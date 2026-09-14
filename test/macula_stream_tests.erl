@@ -220,6 +220,66 @@ read_local_call(Procedure) ->
     {ok, Stream} = macula:call_stream(Procedure, #{}),
     [] = drain(Stream, []).
 
+%%%===================================================================
+%%% A stream takes only the chunks its mode lets the peer send
+%%%===================================================================
+
+%% In server_stream only the server sends chunks, and in client_stream only
+%% the client does. A chunk from the side the mode keeps silent, as a peer on
+%% another stack could send it, ends the stream that gets it: its owner is
+%% told with a stream protocol error, the peer is told the same, and nothing
+%% is queued.
+a_chunk_the_mode_forbids_ends_the_stream_test_() ->
+    [{Name, fun() -> forbidden_chunk_ends_the_stream(Mode, Silent) end}
+     || {Name, Mode, Silent} <- [{"a server_stream caller's chunk arrives", server_stream, client},
+                                 {"a client_stream provider's chunk arrives", client_stream, server}]].
+
+%% The side a mode keeps silent cannot send: its send is refused, and its
+%% peer gets nothing and is not told.
+a_send_the_mode_forbids_is_refused_test_() ->
+    [{Name, fun() -> forbidden_send_is_refused(Mode, Silent) end}
+     || {Name, Mode, Silent} <- [{"a server_stream caller sends", server_stream, client},
+                                 {"a client_stream provider sends", client_stream, server}]].
+
+forbidden_send_is_refused(Mode, SilentRole) ->
+    {Silent, Peer} = mode_pair(Mode, SilentRole),
+    ?assertEqual({error, {send_not_allowed, Mode}}, macula_stream:send(Silent, <<"not yours to send">>)),
+    ?assertEqual(not_told, told(Peer, 50)),
+    ?assertEqual(0, maps:get(inbox_size, macula_stream:info(Peer))).
+
+%% The sides a mode lets send still reach their peer, and nothing ends.
+a_chunk_the_mode_allows_is_received_test_() ->
+    [{Name, fun() -> allowed_chunk_is_received(Mode, Sender) end}
+     || {Name, Mode, Sender} <- [{"a server_stream provider sends", server_stream, server},
+                                 {"a client_stream caller sends", client_stream, client},
+                                 {"a bidi caller sends", bidi, client},
+                                 {"a bidi provider sends", bidi, server}]].
+
+forbidden_chunk_ends_the_stream(Mode, SilentRole) ->
+    {Silent, Receiver} = mode_pair(Mode, SilentRole),
+    ok = macula_stream:deliver_chunk(Receiver, raw, <<"not yours to send">>),
+    ?assertMatch({told, {error, {<<"stream_protocol_error">>, _}}}, told(Receiver, 1_000)),
+    ?assertMatch({told, {error, {<<"stream_protocol_error">>, _}}}, told(Silent, 1_000)),
+    ?assertEqual(0, maps:get(inbox_size, macula_stream:info(Receiver))).
+
+allowed_chunk_is_received(Mode, SenderRole) ->
+    {Sender, Receiver} = mode_pair(Mode, SenderRole),
+    ok = macula_stream:send(Sender, <<"yours to send">>),
+    ?assertEqual({chunk, <<"yours to send">>}, macula_stream:recv(Receiver, 1_000)),
+    ?assertEqual(not_told, told(Receiver, 50)).
+
+%% A locally paired client and server stream in Mode, both owned by the test
+%% process, with the stream of SenderRole first.
+mode_pair(Mode, SenderRole) ->
+    Id = crypto:strong_rand_bytes(16),
+    {ok, Client} = macula_stream:start_link(#{id => Id, role => client, mode => Mode, owner => self()}),
+    {ok, Server} = macula_stream:start_link(#{id => Id, role => server, mode => Mode, owner => self()}),
+    ok = macula_stream:pair(Client, Server),
+    sender_first(SenderRole, Client, Server).
+
+sender_first(client, Client, Server) -> {Client, Server};
+sender_first(server, Client, Server) -> {Server, Client}.
+
 %% A process that runs what it is sent, and ends when told.
 park() ->
     receive

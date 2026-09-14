@@ -3160,6 +3160,53 @@ served_sessions_end(Handler, Ending) ->
         teardown_link_for_streams(ok)
     end.
 
+%% A caller's chunk on a server_stream session, which the mode keeps silent,
+%% ends the session: the handler's process is told it ended with a stream
+%% protocol error, and a STREAM_ERROR with that code goes back on the
+%% session's own stream.
+a_chunk_the_mode_forbids_ends_a_served_session_test_() ->
+    {timeout, 5, fun forbidden_chunk_ends_the_served_session/0}.
+
+forbidden_chunk_ends_the_served_session() ->
+    {Pid, FakePeer, _PeerNodeId} = setup_link_for_streams(),
+    Log = macula_test_log:capture(),
+    try
+        Test = self(),
+        Procedure = <<"foo.direction">>,
+        ok = macula_station_link:advertise_stream(Pid, ?REALM, Procedure, server_stream,
+                                                  telling_when_served(Test, telling_how_it_ended(Test))),
+        flush_send_frame_casts(),
+        {Stream, Sid} = serve_session(Pid, FakePeer, Procedure, macula_identity:generate()),
+        inject_on_stream(Pid, Stream, #{frame_type => stream_data, stream_id => Sid, seq => 0,
+                                        encoding => raw, body => <<"not yours to send">>}),
+        ?assertMatch({ended, {error, {<<"stream_protocol_error">>, _}}}, how_it_ended(1_000)),
+        ?assertMatch(#{code := <<"stream_protocol_error">>}, stream_error_written(Stream, 1_000))
+    after
+        macula_test_log:release(Log),
+        teardown_link_for_streams(ok)
+    end.
+
+telling_how_it_ended(Test) ->
+    fun(Stream, _Args) ->
+        receive
+            {macula_stream, ended, Stream, How} -> Test ! {session_ended, How}
+        end
+    end.
+
+how_it_ended(Ms) ->
+    receive
+        {session_ended, How} -> {ended, How}
+    after Ms ->
+        not_ended
+    end.
+
+stream_error_written(Stream, Ms) ->
+    receive
+        {sent_on_stream, Stream, #{frame_type := stream_error} = Sent} -> Sent
+    after Ms ->
+        none_written
+    end.
+
 %% A STREAM_OPEN refused before any handler runs starts no process at all.
 a_refused_stream_open_starts_no_process_test_() ->
     {timeout, 5,
