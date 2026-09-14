@@ -7,8 +7,10 @@
 %%% on the control stream once connected, a complete frame that is not CBOR
 %%% ends the connection with the reason `{malformed, bad_frame}', and a
 %%% length header above the frame cap ends it with
-%%% `{malformed, frame_too_large}' as soon as the header arrives. The worker
-%%% stops without waiting for more data or for the handshake timeout.
+%%% `{malformed, frame_too_large}' as soon as the header arrives. During the
+%%% handshake the cap is the handshake frame cap, 64 KiB, and a CONNECT of
+%%% exactly that size is still read. The worker stops without waiting for
+%%% more data or for the handshake timeout.
 %%%
 %%% A frame whose framing is intact but whose fields are invalid ends the
 %%% connection during the handshake, with the reason
@@ -26,6 +28,8 @@
 
 %% The frame cap in macula_frame, 16 MiB.
 -define(MAX_FRAME_BYTES, 16#FFFFFF).
+%% The handshake frame cap in macula_peering_conn, 64 KiB.
+-define(HANDSHAKE_FRAME_BYTES, 64 * 1024).
 -define(NOT_CBOR, <<10:32/big, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10>>).
 %% Well within the 30 s handshake timeout.
 -define(PROMPT_MS, 3_000).
@@ -34,13 +38,17 @@
 -define(NON_ATOM_TYPE, <<"zz_frame_type_that_is_no_atom">>).
 
 malformed_test_() ->
-    {timeout, 180,
+    {timeout, 240,
      {setup, fun setup/0, fun cleanup/1,
       fun(Ctx) ->
           [{"a handshake frame that is not CBOR, followed by more data, ends the connection",
             {timeout, 30, fun() -> bad_handshake_frame(Ctx) end}},
            {"a handshake length header above the cap ends the connection from the header",
             {timeout, 30, fun() -> oversize_handshake_header(Ctx) end}},
+           {"a handshake length header just over the handshake cap ends the connection from the header",
+            {timeout, 30, fun() -> handshake_header_over_the_handshake_cap(Ctx) end}},
+           {"a signed CONNECT exactly at the handshake cap completes the handshake",
+            {timeout, 30, fun() -> connect_at_the_handshake_cap(Ctx) end}},
            {"a control stream frame that is not CBOR, followed by more data, ends the connection",
             {timeout, 30, fun() -> bad_control_frame(Ctx) end}},
            {"a control stream length header above the cap ends the connection from the header",
@@ -70,6 +78,20 @@ oversize_handshake_header(Ctx) ->
     with_server(Ctx, fun(Server, Stream) ->
         ok = macula_quic:send(Stream, <<(?MAX_FRAME_BYTES + 1):32/big>>),
         ?assertEqual({malformed, frame_too_large}, ended(Server))
+    end).
+
+handshake_header_over_the_handshake_cap(Ctx) ->
+    with_server(Ctx, fun(Server, Stream) ->
+        ok = macula_quic:send(Stream, <<(?HANDSHAKE_FRAME_BYTES + 1):32/big>>),
+        ?assertEqual({malformed, frame_too_large}, ended(Server))
+    end).
+
+connect_at_the_handshake_cap(Ctx) ->
+    with_server(Ctx, fun(Server, Stream) ->
+        Wire = signed_connect_of_size(?HANDSHAKE_FRAME_BYTES),
+        ?assertEqual(?HANDSHAKE_FRAME_BYTES + 4, byte_size(Wire)),
+        ok = macula_quic:send(Stream, Wire),
+        ?assertEqual(ok, connected(Server))
     end).
 
 bad_control_frame(Ctx) ->
@@ -204,6 +226,18 @@ signed_connect() ->
 signed_connect_without(Key) ->
     Kp = macula_identity:generate(),
     Connect = maps:remove(Key, connect_frame(macula_identity:public(Kp))),
+    macula_frame:encode(macula_frame:sign(Connect, Kp)).
+
+%% A signed CONNECT whose body is exactly Bytes long. A padding field the
+%% handshake does not read makes up the size: its byte string header grows
+%% from one byte, when empty, to three.
+signed_connect_of_size(Bytes) ->
+    Kp = macula_identity:generate(),
+    Unpadded = byte_size(padded_connect(Kp, <<>>)) - 4,
+    padded_connect(Kp, binary:copy(<<0>>, Bytes - Unpadded - 2)).
+
+padded_connect(Kp, Padding) ->
+    Connect = (connect_frame(macula_identity:public(Kp)))#{padding => Padding},
     macula_frame:encode(macula_frame:sign(Connect, Kp)).
 
 connect_frame(Pub) ->

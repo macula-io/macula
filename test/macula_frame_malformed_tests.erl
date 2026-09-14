@@ -25,6 +25,8 @@
 -define(HEADER_BYTES, 4).
 -define(NOT_CBOR, <<10:32/big, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10>>).
 -define(CHUNK_BYTES, 1_048_576).
+%% A frame cap below the frame cap, for parse_received/2.
+-define(SMALL_CAP, 1024).
 
 parse_received_test_() ->
     [{"complete frames and a partial one give ok, the frames and the partial tail",
@@ -36,6 +38,22 @@ parse_received_test_() ->
       fun frames_before_bad_frame/0},
      {"fed chunk by chunk past a bad frame, the kept tail stays within the cap plus the header",
       {timeout, 60, fun tail_stays_within_cap/0}}].
+
+parse_received_with_cap_test_() ->
+    [{"a length header above the given cap is malformed with frame_too_large from its four bytes",
+      fun capped_header_above_the_cap/0},
+     {"a frame exactly at the given cap decodes",
+      fun capped_frame_at_the_cap/0}].
+
+capped_header_above_the_cap() ->
+    ?assertEqual({malformed, [], frame_too_large},
+                 macula_frame:parse_received(<<(?SMALL_CAP + 1):32/big>>, ?SMALL_CAP)).
+
+capped_frame_at_the_cap() ->
+    Wire = wire(connect),
+    <<Len:32/big, _/binary>> = Wire,
+    ?assertMatch({ok, [#{frame_type := connect}], <<>>},
+                 macula_frame:parse_received(Wire, Len)).
 
 parse_stream_test_() ->
     [{"complete frames and a partial one give the frames and the partial tail",
