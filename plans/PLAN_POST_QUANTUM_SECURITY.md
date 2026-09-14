@@ -39,8 +39,12 @@ testable, and Raf can point to a concrete plan in a partner offer.**
 - **Owners** are team sessions:
   - Mercury: identity core, profile model, realm, this plan;
   - Neptune: Rust, the NIF, and the client dial options;
+
   - Mars: station, peering handshake, `lazymesh`;
   - Terra: test suites, the 11.0.0 deploy, the station directory;
+  - Venus: Go, TypeScript, PHP, `macula-cli`, `macula-mcp`;
+  - Mars: station, peering handshake, `lazymesh`;
+  - Terra: test suites, the post-quantum fleet, the station directory;
   - Venus: Go, TypeScript, PHP, `macula-cli`, `macula-mcp`;
   - Uranus: .NET;
   - Pluto: Python;
@@ -413,11 +417,16 @@ Part 2 has the work packages.
 | 0 | Checks before building (V items, Part 1) | per check | nothing |
 | 1 | `macula` 11.0.0 and `macula-station` | Mercury, Neptune, Mars | nothing |
 | 2 | Erlang-only test suite | Terra | Stage 1 |
+
 | 3 | 11.0.0 stations, station directory, realm and distribution relay, ready for the deploy | Terra, Mercury, Neptune | Stage 2 |
 | 4 | Each other stack on 11.0.0, with its suite | Neptune, Venus, Pluto; Uranus later | Stage 3 |
 | 5 | `macula-cli`, `macula-mcp` and `lazymesh` on 11.0.0 | Venus, Mars | Stage 4 (Go); EU parts for `io.macula` |
 | 6 | The hecate services on 11.0.0 | Saturnus | Stage 5, EU parts included; the Reckon plan (D9) |
 | Deploy | Every layer in one deploy (D14), `macula-demo` `plans/PLAN_MACULA_11_DEPLOY.md` | Terra | Stages 3 to 6; `macula` 11.0.0 on hex; Raf's yes |
+| 3 | Post-quantum fleet, station directory, realm and distribution relay | Terra, Mercury, Neptune | Stage 2 |
+| 4 | Each other stack, with its suite against the fleet | Neptune, Venus, Pluto; Uranus later | Stage 3 |
+| 5 | Cutover of `macula-cli`, `macula-mcp` and `lazymesh` | Venus, Mars | Stage 4 (Go); EU parts for `io.macula` |
+| 6 | Cutover of the hecate services | Saturnus | Stage 5, EU parts included; the Reckon plan (D9) |
 | 7 | Quality and security gates | Fable, Jupiter | runs throughout |
 
 - The EU parts of every stage also wait on V8.
@@ -523,8 +532,10 @@ Rough, for planning. Items marked ⚠ are not estimated yet.
 | 3 | Fleet and seeds | 3 to 5 days, plus configuration generation ⚠ |
 | 3 | Station directory | ⚠ |
 | 3 | Distribution relay | ⚠ |
+
 | 3 | Demonstration video plan | 1 day |
 | 3, 6 | Org namespace on every procedure: renames and org directory entries (D25) | ⚠ |
+| 3 | Demonstration video plan | 1 day |
 | 4 | Go transport | 2 to 4 days, plus the FFI unification ⚠ |
 | 4 | Python transport | 6 to 9 days, plus seeds and record verification ⚠ |
 | 4 | Rust transport in `macula-rust` | 3 to 4 days |
