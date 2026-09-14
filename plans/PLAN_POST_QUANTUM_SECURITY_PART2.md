@@ -515,6 +515,24 @@ change, the done criterion and the effort. The US profile goes first; the EU par
 - **Done:** green on the new fleet.
 - **Effort:** ⚠.
 
+### WP 3.5 Demonstration video plan
+
+- [ ] A plan for a video that shows the post-quantum fleet at work, with its shot list and the claim each shot makes.
+- **Owner:** Mercury.
+- **Waiting on:** WP 3.2.
+- **Files:**
+  - `plans/PLAN_PQ_DEMO_VIDEO.md` in `macula-architecture`, which is private (new); it moves to `macula` only after
+    Stage 6 is green and its wording has passed the D11 check
+- **Change:**
+  - the plan proposed in pull request 11 of `macula`, which Raf closed, is written again;
+  - it takes Saturnus's corrections from the D11 check, and his two proposed D11 sentences go to Raf as plan
+    decisions;
+  - every claim in it names the WP 2.2 or WP 4.5 check that is its evidence;
+  - the video, its footage and any sentence about it are published only after Stage 6 is green, and every public
+    sentence passes the D11 check first.
+- **Done:** the plan passes Saturnus's D11 check, and Raf has decided the two sentences.
+- **Effort:** 1 day.
+
 ---
 
 ## Stage 4: each other stack, with its suite against the fleet
@@ -826,7 +844,7 @@ Every stack also meets these, each red first:
 ### WP 5.1 Tools
 
 - [ ] The tools run against the new fleet.
-- **Owners:** Mars (`macula-cli`, `lazymesh`), Venus (`macula-mcp`).
+- **Owners:** Venus (`macula-cli`, `macula-mcp`), Mars (`lazymesh`).
 - **Waiting on:** WP 4.2, WP 3.2; a tool that joins `io.macula` also waits on their EU parts (D19).
 - **Change:**
   - new seeds with node_ids, including compiled-in or documented defaults, such as the default station of
@@ -978,6 +996,10 @@ provider certificate chains verify (D25 item 6). Until then `macula` refuses the
 
 - `rebar.config`
 - `Dockerfile`
+
+### `macula-architecture` (WP 3.5)
+
+- `plans/PLAN_PQ_DEMO_VIDEO.md` (new), until Stage 6 is green
 
 ### `macula-rust` (WP 4.1)
 
