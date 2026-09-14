@@ -33,11 +33,12 @@
 -module(macula_cbor_nif).
 
 -export([pack/1, unpack/1, pack_deterministic/1, unpack_deterministic/1,
-         is_nif_loaded/0]).
+         unpack_deterministic/2, element_budget/0, is_nif_loaded/0]).
 
 %% NIF stubs
 -export([nif_pack/1, nif_unpack/1,
-         nif_pack_deterministic/1, nif_unpack_deterministic/1]).
+         nif_pack_deterministic/1, nif_unpack_deterministic/1,
+         nif_unpack_deterministic_within/2, nif_element_budget/0]).
 
 -on_load(init/0).
 
@@ -104,6 +105,24 @@ pack_deterministic(Term) ->
 unpack_deterministic(Bytes) when is_binary(Bytes) ->
     nif_unpack_deterministic(Bytes).
 
+%% @doc Deterministic CBOR decode within `Left' CBOR items, what a caller
+%% has left of the element budget, returning `{Term, LeftAfter}' with what
+%% is left after it. `Left' never counts for more than `element_budget/0'.
+%% Raises as `unpack_deterministic/1' does, with `too_many_elements' when
+%% the input holds more items than `Left'. A frame and the records nested
+%% in it decode within one budget this way.
+-spec unpack_deterministic(binary(), non_neg_integer()) ->
+    {macula_record_cbor:value(), non_neg_integer()}.
+unpack_deterministic(Bytes, Left) when is_binary(Bytes), is_integer(Left), Left >= 0 ->
+    nif_unpack_deterministic_within(Bytes, Left).
+
+%% @doc The element budget a decode starts with: the most CBOR items
+%% `unpack_deterministic/1' reads from one input, and the most a frame and
+%% the records in it hold together.
+-spec element_budget() -> pos_integer().
+element_budget() ->
+    nif_element_budget().
+
 %%%===================================================================
 %%% NIF stubs (replaced at load time)
 %%%===================================================================
@@ -112,3 +131,5 @@ nif_pack(_Term)    -> ?NIF_NOT_LOADED.
 nif_unpack(_Bytes) -> ?NIF_NOT_LOADED.
 nif_pack_deterministic(_Term)    -> ?NIF_NOT_LOADED.
 nif_unpack_deterministic(_Bytes) -> ?NIF_NOT_LOADED.
+nif_unpack_deterministic_within(_Bytes, _Left) -> ?NIF_NOT_LOADED.
+nif_element_budget() -> ?NIF_NOT_LOADED.

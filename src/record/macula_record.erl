@@ -49,7 +49,7 @@
     refresh/2,
 
     %% Wire codec
-    encode/1, decode/1,
+    encode/1, decode/1, decode/2,
 
     %% Accessors
     type/1, key/1, version/1, created_at/1, expires_at/1,
@@ -736,6 +736,25 @@ decode(Bin) when is_binary(Bin) ->
         error:too_many_elements -> {error, too_many_elements};
         error:<<"cbor: ", _/binary>> -> {error, bad_record}
     end.
+
+%% @doc Decode a record from its wire bytes within `Left' CBOR items, what a
+%% caller has left of an element budget, and return what is left after it
+%% as `{ok, Record, LeftAfter}'. Bytes that are not CBOR are
+%% `{error, bad_record}', and bytes holding more CBOR items than `Left' are
+%% `{error, too_many_elements}'. `macula_frame' decodes a frame's records
+%% this way, within what the frame left.
+-spec decode(binary(), non_neg_integer()) ->
+    {ok, m_record(), non_neg_integer()} | {error, term()}.
+decode(Bin, Left) when is_binary(Bin), is_integer(Left), Left >= 0 ->
+    try macula_cbor_nif:unpack_deterministic(Bin, Left) of
+        {Term, LeftAfter} -> with_left(decode_value(Term), LeftAfter)
+    catch
+        error:too_many_elements -> {error, too_many_elements};
+        error:<<"cbor: ", _/binary>> -> {error, bad_record}
+    end.
+
+with_left({ok, Record}, Left) -> {ok, Record, Left};
+with_left(Error, _Left) -> Error.
 
 decode_value(Map) when is_map(Map) ->
     G = fun(Key) -> maps:get({text, Key}, Map, undefined) end,

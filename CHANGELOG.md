@@ -117,6 +117,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   station memory and from the largest legitimate frames, and it applies to
   every macula node. A frame above it cannot cross a station, so an SDK
   that decodes more items differs from it only on direct connections.
+- A frame and the records in it share one element budget of 131,072 CBOR
+  items: `macula_frame` decodes each record in a `record` or `records`
+  field within what the frame's own items and the records before it left.
+  A STORE, REPLICATE or VALUE whose records need more is an invalid frame
+  named by that field. `macula_cbor_nif:unpack_deterministic/2` decodes
+  within what a caller has left and returns what is left after it,
+  `macula_cbor_nif:element_budget/0` returns the budget, and
+  `macula_record:decode/2` decodes a record within what is left.
 - `macula_frame:parse_stream/1` keeps its `{Frames, Tail}` shape and bounds
   what a caller keeps. Bytes that do not decode end the parse: the frames
   before them come back with an empty `Tail`, and the rest of the buffer is

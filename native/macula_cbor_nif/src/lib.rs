@@ -69,6 +69,26 @@ fn nif_unpack_deterministic<'a>(env: Env<'a>, bytes: Binary<'a>) -> NifResult<Te
     deterministic::decode(env, bytes)
 }
 
+/// Deterministic CBOR decode within `left`, what a caller has left of the
+/// element budget, returning `{Term, Left}` with what is left after it. A
+/// frame and the records nested in it decode within one budget this way.
+/// Raises as `nif_unpack_deterministic` does, and runs on a dirty CPU
+/// scheduler for the same reason.
+#[rustler::nif(schedule = "DirtyCpu")]
+fn nif_unpack_deterministic_within<'a>(
+    env: Env<'a>,
+    bytes: Binary<'a>,
+    left: u64,
+) -> NifResult<Term<'a>> {
+    deterministic::decode_within(env, bytes, left)
+}
+
+/// The element budget one decode starts with.
+#[rustler::nif]
+fn nif_element_budget() -> u64 {
+    deterministic::MAX_ELEMENTS
+}
+
 #[rustler::nif]
 fn nif_pack<'a>(env: Env<'a>, term: Term<'a>) -> NifResult<Binary<'a>> {
     let value = term_to_value(term)?;
