@@ -146,6 +146,18 @@ unset_difficulty_is_eight_bits_test() ->
                  {macula_identity:puzzle_valid(key_meeting(8, 9)),
                   macula_identity:puzzle_valid(key_meeting(7, 8))}).
 
+%% generate/0 grinds to the configured puzzle_difficulty, not to the default:
+%% at difficulty 10 all eight keys pass 10 bits, which keys ground to 8 bits
+%% would do only about once in 65,536 runs.
+generate_grinds_to_the_configured_difficulty_test_() ->
+    {timeout, 30,
+     fun() ->
+         Ids = with_puzzle_difficulty(10, fun() ->
+                   [macula_identity:generate() || _ <- lists:seq(1, 8)]
+               end),
+         ?assertEqual(lists:duplicate(8, true), [macula_identity:puzzle_valid(Id, 10) || Id <- Ids])
+     end}.
+
 %% The setting's checks below use a plain key: generate/0 grinds to the
 %% configured difficulty, which is the setting under test.
 non_integer_difficulty_is_a_configuration_error_test() ->
