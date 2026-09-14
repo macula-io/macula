@@ -210,6 +210,11 @@
 %% wedged and we recycle the link.
 -define(CONNECT_WATCHDOG_GRACE_MS, 10_000).
 
+%% How long a dedicated stream the peer opened may take to bring its first
+%% whole frame before it closes, unless `dedicated_stream_open_timeout_ms'
+%% in the macula application env says otherwise.
+-define(DEDICATED_STREAM_OPEN_TIMEOUT_MS, 10_000).
+
 -record(state, {
     seed             :: #{host := binary() | string(),
                           port := inet:port_number(),
@@ -291,10 +296,15 @@
     %% Inbound byte buffer per dedicated QUIC stream, keyed by the
     %% QUIC stream reference itself (stable for the stream's life,
     %% known before any frame — let alone its `stream_id' — has been
-    %% decoded off it). Entries are created the moment a
-    %% `new_dedicated_stream' notification arrives and removed when
-    %% the session tears down.
+    %% decoded off it). An entry is created when this link opens a
+    %% client stream, or when a stream the peer opened brings its first
+    %% whole frame, and removed when the session tears down.
     stream_bufs = #{} :: #{reference() => binary()},
+    %% A dedicated stream the peer opened is buffered here until its first
+    %% whole frame comes, which decides whether the stream moves on to
+    %% `stream_bufs' or closes. A dedicated stream stays open only while it
+    %% carries a session or is this link's own client stream.
+    opening_bufs = #{} :: #{reference() => binary()},
     %% Dedicated content-transfer streams (PLAN_PER_STREAM_QUIC_ISOLATION.md
     %% Phase 2). One `put_content'/`get_content' call pins one link and
     %% opens one of these via `open_content_stream/1', then issues every
@@ -1259,12 +1269,33 @@ handle_info({macula_peering, disconnected, Pid, Reason},
 %% buffer and wait for its first frame (expected: STREAM_OPEN). See
 %% PLAN_PER_STREAM_QUIC_ISOLATION.md.
 handle_info({macula_peering, new_dedicated_stream, Pid, Stream},
-            #state{peer_pid = Pid, stream_bufs = Bufs} = S) ->
-    {noreply, S#state{stream_bufs = Bufs#{Stream => <<>>}}};
+            #state{peer_pid = Pid, opening_bufs = Opening} = S) ->
+    _ = erlang:send_after(application:get_env(macula, dedicated_stream_open_timeout_ms,
+                                              ?DEDICATED_STREAM_OPEN_TIMEOUT_MS),
+                          self(), {dedicated_stream_open_deadline, Stream}),
+    {noreply, S#state{opening_bufs = Opening#{Stream => <<>>}}};
 handle_info({macula_peering, new_dedicated_stream, _OtherPid, _Stream}, S) ->
     %% Stale notification from a link that is no longer `peer_pid'
     %% (respawned mid-flight) — nothing to attach it to.
     {noreply, S};
+
+%% A dedicated stream the peer opened that brought no whole first frame
+%% within `dedicated_stream_open_timeout_ms' closes without a word.
+handle_info({dedicated_stream_open_deadline, Stream}, #state{opening_bufs = Opening} = S)
+        when is_map_key(Stream, Opening) ->
+    ok = close_dedicated_stream(Stream),
+    {noreply, S#state{opening_bufs = maps:remove(Stream, Opening)}};
+handle_info({dedicated_stream_open_deadline, _Stream}, S) ->
+    {noreply, S};
+
+%% Bytes on a dedicated stream the peer opened, before its first whole
+%% frame. Once one has come, the stream's buffer moves on to `stream_bufs'
+%% and the first frame decides whether the stream stays open; the frames
+%% after it in the same read go the way of any dedicated stream's.
+handle_info({quic, Bin, Stream, _Flags}, #state{opening_bufs = Opening} = S)
+        when is_binary(Bin), is_map_key(Stream, Opening) ->
+    {Frames, Tail} = macula_frame:parse_stream(<<(maps:get(Stream, Opening))/binary, Bin/binary>>),
+    {noreply, on_opening_frames(Frames, Tail, Stream, S)};
 
 %% Bytes on one of our dedicated streams. Decode whatever complete
 %% frames are available and dispatch each; the tail (a partial frame)
@@ -1274,7 +1305,7 @@ handle_info({quic, Bin, Stream, _Flags}, #state{stream_bufs = Bufs} = S)
         when is_binary(Bin), is_map_key(Stream, Bufs) ->
     Buf = maps:get(Stream, Bufs),
     {Frames, Tail} = macula_frame:parse_stream(<<Buf/binary, Bin/binary>>),
-    NewS = lists:foldl(fun(F, Acc) -> dispatch_dedicated_frame(F, Stream, Acc) end,
+    NewS = lists:foldl(fun(F, Acc) -> dispatch_while_open(F, Stream, Acc) end,
                        S#state{stream_bufs = Bufs#{Stream => Tail}}, Frames),
     {noreply, NewS};
 
@@ -1717,10 +1748,14 @@ fail_all_pending(Reason, #state{pending = P, subscriptions = Subs,
     %% on a normal close.
     maps:foreach(fun(Stream, _Buf) -> close_dedicated_stream(Stream) end,
                 S#state.content_stream_bufs),
+    %% A stream the peer opened that brought no whole frame yet carries no
+    %% session to abort either.
+    maps:foreach(fun(Stream, _Buf) -> close_dedicated_stream(Stream) end,
+                S#state.opening_bufs),
     S#state{pending = #{}, subscriptions = #{}, topic_index = #{},
             overlay_subscriptions = #{}, overlay_realm_index = #{},
             client_streams = #{}, server_streams = #{}, stream_bufs = #{},
-            content_pending = #{}, content_stream_bufs = #{}}.
+            opening_bufs = #{}, content_pending = #{}, content_stream_bufs = #{}}.
 
 abort_stream_process(Pid, Reason) ->
     try
@@ -2678,6 +2713,14 @@ end_sessions_on_stream(Stream, Reason, #state{client_streams = CS,
 %% Streaming RPC — dispatch for frames decoded off a dedicated stream
 %%-------------------------------------------------------------------
 
+%% A frame read off a dedicated stream is dispatched only while the stream
+%% is open: once a frame closes it, as a refused STREAM_OPEN does, the frames
+%% after it in the same read are not taken either.
+dispatch_while_open(Frame, Stream, #state{stream_bufs = Bufs} = S) when is_map_key(Stream, Bufs) ->
+    dispatch_dedicated_frame(Frame, Stream, S);
+dispatch_while_open(_Frame, _Stream, S) ->
+    S.
+
 %% Every stream-related frame type this link ever needs to act on,
 %% now sourced from a session's own dedicated QUIC stream instead of
 %% the shared control stream's `on_frame/2'. STREAM_OPEN is the only
@@ -2714,79 +2757,94 @@ dispatch_dedicated_frame(_Frame, _Stream, S) ->
 %% registered handler in a transient process so a slow / crashing
 %% handler can't block the link's gen_server.
 handle_inbound_stream_open(#{stream_id := Sid, procedure := Proc,
-                              realm := Realm, args := Args} = Frame,
+                              realm := Realm, args := Args, caller := Caller},
                            Stream, S) ->
-    DeclaredMode = maps:get(mode, Frame, server_stream),
     dispatch_stream_open(maps:find({Realm, Proc}, S#state.stream_procedures),
-                         Sid, Proc, DeclaredMode, Args, Stream, S).
+                         Sid, Proc, Caller, Args, Stream, S).
+
+%% The first whole frame on a dedicated stream the peer opened decides the
+%% stream's fate. Its buffer moves on to `stream_bufs' first, so a served
+%% STREAM_OPEN keeps it and every refusal takes it away again; the frames
+%% after it in the same read are taken only while the stream stays open.
+on_opening_frames([], Tail, Stream, #state{opening_bufs = Opening} = S) ->
+    S#state{opening_bufs = Opening#{Stream => Tail}};
+on_opening_frames([First | Rest], Tail, Stream,
+                  #state{opening_bufs = Opening, stream_bufs = Bufs} = S) ->
+    Moved = S#state{opening_bufs = maps:remove(Stream, Opening), stream_bufs = Bufs#{Stream => Tail}},
+    lists:foldl(fun(F, Acc) -> dispatch_while_open(F, Stream, Acc) end,
+                dispatch_first_frame(First, Stream, Moved), Rest).
+
+%% A dedicated stream the peer opens must start with a STREAM_OPEN. On any
+%% other first frame it closes without a word: it carries no session, and
+%% nothing on it is authenticated to answer.
+dispatch_first_frame(#{frame_type := stream_open} = Frame, Stream, S) ->
+    dispatch_dedicated_frame(Frame, Stream, S);
+dispatch_first_frame(_Frame, Stream, S) ->
+    close_sessionless_stream(Stream, S).
 
 %% A STREAM_OPEN whose signature does not verify against its own `caller'
 %% never reaches a handler and gets nothing back on its stream, the same
-%% rule `on_inbound_call/3' applies to a unary CALL. Once it verifies, the
+%% rule `on_inbound_call/3' applies to a unary CALL, and a stream that
+%% carries no session closes with it. Once it verifies, the
 %% procedure's auth policy (`advertise_stream/6') decides through the same
 %% `authorize/3' a unary CALL goes through, before any handler runs.
 on_inbound_stream_open({ok, _Verified}, Frame, Stream, S) ->
     on_stream_open_on(carries_a_session(Stream, S), Frame, Stream, S);
-on_inbound_stream_open({error, Why}, Frame, _Stream, S) ->
+on_inbound_stream_open({error, Why}, Frame, Stream, S) ->
     logger:warning("[macula_station_link] dropped inbound STREAM_OPEN whose"
                    " signature does not verify against its caller (~p)"
                    " procedure=~p",
                    [Why, maps:get(procedure, Frame, undefined)]),
-    S.
+    close_unless_carrying(carries_a_session(Stream, S), Stream, S).
 
-%% A dedicated stream carries one served session. A STREAM_OPEN on a stream
-%% that already carries one is refused on that stream, for its own stream id,
-%% before its procedure's policy is asked; the session already on the stream
-%% keeps it.
-on_stream_open_on(true, Frame, Stream, #state{identity = Id} = S) ->
-    Refusal = macula_frame:stream_error(#{
-        stream_id => maps:get(stream_id, Frame),
-        code      => <<"refused">>,
-        message   => <<"this stream already carries a session">>
-    }),
-    try macula_peering:send_on_stream(Stream, Refusal, Id) catch _:_ -> ok end,
+close_unless_carrying(true, _Stream, S) ->
+    S;
+close_unless_carrying(false, Stream, S) ->
+    close_sessionless_stream(Stream, S).
+
+%% Closes a dedicated stream that carries no session and forgets its buffer,
+%% so the link takes no more frames from it.
+close_sessionless_stream(Stream, #state{stream_bufs = Bufs} = S) ->
+    ok = close_dedicated_stream(Stream),
+    S#state{stream_bufs = maps:remove(Stream, Bufs)}.
+
+%% A dedicated stream carries one session. A STREAM_OPEN on a stream that
+%% already carries one, served here or opened by this link as a caller, is
+%% refused on that stream, for its own stream id, before its procedure's
+%% policy is asked; the session already on the stream keeps it, and the
+%% stream stays open for that session.
+on_stream_open_on(true, Frame, Stream, S) ->
+    ok = send_stream_refusal(Stream, maps:get(stream_id, Frame), <<"refused">>,
+                             <<"this stream already carries a session">>, S),
     S;
 on_stream_open_on(false, Frame, Stream, #state{stream_policies = SPols} = S) ->
     Key = {maps:get(realm, Frame, undefined), maps:get(procedure, Frame, undefined)},
     on_stream_open_verdict(authorize(Key, Frame, SPols), Frame, Stream, S).
 
-carries_a_session(Stream, #state{server_streams = SS}) ->
-    lists:any(fun({_Pid, _Mon, On}) -> On =:= Stream end, maps:values(SS)).
+carries_a_session(Stream, #state{client_streams = CS, server_streams = SS}) ->
+    lists:any(fun({_Pid, _Mon, On}) -> On =:= Stream end, maps:values(CS) ++ maps:values(SS)).
 
 %% Refused by the procedure's auth policy: a STREAM_ERROR on the caller's
 %% own stream, so it fails fast instead of waiting out its deadline, and no
 %% handler runs.
 on_stream_open_verdict(ok, Frame, Stream, S) ->
     handle_inbound_stream_open(Frame, Stream, S);
-on_stream_open_verdict(unauthorized, Frame, Stream, #state{identity = Id} = S) ->
-    Refusal = macula_frame:stream_error(#{
-        stream_id => maps:get(stream_id, Frame),
-        code      => <<"unauthorized">>,
-        message   => <<"not authorized for this procedure">>
-    }),
-    try macula_peering:send_on_stream(Stream, Refusal, Id) catch _:_ -> ok end,
-    S.
+on_stream_open_verdict(unauthorized, Frame, Stream, S) ->
+    refuse_stream_open(Stream, maps:get(stream_id, Frame), <<"unauthorized">>,
+                       <<"not authorized for this procedure">>, S).
 
 %% Unknown (Realm, Procedure) → ship a STREAM_ERROR back on the
 %% caller's own dedicated stream so it unblocks immediately rather
 %% than waiting for its deadline. The shared control stream is not
 %% in this session's path at all, so the reply has to go here.
-dispatch_stream_open(error, Sid, _Proc, _Declared, _Args, Stream,
-                     #state{identity = Id} = S) ->
-    Frame = macula_frame:stream_error(#{
-        stream_id => Sid,
-        code      => <<"not_found">>,
-        message   => <<"procedure not advertised">>
-    }),
-    try macula_peering:send_on_stream(Stream, Frame, Id) catch _:_ -> ok end,
-    S;
-dispatch_stream_open({ok, {AdvMode, Handler}}, Sid, Proc, _Declared, Args,
+dispatch_stream_open(error, Sid, _Proc, _Caller, _Args, Stream, S) ->
+    refuse_stream_open(Stream, Sid, <<"not_found">>, <<"procedure not advertised">>, S);
+dispatch_stream_open({ok, {AdvMode, Handler}}, Sid, Proc, Caller, Args,
                      Stream, S) ->
     %% Advertised mode wins — the server declared the shape.
-    spawn_inbound_stream(Sid, Proc, AdvMode, Handler, Args, Stream, S).
+    spawn_inbound_stream(Sid, Proc, AdvMode, Handler, Args, Caller, Stream, S).
 
-spawn_inbound_stream(Sid, Proc, Mode, Handler, Args, Stream,
-                     #state{server_streams = SS} = S) ->
+spawn_inbound_stream(Sid, Proc, Mode, Handler, Args, Caller, Stream, S) ->
     Worker = spawn_stream_handler(Handler, Args, Proc),
     {ok, StreamPid} = macula_stream:start_link(#{
         id    => Sid,
@@ -2794,10 +2852,40 @@ spawn_inbound_stream(Sid, Proc, Mode, Handler, Args, Stream,
         mode  => Mode,
         owner => Worker
     }),
+    serve_if_admitted(macula_stream_sessions:admit(Caller, StreamPid),
+                      Sid, Worker, StreamPid, Stream, S).
+
+%% A session past its caller's or the node's cap on served sessions, or one
+%% the session counter could not admit, is refused on its own stream: its
+%% handler process ends before it serves, and the stream process it would
+%% have owned ends with it.
+serve_if_admitted(ok, Sid, Worker, StreamPid, Stream, #state{server_streams = SS} = S) ->
     ok = macula_stream:attach_to_link(StreamPid, self(), Sid),
     Mon = erlang:monitor(process, StreamPid),
     Worker ! {serve, StreamPid},
-    S#state{server_streams = SS#{Sid => {StreamPid, Mon, Stream}}}.
+    S#state{server_streams = SS#{Sid => {StreamPid, Mon, Stream}}};
+serve_if_admitted({error, Refusal}, Sid, Worker, _StreamPid, Stream, S) ->
+    exit(Worker, kill),
+    {Code, Message} = admission_refusal(Refusal),
+    refuse_stream_open(Stream, Sid, Code, Message, S).
+
+admission_refusal(unavailable) ->
+    {<<"unavailable">>, <<"sessions are not being admitted now">>};
+admission_refusal(_AtACap) ->
+    {<<"too_many_sessions">>, <<"no more sessions are served now">>}.
+
+%% A refused STREAM_OPEN on a stream that carries no session gets its
+%% STREAM_ERROR, and then its stream closes: the link keeps no buffer for it
+%% and takes no more frames from it. The STREAM_ERROR is written before the
+%% close, and a close lets written data through before its FIN.
+refuse_stream_open(Stream, Sid, Code, Message, S) ->
+    ok = send_stream_refusal(Stream, Sid, Code, Message, S),
+    close_sessionless_stream(Stream, S).
+
+send_stream_refusal(Stream, Sid, Code, Message, #state{identity = Id}) ->
+    Refusal = macula_frame:stream_error(#{stream_id => Sid, code => Code, message => Message}),
+    _ = try macula_peering:send_on_stream(Stream, Refusal, Id) catch _:_ -> ok end,
+    ok.
 
 %% Handler runs in a transient process, which owns the session's stream:
 %% the stream ends when the handler returns or crashes, unless the handler
@@ -2912,7 +3000,7 @@ drain_pending_stream_advertises(#state{stream_procedures = SP} = S) ->
 
 %% Probe the client_streams and server_streams maps by pid; fall back
 %% to the subscriber path. Stream pids are added by
-%% `open_client_stream/6' (client_streams) and `spawn_inbound_stream/6'
+%% `open_client_stream/6' (client_streams) and `spawn_inbound_stream/8'
 %% (server_streams).
 on_monitor_down(Pid, Mon, #state{client_streams = CS} = S) ->
     on_client_stream_down(find_stream_by_pid(Pid, CS), Pid, Mon, S).
@@ -2946,7 +3034,7 @@ take_dedicated_stream(Sid, Map) ->
 %% stream resource for a session that will never resume.
 close_dedicated_stream(undefined) -> ok;
 close_dedicated_stream(Stream) ->
-    try macula_quic:close_stream(Stream) catch _:_ -> ok end,
+    try macula_peering:close_dedicated_stream(Stream) catch _:_ -> ok end,
     ok.
 
 %% Lookup a stream by Sid across both maps. Client-side first (the

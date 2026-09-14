@@ -77,6 +77,28 @@ init([]) ->
             type => worker
         },
 
+        %% Holds the table of served stream sessions, so the sessions kept
+        %% there outlive a restart of the counter below. Starts first.
+        #{
+            id => macula_stream_sessions_keeper,
+            start => {macula_stream_sessions_keeper, start_link, []},
+            restart => permanent,
+            shutdown => 5000,
+            type => worker
+        },
+
+        %% The node's count of served stream sessions: each station link
+        %% asks it before serving a session, against the caps per verified
+        %% caller and node-wide, and a session's place frees when its stream
+        %% ends.
+        #{
+            id => macula_stream_sessions,
+            start => {macula_stream_sessions, start_link, []},
+            restart => permanent,
+            shutdown => 5000,
+            type => worker
+        },
+
         %% Distribution-over-mesh bridge supervisor.
         %% Started here (under the application supervisor) so it survives
         %% shell crashes and other transient process deaths in user code.
