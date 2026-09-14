@@ -2799,16 +2799,33 @@ handle_inbound_stream_open(#{stream_id := Sid, procedure := Proc,
 %% rule `on_inbound_call/3' applies to a unary CALL. Once it verifies, the
 %% procedure's auth policy (`advertise_stream/6') decides through the same
 %% `authorize/3' a unary CALL goes through, before any handler runs.
-on_inbound_stream_open({ok, _Verified}, Frame, Stream,
-                       #state{stream_policies = SPols} = S) ->
-    Key = {maps:get(realm, Frame, undefined), maps:get(procedure, Frame, undefined)},
-    on_stream_open_verdict(authorize(Key, Frame, SPols), Frame, Stream, S);
+on_inbound_stream_open({ok, _Verified}, Frame, Stream, S) ->
+    on_stream_open_on(carries_a_session(Stream, S), Frame, Stream, S);
 on_inbound_stream_open({error, Why}, Frame, _Stream, S) ->
     logger:warning("[macula_station_link] dropped inbound STREAM_OPEN whose"
                    " signature does not verify against its caller (~p)"
                    " procedure=~p",
                    [Why, maps:get(procedure, Frame, undefined)]),
     S.
+
+%% A dedicated stream carries one served session. A STREAM_OPEN on a stream
+%% that already carries one is refused on that stream, for its own stream id,
+%% before its procedure's policy is asked; the session already on the stream
+%% keeps it.
+on_stream_open_on(true, Frame, Stream, #state{identity = Id} = S) ->
+    Refusal = macula_frame:stream_error(#{
+        stream_id => maps:get(stream_id, Frame),
+        code      => <<"refused">>,
+        message   => <<"this stream already carries a session">>
+    }),
+    try macula_peering:send_on_stream(Stream, Refusal, Id) catch _:_ -> ok end,
+    S;
+on_stream_open_on(false, Frame, Stream, #state{stream_policies = SPols} = S) ->
+    Key = {maps:get(realm, Frame, undefined), maps:get(procedure, Frame, undefined)},
+    on_stream_open_verdict(authorize(Key, Frame, SPols), Frame, Stream, S).
+
+carries_a_session(Stream, #state{server_streams = SS}) ->
+    lists:any(fun({_Pid, _Mon, On}) -> On =:= Stream end, maps:values(SS)).
 
 %% Refused by the procedure's auth policy: a STREAM_ERROR on the caller's
 %% own stream, so it fails fast instead of waiting out its deadline, and no
