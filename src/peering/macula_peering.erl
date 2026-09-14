@@ -37,7 +37,8 @@
     peer_capabilities/1,
     open_dedicated_stream/1,
     async_open_dedicated_stream/1,
-    send_on_stream/3
+    send_on_stream/3,
+    queue_on_stream/3
 ]).
 
 %% Capability bit asserting the peer is a relay-station (i.e. it
@@ -195,6 +196,25 @@ send_on_stream(Stream, Frame, Identity) when is_map(Frame) ->
 send_checked_on_stream(ok, Stream, Frame, Identity) ->
     macula_quic:send(Stream, macula_frame:encode(ensure_signed(Frame, Identity)));
 send_checked_on_stream({error, Reason} = Rejected, _Stream, Frame, _Identity) ->
+    logger:error("[macula_peering] refused unsendable ~p frame: ~ts",
+                 [maps:get(frame_type, Frame, unknown),
+                  macula_frame:explain(Reason)]),
+    Rejected.
+
+%% @doc Encode, sign and queue one frame on a dedicated stream without
+%% waiting, as `macula_quic:async_send/2' does. Returns `ok' once the frame
+%% is queued, `{error, busy}' when the stream already holds 1 MiB the peer
+%% has not taken, and otherwise the refusal or the stream's error. A
+%% process that must keep serving while a peer withholds credit uses this
+%% instead of `send_on_stream/3'.
+-spec queue_on_stream(reference(), macula_frame:frame(),
+                      macula_identity:key_pair()) -> ok | {error, term()}.
+queue_on_stream(Stream, Frame, Identity) when is_map(Frame) ->
+    queue_checked_on_stream(macula_frame:check_frame(Frame), Stream, Frame, Identity).
+
+queue_checked_on_stream(ok, Stream, Frame, Identity) ->
+    macula_quic:async_send(Stream, macula_frame:encode(ensure_signed(Frame, Identity)));
+queue_checked_on_stream({error, Reason} = Rejected, _Stream, Frame, _Identity) ->
     logger:error("[macula_peering] refused unsendable ~p frame: ~ts",
                  [maps:get(frame_type, Frame, unknown),
                   macula_frame:explain(Reason)]),

@@ -521,6 +521,8 @@ close_stream(Stream) ->
 %%       allowed it.</li>
 %%   <li>1, `?QUIC_CODE_LINGER_EXPIRED': a closed stream's queued data could
 %%       not be written within its linger bound.</li>
+%%   <li>2, `?QUIC_CODE_SESSION_ENDED': a streaming session's process ended
+%%       before it sent its last frame.</li>
 %% </ul>
 %% Any other code is the caller's own.
 -spec reset_stream(reference(), non_neg_integer()) -> ok | {error, term()}.

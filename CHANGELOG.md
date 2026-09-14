@@ -46,6 +46,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   once. The caller receives
   `{macula_peering, dedicated_stream_opened, Ref, Stream}` or
   `{macula_peering, dedicated_stream_open_failed, Ref, Reason}`.
+- `macula_peering:queue_on_stream/3` encodes, signs and queues a frame on
+  a dedicated stream without waiting, and returns `{error, busy}` when
+  the stream already holds 1 MiB the peer has not taken.
 - `macula:find_record/3` and `macula:find_records/3` take a timeout for
   one DHT lookup, for a caller that bounds its work by a deadline of its
   own.
@@ -112,6 +115,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   relay. While the relay takes no data on the control stream, the client
   holds the frames in order and keeps serving tunnel requests, inbound
   tunnels and `status/1`, which reports them as `held_control_frames`.
+- A `macula_stream` session carried by `macula_station_link` builds,
+  signs and writes its own frames on its dedicated QUIC stream. While
+  that stream takes no more data, the session holds its frames in order
+  and its `send/2,3` callers wait, with no timeout, while the link and
+  its other sessions keep serving. A session that ends before its last
+  frame has its stream reset with application error code 2
+  (`QUIC_CODE_SESSION_ENDED`), and a failed write or stream open ends the
+  session once with `{error, {transport, Reason}}`.
+  `macula_stream:attach_to_link/4` takes the key that signs the session's
+  frames, and `macula_station_link:stream_finished/2` tells the link that
+  a session's last frame is on its stream.
+- `macula_station_link` opens dedicated streams without waiting, and
+  `call_on_stream/6` queues its CALL without waiting. A second call on a
+  content stream while one awaits its reply returns
+  `{error, call_pending}` and sends nothing, and a call on a stream that
+  still holds 1 MiB of calls the station has not read returns
+  `{error, busy}`.
 - Direct dial (`macula_direct_dial:call/5,6` and `call_stream/5,6`) treats
   every advertisement that passes trust filtering as a candidate, in the
   order the DHT returns them. A candidate whose `station_endpoint` can't be
@@ -146,6 +166,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- `macula_station_link:send_stream_frame/3` and
+  `macula_stream:attach_to_link/3`: a session writes its own frames (see
+  Changed).
 - The precompiled QUIC NIF download: `priv/fetch-nif.sh`,
   `scripts/fetch-nif.sh`, the `build-nif.yml` workflow that uploaded the
   `libmacula_quic` release assets, and `MACULA_FORCE_SOURCE_BUILD`, which
