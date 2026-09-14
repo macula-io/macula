@@ -13,6 +13,8 @@
 -behaviour(gen_server).
 
 -export([start_link/0]).
+%% Started from macula_root's child spec, which xref does not count as a call.
+-ignore_xref([{macula_stream_sessions_keeper, start_link, 0}]).
 
 -export([init/1, handle_call/3, handle_cast/2]).
 

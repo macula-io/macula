@@ -58,6 +58,13 @@
 
 -export([start_link/0, new_table/0, admit/2, sessions/0,
          charge/2, release/2, inbox_bytes/0, refusals/0]).
+%% Reads of the node's counts that nothing inside macula calls yet; the tests
+%% read them.
+-ignore_xref([{macula_stream_sessions, sessions, 0}]).
+-ignore_xref([{macula_stream_sessions, inbox_bytes, 0}]).
+-ignore_xref([{macula_stream_sessions, refusals, 0}]).
+%% Started from macula_root's child spec, which xref does not count as a call.
+-ignore_xref([{macula_stream_sessions, start_link, 0}]).
 
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
