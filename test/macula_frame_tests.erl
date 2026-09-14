@@ -122,18 +122,18 @@ decode_rejects_garbage_body_test() ->
 %% Stream parser
 %%------------------------------------------------------------------
 
-parse_stream_drains_multiple_frames_test() ->
+parse_received_drains_multiple_frames_test() ->
     Kp = macula_identity:generate(),
     F1 = macula_frame:sign(build_connect(Kp), Kp),
     F2 = macula_frame:sign(build_hello(Kp), Kp),
     Buf = <<(macula_frame:encode(F1))/binary, (macula_frame:encode(F2))/binary>>,
-    {ok, Frames, <<>>} = macula_frame:parse_stream(Buf),
+    {ok, Frames, <<>>} = macula_frame:parse_received(Buf),
     ?assertEqual(2, length(Frames)),
     [D1, D2] = Frames,
     ?assertEqual(connect, macula_frame:frame_type(D1)),
     ?assertEqual(hello, macula_frame:frame_type(D2)).
 
-parse_stream_returns_unconsumed_tail_test() ->
+parse_received_returns_unconsumed_tail_test() ->
     Kp = macula_identity:generate(),
     F1 = macula_frame:sign(build_connect(Kp), Kp),
     Wire1 = macula_frame:encode(F1),
@@ -141,7 +141,7 @@ parse_stream_returns_unconsumed_tail_test() ->
     F2 = macula_frame:sign(build_hello(Kp), Kp),
     Wire2Partial = binary:part(macula_frame:encode(F2), 0, 6),
     Buf = <<Wire1/binary, Wire2Partial/binary>>,
-    {ok, Frames, Rest} = macula_frame:parse_stream(Buf),
+    {ok, Frames, Rest} = macula_frame:parse_received(Buf),
     ?assertEqual(1, length(Frames)),
     ?assertEqual(Wire2Partial, Rest).
 
@@ -1717,15 +1717,16 @@ check_payload_rejects_only_what_cannot_survive_test() ->
 %% stopped being true, and it did. Now it pins the fix.
 float_payload_round_trips_exactly_test() ->
     [begin
-         {ok, Frame, <<>>} = macula_frame:decode(macula_frame:encode(#{payload => F})),
+         {ok, Frame, <<>>} = received_round_trip(F),
          ?assertEqual(F, maps:get(payload, Frame))
      end || F <- [52.34, -1234.5, 0.0, 1.0e300, 1.0e-300, 3.141592653589793]].
 
 
-%% SURVIVES = encodes, decodes, and comes back with its structure
-%% intact. NOT "did not raise": that predicate is blind to silent
-%% corruption, which is the entire bug class here, and it let two false
-%% oks (oversized payloads, colliding wire keys) sit in a green suite.
+%% SURVIVES = encodes, decodes as a peer receives it, and comes back
+%% with its structure intact. NOT "did not raise": that predicate is
+%% blind to silent corruption, which is the entire bug class here, and it
+%% let two false oks (oversized payloads, colliding wire keys) sit in a
+%% green suite.
 %%
 %% Leaf identity is deliberately NOT asserted, because the wire aliases
 %% leaves by design: an atom, and a `{text, Binary}' of the same name,
@@ -1733,12 +1734,22 @@ float_payload_round_trips_exactly_test() ->
 %% receiving node knows the atom. Node count is invariant under that
 %% aliasing and still changes the moment a map pair is swallowed.
 survives(Term) ->
-    try macula_frame:decode(macula_frame:encode(#{payload => Term})) of
+    try received_round_trip(Term) of
         {ok, Frame, <<>>} -> intact(Term, maps:get(payload, Frame));
         _Other            -> false
     catch
         _:_ -> false
     end.
+
+%% A payload's trip over the wire to a peer. decode/1 checks the fields
+%% of a received frame and refuses a map without frame_type, so the
+%% payload travels in a RESULT frame, whose payload may be any term.
+received_round_trip(Payload) ->
+    macula_frame:decode(macula_frame:encode(result_carrying(Payload))).
+
+result_carrying(Payload) ->
+    #{frame_type => result, call_id => <<0:128>>, responded_by => <<0:256>>,
+      payload => Payload}.
 
 %% Structure AND leaves. Node count alone was not enough: it cannot see
 %% 52.34 arrive as {text, <<"52.34">>}, so survives(52.34) was true and
@@ -1826,8 +1837,7 @@ check_payload_rejects_colliding_wire_keys_test() ->
 
 collision_actually_loses_data_test() ->
     Colliding = #{foo => 1, <<"foo">> => 2},
-    {ok, Frame, <<>>} =
-        macula_frame:decode(macula_frame:encode(#{payload => Colliding})),
+    {ok, Frame, <<>>} = received_round_trip(Colliding),
     ?assertEqual(2, maps:size(Colliding)),
     ?assertEqual(1, maps:size(maps:get(payload, Frame))).
 
