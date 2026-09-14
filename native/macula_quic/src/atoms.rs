@@ -26,6 +26,8 @@ rustler::atoms! {
     sent,
     send_ready,
     send_failed,
+    send_complete,
+    send_incomplete,
     busy,
     undefined,
 

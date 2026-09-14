@@ -23,8 +23,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   code macula sends when it resets or stops a stream, or closes a
   connection: `QUIC_CODE_CANCELLED` (0), `QUIC_CODE_LINGER_EXPIRED` (1),
   `QUIC_CODE_REFUSED` (2), `QUIC_CODE_STREAM_PROTOCOL_ERROR` (3) and
-  `QUIC_CODE_REFUSED_BUSY` (4), for a connection a station closes because it
-  has no handshake slot free. The codes on the wire do not change.
+  `QUIC_CODE_REFUSED_BUSY` (4), when the node has no room: for a connection a
+  station closes because it has no handshake slot free, or a relayed stream it
+  resets because the stream's reader does not take data in time. The codes on
+  the wire do not change.
 - `macula_quic:close_connection/3` closes a connection with an application
   error code and a reason of at most 256 bytes, which the peer reads with
   `macula_quic:close_reason/1`. A code that does not fit a QUIC
@@ -36,6 +38,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it is open: `{application_closed, Code, Reason}` for the peer's
   application close, `locally_closed` when this side closed it, and the
   transport's own reason otherwise.
+- `macula_peering:async_send_on_stream/3` writes a frame onto a dedicated
+  stream without waiting, so a peer that stops reading cannot hold a process
+  that serves several links. It checks, signs and encodes the frame as
+  `send_on_stream/3` does, and refuses what that refuses, then queues it.
+  With 1 MiB already unwritten on the stream it queues nothing and returns
+  `{error, busy}`, and the caller gets `{quic, send_ready, Stream, undefined}`
+  when it may send again. `async_send_on_stream/4` takes a tag: for a frame it
+  queued, the caller gets exactly one `{quic, send_complete, Stream, Tag}` once
+  the frame's bytes are written, or `{quic, send_incomplete, Stream, {Tag,
+  Reason}}` when the stream is reset, closed or fails first.
+- `macula_quic:async_send/3` is `async_send/2` with such a tag.
 
 ### Changed
 
@@ -143,6 +156,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `macula_quic:reset_stream/2` records the reset before it resets the
+  stream's send side, so a `send/2` or tagged `async_send/3` write it
+  interrupts ends with the reason `reset`.
 - `macula_stream:await_reply/1,2` called after a stream's session ended
   returns at once how it ended: the peer's abort as
   `{error, {Code, Message}}`, `{error, peer_closed}` when the peer closed both

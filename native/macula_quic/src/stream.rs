@@ -94,12 +94,70 @@ impl Drop for Reply {
     }
 }
 
+/// Where an async_send/3 caller hears how its data ended: once, as
+/// `{quic, send_complete, Stream, Tag}` when all of it is written, or as
+/// `{quic, send_incomplete, Stream, {Tag, Reason}}` when writes stop first.
+/// Dropped without an answer, it answers `send_incomplete` with `closed`, so
+/// every piece of tagged data a caller queued ends with one message.
+struct Tagged {
+    env: OwnedEnv,
+    saved: Option<(SavedTerm, SavedTerm)>,
+    pid: LocalPid,
+}
+
+impl Tagged {
+    fn new(pid: LocalPid, stream: Term, tag: Term) -> Self {
+        let env = OwnedEnv::new();
+        let saved = Some((env.save(stream), env.save(tag)));
+        Self { env, saved, pid }
+    }
+
+    /// Sends the message, once. As for `Reply`, nothing is sent on a thread
+    /// the VM manages; the NIFs disarm a tag instead.
+    fn answer(&mut self, result: Result<(), Failure>) {
+        if rustler::thread::is_scheduler_thread() {
+            return;
+        }
+        let Some((stream, tag)) = self.saved.take() else {
+            return;
+        };
+        let pid = self.pid;
+        let _ = self.env.send_and_clear(&pid, |env| {
+            let stream = stream.load(env);
+            let tag = tag.load(env);
+            match result {
+                Ok(()) => (atoms::quic(), atoms::send_complete(), stream, tag).encode(env),
+                Err(failure) => (
+                    atoms::quic(),
+                    atoms::send_incomplete(),
+                    stream,
+                    (tag, failure),
+                )
+                    .encode(env),
+            }
+        });
+    }
+
+    /// For a NIF that could not queue the data: its caller gets the error as
+    /// the NIF's result instead.
+    fn disarm(mut self) {
+        self.saved = None;
+    }
+}
+
+impl Drop for Tagged {
+    fn drop(&mut self) {
+        self.answer(Err(Failure::Closed));
+    }
+}
+
 /// Data for the writer task. `charged` bytes of the send budget return when
-/// its write ends; `reply` is set for send/2.
+/// its write ends; `reply` is set for send/2, `tagged` for async_send/3.
 struct Command {
     bytes: Vec<u8>,
     charged: usize,
     reply: Option<Reply>,
+    tagged: Option<Tagged>,
 }
 
 /// Opaque stream handle exposed to Erlang via ResourceArc.
@@ -272,17 +330,26 @@ impl StreamResource {
         bytes: Vec<u8>,
         charged: usize,
         reply: Option<Reply>,
+        tagged: Option<Tagged>,
     ) -> Term<'a> {
-        let command = Command { bytes, charged, reply };
+        let command = Command { bytes, charged, reply, tagged };
         let refused = match self.commands.lock().unwrap().as_ref() {
             Some(sender) => sender.send(command).err().map(|refused| refused.0),
             None => Some(command),
         };
         match refused {
             None => atoms::ok().encode(env),
-            Some(Command { charged, reply, .. }) => {
+            Some(Command {
+                charged,
+                reply,
+                tagged,
+                ..
+            }) => {
                 if let Some(reply) = reply {
                     reply.disarm();
+                }
+                if let Some(tagged) = tagged {
+                    tagged.disarm();
                 }
                 self.budget.add_permits(charged);
                 self.pending.fetch_sub(1, Ordering::SeqCst);
@@ -346,30 +413,39 @@ async fn write_loop(
     };
     let failure = stream.stop_writes(ended);
     commands.close();
-    while let Ok(Command { charged, mut reply, .. }) = commands.try_recv() {
+    while let Ok(Command { charged, mut reply, mut tagged, .. }) = commands.try_recv() {
         answer(&mut reply, Err(failure.clone()));
+        tell_tagged(&mut tagged, Err(failure.clone()));
         written(&stream, charged);
     }
     tell_ready(&stream, std::mem::take(&mut *stream.waiting.lock().unwrap()));
 }
 
-/// Writes one command's data and answers its send/2 caller. Returns the
-/// reason all writes stop, when this write ends them.
+/// Writes one command's data and answers its send/2 or async_send/3 caller.
+/// Returns the reason all writes stop, when this write ends them.
 async fn write_command(stream: &ResourceArc<StreamResource>, command: Command) -> Result<(), Failure> {
-    let Command { bytes, charged, mut reply } = command;
+    let Command { bytes, charged, mut reply, mut tagged } = command;
     let result = write_all(stream, &bytes).await;
     written(stream, charged);
     match result {
         Ok(()) => {
             answer(&mut reply, Ok(()));
+            tell_tagged(&mut tagged, Ok(()));
             Ok(())
         }
         Err(failure) => {
             let failure = stream.stop_writes(failure);
             report_failed_write(stream, &failure);
             answer(&mut reply, Err(failure.clone()));
+            tell_tagged(&mut tagged, Err(failure.clone()));
             Err(failure)
         }
+    }
+}
+
+fn tell_tagged(tagged: &mut Option<Tagged>, result: Result<(), Failure>) {
+    if let Some(tagged) = tagged.as_mut() {
+        tagged.answer(result);
     }
 }
 
@@ -500,7 +576,7 @@ fn nif_send<'a>(
         return Ok(refusal);
     }
     let reply = Reply::new(env.pid(), reference);
-    Ok(stream.queue(env, data.as_slice().to_vec(), 0, Some(reply)))
+    Ok(stream.queue(env, data.as_slice().to_vec(), 0, Some(reply), None))
 }
 
 /// NIF: async_send(StreamRef, Data) -> ok | {error, busy} | {error, Reason}
@@ -515,10 +591,39 @@ fn nif_async_send<'a>(
     stream: ResourceArc<StreamResource>,
     data: rustler::Binary<'a>,
 ) -> NifResult<Term<'a>> {
+    Ok(async_queue(env, &stream, data, None))
+}
+
+/// NIF: async_send(StreamRef, Data, Tag) -> ok | {error, busy} | {error, Reason}
+///
+/// async_send/2 for data whose end the calling process hears about. For data
+/// it queued, that process gets exactly one `{quic, send_complete, StreamRef,
+/// Tag}` once all of it is written, or `{quic, send_incomplete, StreamRef,
+/// {Tag, Reason}}` when the stream's writes stop first.
+#[rustler::nif]
+fn nif_async_send_tagged<'a>(
+    env: Env<'a>,
+    stream: ResourceArc<StreamResource>,
+    data: rustler::Binary<'a>,
+    tag: Term<'a>,
+) -> NifResult<Term<'a>> {
+    let stream_term = stream.encode(env);
+    Ok(async_queue(env, &stream, data, Some((stream_term, tag))))
+}
+
+/// Queues data for async_send within the send budget, with the stream and tag
+/// of a tagged send, or answers `{error, busy}` and notes the caller to tell
+/// when it may retry.
+fn async_queue<'a>(
+    env: Env<'a>,
+    stream: &ResourceArc<StreamResource>,
+    data: rustler::Binary<'a>,
+    tag: Option<(Term<'a>, Term<'a>)>,
+) -> Term<'a> {
     stream.pending.fetch_add(1, Ordering::SeqCst);
     if let Some(refusal) = stream.refusal(env) {
         stream.pending.fetch_sub(1, Ordering::SeqCst);
-        return Ok(refusal);
+        return refusal;
     }
     let charged = data.len().min(SEND_BUDGET_BYTES);
     let mut waiting = stream.waiting.lock().unwrap();
@@ -526,7 +631,8 @@ fn nif_async_send<'a>(
         Ok(permit) => {
             permit.forget();
             drop(waiting);
-            Ok(stream.queue(env, data.as_slice().to_vec(), charged, None))
+            let tagged = tag.map(|(stream_term, tag)| Tagged::new(env.pid(), stream_term, tag));
+            stream.queue(env, data.as_slice().to_vec(), charged, None, tagged)
         }
         Err(_) => {
             let caller = env.pid();
@@ -535,7 +641,7 @@ fn nif_async_send<'a>(
             }
             drop(waiting);
             stream.pending.fetch_sub(1, Ordering::SeqCst);
-            Ok((atoms::error(), atoms::busy()).encode(env))
+            (atoms::error(), atoms::busy()).encode(env)
         }
     }
 }
@@ -592,11 +698,13 @@ fn nif_reset_stream<'a>(
         task.abort();
     }
 
+    // Recorded before the send half goes, so a write this reset interrupts
+    // finds the reset, not a missing send half, and ends with `reset`.
+    stream.stop_writes(Failure::Reset);
     let result = match stream.send.lock().unwrap().take() {
         Some(mut send_stream) => send_stream.reset(code).map_err(|e| format!("{}", e)),
         None => Ok(()), // already finished/reset — idempotent
     };
-    stream.stop_writes(Failure::Reset);
     stream.stop_taking_data();
     stream.writer_wake.notify_one();
 

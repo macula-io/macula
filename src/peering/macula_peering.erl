@@ -38,8 +38,15 @@
     open_dedicated_stream/1,
     async_open_dedicated_stream/1,
     send_on_stream/3,
+    async_send_on_stream/3,
+    async_send_on_stream/4,
     close_dedicated_stream/1
 ]).
+
+%% Exports with no caller inside macula yet: macula-station's observer relays
+%% stream frames with them, so a peer that stops reading never holds it.
+-ignore_xref([{macula_peering, async_send_on_stream, 3}]).
+-ignore_xref([{macula_peering, async_send_on_stream, 4}]).
 
 %% Capability bit asserting the peer is a relay-station (i.e. it
 %% advertises on behalf of others via gossip). Daemons MUST leave this
@@ -187,15 +194,44 @@ async_open_dedicated_stream(Pid) ->
 %% sign on the caller's behalf here, since it is not a party to this
 %% stream). Synchronous: waits in the calling process until the frame
 %% is written, for as long as the peer withholds QUIC flow-control
-%% credit, as `macula_quic:send/2' does.
+%% credit, as `macula_quic:send/2' does. A process that must not wait on a
+%% peer uses `async_send_on_stream/3' instead.
 -spec send_on_stream(reference(), macula_frame:frame(),
                      macula_identity:key_pair()) -> ok | {error, term()}.
 send_on_stream(Stream, Frame, Identity) when is_map(Frame) ->
-    send_checked_on_stream(macula_frame:check_frame(Frame), Stream, Frame, Identity).
+    checked_send(macula_frame:check_frame(Frame),
+                 fun(Bytes) -> macula_quic:send(Stream, Bytes) end, Frame, Identity).
 
-send_checked_on_stream(ok, Stream, Frame, Identity) ->
-    macula_quic:send(Stream, macula_frame:encode(ensure_signed(Frame, Identity)));
-send_checked_on_stream({error, Reason} = Rejected, _Stream, Frame, _Identity) ->
+%% @doc `send_on_stream/3' without waiting: the frame is checked, signed and
+%% encoded the same way, then queued with `macula_quic:async_send/2', so a
+%% peer that stops reading cannot hold the calling process. Returns `ok' once
+%% the frame is queued. When the stream already holds 1 MiB unwritten, queues
+%% nothing and returns `{error, busy}', and the calling process later gets
+%% `{quic, send_ready, Stream, undefined}' when it may send again. A frame
+%% `send_on_stream/3' refuses is refused with the same error.
+-spec async_send_on_stream(reference(), macula_frame:frame(),
+                           macula_identity:key_pair()) -> ok | {error, term()}.
+async_send_on_stream(Stream, Frame, Identity) when is_map(Frame) ->
+    checked_send(macula_frame:check_frame(Frame),
+                 fun(Bytes) -> macula_quic:async_send(Stream, Bytes) end, Frame, Identity).
+
+%% @doc `async_send_on_stream/3' for a frame whose end the calling process
+%% hears about. For a frame it queued, that process gets exactly one of
+%% `{quic, send_complete, Stream, Tag}', once the frame's bytes are written,
+%% and `{quic, send_incomplete, Stream, {Tag, Reason}}', when the stream is
+%% reset, closed or fails first. `Tag' is the caller's own term, copied into
+%% that message, so keep it small.
+-spec async_send_on_stream(reference(), macula_frame:frame(),
+                           macula_identity:key_pair(), term()) -> ok | {error, term()}.
+async_send_on_stream(Stream, Frame, Identity, Tag) when is_map(Frame) ->
+    checked_send(macula_frame:check_frame(Frame),
+                 fun(Bytes) -> macula_quic:async_send(Stream, Bytes, Tag) end, Frame, Identity).
+
+%% The one path for a frame written straight onto a stream: checked, signed
+%% unless it already is, encoded, and handed to Send.
+checked_send(ok, Send, Frame, Identity) ->
+    Send(macula_frame:encode(ensure_signed(Frame, Identity)));
+checked_send({error, Reason} = Rejected, _Send, Frame, _Identity) ->
     logger:error("[macula_peering] refused unsendable ~p frame: ~ts",
                  [maps:get(frame_type, Frame, unknown),
                   macula_frame:explain(Reason)]),

@@ -25,6 +25,14 @@
 %%%   {quic, send_failed, StreamRef, Reason}
 %%%     A write on the stream failed; later sends return the error.
 %%%     Handle it as a closed stream.
+%%%
+%%% Sent to the process that called async_send/3, once per tagged send
+%%% that returned ok:
+%%%   {quic, send_complete, StreamRef, Tag}
+%%%     All the data queued with Tag is written.
+%%%   {quic, send_incomplete, StreamRef, {Tag, Reason}}
+%%%     The stream was reset or closed, or its writes failed, before
+%%%     that data was written.
 %%% @end
 %%%-------------------------------------------------------------------
 -module(macula_quic).
@@ -66,6 +74,7 @@
     %% Stream
     send/2,
     async_send/2,
+    async_send/3,
     close_stream/1,
     reset_stream/2,
     setopt/3,
@@ -531,6 +540,19 @@ await_sent({error, _} = Error, _Ref) ->
 async_send(Stream, Data) ->
     nif_async_send(Stream, iolist_to_binary(Data)).
 
+%% @doc `async_send/2' for data whose end the calling process hears about.
+%%
+%% Returns as `async_send/2' does, and queues nothing unless it returns `ok'.
+%% For data it queued, the calling process gets exactly one message:
+%% `{quic, send_complete, Stream, Tag}' once all of the data is written, or
+%% `{quic, send_incomplete, Stream, {Tag, Reason}}' when the stream is reset,
+%% closed or fails first, `Reason' being `reset', `closed' or why the write
+%% failed. `Tag' is the caller's own term, copied into that message, so keep
+%% it small.
+-spec async_send(reference(), iodata(), term()) -> ok | {error, term()}.
+async_send(Stream, Data, Tag) ->
+    nif_async_send_tagged(Stream, iolist_to_binary(Data), Tag).
+
 %% @doc Close a stream's sending side gracefully, and return at once.
 %%
 %% Data queued before the close is still written, and then a QUIC FIN ends
@@ -722,6 +744,9 @@ nif_send(_Stream, _Data, _Ref) ->
     erlang:nif_error(nif_not_loaded).
 
 nif_async_send(_Stream, _Data) ->
+    erlang:nif_error(nif_not_loaded).
+
+nif_async_send_tagged(_Stream, _Data, _Tag) ->
     erlang:nif_error(nif_not_loaded).
 
 nif_close_stream(_Stream, _LingerMs) ->
