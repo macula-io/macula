@@ -59,7 +59,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   counts for the memory it takes: its bytes, a decoded term's heap size, and
   the cell that queues it, so empty chunks count too. A chunk that would take
   the stream past the bound ends the session: the peer gets a STREAM_ERROR
-  with code `stream_protocol_error`, and the owner is told. A chunk handed
+  with the new code `resource_exhausted`, and the owner is told. That code
+  says the receiving side had no room for what was sent, and a later session
+  may succeed; `stream_protocol_error` says the peer broke the protocol, and
+  sending the same again fails the same way. A chunk handed
   straight to a waiting reader counts for nothing. `macula_stream:start_link/1`
   takes a `max_inbox_bytes` option for another bound, and
   `macula_stream:info/1` reports `inbox_bytes`.
@@ -69,7 +72,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `max_served_inbox_bytes_per_caller` and `max_served_inbox_bytes` macula
   application env. The caller budget is one stream's own bound, so a caller
   with many sessions keeps no more unread than one session may. A chunk past
-  a budget ends its session with `stream_protocol_error`, as a chunk past the
+  a budget ends its session with `resource_exhausted`, as a chunk past the
   stream's own bound does. A stream charges the budget in its own process and
   gives the bytes back when a reader takes them or the stream ends.
   `macula_stream_sessions:inbox_bytes/0` reports what the node's served

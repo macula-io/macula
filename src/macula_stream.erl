@@ -666,19 +666,20 @@ enqueue_or_deliver(Encoding, Body, #state{waiters = W0} = State) ->
 
 %% A chunk that would take the memory the queued chunks hold past the
 %% stream's bound, or a served stream's caller or node past its budget for
-%% unread bytes, ends the session with a stream protocol error, and nothing
-%% of it is kept.
+%% unread bytes, ends the session with resource_exhausted, and nothing of it
+%% is kept: the receiving side has no room, which a peer that keeps to the
+%% protocol cannot see coming.
 enqueue(Bytes, _Encoding, _Kept, #state{inbox_bytes = Queued, max_inbox_bytes = Max} = State)
   when Queued + Bytes > Max ->
-    abort_session(<<"stream_protocol_error">>,
-                  <<"the peer sent more than the stream keeps unread">>, State);
+    abort_session(<<"resource_exhausted">>,
+                  <<"the stream keeps no more unread bytes">>, State);
 enqueue(Bytes, Encoding, Kept, State) ->
     queue_charged(charge_budget(Bytes, State), Bytes, Encoding, Kept, State).
 
 queue_charged(ok, Bytes, Encoding, Kept, #state{inbox = Inbox, inbox_bytes = Queued} = State) ->
     State#state{inbox = queue:in({Encoding, Kept}, Inbox), inbox_bytes = Queued + Bytes};
 queue_charged({error, _Refused}, _Bytes, _Encoding, _Kept, State) ->
-    abort_session(<<"stream_protocol_error">>,
+    abort_session(<<"resource_exhausted">>,
                   <<"the node keeps no more unread bytes for this session">>, State).
 
 %% A served stream on a station link charges what it keeps unread to its

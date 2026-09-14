@@ -285,8 +285,9 @@ sender_first(server, Client, Server) -> {Server, Client}.
 %%%===================================================================
 
 %% Chunks no reader has taken wait in the stream's inbox. A chunk that would
-%% take the waiting bytes past the stream's bound ends the session with a
-%% stream protocol error, whether it arrives as raw bytes or as a decoded term.
+%% take the waiting bytes past the stream's bound ends the session with
+%% resource_exhausted, whether it arrives as raw bytes or as a decoded term:
+%% the receiving side had no room, and the peer broke no rule.
 a_chunk_past_the_inbox_bound_ends_the_stream_test_() ->
     [{Name, fun() -> past_the_bound_ends_the_stream(Chunks) end}
      || {Name, Chunks} <- [{"raw chunks", [{raw, binary:copy(<<1>>, 400)} || _ <- lists:seq(1, 3)]},
@@ -305,8 +306,8 @@ a_reader_that_keeps_up_never_meets_the_inbox_bound_test() ->
 past_the_bound_ends_the_stream(Chunks) ->
     {Server, Client} = bounded_pair(1_000),
     [ok = macula_stream:deliver_chunk(Client, Encoding, Body) || {Encoding, Body} <- Chunks],
-    ?assertMatch({told, {error, {<<"stream_protocol_error">>, _}}}, told(Client, 1_000)),
-    ?assertMatch({told, {error, {<<"stream_protocol_error">>, _}}}, told(Server, 1_000)).
+    ?assertMatch({told, {error, {<<"resource_exhausted">>, _}}}, told(Client, 1_000)),
+    ?assertMatch({told, {error, {<<"resource_exhausted">>, _}}}, told(Server, 1_000)).
 
 %% The bound limits what the stream process holds, not only what it counts.
 %% Parts of a larger binary, as a decoded frame's body is, keep none of the
@@ -340,8 +341,8 @@ small_integers() ->
 
 %% Served streams share their caller's inbox budget: the streams of one
 %% caller together keep no more unread than that budget, a chunk past it ends
-%% its session with a stream protocol error, and another caller's stream
-%% still takes chunks.
+%% its session with resource_exhausted, and another caller's stream still
+%% takes chunks.
 served_streams_of_a_caller_share_its_inbox_budget_test() ->
     {ok, _} = application:ensure_all_started(macula),
     Budget = 1_000_000,
@@ -354,11 +355,30 @@ served_streams_of_a_caller_share_its_inbox_budget_test() ->
             Chunk = crypto:strong_rand_bytes(100_000),
             [ok = macula_stream:deliver_chunk(S, raw, Chunk) || S <- Streams, _ <- lists:seq(1, 5)],
             ?assert(lists:sum([inbox_bytes(S) || S <- Streams]) =< Budget),
-            ?assertMatch({told, _Stream, {error, {<<"stream_protocol_error">>, _}}}, any_told(1_000)),
+            ?assertMatch({told, _Stream, {error, {<<"resource_exhausted">>, _}}}, any_told(1_000)),
             ok = macula_stream:deliver_chunk(Bystander, raw, Chunk),
             ?assert(inbox_bytes(Bystander) > 0)
         after
             end_served_streams([Bystander | Streams], Link)
+        end
+    end).
+
+%% All served streams on the node share its inbox budget, whichever callers
+%% they serve: together they keep no more unread than it, and a chunk past it
+%% ends its session with resource_exhausted.
+served_streams_on_the_node_share_its_inbox_budget_test() ->
+    {ok, _} = application:ensure_all_started(macula),
+    Room = 1_000_000,
+    with_macula_env(#{max_served_inbox_bytes => macula_stream_sessions:inbox_bytes() + Room}, fun() ->
+        Link = spawn(fun park/0),
+        Streams = [served_stream(Link, crypto:strong_rand_bytes(32)) || _ <- lists:seq(1, 4)],
+        try
+            Chunk = crypto:strong_rand_bytes(100_000),
+            [ok = macula_stream:deliver_chunk(S, raw, Chunk) || S <- Streams, _ <- lists:seq(1, 5)],
+            ?assert(lists:sum([inbox_bytes(S) || S <- Streams]) =< Room),
+            ?assertMatch({told, _Stream, {error, {<<"resource_exhausted">>, _}}}, any_told(1_000))
+        after
+            end_served_streams(Streams, Link)
         end
     end).
 
