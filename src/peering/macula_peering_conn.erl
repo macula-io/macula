@@ -195,6 +195,11 @@
 %% protocol (e.g. V1 frames against a V2 station) — without this the
 %% sup accumulates stuck workers indefinitely. See PLAN_FLYING_RESTART.
 -define(HANDSHAKE_TIMEOUT_MS, 30_000).
+%% The largest frame the handshake reads, 64 KiB. CONNECT and HELLO are about
+%% 1 KB, and stay under 20 KB with the handshake frames planned for 11.0.0.
+%% A length header above it ends the connection as soon as the header
+%% arrives, before the frame's bytes are buffered or decoded.
+-define(HANDSHAKE_FRAME_BYTES, 64 * 1024).
 
 %%------------------------------------------------------------------
 %% Lifecycle
@@ -384,7 +389,8 @@ handshaking(info, {quic, new_stream, Stream, _Info}, Data) ->
     {keep_state, Data#data{quic_stream = Stream}};
 handshaking(info, {quic, Bin, Stream, _Flags},
             #data{quic_stream = Stream, buf = Buf} = Data) when is_binary(Bin) ->
-    consume_handshake(macula_frame:parse_received(<<Buf/binary, Bin/binary>>), Data);
+    consume_handshake(macula_frame:parse_received(<<Buf/binary, Bin/binary>>,
+                                                  ?HANDSHAKE_FRAME_BYTES), Data);
 %% `{quic, closed, Conn, Detail}' is NEVER actually sent by the NIF —
 %% `native/macula_quic/src/atoms.rs' defines the atom but nothing calls
 %% `send_event' with it (verified directly in source: the connection's

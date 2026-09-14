@@ -101,7 +101,7 @@
     validate_received/1,
 
     %% Stream parser — drain frames a peer sent from a buffer
-    parse_received/1,
+    parse_received/1, parse_received/2,
     %% Deprecated, removed in 11.0.0: the 10.x shape of parse_received/1
     parse_stream/1,
 
@@ -1570,21 +1570,22 @@ encode_with_check(Len, Bytes) ->
   | {more, pos_integer()}
   | {error, frame_too_large | bad_frame | {invalid_frame, frame_type() | unknown, atom()}}.
 decode(Buf) when is_binary(Buf) ->
-    single(decode_item(Buf)).
+    single(decode_item(Buf, ?MAX_FRAME_BYTES)).
 
 single({invalid, Invalid, _Rest}) -> {error, Invalid};
 single(Decoded) -> Decoded.
 
 %% One frame from the head of a buffer, with its fields checked once it
-%% decodes. A frame whose fields are refused comes back with the rest of
-%% the buffer, since its bytes were read in full.
-decode_item(<<Len:32/big, _Rest/binary>>) when Len > ?MAX_FRAME_BYTES ->
+%% decodes. A length header above Cap is refused from its four bytes. A
+%% frame whose fields are refused comes back with the rest of the buffer,
+%% since its bytes were read in full.
+decode_item(<<Len:32/big, _Rest/binary>>, Cap) when Len > Cap ->
     {error, frame_too_large};
-decode_item(<<Len:32/big, Bytes:Len/binary, Rest/binary>>) ->
+decode_item(<<Len:32/big, Bytes:Len/binary, Rest/binary>>, _Cap) ->
     fields_checked(decode_cbor(Bytes, Rest));
-decode_item(<<Len:32/big, Tail/binary>>) ->
+decode_item(<<Len:32/big, Tail/binary>>, _Cap) ->
     {more, Len - byte_size(Tail)};
-decode_item(Buf) when byte_size(Buf) < 4 ->
+decode_item(Buf, _Cap) when byte_size(Buf) < 4 ->
     {more, 4 - byte_size(Buf)}.
 
 fields_checked({ok, Frame, Rest}) ->
@@ -1643,18 +1644,31 @@ decode_record_or_keep(Other) -> Other.
     {ok, [item()], binary()}
   | {malformed, [item()], frame_too_large | bad_frame}.
 parse_received(Buf) when is_binary(Buf) ->
-    drain(Buf, []).
+    parse_received(Buf, ?MAX_FRAME_BYTES).
 
-drain(Buf, Acc) ->
-    drain_step(decode_item(Buf), Buf, Acc).
+%% @doc `parse_received/1' with a frame cap of `MaxFrameBytes', which may not
+%% exceed the 16 MiB frame cap. A length header above `MaxFrameBytes' ends
+%% the parse as `frame_too_large' from its four bytes, so a caller that keeps
+%% `Tail' holds at most `MaxFrameBytes' plus the 4-byte header. A
+%% connection's handshake reads with a small cap.
+-spec parse_received(binary(), pos_integer()) ->
+    {ok, [item()], binary()}
+  | {malformed, [item()], frame_too_large | bad_frame}.
+parse_received(Buf, MaxFrameBytes)
+  when is_binary(Buf), is_integer(MaxFrameBytes), MaxFrameBytes > 0,
+       MaxFrameBytes =< ?MAX_FRAME_BYTES ->
+    drain(Buf, MaxFrameBytes, []).
 
-drain_step({ok, Frame, Rest}, _Buf, Acc) ->
-    drain(Rest, [Frame | Acc]);
-drain_step({invalid, Invalid, Rest}, _Buf, Acc) ->
-    drain(Rest, [Invalid | Acc]);
-drain_step({more, _N}, Buf, Acc) ->
+drain(Buf, Cap, Acc) ->
+    drain_step(decode_item(Buf, Cap), Buf, Cap, Acc).
+
+drain_step({ok, Frame, Rest}, _Buf, Cap, Acc) ->
+    drain(Rest, Cap, [Frame | Acc]);
+drain_step({invalid, Invalid, Rest}, _Buf, Cap, Acc) ->
+    drain(Rest, Cap, [Invalid | Acc]);
+drain_step({more, _N}, Buf, _Cap, Acc) ->
     {ok, lists:reverse(Acc), Buf};
-drain_step({error, Reason}, _Buf, Acc) ->
+drain_step({error, Reason}, _Buf, _Cap, Acc) ->
     {malformed, lists:reverse(Acc), Reason}.
 
 %% @doc Drain the complete frames in a buffer, in the `{Frames, Tail}'
