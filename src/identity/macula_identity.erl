@@ -23,9 +23,9 @@
     puzzle_valid/2
 ]).
 
-%% Public API with no caller inside macula: the client pool and the station
-%% link generate puzzle-hardened identities with generate/1.
--ignore_xref([{macula_identity, generate, 0}]).
+%% Public API with no caller inside macula: macula-station and tests call it
+%% for an explicit difficulty or a plain key.
+-ignore_xref([{macula_identity, generate, 1}]).
 
 -export_type([pubkey/0, privkey/0, sig/0, key_pair/0, node_id/0]).
 
@@ -42,27 +42,31 @@
 %% Generation
 %%------------------------------------------------------------------
 
-%% @doc Generate a fresh Ed25519 key pair. Does not grind a puzzle.
+%% @doc Generate a fresh Ed25519 key pair whose node id passes the puzzle
+%% check at the configured difficulty, as a station applies it. Grinding
+%% for it takes milliseconds.
 -spec generate() -> key_pair().
 generate() ->
-    {Pub, Priv} = crypto:generate_key(eddsa, ed25519),
-    #{public => Pub, private => Priv}.
+    generate(#{}).
 
-%% @doc Generate a key pair, optionally grinding until the puzzle is satisfied.
+%% @doc Generate a key pair. It is ground until it satisfies the puzzle,
+%% unless `puzzle' is `false', which gives a plain key for a caller that
+%% needs one, such as a test of the puzzle check itself.
 %%
 %% Opts:
 %% <ul>
-%%   <li>`puzzle' :: boolean() — default false</li>
-%%   <li>`difficulty' :: non_neg_integer() — leading zero bits required</li>
+%%   <li>`puzzle' :: boolean(), default true</li>
+%%   <li>`difficulty' :: non_neg_integer(), the leading zero bits required</li>
 %% </ul>
 -spec generate(#{puzzle => boolean(), difficulty => non_neg_integer(), _ => _}) ->
     key_pair().
-generate(#{puzzle := true} = Opts) ->
+generate(#{puzzle := false}) ->
+    {Pub, Priv} = crypto:generate_key(eddsa, ed25519),
+    #{public => Pub, private => Priv};
+generate(Opts) ->
     Difficulty = maps:get(difficulty, Opts, default_difficulty()),
     {ok, {Pub, Priv}} = macula_crypto_nif:grind_puzzle(Difficulty),
-    #{public => Pub, private => Priv};
-generate(_Opts) ->
-    generate().
+    #{public => Pub, private => Priv}.
 
 %%------------------------------------------------------------------
 %% Persistence — atomic write with 0600 permissions.

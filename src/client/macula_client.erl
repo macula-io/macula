@@ -1370,20 +1370,17 @@ notify_legacy(Keys) ->
 
 %% The pool's own identity when the caller doesn't supply one.
 %%
-%% Puzzle-hardened, not `macula_identity:generate()' — this identity is
-%% exactly what every station's `puzzle_enforcement_mode/0' checks on
-%% CONNECT/HELLO, and a caller who didn't think to pass one is the
-%% caller most likely to be surprised by a silent rejection: the
-%% underlying QUIC/TLS connection still reports healthy, and
-%% `subscribe/5' still returns `{ok, _}' locally, because both succeed
-%% before the station ever closes the handshake it rejected. Confirmed
-%% live 2026-08-21: `MaculaRealm.Mesh' connected with `%{}' opts, and its
-%% dashboard sat dark for over an hour — five links reporting healthy,
-%% zero events ever delivered — before the identity itself turned out to
-%% be the reason. Grinding difficulty 8 is sub-millisecond, so a caller
-%% who genuinely wants an unhardened identity still has
-%% `macula_identity:generate()' directly; this only changes the pool's
-%% own default.
+%% A fresh one from `macula_identity:generate/0', which passes the puzzle
+%% check every station's `puzzle_enforcement_mode/0' applies on
+%% CONNECT/HELLO. A caller who didn't think to pass one is the caller most
+%% likely to be surprised by a silent rejection: the underlying QUIC/TLS
+%% connection still reports healthy, and `subscribe/5' still returns
+%% `{ok, _}' locally, because both succeed before the station ever closes
+%% the handshake it rejected. Confirmed live 2026-08-21: `MaculaRealm.Mesh'
+%% connected with `%{}' opts, and its dashboard sat dark for over an hour,
+%% five links reporting healthy and zero events ever delivered, before the
+%% identity itself turned out to be the reason. A caller who needs a plain
+%% key passes one from `macula_identity:generate(#{puzzle => false})'.
 %%
 %% Lazy on purpose: `maps:get/3' evaluates its default argument
 %% unconditionally, which would grind a puzzle on every `connect/2' call
@@ -1392,7 +1389,7 @@ resolve_identity(Opts) ->
     identity_or_generate(maps:find(identity, Opts)).
 
 identity_or_generate({ok, Identity}) -> Identity;
-identity_or_generate(error) -> macula_identity:generate(#{puzzle => true}).
+identity_or_generate(error) -> macula_identity:generate().
 
 %% First-success across the pool's healthy links. Tries each link in
 %% turn; the first non-error reply wins. It moves on to the next link only

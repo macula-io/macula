@@ -163,6 +163,9 @@ Every node should upgrade to this release.
 
 ### Changed
 
+- `macula_identity:generate/0` returns an identity that passes the station
+  puzzle. `macula_identity:generate/1` does the same unless given
+  `puzzle => false`, which returns a plain key.
 - `macula_cbor_nif:unpack_deterministic/1`, the decoder behind
   `macula_frame` and `macula_record`, decodes at most 131,072 CBOR items
   from one input, an array, a map, a key and a value each counting as one,

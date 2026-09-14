@@ -940,7 +940,7 @@ peer_node_id(Pid) ->
 %% The identity a link connects with: the one given, or else a fresh one
 %% that passes the puzzle check, as the macula_client pool's default does.
 identity_or_generate({ok, Identity}) -> Identity;
-identity_or_generate(error) -> macula_identity:generate(#{puzzle => true}).
+identity_or_generate(error) -> macula_identity:generate().
 
 init(Opts) ->
     %% TLS policy (`verify' / `expected_node_id') rides in the seed map,
