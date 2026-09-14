@@ -248,6 +248,7 @@ functions(Opts) ->
 
 default_stream_io() ->
     #{recv => fun macula:recv/2,
+      controlling_process => fun macula_stream:controlling_process/2,
       send => fun macula_stream:send/3,
       close_send => fun macula_stream:close_send/1,
       close => fun macula_stream:close/1,
@@ -349,9 +350,16 @@ unadvertise(Pool, Realm, Procedure) ->
 dispatch(Sup, Module, Pool, Realm, Announce, Args, Functions, StreamPid, StreamArgs) ->
     case supervisor:start_child(Sup, [Module, Pool, Realm, Announce, Args,
                                       StreamPid, StreamArgs, Functions]) of
-        {ok, _Pid} -> ok;
+        {ok, Pid} -> hand_stream_to(Functions, StreamPid, Pid);
         {error, _Reason} -> ok
     end.
+
+%% @private The process running this dispatch owns the stream, and the
+%% streamer it started takes the stream over, so the stream ends when the
+%% streamer ends rather than when this dispatch returns.
+hand_stream_to(#{stream_io := #{controlling_process := HandOver}}, StreamPid, StreamerPid) ->
+    _ = HandOver(StreamPid, StreamerPid),
+    ok.
 
 %% @doc Send a chunk out on the stream this streamer owns.
 -spec send(pid(), binary()) -> ok | {error, term()}.
@@ -467,6 +475,13 @@ handle_info({'EXIT', Reader, Reason}, #tstate{reader = Reader} = State)
     {stop, {reader_crashed, Reason}, State};
 handle_info({'EXIT', Stream, Reason}, #tstate{stream = Stream} = State) ->
     {stop, Reason, State};
+%% The stream's session ended (`macula_stream:controlling_process/2'): a
+%% streamer has nothing left to serve, whether or not its module would stop
+%% by itself.
+handle_info({macula_stream, ended, Stream, closed}, #tstate{stream = Stream} = State) ->
+    {stop, normal, State};
+handle_info({macula_stream, ended, Stream, _How}, #tstate{stream = Stream} = State) ->
+    {stop, {shutdown, session_ended}, State};
 handle_info(_Msg, State) ->
     {noreply, State}.
 

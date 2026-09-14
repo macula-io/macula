@@ -10,8 +10,9 @@
 
 -include_lib("eunit/include/eunit.hrl").
 
-%% macula_upload callbacks for the gated upload test.
--export([init/1, handle_uploaded/2]).
+%% macula_upload callbacks for the gated upload test, and macula_streamer
+%% callbacks for the streamer session test (init/1 serves both).
+-export([init/1, handle_uploaded/2, handle_open/2]).
 
 %% Realm-per-call: tests use the all-zeros realm tag (DHT-internal /
 %% realm-agnostic) for every call/subscribe/publish.
@@ -3123,6 +3124,169 @@ a_disconnect_tells_open_streams_its_reasons_name_only_test_() ->
              teardown_link_for_streams(ok)
          end
      end}.
+
+%% -- a served session leaves no process behind ---------------------
+
+-define(SESSIONS, 3).
+
+%% However a served session ends, the processes that served it end with it:
+%% no stream process and no host process stays behind. Each ending runs
+%% three sessions on one link.
+a_served_session_leaves_no_process_behind_test_() ->
+    [{Name, {timeout, 10, fun() -> served_sessions_end(Handler, Ending) end}}
+     || {Name, Handler, Ending} <- [{"the handler closes and returns", fun close_and_return/2, none},
+                                     {"the handler aborts", fun abort_and_return/2, none},
+                                     {"the handler crashes", fun crash_serving/2, none},
+                                     {"the caller ends the stream", fun read_to_the_end/2, caller_end},
+                                     {"the caller sends an error", fun read_to_the_end/2, caller_error},
+                                     {"the link is lost", fun read_to_the_end/2, link_lost}]].
+
+served_sessions_end(Handler, Ending) ->
+    {Pid, FakePeer, _PeerNodeId} = setup_link_for_streams(),
+    Log = macula_test_log:capture(),
+    try
+        Before = macula_test_sessions:serving(),
+        Procedure = <<"foo.sessions">>,
+        ok = macula_station_link:advertise_stream(Pid, ?REALM, Procedure, server_stream,
+                                                  telling_when_served(self(), Handler)),
+        flush_send_frame_casts(),
+        CallerKp = macula_identity:generate(),
+        Served = [serve_session(Pid, FakePeer, Procedure, CallerKp) || _ <- lists:seq(1, ?SESSIONS)],
+        ok = end_served_sessions(Ending, Pid, FakePeer, Served),
+        ?assertEqual([], macula_test_sessions:await_none_new(Before)),
+        stop_link_if_alive(Pid, is_process_alive(Pid))
+    after
+        macula_test_log:release(Log),
+        teardown_link_for_streams(ok)
+    end.
+
+%% A STREAM_OPEN refused before any handler runs starts no process at all.
+a_refused_stream_open_starts_no_process_test_() ->
+    {timeout, 5,
+     fun() ->
+         {Pid, FakePeer, _PeerNodeId} = setup_link_for_streams(),
+         try
+             Before = macula_test_sessions:serving(),
+             CallerKp = macula_identity:generate(),
+             [inject_dedicated_stream_open(
+                Pid, FakePeer, make_ref(),
+                macula_frame:sign(stream_open_frame(<<"foo.nobody">>, CallerKp, refused), CallerKp))
+              || _ <- lists:seq(1, ?SESSIONS)],
+             _ = sys:get_state(Pid),
+             ?assertEqual([], macula_test_sessions:await_none_new(Before)),
+             macula_station_link:stop(Pid)
+         after
+             teardown_link_for_streams(ok)
+         end
+     end}.
+
+%% A session served by a macula_streamer whose module never stops by itself
+%% ends with its caller: the streamer and its stream process end too.
+a_streamer_served_session_ends_with_its_caller_test_() ->
+    {timeout, 10,
+     fun() ->
+         {Pid, FakePeer, _PeerNodeId} = setup_link_for_streams(),
+         try
+             Before = macula_test_sessions:serving(),
+             Procedure = <<"foo.streamed">>,
+             {ok, _Sup} = macula_streamer:advertise(pool, ?REALM, Procedure, ?MODULE, self(),
+                                                    #{announce => false,
+                                                      advertise_stream => advertising_on(Pid),
+                                                      fact_publish => fun no_fact/4}),
+             flush_send_frame_casts(),
+             CallerKp = macula_identity:generate(),
+             Opened = [streamer_session(Pid, FakePeer, Procedure, CallerKp)
+                       || _ <- lists:seq(1, ?SESSIONS)],
+             timer:sleep(200),
+             ?assertEqual([], [Streamer || {_Served, Streamer} <- Opened,
+                                            not is_process_alive(Streamer)]),
+             ok = end_served_sessions(caller_end, Pid, FakePeer, [Served || {Served, _} <- Opened]),
+             ?assertEqual([], macula_test_sessions:await_none_new(Before)),
+             macula_station_link:stop(Pid)
+         after
+             teardown_link_for_streams(ok)
+         end
+     end}.
+
+telling_when_served(Test, Handler) ->
+    fun(Stream, Args) ->
+        Test ! {session_served, Stream},
+        Handler(Stream, Args)
+    end.
+
+serve_session(Pid, FakePeer, Procedure, CallerKp) ->
+    Stream = make_ref(),
+    Open = stream_open_frame(Procedure, CallerKp, served),
+    inject_dedicated_stream_open(Pid, FakePeer, Stream, macula_frame:sign(Open, CallerKp)),
+    receive
+        {session_served, _StreamPid} -> {Stream, maps:get(stream_id, Open)}
+    after 1_000 ->
+        erlang:error(session_not_served)
+    end.
+
+streamer_session(Pid, FakePeer, Procedure, CallerKp) ->
+    Stream = make_ref(),
+    Open = stream_open_frame(Procedure, CallerKp, streamed),
+    inject_dedicated_stream_open(Pid, FakePeer, Stream, macula_frame:sign(Open, CallerKp)),
+    receive
+        {streamer_opened, StreamerPid} -> {{Stream, maps:get(stream_id, Open)}, StreamerPid}
+    after 1_000 ->
+        erlang:error(streamer_not_opened)
+    end.
+
+end_served_sessions(none, _Pid, _FakePeer, _Served) ->
+    ok;
+end_served_sessions(caller_end, Pid, _FakePeer, Served) ->
+    lists:foreach(fun({Stream, Sid}) ->
+                      inject_on_stream(Pid, Stream, #{frame_type => stream_end, stream_id => Sid,
+                                                      role => both})
+                  end, Served);
+end_served_sessions(caller_error, Pid, _FakePeer, Served) ->
+    lists:foreach(fun({Stream, Sid}) ->
+                      inject_on_stream(Pid, Stream, #{frame_type => stream_error, stream_id => Sid,
+                                                      code => <<"error">>, message => <<"stop">>})
+                  end, Served);
+end_served_sessions(link_lost, Pid, FakePeer, _Served) ->
+    Pid ! {macula_peering, disconnected, FakePeer, peer_gone},
+    ok.
+
+close_and_return(Stream, _Args) ->
+    macula_stream:close(Stream).
+
+abort_and_return(Stream, _Args) ->
+    macula_stream:abort(Stream, <<"stop">>, <<"stop">>).
+
+crash_serving(_Stream, _Args) ->
+    error(deliberate).
+
+read_to_the_end(Stream, _Args) ->
+    read_until_ended(macula_stream:recv(Stream, 5_000), Stream).
+
+read_until_ended({chunk, _Chunk}, Stream) ->
+    read_until_ended(macula_stream:recv(Stream, 5_000), Stream);
+read_until_ended({data, _Data}, Stream) ->
+    read_until_ended(macula_stream:recv(Stream, 5_000), Stream);
+read_until_ended(_EndOrError, _Stream) ->
+    ok.
+
+stop_link_if_alive(Pid, true) ->
+    macula_station_link:stop(Pid);
+stop_link_if_alive(_Pid, false) ->
+    ok.
+
+advertising_on(Pid) ->
+    fun(_Pool, Realm, Procedure, Mode, Handler, _Opts) ->
+        macula_station_link:advertise_stream(Pid, Realm, Procedure, Mode, Handler)
+    end.
+
+no_fact(_Pool, _Realm, _Topic, _Payload) ->
+    ok.
+
+%% macula_streamer callbacks, for the streamer session test: a module that
+%% never stops by itself.
+handle_open(_StreamArgs, Parent) ->
+    Parent ! {streamer_opened, self()},
+    {ok, Parent}.
 
 %% `deliver_stream_data/2' etc. look a session up by `stream_id' via
 %% `find_stream/2', so an injected reply frame's `stream_id' has to

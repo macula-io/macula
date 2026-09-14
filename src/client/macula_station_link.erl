@@ -2838,30 +2838,35 @@ dispatch_stream_open({ok, {AdvMode, Handler}}, Sid, Proc, _Declared, Args,
 
 spawn_inbound_stream(Sid, Proc, Mode, Handler, Args, Stream,
                      #state{server_streams = SS} = S) ->
-    Host = spawn(fun stream_host_loop/0),
+    Worker = spawn_stream_handler(Handler, Args, Proc),
     {ok, StreamPid} = macula_stream:start_link(#{
         id    => Sid,
         role  => server,
         mode  => Mode,
-        owner => Host
+        owner => Worker
     }),
     ok = macula_stream:attach_to_link(StreamPid, self(), Sid),
     Mon = erlang:monitor(process, StreamPid),
-    _Worker = spawn_stream_handler(Handler, StreamPid, Args, Proc),
+    Worker ! {serve, StreamPid},
     S#state{server_streams = SS#{Sid => {StreamPid, Mon, Stream}}}.
 
-stream_host_loop() ->
-    receive stop -> ok end.
+%% Handler runs in a transient process, which owns the session's stream:
+%% the stream ends when the handler returns or crashes, unless the handler
+%% hands it over first (`macula_stream:controlling_process/2'). The process
+%% runs the handler once the link has attached the stream. A handler crash
+%% maps to a STREAM_ERROR abort with the crash class as the code and the
+%% reason's name as the message, so callers see a stable error taxonomy and
+%% none of the crash's terms; the crash goes to the node's log. The
+%% try/catch is justified (mirrors `safe_invoke_handler/4' for unary
+%% CALLs): without it a crash would silently leave the caller waiting on
+%% its deadline.
+spawn_stream_handler(Handler, Args, Proc) ->
+    spawn(fun() -> serve_stream_when_attached(Handler, Args, Proc) end).
 
-%% Handler runs in a transient process. A handler crash maps to a
-%% STREAM_ERROR abort with the crash class as the code and the reason's
-%% name as the message, so callers see a stable error taxonomy and none
-%% of the crash's terms; the crash goes to the node's log. The try/catch
-%% is justified (mirrors `safe_invoke_handler/4' for unary CALLs):
-%% without it a crash would silently leave the caller waiting on its
-%% deadline.
-spawn_stream_handler(Handler, Stream, Args, Proc) ->
-    spawn(fun() -> run_stream_handler(Handler, Stream, Args, Proc) end).
+serve_stream_when_attached(Handler, Args, Proc) ->
+    receive
+        {serve, Stream} -> run_stream_handler(Handler, Stream, Args, Proc)
+    end.
 
 run_stream_handler(Handler, Stream, Args, Proc) ->
     try Handler(Stream, Args)

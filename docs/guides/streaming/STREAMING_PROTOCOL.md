@@ -83,6 +83,26 @@ Advertise a streaming procedure with a mode and a `fun(Stream, Args)` handler.
 The handler drives the stream with the same `send` / `recv` primitives, and ends
 it with `set_reply` (a final result) or `abort` (an error).
 
+The handler's process owns the stream, and the stream ends when that process
+ends: when the handler returns or crashes. A handler that lets another process
+keep using the stream hands it over first, and the stream then ends with that
+process:
+
+```erlang
+ok = macula:advertise_stream(
+       Pool, Realm, <<"live.feed">>, server_stream,
+       fun(Stream, _Args) ->
+           Feeder = spawn(fun() -> feed(Stream) end),
+           ok = macula_stream:controlling_process(Stream, Feeder)
+       end),
+```
+
+When a session ends (both sides closed, an abort, or the link lost), the
+stream's owner gets `{macula_stream, ended, Stream, How}` once, with `How`
+being `closed`, `{error, {Code, Message}}` or `peer_down`. An owner the stream
+is handed to after that is told at once. `macula_streamer` takes its stream
+over this way and stops on that message.
+
 The provider verifies each STREAM_OPEN's signature against its `caller` before
 the handler runs; a STREAM_OPEN that does not verify runs no handler.
 `advertise_stream/6` takes an `auth` policy in `Opts`, the same policies as

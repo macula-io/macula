@@ -54,6 +54,12 @@ stream_io(Results) ->
                              {ok, Test}
                      end,
       recv => fun(_Stream, _Timeout) -> next_result(atomics:add_get(Next, 1, 1), Results) end,
+      %% Reported apart from the stream calls, so a test checking what a
+      %% provider did with its stream does not also see the handover.
+      controlling_process => fun(Stream, NewOwner) ->
+                                     Test ! {handed_over, Stream, NewOwner},
+                                     ok
+                             end,
       send => fun(Stream, Chunk, Encoding) -> Record(send, [Stream, Chunk, Encoding]) end,
       close_send => fun(Stream) -> Record(close_send, [Stream]) end,
       close => fun(Stream) -> Record(close, [Stream]) end,
