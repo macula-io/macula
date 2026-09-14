@@ -55,6 +55,29 @@ capped_frame_at_the_cap() ->
     ?assertMatch({ok, [#{frame_type := connect}], <<>>},
                  macula_frame:parse_received(Wire, Len)).
 
+%% The element budget of macula_cbor_nif:unpack_deterministic/1.
+-define(ELEMENT_BUDGET, 131072).
+
+element_budget_test_() ->
+    [{"a frame with more items than the element budget is malformed with too_many_elements",
+      fun parse_over_the_element_budget/0},
+     {"decode/1 refuses a frame with more items than the element budget as too_many_elements",
+      fun decode_over_the_element_budget/0}].
+
+parse_over_the_element_budget() ->
+    ?assertEqual({malformed, [], too_many_elements},
+                 macula_frame:parse_received(over_budget_frame())).
+
+decode_over_the_element_budget() ->
+    ?assertEqual({error, too_many_elements}, macula_frame:decode(over_budget_frame())).
+
+%% A RESULT-shaped frame whose payload is an array of as many zeros as the
+%% budget, so the frame holds more items than the budget allows.
+over_budget_frame() ->
+    Payload = <<16#9A, ?ELEMENT_BUDGET:32/big, (binary:copy(<<0>>, ?ELEMENT_BUDGET))/binary>>,
+    Body = <<16#A2, 16#67, "payload", Payload/binary, 16#6A, "frame_type", 16#66, "result">>,
+    <<(byte_size(Body)):32/big, Body/binary>>.
+
 parse_stream_test_() ->
     [{"complete frames and a partial one give the frames and the partial tail",
       fun stream_frames_and_partial_tail/0},
