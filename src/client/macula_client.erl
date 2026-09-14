@@ -426,6 +426,10 @@
     %% topic's segments: an inbound event is matched against these alone,
     %% not against every topic in the index.
     wildcard_topics = #{} :: #{{<<_:256>>, binary()} => [binary()]},
+    %% link pid → {realm, topic} → the SubRef that link returned for its
+    %% SUBSCRIBE, from a subscribe or from the replay onto a respawned
+    %% link, so an unsubscribe reaches every link that carried it.
+    link_subs = #{} :: #{pid() => #{{<<_:256>>, binary()} => reference()}},
     %% Advertised procedures — pool replays these on link respawn.
     %% {realm, procedure} → handler
     procs = #{}   :: #{{<<_:256>>, binary()} => {handler(), auth_policy()}},
@@ -926,8 +930,7 @@ handle_call({subscribe, Realm, Topic, Subscriber, Opts}, _From, S) ->
     Key = {Realm, Topic},
     AlreadyTracked = maps:is_key(Key, S#state.topic_index),
     NewS = register_sub(SubRef, Spec, S),
-    issue_wire_subs(AlreadyTracked, Realm, Topic, NewS),
-    {reply, {ok, SubRef}, NewS};
+    {reply, {ok, SubRef}, issue_wire_subs(AlreadyTracked, Realm, Topic, NewS)};
 
 handle_call({unsubscribe, SubRef}, _From, S) ->
     {reply, ok, drop_sub(SubRef, S)};
@@ -1074,11 +1077,12 @@ handle_info({macula_event, _LinkSubRef, Topic, Payload, Meta}, S) ->
                                  Publisher, Seq, {Topic, Payload}),
                      Realm, Topic, Payload, Meta, S);
 
-handle_info({macula_event_gone, _LinkSubRef, _Reason}, S) ->
+handle_info({macula_event_gone, LinkSubRef, _Reason}, S) ->
     %% A link torn down its subscription end. Pool will respawn the
     %% link via the DOWN handler and replay subs. Don't propagate to
-    %% local consumers — they see a continuous stream.
-    {noreply, S};
+    %% local consumers — they see a continuous stream. The link's SubRef
+    %% is gone, so unsubscribe no longer sends it.
+    {noreply, forget_link_sub(LinkSubRef, S)};
 
 handle_info({'DOWN', Mon, process, Pid, Reason}, S) ->
     on_down(Mon, Pid, Reason, S);
@@ -1652,10 +1656,10 @@ on_respawn_link(Seed, S) ->
     replay_to_seed(maps:get(Seed, NewS#state.links, undefined), NewS).
 
 replay_to_seed(#link_state{pid = Pid}, S) when is_pid(Pid) ->
-    macula_client_replay:subs_to(Pid, S#state.topic_index),
+    LinkSubRefs = macula_client_replay:subs_to(Pid, S#state.topic_index),
     macula_client_replay:advs_to(Pid, S#state.procs),
     macula_client_replay:stream_advs_to(Pid, S#state.stream_procs),
-    S;
+    S#state{link_subs = (S#state.link_subs)#{Pid => LinkSubRefs}};
 replay_to_seed(_, S) ->
     S.
 
@@ -2089,7 +2093,8 @@ on_down_routed({ok, Seed}, _Mon, Pid, Reason, S) ->
     macula_diagnostics:event(<<"_macula.client.link_down">>,
                              #{seed => Seed, pid => Pid, reason => Reason}),
     erlang:send_after(?LINK_RESPAWN_DELAY_MS, self(), {respawn_link, Seed}),
-    S1 = S#state{links = maps:remove(Seed, S#state.links)},
+    S1 = S#state{links = maps:remove(Seed, S#state.links),
+                 link_subs = maps:remove(Pid, S#state.link_subs)},
     {noreply, maybe_rediscover_now(S1)};
 on_down_routed(error, Mon, _Pid, _Reason, S) ->
     {noreply, on_subscriber_down(Mon, S)}.
@@ -2159,8 +2164,9 @@ drop_sub_take({#sub_spec{realm = R, topic = T, mon = Mon}, NewSubs},
     NewSet = sets:del_element(SubRef, maps:get(Key, Idx, sets:new())),
     Empty = sets:is_empty(NewSet),
     NewIdx = on_index_after_drop(Empty, Key, NewSet, Idx),
-    S#state{subs = NewSubs, topic_index = NewIdx,
-            wildcard_topics = wildcards_after_drop(Empty, Key, S#state.wildcard_topics)}.
+    unsubscribe_links(Empty, Key,
+                      S#state{subs = NewSubs, topic_index = NewIdx,
+                              wildcard_topics = wildcards_after_drop(Empty, Key, S#state.wildcard_topics)}).
 
 wildcards_after_drop(true,  Key, W) -> maps:remove(Key, W);
 wildcards_after_drop(false, _Key, W) -> W.
@@ -2168,15 +2174,49 @@ wildcards_after_drop(false, _Key, W) -> W.
 on_index_after_drop(true,  Key, _Set, Idx) -> maps:remove(Key, Idx);
 on_index_after_drop(false, Key,  Set, Idx) -> Idx#{Key => Set}.
 
-issue_wire_subs(true, _Realm, _Topic, _S) ->
+issue_wire_subs(true, _Realm, _Topic, S) ->
     %% A sibling consumer already triggered the wire-level subscribe;
     %% the pool fans out to every local SubRef on inbound EVENT.
-    ok;
+    S;
 issue_wire_subs(false, Realm, Topic, S) ->
     PoolPid = self(),
-    [_ = macula_station_link:subscribe(P, Realm, Topic, PoolPid)
-     || P <- spawned_link_pids(S)],
-    ok.
+    Key = {Realm, Topic},
+    lists:foldl(fun(P, Acc) ->
+                        record_link_sub(P, Key, macula_station_link:subscribe(P, Realm, Topic, PoolPid), Acc)
+                end, S, spawned_link_pids(S)).
+
+%% Keeps the SubRef a link returned for Key's SUBSCRIBE, so unsubscribe can
+%% reach that link. A link that did not accept it keeps nothing.
+record_link_sub(LinkPid, Key, {ok, LinkSubRef}, #state{link_subs = LS} = S) ->
+    Keys = maps:get(LinkPid, LS, #{}),
+    S#state{link_subs = LS#{LinkPid => Keys#{Key => LinkSubRef}}};
+record_link_sub(_LinkPid, _Key, _NotAccepted, S) ->
+    S.
+
+%% When the last local subscriber of Key has left, each link that carried
+%% its SUBSCRIBE is told to send UNSUBSCRIBE. The pool does not wait on the
+%% link, and the request reaches the link ahead of any later subscribe the
+%% pool sends it.
+unsubscribe_links(false, _Key, S) ->
+    S;
+unsubscribe_links(true, Key, #state{link_subs = LS} = S) ->
+    S#state{link_subs = maps:map(fun(LinkPid, Keys) -> unsubscribe_link(LinkPid, Key, Keys) end, LS)}.
+
+unsubscribe_link(LinkPid, Key, Keys) ->
+    unsubscribed_link(maps:take(Key, Keys), LinkPid, Keys).
+
+unsubscribed_link({LinkSubRef, Rest}, LinkPid, _Keys) ->
+    ok = macula_station_link:unsubscribe_async(LinkPid, LinkSubRef),
+    Rest;
+unsubscribed_link(error, _LinkPid, Keys) ->
+    Keys.
+
+%% Drops a SubRef a link reported gone, from whichever link held it.
+forget_link_sub(LinkSubRef, #state{link_subs = LS} = S) ->
+    S#state{link_subs = maps:map(fun(_LinkPid, Keys) -> without_link_sub(LinkSubRef, Keys) end, LS)}.
+
+without_link_sub(LinkSubRef, Keys) ->
+    maps:filter(fun(_Key, Ref) -> Ref =/= LinkSubRef end, Keys).
 
 %%====================================================================
 %% Internals — inbound event fan-out

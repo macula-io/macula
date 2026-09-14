@@ -341,6 +341,13 @@ Every node should upgrade to this release.
 
 ### Fixed
 
+- `macula_client:unsubscribe/2` takes a subscription off the wire. When the
+  last local subscriber of a (realm, topic) leaves, the pool sends
+  UNSUBSCRIBE on every station link that carried the SUBSCRIBE, including a
+  link it respawned and replayed the subscription onto. It used to drop only
+  its own bookkeeping, so a station kept the subscriber until the client
+  disconnected. `macula_station_link:unsubscribe_async/2` drops a
+  subscription without waiting for the link.
 - `macula_manifest:from_wire/1` returns `{error, invalid_manifest}` for a
   manifest that does not describe whole content: a `chunk_size` that is not a
   positive integer, a `size` below 0, a `chunk_count` other than

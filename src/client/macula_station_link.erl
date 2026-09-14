@@ -97,6 +97,7 @@
     find_records_by_type/2, find_records_by_type/3,
     subscribe/4,
     unsubscribe/2,
+    unsubscribe_async/2,
     advertise/4,
     advertise/5,
     unadvertise/3,
@@ -641,6 +642,15 @@ unsubscribe(Client, SubRef)
   when is_pid(Client), is_reference(SubRef) ->
     gen_server:call(Client, {unsubscribe, SubRef}, 5_000).
 
+%% @doc As `unsubscribe/2', without waiting for the link. The request
+%% queues behind whatever the caller sent this link before it, so a
+%% `subscribe/4' the same caller makes afterwards reaches the link after
+%% it. For a caller that must not wait on a busy link, such as the pool.
+-spec unsubscribe_async(pid(), reference()) -> ok.
+unsubscribe_async(Client, SubRef)
+  when is_pid(Client), is_reference(SubRef) ->
+    gen_server:cast(Client, {unsubscribe, SubRef}).
+
 %% @doc Advertise an RPC procedure handler. The link sends an
 %% ADVERTISE frame to the connected station; the station forwards
 %% inbound CALL frames matching `(Realm, Procedure)' back over the
@@ -1178,6 +1188,9 @@ handle_cast({abort_content_stream, Stream, Code, Message}, S) ->
                              #{stream => Stream, code => Code,
                                message => Message}),
     {noreply, abort_content_stream_state(Stream, Code, S)};
+
+handle_cast({unsubscribe, SubRef}, S) ->
+    {noreply, on_unsubscribe(SubRef, S)};
 
 handle_cast(_Msg, S) -> {noreply, S}.
 
