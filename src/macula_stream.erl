@@ -437,15 +437,19 @@ handle_cast({peer_end, send}, State) ->
     State1 = State#state{closed_recv = true},
     State2 = drain_waiters(eof, State1),
     {noreply, ended_when_both_closed(State2)};
+%% A session that ended keeps how it ended as its reply, unless a reply is
+%% already set, so an await_reply called later returns it at once.
 handle_cast({peer_end, both}, State) ->
-    State1 = State#state{closed_recv = true, closed_send = true},
+    State1 = State#state{closed_recv = true, closed_send = true,
+                         reply = first_reply(State#state.reply, {error, peer_closed})},
     State2 = drain_waiters(eof, State1),
     State3 = settle_reply_waiters_with({error, peer_closed}, State2),
     {noreply, session_ended(closed, State3)};
 
 handle_cast({peer_error, Code, Message}, State) ->
     Err = {error, {Code, Message}},
-    State1 = State#state{closed_recv = true, closed_send = true},
+    State1 = State#state{closed_recv = true, closed_send = true,
+                         reply = first_reply(State#state.reply, Err)},
     State2 = drain_waiters(Err, State1),
     State3 = settle_reply_waiters_with(Err, State2),
     {noreply, session_ended(Err, State3)};
@@ -567,7 +571,8 @@ handle_down(false, _Pid, State) ->
 propagate_peer_down(State) ->
     Err = {error, peer_down},
     State1 = State#state{closed_recv = true, closed_send = true,
-                         peer = undefined},
+                         peer = undefined,
+                         reply = first_reply(State#state.reply, Err)},
     State2 = drain_waiters(Err, State1),
     State3 = settle_reply_waiters_with(Err, State2),
     {noreply, session_ended(peer_down, State3)}.

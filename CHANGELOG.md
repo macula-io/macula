@@ -143,6 +143,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `macula_stream:await_reply/1,2` called after a stream's session ended
+  returns at once how it ended: the peer's abort as
+  `{error, {Code, Message}}`, `{error, peer_closed}` when the peer closed both
+  sides, or `{error, peer_down}` when the peer ended. An ending that follows
+  does not replace it.
 - A `macula_station_link` started without an `identity` generates one whose
   node id passes `macula_identity:puzzle_valid/1`, as the `macula_client`
   pool's default identity does.

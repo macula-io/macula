@@ -103,6 +103,40 @@ told_after_it_is_handed_over() ->
     ?assertEqual({forwarded, Stream, closed}, forwarded(1_000)),
     end_owner(PeerOwner, normal).
 
+%% Once its session has ended, a stream's await_reply returns how it ended,
+%% however late it is called: the peer's abort, the peer closing both sides,
+%% or the peer ending. The peer ending afterwards does not replace it.
+a_late_await_reply_gets_how_the_session_ended_test_() ->
+    [{"after the peer aborts, and then ends",
+      fun() -> late_await_reply(abort, {error, {<<"stop">>, <<"why">>}}) end},
+     {"after the peer closes both sides, and then ends",
+      fun() -> late_await_reply(close, {error, peer_closed}) end},
+     {"after the peer ends without a word",
+      fun() -> late_await_reply(peer_ends, {error, peer_down}) end}].
+
+late_await_reply(Ending, How) ->
+    {Stream, Peer, PeerOwner} = paired_streams(self()),
+    _ = end_session_from_peer(Ending, Peer, PeerOwner),
+    {told, _} = told(Stream, 1_000),
+    end_owner(PeerOwner, kill),
+    ?assertEqual(gone, peer_gone_within(Stream, 1_000)),
+    ?assertEqual(How, macula_stream:await_reply(Stream, 100)).
+
+end_session_from_peer(peer_ends, _Peer, PeerOwner) ->
+    end_owner(PeerOwner, kill);
+end_session_from_peer(Ending, Peer, _PeerOwner) ->
+    end_from_peer(Ending, Peer).
+
+%% Waits until Stream has handled its peer's end, when it forgets its peer.
+peer_gone_within(Stream, Ms) ->
+    peer_gone(maps:get(peer, macula_stream:info(Stream)), Stream, Ms).
+
+peer_gone(undefined, _Stream, _Ms) -> gone;
+peer_gone(_Peer, _Stream, Ms) when Ms =< 0 -> still_paired;
+peer_gone(_Peer, Stream, Ms) ->
+    timer:sleep(10),
+    peer_gone_within(Stream, Ms - 10).
+
 %% A local stream call leaves no process behind once its caller and its
 %% handler are both done.
 local_sessions_leave_no_process_behind_test_() ->
