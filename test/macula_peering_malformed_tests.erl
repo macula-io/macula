@@ -60,7 +60,13 @@ malformed_test_() ->
            {"a frame of an unknown type on the control stream leaves the connection serving",
             {timeout, 30, fun() -> unknown_control_frame_passes(Ctx) end}},
            {"frames whose type is no atom here, as text or bytes, leave the connection serving",
-            {timeout, 30, fun() -> non_atom_control_frames_pass(Ctx) end}}]
+            {timeout, 30, fun() -> non_atom_control_frames_pass(Ctx) end}},
+           {"a STORE whose record does not decode is dropped as invalid and the next frame is served",
+            {timeout, 30, fun() -> undecodable_record_refused(Ctx, store) end}},
+           {"a REPLICATE whose record does not decode is dropped as invalid and the next frame is served",
+            {timeout, 30, fun() -> undecodable_record_refused(Ctx, replicate) end}},
+           {"a VALUE whose records do not decode is dropped as invalid and the next frame is served",
+            {timeout, 30, fun() -> undecodable_record_refused(Ctx, value) end}}]
       end}}.
 
 %%%===================================================================
@@ -157,6 +163,73 @@ non_atom_control_frames_pass(Ctx) ->
         Served = served(Server, Next),
         ?assertEqual({served, running}, {Served, running(Server)})
     end).
+
+%% A STORE, REPLICATE or VALUE whose record bytes do not decode as a record,
+%% first bytes that are not CBOR and then an array over the element budget,
+%% followed by a CALL.
+undecodable_record_refused(Ctx, Type) ->
+    with_server(Ctx, fun(Server, Stream) ->
+        ok = macula_quic:send(Stream, signed_connect()),
+        connected(Server),
+        {Field, Frame} = record_frame(Type),
+        ok = macula_quic:send(Stream, wire_with(Frame, Field, field_value(Field, not_cbor_record()))),
+        ok = macula_quic:send(Stream, wire_with(Frame, Field, field_value(Field, over_budget_array()))),
+        Next = call_frame(),
+        ok = macula_quic:send(Stream, encode_signed(Next)),
+        Reported = [invalid_reported(Server), invalid_reported(Server)],
+        Served = served(Server, Next),
+        Invalid = {invalid_frame, Type, Field},
+        ?assertEqual({[Invalid, Invalid], served, not_forwarded, running},
+                     {Reported, Served, forwarded(Server, Type), running(Server)})
+    end).
+
+%%%===================================================================
+%%% Record frames
+%%%===================================================================
+
+%% The record field of Type, and a frame of that type holding a signed record.
+record_frame(store) ->
+    {record, macula_frame:store(#{record => sample_record()})};
+record_frame(replicate) ->
+    {record, macula_frame:replicate(#{record => sample_record(), new_custodian => false})};
+record_frame(value) ->
+    {records, macula_frame:value(#{key => crypto:strong_rand_bytes(32),
+                                   records => [sample_record()]})}.
+
+sample_record() ->
+    Kp = macula_identity:generate(),
+    macula_record:sign(macula_record:node_record(macula_identity:public(Kp), [], 0), Kp).
+
+field_value(records, Bytes) -> [Bytes];
+field_value(record, Bytes) -> Bytes.
+
+%% Record bytes that are not CBOR.
+not_cbor_record() ->
+    <<255, 255, 255, 255>>.
+
+%% An array of as many zeros as the element budget of
+%% macula_cbor_nif:unpack_deterministic/1, 131,072: with the array itself,
+%% one item more than the budget allows.
+over_budget_array() ->
+    Budget = 131072,
+    <<16#9A, Budget:32/big, (binary:copy(<<0>>, Budget))/binary>>.
+
+%% Frame on the wire with Field holding Value, which a builder would not put
+%% there: the signed frame is encoded, and its field replaced in the CBOR map.
+wire_with(Frame, Field, Value) ->
+    <<_Len:32/big, Body/binary>> = encode_signed(Frame),
+    Map = macula_cbor_nif:unpack_deterministic(Body),
+    Bytes = macula_cbor_nif:pack_deterministic(Map#{{text, atom_to_binary(Field)} := Value}),
+    <<(byte_size(Bytes)):32/big, Bytes/binary>>.
+
+%% Whether Server has delivered a frame of Type, of the messages already here.
+forwarded(Server, Type) ->
+    receive
+        {macula_peering, frame, Server, #{frame_type := Type}} -> forwarded;
+        {macula_peering, dht_frame, Server, _NodeId, #{frame_type := Type}} -> forwarded
+    after 0 ->
+        not_forwarded
+    end.
 
 %%%===================================================================
 %%% Fixture

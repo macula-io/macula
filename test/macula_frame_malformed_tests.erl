@@ -10,6 +10,12 @@
 %%% frame that is not CBOR is `bad_frame'. Fed chunk by chunk, the tail a
 %%% caller keeps never exceeds the frame cap plus the header.
 %%%
+%%% A frame with more CBOR items than the element budget is
+%%% `too_many_elements'. A STORE, REPLICATE or VALUE whose record bytes do
+%%% not decode as a record, whether they are not CBOR or over the element
+%%% budget, is an invalid frame named by its `record' or `records' field:
+%%% decode/1 refuses it, and parse_received/1 reads on past it.
+%%%
 %%% parse_stream/1 keeps the `{Frames, Tail}' shape of 10.x. It returns only
 %%% frames that pass validate_received/1, and the first frame that does not
 %%% decode ends the parse with the frames before it and an empty tail, so a
@@ -74,9 +80,53 @@ decode_over_the_element_budget() ->
 %% A RESULT-shaped frame whose payload is an array of as many zeros as the
 %% budget, so the frame holds more items than the budget allows.
 over_budget_frame() ->
-    Payload = <<16#9A, ?ELEMENT_BUDGET:32/big, (binary:copy(<<0>>, ?ELEMENT_BUDGET))/binary>>,
+    Payload = over_budget_array(),
     Body = <<16#A2, 16#67, "payload", Payload/binary, 16#6A, "frame_type", 16#66, "result">>,
     <<(byte_size(Body)):32/big, Body/binary>>.
+
+%% An array of as many zeros as the budget: with the array itself, one item
+%% more than the budget allows.
+over_budget_array() ->
+    <<16#9A, ?ELEMENT_BUDGET:32/big, (binary:copy(<<0>>, ?ELEMENT_BUDGET))/binary>>.
+
+record_field_test_() ->
+    [{lists:concat([Type, " whose ", Field, " holds ", Kind]),
+      [{"decode/1 refuses it as an invalid frame named by that field",
+        ?_assertEqual({error, {invalid_frame, Type, Field}}, macula_frame:decode(Wire))},
+       {"parse_received/1 gives it as an invalid frame and reads the frame after it",
+        ?_assertMatch({ok, [{invalid_frame, Type, Field}, #{frame_type := connect}], <<>>},
+                      macula_frame:parse_received(<<Wire/binary, (wire(connect))/binary>>))}]}
+     || {Type, Field, Kind, Wire} <- record_field_frames()].
+
+%% A STORE, a REPLICATE and a VALUE whose record bytes do not decode as a
+%% record: bytes that are not CBOR, and an array over the element budget.
+record_field_frames() ->
+    Record = sample_record(),
+    Frames = [{store, record, macula_frame:store(#{record => Record})},
+              {replicate, record,
+               macula_frame:replicate(#{record => Record, new_custodian => false})},
+              {value, records,
+               macula_frame:value(#{key => crypto:strong_rand_bytes(32), records => [Record]})}],
+    [{Type, Field, Kind, wire_with(Frame, Field, field_value(Field, Bytes))}
+     || {Type, Field, Frame} <- Frames,
+        {Kind, Bytes} <- [{"bytes that are not CBOR", <<255, 255, 255, 255>>},
+                          {"an array over the element budget", over_budget_array()}]].
+
+field_value(records, Bytes) -> [Bytes];
+field_value(record, Bytes) -> Bytes.
+
+%% Frame on the wire with Field holding Value, which a builder would not put
+%% there: the signed frame is encoded, and its field replaced in the CBOR map.
+wire_with(Frame, Field, Value) ->
+    Kp = macula_identity:generate(),
+    <<_Len:32/big, Body/binary>> = macula_frame:encode(macula_frame:sign(Frame, Kp)),
+    Map = macula_cbor_nif:unpack_deterministic(Body),
+    Bytes = macula_cbor_nif:pack_deterministic(Map#{{text, atom_to_binary(Field)} := Value}),
+    <<(byte_size(Bytes)):32/big, Bytes/binary>>.
+
+sample_record() ->
+    Kp = macula_identity:generate(),
+    macula_record:sign(macula_record:node_record(macula_identity:public(Kp), [], 0), Kp).
 
 parse_stream_test_() ->
     [{"complete frames and a partial one give the frames and the partial tail",
