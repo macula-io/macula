@@ -1,6 +1,6 @@
-//! QUIC application error codes that macula sends when it resets or stops a
-//! stream. The Erlang side defines the same table, with the same meanings,
-//! in include/macula_quic_error_codes.hrl; a new code goes into both.
+//! QUIC application error codes that the NIF itself sends when it resets or
+//! stops a stream. The full table of every code macula sends, with the same
+//! names and meanings, is include/macula_quic_error_codes.hrl.
 
 /// The sender cancelled the stream: a content transfer cancel, or a stream
 /// open cancelled after the peer allowed it.

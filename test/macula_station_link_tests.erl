@@ -2081,21 +2081,23 @@ flush_mailbox() ->
 %% observable without a real QUIC connection (session frames no
 %% longer travel over the fake-peer-as-cast-target wire the way
 %% ADVERTISE / CALL / EVENT still do — see
-%% PLAN_PER_STREAM_QUIC_ISOLATION.md). `open_dedicated_stream/1`
-%% hands back a fresh `make_ref/0' standing in for a QUIC stream
-%% reference and notifies the test process; `send_on_stream/3`
-%% captures what was written to it as `{sent_on_stream, Stream, Frame}'
-%% instead of performing a real NIF send.
+%% PLAN_PER_STREAM_QUIC_ISOLATION.md). `async_open_dedicated_stream/1`
+%% answers the link at once with a fresh `make_ref/0' standing in for a
+%% QUIC stream reference and notifies the test process;
+%% `queue_on_stream/3' captures what the link queues on it as
+%% `{sent_on_stream, Stream, Frame}' instead of performing a real NIF send.
 setup_link_for_streams() ->
     {ok, _} = application:ensure_all_started(macula),
     meck:new(macula_peering, [passthrough]),
     Test = self(),
-    meck:expect(macula_peering, open_dedicated_stream, fun(_ConnPid) ->
+    meck:expect(macula_peering, async_open_dedicated_stream, fun(_ConnPid) ->
+        Ref = make_ref(),
         Stream = make_ref(),
         Test ! {opened_dedicated_stream, Stream},
-        {ok, Stream}
+        self() ! {macula_peering, dedicated_stream_opened, Ref, Stream},
+        Ref
     end),
-    meck:expect(macula_peering, send_on_stream, fun(Stream, Frame, _Id) ->
+    meck:expect(macula_peering, queue_on_stream, fun(Stream, Frame, _Id) ->
         Test ! {sent_on_stream, Stream, Frame},
         ok
     end),

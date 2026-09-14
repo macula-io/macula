@@ -13,7 +13,10 @@
 %%%       `macula_stream_local' dispatch.</li>
 %%%   <li>`{remote_via_link, Link, Sid}' — V2 wire format via
 %%%       `macula_station_link' (CBOR `macula_frame:stream_*' frames
-%%%       over a peering connection).</li>
+%%%       over a peering connection). The stream builds, signs and
+%%%       writes its own frames on the dedicated QUIC stream the link
+%%%       hands it; while that stream takes no more data the frames wait
+%%%       here in order, and `send/2,3' callers wait for theirs.</li>
 %%% </ul>
 %%%
 %%% Renamed from `macula_stream_v1' in 3.17.0; the V1 mesh_client
@@ -30,7 +33,7 @@
 -export([
     start_link/1,
     pair/2,
-    attach_to_link/3,
+    attach_to_link/4,
     send/2,
     send/3,
     recv/1,
@@ -61,7 +64,8 @@
     handle_call/3,
     handle_cast/2,
     handle_info/2,
-    terminate/2
+    terminate/2,
+    format_status/1
 ]).
 
 -type role() :: client | server.
@@ -102,7 +106,17 @@
     seq_in  = 0 :: non_neg_integer(),
     %% Terminal reply (for client-stream / bidi)
     reply = undefined :: undefined | result(),
-    reply_waiters = [] :: [{pid(), reference()}]
+    reply_waiters = [] :: [{pid(), reference()}],
+    %% `{remote_via_link, _, _}' carrier: the node key that signs this
+    %% session's frames (`redacted' only in status output), the dedicated
+    %% QUIC stream once the link hands it over, the encoded frames that
+    %% stream has not taken yet (each with whether it is the session's
+    %% last frame, and the `send' caller waiting on it), and the transport
+    %% error that ended the session.
+    signer = undefined :: undefined | redacted | macula_identity:key_pair(),
+    link_stream = undefined :: undefined | reference(),
+    held = queue:new() :: queue:queue({binary(), boolean(), undefined | gen_server:from()}),
+    transport_error = undefined :: undefined | {error, {transport, term()}}
 }).
 
 %%%===================================================================
@@ -124,25 +138,30 @@ pair(A, B) when is_pid(A), is_pid(B) ->
     ok.
 
 %% @doc Attach a V2 `macula_station_link' peer to this stream. The
-%% station_link carries deliveries as V2 `macula_frame:stream_*'
-%% frames over its peering connection (one per pool seed); inbound
-%% STREAM_* frames are decoded by the link and forwarded into this
-%% stream via the deliver_chunk / end / error / reply casts below.
--spec attach_to_link(pid(), pid(), stream_id()) -> ok.
-attach_to_link(StreamPid, LinkPid, StreamId)
+%% stream signs its outbound V2 `macula_frame:stream_*' frames with
+%% `Signer' and writes them on the dedicated QUIC stream the link hands
+%% over as `{dedicated_stream, StreamId, QuicStream}'; frames sent before
+%% that wait in order. Inbound STREAM_* frames are decoded by the link
+%% and forwarded into this stream via the deliver_chunk / end / error /
+%% reply casts below.
+-spec attach_to_link(pid(), pid(), stream_id(), macula_identity:key_pair()) -> ok.
+attach_to_link(StreamPid, LinkPid, StreamId, Signer)
   when is_pid(StreamPid), is_pid(LinkPid), is_binary(StreamId) ->
-    gen_server:call(StreamPid, {pair_via_link, LinkPid, StreamId}).
+    gen_server:call(StreamPid, {pair_via_link, LinkPid, StreamId, Signer}).
 
-%% @doc Send a binary chunk on the stream.
+%% @doc Send a binary chunk on the stream. On a stream carried by a
+%% `macula_station_link' the call returns once the dedicated QUIC stream
+%% has taken the chunk, and waits, with no timeout, while that stream
+%% takes no more data.
 -spec send(pid(), binary()) -> ok | {error, term()}.
 send(Pid, Bin) when is_binary(Bin) ->
     send(Pid, Bin, raw).
 
 -spec send(pid(), binary() | term(), encoding()) -> ok | {error, term()}.
 send(Pid, Body, raw) when is_binary(Body) ->
-    gen_server:call(Pid, {send, raw, Body});
+    gen_server:call(Pid, {send, raw, Body}, infinity);
 send(Pid, Body, msgpack) ->
-    gen_server:call(Pid, {send, msgpack, Body}).
+    gen_server:call(Pid, {send, msgpack, Body}, infinity).
 
 %% @doc Receive the next chunk (blocks indefinitely).
 -spec recv(pid()) -> {chunk, binary()}
@@ -256,21 +275,16 @@ init(Opts) ->
 handle_call({pair_local, Peer}, _From, State) ->
     _ = erlang:monitor(process, Peer),
     {reply, ok, State#state{peer = {local, Peer}}};
-handle_call({pair_via_link, LinkPid, StreamId}, _From, State) ->
+handle_call({pair_via_link, LinkPid, StreamId, Signer}, _From, State) ->
     _ = erlang:monitor(process, LinkPid),
-    {reply, ok, State#state{peer = {remote_via_link, LinkPid, StreamId}}};
+    {reply, ok, State#state{peer = {remote_via_link, LinkPid, StreamId}, signer = Signer}};
 
 %% --- send --------------------------------------------------------------
 
 handle_call({send, _Encoding, _Body}, _From, #state{closed_send = true} = State) ->
     {reply, {error, send_closed}, State};
-handle_call({send, Encoding, Body}, _From, State) ->
-    case forward_to_peer(State, {chunk, Encoding, Body}) of
-        ok ->
-            {reply, ok, State#state{seq_out = State#state.seq_out + 1}};
-        {error, _} = Err ->
-            {reply, Err, State}
-    end;
+handle_call({send, Encoding, Body}, From, State) ->
+    sent(forward_to_peer(State, {chunk, Encoding, Body}, From));
 
 %% --- recv --------------------------------------------------------------
 
@@ -283,16 +297,16 @@ handle_call(close_send, _From, State) ->
     State1 = case State#state.closed_send of
                  true -> State;
                  false ->
-                     _ = forward_to_peer(State, {end_stream, send}),
-                     State#state{closed_send = true}
+                     {_, Forwarded} = forward_to_peer(State, {end_stream, send}, undefined),
+                     Forwarded#state{closed_send = true}
              end,
     {reply, ok, State1};
 
 %% --- close -------------------------------------------------------------
 
 handle_call(close, _From, State) ->
-    _ = forward_to_peer(State, {end_stream, both}),
-    State1 = State#state{closed_send = true, closed_recv = true},
+    {_, Forwarded} = forward_to_peer(State, {end_stream, both}, undefined),
+    State1 = Forwarded#state{closed_send = true, closed_recv = true},
     State2 = drain_waiters(eof, State1),
     {reply, ok, State2};
 
@@ -315,8 +329,8 @@ handle_call({await_reply, Timeout}, From, State) ->
 handle_call({set_reply, Result}, _From, State) ->
     State1 = case State#state.reply of
                  undefined ->
-                     _ = forward_to_peer(State, {reply, Result}),
-                     State#state{reply = Result};
+                     {_, Forwarded} = forward_to_peer(State, {reply, Result}, undefined),
+                     Forwarded#state{reply = Result};
                  _ ->
                      State
              end,
@@ -324,8 +338,8 @@ handle_call({set_reply, Result}, _From, State) ->
 
 handle_call({abort, Code, Message}, _From, State) ->
     Err = {error, {Code, Message}},
-    _ = forward_to_peer(State, {error, Code, Message}),
-    State1 = State#state{closed_recv = true, closed_send = true,
+    {_, Forwarded} = forward_to_peer(State, {error, Code, Message}, undefined),
+    State1 = Forwarded#state{closed_recv = true, closed_send = true,
                          reply = case State#state.reply of
                                      undefined -> Err;
                                      R -> R
@@ -348,7 +362,8 @@ handle_call(info, _From, State) ->
         closed_send => State#state.closed_send,
         seq_out => State#state.seq_out,
         seq_in => State#state.seq_in,
-        reply => State#state.reply
+        reply => State#state.reply,
+        held_frames => queue:len(State#state.held)
     },
     {reply, Map, State};
 
@@ -409,6 +424,20 @@ handle_info({reply_timeout, From}, State) ->
                    end, State#state.reply_waiters),
     {noreply, State#state{reply_waiters = NewWaiters}};
 
+%% The link hands over this session's dedicated QUIC stream: held frames
+%% go out on it, oldest first.
+handle_info({dedicated_stream, Sid, Stream}, #state{id = Sid} = State) ->
+    {noreply, flush_held(State#state{link_stream = Stream})};
+
+%% The dedicated stream takes data again after answering busy.
+handle_info({quic, send_ready, Stream, undefined}, #state{link_stream = Stream} = State) ->
+    {noreply, flush_held(State)};
+
+%% A write of this session's bytes failed, or its dedicated stream could
+%% not be opened. The session ends once, with the transport error.
+handle_info({stream_write_failed, Sid, Reason}, #state{id = Sid} = State) ->
+    {noreply, write_failed({error, {transport, Reason}}, State)};
+
 handle_info({'DOWN', Ref, process, Pid, _Reason}, State) ->
     IsOwner = Ref =:= State#state.owner_ref andalso
               Pid =:= State#state.owner,
@@ -419,69 +448,175 @@ handle_info(_Msg, State) ->
 
 terminate(_Reason, _State) -> ok.
 
+%% The signer is the node's private key: status output and crash reports
+%% show it redacted, in the state and in the call that attached it.
+format_status(Status) ->
+    maps:map(fun redact_signer/2, Status).
+
+redact_signer(state, #state{signer = Signer} = State) when Signer =/= undefined ->
+    State#state{signer = redacted};
+redact_signer(message, {'$gen_call', From, {pair_via_link, Link, Sid, _Signer}}) ->
+    {'$gen_call', From, {pair_via_link, Link, Sid, redacted}};
+redact_signer(_Key, Value) ->
+    Value.
+
 %%%===================================================================
 %%% Internal helpers
 %%%===================================================================
 
-%% @private Dispatch a stream-level action to the peer.
+%% @private `ok': the peer has the chunk, or the QUIC stream took it;
+%% `held': the caller is answered once the stream takes it.
+sent({ok, State}) ->
+    {reply, ok, State#state{seq_out = State#state.seq_out + 1}};
+sent({held, State}) ->
+    {noreply, State#state{seq_out = State#state.seq_out + 1}};
+sent({{error, _} = Error, State}) ->
+    {reply, Error, State}.
+
+%% @private Dispatch a stream-level action to the peer, and return how it
+%% went with the new state.
 %%
 %% Peer-shape-aware:
 %%   {local, Pid}             — in-process pair; cast the symmetric
 %%                              deliver_* helper directly.
-%%   {remote_via_link, L, Sid}— hand off to `macula_station_link'
-%%                              which signs and sends a
-%%                              `macula_frame:stream_*' frame.
+%%   {remote_via_link, L, Sid}— build and sign the `macula_frame:stream_*'
+%%                              frame and write it on the dedicated QUIC
+%%                              stream, or hold it in order.
 %%
 %% Action shapes:
 %%   {chunk, Encoding, Body}
 %%   {end_stream, send | both}
 %%   {error, Code, Message}
 %%   {reply, Result}
-forward_to_peer(#state{peer = undefined}, _Action) ->
-    {error, no_peer};
-forward_to_peer(#state{peer = {local, Pid}}, {chunk, Encoding, Body}) ->
-    deliver_chunk(Pid, Encoding, Body);
-forward_to_peer(#state{peer = {local, Pid}}, {end_stream, Role}) ->
-    deliver_end(Pid, Role);
-forward_to_peer(#state{peer = {local, Pid}}, {error, Code, Message}) ->
-    deliver_error(Pid, Code, Message);
-forward_to_peer(#state{peer = {local, Pid}}, {reply, Result}) ->
-    deliver_reply(Pid, Result);
-forward_to_peer(#state{peer = {remote_via_link, Link, Sid}} = S, Action) ->
-    send_via_link(Link, Sid, Action, S#state.seq_out).
+%%
+%% Results: `ok' (the peer has it, or the QUIC stream took it), `held' (it
+%% waits here, and `From', when defined, is answered once the stream takes
+%% it), or `{error, Reason}'.
+forward_to_peer(#state{peer = undefined} = S, _Action, _From) ->
+    {{error, no_peer}, S};
+forward_to_peer(#state{peer = {local, Pid}} = S, Action, _From) ->
+    {deliver_locally(Pid, Action), S};
+forward_to_peer(#state{transport_error = {error, _} = Error} = S, _Action, _From) ->
+    {Error, S};
+forward_to_peer(#state{peer = {remote_via_link, _Link, Sid}} = S, Action, From) ->
+    write_frame(link_frame(Sid, Action, S), last_frame(Action), From, S).
 
-%% @private V2 carrier: hand off to `macula_station_link' which signs
-%% and ships a `macula_frame:stream_*' frame through its peering
-%% connection. Action shapes mirror `send_remote/4'; the link
-%% translates them to V2 frame specs internally.
-send_via_link(Link, Sid, {chunk, Encoding, Body}, Seq) ->
-    macula_station_link:send_stream_frame(Link, stream_data, #{
-        stream_id => Sid,
-        seq       => Seq,
-        encoding  => Encoding,
-        body      => Body
-    });
-send_via_link(Link, Sid, {end_stream, Role}, _Seq) ->
-    macula_station_link:send_stream_frame(Link, stream_end, #{
-        stream_id => Sid,
-        role      => Role
-    });
-send_via_link(Link, Sid, {error, Code, Message}, _Seq) ->
-    macula_station_link:send_stream_frame(Link, stream_error, #{
-        stream_id => Sid,
-        code      => Code,
-        message   => Message
-    });
-send_via_link(Link, Sid, {reply, {ok, Value}}, _Seq) ->
-    macula_station_link:send_stream_frame(Link, stream_reply, #{
-        stream_id => Sid,
-        payload   => Value
-    });
-send_via_link(Link, Sid, {reply, {error, _Reason} = Err}, _Seq) ->
-    macula_station_link:send_stream_frame(Link, stream_reply, #{
-        stream_id => Sid,
-        payload   => Err
-    }).
+deliver_locally(Pid, {chunk, Encoding, Body}) -> deliver_chunk(Pid, Encoding, Body);
+deliver_locally(Pid, {end_stream, Role})      -> deliver_end(Pid, Role);
+deliver_locally(Pid, {error, Code, Message})  -> deliver_error(Pid, Code, Message);
+deliver_locally(Pid, {reply, Result})         -> deliver_reply(Pid, Result).
+
+%% @private The V2 frame for an action. STREAM_DATA / END / ERROR name
+%% the signer so every station on the path can verify them; STREAM_REPLY
+%% names it as `responded_by'.
+link_frame(Sid, {chunk, Encoding, Body}, #state{seq_out = Seq, signer = Signer}) ->
+    macula_frame:stream_data(#{stream_id => Sid, seq => Seq, encoding => Encoding,
+                               body => Body, signer => macula_identity:public(Signer)});
+link_frame(Sid, {end_stream, Role}, #state{signer = Signer}) ->
+    macula_frame:stream_end(#{stream_id => Sid, role => Role,
+                              signer => macula_identity:public(Signer)});
+link_frame(Sid, {error, Code, Message}, #state{signer = Signer}) ->
+    macula_frame:stream_error(#{stream_id => Sid, code => Code, message => Message,
+                                signer => macula_identity:public(Signer)});
+link_frame(Sid, {reply, Result}, #state{signer = Signer}) ->
+    macula_frame:stream_reply(#{stream_id => Sid, payload => reply_payload(Result),
+                                responded_by => macula_identity:public(Signer)}).
+
+reply_payload({ok, Value}) -> Value;
+reply_payload({error, _Reason} = Error) -> Error.
+
+%% @private The session's last frame from this side: a full STREAM_END, a
+%% STREAM_ERROR or a STREAM_REPLY.
+last_frame({end_stream, both}) -> true;
+last_frame({error, _Code, _Message}) -> true;
+last_frame({reply, _Result}) -> true;
+last_frame(_Action) -> false.
+
+write_frame(Frame, Last, From, S) ->
+    encoded(macula_frame:check_frame(Frame), Frame, Last, From, S).
+
+encoded(ok, Frame, Last, From, #state{signer = Signer} = S) ->
+    queue_bytes(macula_frame:encode(macula_frame:sign(Frame, Signer)), Last, From, S);
+encoded({error, _} = Refused, _Frame, _Last, _From, S) ->
+    {Refused, S}.
+
+%% @private A frame goes straight to the QUIC stream once the stream is
+%% handed over and nothing is held before it; otherwise, or when the stream
+%% answers busy, it waits in `held', in order.
+queue_bytes(Bytes, Last, From, #state{link_stream = Stream, held = Held} = S) ->
+    written_now(Stream =/= undefined andalso queue:is_empty(Held), Bytes, Last, From, S).
+
+written_now(true, Bytes, Last, From, #state{link_stream = Stream} = S) ->
+    taken_now(macula_quic:async_send(Stream, Bytes), Bytes, Last, From, S);
+written_now(false, Bytes, Last, From, S) ->
+    {held, hold(Bytes, Last, From, S)}.
+
+taken_now(ok, _Bytes, Last, _From, S) ->
+    {ok, after_written(Last, S)};
+taken_now({error, busy}, Bytes, Last, From, S) ->
+    {held, hold(Bytes, Last, From, S)};
+taken_now({error, already_closed}, _Bytes, _Last, _From, S) ->
+    {{error, send_closed}, closed_under_the_session(S)};
+taken_now({error, Reason}, _Bytes, _Last, _From, S) ->
+    Error = {error, {transport, Reason}},
+    {Error, write_failed(Error, S)}.
+
+hold(Bytes, Last, From, #state{held = Held} = S) ->
+    S#state{held = queue:in({Bytes, Last, From}, Held)}.
+
+%% @private Send held frames, oldest first, until the stream answers busy.
+flush_held(#state{link_stream = Stream, held = Held} = S) ->
+    flush_next(queue:peek(Held), Stream, S).
+
+flush_next(empty, _Stream, S) ->
+    S;
+flush_next({value, {Bytes, Last, From}}, Stream, S) ->
+    flush_taken(macula_quic:async_send(Stream, Bytes), Last, From, S).
+
+flush_taken(ok, Last, From, #state{held = Held} = S) ->
+    ok = answer(From, ok),
+    flush_held(after_written(Last, S#state{held = queue:drop(Held)}));
+flush_taken({error, busy}, _Last, _From, S) ->
+    S;
+flush_taken({error, already_closed}, _Last, _From, S) ->
+    closed_under_the_session(S);
+flush_taken({error, Reason}, _Last, _From, S) ->
+    write_failed({error, {transport, Reason}}, S).
+
+%% @private Once the QUIC stream took the session's last frame, the link
+%% may close that stream gracefully.
+after_written(true, #state{peer = {remote_via_link, Link, Sid}} = S) ->
+    ok = macula_station_link:stream_finished(Link, Sid),
+    S;
+after_written(false, S) ->
+    S.
+
+%% @private The link closed or reset the stream first: held and later send
+%% callers are answered `{error, send_closed}'.
+closed_under_the_session(#state{held = Held} = S) ->
+    ok = answer_held(Held, {error, send_closed}),
+    S#state{held = queue:new(), closed_send = true}.
+
+%% @private A write failed, or the stream could not be opened: the session
+%% ends once, with the transport error, for its held send callers, its
+%% readers and its reply waiters. A later failure changes nothing.
+write_failed(Error, #state{transport_error = undefined, held = Held} = S) ->
+    ok = answer_held(Held, Error),
+    S1 = S#state{transport_error = Error, held = queue:new(),
+                 closed_recv = true, closed_send = true,
+                 reply = first_reply(S#state.reply, Error)},
+    settle_reply_waiters_with(Error, drain_waiters(Error, S1));
+write_failed(_Error, S) ->
+    S.
+
+first_reply(undefined, Error) -> Error;
+first_reply(Reply, _Error) -> Reply.
+
+answer_held(Held, Reply) ->
+    lists:foreach(fun({_Bytes, _Last, From}) -> answer(From, Reply) end, queue:to_list(Held)).
+
+answer(undefined, _Reply) -> ok;
+answer(From, Reply) -> gen_server:reply(From, Reply).
 
 %% @private Owner DOWN → stop. Otherwise check whether the dead pid
 %% was our peer (or our peer's mesh_client for remote peers) and, if
@@ -497,8 +632,9 @@ handle_down(false, _Pid, State) ->
 
 propagate_peer_down(State) ->
     Err = {error, peer_down},
+    ok = answer_held(State#state.held, Err),
     State1 = State#state{closed_recv = true, closed_send = true,
-                         peer = undefined},
+                         peer = undefined, held = queue:new()},
     State2 = drain_waiters(Err, State1),
     State3 = settle_reply_waiters_with(Err, State2),
     {noreply, State3}.
