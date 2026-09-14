@@ -315,6 +315,27 @@ load_refuses_directory_test() ->
                      macula_identity:load(Dir))
     end).
 
+%% A key file only its owner can read, owned by a user other than the one the
+%% node runs as, is refused with its owner rather than reported missing, so a
+%% caller that makes a new identity only for a missing key file makes none;
+%% the file is left as it was.
+load_refuses_key_file_owned_by_another_user_test() ->
+    with_tmp_dir(fun(Dir) ->
+        Path = saved_key_with_mode(Dir, 8#600),
+        {ok, Before} = file:read_file(Path),
+        {ok, #file_info{uid = Owner}} = file:read_file_info(Path),
+        ok = meck:new(macula_node_user, [non_strict]),
+        Loaded = try
+                     ok = meck:expect(macula_node_user, effective_uid, fun() -> Owner + 1 end),
+                     macula_identity:load(Path)
+                 after
+                     meck:unload(macula_node_user)
+                 end,
+        ?assertEqual({{error, {file_owner, #{file => Path, owner => Owner, required => Owner + 1}}},
+                      {ok, Before}},
+                     {Loaded, file:read_file(Path)})
+    end).
+
 save_never_writes_through_symlink_at_path_plus_tmp_test() ->
     with_tmp_path("identity.key", fun(Path) ->
         Target = filename:join(filename:dirname(Path), "elsewhere"),
