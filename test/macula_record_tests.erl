@@ -319,12 +319,15 @@ encode_decode_roundtrip_test() ->
     ?assertMatch({ok, _}, macula_record:verify(Decoded)).
 
 decode_rejects_garbage_test() ->
-    %% A non-CBOR sequence either fails to decode or yields a non-record value.
-    Result = try macula_record:decode(<<255, 255, 255, 255>>) catch _:_ -> error end,
-    case Result of
-        {ok, _} -> ?assert(false);
-        _       -> ok
-    end.
+    %% Bytes that are not CBOR are a bad record, returned rather than raised.
+    ?assertEqual({error, bad_record}, macula_record:decode(<<255, 255, 255, 255>>)).
+
+decode_refuses_a_record_over_the_element_budget_test() ->
+    %% An array of 131,072 zeros holds one CBOR item more than the element
+    %% budget of macula_cbor_nif:unpack_deterministic/1.
+    Budget = 131072,
+    Bytes = <<16#9A, Budget:32/big, (binary:copy(<<0>>, Budget))/binary>>,
+    ?assertEqual({error, too_many_elements}, macula_record:decode(Bytes)).
 
 decode_returns_missing_signature_when_unsigned_test() ->
     Map = #{
