@@ -40,6 +40,11 @@
          nif_pack_deterministic/1, nif_unpack_deterministic/1,
          nif_unpack_deterministic_within/2, nif_element_budget/0]).
 
+%% NIF stubs that the NIF replaces at load; exported like the other stubs and
+%% called only from this module.
+-ignore_xref([{macula_cbor_nif, nif_unpack_deterministic_within, 2}]).
+-ignore_xref([{macula_cbor_nif, nif_element_budget, 0}]).
+
 -on_load(init/0).
 
 -define(NIF_NOT_LOADED, erlang:nif_error(nif_not_loaded)).
