@@ -5,7 +5,7 @@ testable, and Raf can point to a concrete plan in a partner offer.**
 
 **Status:** Planning. Raf accepted the recommendations on 2026-09-10. Open items are marked with their owner.
 **Created:** 2026-09-10
-**Last Updated:** 2026-09-12
+**Last Updated:** 2026-09-14
 **Classification:** BUILD
 **Reasons and measurements:** [EXPLORATION_POST_QUANTUM.md](EXPLORATION_POST_QUANTUM.md)
 
@@ -480,7 +480,9 @@ The full text of each decision is in
 |---|---|---|
 | Leaf certificate before CONNECT in Go, .NET and Python (V16) | Venus, Uranus, Pluto | Python needs its patch |
 | NTS servers for fleet time synchronisation (D22) | unassigned | open |
-| Authorization for procedures without an org namespace (D25) | Raf | open |
+| Authorization for procedures without an org namespace (D25) | Raf | decided on 2026-09-14: every procedure has one |
+| Procedures in use without an org namespace: listed, then renamed (D25) | Pluto, owners, Saturnus (WP 6.1) | open |
+| An org directory entry for every publisher (D25, WP 3.1) | Mercury | open |
 | Cross-profile federation: how realms of different profiles exchange calls and facts | Raf, with Jupiter | open |
 | Name of the US-profile realm on the post-quantum fleet (D19) | Raf | open |
 | Owner of the Reckon post-quantum plan, assigned when Stage 4 starts (D9) | Raf | open |
@@ -515,6 +517,7 @@ Rough, for planning. Items marked ⚠ are not estimated yet.
 | 3 | Station directory | ⚠ |
 | 3 | Distribution relay | ⚠ |
 | 3 | Demonstration video plan | 1 day |
+| 3, 6 | Org namespace on every procedure: renames and org directory entries (D25) | ⚠ |
 | 4 | Go transport | 2 to 4 days, plus the FFI unification ⚠ |
 | 4 | Python transport | 6 to 9 days, plus seeds and record verification ⚠ |
 | 4 | Rust transport in `macula-rust` | 3 to 4 days |
