@@ -111,6 +111,10 @@
 %% How a session ended, as the owner is told it.
 -type ended() :: closed | peer_down | {error, {binary(), binary()}}.
 
+%% The bytes of chunks no reader has taken a stream keeps by default, the
+%% same as a QUIC stream's default receive window.
+-define(MAX_INBOX_BYTES, 16#1000000).
+
 -record(state, {
     id              :: stream_id(),
     role            :: role(),
@@ -120,6 +124,9 @@
     peer            :: peer(),
     %% Recv side: inbound chunks queued, waiting recv/2 callers, eof flag
     inbox = queue:new() :: queue:queue({encoding(), term()}),
+    %% The bytes of the queued chunks, and the most it may reach
+    inbox_bytes = 0 :: non_neg_integer(),
+    max_inbox_bytes = ?MAX_INBOX_BYTES :: pos_integer(),
     waiters = queue:new() :: queue:queue({{pid(), reference()}, reference()}),
     closed_recv = false :: boolean(),
     %% Send side
@@ -139,7 +146,9 @@
 
 %% @doc Start a stream gen_server.
 %%
-%% Required opts: id, role, mode, owner.
+%% Required opts: id, role, mode, owner. Optional: max_inbox_bytes, the
+%% bytes of chunks no reader has taken that the stream keeps; a chunk past
+%% them ends the session (default 16 MiB).
 -spec start_link(map()) -> {ok, pid()} | {error, term()}.
 start_link(Opts) ->
     gen_server:start_link(?MODULE, Opts, []).
@@ -313,7 +322,8 @@ init(Opts) ->
         role = Role,
         mode = Mode,
         owner = Owner,
-        owner_ref = OwnerRef
+        owner_ref = OwnerRef,
+        max_inbox_bytes = maps:get(max_inbox_bytes, Opts, ?MAX_INBOX_BYTES)
     }}.
 
 %% --- pair --------------------------------------------------------------
@@ -402,6 +412,7 @@ handle_call(info, _From, State) ->
         mode => State#state.mode,
         peer => State#state.peer,
         inbox_size => queue:len(State#state.inbox),
+        inbox_bytes => State#state.inbox_bytes,
         waiters => queue:len(State#state.waiters),
         closed_recv => State#state.closed_recv,
         closed_send => State#state.closed_send,
@@ -649,14 +660,45 @@ enqueue_or_deliver(Encoding, Body, #state{waiters = W0} = State) ->
             gen_server:reply(From, chunk_to_recv_result(Encoding, Body)),
             State#state{waiters = W1};
         {empty, _} ->
-            Inbox = queue:in({Encoding, Body}, State#state.inbox),
-            State#state{inbox = Inbox}
+            Kept = kept(Encoding, Body),
+            enqueue(chunk_bytes(Encoding, Kept), Encoding, Kept, State)
     end.
 
-handle_recv(From, _Timeout, #state{inbox = Inbox} = State) ->
+%% A chunk that would take the memory the queued chunks hold past the
+%% stream's bound ends the session with a stream protocol error, and nothing
+%% of it is kept.
+enqueue(Bytes, _Encoding, _Kept, #state{inbox_bytes = Queued, max_inbox_bytes = Max} = State)
+  when Queued + Bytes > Max ->
+    abort_session(<<"stream_protocol_error">>,
+                  <<"the peer sent more than the stream keeps unread">>, State);
+enqueue(Bytes, Encoding, Kept, #state{inbox = Inbox, inbox_bytes = Queued} = State) ->
+    State#state{inbox = queue:in({Encoding, Kept}, Inbox), inbox_bytes = Queued + Bytes}.
+
+%% A chunk as the inbox keeps it: a copy, so a body that is part of the frame
+%% it arrived in keeps none of the rest of that frame.
+kept(raw, Body) when is_binary(Body) -> binary:copy(Body);
+kept(_Encoding, Body)                -> binary_to_term(term_to_binary(Body)).
+
+%% The memory a queued chunk holds: its term on the heap, with the tuple and
+%% the queue cell that hold it (two words), and every binary it keeps off the
+%% heap. An empty chunk still holds its cell and tuple.
+chunk_bytes(Encoding, Kept) ->
+    (erts_debug:flat_size({Encoding, Kept}) + 2) * erlang:system_info(wordsize)
+        + off_heap_bytes(Kept).
+
+%% Binaries over 64 bytes live off the heap; smaller ones are counted in the
+%% heap size.
+off_heap_bytes(Bin) when is_binary(Bin), byte_size(Bin) > 64 -> byte_size(Bin);
+off_heap_bytes(Tuple) when is_tuple(Tuple) -> off_heap_bytes(tuple_to_list(Tuple));
+off_heap_bytes(Map) when is_map(Map) -> off_heap_bytes(maps:to_list(Map));
+off_heap_bytes([Head | Tail]) -> off_heap_bytes(Head) + off_heap_bytes(Tail);
+off_heap_bytes(_Other) -> 0.
+
+handle_recv(From, _Timeout, #state{inbox = Inbox, inbox_bytes = Queued} = State) ->
     case queue:out(Inbox) of
         {{value, {Encoding, Body}}, Rest} ->
-            {reply, chunk_to_recv_result(Encoding, Body), State#state{inbox = Rest}};
+            {reply, chunk_to_recv_result(Encoding, Body),
+             State#state{inbox = Rest, inbox_bytes = Queued - chunk_bytes(Encoding, Body)}};
         {empty, _} when State#state.closed_recv ->
             {reply, eof, State};
         {empty, _} ->
