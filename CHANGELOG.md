@@ -23,6 +23,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `macula_identity:generate/0` returns an identity that passes the station
   puzzle. `macula_identity:generate/1` does the same unless given
   `puzzle => false`, which returns a plain key.
+- The S/Kademlia puzzle difficulty that `macula_identity:puzzle_valid/1`
+  applies, and that `macula_identity:generate/0` and `generate/1` grind to
+  when no `difficulty` is given, is the `macula` application env
+  `puzzle_difficulty`, so a `sys.config` entry for `macula` sets it. It stays
+  8 leading zero bits when unset, and a value that is not a non-negative
+  integer raises `{bad_config, {macula, puzzle_difficulty, Value}}`.
 
 ### Fixed
 

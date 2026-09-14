@@ -5,6 +5,10 @@
 %% `SHA-256(pubkey)' having at least N leading zero bits. This raises the
 %% cost of mass identity minting (Sybil defence).
 %%
+%% The difficulty `puzzle_valid/1' applies, and `generate/1' grinds to when
+%% no `difficulty' is given, is the `macula' application's
+%% `puzzle_difficulty' env: 8 leading zero bits when it is unset.
+%%
 %% See `plans/PLAN_MACULA_V2_PART1_FOUNDATIONS.md' sections 4.1–4.4.
 -module(macula_identity).
 
@@ -144,7 +148,8 @@ puzzle_evidence(#{public := Pub}) ->
 puzzle_evidence(Pub) when is_binary(Pub), byte_size(Pub) =:= 32 ->
     crypto:hash(sha256, Pub).
 
-%% @doc Puzzle validity against the application-configured difficulty.
+%% @doc Puzzle validity against the `macula' application's
+%% `puzzle_difficulty' env, 8 leading zero bits when it is unset.
 -spec puzzle_valid(pubkey() | key_pair()) -> boolean().
 puzzle_valid(X) ->
     puzzle_valid(X, default_difficulty()).
@@ -159,7 +164,14 @@ puzzle_valid(X, Difficulty) when is_integer(Difficulty), Difficulty >= 0 ->
 
 -spec default_difficulty() -> non_neg_integer().
 default_difficulty() ->
-    application:get_env(macula_identity, puzzle_difficulty, ?DEFAULT_PUZZLE_DIFFICULTY).
+    configured_difficulty(application:get_env(macula, puzzle_difficulty)).
+
+configured_difficulty(undefined) ->
+    ?DEFAULT_PUZZLE_DIFFICULTY;
+configured_difficulty({ok, Difficulty}) when is_integer(Difficulty), Difficulty >= 0 ->
+    Difficulty;
+configured_difficulty({ok, Other}) ->
+    erlang:error({bad_config, {macula, puzzle_difficulty, Other}}).
 
 -spec has_leading_zero_bits(binary(), non_neg_integer()) -> boolean().
 has_leading_zero_bits(_Bin, 0) ->
