@@ -11,6 +11,10 @@
 %%%-------------------------------------------------------------------
 -module(macula_mri_registry).
 
+-deprecated([
+    {list_custom_types, 0, "no longer exported from 11.0.0"}
+]).
+
 -behaviour(gen_server).
 
 %% API
@@ -128,6 +132,7 @@ list_types() ->
     Builtin ++ Custom.
 
 %% @doc List only custom registered types.
+%% @deprecated No longer exported from 11.0.0.
 -spec list_custom_types() -> [binary()].
 list_custom_types() ->
     case ets:info(?TABLE) of

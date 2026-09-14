@@ -136,6 +136,10 @@
 %% `macula:call_stream_station/6''s own default.
 -define(DEFAULT_DIAL_TIMEOUT_MS, 10_000).
 
+-deprecated([
+    {resolve_content_provider, 2, "removed in 11.0.0; use fetch_content/4"}
+]).
+
 %% @doc As `call/6' with no cert-chain verification.
 -spec call(macula:pool(), macula:realm(), macula:procedure(), term(),
           pos_integer()) -> {ok, term()} | {error, term()}.
