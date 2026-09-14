@@ -128,6 +128,52 @@ sample_record() ->
     Kp = macula_identity:generate(),
     macula_record:sign(macula_record:node_record(macula_identity:public(Kp), [], 0), Kp).
 
+%% A frame and the records in it share one element budget: a record gets
+%% what the frame's own items and the records before it left.
+shared_budget_test_() ->
+    [{"a VALUE of two records of 70,000 items, each under the element budget, is invalid",
+      ?_assertEqual({error, {invalid_frame, value, records}},
+                    macula_frame:decode(value_wire([record_of_items(70000),
+                                                    record_of_items(70000)])))},
+     {"a VALUE of two records of 60,000 items decodes",
+      ?_assertMatch({ok, #{frame_type := value, records := [#{}, #{}]}, <<>>},
+                    macula_frame:decode(value_wire([record_of_items(60000),
+                                                    record_of_items(60000)])))},
+     {"a STORE whose own items and record together pass the element budget is invalid",
+      ?_assertEqual({error, {invalid_frame, store, record}},
+                    macula_frame:decode(padded_store_wire(70000, record_of_items(70000))))}].
+
+%% A VALUE for one key holding Records, on the wire.
+value_wire(Records) ->
+    macula_frame:encode(macula_frame:value(#{key => <<6:256>>, records => Records})).
+
+%% A STORE of Record whose frame also carries a list of Padding zeros, in a
+%% field a STORE does not read, on the wire.
+padded_store_wire(Padding, Record) ->
+    Store = macula_frame:store(#{record => Record}),
+    macula_frame:encode(Store#{padding => lists:duplicate(Padding, 0)}).
+
+%% A record of exactly Items CBOR items: its payload holds a list of zeros
+%% long enough to make up the count. Its signature is not checked here.
+record_of_items(Items) ->
+    record_with(lists:duplicate(Items - record_items(record_with([])), 0)).
+
+record_with(List) ->
+    #{type => 1, key => <<4:256>>, version => <<5:128>>, created_at => 1,
+      expires_at => 2, payload => #{list => List}, signature => <<0:512>>}.
+
+record_items(Record) ->
+    count_items(macula_cbor_nif:unpack_deterministic(macula_record:encode(Record))).
+
+%% Every CBOR item in a decoded term: a map or a list counts one, and so
+%% does each key, value and element in it.
+count_items(Map) when is_map(Map) ->
+    maps:fold(fun(K, V, Acc) -> Acc + count_items(K) + count_items(V) end, 1, Map);
+count_items(List) when is_list(List) ->
+    lists:foldl(fun(E, Acc) -> Acc + count_items(E) end, 1, List);
+count_items(_Scalar) ->
+    1.
+
 parse_stream_test_() ->
     [{"complete frames and a partial one give the frames and the partial tail",
       fun stream_frames_and_partial_tail/0},
