@@ -40,7 +40,7 @@ unsubscribe_test_() ->
         {timeout, 15, fun respawned_link_unsubscribes/0}},
        {"a busy link does not hold up unsubscribe, and sends UNSUBSCRIBE once free",
         {timeout, 10, fun busy_link_does_not_block/0}},
-       {"an unsubscribe and a new subscribe reach the link in that order",
+       {"an unsubscribe and a new subscribe reach the link in that order, and its events reach the new subscriber",
         {timeout, 10, fun unsubscribe_then_subscribe_in_order/0}}]}}.
 
 %%%===================================================================
@@ -97,12 +97,13 @@ busy_link_does_not_block() ->
     end).
 
 unsubscribe_then_subscribe_in_order() ->
-    with_pool(fun(Pool, _Link, Frames) ->
+    with_pool(fun(Pool, Link, Frames) ->
         {ok, First} = macula_client:subscribe(Pool, ?REALM, ?TOPIC, self(), #{}),
         ?assertEqual(subscribe, next_frame(Frames)),
         ok = macula_client:unsubscribe(Pool, First),
-        {ok, _Again} = macula_client:subscribe(Pool, ?REALM, ?TOPIC, self(), #{}),
-        ?assertEqual([unsubscribe, subscribe], [next_frame(Frames), next_frame(Frames)])
+        {ok, Again} = macula_client:subscribe(Pool, ?REALM, ?TOPIC, self(), #{}),
+        ?assertEqual([unsubscribe, subscribe], [next_frame(Frames), next_frame(Frames)]),
+        ?assertEqual({event, Again}, event_through(Link))
     end).
 
 %%%===================================================================
@@ -171,6 +172,25 @@ next_unsubscribe(Tag) ->
             {unsubscribe, Realm, Topic};
         {Tag, #{frame_type := Other}} ->
             {other_frame, Other}
+    after ?FRAME_MS ->
+        none
+    end.
+
+%% Hands Link an EVENT for the test topic from its fake peer, as a station
+%% sends one, and returns the local subscription the pool delivered it to,
+%% as {event, SubRef}, or none.
+event_through(Link) ->
+    Peer = element(?PEER_PID_INDEX, sys:get_state(Link)),
+    Link ! {macula_peering, frame, Peer,
+            #{frame_type    => event,
+              topic         => ?TOPIC,
+              realm         => ?REALM,
+              publisher     => macula_identity:public(macula_identity:generate()),
+              seq           => 1,
+              payload       => #{probe => true},
+              delivered_via => direct}},
+    receive
+        {macula_event, SubRef, ?TOPIC, #{probe := true}, _Meta} -> {event, SubRef}
     after ?FRAME_MS ->
         none
     end.
