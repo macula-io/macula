@@ -272,6 +272,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `macula_record:decode/1` returns `{error, bad_record}` for bytes that are
+  not CBOR and `{error, too_many_elements}` for bytes over the element
+  budget of `macula_cbor_nif:unpack_deterministic/1`, instead of raising. A
+  STORE, REPLICATE or VALUE whose record bytes do not decode as a record is
+  an invalid frame named by its `record` or `records` field.
 - `macula_dist_relay_client` drops a tunnel and sends `tunnel_close` for it
   once the process holding its stream ends: the caller of
   `request_tunnel/2` for an outbound tunnel, and for an inbound tunnel its

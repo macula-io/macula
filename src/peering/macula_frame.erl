@@ -1612,7 +1612,10 @@ decode_cbor(Bytes, Rest) ->
 
 %% Inverse of `prepare_records/1' — opaque binary blobs in `record' /
 %% `records' fields are decoded via `macula_record:decode/1' so the
-%% frame map exposes record values in their natural map shape.
+%% frame map exposes record values in their natural map shape. Bytes
+%% that do not decode as a record, including bytes over the element
+%% budget, stay bytes, and `validate_received/1' refuses the frame for
+%% that field.
 restore_records(F = #{record := B}) when is_binary(B) ->
     case macula_record:decode(B) of
         {ok, R} -> F#{record := R};
