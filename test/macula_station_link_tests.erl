@@ -3207,6 +3207,42 @@ stream_error_written(Stream, Ms) ->
         none_written
     end.
 
+%% A dedicated stream carries one session. A second STREAM_OPEN on a stream
+%% that already carries one is refused with a STREAM_ERROR for its own stream
+%% id, starts no handler, and leaves the first session serving.
+a_second_stream_open_on_a_dedicated_stream_is_refused_test_() ->
+    {timeout, 5, fun second_stream_open_on_the_same_stream_is_refused/0}.
+
+second_stream_open_on_the_same_stream_is_refused() ->
+    {Pid, FakePeer, _PeerNodeId} = setup_link_for_streams(),
+    Log = macula_test_log:capture(),
+    try
+        Test = self(),
+        Procedure = <<"foo.one_session">>,
+        ok = macula_station_link:advertise_stream(Pid, ?REALM, Procedure, server_stream,
+                                                  telling_when_served(Test, telling_how_it_ended(Test))),
+        flush_send_frame_casts(),
+        CallerKp = macula_identity:generate(),
+        {Stream, _FirstSid} = serve_session(Pid, FakePeer, Procedure, CallerKp),
+        Second = stream_open_frame(Procedure, CallerKp, second),
+        SecondSid = maps:get(stream_id, Second),
+        inject_on_stream(Pid, Stream, macula_frame:sign(Second, CallerKp)),
+        ?assertMatch(#{stream_id := SecondSid, code := <<"refused">>},
+                     stream_error_written(Stream, 1_000)),
+        ?assertEqual(not_served, served_within(200)),
+        ?assertEqual(not_ended, how_it_ended(50))
+    after
+        macula_test_log:release(Log),
+        teardown_link_for_streams(ok)
+    end.
+
+served_within(Ms) ->
+    receive
+        {session_served, _StreamPid} -> served
+    after Ms ->
+        not_served
+    end.
+
 %% A STREAM_OPEN refused before any handler runs starts no process at all.
 a_refused_stream_open_starts_no_process_test_() ->
     {timeout, 5,
