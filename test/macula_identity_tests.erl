@@ -109,6 +109,28 @@ puzzle_higher_difficulty_implies_lower_difficulty_test_() ->
          ?assert(macula_identity:puzzle_valid(Kp, 10))
      end}.
 
+%% Every identity macula generates by default passes the puzzle check a
+%% station applies. Eight keys each, so a plain key passing by chance cannot
+%% make these pass.
+generate_returns_identities_that_pass_the_puzzle_test_() ->
+    {timeout, 30,
+     fun() ->
+         Ids = [macula_identity:generate() || _ <- lists:seq(1, 8)],
+         ?assertEqual(lists:duplicate(8, true), [macula_identity:puzzle_valid(Id) || Id <- Ids])
+     end}.
+
+generate_without_a_puzzle_option_returns_identities_that_pass_the_puzzle_test_() ->
+    {timeout, 30,
+     fun() ->
+         Ids = [macula_identity:generate(#{}) || _ <- lists:seq(1, 8)],
+         ?assertEqual(lists:duplicate(8, true), [macula_identity:puzzle_valid(Id) || Id <- Ids])
+     end}.
+
+%% puzzle => false gives plain keys: of 64, at least one fails difficulty 8.
+generate_with_puzzle_false_returns_plain_keys_test() ->
+    Ids = [macula_identity:generate(#{puzzle => false}) || _ <- lists:seq(1, 64)],
+    ?assert(lists:member(false, [macula_identity:puzzle_valid(Id, 8) || Id <- Ids])).
+
 %%------------------------------------------------------------------
 %% Persistence
 %%------------------------------------------------------------------
