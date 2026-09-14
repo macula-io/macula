@@ -384,7 +384,7 @@ handshaking(info, {quic, new_stream, Stream, _Info}, Data) ->
     {keep_state, Data#data{quic_stream = Stream}};
 handshaking(info, {quic, Bin, Stream, _Flags},
             #data{quic_stream = Stream, buf = Buf} = Data) when is_binary(Bin) ->
-    consume_handshake(macula_frame:parse_stream(<<Buf/binary, Bin/binary>>), Data);
+    consume_handshake(macula_frame:parse_received(<<Buf/binary, Bin/binary>>), Data);
 %% `{quic, closed, Conn, Detail}' is NEVER actually sent by the NIF —
 %% `native/macula_quic/src/atoms.rs' defines the atom but nothing calls
 %% `send_event' with it (verified directly in source: the connection's
@@ -489,6 +489,11 @@ consume_handshake({malformed, _Frames, Reason}, Data) ->
 
 handle_handshake_frames([], Data) ->
     {keep_state, Data};
+%% A handshake frame whose fields are invalid ends the connection: the
+%% handshake cannot go on without a valid CONNECT or HELLO.
+handle_handshake_frames([{invalid_frame, _Type, _Field} = Invalid | _], Data) ->
+    notify(disconnected, {malformed, Invalid}, Data),
+    {stop, normal, Data};
 handle_handshake_frames([#{frame_type := connect} = F | _], Data) ->
     process_connect(F, Data);
 handle_handshake_frames([#{frame_type := hello} = F | _], Data) ->
@@ -595,7 +600,7 @@ connected(enter, _Old, Data) ->
     {keep_state, Data};
 connected(info, {quic, Bin, Stream, _Flags},
           #data{quic_stream = Stream, buf = Buf} = Data) when is_binary(Bin) ->
-    consume_control(macula_frame:parse_stream(<<Buf/binary, Bin/binary>>), Data);
+    consume_control(macula_frame:parse_received(<<Buf/binary, Bin/binary>>), Data);
 %% Peer opened a new stream on this connection, outside the control
 %% stream — a dedicated stream for a streaming RPC session or a
 %% content transfer (see PLAN_PER_STREAM_QUIC_ISOLATION.md). This
@@ -1009,16 +1014,25 @@ notify(Event, Detail, #data{controlling_pid = Pid}) ->
     Pid ! {macula_peering, Event, self(), Detail},
     ok.
 
-%% Frames from the control stream are routed in order. The first frame
-%% that does not decode ends the connection after the frames before it
+%% Items from the control stream are routed in order. A frame whose
+%% fields are invalid is dropped, and the controlling process is told so it
+%% can count it: the control stream carries frames a station relays for
+%% others, and one party's invalid frame must not end the link. The first
+%% frame that does not decode ends the connection after the items before it
 %% are routed: nothing after it can be read.
-consume_control({ok, Frames, Tail}, Data) ->
-    [route_frame(F, Data) || F <- Frames],
+consume_control({ok, Items, Tail}, Data) ->
+    [route_item(I, Data) || I <- Items],
     {keep_state, Data#data{buf = Tail}};
-consume_control({malformed, Frames, Reason}, Data) ->
-    [route_frame(F, Data) || F <- Frames],
+consume_control({malformed, Items, Reason}, Data) ->
+    [route_item(I, Data) || I <- Items],
     notify(disconnected, {malformed, Reason}, Data),
     {stop, normal, Data}.
+
+route_item({invalid_frame, Type, Field}, #data{controlling_pid = Pid}) ->
+    Pid ! {macula_peering, invalid_frame, self(), Type, Field},
+    ok;
+route_item(Frame, Data) ->
+    route_frame(Frame, Data).
 
 %% Inbound-frame router. Category-bypass: DHT-class frames go to
 %% `dht_recipient' if set; pubsub-class frames go to `pubsub_recipient'

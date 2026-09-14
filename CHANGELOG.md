@@ -17,6 +17,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `{error, {invalid_frame, Type, Field}}`. A frame type this node does not
   know passes; a frame without a `frame_type` does not. Sample frames from
   the Go, Rust and .NET SDKs in `test/fixtures/sdk_frames` all pass.
+- `macula_frame:parse_received/1` drains the complete frames a peer sent
+  from a buffer. It returns `{ok, Items, Tail}`, or
+  `{malformed, ItemsBefore, Reason}` at the first frame that does not
+  decode, where `Reason` is `frame_too_large`, decided from the length
+  header, or `bad_frame`. An item is a frame, or
+  `{invalid_frame, Type, Field}` for a frame that decodes but whose fields
+  `macula_frame:validate_received/1` refuses; parsing goes on after it. A
+  `Tail` kept for the next chunk never exceeds the frame cap plus its
+  header.
 - `macula_station_link:not_sent/1` says whether an error from `call/5,6`
   means the CALL never went out: the link was not connected yet, there was
   no link process, or the link refused the frame before sending it.
@@ -94,13 +103,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- `macula_frame:parse_stream/1` returns `{ok, Frames, Tail}`, or
-  `{malformed, FramesBefore, Reason}` at the first frame that does not
-  decode, where `Reason` is `frame_too_large`, decided from the length
-  header, or `bad_frame`. A `Tail` kept for the next chunk never exceeds the
-  frame cap plus its header. `macula_peering_conn` ends the connection with
-  the reason `{malformed, Reason}` when its handshake or control stream does
-  not decode.
+- `macula_frame:parse_stream/1` keeps its `{Frames, Tail}` shape and bounds
+  what a caller keeps. Bytes that do not decode end the parse: the frames
+  before them come back with an empty `Tail`, and the rest of the buffer is
+  dropped. `Frames` holds only frames that pass
+  `macula_frame:validate_received/1`; an invalid frame is dropped without a
+  warning. It is deprecated, see Deprecated.
+- `macula_frame:decode/1` checks every frame it decodes with
+  `macula_frame:validate_received/1` and no longer decodes a frame without
+  that check. A frame whose fields are refused comes back as
+  `{error, {invalid_frame, Type, Field}}`, and a frame without `frame_type`
+  as `{error, {invalid_frame, unknown, frame_type}}`, so a map without
+  `frame_type` no longer decodes.
+- `macula_peering_conn` ends the connection with the reason
+  `{malformed, Reason}` when its handshake or control stream does not
+  decode, or when a handshake frame is invalid. On the control stream an
+  invalid frame is dropped, the frames after it are routed, and the
+  controlling process receives
+  `{macula_peering, invalid_frame, Pid, Type, Field}`.
 - `macula_dist_relay_client:close_tunnel/2` sends `tunnel_close` only for a
   tunnel the client knows, active or still being set up, and ignores an
   unknown tunnel id.
@@ -212,6 +232,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Deprecated
 
+- `macula_frame:parse_stream/1` is deprecated and removed in 11.0.0. Move
+  to `macula_frame:parse_received/1`, which reports invalid frames and bytes
+  that do not decode instead of dropping them. The `-deprecated` attribute
+  follows in the first macula minor release after macula-station calls
+  `parse_received/1`: added now, it would fail the xref check of projects
+  that still call `parse_stream/1` and check for deprecated calls.
 - `macula_direct_dial:resolve_content_provider/2` resolves through the same
   candidate loop, within 10 s, and is deprecated: it is removed in 11.0.0,
   and `fetch_content/4` replaces it.

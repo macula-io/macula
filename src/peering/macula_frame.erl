@@ -100,7 +100,9 @@
     %% Receivability, checked on every frame decoded from a peer's bytes
     validate_received/1,
 
-    %% Stream parser — drain frames from a buffer
+    %% Stream parser — drain frames a peer sent from a buffer
+    parse_received/1,
+    %% Deprecated, removed in 11.0.0: the 10.x shape of parse_received/1
     parse_stream/1,
 
     %% Accessors
@@ -110,6 +112,7 @@
 -export_type([
     frame/0,
     frame_type/0,
+    item/0,
     connect_spec/0,
     hello_spec/0,
     swim_ping_spec/0,
@@ -179,6 +182,10 @@
 -type member_state() :: alive | suspect | confirmed_failed.
 
 -type frame() :: map().
+
+%% What parse_received/1 yields per complete frame: the frame, or the reason
+%% validate_received/1 refused the fields of a frame whose framing is intact.
+-type item() :: frame() | {invalid_frame, frame_type() | unknown, atom()}.
 
 -type connect_spec() :: #{
     node_id          := macula_identity:pubkey(),
@@ -1549,21 +1556,44 @@ encode_with_check(Len, _Bytes) when Len > ?MAX_FRAME_BYTES ->
 encode_with_check(Len, Bytes) ->
     <<Len:32/big, Bytes/binary>>.
 
-%% @doc Decode a single length-prefixed frame from the head of a buffer.
+%% @doc Decode a single length-prefixed frame received from a peer, from
+%% the head of a buffer, and check its fields with `validate_received/1'.
 %% Returns `{ok, Frame, RestBuffer}', `{more, BytesNeeded}' if the buffer
-%% is short, or `{error, Reason}' if the framing is malformed.
+%% is short, or `{error, Reason}': `frame_too_large' or `bad_frame' if the
+%% framing is malformed, and `{invalid_frame, Type, Field}' if the frame
+%% decodes but `validate_received/1' refuses its fields. A frame without
+%% `frame_type' is refused as `{invalid_frame, unknown, frame_type}'.
+%% There is no decode without that check: every frame decode/1 returns
+%% has passed `validate_received/1'.
 -spec decode(binary()) ->
     {ok, frame(), binary()}
   | {more, pos_integer()}
-  | {error, frame_too_large | bad_frame}.
-decode(<<Len:32/big, _Rest/binary>>) when Len > ?MAX_FRAME_BYTES ->
+  | {error, frame_too_large | bad_frame | {invalid_frame, frame_type() | unknown, atom()}}.
+decode(Buf) when is_binary(Buf) ->
+    single(decode_item(Buf)).
+
+single({invalid, Invalid, _Rest}) -> {error, Invalid};
+single(Decoded) -> Decoded.
+
+%% One frame from the head of a buffer, with its fields checked once it
+%% decodes. A frame whose fields are refused comes back with the rest of
+%% the buffer, since its bytes were read in full.
+decode_item(<<Len:32/big, _Rest/binary>>) when Len > ?MAX_FRAME_BYTES ->
     {error, frame_too_large};
-decode(<<Len:32/big, Bytes:Len/binary, Rest/binary>>) ->
-    decode_cbor(Bytes, Rest);
-decode(<<Len:32/big, Tail/binary>>) ->
+decode_item(<<Len:32/big, Bytes:Len/binary, Rest/binary>>) ->
+    fields_checked(decode_cbor(Bytes, Rest));
+decode_item(<<Len:32/big, Tail/binary>>) ->
     {more, Len - byte_size(Tail)};
-decode(Buf) when is_binary(Buf), byte_size(Buf) < 4 ->
+decode_item(Buf) when byte_size(Buf) < 4 ->
     {more, 4 - byte_size(Buf)}.
+
+fields_checked({ok, Frame, Rest}) ->
+    received(validate_received(Frame), Frame, Rest);
+fields_checked(BadFrame) ->
+    BadFrame.
+
+received(ok, Frame, Rest) -> {ok, Frame, Rest};
+received({error, Invalid}, _Frame, Rest) -> {invalid, Invalid, Rest}.
 
 decode_cbor(Bytes, Rest) ->
     try macula_cbor_nif:unpack_deterministic(Bytes) of
@@ -1596,31 +1626,59 @@ decode_record_or_keep(B) when is_binary(B) ->
     end;
 decode_record_or_keep(Other) -> Other.
 
-%% @doc Drain all complete frames from a buffer.
+%% @doc Drain all complete frames a peer sent from a buffer.
 %%
-%% Returns `{ok, Frames, Tail}' with the frames in order and `Tail' holding
-%% at most one incomplete frame, so a caller that keeps `Tail' for the next
-%% chunk never holds more than the frame cap plus its 4-byte header. The
-%% first frame that does not decode ends the parse with
-%% `{malformed, FramesBefore, Reason}': `frame_too_large' for a length
-%% header above the cap, decided from the header alone, and `bad_frame' for
-%% a complete frame that is not CBOR. Nothing after that frame can be read,
-%% so the caller ends the stream.
--spec parse_stream(binary()) ->
-    {ok, [frame()], binary()}
-  | {malformed, [frame()], frame_too_large | bad_frame}.
-parse_stream(Buf) when is_binary(Buf) ->
+%% Returns `{ok, Items, Tail}' with an item per complete frame, in order,
+%% and `Tail' holding at most one incomplete frame, so a caller that keeps
+%% `Tail' for the next chunk never holds more than the frame cap plus its
+%% 4-byte header. An item is the frame, or `{invalid_frame, Type, Field}'
+%% for a frame that decodes but whose fields `validate_received/1' refuses.
+%% Its bytes were read in full, so parsing goes on after it, and each caller
+%% decides what an invalid frame means on its stream. The first frame that
+%% does not decode ends the parse with `{malformed, ItemsBefore, Reason}':
+%% `frame_too_large' for a length header above the cap, decided from the
+%% header alone, and `bad_frame' for a complete frame that is not CBOR.
+%% Nothing after that frame can be read, so the caller ends the stream.
+-spec parse_received(binary()) ->
+    {ok, [item()], binary()}
+  | {malformed, [item()], frame_too_large | bad_frame}.
+parse_received(Buf) when is_binary(Buf) ->
     drain(Buf, []).
 
 drain(Buf, Acc) ->
-    drain_step(decode(Buf), Buf, Acc).
+    drain_step(decode_item(Buf), Buf, Acc).
 
 drain_step({ok, Frame, Rest}, _Buf, Acc) ->
     drain(Rest, [Frame | Acc]);
+drain_step({invalid, Invalid, Rest}, _Buf, Acc) ->
+    drain(Rest, [Invalid | Acc]);
 drain_step({more, _N}, Buf, Acc) ->
     {ok, lists:reverse(Acc), Buf};
 drain_step({error, Reason}, _Buf, Acc) ->
     {malformed, lists:reverse(Acc), Reason}.
+
+%% @doc Drain the complete frames in a buffer, in the `{Frames, Tail}'
+%% shape of 10.x. Deprecated, and removed in 11.0.0: use
+%% `parse_received/1', which reports invalid frames and bytes that do not
+%% decode.
+%%
+%% `Frames' holds only the frames that pass `validate_received/1': a frame
+%% whose fields are refused is dropped without a warning. Bytes that do not
+%% decode end the parse: the frames before them come back with an empty
+%% `Tail', and the rest of the buffer is dropped. A caller that keeps
+%% `Tail' for the next chunk never holds more than the frame cap plus its
+%% 4-byte header.
+-spec parse_stream(binary()) -> {[frame()], binary()}.
+parse_stream(Buf) when is_binary(Buf) ->
+    frames_and_tail(parse_received(Buf)).
+
+frames_and_tail({ok, Items, Tail}) ->
+    {valid_frames(Items), Tail};
+frames_and_tail({malformed, Items, _Reason}) ->
+    {valid_frames(Items), <<>>}.
+
+valid_frames(Items) ->
+    [Frame || Frame <- Items, is_map(Frame)].
 
 %%------------------------------------------------------------------
 %% Received frames
