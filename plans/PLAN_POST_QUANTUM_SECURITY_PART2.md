@@ -921,8 +921,13 @@ Every stack also meets these, each red first:
   - every hecate service procedure moves under the org namespace `hecate`, with a procedure delegation per service
     signed by the `hecate` org key of WP 3.1; SDK examples, `macula-mcp` and `macula-e2e` callers move with the
     rename (D25);
+
   - no hecate service advertises a name without an org namespace; the names to rename are listed with their owners
     (open item);
+  - no hecate service advertises a name without an org namespace. The bare names found in use start the list:
+    `rag_search`, `rag_contribute`, `reach_web`, `graph_learn`, `graph_ask_links`, `graph_ask_entity`,
+    `hecate-nvidia-pair.chat`, `hecate-llm.stream_chat` and the tube procedures (Pluto's first pass, 2026-09-14; the
+    full list is an open item);
   - services that share content keep it and serve it themselves (D27);
   - a node that holds private keys runs with Erlang crash dumps disabled (`ERL_CRASH_DUMP_BYTES=0`), or written only
     to a private location readable by its own user.
@@ -1086,6 +1091,7 @@ core cutover advertises a procedure without an org or node namespace.
 - `src/hecate_om_ownership_proof.erl`
 - Containerfiles and CI images (V11)
 
+
 ---
 
 ## 11.0.0 removals
@@ -1108,6 +1114,49 @@ move first. An owner who deprecates something adds its entry here; some entries 
 - `macula_direct_dial:resolve_content_provider/2`.
   - Replacement: `macula_direct_dial:fetch_content/4`.
   - Moves first: its caller in `macula-internal/macula-e2e` (`macula_e2e_duel`, Terra, WP 2.1).
+- The `dht` and `mdns` clustering strategy values, with `macula_cluster_strategy`, `macula_dist_discovery` and
+  `macula_dist_mdns_advertiser` (Neptune).
+  - Replacement: the `gossip` strategy on a LAN, or `static` with a node list.
+  - Moves first: nothing.
+  - Noted in the [Clustering Guide](../docs/guides/CLUSTERING_GUIDE.md), in the READMEs of
+    [`macula_cluster_system`](../src/macula_cluster_system/README.md) and
+    [`macula_dist_system`](../src/macula_dist_system/README.md), and in `macula_dist_discovery`.
+- `mdns` in the `optional_applications` of `src/macula.app.src`, which names no installed application.
+  - Replacement: none. Moves first: nothing.
+- The modules `macula_console` and `macula_cert_system` (Mercury).
+  - Replacement: start `macula_trust_store` directly. Moves first: nothing; no caller in the workspace on
+    2026-09-14.
+- `macula_mri:index_descendants/3`, `index_insert/4`, `index_remove/3`, `index_size/1` and `is_valid/1`;
+  `macula_names:local_node_id/0`; `macula_source_route:version/1`; `macula_quic:accept_stream/3`,
+  `async_shutdown_connection/3` and `handoff_stream/3`; `macula_crypto_nif:blake3_streaming/1` and
+  `blake3_verify/2`; `hecate_or_set:tombstones/1`; `macula_hyparview_view:contains/2` (Mercury).
+  - Replacement: none. Moves first: nothing; no caller in the workspace on 2026-09-14.
+- Exports that end while their modules keep the functions: `macula_mri:parent_type/1`,
+  `macula_mri_registry:list_custom_types/0` and `macula_dist_relay_protocol:decode/1` (Mercury).
+  - Replacement: none outside their modules. Moves first: nothing; no caller in the workspace on 2026-09-14.
+
+---
+
+## 11.0.0 removals
+
+What `macula` 11.0.0 removes, in one place. Each entry names what is deprecated, what replaces it, and what must
+move first. An owner who deprecates something adds its entry here; some entries belong to changes that are not on
+`main` yet. The `[11.0.0]` Removed section of the post-quantum CHANGELOG records each removal when it is made.
+
+- `macula_frame:parse_stream/1` (Neptune).
+  - Replacement: `macula_frame:parse_received/1`, which returns `{ok, Items, Tail}` or
+    `{malformed, ItemsBefore, Reason}`.
+  - Moves first: its two callers in `macula-station`, in the station's release B (Mars). The `-deprecated`
+    attribute follows in the next `macula` minor, because the station's xref checks deprecated calls; until then
+    the deprecation is in the documentation and the CHANGELOG only.
+- `macula:get_cookie/0`, `macula:set_cookie/1`, `macula_cluster:get_cookie/0` and `macula_cluster:set_cookie/1`
+  (Pluto).
+  - Replacement: `erlang:get_cookie/0` and `erlang:set_cookie/1` on a distributed node, whose cookie comes from its
+    owner-only cookie file or its release.
+  - Moves first: `bc-gitops` (`bc_gitops_cluster` and `bc_gitops_vm_spawner`).
+- `macula_direct_dial:resolve_content_provider/2`.
+  - Replacement: `macula_direct_dial:fetch_content/4`.
+  - Moves first: nothing.
 - The `dht` and `mdns` clustering strategy values, with `macula_cluster_strategy`, `macula_dist_discovery` and
   `macula_dist_mdns_advertiser` (Neptune).
   - Replacement: the `gossip` strategy on a LAN, or `static` with a node list.

@@ -184,9 +184,12 @@ per hash and never showing callers the decision.
 
 ### 2.7 What stays open
 
+
 - Content announcements (no authority exists for them, D27): their entries hold unchecked places only. Procedures
   without an org namespace are refused in 11.0.0 (D25), and so is any authorization but the org directory and
   delegation pair: the certificate-chain form is removed, since the 11.0.0 realm issues no X.509 certificates.
+- Providers authorized by a certificate chain, and content announcements (no authority exists for them, D27): their
+  entries hold unchecked places only. Procedures without an org namespace are refused in 11.0.0 (D25).
 - Realms not on a trust list, and stations with no trust list.
 
 ### 2.8 Tests

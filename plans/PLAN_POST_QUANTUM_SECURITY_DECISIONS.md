@@ -226,6 +226,7 @@ table there gives each decision's answer in short and its status.
     name that says it does not authorize.
   - Membership tokens from the realm are presented only inside a CALL, so this rule needs no exception (Neptune,
     2026-09-10).
+
   - **Amended and accepted by Raf on 2026-09-14,** two rules for the capability check of step 4:
     - **Narrowing along a chain.** Every token in a chain names the same realm. A realm grant covers realm, org and
       procedure grants in that realm, an org grant covers that org and its procedures, and a procedure grant covers
@@ -238,6 +239,18 @@ table there gives each decision's answer in short and its status.
       10.x uses the same definition (Jupiter, 2026-09-14).
     - **Why:** each token grants only within what it was given, and an org key only within its own org, so authority
       follows the chain and the org directory.
+  - **Amended and accepted by Raf on 2026-09-14,** two rules for the capability check of step 4:
+    - **Narrowing along a chain.** Every token in a chain names the same realm. A realm grant covers realm, org and
+      procedure grants in that realm, an org grant covers that org and its procedures, and a procedure grant covers
+      only that procedure. Each token's capability is covered by a capability of the token it proves from, and
+      `can` is equal at every step.
+    - **Issuer scope.** An org key, authorized through the realm-signed org directory (D25 item 6), grants only org
+      or procedure capabilities inside its own org. Only the realm key grants a realm capability.
+    - A grant's org is the org namespace of the procedure name, as `DESIGN_PQ_SIGNED_FRAMES_AND_RECORDS.md` defines
+      it for provider authorization, so the caller check and the provider check agree on who owns a name. `macula`
+      10.x uses the same definition (Jupiter, 2026-09-14).
+    - **Why:** without narrowing, a delegate could grant more than it was given; without issuer scope, a key trusted
+      for one org could grant a whole realm.
   - This is sound under D24's rules for node ids. Using a delegation needs a key that derives to the named
     node_id, a second preimage at the high end of SHA-256's 201 to 256 bits (D5). A collision only gives one party
     two keys for one node_id, and so a delegation it already holds; no issuer delegates to a node_id because of a
@@ -635,6 +648,7 @@ before its wire checks are green.
      the first request may already have run.
 - **Answers to the design questions:**
   - **Who may provide a procedure:** the realm's provider authorization decides (item 6), and the caller, not a
+
     station, picks and signs the target among authorized providers (item 2). In 11.0.0 every procedure has an org
     namespace, so every provider carries an authorization (next answer).
   - **Procedures without an org namespace, decided by Raf on 2026-09-14:** `macula` 11.0.0 requires an org namespace
@@ -644,6 +658,18 @@ before its wire checks are green.
       owns it (D7), and the provider check and the caller check share one definition of who owns a name. Not taken:
       the realm owning `_` and signing its procedure delegations, which keeps today's names but makes the realm key a
       signer in regular use.
+    - **Consequences:** the procedures in use without an org namespace are listed and renamed before 11.0.0, and
+      every publisher gets an org directory entry (WP 3.1, WP 6.1, open items).
+    station, picks and signs the target among authorized providers (item 2). In 11.0.0 every procedure has an org
+    namespace, so every provider carries an authorization (next answer).
+  - **Procedures without an org namespace, decided by Raf on 2026-09-14:** `macula` 11.0.0 requires an org namespace
+    on every procedure. A name whose first segment is `_`, a name without `/`, and a name that starts with `/` are
+    refused when a procedure is advertised and by every authorization policy.
+    - **Why:** every provider then carries a provider authorization (item 6), every capability grant has an org that
+      owns it (D7), and the provider check and the caller check share one definition of who owns a name. Under the
+      earlier rule, any realm member could provide a procedure without an org namespace, and the reply binding
+      proved only that the reply came from the node the caller chose. Not taken: the realm owning `_` and signing
+      its procedure delegations, which keeps today's names but makes the realm key a signer in regular use.
     - **Consequences:** the procedures in use without an org namespace are listed and renamed before 11.0.0, and
       every publisher gets an org directory entry (WP 3.1, WP 6.1, open items).
   - **Hecate services, accepted by Raf on 2026-09-11:** in 11.0.0 every hecate service procedure has the org
