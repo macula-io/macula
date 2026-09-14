@@ -1,12 +1,29 @@
 %% @doc Per-identity registry for `hecate_pubsub_server' processes.
 %%
 %% Holds a `RealmTag => pid()' map and acts as the dispatch hub for
-%% inbound SUBSCRIBE / UNSUBSCRIBE / EVENT frames. New realms are
-%% materialised via `register/2': the registry spawn-links a
-%% `hecate_pubsub_server' worker for the realm and stores its pid.
-%% A linked worker that crashes delivers an `'EXIT'' message which
-%% the registry traps + uses to clear the entry; a later
-%% `register/2' yields a fresh server.
+%% inbound SUBSCRIBE / UNSUBSCRIBE / EVENT frames. The registry
+%% spawn-links one `hecate_pubsub_server' worker per realm and stores
+%% its pid. A linked worker that crashes delivers an `'EXIT'' message
+%% which the registry traps + uses to clear the entry; a later
+%% `register/3' or SUBSCRIBE yields a fresh server.
+%%
+%% == A realm's server lives while something holds it ==
+%%
+%% A realm gets a server in two ways. `register/3' materialises it for
+%% the station's own use, such as a realm the station publishes on; such
+%% a realm is pinned and stays until the registry stops. With a
+%% `default_identity', a SUBSCRIBE for a realm without a server
+%% materialises one; that realm lives while a subscription holds it, and
+%% when an UNSUBSCRIBE or `purge_subscriber/2' takes its last one, its
+%% server stops and its place frees. Nothing else starts a server: an
+%% UNSUBSCRIBE or EVENT for a realm without one gets `{ok, []}', and
+%% `relay_publish/3' builds its EVENT without one.
+%%
+%% At most `max_subscribed_realms' realms (1000 by default) are
+%% materialised by SUBSCRIBE at once. A SUBSCRIBE that would take the
+%% registry past that gets `{error, too_many_realms}' and starts no
+%% server. Pinned realms do not count, so `register/3' is for realms the
+%% station itself chooses, never for a realm a peer names.
 %%
 %% == Sprint A invariant ==
 %%
@@ -49,13 +66,16 @@
 
 -export_type([opts/0, realm/0, identity/0]).
 
+-define(MAX_SUBSCRIBED_REALMS, 1000).
+
 -type realm()    :: <<_:256>>.
 -type identity() :: macula_identity:key_pair().
 
 -type opts() :: #{
     %% Default identity used when a `register/3' caller does not
     %% pass one explicitly. Optional — passing identity per-call
-    %% gives the same behaviour as the pre-Phase-2 API.
+    %% gives the same behaviour as the pre-Phase-2 API. With it, a
+    %% SUBSCRIBE for a realm without a server materialises one.
     identity     => identity(),
     %% Phase 6 (operational tooling): when supplied, the registry
     %% sets `logger:set_process_metadata(#{identity_id =&gt; Key})'
@@ -63,13 +83,20 @@
     %% from the pubsub_servers it spawn-links — carries the
     %% identity for grep-friendly diagnostics on a multi-identity
     %% box.
-    identity_key => term()
+    identity_key => term(),
+    %% The most realms SUBSCRIBE frames may have materialised at once,
+    %% 1000 by default. Realms `register/3' pinned do not count.
+    max_subscribed_realms => pos_integer()
 }.
 
 -record(state, {
-    default_identity     :: identity() | undefined,
-    by_realm = #{}       :: #{realm() => pid()},
-    by_pid   = #{}       :: #{pid() => realm()}
+    default_identity      :: identity() | undefined,
+    max_subscribed_realms :: pos_integer(),
+    by_realm = #{}        :: #{realm() => pid()},
+    by_pid   = #{}        :: #{pid() => realm()},
+    %% Live realms `register/3' materialised or took over: they stay
+    %% without subscriptions and do not count towards the maximum.
+    pinned   = #{}        :: #{realm() => true}
 }).
 
 %%====================================================================
@@ -85,6 +112,12 @@ start_link(Opts) when is_map(Opts) ->
 %% exists, returns its pid; otherwise spawns a new one and records
 %% the mapping. A stale entry pointing at a dead pid is replaced
 %% transparently.
+%%
+%% The realm is pinned: it stays when its last subscription leaves, and
+%% it does not count towards `max_subscribed_realms'. Register only a
+%% realm the station itself chooses, such as one it publishes on, never
+%% a realm a peer names, or peers could grow the registry past its
+%% maximum.
 -spec register(pid(), realm(), identity()) ->
         {ok, pid()} | {error, term()}.
 register(RegistryPid, <<_:256>> = Realm, Identity) ->
@@ -98,18 +131,20 @@ lookup(RegistryPid, <<_:256>> = Realm) ->
 
 %% @doc Route a SUBSCRIBE / UNSUBSCRIBE / EVENT frame for `Realm' to
 %% the matching pubsub_server. Returns the matched local subscribers
-%% (empty list for SUBSCRIBE / UNSUBSCRIBE) or `{error, not_found}'
-%% if no server is registered for `Realm' AND no `default_identity'
-%% was configured at start-up.
+%% (empty list for SUBSCRIBE / UNSUBSCRIBE).
 %%
-%% **Auto-registration**: when `default_identity' is set on the
-%% registry (the production path under
-%% `macula_station_identity_sup'), an unknown realm is materialised
-%% on demand using that identity and the frame is dispatched against
-%% the freshly-spawned server. Tests that omit `default_identity'
-%% retain the strict `{error, not_found}' semantics.
+%% For a realm without a server: when no `default_identity' was
+%% configured at start-up, every frame gets `{error, not_found}'. With
+%% one (the production path under `macula_station_identity_sup'), a
+%% SUBSCRIBE materialises the realm and is dispatched against the fresh
+%% server, or gets `{error, too_many_realms}' when SUBSCRIBE frames
+%% already hold `max_subscribed_realms' realms; an UNSUBSCRIBE or EVENT
+%% gets `{ok, []}' and starts nothing.
+%%
+%% An UNSUBSCRIBE that takes the last subscription of a realm a
+%% SUBSCRIBE materialised stops that realm's server.
 -spec dispatch_frame(pid(), realm(), <<_:256>>, macula_frame:frame()) ->
-        {ok, [<<_:256>>]} | {error, not_found}.
+        {ok, [<<_:256>>]} | {error, not_found | too_many_realms}.
 dispatch_frame(RegistryPid, <<_:256>> = Realm, From, Frame) ->
     gen_server:call(RegistryPid, {dispatch_frame, Realm, From, Frame}).
 
@@ -123,15 +158,14 @@ dispatch_frame(RegistryPid, <<_:256>> = Realm, From, Frame) ->
 %% `{error, not_found}' when no server is registered for the realm
 %% AND no `default_identity' was configured at start-up.
 %%
-%% **Auto-registration**: parallel to `dispatch_frame/4'. With
-%% `default_identity' set (the production path under
-%% `macula_station_identity_sup'), an unknown realm is materialised
-%% on demand and the EVENT frame is built against a freshly-spawned
-%% server with empty subscribers. This makes the EVENT available for
-%% publisher-side bloom-fan forwarding to peer stations that have
-%% the topic in their Bloom filter but no subscribe-on-peer chain
-%% terminating at us. Tests that omit `default_identity' retain the
-%% strict `{error, not_found}' semantics.
+%% For a realm without a server and a `default_identity' set (the
+%% production path under `macula_station_identity_sup'), the EVENT is
+%% still built, signed with that identity, with no local subscribers.
+%% This keeps the EVENT available for publisher-side bloom-fan
+%% forwarding to peer stations that have the topic in their Bloom filter
+%% but no subscribe-on-peer chain terminating at us, and starts no
+%% process for a realm nobody here subscribes to. Tests that omit
+%% `default_identity' retain the strict `{error, not_found}' semantics.
 -spec relay_publish(pid(), realm(), macula_frame:frame()) ->
         {ok, macula_frame:frame(), [<<_:256>>]}
       | {error, not_found | realm_mismatch}.
@@ -150,6 +184,8 @@ list_realms(RegistryPid) ->
 %% (raced against its own `EXIT' cleanup, see `handle_info/2') is
 %% skipped rather than treated as an error; the registry's own
 %% `by_realm'/`by_pid' bookkeeping self-heals on the pending `EXIT'.
+%% A realm a SUBSCRIBE materialised whose last subscription the purge
+%% took has its server stopped.
 %%
 %% Intended caller: the station's peer/daemon connection-lifecycle
 %% path, once a `NodeId' is confirmed to have no remaining
@@ -178,7 +214,9 @@ stop(RegistryPid) ->
 init(Opts) ->
     process_flag(trap_exit, true),
     set_logger_identity(Opts),
-    {ok, #state{default_identity = maps:get(identity, Opts, undefined)}}.
+    {ok, #state{default_identity      = maps:get(identity, Opts, undefined),
+                max_subscribed_realms = maps:get(max_subscribed_realms, Opts,
+                                                 ?MAX_SUBSCRIBED_REALMS)}}.
 
 set_logger_identity(#{identity_key := Key}) ->
     logger:set_process_metadata(#{identity_id => Key});
@@ -196,9 +234,8 @@ handle_call({relay_publish, Realm, Frame}, _From, S) ->
 handle_call(list_realms, _From, S) ->
     {reply, maps:keys(S#state.by_realm), S};
 handle_call({purge_subscriber, Sub}, _From, S) ->
-    lists:foreach(fun(Pid) -> purge_one(Pid, Sub) end,
-                  maps:values(S#state.by_realm)),
-    {reply, ok, S};
+    {reply, ok, lists:foldl(fun({Realm, Pid}, Acc) -> purge_one(Realm, Pid, Sub, Acc) end,
+                            S, maps:to_list(S#state.by_realm))};
 handle_call(_Other, _From, S) ->
     {reply, {error, unknown_call}, S}.
 
@@ -224,8 +261,8 @@ do_register_call(Realm, Identity, {ok, Pid}, S) ->
 do_register_call(Realm, Identity, error, S) ->
     do_spawn_server(Realm, Identity, S).
 
-handle_existing(_Realm, Pid, _Identity, true, S) ->
-    {reply, {ok, Pid}, S};
+handle_existing(Realm, Pid, _Identity, true, S) ->
+    {reply, {ok, Pid}, pin(Realm, S)};
 handle_existing(Realm, _Pid, Identity, false, S) ->
     %% The process is dead but the EXIT message has not been
     %% drained yet. Drop it now so the new server lands on a clean
@@ -240,10 +277,13 @@ do_spawn_server(Realm, Identity, S) ->
 
 on_server_started(Realm, {ok, Pid}, S) ->
     {reply, {ok, Pid},
-     S#state{by_realm = (S#state.by_realm)#{Realm => Pid},
-             by_pid   = (S#state.by_pid)#{Pid => Realm}}};
+     pin(Realm, S#state{by_realm = (S#state.by_realm)#{Realm => Pid},
+                        by_pid   = (S#state.by_pid)#{Pid => Realm}})};
 on_server_started(_Realm, {error, _} = E, S) ->
     {reply, E, S}.
+
+pin(Realm, #state{pinned = Pinned} = S) ->
+    S#state{pinned = Pinned#{Realm => true}}.
 
 lookup_reply({ok, Pid}) -> {ok, Pid};
 lookup_reply(error)     -> {error, not_found}.
@@ -251,15 +291,27 @@ lookup_reply(error)     -> {error, not_found}.
 do_dispatch(_Realm, _From, _Frame, error,
             #state{default_identity = undefined} = S) ->
     {reply, {error, not_found}, S};
-do_dispatch(Realm, From, Frame, error,
-            #state{default_identity = Id} = S) ->
-    %% Auto-register on first arrival so SUBSCRIBE / EVENT frames
-    %% don't need a separate `register' round-trip from the caller.
-    %% Only fires when a default_identity was configured at start-up
-    %% — tests pass `#{}' to retain the strict not_found semantics.
-    on_auto_registered(ensure_server(Realm, Id, S), Realm, From, Frame);
+do_dispatch(Realm, From, #{frame_type := subscribe} = Frame, error, S) ->
+    %% Only a SUBSCRIBE materialises a realm, and only while SUBSCRIBE
+    %% frames hold fewer realms than the maximum.
+    materialise_for_subscribe(has_room_for_a_subscribed_realm(S), Realm, From, Frame, S);
+do_dispatch(_Realm, _From, _Frame, error, S) ->
+    %% An UNSUBSCRIBE or EVENT for a realm with no server has nothing to
+    %% act on, and starts none.
+    {reply, {ok, []}, S};
 do_dispatch(Realm, From, Frame, {ok, Pid}, S) ->
     forward_frame(Realm, Pid, From, Frame, S).
+
+materialise_for_subscribe(false, _Realm, _From, _Frame, S) ->
+    {reply, {error, too_many_realms}, S};
+materialise_for_subscribe(true, Realm, From, Frame, #state{default_identity = Id} = S) ->
+    on_auto_registered(ensure_server(Realm, Id, S), Realm, From, Frame).
+
+%% Pinned realms are live realms, so the realms SUBSCRIBE frames hold are
+%% all the others.
+has_room_for_a_subscribed_realm(#state{by_realm = ByRealm, pinned = Pinned,
+                                       max_subscribed_realms = Max}) ->
+    map_size(ByRealm) - map_size(Pinned) < Max.
 
 on_auto_registered({ok, Pid, S}, Realm, From, Frame) ->
     forward_frame(Realm, Pid, From, Frame, S);
@@ -268,10 +320,44 @@ on_auto_registered({error, Reason, S}, _Realm, _From, _Frame) ->
 
 forward_frame(Realm, Pid, From, Frame, S) ->
     try hecate_pubsub_server:process_frame(Pid, From, Frame) of
-        Subs -> {reply, {ok, Subs}, S}
+        Subs -> {reply, {ok, Subs}, reap_if_empty(is_unsubscribe(Frame), Realm, Pid, S)}
     catch
         exit:{noproc, _} ->
             {reply, {error, not_found}, drop_realm(Realm, S)}
+    end.
+
+is_unsubscribe(#{frame_type := unsubscribe}) -> true;
+is_unsubscribe(_Frame)                       -> false.
+
+%%====================================================================
+%% Internals — a realm lives while a subscription holds it
+%%====================================================================
+
+%% After an UNSUBSCRIBE or a purge that reached the realm's server: a
+%% realm a SUBSCRIBE materialised whose server holds no subscription any
+%% more has its server stopped, which frees its place. A pinned realm
+%% stays.
+reap_if_empty(false, _Realm, _Pid, S) ->
+    S;
+reap_if_empty(true, Realm, Pid, #state{pinned = Pinned} = S) ->
+    reap(is_map_key(Realm, Pinned) orelse holds_subscriptions(Pid), Realm, Pid, S).
+
+reap(true, _Realm, _Pid, S) ->
+    S;
+reap(false, Realm, Pid, S) ->
+    ok = stop_server(Pid),
+    drop_realm(Realm, S).
+
+holds_subscriptions(Pid) ->
+    try hecate_pubsub_server:topic_count(Pid) > 0
+    catch exit:{noproc, _} -> false
+    end.
+
+%% The server is linked to this process, which traps exits: its `EXIT'
+%% arrives after the realm is already dropped, and changes nothing.
+stop_server(Pid) ->
+    try hecate_pubsub_server:stop(Pid)
+    catch exit:_Gone -> ok
     end.
 
 %%====================================================================
@@ -283,20 +369,19 @@ do_relay_publish(_Realm, _Frame, error,
     {reply, {error, not_found}, S};
 do_relay_publish(Realm, Frame, error,
                  #state{default_identity = Id} = S) ->
-    %% Auto-register so we can build the EVENT frame even when no
-    %% local subscribers exist. The caller (pubsub_dispatcher) needs
-    %% the frame to fan out to peer stations whose Bloom filter
-    %% matches the topic — without auto-register, a station with no
-    %% local interest for a realm would drop the publish on the floor
-    %% even when downstream peers in the mesh are subscribed.
-    on_auto_registered_publish(ensure_server(Realm, Id, S), Realm, Frame);
+    %% No server for the realm: the EVENT is still built, signed by the
+    %% station, so the caller (pubsub_dispatcher) can fan it out to peer
+    %% stations whose Bloom filter matches the topic, but no process
+    %% starts for a realm nobody here subscribes to, and there is no
+    %% local subscriber to match.
+    {reply, relay_without_server(Realm, Frame, Id), S};
 do_relay_publish(Realm, Frame, {ok, Pid}, S) ->
     forward_relay_publish(Realm, Pid, Frame, S).
 
-on_auto_registered_publish({ok, Pid, S}, Realm, Frame) ->
-    forward_relay_publish(Realm, Pid, Frame, S);
-on_auto_registered_publish({error, Reason, S}, _Realm, _Frame) ->
-    {reply, {error, Reason}, S}.
+relay_without_server(Realm, #{frame_type := publish, realm := Realm} = Frame, Id) ->
+    {ok, hecate_pubsub_server:relay_event(Frame, Id), []};
+relay_without_server(_Realm, _Frame, _Id) ->
+    {error, realm_mismatch}.
 
 forward_relay_publish(Realm, Pid, Frame, S) ->
     try hecate_pubsub_server:relay_publish(Pid, Frame) of
@@ -310,7 +395,7 @@ forward_relay_publish(Realm, Pid, Frame, S) ->
     end.
 
 %%====================================================================
-%% Internals — ensure_server (shared by register + auto-register)
+%% Internals — ensure_server (materialising a realm for a SUBSCRIBE)
 %%====================================================================
 
 ensure_server(Realm, Id, S) ->
@@ -334,7 +419,8 @@ drop_realm(Realm, S) ->
     Pid = maps:get(Realm, S#state.by_realm, undefined),
     S#state{
         by_realm = maps:remove(Realm, S#state.by_realm),
-        by_pid   = drop_pid_entry(Pid, S#state.by_pid)
+        by_pid   = drop_pid_entry(Pid, S#state.by_pid),
+        pinned   = maps:remove(Realm, S#state.pinned)
     }.
 
 drop_pid_entry(undefined, ByPid) -> ByPid;
@@ -344,7 +430,13 @@ drop_pid_entry(Pid, ByPid)       -> maps:remove(Pid, ByPid).
 %% Internals — purge_subscriber
 %%====================================================================
 
-purge_one(Pid, Sub) ->
-    try hecate_pubsub_server:purge_subscriber(Pid, Sub)
-    catch exit:{noproc, _} -> ok
+purge_one(Realm, Pid, Sub, S) ->
+    reap_if_empty(purged(Pid, Sub), Realm, Pid, S).
+
+%% Whether the purge reached a live server, which may then hold no
+%% subscription any more.
+purged(Pid, Sub) ->
+    try hecate_pubsub_server:purge_subscriber(Pid, Sub) of
+        ok -> true
+    catch exit:{noproc, _} -> false
     end.
