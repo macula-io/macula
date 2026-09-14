@@ -55,6 +55,8 @@
     %% Self-signed cert generation (pubkey-anchored)
     generate_self_signed_cert/3,
     close_connection/1,
+    close_connection/3,
+    close_reason/1,
     async_accept_stream/1,
     async_accept_stream/2,
     handshake/1,
@@ -84,6 +86,11 @@
     %% Stats
     getstat/2
 ]).
+
+%% Exports with no caller inside macula yet: macula-station closes a
+%% connection with an application error code and reads why one closed.
+-ignore_xref([{macula_quic, close_connection, 3}]).
+-ignore_xref([{macula_quic, close_reason, 1}]).
 
 -export_type([dial/0, stream_opening/0]).
 
@@ -411,10 +418,36 @@ discard_stream_open_result(delivered, Tag) ->
         ok
     end.
 
-%% @doc Close a connection.
+%% @doc Close a connection with application error code 0 and the reason
+%% `closed'.
 -spec close_connection(reference()) -> ok.
 close_connection(Conn) ->
     nif_close_connection(Conn).
+
+%% The longest reason close_connection/3 sends.
+-define(MAX_CLOSE_REASON_BYTES, 256).
+
+%% @doc Close a connection with an application error code and a reason, which
+%% the peer reads with `close_reason/1'. `Code' must fit a QUIC
+%% variable-length integer (below 2^62), and `Reason' is at most 256 bytes.
+%% The codes macula sends are named in include/macula_quic_error_codes.hrl.
+-spec close_connection(reference(), non_neg_integer(), binary()) ->
+    ok | {error, error_code_out_of_range | reason_too_long}.
+close_connection(Conn, Code, Reason)
+  when is_integer(Code), Code >= 0, byte_size(Reason) =< ?MAX_CLOSE_REASON_BYTES ->
+    nif_close_connection_with_code(Conn, Code, Reason);
+close_connection(_Conn, Code, Reason) when is_integer(Code), Code >= 0, is_binary(Reason) ->
+    {error, reason_too_long}.
+
+%% @doc Why a connection closed, or `open' while it is open. A peer's
+%% application close comes back as `{application_closed, Code, Reason}',
+%% with the code and reason the peer passed to `close_connection/3';
+%% `locally_closed' means this side closed it.
+-spec close_reason(reference()) ->
+    open | locally_closed | reset | timed_out | version_mismatch | cids_exhausted
+  | {application_closed | transport_closed | transport_error, non_neg_integer(), binary()}.
+close_reason(Conn) ->
+    nif_close_reason(Conn).
 
 %% @doc Start accepting streams on a connection.
 %% Delivers {quic, new_stream, StreamRef, #{conn => ConnRef}} to the owning process.
@@ -662,6 +695,12 @@ nif_cancel_open_stream(_Opening) ->
     erlang:nif_error(nif_not_loaded).
 
 nif_close_connection(_Conn) ->
+    erlang:nif_error(nif_not_loaded).
+
+nif_close_connection_with_code(_Conn, _Code, _Reason) ->
+    erlang:nif_error(nif_not_loaded).
+
+nif_close_reason(_Conn) ->
     erlang:nif_error(nif_not_loaded).
 
 nif_async_accept_stream(_Conn) ->

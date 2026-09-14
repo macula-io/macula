@@ -337,17 +337,89 @@ fn deliver_open_result(
 }
 
 /// NIF: close_connection(ConnRef) -> ok
+/// Closes with application error code 0 and the reason "closed".
 #[rustler::nif]
 fn nif_close_connection<'a>(
     env: Env<'a>,
     conn: ResourceArc<ConnectionResource>,
 ) -> NifResult<Term<'a>> {
+    close_with(&conn, 0u32.into(), b"closed");
+    Ok(atoms::ok().encode(env))
+}
+
+/// NIF: close_connection(ConnRef, Code, Reason) -> ok | {error, error_code_out_of_range}
+/// Closes with an application error code and reason, which the peer reads
+/// from its own close reason. The code must fit a QUIC variable-length
+/// integer.
+#[rustler::nif]
+fn nif_close_connection_with_code<'a>(
+    env: Env<'a>,
+    conn: ResourceArc<ConnectionResource>,
+    code: u64,
+    reason: Binary<'a>,
+) -> NifResult<Term<'a>> {
+    let Ok(code) = quinn::VarInt::from_u64(code) else {
+        return Ok((atoms::error(), atoms::error_code_out_of_range()).encode(env));
+    };
+    close_with(&conn, code, reason.as_slice());
+    Ok(atoms::ok().encode(env))
+}
+
+fn close_with(conn: &ConnectionResource, code: quinn::VarInt, reason: &[u8]) {
     conn.closed.store(true, Ordering::SeqCst);
     if let Some(task) = conn.stream_accept_task.lock().unwrap().take() {
         task.abort();
     }
-    conn.connection.close(0u32.into(), b"closed");
-    Ok(atoms::ok().encode(env))
+    conn.connection.close(code, reason);
+}
+
+/// NIF: close_reason(ConnRef) -> open | locally_closed | reset | timed_out
+///   | version_mismatch | cids_exhausted
+///   | {application_closed | transport_closed | transport_error, Code, Reason}
+/// Why the connection closed, or `open` while it is open.
+#[rustler::nif]
+fn nif_close_reason<'a>(
+    env: Env<'a>,
+    conn: ResourceArc<ConnectionResource>,
+) -> NifResult<Term<'a>> {
+    Ok(close_reason_term(env, conn.connection.close_reason()))
+}
+
+fn close_reason_term<'a>(env: Env<'a>, reason: Option<quinn::ConnectionError>) -> Term<'a> {
+    use quinn::ConnectionError;
+    match reason {
+        None => atoms::open().encode(env),
+        Some(ConnectionError::ApplicationClosed(close)) => (
+            atoms::application_closed(),
+            close.error_code.into_inner(),
+            binary_term(env, &close.reason),
+        )
+            .encode(env),
+        Some(ConnectionError::ConnectionClosed(close)) => (
+            atoms::transport_closed(),
+            u64::from(close.error_code),
+            binary_term(env, &close.reason),
+        )
+            .encode(env),
+        Some(ConnectionError::TransportError(error)) => (
+            atoms::transport_error(),
+            u64::from(error.code),
+            binary_term(env, error.reason.as_bytes()),
+        )
+            .encode(env),
+        Some(ConnectionError::LocallyClosed) => atoms::locally_closed().encode(env),
+        Some(ConnectionError::Reset) => atoms::reset().encode(env),
+        Some(ConnectionError::TimedOut) => atoms::timed_out().encode(env),
+        Some(ConnectionError::VersionMismatch) => atoms::version_mismatch().encode(env),
+        Some(ConnectionError::CidsExhausted) => atoms::cids_exhausted().encode(env),
+    }
+}
+
+/// `bytes` copied into a binary made in `env`.
+fn binary_term<'a>(env: Env<'a>, bytes: &[u8]) -> Term<'a> {
+    let mut binary = rustler::NewBinary::new(env, bytes.len());
+    binary.as_mut_slice().copy_from_slice(bytes);
+    binary.into()
 }
 
 /// NIF: async_accept_stream(ConnRef) -> ok
