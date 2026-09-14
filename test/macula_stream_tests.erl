@@ -338,6 +338,94 @@ empty_chunks() ->
 small_integers() ->
     [{msgpack, [N rem 256 || N <- lists:seq(1, 30_000)]}].
 
+%% Served streams share their caller's inbox budget: the streams of one
+%% caller together keep no more unread than that budget, a chunk past it ends
+%% its session with a stream protocol error, and another caller's stream
+%% still takes chunks.
+served_streams_of_a_caller_share_its_inbox_budget_test() ->
+    {ok, _} = application:ensure_all_started(macula),
+    Budget = 1_000_000,
+    with_macula_env(#{max_served_inbox_bytes_per_caller => Budget}, fun() ->
+        Link = spawn(fun park/0),
+        [Caller, Other] = [crypto:strong_rand_bytes(32), crypto:strong_rand_bytes(32)],
+        Streams = [served_stream(Link, Caller) || _ <- lists:seq(1, 4)],
+        Bystander = served_stream(Link, Other),
+        try
+            Chunk = crypto:strong_rand_bytes(100_000),
+            [ok = macula_stream:deliver_chunk(S, raw, Chunk) || S <- Streams, _ <- lists:seq(1, 5)],
+            ?assert(lists:sum([inbox_bytes(S) || S <- Streams]) =< Budget),
+            ?assertMatch({told, _Stream, {error, {<<"stream_protocol_error">>, _}}}, any_told(1_000)),
+            ok = macula_stream:deliver_chunk(Bystander, raw, Chunk),
+            ?assert(inbox_bytes(Bystander) > 0)
+        after
+            end_served_streams([Bystander | Streams], Link)
+        end
+    end).
+
+%% A chunk a reader takes gives its bytes back to the caller's budget, so the
+%% stream then takes as much again.
+a_read_chunk_gives_its_bytes_back_test() ->
+    {ok, _} = application:ensure_all_started(macula),
+    with_macula_env(#{max_served_inbox_bytes_per_caller => 250_000}, fun() ->
+        Link = spawn(fun park/0),
+        Stream = served_stream(Link, crypto:strong_rand_bytes(32)),
+        try
+            Chunk = crypto:strong_rand_bytes(100_000),
+            [ok = macula_stream:deliver_chunk(Stream, raw, Chunk) || _ <- lists:seq(1, 2)],
+            [{chunk, Chunk} = macula_stream:recv(Stream, 1_000) || _ <- lists:seq(1, 2)],
+            [ok = macula_stream:deliver_chunk(Stream, raw, Chunk) || _ <- lists:seq(1, 2)],
+            ?assert(inbox_bytes(Stream) > 0),
+            ?assertEqual(not_told, any_told(100))
+        after
+            end_served_streams([Stream], Link)
+        end
+    end).
+
+%% A served bidi stream attached to Link and admitted as a session of Caller,
+%% owned by the test process.
+served_stream(Link, Caller) ->
+    {ok, Stream} = macula_stream:start_link(#{id => crypto:strong_rand_bytes(16), role => server,
+                                              mode => bidi, owner => self()}),
+    ok = macula_stream:attach_to_link(Stream, Link, crypto:strong_rand_bytes(16)),
+    ok = macula_stream_sessions:admit(Caller, Stream),
+    Stream.
+
+inbox_bytes(Stream) ->
+    maps:get(inbox_bytes, macula_stream:info(Stream)).
+
+%% Ends the streams and their link without taking the test process with them,
+%% and drops their notices.
+end_served_streams(Streams, Link) ->
+    [end_served_stream(S) || S <- Streams],
+    exit(Link, kill),
+    drop_notices().
+
+end_served_stream(Stream) ->
+    true = unlink(Stream),
+    exit(Stream, kill).
+
+drop_notices() ->
+    receive
+        {macula_stream, ended, _Stream, _How} -> drop_notices()
+    after 0 ->
+        ok
+    end.
+
+any_told(Ms) ->
+    receive
+        {macula_stream, ended, Stream, How} -> {told, Stream, How}
+    after Ms ->
+        not_told
+    end.
+
+with_macula_env(Env, Test) ->
+    Old = [{Key, application:get_env(macula, Key)} || Key <- maps:keys(Env)],
+    [ok = application:set_env(macula, Key, Value) || {Key, Value} <- maps:to_list(Env)],
+    try Test() after [restore_macula_env(Key, Was) || {Key, Was} <- Old] end.
+
+restore_macula_env(Key, undefined) -> application:unset_env(macula, Key);
+restore_macula_env(Key, {ok, Value}) -> application:set_env(macula, Key, Value).
+
 %% The bytes a process holds after a collection: its heap, and each binary it
 %% references off the heap once, at the size of the whole binary.
 held_bytes(Pid) ->

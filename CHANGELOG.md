@@ -63,6 +63,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   straight to a waiting reader counts for nothing. `macula_stream:start_link/1`
   takes a `max_inbox_bytes` option for another bound, and
   `macula_stream:info/1` reports `inbox_bytes`.
+- The streams a node serves share a budget for chunks no reader has taken:
+  one caller's streams together keep at most 16 MiB, and all served streams
+  on the node at most 256 MiB, set with the
+  `max_served_inbox_bytes_per_caller` and `max_served_inbox_bytes` macula
+  application env. The caller budget is one stream's own bound, so a caller
+  with many sessions keeps no more unread than one session may. A chunk past
+  a budget ends its session with `stream_protocol_error`, as a chunk past the
+  stream's own bound does. A stream charges the budget in its own process and
+  gives the bytes back when a reader takes them or the stream ends.
+  `macula_stream_sessions:inbox_bytes/0` reports what the node's served
+  streams keep, and a refused charge counts as `caller_budget` or
+  `node_budget`.
 - A stream takes chunks only from the side its mode lets send: the server in
   `server_stream`, the client in `client_stream`, and both in `bidi`. A
   session whose peer sends a chunk from the side its mode keeps silent now
