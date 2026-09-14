@@ -20,18 +20,22 @@ two_directories_are_different_empty_and_readable_by_their_owner_only_test() ->
         ok = file:del_dir_r(Second)
     end.
 
-%% The second directory draws the same name as the first once, finds it taken, and takes a new name.
+%% The second directory draws the same name as the first once, finds it taken, and takes a new name. The scripted
+%% names carry a random part drawn for this run, so no directory another run left behind has one of them.
 an_existing_directory_is_never_reused_test() ->
+    Run = macula_test_tmp:unique_part(),
+    Repeated = "repeated-" ++ Run,
+    Fresh = "fresh-" ++ Run,
     ok = meck:new(macula_test_tmp, [passthrough]),
     try
-        ok = meck:expect(macula_test_tmp, unique_part, 0, meck:seq(["repeated", "repeated", "fresh"])),
+        ok = meck:expect(macula_test_tmp, unique_part, 0, meck:seq([Repeated, Repeated, Fresh])),
         First = macula_test_tmp:dir("macula_test_tmp_tests"),
         ok = file:write_file(filename:join(First, "left behind"), <<>>),
         Second = macula_test_tmp:dir("macula_test_tmp_tests"),
         try
             ?assertNotEqual(First, Second),
             ?assertEqual({ok, []}, file:list_dir(Second)),
-            ?assertEqual("macula_test_tmp_tests-fresh", filename:basename(Second))
+            ?assertEqual("macula_test_tmp_tests-" ++ Fresh, filename:basename(Second))
         after
             ok = file:del_dir_r(First),
             ok = file:del_dir_r(Second)
