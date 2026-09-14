@@ -76,6 +76,7 @@ upload_test_() ->
                  fun too_many_chunks_aborts_the_stream/0,
                  fun bad_manifest_stops_before_any_chunk/0,
                  fun relabelled_manifest_is_refused_before_any_chunk/0,
+                 fun a_manifest_with_a_chunk_size_of_zero_is_refused_before_any_chunk/0,
                  fun direct_dial_forwards_client_stream_mode/0,
                  fun a_fact_publish_of_another_arity_is_refused/0,
                  fun advertise_passes_auth_and_reuse_sup_on_to_the_streamer/0]].
@@ -162,6 +163,30 @@ relabelled_manifest_is_refused_before_any_chunk() ->
     ?assertEqual([{set_error, [StreamPid, Reason]}, {close, [StreamPid]}],
                  macula_scripted_stream:calls()),
     ?assertEqual([], macula_scripted_stream:published()).
+
+%% A manifest with a chunk size of 0, made to match its own MCID, is refused
+%% when the stream opens, so the chunks pushed after it are never re-chunked
+%% by it when the sender closes. The receiver's callbacks run with a capped
+%% heap, so a regression ends at the cap instead of filling memory.
+a_manifest_with_a_chunk_size_of_zero_is_refused_before_any_chunk() ->
+    {ok, Whole, Chunks} = macula_manifest:create(crypto:strong_rand_bytes(700), #{chunk_size => 200}),
+    Zero = macula_test_manifest:with_matching_mcid(Whole#{chunk_size := 0}),
+    ?assertEqual({returned, {error, {invalid_manifest, invalid_manifest}}},
+                 macula_test_heap:capped(fun() -> receive_upload(Zero, Chunks) end)).
+
+%% What the receiver answers when the sender closes, after `Manifest' opened
+%% the stream and `Chunks' arrived, driven through its streamer callbacks.
+receive_upload(Manifest, Chunks) ->
+    NoPublish = fun(_Pool, _Realm, _Topic, _Payload) -> ok end,
+    {ok, Started} = macula_upload:init({?MODULE, pool, <<0:256>>, false, NoPublish, self()}),
+    {ok, Opened} = macula_upload:handle_open(manifest_stream_args(Manifest), Started),
+    Received = lists:foldl(fun receive_chunk/2, Opened, Chunks),
+    {reply, Reply, _Closed} = macula_upload:handle_eof(Received),
+    Reply.
+
+receive_chunk(Chunk, State) ->
+    {noreply, Next} = macula_upload:handle_chunk(Chunk, State),
+    Next.
 
 direct_dial_forwards_client_stream_mode() ->
     Identity = macula_identity:generate(),

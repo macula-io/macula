@@ -280,6 +280,95 @@ verify_mcid_refuses_an_unknown_hash_algorithm_test() ->
                  macula_manifest:verify_mcid(M#{hash_algorithm := sha3},
                                              maps:get(mcid, M))).
 
+%%%===================================================================
+%%% A manifest that does not describe whole content is refused
+%%%===================================================================
+
+%% A chunk size of 0 would re-chunk forever. The manifest is made to match
+%% its own MCID, as a peer could make it: from_wire/1 still refuses it, and
+%% verify/2 and create/2 end at once. Both run with a capped heap, so a
+%% regression fails here instead of filling memory.
+a_chunk_size_of_zero_is_refused_everywhere_test_() ->
+    {timeout, 5,
+     fun() ->
+         {ok, M, Chunks} = whole_manifest(),
+         Data = iolist_to_binary(Chunks),
+         Zero = macula_test_manifest:with_matching_mcid(M#{chunk_size := 0}),
+         ?assertEqual(ok, macula_manifest:verify_mcid(Zero, maps:get(mcid, Zero))),
+         ?assertEqual({error, invalid_manifest}, macula_manifest:from_wire(Zero)),
+         ?assertEqual({returned, {error, invalid_manifest}},
+                      macula_test_heap:capped(fun() -> macula_manifest:verify(Zero, Data) end)),
+         ?assertEqual({raised, function_clause},
+                      macula_test_heap:capped(fun() -> macula_manifest:create(Data, #{chunk_size => 0}) end))
+     end}.
+
+%% A chunk count other than the chunks listed, however far off, is refused
+%% before anything is counted out by it.
+a_chunk_count_other_than_the_chunks_listed_is_refused_test_() ->
+    {timeout, 5,
+     fun() ->
+         {ok, M, _Chunks} = whole_manifest(),
+         Count = maps:get(chunk_count, M),
+         [begin
+              Changed = macula_test_manifest:with_matching_mcid(M#{chunk_count := N}),
+              ?assertEqual(ok, macula_manifest:verify_mcid(Changed, maps:get(mcid, Changed))),
+              ?assertEqual({error, invalid_manifest}, macula_manifest:from_wire(Changed))
+          end || N <- [Count + 1, Count - 1, 1_000_000_000_000, -1]]
+     end}.
+
+%% A size the chunks do not cover, including one too large to hold, is
+%% refused.
+a_size_the_chunks_do_not_cover_is_refused_test() ->
+    {ok, M, _} = whole_manifest(),
+    Size = maps:get(size, M),
+    [?assertEqual({error, invalid_manifest},
+                  macula_manifest:from_wire(macula_test_manifest:with_matching_mcid(M#{size := S})))
+     || S <- [1 bsl 62, Size + 1, Size - 1, -1]].
+
+%% Chunks out of order, with a gap, empty, larger than the chunk size, cut
+%% short before the last, missing, or with a hash that is not 32 bytes, are
+%% refused, as is a root hash that is not 32 bytes or a chunk size that is
+%% not an integer. So is a chunk past the end of the content, even one whose
+%% size makes the offsets add up: only the count the size allows refuses it.
+%% A chunk whose index is not its place, and a negative size with no chunks,
+%% are refused too. Empty content with no chunks is whole.
+a_chunk_list_that_is_not_whole_is_refused_test() ->
+    {ok, M, _} = whole_manifest(),
+    [C0, C1, C2, C3] = maps:get(chunks, M),
+    PastTheEnd = #{index => 4, offset => 800, size => -100, hash => <<0:256>>},
+    Refused = fun(Changed) ->
+                  ?assertEqual({error, invalid_manifest}, macula_manifest:from_wire(Changed))
+              end,
+    Refused(M#{chunks := [C1, C0, C2, C3]}),
+    Refused(M#{chunks := [C0, C1#{offset := 250}, C2, C3]}),
+    Refused(M#{chunks := [C0, C1, C2, C3#{size := 0}]}),
+    Refused(M#{chunks := [C0, C1, C2, C3#{size := 201}]}),
+    Refused(M#{chunks := [C0, C1#{size := 150}, C2, C3]}),
+    Refused(M#{chunks := [C0, C1, C2]}),
+    Refused(M#{chunks := [C0, C1#{hash := <<0:248>>}, C2, C3]}),
+    Refused(M#{root_hash := <<0:248>>}),
+    Refused(M#{chunk_size := <<"200">>}),
+    Refused(M#{chunk_count := 5, chunks := [C0, C1, C2, C3, PastTheEnd]}),
+    Refused(M#{chunks := [C0, C1#{index := 2}, C2, C3]}),
+    Refused(M#{size := -150, chunk_count := 0, chunks := []}),
+    {ok, Empty, []} = macula_manifest:create(<<>>, #{}),
+    ?assertMatch({ok, _}, macula_manifest:from_wire(Empty)).
+
+%% Chunks are not part of the MCID, so a whole chunk list swapped in for
+%% another keeps the manifest's MCID; the bytes fetched through it are then
+%% refused by the root hash.
+a_substituted_chunk_list_is_refused_by_the_root_hash_test() ->
+    DataB = crypto:strong_rand_bytes(700),
+    {ok, A, _} = whole_manifest(),
+    {ok, B, _} = macula_manifest:create(DataB, #{chunk_size => 200}),
+    {ok, Read} = macula_manifest:from_wire(A#{chunks := maps:get(chunks, B)}),
+    ?assertEqual(ok, macula_manifest:verify_mcid(Read, maps:get(mcid, A))),
+    ?assertEqual({error, root_hash_mismatch}, macula_manifest:verify(Read, DataB)).
+
+whole_manifest() ->
+    macula_manifest:create(crypto:strong_rand_bytes(700), #{chunk_size => 200}).
+
+
 %% End to end in a fresh node that has never loaded macula_manifest: the
 %% manifest a station returns decodes there with text keys, and from_wire/1
 %% still reads the manifest the MCID names. The node is checked first, so
