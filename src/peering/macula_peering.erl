@@ -37,7 +37,8 @@
     peer_capabilities/1,
     open_dedicated_stream/1,
     async_open_dedicated_stream/1,
-    send_on_stream/3
+    send_on_stream/3,
+    close_dedicated_stream/1
 ]).
 
 %% Capability bit asserting the peer is a relay-station (i.e. it
@@ -202,6 +203,13 @@ send_checked_on_stream({error, Reason} = Rejected, _Stream, Frame, _Identity) ->
 
 ensure_signed(#{signature := _} = Frame, _Id) -> Frame;
 ensure_signed(Frame, Id) -> macula_frame:sign(Frame, Id).
+
+%% @doc Close a dedicated stream, one obtained from `open_dedicated_stream/1'
+%% or one the peer opened, gracefully: data already written still goes out,
+%% and then the stream ends, as `macula_quic:close_stream/1' does.
+-spec close_dedicated_stream(reference()) -> ok.
+close_dedicated_stream(Stream) ->
+    macula_quic:close_stream(Stream).
 
 %% @doc Read the peer's capabilities bitmask as observed in their
 %% CONNECT/HELLO frame. Returns `{ok, NegotiatedCaps}' once the
