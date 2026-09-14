@@ -4,7 +4,7 @@
 and decisions are there. [PLAN_POST_QUANTUM_SECURITY_PART1.md](PLAN_POST_QUANTUM_SECURITY_PART1.md) has the
 verified facts and the Stage 0 checks.
 
-**Last Updated:** 2026-09-12
+**Last Updated:** 2026-09-14
 
 Each work package gives its owner, what it waits on, the files, the change, the test that must go red before the
 change, the done criterion and the effort. The US profile goes first; the EU parts follow right after (D15).
@@ -154,6 +154,8 @@ change, the done criterion and the effort. The US profile goes first; the EU par
   - the advertisement bundle with provider authorization, the caller-signed target in CALL and STREAM_OPEN, the
     request hash in provider replies, the stream signer with its sequence numbers (D25), and the caller's signature
     with its sequence numbers on its own stream frames (D17);
+  - a procedure advertisement for a name without an org namespace is refused when it is made and when it is
+    verified (D25);
   - every 32-byte and 64-byte guard is replaced by profile sizes;
   - peer-supplied maps are delivered in one key form and read through `macula:field/2,3` and `macula:text/1`, and
     the codec decodes a frame type's own fields through a fixed table (D26);
@@ -227,13 +229,23 @@ change, the done criterion and the effort. The US profile goes first; the EU par
   - a realm membership token names its device by node_id in `aud` (D7, V12), changed in the realm issuer (WP 3.1)
     and in every checker together;
   - streams are authorized by the same checks as calls;
+  - a capability names what it grants in `with`: a realm, an org of that realm or a procedure of that realm, where
+    an org is the org namespace of a procedure name as `DESIGN_PQ_SIGNED_FRAMES_AND_RECORDS.md` defines it (D7);
+  - along a chain every token names the same realm, each token's capability is covered by one of the token it
+    proves from, and `can` is equal at every step: a realm grant covers realm, org and procedure grants, an org
+    grant covers that org and its procedures, and a procedure grant only itself (D7);
+  - an org key grants only org or procedure capabilities inside its own org, and only the realm key grants a realm
+    capability (D7);
+  - every policy refuses a procedure name without an org namespace (D25);
   - `ed25519-dalek` removed.
 - **Red first:** `test/macula_ucan_nif_tests.erl` and `test/macula_did_nif_tests.erl`: a post-quantum token and
   DID round-trip; an EdDSA token is rejected. For a call and for a stream, a request is refused when its target is
   another node, its token's `aud` is not the node_id of the verified caller, a proof's `aud` is not the node_id of
   the next token's `iss` key, the chain does not root at the required issuer, a token has no `exp` or no capability
   for the procedure and realm, or the request is past its signed deadline plus the D22 tolerance; a repeated
-  (caller, call id) within that window is refused as a duplicate.
+  (caller, call id) within that window is refused as a duplicate. A request is also refused when a token grants
+  more than the token it proves from, a chain changes realm or `can`, an org key grants outside its own org or
+  grants a realm, or the procedure name has no org namespace.
 - **Done:** green.
 - **Effort:** 2 to 3 days, plus the token checks ⚠.
 
@@ -330,6 +342,7 @@ change, the done criterion and the effort. The US profile goes first; the EU par
   - advertisement gossip forwards providers' signed advertisements unchanged and drops expired ones; routing
     follows the serving station; replies and stream frames are checked against the target, the request hash and
     the sequence; relay errors carry their own codes (D25);
+  - the station neither stores nor forwards an advertisement for a procedure name without an org namespace (D25);
   - station-side key storage per D6, with the certificate reloaded on rotation;
   - the station side of `DESIGN_PQ_DHT_SLOTS_AND_BUDGET.md` (D28): slot bounds and class totals; slot admission,
     with the trust list refreshed in the background and embedded records verified once per hash; VALUE paging; the
@@ -433,6 +446,8 @@ change, the done criterion and the effort. The US profile goes first; the EU par
   - leaf issuance, ownership proofs and membership checks take post-quantum keys, carried in full (D13);
   - the realm key that signs realm records and each org key that signs procedure delegations (key purposes realm and
     org) are generated and stored per D6, and their custody is set here, including the `hecate` org key (D25);
+  - an org directory entry for every publisher, so that every procedure carries a provider authorization; a
+    publisher whose procedures have no org namespace today moves under one first (D25);
   - `issue_membership_ucan` names the device by node_id in `aud` (D7), in the same change as every checker
     (WP 1.4, WP 4.2);
   - the realm carries its profile (D1);
@@ -553,7 +568,8 @@ Every stack also meets these, each red first:
   the decoding vectors cover the new fields;
 - a stack that dials providers directly, before a request is sent, tries the next authorized advertisement for a
   procedure when the chosen provider's station endpoint does not resolve or the dial fails, and retries resolution
-  when none qualifies, within the call's deadline (D25 item 9).
+  when none qualifies, within the call's deadline (D25 item 9);
+- a stack refuses to advertise a procedure name without an org namespace, and so does every policy it offers (D25).
 
 ### WP 4.1 `macula-rust`
 
@@ -860,6 +876,8 @@ Every stack also meets these, each red first:
   - `macula-mcp`'s `mesh_put` and `mesh_get` serve content from the node that shares it and fetch it from that node,
     through stations (D27);
   - `macula-mcp`'s envelope attestation compares an envelope's `from` with the event's `publisher`, both as node_ids;
+  - every procedure a tool advertises, and every procedure its examples and defaults name, has an org namespace
+    (D25);
   - release on tag: goreleaser for `macula-cli`, npm for `macula-mcp`.
 - **Red first:** each tool's connection test against the new fleet fails before its cutover.
 - **Effort:** ⚠.
@@ -893,6 +911,10 @@ Every stack also meets these, each red first:
   - every hecate service procedure moves under the org namespace `hecate`, with a procedure delegation per service
     signed by the `hecate` org key of WP 3.1; SDK examples, `macula-mcp` and `macula-e2e` callers move with the
     rename (D25);
+  - no hecate service advertises a name without an org namespace. The bare names found in use start the list:
+    `rag_search`, `rag_contribute`, `reach_web`, `graph_learn`, `graph_ask_links`, `graph_ask_entity`,
+    `hecate-nvidia-pair.chat`, `hecate-llm.stream_chat` and the tube procedures (Pluto's first pass, 2026-09-14; the
+    full list is an open item);
   - services that share content keep it and serve it themselves (D27);
   - a node that holds private keys runs with Erlang crash dumps disabled (`ERL_CRASH_DUMP_BYTES=0`), or written only
     to a private location readable by its own user.
@@ -1051,3 +1073,46 @@ provider certificate chains verify (D25 item 6). Until then `macula` refuses the
 - `src/hecate_om_identity.erl`
 - `src/hecate_om_ownership_proof.erl`
 - Containerfiles and CI images (V11)
+
+---
+
+## 11.0.0 removals
+
+What `macula` 11.0.0 removes, in one place. Each entry names what is deprecated, what replaces it, and what must
+move first. An owner who deprecates something adds its entry here; some entries belong to changes that are not on
+`main` yet. The `[11.0.0]` Removed section of the post-quantum CHANGELOG records each removal when it is made.
+
+- `macula_frame:parse_stream/1` (Neptune).
+  - Replacement: `macula_frame:parse_received/1`, which returns `{ok, Items, Tail}` or
+    `{malformed, ItemsBefore, Reason}`.
+  - Moves first: its two callers in `macula-station`, in the station's release B (Mars). The `-deprecated`
+    attribute follows in the next `macula` minor, because the station's xref checks deprecated calls; until then
+    the deprecation is in the documentation and the CHANGELOG only.
+- `macula:get_cookie/0`, `macula:set_cookie/1`, `macula_cluster:get_cookie/0` and `macula_cluster:set_cookie/1`
+  (Pluto).
+  - Replacement: `erlang:get_cookie/0` and `erlang:set_cookie/1` on a distributed node, whose cookie comes from its
+    owner-only cookie file or its release.
+  - Moves first: `bc-gitops` (`bc_gitops_cluster` and `bc_gitops_vm_spawner`).
+- `macula_direct_dial:resolve_content_provider/2`.
+  - Replacement: `macula_direct_dial:fetch_content/4`.
+  - Moves first: nothing.
+- The `dht` and `mdns` clustering strategy values, with `macula_cluster_strategy`, `macula_dist_discovery` and
+  `macula_dist_mdns_advertiser` (Neptune).
+  - Replacement: the `gossip` strategy on a LAN, or `static` with a node list.
+  - Moves first: nothing.
+  - Noted in the [Clustering Guide](../docs/guides/CLUSTERING_GUIDE.md), in the READMEs of
+    [`macula_cluster_system`](../src/macula_cluster_system/README.md) and
+    [`macula_dist_system`](../src/macula_dist_system/README.md), and in `macula_dist_discovery`.
+- `mdns` in the `optional_applications` of `src/macula.app.src`, which names no installed application.
+  - Replacement: none. Moves first: nothing.
+- The modules `macula_console` and `macula_cert_system` (Mercury).
+  - Replacement: start `macula_trust_store` directly. Moves first: nothing; no caller in the workspace on
+    2026-09-14.
+- `macula_mri:index_descendants/3`, `index_insert/4`, `index_remove/3`, `index_size/1` and `is_valid/1`;
+  `macula_names:local_node_id/0`; `macula_source_route:version/1`; `macula_quic:accept_stream/3`,
+  `async_shutdown_connection/3` and `handoff_stream/3`; `macula_crypto_nif:blake3_streaming/1` and
+  `blake3_verify/2`; `hecate_or_set:tombstones/1`; `macula_hyparview_view:contains/2` (Mercury).
+  - Replacement: none. Moves first: nothing; no caller in the workspace on 2026-09-14.
+- Exports that end while their modules keep the functions: `macula_mri:parent_type/1`,
+  `macula_mri_registry:list_custom_types/0` and `macula_dist_relay_protocol:decode/1` (Mercury).
+  - Replacement: none outside their modules. Moves first: nothing; no caller in the workspace on 2026-09-14.
