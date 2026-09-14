@@ -225,7 +225,11 @@ const MAX_NESTING_DEPTH: usize = 128;
 // macula node, stations and Erlang clients alike. A frame above it cannot
 // cross a station, so an SDK that decodes more items differs from it only on
 // direct connections.
-const MAX_ELEMENTS: u64 = 1 << 17;
+//
+// One budget can span several decodes: `decode_within` starts from what a
+// caller has left and returns what is left after it, so a frame and the
+// records nested in it hold at most this many items together.
+pub const MAX_ELEMENTS: u64 = 1 << 17;
 
 // What is left of one decode's element budget. Every item takes one when it
 // is read, and the count an array or map header claims is held against what
@@ -254,11 +258,25 @@ impl Budget {
 }
 
 pub fn decode<'a>(env: Env<'a>, bytes: Binary<'a>) -> NifResult<Term<'a>> {
-    let len = bytes.as_slice().len();
     let mut budget = Budget { left: MAX_ELEMENTS };
+    decode_all(env, bytes, &mut budget)
+}
+
+// Decodes within `left`, what a caller has left of the budget, never more
+// than `MAX_ELEMENTS`, and returns `{Term, Left}` with what is left after it.
+pub fn decode_within<'a>(env: Env<'a>, bytes: Binary<'a>, left: u64) -> NifResult<Term<'a>> {
+    let mut budget = Budget {
+        left: left.min(MAX_ELEMENTS),
+    };
+    let term = decode_all(env, bytes, &mut budget)?;
+    Ok((term, budget.left).encode(env))
+}
+
+fn decode_all<'a>(env: Env<'a>, bytes: Binary<'a>, budget: &mut Budget) -> NifResult<Term<'a>> {
+    let len = bytes.as_slice().len();
     // Nobody consumes the top-level value's own canonical bytes -- start
     // with need_canon=false (see decode_one's doc for what that skips).
-    let (term, _canon, pos) = decode_one(env, bytes, 0, 0, false, &mut budget)?;
+    let (term, _canon, pos) = decode_one(env, bytes, 0, 0, false, budget)?;
     if pos != len {
         // `macula_record_cbor:decode/1` requires `{V, <<>>} = decode_one(Bin)`
         // — trailing bytes after the top-level value is a badmatch there.
