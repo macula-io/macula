@@ -329,13 +329,8 @@ handle_call({pair_via_link, LinkPid, StreamId}, _From, State) ->
 
 handle_call({send, _Encoding, _Body}, _From, #state{closed_send = true} = State) ->
     {reply, {error, send_closed}, State};
-handle_call({send, Encoding, Body}, _From, State) ->
-    case forward_to_peer(State, {chunk, Encoding, Body}) of
-        ok ->
-            {reply, ok, State#state{seq_out = State#state.seq_out + 1}};
-        {error, _} = Err ->
-            {reply, Err, State}
-    end;
+handle_call({send, Encoding, Body}, _From, #state{role = Role, mode = Mode} = State) ->
+    send_chunk(may_send(Role, Mode), Encoding, Body, State);
 
 %% --- recv --------------------------------------------------------------
 
@@ -388,16 +383,7 @@ handle_call({set_reply, Result}, _From, State) ->
     {reply, ok, State1};
 
 handle_call({abort, Code, Message}, _From, State) ->
-    Err = {error, {Code, Message}},
-    _ = forward_to_peer(State, {error, Code, Message}),
-    State1 = State#state{closed_recv = true, closed_send = true,
-                         reply = case State#state.reply of
-                                     undefined -> Err;
-                                     R -> R
-                                 end},
-    State2 = drain_waiters(Err, State1),
-    State3 = settle_reply_waiters_with(Err, State2),
-    {reply, ok, session_ended(Err, State3)};
+    {reply, ok, abort_session(Code, Message, State)};
 
 %% --- controlling_process -----------------------------------------------
 
@@ -432,9 +418,8 @@ handle_call(_Msg, _From, State) ->
 
 handle_cast({peer_chunk, _Encoding, _Body}, #state{closed_recv = true} = State) ->
     {noreply, State};
-handle_cast({peer_chunk, Encoding, Body}, State) ->
-    State1 = enqueue_or_deliver(Encoding, Body, State),
-    {noreply, State1#state{seq_in = State1#state.seq_in + 1}};
+handle_cast({peer_chunk, Encoding, Body}, #state{role = Role, mode = Mode} = State) ->
+    {noreply, take_chunk(peer_may_send(Role, Mode), Encoding, Body, State)};
 
 handle_cast({peer_end, send}, State) ->
     %% Peer half-closed: no more inbound data
@@ -575,6 +560,55 @@ propagate_peer_down(State) ->
     State2 = drain_waiters(Err, State1),
     State3 = settle_reply_waiters_with(Err, State2),
     {noreply, session_ended(peer_down, State3)}.
+
+%% @private In server_stream only the server sends chunks, and in client_stream
+%% only the client does; bidi takes them both ways.
+may_send(client, server_stream) -> false;
+may_send(server, client_stream) -> false;
+may_send(_Role, _Mode)          -> true.
+
+peer_may_send(Role, Mode) ->
+    may_send(peer_role(Role), Mode).
+
+peer_role(client) -> server;
+peer_role(server) -> client.
+
+%% @private A chunk this side's mode lets it send goes to the peer. Any other
+%% send is refused, and nothing reaches the peer.
+send_chunk(true, Encoding, Body, State) ->
+    case forward_to_peer(State, {chunk, Encoding, Body}) of
+        ok ->
+            {reply, ok, State#state{seq_out = State#state.seq_out + 1}};
+        {error, _} = Err ->
+            {reply, Err, State}
+    end;
+send_chunk(false, _Encoding, _Body, #state{mode = Mode} = State) ->
+    {reply, {error, {send_not_allowed, Mode}}, State}.
+
+%% @private A chunk the mode lets the peer send is delivered or queued. Any
+%% other chunk ends the session with a stream protocol error, and nothing of it
+%% is kept.
+take_chunk(true, Encoding, Body, State) ->
+    State1 = enqueue_or_deliver(Encoding, Body, State),
+    State1#state{seq_in = State1#state.seq_in + 1};
+take_chunk(false, _Encoding, _Body, State) ->
+    abort_session(<<"stream_protocol_error">>,
+                  <<"the peer sent a chunk its stream mode does not allow">>, State).
+
+%% @private End the session with an error: the peer is sent it, both directions
+%% close, waiting readers and reply waiters get it, a reply already set stays,
+%% and the owner is told.
+abort_session(Code, Message, State) ->
+    Err = {error, {Code, Message}},
+    _ = forward_to_peer(State, {error, Code, Message}),
+    State1 = State#state{closed_recv = true, closed_send = true,
+                         reply = first_reply(State#state.reply, Err)},
+    State2 = drain_waiters(Err, State1),
+    State3 = settle_reply_waiters_with(Err, State2),
+    session_ended(Err, State3).
+
+first_reply(undefined, Err) -> Err;
+first_reply(Reply, _Err)    -> Reply.
 
 %% @private A session has ended once both of its directions are closed.
 ended_when_both_closed(#state{closed_recv = true, closed_send = true} = State) ->
