@@ -60,8 +60,11 @@ fn nif_pack_deterministic<'a>(env: Env<'a>, term: Term<'a>) -> NifResult<Binary<
 
 /// Deterministic CBOR decode, mirroring `macula_record_cbor:decode/1`
 /// exactly, including its strict "no trailing bytes" requirement.
-/// Never panics on malformed input — see `deterministic.rs`.
-#[rustler::nif]
+/// Never panics on malformed input — see `deterministic.rs`. Decodes at
+/// most `MAX_ELEMENTS` items, raising `too_many_elements` beyond that, and
+/// runs on a dirty CPU scheduler, since decoding a large input can take
+/// longer than a normal scheduler should be held.
+#[rustler::nif(schedule = "DirtyCpu")]
 fn nif_unpack_deterministic<'a>(env: Env<'a>, bytes: Binary<'a>) -> NifResult<Term<'a>> {
     deterministic::decode(env, bytes)
 }
