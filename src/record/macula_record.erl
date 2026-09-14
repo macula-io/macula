@@ -724,9 +724,18 @@ expiry_check(#{expires_at := X} = Record) ->
 encode(#{signature := Sig} = Record) when is_binary(Sig), byte_size(Sig) =:= 64 ->
     macula_cbor_nif:pack_deterministic(to_envelope_map(Record)).
 
+%% @doc Decode a record from its wire bytes. Bytes that are not CBOR are
+%% `{error, bad_record}', and bytes holding more CBOR items than the
+%% element budget of `macula_cbor_nif:unpack_deterministic/1' are
+%% `{error, too_many_elements}'.
 -spec decode(binary()) -> {ok, m_record()} | {error, term()}.
 decode(Bin) when is_binary(Bin) ->
-    decode_value(macula_cbor_nif:unpack_deterministic(Bin)).
+    try macula_cbor_nif:unpack_deterministic(Bin) of
+        Term -> decode_value(Term)
+    catch
+        error:too_many_elements -> {error, too_many_elements};
+        error:<<"cbor: ", _/binary>> -> {error, bad_record}
+    end.
 
 decode_value(Map) when is_map(Map) ->
     G = fun(Key) -> maps:get({text, Key}, Map, undefined) end,
