@@ -1267,7 +1267,7 @@ handle_info({macula_peering, new_dedicated_stream, _OtherPid, _Stream}, S) ->
 handle_info({quic, Bin, Stream, _Flags}, #state{stream_bufs = Bufs} = S)
         when is_binary(Bin), is_map_key(Stream, Bufs) ->
     Buf = maps:get(Stream, Bufs),
-    {ok, Frames, Tail} = macula_frame:parse_stream(<<Buf/binary, Bin/binary>>),
+    {ok, Frames, Tail} = macula_frame:parse_received(<<Buf/binary, Bin/binary>>),
     NewS = lists:foldl(fun(F, Acc) -> dispatch_dedicated_frame(F, Stream, Acc) end,
                        S#state{stream_bufs = Bufs#{Stream => Tail}}, Frames),
     {noreply, NewS};
@@ -1281,7 +1281,7 @@ handle_info({quic, Bin, Stream, _Flags},
             #state{content_stream_bufs = Bufs} = S)
         when is_binary(Bin), is_map_key(Stream, Bufs) ->
     Buf = maps:get(Stream, Bufs),
-    {ok, Frames, Tail} = macula_frame:parse_stream(<<Buf/binary, Bin/binary>>),
+    {ok, Frames, Tail} = macula_frame:parse_received(<<Buf/binary, Bin/binary>>),
     NewS = lists:foldl(fun(F, Acc) -> dispatch_content_frame(F, Stream, Acc) end,
                        S#state{content_stream_bufs = Bufs#{Stream => Tail}},
                        Frames),
