@@ -41,6 +41,7 @@ inflight_test_() ->
     {setup,
      fun() -> {ok, _} = application:ensure_all_started(macula), ok end,
      fun(ok) -> ok end,
+     [{Description, {timeout, 30, Test}} || {Description, Test} <-
      [{"handle_reserved releases when the handling returns, throws, errors or exits",
        fun handle_reserved_releases_whatever_the_handling_does/0},
       {"a handed over reservation is released only by its new holder",
@@ -86,7 +87,7 @@ inflight_test_() ->
       {"a session budget not below the stream share of the connection limit is a configuration error",
        fun a_session_budget_not_below_the_stream_share_is_a_configuration_error/0},
       {"a connection whose stream share is not above the session budget is refused when it opens",
-       fun a_connection_whose_stream_share_is_not_above_the_session_budget_is_refused/0}]}.
+       fun a_connection_whose_stream_share_is_not_above_the_session_budget_is_refused/0}]]}.
 
 %%%===================================================================
 %%% Release
@@ -491,12 +492,17 @@ handle_forwarded(Test) ->
             Test ! {handled, self()}
     end.
 
-%% A process holding a reservation of Bytes on Conn until it is stopped.
+%% A process holding a reservation of Bytes on Conn until it is stopped. A
+%% holder that ends before it holds fails the test with its reason.
 held_elsewhere(Conn, Bytes) ->
     Test = self(),
-    Holder = spawn(fun() -> hold(Conn, Bytes, Test) end),
+    {Holder, Mon} = spawn_monitor(fun() -> hold(Conn, Bytes, Test) end),
     receive
-        {holding, Holder, Reservation} -> {Holder, Reservation}
+        {holding, Holder, Reservation} ->
+            true = erlang:demonitor(Mon, [flush]),
+            {Holder, Reservation};
+        {'DOWN', Mon, process, Holder, Reason} ->
+            error({holder_ended, Reason})
     after ?EVENT_MS ->
         error(not_holding)
     end.

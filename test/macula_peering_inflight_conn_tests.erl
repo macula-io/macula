@@ -172,14 +172,17 @@ decode_transient_is_reserved_before_decode(Ctx) ->
 %%%===================================================================
 
 %% With a limit of 2W + T - 1 for frames of W wire bytes and T transient, the
-%% first frame fits and, while it is held, the second cannot be decoded.
+%% first frame fits and, while it is held, the second cannot be decoded. The
+%% second is sent once the first arrived, since bytes are reserved as they
+%% come and a second frame already buffered would leave the first no room.
 connection_limit_holds_until_release(Ctx) ->
     {First, Second, Limit} = two_frames_one_room(),
     with_env([], fun() ->
         Opts = inflight(Limit, #{pause_limit_ms => 10 * ?WINDOW_MS}),
         with_raw_peer(Ctx, Opts, fun(#{server := Server, stream := Stream}) ->
-            ok = macula_quic:send(Stream, <<(encode_signed(First))/binary, (encode_signed(Second))/binary>>),
+            ok = macula_quic:send(Stream, encode_signed(First)),
             Held = reserved_call(Server, First),
+            ok = macula_quic:send(Stream, encode_signed(Second)),
             Early = frame_within(Server, ?WINDOW_MS),
             release(Held),
             release(reserved_call(Server, Second)),
@@ -210,8 +213,9 @@ paused_past_the_limit_closes_busy(Ctx) ->
         Opts = inflight(Limit, #{pause_limit_ms => ?PAUSE_LIMIT_MS,
                                  body_window_ms => 10 * ?PAUSE_LIMIT_MS}),
         with_raw_peer(Ctx, Opts, fun(#{server := Server, stream := Stream, peer_conn := PeerConn}) ->
-            ok = macula_quic:send(Stream, <<(encode_signed(First))/binary, (encode_signed(Second))/binary>>),
+            ok = macula_quic:send(Stream, encode_signed(First)),
             Held = reserved_call(Server, First),
+            ok = macula_quic:send(Stream, encode_signed(Second)),
             Reason = ended(Server, 4 * ?PAUSE_LIMIT_MS),
             release(Held),
             PeerSees = eventually(fun() -> macula_quic:close_reason(PeerConn) end,
@@ -231,8 +235,9 @@ station_control_stream_is_not_closed_busy(Ctx) ->
                                      body_window_ms => 10 * ?PAUSE_LIMIT_MS}),
         with_raw_peer(Ctx, Opts, fun(#{server := Server, stream := Stream}) ->
             Before = usage_of(ceiling_pauses),
-            ok = macula_quic:send(Stream, <<(encode_signed(First))/binary, (encode_signed(Second))/binary>>),
+            ok = macula_quic:send(Stream, encode_signed(First)),
             Held = reserved_call(Server, First),
+            ok = macula_quic:send(Stream, encode_signed(Second)),
             timer:sleep(3 * ?PAUSE_LIMIT_MS),
             Alive = is_process_alive(Server),
             Counted = usage_of(ceiling_pauses) - Before,
