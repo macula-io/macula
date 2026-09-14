@@ -646,6 +646,12 @@ unadvertise(Pool, Realm, Procedure)
 %% accepts `mode' (default `server_stream'), `owner' (default the
 %% calling pid), `deadline_ms', and `ucan_token' (a UCAN presented to a
 %% streaming procedure advertised with an auth policy).
+%%
+%% Returns `{error, {open_too_large, Limit}}', sending nothing, when the
+%% signed STREAM_OPEN would be longer than `Limit' bytes, the
+%% `max_stream_open_bytes' macula application env (1 MiB by default): a
+%% provider closes a stream whose first frame is longer. Send bulk data as
+%% chunks once the stream is open.
 -spec call_stream(pool(), <<_:256>>, binary(), term(), map()) ->
     {ok, pid()} | {error, term()}.
 call_stream(Pool, Realm, Procedure, Args, Opts)

@@ -174,6 +174,14 @@ it within 10 seconds (`dedicated_stream_open_timeout_ms`). A stream whose
 first frame is anything else, whose STREAM_OPEN does not verify, or that
 stays silent that long closes without a STREAM_ERROR.
 
+A STREAM_OPEN is at most 1 MiB (`max_stream_open_bytes`). A longer first
+frame closes its stream the same way, and `call_stream` refuses such an open
+before sending anything, with `{error, {open_too_large, Limit}}`. Send bulk
+data as chunks once the stream is open. Each node reads its own setting: a
+provider whose `max_stream_open_bytes` is lower than a caller's closes a
+larger open without an answer, and the caller waits out its deadline, so keep
+the default unless both sides change it.
+
 A stream holds at most 16 MiB of memory for chunks no reader has taken,
 counting each chunk's bytes, a decoded term's heap size and the cell that
 queues it. The streams a provider serves also share a budget for those

@@ -216,6 +216,12 @@
 %% in the macula application env says otherwise.
 -define(DEDICATED_STREAM_OPEN_TIMEOUT_MS, 10_000).
 
+%% The longest STREAM_OPEN a dedicated stream may start with, 1 MiB, unless
+%% `max_stream_open_bytes' in the macula application env says otherwise.
+%% `call_stream/5' refuses a longer open by the same limit, so both sides on
+%% one node agree.
+-define(MAX_STREAM_OPEN_BYTES, 16#100000).
+
 -record(state, {
     seed             :: #{host := binary() | string(),
                           port := inet:port_number(),
@@ -858,7 +864,10 @@ send_overlay_frame(Client, TargetPeer, Frame)
 %%
 %% Returns `{error, not_connected}' when the QUIC handshake has not
 %% completed; the caller may retry once the link reports
-%% `is_connected/1'. The pool layer (`macula_client') should be
+%% `is_connected/1'. Returns `{error, {open_too_large, Limit}}', sending
+%% nothing and starting no stream, when the signed STREAM_OPEN would be
+%% longer than `Limit' bytes, the `max_stream_open_bytes' macula
+%% application env (1 MiB by default). The pool layer (`macula_client') should be
 %% preferred over direct invocation — it picks a healthy link
 %% transparently.
 -spec call_stream(pid(), <<_:256>>, binary(), term(), map()) ->
@@ -1313,13 +1322,17 @@ handle_info({dedicated_stream_open_deadline, _Stream}, S) ->
     {noreply, S};
 
 %% Bytes on a dedicated stream the peer opened, before its first whole
-%% frame. Once one has come, the stream's buffer moves on to `stream_bufs'
-%% and the first item decides whether the stream stays open; the items
-%% after it go the way of any dedicated stream's (`opening_items/3').
+%% frame. That frame is read with a cap of `max_stream_open_bytes', the way
+%% the handshake reads its frames, so a longer length header closes the
+%% stream as soon as it arrives (`opening_parse/2'). Once a whole first
+%% frame has come, the stream's buffer moves on to `stream_bufs' and the
+%% first item decides whether the stream stays open; the items after it go
+%% the way of any dedicated stream's (`opening_items/3').
 handle_info({quic, Bin, Stream, _Flags}, #state{opening_bufs = Opening} = S)
         when is_binary(Bin), is_map_key(Stream, Opening) ->
-    Buf = maps:get(Stream, Opening),
-    {noreply, opening_items(macula_frame:parse_received(<<Buf/binary, Bin/binary>>), Stream, S)};
+    Bytes = <<(maps:get(Stream, Opening))/binary, Bin/binary>>,
+    {noreply, opening_items(opening_parse(macula_frame:parse_received(Bytes, stream_open_limit()), Bytes),
+                            Stream, S)};
 
 %% Bytes on one of our dedicated streams. Decode whatever complete
 %% frames are available and dispatch each; the tail (a partial frame)
@@ -2583,22 +2596,12 @@ parse_seed(Url) when is_list(Url) ->
 %% STREAM_OPEN frame. The caller drives the stream from outside; the
 %% returned pid is bound to the requested `owner' (default = caller)
 %% so a crashing owner tears the stream down.
-open_client_stream(Realm, Proc, Args, Opts, Caller,
-                   #state{peer_pid = Pid, identity = Id} = S) ->
+open_client_stream(Realm, Proc, Args, Opts, Caller, #state{identity = Id} = S) ->
     Sid       = crypto:strong_rand_bytes(16),
     Mode      = maps:get(mode, Opts, server_stream),
-    Owner     = maps:get(owner, Opts, Caller),
     DeadlineMs = maps:get(deadline_ms, Opts,
                           erlang:system_time(millisecond) + 30_000),
-    {ok, StreamPid} = macula_stream:start_link(#{
-        id    => Sid,
-        role  => client,
-        mode  => Mode,
-        owner => Owner
-    }),
-    ok = macula_stream:attach_to_link(StreamPid, self(), Sid),
-    Mon = erlang:monitor(process, StreamPid),
-    Frame = macula_frame:stream_open(#{
+    Frame = macula_frame:sign(macula_frame:stream_open(#{
         stream_id   => Sid,
         procedure   => Proc,
         realm       => Realm,
@@ -2607,7 +2610,33 @@ open_client_stream(Realm, Proc, Args, Opts, Caller,
         deadline_ms => DeadlineMs,
         caller      => macula_identity:public(Id),
         ucan_token  => maps:get(ucan_token, Opts, <<>>)
+    }), Id),
+    open_within_limit(fits_open_limit(macula_frame:check_frame(Frame), Frame),
+                      Frame, Sid, Mode, Opts, Caller, S).
+
+%% A signed STREAM_OPEN longer than the limit a provider reads a stream's
+%% first frame by is refused here, before a stream process starts or a
+%% stream opens, so the caller learns at once instead of waiting out its
+%% deadline. A frame that cannot be encoded goes the way it always has:
+%% `macula_peering:send_on_stream/3' refuses it and says why.
+fits_open_limit(ok, Frame) ->
+    byte_size(macula_frame:encode(Frame)) - 4 =< stream_open_limit();
+fits_open_limit({error, _Unsendable}, _Frame) ->
+    true.
+
+open_within_limit(false, _Frame, _Sid, _Mode, _Opts, _Caller, S) ->
+    {reply_value, {error, {open_too_large, stream_open_limit()}}, S};
+open_within_limit(true, Frame, Sid, Mode, Opts, Caller,
+                  #state{peer_pid = Pid, identity = Id} = S) ->
+    Owner = maps:get(owner, Opts, Caller),
+    {ok, StreamPid} = macula_stream:start_link(#{
+        id    => Sid,
+        role  => client,
+        mode  => Mode,
+        owner => Owner
     }),
+    ok = macula_stream:attach_to_link(StreamPid, self(), Sid),
+    Mon = erlang:monitor(process, StreamPid),
     NewS = open_client_stream_dedicated(Pid, Frame, Sid, StreamPid, Mon, Id, S),
     {reply_value, {ok, StreamPid}, NewS}.
 
@@ -2835,6 +2864,23 @@ handle_inbound_stream_open(#{stream_id := Sid, procedure := Proc,
                            Stream, S) ->
     dispatch_stream_open(maps:find({Realm, Proc}, S#state.stream_procedures),
                          Sid, Proc, Caller, Args, Stream, S).
+
+%% A first frame longer than the limit is refused from its length header, as
+%% `{malformed, [], frame_too_large}', which closes the stream
+%% (`opening_items/3'). The frames after a first frame that fits have the
+%% usual frame cap, so when only a later frame in the same read is longer
+%% than the limit, the read is parsed again with that cap.
+opening_parse({malformed, [_First | _], frame_too_large}, Bytes) ->
+    macula_frame:parse_received(Bytes);
+opening_parse(Parsed, _Bytes) ->
+    Parsed.
+
+%% The longest STREAM_OPEN a dedicated stream may start with, and the limit
+%% `call_stream/5' refuses a longer open by. No frame is longer than the
+%% 16 MiB frame cap, so a setting above it reads as that cap, which is also
+%% the most `macula_frame:parse_received/2' takes.
+stream_open_limit() ->
+    min(application:get_env(macula, max_stream_open_bytes, ?MAX_STREAM_OPEN_BYTES), 16#FFFFFF).
 
 %% What `macula_frame:parse_received/1' gave for a dedicated stream the peer
 %% opened, before its first whole frame. With no whole frame yet the bytes
