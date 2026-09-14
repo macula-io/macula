@@ -35,6 +35,10 @@ close_test_() ->
             fun() -> plain_close_is_code_zero(Ctx) end},
            {"a code that does not fit a QUIC variable-length integer is refused, and the connection stays open",
             fun() -> out_of_range_code_is_refused(Ctx) end},
+           {"a code of 2^64 is refused the same way, and the connection stays open",
+            fun() -> code_of_64_bits_is_refused(Ctx) end},
+           {"the largest code a QUIC variable-length integer holds reaches the peer",
+            fun() -> largest_code_reaches_the_peer(Ctx) end},
            {"a reason longer than 256 bytes is refused, and the connection stays open",
             fun() -> overlong_reason_is_refused(Ctx) end}]
       end}}.
@@ -97,6 +101,22 @@ out_of_range_code_is_refused(Ctx) ->
     ?assertEqual({{error, error_code_out_of_range}, open},
                  {macula_quic:close_connection(ServerConn, 1 bsl 62, <<"busy">>),
                   macula_quic:close_reason(ServerConn)}),
+    Cleanup().
+
+%% A code of 2^64 is a bignum, past any 64-bit integer, and gets the same error.
+code_of_64_bits_is_refused(Ctx) ->
+    {_ClientConn, ServerConn, _ClientStream, Cleanup} = connected_pair(Ctx),
+    ?assertEqual({{error, error_code_out_of_range}, open},
+                 {macula_quic:close_connection(ServerConn, 1 bsl 64, <<"busy">>),
+                  macula_quic:close_reason(ServerConn)}),
+    Cleanup().
+
+largest_code_reaches_the_peer(Ctx) ->
+    {ClientConn, ServerConn, ClientStream, Cleanup} = connected_pair(Ctx),
+    Largest = (1 bsl 62) - 1,
+    ok = macula_quic:close_connection(ServerConn, Largest, <<"busy">>),
+    ok = stream_ended(ClientStream),
+    ?assertEqual({application_closed, Largest, <<"busy">>}, macula_quic:close_reason(ClientConn)),
     Cleanup().
 
 overlong_reason_is_refused(Ctx) ->
