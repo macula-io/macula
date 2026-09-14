@@ -39,19 +39,10 @@
 
 %% NIF stubs
 -export([
-    nif_generate_keypair/0,
-    nif_grind_puzzle/1,
-    nif_sign/2,
-    nif_verify/3,
     nif_blake3/1,
     nif_blake3_streaming/1,
     nif_blake3_verify/2,
-    nif_blake3_hex/1,
-    nif_sha256/1,
-    nif_sha256_base64/1,
-    nif_base64_encode/1,
-    nif_base64_decode/1,
-    nif_secure_compare/2
+    nif_blake3_hex/1
 ]).
 
 -on_load(init/0).
