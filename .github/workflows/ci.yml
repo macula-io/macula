@@ -1,0 +1,82 @@
+name: CI
+
+# The gates of every push to main and every pull request: compile, xref,
+# dialyzer, lint and the eunit suite. One job builds the Rust NIFs once for
+# all of them. Every gate after compile runs even when an earlier gate fails,
+# so one run reports all of them, and the job fails if any gate failed.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  OTP_VERSION: '28.4.2'
+  REBAR3_VERSION: '3.27.0'
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  gates:
+    name: Compile, xref, dialyzer, lint and eunit
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Erlang/OTP and rebar3
+        uses: erlef/setup-beam@v1
+        with:
+          otp-version: ${{ env.OTP_VERSION }}
+          rebar3-version: ${{ env.REBAR3_VERSION }}
+          version-type: strict
+
+      # Compiling builds the Rust NIFs (rebar.config pre_hooks).
+      - name: Install Rust
+        id: rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo downloads and NIF builds
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            native/*/target
+          key: cargo-${{ runner.os }}-${{ steps.rust.outputs.cachekey }}-${{ hashFiles('native/*/Cargo.lock') }}
+
+      - name: Cache hex packages and the dialyzer PLTs
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/rebar3/hex
+            ~/.cache/rebar3/rebar3_${{ env.OTP_VERSION }}_plt
+            _build/default/rebar3_${{ env.OTP_VERSION }}_plt
+          key: rebar3-${{ runner.os }}-${{ env.OTP_VERSION }}-${{ hashFiles('rebar.config') }}
+          restore-keys: rebar3-${{ runner.os }}-${{ env.OTP_VERSION }}-
+
+      - name: Compile
+        id: compile
+        run: rebar3 compile
+
+      - name: Xref
+        if: ${{ !cancelled() && steps.compile.outcome == 'success' }}
+        run: rebar3 xref
+
+      - name: Dialyzer
+        if: ${{ !cancelled() && steps.compile.outcome == 'success' }}
+        run: rebar3 dialyzer
+
+      - name: Lint
+        if: ${{ !cancelled() && steps.compile.outcome == 'success' }}
+        run: rebar3 as lint lint
+
+      - name: Eunit
+        if: ${{ !cancelled() && steps.compile.outcome == 'success' }}
+        run: rebar3 eunit
