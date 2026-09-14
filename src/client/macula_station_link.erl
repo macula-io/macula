@@ -144,6 +144,9 @@
 %% The process a served stream's handler runs in, spawned before the stream
 %% exists: exported for macula_stream_tests.erl.
 -export([spawn_stream_handler/3]).
+%% A state field's position in the state tuple, by name, for tests that read
+%% or set the state.
+-export([state_field_index/1]).
 -endif.
 
 -type url() :: binary() | string().
@@ -3184,3 +3187,14 @@ find_stream_by_pid(Pid, Streams) ->
 
 first_or_error([H | _]) -> {ok, H};
 first_or_error([])      -> error.
+
+-ifdef(TEST).
+%% The position of a field in the state tuple, read from the record itself:
+%% a test names the field, so a field added to the record cannot shift what
+%% the test reads or sets.
+state_field_index(Field) ->
+    field_index(Field, record_info(fields, state), 2).
+
+field_index(Field, [Field | _Rest], Index) -> Index;
+field_index(Field, [_Other | Rest], Index) -> field_index(Field, Rest, Index + 1).
+-endif.

@@ -21,9 +21,9 @@
 -define(REALM, <<0:256>>).
 -define(SEED, #{host => <<"127.0.0.1">>, port => 1}).
 -define(TOPIC, <<"unsub.test_v1">>).
-%% The peer_pid field of macula_station_link's state record; peer_node_id
-%% follows it.
--define(PEER_PID_INDEX, 7).
+%% The peer_pid and peer_node_id fields of macula_station_link's state, by name.
+-define(PEER_PID_INDEX, macula_station_link:state_field_index(peer_pid)).
+-define(PEER_NODE_ID_INDEX, macula_station_link:state_field_index(peer_node_id)).
 -define(FRAME_MS, 1_000).
 -define(QUIET_MS, 300).
 %% Well under the 5 s a call to a busy link would wait.
@@ -140,7 +140,7 @@ plant_fake_peer(Link) ->
     PeerNodeId = macula_identity:public(macula_identity:generate()),
     _ = sys:replace_state(Link, fun(S) ->
             WithPeer = setelement(?PEER_PID_INDEX, S, Peer),
-            setelement(?PEER_PID_INDEX + 1, WithPeer, PeerNodeId)
+            setelement(?PEER_NODE_ID_INDEX, WithPeer, PeerNodeId)
         end),
     {Tag, Peer}.
 

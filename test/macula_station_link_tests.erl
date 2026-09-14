@@ -23,20 +23,10 @@
 %% Well above what the log gets of a reason, far below a whole large one.
 -define(LOGGED_BYTES, 8192).
 
-%% #state record layout after the realm-per-call refactor:
-%%   1: tag (state)
-%%   2: seed
-%%   3: identity
-%%   4: capabilities
-%%   5: alpn
-%%   6: connect_timeout_ms
-%%   7: peer_pid           <-- patched by these tests via setelement
-%%   8: peer_node_id
-%%   9: pending
-%%  10: subscriptions
-%%  11: topic_index
-%%  12: publish_seq
--define(PEER_PID_INDEX, 7).
+%% The link's state fields these tests read or set, looked up by name in the
+%% state record, so a field added to the record cannot shift them.
+-define(PEER_PID_INDEX, macula_station_link:state_field_index(peer_pid)).
+-define(PEER_NODE_ID_INDEX, macula_station_link:state_field_index(peer_node_id)).
 
 %%------------------------------------------------------------------
 %% Seed parsing
@@ -96,7 +86,7 @@ result_frame_resolves_pending_caller_test_() ->
          %% must set both fields atomically.
          _ = sys:replace_state(Pid, fun(S) ->
              S2 = setelement(?PEER_PID_INDEX, S, FakePeer),
-             setelement(?PEER_PID_INDEX + 1, S2, PeerNodeId)
+             setelement(?PEER_NODE_ID_INDEX, S2, PeerNodeId)
          end),
          CallerRef = make_ref(),
          Test = self(),
@@ -155,7 +145,7 @@ error_frame_surfaces_to_caller_test_() ->
          %% must set both fields atomically.
          _ = sys:replace_state(Pid, fun(S) ->
              S2 = setelement(?PEER_PID_INDEX, S, FakePeer),
-             setelement(?PEER_PID_INDEX + 1, S2, PeerNodeId)
+             setelement(?PEER_NODE_ID_INDEX, S2, PeerNodeId)
          end),
          CallerRef = make_ref(),
          Test = self(),
@@ -215,7 +205,7 @@ disconnect_fails_pending_callers_test_() ->
          %% must set both fields atomically.
          _ = sys:replace_state(Pid, fun(S) ->
              S2 = setelement(?PEER_PID_INDEX, S, FakePeer),
-             setelement(?PEER_PID_INDEX + 1, S2, PeerNodeId)
+             setelement(?PEER_NODE_ID_INDEX, S2, PeerNodeId)
          end),
          CallerRef = make_ref(),
          Test = self(),
@@ -267,7 +257,7 @@ call_times_out_when_no_reply_test_() ->
          %% must set both fields atomically.
          _ = sys:replace_state(Pid, fun(S) ->
              S2 = setelement(?PEER_PID_INDEX, S, FakePeer),
-             setelement(?PEER_PID_INDEX + 1, S2, PeerNodeId)
+             setelement(?PEER_NODE_ID_INDEX, S2, PeerNodeId)
          end),
          R = macula_station_link:call(Pid, ?REALM,
                                         <<"_dht.find_records_by_type">>,
@@ -312,7 +302,7 @@ a_refused_call_frame_is_reported_as_refused_test_() ->
          PeerNodeId = macula_identity:public(macula_identity:generate()),
          _ = sys:replace_state(Pid, fun(S) ->
              S2 = setelement(?PEER_PID_INDEX, S, FakePeer),
-             setelement(?PEER_PID_INDEX + 1, S2, PeerNodeId)
+             setelement(?PEER_NODE_ID_INDEX, S2, PeerNodeId)
          end),
          R = macula_station_link:call(Pid, ?REALM, <<"_dht.find_records_by_type">>,
                                         #{unsendable => self()}, 1_000),
@@ -392,7 +382,7 @@ link_with_relay_peer() ->
     PeerNodeId = macula_identity:public(macula_identity:generate()),
     _ = sys:replace_state(Pid, fun(S) ->
         S2 = setelement(?PEER_PID_INDEX, S, FakePeer),
-        setelement(?PEER_PID_INDEX + 1, S2, PeerNodeId)
+        setelement(?PEER_NODE_ID_INDEX, S2, PeerNodeId)
     end),
     {Pid, FakePeer, Sent}.
 
@@ -437,7 +427,7 @@ put_record_ok_test_() ->
          %% must set both fields atomically.
          _ = sys:replace_state(Pid, fun(S) ->
              S2 = setelement(?PEER_PID_INDEX, S, FakePeer),
-             setelement(?PEER_PID_INDEX + 1, S2, PeerNodeId)
+             setelement(?PEER_NODE_ID_INDEX, S2, PeerNodeId)
          end),
          CallerRef = make_ref(),
          Test = self(),
@@ -499,7 +489,7 @@ put_record_unexpected_reply_test_() ->
          %% must set both fields atomically.
          _ = sys:replace_state(Pid, fun(S) ->
              S2 = setelement(?PEER_PID_INDEX, S, FakePeer),
-             setelement(?PEER_PID_INDEX + 1, S2, PeerNodeId)
+             setelement(?PEER_NODE_ID_INDEX, S2, PeerNodeId)
          end),
          CallerRef = make_ref(),
          Test = self(),
@@ -558,7 +548,7 @@ find_record_ok_test_() ->
          %% must set both fields atomically.
          _ = sys:replace_state(Pid, fun(S) ->
              S2 = setelement(?PEER_PID_INDEX, S, FakePeer),
-             setelement(?PEER_PID_INDEX + 1, S2, PeerNodeId)
+             setelement(?PEER_NODE_ID_INDEX, S2, PeerNodeId)
          end),
          CallerRef = make_ref(),
          Test = self(),
@@ -620,7 +610,7 @@ find_record_not_found_test_() ->
          %% must set both fields atomically.
          _ = sys:replace_state(Pid, fun(S) ->
              S2 = setelement(?PEER_PID_INDEX, S, FakePeer),
-             setelement(?PEER_PID_INDEX + 1, S2, PeerNodeId)
+             setelement(?PEER_NODE_ID_INDEX, S2, PeerNodeId)
          end),
          CallerRef = make_ref(),
          Test = self(),
@@ -676,7 +666,7 @@ subscribe_sends_frame_test_() ->
          %% must set both fields atomically.
          _ = sys:replace_state(Pid, fun(S) ->
              S2 = setelement(?PEER_PID_INDEX, S, FakePeer),
-             setelement(?PEER_PID_INDEX + 1, S2, PeerNodeId)
+             setelement(?PEER_NODE_ID_INDEX, S2, PeerNodeId)
          end),
          {ok, SubRef} = macula_station_link:subscribe(
                           Pid, ?REALM, <<"_mesh.station.announced_v1">>, self()),
@@ -720,7 +710,7 @@ event_frame_delivered_to_subscriber_test_() ->
          %% must set both fields atomically.
          _ = sys:replace_state(Pid, fun(S) ->
              S2 = setelement(?PEER_PID_INDEX, S, FakePeer),
-             setelement(?PEER_PID_INDEX + 1, S2, PeerNodeId)
+             setelement(?PEER_NODE_ID_INDEX, S2, PeerNodeId)
          end),
          Topic = <<"_mesh.station.announced_v1">>,
          {ok, SubRef} = macula_station_link:subscribe(
@@ -772,7 +762,7 @@ event_publisher_sig_verify_test_() ->
          PeerNodeId = macula_identity:public(macula_identity:generate()),
          _ = sys:replace_state(Pid, fun(S) ->
              S2 = setelement(?PEER_PID_INDEX, S, FakePeer),
-             setelement(?PEER_PID_INDEX + 1, S2, PeerNodeId)
+             setelement(?PEER_NODE_ID_INDEX, S2, PeerNodeId)
          end),
          Topic = <<"io.macula/x/y/v1">>,
          {ok, SubRef} = macula_station_link:subscribe(Pid, ?REALM, Topic, self()),
@@ -858,7 +848,7 @@ event_in_other_realm_not_delivered_test_() ->
          %% must set both fields atomically.
          _ = sys:replace_state(Pid, fun(S) ->
              S2 = setelement(?PEER_PID_INDEX, S, FakePeer),
-             setelement(?PEER_PID_INDEX + 1, S2, PeerNodeId)
+             setelement(?PEER_NODE_ID_INDEX, S2, PeerNodeId)
          end),
          Topic = <<"weather.measured_v1">>,
          RealmA = <<1:256>>,
@@ -911,7 +901,7 @@ publish_sends_frame_and_increments_seq_test_() ->
          %% peer_pid at 7).
          _ = sys:replace_state(Pid, fun(S) ->
              S2 = setelement(?PEER_PID_INDEX, S, FakePeer),
-             setelement(?PEER_PID_INDEX + 1, S2, PeerNodeId)
+             setelement(?PEER_NODE_ID_INDEX, S2, PeerNodeId)
          end),
          Topic = <<"weather.measured_v1">>,
          ok = macula_station_link:publish(Pid, ?REALM, Topic,
@@ -955,7 +945,7 @@ publish5_uses_caller_seq_test_() ->
          PeerNodeId = macula_identity:public(macula_identity:generate()),
          _ = sys:replace_state(Pid, fun(S) ->
              S2 = setelement(?PEER_PID_INDEX, S, FakePeer),
-             setelement(?PEER_PID_INDEX + 1, S2, PeerNodeId)
+             setelement(?PEER_NODE_ID_INDEX, S2, PeerNodeId)
          end),
          Topic = <<"weather.measured_v1">>,
          ok = macula_station_link:publish(Pid, ?REALM, Topic, #{n => 1}, 4242),
@@ -1047,7 +1037,7 @@ unsubscribe_sends_frame_and_clears_test_() ->
          %% must set both fields atomically.
          _ = sys:replace_state(Pid, fun(S) ->
              S2 = setelement(?PEER_PID_INDEX, S, FakePeer),
-             setelement(?PEER_PID_INDEX + 1, S2, PeerNodeId)
+             setelement(?PEER_NODE_ID_INDEX, S2, PeerNodeId)
          end),
          Topic = <<"_mesh.station.announced_v1">>,
          {ok, SubRef} = macula_station_link:subscribe(
@@ -1112,7 +1102,7 @@ subscriber_down_drops_subscription_test_() ->
          %% must set both fields atomically.
          _ = sys:replace_state(Pid, fun(S) ->
              S2 = setelement(?PEER_PID_INDEX, S, FakePeer),
-             setelement(?PEER_PID_INDEX + 1, S2, PeerNodeId)
+             setelement(?PEER_NODE_ID_INDEX, S2, PeerNodeId)
          end),
          Test = self(),
          Sub = spawn(fun() ->
@@ -1167,7 +1157,7 @@ disconnect_notifies_subscribers_test_() ->
          %% must set both fields atomically.
          _ = sys:replace_state(Pid, fun(S) ->
              S2 = setelement(?PEER_PID_INDEX, S, FakePeer),
-             setelement(?PEER_PID_INDEX + 1, S2, PeerNodeId)
+             setelement(?PEER_NODE_ID_INDEX, S2, PeerNodeId)
          end),
          {ok, SubRef} = macula_station_link:subscribe(
                           Pid, ?REALM,
@@ -1204,7 +1194,7 @@ overlay_subscribe_delivers_matching_realm_test_() ->
          PeerNodeId = macula_identity:public(macula_identity:generate()),
          _ = sys:replace_state(Pid, fun(S) ->
              S2 = setelement(?PEER_PID_INDEX, S, FakePeer),
-             setelement(?PEER_PID_INDEX + 1, S2, PeerNodeId)
+             setelement(?PEER_NODE_ID_INDEX, S2, PeerNodeId)
          end),
          {ok, SubRef} = macula_station_link:overlay_subscribe(Pid, ?REALM, self()),
          Joiner = macula_identity:public(macula_identity:generate()),
@@ -1234,7 +1224,7 @@ overlay_frame_in_other_realm_not_delivered_test_() ->
          PeerNodeId = macula_identity:public(macula_identity:generate()),
          _ = sys:replace_state(Pid, fun(S) ->
              S2 = setelement(?PEER_PID_INDEX, S, FakePeer),
-             setelement(?PEER_PID_INDEX + 1, S2, PeerNodeId)
+             setelement(?PEER_NODE_ID_INDEX, S2, PeerNodeId)
          end),
          {ok, _SubRef} = macula_station_link:overlay_subscribe(Pid, ?REALM, self()),
          OtherRealm = crypto:strong_rand_bytes(32),
@@ -1262,7 +1252,7 @@ send_overlay_frame_sends_on_wire_test_() ->
          PeerNodeId = macula_identity:public(macula_identity:generate()),
          _ = sys:replace_state(Pid, fun(S) ->
              S2 = setelement(?PEER_PID_INDEX, S, FakePeer),
-             setelement(?PEER_PID_INDEX + 1, S2, PeerNodeId)
+             setelement(?PEER_NODE_ID_INDEX, S2, PeerNodeId)
          end),
          Joiner = macula_identity:public(macula_identity:generate()),
          Frame = macula_frame:hyparview_join(#{realm => ?REALM, new_member => Joiner}),
@@ -1300,7 +1290,7 @@ send_overlay_frame_3_wraps_target_in_relay_envelope_test_() ->
          PeerNodeId = macula_identity:public(macula_identity:generate()),
          _ = sys:replace_state(Pid, fun(S) ->
              S2 = setelement(?PEER_PID_INDEX, S, FakePeer),
-             setelement(?PEER_PID_INDEX + 1, S2, PeerNodeId)
+             setelement(?PEER_NODE_ID_INDEX, S2, PeerNodeId)
          end),
          Target = macula_identity:public(macula_identity:generate()),
          Frame = macula_frame:hyparview_disconnect(#{realm => ?REALM}),
@@ -1344,7 +1334,7 @@ overlay_relay_delivers_with_envelope_origin_as_sender_test_() ->
          StationNodeId = macula_identity:public(macula_identity:generate()),
          _ = sys:replace_state(Pid, fun(S) ->
              S2 = setelement(?PEER_PID_INDEX, S, FakePeer),
-             setelement(?PEER_PID_INDEX + 1, S2, StationNodeId)
+             setelement(?PEER_NODE_ID_INDEX, S2, StationNodeId)
          end),
          {ok, SubRef} = macula_station_link:overlay_subscribe(Pid, ?REALM, self()),
          OriginKp = macula_identity:generate(),
@@ -1453,7 +1443,7 @@ overlay_subscriber_down_drops_subscription_test_() ->
          PeerNodeId = macula_identity:public(macula_identity:generate()),
          _ = sys:replace_state(Pid, fun(S) ->
              S2 = setelement(?PEER_PID_INDEX, S, FakePeer),
-             setelement(?PEER_PID_INDEX + 1, S2, PeerNodeId)
+             setelement(?PEER_NODE_ID_INDEX, S2, PeerNodeId)
          end),
          Test = self(),
          Sub = spawn(fun() ->
@@ -1496,7 +1486,7 @@ disconnect_notifies_overlay_subscribers_test_() ->
          PeerNodeId = macula_identity:public(macula_identity:generate()),
          _ = sys:replace_state(Pid, fun(S) ->
              S2 = setelement(?PEER_PID_INDEX, S, FakePeer),
-             setelement(?PEER_PID_INDEX + 1, S2, PeerNodeId)
+             setelement(?PEER_NODE_ID_INDEX, S2, PeerNodeId)
          end),
          {ok, SubRef} = macula_station_link:overlay_subscribe(Pid, ?REALM, self()),
          Pid ! {macula_peering, disconnected, FakePeer, peer_closed},
@@ -1623,7 +1613,7 @@ advertise_sends_frame_when_connected_test_() ->
          PeerNodeId = macula_identity:public(macula_identity:generate()),
          _ = sys:replace_state(Pid, fun(S) ->
              S2 = setelement(?PEER_PID_INDEX, S, FakePeer),
-             setelement(?PEER_PID_INDEX + 1, S2, PeerNodeId)
+             setelement(?PEER_NODE_ID_INDEX, S2, PeerNodeId)
          end),
          Procedure = <<"_realm.membership.join_with_token_v1">>,
          Handler = fun(_Args) -> {ok, #{joined => true}} end,
@@ -1696,7 +1686,7 @@ inbound_call_dispatches_to_handler_test_() ->
          PeerNodeId = macula_identity:public(macula_identity:generate()),
          _ = sys:replace_state(Pid, fun(S) ->
              S2 = setelement(?PEER_PID_INDEX, S, FakePeer),
-             setelement(?PEER_PID_INDEX + 1, S2, PeerNodeId)
+             setelement(?PEER_NODE_ID_INDEX, S2, PeerNodeId)
          end),
          Procedure = <<"_realm.membership.join_with_token_v1">>,
          %% Handler asserts on input + returns canonical reply.
@@ -1743,7 +1733,7 @@ inbound_call_threads_caller_into_payload_test_() ->
          PeerNodeId = macula_identity:public(macula_identity:generate()),
          _ = sys:replace_state(Pid, fun(S) ->
              S2 = setelement(?PEER_PID_INDEX, S, FakePeer),
-             setelement(?PEER_PID_INDEX + 1, S2, PeerNodeId)
+             setelement(?PEER_NODE_ID_INDEX, S2, PeerNodeId)
          end),
          Procedure = <<"_realm.membership.join_with_token_v1">>,
          Self = self(),
@@ -1797,7 +1787,7 @@ inbound_call_unknown_procedure_returns_error_frame_test_() ->
          PeerNodeId = macula_identity:public(macula_identity:generate()),
          _ = sys:replace_state(Pid, fun(S) ->
              S2 = setelement(?PEER_PID_INDEX, S, FakePeer),
-             setelement(?PEER_PID_INDEX + 1, S2, PeerNodeId)
+             setelement(?PEER_NODE_ID_INDEX, S2, PeerNodeId)
          end),
          CallId = <<2:128>>,
          CallerKp = macula_identity:generate(),
@@ -1839,7 +1829,7 @@ inbound_call_handler_crash_returns_error_frame_test_() ->
          PeerNodeId = macula_identity:public(macula_identity:generate()),
          _ = sys:replace_state(Pid, fun(S) ->
              S2 = setelement(?PEER_PID_INDEX, S, FakePeer),
-             setelement(?PEER_PID_INDEX + 1, S2, PeerNodeId)
+             setelement(?PEER_NODE_ID_INDEX, S2, PeerNodeId)
          end),
          Procedure = <<"_test.crash">>,
          Handler = fun(_Args) -> error(deliberate) end,
@@ -1898,7 +1888,7 @@ inbound_call_handler_error_tuple_emits_call_error_test_() ->
          PeerNodeId = macula_identity:public(macula_identity:generate()),
          _ = sys:replace_state(Pid, fun(S) ->
              S2 = setelement(?PEER_PID_INDEX, S, FakePeer),
-             setelement(?PEER_PID_INDEX + 1, S2, PeerNodeId)
+             setelement(?PEER_NODE_ID_INDEX, S2, PeerNodeId)
          end),
          Procedure = <<"_test.app_error">>,
          Handler = fun(_Args) -> {error, invalid_token} end,
@@ -1989,7 +1979,7 @@ binary_reason_crosses_the_wire_verbatim_test_() ->
          PeerNodeId = macula_identity:public(macula_identity:generate()),
          _ = sys:replace_state(Pid, fun(S) ->
              S2 = setelement(?PEER_PID_INDEX, S, FakePeer),
-             setelement(?PEER_PID_INDEX + 1, S2, PeerNodeId)
+             setelement(?PEER_NODE_ID_INDEX, S2, PeerNodeId)
          end),
          Procedure = <<"_test.refusal">>,
          Handler = fun(_Args) -> {error, <<"hold_full">>} end,
@@ -2089,7 +2079,7 @@ error_frame_for_handler(Handler) ->
     PeerNodeId = macula_identity:public(macula_identity:generate()),
     _ = sys:replace_state(Pid, fun(S) ->
         S2 = setelement(?PEER_PID_INDEX, S, FakePeer),
-        setelement(?PEER_PID_INDEX + 1, S2, PeerNodeId)
+        setelement(?PEER_NODE_ID_INDEX, S2, PeerNodeId)
     end),
     Procedure = <<"_test.handler_answer">>,
     ok = macula_station_link:advertise(Pid, ?REALM, Procedure, Handler),
@@ -2127,7 +2117,7 @@ inject_error_frame(Fields) ->
     PeerNodeId = macula_identity:public(macula_identity:generate()),
     _ = sys:replace_state(Pid, fun(S) ->
         S2 = setelement(?PEER_PID_INDEX, S, FakePeer),
-        setelement(?PEER_PID_INDEX + 1, S2, PeerNodeId)
+        setelement(?PEER_NODE_ID_INDEX, S2, PeerNodeId)
     end),
     CallerRef = make_ref(),
     Test = self(),
@@ -2259,7 +2249,7 @@ unadvertise_clears_handler_and_sends_frame_test_() ->
          PeerNodeId = macula_identity:public(macula_identity:generate()),
          _ = sys:replace_state(Pid, fun(S) ->
              S2 = setelement(?PEER_PID_INDEX, S, FakePeer),
-             setelement(?PEER_PID_INDEX + 1, S2, PeerNodeId)
+             setelement(?PEER_NODE_ID_INDEX, S2, PeerNodeId)
          end),
          Procedure = <<"_test.unadv">>,
          ok = macula_station_link:advertise(Pid, ?REALM, Procedure,
@@ -2353,7 +2343,7 @@ setup_link_for_streams() ->
     PeerNodeId = macula_identity:public(macula_identity:generate()),
     _ = sys:replace_state(Pid, fun(S) ->
         S2 = setelement(?PEER_PID_INDEX,     S, FakePeer),
-        setelement(?PEER_PID_INDEX + 1, S2, PeerNodeId)
+        setelement(?PEER_NODE_ID_INDEX, S2, PeerNodeId)
     end),
     {Pid, FakePeer, PeerNodeId}.
 
@@ -2611,9 +2601,9 @@ inbound_stream_open_invokes_handler_test_() ->
 
 %% -- a malformed or invalid frame ends only its own stream ---------
 
--define(SERVER_STREAMS_INDEX, 19).
--define(STREAM_BUFS_INDEX, 20).
--define(OPENING_BUFS_INDEX, 21).
+-define(SERVER_STREAMS_INDEX, macula_station_link:state_field_index(server_streams)).
+-define(STREAM_BUFS_INDEX, macula_station_link:state_field_index(stream_bufs)).
+-define(OPENING_BUFS_INDEX, macula_station_link:state_field_index(opening_bufs)).
 
 %% A signed STREAM_OPEN missing a field its type requires never reaches a
 %% handler: its stream ends and its buffer goes, and the link serves the
@@ -2722,7 +2712,7 @@ an_invalid_frame_notice_leaves_the_link_serving_test_() ->
          macula_station_link:stop(Pid)
      end}.
 
--define(CONTENT_STREAM_BUFS_INDEX, 21).
+-define(CONTENT_STREAM_BUFS_INDEX, macula_station_link:state_field_index(content_stream_bufs)).
 
 %% A reply on a content stream whose bytes do not decode ends that stream
 %% and fails the call waiting on it; the link lives on.
@@ -3960,7 +3950,7 @@ start_connected_link() ->
     PeerNodeId = macula_identity:public(macula_identity:generate()),
     _ = sys:replace_state(Pid, fun(S) ->
         S2 = setelement(?PEER_PID_INDEX, S, FakePeer),
-        setelement(?PEER_PID_INDEX + 1, S2, PeerNodeId)
+        setelement(?PEER_NODE_ID_INDEX, S2, PeerNodeId)
     end),
     {Pid, FakePeer, PeerNodeId}.
 
@@ -4007,7 +3997,7 @@ inbound_call_fixture(Handlers, Policy) ->
     PeerNodeId = macula_identity:public(PeerKp),
     _ = sys:replace_state(Pid, fun(S) ->
         S2 = setelement(?PEER_PID_INDEX, S, FakePeer),
-        setelement(?PEER_PID_INDEX + 1, S2, PeerNodeId)
+        setelement(?PEER_NODE_ID_INDEX, S2, PeerNodeId)
     end),
     lists:foreach(
       fun({Proc, Fun}) ->

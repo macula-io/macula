@@ -26,11 +26,10 @@
 -include_lib("eunit/include/eunit.hrl").
 
 -define(REALM, <<0:256>>).
-%% #state record layout — peer_pid at 7, peer_node_id at 8 (see
-%% macula_station_link_tests.erl for the full map). These are the only
-%% fields these tests patch, so the numeric coupling stays minimal.
--define(PEER_PID_INDEX, 7).
--define(PEER_NODE_INDEX, 8).
+%% The two fields of macula_station_link's state these tests patch, looked up
+%% by name, so a field added to the state record cannot shift them.
+-define(PEER_PID_INDEX, macula_station_link:state_field_index(peer_pid)).
+-define(PEER_NODE_INDEX, macula_station_link:state_field_index(peer_node_id)).
 
 %%------------------------------------------------------------------
 %% A wedged (never-connected) link recycles itself when the watchdog

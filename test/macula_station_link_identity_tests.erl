@@ -15,8 +15,8 @@
 -include_lib("eunit/include/eunit.hrl").
 
 -define(SEED, #{host => <<"127.0.0.1">>, port => 1}).
-%% The identity field of macula_station_link's state record.
--define(IDENTITY_INDEX, 3).
+%% The identity field of macula_station_link's state, by name.
+-define(IDENTITY_INDEX, macula_station_link:state_field_index(identity)).
 -define(LINKS, 8).
 
 identity_test_() ->
