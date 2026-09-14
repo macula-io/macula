@@ -280,6 +280,45 @@ mode_pair(Mode, SenderRole) ->
 sender_first(client, Client, Server) -> {Client, Server};
 sender_first(server, Client, Server) -> {Server, Client}.
 
+%%%===================================================================
+%%% A stream keeps a bounded number of bytes no reader has taken
+%%%===================================================================
+
+%% Chunks no reader has taken wait in the stream's inbox. A chunk that would
+%% take the waiting bytes past the stream's bound ends the session with a
+%% stream protocol error, whether it arrives as raw bytes or as a decoded term.
+a_chunk_past_the_inbox_bound_ends_the_stream_test_() ->
+    [{Name, fun() -> past_the_bound_ends_the_stream(Chunks) end}
+     || {Name, Chunks} <- [{"raw chunks", [{raw, binary:copy(<<1>>, 400)} || _ <- lists:seq(1, 3)]},
+                           {"a decoded term", [{msgpack, #{bytes => binary:copy(<<1>>, 1_500)}}]}]].
+
+%% A reader that takes each chunk as it comes never meets the bound, however
+%% many bytes pass.
+a_reader_that_keeps_up_never_meets_the_inbox_bound_test() ->
+    {Server, Client} = bounded_pair(1_000),
+    [begin
+         ok = macula_stream:send(Server, binary:copy(<<N>>, 400)),
+         ?assertEqual({chunk, binary:copy(<<N>>, 400)}, macula_stream:recv(Client, 1_000))
+     end || N <- lists:seq(1, 10)],
+    ?assertEqual(not_told, told(Client, 50)).
+
+past_the_bound_ends_the_stream(Chunks) ->
+    {Server, Client} = bounded_pair(1_000),
+    [ok = macula_stream:send(Server, Body, Encoding) || {Encoding, Body} <- Chunks],
+    ?assertMatch({told, {error, {<<"stream_protocol_error">>, _}}}, told(Client, 1_000)),
+    ?assertMatch({told, {error, {<<"stream_protocol_error">>, _}}}, told(Server, 1_000)).
+
+%% A server_stream pair, both owned by the test process, whose client stream
+%% keeps at most Bytes no reader has taken.
+bounded_pair(Bytes) ->
+    Id = crypto:strong_rand_bytes(16),
+    {ok, Client} = macula_stream:start_link(#{id => Id, role => client, mode => server_stream,
+                                              owner => self(), max_inbox_bytes => Bytes}),
+    {ok, Server} = macula_stream:start_link(#{id => Id, role => server, mode => server_stream,
+                                              owner => self()}),
+    ok = macula_stream:pair(Client, Server),
+    {Server, Client}.
+
 %% A process that runs what it is sent, and ends when told.
 park() ->
     receive

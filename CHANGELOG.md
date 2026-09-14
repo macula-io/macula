@@ -142,6 +142,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- A stream keeps at most 16 MiB of chunks no reader has taken. A chunk that
+  would take it past that ends the session: the peer gets a STREAM_ERROR with
+  code `stream_protocol_error`, and the owner is told. A chunk handed straight
+  to a waiting reader counts for nothing. `macula_stream:start_link/1` takes a
+  `max_inbox_bytes` option for another bound, and `macula_stream:info/1`
+  reports `inbox_bytes`.
 - A stream takes chunks only from the side its mode lets send: the server in
   `server_stream`, the client in `client_stream`, and both in `bidi`. A chunk
   from the other side ends the session: the peer gets a STREAM_ERROR with

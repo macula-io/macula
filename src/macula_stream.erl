@@ -111,6 +111,10 @@
 %% How a session ended, as the owner is told it.
 -type ended() :: closed | peer_down | {error, {binary(), binary()}}.
 
+%% The bytes of chunks no reader has taken a stream keeps by default, the
+%% same as a QUIC stream's default receive window.
+-define(MAX_INBOX_BYTES, 16#1000000).
+
 -record(state, {
     id              :: stream_id(),
     role            :: role(),
@@ -120,6 +124,9 @@
     peer            :: peer(),
     %% Recv side: inbound chunks queued, waiting recv/2 callers, eof flag
     inbox = queue:new() :: queue:queue({encoding(), term()}),
+    %% The bytes of the queued chunks, and the most it may reach
+    inbox_bytes = 0 :: non_neg_integer(),
+    max_inbox_bytes = ?MAX_INBOX_BYTES :: pos_integer(),
     waiters = queue:new() :: queue:queue({{pid(), reference()}, reference()}),
     closed_recv = false :: boolean(),
     %% Send side
@@ -139,7 +146,9 @@
 
 %% @doc Start a stream gen_server.
 %%
-%% Required opts: id, role, mode, owner.
+%% Required opts: id, role, mode, owner. Optional: max_inbox_bytes, the
+%% bytes of chunks no reader has taken that the stream keeps; a chunk past
+%% them ends the session (default 16 MiB).
 -spec start_link(map()) -> {ok, pid()} | {error, term()}.
 start_link(Opts) ->
     gen_server:start_link(?MODULE, Opts, []).
@@ -313,7 +322,8 @@ init(Opts) ->
         role = Role,
         mode = Mode,
         owner = Owner,
-        owner_ref = OwnerRef
+        owner_ref = OwnerRef,
+        max_inbox_bytes = maps:get(max_inbox_bytes, Opts, ?MAX_INBOX_BYTES)
     }}.
 
 %% --- pair --------------------------------------------------------------
@@ -402,6 +412,7 @@ handle_call(info, _From, State) ->
         mode => State#state.mode,
         peer => State#state.peer,
         inbox_size => queue:len(State#state.inbox),
+        inbox_bytes => State#state.inbox_bytes,
         waiters => queue:len(State#state.waiters),
         closed_recv => State#state.closed_recv,
         closed_send => State#state.closed_send,
@@ -649,14 +660,29 @@ enqueue_or_deliver(Encoding, Body, #state{waiters = W0} = State) ->
             gen_server:reply(From, chunk_to_recv_result(Encoding, Body)),
             State#state{waiters = W1};
         {empty, _} ->
-            Inbox = queue:in({Encoding, Body}, State#state.inbox),
-            State#state{inbox = Inbox}
+            enqueue(chunk_bytes(Encoding, Body), Encoding, Body, State)
     end.
 
-handle_recv(From, _Timeout, #state{inbox = Inbox} = State) ->
+%% A chunk that would take the bytes no reader has taken past the stream's
+%% bound ends the session with a stream protocol error, and nothing of it is
+%% kept.
+enqueue(Bytes, _Encoding, _Body, #state{inbox_bytes = Queued, max_inbox_bytes = Max} = State)
+  when Queued + Bytes > Max ->
+    abort_session(<<"stream_protocol_error">>,
+                  <<"the peer sent more than the stream keeps unread">>, State);
+enqueue(Bytes, Encoding, Body, #state{inbox = Inbox, inbox_bytes = Queued} = State) ->
+    State#state{inbox = queue:in({Encoding, Body}, Inbox), inbox_bytes = Queued + Bytes}.
+
+%% The bytes a chunk counts for: raw bytes by their size, a decoded term by its
+%% external size.
+chunk_bytes(raw, Body) when is_binary(Body) -> byte_size(Body);
+chunk_bytes(_Encoding, Body)                -> erlang:external_size(Body).
+
+handle_recv(From, _Timeout, #state{inbox = Inbox, inbox_bytes = Queued} = State) ->
     case queue:out(Inbox) of
         {{value, {Encoding, Body}}, Rest} ->
-            {reply, chunk_to_recv_result(Encoding, Body), State#state{inbox = Rest}};
+            {reply, chunk_to_recv_result(Encoding, Body),
+             State#state{inbox = Rest, inbox_bytes = Queued - chunk_bytes(Encoding, Body)}};
         {empty, _} when State#state.closed_recv ->
             {reply, eof, State};
         {empty, _} ->

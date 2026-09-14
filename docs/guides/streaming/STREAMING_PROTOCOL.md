@@ -159,6 +159,10 @@ from the other side ends the session with code `stream_protocol_error`, and a
 send the mode does not allow returns `{error, {send_not_allowed, Mode}}`
 without sending anything.
 
+A stream keeps at most 16 MiB of chunks no reader has taken. A chunk that
+would take it past that ends the session with code `stream_protocol_error`. A
+reader that takes chunks as they come never meets the bound.
+
 ---
 
 ## Local (in-process) streams
