@@ -125,3 +125,37 @@ encodes_bool_correctly_test() ->
     ?assertEqual(<<16#f5>>, macula_cbor_nif:pack(true)),
     ?assertEqual(<<16#f4>>, macula_cbor_nif:pack(false)),
     ?assertEqual(<<16#f6>>, macula_cbor_nif:pack(nil)).
+
+%%====================================================================
+%% Element budget of unpack_deterministic/1
+%%====================================================================
+
+%% The most CBOR items unpack_deterministic/1 decodes from one input. An
+%% array, a map, a key and a value each count as one item.
+-define(ELEMENT_BUDGET, 131072).
+
+an_input_with_as_many_items_as_the_budget_decodes_test() ->
+    Items = ?ELEMENT_BUDGET - 1,
+    Decoded = macula_cbor_nif:unpack_deterministic(zeros_array(Items)),
+    ?assertEqual(Items, length(Decoded)).
+
+an_input_one_item_over_the_budget_is_refused_test() ->
+    ?assertError(too_many_elements,
+                 macula_cbor_nif:unpack_deterministic(zeros_array(?ELEMENT_BUDGET))).
+
+%% The count a header claims is held against the budget before any item is
+%% read, so a header claiming more items than the budget allows is refused
+%% even when the items are not there.
+a_map_header_claiming_more_than_the_budget_is_refused_before_its_entries_test() ->
+    ?assertError(too_many_elements,
+                 macula_cbor_nif:unpack_deterministic(<<16#BA, 16#FFFFFFFF:32/big>>)).
+
+%% The budget covers the whole input, not each array or map on its own.
+items_in_nested_arrays_count_against_one_budget_test() ->
+    Half = ?ELEMENT_BUDGET div 2,
+    Nested = <<16#82, (zeros_array(Half))/binary, (zeros_array(Half))/binary>>,
+    ?assertError(too_many_elements, macula_cbor_nif:unpack_deterministic(Nested)).
+
+%% An array of Count zeros: its header, then Count one-byte items.
+zeros_array(Count) ->
+    <<16#9A, Count:32/big, (binary:copy(<<0>>, Count))/binary>>.
