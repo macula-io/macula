@@ -212,11 +212,53 @@ fn err(msg: &'static str) -> rustler::Error {
 // macula wire value nests remotely this deep.
 const MAX_NESTING_DEPTH: usize = 128;
 
+// The most CBOR items one decode reads: an array, a map, a map key and a
+// value each count as one. The memory and time a decode takes grow with its
+// number of items rather than with the input's length, since a one-byte
+// item becomes a term many bytes long, and `macula_frame` walks the decoded
+// term again.
+//
+// This is the limit for the mesh path. It is sized from what a station can
+// decode for several peers at once within its memory, and from the largest
+// legitimate frames, which stay well under it: a manifest takes 9 items per
+// chunk, and a NODES reply with 20 stations about 500. It applies to every
+// macula node, stations and Erlang clients alike. A frame above it cannot
+// cross a station, so an SDK that decodes more items differs from it only on
+// direct connections.
+const MAX_ELEMENTS: u64 = 1 << 17;
+
+// What is left of one decode's element budget. Every item takes one when it
+// is read, and the count an array or map header claims is held against what
+// is left before any of its items is read, so an input that claims more
+// items than the budget allows is refused without allocating for them.
+struct Budget {
+    left: u64,
+}
+
+impl Budget {
+    // Takes one item, or refuses the input when none is left.
+    fn take_one(&mut self) -> NifResult<()> {
+        self.claim(1)?;
+        self.left -= 1;
+        Ok(())
+    }
+
+    // Refuses the input when a header claims more items than are left. The
+    // items themselves are taken as they are read.
+    fn claim(&self, count: u64) -> NifResult<()> {
+        if count > self.left {
+            return Err(rustler::Error::RaiseAtom("too_many_elements"));
+        }
+        Ok(())
+    }
+}
+
 pub fn decode<'a>(env: Env<'a>, bytes: Binary<'a>) -> NifResult<Term<'a>> {
     let len = bytes.as_slice().len();
+    let mut budget = Budget { left: MAX_ELEMENTS };
     // Nobody consumes the top-level value's own canonical bytes -- start
     // with need_canon=false (see decode_one's doc for what that skips).
-    let (term, _canon, pos) = decode_one(env, bytes, 0, 0, false)?;
+    let (term, _canon, pos) = decode_one(env, bytes, 0, 0, false, &mut budget)?;
     if pos != len {
         // `macula_record_cbor:decode/1` requires `{V, <<>>} = decode_one(Bin)`
         // — trailing bytes after the top-level value is a badmatch there.
@@ -270,10 +312,12 @@ fn decode_one<'a>(
     pos: usize,
     depth: usize,
     need_canon: bool,
+    budget: &mut Budget,
 ) -> NifResult<(Term<'a>, Vec<u8>, usize)> {
     if depth > MAX_NESTING_DEPTH {
         return Err(err("cbor: nesting exceeds 128 levels"));
     }
+    budget.take_one()?;
     let buf = orig.as_slice();
     need(buf, pos, 1)?;
     let byte0 = buf[pos];
@@ -314,8 +358,8 @@ fn decode_one<'a>(
             let tuple = (atoms::text().to_term(env), sub.to_term(env));
             scalar_canon(env, tuple.encode(env), next + len, need_canon)
         }
-        4 => decode_array(env, orig, next, n, depth + 1, need_canon),
-        5 => decode_map(env, orig, next, n, depth + 1, need_canon),
+        4 => decode_array(env, orig, next, n, depth + 1, need_canon, budget),
+        5 => decode_map(env, orig, next, n, depth + 1, need_canon, budget),
         _ => Err(err("cbor: major type 6 (tags) not supported")),
     }
 }
@@ -430,14 +474,16 @@ fn decode_array<'a>(
     count: u64,
     depth: usize,
     need_canon: bool,
+    budget: &mut Budget,
 ) -> NifResult<(Term<'a>, Vec<u8>, usize)> {
+    budget.claim(count)?;
     let mut items: Vec<Term<'a>> = Vec::with_capacity(count.min(1024) as usize);
     let mut canon = Vec::new();
     if need_canon {
         encode_head(4, count, &mut canon);
     }
     for _ in 0..count {
-        let (item, item_canon, next) = decode_one(env, orig, pos, depth, need_canon)?;
+        let (item, item_canon, next) = decode_one(env, orig, pos, depth, need_canon, budget)?;
         if need_canon {
             canon.extend_from_slice(&item_canon);
         }
@@ -485,7 +531,9 @@ fn decode_map<'a>(
     count: u64,
     depth: usize,
     need_canon: bool,
+    budget: &mut Budget,
 ) -> NifResult<(Term<'a>, Vec<u8>, usize)> {
+    budget.claim(count.saturating_mul(2))?;
     let capacity = count.min(1024) as usize;
     let mut pairs: Vec<(Term<'a>, Term<'a>)> = Vec::with_capacity(capacity);
     // Owns each distinct key's canonical bytes -> its slot index into
@@ -501,8 +549,8 @@ fn decode_map<'a>(
         // A key ALWAYS needs its canon bytes — that's the dedup identity
         // itself, independent of whether this map's OWN canon bytes
         // (built below) are ever going to be read by anything.
-        let (k, key_canon, next1) = decode_one(env, orig, pos, depth, true)?;
-        let (v, val_canon, next2) = decode_one(env, orig, next1, depth, need_canon)?;
+        let (k, key_canon, next1) = decode_one(env, orig, pos, depth, true, budget)?;
+        let (v, val_canon, next2) = decode_one(env, orig, next1, depth, need_canon, budget)?;
         pos = next2;
         use std::collections::hash_map::Entry;
         match index_of_key.entry(key_canon) {

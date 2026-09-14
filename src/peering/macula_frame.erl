@@ -1564,11 +1564,13 @@ encode_with_check(Len, Bytes) ->
 %% decodes but `validate_received/1' refuses its fields. A frame without
 %% `frame_type' is refused as `{invalid_frame, unknown, frame_type}'.
 %% There is no decode without that check: every frame decode/1 returns
-%% has passed `validate_received/1'.
+%% has passed `validate_received/1'. A frame with more CBOR items than the
+%% decoder's element budget is refused as `too_many_elements'.
 -spec decode(binary()) ->
     {ok, frame(), binary()}
   | {more, pos_integer()}
-  | {error, frame_too_large | bad_frame | {invalid_frame, frame_type() | unknown, atom()}}.
+  | {error, frame_too_large | bad_frame | too_many_elements
+          | {invalid_frame, frame_type() | unknown, atom()}}.
 decode(Buf) when is_binary(Buf) ->
     single(decode_item(Buf, ?MAX_FRAME_BYTES)).
 
@@ -1604,6 +1606,7 @@ decode_cbor(Bytes, Rest) ->
         _Other ->
             {error, bad_frame}
     catch
+        error:too_many_elements -> {error, too_many_elements};
         _:_ -> {error, bad_frame}
     end.
 
@@ -1638,11 +1641,13 @@ decode_record_or_keep(Other) -> Other.
 %% decides what an invalid frame means on its stream. The first frame that
 %% does not decode ends the parse with `{malformed, ItemsBefore, Reason}':
 %% `frame_too_large' for a length header above the cap, decided from the
-%% header alone, and `bad_frame' for a complete frame that is not CBOR.
-%% Nothing after that frame can be read, so the caller ends the stream.
+%% header alone, `bad_frame' for a complete frame that is not CBOR, and
+%% `too_many_elements' for one with more CBOR items than the decoder's
+%% element budget. Nothing after that frame can be read, so the caller ends
+%% the stream.
 -spec parse_received(binary()) ->
     {ok, [item()], binary()}
-  | {malformed, [item()], frame_too_large | bad_frame}.
+  | {malformed, [item()], frame_too_large | bad_frame | too_many_elements}.
 parse_received(Buf) when is_binary(Buf) ->
     parse_received(Buf, ?MAX_FRAME_BYTES).
 
@@ -1653,7 +1658,7 @@ parse_received(Buf) when is_binary(Buf) ->
 %% connection's handshake reads with a small cap.
 -spec parse_received(binary(), pos_integer()) ->
     {ok, [item()], binary()}
-  | {malformed, [item()], frame_too_large | bad_frame}.
+  | {malformed, [item()], frame_too_large | bad_frame | too_many_elements}.
 parse_received(Buf, MaxFrameBytes)
   when is_binary(Buf), is_integer(MaxFrameBytes), MaxFrameBytes > 0,
        MaxFrameBytes =< ?MAX_FRAME_BYTES ->

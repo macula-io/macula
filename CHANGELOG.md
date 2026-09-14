@@ -21,7 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from a buffer. It returns `{ok, Items, Tail}`, or
   `{malformed, ItemsBefore, Reason}` at the first frame that does not
   decode, where `Reason` is `frame_too_large`, decided from the length
-  header, or `bad_frame`. An item is a frame, or
+  header, `bad_frame`, or `too_many_elements` for a frame with more CBOR
+  items than the decoder's element budget. An item is a frame, or
   `{invalid_frame, Type, Field}` for a frame that decodes but whose fields
   `macula_frame:validate_received/1` refuses; parsing goes on after it. A
   `Tail` kept for the next chunk never exceeds the frame cap plus its
@@ -153,6 +154,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `macula_cbor_nif:unpack_deterministic/1`, the decoder behind
+  `macula_frame` and `macula_record`, decodes at most 131,072 CBOR items
+  from one input, an array, a map, a key and a value each counting as one,
+  and raises `too_many_elements` beyond that. A header that claims more
+  items than are left is refused before any of them is read. It runs on a
+  dirty CPU scheduler. The budget is the limit for the mesh path, sized from
+  station memory and from the largest legitimate frames, and it applies to
+  every macula node. A frame above it cannot cross a station, so an SDK
+  that decodes more items differs from it only on direct connections.
 - `macula_frame:parse_stream/1` keeps its `{Frames, Tail}` shape and bounds
   what a caller keeps. Bytes that do not decode end the parse: the frames
   before them come back with an empty `Tail`, and the rest of the buffer is
