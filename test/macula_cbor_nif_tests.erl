@@ -156,6 +156,31 @@ items_in_nested_arrays_count_against_one_budget_test() ->
     Nested = <<16#82, (zeros_array(Half))/binary, (zeros_array(Half))/binary>>,
     ?assertError(too_many_elements, macula_cbor_nif:unpack_deterministic(Nested)).
 
+%%====================================================================
+%% unpack_deterministic/2, a decode within what is left of a budget
+%%====================================================================
+
+the_element_budget_is_131072_items_test() ->
+    ?assertEqual(?ELEMENT_BUDGET, macula_cbor_nif:element_budget()).
+
+a_decode_within_a_budget_returns_the_term_and_what_is_left_test() ->
+    ?assertEqual({[0, 0, 0], 6}, macula_cbor_nif:unpack_deterministic(<<16#83, 0, 0, 0>>, 10)).
+
+a_decode_that_needs_exactly_what_is_left_leaves_nothing_test() ->
+    ?assertEqual({[0, 0, 0], 0}, macula_cbor_nif:unpack_deterministic(<<16#83, 0, 0, 0>>, 4)).
+
+a_decode_that_needs_more_than_is_left_is_refused_test() ->
+    ?assertError(too_many_elements, macula_cbor_nif:unpack_deterministic(<<16#83, 0, 0, 0>>, 3)).
+
+%% What is left never counts for more than the element budget, however much
+%% a caller passes.
+what_is_left_is_capped_at_the_element_budget_test() ->
+    ?assertError(too_many_elements,
+                 macula_cbor_nif:unpack_deterministic(zeros_array(?ELEMENT_BUDGET), 1 bsl 40)).
+
+bytes_that_are_not_cbor_raise_within_a_budget_as_without_test() ->
+    ?assertError(<<"cbor: ", _/binary>>, macula_cbor_nif:unpack_deterministic(<<255>>, 10)).
+
 %% An array of Count zeros: its header, then Count one-byte items.
 zeros_array(Count) ->
     <<16#9A, Count:32/big, (binary:copy(<<0>>, Count))/binary>>.
