@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [10.25.0] - 2026-09-14
+
+Every node should upgrade to this release.
+
 ### Added
 
 - `macula_frame:validate_received/1` checks that a frame decoded from a
@@ -16,7 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   value that type's builder accepts, and returns `ok` or
   `{error, {invalid_frame, Type, Field}}`. A frame type this node does not
   know passes; a frame without a `frame_type` does not. Sample frames from
-  the Go, Rust and .NET SDKs in `test/fixtures/sdk_frames` all pass.
+  the Go, Rust and .NET SDKs, and frames macula-station builds with macula
+  10.21.0 and 10.24.0, all pass; they are in `test/fixtures/sdk_frames`.
 - `macula_frame:parse_received/1` drains the complete frames a peer sent
   from a buffer. It returns `{ok, Items, Tail}`, or
   `{malformed, ItemsBefore, Reason}` at the first frame that does not
@@ -80,6 +85,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   announced providers whose fetch succeeds, with a fetch function of the
   caller's own. `macula_direct_dial:resolve_station_endpoint/3` takes a
   timeout.
+- `macula_lifetime_announcer` publishes a supervised wrapper's lifetime
+  facts from a process of its own: `start/2` starts it for the calling
+  wrapper, and `announce_end/2` hands it the end payload.
+  `macula_stream_sink` announces through it.
 - `macula_stream_sink:start_link/7` and `start_link_direct/7` take start
   options. `stream_io` gives the functions a sink opens, reads and ends its
   stream with, `call_stream/5`, `recv/2`, `close_stream/1` and `abort/3`,
@@ -159,10 +168,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from one input, an array, a map, a key and a value each counting as one,
   and raises `too_many_elements` beyond that. A header that claims more
   items than are left is refused before any of them is read. It runs on a
-  dirty CPU scheduler. The budget is the limit for the mesh path, sized from
-  station memory and from the largest legitimate frames, and it applies to
-  every macula node. A frame above it cannot cross a station, so an SDK
-  that decodes more items differs from it only on direct connections.
+  dirty CPU scheduler. The same budget applies on every macula node. An SDK
+  with a larger budget accepts frames that a macula node refuses.
 - A frame and the records in it share one element budget of 131,072 CBOR
   items: `macula_frame` decodes each record in a `record` or `records`
   field within what the frame's own items and the records before it left.
@@ -182,7 +189,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that check. A frame whose fields are refused comes back as
   `{error, {invalid_frame, Type, Field}}`, and a frame without `frame_type`
   as `{error, {invalid_frame, unknown, frame_type}}`, so a map without
-  `frame_type` no longer decodes.
+  `frame_type` no longer decodes. A frame whose own CBOR items exceed the
+  element budget comes back as `{error, too_many_elements}`.
 - `macula_peering_conn` ends the connection with the reason
   `{malformed, Reason}` when its handshake or control stream does not
   decode, or when a handshake frame is invalid. On the control stream an
@@ -192,6 +200,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it reads frames of up to 64 KiB: a length header above that ends the
   connection with `{malformed, frame_too_large}` as soon as the header
   arrives.
+- `macula_station_link` ends a dedicated or content stream whose bytes do
+  not decode as frames, or that carries a frame missing a field its type
+  requires. On a dedicated stream the sessions it carries end; on a content
+  stream the call waiting on it fails with `{error, {malformed, Reason}}`.
+  The frames before it are still handled, and the link and its other
+  streams carry on. A peering connection's `invalid_frame` notice changes
+  nothing on the link.
 - `macula_dist_relay_client:close_tunnel/2` sends `tunnel_close` only for a
   tunnel the client knows, active or still being set up, and ignores an
   unknown tunnel id.
@@ -202,12 +217,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `{ok, Conn, Stream, Received}`, where `Received` holds the tunnel's
   bytes the client read before handing the stream over.
 - A procedure advertised with `{ucan_required, Issuer}`, unary or
-  streaming, also requires the token's audience (`aud`) to be the calling
-  identity's public key in lowercase hex, the check
-  `{realm_member_required, RealmDid, RequiredCan}` already made; both
-  policies now share it. A token signed by `Issuer` but minted for another
-  audience is refused with `unauthorized`. Mint `ucan_required` tokens for
-  the caller that will present them.
+  streaming, requires the token's audience (`aud`) to be the calling
+  identity's public key in lowercase hex, as
+  `{realm_member_required, RealmDid, RequiredCan}` does. A token whose
+  audience is another identity is refused with `unauthorized`. Mint
+  `ucan_required` tokens for the caller that will present them.
 - `macula_identity:load/1` accepts only a key file its group and others
   have no access to, mode 0600 or 0400, following symlinks. Another mode
   returns `{error, {file_permissions, #{file => Path, mode => <<"0644">>,
@@ -295,8 +309,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A handler's `{error, Reason}` reaches its caller with `Reason` itself as
   the CALL_ERROR `detail` when it is a binary or a printable Unicode
   charlist, judged by its first 257 elements, as at most 256 bytes of
-  valid UTF-8 cut on a character boundary. Any other reason gives its name, such as `<<"refused">>` for
-  `{refused, Why}`, or no detail when it has none.
+  valid UTF-8 cut on a character boundary. Any other reason gives its name,
+  such as `<<"refused">>` for `{refused, Why}`, or no detail when it has
+  none.
 - The warning for a crashing handler, unary or streaming, and the log
   lines of `macula_lifetime_announcer` print at most 4,096 characters of
   the terms they carry.
@@ -338,15 +353,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and `macula_manifest:create/2` accepts only a positive integer `chunk_size`.
 - `macula_record:decode/1` returns `{error, bad_record}` for bytes that are
   not CBOR and `{error, too_many_elements}` for bytes over the element
-  budget of `macula_cbor_nif:unpack_deterministic/1`, instead of raising. A
-  STORE, REPLICATE or VALUE whose record bytes do not decode as a record is
-  an invalid frame named by its `record` or `records` field.
+  budget of `macula_cbor_nif:unpack_deterministic/1`. A STORE, REPLICATE or
+  VALUE whose record bytes do not decode as a record is an invalid frame
+  named by its `record` or `records` field.
 - `macula_dist_relay_client` drops a tunnel and sends `tunnel_close` for it
   once the process holding its stream ends: the caller of
   `request_tunnel/2` for an outbound tunnel, and for an inbound tunnel its
   setup process until that names the dist controller, then the controller.
-  Tunnels used to stay in the client, and at the relay, for as long as the
-  client ran.
 - `macula_station_link:call/5,6` no longer sends a CALL that the link reaches
   only after its caller's deadline, when the link was busy for longer than the
   call's timeout: its caller has already been told it timed out. A CALL frame
@@ -410,12 +423,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   failed publish is now logged. A sink killed before its stop has its
   `streaming.completed_v1` published with `outcome => failed` and the
   reason.
-- `macula_upload:advertise/6` now passes its `auth` and `reuse_sup` options,
+- `macula_upload:advertise/6` passes its `auth` and `reuse_sup` options,
   and its other options except `fact_publish`, on to
-  `macula_streamer:advertise/6`, as `advertise_direct/7` does. Before this
-  release `advertise/6` ignored them, so an upload advertised through
-  `advertise/6` with an `auth` policy was served without that policy.
-  Upgrade if you advertise uploads through `advertise/6`.
+  `macula_streamer:advertise/6`, as `advertise_direct/7` does. Upgrade if
+  you advertise uploads through `advertise/6`.
 
 ## [10.24.0] - 2026-09-10
 
