@@ -20,6 +20,7 @@ pub const REFUSED: u32 = 2;
 /// An established stream was aborted because a frame on it did not decode.
 pub const STREAM_PROTOCOL_ERROR: u32 = 3;
 
-/// The connection was closed because the station had no handshake slot free;
-/// the peer may try again later, or another station.
+/// The node had no room: a connection closed because the station had no
+/// handshake slot free, or a relayed stream reset because its reader did not
+/// take data in time. The peer may try again later, or another station.
 pub const REFUSED_BUSY: u32 = 4;

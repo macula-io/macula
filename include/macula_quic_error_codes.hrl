@@ -17,10 +17,12 @@
 %%%                                       STREAM_OPEN signed by its caller
 %%%   3  QUIC_CODE_STREAM_PROTOCOL_ERROR  an established stream was aborted:
 %%%                                       a frame on it did not decode
-%%%   4  QUIC_CODE_REFUSED_BUSY           the connection was closed because
-%%%                                       the station had no handshake slot
-%%%                                       free; the peer may try again later,
-%%%                                       or another station
+%%%   4  QUIC_CODE_REFUSED_BUSY           the node had no room: a connection
+%%%                                       closed because the station had no
+%%%                                       handshake slot free, or a relayed
+%%%                                       stream reset because its reader did
+%%%                                       not take data in time; the peer may
+%%%                                       try again later, or another station
 %%%-------------------------------------------------------------------
 -ifndef(MACULA_QUIC_ERROR_CODES_HRL).
 -define(MACULA_QUIC_ERROR_CODES_HRL, true).
@@ -38,7 +40,9 @@
 %% An established stream was aborted because a frame on it did not decode.
 -define(QUIC_CODE_STREAM_PROTOCOL_ERROR, 3).
 
-%% The connection was closed because the station had no handshake slot free.
+%% The node had no room: a connection closed because the station had no
+%% handshake slot free, or a relayed stream reset because its reader did not
+%% take data in time.
 -define(QUIC_CODE_REFUSED_BUSY, 4).
 
 -endif.

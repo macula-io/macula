@@ -42,6 +42,7 @@ rustler::init!(
         // Stream
         stream::nif_send,
         stream::nif_async_send,
+        stream::nif_async_send_tagged,
         stream::nif_close_stream,
         stream::nif_reset_stream,
         stream::nif_setopt_active,
