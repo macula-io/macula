@@ -426,6 +426,8 @@ close_connection(Conn) ->
 
 %% The longest reason close_connection/3 sends.
 -define(MAX_CLOSE_REASON_BYTES, 256).
+%% The largest code a QUIC variable-length integer holds.
+-define(MAX_CLOSE_CODE, (1 bsl 62) - 1).
 
 %% @doc Close a connection with an application error code and a reason, which
 %% the peer reads with `close_reason/1'. `Code' must fit a QUIC
@@ -434,8 +436,12 @@ close_connection(Conn) ->
 -spec close_connection(reference(), non_neg_integer(), binary()) ->
     ok | {error, error_code_out_of_range | reason_too_long}.
 close_connection(Conn, Code, Reason)
-  when is_integer(Code), Code >= 0, byte_size(Reason) =< ?MAX_CLOSE_REASON_BYTES ->
+  when is_integer(Code), Code >= 0, Code =< ?MAX_CLOSE_CODE,
+       byte_size(Reason) =< ?MAX_CLOSE_REASON_BYTES ->
     nif_close_connection_with_code(Conn, Code, Reason);
+close_connection(_Conn, Code, Reason)
+  when is_integer(Code), Code > ?MAX_CLOSE_CODE, is_binary(Reason) ->
+    {error, error_code_out_of_range};
 close_connection(_Conn, Code, Reason) when is_integer(Code), Code >= 0, is_binary(Reason) ->
     {error, reason_too_long}.
 
