@@ -135,6 +135,203 @@ recover_after(Ref, Recover) ->
     end,
     Recover().
 
+%% A served stream charges the bytes it keeps unread to its caller and the
+%% node. A charge that would take its caller past the caller's budget is
+%% refused, while another caller's charge is still taken.
+a_caller_past_its_inbox_budget_is_refused_test() ->
+    with_limits(#{max_served_inbox_bytes_per_caller => 1000,
+                  max_served_inbox_bytes => 1000000}, fun(Base) ->
+        [S1, S2, S3] = [park() || _ <- lists:seq(1, 3)],
+        [Caller, Other] = [caller(), caller()],
+        [ok = macula_stream_sessions:admit(C, S) || {C, S} <- [{Caller, S1}, {Caller, S2}, {Other, S3}]],
+        Bytes = macula_stream_sessions:inbox_bytes(),
+        ?assertEqual(ok, charge_as(S1, 600)),
+        ?assertEqual({error, caller_budget}, charge_as(S2, 600)),
+        ?assertEqual(ok, charge_as(S3, 600)),
+        ?assertEqual(Bytes + 1200, macula_stream_sessions:inbox_bytes()),
+        end_all([S1, S2, S3], Base),
+        ?assertEqual(Bytes, inbox_bytes_back_to(Bytes, 1_000))
+    end).
+
+%% A charge that would take the node past its budget is refused whatever
+%% caller asks, and the caller's share of that charge is taken back: once the
+%% node has room, the same caller's charge up to its own budget is taken.
+the_node_past_its_inbox_budget_is_refused_test() ->
+    Bytes = settled_inbox_bytes(),
+    with_limits(#{max_served_inbox_bytes_per_caller => 1000,
+                  max_served_inbox_bytes => Bytes + 1000}, fun(Base) ->
+        [S1, S2] = [park() || _ <- lists:seq(1, 2)],
+        [Caller, Other] = [caller(), caller()],
+        ok = macula_stream_sessions:admit(Caller, S1),
+        ok = macula_stream_sessions:admit(Other, S2),
+        ?assertEqual(ok, charge_as(S1, 700)),
+        ?assertEqual({error, node_budget}, charge_as(S2, 700)),
+        ok = release_as(S1, 700),
+        ?assertEqual(ok, charge_as(S2, 1000)),
+        end_all([S1, S2], Base)
+    end).
+
+%% Bytes a stream gives back when a reader takes them make room again.
+a_released_charge_makes_room_test() ->
+    with_limits(#{max_served_inbox_bytes_per_caller => 1000,
+                  max_served_inbox_bytes => 1000000}, fun(Base) ->
+        Stream = park(),
+        ok = macula_stream_sessions:admit(caller(), Stream),
+        ok = charge_as(Stream, 1000),
+        {error, caller_budget} = charge_as(Stream, 1),
+        ok = release_as(Stream, 400),
+        ?assertEqual(ok, charge_as(Stream, 400)),
+        end_all([Stream], Base)
+    end).
+
+%% What a stream still has charged comes back when its process ends, however
+%% it ends.
+an_ended_streams_charge_comes_back_test_() ->
+    [{Name, fun() -> ended_streams_charge_comes_back(Exit) end}
+     || {Name, Exit} <- [{"the stream ends normally", normal}, {"the stream is killed", kill}]].
+
+ended_streams_charge_comes_back(Exit) ->
+    with_limits(#{max_served_inbox_bytes_per_caller => 1000,
+                  max_served_inbox_bytes => 1000000}, fun(Base) ->
+        Bytes = macula_stream_sessions:inbox_bytes(),
+        [S1, S2] = [park() || _ <- lists:seq(1, 2)],
+        Caller = caller(),
+        ok = macula_stream_sessions:admit(Caller, S1),
+        ok = macula_stream_sessions:admit(Caller, S2),
+        ok = charge_as(S1, 900),
+        {error, caller_budget} = charge_as(S2, 900),
+        end_process(S1, Exit),
+        ?assertEqual(ok, charged_within(S2, 900, 1_000)),
+        end_all([S2], Base),
+        ?assertEqual(Bytes, inbox_bytes_back_to(Bytes, 1_000))
+    end).
+
+%% Only an admitted stream is charged.
+a_stream_not_admitted_is_not_charged_test() ->
+    with_limits(#{}, fun(_Base) ->
+        Stream = park(),
+        try
+            ?assertEqual({error, not_admitted}, charge_as(Stream, 10))
+        after
+            exit(Stream, kill)
+        end
+    end).
+
+%% The charges outlive the counter: after it restarts, a caller at its budget
+%% is still refused, and a stream that ends still gives its charge back.
+the_charges_hold_across_a_restart_of_the_counter_test() ->
+    with_limits(#{max_served_inbox_bytes_per_caller => 1000,
+                  max_served_inbox_bytes => 1000000}, fun(Base) ->
+        Bytes = macula_stream_sessions:inbox_bytes(),
+        [S1, S2] = [park() || _ <- lists:seq(1, 2)],
+        Caller = caller(),
+        ok = macula_stream_sessions:admit(Caller, S1),
+        ok = macula_stream_sessions:admit(Caller, S2),
+        ok = charge_as(S1, 900),
+        Counter = whereis(macula_stream_sessions),
+        exit(Counter, kill),
+        ?assertNotEqual(Counter, restarted(macula_stream_sessions, Counter, 2_000)),
+        ?assertEqual(Bytes + 900, macula_stream_sessions:inbox_bytes()),
+        ?assertEqual({error, caller_budget}, charge_as(S2, 900)),
+        end_process(S1, kill),
+        ?assertEqual(ok, charged_within(S2, 900, 1_000)),
+        end_all([S2], Base),
+        ?assertEqual(Bytes, inbox_bytes_back_to(Bytes, 1_000))
+    end).
+
+%% A caller that holds no session holds no bytes: whatever its streams left
+%% counted is cleared when its last session ends, inside the counter's
+%% handling of that end. A session the same caller opens right after then
+%% counts for exactly what it charges.
+a_caller_with_no_session_holds_no_bytes_test() ->
+    with_limits(#{max_served_inbox_bytes_per_caller => 1000,
+                  max_served_inbox_bytes => 1000000}, fun(Base) ->
+        [S1, S2] = [park() || _ <- lists:seq(1, 2)],
+        Caller = caller(),
+        ok = macula_stream_sessions:admit(Caller, S1),
+        ok = charge_as(S1, 500),
+        _ = ets:update_counter(macula_stream_sessions, {caller_bytes, Caller}, {2, 500}),
+        end_all([S1], Base),
+        ok = macula_stream_sessions:admit(Caller, S2),
+        ok = charge_as(S2, 300),
+        ?assertEqual(300, ets:lookup_element(macula_stream_sessions, {caller_bytes, Caller}, 2)),
+        end_all([S2], Base)
+    end).
+
+%% A node that holds no session holds no bytes: whatever its streams left
+%% counted is cleared when its last session ends. The node must hold no other
+%% session when this runs.
+the_node_with_no_session_holds_no_bytes_test() ->
+    with_limits(#{max_served_inbox_bytes_per_caller => 1000,
+                  max_served_inbox_bytes => 1000000}, fun(Base) ->
+        ?assertEqual(0, Base),
+        Stream = park(),
+        ok = macula_stream_sessions:admit(caller(), Stream),
+        ok = charge_as(Stream, 500),
+        _ = ets:update_counter(macula_stream_sessions, inbox_bytes, {2, 500}),
+        end_all([Stream], Base),
+        ?assertEqual(0, macula_stream_sessions:inbox_bytes())
+    end).
+
+%% A refused charge is counted by its reason.
+refused_charges_are_counted_test() ->
+    with_limits(#{max_served_inbox_bytes_per_caller => 10,
+                  max_served_inbox_bytes => 1000000}, fun(Base) ->
+        Stream = park(),
+        ok = macula_stream_sessions:admit(caller(), Stream),
+        Before = maps:get(caller_budget, macula_stream_sessions:refusals(), 0),
+        {error, caller_budget} = charge_as(Stream, 11),
+        ?assertEqual(Before + 1, refusals_reach(caller_budget, Before + 1, 1_000)),
+        end_all([Stream], Base)
+    end).
+
+%% A charge or release runs in the stream's own process, as a stream makes it.
+charge_as(Stream, Bytes) ->
+    as(Stream, fun() -> macula_stream_sessions:charge(Stream, Bytes) end).
+
+release_as(Stream, Bytes) ->
+    as(Stream, fun() -> macula_stream_sessions:release(Stream, Bytes) end).
+
+as(Stream, Fun) ->
+    Stream ! {run, self(), Fun},
+    receive
+        {ran, Stream, Result} -> Result
+    after 1_000 ->
+        erlang:error(stream_did_not_run)
+    end.
+
+charged_within(Stream, Bytes, Ms) ->
+    charged(charge_as(Stream, Bytes), Stream, Bytes, Ms).
+
+charged(ok, _Stream, _Bytes, _Ms) -> ok;
+charged(Refused, _Stream, _Bytes, Ms) when Ms =< 0 -> Refused;
+charged({error, _}, Stream, Bytes, Ms) ->
+    timer:sleep(20),
+    charged_within(Stream, Bytes, Ms - 20).
+
+settled_inbox_bytes() ->
+    {ok, _} = application:ensure_all_started(macula),
+    timer:sleep(20),
+    macula_stream_sessions:inbox_bytes().
+
+inbox_bytes_back_to(Bytes, Ms) ->
+    bytes_back_to(macula_stream_sessions:inbox_bytes(), Bytes, Ms).
+
+bytes_back_to(Bytes, Bytes, _Ms) -> Bytes;
+bytes_back_to(Now, _Bytes, Ms) when Ms =< 0 -> Now;
+bytes_back_to(_Now, Bytes, Ms) ->
+    timer:sleep(20),
+    inbox_bytes_back_to(Bytes, Ms - 20).
+
+refusals_reach(Reason, Count, Ms) ->
+    reached(maps:get(Reason, macula_stream_sessions:refusals(), 0), Reason, Count, Ms).
+
+reached(Count, _Reason, Count, _Ms) -> Count;
+reached(Now, _Reason, _Count, Ms) when Ms =< 0 -> Now;
+reached(_Now, Reason, Count, Ms) ->
+    timer:sleep(20),
+    refusals_reach(Reason, Count, Ms - 20).
+
 %% Refusals are counted by reason, and however many there are, one warning is
 %% logged per interval.
 refusals_are_counted_and_logged_once_per_interval_test() ->
@@ -177,7 +374,15 @@ caller() ->
     crypto:strong_rand_bytes(32).
 
 park() ->
-    spawn(fun() -> receive stop -> ok end end).
+    spawn(fun parked/0).
+
+%% A stand-in for a stream process: it runs what it is handed in its own
+%% process, as a stream charges and releases, until it is told to stop.
+parked() ->
+    receive
+        {run, From, Fun} -> From ! {ran, self(), Fun()}, parked();
+        stop -> ok
+    end.
 
 end_process(Pid, normal) -> Pid ! stop;
 end_process(Pid, kill)   -> exit(Pid, kill).

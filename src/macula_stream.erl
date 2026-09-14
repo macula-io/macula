@@ -665,14 +665,35 @@ enqueue_or_deliver(Encoding, Body, #state{waiters = W0} = State) ->
     end.
 
 %% A chunk that would take the memory the queued chunks hold past the
-%% stream's bound ends the session with a stream protocol error, and nothing
+%% stream's bound, or a served stream's caller or node past its budget for
+%% unread bytes, ends the session with a stream protocol error, and nothing
 %% of it is kept.
 enqueue(Bytes, _Encoding, _Kept, #state{inbox_bytes = Queued, max_inbox_bytes = Max} = State)
   when Queued + Bytes > Max ->
     abort_session(<<"stream_protocol_error">>,
                   <<"the peer sent more than the stream keeps unread">>, State);
-enqueue(Bytes, Encoding, Kept, #state{inbox = Inbox, inbox_bytes = Queued} = State) ->
-    State#state{inbox = queue:in({Encoding, Kept}, Inbox), inbox_bytes = Queued + Bytes}.
+enqueue(Bytes, Encoding, Kept, State) ->
+    queue_charged(charge_budget(Bytes, State), Bytes, Encoding, Kept, State).
+
+queue_charged(ok, Bytes, Encoding, Kept, #state{inbox = Inbox, inbox_bytes = Queued} = State) ->
+    State#state{inbox = queue:in({Encoding, Kept}, Inbox), inbox_bytes = Queued + Bytes};
+queue_charged({error, _Refused}, _Bytes, _Encoding, _Kept, State) ->
+    abort_session(<<"stream_protocol_error">>,
+                  <<"the node keeps no more unread bytes for this session">>, State).
+
+%% A served stream on a station link charges what it keeps unread to its
+%% caller and the node (`macula_stream_sessions'), and gives it back when a
+%% reader takes it or the stream ends; any other stream keeps only its own
+%% bound.
+charge_budget(Bytes, #state{role = server, peer = {remote_via_link, _Link, _Sid}}) ->
+    macula_stream_sessions:charge(self(), Bytes);
+charge_budget(_Bytes, _State) ->
+    ok.
+
+release_budget(Bytes, #state{role = server, peer = {remote_via_link, _Link, _Sid}}) ->
+    macula_stream_sessions:release(self(), Bytes);
+release_budget(_Bytes, _State) ->
+    ok.
 
 %% A chunk as the inbox keeps it: a copy, so a body that is part of the frame
 %% it arrived in keeps none of the rest of that frame.
@@ -694,16 +715,22 @@ off_heap_bytes(Map) when is_map(Map) -> off_heap_bytes(maps:to_list(Map));
 off_heap_bytes([Head | Tail]) -> off_heap_bytes(Head) + off_heap_bytes(Tail);
 off_heap_bytes(_Other) -> 0.
 
-handle_recv(From, _Timeout, #state{inbox = Inbox, inbox_bytes = Queued} = State) ->
+handle_recv(From, _Timeout, #state{inbox = Inbox} = State) ->
     case queue:out(Inbox) of
         {{value, {Encoding, Body}}, Rest} ->
-            {reply, chunk_to_recv_result(Encoding, Body),
-             State#state{inbox = Rest, inbox_bytes = Queued - chunk_bytes(Encoding, Body)}};
+            take_queued(Encoding, Body, Rest, State);
         {empty, _} when State#state.closed_recv ->
             {reply, eof, State};
         {empty, _} ->
             queue_waiter(From, _Timeout, State)
     end.
+
+%% A reader takes a queued chunk: its bytes leave the stream's count, and a
+%% served stream gives them back to its caller's and the node's budget.
+take_queued(Encoding, Body, Rest, #state{inbox_bytes = Queued} = State) ->
+    Bytes = chunk_bytes(Encoding, Body),
+    ok = release_budget(Bytes, State),
+    {reply, chunk_to_recv_result(Encoding, Body), State#state{inbox = Rest, inbox_bytes = Queued - Bytes}}.
 
 queue_waiter(From, Timeout, State) ->
     Ref = case Timeout of
