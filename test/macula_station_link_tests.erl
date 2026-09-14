@@ -2600,6 +2600,191 @@ inbound_stream_open_invokes_handler_test_() ->
          end
      end}.
 
+%% -- a malformed or invalid frame ends only its own stream ---------
+
+-define(SERVER_STREAMS_INDEX, 19).
+-define(STREAM_BUFS_INDEX, 20).
+
+%% A signed STREAM_OPEN missing a field its type requires never reaches a
+%% handler: its stream ends and its buffer goes, and the link serves the
+%% next valid STREAM_OPEN.
+a_stream_open_missing_a_required_field_ends_its_stream_test_() ->
+    {timeout, 5,
+     fun() ->
+         {Pid, FakePeer, _PeerNodeId} = setup_link_for_streams(),
+         try
+             {Procedure, CallerKp} = advertise_notifying_stream(Pid),
+             Bad = make_ref(),
+             inject_dedicated_stream_open(
+               Pid, FakePeer, Bad,
+               macula_frame:sign(maps:remove(args, unsigned_stream_open(Procedure, CallerKp)),
+                                 CallerKp)),
+             ?assertNot(has_stream_buffer(Pid, Bad)),
+             next_stream_open_is_served(Pid, FakePeer, Procedure, CallerKp),
+             receive
+                 {stream_opened, Args} -> erlang:error({opened_without_its_fields, Args})
+             after 200 ->
+                 ok
+             end,
+             macula_station_link:stop(Pid)
+         after
+             teardown_link_for_streams(ok)
+         end
+     end}.
+
+%% A frame on an established session's stream that lacks a required field
+%% ends the session on that stream and frees its buffer; the link keeps
+%% serving.
+a_session_frame_missing_a_required_field_ends_its_stream_test_() ->
+    [{atom_to_list(Type), {timeout, 5, fun() -> session_frame_missing_a_field(Frame) end}}
+     || {Type, Frame} <- [{stream_data, #{frame_type => stream_data, seq => 0,
+                                           encoding => raw, body => <<"x">>}},
+                          {stream_end, #{frame_type => stream_end, role => both}},
+                          {stream_error, #{frame_type => stream_error, code => <<"error">>,
+                                            message => <<"stop">>}},
+                          {stream_reply, #{frame_type => stream_reply,
+                                            responded_by => <<0:256>>}}]].
+
+session_frame_missing_a_field(Frame) ->
+    {Pid, FakePeer, _PeerNodeId} = setup_link_for_streams(),
+    try
+        {Procedure, CallerKp} = advertise_notifying_stream(Pid),
+        Stream = make_ref(),
+        Open = unsigned_stream_open(Procedure, CallerKp),
+        Sid = maps:get(stream_id, Open),
+        inject_dedicated_stream_open(Pid, FakePeer, Stream, macula_frame:sign(Open, CallerKp)),
+        receive
+            {stream_opened, _} -> ok
+        after 1_000 ->
+            erlang:error(session_not_opened)
+        end,
+        ?assert(is_map_key(Sid, element(?SERVER_STREAMS_INDEX, sys:get_state(Pid)))),
+        inject_on_stream(Pid, Stream, Frame),
+        State = sys:get_state(Pid),
+        ?assertNot(is_map_key(Sid, element(?SERVER_STREAMS_INDEX, State))),
+        ?assertNot(is_map_key(Stream, element(?STREAM_BUFS_INDEX, State))),
+        next_stream_open_is_served(Pid, FakePeer, Procedure, CallerKp),
+        macula_station_link:stop(Pid)
+    after
+        teardown_link_for_streams(ok)
+    end.
+
+%% Bytes on a new stream that do not decode as a frame end that stream and
+%% free its buffer; the link keeps serving.
+a_new_stream_whose_bytes_do_not_decode_is_ended_test_() ->
+    [{Name, {timeout, 5, fun() -> undecodable_new_stream(Bytes) end}}
+     || {Name, Bytes} <- [{"bytes that are not CBOR", <<4:32, "junk">>},
+                          {"a length above the frame cap", <<16#FFFFFFFF:32>>}]].
+
+undecodable_new_stream(Bytes) ->
+    {Pid, FakePeer, _PeerNodeId} = setup_link_for_streams(),
+    try
+        {Procedure, CallerKp} = advertise_notifying_stream(Pid),
+        Bad = make_ref(),
+        inject_dedicated_stream_bytes(Pid, FakePeer, Bad, Bytes),
+        ?assertNot(has_stream_buffer(Pid, Bad)),
+        next_stream_open_is_served(Pid, FakePeer, Procedure, CallerKp),
+        macula_station_link:stop(Pid)
+    after
+        teardown_link_for_streams(ok)
+    end.
+
+%% The peering connection's notice of a control-stream frame that lacked a
+%% required field changes nothing on the link: the next CALL is served.
+an_invalid_frame_notice_leaves_the_link_serving_test_() ->
+    {timeout, 5,
+     fun() ->
+         Test = self(),
+         Handler = fun(#{tag := Tag}) -> {ok, #{tag => Tag}} end,
+         {Pid, CallerKp} = inbound_call_fixture([{<<"probe.notice">>, Handler}]),
+         Pid ! {macula_peering, invalid_frame, Test, call, caller},
+         CallId = crypto:strong_rand_bytes(16),
+         Pid ! {macula_peering, frame, Test, macula_frame:sign(#{
+             frame_type  => call,
+             call_id     => CallId,
+             realm       => ?REALM,
+             procedure   => <<"probe.notice">>,
+             payload     => #{tag => served},
+             deadline_ms => erlang:system_time(millisecond) + 5_000,
+             caller      => macula_identity:public(CallerKp)
+         }, CallerKp)},
+         ?assertEqual({ok, #{tag => served}}, await_result(CallId, 2_000)),
+         macula_station_link:stop(Pid)
+     end}.
+
+-define(CONTENT_STREAM_BUFS_INDEX, 21).
+
+%% A reply on a content stream whose bytes do not decode ends that stream
+%% and fails the call waiting on it; the link lives on.
+a_content_stream_reply_that_does_not_decode_fails_its_call_test_() ->
+    {timeout, 5,
+     fun() ->
+         {Pid, _FakePeer, _PeerNodeId} = setup_link_for_streams(),
+         try
+             Test = self(),
+             {ok, Stream} = macula_station_link:open_content_stream(Pid),
+             spawn_link(fun() ->
+                 Test ! {content_call,
+                         macula_station_link:call_on_stream(Pid, Stream, ?REALM,
+                                                            <<"_content.get_block">>, #{}, 2_000)}
+             end),
+             receive
+                 {sent_on_stream, Stream, #{frame_type := call}} -> ok
+             after 1_000 ->
+                 erlang:error(no_content_call_sent)
+             end,
+             Pid ! {quic, <<4:32, "junk">>, Stream, undefined},
+             receive
+                 {content_call, Result} -> ?assertEqual({error, {malformed, bad_frame}}, Result)
+             after 1_000 ->
+                 erlang:error(content_call_not_failed)
+             end,
+             ?assertNot(is_map_key(Stream, element(?CONTENT_STREAM_BUFS_INDEX, sys:get_state(Pid)))),
+             macula_station_link:stop(Pid)
+         after
+             teardown_link_for_streams(ok)
+         end
+     end}.
+
+%% Advertises a server_stream procedure whose handler reports the arguments
+%% each STREAM_OPEN brought, and gives the procedure and a caller key pair.
+advertise_notifying_stream(Pid) ->
+    Test = self(),
+    Procedure = <<"foo.fields">>,
+    Handler = fun(_Stream, Args) -> Test ! {stream_opened, Args}, ok end,
+    ok = macula_station_link:advertise_stream(Pid, ?REALM, Procedure, server_stream, Handler),
+    flush_send_frame_casts(),
+    {Procedure, macula_identity:generate()}.
+
+unsigned_stream_open(Procedure, CallerKp) ->
+    #{frame_type  => stream_open,
+      stream_id   => crypto:strong_rand_bytes(16),
+      procedure   => Procedure,
+      realm       => ?REALM,
+      mode        => server_stream,
+      args        => #{n => 7},
+      deadline_ms => erlang:system_time(millisecond) + 5_000,
+      caller      => macula_identity:public(CallerKp)}.
+
+next_stream_open_is_served(Pid, FakePeer, Procedure, CallerKp) ->
+    inject_dedicated_stream_open(Pid, FakePeer, make_ref(),
+                                 macula_frame:sign(unsigned_stream_open(Procedure, CallerKp),
+                                                   CallerKp)),
+    receive
+        {stream_opened, #{n := 7}} -> ok
+    after 1_000 ->
+        erlang:error(next_stream_open_not_served)
+    end.
+
+%% A peer opening a dedicated stream toward us and writing `Bytes' as its
+%% first bytes, whatever they are.
+inject_dedicated_stream_bytes(Pid, FakePeer, Stream, Bytes) ->
+    Pid ! {macula_peering, new_dedicated_stream, FakePeer, Stream},
+    Pid ! {quic, Bytes, Stream, undefined}.
+
+has_stream_buffer(Pid, Stream) ->
+    is_map_key(Stream, element(?STREAM_BUFS_INDEX, sys:get_state(Pid))).
+
 %% -- a stream handler crash is told by name, and logged here ------
 
 %% The caller of a crashing stream handler gets the crash class as the
