@@ -36,8 +36,6 @@
          is_nif_loaded/0]).
 
 %% NIF stubs
--export([nif_pack/1, nif_unpack/1,
-         nif_pack_deterministic/1, nif_unpack_deterministic/1]).
 
 -on_load(init/0).
 
