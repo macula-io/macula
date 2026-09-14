@@ -152,6 +152,54 @@ non_integer_difficulty_is_a_configuration_error_test() ->
                      macula_identity:puzzle_valid(macula_identity:generate())
                  end)).
 
+%% The largest puzzle_difficulty the setting accepts.
+maximum_difficulty_is_accepted_test() ->
+    ?assert(is_boolean(with_puzzle_difficulty(16, fun() ->
+        macula_identity:puzzle_valid(macula_identity:generate())
+    end))).
+
+difficulty_above_the_maximum_is_a_configuration_error_test() ->
+    ?assertError({bad_config, {macula, puzzle_difficulty, 17}},
+                 with_puzzle_difficulty(17, fun() ->
+                     macula_identity:puzzle_valid(macula_identity:generate())
+                 end)).
+
+%% The macula application checks puzzle_difficulty when it starts, so a node
+%% with a bad value does not start, instead of failing its puzzle checks one
+%% CONNECT at a time. Each case starts macula on a fresh peer node; the valid
+%% value shows that the peer can start macula at all.
+application_start_checks_puzzle_difficulty_test_() ->
+    {timeout, 300,
+     [{"a valid puzzle_difficulty lets the macula application start",
+       {timeout, 90, fun() -> ?assertMatch({ok, _}, start_macula_with_puzzle_difficulty(10)) end}},
+      {"a puzzle_difficulty that is not an integer stops the macula application starting",
+       {timeout, 90, fun() -> bad_difficulty_stops_start(<<"12">>) end}},
+      {"a puzzle_difficulty above the maximum stops the macula application starting",
+       {timeout, 90, fun() -> bad_difficulty_stops_start(17) end}}]}.
+
+bad_difficulty_stops_start(Value) ->
+    Started = start_macula_with_puzzle_difficulty(Value),
+    ?assert(names(Started, {bad_config, {macula, puzzle_difficulty, Value}})).
+
+%% Starts macula on a fresh peer node with puzzle_difficulty set to Value, and
+%% returns what application:ensure_all_started/1 returned there.
+start_macula_with_puzzle_difficulty(Value) ->
+    Paths = lists:append([["-pa", P] || P <- code:get_path()]),
+    {ok, Peer, _Node} = peer:start_link(#{connection => standard_io, args => Paths}),
+    try
+        ok = peer:call(Peer, application, load, [macula]),
+        ok = peer:call(Peer, application, set_env, [macula, puzzle_difficulty, Value]),
+        peer:call(Peer, application, ensure_all_started, [macula], 60_000)
+    after
+        peer:stop(Peer)
+    end.
+
+%% Whether Wanted appears anywhere inside Term.
+names(Wanted, Wanted) -> true;
+names(Tuple, Wanted) when is_tuple(Tuple) -> names(tuple_to_list(Tuple), Wanted);
+names([Head | Tail], Wanted) -> names(Head, Wanted) orelse names(Tail, Wanted);
+names(_Other, _Wanted) -> false.
+
 %% A key whose puzzle meets Met leading zero bits but not Missed.
 key_meeting(Met, Missed) ->
     Kp = macula_identity:generate(#{puzzle => true, difficulty => Met}),
