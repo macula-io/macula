@@ -23,6 +23,10 @@
     puzzle_valid/2
 ]).
 
+%% Public API with no caller inside macula: the client pool and the station
+%% link generate puzzle-hardened identities with generate/1.
+-ignore_xref([{macula_identity, generate, 0}]).
+
 -export_type([pubkey/0, privkey/0, sig/0, key_pair/0, node_id/0]).
 
 -type pubkey()   :: <<_:256>>.

@@ -937,13 +937,18 @@ peer_node_id(Pid) ->
 %% gen_server
 %%====================================================================
 
+%% The identity a link connects with: the one given, or else a fresh one
+%% that passes the puzzle check, as the macula_client pool's default does.
+identity_or_generate({ok, Identity}) -> Identity;
+identity_or_generate(error) -> macula_identity:generate(#{puzzle => true}).
+
 init(Opts) ->
     %% TLS policy (`verify' / `expected_node_id') rides in the seed map,
     %% which is spread into the peering target at connect — so a caller
     %% can dial a self-signed or pubkey-pinned station, same as the
     %% station-side outbound link.
     Seed     = add_tls_opts(parse_seed(maps:get(seed, Opts)), Opts),
-    Identity = maps:get(identity, Opts, macula_identity:generate()),
+    Identity = identity_or_generate(maps:find(identity, Opts)),
     Caps     = maps:get(capabilities, Opts, 0),
     Alpn     = maps:get(alpn, Opts, [<<"macula">>]),
     Tmo      = maps:get(connect_timeout_ms, Opts, 30_000),

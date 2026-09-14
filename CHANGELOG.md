@@ -341,6 +341,9 @@ Every node should upgrade to this release.
 
 ### Fixed
 
+- A `macula_station_link` started without an `identity` generates one whose
+  node id passes `macula_identity:puzzle_valid/1`, as the `macula_client`
+  pool's default identity does.
 - `macula_client:unsubscribe/2` takes a subscription off the wire. When the
   last local subscriber of a (realm, topic) leaves, the pool sends
   UNSUBSCRIBE on every station link that carried the SUBSCRIBE, including a
