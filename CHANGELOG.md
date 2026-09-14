@@ -9,6 +9,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `include/macula_quic_error_codes.hrl` names each QUIC application error
+  code macula sends when it resets or stops a stream, or closes a
+  connection: `QUIC_CODE_CANCELLED` (0), `QUIC_CODE_LINGER_EXPIRED` (1),
+  `QUIC_CODE_REFUSED` (2), `QUIC_CODE_STREAM_PROTOCOL_ERROR` (3) and
+  `QUIC_CODE_REFUSED_BUSY` (4), for a connection a station closes because it
+  has no handshake slot free. The codes on the wire do not change.
+
+### Changed
+
+- `macula_identity:generate/0` returns an identity that passes the station
+  puzzle. `macula_identity:generate/1` does the same unless given
+  `puzzle => false`, which returns a plain key.
+
+### Fixed
+
+- A `macula_station_link` started without an `identity` generates one whose
+  node id passes `macula_identity:puzzle_valid/1`, as the `macula_client`
+  pool's default identity does.
+- `macula_client:unsubscribe/2` takes a subscription off the wire. When the
+  last local subscriber of a (realm, topic) leaves, the pool sends
+  UNSUBSCRIBE on every station link that carried the SUBSCRIBE, including a
+  link it respawned and replayed the subscription onto.
+  `macula_station_link:unsubscribe_async/2` drops a subscription without
+  waiting for the link.
+
 ## [10.25.0] - 2026-09-14
 
 Every node should upgrade to this release.
@@ -36,12 +63,6 @@ Every node should upgrade to this release.
   its own, up to the 16 MiB frame cap: a length header above it is
   `frame_too_large` from its four bytes, so a `Tail` kept for the next chunk
   never exceeds that cap plus the header.
-- `include/macula_quic_error_codes.hrl` names each QUIC application error
-  code macula sends when it resets or stops a stream, or closes a
-  connection: `QUIC_CODE_CANCELLED` (0), `QUIC_CODE_LINGER_EXPIRED` (1),
-  `QUIC_CODE_REFUSED` (2), `QUIC_CODE_STREAM_PROTOCOL_ERROR` (3) and
-  `QUIC_CODE_REFUSED_BUSY` (4), for a connection a station closes because it
-  has no handshake slot free. The codes on the wire do not change.
 - `macula_station_link:not_sent/1` says whether an error from `call/5,6`
   means the CALL never went out: the link was not connected yet, there was
   no link process, or the link refused the frame before sending it.
@@ -169,9 +190,6 @@ Every node should upgrade to this release.
 
 ### Changed
 
-- `macula_identity:generate/0` returns an identity that passes the station
-  puzzle. `macula_identity:generate/1` does the same unless given
-  `puzzle => false`, which returns a plain key.
 - `macula_cbor_nif:unpack_deterministic/1`, the decoder behind
   `macula_frame` and `macula_record`, decodes at most 131,072 CBOR items
   from one input, an array, a map, a key and a value each counting as one,
@@ -350,16 +368,6 @@ Every node should upgrade to this release.
 
 ### Fixed
 
-- A `macula_station_link` started without an `identity` generates one whose
-  node id passes `macula_identity:puzzle_valid/1`, as the `macula_client`
-  pool's default identity does.
-- `macula_client:unsubscribe/2` takes a subscription off the wire. When the
-  last local subscriber of a (realm, topic) leaves, the pool sends
-  UNSUBSCRIBE on every station link that carried the SUBSCRIBE, including a
-  link it respawned and replayed the subscription onto. It used to drop only
-  its own bookkeeping, so a station kept the subscriber until the client
-  disconnected. `macula_station_link:unsubscribe_async/2` drops a
-  subscription without waiting for the link.
 - `macula_manifest:from_wire/1` returns `{error, invalid_manifest}` for a
   manifest that does not describe whole content: a `chunk_size` that is not a
   positive integer, a `size` below 0, a `chunk_count` other than
