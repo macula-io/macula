@@ -4,9 +4,13 @@
 %%% Supervises the certificate-related processes:
 %%% - macula_trust_store: ETS-based trust store for realm certificates
 %%%
+%%% @deprecated Removed in 11.0.0: nothing starts this supervisor. Start
+%%% macula_trust_store directly.
 %%% @end
 %%%-------------------------------------------------------------------
 -module(macula_cert_system).
+
+-deprecated(module).
 
 -behaviour(supervisor).
 

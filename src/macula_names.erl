@@ -7,6 +7,10 @@
 %%%-------------------------------------------------------------------
 -module(macula_names).
 
+-deprecated([
+    {local_node_id, 0, "removed in 11.0.0"}
+]).
+
 %% API
 -export([
     validate/1,
@@ -90,6 +94,7 @@ segment_count(Name) ->
 %% @doc Get the local node ID.
 %% Returns the node ID stored in persistent_term, or generates one if not set.
 %% This is used for NAT detection to identify the local node.
+%% @deprecated Removed in 11.0.0.
 -spec local_node_id() -> binary().
 local_node_id() ->
     case persistent_term:get({macula, local_node_id}, undefined) of

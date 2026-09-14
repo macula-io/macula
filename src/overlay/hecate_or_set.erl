@@ -41,6 +41,10 @@
 %% plans/PLAN_PHASE_5_BREAKDOWN.md Session 5.4.
 -module(hecate_or_set).
 
+-deprecated([
+    {tombstones, 1, "removed in 11.0.0"}
+]).
+
 -export([
     new/0,
     add/2,
@@ -125,6 +129,7 @@ is_empty(Set) -> members(Set) =:= [].
 tags_for(#{data := D}, Element) ->
     sets:to_list(maps:get(Element, D, sets:new())).
 
+%% @deprecated Removed in 11.0.0.
 -spec tombstones(or_set()) -> [tag()].
 tombstones(#{tombstones := T}) -> sets:to_list(T).
 
