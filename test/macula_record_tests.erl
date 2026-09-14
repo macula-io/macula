@@ -329,6 +329,23 @@ decode_refuses_a_record_over_the_element_budget_test() ->
     Bytes = <<16#9A, Budget:32/big, (binary:copy(<<0>>, Budget))/binary>>,
     ?assertEqual({error, too_many_elements}, macula_record:decode(Bytes)).
 
+decode_within_a_budget_returns_what_is_left_test() ->
+    %% decode/2 reads at most the items it is given and returns what is left,
+    %% so a record that needs every one of them leaves nothing, and one fewer
+    %% is too few.
+    Kp = macula_identity:generate(),
+    Signed = macula_record:sign(macula_record:node_record(macula_identity:public(Kp), [], 0), Kp),
+    Wire = macula_record:encode(Signed),
+    Budget = macula_cbor_nif:element_budget(),
+    {ok, Decoded, Left} = macula_record:decode(Wire, Budget),
+    Used = Budget - Left,
+    ?assertEqual({ok, Decoded}, macula_record:decode(Wire)),
+    ?assertEqual({ok, Decoded, 0}, macula_record:decode(Wire, Used)),
+    ?assertEqual({error, too_many_elements}, macula_record:decode(Wire, Used - 1)).
+
+decode_within_a_budget_refuses_bytes_that_are_not_cbor_test() ->
+    ?assertEqual({error, bad_record}, macula_record:decode(<<255, 255, 255, 255>>, 10)).
+
 decode_returns_missing_signature_when_unsigned_test() ->
     Map = #{
         {text, <<"t">>} => 1,
