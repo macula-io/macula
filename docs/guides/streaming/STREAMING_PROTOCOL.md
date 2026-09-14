@@ -181,8 +181,14 @@ chunks: one caller's streams together at most 16 MiB
 (`max_served_inbox_bytes_per_caller`), and all served streams on the node at
 most 256 MiB (`max_served_inbox_bytes`). A chunk that would take a stream
 past its bound, or a budget past its limit, ends the session with code
-`stream_protocol_error`. A reader that takes chunks as they come never meets
+`resource_exhausted`. A reader that takes chunks as they come never meets
 either.
+
+The two codes tell a peer different things. `stream_protocol_error` says it
+broke the protocol, and sending the same again fails the same way.
+`resource_exhausted` says the receiving side had no room for what it sent,
+which a well-behaved sender cannot see coming, and a later session may
+succeed.
 
 A queued chunk is a copy, but a chunk handed straight to a waiting reader can
 still be part of the frame it arrived in. A handler that keeps chunks after
