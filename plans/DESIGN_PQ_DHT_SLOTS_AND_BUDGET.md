@@ -178,9 +178,8 @@ checked place, and never parses a certificate chain or shows that decision to ca
 
 ### 2.7 What stays open
 
-- Procedures without an org namespace (whether they need an authorization is Raf's open item, D25), providers
-  authorized by a certificate chain, and content announcements (no authority exists for them, D27): their entries hold
-  unchecked places only.
+- Providers authorized by a certificate chain, and content announcements (no authority exists for them, D27): their
+  entries hold unchecked places only. Procedures without an org namespace are refused in 11.0.0 (D25).
 - Realms not on a trust list, and stations with no trust list.
 
 ### 2.8 Tests
