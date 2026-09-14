@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- A station's pubsub registry keeps a realm's `hecate_pubsub_server` only
+  while something holds the realm. With the registry's `identity` set, only
+  a SUBSCRIBE starts a server for a realm without one; an UNSUBSCRIBE or
+  EVENT for such a realm gets `{ok, []}` and starts none, and
+  `hecate_pubsub_registry:relay_publish/3` still returns the station-signed
+  EVENT for fan-out to peer stations but starts no process. When an
+  UNSUBSCRIBE or `purge_subscriber/2` takes a realm's last subscription, its
+  server stops and its place frees. A realm registered with `register/3` is
+  pinned and stays. At most `max_subscribed_realms` realms, a registry start
+  option of 1000 by default, are materialised by SUBSCRIBE at once; a
+  SUBSCRIBE past that gets `{error, too_many_realms}` and starts no server.
+  Pinned realms do not count. `hecate_pubsub_server:relay_event/2` builds the
+  EVENT a station relays for a PUBLISH, without a server.
+
 ## [10.25.0] - 2026-09-14
 
 Every node should upgrade to this release.

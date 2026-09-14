@@ -307,37 +307,6 @@ relay_publish_unknown_realm_is_not_found(Reg) ->
     ?assertEqual({error, not_found},
                  hecate_pubsub_registry:relay_publish(Reg, R, Frame)).
 
-%% Production path: a registry started with `default_identity' auto-
-%% registers a pubsub_server on relay_publish for an unknown realm so
-%% the EVENT frame is built even with zero local subscribers.
-%% Downstream bloom-fan in the dispatcher needs the EVENT regardless
-%% of local interest.
-relay_publish_auto_registers_when_default_identity_set_test() ->
-    process_flag(trap_exit, true),
-    Station = keypair(),
-    {ok, Reg} = hecate_pubsub_registry:start_link(#{identity => Station}),
-    unlink(Reg),
-    R        = realm(),
-    DaemonKp = keypair(),
-    DaemonId = macula_identity:public(DaemonKp),
-    PublishFrame = macula_frame:sign(macula_frame:publish(#{
-        topic           => <<"weather.measured_v1">>,
-        realm           => R,
-        publisher       => DaemonId,
-        seq             => 1,
-        payload         => <<"hi">>,
-        published_at_ms => erlang:system_time(millisecond)
-    }), DaemonKp),
-    {ok, EventFrame, Matched} =
-        hecate_pubsub_registry:relay_publish(Reg, R, PublishFrame),
-    ?assertEqual(event, macula_frame:frame_type(EventFrame)),
-    ?assertEqual(<<"weather.measured_v1">>, maps:get(topic, EventFrame)),
-    ?assertEqual(DaemonId, maps:get(publisher, EventFrame)),
-    ?assertEqual([], Matched),  % zero local subs — bloom-fan extras live in dispatcher
-    %% Realm now materialised.
-    ?assertMatch({ok, _Pid}, hecate_pubsub_registry:lookup(Reg, R)),
-    catch hecate_pubsub_registry:stop(Reg).
-
 relay_publish_returns_event_and_subscribers(Reg) ->
     R       = realm(),
     Station = keypair(),
@@ -431,6 +400,198 @@ purge_subscriber_tolerates_a_dead_server(Reg) ->
     wait_until(fun() -> not is_process_alive(Pid) end, 1000),
     ?assertEqual(ok, hecate_pubsub_registry:purge_subscriber(Reg, id(1))),
     ?assert(is_process_alive(Reg)).
+
+%%---------------------------------------------------------------------
+%% A realm's server lives while a subscription holds it
+%%---------------------------------------------------------------------
+
+%% A PUBLISH relayed for a realm with no server still gets its EVENT, signed
+%% by the station, for fan-out to peer stations, and starts no process.
+relay_publish_to_a_realm_without_a_server_starts_no_process_test() ->
+    with_station_registry(fun(Reg, Station) ->
+        R        = realm(),
+        DaemonKp = keypair(),
+        Links    = registry_links(Reg),
+        {ok, EventFrame, Matched} =
+            hecate_pubsub_registry:relay_publish(Reg, R, publish_frame(R, DaemonKp, 1)),
+        ?assertEqual(event, macula_frame:frame_type(EventFrame)),
+        ?assertEqual(macula_identity:public(DaemonKp), maps:get(publisher, EventFrame)),
+        ?assertEqual(1, maps:get(seq, EventFrame)),
+        ?assertEqual({ok, EventFrame},
+                     macula_frame:verify(EventFrame, macula_identity:public(Station))),
+        ?assertEqual([], Matched),
+        ?assertEqual({error, not_found}, hecate_pubsub_registry:lookup(Reg, R)),
+        ?assertEqual(Links, registry_links(Reg))
+    end).
+
+%% Only a SUBSCRIBE materialises a realm. An UNSUBSCRIBE or an EVENT for a
+%% realm with no server starts none.
+a_frame_other_than_subscribe_starts_no_server_test() ->
+    with_station_registry(fun(Reg, _Station) ->
+        R     = realm(),
+        SubKp = keypair(),
+        SubId = macula_identity:public(SubKp),
+        Links = registry_links(Reg),
+        ?assertEqual({ok, []}, hecate_pubsub_registry:dispatch_frame(
+                                 Reg, R, SubId, unsubscribe_frame(R, SubKp, <<"news">>))),
+        ?assertEqual({ok, []}, hecate_pubsub_registry:dispatch_frame(
+                                 Reg, R, SubId, event_frame(R, SubKp, <<"news">>))),
+        ?assertEqual({error, not_found}, hecate_pubsub_registry:lookup(Reg, R)),
+        ?assertEqual(Links, registry_links(Reg))
+    end).
+
+%% A realm a SUBSCRIBE materialised stops when its last subscription leaves,
+%% and not before.
+the_last_unsubscribe_stops_the_realms_server_test() ->
+    with_station_registry(fun(Reg, _Station) ->
+        R     = realm(),
+        SubKp = keypair(),
+        SubId = macula_identity:public(SubKp),
+        [{ok, []} = hecate_pubsub_registry:dispatch_frame(Reg, R, SubId, subscribe_frame(R, SubKp, T))
+         || T <- [<<"news">>, <<"sport">>]],
+        {ok, Server} = hecate_pubsub_registry:lookup(Reg, R),
+        Ref = erlang:monitor(process, Server),
+        {ok, []} = hecate_pubsub_registry:dispatch_frame(Reg, R, SubId, unsubscribe_frame(R, SubKp, <<"news">>)),
+        ?assertEqual({ok, Server}, hecate_pubsub_registry:lookup(Reg, R)),
+        {ok, []} = hecate_pubsub_registry:dispatch_frame(Reg, R, SubId, unsubscribe_frame(R, SubKp, <<"sport">>)),
+        ?assertEqual({error, not_found}, hecate_pubsub_registry:lookup(Reg, R)),
+        ?assertEqual(down, down_within(Ref, 1_000)),
+        ?assertEqual([], hecate_pubsub_registry:list_realms(Reg))
+    end).
+
+%% A subscriber that sends the same SUBSCRIBE twice holds one subscription, as
+%% a released macula-ts client does: one UNSUBSCRIBE leaves no entry behind,
+%% and the realm's server stops.
+a_repeated_subscribe_is_one_subscription_test() ->
+    with_station_registry(fun(Reg, _Station) ->
+        R     = realm(),
+        SubKp = keypair(),
+        SubId = macula_identity:public(SubKp),
+        [{ok, []} = hecate_pubsub_registry:dispatch_frame(Reg, R, SubId, subscribe_frame(R, SubKp, <<"news">>))
+         || _ <- [first, repeated]],
+        {ok, Server} = hecate_pubsub_registry:lookup(Reg, R),
+        ?assertEqual(1, hecate_pubsub_server:subscriber_count(Server)),
+        Ref = erlang:monitor(process, Server),
+        {ok, []} = hecate_pubsub_registry:dispatch_frame(Reg, R, SubId, unsubscribe_frame(R, SubKp, <<"news">>)),
+        ?assertEqual({error, not_found}, hecate_pubsub_registry:lookup(Reg, R)),
+        ?assertEqual(down, down_within(Ref, 1_000))
+    end).
+
+%% A purge that takes a realm's last subscription stops that realm's server;
+%% a realm another subscriber still holds stays.
+a_purge_that_empties_a_realm_stops_its_server_test() ->
+    with_station_registry(fun(Reg, _Station) ->
+        [R1, R2] = [realm(), realm()],
+        GoneKp   = keypair(),
+        StayKp   = keypair(),
+        Gone     = macula_identity:public(GoneKp),
+        Stay     = macula_identity:public(StayKp),
+        {ok, []} = hecate_pubsub_registry:dispatch_frame(Reg, R1, Gone, subscribe_frame(R1, GoneKp, <<"a">>)),
+        {ok, []} = hecate_pubsub_registry:dispatch_frame(Reg, R2, Gone, subscribe_frame(R2, GoneKp, <<"b">>)),
+        {ok, []} = hecate_pubsub_registry:dispatch_frame(Reg, R2, Stay, subscribe_frame(R2, StayKp, <<"b">>)),
+        {ok, S1} = hecate_pubsub_registry:lookup(Reg, R1),
+        {ok, S2} = hecate_pubsub_registry:lookup(Reg, R2),
+        Ref1 = erlang:monitor(process, S1),
+        ok = hecate_pubsub_registry:purge_subscriber(Reg, Gone),
+        ?assertEqual({error, not_found}, hecate_pubsub_registry:lookup(Reg, R1)),
+        ?assertEqual(down, down_within(Ref1, 1_000)),
+        ?assertEqual({ok, S2}, hecate_pubsub_registry:lookup(Reg, R2)),
+        ?assertEqual([Stay], hecate_pubsub_server:subscribers(S2, <<"b">>))
+    end).
+
+%% A realm the station registered itself stays when its last subscription
+%% leaves: the station publishes on it.
+a_registered_realm_stays_when_its_last_subscription_leaves_test() ->
+    with_station_registry(fun(Reg, Station) ->
+        R     = realm(),
+        SubKp = keypair(),
+        SubId = macula_identity:public(SubKp),
+        {ok, Server} = hecate_pubsub_registry:register(Reg, R, Station),
+        {ok, []} = hecate_pubsub_registry:dispatch_frame(Reg, R, SubId, subscribe_frame(R, SubKp, <<"news">>)),
+        {ok, []} = hecate_pubsub_registry:dispatch_frame(Reg, R, SubId, unsubscribe_frame(R, SubKp, <<"news">>)),
+        ?assertEqual({ok, Server}, hecate_pubsub_registry:lookup(Reg, R)),
+        ?assert(is_process_alive(Server))
+    end).
+
+%% A SUBSCRIBE that would materialise a realm past the registry's maximum is
+%% refused and starts no server. Realms the station registered do not count,
+%% and a realm that stopped frees its place.
+a_subscribe_past_the_realm_maximum_is_refused_test() ->
+    with_station_registry(#{max_subscribed_realms => 2}, fun(Reg, Station) ->
+        [Pinned, R1, R2, R3] = [realm(), realm(), realm(), realm()],
+        SubKp = keypair(),
+        SubId = macula_identity:public(SubKp),
+        {ok, _} = hecate_pubsub_registry:register(Reg, Pinned, Station),
+        {ok, []} = hecate_pubsub_registry:dispatch_frame(Reg, R1, SubId, subscribe_frame(R1, SubKp, <<"t">>)),
+        {ok, []} = hecate_pubsub_registry:dispatch_frame(Reg, R2, SubId, subscribe_frame(R2, SubKp, <<"t">>)),
+        Links = registry_links(Reg),
+        ?assertEqual({error, too_many_realms},
+                     hecate_pubsub_registry:dispatch_frame(Reg, R3, SubId, subscribe_frame(R3, SubKp, <<"t">>))),
+        ?assertEqual({error, not_found}, hecate_pubsub_registry:lookup(Reg, R3)),
+        ?assertEqual(Links, registry_links(Reg)),
+        {ok, []} = hecate_pubsub_registry:dispatch_frame(Reg, R1, SubId, unsubscribe_frame(R1, SubKp, <<"t">>)),
+        ?assertEqual({ok, []},
+                     hecate_pubsub_registry:dispatch_frame(Reg, R3, SubId, subscribe_frame(R3, SubKp, <<"t">>)))
+    end).
+
+%% Registering a realm a SUBSCRIBE materialised pins it: it stays when its
+%% last subscription leaves, and it no longer counts towards the maximum.
+registering_a_subscribed_realm_pins_it_test() ->
+    with_station_registry(#{max_subscribed_realms => 1}, fun(Reg, Station) ->
+        [R, Other] = [realm(), realm()],
+        SubKp = keypair(),
+        SubId = macula_identity:public(SubKp),
+        {ok, []} = hecate_pubsub_registry:dispatch_frame(Reg, R, SubId, subscribe_frame(R, SubKp, <<"news">>)),
+        {ok, Server} = hecate_pubsub_registry:lookup(Reg, R),
+        ?assertEqual({ok, Server}, hecate_pubsub_registry:register(Reg, R, Station)),
+        {ok, []} = hecate_pubsub_registry:dispatch_frame(Reg, R, SubId, unsubscribe_frame(R, SubKp, <<"news">>)),
+        ?assertEqual({ok, Server}, hecate_pubsub_registry:lookup(Reg, R)),
+        ?assertEqual({ok, []},
+                     hecate_pubsub_registry:dispatch_frame(Reg, Other, SubId, subscribe_frame(Other, SubKp, <<"news">>)))
+    end).
+
+%% A registry that auto-materialises realms with the station's identity, as
+%% the station starts it, stopped after Test.
+with_station_registry(Test) ->
+    with_station_registry(#{}, Test).
+
+with_station_registry(Opts, Test) ->
+    process_flag(trap_exit, true),
+    Station = keypair(),
+    {ok, Reg} = hecate_pubsub_registry:start_link(Opts#{identity => Station}),
+    unlink(Reg),
+    try Test(Reg, Station) after catch hecate_pubsub_registry:stop(Reg) end.
+
+%% The processes the registry is linked to: its pubsub_servers.
+registry_links(Reg) ->
+    {links, Links} = erlang:process_info(Reg, links),
+    lists:sort(Links).
+
+subscribe_frame(R, Kp, Topic) ->
+    macula_frame:sign(macula_frame:subscribe(#{topic => Topic, realm => R,
+                                               subscriber => macula_identity:public(Kp)}), Kp).
+
+unsubscribe_frame(R, Kp, Topic) ->
+    macula_frame:sign(macula_frame:unsubscribe(#{topic => Topic, realm => R,
+                                                 subscriber => macula_identity:public(Kp)}), Kp).
+
+event_frame(R, Kp, Topic) ->
+    macula_frame:sign(macula_frame:event(#{topic => Topic, realm => R,
+                                           publisher => macula_identity:public(Kp), seq => 1,
+                                           payload => <<"hello">>, delivered_via => plumtree}), Kp).
+
+publish_frame(R, Kp, Seq) ->
+    macula_frame:sign(macula_frame:publish(#{topic => <<"weather.measured_v1">>, realm => R,
+                                             publisher => macula_identity:public(Kp), seq => Seq,
+                                             payload => <<"hi">>,
+                                             published_at_ms => erlang:system_time(millisecond)}), Kp).
+
+down_within(Ref, Ms) ->
+    receive
+        {'DOWN', Ref, process, _Pid, _Reason} -> down
+    after Ms ->
+        alive
+    end.
 
 %%---------------------------------------------------------------------
 %% Polling helper

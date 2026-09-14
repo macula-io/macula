@@ -38,7 +38,7 @@
     subscribers/2, topics/1, patterns/1, topic_count/1, subscriber_count/1,
     realm/1,
     publish/3, deliver_event/2, process_frame/3,
-    relay_publish/2,
+    relay_publish/2, relay_event/2,
     stop/1
 ]).
 
@@ -222,7 +222,7 @@ handle_call(_Request, _From, S) ->
 
 do_relay_publish(#{frame_type := publish, realm := R} = Frame,
                  #state{realm = R} = S) ->
-    EventFrame = build_relay_event(Frame, S),
+    EventFrame = relay_event(Frame, S#state.identity),
     Matched    = hecate_pubsub:deliver_event(S#state.pubsub, EventFrame),
     %% [mpong-trace] temporary — diagnose state_broadcast_v1 routing
     %% (see project_mpong_state_broadcast_bug memory). Remove after fix.
@@ -236,9 +236,13 @@ do_relay_publish(#{frame_type := publish, realm := R} = Frame,
 do_relay_publish(_Frame, _S) ->
     {error, realm_mismatch}.
 
-build_relay_event(#{topic := T, realm := R, publisher := Pub,
-                    seq := Seq, payload := Pl} = PubFrame,
-                  #state{identity = Id}) ->
+%% @doc The EVENT a station relays for an inbound PUBLISH, signed with
+%% `Id': the PUBLISH's topic, realm, publisher key, seq and payload, with
+%% its publisher signature carried over when it has one. It needs no
+%% server, so `hecate_pubsub_registry' builds it for a realm without one.
+-spec relay_event(macula_frame:frame(), macula_identity:key_pair()) -> macula_frame:frame().
+relay_event(#{topic := T, realm := R, publisher := Pub,
+              seq := Seq, payload := Pl} = PubFrame, Id) ->
     Spec0 = #{topic         => T,
               realm         => R,
               publisher     => Pub,
