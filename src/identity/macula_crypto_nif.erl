@@ -19,6 +19,11 @@
 %% @author rgfaber
 -module(macula_crypto_nif).
 
+-deprecated([
+    {blake3_streaming, 1, "removed in 11.0.0"},
+    {blake3_verify, 2, "removed in 11.0.0"}
+]).
+
 %% API
 -export([
     generate_keypair/0,
@@ -150,6 +155,7 @@ blake3(Data) ->
 
 %% @doc Compute BLAKE3 hash of multiple chunks (streaming).
 %% Returns 32-byte hash binary.
+%% @deprecated Removed in 11.0.0.
 -spec blake3_streaming(Chunks :: [binary()]) -> Hash :: binary().
 blake3_streaming(Chunks) ->
     case is_nif_loaded() of
@@ -158,6 +164,7 @@ blake3_streaming(Chunks) ->
     end.
 
 %% @doc Verify data matches expected BLAKE3 hash.
+%% @deprecated Removed in 11.0.0.
 -spec blake3_verify(Data :: binary(), ExpectedHash :: binary()) -> boolean().
 blake3_verify(Data, ExpectedHash) ->
     case is_nif_loaded() of

@@ -37,6 +37,12 @@
 %%%-------------------------------------------------------------------
 -module(macula_quic).
 
+-deprecated([
+    {accept_stream, 3, "removed in 11.0.0"},
+    {async_shutdown_connection, 3, "removed in 11.0.0"},
+    {handoff_stream, 3, "removed in 11.0.0"}
+]).
+
 -include_lib("kernel/include/logger.hrl").
 -include("macula_quic_error_codes.hrl").
 
@@ -668,6 +674,7 @@ async_shutdown_stream(Stream, _Flag, Code) ->
     reset_stream(Stream, Code).
 
 %% @doc Async shutdown connection.
+%% @deprecated Removed in 11.0.0.
 -spec async_shutdown_connection(reference(), integer(), integer()) -> ok.
 async_shutdown_connection(Conn, _Flag, _Code) ->
     nif_close_connection(Conn).
@@ -710,6 +717,7 @@ getstat(_Conn, _Stats) ->
 %%%===================================================================
 
 %% @doc Accept stream with options and timeout (for macula_dist).
+%% @deprecated Removed in 11.0.0.
 -spec accept_stream(reference(), map(), timeout()) -> {ok, reference()} | {error, term()}.
 accept_stream(Conn, _Opts, _Timeout) ->
     async_accept_stream(Conn).
@@ -720,6 +728,7 @@ open_stream(Conn, _Opts) ->
     open_stream(Conn).
 
 %% @doc Hand off a stream to another process (for macula_dist).
+%% @deprecated Removed in 11.0.0.
 -spec handoff_stream(reference(), pid(), map()) -> ok | {error, term()}.
 handoff_stream(Stream, NewOwner, _Opts) ->
     controlling_process(Stream, NewOwner).
