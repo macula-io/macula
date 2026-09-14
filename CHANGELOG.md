@@ -67,6 +67,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   policies now share it. A token signed by `Issuer` but minted for another
   audience is refused with `unauthorized`. Mint `ucan_required` tokens for
   the caller that will present them.
+- Both gated policies, `{ucan_required, Issuer}` and
+  `{realm_member_required, RealmDid, RequiredCan}`, unary or streaming,
+  require a capability whose `with` grants the procedure:
+  `mri:proc:<realm name>/<procedure>` for that procedure exactly,
+  `mri:org:<realm name>/<org>` for procedures named `<org>/<name>` with
+  one `/` and any org but `_`, or `mri:realm:<realm name>` for every
+  procedure in the realm. The realm name's SHA-256 must be the procedure's
+  realm tag. For `realm_member_required`, that same capability's `can` must
+  be `RequiredCan`. A token granted for another realm, org or procedure is
+  refused with `unauthorized`, and so is a `ucan_required` token without
+  such a capability. Membership tokens naming `mri:realm:<realm name>`, as
+  macula-realm mints them, grant every procedure in their realm.
 - `macula_cluster:get_cookie/0`, and `macula:get_cookie/0` with it,
   returns the cookie of a node that is already distributed instead of
   resolving another one. On a node that is not, it reads

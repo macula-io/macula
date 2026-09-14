@@ -2199,42 +2199,39 @@ authorized_reply(unauthorized, _Found, CallId, _Payload, SelfPub) ->
                               reported_by => SelfPub}).
 
 authorize(Key, Frame, Pols) ->
-    authorize_policy(maps:get(Key, Pols, open), Frame).
+    authorize_policy(maps:get(Key, Pols, open), Key, Frame).
 
-authorize_policy(open, _Frame) ->
+%% `Resource' is the `{Realm, Procedure}' the CALL or STREAM_OPEN names, the
+%% key its policy was found under.
+authorize_policy(open, _Resource, _Frame) ->
     ok;
-authorize_policy({ucan_required, Issuer}, Frame) ->
+authorize_policy({ucan_required, Issuer}, Resource, Frame) ->
     check_ucan(maps:get(ucan_token, Frame, <<>>), Issuer,
-               maps:get(caller, Frame, undefined));
-authorize_policy({realm_member_required, RealmDid, RequiredCan}, Frame) ->
+               maps:get(caller, Frame, undefined), Resource);
+authorize_policy({realm_member_required, RealmDid, RequiredCan}, Resource, Frame) ->
     check_realm_membership(maps:get(ucan_token, Frame, <<>>), RealmDid,
-                            maps:get(caller, Frame, undefined), RequiredCan).
+                            maps:get(caller, Frame, undefined), RequiredCan,
+                            Resource).
 
 %% `macula_ucan_nif:verify/2' checks signature + `exp' + `nbf' only. It does
-%% NOT check `aud' (see that function's own doc): a verified token proves
-%% its issuer granted it to SOMEONE, not that it belongs to whoever is
-%% presenting it now. Both gated policies therefore also require the
-%% token's audience to be the caller, through `audience_is_caller/2'.
-%% Without that, any token a caller obtained a copy of -- not necessarily
-%% its own -- would authorize as if it were the caller it was minted for.
+%% NOT check `aud' or `cap' (see that function's own doc): a verified token
+%% proves its issuer granted something to SOMEONE, not that it belongs to
+%% whoever is presenting it now, nor that it grants this procedure. Both
+%% gated policies therefore also require the token's audience to be the
+%% caller, through `audience_is_caller/2', and one of its capabilities to
+%% grant the procedure, through `grants_resource/3'. Without the audience
+%% check, any token a caller obtained a copy of -- not necessarily its own
+%% -- would authorize as if it were the caller it was minted for.
 %% `Caller' is the frame's own `caller' field: `on_inbound_call/3' lets a
 %% CALL through to `handle_inbound_call/2', and `on_inbound_stream_open/4'
 %% lets a STREAM_OPEN through to `authorize/3', only once the frame's
 %% signature verifies against that same `caller', so by the time these
 %% checks run `Caller' is the identity that signed the frame.
-check_ucan(Token, Issuer, Caller)
+check_ucan(Token, Issuer, Caller, Resource)
   when is_binary(Token), Token =/= <<>>, is_binary(Caller) ->
-    ucan_verdict(macula_ucan_nif:verify(Token, Issuer), Caller);
-check_ucan(_Token, _Issuer, _Caller) ->
+    token_verdict(macula_ucan_nif:verify(Token, Issuer), Caller, Resource, any);
+check_ucan(_Token, _Issuer, _Caller, _Resource) ->
     unauthorized.
-
-ucan_verdict({ok, Payload}, Caller) ->
-    audience_verdict(audience_is_caller(Payload, Caller));
-ucan_verdict(_Error, _Caller) ->
-    unauthorized.
-
-audience_verdict(true)  -> ok;
-audience_verdict(false) -> unauthorized.
 
 %% `RealmDid' is a realm's own DID (a real Ed25519 keypair the realm
 %% holds), never the 32-byte `RealmId' routing/scoping hash used in
@@ -2245,28 +2242,30 @@ audience_verdict(false) -> unauthorized.
 %% on whatever `hecate_om:service_cert/0' or equivalent already returns).
 %%
 %% A verified token signed by `RealmDid' is a genuine grant from this
-%% realm; its audience is bound to the caller exactly as for
-%% `ucan_required' (see `check_ucan/3').
+%% realm; its audience and the procedure it grants are checked exactly as
+%% for `ucan_required' (see `check_ucan/4').
 %%
-%% Signature and audience are still not enough on their own: a realm
-%% mints membership UCANs at more than one tier from the same key (see
-%% `auth_policy()' in `macula_client' for why), so `RequiredCan' is
-%% checked against the verified token's own `cap' list too -- a device
-%% that self-enrolled at a weaker tier presents a token that is entirely
-%% genuine and entirely correctly-audienced, and must still be refused if
-%% it doesn't carry the capability this procedure actually requires.
-check_realm_membership(Token, RealmDid, Caller, RequiredCan)
+%% Signature, audience and procedure are still not enough on their own: a
+%% realm mints membership UCANs at more than one tier from the same key
+%% (see `auth_policy()' in `macula_client' for why), so the capability that
+%% grants the procedure must also carry `RequiredCan' -- a device that
+%% self-enrolled at a weaker tier presents a token that is entirely genuine
+%% and entirely correctly-audienced, and must still be refused if it
+%% doesn't carry the capability this procedure actually requires.
+check_realm_membership(Token, RealmDid, Caller, RequiredCan, Resource)
   when is_binary(Token), Token =/= <<>>, is_binary(Caller) ->
-    membership_verdict(macula_ucan_nif:verify(Token, RealmDid), Caller,
-                        RequiredCan);
-check_realm_membership(_Token, _RealmDid, _Caller, _RequiredCan) ->
+    token_verdict(macula_ucan_nif:verify(Token, RealmDid), Caller, Resource,
+                  RequiredCan);
+check_realm_membership(_Token, _RealmDid, _Caller, _RequiredCan, _Resource) ->
     unauthorized.
 
-membership_verdict({ok, Payload}, Caller, RequiredCan) ->
+%% `Can' is the ability the granting capability must carry, or `any' for
+%% `ucan_required', which names no ability: a procedure is called or
+%% streamed, and both are authorized alike.
+token_verdict({ok, Payload}, Caller, Resource, Can) ->
     grant_verdict(audience_is_caller(Payload, Caller),
-                  has_required_capability(maps:get(<<"cap">>, Payload, []),
-                                           RequiredCan));
-membership_verdict(_Result, _Caller, _RequiredCan) ->
+                  grants_resource(maps:get(<<"cap">>, Payload, []), Resource, Can));
+token_verdict(_Error, _Caller, _Resource, _Can) ->
     unauthorized.
 
 %% The one audience check both gated policies share. A token names its
@@ -2281,19 +2280,68 @@ audience_is_caller(_Payload, _Caller) ->
     false.
 
 grant_verdict(true, true) -> ok;
-grant_verdict(_AudienceOk, _CapabilityOk) -> unauthorized.
+grant_verdict(_AudienceOk, _GrantOk) -> unauthorized.
 
-%% A membership UCAN's `cap' list entries are `#{<<"with">> := _,
-%% <<"can">> := _}' maps (macula-realm's own minting shape, decoded
-%% straight off the verified JWT payload). Only `can' is checked here --
-%% this policy gates on TIER (which admission path minted the token), not
-%% on any particular MRI scope, so `with' is left alone.
-has_required_capability(Caps, RequiredCan) when is_list(Caps) ->
-    lists:any(fun(#{<<"can">> := Can}) -> Can =:= RequiredCan;
-                 (_Other) -> false
-              end, Caps);
-has_required_capability(_Caps, _RequiredCan) ->
+%% A token's `cap' list entries are `#{<<"with">> := _, <<"can">> := _}'
+%% maps, decoded straight off the verified JWT payload. A capability grants
+%% `{Realm, Procedure}' when its `with' names, by a realm name whose SHA-256
+%% is `Realm':
+%% - `mri:proc:<name>/<Procedure>', the procedure itself, compared exactly;
+%% - `mri:org:<name>/<Org>', when `Procedure' is `<Org>/<rest>' with exactly
+%%   one `/' and `Org' is not the `_' placeholder for no org;
+%% - `mri:realm:<name>', every procedure in the realm.
+%% The token's strings are only split on `/', compared with the procedure's
+%% own trusted name and hashed once. No MRI parser or NIF runs on them, so a
+%% malformed `with' only fails to grant.
+grants_resource(Caps, Resource, Can) when is_list(Caps) ->
+    lists:any(fun(Cap) -> capability_grants(Cap, Resource, Can) end, Caps);
+grants_resource(_Caps, _Resource, _Can) ->
     false.
+
+capability_grants(#{<<"with">> := With, <<"can">> := CapCan}, Resource, Can)
+  when is_binary(With), is_binary(CapCan) ->
+    can_matches(Can, CapCan) andalso with_grants(With, Resource);
+capability_grants(_Cap, _Resource, _Can) ->
+    false.
+
+can_matches(any, _CapCan) -> true;
+can_matches(Can, CapCan) -> Can =:= CapCan.
+
+with_grants(<<"mri:realm:", Name/binary>>, {Realm, _Procedure}) ->
+    names_realm(Name, Realm);
+with_grants(<<"mri:org:", NameAndOrg/binary>>, {Realm, Procedure}) ->
+    org_grants(binary:split(NameAndOrg, <<"/">>), Realm, Procedure);
+with_grants(<<"mri:proc:", NameAndProcedure/binary>>, {Realm, Procedure}) ->
+    procedure_grants(binary:split(NameAndProcedure, <<"/">>), Realm, Procedure);
+with_grants(_With, _Resource) ->
+    false.
+
+org_grants([Name, Org], Realm, Procedure) ->
+    names_realm(Name, Realm) andalso org_of(Procedure) =:= {org, Org};
+org_grants(_Parts, _Realm, _Procedure) ->
+    false.
+
+procedure_grants([Name, Granted], Realm, Procedure) ->
+    names_realm(Name, Realm) andalso Granted =:= Procedure;
+procedure_grants(_Parts, _Realm, _Procedure) ->
+    false.
+
+%% A realm name names `Realm' when its SHA-256 is that tag.
+names_realm(Name, Realm) when is_binary(Realm), byte_size(Name) > 0 ->
+    crypto:hash(sha256, Name) =:= Realm;
+names_realm(_Name, _Realm) ->
+    false.
+
+%% The org of a procedure named `<Org>/<rest>' with exactly one `/', both
+%% parts non-empty; `none' for any other name and for the `_' placeholder.
+org_of(Procedure) when is_binary(Procedure) ->
+    org_in(binary:split(Procedure, <<"/">>, [global]));
+org_of(_Procedure) ->
+    none.
+
+org_in([<<"_">>, _Rest]) -> none;
+org_in([Org, Rest]) when Org =/= <<>>, Rest =/= <<>> -> {org, Org};
+org_in(_Parts) -> none.
 
 %% `open' is the default, so store it as absence to keep the map small.
 set_policy(Key, open, Pols)   -> maps:remove(Key, Pols);

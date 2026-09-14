@@ -29,7 +29,9 @@ Macula's authorization is:
 > human-confirmed tier versus a self-service device tier, and `RequiredCan`
 > is mandatory so a service names the tier it actually needs). Both policies
 > bind a token's audience (`aud`) to the wire-authenticated caller, so a
-> token copied from someone else is refused. There is no automatic DID-namespace-ownership check on
+> token copied from someone else is refused, and both require a capability
+> whose `with` names the procedure, its org or its realm, so a token granted
+> for another realm or procedure is refused too. There is no automatic DID-namespace-ownership check on
 > publish/subscribe/call — the primitives below (DIDs, certs, UCANs) are
 > what you build a stronger policy from, not a policy the SDK enforces on
 > its own. See [Direct-Dial Dual-Trust](#direct-dial-dual-trust) for the
@@ -307,6 +309,31 @@ procedure gate compares `aud` with the wire-authenticated caller of the CALL
 or STREAM_OPEN. A genuine token minted for someone else is refused like no
 token at all, so a copied token does not work for whoever holds the copy.
 
+A valid token also grants the procedure it is presented for: one of its
+capabilities must name, in `with`, the procedure itself, its org or its realm,
+always by the realm's name:
+
+| `with` | Grants |
+|--------|--------|
+| `mri:proc:<realm name>/<procedure>` | that procedure, compared as an exact string |
+| `mri:org:<realm name>/<org>` | every procedure named `<org>/<name>`, with exactly one `/`, for any org but `_` |
+| `mri:realm:<realm name>` | every procedure in the realm |
+
+The realm name must hash to the procedure's 32-byte realm tag
+(`SHA-256(realm_name)`). The provider compares the token's `with` as a string
+with the procedure's own name and checks that one hash; it runs no parser on
+it. Each form of procedure name accepts these grants:
+
+- A name without `/`, like `echo.say`: a procedure or realm grant.
+- `<org>/<name>`, like `acme/echo.say`: a procedure, org or realm grant.
+- `_/<name>`: a procedure or realm grant. `_` stands for no org, so no org
+  grant covers it.
+- A name with more than one `/`: a procedure or realm grant.
+
+`{ucan_required, Issuer}` does not check `can`: a procedure is called or
+streamed, and both are authorized alike. A token for one procedure looks like
+`#{with => <<"mri:proc:io.macula/acme/echo.say">>, can => <<"call">>}`.
+
 Managed realms are the first target for this model; the fully-open public realm
 keeps discovery permissionless and layers authorization on top only where a
 provider opts in.
@@ -331,10 +358,14 @@ Opts = #{auth => {realm_member_required, RealmDid, <<"member/email-verified">>}}
 ok = macula:advertise(Pool, Realm, <<"private.procedure">>, Handler, Opts).
 ```
 
-This policy binds the audience the same way `ucan_required` does: a token that
-is genuinely realm-signed and unexpired, but minted for a different member, is
-refused. What it adds is trust in a realm rather than one issuer, and the tier
-check: `RequiredCan` must appear in the token's capabilities.
+This policy binds the audience and the procedure the same way `ucan_required`
+does: a token that is genuinely realm-signed and unexpired, but minted for a
+different member or granted for another realm, org or procedure, is refused.
+What it adds is trust in a realm rather than one issuer, and the tier check:
+the capability that grants the procedure must carry `RequiredCan` as its
+`can`. A token that names the realm in one capability and the tier in another
+is refused. Membership tokens that name `mri:realm:<realm name>`, as
+macula-realm mints them, grant every procedure in their realm.
 
 ### provider → consumer: gated streaming procedures
 

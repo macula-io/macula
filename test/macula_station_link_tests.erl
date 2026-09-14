@@ -10,9 +10,11 @@
 
 -include_lib("eunit/include/eunit.hrl").
 
-%% Realm-per-call: tests use the all-zeros realm tag (DHT-internal /
-%% realm-agnostic) for every call/subscribe/publish.
--define(REALM, <<0:256>>).
+%% Realm-per-call: tests use one realm tag for every call/subscribe/publish,
+%% the SHA-256 of the realm name `test' as a realm tag is derived, so a gated
+%% procedure's token can name that realm as `mri:realm:test'.
+-define(REALM_NAME, <<"test">>).
+-define(REALM, <<16#9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08:256>>).
 
 %% #state record layout after the realm-per-call refactor:
 %%   1: tag (state)
@@ -2724,6 +2726,10 @@ inbound_call_fixture(Handlers) ->
 %% Same, but with an explicit auth policy on every advertised procedure
 %% instead of the `open' default -- for exercising `authorize_policy/2'.
 inbound_call_fixture(Handlers, Policy) ->
+    inbound_call_fixture(Handlers, Policy, ?REALM).
+
+%% Same, advertising every procedure in `Realm' instead of `?REALM'.
+inbound_call_fixture(Handlers, Policy, Realm) ->
     {ok, _} = application:ensure_all_started(macula),
     Identity = macula_identity:generate(),
     {ok, Pid} = macula_station_link:start_link(#{
@@ -2740,7 +2746,7 @@ inbound_call_fixture(Handlers, Policy) ->
     end),
     lists:foreach(
       fun({Proc, Fun}) ->
-              ok = macula_station_link:advertise(Pid, ?REALM, Proc, Fun, Policy),
+              ok = macula_station_link:advertise(Pid, Realm, Proc, Fun, Policy),
               receive
                   {'$gen_cast', {send_frame, #{frame_type := advertise}}} -> ok
               after 1_000 ->
@@ -2763,10 +2769,14 @@ inject_call(Pid, FakePeer, CallerKp, CallId, Proc) ->
 %% `{ucan_required, _}'/`{realm_member_required, _}' gates, which read
 %% it straight off the Frame the same way `authorize/3' does.
 inject_call_with_ucan(Pid, FakePeer, CallerKp, CallId, Proc, UcanToken) ->
+    inject_call_with_ucan(Pid, FakePeer, CallerKp, CallId, ?REALM, Proc, UcanToken).
+
+%% Same, for a procedure advertised in `Realm'.
+inject_call_with_ucan(Pid, FakePeer, CallerKp, CallId, Realm, Proc, UcanToken) ->
     Pid ! {macula_peering, frame, FakePeer, macula_frame:sign(#{
         frame_type => call,
         call_id    => CallId,
-        realm      => ?REALM,
+        realm      => Realm,
         procedure  => Proc,
         payload    => #{},
         caller     => macula_identity:public(CallerKp),
@@ -2866,11 +2876,15 @@ mint_membership_ucan(RealmIdentity, MemberPub, ExpOverride) ->
                          <<"member/email-verified">>).
 
 mint_membership_ucan(RealmIdentity, MemberPub, ExpOverride, Can) ->
+    mint_ucan_with_caps(RealmIdentity, MemberPub, ExpOverride,
+                        [#{with => <<"mri:realm:test">>, can => Can}]).
+
+%% Same, carrying `Caps' as the token's whole capability list.
+mint_ucan_with_caps(RealmIdentity, MemberPub, ExpOverride, Caps) ->
     IssuerDid = binary:encode_hex(macula_identity:public(RealmIdentity), lowercase),
     AudienceDid = binary:encode_hex(MemberPub, lowercase),
-    Cap = #{with => <<"mri:realm:test">>, can => Can},
     Opts = maps:merge(#{exp => erlang:system_time(second) + 3_600}, ExpOverride),
-    {ok, Token} = macula_ucan_nif:create(IssuerDid, AudienceDid, [Cap],
+    {ok, Token} = macula_ucan_nif:create(IssuerDid, AudienceDid, Caps,
                                         macula_identity:private(RealmIdentity), Opts),
     Token.
 
@@ -2952,6 +2966,46 @@ realm_member_required_test_() ->
          ok
      end}.
 
+realm_tag_is_the_sha256_of_the_realm_name_test() ->
+    ?assertEqual(crypto:hash(sha256, ?REALM_NAME), ?REALM).
+
+%% The procedures a resource fixture advertises, one per name form: bare, a
+%% sibling, org-qualified, the `_' placeholder org, and more than one `/'.
+-define(RESOURCE_PROCEDURES, [<<"svc.do">>, <<"svc.other">>, <<"acme/svc.do">>,
+                              <<"_/svc.do">>, <<"acme/api/users.get">>]).
+
+%% `realm_member_required' serves a token only when one capability both grants
+%% the procedure, by the procedure, its org or its realm, and carries the
+%% required tier.
+realm_member_required_binds_the_token_to_the_procedure_test_() ->
+    {timeout, 30,
+     fun() ->
+         RealmName = <<"io.example.members">>,
+         Tier = <<"member/email-verified">>,
+         RealmIdentity = macula_identity:generate(),
+         Policy = {realm_member_required, macula_identity:public(RealmIdentity), Tier},
+         Realm = <<"mri:realm:", RealmName/binary>>,
+         Grant = fun(With) -> [#{with => With, can => Tier}] end,
+         Rows = [{"realm grant with the tier", <<"svc.do">>, Grant(Realm), #{}, served},
+                 {"procedure grant with the tier", <<"acme/svc.do">>,
+                  Grant(<<"mri:proc:", RealmName/binary, "/acme/svc.do">>), #{}, served},
+                 {"org grant with the tier", <<"acme/svc.do">>,
+                  Grant(<<"mri:org:", RealmName/binary, "/acme">>), #{}, served},
+                 {"another realm with the tier", <<"svc.do">>,
+                  Grant(<<"mri:realm:io.example.elsewhere">>), #{}, refused},
+                 {"this realm with a weaker tier", <<"svc.do">>,
+                  [#{with => Realm, can => <<"member/device-verified">>}], #{}, refused},
+                 {"the tier and the realm in two capabilities", <<"svc.do">>,
+                  [#{with => <<"mri:realm:io.example.elsewhere">>, can => Tier},
+                   #{with => Realm, can => <<"member/device-verified">>}], #{}, refused},
+                 {"a sibling procedure with the tier", <<"svc.do">>,
+                  Grant(<<"mri:proc:", RealmName/binary, "/svc.other">>), #{}, refused},
+                 {"not yet valid", <<"svc.do">>, Grant(Realm),
+                  #{nbf => erlang:system_time(second) + 3_600}, refused}],
+         ?assertEqual(expected_outcomes(Rows),
+                      resource_outcomes(Policy, RealmIdentity, RealmName, Rows))
+     end}.
+
 %%------------------------------------------------------------------
 %% {ucan_required, Issuer} -- binds the token's audience to the caller
 %%------------------------------------------------------------------
@@ -3004,6 +3058,164 @@ ucan_required_binds_the_token_audience_to_the_caller_test_() ->
          macula_station_link:stop(Pid),
          ok
      end}.
+
+%% `ucan_required' serves a token only when one of its capabilities grants the
+%% procedure: the procedure itself exactly, its org when the name is
+%% `<org>/<name>' and the org is not `_', or its realm, always by a realm name
+%% whose SHA-256 is the procedure's realm tag. Anything else is refused, and no
+%% malformed `with' stops the link from answering.
+ucan_required_binds_the_token_to_the_procedure_test_() ->
+    {timeout, 30,
+     fun() ->
+         RealmName = <<"io.example.issuer">>,
+         IssuerIdentity = macula_identity:generate(),
+         Policy = {ucan_required, macula_identity:public(IssuerIdentity)},
+         Realm = <<"mri:realm:", RealmName/binary>>,
+         Proc = fun(Name) -> <<"mri:proc:", RealmName/binary, "/", Name/binary>> end,
+         Org = fun(Name) -> <<"mri:org:", RealmName/binary, "/", Name/binary>> end,
+         Grant = fun(With) -> [#{with => With, can => <<"call">>}] end,
+         Elsewhere = <<"mri:realm:io.example.elsewhere">>,
+         Rows = [{"realm grant, bare name", <<"svc.do">>, Grant(Realm), #{}, served},
+                 {"realm grant, placeholder org", <<"_/svc.do">>, Grant(Realm), #{}, served},
+                 {"realm grant, more than one slash", <<"acme/api/users.get">>,
+                  Grant(Realm), #{}, served},
+                 {"procedure grant, bare name", <<"svc.do">>, Grant(Proc(<<"svc.do">>)),
+                  #{}, served},
+                 {"procedure grant, org-qualified name", <<"acme/svc.do">>,
+                  Grant(Proc(<<"acme/svc.do">>)), #{}, served},
+                 {"procedure grant, more than one slash", <<"acme/api/users.get">>,
+                  Grant(Proc(<<"acme/api/users.get">>)), #{}, served},
+                 {"org grant, org-qualified name", <<"acme/svc.do">>, Grant(Org(<<"acme">>)),
+                  #{}, served},
+                 {"one granting capability among others", <<"svc.do">>,
+                  [#{with => Elsewhere, can => <<"call">>} | Grant(Realm)], #{}, served},
+                 {"no capabilities", <<"svc.do">>, [], #{}, refused},
+                 {"another realm", <<"svc.do">>, Grant(Elsewhere), #{}, refused},
+                 {"a procedure name from another realm", <<"svc.do">>,
+                  Grant(<<"mri:proc:io.example.elsewhere/svc.do">>), #{}, refused},
+                 {"a sibling procedure", <<"svc.do">>, Grant(Proc(<<"svc.other">>)), #{}, refused},
+                 {"an org grant for a bare name", <<"svc.do">>, Grant(Org(<<"svc.do">>)),
+                  #{}, refused},
+                 {"an org grant without an org", <<"svc.do">>,
+                  Grant(<<"mri:org:", RealmName/binary>>), #{}, refused},
+                 {"an org grant for the placeholder org", <<"_/svc.do">>, Grant(Org(<<"_">>)),
+                  #{}, refused},
+                 {"an org grant for a name with more than one slash", <<"acme/api/users.get">>,
+                  Grant(Org(<<"acme">>)), #{}, refused},
+                 {"another org", <<"acme/svc.do">>, Grant(Org(<<"other">>)), #{}, refused},
+                 {"a realm name with an extra colon", <<"svc.do">>,
+                  Grant(<<Realm/binary, ":x">>), #{}, refused},
+                 {"a realm name with an extra slash", <<"svc.do">>,
+                  Grant(<<Realm/binary, "/x">>), #{}, refused},
+                 {"a procedure with an extra segment", <<"svc.do">>,
+                  Grant(Proc(<<"svc.do/x">>)), #{}, refused},
+                 {"a procedure grant whose realm name has an extra colon", <<"svc.do">>,
+                  Grant(<<"mri:proc:", RealmName/binary, ":x/svc.do">>), #{}, refused},
+                 {"an org with an extra segment", <<"acme/svc.do">>, Grant(Org(<<"acme/x">>)),
+                  #{}, refused},
+                 {"an empty realm name", <<"svc.do">>, Grant(<<"mri:realm:">>), #{}, refused},
+                 {"an empty procedure name", <<"svc.do">>, Grant(Proc(<<>>)), #{}, refused},
+                 {"an empty org name", <<"acme/svc.do">>, Grant(Org(<<>>)), #{}, refused},
+                 {"a procedure grant without a realm name", <<"svc.do">>,
+                  Grant(<<"mri:proc:/svc.do">>), #{}, refused},
+                 {"a with that is no MRI", <<"svc.do">>, Grant(<<"svc.do">>), #{}, refused},
+                 {"not yet valid", <<"svc.do">>, Grant(Realm),
+                  #{nbf => erlang:system_time(second) + 3_600}, refused}],
+         ?assertEqual(expected_outcomes(Rows),
+                      resource_outcomes(Policy, IssuerIdentity, RealmName, Rows))
+     end}.
+
+%% A STREAM_OPEN is authorized the same way: a token granted for another realm
+%% gets a STREAM_ERROR `unauthorized' and runs no handler, and a token granted
+%% for the procedure's realm is served.
+stream_ucan_required_binds_the_token_to_the_procedure_test_() ->
+    {timeout, 5,
+     fun() ->
+         {Pid, FakePeer, _PeerNodeId} = setup_link_for_streams(),
+         try
+             Test = self(),
+             Procedure = <<"foo.issuer_gated">>,
+             IssuerIdentity = macula_identity:generate(),
+             Policy = {ucan_required, macula_identity:public(IssuerIdentity)},
+             Handler = fun(_Stream, #{tag := Tag}) ->
+                 Test ! {handler_invoked, Tag},
+                 ok
+             end,
+             ok = macula_station_link:advertise_stream(
+                    Pid, ?REALM, Procedure, server_stream, Handler, Policy),
+             flush_send_frame_casts(),
+             CallerKp = macula_identity:generate(),
+             Caller = macula_identity:public(CallerKp),
+             Token = fun(With) ->
+                         mint_ucan_with_caps(IssuerIdentity, Caller, #{},
+                                             [#{with => With, can => <<"call">>}])
+                     end,
+             [Elsewhere, Here] = [make_ref(), make_ref()],
+             inject_dedicated_stream_open(
+               Pid, FakePeer, Elsewhere,
+               macula_frame:sign(
+                 (stream_open_frame(Procedure, CallerKp, elsewhere))#{
+                   ucan_token => Token(<<"mri:realm:io.example.elsewhere">>)},
+                 CallerKp)),
+             inject_dedicated_stream_open(
+               Pid, FakePeer, Here,
+               macula_frame:sign(
+                 (stream_open_frame(Procedure, CallerKp, here))#{
+                   ucan_token => Token(<<"mri:realm:", ?REALM_NAME/binary>>)},
+                 CallerKp)),
+             receive
+                 {sent_on_stream, Elsewhere, #{frame_type := stream_error,
+                                               code       := Code}} ->
+                     ?assertEqual(<<"unauthorized">>, Code)
+             after 1_000 ->
+                 erlang:error(no_unauthorized_stream_error)
+             end,
+             receive
+                 {handler_invoked, here} -> ok
+             after 1_000 ->
+                 erlang:error(realm_token_handler_not_invoked)
+             end,
+             receive
+                 {handler_invoked, elsewhere} ->
+                     erlang:error(handler_invoked_for_another_realms_token)
+             after 300 ->
+                 ok
+             end,
+             macula_station_link:stop(Pid)
+         after
+             teardown_link_for_streams(ok)
+         end
+     end}.
+
+%% Calls each row's procedure in the realm named `RealmName', gated by
+%% `Policy', with a token `Signer' signs for the caller carrying the row's
+%% capabilities and token options, and returns `{Title, Outcome}' per row.
+resource_outcomes(Policy, Signer, RealmName, Rows) ->
+    Realm = crypto:hash(sha256, RealmName),
+    Handler = fun(_Payload) -> {ok, #{served => true}} end,
+    {Pid, CallerKp} = inbound_call_fixture([{P, Handler} || P <- ?RESOURCE_PROCEDURES],
+                                           Policy, Realm),
+    Caller = macula_identity:public(CallerKp),
+    Outcomes = [{Title, resource_outcome(Pid, CallerKp, Realm, Procedure,
+                                         mint_ucan_with_caps(Signer, Caller, TokenOpts, Caps))}
+                || {Title, Procedure, Caps, TokenOpts, _Expected} <- Rows],
+    macula_station_link:stop(Pid),
+    Outcomes.
+
+resource_outcome(Pid, CallerKp, Realm, Procedure, Token) ->
+    CallId = crypto:strong_rand_bytes(16),
+    inject_call_with_ucan(Pid, self(), CallerKp, CallId, Realm, Procedure, Token),
+    outcome_of(await_result(CallId, 2_000)).
+
+outcome_of({ok, #{served := true}}) -> served;
+outcome_of({error, #{code := Code}}) -> refusal_of(macula_bolt4:code(unauthorized), Code);
+outcome_of(Other) -> {unexpected, Other}.
+
+refusal_of(Code, Code) -> refused;
+refusal_of(_Unauthorized, Code) -> {error_code, Code}.
+
+expected_outcomes(Rows) ->
+    [{Title, Expected} || {Title, _Procedure, _Caps, _TokenOpts, Expected} <- Rows].
 
 %% The same binding holds for a streaming procedure: a STREAM_OPEN carrying
 %% a genuine `ucan_required' token minted for another identity gets a

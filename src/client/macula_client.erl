@@ -105,9 +105,17 @@
 %% identity itself, carrying the capability `RequiredCan'.
 %%
 %% Both policies bind the audience the same way. `macula_ucan_nif:verify/2'
-%% never checks `aud', so `authorize_policy/2' in `macula_station_link'
+%% never checks `aud', so `authorize_policy/3' in `macula_station_link'
 %% compares it with the wire-authenticated caller for both. A token names
 %% its audience as that identity's public key, hex-encoded in lowercase.
+%%
+%% Both policies also require one of the token's capabilities to grant the
+%% procedure, by a realm name whose SHA-256 is the procedure's realm tag:
+%% `mri:proc:<name>/<procedure>' grants that procedure exactly,
+%% `mri:org:<name>/<org>' every procedure named `<org>/<rest>' with exactly
+%% one `/' (any org but `_'), and `mri:realm:<name>' every procedure in the
+%% realm. For `realm_member_required', that same capability must carry
+%% `RequiredCan'; `ucan_required' does not check `can'.
 %%
 %% `RequiredCan' is mandatory, not optional-with-a-default: a realm mints
 %% membership UCANs at more than one tier from the SAME signing key --
