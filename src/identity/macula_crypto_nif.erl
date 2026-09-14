@@ -51,7 +51,8 @@
     nif_sha256_base64/1,
     nif_base64_encode/1,
     nif_base64_decode/1,
-    nif_secure_compare/2
+    nif_secure_compare/2,
+    nif_effective_uid/0
 ]).
 
 -on_load(init/0).
@@ -270,6 +271,12 @@ nif_base64_decode(_Encoded) ->
     erlang:nif_error(nif_not_loaded).
 
 nif_secure_compare(_A, _B) ->
+    erlang:nif_error(nif_not_loaded).
+
+%% The effective user id, or none on a host without user ids. No Erlang
+%% fallback: macula_node_user raises rather than skip an owner check.
+-spec nif_effective_uid() -> non_neg_integer() | none.
+nif_effective_uid() ->
     erlang:nif_error(nif_not_loaded).
 
 %%====================================================================

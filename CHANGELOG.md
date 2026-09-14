@@ -39,6 +39,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `macula_identity:load/1` and `macula_owner_only_file:read/1` accept only
+  a file that belongs to the user the node runs as, besides its mode. A file
+  of another owner returns `{error, {file_owner, #{file => Path, owner =>
+  Uid, required => NodeUid}}}` and is never reported as missing, so a
+  caller that makes a new identity only on `{error, enoent}` makes none. A
+  host without user ids skips the owner check. Before upgrading, give every
+  identity key file, and every other secret macula reads this way, to the
+  user the node runs as.
 - A station's pubsub registry keeps a realm's `hecate_pubsub_server` only
   while something holds the realm. With the registry's `identity` set, only
   a SUBSCRIBE starts a server for a realm without one; an UNSUBSCRIBE or

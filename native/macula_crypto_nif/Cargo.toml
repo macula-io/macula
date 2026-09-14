@@ -28,6 +28,10 @@ blake3 = "1.5"
 # Base64 encoding
 base64 = "0.23"
 
+# The effective user id (geteuid), which a key file's owner has to match
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [profile.release]
 lto = true
 opt-level = 3
