@@ -217,17 +217,16 @@ The payload of a procedure advertisement, type tag 0x06, holds exactly these key
 | `procedure` | text | the procedure name within the realm |
 | `advertiser_node` | bytes, 32 | the provider's node_id, equal to the key id of `key` |
 | `serving_station` | bytes, 32 | the node_id of the station that serves the provider |
-| `authorization` | map | the provider authorization (D25 item 6): required with an org namespace, absent without |
+| `authorization` | map | the provider authorization (D25 item 6); every procedure has one |
 
 - `authorization` holds either `org_directory` and `procedure_delegation`, each bytes, the wire form as received of
   the realm-signed org directory and of the org-signed procedure delegation that names the provider, or
   `certificate_chain`, an array of bytes, the provider's certificate chain in DER, leaf first. It holds nothing else.
 - **Org namespace.** A procedure's org namespace is the text before the first `/` of its name, when there is one and
   it is not `_`. A name with no `/`, or whose first segment is `_`, has none, and a name that starts with `/` is
-  malformed.
-- A verifier refuses an advertisement for a procedure with an org namespace that carries no `authorization`, and one
-  for a procedure without an org namespace that carries any: there is no delegation to check (D25), and whether
-  such procedures need an authorization of their own is open.
+  malformed. Capability grants use the same definition (D7).
+- Every procedure has an org namespace (D25). A verifier refuses an advertisement for a procedure without one, and
+  one that carries no `authorization`.
 - The org directory's `org_name`, or the O of the leaf certificate, equals the org namespace byte for byte.
 - The provider's signature covers `authorization`. The caller, and a serving station that gates a CALL, check each
   embedded record's own signature and validity, or the chain against the realm's trust anchor (D25 item 6).
