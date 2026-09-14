@@ -1599,10 +1599,10 @@ received(ok, Frame, Rest) -> {ok, Frame, Rest};
 received({error, Invalid}, _Frame, Rest) -> {invalid, Invalid, Rest}.
 
 decode_cbor(Bytes, Rest) ->
-    try macula_cbor_nif:unpack_deterministic(Bytes) of
-        Term when is_map(Term) ->
+    try macula_cbor_nif:unpack_deterministic(Bytes, macula_cbor_nif:element_budget()) of
+        {Term, Left} when is_map(Term) ->
             Frame = from_wire_envelope(Term),
-            {ok, restore_records(Frame), Rest};
+            {ok, restore_records(Frame, Left), Rest};
         _Other ->
             {error, bad_frame}
     catch
@@ -1611,27 +1611,31 @@ decode_cbor(Bytes, Rest) ->
     end.
 
 %% Inverse of `prepare_records/1' — opaque binary blobs in `record' /
-%% `records' fields are decoded via `macula_record:decode/1' so the
-%% frame map exposes record values in their natural map shape. Bytes
-%% that do not decode as a record, including bytes over the element
-%% budget, stay bytes, and `validate_received/1' refuses the frame for
-%% that field.
-restore_records(F = #{record := B}) when is_binary(B) ->
-    case macula_record:decode(B) of
-        {ok, R} -> F#{record := R};
-        _       -> F
-    end;
-restore_records(F = #{records := L}) when is_list(L) ->
-    Decoded = [decode_record_or_keep(E) || E <- L],
-    F#{records := Decoded};
-restore_records(F) -> F.
+%% `records' fields are decoded via `macula_record:decode/2' so the
+%% frame map exposes record values in their natural map shape. A record
+%% decodes within `Left', what the frame's own items and the records
+%% before it left of the element budget, so a frame and its records hold
+%% at most one budget of CBOR items together. Bytes that do not decode as
+%% a record within what is left stay bytes, and so do the records after
+%% them, and `validate_received/1' refuses the frame for that field.
+restore_records(F = #{record := B}, Left) when is_binary(B) ->
+    restored_record(macula_record:decode(B, Left), F);
+restore_records(F = #{records := L}, Left) when is_list(L) ->
+    F#{records := decode_records(L, Left)};
+restore_records(F, _Left) -> F.
 
-decode_record_or_keep(B) when is_binary(B) ->
-    case macula_record:decode(B) of
-        {ok, R} -> R;
-        _       -> B
-    end;
-decode_record_or_keep(Other) -> Other.
+restored_record({ok, R, _Left}, F) -> F#{record := R};
+restored_record({error, _Reason}, F) -> F.
+
+decode_records([B | Rest], Left) when is_binary(B) ->
+    decoded_record(macula_record:decode(B, Left), B, Rest);
+decode_records([Other | Rest], Left) ->
+    [Other | decode_records(Rest, Left)];
+decode_records([], _Left) ->
+    [].
+
+decoded_record({ok, R, Left}, _B, Rest) -> [R | decode_records(Rest, Left)];
+decoded_record({error, _Reason}, B, Rest) -> [B | Rest].
 
 %% @doc Drain all complete frames a peer sent from a buffer.
 %%
