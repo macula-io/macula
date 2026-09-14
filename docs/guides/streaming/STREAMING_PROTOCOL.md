@@ -153,6 +153,12 @@ Abort with a BOLT#4-style code and message when something goes wrong:
 macula:abort(Stream, <<"0F">>, <<"source unavailable">>).
 ```
 
+A stream takes chunks only from the side its mode lets send: the server in
+`server_stream`, the client in `client_stream`, and both in `bidi`. A chunk
+from the other side ends the session with code `stream_protocol_error`, and a
+send the mode does not allow returns `{error, {send_not_allowed, Mode}}`
+without sending anything.
+
 ---
 
 ## Local (in-process) streams

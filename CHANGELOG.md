@@ -142,6 +142,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- A stream takes chunks only from the side its mode lets send: the server in
+  `server_stream`, the client in `client_stream`, and both in `bidi`. A chunk
+  from the other side ends the session: the peer gets a STREAM_ERROR with
+  code `stream_protocol_error`, and the owner is told
+  `{macula_stream, ended, Stream, {error, {<<"stream_protocol_error">>, _}}}`.
+  A send the mode does not allow returns `{error, {send_not_allowed, Mode}}`
+  and sends nothing.
 - A served stream is owned by the process that runs its handler, and a
   stream process ends when its owner ends. So a stream ends when its handler
   returns or crashes, and a stream served by `macula_streamer` ends with the
