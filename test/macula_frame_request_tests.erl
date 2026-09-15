@@ -237,10 +237,13 @@ an_error_frame_is_either_a_reply_or_a_relay_error(#{provider := Provider, statio
         macula_frame:relay_error(#{frame_type => error, request => Request, code => unknown_next_peer}, Station),
     ?assertEqual({error, malformed_frame}, macula_frame:verify_reply(wire(Relay), Request, pq_pure)),
     ?assertEqual({error, malformed_frame}, macula_frame:verify_relay_error(wire(ProviderError), Request, pq_pure)),
+    %% A frame that holds both objects no longer decodes: decode/1 refuses it by name, and the verifiers still refuse
+    %% it as built.
     Both = ProviderError#{relay_error => RelayError},
-    ?assertEqual({error, malformed_frame}, macula_frame:verify_reply(wire(Both), Request, pq_pure)),
+    ?assertEqual({error, {invalid_frame, error, relay_error}}, macula_frame:decode(macula_frame:encode(Both))),
+    ?assertEqual({error, malformed_frame}, macula_frame:verify_reply(Both, Request, pq_pure)),
     ?assertEqual({error, malformed_frame},
-                 macula_frame:verify_relay_error(wire(Relay#{reply => Reply}), Request, pq_pure)).
+                 macula_frame:verify_relay_error(Relay#{reply => Reply}, Request, pq_pure)).
 
 %%------------------------------------------------------------------
 %% Helpers

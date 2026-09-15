@@ -71,10 +71,13 @@ the_outer_frame_carries_only_version_frame_type_and_neighbour(#{key := Key} = Ke
     ?assertEqual([frame_type, neighbour, version], lists:sort(maps:keys(Decoded))),
     ?assertEqual([signature, tbs], lists:sort(maps:keys(maps:get(neighbour, Decoded)))).
 
+%% A field beside neighbour no longer decodes: decode/1 refuses it by name, and verify_neighbour/2 still refuses the
+%% frame as built.
 fields_beside_neighbour_are_refused(#{key := Key} = Keys) ->
     Signed = macula_frame:sign_neighbour(ping(), Key, at(Keys, 0)),
-    ?assertEqual({error, malformed_frame},
-                 macula_frame:verify_neighbour(wire(Signed#{nonce => <<0:128>>}), opts(Keys, 0))).
+    Beside = Signed#{nonce => <<0:128>>},
+    ?assertEqual({error, {invalid_frame, ping, nonce}}, macula_frame:decode(macula_frame:encode(Beside))),
+    ?assertEqual({error, malformed_frame}, macula_frame:verify_neighbour(Beside, opts(Keys, 0))).
 
 the_tbs_holds_the_frame_fields_with_frame_type_alg_connection_and_seq(#{key := Key, connection := C} = Keys) ->
     #{neighbour := #{tbs := Tbs}} = macula_frame:sign_neighbour(ping(), Key, at(Keys, 7)),

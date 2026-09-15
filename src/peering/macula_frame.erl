@@ -120,6 +120,11 @@
 -ignore_xref([{macula_frame, validate_received, 1}]).
 -ignore_xref([{macula_frame, parse_stream, 1}]).
 
+-ifdef(TEST).
+%% The field table and the received rules of each frame type, so a test can hold them to each other.
+-export([field_table/1, received_rules/1]).
+-endif.
+
 -export_type([
     frame/0,
     frame_type/0,
@@ -1724,9 +1729,16 @@ neighbour_tbs_table(Type) ->
 
 neighbour_frame({ok, #{frame_type := Type, connection := Connection, seq := Seq} = Read}, Version, Type,
                 #{connection := Connection, seq := Seq}) ->
-    {ok, (maps:without([alg, connection, seq], Read))#{version => Version}};
+    opened_shape((maps:without([alg, connection, seq], Read))#{version => Version});
 neighbour_frame(_NotThisConnectionOrSeq, _Version, _Type, _Opts) ->
     {error, malformed_frame}.
+
+%% The frame a neighbour signature opens has the shape of its type, as every received frame does.
+opened_shape(Opened) ->
+    opened(validate_received(Opened), Opened).
+
+opened(ok, Opened) -> {ok, Opened};
+opened({error, _Invalid}, _Opened) -> {error, malformed_frame}.
 
 %%------------------------------------------------------------------
 %% Sign / verify
@@ -1783,15 +1795,16 @@ encode_with_check(Len, Bytes) ->
     <<Len:32/big, Bytes/binary>>.
 
 %% @doc Decode a single length-prefixed frame received from a peer, from
-%% the head of a buffer, and check its fields with `validate_received/1'.
+%% the head of a buffer, and check its shape with `validate_received/1'.
 %% Returns `{ok, Frame, RestBuffer}', `{more, BytesNeeded}' if the buffer
 %% is short, or `{error, Reason}': `frame_too_large' or `bad_frame' if the
-%% framing is malformed, and `{invalid_frame, Type, Field}' if the frame
-%% decodes but `validate_received/1' refuses its fields. A frame without
-%% `frame_type' is refused as `{invalid_frame, unknown, frame_type}'.
-%% There is no decode without that check: every frame decode/1 returns
-%% has passed `validate_received/1'. A frame with more CBOR items than the
-%% decoder's element budget is refused as `too_many_elements'.
+%% framing is malformed, `bad_frame' as well for a frame without a
+%% `frame_type', of a type this node does not know, or with a field its
+%% type's table cannot read, and `{invalid_frame, Type, Field}' if the frame
+%% decodes but `validate_received/1' refuses its shape. There is no decode
+%% without that check: every frame decode/1 returns has passed
+%% `validate_received/1'. A frame with more CBOR items than the decoder's
+%% element budget is refused as `too_many_elements'.
 -spec decode(binary()) ->
     {ok, frame(), binary()}
   | {more, pos_integer()}
@@ -1941,37 +1954,87 @@ valid_frames(Items) ->
 %% Received frames
 %%------------------------------------------------------------------
 
-%% @doc Does a frame decoded from a peer's bytes carry what its type
-%% requires? Each required field of its `frame_type' must be there, with a
-%% value its builder accepts: a 16-byte id, a 32-byte key, a binary, an
-%% integer in range, an atom of a closed set, or a list of well-formed
-%% entries. A handler of a received frame then never meets a missing key or
-%% a value it cannot match. The rules are the builders' own guards, and
-%% `macula_frame_received_tests' keeps them in step: every builder's output
-%% passes, and so does every sample frame the other SDKs send.
+%% @doc Does a frame decoded from a peer's bytes have the shape its type
+%% requires, the post-quantum shape its builder writes (D26)? Each required
+%% field must be there with a value its builder accepts: a 16-byte id, a
+%% 32-byte key, a 48-byte hash, a binary, an integer in range, an atom of a
+%% closed set, a signed object, or a list of well-formed entries. A type that
+%% carries one of several signed objects holds exactly one of them. An
+%% optional field may be missing or undefined, a CBOR null. A field the type
+%% does not have refuses the frame. A control frame signed for its neighbour
+%% holds version, frame_type and neighbour and nothing else, and the frame
+%% `verify_neighbour/2' opens from it is checked the same way. A handler of a
+%% received frame then never meets a missing key or a value it cannot match.
+%% The rules sit beside the field table and `macula_frame_received_tests'
+%% holds the two to each other.
 %%
-%% A frame whose `frame_type' this node does not know passes, so a newer
-%% peer's new frame type reaches dispatch, which ignores it. A frame with no
-%% `frame_type' does not. A GOODBYE's reason may be text as well as an atom.
+%% The refusal names the frame type and the first field refused, both this
+%% node's own atoms. A frame without a `frame_type', or of a type this node
+%% does not know, is refused as `{invalid_frame, unknown, frame_type}'.
 %% Signatures are not checked here.
 -spec validate_received(frame()) ->
     ok | {error, {invalid_frame, frame_type() | unknown, atom()}}.
 validate_received(#{frame_type := Type} = Frame) ->
-    received_fields(received_rules(Type), Type, Frame);
+    named(received_shape(received_rules(Type), Type, Frame), Type);
 validate_received(_Frame) ->
     {error, {invalid_frame, unknown, frame_type}}.
 
-received_fields(unknown_type, _Type, _Frame) ->
-    ok;
-received_fields([], _Type, _Frame) ->
-    ok;
-received_fields([{Field, Rule} | Rules], Type, Frame) ->
-    received_field(field_valid(Rule, maps:find(Field, Frame)), Field, Rules, Type, Frame).
+named(ok, _Type) -> ok;
+named({refused, Field}, Type) -> {error, {invalid_frame, Type, Field}};
+named(unknown_type, _Type) -> {error, {invalid_frame, unknown, frame_type}}.
 
-received_field(true, _Field, Rules, Type, Frame) ->
-    received_fields(Rules, Type, Frame);
-received_field(false, Field, _Rules, Type, _Frame) ->
-    {error, {invalid_frame, Type, Field}}.
+received_shape(unknown_type, _Type, _Frame) ->
+    unknown_type;
+received_shape(Rules, Type, #{neighbour := _} = Frame) ->
+    neighbour_shape(lists:member(Type, ?NEIGHBOUR_SIGNED), Rules, Frame);
+received_shape(Rules, _Type, Frame) ->
+    shape(Rules, Frame).
+
+%% A control frame signed for its neighbour holds only version, frame_type and the held object.
+neighbour_shape(true, _Rules, Frame) ->
+    shape(#{required => [{version, non_neg}, {neighbour, held}], one_of => [], optional => []}, Frame);
+neighbour_shape(false, _Rules, _Frame) ->
+    {refused, neighbour}.
+
+%% The required fields first, then each one-of group, the optional fields, and last any field the rules do not
+%% name, in term order.
+shape(#{required := Required, one_of := Groups, optional := Optional}, Frame) ->
+    Named = [frame_type | [Field || {Field, _Rule} <- Required ++ lists:append(Groups) ++ Optional]],
+    first_refused([fun() -> fields_refused(Required, Frame) end,
+                   fun() -> groups_refused(Groups, Frame) end,
+                   fun() -> fields_refused(Optional, Frame) end,
+                   fun() -> extra_refused(lists:sort(maps:keys(Frame) -- Named)) end]).
+
+first_refused([]) -> ok;
+first_refused([Check | Checks]) -> refused_or_next(Check(), Checks).
+
+refused_or_next(ok, Checks) -> first_refused(Checks);
+refused_or_next({refused, _Field} = Refused, _Checks) -> Refused.
+
+fields_refused([], _Frame) -> ok;
+fields_refused([{Field, Rule} | Rules], Frame) ->
+    field_refused(field_valid(Rule, maps:find(Field, Frame)), Field, Rules, Frame).
+
+field_refused(true, _Field, Rules, Frame) -> fields_refused(Rules, Frame);
+field_refused(false, Field, _Rules, _Frame) -> {refused, Field}.
+
+%% Exactly one member of each group is there. None names the group's first member, and more than one names the
+%% second member that is there.
+groups_refused([], _Frame) -> ok;
+groups_refused([Group | Groups], Frame) ->
+    group_refused(Group, [Member || {Field, _Rule} = Member <- Group, maps:get(Field, Frame, undefined) =/= undefined],
+                  Groups, Frame).
+
+group_refused([{First, _Rule} | _], [], _Groups, _Frame) -> {refused, First};
+group_refused(_Group, [{Field, Rule}], Groups, Frame) ->
+    group_member(field_valid(Rule, maps:find(Field, Frame)), Field, Groups, Frame);
+group_refused(_Group, [_One, {Second, _Rule} | _], _Groups, _Frame) -> {refused, Second}.
+
+group_member(true, _Field, Groups, Frame) -> groups_refused(Groups, Frame);
+group_member(false, Field, _Groups, _Frame) -> {refused, Field}.
+
+extra_refused([]) -> ok;
+extra_refused([Field | _]) -> {refused, Field}.
 
 %% A required field must be there; an optional one may be missing or
 %% undefined, a CBOR null.
@@ -1981,13 +2044,14 @@ field_valid({optional, Rule}, {ok, Value})      -> value_valid(Rule, Value);
 field_valid(_Rule, error)                       -> false;
 field_valid(Rule, {ok, Value})                  -> value_valid(Rule, Value).
 
+value_valid(_Rule, undefined)                                         -> false;
 value_valid(present, _Value)                                          -> true;
 value_valid(id16, <<_:128>>)                                          -> true;
 value_valid(key, <<_:256>>)                                           -> true;
-value_valid(mcid, <<_:272>>)                                          -> true;
+value_valid(hash48, <<_:384>>)                                        -> true;
+value_valid(mcid, <<2, _Codec:8, _Hash:384>>)                         -> true;
 value_valid(country, <<_:16>>)                                        -> true;
 value_valid(binary, Value) when is_binary(Value)                      -> true;
-value_valid(integer, Value) when is_integer(Value)                    -> true;
 value_valid(non_neg, Value) when is_integer(Value), Value >= 0        -> true;
 value_valid(pos, Value) when is_integer(Value), Value > 0             -> true;
 value_valid(byte, Value) when is_integer(Value), Value >= 0, Value =< 255 -> true;
@@ -1998,15 +2062,21 @@ value_valid(list, Value) when is_list(Value)                          -> all_val
 value_valid({list_of, Rule}, Value) when is_list(Value)               -> all_valid(Rule, Value);
 value_valid({one_of, Atoms}, Value) when is_atom(Value)               -> lists:member(Value, Atoms);
 value_valid({entry, Rules}, Value) when is_map(Value)                 -> entry_valid(Rules, Value);
-value_valid(record, #{type := _, key := <<_:256>>, payload := Payload}) -> is_map(Payload);
+value_valid(object, #{tbs := Tbs, signature := Signature} = Object)
+  when is_binary(Tbs), is_binary(Signature)                           -> object_key(maps:without([tbs, signature], Object));
+value_valid(held, #{tbs := Tbs, signature := Signature} = Held)
+  when map_size(Held) =:= 2, is_binary(Tbs), is_binary(Signature)     -> true;
 value_valid(reason, Value) when is_boolean(Value)                     -> false;
 value_valid(reason, Value) when is_atom(Value)                        -> true;
 value_valid(reason, {text, Text})                                     -> is_binary(Text);
 value_valid(text, Value) when is_binary(Value); is_atom(Value)        -> true;
 value_valid(text, {text, Text})                                       -> is_binary(Text);
-value_valid(manifest, not_found)                                      -> true;
-value_valid(manifest, Value)                                          -> is_map(Value);
 value_valid(_Rule, _Value)                                            -> false.
+
+%% A signed object carries its signer's key or leaves it out, as a stream's later frames do, and holds nothing else.
+object_key(Rest) when map_size(Rest) =:= 0 -> true;
+object_key(#{key := Key} = Rest) when map_size(Rest) =:= 1 -> is_binary(Key);
+object_key(_Rest) -> false.
 
 %% A proper list whose every element passes Rule.
 all_valid(_Rule, []) ->
@@ -2021,107 +2091,125 @@ entry_valid([], _Entry) ->
 entry_valid([{Field, Rule} | Rules], Entry) ->
     field_valid(Rule, maps:find(Field, Entry)) andalso entry_valid(Rules, Entry).
 
-%% The fields each frame type requires, and the rule each value follows:
-%% the guards of its builder above. `unknown_type' for a type this node does
-%% not know.
+%% The shape each frame type has, as its builder above writes it: the
+%% required fields with the rule each value follows, the groups of which
+%% exactly one field is there, and the optional fields. `unknown_type' for a
+%% type this node does not know.
+-spec received_rules(atom()) ->
+    #{required := [{atom(), term()}], one_of := [[{atom(), term()}]], optional := [{atom(), term()}]}
+  | unknown_type.
 received_rules(connect) ->
-    [{node_id, key}, {station_id, key}, {realms, list},
-     {capabilities, non_neg}, {puzzle_evidence, key}];
+    base_rules([{node_id, key}, {station_id, key}, {realms, list}, {capabilities, non_neg},
+                {puzzle_evidence, key}],
+               [{addresses, {optional, list}}, {site, {optional, present}}, {endorsements, {optional, list}}]);
 received_rules(hello) ->
-    [{node_id, key}, {station_id, key}, {realms, list}, {capabilities, non_neg},
-     {accepted, boolean}, {negotiated_capabilities, non_neg}];
+    base_rules([{node_id, key}, {station_id, key}, {realms, list}, {capabilities, non_neg},
+                {accepted, boolean}, {negotiated_capabilities, non_neg}],
+               [{addresses, {optional, list}}, {site, {optional, present}}, {refusal_code, {optional, present}}]);
 received_rules(goodbye) ->
-    [{reason, text}, {detail, {optional, text}}];
+    base_rules([{reason, reason}], [{detail, {optional, text}}]);
 received_rules(swim_ping) ->
-    [{round, non_neg}, {incarnation, non_neg}, {piggyback, {optional, list}}];
+    base_rules([{round, non_neg}, {incarnation, non_neg}], [{piggyback, {optional, list}}]);
 received_rules(swim_ack) ->
-    [{round, non_neg}, {responder, key}, {incarnation, non_neg},
-     {piggyback, {optional, list}}];
+    base_rules([{round, non_neg}, {responder, key}, {incarnation, non_neg}], [{piggyback, {optional, list}}]);
 received_rules(Type) when Type =:= swim_suspect; Type =:= swim_confirm ->
-    [{target, key}, {target_incarnation, non_neg}, {suspected_by, key}, {ttl, non_neg}];
+    base_rules([{target, key}, {target_incarnation, non_neg}, {suspected_by, key}, {ttl, non_neg}]);
 received_rules(Type) when Type =:= ping; Type =:= pong ->
-    [{nonce, id16}];
+    base_rules([{nonce, id16}]);
 received_rules(find_node) ->
-    [{key, key}, {origin, key}, {depth, non_neg}];
+    base_rules([{key, key}, {origin, key}, {depth, non_neg}]);
 received_rules(nodes) ->
-    [{key, key}, {nodes, {list_of, station_ref_rule()}}];
+    base_rules([{key, key}, {nodes, {list_of, station_ref_rule()}}]);
 received_rules(find_value) ->
-    [{key, key}, {origin, key}];
+    base_rules([{key, key}, {origin, key}]);
 received_rules(value) ->
-    [{key, key}, {records, {list_of, record}}];
+    base_rules([{key, key}, {records, {list_of, binary}}]);
 received_rules(store) ->
-    [{record, record}];
+    base_rules([{record, binary}]);
 received_rules(store_ack) ->
-    [{key, key}, {stored, boolean}, {reason, {optional, reason}}];
-received_rules(replicate) ->
-    [{record, record}, {new_custodian, boolean}];
-received_rules(replicate_ack) ->
-    [{key, key}, {accepted, boolean}];
-received_rules(call) ->
-    [{call_id, id16}, {procedure, binary}, {realm, key}, {payload, present},
-     {deadline_ms, integer}, {caller, key}, {ucan_token, {optional, binary}}];
+    base_rules([{key, key}, {stored, boolean}]);
+received_rules(Type) when Type =:= call; Type =:= stream_open ->
+    signed_rules([{request, object}], [], [{source_route, {optional, binary}}, {retry_budget, {optional, non_neg}}]);
 received_rules(result) ->
-    [{call_id, id16}, {payload, present}, {responded_by, key}];
+    signed_rules([{reply, object}], [], [{source_route_reverse, {optional, binary}}]);
 received_rules(error) ->
-    [{call_id, id16}, {code, byte}, {reported_by, key}];
+    signed_rules([], [[{reply, object}, {relay_error, object}]],
+                 [{source_route_reverse, {optional, binary}}, {source_route_partial, {optional, binary}}]);
 received_rules(hyparview_join) ->
-    [{realm, key}, {new_member, key}];
+    base_rules([{realm, key}, {new_member, key}], [{record, {optional, binary}}]);
 received_rules(hyparview_forward_join) ->
-    [{realm, key}, {new_member, key}, {ttl, non_neg}, {arwl, non_neg}, {prwl, non_neg}];
+    base_rules([{realm, key}, {new_member, key}, {ttl, non_neg}, {arwl, non_neg}, {prwl, non_neg}],
+               [{record, {optional, binary}}]);
 received_rules(hyparview_neighbor) ->
-    [{realm, key}, {priority, {one_of, [high, low]}}];
+    base_rules([{realm, key}, {priority, {one_of, [high, low]}}], [{record, {optional, binary}}]);
 received_rules(hyparview_disconnect) ->
-    [{realm, key}];
+    base_rules([{realm, key}]);
 received_rules(hyparview_shuffle) ->
-    [{realm, key}, {origin, key}, {ttl, non_neg}, {peer_sample, list}];
+    base_rules([{realm, key}, {origin, key}, {ttl, non_neg}, {peer_sample, list}]);
 received_rules(hyparview_shuffle_reply) ->
-    [{realm, key}, {peer_sample, list}];
+    base_rules([{realm, key}, {peer_sample, list}]);
 received_rules(plumtree_gossip) ->
-    [{realm, key}, {msg_id, id16}, {round, non_neg}, {payload, present}];
+    signed_rules([{publication, object}, {round, non_neg}], [], []);
 received_rules(Type) when Type =:= plumtree_ihave; Type =:= plumtree_graft ->
-    [{realm, key}, {msg_id, id16}, {round, non_neg}];
+    base_rules([{realm, key}, {msg_id, hash48}, {round, non_neg}]);
 received_rules(plumtree_prune) ->
-    [{realm, key}];
+    base_rules([{realm, key}]);
 received_rules(overlay_relay) ->
-    [{peer, key}, {payload, binary}];
+    base_rules([{peer, key}, {payload, binary}]);
 received_rules(publish) ->
-    [{topic, binary}, {realm, key}, {publisher, key}, {seq, non_neg},
-     {payload, present}, {published_at_ms, non_neg}];
-received_rules(Type) when Type =:= subscribe; Type =:= unsubscribe ->
-    [{topic, binary}, {realm, key}, {subscriber, key}];
+    signed_rules([{publication, object}], [], []);
+received_rules(subscribe) ->
+    base_rules([{realm, key}, {topic, binary}, {subscriber, key}],
+               [{filter, {optional, present}}, {options, {optional, present}}]);
+received_rules(unsubscribe) ->
+    base_rules([{realm, key}, {topic, binary}, {subscriber, key}]);
 received_rules(event) ->
-    [{topic, binary}, {realm, key}, {publisher, key}, {seq, non_neg},
-     {payload, present}, {delivered_via, {one_of, [plumtree, dht, direct]}}];
-received_rules(Type) when Type =:= advertise; Type =:= unadvertise ->
-    [{realm, key}, {procedure, binary}, {advertiser, key}];
-received_rules(stream_open) ->
-    [{stream_id, id16}, {procedure, binary}, {realm, key},
-     {mode, {one_of, [server_stream, client_stream, bidi]}}, {args, present},
-     {deadline_ms, integer}, {caller, key}, {ucan_token, {optional, binary}}];
-received_rules(stream_data) ->
-    [{stream_id, id16}, {seq, non_neg}, {encoding, {one_of, [raw, msgpack]}},
-     {body, present}];
-received_rules(stream_end) ->
-    [{stream_id, id16}, {role, {one_of, [send, both]}}];
+    signed_rules([{publication, object}, {delivered_via, {one_of, [plumtree, direct]}}], [], []);
+received_rules(advertise) ->
+    base_rules([{advertisement, binary}]);
+received_rules(unadvertise) ->
+    base_rules([{withdrawal, binary}]);
+received_rules(Type) when Type =:= stream_data; Type =:= stream_end ->
+    signed_rules([], [[{stream, object}, {caller_stream, object}]], []);
 received_rules(stream_error) ->
-    [{stream_id, id16}, {code, binary}, {message, binary}];
+    signed_rules([], [[{stream, object}, {caller_stream, object}, {relay_error, object}]],
+                 [{source_route_partial, {optional, binary}}]);
 received_rules(stream_reply) ->
-    [{stream_id, id16}, {payload, present}, {responded_by, key}];
+    signed_rules([{stream, object}], [], []);
 received_rules(want) ->
-    [{blocks, {list_of, {entry, [{mcid, mcid}, {priority, {optional, byte}}]}}}];
+    base_rules([{blocks, {list_of, {entry, [{mcid, mcid}, {priority, {optional, byte}}]}}}]);
 received_rules(have) ->
-    [{blocks, {list_of, {entry, [{mcid, mcid}, {size, non_neg}]}}}];
+    base_rules([{blocks, {list_of, {entry, [{mcid, mcid}, {size, non_neg}]}}}]);
 received_rules(block) ->
-    [{mcid, mcid}, {payload, binary}];
+    base_rules([{mcid, mcid}, {payload, binary}]);
 received_rules(manifest_req) ->
-    [{mcid, mcid}];
+    base_rules([{mcid, mcid}]);
 received_rules(manifest_res) ->
-    [{mcid, mcid}, {manifest, manifest}];
+    base_rules([{mcid, mcid}, {manifest, map}]);
 received_rules(cancel) ->
-    [{blocks, {list_of, mcid}}];
+    base_rules([{blocks, {list_of, mcid}}]);
 received_rules(_Unknown) ->
     unknown_type.
 
+%% A frame base/2 builds: its own fields, and the header base/2 writes and sign/2 adds, each optional unless the
+%% type requires it.
+base_rules(Required) ->
+    base_rules(Required, []).
+
+base_rules(Required, Optional) ->
+    Own = [Field || {Field, _Rule} <- Required ++ Optional],
+    #{required => [{version, non_neg} | Required], one_of => [],
+      optional => Optional ++ [Header || {Field, _Rule} = Header <- base_header(), not lists:member(Field, Own)]}.
+
+base_header() ->
+    [{frame_id, {optional, id16}}, {sent_at_ms, {optional, non_neg}}, {capabilities, {optional, non_neg}},
+     {realm, {optional, key}}, {call_id, {optional, id16}}, {source_route, {optional, binary}},
+     {signature, {optional, binary}}].
+
+%% A frame that carries its fields in signed objects: version and frame_type beside those objects, and its routing
+%% fields.
+signed_rules(Required, OneOf, Optional) ->
+    #{required => [{version, non_neg} | Required], one_of => OneOf, optional => Optional}.
 %% A NODES entry, as station_ref/1 builds it.
 station_ref_rule() ->
     {entry, [{node_id, key}, {station_id, key}, {tier, tier}, {country, country},

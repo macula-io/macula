@@ -228,11 +228,14 @@ a_stream_error_frame_carries_exactly_one_signed_object(#{caller := Caller, provi
     #{caller_stream := CallerStream} = CallerError = macula_frame:caller_stream(ErrorSpec, Caller, Open),
     ?assertEqual({error, malformed_frame}, macula_frame:verify_provider_stream(wire(CallerError), Fresh, pq_pure)),
     ?assertEqual({error, malformed_frame}, macula_frame:verify_caller_stream(wire(ProviderError), Fresh, pq_pure)),
+    %% A frame that holds both objects no longer decodes: decode/1 refuses it by name, and the verifiers still refuse
+    %% it as built.
+    ?assertEqual({error, {invalid_frame, stream_error, caller_stream}},
+                 macula_frame:decode(macula_frame:encode(ProviderError#{caller_stream => CallerStream}))),
     ?assertEqual({error, malformed_frame},
-                 macula_frame:verify_provider_stream(wire(ProviderError#{caller_stream => CallerStream}), Fresh,
-                                                     pq_pure)),
+                 macula_frame:verify_provider_stream(ProviderError#{caller_stream => CallerStream}, Fresh, pq_pure)),
     ?assertEqual({error, malformed_frame},
-                 macula_frame:verify_caller_stream(wire(CallerError#{stream => Stream}), Fresh, pq_pure)).
+                 macula_frame:verify_caller_stream(CallerError#{stream => Stream}, Fresh, pq_pure)).
 
 %%------------------------------------------------------------------
 %% Helpers
