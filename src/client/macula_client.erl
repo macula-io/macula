@@ -58,7 +58,7 @@
 -behaviour(gen_server).
 
 -export([connect/2, close/1, child_spec/3, status/1, links/1, sign_node_record/2, sign_domain_record/2,
-         withdraw_node_record/3]).
+         withdraw_node_record/3, realm_key/2]).
 %% Internal API — called by `macula_pubsub' (and future surfaces).
 -export([publish/5, subscribe/5, unsubscribe/2]).
 %% RPC fan-out (since 3.16.0) — called by the `macula' facade.
@@ -221,6 +221,13 @@
     %% How often the inbound publication dedup table is swept for
     %% entries whose publication has expired. Default 30_000.
     dedup_sweep_ms     => pos_integer(),
+
+    %% The realm keys the pool pins, one per realm id: each realm's public
+    %% key as carried, configured per deployment beside the realm id. A call
+    %% trusts an org namespaced advertisement only through the key pinned for
+    %% its realm. The pool does not start unless every id is 32 bytes and
+    %% every key is well formed for the node's crypto profile.
+    realm_trust        => #{<<_:256>> => binary()},
 
     %% Opt-in dynamic station discovery via `hecate_stations.list_stations'
     %% (the mesh's canonical station directory). Absent, or
@@ -485,6 +492,9 @@
 -record(state, {
     seeds         :: [seed()],
     node_id       :: <<_:256>>,
+    %% The realm keys pinned at start, from the `realm_trust' option: realm id
+    %% to the realm's key as carried.
+    realm_keys = #{} :: #{<<_:256>> => binary()},
     link_opts     :: map(),
     replication   :: pos_integer(),
     dedup_sweep   :: pos_integer(),
@@ -871,6 +881,12 @@ unadvertise_stream(Pool, Realm, Procedure)
 status(Pool) when is_pid(Pool) ->
     gen_server:call(Pool, status, 5_000).
 
+%% @doc The realm key the pool pinned for `RealmId' when it started, from its `realm_trust' option, or `none'. Direct
+%% dial checks an org namespaced advertisement's authorization against this key alone.
+-spec realm_key(pool(), <<_:256>>) -> {ok, binary()} | none.
+realm_key(Pool, <<_:256>> = RealmId) when is_pid(Pool) ->
+    gen_server:call(Pool, {realm_key, RealmId}, 5_000).
+
 %% @doc Sign a record this node signs about itself with the pool's node identity key, in the pool's own process, and
 %% return the signed record: the node record, a procedure advertisement or a content announcement that names this node.
 %% The pool stamps it with a new version and created_at, keeping the lifetime it was built with. The key never leaves
@@ -1042,7 +1058,42 @@ unsubscribe(Pool, SubRef) when is_pid(Pool), is_reference(SubRef) ->
 init({Seeds, Opts}) ->
     process_flag(trap_exit, true),
     warn_legacy_opts(Opts),
-    init_within_link_limits(link_limit_outside_its_range(Opts), Seeds, Opts).
+    init_within_realm_trust(realm_trust_refusal(Opts), Seeds, Opts).
+
+%% A realm trust that is not a map of 32-byte realm ids to realm keys well formed for the node's crypto profile does
+%% not start the pool, loads no key and dials nothing: a key that can never equal an org directory's signer would leave
+%% every org namespaced advertisement of its realm untrusted without saying why. A key well formed for the other
+%% profile is refused by its own name.
+init_within_realm_trust(none, Seeds, Opts) ->
+    init_within_link_limits(link_limit_outside_its_range(Opts), Seeds, Opts);
+init_within_realm_trust(Refusal, _Seeds, _Opts) ->
+    {error, Refusal}.
+
+realm_trust_refusal(#{realm_trust := Trust}) when is_map(Trust) ->
+    {ok, Profile} = macula_crypto_profile:configured(),
+    first_outside([Refusal || Id := Key <- Trust,
+                              Refusal <- [realm_key_refusal(Id, Key, Profile)], Refusal =/= none]);
+realm_trust_refusal(#{realm_trust := _NotAMap}) ->
+    {realm_trust, invalid};
+realm_trust_refusal(_NoRealmTrust) ->
+    none.
+
+realm_key_refusal(<<_:256>>, Key, Profile) when is_binary(Key) ->
+    realm_key_formed(macula_node_keys:carried_key_well_formed(Key, Profile), Key, Profile);
+realm_key_refusal(_Id, _Key, _Profile) ->
+    {realm_trust, invalid}.
+
+realm_key_formed(true, _Key, _Profile) ->
+    none;
+realm_key_formed(false, Key, Profile) ->
+    other_profile(lists:any(fun(Candidate) -> macula_node_keys:carried_key_well_formed(Key, Candidate) end,
+                            [Other || Other <- [pq_pure, pq_hybrid], Other =/= Profile])).
+
+other_profile(true)  -> {realm_trust, profile_mismatch};
+other_profile(false) -> {realm_trust, invalid}.
+
+pinned_realm_key({ok, Key}) -> {ok, Key};
+pinned_realm_key(error)     -> none.
 
 %% A link limit that is not an integer from 1 to its cap does not start the
 %% pool, and nothing is dialed: an atom would otherwise sort above every
@@ -1172,7 +1223,7 @@ init_with_keys({ok, #{node_identity := NodeIdentity, issuer := Issuer, issuer_st
     OrderMaxBuf  = maps:get(order_max_buffer, Opts, ?DEFAULT_ORDER_MAX_BUFFER),
     Discovery = init_discovery(maps:get(station_discovery, Opts, #{})),
     LinkSelection = maps:get(link_selection, Opts, default_link_selection(Discovery)),
-    State0 = #state{seeds = Seeds, node_id = NodeId,
+    State0 = #state{seeds = Seeds, node_id = NodeId, realm_keys = maps:get(realm_trust, Opts, #{}),
                     link_opts = LinkOpts, replication = Replication,
                     dedup_sweep = DedupSweep,
                     dedup_tab = DedupTab,
@@ -1358,6 +1409,8 @@ handle_call({unadvertise_stream, Realm, Procedure}, _From,
     {reply, ok,
      S#state{stream_procs = maps:remove({Realm, Procedure}, SP)}};
 
+handle_call({realm_key, RealmId}, _From, #state{realm_keys = Keys} = S) ->
+    {reply, pinned_realm_key(maps:find(RealmId, Keys)), S};
 handle_call({sign_node_record, Record}, _From, #state{node_identity = Key} = S) ->
     {reply, node_record_signed(macula_record:node_signed(Record), Record, Key), S};
 handle_call({sign_domain_record, Record}, _From, #state{node_identity = Key} = S) ->

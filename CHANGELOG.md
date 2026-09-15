@@ -309,13 +309,23 @@ Post-quantum work on the `post-quantum` branch. Not on `main`.
   `dial_timeout_ms` from 1 to 600000 milliseconds, and
   `macula_request:start_link/6,7,8` and `start_link_direct/6,7,8` refuse a
   timeout outside that range where the request starts.
+- A pool pins realm trust when it starts: `macula:connect/2`'s
+  `realm_trust => #{RealmId => RealmKey}`, each realm's public key as
+  carried. The pool refuses to start, before any link, on a realm id that
+  is not 32 bytes or a key not well formed for the node's crypto profile
+  (`{realm_trust, invalid}`), or on a key of the other profile
+  (`{realm_trust, profile_mismatch}`). Direct dial checks an org namespaced
+  advertisement against the key pinned for its realm alone
+  (`macula_client:realm_key/2`). A caller looks up no tombstone, so a
+  delegation its org withdraws is honoured until it expires, at most six
+  hours.
 - Direct dial refuses the 10.x trust options by name, with
   `{error, {removed_option, Key}}`, before anything is looked up, dialed,
   registered or published. `macula_direct_dial:call/6` and `call_stream/6`
-  refuse `verify_cert_chain`. `macula_direct_dial:publish_advertisement/5`
-  and the `advertise_direct/7` functions of `macula_response` and
-  `macula_streamer` refuse `cert_chain`. `realm_trust` and `authorization`
-  replace them.
+  refuse `verify_cert_chain`, and `realm_trust`, which the pool now pins.
+  `macula_direct_dial:publish_advertisement/5` and the `advertise_direct/7`
+  functions of `macula_response` and `macula_streamer` refuse `cert_chain`.
+  The realm keys a pool pins and `authorization` replace them.
 - A station link delivers the overlay frames D17 leaves unsigned, as
   `macula_frame:relayed_without_signature/1` names them, from an
   `overlay_relay` envelope, with the envelope's origin as their sender
@@ -368,7 +378,7 @@ Post-quantum work on the `post-quantum` branch. Not on `main`.
   `macula_record:verify_authorization/3` refuses an authorization in any
   other form as `authorization_form_unsupported`, and
   `procedure_advertisement/5` builds only the delegation form.
-  `realm_trust` and `macula_record`'s trust take only `realm_key`. The
+  `macula_record`'s trust takes only `realm_key`. The
   `realm_ca` trust key, certificate path validation, and the
   `no_realm_ca` and `cert_*` refusals are gone.
 

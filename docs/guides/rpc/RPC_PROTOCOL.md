@@ -179,14 +179,15 @@ For an org namespaced procedure, add the realm trust you hold to the map
 org directory and the procedure delegation, the only authorization form. An
 authorization in any other form, a certificate chain included, is refused as
 `authorization_form_unsupported`. Without the realm key, an advertisement for
-an org namespaced procedure is never trusted. The supervised wrappers take
-the same key as `realm_trust => #{realm_key => RealmKey}` in their options
-(`macula_request:start_link_direct/8`). A provider publishes its
+an org namespaced procedure is never trusted. `macula:call/5` and the
+supervised wrappers use the key the pool pinned for the realm, from
+`macula:connect/2`'s `realm_trust => #{RealmId => RealmKey}`. A provider publishes its
 authorization with `macula_response:advertise_direct/7`'s `authorization`
 option, as `#{org_directory => Wire, procedure_delegation => Wire}`. The 10.x
 options `verify_cert_chain` and
 `cert_chain` are refused with `{error, {removed_option, Key}}` before anything
-is looked up or published: `realm_trust` and `authorization` replace them.
+is looked up or published, and so is `realm_trust` on a call: the realm keys
+the pool pins and `authorization` replace them.
 
 This is the same resolve shape used by [content](../content/CONTENT_PROTOCOL.md)'s
 `get_content_station/4,5` and [streaming](../streaming/STREAMING_PROTOCOL.md)'s

@@ -279,13 +279,19 @@ expires no later than any part of its authorization. A provider publishes
 its authorization with `macula_response:advertise_direct/7`'s
 `authorization` option.
 
-A caller passes the realm trust it holds to resolution, as
-`realm_trust => #{realm_key => RealmKey}` in
-`macula_request:start_link_direct/8`'s options. Without the realm key, the
-advertisement is never trusted, so writing an advertisement next to the real
-one does not make a node the server of an org's procedure. The 10.x options
-`verify_cert_chain` and `cert_chain` are refused with
-`{error, {removed_option, Key}}`.
+A caller's pool pins each realm's key when it starts, as
+`realm_trust => #{RealmId => RealmKey}` in `macula:connect/2`'s options, and
+resolution checks an advertisement only against the key pinned for its realm.
+Without that key, the advertisement is never trusted, so writing an
+advertisement next to the real one does not make a node the server of an org's
+procedure. A realm key never arrives with a request: `realm_trust` on a call
+is refused with `{error, {removed_option, realm_trust}}`, as the 10.x options
+`verify_cert_chain` and `cert_chain` are.
+
+A caller checks the authorization from the advertisement alone and looks up
+no tombstone. A delegation its org withdraws is honoured until it expires, so
+the caller-side revocation bound is the delegation's maximum lifetime, six
+hours, and it lengthens if that lifetime does.
 
 ```erlang
 %% consumer side (the check resolution runs on each verified advertisement)

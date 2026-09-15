@@ -257,6 +257,11 @@ The payload of a procedure advertisement, type tag 0x06, holds exactly these key
   embedded record's own signature and validity (D25 item 6).
 - They also refuse an advertisement that expires later than the earliest expiry in its authorization, an embedded
   record's `expires_at`. Renewing an authorization therefore means signing the advertisement again, at a new version.
+- A caller holds a realm key for each realm it trusts, pinned when its pool starts and keyed by realm id, and checks an
+  org directory only against the key pinned for the advertisement's realm.
+- A caller checks the authorization from the advertisement alone and looks up no tombstone. A delegation its org
+  withdraws is honoured until it expires, so the caller-side revocation bound is the delegation's maximum lifetime, six
+  hours, and it lengthens with that lifetime (Jupiter, 2026-09-15).
 - A station that stores or forwards an advertisement verifies its embedded org directory and delegation, once per
   hash, to decide a checked place, and never shows that decision to callers (`DESIGN_PQ_DHT_SLOTS_AND_BUDGET.md`,
   part 2).

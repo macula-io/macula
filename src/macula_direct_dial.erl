@@ -68,13 +68,21 @@
 %%% (the peer identity binding in `macula_peering_conn') checked against the
 %%% exact node_id the signed DHT chain above resolved.
 %%%
-%%% An authorization verifies against the realm trust in `Opts',
-%%% `realm_trust => #{realm_key => RealmKey}': the realm key as carried,
-%%% for the org directory and the procedure delegation, the only
-%%% authorization form. Without the realm key, an advertisement for an org
-%%% namespaced procedure is never trusted. The 10.x options
-%%% `verify_cert_chain' and `cert_chain' are refused by name, with
+%%% An authorization verifies against the realm key the pool pinned for the
+%%% call's realm when it started (`macula:connect/2''s
+%%% `realm_trust => #{RealmId => RealmKey}'): the realm key as carried, for
+%%% the org directory and the procedure delegation, the only authorization
+%%% form. Without a key pinned for the realm, an advertisement for an org
+%%% namespaced procedure is never trusted. A realm key never arrives with a
+%%% request: `realm_trust' on a call, like the 10.x options
+%%% `verify_cert_chain' and `cert_chain', is refused by name, with
 %%% `{error, {removed_option, Key}}' (see `removed_option/2').
+%%%
+%%% A caller checks the authorization from the advertisement alone and looks
+%%% up no tombstone. A delegation its org withdraws is honoured until it
+%%% expires, so the caller-side revocation bound is the delegation's maximum
+%%% lifetime, six hours (`macula_record''s REALM_AND_ORG_MAX_LIFETIME_MS), and
+%%% it lengthens if that lifetime does.
 %%%
 %%% == Content ==
 %%%
@@ -145,14 +153,16 @@
         (Reason =:= record_too_large orelse Reason =:= malformed orelse
          Reason =:= signature_invalid orelse Reason =:= alg_mismatch orelse
          Reason =:= not_yet_valid orelse Reason =:= key_id_mismatch)).
-%% Options 10.x read that each turned a trust check on and 11.0.0 does not
-%% read: `realm_trust' replaces `verify_cert_chain' on a call, and
-%% `authorization' replaces `cert_chain' on an advertisement. One still given
-%% is refused by name, so nobody goes on without the check they asked for.
--define(REMOVED_CALL_OPTIONS, [verify_cert_chain]).
+%% Options a call or an advertisement no longer reads. `verify_cert_chain'
+%% turned a trust check on in 10.x, and the realm keys a pool pins replace it;
+%% `realm_trust' on a call is gone because a realm key never arrives with a
+%% request; `authorization' replaces `cert_chain' on an advertisement. One
+%% still given is refused by name, so nobody goes on without the check they
+%% asked for.
+-define(REMOVED_CALL_OPTIONS, [verify_cert_chain, realm_trust]).
 -define(REMOVED_ADVERTISE_OPTIONS, [cert_chain]).
 
-%% @doc As `call/6' with no realm trust.
+%% @doc As `call/6' with no options.
 -spec call(macula:pool(), macula:realm(), macula:procedure(), term(),
           1..600_000) -> {ok, term()} | {error, term()}.
 call(Pool, Realm, Procedure, Payload, TimeoutMs) ->
@@ -166,12 +176,11 @@ call(Pool, Realm, Procedure, Payload, TimeoutMs) ->
 %% candidate's failure is the result instead, such as
 %% `{error, not_connected}'.
 %% `TimeoutMs' bounds resolution, each candidate's connect wait and the
-%% CALL itself (see "Resolution" in the module doc). `Opts' may include
-%% `realm_trust', the realm trust an org namespaced procedure's
-%% authorization is checked against: see the module doc's "Trust model"
-%% section. `verify_cert_chain', a 10.x option `realm_trust' replaces, is
-%% refused with `{error, {removed_option, verify_cert_chain}}' before
-%% anything is looked up.
+%% CALL itself (see "Resolution" in the module doc). An org namespaced
+%% procedure's authorization is checked against the realm key the pool
+%% pinned for `Realm': see the module doc's "Trust model" section. `Opts'
+%% takes no option: `realm_trust' and `verify_cert_chain' are refused with
+%% `{error, {removed_option, Key}}' before anything is looked up.
 -spec call(macula:pool(), macula:realm(), macula:procedure(), term(),
           1..600_000, map()) -> {ok, term()} | {error, term()}.
 call(Pool, Realm, Procedure, Payload, TimeoutMs, Opts)
@@ -179,15 +188,15 @@ call(Pool, Realm, Procedure, Payload, TimeoutMs, Opts)
     call_unless_removed(removed_option(call, Opts), Pool, Realm, Procedure, Payload, TimeoutMs,
                         Opts).
 
-call_unless_removed(none, Pool, Realm, Procedure, Payload, TimeoutMs, Opts) ->
+call_unless_removed(none, Pool, Realm, Procedure, Payload, TimeoutMs, _Opts) ->
     Deadline = deadline(TimeoutMs),
-    each_candidate(advertised_stations(Pool, Realm, Procedure, Opts),
+    each_candidate(advertised_stations(Pool, Realm, Procedure),
                    station_try(Pool, call_work(Pool, Realm, Procedure, Payload, Deadline)),
                    Deadline);
 call_unless_removed(Removed, _Pool, _Realm, _Procedure, _Payload, _TimeoutMs, _Opts) ->
     {error, Removed}.
 
-%% @doc As `call_stream/6' with no realm trust.
+%% @doc As `call_stream/6' with no options.
 -spec call_stream(macula:pool(), macula:realm(), macula:procedure(), term(),
                   map()) -> {ok, macula:stream()} | {error, term()}.
 call_stream(Pool, Realm, Procedure, Args, StreamOpts) ->
@@ -200,9 +209,8 @@ call_stream(Pool, Realm, Procedure, Args, StreamOpts) ->
 %% override (`mode', `owner', etc); its `dial_timeout_ms' (default
 %% 10_000, from 1 to 600_000 as a call's timeout) bounds resolution and
 %% each candidate's connect wait, and the stream itself keeps its own
-%% deadline. `Opts' is the resolve-side `realm_trust' opt, same as
-%% `call/6', and `verify_cert_chain' in it is refused as `call/6' refuses
-%% it.
+%% deadline. `Opts' takes no option: `realm_trust' and `verify_cert_chain'
+%% in it are refused as `call/6' refuses them.
 -spec call_stream(macula:pool(), macula:realm(), macula:procedure(), term(),
                   map(), map()) -> {ok, macula:stream()} | {error, term()}.
 call_stream(Pool, Realm, Procedure, Args, StreamOpts, Opts)
@@ -212,9 +220,9 @@ call_stream(Pool, Realm, Procedure, Args, StreamOpts, Opts)
     call_stream_unless_removed(removed_option(call, Opts), Pool, Realm, Procedure, Args,
                                StreamOpts, Opts).
 
-call_stream_unless_removed(none, Pool, Realm, Procedure, Args, StreamOpts, Opts) ->
+call_stream_unless_removed(none, Pool, Realm, Procedure, Args, StreamOpts, _Opts) ->
     Deadline = deadline(maps:get(dial_timeout_ms, StreamOpts, ?DEFAULT_DIAL_TIMEOUT_MS)),
-    each_candidate(advertised_stations(Pool, Realm, Procedure, Opts),
+    each_candidate(advertised_stations(Pool, Realm, Procedure),
                    station_try(Pool, stream_work(Pool, Realm, Procedure, Args, StreamOpts)),
                    Deadline);
 call_stream_unless_removed(Removed, _Pool, _Realm, _Procedure, _Args, _StreamOpts, _Opts) ->
@@ -254,9 +262,9 @@ publish_unless_removed(Removed, _Pool, _Realm, _Procedure, _NodeIdentity, _Opts)
     {error, Removed}.
 
 %% @doc The first option in `Opts' that 11.0.0 removed from a call or an
-%% advertisement, as `{removed_option, Key}', or `none'. Each one turned a
-%% trust check on in 10.x: `realm_trust' replaces `verify_cert_chain' on a
-%% call, and `authorization' replaces `cert_chain' on an advertisement.
+%% advertisement, as `{removed_option, Key}', or `none'. On a call, the realm
+%% keys the pool pins replace `verify_cert_chain' and `realm_trust'; on an
+%% advertisement, `authorization' replaces `cert_chain'.
 -spec removed_option(call | advertise, map()) -> none | {removed_option, atom()}.
 removed_option(call, Opts) -> first_given(?REMOVED_CALL_OPTIONS, Opts);
 removed_option(advertise, Opts) -> first_given(?REMOVED_ADVERTISE_OPTIONS, Opts).
@@ -315,7 +323,7 @@ connected_station(Links) ->
 %% fetch: lookups, each provider's connect wait and the transfers. See
 %% `fetch_content/4' for how providers are chosen, and the module doc's
 %% "Content" section
-%% for why this has no `realm_trust'-equivalent opt, unlike
+%% for why it checks no provider authorization, unlike
 %% `call/6'. Only chunked content is discoverable this way — see
 %% `macula:find_content_providers/2'.
 -spec get_content(macula:pool(), macula:mcid(), pos_integer()) ->
@@ -472,18 +480,19 @@ tried({next, Error, Seen}, Rest, Untried, Try, Deadline) ->
     each(Rest, Untried, Try, Deadline, Seen, {candidate, Error}).
 
 %% One pass over `Procedure''s advertisements.
-advertised_stations(Pool, Realm, Procedure, Opts) ->
+advertised_stations(Pool, Realm, Procedure) ->
     Key = macula_record:procedure_key(Realm, Procedure),
-    Trust = trust(Realm, Procedure, Opts),
     fun(Deadline) ->
         qualifying_stations(macula:find_records(Pool, Key, lookup_timeout(Deadline)),
-                            Trust)
+                            fun() -> trust(Pool, Realm, Procedure) end)
     end.
 
+%% The pool is asked for its realm key only once a lookup has answered with
+%% records to check.
 qualifying_stations({ok, []}, _Trust) ->
     {answered, {error, {unresolved, procedure_not_advertised}}};
 qualifying_stations({ok, Recs}, Trust) ->
-    candidates_or(trusted_stations(Recs, Trust), no_trusted_advertisement);
+    candidates_or(trusted_stations(Recs, Trust()), no_trusted_advertisement);
 qualifying_stations({error, Reason}, _Trust) ->
     {failed, {error, {unresolved, Reason}}}.
 
@@ -508,13 +517,16 @@ serving_station(Rec) ->
 
 %% What an advertisement for `Procedure' in `Realm' is checked against:
 %% the node's crypto profile, under which `macula:find_records/3' just
-%% verified the records, and the realm trust the caller holds. Only an
-%% advertisement that passes the check is a candidate at all: see the
-%% module doc's "Trust model" section.
-trust(Realm, Procedure, Opts) ->
+%% verified the records, and the realm key the pool pinned for `Realm', when
+%% it pinned one. Only an advertisement that passes the check is a candidate
+%% at all: see the module doc's "Trust model" section.
+trust(Pool, Realm, Procedure) ->
     {ok, Profile} = macula_crypto_profile:configured(),
-    RealmTrust = maps:with([realm_key], maps:get(realm_trust, Opts, #{})),
-    RealmTrust#{realm => Realm, procedure => Procedure, profile => Profile}.
+    with_realm_key(macula_client:realm_key(Pool, Realm),
+                   #{realm => Realm, procedure => Procedure, profile => Profile}).
+
+with_realm_key({ok, RealmKey}, Trust) -> Trust#{realm_key => RealmKey};
+with_realm_key(none, Trust)           -> Trust.
 
 %% A verified advertisement is trusted when it advertises the resolved
 %% procedure in the resolved realm and its provider authorization

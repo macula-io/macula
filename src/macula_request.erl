@@ -139,10 +139,9 @@ start_link_direct(Module, Pool, Realm, Procedure, Payload, TimeoutMs, Args) ->
 %% @doc As `start_link_direct/7', with options: `direct_call' and
 %% `fact_publish' give the functions the request calls and announces with
 %% (see "Call and publish functions" above), and the other options go to
-%% the call as `macula_direct_dial:call/6' takes them, for example
-%% `realm_trust', the realm trust an org namespaced procedure's
-%% authorization is checked against (see `macula_direct_dial''s module
-%% doc, "Trust model").
+%% the call as `macula_direct_dial:call/6' takes them. An org namespaced
+%% procedure's authorization is checked against the realm key the pool
+%% pinned (see `macula_direct_dial''s module doc, "Trust model").
 -spec start_link_direct(module(), macula:pool(), macula:realm(),
                         macula:procedure(), term(), 1..600_000, term(),
                         direct_opts()) -> {ok, pid()} | {error, term()}.

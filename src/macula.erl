@@ -137,6 +137,13 @@
 %% <ul>
 %%   <li>`node_identity': the pool's node identity key, in the node's crypto
 %%       profile; generated with a puzzle-solved node_id if absent.</li>
+%%   <li>`realm_trust': the realm keys the pool pins, one per realm id, as
+%%       `#{RealmId => RealmKey}', each realm's public key as carried. A call
+%%       trusts an org namespaced advertisement only through the key pinned
+%%       for its realm. Refused as `{error, {realm_trust, invalid}}' unless
+%%       every id is 32 bytes and every key is well formed for the node's
+%%       crypto profile, and as `{error, {realm_trust, profile_mismatch}}'
+%%       for a key of the other profile.</li>
 %%   <li>`replication_factor' — links per PUBLISH (default 2, since 10.19.0).</li>
 %%   <li>`capabilities' — per-link bitfield (default 0).</li>
 %%   <li>`alpn' — QUIC ALPN list (default `[<<"macula">>]').</li>
@@ -253,8 +260,9 @@ unsubscribe(Pool, SubRef) when is_pid(Pool), is_reference(SubRef) ->
 %%%===================================================================
 
 %% @doc Call `Procedure' in `Realm' at the provider that serves it: resolve
-%% the procedure's verified, authorized advertisements, reach the station a
-%% candidate names directly, and call its provider there. See
+%% the procedure's verified advertisements, authorized against the realm key
+%% the pool pinned for `Realm', reach the station a candidate names
+%% directly, and call its provider there. See
 %% `macula_direct_dial:call/5'. A procedure the pool's linked stations serve
 %% themselves, such as `_dht.*', goes through
 %% `macula_client:call_linked_station/5'.
