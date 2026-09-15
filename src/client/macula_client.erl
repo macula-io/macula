@@ -531,7 +531,9 @@
 %% `{error, {transient, no_healthy_station}}' on the publish path).
 %% A node with no crypto profile, or a `node_identity' that is not an
 %% identity key in the node's profile, starts no pool: the refusal is
-%% returned and no link is dialed.
+%% returned and no link is dialed. Nor does a seed that names no node_id
+%% it expects, in the seed or in the `expected_node_id' option: the start
+%% returns `{error, {seeds, expected_node_id_required}}'.
 -spec connect([seed()], opts()) -> {ok, pool()} | {error, term()}.
 connect(Seeds, Opts) when is_list(Seeds), is_map(Opts) ->
     gen_server:start_link(?MODULE, {Seeds, identity_wrapped(Opts)}, []).
@@ -941,9 +943,23 @@ first_outside([Outside | _]) -> Outside.
 
 %% A pool given more seeds than its limit does not start, and dials nothing.
 init_within_seed_limit(Given, Max, Seeds, Opts) when Given =< Max ->
-    init_with_keys(pool_keys(Opts), Seeds, Opts);
+    init_with_pinned_seeds(lists:all(fun(Seed) -> pinned_seed(Seed, Opts) end, Seeds), Seeds, Opts);
 init_within_seed_limit(Given, Max, _Seeds, _Opts) ->
     {error, {too_many_seeds, Given, Max}}.
+
+%% A pool given a seed that names no node_id it expects does not start, loads no key and dials nothing: a link would
+%% refuse that seed at every start, and the pool would look ready with nothing it could reach. A seed map's own
+%% expected_node_id stands over the pool's option, as a link reads it.
+init_with_pinned_seeds(true, Seeds, Opts) ->
+    init_with_keys(pool_keys(Opts), Seeds, Opts);
+init_with_pinned_seeds(false, _Seeds, _Opts) ->
+    {error, {seeds, expected_node_id_required}}.
+
+pinned_seed(#{expected_node_id := NodeId}, _Opts) -> node_id_sized(NodeId);
+pinned_seed(_Seed, #{expected_node_id := NodeId}) -> node_id_sized(NodeId);
+pinned_seed(_Seed, _Opts) -> false.
+
+node_id_sized(NodeId) -> is_binary(NodeId) andalso byte_size(NodeId) =:= 32.
 
 %% A pool whose keys cannot be had does not start: `connect/2' returns
 %% the refusal and no link is dialed.

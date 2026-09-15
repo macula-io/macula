@@ -125,10 +125,13 @@
 
 %% @doc Connect to the Macula relay mesh and return a pool handle.
 %%
-%% `Seeds' is a list of relay endpoints (URL binaries/strings or
-%% `#{host, port}' maps). The pool spawns one peering link per seed
-%% and routes ops with replication, replay, and event dedup. Returns
-%% immediately; link handshakes complete asynchronously.
+%% `Seeds' is a list of station endpoints: `#{host, port, expected_node_id}'
+%% maps, or URL binaries or strings. Every seed names the node_id it
+%% expects, in the seed or in the `expected_node_id' option; otherwise no
+%% pool starts and `{error, {seeds, expected_node_id_required}}' is
+%% returned. The pool spawns one peering link per seed and routes ops with
+%% replication, replay, and event dedup. Returns immediately; link
+%% handshakes complete asynchronously.
 %%
 %% Honored opts (full reference: `macula_client:opts()'):
 %% <ul>
