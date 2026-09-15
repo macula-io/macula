@@ -10,7 +10,7 @@ refusals_every_verifier_reaches_from_the_same_bytes_are_charged_test_() ->
 
 refusals_that_depend_on_what_the_receiver_holds_are_not_charged_test_() ->
     [?_assertNot(macula_frame:charged_refusal(Kind))
-     || Kind <- [seq_mismatch, stream_ended, request_mismatch, not_the_target]].
+     || Kind <- [seq_mismatch, stream_ended, request_mismatch, not_the_target, not_a_peer]].
 
 a_connection_counts_reports_by_kind_and_charged_test() ->
     Conn = conn(),
