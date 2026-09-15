@@ -37,6 +37,10 @@ cases(Keys) ->
                  fun a_later_provider_frame_verifies_with_the_held_key/1,
                  fun a_stream_end_error_and_reply_verify/1,
                  fun a_stream_frame_for_another_open_is_refused/1,
+                 fun a_local_error_term_as_provider_code_or_detail_writes_nothing/1,
+                 fun a_provider_code_over_64_bytes_is_refused/1,
+                 fun a_stream_error_code_or_message_over_its_bound_is_refused/1,
+                 fun a_caller_frame_its_side_may_not_send_is_a_named_error/1,
                  fun no_other_module_builds_or_reads_the_stream_bytes_tag/1]].
 
 a_call_verifies_as_its_callers_request(#{caller := Caller} = Keys) ->
@@ -209,6 +213,48 @@ a_stream_frame_for_another_open_is_refused(#{provider := Provider} = Keys) ->
     ?assertEqual({error, request_mismatch},
                  macula_frame:verify_provider_stream(decoded(Bytes), macula_frame:open_stream(Other), pq_pure)).
 
+%% A local error, such as the refusal stream_bytes/2 itself returns or the Path inside it, is never error text for a
+%% peer: as a provider's code or detail it is refused, and nothing is written.
+a_local_error_term_as_provider_code_or_detail_writes_nothing(#{provider := Provider} = Keys) ->
+    Request = verified_call(Keys),
+    Local = {unsupported_payload_type, tuple, [<<"payload">>, 3]},
+    ?assertEqual({error, {invalid_text, code}},
+                 macula_frame:stream_bytes({provider_error, #{request => Request, code => Local}}, Provider)),
+    ?assertEqual({error, {invalid_text, detail}},
+                 macula_frame:stream_bytes({provider_error, #{request => Request, code => <<"c">>,
+                                                             detail => [<<"payload">>, 3]}}, Provider)).
+
+a_provider_code_over_64_bytes_is_refused(#{provider := Provider} = Keys) ->
+    Request = verified_call(Keys),
+    ?assertEqual({error, {text_too_long, code}},
+                 macula_frame:stream_bytes({provider_error, #{request => Request, code => binary:copy(<<"c">>, 65)}},
+                                           Provider)),
+    ?assertMatch({ok, _},
+                 macula_frame:stream_bytes({provider_error, #{request => Request, code => binary:copy(<<"c">>, 64)}},
+                                           Provider)).
+
+%% A stream error's code is at most 64 bytes, as a provider error's is, and its message at most 256 bytes.
+a_stream_error_code_or_message_over_its_bound_is_refused(#{provider := Provider} = Keys) ->
+    Open = verified_open(Keys),
+    StreamError = fun(Code, Message) ->
+                      macula_frame:stream_bytes({provider_stream, #{frame_type => stream_error, seq => 0, code => Code,
+                                                                    message => Message}, Open}, Provider)
+                  end,
+    ?assertEqual({error, {text_too_long, code}}, StreamError(binary:copy(<<"c">>, 65), <<>>)),
+    ?assertEqual({error, {text_too_long, message}}, StreamError(<<"c">>, binary:copy(<<"m">>, 257))),
+    ?assertMatch({ok, _}, StreamError(binary:copy(<<"c">>, 64), binary:copy(<<"m">>, 256))).
+
+%% A caller sends no STREAM_REPLY, and no STREAM_DATA in a server_stream: asking for one, which a caller's own stream
+%% state can do, is a named error, not a raise.
+a_caller_frame_its_side_may_not_send_is_a_named_error(#{caller := Caller} = Keys) ->
+    Bidi = verified_open(Keys),
+    ServerStream = verified_open(Keys, <<9:128>>, server_stream),
+    ?assertEqual({error, {not_allowed, stream_reply}},
+                 macula_frame:stream_bytes({caller_stream, #{frame_type => stream_reply, seq => 0, payload => 1}, Bidi},
+                                           Caller)),
+    ?assertEqual({error, {not_allowed, stream_data}},
+                 macula_frame:stream_bytes({caller_stream, chunk(0), ServerStream}, Caller)).
+
 %% The tag that marks bytes built here appears in no other module, in a construction or a match, so no other module can
 %% write bytes onto a stream as if stream_bytes/2 had built them. The search sees literal tuples only: a record of that
 %% name, list_to_tuple/1 or an untagged element/2 read would pass it.
@@ -249,8 +295,11 @@ verified_call(#{caller := Caller} = Keys) ->
 verified_open(Keys) ->
     verified_open(Keys, <<7:128>>).
 
-verified_open(#{caller := Caller} = Keys, RequestId) ->
-    Frame = macula_frame:stream_open((call_spec(Keys))#{mode => bidi, request_id => RequestId}, Caller),
+verified_open(Keys, RequestId) ->
+    verified_open(Keys, RequestId, bidi).
+
+verified_open(#{caller := Caller} = Keys, RequestId, Mode) ->
+    Frame = macula_frame:stream_open((call_spec(Keys))#{mode => Mode, request_id => RequestId}, Caller),
     {ok, Request} = macula_frame:verify_request(wire(Frame), pq_pure),
     Request.
 

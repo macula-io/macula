@@ -19,6 +19,7 @@ cases(Keys) ->
                  fun a_frame_its_type_refuses_yields_no_unit/1,
                  fun a_length_header_over_the_cap_yields_no_unit_and_ends_the_parse/1,
                  fun bytes_that_are_not_a_frame_yield_no_unit_and_end_the_parse/1,
+                 fun a_unit_holds_only_its_own_bytes/1,
                  fun no_other_module_builds_or_reads_the_received_frame_tag/1]].
 
 a_frame_that_passes_its_checks_yields_a_unit_of_its_exact_bytes(Keys) ->
@@ -52,6 +53,14 @@ bytes_that_are_not_a_frame_yield_no_unit_and_end_the_parse(Keys) ->
     {malformed, Items, bad_frame} =
         macula_frame:parse_for_relay(<<Good/binary, 4:32/big, "junk", (provider_frame(Keys))/binary>>, ?CAP),
     ?assertEqual([Good], [macula_frame:relayed_bytes(Unit) || {_Frame, Unit} <- Items]).
+
+%% A unit is a copy of its bytes, not a reference into the buffer they were read from, so a unit waiting to be written
+%% keeps no more of that buffer alive than itself.
+a_unit_holds_only_its_own_bytes(Keys) ->
+    [First, Second] = [provider_frame(Keys), caller_frame(Keys)],
+    {ok, Items, <<>>} = macula_frame:parse_for_relay(<<First/binary, Second/binary>>, ?CAP),
+    ?assertEqual([byte_size(First), byte_size(Second)],
+                 [binary:referenced_byte_size(macula_frame:relayed_bytes(Unit)) || {_Frame, Unit} <- Items]).
 
 %% The tag that marks bytes received through the reader appears in no other module, in a construction or a match, so no
 %% other module can relay bytes as if the reader had accepted them.

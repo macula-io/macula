@@ -48,7 +48,9 @@ async_send_on_stream_test_() ->
        {"the bytes arrive as they were given, in order",
         {timeout, 30, fun the_bytes_arrive_as_given/0}},
        {"a relay writes only the frames the reader accepted, as the bytes received",
-        {timeout, 30, fun a_relay_writes_only_the_frames_the_reader_accepted/0}}]}}.
+        {timeout, 30, fun a_relay_writes_only_the_frames_the_reader_accepted/0}},
+       {"a relay to a stopped reader gets busy, queues nothing, and gets one send_ready",
+        {timeout, 30, fun a_relay_to_a_stopped_reader_gets_busy_then_one_send_ready/0}}]}}.
 
 %%%===================================================================
 %%% Scenarios
@@ -147,16 +149,63 @@ a_relay_writes_only_the_frames_the_reader_accepted() ->
         ?assertError(function_clause, macula_peering:relay_on_stream(Stream, Good))
     end).
 
-%% Three frames as their bytes: a provider's stream frame, a frame whose type
-%% refuses its fields (the same frame without its signed object), and a
-%% caller's stream frame.
-relay_samples() ->
+%% A relay writing to a reader that stopped gets {error, busy} once its queue
+%% is full, and the unit it was refused is not queued: once the reader reads
+%% again, it reads exactly the accepted units, and the relay gets exactly one
+%% send_ready. Bytes stream_bytes/2 built are not a relay's to write.
+a_relay_to_a_stopped_reader_gets_busy_then_one_send_ready() ->
+    with_pair(fun(#{client_stream := Stream, server_stream := ServerStream}) ->
+        {Unit, Built} = relay_block(),
+        ?assertError(function_clause, macula_peering:relay_on_stream(Stream, Built)),
+        ?assertError(function_clause, macula_peering:async_relay_on_stream(Stream, Built, built)),
+        Accepted = relayed_until_busy(Stream, Unit, 0),
+        Size = byte_size(macula_frame:relayed_bytes(Unit)),
+        ok = macula_quic:setopt(ServerStream, active, true),
+        <<"open", Read/binary>> = read_bytes(ServerStream, 4 + Accepted * Size, <<>>,
+                                             erlang:monotonic_time(millisecond) + ?EVENT_MS),
+        Later = read_bytes(ServerStream, 1, <<>>, erlang:monotonic_time(millisecond) + 200),
+        ?assertEqual({true, Accepted * Size, <<>>, 1},
+                     {Accepted > 0, byte_size(Read), Later, send_readies(Stream, 500)})
+    end).
+
+relayed_until_busy(Stream, Unit, Accepted) ->
+    relayed(macula_peering:async_relay_on_stream(Stream, Unit), Stream, Unit, Accepted).
+
+relayed(ok, Stream, Unit, Accepted)              -> relayed_until_busy(Stream, Unit, Accepted + 1);
+relayed({error, busy}, _Stream, _Unit, Accepted) -> Accepted.
+
+%% The send_ready messages for Stream that arrive within Ms of each other.
+send_readies(Stream, Ms) ->
+    receive
+        {quic, send_ready, Stream, _} -> 1 + send_readies(Stream, Ms)
+    after Ms ->
+        0
+    end.
+
+%% One received frame of about BLOCK_BYTES as a relay unit, and the same
+%% frame as stream_bytes/2 built it.
+relay_block() ->
+    #{provider := Provider, open := Open} = relay_open(),
+    Chunk = #{frame_type => stream_data, seq => 0, encoding => raw, body => binary:copy(<<0>>, ?BLOCK_BYTES)},
+    {ok, Built} = macula_frame:stream_bytes({provider_stream, Chunk, Open}, Provider),
+    {ok, [{_Frame, Unit}], <<>>} = macula_frame:parse_for_relay(macula_frame:written_bytes(Built), ?WINDOW),
+    {Unit, Built}.
+
+%% A caller, a provider, and the verified STREAM_OPEN between them.
+relay_open() ->
     Generate = fun() -> {ok, Key} = macula_node_keys:generate(identity, pq_pure), Key end,
     [Caller, Provider] = [Generate(), Generate()],
     Spec = #{request_id => <<7:128>>, realm => <<1:256>>, procedure => <<"acme/count_v1">>,
              target => macula_node_keys:key_id(Provider), deadline => 1789000600000, payload => #{}, mode => bidi},
     {ok, OpenFrame, <<>>} = macula_frame:decode(macula_frame:encode(macula_frame:stream_open(Spec, Caller))),
     {ok, Open} = macula_frame:verify_request(OpenFrame, pq_pure),
+    #{caller => Caller, provider => Provider, open => Open}.
+
+%% Three frames as their bytes: a provider's stream frame, a frame whose type
+%% refuses its fields (the same frame without its signed object), and a
+%% caller's stream frame.
+relay_samples() ->
+    #{caller := Caller, provider := Provider, open := Open} = relay_open(),
     Chunk = #{frame_type => stream_data, seq => 0, encoding => raw, body => <<"chunk">>},
     [macula_frame:encode(macula_frame:provider_stream(Chunk, Provider, Open)),
      macula_frame:encode(maps:remove(stream, macula_frame:provider_stream(Chunk#{seq => 1}, Provider, Open))),

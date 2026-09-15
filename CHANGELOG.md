@@ -201,20 +201,24 @@ Post-quantum work on the `post-quantum` branch. Not on `main`.
 - `macula_frame:stream_bytes/2` signs and encodes a frame built for a
   dedicated stream: a CALL or STREAM_OPEN, a RESULT or provider ERROR, a
   station's relay error, or either side's stream frame under its verified
-  STREAM_OPEN. It returns `{ok, StreamBytes}`, or one of these errors, with
-  nothing to write: `{unknown_build_key, Key}` for a field the frame does
-  not have; `unsignable` for a key that is not the identity key of the
+  STREAM_OPEN. It returns `{ok, StreamBytes}`, or an error with nothing to
+  write. Before signing: `{unknown_build_key, Key}` for a field the frame
+  does not have; `unsignable` for a key that is not the identity key of the
   sender the receiver verifies, or a stream frame without its verified
-  STREAM_OPEN; `{invalid_text, Field}` for text that is not UTF-8;
-  `{text_too_long, detail}` for a provider detail over 256 bytes;
-  `relay_code_outside_its_set`; `{unsupported_payload_type, Type, Path}` for
-  a payload, body or reply the wire cannot carry; and `frame_too_large` for
-  a frame whose encoding is over the 16 MiB cap. A `seq` outside the
-  protocol's range raises `function_clause`. `written_bytes/1` gives the
-  bytes of a `stream_bytes()` and refuses anything else.
+  STREAM_OPEN; `{not_allowed, Type}` for a caller's STREAM_REPLY, or a
+  caller's STREAM_DATA in a server_stream; `{invalid_text, Field}` for text
+  that is not a UTF-8 binary; `{text_too_long, Field}` for a code over 64
+  bytes, or a provider detail or STREAM_ERROR message over 256 bytes;
+  `relay_code_outside_its_set`; and `{unsupported_payload_type, Type, Path}`
+  for a payload, body or reply the wire cannot carry. After encoding:
+  `frame_too_large` for a frame over the 16 MiB cap. A build that leaves out
+  a field its frame requires, has a field of the wrong size, or has a `seq`
+  outside the protocol's range raises `function_clause`. `written_bytes/1`
+  gives the bytes of a `stream_bytes()` and refuses anything else.
 - `macula_frame:parse_for_relay/2` parses bytes a relay received on a
   stream: each whole frame that passes the checks of `parse_received/2`
-  comes with a unit of exactly the bytes received for it, a frame whose
+  comes with a unit holding a copy of exactly the bytes received for it, a
+  frame whose
   fields its type refuses comes back refused with no unit, and a length
   header over the cap or a frame that does not decode ends the parse.
   `macula_peering:relay_on_stream/2` and `async_relay_on_stream/2,3` write
