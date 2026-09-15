@@ -1505,8 +1505,7 @@ subscribe_before_connect_drains_on_connected_test_() ->
 %%------------------------------------------------------------------
 %% subscribe/4 mid-handshake (peer_pid set, peer_node_id not yet) --
 %% regression for the bug fixed alongside this test: maybe_send_subscribe/3
-%% used to gate on peer_pid alone, unlike maybe_send_advertise/3 and
-%% maybe_send_unadvertise/3 (both correctly gate on peer_node_id), so a
+%% used to gate on peer_pid alone instead of peer_node_id, so a
 %% SUBSCRIBE frame sent in this exact window landed on the wire while the
 %% peering statem was still in `handshaking' -- which has no clause for
 %% `cast({send_frame, _})' and silently drops it via `drop_unexpected'.
@@ -1558,76 +1557,6 @@ subscribe_during_handshake_not_sent_early_test_() ->
 %%==================================================================
 %% advertise/4 + inbound CALL dispatch
 %%==================================================================
-
-advertise_sends_frame_when_connected_test_() ->
-    {timeout, 5,
-     fun() ->
-         {ok, _} = application:ensure_all_started(macula),
-         Identity = macula_identity:generate(),
-         {ok, Pid} = macula_station_link:start_link(with_link_keys(#{
-             seed     => #{host => <<"127.0.0.1">>, port => 1},
-             connect_timeout_ms => 2000
-         })),
-         FakePeer = self(),
-         PeerNodeId = macula_identity:public(macula_identity:generate()),
-         _ = sys:replace_state(Pid, fun(S) ->
-             S2 = setelement(?PEER_PID_INDEX, S, FakePeer),
-             setelement(?PEER_NODE_ID_INDEX, S2, PeerNodeId)
-         end),
-         Procedure = <<"_realm.membership.join_with_token_v1">>,
-         Handler = fun(_Args) -> {ok, #{joined => true}} end,
-         ok = macula_station_link:advertise(Pid, ?REALM, Procedure, Handler),
-         AdvertiserPub = macula_identity:public(Identity),
-         receive
-             {'$gen_cast', {send_frame,
-                            #{frame_type := advertise,
-                              realm      := R,
-                              procedure  := P,
-                              advertiser := A}}} ->
-                 ?assertEqual(?REALM, R),
-                 ?assertEqual(Procedure, P),
-                 ?assertEqual(AdvertiserPub, A)
-         after 1_000 ->
-             erlang:error(advertise_frame_not_sent)
-         end,
-         macula_station_link:stop(Pid),
-         ok
-     end}.
-
-advertise_before_connect_drains_on_connected_test_() ->
-    {timeout, 5,
-     fun() ->
-         {ok, _} = application:ensure_all_started(macula),
-         {ok, Pid} = macula_station_link:start_link(with_link_keys(#{
-             seed     => #{host => <<"127.0.0.1">>, port => 1},
-             connect_timeout_ms => 2000
-         })),
-         Procedure = <<"_realm.membership.join_with_token_v1">>,
-         Handler = fun(_Args) -> ok end,
-         ok = macula_station_link:advertise(Pid, ?REALM, Procedure, Handler),
-         %% Pre-connect: nothing on the wire yet.
-         receive
-             {'$gen_cast', {send_frame, _}} ->
-                 erlang:error(premature_send_frame)
-         after 200 -> ok
-         end,
-         FakePeer = self(),
-         PeerNodeId = macula_identity:public(macula_identity:generate()),
-         _ = sys:replace_state(Pid, fun(S) ->
-             setelement(?PEER_PID_INDEX, S, FakePeer)
-         end),
-         Pid ! {macula_peering, connected, FakePeer, PeerNodeId},
-         receive
-             {'$gen_cast', {send_frame,
-                            #{frame_type := advertise,
-                              procedure  := P}}} ->
-                 ?assertEqual(Procedure, P)
-         after 1_000 ->
-             erlang:error(advertise_frame_not_drained)
-         end,
-         macula_station_link:stop(Pid),
-         ok
-     end}.
 
 inbound_call_dispatches_to_handler_test_() ->
     {timeout, 5,
@@ -2177,59 +2106,6 @@ forged_reply(Frame, Field) ->
 unsigned_reply(Frame, Field) ->
     Frame#{Field => macula_identity:public(macula_identity:generate())}.
 
-unadvertise_clears_handler_and_sends_frame_test_() ->
-    {timeout, 5,
-     fun() ->
-         {ok, _} = application:ensure_all_started(macula),
-         {ok, Pid} = macula_station_link:start_link(with_link_keys(#{
-             seed     => #{host => <<"127.0.0.1">>, port => 1},
-             connect_timeout_ms => 2000
-         })),
-         FakePeer = self(),
-         PeerNodeId = macula_identity:public(macula_identity:generate()),
-         _ = sys:replace_state(Pid, fun(S) ->
-             S2 = setelement(?PEER_PID_INDEX, S, FakePeer),
-             setelement(?PEER_NODE_ID_INDEX, S2, PeerNodeId)
-         end),
-         Procedure = <<"_test.unadv">>,
-         ok = macula_station_link:advertise(Pid, ?REALM, Procedure,
-                                            fun(_) -> ok end),
-         flush_send_frame_casts(),
-         ok = macula_station_link:unadvertise(Pid, ?REALM, Procedure),
-         receive
-             {'$gen_cast', {send_frame,
-                            #{frame_type := unadvertise,
-                              procedure  := P}}} ->
-                 ?assertEqual(Procedure, P)
-         after 1_000 ->
-             erlang:error(no_unadvertise_frame_sent)
-         end,
-         %% After unadvertise, an inbound CALL must produce
-         %% unknown_next_peer (handler was cleared).
-         CallId = <<5:128>>,
-         CallerKp = macula_identity:generate(),
-         CallerPub = macula_identity:public(CallerKp),
-         Pid ! {macula_peering, frame, FakePeer, macula_frame:sign(#{
-             frame_type  => call,
-             call_id     => CallId,
-             realm       => ?REALM,
-             procedure   => Procedure,
-             payload     => #{},
-             deadline_ms => erlang:system_time(millisecond) + 5_000,
-             caller      => CallerPub
-         }, CallerKp)},
-         receive
-             {'$gen_cast', {send_frame,
-                            #{frame_type := error,
-                              code       := Code}}} ->
-                 ?assertEqual(16#01, Code)
-         after 1_000 ->
-             erlang:error(no_error_frame_sent)
-         end,
-         macula_station_link:stop(Pid),
-         ok
-     end}.
-
 flush_send_frame_casts() ->
     receive
         {'$gen_cast', {send_frame, _}} -> flush_send_frame_casts()
@@ -2480,31 +2356,6 @@ inbound_stream_open_unknown_procedure_returns_error_test_() ->
                      ?assertEqual(<<"not_found">>, Code)
              after 1_000 ->
                  erlang:error(no_stream_error_emitted)
-             end,
-             macula_station_link:stop(Pid)
-         after
-             teardown_link_for_streams(Pid)
-         end
-     end}.
-
-%% -- advertise_stream emits an ADVERTISE frame -------------------
-
-advertise_stream_emits_advertise_frame_test_() ->
-    {timeout, 5,
-     fun() ->
-         {Pid, _Peer, _PeerNodeId} = setup_link_for_streams(),
-         try
-             Procedure = <<"foo.echo">>,
-             Handler = fun(_Stream, _Args) -> ok end,
-             ok = macula_station_link:advertise_stream(
-                    Pid, ?REALM, Procedure, server_stream, Handler),
-             receive
-                 {'$gen_cast', {send_frame,
-                                #{frame_type := advertise,
-                                  procedure  := P}}} ->
-                     ?assertEqual(Procedure, P)
-             after 1_000 ->
-                 erlang:error(no_advertise_frame_sent)
              end,
              macula_station_link:stop(Pid)
          after
@@ -3829,8 +3680,8 @@ start_connected_link() ->
 %% its own process.
 %%------------------------------------------------------------------
 
-%% Start a link with a fake peer patched in, advertise `Handlers'
-%% (a list of {Procedure, Fun}), and drain the ADVERTISE frames. Returns
+%% Start a link with a fake peer patched in and register `Handlers'
+%% (a list of {Procedure, Fun}) on it. Returns
 %% the link and the fake peer's key pair, which the tests sign CALLs with.
 inbound_call_fixture(Handlers) ->
     inbound_call_fixture(Handlers, open).
@@ -3852,12 +3703,7 @@ inbound_call_fixture(Handlers, Policy) ->
     end),
     lists:foreach(
       fun({Proc, Fun}) ->
-              ok = macula_station_link:advertise(Pid, ?REALM, Proc, Fun, Policy),
-              receive
-                  {'$gen_cast', {send_frame, #{frame_type := advertise}}} -> ok
-              after 1_000 ->
-                  erlang:error({no_advertise_frame, Proc})
-              end
+              ok = macula_station_link:advertise(Pid, ?REALM, Proc, Fun, Policy)
       end, Handlers),
     {Pid, PeerKp}.
 

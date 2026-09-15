@@ -1845,14 +1845,10 @@ next_if_not_sent(false, E, _Rest, _Connected, _Call) ->
 %%
 %% Pre-handshake links MUST receive the call too — `advertise/4' on
 %% the link gen_server updates its local `procedures' map regardless
-%% of connection state, and `drain_pending_advertises/1' replays that
-%% map on the next handshake. Filtering by `is_connected/1' here
-%% leaves the link's map out of sync with the pool's intent: a later
-%% `unadvertise' that *also* gets filtered (still pre-handshake)
-%% never clears the link's map, and the link will silently re-ADVERTISE
-%% the dead procedure when it eventually handshakes — the station
-%% re-registers a stale entry that nothing in the SDK will ever
-%% withdraw.
+%% of connection state, and that map is what dispatches a CALL the
+%% station delivers once the link connects. Filtering by
+%% `is_connected/1' here leaves the link's map out of sync with the
+%% pool's intent.
 fanout_advertise([], _Realm, _Proc, _Handler, _Policy) ->
     {error, no_healthy_station};
 fanout_advertise(Pids, Realm, Proc, Handler, Policy) ->
@@ -1875,18 +1871,14 @@ summarize_advertise(Results) ->
     end.
 
 %% Fan-out unadvertise: best-effort; ignored errors. The local pool
-%% state is dropped regardless so subsequent CALLs surface
-%% `unknown_next_peer' from the station.
+%% state is dropped regardless.
 %%
 %% MUST dispatch to every LIVE link (not just connected ones): the
 %% link gen_server's `unadvertise' handler clears its local
-%% `procedures' map unconditionally, and the wire UNADVERTISE is
-%% best-effort inside `maybe_send_unadvertise' (no-op when
-%% pre-handshake). Filtering by `is_connected/1' here leaks: a
-%% link that was disconnected at unadvertise time keeps the proc in
-%% its local map, and on the next handshake `drain_pending_advertises'
-%% replays a now-dead ADVERTISE — the station re-registers an entry
-%% that the pool already considers withdrawn.
+%% `procedures' map unconditionally. Filtering by `is_connected/1'
+%% here leaks: a link that was disconnected at unadvertise time keeps
+%% the handler in its local map, and once it connects dispatches a CALL
+%% for a procedure the pool already considers withdrawn.
 fanout_unadvertise(Pids, Realm, Proc) ->
     [_ = safe_link_unadvertise(P, Realm, Proc)
      || P <- Pids, is_process_alive(P)],

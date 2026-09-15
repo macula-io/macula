@@ -287,6 +287,11 @@ Post-quantum work on the `post-quantum` branch. Not on `main`.
   `realms`, `verify` and `pin_tls_cert` options.
 - `macula_record_uuid:v7/1`. Record versions come from `v7_monotonic/1`,
   and `v7/0` stays for ids that need no order.
+- The ADVERTISE and UNADVERTISE frames a station link sent.
+  `macula_station_link:advertise/4,5`, `advertise_stream/5,6`,
+  `unadvertise/3` and `unadvertise_stream/3` register or remove a handler
+  on the link, for the CALLs and STREAM_OPENs its station delivers to it by
+  target, and send nothing, before or after the link connects.
 
 ### Fixed
 

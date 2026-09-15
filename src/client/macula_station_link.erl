@@ -279,12 +279,10 @@
     %% frames). Resets on link respawn — pool dedup absorbs the gap.
     publish_seq = 0 :: non_neg_integer(),
     %% Advertised RPC procedures. Keyed by `{Realm, Procedure}`. The
-    %% link sends one ADVERTISE frame per entry on every successful
-    %% (re)connect (drained alongside subscriptions on `connected').
-    %% Inbound CALL frames whose `(realm, procedure)' is in this map
-    %% are dispatched to the registered handler; the resulting
-    %% RESULT or call_error frame is shipped back over the same
-    %% peering connection.
+    %% link sends nothing for them. Inbound CALL frames whose
+    %% `(realm, procedure)' is in this map are dispatched to the
+    %% registered handler; the resulting RESULT or call_error frame is
+    %% shipped back over the same peering connection.
     procedures = #{} :: #{{<<_:256>>, binary()} => handler()},
     %% Per-procedure auth policy. Absent = `open' (serve any identified
     %% caller). `{ucan_required, Issuer}' gates the procedure: an inbound
@@ -699,19 +697,15 @@ unsubscribe_async(Client, SubRef)
   when is_pid(Client), is_reference(SubRef) ->
     gen_server:cast(Client, {unsubscribe, SubRef}).
 
-%% @doc Advertise an RPC procedure handler. The link sends an
-%% ADVERTISE frame to the connected station; the station forwards
-%% inbound CALL frames matching `(Realm, Procedure)' back over the
-%% peering connection where this link dispatches them to `Handler'.
+%% @doc Register an RPC procedure handler on this link. A CALL for
+%% `(Realm, Procedure)' that the connected station delivers to this
+%% node, by its target, is dispatched to `Handler'. The link sends no
+%% frame for it.
 %%
-%% Idempotent: re-advertising replaces the prior handler. Replayed
-%% on every (re)connect — the caller does not need to re-call
-%% `advertise/4' after a peering reconnect.
+%% Idempotent: re-advertising replaces the prior handler. The pool
+%% registers its handlers again on a link it respawns.
 %%
-%% Returns once the handler is registered locally. The wire frame
-%% goes out immediately if the peering handshake has completed; if
-%% not, it is queued for the post-HELLO drain (matches `subscribe/4'
-%% semantics).
+%% Returns once the handler is registered.
 %%
 %% Handlers run in a transient process spawned per CALL. They must
 %% return `{ok, Reply}', `{error, Reason}', or any other term (treated
@@ -761,9 +755,8 @@ advertise(Pid, Realm, Procedure, Handler,
        is_binary(RequiredCan), RequiredCan =/= <<>> ->
     gen_server:call(Pid, {advertise, Realm, Procedure, Handler, Policy}, 5_000).
 
-%% @doc Drop a previously-advertised procedure. Sends a best-effort
-%% UNADVERTISE frame to the station and clears the local handler
-%% binding. Idempotent: unknown `(Realm, Procedure)' is a no-op.
+%% @doc Drop a previously-advertised procedure's handler from this link.
+%% Sends nothing. Idempotent: unknown `(Realm, Procedure)' is a no-op.
 -spec unadvertise(pid(), <<_:256>>, binary()) -> ok | {error, term()}.
 unadvertise(Pid, Realm, Procedure)
   when is_pid(Pid),
@@ -906,14 +899,12 @@ call_stream(Pid, Realm, Procedure, Args, Opts)
                     {stream_open, Realm, Procedure, Args, Opts, self()},
                     5_000).
 
-%% @doc Advertise a streaming RPC handler. Idempotent — re-advertising
-%% replaces the prior `{Mode, Handler}'. Replayed on every
-%% (re)connect alongside unary advertisements. Wire shape is the
-%% existing `advertise' frame; the receiving station routes inbound
-%% STREAM_OPEN frames for `(Realm, Procedure)' back over this peering
-%% connection where this link spawns a server-side
-%% `macula_stream' and dispatches `Handler(StreamPid, Args)' in a
-%% transient process. Same as `advertise_stream/6' with policy `open'.
+%% @doc Register a streaming RPC handler on this link. Idempotent —
+%% re-advertising replaces the prior `{Mode, Handler}'. A STREAM_OPEN
+%% for `(Realm, Procedure)' that the connected station delivers to this
+%% node spawns a server-side `macula_stream' and dispatches
+%% `Handler(StreamPid, Args)' in a transient process. The link sends no
+%% frame for it. Same as `advertise_stream/6' with policy `open'.
 -spec advertise_stream(pid(), <<_:256>>, binary(),
                         macula_frame:stream_mode(), stream_handler()) ->
     ok | {error, term()}.
@@ -1158,25 +1149,16 @@ handle_call({subscribe, Realm, Topic, Subscriber}, _From,
 handle_call({unsubscribe, SubRef}, _From, S) ->
     {reply, ok, on_unsubscribe(SubRef, S)};
 
+%% Advertising registers the handler on the link and sends nothing.
 handle_call({advertise, Realm, Proc, Handler, Policy}, _From,
             #state{procedures = P, policies = Pols} = S) ->
-    %% Register locally first so that any CALL frame arriving in the
-    %% same scheduler tick as the ADVERTISE round-trips correctly.
-    %% Replays from the post-HELLO drain pick up the same map.
-    NewS = S#state{procedures = P#{{Realm, Proc} => Handler},
-                   policies   = set_policy({Realm, Proc}, Policy, Pols)},
-    maybe_send_advertise(Realm, Proc, NewS),
-    {reply, ok, NewS};
+    {reply, ok, S#state{procedures = P#{{Realm, Proc} => Handler},
+                        policies   = set_policy({Realm, Proc}, Policy, Pols)}};
 
 handle_call({unadvertise, Realm, Proc}, _From,
             #state{procedures = P, policies = Pols} = S) ->
-    %% Best-effort UNADVERTISE on the wire; ignore disconnected.
-    %% Local clear happens regardless so subsequent inbound CALLs for
-    %% this procedure surface as `unknown_next_peer' from the relay.
-    NewS = S#state{procedures = maps:remove({Realm, Proc}, P),
-                   policies   = maps:remove({Realm, Proc}, Pols)},
-    maybe_send_unadvertise(Realm, Proc, S),
-    {reply, ok, NewS};
+    {reply, ok, S#state{procedures = maps:remove({Realm, Proc}, P),
+                        policies   = maps:remove({Realm, Proc}, Pols)}};
 
 %%-- Overlay-protocol frame transport --------------------------------
 
@@ -1233,17 +1215,13 @@ handle_call({stream_open, Realm, Proc, Args, Opts, Caller}, _From, S) ->
 
 handle_call({stream_advertise, Realm, Proc, Mode, Handler, Policy}, _From,
             #state{stream_procedures = SP, stream_policies = SPols} = S) ->
-    NewS = S#state{stream_procedures = SP#{{Realm, Proc} => {Mode, Handler}},
-                   stream_policies   = set_policy({Realm, Proc}, Policy, SPols)},
-    maybe_send_advertise(Realm, Proc, NewS),
-    {reply, ok, NewS};
+    {reply, ok, S#state{stream_procedures = SP#{{Realm, Proc} => {Mode, Handler}},
+                        stream_policies   = set_policy({Realm, Proc}, Policy, SPols)}};
 
 handle_call({stream_unadvertise, Realm, Proc}, _From,
             #state{stream_procedures = SP, stream_policies = SPols} = S) ->
-    NewS = S#state{stream_procedures = maps:remove({Realm, Proc}, SP),
-                   stream_policies   = maps:remove({Realm, Proc}, SPols)},
-    maybe_send_unadvertise(Realm, Proc, S),
-    {reply, ok, NewS};
+    {reply, ok, S#state{stream_procedures = maps:remove({Realm, Proc}, SP),
+                        stream_policies   = maps:remove({Realm, Proc}, SPols)}};
 
 handle_call(_Req, _From, S) ->
     {reply, {error, unknown_call}, S}.
@@ -1295,8 +1273,6 @@ handle_info({macula_peering, connected, Pid, PeerNodeId},
                                  liveness_misses = 0,
                                  liveness_outstanding = undefined}),
     drain_pending_subscribes(NewS),
-    drain_pending_advertises(NewS),
-    drain_pending_stream_advertises(NewS),
     {noreply, NewS};
 
 handle_info({macula_peering, frame, Pid, Frame},
@@ -2067,9 +2043,8 @@ send_unsubscribe(Pid, Realm, Topic, Id) ->
 %% Send a SUBSCRIBE frame for `(Realm, Topic)' iff peering is connected.
 %% Must gate on `peer_node_id' (set only once the CONNECT/HELLO handshake
 %% completes), not `peer_pid' (set the moment `macula_peering:connect/1'
-%% returns, before handshaking finishes) -- matches `is_connected/1' and
-%% mirrors `maybe_send_advertise/3'/`maybe_send_unadvertise/3' below,
-%% which already gate correctly. Gating on `peer_pid' alone let a
+%% returns, before handshaking finishes) -- matches `is_connected/1'.
+%% Gating on `peer_pid' alone let a
 %% SUBSCRIBE frame through mid-handshake, where the peering statem has no
 %% clause for `cast({send_frame, _})' and silently drops it via
 %% `drop_unexpected' (logged as `_macula.peering.unexpected_event') --
@@ -2284,44 +2259,6 @@ fan_event(error, _SubRef, _Topic, _Payload, _Meta) ->
     ok;
 fan_event({ok, {_R, _T, Subscriber, _Mon}}, SubRef, Topic, Payload, Meta) ->
     Subscriber ! {macula_event, SubRef, Topic, Payload, Meta},
-    ok.
-
-%%-------------------------------------------------------------------
-%% Advertise helpers
-%%-------------------------------------------------------------------
-
-%% Send an ADVERTISE frame iff peering is connected. Otherwise the
-%% post-HELLO drain replays it. Mirrors `maybe_send_subscribe/3'.
-maybe_send_advertise(_Realm, _Procedure, #state{peer_node_id = undefined}) ->
-    ok;
-maybe_send_advertise(Realm, Procedure,
-                     #state{peer_pid = Pid, node_identity = Id}) ->
-    Pub = node_id(Id),
-    Frame = macula_frame:advertise(#{realm      => Realm,
-                                     procedure  => Procedure,
-                                     advertiser => Pub}),
-    try macula_peering:send_frame(Pid, Frame) catch _:_ -> ok end,
-    ok.
-
-%% Best-effort UNADVERTISE on the wire. Disconnected → no-op (the
-%% station purges advertised procedures on peer disconnect anyway).
-maybe_send_unadvertise(_Realm, _Procedure, #state{peer_node_id = undefined}) ->
-    ok;
-maybe_send_unadvertise(Realm, Procedure,
-                       #state{peer_pid = Pid, node_identity = Id}) ->
-    Pub = node_id(Id),
-    Frame = macula_frame:unadvertise(#{realm      => Realm,
-                                       procedure  => Procedure,
-                                       advertiser => Pub}),
-    try macula_peering:send_frame(Pid, Frame) catch _:_ -> ok end,
-    ok.
-
-%% On handshake completion, send an ADVERTISE frame for every stored
-%% procedure. Mirrors `drain_pending_subscribes/1'.
-drain_pending_advertises(#state{procedures = Procs} = S) ->
-    maps:foreach(fun({Realm, Procedure}, _Handler) ->
-        maybe_send_advertise(Realm, Procedure, S)
-    end, Procs),
     ok.
 
 %% Inbound CALL — relay forwarded a CALL whose `(realm, procedure)'
@@ -3160,20 +3097,6 @@ deliver_to_stream({ok, Entry}, Fun) ->
 
 forget_on_full_close(both, Sid, S) -> drop_stream(Sid, S);
 forget_on_full_close(_, _, S)      -> S.
-
-%%-------------------------------------------------------------------
-%% Streaming RPC — replay on (re)connect
-%%-------------------------------------------------------------------
-
-%% Mirror `drain_pending_advertises/1' for streaming procedures. The
-%% wire frame is the existing `advertise' (no separate streaming
-%% advertise frame); the link's local `stream_procedures' map
-%% remains the source of truth for mode-aware dispatch.
-drain_pending_stream_advertises(#state{stream_procedures = SP} = S) ->
-    maps:foreach(fun({Realm, Procedure}, _Entry) ->
-        maybe_send_advertise(Realm, Procedure, S)
-    end, SP),
-    ok.
 
 %%-------------------------------------------------------------------
 %% Streaming RPC — DOWN routing (stream pid vs subscriber pid)

@@ -32,10 +32,9 @@ subs_to(LinkPid, TopicIndex) when is_pid(LinkPid), is_map(TopicIndex) ->
        || {R, T} <- maps:keys(TopicIndex),
           {ok, LinkSubRef} <- [macula_station_link:subscribe(LinkPid, R, T, PoolPid)]]).
 
-%% @doc Re-issue an ADVERTISE frame for every advertised procedure
-%% in `Procs' against `LinkPid'. Mirrors `subs_to/2' for the RPC
-%% surface — used by the pool to restore wire-level advertisement
-%% bindings whenever a station link respawns.
+%% @doc Register the handler of every advertised procedure in `Procs'
+%% on `LinkPid'. Mirrors `subs_to/2' for the RPC surface — used by the
+%% pool to restore a respawned station link's handlers.
 %%
 %% Errors from individual link advertise calls are swallowed: the
 %% next link respawn cycle re-tries.
@@ -50,8 +49,8 @@ advs_to(LinkPid, Procs) when is_pid(LinkPid), is_map(Procs) ->
       end, Procs),
     ok.
 
-%% @doc Re-issue an ADVERTISE frame for every streaming procedure in
-%% `StreamProcs' against `LinkPid'. Mirrors `advs_to/2' for the
+%% @doc Register the handler of every streaming procedure in
+%% `StreamProcs' on `LinkPid'. Mirrors `advs_to/2' for the
 %% streaming RPC surface (SDK 3.17+). Stored shape is
 %% `{Mode, Handler, Policy}' so the receiving link dispatches inbound
 %% STREAM_OPEN frames with the correct mode and keeps enforcing the
