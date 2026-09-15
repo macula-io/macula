@@ -424,6 +424,18 @@ relay_publish_to_a_realm_without_a_server_starts_no_process_test() ->
         ?assertEqual(Links, registry_links(Reg))
     end).
 
+%% A PUBLISH relayed for a realm with no server is refused when the frame
+%% names another realm: no EVENT is built for it, and no process starts.
+relay_publish_of_a_frame_naming_another_realm_is_refused_test() ->
+    with_station_registry(fun(Reg, _Station) ->
+        [R, Other] = [realm(), realm()],
+        Links = registry_links(Reg),
+        ?assertEqual({error, realm_mismatch},
+                     hecate_pubsub_registry:relay_publish(Reg, R, publish_frame(Other, keypair(), 1))),
+        ?assertEqual({error, not_found}, hecate_pubsub_registry:lookup(Reg, R)),
+        ?assertEqual(Links, registry_links(Reg))
+    end).
+
 %% Only a SUBSCRIBE materialises a realm. An UNSUBSCRIBE or an EVENT for a
 %% realm with no server starts none.
 a_frame_other_than_subscribe_starts_no_server_test() ->
