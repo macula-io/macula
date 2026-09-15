@@ -27,6 +27,16 @@ cases(Keys) ->
                  fun an_unsendable_payload_is_an_error_with_nothing_to_write/1,
                  fun an_unsendable_stream_body_or_reply_is_an_error/1,
                  fun a_frame_without_an_identity_key_or_open_is_unsignable/1,
+                 fun a_frame_over_the_frame_cap_is_an_error_not_a_raise/1,
+                 fun a_key_that_is_not_the_verified_sender_is_unsignable/1,
+                 fun a_key_of_the_other_profile_is_unsignable/1,
+                 fun text_that_is_not_utf8_is_a_named_error/1,
+                 fun a_provider_detail_over_256_bytes_is_refused/1,
+                 fun a_relay_error_takes_no_free_detail_and_no_code_outside_its_set/1,
+                 fun a_build_key_the_frame_does_not_have_is_refused/1,
+                 fun a_later_provider_frame_verifies_with_the_held_key/1,
+                 fun a_stream_end_error_and_reply_verify/1,
+                 fun a_stream_frame_for_another_open_is_refused/1,
                  fun no_other_module_builds_or_reads_the_stream_bytes_tag/1]].
 
 a_call_verifies_as_its_callers_request(#{caller := Caller} = Keys) ->
@@ -102,8 +112,106 @@ a_frame_without_an_identity_key_or_open_is_unsignable(#{provider := Provider} = 
     ?assertEqual({error, unsignable}, macula_frame:stream_bytes({provider_stream, chunk(0), Open}, undefined)),
     ?assertEqual({error, unsignable}, macula_frame:stream_bytes({provider_stream, chunk(0), undefined}, Provider)).
 
+%% A payload whose byte floor passes the payload check can still make a frame over the 16 MiB frame cap once it is
+%% signed and encoded: that is an error with nothing to write, never a raise.
+a_frame_over_the_frame_cap_is_an_error_not_a_raise(#{caller := Caller} = Keys) ->
+    Payload = binary:copy(<<0>>, 16#FFFFFF - 16),
+    ?assertEqual(ok, macula_frame:check_payload(Payload)),
+    ?assertEqual({error, frame_too_large},
+                 macula_frame:stream_bytes({call, (call_spec(Keys))#{payload => Payload}}, Caller)).
+
+%% Bytes are built only for the sender its receiver verifies: the STREAM_OPEN's target for a provider's stream frame, its
+%% caller for a caller's, the request's target for a reply. Any other identity key is unsignable, so stream_bytes/2
+%% never returns bytes the receiver refuses.
+a_key_that_is_not_the_verified_sender_is_unsignable(#{caller := Caller, provider := Provider, station := Station} = Keys) ->
+    Open = verified_open(Keys),
+    Request = verified_call(Keys),
+    ?assertEqual({error, unsignable}, macula_frame:stream_bytes({provider_stream, chunk(0), Open}, Caller)),
+    ?assertEqual({error, unsignable}, macula_frame:stream_bytes({caller_stream, chunk(0), Open}, Provider)),
+    ?assertEqual({error, unsignable},
+                 macula_frame:stream_bytes({result, #{request => Request, payload => 1}}, Caller)),
+    ?assertEqual({error, unsignable},
+                 macula_frame:stream_bytes({provider_error, #{request => Request, code => <<"closed">>}}, Station)).
+
+%% A key id holds its profile, so a key of the other profile never passes for the sender.
+a_key_of_the_other_profile_is_unsignable(Keys) ->
+    {ok, Hybrid} = macula_node_keys:generate(identity, pq_hybrid),
+    ?assertEqual({error, unsignable},
+                 macula_frame:stream_bytes({provider_stream, chunk(0), verified_open(Keys)}, Hybrid)).
+
+%% Text a receiver reads as text must be valid UTF-8; otherwise the build is a named error and nothing is written.
+text_that_is_not_utf8_is_a_named_error(#{caller := Caller, provider := Provider} = Keys) ->
+    Bad = <<16#ff, 16#fe>>,
+    Request = verified_call(Keys),
+    Open = verified_open(Keys),
+    Error = #{frame_type => stream_error, seq => 0, code => <<"c">>, message => <<"m">>},
+    ?assertEqual({error, {invalid_text, procedure}},
+                 macula_frame:stream_bytes({call, (call_spec(Keys))#{procedure => Bad}}, Caller)),
+    ?assertEqual({error, {invalid_text, code}},
+                 macula_frame:stream_bytes({provider_error, #{request => Request, code => Bad}}, Provider)),
+    ?assertEqual({error, {invalid_text, detail}},
+                 macula_frame:stream_bytes({provider_error, #{request => Request, code => <<"c">>, detail => Bad}},
+                                           Provider)),
+    ?assertEqual({error, {invalid_text, code}},
+                 macula_frame:stream_bytes({provider_stream, Error#{code => Bad}, Open}, Provider)),
+    ?assertEqual({error, {invalid_text, message}},
+                 macula_frame:stream_bytes({provider_stream, Error#{message => Bad}, Open}, Provider)).
+
+a_provider_detail_over_256_bytes_is_refused(#{provider := Provider} = Keys) ->
+    Request = verified_call(Keys),
+    Error = #{request => Request, code => <<"closed">>},
+    ?assertEqual({error, {text_too_long, detail}},
+                 macula_frame:stream_bytes({provider_error, Error#{detail => binary:copy(<<"a">>, 257)}}, Provider)),
+    ?assertMatch({ok, _},
+                 macula_frame:stream_bytes({provider_error, Error#{detail => binary:copy(<<"a">>, 256)}}, Provider)).
+
+%% A relay error carries a code from its closed set and no free text.
+a_relay_error_takes_no_free_detail_and_no_code_outside_its_set(#{station := Station} = Keys) ->
+    Relay = #{frame_type => error, request => verified_call(Keys), code => unknown_next_peer},
+    ?assertEqual({error, {unknown_build_key, detail}},
+                 macula_frame:stream_bytes({relay_error, Relay#{detail => <<"no route">>}}, Station)),
+    ?assertEqual({error, relay_code_outside_its_set},
+                 macula_frame:stream_bytes({relay_error, Relay#{code => made_up}}, Station)).
+
+%% A build names only the fields its frame has.
+a_build_key_the_frame_does_not_have_is_refused(#{caller := Caller, provider := Provider} = Keys) ->
+    Open = verified_open(Keys),
+    ?assertEqual({error, {unknown_build_key, surprise}},
+                 macula_frame:stream_bytes({call, (call_spec(Keys))#{surprise => 1}}, Caller)),
+    ?assertEqual({error, {unknown_build_key, mode}},
+                 macula_frame:stream_bytes({call, (call_spec(Keys))#{mode => bidi}}, Caller)),
+    ?assertEqual({error, {unknown_build_key, payload}},
+                 macula_frame:stream_bytes({provider_stream, (chunk(0))#{payload => 1}, Open}, Provider)).
+
+a_later_provider_frame_verifies_with_the_held_key(#{provider := Provider} = Keys) ->
+    Open = verified_open(Keys),
+    {ok, First} = macula_frame:stream_bytes({provider_stream, chunk(0), Open}, Provider),
+    {ok, Later} = macula_frame:stream_bytes({provider_stream, chunk(1), Open}, Provider),
+    {ok, _Fields, Held} = macula_frame:verify_provider_stream(decoded(First), macula_frame:open_stream(Open), pq_pure),
+    ?assertMatch({ok, #{seq := 1, body := <<"chunk">>}, _}, macula_frame:verify_provider_stream(decoded(Later), Held, pq_pure)).
+
+a_stream_end_error_and_reply_verify(#{provider := Provider} = Keys) ->
+    Open = verified_open(Keys),
+    Specs = [#{frame_type => stream_end, seq => 0, role => both},
+             #{frame_type => stream_error, seq => 0, code => <<"c">>, message => <<"m">>},
+             #{frame_type => stream_reply, seq => 0, payload => #{n => 1}}],
+    ?assertEqual([stream_end, stream_error, stream_reply],
+                 [begin
+                      {ok, Bytes} = macula_frame:stream_bytes({provider_stream, Spec, Open}, Provider),
+                      {ok, #{frame_type := Type}, _} =
+                          macula_frame:verify_provider_stream(decoded(Bytes), macula_frame:open_stream(Open), pq_pure),
+                      Type
+                  end || Spec <- Specs]).
+
+a_stream_frame_for_another_open_is_refused(#{provider := Provider} = Keys) ->
+    {ok, Bytes} = macula_frame:stream_bytes({provider_stream, chunk(0), verified_open(Keys)}, Provider),
+    Other = verified_open(Keys, <<8:128>>),
+    ?assertEqual({error, request_mismatch},
+                 macula_frame:verify_provider_stream(decoded(Bytes), macula_frame:open_stream(Other), pq_pure)).
+
 %% The tag that marks bytes built here appears in no other module, in a construction or a match, so no other module can
-%% write bytes onto a stream as if stream_bytes/2 had built them.
+%% write bytes onto a stream as if stream_bytes/2 had built them. The search sees literal tuples only: a record of that
+%% name, list_to_tuple/1 or an untagged element/2 read would pass it.
 no_other_module_builds_or_reads_the_stream_bytes_tag(_Keys) ->
     {ok, Modules} = application:get_key(macula, modules),
     %% The search must find the tag where it is, or finding it nowhere else proves nothing.
@@ -138,8 +246,11 @@ verified_call(#{caller := Caller} = Keys) ->
     {ok, Request} = macula_frame:verify_request(wire(macula_frame:call(call_spec(Keys), Caller)), pq_pure),
     Request.
 
-verified_open(#{caller := Caller} = Keys) ->
-    Frame = macula_frame:stream_open((call_spec(Keys))#{mode => bidi}, Caller),
+verified_open(Keys) ->
+    verified_open(Keys, <<7:128>>).
+
+verified_open(#{caller := Caller} = Keys, RequestId) ->
+    Frame = macula_frame:stream_open((call_spec(Keys))#{mode => bidi, request_id => RequestId}, Caller),
     {ok, Request} = macula_frame:verify_request(wire(Frame), pq_pure),
     Request.
 

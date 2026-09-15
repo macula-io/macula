@@ -610,11 +610,18 @@
 %% A frame built here for a dedicated stream, as stream_bytes/2 takes it: a request, a provider's reply, a station's
 %% relay error, or a stream frame of either side under the verified STREAM_OPEN it belongs to.
 -type stream_build() :: {call | stream_open, request_spec()}
-                      | {result, #{request := verified_request(), payload := term(), _ => _}}
-                      | {provider_error, #{request := verified_request(), code := binary(), _ => _}}
+                      | {result, #{request := verified_request(), payload := term(),
+                                   source_route_reverse => binary()}}
+                      | {provider_error, #{request := verified_request(), code := binary(), detail => binary(),
+                                           source_route_reverse => binary()}}
                       | {relay_error, #{frame_type := error | stream_error, request := verified_request(),
-                                        code := unknown_next_peer, _ => _}}
+                                        code := unknown_next_peer, offending_hop => <<_:256>>,
+                                        source_route_partial => binary()}}
                       | {provider_stream | caller_stream, stream_spec(), verified_request() | undefined}.
+
+%% The fields a CALL build may name; a STREAM_OPEN build also names its mode.
+-define(REQUEST_BUILD_KEYS, [request_id, realm, procedure, target, deadline, payload, token, source_route,
+                             retry_budget]).
 
 %% The signed and encoded bytes of a frame built here, tagged so that only what stream_bytes/2 returns is written on a
 %% dedicated stream.
@@ -1431,15 +1438,32 @@ caller_stream(#{frame_type := Type, seq := Seq} = Spec, #{purpose := identity} =
 
 %% @doc The bytes of a frame built here for a dedicated stream: the one step every such frame passes through before it
 %% is written. `Build' names the frame (see `stream_build()'); it is signed with the identity key `Key', under that key's
-%% profile, and encoded. A payload, stream body or reply the wire cannot carry gives
-%% `{error, {unsupported_payload_type, Type, Path}}', and a frame without an identity key, or a stream frame without
-%% its verified STREAM_OPEN, gives `{error, unsignable}'. Neither error builds, signs or returns anything to write, and
-%% neither is for the peer: an error frame carries only the code its build names. `macula_peering:send_on_stream/2'
-%% and `async_send_on_stream/2,3' write the result, through `written_bytes/1'.
+%% profile, and encoded. Before anything is signed, a build that its receiver would refuse, or that the wire cannot
+%% carry, returns an error, never raises, and leaves nothing to write:
+%%
+%% - `{unknown_build_key, Key}' for a field its frame does not have;
+%% - `unsignable' for a key that is not an identity key or not the sender the receiver verifies (the verified
+%%   request's target for a reply or a provider's stream frame, its caller for a caller's stream frame; a key id holds
+%%   its profile, so a key of the other profile is not the sender either), or a stream frame without its verified
+%%   STREAM_OPEN;
+%% - `{invalid_text, Field}' for text that is not valid UTF-8, `{text_too_long, detail}' for a provider detail over
+%%   256 bytes, and `relay_code_outside_its_set' for a relay error code outside the closed set;
+%% - `{unsupported_payload_type, Type, Path}' for a payload, stream body or reply the wire cannot carry;
+%% - `frame_too_large' for a frame whose encoding is over the 16 MiB frame cap.
+%%
+%% None of these is for the peer: an error frame carries only the code its build names. A stream frame's `seq' is its
+%% side's own next sequence number, from 0; a `seq' outside the protocol's range is a programming error and raises
+%% function_clause. `macula_peering:send_on_stream/2' and `async_send_on_stream/2,3' write the result, through
+%% `written_bytes/1'.
 -spec stream_bytes(stream_build(), macula_node_keys:node_key() | undefined) ->
-          {ok, stream_bytes()} | {error, {unsupported_payload_type, atom(), [term()]} | unsignable}.
+          {ok, stream_bytes()}
+        | {error, {unknown_build_key, term()} | unsignable | {invalid_text, atom()} | {text_too_long, detail}
+                | relay_code_outside_its_set | {unsupported_payload_type, atom(), [term()]} | frame_too_large}.
 stream_bytes(Build, #{purpose := identity} = Key) ->
-    stream_signed(sendable(Build), Build, Key);
+    stream_framed(passed_checks([fun() -> known_build_keys(Build) end,
+                                 fun() -> signer(Build, Key) end,
+                                 fun() -> build_texts(Build) end,
+                                 fun() -> sendable(Build) end]), Build, Key);
 stream_bytes(_Build, _NotAnIdentityKey) ->
     {error, unsignable}.
 
@@ -1448,22 +1472,98 @@ stream_bytes(_Build, _NotAnIdentityKey) ->
 written_bytes({macula_stream_bytes, Bytes}) when is_binary(Bytes) ->
     Bytes.
 
-%% What of a build the wire must carry, checked before anything is signed.
+%% The checks of a build, in order; the first refusal is the result.
+passed_checks([])              -> ok;
+passed_checks([Check | Checks]) -> check_passed(Check(), Checks).
+
+check_passed(ok, Checks)               -> passed_checks(Checks);
+check_passed({error, _} = Refused, _Checks) -> Refused.
+
+%% A build names only the fields its frame has.
+known_build_keys({call, Spec})           -> only_build_keys(Spec, ?REQUEST_BUILD_KEYS);
+known_build_keys({stream_open, Spec})    -> only_build_keys(Spec, [mode | ?REQUEST_BUILD_KEYS]);
+known_build_keys({result, Spec})         -> only_build_keys(Spec, [request, payload, source_route_reverse]);
+known_build_keys({provider_error, Spec}) -> only_build_keys(Spec, [request, code, detail, source_route_reverse]);
+known_build_keys({relay_error, Spec})    ->
+    only_build_keys(Spec, [frame_type, request, code, offending_hop, source_route_partial]);
+known_build_keys({Side, Spec, _Open}) when Side =:= provider_stream; Side =:= caller_stream ->
+    only_build_keys(Spec, stream_build_keys(Spec)).
+
+stream_build_keys(#{frame_type := stream_data})  -> [frame_type, seq, encoding, body];
+stream_build_keys(#{frame_type := stream_end})   -> [frame_type, seq, role];
+stream_build_keys(#{frame_type := stream_error}) -> [frame_type, seq, code, message];
+stream_build_keys(#{frame_type := stream_reply}) -> [frame_type, seq, payload];
+stream_build_keys(_TypeTheBuilderRefuses)        -> [frame_type, seq].
+
+only_build_keys(Spec, Known) -> unknown_build_key(maps:keys(Spec) -- Known).
+
+unknown_build_key([])        -> ok;
+unknown_build_key([Key | _]) -> {error, {unknown_build_key, Key}}.
+
+%% The key must be the sender the receiver verifies. A request's caller and a station's relay error name their own key;
+%% a reply and a provider's stream frame need the verified request's target, and a caller's stream frame its caller.
+signer({Type, _Spec}, _Key) when Type =:= call; Type =:= stream_open; Type =:= relay_error ->
+    ok;
+signer({Type, #{request := #{target := Target}}}, Key) when Type =:= result; Type =:= provider_error ->
+    sender_is(Target, Key);
+signer({provider_stream, _Spec, #{frame_type := stream_open, target := Target}}, Key) ->
+    sender_is(Target, Key);
+signer({caller_stream, _Spec, #{frame_type := stream_open, caller := Caller}}, Key) ->
+    sender_is(Caller, Key);
+signer(_BuildWithoutItsVerifiedRequest, _Key) ->
+    {error, unsignable}.
+
+sender_is(Id, Key) -> sender_matches(macula_node_keys:key_id(Key) =:= Id).
+
+sender_matches(true)  -> ok;
+sender_matches(false) -> {error, unsignable}.
+
+%% Text a receiver reads as text is valid UTF-8, a provider's detail is at most 256 bytes, and a relay error's code is
+%% one of the closed set.
+build_texts({Type, #{procedure := Procedure}}) when Type =:= call; Type =:= stream_open ->
+    utf8_text(procedure, Procedure);
+build_texts({provider_error, #{code := Code} = Spec}) ->
+    passed_checks([fun() -> utf8_text(code, Code) end,
+                   fun() -> provider_detail(maps:find(detail, Spec)) end]);
+build_texts({relay_error, #{code := Code}}) ->
+    relay_code_in_set(lists:member(Code, ?RELAY_CODES));
+build_texts({Side, #{frame_type := stream_error, code := Code, message := Message}, _Open})
+  when Side =:= provider_stream; Side =:= caller_stream ->
+    passed_checks([fun() -> utf8_text(code, Code) end, fun() -> utf8_text(message, Message) end]);
+build_texts(_BuildWithoutText) ->
+    ok.
+
+utf8_text(Field, Text) when is_binary(Text) -> valid_utf8(unicode:characters_to_binary(Text, utf8, utf8) =:= Text, Field);
+utf8_text(Field, _NotText)                  -> {error, {invalid_text, Field}}.
+
+valid_utf8(true, _Field)  -> ok;
+valid_utf8(false, Field)  -> {error, {invalid_text, Field}}.
+
+provider_detail(error)                                          -> ok;
+provider_detail({ok, Detail}) when is_binary(Detail), byte_size(Detail) > 256 -> {error, {text_too_long, detail}};
+provider_detail({ok, Detail})                                   -> utf8_text(detail, Detail).
+
+relay_code_in_set(true)  -> ok;
+relay_code_in_set(false) -> {error, relay_code_outside_its_set}.
+
+%% What of a build the wire must carry.
 sendable({Type, #{payload := Payload}}) when Type =:= call; Type =:= stream_open; Type =:= result ->
     check_payload(Payload);
 sendable({Type, _Spec}) when Type =:= provider_error; Type =:= relay_error ->
     ok;
-sendable({Side, Spec, #{frame_type := stream_open}}) when Side =:= provider_stream; Side =:= caller_stream ->
-    stream_sendable(Spec);
-sendable({Side, _Spec, _NoVerifiedOpen}) when Side =:= provider_stream; Side =:= caller_stream ->
-    {error, unsignable}.
+sendable({Side, Spec, _VerifiedOpen}) when Side =:= provider_stream; Side =:= caller_stream ->
+    stream_sendable(Spec).
 
 stream_sendable(#{encoding := msgpack, body := Body}) -> check_payload(Body);
 stream_sendable(#{payload := Payload})                -> check_payload(Payload);
 stream_sendable(_RawBodyOrNoPayload)                  -> ok.
 
-stream_signed(ok, Build, Key)                   -> {ok, {macula_stream_bytes, encode(built(Build, Key))}};
-stream_signed({error, _} = Unsendable, _Build, _Key) -> Unsendable.
+%% The frame cap is judged on the encoded frame: the payload check bounds a payload's size only from below.
+stream_framed(ok, Build, Key)                    -> framed(macula_cbor_nif:pack_deterministic(wire_form(built(Build, Key))));
+stream_framed({error, _} = Refused, _Build, _Key) -> Refused.
+
+framed(Encoded) when byte_size(Encoded) > ?MAX_FRAME_BYTES -> {error, frame_too_large};
+framed(Encoded)                                            -> {ok, {macula_stream_bytes, encode_bytes(Encoded)}}.
 
 built({call, Spec}, Key)                  -> call(Spec, Key);
 built({stream_open, Spec}, Key)           -> stream_open(Spec, Key);
