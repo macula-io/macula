@@ -52,7 +52,7 @@ a_pool_and_a_pubsub_server_with_one_key_share_one_counter_test_() ->
         {ok, Key} = macula_node_keys:generate(identity, Profile),
         Realm = crypto:strong_rand_bytes(32),
         {ok, Pool} = macula_client:connect([], #{node_identity => Key}),
-        {ok, Server} = hecate_pubsub_server:start_link(#{realm => Realm, identity => Key}),
+        {ok, Server} = hecate_pubsub_server:start_link(#{realm => Realm, identity => fun() -> Key end}),
         First = published_seq(hecate_pubsub_server:publish(Server, ?TOPIC, <<"one">>), Profile),
         {error, _} = macula_client:publish(Pool, Realm, ?TOPIC, <<"two">>, #{}),
         Third = published_seq(hecate_pubsub_server:publish(Server, ?TOPIC, <<"three">>), Profile),

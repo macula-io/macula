@@ -145,23 +145,28 @@ the_status_of_a_started_pool_carries_no_private_key_test_() ->
         assert_no_private_half(Status, privates(Key))
     end}.
 
+%% A pubsub server holds its identity key's loader, so its status shows the loader as a printed function and no half of
+%% the key.
 the_status_of_a_pubsub_server_carries_no_private_key_test() ->
     started(),
     Key = key(),
-    {ok, Server} = hecate_pubsub_server:start_link(#{realm => crypto:strong_rand_bytes(32), identity => Key}),
+    {ok, Server} = hecate_pubsub_server:start_link(#{realm => crypto:strong_rand_bytes(32),
+                                                     identity => fun() -> Key end}),
     Status = sys:get_status(Server),
     ok = gen_server:stop(Server),
-    assert_no_private_half(Status, privates(Key)).
+    ?assertEqual({[], false}, {exposed(Status, privates(Key)), holds(Status, macula_node_keys:public_key(Key))}).
 
+%% A registry holds its default identity's loader, so its status shows the loader as a printed function and no half of
+%% the key.
 the_status_of_a_pubsub_registry_carries_no_private_key_test() ->
     started(),
     Key = key(),
-    {ok, Registry} = hecate_pubsub_registry:start_link(#{identity => Key}),
+    {ok, Registry} = hecate_pubsub_registry:start_link(#{identity => fun() -> Key end}),
     %% The registry stops with reason shutdown.
     unlink(Registry),
     Status = sys:get_status(Registry),
     _ = hecate_pubsub_registry:stop(Registry),
-    assert_no_private_half(Status, privates(Key)).
+    ?assertEqual({[], false}, {exposed(Status, privates(Key)), holds(Status, macula_node_keys:public_key(Key))}).
 
 the_status_of_a_statement_issuer_carries_no_private_key_test() ->
     Identity = key(),
@@ -370,6 +375,24 @@ a_pool_started_without_the_application_redacts_its_crash_reports_test_() ->
         end
     end}.
 
+%% A pubsub server and a registry started without the macula application, and with no pool, install the filter too,
+%% once they hold their identity key.
+a_pubsub_server_or_registry_started_without_the_application_installs_the_filter_test_() ->
+    {timeout, ?EU_TIMEOUT, fun() ->
+        started(),
+        Key = key(),
+        Load = fun() -> Key end,
+        Starts = [fun() -> hecate_pubsub_server:start_link(#{realm => crypto:strong_rand_bytes(32), identity => Load})
+                  end,
+                  fun() -> hecate_pubsub_registry:start_link(#{identity => Load}) end],
+        ok = application:stop(macula),
+        try
+            ?assertEqual([1, 1], [installed_by(Start) || Start <- Starts])
+        after
+            started()
+        end
+    end}.
+
 %%------------------------------------------------------------------
 %% A gen_statem that holds a key, a supervisor of one issuer, and a host helper
 %%------------------------------------------------------------------
@@ -465,6 +488,16 @@ filter_ids() ->
 
 installed() ->
     length([Id || Id <- filter_ids(), Id =:= ?FILTER]).
+
+%% How many redaction filters the node holds once Start has started a key holder with none installed. The holder is
+%% stopped after.
+installed_by(Start) ->
+    _ = logger:remove_primary_filter(?FILTER),
+    {ok, Holder} = Start(),
+    Installed = installed(),
+    true = unlink(Holder),
+    ok = gen_server:stop(Holder),
+    Installed.
 
 %% The filter the installer puts in place: the external function redacted_log_event/2 with the application's modules.
 expected_filter() ->

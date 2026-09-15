@@ -2,7 +2,7 @@
 %%
 %% Phase 2 multi-identity refactor: registry is anonymous; tests spawn one per fixture and pass the pid through every
 %% API call. pubsub_servers are spawn-linked by the registry directly (the old `hecate_pubsub_server_sup' is gone).
-%% Every server signs with a node identity key in the node's configured crypto profile.
+%% Every server signs with a node identity key in the node's configured crypto profile, which it is given as a loader.
 -module(hecate_pubsub_registry_tests).
 
 -include_lib("eunit/include/eunit.hrl").
@@ -18,6 +18,10 @@ key() ->
     {ok, Profile} = macula_crypto_profile:configured(),
     {ok, Key} = macula_node_keys:generate(identity, Profile),
     Key.
+
+%% A registry and its servers take an identity as a loader, a function that returns the key.
+loader(Key) ->
+    fun() -> Key end.
 
 setup() ->
     process_flag(trap_exit, true),
@@ -77,9 +81,24 @@ a_registry_with_an_identity_it_cannot_use_does_not_start_test_() ->
         {ok, OtherProfileKey} = macula_node_keys:generate(identity, Other),
         {ok, TlsKey} = macula_node_keys:generate(tls, Profile),
         ?assertEqual({error, {identity_profile_mismatch, Other, Profile}},
-                     hecate_pubsub_registry:start_link(#{identity => OtherProfileKey})),
+                     hecate_pubsub_registry:start_link(#{identity => loader(OtherProfileKey)})),
         ?assertEqual({error, {identity, not_an_identity_key}},
-                     hecate_pubsub_registry:start_link(#{identity => TlsKey}))
+                     hecate_pubsub_registry:start_link(#{identity => loader(TlsKey)}))
+    end}.
+
+%% A registry takes an identity only as a loader. A registry given the key map itself does not start, and register/3
+%% given one refuses it by name before it calls the registry, so the key never enters the registry's mailbox: the
+%% refusal returns while the registry is suspended.
+a_registry_given_a_key_instead_of_a_loader_refuses_it_test_() ->
+    {timeout, 60, fun() ->
+        process_flag(trap_exit, true),
+        Key = key(),
+        Started = hecate_pubsub_registry:start_link(#{identity => Key}),
+        {ok, Reg} = hecate_pubsub_registry:start_link(#{}),
+        ok = sys:suspend(Reg),
+        Registered = try hecate_pubsub_registry:register(Reg, realm(), Key) after ok = sys:resume(Reg) end,
+        catch hecate_pubsub_registry:stop(Reg),
+        ?assertEqual({{error, {identity, not_a_loader}}, {error, {identity, not_a_loader}}}, {Started, Registered})
     end}.
 
 %%---------------------------------------------------------------------
@@ -93,8 +112,8 @@ distinct_registries_isolate_realm_state_test() ->
     {ok, RegB} = hecate_pubsub_registry:start_link(#{}),
     unlink(RegA), unlink(RegB),
     Key = key(),
-    {ok, PidA} = hecate_pubsub_registry:register(RegA, R, Key),
-    {ok, PidB} = hecate_pubsub_registry:register(RegB, R, Key),
+    {ok, PidA} = hecate_pubsub_registry:register(RegA, R, loader(Key)),
+    {ok, PidB} = hecate_pubsub_registry:register(RegB, R, loader(Key)),
     ?assertNotEqual(PidA, PidB),
     %% Subscribe in registry A.
     Sub = id(1),
@@ -110,7 +129,7 @@ distinct_registries_isolate_realm_state_test() ->
 
 register_creates_server(Reg) ->
     R = realm(),
-    {ok, Pid} = hecate_pubsub_registry:register(Reg, R, key()),
+    {ok, Pid} = hecate_pubsub_registry:register(Reg, R, loader(key())),
     ?assert(is_pid(Pid)),
     ?assert(is_process_alive(Pid)),
     ?assertEqual(R, hecate_pubsub_server:realm(Pid)).
@@ -118,18 +137,18 @@ register_creates_server(Reg) ->
 register_idempotent_returns_same_pid(Reg) ->
     R = realm(),
     Key = key(),
-    {ok, Pid1} = hecate_pubsub_registry:register(Reg, R, Key),
-    {ok, Pid2} = hecate_pubsub_registry:register(Reg, R, Key),
+    {ok, Pid1} = hecate_pubsub_registry:register(Reg, R, loader(Key)),
+    {ok, Pid2} = hecate_pubsub_registry:register(Reg, R, loader(Key)),
     ?assertEqual(Pid1, Pid2).
 
 register_after_child_death_yields_fresh_pid(Reg) ->
     R = realm(),
     Key = key(),
-    {ok, Pid1} = hecate_pubsub_registry:register(Reg, R, Key),
+    {ok, Pid1} = hecate_pubsub_registry:register(Reg, R, loader(Key)),
     %% Kill the server abruptly. The EXIT message reaches the registry; wait for it to be processed by polling lookup.
     exit(Pid1, kill),
     wait_until(fun() -> hecate_pubsub_registry:lookup(Reg, R) =:= {error, not_found} end, 1000),
-    {ok, Pid2} = hecate_pubsub_registry:register(Reg, R, Key),
+    {ok, Pid2} = hecate_pubsub_registry:register(Reg, R, loader(Key)),
     ?assertNotEqual(Pid1, Pid2),
     ?assert(is_process_alive(Pid2)).
 
@@ -138,7 +157,7 @@ lookup_unknown_realm_returns_not_found(Reg) ->
 
 lookup_after_register_returns_pid(Reg) ->
     R = realm(),
-    {ok, Pid} = hecate_pubsub_registry:register(Reg, R, key()),
+    {ok, Pid} = hecate_pubsub_registry:register(Reg, R, loader(key())),
     ?assertEqual({ok, Pid}, hecate_pubsub_registry:lookup(Reg, R)).
 
 %%---------------------------------------------------------------------
@@ -147,7 +166,7 @@ lookup_after_register_returns_pid(Reg) ->
 
 child_death_clears_map(Reg) ->
     R = realm(),
-    {ok, Pid} = hecate_pubsub_registry:register(Reg, R, key()),
+    {ok, Pid} = hecate_pubsub_registry:register(Reg, R, loader(key())),
     exit(Pid, kill),
     wait_until(fun() -> hecate_pubsub_registry:lookup(Reg, R) =:= {error, not_found} end, 1000),
     ?assertEqual({error, not_found}, hecate_pubsub_registry:lookup(Reg, R)).
@@ -159,7 +178,7 @@ child_death_clears_map(Reg) ->
 dispatch_subscribe_routes_to_server(Reg) ->
     R = realm(),
     SubId = id(5),
-    {ok, Pid} = hecate_pubsub_registry:register(Reg, R, key()),
+    {ok, Pid} = hecate_pubsub_registry:register(Reg, R, loader(key())),
     Frame = subscribe_frame(R, <<"news">>, SubId),
     {ok, Subs} = hecate_pubsub_registry:dispatch_frame(Reg, R, SubId, Frame),
     ?assertEqual([], Subs),
@@ -168,7 +187,7 @@ dispatch_subscribe_routes_to_server(Reg) ->
 dispatch_event_returns_local_subscribers(Reg) ->
     R = realm(),
     SubId = id(5),
-    {ok, _Pid} = hecate_pubsub_registry:register(Reg, R, key()),
+    {ok, _Pid} = hecate_pubsub_registry:register(Reg, R, loader(key())),
     %% Subscribe via the registry's dispatch path.
     {ok, []} = hecate_pubsub_registry:dispatch_frame(Reg, R, SubId, subscribe_frame(R, <<"news">>, SubId)),
     %% Now an inbound EVENT must match the local subscriber.
@@ -185,7 +204,7 @@ dispatch_unknown_realm_returns_not_found(Reg) ->
 
 dispatch_after_child_death_returns_not_found(Reg) ->
     R = realm(),
-    {ok, Pid} = hecate_pubsub_registry:register(Reg, R, key()),
+    {ok, Pid} = hecate_pubsub_registry:register(Reg, R, loader(key())),
     exit(Pid, kill),
     wait_until(fun() -> hecate_pubsub_registry:lookup(Reg, R) =:= {error, not_found} end, 1000),
     Sub = id(6),
@@ -200,8 +219,8 @@ distinct_realms_isolated(Reg) ->
     R1 = realm(),
     R2 = realm(),
     Key = key(),
-    {ok, P1} = hecate_pubsub_registry:register(Reg, R1, Key),
-    {ok, P2} = hecate_pubsub_registry:register(Reg, R2, Key),
+    {ok, P1} = hecate_pubsub_registry:register(Reg, R1, loader(Key)),
+    {ok, P2} = hecate_pubsub_registry:register(Reg, R2, loader(Key)),
     ?assertNotEqual(P1, P2),
     ok = hecate_pubsub_server:subscribe(P1, <<"t">>, id(1)),
     ?assertEqual(1, hecate_pubsub_server:subscriber_count(P1)),
@@ -221,8 +240,8 @@ list_realms_reports_active_realms(Reg) ->
     R1 = realm(),
     R2 = realm(),
     ?assertEqual([], hecate_pubsub_registry:list_realms(Reg)),
-    {ok, _} = hecate_pubsub_registry:register(Reg, R1, Key),
-    {ok, _} = hecate_pubsub_registry:register(Reg, R2, Key),
+    {ok, _} = hecate_pubsub_registry:register(Reg, R1, loader(Key)),
+    {ok, _} = hecate_pubsub_registry:register(Reg, R2, loader(Key)),
     ?assertEqual(lists:sort([R1, R2]), lists:sort(hecate_pubsub_registry:list_realms(Reg))).
 
 %%---------------------------------------------------------------------
@@ -233,8 +252,8 @@ shutdown_propagates_to_children(Reg) ->
     R1 = realm(),
     R2 = realm(),
     Key = key(),
-    {ok, P1} = hecate_pubsub_registry:register(Reg, R1, Key),
-    {ok, P2} = hecate_pubsub_registry:register(Reg, R2, Key),
+    {ok, P1} = hecate_pubsub_registry:register(Reg, R1, loader(Key)),
+    {ok, P2} = hecate_pubsub_registry:register(Reg, R2, loader(Key)),
     Ref1 = erlang:monitor(process, P1),
     Ref2 = erlang:monitor(process, P2),
     %% Stop the registry. As the linked parent of both pubsub_servers, its termination cascades via OTP exit signals.
@@ -261,7 +280,7 @@ relay_publish_returns_event_and_subscribers(Reg) ->
     %% A local subscriber.
     SubId = id(7),
     %% Materialise the realm with the station's identity.
-    {ok, Server} = hecate_pubsub_registry:register(Reg, R, key()),
+    {ok, Server} = hecate_pubsub_registry:register(Reg, R, loader(key())),
     ok = hecate_pubsub_server:subscribe(Server, <<"weather.measured_v1">>, SubId),
     #{publication := Publication} = PublishFrame = publish_frame(R, <<"weather.measured_v1">>, Daemon),
     {ok, EventFrame, Matched} = hecate_pubsub_registry:relay_publish(Reg, R, PublishFrame),
@@ -281,7 +300,7 @@ relay_publish_returns_event_and_subscribers(Reg) ->
 
 relay_publish_passes_a_refusal_through(Reg) ->
     R = realm(),
-    {ok, _Server} = hecate_pubsub_registry:register(Reg, R, key()),
+    {ok, _Server} = hecate_pubsub_registry:register(Reg, R, loader(key())),
     ?assertEqual({error, signature_invalid},
                  hecate_pubsub_registry:relay_publish(Reg, R, tampered(publish_frame(R, <<"t">>, key())))).
 
@@ -292,7 +311,7 @@ relay_publish_passes_a_refusal_through(Reg) ->
 purge_subscriber_clears_a_single_realm(Reg) ->
     R = realm(),
     Sub = id(1),
-    {ok, Server} = hecate_pubsub_registry:register(Reg, R, key()),
+    {ok, Server} = hecate_pubsub_registry:register(Reg, R, loader(key())),
     ok = hecate_pubsub_server:subscribe(Server, <<"t">>, Sub),
     ok = hecate_pubsub_registry:purge_subscriber(Reg, Sub),
     ?assertEqual(0, hecate_pubsub_server:topic_count(Server)).
@@ -304,8 +323,8 @@ purge_subscriber_fans_out_across_realms(Reg) ->
     R2 = realm(),
     Key = key(),
     Sub = id(1),
-    {ok, S1} = hecate_pubsub_registry:register(Reg, R1, Key),
-    {ok, S2} = hecate_pubsub_registry:register(Reg, R2, Key),
+    {ok, S1} = hecate_pubsub_registry:register(Reg, R1, loader(Key)),
+    {ok, S2} = hecate_pubsub_registry:register(Reg, R2, loader(Key)),
     ok = hecate_pubsub_server:subscribe(S1, <<"a">>, Sub),
     ok = hecate_pubsub_server:subscribe(S2, <<"b">>, Sub),
     ok = hecate_pubsub_registry:purge_subscriber(Reg, Sub),
@@ -314,7 +333,7 @@ purge_subscriber_fans_out_across_realms(Reg) ->
 
 purge_subscriber_keeps_other_subscribers(Reg) ->
     R = realm(),
-    {ok, Server} = hecate_pubsub_registry:register(Reg, R, key()),
+    {ok, Server} = hecate_pubsub_registry:register(Reg, R, loader(key())),
     ok = hecate_pubsub_server:subscribe(Server, <<"t">>, id(1)),
     ok = hecate_pubsub_server:subscribe(Server, <<"t">>, id(2)),
     ok = hecate_pubsub_registry:purge_subscriber(Reg, id(1)),
@@ -328,7 +347,7 @@ purge_subscriber_tolerates_no_realms(Reg) ->
 %% when it hits a dead pid.
 purge_subscriber_tolerates_a_dead_server(Reg) ->
     R = realm(),
-    {ok, Pid} = hecate_pubsub_registry:register(Reg, R, key()),
+    {ok, Pid} = hecate_pubsub_registry:register(Reg, R, loader(key())),
     exit(Pid, kill),
     wait_until(fun() -> not is_process_alive(Pid) end, 1000),
     ?assertEqual(ok, hecate_pubsub_registry:purge_subscriber(Reg, id(1))),
@@ -460,7 +479,7 @@ a_registered_realm_stays_when_its_last_subscription_leaves_test() ->
     with_station_registry(fun(Reg, Station) ->
         R     = realm(),
         SubId = id(5),
-        {ok, Server} = hecate_pubsub_registry:register(Reg, R, Station),
+        {ok, Server} = hecate_pubsub_registry:register(Reg, R, loader(Station)),
         {ok, []} = hecate_pubsub_registry:dispatch_frame(Reg, R, SubId, subscribe_frame(R, <<"news">>, SubId)),
         {ok, []} = hecate_pubsub_registry:dispatch_frame(Reg, R, SubId, unsubscribe_frame(R, <<"news">>, SubId)),
         ?assertEqual({ok, Server}, hecate_pubsub_registry:lookup(Reg, R)),
@@ -474,7 +493,7 @@ a_subscribe_past_the_realm_maximum_is_refused_test() ->
     with_station_registry(#{max_subscribed_realms => 2}, fun(Reg, Station) ->
         [Pinned, R1, R2, R3] = [realm(), realm(), realm(), realm()],
         SubId = id(5),
-        {ok, _} = hecate_pubsub_registry:register(Reg, Pinned, Station),
+        {ok, _} = hecate_pubsub_registry:register(Reg, Pinned, loader(Station)),
         {ok, []} = hecate_pubsub_registry:dispatch_frame(Reg, R1, SubId, subscribe_frame(R1, <<"t">>, SubId)),
         {ok, []} = hecate_pubsub_registry:dispatch_frame(Reg, R2, SubId, subscribe_frame(R2, <<"t">>, SubId)),
         Links = registry_links(Reg),
@@ -495,7 +514,7 @@ registering_a_subscribed_realm_pins_it_test() ->
         SubId = id(5),
         {ok, []} = hecate_pubsub_registry:dispatch_frame(Reg, R, SubId, subscribe_frame(R, <<"news">>, SubId)),
         {ok, Server} = hecate_pubsub_registry:lookup(Reg, R),
-        ?assertEqual({ok, Server}, hecate_pubsub_registry:register(Reg, R, Station)),
+        ?assertEqual({ok, Server}, hecate_pubsub_registry:register(Reg, R, loader(Station))),
         {ok, []} = hecate_pubsub_registry:dispatch_frame(Reg, R, SubId, unsubscribe_frame(R, <<"news">>, SubId)),
         ?assertEqual({ok, Server}, hecate_pubsub_registry:lookup(Reg, R)),
         ?assertEqual({ok, []},
@@ -509,7 +528,7 @@ a_registered_realm_stays_pinned_when_its_server_stops_test() ->
     with_station_registry(#{max_subscribed_realms => 1}, fun(Reg, Station) ->
         [R, Other] = [realm(), realm()],
         SubId = id(5),
-        {ok, Stopped} = hecate_pubsub_registry:register(Reg, R, Station),
+        {ok, Stopped} = hecate_pubsub_registry:register(Reg, R, loader(Station)),
         exit(Stopped, kill),
         wait_until_gone(Reg, R),
         {ok, []} = hecate_pubsub_registry:dispatch_frame(Reg, R, SubId, subscribe_frame(R, <<"news">>, SubId)),
@@ -526,7 +545,7 @@ a_pinned_realm_without_a_server_frees_no_place_test() ->
     with_station_registry(#{max_subscribed_realms => 2}, fun(Reg, Station) ->
         [R, A, B, C] = [realm(), realm(), realm(), realm()],
         SubId = id(5),
-        {ok, Stopped} = hecate_pubsub_registry:register(Reg, R, Station),
+        {ok, Stopped} = hecate_pubsub_registry:register(Reg, R, loader(Station)),
         exit(Stopped, kill),
         wait_until_gone(Reg, R),
         {ok, []} = hecate_pubsub_registry:dispatch_frame(Reg, A, SubId, subscribe_frame(A, <<"t">>, SubId)),
@@ -541,7 +560,7 @@ a_pinned_realm_without_a_server_is_admitted_at_the_maximum_test() ->
     with_station_registry(#{max_subscribed_realms => 1}, fun(Reg, Station) ->
         [R, A] = [realm(), realm()],
         SubId = id(5),
-        {ok, Stopped} = hecate_pubsub_registry:register(Reg, R, Station),
+        {ok, Stopped} = hecate_pubsub_registry:register(Reg, R, loader(Station)),
         exit(Stopped, kill),
         wait_until_gone(Reg, R),
         {ok, []} = hecate_pubsub_registry:dispatch_frame(Reg, A, SubId, subscribe_frame(A, <<"t">>, SubId)),
@@ -588,7 +607,7 @@ with_station_registry(Test) ->
 with_station_registry(Opts, Test) ->
     process_flag(trap_exit, true),
     Station = key(),
-    {ok, Reg} = hecate_pubsub_registry:start_link(Opts#{identity => Station}),
+    {ok, Reg} = hecate_pubsub_registry:start_link(Opts#{identity => loader(Station)}),
     unlink(Reg),
     try Test(Reg, Station) after catch hecate_pubsub_registry:stop(Reg) end.
 

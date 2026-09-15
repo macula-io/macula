@@ -1,6 +1,7 @@
 %% EUnit tests for hecate_pubsub_server. The server signs its own PUBLISH frames with a node identity key in the node's
-%% configured crypto profile, and refuses to start with any other key; a relayed PUBLISH is verified once and its EVENT
-%% carries the publication bytes unchanged; an inbound EVENT is verified before it matches subscribers.
+%% configured crypto profile, given as a loader, and refuses to start with any other key or with the key itself; a
+%% relayed PUBLISH is verified once and its EVENT carries the publication bytes unchanged; an inbound EVENT is verified
+%% before it matches subscribers.
 -module(hecate_pubsub_server_tests).
 
 -include_lib("eunit/include/eunit.hrl").
@@ -24,8 +25,12 @@ key() ->
     {ok, Key} = macula_node_keys:generate(identity, profile()),
     Key.
 
+%% A server takes its identity as a loader, a function that returns the key.
+loader(Key) ->
+    fun() -> Key end.
+
 start() ->
-    {ok, Pid} = hecate_pubsub_server:start_link(#{realm => realm(), identity => key()}),
+    {ok, Pid} = hecate_pubsub_server:start_link(#{realm => realm(), identity => loader(key())}),
     Pid.
 
 stop_(Pid) ->
@@ -44,7 +49,7 @@ start_link_creates_empty_state_test() ->
 
 realm_returns_configured_realm_test() ->
     R = realm(),
-    {ok, Pid} = hecate_pubsub_server:start_link(#{realm => R, identity => key()}),
+    {ok, Pid} = hecate_pubsub_server:start_link(#{realm => R, identity => loader(key())}),
     ?assertEqual(R, hecate_pubsub_server:realm(Pid)),
     hecate_pubsub_server:stop(Pid).
 
@@ -54,13 +59,19 @@ a_server_whose_key_is_in_another_profile_does_not_start_test_() ->
         [Other] = macula_crypto_profile:profiles() -- [Configured],
         {ok, Key} = macula_node_keys:generate(identity, Other),
         ?assertEqual({error, {identity_profile_mismatch, Other, Configured}},
-                     hecate_pubsub_server:start_link(#{realm => realm(), identity => Key}))
+                     hecate_pubsub_server:start_link(#{realm => realm(), identity => loader(Key)}))
     end}.
 
 a_server_whose_key_is_not_an_identity_key_does_not_start_test() ->
     {ok, Key} = macula_node_keys:generate(connect, profile()),
     ?assertEqual({error, {identity, not_an_identity_key}},
-                 hecate_pubsub_server:start_link(#{realm => realm(), identity => Key})).
+                 hecate_pubsub_server:start_link(#{realm => realm(), identity => loader(Key)})).
+
+%% A server is given its identity only as a loader. One given the key map itself does not start, and the refusal names
+%% the option without carrying the key.
+a_server_given_its_key_instead_of_a_loader_does_not_start_test() ->
+    ?assertEqual({error, {identity, not_a_loader}},
+                 hecate_pubsub_server:start_link(#{realm => realm(), identity => key()})).
 
 %%---------------------------------------------------------------------
 %% Subscribe / unsubscribe
@@ -179,7 +190,7 @@ publish_seq_is_seeded_from_wall_clock_microseconds_test() ->
 publish_signs_the_publication_with_the_server_identity_test() ->
     R = realm(),
     Key = key(),
-    {ok, Pid} = hecate_pubsub_server:start_link(#{realm => R, identity => Key}),
+    {ok, Pid} = hecate_pubsub_server:start_link(#{realm => R, identity => loader(Key)}),
     ok = hecate_pubsub_server:subscribe(Pid, <<"t">>, id(1)),
     {Frame, _} = hecate_pubsub_server:publish(Pid, <<"t">>, <<"hello">>),
     Publisher = macula_node_keys:key_id(Key),
@@ -194,7 +205,7 @@ publish_signs_the_publication_with_the_server_identity_test() ->
 
 deliver_event_returns_subscribers_test() ->
     R = realm(),
-    {ok, Pid} = hecate_pubsub_server:start_link(#{realm => R, identity => key()}),
+    {ok, Pid} = hecate_pubsub_server:start_link(#{realm => R, identity => loader(key())}),
     ok = hecate_pubsub_server:subscribe(Pid, <<"t">>, id(1)),
     %% An event another publisher made, for the same realm.
     ?assertEqual([id(1)], hecate_pubsub_server:deliver_event(Pid, event_frame(R, <<"t">>))),
@@ -203,7 +214,7 @@ deliver_event_returns_subscribers_test() ->
 deliver_event_for_other_realm_returns_empty_test() ->
     R1 = realm(),
     R2 = realm(),
-    {ok, Pid} = hecate_pubsub_server:start_link(#{realm => R1, identity => key()}),
+    {ok, Pid} = hecate_pubsub_server:start_link(#{realm => R1, identity => loader(key())}),
     ok = hecate_pubsub_server:subscribe(Pid, <<"t">>, id(1)),
     %% A publication for a different realm must NOT deliver.
     ?assertEqual([], hecate_pubsub_server:deliver_event(Pid, event_frame(R2, <<"t">>))),
@@ -211,7 +222,7 @@ deliver_event_for_other_realm_returns_empty_test() ->
 
 deliver_event_for_a_publication_that_does_not_verify_returns_empty_test() ->
     R = realm(),
-    {ok, Pid} = hecate_pubsub_server:start_link(#{realm => R, identity => key()}),
+    {ok, Pid} = hecate_pubsub_server:start_link(#{realm => R, identity => loader(key())}),
     ok = hecate_pubsub_server:subscribe(Pid, <<"t">>, id(1)),
     ?assertEqual([], hecate_pubsub_server:deliver_event(Pid, tampered(event_frame(R, <<"t">>)))),
     hecate_pubsub_server:stop(Pid).
@@ -223,7 +234,7 @@ deliver_event_for_a_publication_that_does_not_verify_returns_empty_test() ->
 relay_publish_carries_the_publication_bytes_unchanged_test() ->
     R = realm(),
     Publisher = key(),
-    {ok, Pid} = hecate_pubsub_server:start_link(#{realm => R, identity => key()}),
+    {ok, Pid} = hecate_pubsub_server:start_link(#{realm => R, identity => loader(key())}),
     ok = hecate_pubsub_server:subscribe(Pid, <<"io.macula/x/y/v1">>, id(3)),
     #{publication := Publication} = Publish = publish_frame(R, <<"io.macula/x/y/v1">>, Publisher),
     {EventFrame, Matched} = hecate_pubsub_server:relay_publish(Pid, Publish),
@@ -239,13 +250,13 @@ relay_publish_carries_the_publication_bytes_unchanged_test() ->
 
 relay_publish_refuses_a_publication_that_does_not_verify_test() ->
     R = realm(),
-    {ok, Pid} = hecate_pubsub_server:start_link(#{realm => R, identity => key()}),
+    {ok, Pid} = hecate_pubsub_server:start_link(#{realm => R, identity => loader(key())}),
     Publish = tampered(publish_frame(R, <<"t">>, key())),
     ?assertEqual({error, signature_invalid}, hecate_pubsub_server:relay_publish(Pid, Publish)),
     hecate_pubsub_server:stop(Pid).
 
 relay_publish_for_another_realm_is_refused_test() ->
-    {ok, Pid} = hecate_pubsub_server:start_link(#{realm => realm(), identity => key()}),
+    {ok, Pid} = hecate_pubsub_server:start_link(#{realm => realm(), identity => loader(key())}),
     Publish = publish_frame(realm(), <<"t">>, key()),
     ?assertEqual({error, realm_mismatch}, hecate_pubsub_server:relay_publish(Pid, Publish)),
     hecate_pubsub_server:stop(Pid).
