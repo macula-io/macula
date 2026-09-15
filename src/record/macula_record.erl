@@ -629,7 +629,9 @@ procedure_org(Procedure) when is_binary(Procedure) ->
 %% @doc The caller's check of a verified advertisement's provider authorization, against the realm it trusts: the
 %% realm key for the org directory and the delegation, the realm CA (PEM) for a certificate chain. A procedure with an
 %% org namespace needs an authorization for that org, a procedure without one carries none, and the advertisement
-%% expires no later than any part of its authorization.
+%% expires no later than any part of its authorization. A certificate chain holds at most 4 certificates below the
+%% realm CA, a longer one refused as cert_chain_undecodable before any is parsed, and each certificate's validity is
+%% judged at Now, not the wall clock.
 -spec verify_authorization(m_record(), trust(), integer()) -> ok | {error, authorization_refusal()}.
 verify_authorization(#{type := ?TYPE_PROCEDURE_ADVERTISEMENT} = Advertisement, #{profile := _} = Trust, Now) ->
     #{procedure := Procedure, authorization := Authorization} = read_procedure_advertisement(Advertisement),
@@ -1113,8 +1115,8 @@ authorization_for({org, _Org}, undefined, _Adv, _Trust, _Now) ->
 authorization_for({org, Org}, #{org_directory := Directory, procedure_delegation := Delegation}, Adv, Trust, Now)
   when is_binary(Directory), is_binary(Delegation) ->
     delegation_path(maps:get(realm_key, Trust, undefined), Directory, Delegation, Org, Adv, Trust, Now);
-authorization_for({org, Org}, #{certificate_chain := [_ | _] = Chain}, Adv, Trust, _Now) ->
-    certificate_path(maps:get(realm_ca, Trust, undefined), Chain, Org, Adv);
+authorization_for({org, Org}, #{certificate_chain := [_ | _] = Chain}, Adv, Trust, Now) ->
+    certificate_path(maps:get(realm_ca, Trust, undefined), Chain, Org, Adv, Now);
 authorization_for({org, _Org}, _Other, _Adv, _Trust, _Now) ->
     {error, malformed}.
 
@@ -1153,10 +1155,16 @@ delegation_matched(true, Earliest, Adv) -> within(expires_at(Adv) =< Earliest).
 within(true) -> ok;
 within(false) -> {error, authorization_outlived}.
 
-certificate_path(undefined, _Chain, _Org, _Adv) ->
+%% The most certificates a chain holds below the realm CA.
+-define(MAX_CERT_CHAIN, 4).
+
+%% A chain longer than ?MAX_CERT_CHAIN is refused before any certificate in it is parsed.
+certificate_path(undefined, _Chain, _Org, _Adv, _Now) ->
     {error, no_realm_ca};
-certificate_path(RealmCaPem, Chain, Org, #{key := AdvKey} = Adv) ->
-    chain_decoded(decode_chain(Chain), Chain, RealmCaPem, Org, AdvKey, Adv).
+certificate_path(_RealmCaPem, Chain, _Org, _Adv, _Now) when length(Chain) > ?MAX_CERT_CHAIN ->
+    {error, cert_chain_undecodable};
+certificate_path(RealmCaPem, Chain, Org, #{key := AdvKey} = Adv, Now) ->
+    chain_decoded(decode_chain(Chain), Chain, RealmCaPem, Org, AdvKey, Adv, Now).
 
 decode_chain(Ders) ->
     try [public_key:der_decode('Certificate', Der) || Der <- Ders] of
@@ -1165,15 +1173,15 @@ decode_chain(Ders) ->
         _:_ -> error
     end.
 
-chain_decoded(error, _Chain, _RealmCaPem, _Org, _AdvKey, _Adv) ->
+chain_decoded(error, _Chain, _RealmCaPem, _Org, _AdvKey, _Adv, _Now) ->
     {error, cert_chain_undecodable};
-chain_decoded({ok, [Leaf | _] = Certificates}, Chain, RealmCaPem, Org, AdvKey, Adv) ->
-    leaf_matched(leaf_key(Leaf) =:= {ok, AdvKey}, Certificates, Chain, RealmCaPem, Org, Adv).
+chain_decoded({ok, [Leaf | _] = Certificates}, Chain, RealmCaPem, Org, AdvKey, Adv, Now) ->
+    leaf_matched(leaf_key(Leaf) =:= {ok, AdvKey}, Certificates, Chain, RealmCaPem, Org, Adv, Now).
 
-leaf_matched(false, _Certificates, _Chain, _RealmCaPem, _Org, _Adv) ->
+leaf_matched(false, _Certificates, _Chain, _RealmCaPem, _Org, _Adv, _Now) ->
     {error, cert_key_mismatch};
-leaf_matched(true, Certificates, [LeafDer | _] = Chain, RealmCaPem, Org, Adv) ->
-    path_checked(validate_path(RealmCaPem, Chain), cert_org(LeafDer) =:= {ok, Org}, Certificates, Adv).
+leaf_matched(true, Certificates, [LeafDer | _] = Chain, RealmCaPem, Org, Adv, Now) ->
+    path_checked(validate_path(RealmCaPem, Chain, Now), cert_org(LeafDer) =:= {ok, Org}, Certificates, Adv).
 
 path_checked({error, _}, _SameOrg, _Certificates, _Adv) ->
     {error, cert_chain_untrusted};
@@ -1210,15 +1218,37 @@ gregorian_ms(Year, [Mo1, Mo2, D1, D2, H1, H2, Mi1, Mi2, S1, S2, $Z]) ->
     Time = {list_to_integer([H1, H2]), list_to_integer([Mi1, Mi2]), list_to_integer([S1, S2])},
     (calendar:datetime_to_gregorian_seconds({Date, Time}) - ?UNIX_EPOCH_GREGORIAN_SECONDS) * 1000.
 
-%% Validate leaf -> ... -> realm CA. pkix_path_validation wants the chain from the anchor's direct child down to the
-%% leaf, so the leaf-first chain is reversed.
-validate_path(RealmCaPem, ChainDers) ->
-    validate_path_anchor(realm_ca_der(RealmCaPem), ChainDers).
+%% Validate leaf -> ... -> realm CA at the verifier's Now. pkix_path_validation wants the chain from the anchor's direct
+%% child down to the leaf, so the leaf-first chain is reversed.
+validate_path(RealmCaPem, ChainDers, Now) ->
+    validate_path_anchor(realm_ca_der(RealmCaPem), ChainDers, Now).
 
-validate_path_anchor({ok, AnchorDer}, ChainDers) ->
-    validate_path_result(public_key:pkix_path_validation(AnchorDer, lists:reverse(ChainDers), []));
-validate_path_anchor({error, _} = Error, _ChainDers) ->
+validate_path_anchor({ok, AnchorDer}, ChainDers, Now) ->
+    Options = [{verify_fun, {fun valid_at/3, Now}}],
+    validate_path_result(public_key:pkix_path_validation(AnchorDer, lists:reverse(ChainDers), Options));
+validate_path_anchor({error, _} = Error, _ChainDers, _Now) ->
     Error.
+
+%% Path validation judges each certificate's validity window at the verifier's Now, not the wall clock, so every stack
+%% judges a chain at the same instant. public_key's own verdict on the window at the wall clock, cert_expired, is set
+%% aside, and each certificate's notBefore and notAfter are compared with Now once public_key has validated the rest of
+%% it. Every other event keeps public_key's default: a bad certificate fails, and an extension public_key does not
+%% handle stays unknown, so a critical one fails.
+valid_at(_Certificate, {bad_cert, cert_expired}, Now) ->
+    {valid, Now};
+valid_at(_Certificate, {bad_cert, _} = Reason, _Now) ->
+    {fail, Reason};
+valid_at(_Certificate, {extension, _}, Now) ->
+    {unknown, Now};
+valid_at(Certificate, Validated, Now) when Validated =:= valid; Validated =:= valid_peer ->
+    window_at(certificate_window(Certificate), Now).
+
+certificate_window(#'OTPCertificate'{tbsCertificate = #'OTPTBSCertificate'{validity = Validity}}) ->
+    #'Validity'{notBefore = NotBefore, notAfter = NotAfter} = Validity,
+    {time_ms(NotBefore), time_ms(NotAfter)}.
+
+window_at({NotBefore, NotAfter}, Now) when NotBefore =< Now, Now =< NotAfter -> {valid, Now};
+window_at(_Window, _Now) -> {fail, {bad_cert, cert_expired}}.
 
 validate_path_result({ok, _}) -> ok;
 validate_path_result({error, Reason}) -> {error, {bad_cert, Reason}}.

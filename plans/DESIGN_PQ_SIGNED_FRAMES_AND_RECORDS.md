@@ -252,7 +252,10 @@ The payload of a procedure advertisement, type tag 0x06, holds exactly these key
   one that carries no `authorization`.
 - The org directory's `org_name`, or the O of the leaf certificate, equals the org namespace byte for byte.
 - The provider's signature covers `authorization`. The caller, and a serving station that gates a CALL, check each
-  embedded record's own signature and validity, or the chain against the realm's trust anchor (D25 item 6).
+  embedded record's own signature and validity, or the chain against the realm's trust anchor (D25 item 6). A
+  certificate's validity is judged at the verifier's clock for the check, not the wall clock, so every stack judges a
+  chain at the same instant, and a chain of more than 4 certificates below the realm CA is refused as
+  `cert_chain_undecodable` before any certificate is parsed.
 - They also refuse an advertisement that expires later than the earliest expiry in its authorization: an embedded
   record's `expires_at`, or a certificate's notAfter. Renewing an authorization therefore means signing the
   advertisement again, at a new version.

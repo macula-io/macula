@@ -272,7 +272,9 @@ is served only by a provider that org authorized, and a caller checks that
 before it calls. The provider's `procedure_advertisement` carries its
 authorization in one of two forms: an org directory with a procedure
 delegation, checked against the realm key, or a certificate chain, checked
-against the realm CA. A procedure without an org namespace carries none, and
+against the realm CA. A chain holds at most 4 certificates below the realm
+CA, and each certificate's validity is judged at the time the caller passes,
+not the wall clock. A procedure without an org namespace carries none, and
 an advertisement expires no later than any part of its authorization. A
 provider publishes its authorization with
 `macula_response:advertise_direct/7`'s `authorization` option.
