@@ -352,6 +352,18 @@ relay_publish_of_a_frame_naming_another_realm_is_refused_test() ->
         ?assertEqual(Links, registry_links(Reg))
     end).
 
+%% A PUBLISH relayed for a realm with no server is verified before its EVENT is
+%% built: a tampered publication gets its refusal, and no process starts.
+relay_publish_of_a_tampered_frame_for_a_realm_without_a_server_is_refused_test() ->
+    with_station_registry(fun(Reg, _Station) ->
+        R = realm(),
+        Links = registry_links(Reg),
+        Tampered = tampered(publish_frame(R, <<"weather.measured_v1">>, key())),
+        ?assertEqual({error, signature_invalid}, hecate_pubsub_registry:relay_publish(Reg, R, Tampered)),
+        ?assertEqual({error, not_found}, hecate_pubsub_registry:lookup(Reg, R)),
+        ?assertEqual(Links, registry_links(Reg))
+    end).
+
 %% Only a SUBSCRIBE materialises a realm. An UNSUBSCRIBE or an EVENT for a
 %% realm with no server starts none.
 a_frame_other_than_subscribe_starts_no_server_test() ->
