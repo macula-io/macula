@@ -10,7 +10,9 @@
 %%% {quic, send_incomplete, Stream, {Tag, Reason}} when the stream is reset or
 %%% fails first, never both. A caller that is not the stream's owner gets
 %%% these messages, and the owner gets none of them. The bytes arrive as they
-%%% were given, in order, as a relay passes a frame on.
+%%% were given, in order, as a relay passes a frame on. A relay writes only
+%%% what macula_frame:parse_for_relay/2 accepted: relay_on_stream/2 and
+%%% async_relay_on_stream/2,3 take its units, never bytes.
 %%%
 %%% Senders run in monitored processes, so a sender that fails fails its own
 %%% test with the reason, and the other tests still run.
@@ -43,7 +45,9 @@ async_send_on_stream_test_() ->
        {"a reset racing a tagged write gives exactly one notice for that tag",
         {timeout, 60, fun a_reset_racing_a_write_gives_one_notice/0}},
        {"the bytes arrive as they were given, in order",
-        {timeout, 30, fun the_bytes_arrive_as_given/0}}]}}.
+        {timeout, 30, fun the_bytes_arrive_as_given/0}},
+       {"a relay writes only the frames the reader accepted, as the bytes received",
+        {timeout, 30, fun a_relay_writes_only_the_frames_the_reader_accepted/0}}]}}.
 
 %%%===================================================================
 %%% Scenarios
@@ -121,6 +125,41 @@ the_bytes_arrive_as_given() ->
                           erlang:monotonic_time(millisecond) + ?EVENT_MS),
         ?assertEqual({lists:duplicate(8, ok), Expected}, {Sent, Read})
     end).
+
+%% A relay parses what it received with the reader and writes only the units
+%% the reader gave it: the far side reads exactly the bytes of the frames that
+%% passed, in order, and never the bytes of the frame the reader refused. The
+%% refusal is named once, and a raw binary is not written.
+a_relay_writes_only_the_frames_the_reader_accepted() ->
+    with_pair(fun(#{client_stream := Stream, server_stream := ServerStream}) ->
+        ok = macula_quic:setopt(ServerStream, active, true),
+        [Good, Refused, Other] = relay_samples(),
+        {ok, Items, <<>>} = macula_frame:parse_for_relay(<<Good/binary, Refused/binary, Other/binary>>, ?WINDOW),
+        [First, Second] = [Unit || {Frame, Unit} <- Items, is_map(Frame)],
+        ok = macula_peering:relay_on_stream(Stream, First),
+        ok = macula_peering:async_relay_on_stream(Stream, Second, relayed),
+        Expected = <<"open", Good/binary, Other/binary>>,
+        Read = read_bytes(ServerStream, byte_size(Expected), <<>>, erlang:monotonic_time(millisecond) + ?EVENT_MS),
+        Later = read_bytes(ServerStream, 1, <<>>, erlang:monotonic_time(millisecond) + 200),
+        ?assertEqual({[refused], Expected, <<>>, [{complete, relayed}]},
+                     {[refused || {refused, _} <- Items], Read, Later, notices_until(Stream, 1)}),
+        ?assertError(function_clause, macula_peering:relay_on_stream(Stream, Good))
+    end).
+
+%% Three frames as their bytes: a provider's stream frame, a frame whose type
+%% refuses its fields (the same frame without its signed object), and a
+%% caller's stream frame.
+relay_samples() ->
+    Generate = fun() -> {ok, Key} = macula_node_keys:generate(identity, pq_pure), Key end,
+    [Caller, Provider] = [Generate(), Generate()],
+    Spec = #{request_id => <<7:128>>, realm => <<1:256>>, procedure => <<"acme/count_v1">>,
+             target => macula_node_keys:key_id(Provider), deadline => 1789000600000, payload => #{}, mode => bidi},
+    {ok, OpenFrame, <<>>} = macula_frame:decode(macula_frame:encode(macula_frame:stream_open(Spec, Caller))),
+    {ok, Open} = macula_frame:verify_request(OpenFrame, pq_pure),
+    Chunk = #{frame_type => stream_data, seq => 0, encoding => raw, body => <<"chunk">>},
+    [macula_frame:encode(macula_frame:provider_stream(Chunk, Provider, Open)),
+     macula_frame:encode(maps:remove(stream, macula_frame:provider_stream(Chunk#{seq => 1}, Provider, Open))),
+     macula_frame:encode(macula_frame:caller_stream(Chunk, Caller, Open))].
 
 %%%===================================================================
 %%% Senders

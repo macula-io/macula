@@ -44,6 +44,9 @@
     send_on_stream/2,
     async_send_on_stream/2,
     async_send_on_stream/3,
+    relay_on_stream/2,
+    async_relay_on_stream/2,
+    async_relay_on_stream/3,
     close_dedicated_stream/1,
     object_refused/2,
     refusals/1
@@ -226,6 +229,26 @@ async_send_on_stream(Stream, Bytes) when is_binary(Bytes) ->
 -spec async_send_on_stream(reference(), binary(), term()) -> ok | {error, term()}.
 async_send_on_stream(Stream, Bytes, Tag) when is_binary(Bytes) ->
     macula_quic:async_send(Stream, Bytes, Tag).
+
+%% @doc Write a frame a relay received onto a dedicated stream, as the bytes
+%% it received: a unit `macula_frame:parse_for_relay/2' accepted, and nothing
+%% else, so a relay never writes bytes its reader did not accept. Synchronous,
+%% as `send_on_stream/2'.
+-spec relay_on_stream(reference(), macula_frame:received_frame()) -> ok | {error, term()}.
+relay_on_stream(Stream, Received) ->
+    macula_quic:send(Stream, macula_frame:relayed_bytes(Received)).
+
+%% @doc `relay_on_stream/2' without waiting, with the busy and send_ready
+%% behaviour of `async_send_on_stream/2'.
+-spec async_relay_on_stream(reference(), macula_frame:received_frame()) -> ok | {error, term()}.
+async_relay_on_stream(Stream, Received) ->
+    macula_quic:async_send(Stream, macula_frame:relayed_bytes(Received)).
+
+%% @doc `async_relay_on_stream/2' for a frame whose end the calling process
+%% hears about, with the notices of `async_send_on_stream/3'.
+-spec async_relay_on_stream(reference(), macula_frame:received_frame(), term()) -> ok | {error, term()}.
+async_relay_on_stream(Stream, Received, Tag) ->
+    macula_quic:async_send(Stream, macula_frame:relayed_bytes(Received), Tag).
 
 %% @doc Report an object a connection carried that its receiver
 %% refused, by the kind of refusal. The connection counts refusals by
