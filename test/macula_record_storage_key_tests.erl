@@ -2,7 +2,8 @@
 %% signer's node_id, every other record under SHA-256("MACULA-PQ-STORAGE-KEY-V1" || 0x00 || type || fields), with a
 %% 32-byte id as it is and any other field length-prefixed. The vectors were computed in Python (2026-09-11) with
 %% realm id 0x11..., member 0x22..., org key id 0x44..., advertiser 0x55..., station 0x77... and content id
-%% 02 55 88....
+%% 02 55 88.... The realm-signed types, realm directory, realm stations, realm member endorsement and org directory,
+%% are keyed by their signer's key id first, so each realm key's entries have slots of their own.
 -module(macula_record_storage_key_tests).
 
 -include_lib("eunit/include/eunit.hrl").
@@ -23,9 +24,22 @@ station_endpoint_key_vector_test() ->
     ?assertEqual(hex(<<"745798b5c27ad23602e034732f508ab43dd623371133fb5425ee4f600e09bc6c">>),
                  macula_record:station_endpoint_key(fill(16#77))).
 
+%% The realm-signed types' keys name the realm key id first, 0x33..., then the realm id, 0x11....
 org_directory_key_vector_test() ->
-    ?assertEqual(hex(<<"a0c45a66de0f7000a76726e424add18ef32014cbd106e9c72e8c8425c1282924">>),
-                 macula_record:org_directory_key(fill(16#11), <<"acme">>)).
+    ?assertEqual(hex(<<"92b9db780531f5cabf7a6e1fc3a2d9a8a6b94ab15c32090abc45023305b232a4">>),
+                 macula_record:org_directory_key(fill(16#33), fill(16#11), <<"acme">>)).
+
+realm_directory_key_vector_test() ->
+    ?assertEqual(hex(<<"d45621d5e2812ad4dafd8e8eda3f148cd9ebc536fec97ff5e92112854f47d2f2">>),
+                 macula_record:realm_directory_key(fill(16#33), fill(16#11))).
+
+realm_stations_key_vector_test() ->
+    ?assertEqual(hex(<<"c208251a45776551e18275eff18083aa85583877ae6b89406a4f936d20f3e1fa">>),
+                 macula_record:realm_stations_key(fill(16#33), fill(16#11))).
+
+realm_member_endorsement_key_vector_test() ->
+    ?assertEqual(hex(<<"451ef7d62e7ba4579454a90695dd141d33d6099acec1d332c8c016221acb1f96">>),
+                 macula_record:realm_member_endorsement_key(fill(16#33), fill(16#11), fill(16#22))).
 
 procedure_delegation_key_vector_test() ->
     ?assertEqual(hex(<<"011574703bed4c79df51f4cc53afcebd79a4401518b830aa12587950d1edfda4">>),
@@ -33,29 +47,32 @@ procedure_delegation_key_vector_test() ->
 
 records_named_by_their_payload_match_the_vectors_test() ->
     RealmId = fill(16#11),
-    Cases = [{"5ae659563813ed3f41b6ce4360c0397ddd46878fec0015beab4b2f7661a9fe29",
-              macula_record:realm_directory(RealmId, <<"io.macula">>, fill(1))},
-             {"d92cb1913d63777c2d7a4e7cb2177a978ecff041c00bb9567cf9fafd1e812341",
-              macula_record:realm_stations(RealmId, [])},
-             {"d93b63bd8a0c04442b094aa046be12eb4e72e34156913e2e413904c580bfdc3b",
-              macula_record:realm_member_endorsement(RealmId, #{realm => RealmId, member_node => fill(16#22),
-                                                                roles => []})},
-             {"efbcd93463f2cd8c2c00fd481ef4f2ad2948af8476f505d4e3aeb13b9e69e2bc",
+    Cases = [{"efbcd93463f2cd8c2c00fd481ef4f2ad2948af8476f505d4e3aeb13b9e69e2bc",
               macula_record:procedure_advertisement(fill(16#55), RealmId, <<"acme/get_forecast_v1">>, fill(16#77))},
              {"51c6fc4b520eed65bb556522be043366a888fb7c9a2d0915392378ca0adb8c31",
               macula_record:foundation_t3_attestation(fill(16#77), 1789000000000)},
              {"c3860b4b53a5ad2ab73ec3c26ec8c228e46f2f0c123732b257ea5c8b93351138",
-              macula_record:content_announcement(fill(16#55), mcid(), <<"quic://h:1">>)},
-             {"a0c45a66de0f7000a76726e424add18ef32014cbd106e9c72e8c8425c1282924",
-              macula_record:org_directory(RealmId, <<"acme">>, fill(16#44))}],
+              macula_record:content_announcement(fill(16#55), mcid(), <<"quic://h:1">>)}],
     [?assertEqual(hex(list_to_binary(Hex)), macula_record:storage_key(Record)) || {Hex, Record} <- Cases].
 
 %% Records named by their signer, with key id 0x33 repeated. The vectors were computed in Python (2026-09-15) from the
 %% design's formula, by a script that first reproduces procedure_key_vector_test's vector, and macula-go pins the same
-%% rows, so a change of field order or prefix in either stack fails here or there. Each row names its vector.
+%% rows, so a change of field order or prefix in either stack fails here or there. Each row names its vector. The four
+%% realm-signed rows, keyed by the realm key id and then the realm id, were computed the same way (2026-09-15) by a
+%% script that first reproduces three committed vectors.
 records_named_by_their_signer_match_the_vectors_test() ->
     Signer = fill(16#33),
-    Cases = [{"76f0c1daf5c481e36fe610398b395a8bca902297e292e1a21e1b161b01007c47",
+    RealmId = fill(16#11),
+    Cases = [{"d45621d5e2812ad4dafd8e8eda3f148cd9ebc536fec97ff5e92112854f47d2f2",
+              macula_record:realm_directory(RealmId, <<"io.macula">>, fill(1))},
+             {"c208251a45776551e18275eff18083aa85583877ae6b89406a4f936d20f3e1fa",
+              macula_record:realm_stations(RealmId, [])},
+             {"451ef7d62e7ba4579454a90695dd141d33d6099acec1d332c8c016221acb1f96",
+              macula_record:realm_member_endorsement(RealmId, #{realm => RealmId, member_node => fill(16#22),
+                                                                roles => []})},
+             {"92b9db780531f5cabf7a6e1fc3a2d9a8a6b94ab15c32090abc45023305b232a4",
+              macula_record:org_directory(RealmId, <<"acme">>, fill(16#44))},
+             {"76f0c1daf5c481e36fe610398b395a8bca902297e292e1a21e1b161b01007c47",
               macula_record:foundation_seed_list([])},
              {"a5aad8cf95e5bbd30728b699bd8f1ed4434edc6b3cfa7fb508ec18a9a104cc29",
               macula_record:foundation_parameter(<<"max_hops">>, 8)},
@@ -88,6 +105,42 @@ a_procedure_delegation_is_stored_under_its_org_key_id_and_advertiser_test() ->
     OrgKeyId = macula_node_keys:key_id(Org),
     R = macula_record:sign(macula_record:procedure_delegation(OrgKeyId, fill(16#55)), Org),
     ?assertEqual(macula_record:procedure_delegation_key(OrgKeyId, fill(16#55)), macula_record:storage_key(R)).
+
+%% The four realm-signed types are stored per realm key: the same payload under another key id lands in another slot,
+%% so the entries of other keys never fill a realm's slot, whatever a station's trust list holds.
+realm_signed_records_are_stored_per_realm_key_test() ->
+    RealmId = fill(16#11),
+    Slots = [{macula_record:realm_directory(RealmId, <<"io.macula">>, fill(1)),
+              fun(KeyId) -> macula_record:realm_directory_key(KeyId, RealmId) end},
+             {macula_record:realm_stations(RealmId, []),
+              fun(KeyId) -> macula_record:realm_stations_key(KeyId, RealmId) end},
+             {endorsement(RealmId),
+              fun(KeyId) -> macula_record:realm_member_endorsement_key(KeyId, RealmId, fill(16#22)) end},
+             {macula_record:org_directory(RealmId, <<"acme">>, fill(16#44)),
+              fun(KeyId) -> macula_record:org_directory_key(KeyId, RealmId, <<"acme">>) end}],
+    [begin
+         ?assertEqual(Slot(fill(16#33)), macula_record:storage_key(Record#{key_id => fill(16#33)})),
+         ?assertNotEqual(Slot(fill(16#33)), macula_record:storage_key(Record#{key_id => fill(16#34)}))
+     end || {Record, Slot} <- Slots].
+
+%% A member's endorsement slot under the realm key holds no entry another key writes: endorsements of the same member
+%% under 64 other key ids land in 64 other slots.
+no_other_key_shares_a_members_endorsement_slot_under_the_realm_key_test() ->
+    RealmId = fill(16#11),
+    RealmSlot = macula_record:realm_member_endorsement_key(fill(16#33), RealmId, fill(16#22)),
+    Others = [macula_record:storage_key((endorsement(RealmId))#{key_id => <<N:256>>}) || N <- lists:seq(1, 64)],
+    ?assertEqual(64, length(lists:usort(Others))),
+    ?assertNot(lists:member(RealmSlot, Others)).
+
+%% A realm key's tombstone of a member's endorsement lands in that endorsement's slot, which only that key writes.
+a_realm_tombstone_lands_in_the_slot_of_the_endorsement_it_withdraws_test() ->
+    Realm = key(realm),
+    RealmId = fill(16#11),
+    Endorsement = macula_record:sign(endorsement(RealmId), Realm),
+    Tombstone = macula_record:sign(macula_record:tombstone(Endorsement, shutdown), Realm),
+    Slot = macula_record:realm_member_endorsement_key(macula_node_keys:key_id(Realm), RealmId, fill(16#22)),
+    ?assertEqual(Slot, macula_record:storage_key(Endorsement)),
+    ?assertEqual(Slot, macula_record:storage_key(Tombstone)).
 
 foundation_records_are_stored_per_signer_and_type_test() ->
     Foundation = key(foundation),
@@ -135,3 +188,7 @@ mcid() ->
 
 fill(Byte) ->
     binary:copy(<<Byte>>, 32).
+
+endorsement(RealmId) ->
+    macula_record:realm_member_endorsement(RealmId, #{realm => RealmId, member_node => fill(16#22),
+                                                      roles => [<<"peer">>]}).
