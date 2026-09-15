@@ -90,7 +90,7 @@
 -export([select_publish_targets/2, safe_link_publish/5]).
 %% Station discovery selection math — exported for direct testing, same
 %% rationale as `select_publish_targets/2' above.
--export([ordered_for_selection/2, select_discovery_seeds/3, station_seed/1]).
+-export([ordered_for_selection/2, select_discovery_seeds/3, station_seed/1, seed_peer/1]).
 %% How a pool call moves from one link to the next, over any links and
 %% call -- exported for macula_client_call_first_success_tests.erl, which
 %% replaces no module.
@@ -389,6 +389,13 @@
 %% A refused dial is counted every time and logged at most once a minute per
 %% reason.
 -define(REFUSAL_REPORT_WINDOW_MS, 60_000).
+%% Each link limit is an integer from 1 to its cap, or the pool does not
+%% start. The caps keep the links a pool holds, and so the shares of a
+%% provider's seen requests, within a fixed bound.
+-define(MAX_SEEDS_CAP, 64).
+-define(MAX_DIRECT_LINKS_CAP, 64).
+-define(NEW_PEER_BUDGET_CAP, 256).
+-define(DISCOVERY_MAX_LINKS_CAP, 64).
 
 -record(link_state, {
     seed          :: seed(),
@@ -880,7 +887,33 @@ unsubscribe(Pool, SubRef) when is_pid(Pool), is_reference(SubRef) ->
 init({Seeds, Opts}) ->
     process_flag(trap_exit, true),
     warn_legacy_opts(Opts),
-    init_within_seed_limit(length(Seeds), maps:get(max_seeds, Opts, ?DEFAULT_MAX_SEEDS), Seeds, Opts).
+    init_within_link_limits(link_limit_outside_its_range(Opts), Seeds, Opts).
+
+%% A link limit that is not an integer from 1 to its cap does not start the
+%% pool, and nothing is dialed: an atom would otherwise sort above every
+%% integer and lift its bound.
+init_within_link_limits(none, Seeds, Opts) ->
+    init_within_seed_limit(length(Seeds), maps:get(max_seeds, Opts, ?DEFAULT_MAX_SEEDS), Seeds, Opts);
+init_within_link_limits({Key, Value}, _Seeds, _Opts) ->
+    {error, {invalid_link_limit, Key, Value}}.
+
+link_limit_outside_its_range(Opts) ->
+    first_outside([{Key, Value} || {Key, Value, Cap} <- link_limits(Opts), not in_link_range(Value, Cap)]).
+
+link_limits(Opts) ->
+    [{max_seeds, maps:get(max_seeds, Opts, ?DEFAULT_MAX_SEEDS), ?MAX_SEEDS_CAP},
+     {max_direct_links, maps:get(max_direct_links, Opts, ?DEFAULT_MAX_DIRECT_LINKS), ?MAX_DIRECT_LINKS_CAP},
+     {new_peer_budget, maps:get(new_peer_budget, Opts, ?DEFAULT_NEW_PEER_BUDGET), ?NEW_PEER_BUDGET_CAP},
+     {max_links, discovery_max_links(maps:get(station_discovery, Opts, #{})), ?DISCOVERY_MAX_LINKS_CAP}].
+
+discovery_max_links(#{} = Discovery) -> maps:get(max_links, Discovery, ?DEFAULT_DISCOVERY_MAX_LINKS);
+discovery_max_links(_NotAMap)        -> ?DEFAULT_DISCOVERY_MAX_LINKS.
+
+in_link_range(Value, Cap) ->
+    is_integer(Value) andalso Value >= 1 andalso Value =< Cap.
+
+first_outside([])            -> none;
+first_outside([Outside | _]) -> Outside.
 
 %% A pool given more seeds than its limit does not start, and dials nothing.
 init_within_seed_limit(Given, Max, Seeds, Opts) when Given =< Max ->
@@ -1918,12 +1951,30 @@ is_known_seed(Seed, ExistingNormalized) ->
 %% fails to parse falls back to comparing its own raw term, same as
 %% before this normalization existed -- no worse, never crashes the
 %% pool over a bad seed string.
+%%
+%% On top of it the host is made canonical, so one station is one seed
+%% however it is spelled: a lowercase binary with no brackets and no
+%% trailing dot, and an IP literal in the one text form `inet:ntoa/1'
+%% gives, with an IPv4 address mapped into IPv6 as that IPv4 address.
 normalize_seed(Seed) ->
     try macula_station_link:parse_seed(Seed) of
-        #{host := H, port := P} -> #{host => H, port => P}
+        #{host := H, port := P} -> #{host => canonical_host(H), port => P}
     catch
         _:_ -> Seed
     end.
+
+canonical_host(Host) when is_list(Host) ->
+    canonical_host(unicode:characters_to_binary(Host));
+canonical_host(Host) when is_binary(Host) ->
+    Bare = string:lowercase(string:trim(string:trim(Host, both, "[]"), trailing, ".")),
+    ip_literal(inet:parse_address(binary_to_list(Bare)), Bare).
+
+ip_literal({ok, {0, 0, 0, 0, 0, 16#ffff, _, _} = Mapped}, _Bare) ->
+    list_to_binary(inet:ntoa(inet:ipv4_mapped_ipv6_address(Mapped)));
+ip_literal({ok, Address}, _Bare) ->
+    list_to_binary(inet:ntoa(Address));
+ip_literal({error, einval}, Bare) ->
+    Bare.
 
 %% Secondary, identity-based backstop for exactly the case
 %% `select_discovery_seeds/3''s host/port normalization cannot catch:
