@@ -48,7 +48,8 @@
 %%   <li><strong>A sender outside both push sets</strong>: a frame moves a peer between the sets and never adds one.
 %%       Through a station's relay the sender is the frame's origin, which need not be a neighbour, so from such a
 %%       sender a GRAFT, a PRUNE and an IHAVE move no one, send nothing and are refused as `not_a_peer', a first GOSSIP
-%%       delivers and forwards its verified publication but moves no one, and a duplicate GOSSIP gets no PRUNE.</li>
+%%       delivers and forwards its verified publication but moves no one, and a duplicate GOSSIP gets no PRUNE and is
+%%       refused as `not_a_peer' too.</li>
 %% </ul>
 %%
 %% This module is pure apart from reading the configured profile when a node starts. The caller passes the clocks:
@@ -250,13 +251,13 @@ on_gossip(From, #{publication := #{tbs := Tbs} = Publication} = Frame, State, Wa
 
 classify_gossip(true, From, _MsgId, _Publication, _Frame, State, _WallMs) ->
     %% A duplicate, recognised by its id and not verified again. The sender should not be eager: PRUNE it, unless it
-    %% is no peer at all, which gets nothing.
+    %% is no peer at all, which gets nothing and is refused as not_a_peer, so the connection counts it.
     duplicate_from(is_peer(From, State), From, State);
 classify_gossip(false, From, MsgId, Publication, #{round := Round} = Frame, State, WallMs) ->
     first_gossip(verified(Frame, State, WallMs), From, MsgId, Round, Publication, State).
 
 duplicate_from(true, From, State) -> {move_to_lazy(State, From), [{send, From, prune(State)}], []};
-duplicate_from(false, _From, State) -> {State, [], []}.
+duplicate_from(false, From, State) -> {State, [{refused, From, not_a_peer}], []}.
 
 first_gossip({ok, #{expires_at := ExpiresAt} = Verified}, From, MsgId, Round, Publication, State) ->
     State1 = mark_received(State, MsgId, Publication, ExpiresAt),
