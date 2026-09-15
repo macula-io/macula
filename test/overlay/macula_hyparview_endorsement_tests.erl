@@ -26,6 +26,7 @@ cases(Keys) ->
                  fun an_endorsement_past_its_window_is_refused/1,
                  fun an_endorsement_window_of_30_days_is_accepted/1,
                  fun an_endorsement_window_over_30_days_is_refused/1,
+                 fun an_endorsement_window_that_ends_before_it_starts_is_refused/1,
                  fun a_join_frame_carries_no_signature_of_its_own/1,
                  fun a_join_frame_carries_a_verifiable_endorsement/1]].
 
@@ -98,6 +99,15 @@ an_endorsement_window_over_30_days_is_refused(#{realm_key := Key} = Keys) ->
     Record = unsigned(Keys, Member, [], #{valid_from => From, valid_until => Until}),
     Longer = Record#{payload := (maps:get(payload, Record))#{{text, <<"valid_until">>} := Until + 1}},
     ?assertEqual({error, endorsement_window_too_long}, verify(signed(Longer, Key), Keys, Member)).
+
+%% A window that ends before it starts is refused by its own name. The builder refuses one, so the test reverses the
+%% record's window before signing it.
+an_endorsement_window_that_ends_before_it_starts_is_refused(#{realm_key := Key} = Keys) ->
+    Member = id(),
+    From = erlang:system_time(millisecond) - ?MINUTE,
+    Record = unsigned(Keys, Member, [], #{valid_from => From, valid_until => From + ?MINUTE}),
+    Reversed = Record#{payload := (maps:get(payload, Record))#{{text, <<"valid_until">>} := From - 1}},
+    ?assertEqual({error, endorsement_window_reversed}, verify(signed(Reversed, Key), Keys, Member)).
 
 %%------------------------------------------------------------------
 %% The JOIN frame
