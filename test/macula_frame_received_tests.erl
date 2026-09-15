@@ -289,13 +289,29 @@ a_nodes_address_is_a_host_a_port_and_quic_test() ->
     [Entry] = maps:get(nodes, Nodes),
     ?assertEqual([Address], maps:get(addresses, Entry)),
     Received = fun(Addresses) -> macula_frame:validate_received(Nodes#{nodes => [Entry#{addresses => Addresses}]}) end,
-    Longest = Address#{host => binary:copy(<<"h">>, 253), port => 65535},
+    Label = binary:copy(<<"h">>, 63),
+    Host253 = <<Label/binary, ".", Label/binary, ".", Label/binary, ".", (binary:copy(<<"h">>, 61))/binary>>,
+    Longest = Address#{host => Host253, port => 65535},
     ?assertEqual(ok, Received([Longest, Address#{port => 1}, Address, Address])),
-    Refused = [lists:duplicate(5, Address), [Address#{host => <<>>}], [Address#{host => binary:copy(<<"h">>, 254)}],
-               [Address#{port => 0}], [Address#{port => 65536}], [Address#{transport => tcp}],
-               [maps:remove(transport, Address)], [Address#{via => relay}], [#{}]],
+    Refused = [lists:duplicate(5, Address), [Address#{host => <<>>}], [Address#{host => <<Host253/binary, "h">>}],
+               [Address#{host => <<"bad host">>}], [Address#{port => 0}], [Address#{port => 65536}],
+               [Address#{transport => tcp}], [maps:remove(transport, Address)], [Address#{via => relay}], [#{}]],
     [?assertEqual({error, {invalid_frame, nodes, nodes}}, Received(Addresses)) || Addresses <- Refused],
     [?assertError({badmatch, {error, invalid_addresses}}, station_ref(Addresses)) || Addresses <- Refused].
+
+%% A NODES address host is an IP literal without a zone, or a host name: labels of 1 to 63 letters, digits and hyphens
+%% that neither start nor end with a hyphen, and no trailing dot. The check is macula_frame:addresses_checked/1, which
+%% a station can run on the addresses it stores before it lists them.
+a_nodes_address_host_is_an_ip_literal_or_a_host_name_test() ->
+    Label = binary:copy(<<"a">>, 63),
+    Named = fun(Host) -> [#{host => Host, port => 4433, transport => quic}] end,
+    Hosts = [<<"station-de-frankfurt.macula.io">>, <<"beam00">>, <<"A1-b2.EXAMPLE">>, <<Label/binary, ".example">>,
+             <<"127.0.0.1">>, <<"2001:db8::1">>, <<"::">>],
+    NotHosts = [<<"bad host">>, <<"a_b.example">>, <<"-a.example">>, <<"a-.example">>, <<"example.">>, <<"a..b">>,
+                <<".a">>, <<"fe80::1%eth0">>, <<"a", 0>>, <<"station.example\n">>, <<Label/binary, "a.example">>,
+                <<"ex", 16#C3, 16#A9, ".example">>],
+    [?assertEqual(ok, macula_frame:addresses_checked(Named(Host))) || Host <- Hosts],
+    [?assertEqual({error, invalid_addresses}, macula_frame:addresses_checked(Named(Host))) || Host <- NotHosts].
 
 %% Each fixed-length field of a list entry, one byte short and one byte long: a NODES entry's node_id, station_id and
 %% country, the mcid of a WANT or HAVE block, a SWIM update's target and by, and an mcid a CANCEL lists.
