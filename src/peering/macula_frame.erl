@@ -1448,21 +1448,25 @@ caller_stream(#{frame_type := Type, seq := Seq} = Spec, #{purpose := identity} =
 %%   STREAM_OPEN;
 %% - `{not_allowed, Type}' for a stream frame its side does not send: a caller's STREAM_REPLY, or a caller's
 %%   STREAM_DATA in a server_stream;
-%% - `{invalid_text, Field}' for a procedure, code, detail or message that is not a binary of valid UTF-8. A local
-%%   error term is not text: rendering one as text is the call site's job;
 %% - `{text_too_long, Field}' for a code over 64 bytes, or a provider error's detail or a STREAM_ERROR message over 256
-%%   bytes;
+%%   bytes, judged before the text itself;
+%% - `{invalid_text, Field}' for a procedure, code, detail or message that is not a binary of valid UTF-8;
 %% - `relay_code_outside_its_set' for a relay error code outside the closed set;
 %% - `{unsupported_payload_type, Type, Path}' for a payload, stream body or reply the wire cannot carry.
 %%
 %% After encoding, `frame_too_large' is returned for a frame whose encoding is over the 16 MiB frame cap.
 %%
-%% None of these is for the peer: an error frame carries only the code its build names. A build that leaves out a field
-%% its frame requires (a result without its payload, a STREAM_ERROR without its message), an id, realm or target of the
-%% wrong size, a relay error whose offending hop is not 32 bytes, a stream frame type other than STREAM_DATA,
-%% STREAM_END, STREAM_ERROR and STREAM_REPLY, or a `seq' outside the protocol's range is a programming error and raises
-%% function_clause. A stream frame's `seq' is its side's own next sequence number, from 0.
-%% `macula_peering:send_on_stream/2' and `async_send_on_stream/2,3' write the result, through `written_bytes/1'.
+%% None of these is for the peer. A call site sends a fixed code, never a rendering of a local error, and an error frame
+%% carries only the code its build names; a local error term given as text is `{invalid_text, Field}'.
+%%
+%% A build that leaves out a field its frame requires (a result without its payload, a STREAM_ERROR without its
+%% message), an id, realm or target of the wrong size, a relay error whose offending hop is not 32 bytes, a stream frame
+%% type other than STREAM_DATA, STREAM_END, STREAM_ERROR and STREAM_REPLY, or a `seq' outside the protocol's range is a
+%% programming error and raises function_clause. Any other field outside its type, range or set is a programming error
+%% too, and raises: a deadline or retry budget out of range, a token or source route that is not a binary, a mode,
+%% role, encoding or relay frame type outside its set, or a raw body that is not a binary. A stream frame's `seq' is its
+%% side's own next sequence number, from 0. `macula_peering:send_on_stream/2' and `async_send_on_stream/2,3' write the
+%% result, through `written_bytes/1'.
 -spec stream_bytes(stream_build(), macula_node_keys:node_key() | undefined) ->
           {ok, stream_bytes()}
         | {error, {unknown_build_key, term()} | unsignable | {not_allowed, stream_reply | stream_data}
