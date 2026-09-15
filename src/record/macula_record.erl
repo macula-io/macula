@@ -34,7 +34,7 @@
     tombstone/2, tombstone/3,
     envelope/3
 ]).
--export([sign/2, verify/2, verify/3, refresh/2, encode/1, node_signed/1]).
+-export([sign/2, verify/2, verify/3, refresh/2, encode/1, node_signed/1, payload_bounded/1]).
 -export([type/1, key/1, key_id/1, version/1, created_at/1, expires_at/1, payload/1, signature/1]).
 -export([payload_field/2, type_procedure_advertisement/0]).
 -export([read_node_record/1, read_procedure_advertisement/1, read_station_endpoint/1, read_tombstone/1,
@@ -70,7 +70,7 @@
 }.
 
 -type refusal() :: record_too_large | malformed | signature_invalid | alg_mismatch | not_yet_valid | expired
-                 | key_id_mismatch.
+                 | key_id_mismatch | lifetime_too_long | lifetime_reversed.
 -type reason() :: shutdown | moved | revoked.
 -type authorization() :: #{org_directory := binary(), procedure_delegation := binary()}
                        | #{certificate_chain := [binary(), ...]}.
@@ -149,6 +149,19 @@
 %% member for at most that long. A builder given no valid_until takes the whole window.
 -define(MAX_ENDORSEMENT_WINDOW_MS, 30 * 24 * 60 * 60 * 1000).
 -define(DEFAULT_TTL_MS, 48 * 60 * 60 * 1000).
+%% The longest a record of a type lives, created_at to expires_at. A node record and a content announcement 48 hours; a
+%% procedure advertisement 5 minutes, renewed at half that or sooner, so a provider that stops is gone within minutes; a
+%% station endpoint 5 minutes; realm stations, an org directory and a procedure delegation 6 hours; a realm member
+%% endorsement 30 days; a domain record 7 days (D28); and any other type 30 days, so no record keeps a key trusted
+%% without end. A tombstone lives at most its withdrawn type's maximum plus the clock tolerance.
+-define(NODE_RECORD_MAX_LIFETIME_MS, 48 * 60 * 60 * 1000).
+-define(CONTENT_ANNOUNCEMENT_MAX_LIFETIME_MS, 48 * 60 * 60 * 1000).
+-define(PROCEDURE_ADVERTISEMENT_MAX_LIFETIME_MS, 5 * 60 * 1000).
+-define(REALM_AND_ORG_MAX_LIFETIME_MS, 6 * 60 * 60 * 1000).
+-define(DOMAIN_RECORD_MAX_LIFETIME_MS, 7 * 24 * 60 * 60 * 1000).
+-define(DEFAULT_MAX_LIFETIME_MS, 30 * 24 * 60 * 60 * 1000).
+%% A payload sits in a record's tbs map, and the decoding rule accepts 64 levels, so a payload nests at most 63.
+-define(MAX_PAYLOAD_NESTING, 63).
 
 %%------------------------------------------------------------------
 %% Constructors
@@ -339,7 +352,8 @@ station_endpoint(QuicPort, Opts) when is_integer(QuicPort), QuicPort > 0, QuicPo
     unsigned(?TYPE_STATION_ENDPOINT, Payload, maps:merge(#{ttl_ms => ?STATION_ENDPOINT_TTL_MS}, Opts)).
 
 %% @doc A tombstone that withdraws a record: it names the record's type, version and slot fields, takes the record's
-%% slot, and expires no earlier than the record. Sign it with the key that signed the record.
+%% slot, and lives until the record has expired plus the clock tolerance, so no replica serves the record again after
+%% the tombstone lapses. Sign it with the key that signed the record.
 -spec tombstone(m_record(), reason()) -> m_record().
 tombstone(Withdrawn, Reason) ->
     tombstone(Withdrawn, Reason, #{}).
@@ -355,8 +369,9 @@ tombstone(#{type := Type, version := Version, expires_at := WithdrawnExpiry, pay
     Slot = slot_fields(slot_field_names(Type, maps:get(subject, Withdrawn, undefined)), WithdrawnPayload,
                        maps:get(subject, Withdrawn, undefined)),
     Payload = with_text(maps:merge(Base, Slot), <<"detail">>, maps:get(detail, Opts, undefined)),
-    #{expires_at := Expires} = Unsigned = unsigned(?TYPE_TOMBSTONE, Payload, Opts),
-    Unsigned#{expires_at := max(Expires, WithdrawnExpiry)}.
+    #{created_at := Created} = Unsigned = unsigned(?TYPE_TOMBSTONE, Payload, Opts),
+    Unsigned#{expires_at := max(Created + maps:get(ttl_ms, Opts, ?CLOCK_TOLERANCE_MS),
+                                WithdrawnExpiry + ?CLOCK_TOLERANCE_MS)}.
 
 %% @doc An unsigned record of a domain type (tags 0x20 to 0xFF). The subject_id option names the record's subject.
 -spec envelope(type_tag(), map(), map()) -> m_record().
@@ -373,10 +388,14 @@ envelope(Type, Payload, Opts)
 -spec sign(m_record(), macula_node_keys:node_key()) -> m_record().
 sign(#{type := Type, payload := Payload} = Record, #{purpose := Purpose, profile := Profile} = Key) ->
     ok = purpose_fits(lists:member(Purpose, signer_purposes(Type, Payload)), {Type, Purpose}),
+    ok = lifetime_checked(lifetime(Record), Type),
     Carried = macula_node_keys:public_key(Key),
     KeyId = key_id_of(signer_kind(Type, Payload), Carried, Profile),
     ok = signer_matches(named_signer(Type, Payload, KeyId), Type),
-    Object = macula_signed_object:sign(?LABEL, tbs_fields(Record), Key),
+    Fields = tbs_fields(Record),
+    ok = size_fits(byte_size(macula_record_cbor:encode(Fields)) + byte_size(Carried)
+                   + macula_node_keys:signature_bytes(Profile)),
+    Object = macula_signed_object:sign(?LABEL, Fields, Key),
     ok = size_fits(byte_size(macula_signed_object:encode(Object))),
     #{tbs := Tbs, signature := Signature} = Object,
     Record#{key => Carried, key_id => KeyId, alg => macula_signed_object:alg(Profile), tbs => Tbs,
@@ -579,7 +598,7 @@ procedure_delegation_key(<<_:256>> = OrgKeyId, <<_:256>> = Advertiser) ->
 unsigned(Type, Payload, Opts) ->
     Now = erlang:system_time(millisecond),
     #{type => Type, version => macula_record_uuid:v7_monotonic(Now), created_at => Now,
-      expires_at => Now + maps:get(ttl_ms, Opts, ?DEFAULT_TTL_MS), payload => Payload}.
+      expires_at => Now + maps:get(ttl_ms, Opts, default_ttl(Type)), payload => Payload}.
 
 with_subject(Record, undefined) -> Record;
 with_subject(Record, Subject) when is_binary(Subject) -> Record#{subject => Subject}.
@@ -594,6 +613,9 @@ with_tbs_subject(Fields, Subject) -> Fields#{{text, <<"subject">>} => Subject}.
 
 purpose_fits(true, _Detail) -> ok;
 purpose_fits(false, Detail) -> erlang:error({key_purpose_mismatch, Detail}).
+
+lifetime_checked(ok, _Type) -> ok;
+lifetime_checked(Refusal, Type) -> erlang:error({Refusal, Type}).
 
 signer_matches(true, _Type) -> ok;
 signer_matches(false, Type) -> erlang:error({key_id_mismatch, Type}).
@@ -645,17 +667,64 @@ signer_field_holds(none, _Payload, _KeyId) -> true;
 signer_field_holds(Name, Payload, KeyId) -> maps:get({text, Name}, Payload, undefined) =:= KeyId.
 
 %% @doc Whether a node signs this record about itself: a node record, a procedure advertisement or a content
-%% announcement, whose payload names the signing node, or a tombstone that withdraws one of those.
+%% announcement, whose payload names the signing node. A tombstone is not one: it withdraws a record, and whoever signs
+%% it checks that the record was theirs.
 -spec node_signed(term()) -> boolean().
-node_signed(#{type := ?TYPE_TOMBSTONE, payload := #{{text, <<"withdrawn_type">>} := Withdrawn}}) ->
-    names_its_node(Withdrawn);
-node_signed(#{type := Type, payload := Payload}) when is_map(Payload) ->
+node_signed(#{type := Type, payload := Payload}) when is_integer(Type), Type =/= ?TYPE_TOMBSTONE, is_map(Payload) ->
     names_its_node(Type);
 node_signed(_NotARecord) ->
     false.
 
 names_its_node(Type) ->
     signer_kind(Type, #{}) =:= node andalso signer_field(Type) =/= none.
+
+%% The longest a record of Type lives. A tombstone's follows the type it withdraws, plus the clock tolerance.
+max_lifetime(?TYPE_NODE_RECORD, _Payload) -> ?NODE_RECORD_MAX_LIFETIME_MS;
+max_lifetime(?TYPE_CONTENT_ANNOUNCEMENT, _Payload) -> ?CONTENT_ANNOUNCEMENT_MAX_LIFETIME_MS;
+max_lifetime(?TYPE_PROCEDURE_ADVERTISEMENT, _Payload) -> ?PROCEDURE_ADVERTISEMENT_MAX_LIFETIME_MS;
+max_lifetime(?TYPE_STATION_ENDPOINT, _Payload) -> ?STATION_ENDPOINT_TTL_MS;
+max_lifetime(Type, _Payload) when Type =:= ?TYPE_REALM_STATIONS; Type =:= ?TYPE_ORG_DIRECTORY;
+                                  Type =:= ?TYPE_PROCEDURE_DELEGATION ->
+    ?REALM_AND_ORG_MAX_LIFETIME_MS;
+max_lifetime(?TYPE_REALM_MEMBER_ENDORSEMENT, _Payload) -> ?MAX_ENDORSEMENT_WINDOW_MS;
+max_lifetime(?TYPE_TOMBSTONE, #{{text, <<"withdrawn_type">>} := Withdrawn}) when Withdrawn =/= ?TYPE_TOMBSTONE ->
+    max_lifetime(Withdrawn, #{}) + ?CLOCK_TOLERANCE_MS;
+max_lifetime(Type, _Payload) when is_integer(Type), Type >= ?DOMAIN_TYPE_MIN -> ?DOMAIN_RECORD_MAX_LIFETIME_MS;
+max_lifetime(_Type, _Payload) -> ?DEFAULT_MAX_LIFETIME_MS.
+
+%% Whether a record's lifetime, created_at to expires_at, runs forward and fits its type's maximum.
+lifetime(#{type := Type, created_at := Created, expires_at := Expires, payload := Payload}) ->
+    lifetime_within(Expires - Created, max_lifetime(Type, Payload)).
+
+lifetime_within(Lifetime, _Max) when Lifetime =< 0 -> lifetime_reversed;
+lifetime_within(Lifetime, Max) when Lifetime > Max -> lifetime_too_long;
+lifetime_within(_Lifetime, _Max) -> ok.
+
+%% A builder given no ttl takes 48 hours, or its type's maximum when that is shorter.
+default_ttl(Type) ->
+    min(?DEFAULT_TTL_MS, max_lifetime(Type, #{})).
+
+%% @doc Check a payload before anything is encoded: its external size is at most 256 KiB, and it nests at most 63 levels
+%% of maps and lists, which a record's tbs leaves it under the decoder's 64. Returns record_too_large or malformed.
+-spec payload_bounded(term()) -> ok | {error, record_too_large | malformed}.
+payload_bounded(Payload) ->
+    sized_payload(erlang:external_size(Payload) =< ?MAX_RECORD_BYTES, Payload).
+
+sized_payload(false, _Payload) -> {error, record_too_large};
+sized_payload(true, Payload) -> nested_payload(nesting(Payload, 0) =< ?MAX_PAYLOAD_NESTING).
+
+nested_payload(true) -> ok;
+nested_payload(false) -> {error, malformed}.
+
+%% How deep a term nests maps and lists, counted no further than one level past the bound.
+nesting(Map, Depth) when is_map(Map) -> deepest(maps:to_list(Map), Depth + 1, Depth + 1);
+nesting(List, Depth) when is_list(List) -> deepest(List, Depth + 1, Depth + 1);
+nesting({Key, Value}, Depth) -> max(nesting(Key, Depth), nesting(Value, Depth));
+nesting(_Leaf, Depth) -> Depth.
+
+deepest(_Terms, _Level, Deepest) when Deepest > ?MAX_PAYLOAD_NESTING -> Deepest;
+deepest([Term | Terms], Level, Deepest) -> deepest(Terms, Level, max(Deepest, nesting(Term, Level)));
+deepest(_EndOrImproperTail, _Level, Deepest) -> Deepest.
 
 %%------------------------------------------------------------------
 %% Internals: verifying
@@ -703,9 +772,14 @@ clock(#{created_at := Created}, Now) when Created > Now + ?CLOCK_TOLERANCE_MS ->
 clock(#{expires_at := Expires}, Now) when Expires + ?CLOCK_TOLERANCE_MS < Now -> expired;
 clock(_Record, _Now) -> ok.
 
-clocked(ok, #{type := Type, payload := Payload} = Record, Profile) ->
-    payload_checked(payload_ok(Type, Payload), Record, Profile);
+clocked(ok, Record, Profile) ->
+    lived(lifetime(Record), Record, Profile);
 clocked(Refusal, _Record, _Profile) ->
+    {error, Refusal}.
+
+lived(ok, #{type := Type, payload := Payload} = Record, Profile) ->
+    payload_checked(payload_ok(Type, Payload), Record, Profile);
+lived(Refusal, _Record, _Profile) ->
     {error, Refusal}.
 
 payload_checked(false, _Record, _Profile) ->

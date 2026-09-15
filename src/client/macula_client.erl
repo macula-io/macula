@@ -57,7 +57,7 @@
 -module(macula_client).
 -behaviour(gen_server).
 
--export([connect/2, close/1, child_spec/3, status/1, links/1, sign_node_record/2]).
+-export([connect/2, close/1, child_spec/3, status/1, links/1, sign_node_record/2, withdraw_node_record/3]).
 %% Internal API — called by `macula_pubsub' (and future surfaces).
 -export([publish/5, subscribe/5, unsubscribe/2]).
 %% RPC fan-out (since 3.16.0) — called by the `macula' facade.
@@ -835,19 +835,41 @@ status(Pool) when is_pid(Pool) ->
     gen_server:call(Pool, status, 5_000).
 
 %% @doc Sign a record this node signs about itself with the pool's node identity key, in the pool's own process, and
-%% return the signed record: the node record, a procedure advertisement or a content announcement that names this
-%% node, or a tombstone that withdraws one. The key never leaves the pool, so a caller never holds it. A record of
-%% another type is `{error, not_a_node_signed_type}', one that names another node `{error, key_id_mismatch}', one past
-%% the record size bound `{error, record_too_large}', and anything that is not an unsigned record
+%% return the signed record: the node record, a procedure advertisement or a content announcement that names this node.
+%% The pool stamps it with a new version and created_at, keeping the lifetime it was built with. The key never leaves
+%% the pool, so a caller never holds it. A record of another type, a tombstone included, is
+%% `{error, not_a_node_signed_type}'; one that names another node `{error, key_id_mismatch}'; one whose lifetime
+%% passes its type's maximum or runs backwards `{error, lifetime_too_long}' or `{error, lifetime_reversed}'; a payload
+%% over 256 KiB `{error, record_too_large}', refused before the call; and anything else the pool cannot sign
 %% `{error, malformed_record}'.
 -spec sign_node_record(pool(), macula_record:m_record()) ->
           {ok, macula_record:m_record()}
-        | {error, not_a_node_signed_type | key_id_mismatch | record_too_large | malformed_record}.
+        | {error, not_a_node_signed_type | key_id_mismatch | lifetime_too_long | lifetime_reversed | record_too_large
+                | malformed_record}.
 sign_node_record(Pool, #{type := Type, payload := Payload} = Record)
   when is_pid(Pool), is_integer(Type), is_map(Payload) ->
-    gen_server:call(Pool, {sign_node_record, Record}, 5_000);
+    pool_signs(macula_record:payload_bounded(Payload), Pool, {sign_node_record, Record});
 sign_node_record(Pool, _NotARecord) when is_pid(Pool) ->
     {error, malformed_record}.
+
+%% @doc Sign a tombstone that withdraws a record this node signed, with the pool's node identity key, in the pool's own
+%% process. The pool first verifies the record, as its wire form or its signed map, under its profile, and withdraws it
+%% only when it is of a type a node signs about itself and its key id is this node's. A record that does not verify
+%% gets its refusal; one of another type `{error, not_a_node_signed_type}'; another node's
+%% `{error, not_this_nodes_record}'; and anything else the pool cannot sign `{error, malformed_record}'. The tombstone
+%% lives until the record has expired plus the clock tolerance.
+-spec withdraw_node_record(pool(), macula_record:m_record() | binary(), macula_record:reason()) ->
+          {ok, macula_record:m_record()}
+        | {error, not_this_nodes_record | not_a_node_signed_type | lifetime_too_long | lifetime_reversed
+                | record_too_large | malformed_record | macula_record:refusal()}.
+withdraw_node_record(Pool, Withdrawn, Reason)
+  when is_pid(Pool), (Reason =:= shutdown orelse Reason =:= moved orelse Reason =:= revoked) ->
+    gen_server:call(Pool, {withdraw_node_record, Withdrawn, Reason}, 5_000).
+
+%% A payload past the record bounds never reaches the pool.
+pool_signs(ok, Pool, Request) -> gen_server:call(Pool, Request, 5_000);
+pool_signs({error, record_too_large}, _Pool, _Request) -> {error, record_too_large};
+pool_signs({error, malformed}, _Pool, _Request) -> {error, malformed_record}.
 
 %% @doc Per-link snapshot of the pool — one `link_info()' per
 %% configured seed that currently has a spawned link worker. Unlike
@@ -1207,6 +1229,8 @@ handle_call({unadvertise_stream, Realm, Procedure}, _From,
 
 handle_call({sign_node_record, Record}, _From, #state{node_identity = Key} = S) ->
     {reply, node_record_signed(macula_record:node_signed(Record), Record, Key), S};
+handle_call({withdraw_node_record, Withdrawn, Reason}, _From, #state{node_identity = Key, node_id = NodeId} = S) ->
+    {reply, tombstone_signed(verified_record(Withdrawn, Key), NodeId, Reason, Key), S};
 handle_call(status, _From,
             #state{seeds = Seeds, links = Links, subs = Subs,
                    node_id = NodeId, replication = Replication} = S) ->
@@ -1332,15 +1356,42 @@ code_change(_OldVsn, S, _Extra) -> {ok, S}.
 %% redacted.
 format_status(Status) -> macula_node_keys:redacted(Status).
 
-%% A record the pool signs is one a node signs about itself; macula_record:sign/2 then checks the key's purpose and that
-%% the payload names this node. A refusal names what failed and carries neither the key nor a stack.
+%% A record the pool signs is one a node signs about itself. macula_record:refresh/2 stamps it now and signs it, and
+%% sign/2 checks the key's purpose, the lifetime, that the payload names this node, and the size. A refusal names what
+%% failed and carries neither the key nor a stack.
 node_record_signed(false, _Record, _Key) ->
     {error, not_a_node_signed_type};
 node_record_signed(true, Record, Key) ->
-    try macula_record:sign(Record, Key) of
+    signed_here(fun() -> macula_record:refresh(Record, Key) end).
+
+%% A tombstone is signed only for a record that verifies, is of a type a node signs about itself, and names this node.
+verified_record(Withdrawn, #{profile := Profile}) ->
+    try macula_record:verify(wire_record(Withdrawn), Profile)
+    catch _:_ -> {error, malformed_record}
+    end.
+
+wire_record(Bytes) when is_binary(Bytes) -> Bytes;
+wire_record(Record) -> macula_record:encode(Record).
+
+tombstone_signed({ok, Verified}, NodeId, Reason, Key) ->
+    withdrawable(macula_record:node_signed(Verified), Verified, NodeId, Reason, Key);
+tombstone_signed({error, _} = Refusal, _NodeId, _Reason, _Key) ->
+    Refusal.
+
+withdrawable(false, _Verified, _NodeId, _Reason, _Key) ->
+    {error, not_a_node_signed_type};
+withdrawable(true, #{key_id := NodeId} = Verified, NodeId, Reason, Key) ->
+    signed_here(fun() -> macula_record:sign(macula_record:tombstone(Verified, Reason), Key) end);
+withdrawable(true, _Verified, _NodeId, _Reason, _Key) ->
+    {error, not_this_nodes_record}.
+
+signed_here(Sign) ->
+    try Sign() of
         Signed -> {ok, Signed}
     catch
         error:{key_id_mismatch, _Type} -> {error, key_id_mismatch};
+        error:{lifetime_too_long, _Type} -> {error, lifetime_too_long};
+        error:{lifetime_reversed, _Type} -> {error, lifetime_reversed};
         error:{record_too_large, _Bytes} -> {error, record_too_large};
         _:_ -> {error, malformed_record}
     end.

@@ -148,9 +148,14 @@ A record is the signed object `{key, tbs, signature}`, with `key` the signer's k
 About 7.3 KB / 8.3 KB before the payload: 2,592 / 3,118 bytes of key and 4,627 / 5,139 bytes of signature.
 
 - **Size.** Every stack refuses a record whose wire form is larger than 256 KiB, before any other check.
-- **Domain record lifetime.** A domain record's `expires_at` is at most 7 days after its `created_at`, and every
-  verifier refuses a longer one as malformed. With `created_at` at most 5 minutes ahead, no domain record a station
-  accepts expires more than 7 days and 5 minutes after it arrives (D28).
+- **Record lifetime.** A record's `expires_at` is after its `created_at` and at most its type's maximum after it: a
+  node record and a content announcement 48 hours; a procedure advertisement and a station endpoint 5 minutes; realm
+  stations, an org directory and a procedure delegation 6 hours; a realm member endorsement 30 days; a domain record 7
+  days (D28); and any other type 30 days, so no record keeps a key trusted without end. A tombstone lives at least
+  until the record it withdraws has expired plus the clock tolerance, and at most the withdrawn type's maximum plus
+  that tolerance. A signer refuses to sign any other record, and every verifier refuses one as `lifetime_too_long`, or
+  as `lifetime_reversed` when it expires before it is created. With `created_at` at most 5 minutes ahead, no domain
+  record a station accepts expires more than 7 days and 5 minutes after it arrives.
 - **Realm member endorsement window.** Its payload's `valid_until` is not before its `valid_from`, and at most 30 days
   after it. The builder refuses another window, and a verifier of the endorsement refuses a reversed one as
   `endorsement_window_reversed` and a longer one as `endorsement_window_too_long`, before its other window checks, so

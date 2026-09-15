@@ -615,9 +615,10 @@ before its wire checks are green.
   7. **Stations report transport failures only.** A station may sign an ERROR or STREAM_ERROR as reported_by only with
      a relay error code distinct from every provider result, and never a RESULT. A relay error means the outcome is
      unknown, not that the call failed. Providers deduplicate requests on caller and call id.
-  8. **Advertisements expire, and only their provider withdraws them.** Each advertisement carries a signed validity,
-     120 seconds today ✅, and verifiers refuse an expired one, with the clock tolerance of D22. Stations drop expired
-     advertisements from gossip, and honour a withdrawal only under the provider's signature.
+  8. **Advertisements expire, and only their provider withdraws them.** Each advertisement carries a signed validity
+     of at most 300 seconds, renewed at half that or sooner, and verifiers refuse an expired or longer one, with the
+     clock tolerance of D22. Stations drop expired advertisements from gossip, and honour a withdrawal only under the
+     provider's signature.
   9. **Retries.** A retry along another path keeps the call id and the target, so the provider's deduplication
      applies. Switching to another provider is a new, separately signed request, and the caller decides it, because
      the first request may already have run.

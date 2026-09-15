@@ -293,8 +293,9 @@ Not counted:
   stay within it. 300,000 EU-profile records, about 2.5 GB, upload over one connection in about 40 minutes. It bounds
   verification from STOREs to about 130 to 140 per second per connection at record size.
 - Domain record lifetime, a format rule in the Records section beside the 256 KiB rule: a domain record's `expires_at`
-  is at most 7 days after its `created_at`, and every verifier refuses a longer one as malformed. With `created_at` at
-  most 5 minutes ahead, no domain record a station accepts expires more than 7 days and 5 minutes after it arrives.
+  is at most 7 days after its `created_at`, and every verifier refuses a longer one as `lifetime_too_long`, as it
+  refuses any record past its type's maximum. With `created_at` at most 5 minutes ahead, no domain record a station
+  accepts expires more than 7 days and 5 minutes after it arrives.
 - Why 7 days: it bounds how long any domain entry holds space in a station's domain total, it matches the binding
   lifetime (D22), and renewal stays affordable for a large signer: re-signing 300,000 records once a week takes about
   26 minutes of one core in the EU profile and 6 minutes in the US profile, plus the upload.
@@ -327,7 +328,7 @@ Not counted:
   cost 1. Replication between two stations at 512 KiB per second never is.
 - An SDK bulk upload of valid records into slots with room is answered `stored` 1 throughout.
 - A domain record whose `expires_at` is exactly 7 days after its `created_at` is accepted; one a millisecond longer is
-  refused as malformed at a station and at a consumer, and costs 1.
+  refused as `lifetime_too_long` at a station and at a consumer, and costs 1.
 - While paused, a peer sending 1 GiB leaves at most N chunks in the receiver's mailbox and its memory within a bound.
 - A pause trips none of the receiver's SWIM or stream idle timers for that peer.
 
