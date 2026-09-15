@@ -164,7 +164,8 @@
     pubsub_gap_skips   := non_neg_integer(),
     refused_dials      := #{too_many_direct_links | new_peer_budget_spent | unusable_seed
                             | link_start_waits_for_issuer | seed_without_expected_node_id => pos_integer()},
-    issuer_restarts    := non_neg_integer()
+    issuer_restarts    := non_neg_integer(),
+    issuer_losses      := non_neg_integer()
 }.
 %% Per-link view returned by `links/1'. One entry per configured seed
 %% that currently has a spawned link worker. `node_id' is the peer
@@ -503,9 +504,10 @@
     issuer           :: pid() | undefined,
     issuer_started_at :: integer(),
     issuer_backoff_ms :: pos_integer(),
-    %% How the pool starts an issuer, and how many it has started after its first.
+    %% How the pool starts an issuer, how many it has started after its first, and how many issuers it has lost.
     issuer_start     :: fun((fun(() -> macula_node_keys:node_key()), pid()) -> {ok, pid()} | {error, term()}),
     issuer_restarts = 0 :: non_neg_integer(),
+    issuer_losses = 0 :: non_neg_integer(),
     %% Link starts that wait for the next issuer: seed → the start's extra
     %% options.
     held_starts = #{} :: #{seed() => map()}
@@ -550,10 +552,10 @@ close(Pool) ->
 %% tree. `Id' is the supervisor child id. A supervisor keeps the spec for
 %% its child's life, so the spec names how to load the node identity key
 %% and never holds the key: give `node_identity' as a loader
-%% `{Module, Function, Args}' that returns `{ok, Key}'. A key given here
-%% raises `{node_identity, loader_required}'.
+%% `{Module, Function, Args}' that returns `{ok, Key}'. A key, or a function
+%% that could hold one, given here raises `{node_identity, loader_required}'.
 -spec child_spec(term(), [seed()], opts()) -> supervisor:child_spec().
-child_spec(_Id, _Seeds, #{node_identity := Key}) when is_map(Key) ->
+child_spec(_Id, _Seeds, #{node_identity := Given}) when is_map(Given); is_function(Given) ->
     erlang:error({node_identity, loader_required});
 child_spec(Id, Seeds, Opts) ->
     #{id       => Id,
@@ -1177,7 +1179,9 @@ handle_call(status, _From,
         %% by the budget or refused, by reason.
         refused_dials      => macula_refusal_report:counts(S#state.refused_dials),
         %% Issuers the pool started after its first, one for each that ended.
-        issuer_restarts    => S#state.issuer_restarts
+        issuer_restarts    => S#state.issuer_restarts,
+        %% Issuers the pool lost, whether or not a new one runs yet.
+        issuer_losses      => S#state.issuer_losses
     },
     {reply, {ok, Status}, S};
 
@@ -1615,8 +1619,16 @@ keys_in_profile({error, _} = Refusal, _Opts) ->
 %% {ok, Key}, as a child spec names it. A loader that returns anything else refuses the pool, naming no key.
 identity_opt({ok, Identity}) when is_function(Identity, 0) -> {ok, Identity()};
 identity_opt({ok, {Module, Function, Args}}) when is_atom(Module), is_atom(Function), is_list(Args) ->
-    loaded(apply(Module, Function, Args));
+    loaded(run_loader(Module, Function, Args));
 identity_opt(NotGiven) -> NotGiven.
+
+%% A loader runs once, at the pool's start. One that raises refuses the pool as one that returns no key does. The try
+%% is what keeps a loader's crash from becoming the pool's crash report, and the refusal carries neither the loader's
+%% error nor its arguments, since either can hold the key.
+run_loader(Module, Function, Args) ->
+    try apply(Module, Function, Args)
+    catch _Class:_Reason -> loader_raised
+    end.
 
 loaded({ok, Key}) -> {ok, Key};
 loaded(_NoKey) -> {error, {node_identity, loader_failed}}.
@@ -2423,7 +2435,7 @@ issuer_down(Reason, #state{issuer_started_at = StartedAt, issuer_backoff_ms = Ba
     ok = macula_diagnostics:bounded_event(warning, <<"_macula.client.issuer_down">>,
                                           #{reason => Reason, restart_in_ms => Delay}),
     erlang:send_after(Delay, self(), restart_issuer),
-    S#state{issuer = undefined, issuer_backoff_ms = next_issuer_backoff(Delay),
+    S#state{issuer = undefined, issuer_backoff_ms = next_issuer_backoff(Delay), issuer_losses = S#state.issuer_losses + 1,
             link_opts = maps:remove(issuer, S#state.link_opts)}.
 
 %% The delay before the pool starts a new issuer: the least once the issuer that ended has run a minute, and the backoff
