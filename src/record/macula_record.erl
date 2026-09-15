@@ -121,8 +121,11 @@
 -define(LABEL, <<"MACULA-PQ-RECORD-V1">>).
 -define(STORAGE_KEY_LABEL, "MACULA-PQ-STORAGE-KEY-V1").
 -define(MAX_RECORD_BYTES, 256 * 1024).
-%% The longest coordinate text a node record's reader parses: a finite coordinate needs far fewer bytes.
+%% The longest coordinate text a node record's reader parses: a coordinate needs far fewer bytes.
 -define(MAX_GEO_TEXT_BYTES, 32).
+%% How far from zero a latitude and a longitude reach, both inclusive.
+-define(LAT_BOUND, 90).
+-define(LNG_BOUND, 180).
 -define(CLOCK_TOLERANCE_MS, 5 * 60 * 1000).
 %% A protocol integer in a signed structure stays below 2^53 (the decoding rule).
 -define(MAX_PROTOCOL_INT, 1 bsl 53).
@@ -489,8 +492,8 @@ read_node_record(#{type := ?TYPE_NODE_RECORD, payload := P}) ->
       endpoint     => payload_field(P, <<"endpoint">>),
       city         => payload_field(P, <<"city">>),
       country      => payload_field(P, <<"country">>),
-      lat          => parse_geo(payload_field(P, <<"lat">>)),
-      lng          => parse_geo(payload_field(P, <<"lng">>)),
+      lat          => parse_geo(maps:get({text, <<"lat">>}, P, undefined), ?LAT_BOUND),
+      lng          => parse_geo(maps:get({text, <<"lng">>}, P, undefined), ?LNG_BOUND),
       display_name => payload_field(P, <<"display_name">>),
       caps_hint    => payload_field(P, <<"caps_hint">>),
       peers        => payload_field(P, <<"peers">>),
@@ -1189,18 +1192,28 @@ node_payload(NodeId, StationId, Realms, Capabilities, Opts) ->
     M4 = with_text(M3, <<"endpoint">>, maps:get(endpoint, Opts, undefined)),
     M5 = with_text(M4, <<"city">>, maps:get(city, Opts, undefined)),
     M6 = with_text(M5, <<"country">>, maps:get(country, Opts, undefined)),
-    M7 = with_geo(M6, <<"lat">>, maps:get(lat, Opts, undefined)),
-    M8 = with_geo(M7, <<"lng">>, maps:get(lng, Opts, undefined)),
+    M7 = with_geo(M6, <<"lat">>, lat, maps:get(lat, Opts, undefined), ?LAT_BOUND),
+    M8 = with_geo(M7, <<"lng">>, lng, maps:get(lng, Opts, undefined), ?LNG_BOUND),
     M9 = with_peers(M8, maps:get(peers, Opts, undefined)),
     with_text(M9, <<"kind">>, maps:get(kind, Opts, undefined)).
 
 with_text(Map, _Key, undefined) -> Map;
 with_text(Map, Key, Bin) when is_binary(Bin) -> Map#{{text, Key} => {text, Bin}}.
 
-%% Coordinates travel as text: a fixed-decimals rendering is stable across stacks, unlike float encodings.
-with_geo(Map, _Key, undefined) -> Map;
-with_geo(Map, Key, V) when is_float(V) -> Map#{{text, Key} => {text, float_to_binary(V, [{decimals, 6}, compact])}};
-with_geo(Map, Key, V) when is_integer(V) -> Map#{{text, Key} => {text, integer_to_binary(V)}}.
+%% Coordinates travel as text: a fixed-decimals rendering is stable across stacks, unlike float encodings. A coordinate
+%% is a number within Bound of zero either way; any other value is refused by name, so the builder writes only text a
+%% reader takes.
+with_geo(Map, _Key, _Field, undefined, _Bound) ->
+    Map;
+with_geo(Map, Key, Field, V, Bound) ->
+    ok = coordinate_checked(is_number(V) andalso abs(V) =< Bound, Field),
+    Map#{{text, Key} => {text, geo_text(V)}}.
+
+coordinate_checked(true, _Field) -> ok;
+coordinate_checked(false, Field) -> {error, {invalid_coordinate, Field}}.
+
+geo_text(V) when is_float(V) -> float_to_binary(V, [{decimals, 6}, compact]);
+geo_text(V) when is_integer(V) -> integer_to_binary(V).
 
 %% Sorted, so the same set of peers always encodes the same way.
 with_peers(Map, undefined) -> Map;
@@ -1319,16 +1332,33 @@ host_list(undefined) -> [];
 host_list(Hosts) when is_list(Hosts) -> [unwrap_text(Host) || Host <- Hosts];
 host_list(Host) -> [unwrap_text(Host)].
 
-%% Coordinate text reads as the finite number it spells in full, a float or an integer, in at most 32 bytes. Any other
-%% value, text or not, reads as no coordinate, so reading a verified record never raises on a coordinate its signer
-%% chose.
-parse_geo(Text) when is_binary(Text), byte_size(Text) =< ?MAX_GEO_TEXT_BYTES ->
-    geo_float(string:to_float(Text), Text);
-parse_geo(_NotACoordinate) ->
+%% A coordinate is text as both builders write it: an optional leading minus, digits, then optionally a dot and
+%% digits, in at most 32 bytes, within Bound of zero either way. Any other value, text or not, reads as no coordinate,
+%% so reading a verified record never raises on a coordinate its signer chose.
+parse_geo({text, Text}, Bound) when is_binary(Text), byte_size(Text) =< ?MAX_GEO_TEXT_BYTES ->
+    within_bound(geo_number(geo_shape(Text), Text), Bound);
+parse_geo(_NotACoordinate, _Bound) ->
     undefined.
 
-geo_float({Float, <<>>}, _Text) when is_float(Float) -> Float;
-geo_float(_NotAFloat, Text) -> geo_integer(string:to_integer(Text)).
+%% The shape of coordinate text: integer or decimal when it is exactly the grammar, and none otherwise.
+geo_shape(<<"-", Unsigned/binary>>) -> unsigned_shape(Unsigned);
+geo_shape(Unsigned) -> unsigned_shape(Unsigned).
 
-geo_integer({Integer, <<>>}) when is_integer(Integer) -> Integer;
-geo_integer(_NotANumber) -> undefined.
+unsigned_shape(Text) -> parts_shape(binary:split(Text, <<".">>)).
+
+parts_shape([Whole]) -> shape_if(all_digits(Whole), integer);
+parts_shape([Whole, Fraction]) -> shape_if(all_digits(Whole) andalso all_digits(Fraction), decimal).
+
+shape_if(true, Shape) -> Shape;
+shape_if(false, _Shape) -> none.
+
+all_digits(<<>>) -> false;
+all_digits(Bytes) -> lists:all(fun(Byte) -> Byte >= $0 andalso Byte =< $9 end, binary_to_list(Bytes)).
+
+%% Text of the grammar's shape is exactly what binary_to_integer/1 and binary_to_float/1 take, so neither raises.
+geo_number(integer, Text) -> binary_to_integer(Text);
+geo_number(decimal, Text) -> binary_to_float(Text);
+geo_number(none, _Text) -> undefined.
+
+within_bound(Number, Bound) when is_number(Number), abs(Number) =< Bound -> Number;
+within_bound(_OutOfBoundOrNone, _Bound) -> undefined.
