@@ -191,6 +191,15 @@ Post-quantum work on the `post-quantum` branch. Not on `main`.
   later discovery run. The configured seeds never spend it. `status/1`
   counts refused dials by reason in `refused_dials`, and each reason is
   logged at most once a minute with its count.
+- `macula_frame:stream_bytes/2` signs and encodes a frame built for a
+  dedicated stream: a CALL or STREAM_OPEN, a RESULT or provider ERROR, a
+  station's relay error, or either side's stream frame under its verified
+  STREAM_OPEN. It returns `{ok, StreamBytes}`, or
+  `{error, {unsupported_payload_type, Type, Path}}` for a payload, body or
+  reply the wire cannot carry and `{error, unsignable}` for a frame without
+  an identity key or a stream frame without its verified STREAM_OPEN,
+  without raising and with nothing to write. `written_bytes/1` gives the
+  bytes of a `stream_bytes()` and refuses anything else.
 
 ### Changed
 
