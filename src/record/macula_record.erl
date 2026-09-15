@@ -120,6 +120,8 @@
 -define(LABEL, <<"MACULA-PQ-RECORD-V1">>).
 -define(STORAGE_KEY_LABEL, "MACULA-PQ-STORAGE-KEY-V1").
 -define(MAX_RECORD_BYTES, 256 * 1024).
+%% The longest coordinate text a node record's reader parses: a finite coordinate needs far fewer bytes.
+-define(MAX_GEO_TEXT_BYTES, 32).
 -define(CLOCK_TOLERANCE_MS, 5 * 60 * 1000).
 %% A protocol integer in a signed structure stays below 2^53 (the decoding rule).
 -define(MAX_PROTOCOL_INT, 1 bsl 53).
@@ -1271,8 +1273,16 @@ host_list(undefined) -> [];
 host_list(Hosts) when is_list(Hosts) -> [unwrap_text(Host) || Host <- Hosts];
 host_list(Host) -> [unwrap_text(Host)].
 
-parse_geo(undefined) -> undefined;
-parse_geo(Bin) when is_binary(Bin) ->
-    try binary_to_float(Bin)
-    catch error:badarg -> binary_to_integer(Bin)
-    end.
+%% Coordinate text reads as the finite number it spells in full, a float or an integer, in at most 32 bytes. Any other
+%% value, text or not, reads as no coordinate, so reading a verified record never raises on a coordinate its signer
+%% chose.
+parse_geo(Text) when is_binary(Text), byte_size(Text) =< ?MAX_GEO_TEXT_BYTES ->
+    geo_float(string:to_float(Text), Text);
+parse_geo(_NotACoordinate) ->
+    undefined.
+
+geo_float({Float, <<>>}, _Text) when is_float(Float) -> Float;
+geo_float(_NotAFloat, Text) -> geo_integer(string:to_integer(Text)).
+
+geo_integer({Integer, <<>>}) when is_integer(Integer) -> Integer;
+geo_integer(_NotANumber) -> undefined.
