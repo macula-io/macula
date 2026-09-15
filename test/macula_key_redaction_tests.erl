@@ -1,9 +1,9 @@
 %% EUnit tests for keeping private keys out of what a node shows and logs: macula_node_keys:redacted/1, format_status/1
 %% in every process that holds a private key, and the primary logger filter macula_node_keys:redacted_log_event/2 that
-%% the application installs and removes. Each crash path is captured through a logger handler, and no private key's
-%% bytes may appear in an event or in its formatted text. The gen_statem path runs on a gen_statem of this module that
-%% holds a key: every state function of macula_peering_conn has a clause for any event, and its format_status/1 is
-%% tested directly.
+%% the application's start and every pool install, and that nothing removes. Each crash path is captured through a
+%% logger handler, and no private key's bytes may appear in an event or in its formatted text. The gen_statem path
+%% runs on a gen_statem of this module that holds a key: every state function of macula_peering_conn has a clause for
+%% any event, and its format_status/1 is tested directly.
 -module(macula_key_redaction_tests).
 
 -include_lib("eunit/include/eunit.hrl").
@@ -69,6 +69,47 @@ keys_are_redacted_in_reports_of_the_otp_and_macula_domains_test_() ->
     Key = key(),
     [?_assertEqual(#{held => redacted_key(Key)}, filtered(#{held => Key}, [Domain, sasl], #{}))
      || Domain <- [otp, macula]].
+
+%% The filter never raises, whatever an event holds: logger removes a filter that raises, and every report after it
+%% would go out unredacted with no signal. Each event comes back as an event, and a term that is no event comes back
+%% as it is.
+the_filter_returns_every_event_shape_without_raising_test_() ->
+    Key = key(),
+    {_Fun, Modules} = expected_filter(),
+    Held = event({report, #{held => Key}}, [otp]),
+    Shapes = [event({string, "a string message"}, [otp]),
+              event({"~p and ~p", [one, Key]}, [otp]),
+              Held,
+              event({report, [{held, Key}, {other, 1}]}, [macula]),
+              event({report, [improper | tail]}, [otp]),
+              event({report, not_a_map_or_a_list}, [otp]),
+              event({report, fun() -> Key end}, [otp]),
+              event({report, #{reason => {function_clause, [{macula_client, init, [one | two], [{line, 1}]}]}}},
+                    [otp]),
+              Held#{meta := #{domain => [otp], report_cb => fun(Report) -> {"~p", [Report]} end}},
+              Held#{meta := #{domain => not_a_list}},
+              Held#{meta := #{domain => []}},
+              Held#{meta := not_a_map},
+              maps:remove(meta, Held),
+              not_an_event],
+    [?_assert(event_returned(Shape, macula_node_keys:redacted_log_event(Shape, Modules))) || Shape <- Shapes].
+
+%% A crash report whose top stack frame is a macula function called with a key map, or with a loader that returns the
+%% key, shows that frame's arity in place of its arguments, and no private half in the term or its formatted text.
+a_top_frame_that_holds_a_key_or_its_loader_shows_its_arity_test_() ->
+    Key = key(),
+    {_Fun, Modules} = expected_filter(),
+    Location = [{file, "macula_station_link.erl"}, {line, 1}],
+    [?_test(begin
+                Stack = [{macula_station_link, handle_call, [a_request, from, Holder], Location}],
+                Report = #{label => {proc_lib, crash}, report => [[{error_info, {error, function_clause, Stack}}]]},
+                Event = macula_node_keys:redacted_log_event(event({report, Report}, [otp, sasl]), Modules),
+                #{msg := {report, #{report := [[{error_info, {error, function_clause, [Frame]}}]]}}} = Event,
+                ?assertEqual({macula_station_link, handle_call, 3, Location}, Frame),
+                ?assertEqual([], [Private || Private <- privates(Key),
+                                             holds(Event, Private) orelse holds(formatted(Event), printed(Private))])
+            end)
+     || Holder <- [#{node_identity => Key}, fun() -> Key end]].
 
 other_events_pass_unchanged_test_() ->
     Key = key(),
@@ -244,15 +285,17 @@ a_host_function_clause_keeps_its_arguments() ->
                                     binary:match(formatted(Event), ?MARKER) =/= nomatch]).
 
 %%------------------------------------------------------------------
-%% The filter goes with the application
+%% The filter is installed once and stays
 %%------------------------------------------------------------------
 
+%% The application's start and every pool install the filter, and nothing removes it: a process that holds a key can
+%% outlive the application, and the filter changes nothing but key material. A node holds one filter across a restart.
 the_application_holds_one_redaction_filter_across_a_restart_test_() ->
     {timeout, ?EU_TIMEOUT, fun() ->
         started(),
         ?assertEqual(1, installed()),
         ok = application:stop(macula),
-        ?assertEqual(0, installed()),
+        ?assertEqual(1, installed()),
         started(),
         ?assertEqual(1, installed())
     end}.
@@ -261,6 +304,7 @@ a_start_replaces_a_filter_left_behind_test_() ->
     {timeout, ?EU_TIMEOUT, fun() ->
         started(),
         ok = application:stop(macula),
+        _ = logger:remove_primary_filter(?FILTER),
         ok = logger:add_primary_filter(?FILTER, {fun(Event, _) -> Event end, left_behind}),
         started(),
         Held = [Filter || {Id, _} = Filter <- primary_filters(), Id =:= ?FILTER],
@@ -268,7 +312,7 @@ a_start_replaces_a_filter_left_behind_test_() ->
         ?assertMatch([{?FILTER, {_, #{macula_node_keys := true}}}], Held)
     end}.
 
-stopping_the_application_removes_only_its_own_filter_test_() ->
+stopping_the_application_removes_no_filter_test_() ->
     {timeout, ?EU_TIMEOUT, fun() ->
         started(),
         ok = logger:add_primary_filter(host_filter, {fun(Event, _) -> Event end, host}),
@@ -277,7 +321,53 @@ stopping_the_application_removes_only_its_own_filter_test_() ->
         After = filter_ids(),
         started(),
         ok = logger:remove_primary_filter(host_filter),
-        ?assertEqual([?FILTER], Before -- After)
+        ?assertEqual({[], true}, {Before -- After, lists:member(?FILTER, After)})
+    end}.
+
+%% The installer keeps one filter, the external function redacted_log_event/2 with the application's modules, however
+%% often it runs, and puts that filter in place of another value held under its id.
+installing_again_keeps_the_one_filter_test_() ->
+    {timeout, ?EU_TIMEOUT, fun() ->
+        started(),
+        Expected = expected_filter(),
+        ok = macula_node_keys:install_log_redaction(),
+        ok = macula_node_keys:install_log_redaction(),
+        Held = [Filter || {Id, Filter} <- primary_filters(), Id =:= ?FILTER],
+        _ = logger:remove_primary_filter(?FILTER),
+        ok = logger:add_primary_filter(?FILTER, {fun(Event, _) -> Event end, left_behind}),
+        ok = macula_node_keys:install_log_redaction(),
+        Replaced = [Filter || {Id, Filter} <- primary_filters(), Id =:= ?FILTER],
+        ?assertEqual({[Expected], [Expected]}, {Held, Replaced})
+    end}.
+
+%% A pool started without the macula application installs the filter itself, so a key holder in its tree that crashes
+%% leaves reports with no private half: here the pool's statement issuer, which holds the pool's CONNECT key and a
+%% loader of its identity key, hits a function_clause.
+a_pool_started_without_the_application_redacts_its_crash_reports_test_() ->
+    {timeout, ?EU_TIMEOUT, fun() ->
+        started(),
+        Identity = key(),
+        ok = application:stop(macula),
+        _ = logger:remove_primary_filter(?FILTER),
+        Test = self(),
+        Start = fun(Load, Owner) ->
+                    {ok, Started} = Result = macula_statement_issuer:start_link(#{identity => Load, owner => Owner}),
+                    Test ! {issuer_started, Started},
+                    Result
+                end,
+        try
+            {ok, Pool} = macula_client:connect([], #{node_identity => Identity, issuer_start => Start}),
+            Issuer = receive {issuer_started, Pid} -> Pid after 5_000 -> erlang:error(no_issuer) end,
+            #{connect_key := Connect} = macula_statement_issuer:connect_material(Issuer),
+            Installed = installed(),
+            Events = captured(fun() -> catch gen_server:call(Issuer, not_a_request) end),
+            ok = macula_client:close(Pool),
+            ?assertEqual(1, Installed),
+            assert_clean(Events, [{gen_server, terminate}, {proc_lib, crash}],
+                         privates(Identity) ++ privates(Connect))
+        after
+            started()
+        end
     end}.
 
 %%------------------------------------------------------------------
@@ -375,6 +465,15 @@ filter_ids() ->
 
 installed() ->
     length([Id || Id <- filter_ids(), Id =:= ?FILTER]).
+
+%% The filter the installer puts in place: the external function redacted_log_event/2 with the application's modules.
+expected_filter() ->
+    {ok, Modules} = application:get_key(macula, modules),
+    {fun macula_node_keys:redacted_log_event/2, maps:from_keys(Modules, true)}.
+
+%% A filter's answer: an event for an event, and a term that is no event as it is.
+event_returned(Given, Returned) when is_map(Given) -> is_map(Returned);
+event_returned(Given, Returned) -> Given =:= Returned.
 
 %% The events every handler receives while Act runs, through a handler added for the run.
 captured(Act) ->
