@@ -316,6 +316,16 @@ Post-quantum work on the `post-quantum` branch. Not on `main`.
   and the `advertise_direct/7` functions of `macula_response` and
   `macula_streamer` refuse `cert_chain`. `realm_trust` and `authorization`
   replace them.
+- A station link delivers the overlay frames D17 leaves unsigned from an
+  `overlay_relay` envelope, with the envelope's origin as their sender
+  whatever the inner frame names. Those frames are the six HyParView types,
+  `hyparview_join`, `hyparview_forward_join`, `hyparview_neighbor`,
+  `hyparview_disconnect`, `hyparview_shuffle` and `hyparview_shuffle_reply`,
+  as `macula_frame:relayed_without_signature/1` names them. Every other
+  relayed frame is still delivered only when its own signature verifies
+  against that origin. The envelope reaches the link only through its own
+  connection, which in `pq_hybrid` checks the station's neighbour signature
+  on it first.
 
 ### Removed
 

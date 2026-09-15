@@ -105,6 +105,12 @@ handshake_test_() ->
            {"an overlay relay goes out neighbour-signed and verifies in pq_hybrid",
             {timeout, 120,
              fun() -> an_overlay_relay_goes_out_neighbour_signed_and_verifies_in_pq_hybrid(Ctx) end}},
+           {"an overlay relay without a neighbour signature closes and routes nothing in pq_hybrid",
+            {timeout, 120,
+             fun() -> an_overlay_relay_without_a_neighbour_signature_closes_and_routes_nothing_in_pq_hybrid(Ctx) end}},
+           {"an overlay relay neighbour-signed by another key closes and routes nothing in pq_hybrid",
+            {timeout, 120,
+             fun() -> an_overlay_relay_signed_by_another_key_closes_and_routes_nothing_in_pq_hybrid(Ctx) end}},
            {"a frame with a field its table does not name closes with malformed_frame",
             {timeout, 30, fun() -> a_frame_with_a_field_its_table_does_not_name_closes_with_malformed_frame(Ctx) end}},
            {"an application frame on the control stream is delivered",
@@ -855,6 +861,41 @@ an_overlay_relay_goes_out_neighbour_signed_and_verifies_in_pq_hybrid(Ctx) ->
     ok = sent(Client, Station, [Relay]),
     ?assertEqual({open, open}, {still_open(Client, 500), still_open(Station, 0)}),
     finish(World, [Client, Station]).
+
+%% A relayed overlay frame is taken unsigned only on the neighbour signature of
+%% the connection it arrives on. In pq_hybrid an OVERLAY_RELAY without one
+%% closes the connection, and nothing reaches the controlling process.
+an_overlay_relay_without_a_neighbour_signature_closes_and_routes_nothing_in_pq_hybrid(Ctx) ->
+    World = world(Ctx, #{profile => pq_hybrid}),
+    {Client, Station} = connect(World, #{mode => off}),
+    _ = {await(Client, connected), await(Station, connected)},
+    ok = on_control_stream(Client, macula_frame:encode(unsigned_join_relay())),
+    Reason = ended(Station),
+    ?assertEqual(malformed_frame, Reason),
+    ?assertEqual(none, routed(Station)),
+    finish(World, [Client, Station]).
+
+%% One neighbour-signed with a key other than the peer's identity key closes
+%% the connection with signature_invalid, and nothing is routed.
+an_overlay_relay_signed_by_another_key_closes_and_routes_nothing_in_pq_hybrid(Ctx) ->
+    #{station_key := StationKey} = World = world(Ctx, #{profile => pq_hybrid}),
+    {Client, Station} = connect(World, #{mode => off}),
+    _ = {await(Client, connected), await(Station, connected)},
+    Forged = macula_frame:sign_neighbour(unsigned_join_relay(), StationKey,
+                                         #{connection => crypto:hash(sha384, <<"a challenge">>), seq => 0}),
+    ok = on_control_stream(Client, macula_frame:encode(Forged)),
+    Reason = ended(Station),
+    ?assertEqual(signature_invalid, Reason),
+    ?assertEqual(none, routed(Station)),
+    finish(World, [Client, Station]).
+
+unsigned_join_relay() ->
+    Join = macula_frame:hyparview_join(#{realm => <<9:256>>, new_member => <<8:256>>}),
+    macula_frame:overlay_relay(#{peer => <<9:256>>, payload => macula_frame:encode(Join)}).
+
+%% Whether a frame reached the controlling process of `Pid'.
+routed(Pid) ->
+    receive {macula_peering, frame, Pid, _Frame} -> routed after 0 -> none end.
 
 ping() ->
     macula_frame:ping(#{nonce => crypto:strong_rand_bytes(16)}).

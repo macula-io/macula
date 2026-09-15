@@ -804,13 +804,15 @@ unadvertise(Pid, Realm, Procedure)
 %% Subscriber receives one of:
 %%
 %% <ul>
-%%   <li>`{macula_overlay_frame, SubRef, Frame, Meta}' — every time a
+%%   <li>`{macula_overlay_frame, SubRef, Frame, Meta}': every time a
 %%       matching frame arrives. `Frame' is the fully decoded frame
-%%       map (including a `record' field already inflated to a
-%%       `macula_record:m_record()' if the frame carried one — see
-%%       `macula_frame:hyparview_join_spec()'). `Meta' is a map with
-%%       a `sender' field: the connected peer's NodeId, since a frame
-%%       does not self-identify its sender at the application layer.</li>
+%%       map (a `record' field, if the frame carried one, as its wire
+%%       form, the form `macula_hyparview_endorsement:verify_endorsement/3'
+%%       takes; see `macula_frame:hyparview_join_spec()'). `Meta' is a map
+%%       with a `sender' field: the connected peer's NodeId, or for a frame
+%%       relayed in an `overlay_relay' envelope, the envelope's origin, since
+%%       a frame does not self-identify its sender at the application
+%%       layer.</li>
 %%   <li>`{macula_overlay_gone, SubRef, Reason}' — once, when the
 %%       connection drops or the client stops. The subscription is
 %%       cleared on the same transition.</li>
@@ -1664,20 +1666,23 @@ on_frame(#{frame_type := call} = Frame, S) ->
 %% anyone. A frame with no `realm' field, or no matching subscriber,
 %% is dropped, same as every overlay frame was before this existed.
 %%
-%% `overlay_relay' is a relayed third-party frame (Phase 3.5): the
-%% station forwarded it here because its `peer' field named US, having
-%% received it from a DIFFERENT connection whose authenticated identity
-%% is `Origin'. Decode the wrapped frame and deliver with `Origin' as
-%% `Meta.sender' — NOT `peer_node_id' (that's the station's own
-%% identity, always wrong for a genuine third-party HyParView peer).
+%% `overlay_relay' is a relayed third-party frame: the station forwards a
+%% frame from another node, and `Origin' is that node's identity as the
+%% station authenticated it. It is delivered to the realm's overlay
+%% subscribers with `Meta.sender' set to `Origin', not `peer_node_id' (the
+%% station's own identity). The overlay frames D17 leaves unsigned
+%% (`macula_frame:relayed_without_signature/1') are taken as they are, and
+%% `Origin' is their sender whatever the frame itself names. Every other
+%% relayed frame is delivered only once its own signature verifies against
+%% `Origin'. The envelope reached this link through its own connection, which
+%% in pq_hybrid checked the station's neighbour signature on it first.
 %% Must be matched before the bare `#{realm := Realm}' clause below,
 %% since an `overlay_relay' envelope has no `realm' field of its own.
-%% The wrapped frame is delivered only once its own signature verifies
-%% against `Origin' (`on_relayed_overlay_frame/3').
 on_frame(#{frame_type := overlay_relay, peer := Origin, payload := Bytes}, S) ->
     case macula_frame:decode(Bytes) of
-        {ok, Inner, _Rest} ->
-            on_relayed_overlay_frame(macula_frame:verify(Inner, Origin), Origin, S);
+        {ok, #{frame_type := Type} = Inner, _Rest} ->
+            on_relayed_overlay_frame(relayed(macula_frame:relayed_without_signature(Type), Inner, Origin),
+                                     Origin, S);
         {error, _Reason} -> S
     end;
 on_frame(#{realm := Realm} = Frame, S) ->
@@ -2197,11 +2202,13 @@ deliver_overlay_frame_from(_Sender, _Frame, S) ->
     %% the bare-frame catch-all in on_frame/2.
     S.
 
-%% The inner frame of an `overlay_relay' is signed by the peer that emitted
-%% it, and `Origin' is that peer's identity as the station authenticated
-%% it. Every HyParView frame `macula_hyparview_proto' emits is signed with
-%% the emitting peer's own identity, the one its link connects with, so a
-%% genuine relayed frame verifies here. One that does not is dropped.
+%% A relayed frame of a type D17 leaves unsigned is taken as it is; any other
+%% must verify against `Origin'.
+relayed(true, Inner, _Origin) -> {ok, Inner};
+relayed(false, Inner, Origin) -> macula_frame:verify(Inner, Origin).
+
+%% A relayed frame taken is delivered with `Origin' as its sender; one whose
+%% signature does not verify against `Origin' is dropped.
 on_relayed_overlay_frame({ok, Inner}, Origin, S) ->
     deliver_overlay_frame_from(Origin, Inner, S);
 on_relayed_overlay_frame({error, Why}, Origin, S) ->
