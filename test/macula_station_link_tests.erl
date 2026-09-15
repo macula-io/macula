@@ -3434,6 +3434,36 @@ refused_stream_takes_no_frame_after_its_refusal() ->
         teardown_link_for_streams(Pid)
     end.
 
+%% A frame that closes an established dedicated stream, as a caller's
+%% STREAM_ERROR does by ending the session it carries, closes it for the frames
+%% behind it in the same read too: a STREAM_OPEN right behind it starts no
+%% handler.
+a_closed_stream_takes_no_frame_behind_its_close_test_() ->
+    {timeout, 5, fun closed_stream_takes_no_frame_behind_its_close/0}.
+
+closed_stream_takes_no_frame_behind_its_close() ->
+    {Pid, FakePeer, _PeerNodeId} = setup_link_for_streams(),
+    Log = macula_test_log:capture(),
+    try
+        Test = self(),
+        Procedure = <<"foo.behind_a_close">>,
+        ok = macula_station_link:advertise_stream(Pid, ?REALM, Procedure, server_stream,
+                                                  telling_when_served(Test, telling_how_it_ended(Test))),
+        flush_send_frame_casts(),
+        CallerKp = macula_identity:generate(),
+        {Stream, Sid} = serve_session(Pid, FakePeer, Procedure, CallerKp),
+        Close = #{frame_type => stream_error, stream_id => Sid, code => <<"error">>, message => <<"stop">>},
+        Behind = macula_frame:sign(stream_open_frame(Procedure, CallerKp, behind), CallerKp),
+        Pid ! {quic, <<(macula_frame:encode(Close))/binary, (macula_frame:encode(Behind))/binary>>,
+               Stream, undefined},
+        ?assertMatch({ended, {error, _}}, how_it_ended(1_000)),
+        ?assertEqual(not_served, served_within(200)),
+        ?assertNot(link_holds_key(Pid, Stream))
+    after
+        macula_test_log:release(Log),
+        teardown_link_for_streams(Pid)
+    end.
+
 %% A dedicated stream the peer opened stays open only once it carries a
 %% session. One whose STREAM_OPEN does not verify, or whose first frame is
 %% not a STREAM_OPEN, closes without a STREAM_ERROR and leaves no buffer.
