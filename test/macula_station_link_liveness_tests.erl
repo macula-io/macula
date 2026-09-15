@@ -41,18 +41,20 @@ liveness_tick_emits_probe_call_test_() ->
      end}}.
 
 %% A probe answered by a verified reply from the connected station, a RESULT or a relay ERROR, clears the outstanding
-%% slot, so a link whose station answers every probe stays up past three ticks.
+%% slot before the next tick, and no answer is refused, so a link whose station answers every probe stays up past three
+%% ticks. Stations answer `_macula.ping' with a relay ERROR, so that answer is checked on its own tick.
 liveness_probe_reply_clears_outstanding_test_() ->
     {spawn, {timeout, 10,
      fun() ->
          {Pid, StationKey, Profile} = start_link_to_station(),
-         [answer_next_probe(Pid, Profile, Answer, StationKey)
-          || Answer <- [fun station_result/2, fun station_relay_error/2, fun station_result/2]],
-         ?assertEqual(undefined,
-                      element(macula_station_link:state_field_index(liveness_outstanding), sys:get_state(Pid))),
+         [begin
+              answer_next_probe(Pid, Profile, Answer, StationKey),
+              ?assertEqual(undefined, outstanding_probe(Pid))
+          end || Answer <- [fun station_result/2, fun station_relay_error/2, fun station_result/2]],
          Pid ! liveness_tick,
          _ = sent_probe(Profile),
          ?assertNot(liveness_close_within(300)),
+         ?assertEqual(#{}, refused_replies(Pid)),
          ?assert(is_process_alive(Pid)),
          macula_station_link:stop(Pid)
      end}}.
@@ -188,6 +190,10 @@ liveness_close_within(Ms) ->
     after Ms ->
         false
     end.
+
+%% The probe the link is waiting on an answer to, or undefined.
+outstanding_probe(Pid) ->
+    element(macula_station_link:state_field_index(liveness_outstanding), sys:get_state(Pid)).
 
 %% The replies the link refused, counted by reason.
 refused_replies(Pid) ->
