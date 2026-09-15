@@ -107,7 +107,27 @@ handshake_test_() ->
            {"an application frame on the control stream is delivered",
             {timeout, 30, fun() -> an_application_frame_on_the_control_stream_is_delivered(Ctx) end}},
            {"a handshake frame after HELLO closes with malformed_frame",
-            {timeout, 30, fun() -> a_handshake_frame_after_hello_closes_with_malformed_frame(Ctx) end}}]
+            {timeout, 30, fun() -> a_handshake_frame_after_hello_closes_with_malformed_frame(Ctx) end}},
+           {"a handshake frame that is not CBOR closes with malformed_frame",
+            {timeout, 30, fun() -> a_handshake_frame_that_is_not_cbor_closes_with_malformed_frame(Ctx) end}},
+           {"a handshake length header above the frame cap closes from the header",
+            {timeout, 30, fun() -> a_handshake_length_header_above_the_frame_cap_closes_from_the_header(Ctx) end}},
+           {"a handshake frame of exactly 64 KiB is read, and one byte more closes from the header",
+            {timeout, 30, fun() -> a_handshake_frame_of_64_kib_is_read_and_one_byte_more_closes(Ctx) end}},
+           {"bytes that are not CBOR on the control stream close with malformed_frame",
+            {timeout, 30, fun() -> bytes_that_are_not_cbor_on_the_control_stream_close_with_malformed_frame(Ctx) end}},
+           {"a control stream length header above the frame cap closes from the header",
+            {timeout, 30, fun() -> a_control_stream_length_header_above_the_frame_cap_closes_from_the_header(Ctx) end}},
+           {"a control stream frame over the element budget closes with malformed_frame",
+            {timeout, 30, fun() -> a_control_stream_frame_over_the_element_budget_closes_with_malformed_frame(Ctx) end}},
+           {"a CALL, a PUBLISH and a STREAM_OPEN on the control stream are delivered",
+            {timeout, 30, fun() -> a_call_a_publish_and_a_stream_open_on_the_control_stream_are_delivered(Ctx) end}},
+           {"a CALL without its request closes with malformed_frame",
+            {timeout, 30, fun() -> a_call_without_its_request_closes_with_malformed_frame(Ctx) end}},
+           {"a frame of a type this node does not know closes with malformed_frame",
+            {timeout, 30, fun() -> a_frame_of_a_type_this_node_does_not_know_closes_with_malformed_frame(Ctx) end}},
+           {"a STORE whose record bytes are not CBOR reaches its recipient and the connection serves on",
+            {timeout, 30, fun() -> a_store_whose_record_is_not_cbor_reaches_its_recipient_and_the_connection_serves_on(Ctx) end}}]
       end}}.
 
 %%====================================================================
@@ -892,3 +912,143 @@ a_handshake_frame_after_hello_closes_with_malformed_frame(Ctx) ->
     ok = on_control_stream(Client, macula_frame:encode_bytes(Hello)),
     ?assertEqual(malformed_frame, ended(Station)),
     finish(World, [Client, Station]).
+
+%%====================================================================
+%% Bytes a peer sends that do not make a frame, and frames with fields
+%% their type refuses: a refused frame from the peer on the other end of
+%% the connection ends the connection, named and counted once
+%%====================================================================
+
+%% The frame cap in macula_frame, 16 MiB, and the handshake frame cap in
+%% macula_peering_conn, 64 KiB.
+-define(FRAME_CAP, 16#FFFFFF).
+-define(HANDSHAKE_CAP, 64 * 1024).
+-define(NOT_CBOR, <<10:32/big, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10>>).
+
+a_handshake_frame_that_is_not_cbor_closes_with_malformed_frame(Ctx) ->
+    with_raw_peer(Ctx, fun(Station, Stream) ->
+        ok = macula_quic:send(Stream, ?NOT_CBOR),
+        _ = macula_quic:send(Stream, binary:copy(<<0>>, 65_536)),
+        ?assertEqual(malformed_frame, ended(Station))
+    end).
+
+a_handshake_length_header_above_the_frame_cap_closes_from_the_header(Ctx) ->
+    with_raw_peer(Ctx, fun(Station, Stream) ->
+        ok = macula_quic:send(Stream, <<(?FRAME_CAP + 1):32/big>>),
+        ?assertEqual(malformed_frame, ended(Station))
+    end).
+
+%% A status frame is no opener, so a station that reads one of exactly
+%% 64 KiB closes with unexpected_frame. With one byte more, its length
+%% header alone closes the connection.
+a_handshake_frame_of_64_kib_is_read_and_one_byte_more_closes(Ctx) ->
+    AtCap = status_frame_of_size(?HANDSHAKE_CAP),
+    ?assertEqual(?HANDSHAKE_CAP, byte_size(AtCap)),
+    with_raw_peer(Ctx, fun(Station, Stream) ->
+        ok = macula_quic:send(Stream, macula_frame:encode_bytes(AtCap)),
+        ?assertEqual(unexpected_frame, ended(Station))
+    end),
+    with_raw_peer(Ctx, fun(Station, Stream) ->
+        ok = macula_quic:send(Stream, <<(?HANDSHAKE_CAP + 1):32/big>>),
+        ?assertEqual(malformed_frame, ended(Station))
+    end).
+
+bytes_that_are_not_cbor_on_the_control_stream_close_with_malformed_frame(Ctx) ->
+    on_open_connection(Ctx, fun(Client, Station) ->
+        ok = on_control_stream(Client, ?NOT_CBOR),
+        ?assertEqual(malformed_frame, ended(Station))
+    end).
+
+a_control_stream_length_header_above_the_frame_cap_closes_from_the_header(Ctx) ->
+    on_open_connection(Ctx, fun(Client, Station) ->
+        ok = on_control_stream(Client, <<(?FRAME_CAP + 1):32/big>>),
+        ?assertEqual(malformed_frame, ended(Station))
+    end).
+
+%% An array of 131,072 items, the element budget, is one item over it with
+%% the array itself.
+a_control_stream_frame_over_the_element_budget_closes_with_malformed_frame(Ctx) ->
+    Budget = 131_072,
+    OverBudget = <<16#9A, Budget:32/big, (binary:copy(<<0>>, Budget))/binary>>,
+    on_open_connection(Ctx, fun(Client, Station) ->
+        ok = on_control_stream(Client, macula_frame:encode_bytes(OverBudget)),
+        ?assertEqual(malformed_frame, ended(Station))
+    end).
+
+a_call_a_publish_and_a_stream_open_on_the_control_stream_are_delivered(Ctx) ->
+    Key = identity(),
+    Spec = #{request_id => <<1:128>>, realm => <<1:256>>, procedure => <<"io.macula.test.echo">>,
+             target => node_id(identity()), deadline => erlang:system_time(millisecond) + 60_000, payload => #{}},
+    Frames = [macula_frame:call(Spec, Key),
+              macula_frame:publish(#{realm => <<1:256>>, topic => <<"t">>, seq => 0,
+                                     published_at => erlang:system_time(millisecond), payload => 1}, Key),
+              macula_frame:stream_open(Spec#{request_id => <<2:128>>, mode => bidi}, Key)],
+    on_open_connection(Ctx, fun(Client, Station) ->
+        _ = [ok = on_control_stream(Client, macula_frame:encode(Frame)) || Frame <- Frames],
+        ?assertEqual([wire(Frame) || Frame <- Frames], [frame_from(Station) || _ <- Frames]),
+        ?assertEqual(open, still_open(Station, 500))
+    end).
+
+a_call_without_its_request_closes_with_malformed_frame(Ctx) ->
+    Call = macula_record_cbor:encode(#{{text, <<"version">>} => macula_frame:version(ping()),
+                                       {text, <<"frame_type">>} => {text, <<"call">>}}),
+    on_open_connection(Ctx, fun(Client, Station) ->
+        ok = on_control_stream(Client, macula_frame:encode_bytes(Call)),
+        ?assertEqual(malformed_frame, ended(Station))
+    end).
+
+%% A type name this node does not know, whether sent as text or as bytes.
+a_frame_of_a_type_this_node_does_not_know_closes_with_malformed_frame(Ctx) ->
+    Version = macula_frame:version(ping()),
+    Frames = [#{{text, <<"version">>} => Version, {text, <<"frame_type">>} => {text, <<"zz_future_frame">>}},
+              #{{text, <<"version">>} => Version, {text, <<"frame_type">>} => <<"zz_future_frame">>}],
+    [on_open_connection(Ctx, fun(Client, Station) ->
+         ok = on_control_stream(Client, macula_frame:encode_bytes(macula_record_cbor:encode(Frame))),
+         ?assertEqual(malformed_frame, ended(Station))
+     end) || Frame <- Frames],
+    ok.
+
+%% A record is an object carried for others: the connection passes the
+%% STORE to its recipient, which checks the record, and reads the next
+%% frame.
+a_store_whose_record_is_not_cbor_reaches_its_recipient_and_the_connection_serves_on(Ctx) ->
+    Store = macula_frame:store(#{record => <<255, 255, 255, 255>>}),
+    Ping = ping(),
+    on_open_connection(Ctx, fun(Client, Station) ->
+        ok = on_control_stream(Client, macula_frame:encode(Store)),
+        ok = on_control_stream(Client, macula_frame:encode(Ping)),
+        ?assertEqual([wire(Store), wire(Ping)], [frame_from(Station), frame_from(Station)]),
+        ?assertEqual(open, still_open(Station, 500))
+    end).
+
+%% Runs Scenario with a station connection accepted from a raw QUIC peer
+%% that has not sent an opener, and that peer's open stream.
+with_raw_peer(Ctx, Scenario) ->
+    #{port := Port} = World = world(Ctx, #{}),
+    {ok, Raw} = macula_quic:connect(<<"127.0.0.1">>, Port, [{verify, none}, {alpn, [<<"macula">>]}], 5_000),
+    Station = accept_one(station_opts(World, #{mode => off})),
+    {ok, Stream} = macula_quic:open_stream(Raw),
+    try
+        Scenario(Station, Stream)
+    after
+        _ = (catch macula_quic:close_connection(Raw)),
+        finish(World, [Station])
+    end.
+
+%% Runs Scenario on a connected client and station.
+on_open_connection(Ctx, Scenario) ->
+    World = world(Ctx, #{}),
+    {Client, Station} = connect(World, #{mode => off}),
+    _ = {await(Client, connected), await(Station, connected)},
+    try
+        Scenario(Client, Station)
+    after
+        finish(World, [Client, Station])
+    end.
+
+%% A status frame whose CBOR bytes are exactly Bytes long: its tbs makes up
+%% the size, with a byte string header of three bytes from 256 bytes on.
+status_frame_of_size(Bytes) ->
+    Status = fun(Size) -> macula_handshake:status(#{tbs => binary:copy(<<0>>, Size), signature => <<"s">>}) end,
+    Fixed = byte_size(Status(256)) - 256,
+    Status(Bytes - Fixed).
