@@ -10,7 +10,19 @@ refusals_every_verifier_reaches_from_the_same_bytes_are_charged_test_() ->
 
 refusals_that_depend_on_what_the_receiver_holds_are_not_charged_test_() ->
     [?_assertNot(macula_frame:charged_refusal(Kind))
-     || Kind <- [seq_mismatch, stream_ended, request_mismatch, not_the_target, not_a_peer]].
+     || Kind <- [seq_mismatch, stream_ended, request_mismatch, not_the_target, not_a_peer, no_subscriber]].
+
+%% refusal_charge/1 is charged_refusal/1 over any term: it agrees with charged_refusal/1 on every kind that function
+%% classifies, and a term it does not classify is unclassified, never an error.
+refusal_charge_agrees_with_charged_refusal_and_classifies_any_term_test_() ->
+    Charge = fun(true) -> charged; (false) -> uncharged end,
+    Kinds = [malformed_frame, signature_invalid, key_id_mismatch, seq_mismatch, stream_ended, request_mismatch,
+             not_the_target, placement_allowance, unsolicited_shuffle_reply, {expired, 1}, {expired, 600_001},
+             {not_yet_valid, 1}, {not_yet_valid, 600_001}, ihave_allowance, graft_unanswered, wrong_realm, not_a_peer,
+             no_subscriber],
+    [?_assertEqual(Charge(macula_frame:charged_refusal(Kind)), macula_frame:refusal_charge(Kind)) || Kind <- Kinds]
+    ++ [?_assertEqual(unclassified, macula_frame:refusal_charge(Other))
+        || Other <- [not_a_kind, {expired, soon}, {not_yet_valid}, {signature_invalid, 1}, "text", 7]].
 
 a_connection_counts_reports_by_kind_and_charged_test() ->
     Conn = conn(),

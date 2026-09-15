@@ -1,7 +1,7 @@
 %% EUnit tests for overlay frames a station relays between two nodes' links. The overlay frames D17 leaves unsigned
 %% reach the receiving link's overlay subscribers with the origin the station authenticated as their sender, whatever
-%% the inner frame names. A relayed frame of any other type, and a payload that is not exactly one frame, is dropped
-%% and counted.
+%% the inner frame names, and the relaying station as via. A relayed frame of any other type, and a payload that is not
+%% exactly one frame, is dropped and counted.
 %%
 %% Two real links run here, and the test process is the peering connection of both, standing in for the station: it
 %% takes the envelope link A sends, readdresses it to A's node_id as a station forwards it, and hands it to link B after
@@ -140,6 +140,27 @@ a_relayed_forward_join_reaches_the_other_node_with_the_origin_as_sender_test_() 
          stop_links([A, B])
      end}}.
 
+%% A relayed IHAVE, GRAFT and PRUNE, the Plumtree control frames D17 leaves unsigned in pq_pure, each reach the other
+%% node's overlay subscriber with the origin as their sender and the relaying station as via.
+a_relayed_ihave_graft_and_prune_reach_the_other_node_with_the_origin_as_sender_test_() ->
+    {spawn, {timeout, 10,
+     fun() ->
+         {A, B, SubRef} = two_links_with_a_subscriber_on_b(),
+         ANode = node_id(A),
+         Station = station_of(B),
+         MsgId = crypto:strong_rand_bytes(48),
+         Frames = [macula_frame:plumtree_ihave(#{realm => ?REALM, msg_id => MsgId, round => 1}),
+                   macula_frame:plumtree_graft(#{realm => ?REALM, msg_id => MsgId, round => 1}),
+                   macula_frame:plumtree_prune(#{realm => ?REALM})],
+         [begin
+              ok = macula_station_link:send_overlay_frame(A, node_id(B), Frame),
+              forward_to(B, ANode, sent_envelope(node_id(B))),
+              ?assertMatch({SubRef, #{frame_type := Type}, #{sender := ANode, via := Station}},
+                           overlay_frame_within(1_000))
+          end || #{frame_type := Type} = Frame <- Frames],
+         stop_links([A, B])
+     end}}.
+
 %%------------------------------------------------------------------
 %% Helpers
 %%------------------------------------------------------------------
@@ -175,6 +196,10 @@ start_link_to_station() ->
 
 node_id(Pid) ->
     macula_node_keys:key_id(element(?NODE_IDENTITY_INDEX, sys:get_state(Pid))).
+
+%% The station a link believes it is connected to: the node_id it holds as its peer's.
+station_of(Pid) ->
+    element(?PEER_NODE_ID_INDEX, sys:get_state(Pid)).
 
 %% The overlay_relay envelope a link sent to `Target', as its station receives it.
 sent_envelope(Target) ->
