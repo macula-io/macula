@@ -342,6 +342,12 @@ layer:
 | `_macula.client.link_start_failed` | A `start_link/1` against a seed returned `{error, _}` | `seed`, `reason` |
 | `_macula.client.link_down` | A live link's worker process died | `seed`, `pid`, `reason` |
 
+These events log at `info`, which OTP's default primary level (`notice`)
+does not let through, so set the node's level to `info` to see them. A
+station link's `_macula.station_link.disconnected` and
+`_macula.station_link.peering_exit` events log at `notice`, so a lost
+connection shows at the default level.
+
 Subscriber-pid deaths and pool close are **not** logged by the pool —
 they are normal lifecycle events.
 

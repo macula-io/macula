@@ -325,6 +325,10 @@ Post-quantum work on the `post-quantum` branch. Not on `main`.
   logged at most once a minute per kind. The envelope reaches the link only
   through its own connection, which in `pq_hybrid` checks the station's
   neighbour signature on it first.
+- A station link logs its `_macula.station_link.disconnected` and
+  `_macula.station_link.peering_exit` diagnostic events at `notice`, so a
+  lost connection shows at OTP's default primary level. Its other
+  diagnostic events stay at `info`.
 
 ### Removed
 

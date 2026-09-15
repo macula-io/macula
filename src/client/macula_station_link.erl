@@ -1327,7 +1327,7 @@ handle_info({macula_peering, disconnected, Pid, Reason},
     %% `macula_client:on_down_routed/5' has left to log. Without this,
     %% a station-initiated close is indistinguishable from any other
     %% disconnect in every log this link ever produces.
-    macula_diagnostics:event(<<"_macula.station_link.disconnected">>, #{
+    macula_diagnostics:event(notice, <<"_macula.station_link.disconnected">>, #{
         seed     => Seed,
         peer_pid => Pid,
         reason   => Reason
@@ -1451,7 +1451,7 @@ handle_info({'EXIT', Pid, Reason}, #state{peer_pid = Pid, seed = Seed} = S) ->
     %% Same swallowed-reason gap as the `disconnected' clause above, for
     %% the case where the peering worker itself exits (crash or
     %% deliberate stop) rather than sending a `disconnected' notification.
-    macula_diagnostics:event(<<"_macula.station_link.peering_exit">>, #{
+    macula_diagnostics:event(notice, <<"_macula.station_link.peering_exit">>, #{
         seed     => Seed,
         peer_pid => Pid,
         reason   => Reason
