@@ -1,34 +1,105 @@
-%% EUnit tests for macula_peering:send_on_stream/2. A dedicated stream's writer builds, signs and encodes its frames
-%% itself, and send_on_stream/2 writes exactly the bytes it is given, with no check, encoding or signing of its own.
+%% EUnit tests for macula_peering:send_on_stream/2, over a loopback QUIC stream. A dedicated stream's writer builds, signs
+%% and encodes its frames itself, and send_on_stream/2 writes exactly the bytes it is given, with no check, encoding or
+%% signing of its own. The stream is real, so no test replaces macula_quic.
 -module(macula_peering_send_on_stream_tests).
 
 -include_lib("eunit/include/eunit.hrl").
 
+-define(EVENT_MS, 5_000).
+
 send_on_stream_test_() ->
-    {foreach, fun mocked_quic/0, fun unmocked_quic/1,
-     [{"the bytes given are written as they are", fun the_bytes_given_are_written_as_they_are/0},
-      {"a failed write returns its error", fun a_failed_write_returns_its_error/0},
-      {"a frame map is not taken, and nothing is written", fun a_frame_map_is_not_taken/0}]}.
+    {timeout, 60,
+     {setup,
+      fun() -> {ok, _} = application:ensure_all_started(macula), ok end,
+      fun(ok) -> ok end,
+      [{"the bytes given arrive as they are", fun the_bytes_given_arrive_as_they_are/0},
+       {"a write after the connection closed returns its error", fun a_write_after_the_connection_closed_fails/0},
+       {"a frame map is not taken", fun a_frame_map_is_not_taken/0}]}}.
 
-the_bytes_given_are_written_as_they_are() ->
-    Stream = make_ref(),
-    Bytes = <<"the bytes of a frame its writer built, signed and encoded">>,
-    ?assertEqual(ok, macula_peering:send_on_stream(Stream, Bytes)),
-    ?assert(meck:called(macula_quic, send, [Stream, Bytes])),
-    ?assertEqual(1, meck:num_calls(macula_quic, send, '_')).
+the_bytes_given_arrive_as_they_are() ->
+    with_pair(fun(#{client_stream := Stream, server_stream := ServerStream}) ->
+        ok = macula_quic:setopt(ServerStream, active, true),
+        Bytes = <<"the bytes of a frame its writer built, signed and encoded">>,
+        Sent = macula_peering:send_on_stream(Stream, Bytes),
+        Expected = <<"open", Bytes/binary>>,
+        Read = read_bytes(ServerStream, byte_size(Expected), <<>>, erlang:monotonic_time(millisecond) + ?EVENT_MS),
+        ?assertEqual({ok, Expected}, {Sent, Read})
+    end).
 
-a_failed_write_returns_its_error() ->
-    ok = meck:expect(macula_quic, send, fun(_Stream, _Data) -> {error, stream_closed} end),
-    ?assertEqual({error, stream_closed}, macula_peering:send_on_stream(make_ref(), <<"bytes">>)).
+a_write_after_the_connection_closed_fails() ->
+    with_pair(fun(#{client_conn := ClientConn, client_stream := Stream}) ->
+        ok = macula_quic:close_connection(ClientConn),
+        ?assertMatch({error, _}, macula_peering:send_on_stream(Stream, <<"bytes">>))
+    end).
 
 a_frame_map_is_not_taken() ->
-    ?assertError(function_clause, macula_peering:send_on_stream(make_ref(), #{frame_type => ping})),
-    ?assertEqual(0, meck:num_calls(macula_quic, send, '_')).
+    ?assertError(function_clause, macula_peering:send_on_stream(make_ref(), #{frame_type => ping})).
 
-mocked_quic() ->
-    try meck:unload(macula_quic) catch _:_ -> ok end,
-    ok = meck:new(macula_quic, [passthrough]),
-    ok = meck:expect(macula_quic, send, fun(_Stream, _Data) -> ok end).
+%%%===================================================================
+%%% A loopback pair: one stream from the client, accepted on the server
+%%%===================================================================
 
-unmocked_quic(_) ->
-    meck:unload(macula_quic).
+with_pair(Fun) ->
+    Pair = pair(),
+    try
+        Fun(Pair)
+    after
+        stop_pair(Pair)
+    end.
+
+pair() ->
+    Port = free_udp_port(),
+    {PubBin, {ok, Listener}} = macula_test_tmp:with_dir("macula-send-on-stream",
+                                                        fun(Dir) -> listener(Dir, Port) end),
+    ok = macula_quic:async_accept(Listener),
+    {ok, ClientConn} = macula_quic:connect(<<"127.0.0.1">>, Port,
+                                            [{verify_pubkey, PubBin}, {alpn, [<<"macula">>]}],
+                                            ?EVENT_MS),
+    ServerConn = receive {quic, new_conn, C, _Info} -> C after ?EVENT_MS -> error(no_server_connection) end,
+    ok = macula_quic:async_accept_stream(ServerConn),
+    {ok, ClientStream} = macula_quic:open_stream(ClientConn),
+    ok = macula_quic:send(ClientStream, <<"open">>),
+    ServerStream = receive {quic, new_stream, S, _Props} -> S after ?EVENT_MS -> error(no_server_stream) end,
+    #{listener => Listener, client_conn => ClientConn, server_conn => ServerConn,
+      client_stream => ClientStream, server_stream => ServerStream}.
+
+listener(Dir, Port) ->
+    {Pub, Priv} = crypto:generate_key(eddsa, ed25519),
+    PubBin = iolist_to_binary(Pub),
+    {ok, {CertPem, KeyPem}} =
+        macula_quic:generate_self_signed_cert(PubBin, iolist_to_binary(Priv), [<<"127.0.0.1">>]),
+    Cert = filename:join(Dir, "listener.crt"),
+    Key = filename:join(Dir, "listener.key"),
+    ok = file:write_file(Cert, CertPem),
+    ok = file:write_file(Key, KeyPem),
+    {PubBin, macula_quic:listen(<<"127.0.0.1">>, Port, [{cert, Cert}, {key, Key}, {alpn, [<<"macula">>]}])}.
+
+stop_pair(#{listener := Listener, client_conn := ClientConn, server_conn := ServerConn}) ->
+    _ = (catch macula_quic:close_connection(ClientConn)),
+    _ = (catch macula_quic:close_connection(ServerConn)),
+    _ = (catch macula_quic:close_listener(Listener)),
+    drain().
+
+drain() ->
+    receive
+        {quic, _, _, _} -> drain()
+    after 50 ->
+        ok
+    end.
+
+read_bytes(_Stream, Wanted, Acc, _Deadline) when byte_size(Acc) >= Wanted ->
+    Acc;
+read_bytes(Stream, Wanted, Acc, Deadline) ->
+    Wait = max(0, Deadline - erlang:monotonic_time(millisecond)),
+    receive
+        {quic, Bin, Stream, _Flags} when is_binary(Bin) ->
+            read_bytes(Stream, Wanted, <<Acc/binary, Bin/binary>>, Deadline)
+    after Wait ->
+        Acc
+    end.
+
+free_udp_port() ->
+    {ok, Sock} = gen_udp:open(0, [binary, {ip, {127, 0, 0, 1}}]),
+    {ok, Port} = inet:port(Sock),
+    ok = gen_udp:close(Sock),
+    Port.
