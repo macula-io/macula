@@ -442,14 +442,31 @@ a_read_chunk_gives_its_bytes_back_test() ->
         end
     end).
 
-%% A served bidi stream attached to Link and admitted as a session of Caller,
+%% A served bidi stream carried by Link, as a link starts one: with the provider's node identity key, the verified
+%% STREAM_OPEN it serves, Link as its connection and the pq_pure profile. It is admitted as a session of Caller and
 %% owned by the test process.
 served_stream(Link, Caller) ->
-    {ok, Stream} = macula_stream:start_link(#{id => crypto:strong_rand_bytes(16), role => server,
-                                              mode => bidi, owner => self()}),
+    Provider = stream_node_key(),
+    OpenSpec = #{request_id => crypto:strong_rand_bytes(16), realm => <<0:256>>, procedure => <<"acme/count_v1">>,
+                 target => macula_node_keys:key_id(Provider), deadline => erlang:system_time(millisecond) + 60_000,
+                 payload => #{}, mode => bidi},
+    {ok, Open} = macula_frame:verify_request(as_received(macula_frame:stream_open(OpenSpec, stream_node_key())),
+                                             pq_pure),
+    {ok, Stream} = macula_stream:start_link(#{id => crypto:strong_rand_bytes(16), role => server, mode => bidi,
+                                              owner => self(), key => Provider, open => Open, conn => Link,
+                                              profile => pq_pure}),
     ok = macula_stream:attach_to_link(Stream, Link, crypto:strong_rand_bytes(16)),
     ok = macula_stream_sessions:admit(Caller, Stream),
     Stream.
+
+stream_node_key() ->
+    {ok, Key} = macula_node_keys:generate(identity, pq_pure),
+    Key.
+
+%% A frame as a peer's bytes arrive: encoded, then decoded.
+as_received(Frame) ->
+    {ok, Decoded, <<>>} = macula_frame:decode(macula_frame:encode(Frame)),
+    Decoded.
 
 inbox_bytes(Stream) ->
     maps:get(inbox_bytes, macula_stream:info(Stream)).
