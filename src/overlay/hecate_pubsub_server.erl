@@ -39,7 +39,7 @@
     subscribers/2, topics/1, patterns/1, topic_count/1, subscriber_count/1,
     realm/1,
     publish/3, deliver_event/2, process_frame/3,
-    relay_publish/2,
+    relay_publish/2, identity_checked/1,
     stop/1
 ]).
 
@@ -162,7 +162,7 @@ stop(Pid) ->
 %%====================================================================
 
 init(#{realm := Realm, identity := Key}) ->
-    started(identity_profile(Key, macula_crypto_profile:configured()), Realm, Key).
+    started(identity_checked(Key), Realm, Key).
 
 %% The server's key is an identity key in the node's configured profile, the one the pool reads, so one node never
 %% runs two profiles.
@@ -174,6 +174,12 @@ identity_profile(#{purpose := identity}, {error, _} = Refusal) ->
     Refusal;
 identity_profile(_NotAnIdentityKey, _Configured) ->
     {error, {identity, not_an_identity_key}}.
+
+%% @doc Check that a key is an identity key in the node's configured crypto profile, as a pubsub server requires of its
+%% key and a registry of its identity. Returns the profile, or the refusal by name.
+-spec identity_checked(term()) -> {ok, macula_crypto_profile:profile()} | {error, term()}.
+identity_checked(Key) ->
+    identity_profile(Key, macula_crypto_profile:configured()).
 
 started({error, _} = Refusal, _Realm, _Key) ->
     Refusal;

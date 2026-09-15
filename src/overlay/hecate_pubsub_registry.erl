@@ -75,7 +75,9 @@
     %% Default identity used when a `register/3' caller does not
     %% pass one explicitly. Optional — passing identity per-call
     %% gives the same behaviour as the pre-Phase-2 API. With it, a
-    %% SUBSCRIBE for a realm without a server materialises one.
+    %% SUBSCRIBE for a realm without a server materialises one. It is an
+    %% identity key in the node's configured crypto profile, or the
+    %% registry does not start.
     identity     => identity(),
     %% Phase 6 (operational tooling): when supplied, the registry
     %% sets `logger:set_process_metadata(#{identity_id =&gt; Key})'
@@ -222,9 +224,21 @@ stop(RegistryPid) ->
 init(Opts) ->
     process_flag(trap_exit, true),
     set_logger_identity(Opts),
-    {ok, #state{default_identity      = maps:get(identity, Opts, undefined),
-                max_subscribed_realms = maps:get(max_subscribed_realms, Opts,
-                                                 ?MAX_SUBSCRIBED_REALMS)}}.
+    registry_started(default_identity(maps:find(identity, Opts)), Opts).
+
+%% A registry's identity is an identity key in the node's configured profile, as a server's is, so a registry given a
+%% key it cannot use refuses to start instead of refusing every relay later.
+default_identity(error) -> {ok, undefined};
+default_identity({ok, Key}) -> identity_held(hecate_pubsub_server:identity_checked(Key), Key).
+
+identity_held({ok, _Profile}, Key) -> {ok, Key};
+identity_held({error, _} = Refusal, _Key) -> Refusal.
+
+registry_started({ok, Identity}, Opts) ->
+    {ok, #state{default_identity      = Identity,
+                max_subscribed_realms = maps:get(max_subscribed_realms, Opts, ?MAX_SUBSCRIBED_REALMS)}};
+registry_started({error, _} = Refusal, _Opts) ->
+    Refusal.
 
 set_logger_identity(#{identity_key := Key}) ->
     logger:set_process_metadata(#{identity_id => Key});
