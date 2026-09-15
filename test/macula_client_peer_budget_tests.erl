@@ -22,17 +22,18 @@ a_refused_peer_is_not_counted_test() ->
     ?assertEqual(1, macula_client_peer_budget:counted(B2, ?NOW + 1)),
     ?assertMatch({ok, _}, macula_client_peer_budget:spend(B2, peer(1), ?NOW + 2)).
 
-%% A peer already counted spends nothing more in its window, and seeing it again does not extend its window.
+%% A peer already counted spends nothing more in its window, and seeing it again does not extend its window. The count
+%% holds through the window's last millisecond, so no closed window ever holds more than the budget.
 a_peer_counts_once_per_window_test() ->
     {ok, B1} = macula_client_peer_budget:spend(budget(1), peer(1), ?NOW),
     {ok, B2} = macula_client_peer_budget:spend(B1, peer(1), ?NOW + ?MINUTE),
-    ?assertMatch({spent, _}, macula_client_peer_budget:spend(B2, peer(2), ?NOW + ?WINDOW - 1)),
-    ?assertMatch({ok, _}, macula_client_peer_budget:spend(B2, peer(2), ?NOW + ?WINDOW)).
+    ?assertMatch({spent, _}, macula_client_peer_budget:spend(B2, peer(2), ?NOW + ?WINDOW)),
+    ?assertMatch({ok, _}, macula_client_peer_budget:spend(B2, peer(2), ?NOW + ?WINDOW + 1)).
 
 a_peer_counted_again_after_its_window_spends_again_test() ->
     {ok, B1} = macula_client_peer_budget:spend(budget(1), peer(1), ?NOW),
-    {ok, B2} = macula_client_peer_budget:spend(B1, peer(1), ?NOW + ?WINDOW),
-    ?assertMatch({spent, _}, macula_client_peer_budget:spend(B2, peer(2), ?NOW + ?WINDOW + 1)).
+    {ok, B2} = macula_client_peer_budget:spend(B1, peer(1), ?NOW + ?WINDOW + 1),
+    ?assertMatch({spent, _}, macula_client_peer_budget:spend(B2, peer(2), ?NOW + ?WINDOW + 2)).
 
 %% A configured seed sits outside the budget: it is allowed when the budget is spent, and it takes no count.
 an_exempt_peer_never_spends_the_budget_test() ->
@@ -42,11 +43,11 @@ an_exempt_peer_never_spends_the_budget_test() ->
     ?assertEqual(1, macula_client_peer_budget:counted(B2, ?NOW + 1)),
     ?assertMatch({spent, _}, macula_client_peer_budget:spend(B2, seed(2), ?NOW + 2)).
 
-%% New peers arriving exactly at the budget's rate, one every window divided by the budget, are all allowed, and the
-%% peers counted in any window never exceed the budget.
+%% New peers arriving at the budget's highest rate, one every window divided by the budget plus a millisecond, are all
+%% allowed, and the peers counted in any window never exceed the budget.
 new_peers_at_the_highest_allowed_rate_stay_within_the_budget_test() ->
     Budget = 4,
-    Step = ?WINDOW div Budget,
+    Step = ?WINDOW div Budget + 1,
     Final = lists:foldl(
               fun(N, B) ->
                       Now = ?NOW + N * Step,
@@ -62,7 +63,8 @@ a_new_peer_faster_than_the_rate_is_refused_until_a_count_ends_test() ->
                                Next
                        end, budget(4), [1, 2, 3, 4]),
     ?assertMatch({spent, _}, macula_client_peer_budget:spend(Full, peer(5), ?NOW + 5)),
-    ?assertMatch({ok, _}, macula_client_peer_budget:spend(Full, peer(5), ?NOW + 1 + ?WINDOW)).
+    ?assertMatch({spent, _}, macula_client_peer_budget:spend(Full, peer(5), ?NOW + 1 + ?WINDOW)),
+    ?assertMatch({ok, _}, macula_client_peer_budget:spend(Full, peer(5), ?NOW + 2 + ?WINDOW)).
 
 a_budget_or_window_that_is_not_positive_is_refused_test() ->
     ?assertError(function_clause, macula_client_peer_budget:new(#{budget => 0, window_ms => ?WINDOW})),

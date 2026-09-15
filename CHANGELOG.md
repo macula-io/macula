@@ -190,7 +190,14 @@ Post-quantum work on the `post-quantum` branch. Not on `main`.
   `{error, new_peer_budget_spent}` and a discovered station is left for a
   later discovery run. The configured seeds never spend it. `status/1`
   counts refused dials by reason in `refused_dials`, and each reason is
-  logged at most once a minute with its count.
+  logged at most once a minute with its count. Each limit, and station
+  discovery's `max_links`, is an integer from 1 to its cap (64 seeds, 64
+  direct links, 256 new peers, 64 discovered links); any other value, an
+  atom included, does not start the pool, and `connect/2` returns
+  `{error, {invalid_link_limit, Key, Value}}`. A seed's host is compared in
+  canonical form: lowercase, without brackets or a trailing dot, and an IP
+  literal in one text form, with an IPv4-mapped IPv6 address as its IPv4
+  address.
 - `macula_frame:stream_bytes/2` signs and encodes a frame built for a
   dedicated stream: a CALL or STREAM_OPEN, a RESULT or provider ERROR, a
   station's relay error, or either side's stream frame under its verified

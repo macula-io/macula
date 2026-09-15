@@ -6,8 +6,9 @@
 %% set's cap bounds anything only when the distinct peers one window can see
 %% are bounded. This budget is that bound: at most `budget' new peers per
 %% `window_ms'. A peer is counted once per window: a later sighting inside
-%% the window spends nothing and does not extend it, and its count ends when
-%% the window does.
+%% the window spends nothing and does not extend it, and its count holds
+%% through the window's last millisecond, so no closed window of
+%% `window_ms' ever holds more than `budget' new peers.
 %%
 %% The pool keeps two budgets of this kind: dials, keyed by normalized seed
 %% before a link is dialed, and peers, keyed by node_id when a handshake
@@ -62,4 +63,4 @@ judged(false, false, Budget, _Peer, _Now) ->
     {spent, Budget}.
 
 in_window(#budget{window_ms = WindowMs, counted = Counted} = Budget, Now) ->
-    Budget#budget{counted = maps:filter(fun(_Peer, Since) -> Now - Since < WindowMs end, Counted)}.
+    Budget#budget{counted = maps:filter(fun(_Peer, Since) -> Now - Since =< WindowMs end, Counted)}.
