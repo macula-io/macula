@@ -25,8 +25,9 @@
 -define(KIB, 1024).
 %% The listener's stream receive window: a reader that stops reading stops
 %% crediting the sender after this much.
--define(WINDOW, 64 * ?KIB).
--define(BLOCK_BYTES, 32 * ?KIB).
+-define(WINDOW, (64 * ?KIB)).
+%% Parenthesized: without them `X div ?BLOCK_BYTES' reads as `(X div 32) * 1024'.
+-define(BLOCK_BYTES, (32 * ?KIB)).
 -define(EVENT_MS, 5_000).
 -define(PROBE_MS, 100).
 -define(RACE_ROUNDS, 20).
