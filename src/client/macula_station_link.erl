@@ -65,7 +65,8 @@
 %%       the timer, reply to the caller. A reply that does not verify is
 %%       counted and leaves the call pending.</li>
 %%   <li>`{macula_peering, disconnected, Pid, Reason}' → fail all
-%%       pending calls with `{error, {disconnected, Reason}}', notify
+%%       pending calls with `{error, {disconnected, Name}}', `Name'
+%%       being the reason's name from `macula_reason_name:text/1', notify
 %%       all subscribers via `macula_event_gone', stop the client
 %%       (caller is responsible for restart / reconnect).</li>
 %% </ol>
