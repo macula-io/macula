@@ -1,8 +1,8 @@
 %% EUnit tests for the bounds on the links a pool holds and dials: a limit on its configured seeds, a limit on its
 %% direct-dial links, and a budget of new peers per window that its configured seeds never spend. Refused dials are
-%% counted in the pool's status. Links dial unreachable seeds (127.0.0.1, low ports), each naming the node_id it
-%% expects as a link requires, so every link starts, stays disconnected, and a fresh direct dial ends in not_connected
-%% once its dial timeout passes.
+%% counted in the pool's status. A pool given a seed that names no node_id it expects does not start. Links dial
+%% unreachable seeds (127.0.0.1, low ports), each naming the node_id it expects as a link requires, so every link
+%% starts, stays disconnected, and a fresh direct dial ends in not_connected once its dial timeout passes.
 -module(macula_client_link_limits_tests).
 
 -include_lib("eunit/include/eunit.hrl").
@@ -16,6 +16,7 @@ link_limits_test_() ->
      fun(ok) -> ok end,
      [{spawn, Test}
       || Test <- [fun a_pool_with_more_seeds_than_its_limit_does_not_start/0,
+                  fun a_pool_given_a_seed_that_names_no_node_id_does_not_start/0,
                   fun a_link_limit_outside_its_range_does_not_start_the_pool/0,
                   fun a_fresh_direct_dial_past_the_direct_link_limit_is_refused/0,
                   fun a_fresh_direct_dial_past_the_new_peer_budget_is_refused/0,
@@ -28,6 +29,23 @@ link_limits_test_() ->
 a_pool_with_more_seeds_than_its_limit_does_not_start() ->
     ?assertEqual({error, {too_many_seeds, 3, 2}},
                  macula_client:connect([seed(1), seed(2), seed(3)], #{max_seeds => 2})).
+
+%% A pool starts only on seeds that each name the node_id they expect, in the seed or in the pool's expected_node_id
+%% option. A seed that names none, or whose own expected_node_id is not 32 bytes, stops the start by name, and no
+%% statement issuer starts. Seeds pinned either way, and a pool with no seeds, start.
+a_pool_given_a_seed_that_names_no_node_id_does_not_start() ->
+    Issuers = fun() -> proplists:get_value(active, supervisor:count_children(macula_statement_issuer_sup)) end,
+    Before = Issuers(),
+    Refused = [{[<<"quic://127.0.0.1:1">>], #{}},
+               {[#{host => <<"127.0.0.1">>, port => 1}], #{}},
+               {[seed(1), #{host => <<"127.0.0.1">>, port => 2}], #{}},
+               {[(seed(1))#{expected_node_id => <<1:248>>}], #{expected_node_id => <<1:256>>}}],
+    [?assertEqual({error, {seeds, expected_node_id_required}}, macula_client:connect(Seeds, Opts))
+     || {Seeds, Opts} <- Refused],
+    ?assert(Issuers() =< Before),
+    Started = [{[seed(1)], #{}}, {[<<"quic://127.0.0.1:1">>], #{expected_node_id => <<1:256>>}}, {[], #{}}],
+    [begin {ok, Pool} = macula_client:connect(Seeds, Opts), ok = macula_client:close(Pool) end
+     || {Seeds, Opts} <- Started].
 
 %% Each link limit is an integer from 1 to its cap. Anything else, an atom included, does not start the pool, so no
 %% bound is silently lifted.
