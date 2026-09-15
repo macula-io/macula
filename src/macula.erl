@@ -160,7 +160,10 @@ close(Pool) when is_pid(Pool) ->
     macula_client:close(Pool).
 
 %% @doc OTP child spec to drop a V2 pool into a caller's supervision
-%% tree.
+%% tree. Give `node_identity' as a loader `{Module, Function, Args}' that
+%% returns `{ok, Key}'. Its `Args' say where the key is and never hold the
+%% key, because a supervisor logs them when a start fails. See
+%% `macula_client:child_spec/3'.
 -spec child_spec(term(), [macula_client:seed()], macula_client:opts()) ->
     supervisor:child_spec().
 child_spec(Id, Seeds, Opts) ->

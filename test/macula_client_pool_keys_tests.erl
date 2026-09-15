@@ -8,11 +8,14 @@
 
 -include_lib("eunit/include/eunit.hrl").
 
-%% The key loader a child spec in these tests names, and the logger handler callback that captures reports.
--export([child_key/0, log/2]).
+%% The key loaders a child spec in these tests names, the logger handler callback that captures reports, and the
+%% callback of the supervisor a test starts.
+-export([child_key/0, raising_loader/1, log/2, init/1]).
 
 %% A pq_hybrid key carries an RSA-4096 half, which takes up to about a second to generate.
 -define(EU_TIMEOUT, 120).
+%% The primary logger filter the macula application installs to redact keys.
+-define(KEY_REDACTION, macula_key_redaction).
 %% The issuer restart backoff reaches 5 s, and a link respawns a second after it ends.
 -define(RESPAWN_MS, 15_000).
 
@@ -204,6 +207,27 @@ a_loader_that_raises_refuses_the_pool_by_name_test_() ->
                                       binary:match(term_to_binary({Started, Events}), Private) =/= nomatch])
     end}.
 
+%% A supervisor that fails to start a pool whose loader raises logs a start error report. The report names the child
+%% spec, whose loader Args say where the key is, and holds no private half of the key, though the loader's error
+%% carries it. The capture runs without macula's redaction filter, so only the pool's refusal keeps the key out.
+a_supervised_start_whose_loader_raises_logs_no_key_test_() ->
+    {timeout, ?EU_TIMEOUT, fun() ->
+        {ok, Profile} = profile(),
+        {ok, Key} = macula_node_keys:generate(identity, Profile),
+        ok = persistent_term:put({?MODULE, raising_key}, Key),
+        Spec = macula_client:child_spec(pool, [], #{node_identity => {?MODULE, raising_loader, [{?MODULE, raising_key}]}}),
+        Trapping = process_flag(trap_exit, true),
+        Start = fun() -> supervisor:start_link(?MODULE, {pool, Spec}) end,
+        {Redaction, Events} = unredacted(fun() -> captured(Start) end),
+        receive {'EXIT', _Supervisor, _Reason} -> ok after 0 -> ok end,
+        _ = process_flag(trap_exit, Trapping),
+        _ = persistent_term:erase({?MODULE, raising_key}),
+        ?assertMatch([_], Redaction),
+        ?assertMatch([_ | _], [Report || #{msg := {report, #{label := {supervisor, start_error}} = Report}} <- Events]),
+        ?assertEqual([], [Private || #{private := Private} <- maps:get(components, Key),
+                                      binary:match(term_to_binary(Events), Private) =/= nomatch])
+    end}.
+
 %%------------------------------------------------------------------
 %% The node identity key
 %%------------------------------------------------------------------
@@ -331,7 +355,9 @@ checked(true, _Late, _Check, _Deadline) -> ok;
 checked(false, true, _Check, _Deadline) -> {error, timeout};
 checked(false, false, Check, Deadline) -> receive after 50 -> ok end, until_by(Check, Deadline).
 
-%% Every classical key pair in a term, at any depth: a map of exactly a public and a private half.
+%% Every classical key pair in a term, at any depth: a map of exactly a public and a private half. It walks map values,
+%% lists and tuples only, so it misses a pair in a closure's environment or a map key, a {Public, Private} tuple, and
+%% bare key bytes.
 key_pairs(#{public := _, private := _} = Pair) when map_size(Pair) =:= 2 -> [Pair];
 key_pairs(Map) when is_map(Map) -> key_pairs(maps:values(Map));
 key_pairs([Head | Tail]) -> key_pairs(Head) ++ key_pairs(Tail);
@@ -360,3 +386,20 @@ drained(Events) ->
 %% The loader the child spec test names: the key it stored.
 child_key() ->
     {ok, persistent_term:get({?MODULE, child_key})}.
+
+%% A loader whose Args say where the key is, and whose error carries the key it read.
+raising_loader(Name) ->
+    erlang:error({key_read, persistent_term:get(Name)}).
+
+%% The supervisor a test starts: the one child spec it is given, never restarted.
+init({pool, Spec}) ->
+    {ok, {#{strategy => one_for_one, intensity => 0, period => 1}, [Spec]}}.
+
+%% Runs Act without macula's key redaction filter and puts back what it removed. Returns the removed filters and Act's
+%% result.
+unredacted(Act) ->
+    Removed = [Filter || {?KEY_REDACTION, _} = Filter <- maps:get(filters, logger:get_primary_config())],
+    _ = logger:remove_primary_filter(?KEY_REDACTION),
+    try {Removed, Act()}
+    after [ok = logger:add_primary_filter(Id, Filter) || {Id, Filter} <- Removed]
+    end.

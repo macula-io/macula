@@ -188,7 +188,9 @@
     %% as a single peer (one node_id across N links). Generated when
     %% absent, with a node_id that meets the puzzle. Given as the key, or
     %% as a loader {Module, Function, Args} that returns {ok, Key}, which a
-    %% child spec must use so the spec holds no key.
+    %% child spec must use so the spec holds no key. A loader's Args say
+    %% where the key is and never hold it, because a supervisor logs them
+    %% when a start fails.
     node_identity      => macula_node_keys:node_key() | {module(), atom(), [term()]},
     %% The function the pool starts its statement issuer with, of the
     %% shape of macula_statement_issuer_sup:start_issuer/2. For tests.
@@ -552,8 +554,11 @@ close(Pool) ->
 %% tree. `Id' is the supervisor child id. A supervisor keeps the spec for
 %% its child's life, so the spec names how to load the node identity key
 %% and never holds the key: give `node_identity' as a loader
-%% `{Module, Function, Args}' that returns `{ok, Key}'. A key, or a function
-%% that could hold one, given here raises `{node_identity, loader_required}'.
+%% `{Module, Function, Args}' that returns `{ok, Key}'. `Args' say where the
+%% key is, such as a file name, and never hold the key, because a supervisor
+%% that fails to start the pool logs the spec, `Args' included. A key, or a
+%% function that could hold one, given here raises
+%% `{node_identity, loader_required}'.
 -spec child_spec(term(), [seed()], opts()) -> supervisor:child_spec().
 child_spec(_Id, _Seeds, #{node_identity := Given}) when is_map(Given); is_function(Given) ->
     erlang:error({node_identity, loader_required});
@@ -1623,8 +1628,9 @@ identity_opt({ok, {Module, Function, Args}}) when is_atom(Module), is_atom(Funct
 identity_opt(NotGiven) -> NotGiven.
 
 %% A loader runs once, at the pool's start. One that raises refuses the pool as one that returns no key does. The try
-%% is what keeps a loader's crash from becoming the pool's crash report, and the refusal carries neither the loader's
-%% error nor its arguments, since either can hold the key.
+%% is what keeps a loader's crash from becoming the pool's crash report, and the refusal carries none of the loader's
+%% error, which can hold the key the loader read. The loader's Args never hold the key, only where it is, because a
+%% supervisor logs them when a start fails (child_spec/3).
 run_loader(Module, Function, Args) ->
     try apply(Module, Function, Args)
     catch _Class:_Reason -> loader_raised
