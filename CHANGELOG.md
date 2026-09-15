@@ -194,11 +194,16 @@ Post-quantum work on the `post-quantum` branch. Not on `main`.
 - `macula_frame:stream_bytes/2` signs and encodes a frame built for a
   dedicated stream: a CALL or STREAM_OPEN, a RESULT or provider ERROR, a
   station's relay error, or either side's stream frame under its verified
-  STREAM_OPEN. It returns `{ok, StreamBytes}`, or
-  `{error, {unsupported_payload_type, Type, Path}}` for a payload, body or
-  reply the wire cannot carry and `{error, unsignable}` for a frame without
-  an identity key or a stream frame without its verified STREAM_OPEN,
-  without raising and with nothing to write. `written_bytes/1` gives the
+  STREAM_OPEN. It returns `{ok, StreamBytes}`, or one of these errors, with
+  nothing to write: `{unknown_build_key, Key}` for a field the frame does
+  not have; `unsignable` for a key that is not the identity key of the
+  sender the receiver verifies, or a stream frame without its verified
+  STREAM_OPEN; `{invalid_text, Field}` for text that is not UTF-8;
+  `{text_too_long, detail}` for a provider detail over 256 bytes;
+  `relay_code_outside_its_set`; `{unsupported_payload_type, Type, Path}` for
+  a payload, body or reply the wire cannot carry; and `frame_too_large` for
+  a frame whose encoding is over the 16 MiB cap. A `seq` outside the
+  protocol's range raises `function_clause`. `written_bytes/1` gives the
   bytes of a `stream_bytes()` and refuses anything else.
 - `macula_frame:parse_for_relay/2` parses bytes a relay received on a
   stream: each whole frame that passes the checks of `parse_received/2`
