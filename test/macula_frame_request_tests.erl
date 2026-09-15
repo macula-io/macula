@@ -32,6 +32,7 @@ cases(Keys) ->
                  fun two_callers_never_share_a_request_hash/1,
                  fun a_result_from_the_target_verifies_for_its_request/1,
                  fun a_provider_error_carries_its_code_and_detail/1,
+                 fun an_error_code_and_detail_are_read_within_their_bounds/1,
                  fun a_reply_from_a_node_other_than_the_target_is_refused/1,
                  fun a_reply_for_another_request_is_refused/1,
                  fun a_responded_by_that_is_not_the_key_id_of_key_is_refused/1,
@@ -141,6 +142,23 @@ a_provider_error_carries_its_code_and_detail(#{provider := Provider} = Keys) ->
     Bare = macula_frame:provider_error(#{request => Request, code => <<"closed">>}, Provider),
     ?assertEqual({ok, #{frame_type => error, responded_by => target(Keys), code => <<"closed">>}},
                  macula_frame:verify_reply(wire(Bare), Request, pq_pure)).
+
+%% A provider error's code is text of at most 64 bytes and its detail text of at most 256: at the bound it verifies,
+%% with the text as a binary, and one byte over is malformed.
+an_error_code_and_detail_are_read_within_their_bounds(#{provider := Provider} = Keys) ->
+    Request = verified_call(Keys),
+    #{reply := #{tbs := Built}} =
+        macula_frame:provider_error(#{request => Request, code => <<"c">>, detail => <<"d">>}, Provider),
+    {ok, Tbs} = macula_record_cbor:decode_strict(Built),
+    Verify = fun(Field, Bytes) ->
+        Resized = Tbs#{{text, Field} := {text, binary:copy(<<"a">>, Bytes)}},
+        Signed = macula_signed_object:sign(?REPLY_LABEL, Resized, Provider),
+        macula_frame:verify_reply(wire(crafted(error, reply, Signed)), Request, pq_pure)
+    end,
+    ?assertMatch({ok, #{code := <<_:512>>}}, Verify(<<"code">>, 64)),
+    ?assertMatch({ok, #{detail := <<_:2048>>}}, Verify(<<"detail">>, 256)),
+    ?assertEqual({error, malformed_frame}, Verify(<<"code">>, 65)),
+    ?assertEqual({error, malformed_frame}, Verify(<<"detail">>, 257)).
 
 a_reply_from_a_node_other_than_the_target_is_refused(#{other := Other} = Keys) ->
     Request = verified_call(Keys),

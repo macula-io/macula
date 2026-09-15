@@ -27,6 +27,7 @@ cases(Keys) ->
                  fun provider_frame_fields_the_design_does_not_allow_are_malformed/1,
                  fun a_first_frame_carries_the_provider_key_and_a_later_one_does_not/1,
                  fun a_provider_stream_error_and_stream_reply_carry_their_fields/1,
+                 fun a_stream_error_code_and_message_are_read_within_their_bounds/1,
                  fun a_caller_frame_verifies_with_the_caller_key_from_the_open/1,
                  fun caller_and_provider_count_their_frames_apart/1,
                  fun a_caller_frame_signed_by_another_key_is_refused/1,
@@ -145,6 +146,24 @@ a_provider_stream_error_and_stream_reply_carry_their_fields(#{provider := Provid
                                                 message => <<"too many rows">>}, Provider, Open)),
     ?assertMatch({ok, #{frame_type := stream_error, code := <<"overflow">>, message := <<"too many rows">>}, _},
                  macula_frame:verify_provider_stream(Error, Replied, pq_pure)).
+
+%% A STREAM_ERROR's code is text of at most 64 bytes and its message text of at most 256: at the bound it verifies,
+%% with the text as a binary, and one byte over is malformed.
+a_stream_error_code_and_message_are_read_within_their_bounds(#{provider := Provider} = Keys) ->
+    Open = verified_open(Keys, bidi),
+    Built = macula_frame:provider_stream(#{frame_type => stream_error, seq => 0, code => <<"c">>,
+                                           message => <<"m">>}, Provider, Open),
+    {ok, Tbs} = macula_record_cbor:decode_strict(maps:get(tbs, maps:get(stream, Built))),
+    Verify = fun(Field, Bytes) ->
+        Resized = Tbs#{{text, Field} := {text, binary:copy(<<"a">>, Bytes)}},
+        Signed = macula_signed_object:sign(?STREAM_LABEL, Resized, Provider),
+        macula_frame:verify_provider_stream(wire(crafted(stream_error, stream, Signed)),
+                                            macula_frame:open_stream(Open), pq_pure)
+    end,
+    ?assertMatch({ok, #{code := <<_:512>>}, _}, Verify(<<"code">>, 64)),
+    ?assertMatch({ok, #{message := <<_:2048>>}, _}, Verify(<<"message">>, 256)),
+    ?assertEqual({error, malformed_frame}, Verify(<<"code">>, 65)),
+    ?assertEqual({error, malformed_frame}, Verify(<<"message">>, 257)).
 
 %%------------------------------------------------------------------
 %% Caller stream frames
