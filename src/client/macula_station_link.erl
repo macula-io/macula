@@ -1677,9 +1677,9 @@ on_frame(#{frame_type := call} = Frame, S) ->
 %% subscribers with `Meta.sender' set to `Origin', not `peer_node_id' (the
 %% station's own identity). The overlay frames D17 leaves unsigned
 %% (`macula_frame:relayed_without_signature/1') are taken as they are, and
-%% `Origin' is their sender whatever the frame itself names. Every other
-%% relayed frame is delivered only once its own signature verifies against
-%% `Origin'. The envelope reached this link through its own connection, which
+%% `Origin' is their sender whatever the frame itself names. A relayed frame
+%% of any other type is dropped and counted as `not_overlay', never verified
+%% and never delivered. The envelope reached this link through its own connection, which
 %% in pq_hybrid checked the station's neighbour signature on it first.
 %% A payload that is not exactly one frame is dropped and counted
 %% (`relayed_payload/3'), and the link carries on.
@@ -2208,7 +2208,7 @@ deliver_overlay_frame_from(_Sender, _Frame, S) ->
 %% shorter than its length header, one that does not decode, and one with
 %% bytes after its frame are dropped and counted by kind.
 relayed_payload({ok, #{frame_type := Type} = Inner, <<>>}, Origin, S) ->
-    on_relayed_overlay_frame(relayed(macula_frame:relayed_without_signature(Type), Inner, Origin), Origin, S);
+    on_relayed_overlay_frame(relayed(macula_frame:relayed_without_signature(Type), Inner), Origin, S);
 relayed_payload({ok, _Inner, _Trailing}, Origin, S) ->
     refused_relay(trailing_bytes, Origin, S);
 relayed_payload({more, _Needed}, Origin, S) ->
@@ -2217,24 +2217,23 @@ relayed_payload({error, Why}, Origin, S) ->
     refused_relay(decode_refusal(Why), Origin, S).
 
 %% The kind a payload that does not decode is counted under: one of a fixed
-%% set, never a term of the payload.
+%% set, never a term of the payload. An error decode/1 comes to name later
+%% counts as bad_frame, so no relayed payload takes the link down.
 decode_refusal({invalid_frame, _Type, _Field}) -> invalid_frame;
-decode_refusal(Kind) when Kind =:= bad_frame; Kind =:= frame_too_large; Kind =:= too_many_elements -> Kind.
+decode_refusal(Kind) when Kind =:= frame_too_large; Kind =:= too_many_elements -> Kind;
+decode_refusal(_BadFrame) -> bad_frame.
 
-%% A relayed frame of a type D17 leaves unsigned is taken as it is; any other
-%% must verify against `Origin'.
-relayed(true, Inner, _Origin) -> {ok, Inner};
-relayed(false, Inner, Origin) -> macula_frame:verify(Inner, Origin).
+%% A relayed frame of an overlay type D17 leaves unsigned is taken as it is;
+%% a frame of any other type is not taken.
+relayed(true, Inner) -> {ok, Inner};
+relayed(false, _Inner) -> not_overlay.
 
-%% A relayed frame taken is delivered with `Origin' as its sender. One that
-%% does not verify against `Origin' is dropped and counted: `unsigned' when it
-%% carries no signature verify/2 reads, `signature_invalid' otherwise.
+%% A relayed frame taken is delivered with `Origin' as its sender. A frame of
+%% any other type is dropped and counted as `not_overlay'.
 on_relayed_overlay_frame({ok, Inner}, Origin, S) ->
     deliver_overlay_frame_from(Origin, Inner, S);
-on_relayed_overlay_frame({error, bad_frame}, Origin, S) ->
-    refused_relay(unsigned, Origin, S);
-on_relayed_overlay_frame({error, signature_invalid}, Origin, S) ->
-    refused_relay(signature_invalid, Origin, S).
+on_relayed_overlay_frame(not_overlay, Origin, S) ->
+    refused_relay(not_overlay, Origin, S).
 
 %% A dropped relayed frame changes nothing but its count, and the log hears of
 %% it at most once a window per kind, with the origin of the frame that reports.

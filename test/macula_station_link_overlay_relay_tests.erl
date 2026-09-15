@@ -1,7 +1,7 @@
-%% EUnit tests for overlay frames a station relays between two nodes' links. The HyParView frames D17 leaves unsigned
+%% EUnit tests for overlay frames a station relays between two nodes' links. The overlay frames D17 leaves unsigned
 %% reach the receiving link's overlay subscribers with the origin the station authenticated as their sender, whatever
-%% the inner frame names; every other relayed frame type is still delivered only when its own signature verifies against
-%% that origin.
+%% the inner frame names. A relayed frame of any other type, and a payload that is not exactly one frame, is dropped
+%% and counted.
 %%
 %% Two real links run here, and the test process is the peering connection of both, standing in for the station: it
 %% takes the envelope link A sends, readdresses it to A's node_id as a station forwards it, and hands it to link B after
@@ -62,30 +62,29 @@ a_relayed_disconnect_and_shuffle_reply_reach_the_other_node_with_the_origin_as_s
          stop_links([A, B])
      end}}.
 
-%% A relayed frame of a type D17 signs is not delivered without a signature: the predicate opens only the overlay types.
-an_unsigned_relayed_frame_of_another_type_is_not_delivered_test_() ->
+%% A relayed frame of a type outside the overlay set is dropped and counted, however it is signed: a CALL and a
+%% STREAM_OPEN, each signed by the origin's own key, reach no subscriber, and neither the unary nor the stream handler
+%% advertised for their procedure runs.
+a_relayed_frame_of_a_type_outside_the_overlay_set_is_dropped_and_counted_test_() ->
     {spawn, {timeout, 10,
      fun() ->
          {A, B, _SubRef} = two_links_with_a_subscriber_on_b(),
-         Ihave = macula_frame:plumtree_ihave(#{realm => ?REALM, msg_id => crypto:strong_rand_bytes(48), round => 0}),
-         forward_to(B, node_id(A), macula_frame:overlay_relay(#{peer => node_id(B),
-                                                                payload => macula_frame:encode(Ihave)})),
+         Test = self(),
+         Procedure = <<"acme/count_v1">>,
+         ok = macula_station_link:advertise(B, ?REALM, Procedure,
+                                            fun(Args) -> Test ! {handler_ran, call, Args}, {ok, done} end),
+         ok = macula_station_link:advertise_stream(B, ?REALM, Procedure, bidi,
+                                                   fun(_Stream, Args) -> Test ! {handler_ran, stream, Args}, ok end),
+         Key = element(?NODE_IDENTITY_INDEX, sys:get_state(A)),
+         Request = #{request_id => crypto:strong_rand_bytes(16), realm => ?REALM, procedure => Procedure,
+                     target => node_id(B), deadline => erlang:system_time(millisecond) + 30_000, payload => #{}},
+         Frames = [macula_frame:call(Request, Key), macula_frame:stream_open(Request#{mode => bidi}, Key)],
+         _ = [forward_to(B, node_id(A), macula_frame:overlay_relay(#{peer => node_id(B),
+                                                                     payload => macula_frame:encode(Frame)}))
+              || Frame <- Frames],
          ?assertEqual(none, overlay_frame_within(300)),
-         ?assertEqual(#{unsigned => 1}, refused_relays(B)),
-         stop_links([A, B])
-     end}}.
-
-%% A relayed frame of another type whose signature does not verify against the origin is refused, as before.
-a_relayed_frame_of_another_type_with_an_invalid_signature_is_refused_test_() ->
-    {spawn, {timeout, 10,
-     fun() ->
-         {A, B, _SubRef} = two_links_with_a_subscriber_on_b(),
-         Ihave = macula_frame:plumtree_ihave(#{realm => ?REALM, msg_id => crypto:strong_rand_bytes(48), round => 0}),
-         Forged = macula_frame:sign(Ihave, macula_identity:generate()),
-         forward_to(B, node_id(A), macula_frame:overlay_relay(#{peer => node_id(B),
-                                                                payload => macula_frame:encode(Forged)})),
-         ?assertEqual(none, overlay_frame_within(300)),
-         ?assertEqual(#{signature_invalid => 1}, refused_relays(B)),
+         ?assertEqual(none, receive {handler_ran, _Kind, _Args} = Ran -> Ran after 0 -> none end),
+         ?assertEqual(#{not_overlay => 2}, refused_relays(B)),
          stop_links([A, B])
      end}}.
 
