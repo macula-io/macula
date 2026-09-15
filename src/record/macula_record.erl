@@ -474,7 +474,9 @@ carried_id(node_id, #{key := Key}, Profile) -> macula_node_keys:node_id(Key, Pro
 carried_id(_Kind, _HeldObject, _Profile) -> none.
 
 %% Entries under one key, highest claimed version first. The version is read from the tbs without verifying it, and an
-%% entry whose version cannot be read comes last.
+%% entry whose version cannot be read comes last. Entries claiming the same version keep no chosen order, so more than
+%% 4 of them forged ahead of the real entry make the lookup refuse. Only a misbehaving station sends them, since a store
+%% keeps one entry per signer, and such a station could withhold the entry anyway.
 by_claimed_version(Objects) ->
     Claimed = lists:keysort(1, [{claimed_version(Object), Object} || Object <- Objects]),
     [Object || {_Version, Object} <- lists:reverse(Claimed)].
