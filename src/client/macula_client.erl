@@ -57,7 +57,7 @@
 -module(macula_client).
 -behaviour(gen_server).
 
--export([connect/2, close/1, child_spec/3, status/1, links/1]).
+-export([connect/2, close/1, child_spec/3, status/1, links/1, sign_node_record/2]).
 %% Internal API — called by `macula_pubsub' (and future surfaces).
 -export([publish/5, subscribe/5, unsubscribe/2]).
 %% RPC fan-out (since 3.16.0) — called by the `macula' facade.
@@ -834,6 +834,21 @@ unadvertise_stream(Pool, Realm, Procedure)
 status(Pool) when is_pid(Pool) ->
     gen_server:call(Pool, status, 5_000).
 
+%% @doc Sign a record this node signs about itself with the pool's node identity key, in the pool's own process, and
+%% return the signed record: the node record, a procedure advertisement or a content announcement that names this
+%% node, or a tombstone that withdraws one. The key never leaves the pool, so a caller never holds it. A record of
+%% another type is `{error, not_a_node_signed_type}', one that names another node `{error, key_id_mismatch}', one past
+%% the record size bound `{error, record_too_large}', and anything that is not an unsigned record
+%% `{error, malformed_record}'.
+-spec sign_node_record(pool(), macula_record:m_record()) ->
+          {ok, macula_record:m_record()}
+        | {error, not_a_node_signed_type | key_id_mismatch | record_too_large | malformed_record}.
+sign_node_record(Pool, #{type := Type, payload := Payload} = Record)
+  when is_pid(Pool), is_integer(Type), is_map(Payload) ->
+    gen_server:call(Pool, {sign_node_record, Record}, 5_000);
+sign_node_record(Pool, _NotARecord) when is_pid(Pool) ->
+    {error, malformed_record}.
+
 %% @doc Per-link snapshot of the pool — one `link_info()' per
 %% configured seed that currently has a spawned link worker. Unlike
 %% `status/1' (which only aggregates counts), this exposes each link's
@@ -1178,6 +1193,8 @@ handle_call({unadvertise_stream, Realm, Procedure}, _From,
     {reply, ok,
      S#state{stream_procs = maps:remove({Realm, Procedure}, SP)}};
 
+handle_call({sign_node_record, Record}, _From, #state{node_identity = Key} = S) ->
+    {reply, node_record_signed(macula_record:node_signed(Record), Record, Key), S};
 handle_call(status, _From,
             #state{seeds = Seeds, links = Links, subs = Subs,
                    node_id = NodeId, replication = Replication} = S) ->
@@ -1302,6 +1319,19 @@ code_change(_OldVsn, S, _Extra) -> {ok, S}.
 %% The link options hold the node's keys: status output and crash reports show them with their private halves
 %% redacted.
 format_status(Status) -> macula_node_keys:redacted(Status).
+
+%% A record the pool signs is one a node signs about itself; macula_record:sign/2 then checks the key's purpose and that
+%% the payload names this node. A refusal names what failed and carries neither the key nor a stack.
+node_record_signed(false, _Record, _Key) ->
+    {error, not_a_node_signed_type};
+node_record_signed(true, Record, Key) ->
+    try macula_record:sign(Record, Key) of
+        Signed -> {ok, Signed}
+    catch
+        error:{key_id_mismatch, _Type} -> {error, key_id_mismatch};
+        error:{record_too_large, _Bytes} -> {error, record_too_large};
+        _:_ -> {error, malformed_record}
+    end.
 
 %%====================================================================
 %% Internals — link lifecycle

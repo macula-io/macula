@@ -34,7 +34,7 @@
     tombstone/2, tombstone/3,
     envelope/3
 ]).
--export([sign/2, verify/2, verify/3, refresh/2, encode/1]).
+-export([sign/2, verify/2, verify/3, refresh/2, encode/1, node_signed/1]).
 -export([type/1, key/1, key_id/1, version/1, created_at/1, expires_at/1, payload/1, signature/1]).
 -export([payload_field/2, type_procedure_advertisement/0]).
 -export([read_node_record/1, read_procedure_advertisement/1, read_station_endpoint/1, read_tombstone/1,
@@ -641,6 +641,19 @@ signer_field(_Type) -> none.
 
 signer_field_holds(none, _Payload, _KeyId) -> true;
 signer_field_holds(Name, Payload, KeyId) -> maps:get({text, Name}, Payload, undefined) =:= KeyId.
+
+%% @doc Whether a node signs this record about itself: a node record, a procedure advertisement or a content
+%% announcement, whose payload names the signing node, or a tombstone that withdraws one of those.
+-spec node_signed(term()) -> boolean().
+node_signed(#{type := ?TYPE_TOMBSTONE, payload := #{{text, <<"withdrawn_type">>} := Withdrawn}}) ->
+    names_its_node(Withdrawn);
+node_signed(#{type := Type, payload := Payload}) when is_map(Payload) ->
+    names_its_node(Type);
+node_signed(_NotARecord) ->
+    false.
+
+names_its_node(Type) ->
+    signer_kind(Type, #{}) =:= node andalso signer_field(Type) =/= none.
 
 %%------------------------------------------------------------------
 %% Internals: verifying
