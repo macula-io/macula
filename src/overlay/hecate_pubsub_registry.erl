@@ -69,15 +69,15 @@
 -define(MAX_SUBSCRIBED_REALMS, 1000).
 
 -type realm()    :: <<_:256>>.
--type identity() :: macula_node_keys:node_key().
+-type identity() :: fun(() -> macula_node_keys:node_key()).
 
 -type opts() :: #{
     %% Default identity used when a `register/3' caller does not
     %% pass one explicitly. Optional — passing identity per-call
     %% gives the same behaviour as the pre-Phase-2 API. With it, a
-    %% SUBSCRIBE for a realm without a server materialises one. It is an
-    %% identity key in the node's configured crypto profile, or the
-    %% registry does not start.
+    %% SUBSCRIBE for a realm without a server materialises one. It is a
+    %% function that returns an identity key in the node's configured
+    %% crypto profile, or the registry does not start.
     identity     => identity(),
     %% Phase 6 (operational tooling): when supplied, the registry
     %% sets `logger:set_process_metadata(#{identity_id =&gt; Key})'
@@ -93,6 +93,9 @@
 
 -record(state, {
     default_identity      :: identity() | undefined,
+    %% The crypto profile of the default identity's key, for a relay
+    %% without a server.
+    profile               :: macula_crypto_profile:profile() | undefined,
     max_subscribed_realms :: pos_integer(),
     by_realm = #{}        :: #{realm() => pid()},
     by_pid   = #{}        :: #{pid() => realm()},
@@ -111,7 +114,7 @@ start_link(Opts) when is_map(Opts) ->
     gen_server:start_link(?MODULE, Opts, []).
 
 %% @doc Idempotently start a pubsub_server for `Realm' under
-%% `RegistryPid', signing with `Identity'. If a live server already
+%% `RegistryPid', signing with the key `Identity' returns. If a live server already
 %% exists, returns its pid; otherwise spawns a new one and records
 %% the mapping. A stale entry pointing at a dead pid is replaced
 %% transparently.
@@ -122,11 +125,15 @@ start_link(Opts) when is_map(Opts) ->
 %% for it is pinned too. Register only a
 %% realm the station itself chooses, such as one it publishes on, never
 %% a realm a peer names, or peers could grow the registry past its
-%% maximum.
+%% maximum. An identity given as the key itself, in place of a function that
+%% returns it, is refused as `{error, {identity, not_a_loader}}' before the
+%% registry is called.
 -spec register(pid(), realm(), identity()) ->
         {ok, pid()} | {error, term()}.
-register(RegistryPid, <<_:256>> = Realm, Identity) ->
-    gen_server:call(RegistryPid, {register, Realm, Identity}).
+register(RegistryPid, <<_:256>> = Realm, Identity) when is_function(Identity, 0) ->
+    gen_server:call(RegistryPid, {register, Realm, Identity});
+register(_RegistryPid, <<_:256>>, _NotALoader) ->
+    {error, {identity, not_a_loader}}.
 
 %% @doc Find the pubsub_server pid for `Realm' under `RegistryPid',
 %% or report `not_found'.
@@ -226,16 +233,25 @@ init(Opts) ->
     set_logger_identity(Opts),
     registry_started(default_identity(maps:find(identity, Opts)), Opts).
 
-%% A registry's identity is an identity key in the node's configured profile, as a server's is, so a registry given a
-%% key it cannot use refuses to start instead of refusing every relay later.
-default_identity(error) -> {ok, undefined};
-default_identity({ok, Key}) -> identity_held(hecate_pubsub_server:identity_checked(Key), Key).
+%% A registry's identity returns an identity key in the node's configured profile, as a server's does, so a registry
+%% given a key it cannot use, or the key itself in place of a function that returns it, refuses to start instead of
+%% refusing every relay later. A registry that holds a checked key installs the key redaction filter, as a pool does.
+default_identity(error) ->
+    {ok, undefined, undefined};
+default_identity({ok, Load}) when is_function(Load, 0) ->
+    identity_held(hecate_pubsub_server:identity_checked(Load()), Load);
+default_identity({ok, _NotALoader}) ->
+    {error, {identity, not_a_loader}}.
 
-identity_held({ok, _Profile}, Key) -> {ok, Key};
-identity_held({error, _} = Refusal, _Key) -> Refusal.
+identity_held({ok, Profile}, Load) ->
+    ok = macula_node_keys:install_log_redaction(),
+    {ok, Load, Profile};
+identity_held({error, _} = Refusal, _Load) ->
+    Refusal.
 
-registry_started({ok, Identity}, Opts) ->
+registry_started({ok, Identity, Profile}, Opts) ->
     {ok, #state{default_identity      = Identity,
+                profile               = Profile,
                 max_subscribed_realms = maps:get(max_subscribed_realms, Opts, ?MAX_SUBSCRIBED_REALMS)}};
 registry_started({error, _} = Refusal, _Opts) ->
     Refusal.
@@ -397,20 +413,20 @@ do_relay_publish(_Realm, _Frame, error,
                  #state{default_identity = undefined} = S) ->
     {reply, {error, not_found}, S};
 do_relay_publish(Realm, Frame, error,
-                 #state{default_identity = Id} = S) ->
+                 #state{profile = Profile} = S) ->
     %% No server for the realm: the publication is verified and the
     %% EVENT still built from its bytes, so the caller can fan it out to
     %% peer stations whose Bloom filter matches the topic, but no process
     %% starts for a realm nobody here subscribes to, and there is no
     %% local subscriber to match.
-    {reply, relay_without_server(Realm, Frame, Id), S};
+    {reply, relay_without_server(Realm, Frame, Profile), S};
 do_relay_publish(Realm, Frame, {ok, Pid}, S) ->
     forward_relay_publish(Realm, Pid, Frame, S).
 
 %% The checks a server's relay makes: the publication verifies under the identity's profile and names this realm.
-relay_without_server(Realm, #{frame_type := publish} = Frame, #{profile := Profile}) ->
+relay_without_server(Realm, #{frame_type := publish} = Frame, Profile) ->
     without_server(macula_frame:verify_publication(Frame, Profile, erlang:system_time(millisecond)), Realm, Frame);
-relay_without_server(_Realm, _Frame, _Id) ->
+relay_without_server(_Realm, _Frame, _Profile) ->
     {error, malformed_frame}.
 
 without_server({ok, #{realm := Realm}}, Realm, Frame) -> {ok, hecate_pubsub:build_event(Frame, direct), []};

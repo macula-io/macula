@@ -47,13 +47,14 @@
 
 -export_type([opts/0]).
 
-%% `identity' is an identity key in the node's configured crypto profile: the server signs its own PUBLISH frames with
-%% it and verifies publications under that profile.
--type opts() :: #{realm := <<_:256>>, identity := macula_node_keys:node_key()}.
+%% `identity' returns an identity key in the node's configured crypto profile: the server signs its own PUBLISH frames
+%% with that key, calling it at each publication, and verifies publications under that profile. The server holds the
+%% function, never the key.
+-type opts() :: #{realm := <<_:256>>, identity := fun(() -> macula_node_keys:node_key())}.
 
 -record(state, {
     realm    :: <<_:256>>,
-    identity :: macula_node_keys:node_key(),
+    identity :: fun(() -> macula_node_keys:node_key()),
     profile  :: macula_crypto_profile:profile(),
     pubsub   :: hecate_pubsub:state(),
     key_id   :: <<_:256>>
@@ -63,8 +64,9 @@
 %% API
 %%====================================================================
 
-%% @doc Start the server for a realm. A server whose `identity' is not an identity key in the node's configured
-%% crypto profile does not start, so one node never runs two profiles.
+%% @doc Start the server for a realm. A server whose `identity' does not return an identity key in the node's
+%% configured crypto profile does not start, so one node never runs two profiles, and one given the key itself in place
+%% of a function that returns it does not start either, with `{error, {identity, not_a_loader}}'.
 -spec start_link(opts()) -> {ok, pid()} | {error, term()}.
 start_link(#{realm := <<_:256>>, identity := _} = Opts) ->
     gen_server:start_link(?MODULE, Opts, []).
@@ -161,8 +163,11 @@ stop(Pid) ->
 %% gen_server callbacks
 %%====================================================================
 
-init(#{realm := Realm, identity := Key}) ->
-    started(identity_checked(Key), Realm, Key).
+init(#{identity := Load}) when not is_function(Load, 0) ->
+    {error, {identity, not_a_loader}};
+init(#{realm := Realm, identity := Load}) ->
+    Key = Load(),
+    started(identity_checked(Key), Realm, Load, Key).
 
 %% The server's key is an identity key in the node's configured profile, the one the pool reads, so one node never
 %% runs two profiles.
@@ -181,12 +186,15 @@ identity_profile(_NotAnIdentityKey, _Configured) ->
 identity_checked(Key) ->
     identity_profile(Key, macula_crypto_profile:configured()).
 
-started({error, _} = Refusal, _Realm, _Key) ->
+%% A server that holds a checked key installs the key redaction filter, as a pool does, since it can run without the
+%% macula application.
+started({error, _} = Refusal, _Realm, _Load, _Key) ->
     Refusal;
-started({ok, Profile}, Realm, Key) ->
+started({ok, Profile}, Realm, Load, Key) ->
+    ok = macula_node_keys:install_log_redaction(),
     {ok, #state{
         realm    = Realm,
-        identity = Key,
+        identity = Load,
         profile  = Profile,
         pubsub   = hecate_pubsub:new(Realm, Profile),
         %% Each publication's seq comes from the node's counter for this
@@ -223,7 +231,7 @@ handle_call({publish, Topic, Payload}, _From, S) ->
              seq          => macula_publication_seq:next(S#state.key_id),
              published_at => erlang:system_time(millisecond),
              payload      => Payload},
-    Event   = hecate_pubsub:build_event(macula_frame:publish(Spec, S#state.identity), plumtree),
+    Event   = hecate_pubsub:build_event(macula_frame:publish(Spec, (S#state.identity)()), plumtree),
     Matched = hecate_pubsub:subscribers(S#state.pubsub, Topic),
     {reply, {Event, Matched}, S};
 handle_call({deliver_event, Frame}, _From, S) ->

@@ -159,25 +159,30 @@ redacted_log_event(Event, _Modules) ->
 %% @doc Put the primary logger filter redacted_log_event/2, with the macula application's modules, in place, unless the
 %% node already holds it. Another value held under its id, as an earlier load can leave behind, is replaced. The
 %% application's start and every pool call it, and nothing removes it, since a process that holds a key can outlive
-%% the application. Returns ok, also when a concurrent call added the filter first.
+%% the application. A filter a concurrent call adds first is read back and replaced unless it is this one. Returns ok.
 -spec install_log_redaction() -> ok.
 install_log_redaction() ->
     ok = application_loaded(application:load(macula)),
     {ok, Modules} = application:get_key(macula, modules),
     Filter = {fun macula_node_keys:redacted_log_event/2, maps:from_keys(Modules, true)},
-    log_redaction(lists:keyfind(?KEY_REDACTION, 1, maps:get(filters, logger:get_primary_config())), Filter).
+    log_redaction(held_log_redaction(), Filter).
 
 application_loaded(ok) -> ok;
 application_loaded({error, {already_loaded, macula}}) -> ok.
+
+held_log_redaction() ->
+    lists:keyfind(?KEY_REDACTION, 1, maps:get(filters, logger:get_primary_config())).
 
 log_redaction({?KEY_REDACTION, Filter}, Filter) ->
     ok;
 log_redaction(_MissingOrOther, Filter) ->
     _ = logger:remove_primary_filter(?KEY_REDACTION),
-    filter_added(logger:add_primary_filter(?KEY_REDACTION, Filter)).
+    filter_added(logger:add_primary_filter(?KEY_REDACTION, Filter), Filter).
 
-filter_added(ok) -> ok;
-filter_added({error, {already_exist, ?KEY_REDACTION}}) -> ok.
+%% A concurrent call can add a filter under the id between the removal and the add: the one held is read back, and kept
+%% only when it is this filter.
+filter_added(ok, _Filter) -> ok;
+filter_added({error, {already_exist, ?KEY_REDACTION}}, Filter) -> log_redaction(held_log_redaction(), Filter).
 
 %%------------------------------------------------------------------
 %% Signing
