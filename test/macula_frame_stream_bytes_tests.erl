@@ -85,7 +85,7 @@ a_relay_error_carries_only_its_fixed_code(#{station := Station} = Keys) ->
                                                             code => unknown_next_peer}}, Station),
     ?assertEqual({ok, #{frame_type => stream_error, reported_by => macula_node_keys:key_id(Station),
                         code => unknown_next_peer}},
-                 macula_frame:verify_relay_error(decoded(Bytes), Request, pq_pure)).
+                 macula_frame:verify_relay_error(decoded(Bytes), Request, pq_pure, macula_node_keys:key_id(Station))).
 
 %% A payload the wire cannot carry is the local caller's error: nothing is built, signed or returned to write.
 an_unsendable_payload_is_an_error_with_nothing_to_write(#{caller := Caller, provider := Provider} = Keys) ->
