@@ -71,7 +71,7 @@
 
 %% Streaming RPC (LOCAL in-process + V2 pool, see PLAN_MACULA_STREAMING.md)
 -export([
-    call_stream/2, call_stream/3, call_stream/5, call_stream_station/6,
+    call_stream/2, call_stream/3, call_stream/5, call_stream_station/7,
     open_stream/3, open_stream/4,
     advertise_stream/2, advertise_stream/3, advertise_stream/5,
     advertise_stream/6,
@@ -759,10 +759,13 @@ call_stream(Procedure, Args) when is_binary(Procedure) ->
 call_stream(Procedure, Args, Opts) when is_binary(Procedure), is_map(Opts) ->
     macula_stream_local:call_stream(Procedure, Args, Opts).
 
-%% @doc Open a streaming RPC against a V2 pool. Picks the first
-%% currently-healthy link and opens the stream there; the returned
-%% stream is sticky-to-link (errors with `peer_down' if the link
-%% dies; caller re-opens). See `macula_client:call_stream/5'.
+%% @doc Open a streaming RPC to `Procedure''s provider in `Realm': resolve
+%% the provider through its `procedure_advertisement' and open the stream
+%% at its serving station, naming the provider as the target, as
+%% `call/5' does for a single-reply call. Same as
+%% `macula_direct_dial:call_stream/5'. The returned stream is bound to
+%% that station's link (errors with `peer_down' if the link dies; caller
+%% re-opens).
 %% `Opts' `ucan_token' presents a UCAN to a streaming procedure
 %% advertised with an `auth' policy (see `advertise_stream/6').
 %% An open whose signed STREAM_OPEN would be longer than
@@ -773,23 +776,24 @@ call_stream(Procedure, Args, Opts) when is_binary(Procedure), is_map(Opts) ->
 call_stream(Pool, Realm, Procedure, Args, Opts)
   when is_pid(Pool), is_binary(Realm), byte_size(Realm) =:= 32,
        is_binary(Procedure), is_map(Opts) ->
-    macula_client:call_stream(Pool, Realm, Procedure, Args, Opts).
+    macula_direct_dial:call_stream(Pool, Realm, Procedure, Args, Opts).
 
-%% @doc Open a streaming RPC by DIALING a specific station directly
-%% (direct-dial), instead of routing through an existing pool link — the
-%% streaming analogue of `call_station/7'. Compose it with DHT resolution
+%% @doc Open a streaming RPC to `Target', a provider's node_id, by DIALING
+%% a specific station directly (direct-dial): the streaming analogue of
+%% `call_station/7'. Compose it with DHT resolution
 %% (`find_records' -> `read_procedure_advertisement' -> `station_endpoint')
 %% to reach a stream provider in one hop, exactly as a unary caller does.
 %% `Opts' may set `dial_timeout_ms' (default 10_000) and a `mode'.
 %% `Opts' also carries the per-call TLS trust override for this dial:
 %% `verify', `expected_node_id', `pin_tls_cert' (see
 %% `macula_client:call_station/8').
--spec call_stream_station(pool(), macula_client:seed(), realm(), procedure(),
+-spec call_stream_station(pool(), macula_client:seed(), <<_:256>>, realm(), procedure(),
                           term(), map()) -> {ok, stream()} | {error, term()}.
-call_stream_station(Pool, Station, Realm, Procedure, Args, Opts)
-  when is_pid(Pool), is_binary(Realm), byte_size(Realm) =:= 32,
+call_stream_station(Pool, Station, Target, Realm, Procedure, Args, Opts)
+  when is_pid(Pool), is_binary(Target), byte_size(Target) =:= 32,
+       is_binary(Realm), byte_size(Realm) =:= 32,
        is_binary(Procedure), is_map(Opts) ->
-    macula_client:call_stream_station(Pool, Station, Realm, Procedure, Args,
+    macula_client:call_stream_station(Pool, Station, Target, Realm, Procedure, Args,
                                       Opts).
 
 %% @doc Open a LOCAL in-process client-stream or bidi call. Used

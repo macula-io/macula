@@ -14,7 +14,7 @@
 %%% the record -> build a `quic://' dial URL). Streaming and RPC share the
 %%% IDENTICAL discovery mechanism — a `procedure_advertisement' does not
 %%% distinguish RPC from streaming, only the eventual dial
-%%% (`call_station/7' vs `call_stream_station/6') does — so
+%%% (`call_station/7' vs `call_stream_station/7') does — so
 %%% `publish_advertisement/4,5' is reused as-is by both providers, and
 %%% `call/6'/`call_stream/6' share the same candidate resolution and
 %%% "Trust model" below. Content has no publish step here at all — see
@@ -25,7 +25,7 @@
 %%% Every advertisement that passes trust filtering is a candidate, in the
 %%% order the DHT returns them. A candidate whose `station_endpoint' can't
 %%% be resolved, or whose link doesn't connect (`{error, not_connected}'
-%%% from `call_station/7' or `call_stream_station/6'), is passed over for
+%%% from `call_station/7' or `call_stream_station/7'), is passed over for
 %%% the next one, but only before the request is sent: once a CALL or a
 %%% stream has gone out, its outcome is returned as it is. When no
 %%% candidate qualifies, or every one failed before sending, resolution
@@ -134,7 +134,7 @@
 %% `resolve_station_endpoint/2''s budget.
 -define(DEFAULT_RESOLVE_TIMEOUT_MS, 10_000).
 %% `call_stream/6''s budget without `dial_timeout_ms', matching
-%% `macula:call_stream_station/6''s own default.
+%% `macula:call_stream_station/7''s own default.
 -define(DEFAULT_DIAL_TIMEOUT_MS, 10_000).
 -define(TYPE_PROCEDURE_ADVERTISEMENT, 16#06).
 -define(TYPE_STATION_ENDPOINT, 16#12).
@@ -193,10 +193,10 @@ call_unless_removed(Removed, _Pool, _Realm, _Procedure, _Payload, _TimeoutMs, _O
 call_stream(Pool, Realm, Procedure, Args, StreamOpts) ->
     call_stream(Pool, Realm, Procedure, Args, StreamOpts, #{}).
 
-%% @doc As `call/6', but opens a stream (`macula:call_stream_station/6''s
+%% @doc As `call/6', but opens a stream (`macula:call_stream_station/7''s
 %% shape) instead of making a single-reply call, built on the exact
 %% same resolve+trust machinery — see the module doc. `StreamOpts' is
-%% forwarded to `call_stream_station/6' alongside the resolved trust
+%% forwarded to `call_stream_station/7' alongside the resolved trust
 %% override (`mode', `owner', etc); its `dial_timeout_ms' (default
 %% 10_000, from 1 to 600_000 as a call's timeout) bounds resolution and
 %% each candidate's connect wait, and the stream itself keeps its own
@@ -543,8 +543,8 @@ call_work(Pool, Realm, Procedure, Payload, Deadline) ->
 
 %% Opens the stream at one resolved station, on the same terms as `call_work/5'.
 stream_work(Pool, Realm, Procedure, Args, StreamOpts) ->
-    fun(_Provider, Station, DialUrl, Share) ->
-        sent_or_not(macula:call_stream_station(Pool, DialUrl, Realm, Procedure, Args,
+    fun(Provider, Station, DialUrl, Share) ->
+        sent_or_not(macula:call_stream_station(Pool, DialUrl, Provider, Realm, Procedure, Args,
                                                maps:merge(StreamOpts, (pinned(Station))#{
                                                    dial_timeout_ms => budget(Share)})))
     end.

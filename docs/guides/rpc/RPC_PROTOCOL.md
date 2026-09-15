@@ -190,7 +190,7 @@ is looked up or published: `realm_trust` and `authorization` replace them.
 
 This is the same resolve shape used by [content](../content/CONTENT_PROTOCOL.md)'s
 `get_content_station/4,5` and [streaming](../streaming/STREAMING_PROTOCOL.md)'s
-raw `call_stream_station/6` — one mechanism, reused across every primitive
+raw `call_stream_station/7`: one mechanism, reused across every primitive
 pair.
 
 ---

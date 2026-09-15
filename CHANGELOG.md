@@ -309,6 +309,32 @@ Post-quantum work on the `post-quantum` branch. Not on `main`.
   `dial_timeout_ms` from 1 to 600000 milliseconds, and
   `macula_request:start_link/6,7,8` and `start_link_direct/6,7,8` refuse a
   timeout outside that range where the request starts.
+- A station link's stream sessions use the post-quantum stream frames and
+  name their target. `macula_station_link:call_stream/6` takes `station` or
+  a provider's node_id and replaces `call_stream/5`. The link signs the
+  STREAM_OPEN with its identity key, and the session's stream signs and
+  verifies its own frames under that open. A build the frame refuses
+  returns `{error, {refused, Reason}}`, and an open over
+  `max_stream_open_bytes` returns `{error, {open_too_large, Limit}}`, both
+  before a stream starts. A session's frames reach it through the dedicated
+  stream they arrive on.
+- A provider verifies a STREAM_OPEN, serves only one addressed to its own
+  node_id, and admits it once per caller and request id through the pool's
+  request admission, before its procedure's policy or handler. An open
+  that does not verify, or names another node, closes its stream with
+  nothing written. Any other refusal is a STREAM_ERROR signed under the
+  open it refuses: `request_copy`, the admission refusal's name,
+  `unauthorized`, `not_found`, `mode_mismatch` for an open in a mode other
+  than its procedure's, `too_many_sessions`, `refused` for a second open on
+  one stream, or `unavailable`. A caller's chunk in a `server_stream` is
+  refused as a malformed frame and no longer ends the session. A
+  procedure's policy reads the request's `token`, and its audience check
+  takes the caller's key id.
+- `macula:call_stream/5` resolves the provider through its verified
+  advertisement, as `macula:call/5` does. `macula:call_stream_station/7`
+  and `macula_client:call_stream_station/7` take the provider's node_id as
+  `Target`, after the station, and direct dial passes the provider it
+  resolved.
 - Direct dial refuses the 10.x trust options by name, with
   `{error, {removed_option, Key}}`, before anything is looked up, dialed,
   registered or published. `macula_direct_dial:call/6` and `call_stream/6`
@@ -362,6 +388,9 @@ Post-quantum work on the `post-quantum` branch. Not on `main`.
   `unadvertise/3` and `unadvertise_stream/3` register or remove a handler
   on the link, for the CALLs and STREAM_OPENs its station delivers to it by
   target, and send nothing, before or after the link connects.
+- `macula_client:call_stream/5`, which opened a stream on the pool's first
+  healthy link with no target. A stream open names its target, and
+  `macula:call_stream/5` resolves it.
 - The certificate-chain form of a provider authorization. The 11.0.0
   realm issues no X.509 certificates, so a provider is authorized only by
   the realm-signed org directory and the org-signed procedure delegation.
