@@ -30,6 +30,8 @@ stacks. Syntax and refusal names agreed by Neptune and Venus, 2026-09-15.
   `authorization_not_allowed`, and one naming a node other than the advertiser as `node_namespace_mismatch`. An
   org-namespaced one is refused as `no_authorization`, `authorization_form_unsupported`, a malformed pair, then the
   delegation refusals.
+- A station refuses to store a node-namespaced advertisement whose marked node id differs from the key id it
+  verifies, as `node_namespace_mismatch`, and stores a matching one (Jupiter, 2026-09-15).
 
 ## A. Outside the rule
 
@@ -49,35 +51,50 @@ stacks. Syntax and refusal names agreed by Neptune and Venus, 2026-09-15.
 Each service configures its org, advertises under `Org/Name` with a delegation, and drops the bare advertise. Owner:
 Saturnus, end to end: the hecate_om slice first, then each service.
 
+Decided by Jupiter, 2026-09-15:
+- **Org**: one org per service, named after its repo. Procedures become `Org/<capability name>`, and capability names
+  stay as they are. No service has an established org today (every service advertises with org `_`), so the repo
+  name is the one convention. `io.macula.echo` and `io.hecate.embed` are capability names, not orgs, and keep their
+  names under their service's org. `io.macula` itself is the realm's own org (D) and is never a service org.
+- **Privilege split**: one org per service while one binary serves all its procedures, as every service does today.
+  A service splits into orgs only where different nodes would serve its privileged procedures.
+- **Caller policy**: every capability declares an explicit caller policy, and hecate_om refuses to boot a capability
+  without one (hecate_om slice S2).
+- **Core cutover**: every service that runs on the fleet at cutover, from Terra's deployed inventory. A service not
+  deployed follows with its own port.
+
+hecate_om dependents that advertise no procedure (biotope, parksim, passport, society, spartan, testkit, tom-player,
+victron, whiteboard) take the slice's identity port and set no org.
+
 Through hecate_om, whose org defaults to `_` until a service sets one:
 
 | Service | Procedures | Org | Privilege split | Core cutover |
 |---|---|---|---|---|
-| hecate-stations | `hecate_stations.list_stations` | to confirm | to confirm | to confirm |
-| hecate-citizens | `hecate_citizens.register_presence`, `get_citizen`, `list_citizens` | to confirm | to confirm | to confirm |
-| hecate-agora | `hecate_agora.get_posts_page`, `get_thread_by_post_id`, `search_posts`, `search_archive` | to confirm | to confirm | to confirm |
-| hecate-tube | `tube.lookup_channel`, `lookup_content`, `lookup_video_clip`, `watch_video_clip` | to confirm | to confirm | to confirm |
-| hecate-rag | `hecate-rag.*` (16 to 18 names) | to confirm | to confirm | to confirm |
-| hecate-graph | `hecate_graph.learn_link`, `resolve_entity`, `resolve_link`, `narrate_entity`, `narrate_link` | to confirm | to confirm | to confirm |
-| hecate-mail | `hecate_mail.initiate_mailbox`, `open_mailbox`, `get_mailbox`, `deposit_letter`, `get_letter`, `reply_to_letter`, `archive_letter` | to confirm | to confirm | to confirm |
-| hecate-mods | `hecate_mods.invite_agent_to_room`, `moderate_room` | to confirm | to confirm | to confirm |
-| hecate-echo | `io.macula.echo` | to confirm | to confirm | to confirm |
-| hecate-search | `hecate_search.web_search` | to confirm | to confirm | to confirm |
-| hecate-turn-credentials | `hecate_turn_credentials.mint_credential` | to confirm | to confirm | to confirm |
-| hecate-mpong-bot | `hecate-mpong-bot.fill_seat`, `host_game`, `list_active_games`, `withdraw` | to confirm | to confirm | to confirm |
-| archive, grid, news, rumble, sentinel, warden | `archive.collect_observations`, `report_gaps`; `grid.observe_datasets`; `news.report_item`; `rumble.settle_visit`; `sentinel.alert_society`, `correlate_threats`; `warden.ensnare`, `report_threat` | to confirm | to confirm | to confirm |
+| hecate-stations | `hecate_stations.list_stations` | `hecate-stations` | one org, one binary | to confirm (Terra) |
+| hecate-citizens | `hecate_citizens.register_presence`, `get_citizen`, `list_citizens` | `hecate-citizens` | one org, one binary | to confirm (Terra) |
+| hecate-agora | `hecate_agora.get_posts_page`, `get_thread_by_post_id`, `search_posts`, `search_archive` | `hecate-agora` | one org, one binary | to confirm (Terra) |
+| hecate-tube | `tube.lookup_channel`, `lookup_content`, `lookup_video_clip`, `watch_video_clip` | `hecate-tube` | one org, one binary | to confirm (Terra) |
+| hecate-rag | `hecate-rag.*` (16 to 18 names) | `hecate-rag` | one org, one binary | to confirm (Terra) |
+| hecate-graph | `hecate_graph.learn_link`, `resolve_entity`, `resolve_link`, `narrate_entity`, `narrate_link` | `hecate-graph` | one org, one binary | to confirm (Terra) |
+| hecate-mail | `hecate_mail.initiate_mailbox`, `open_mailbox`, `get_mailbox`, `deposit_letter`, `get_letter`, `reply_to_letter`, `archive_letter` | `hecate-mail` | one org, one binary | to confirm (Terra) |
+| hecate-mods | `hecate_mods.invite_agent_to_room`, `moderate_room` | `hecate-mods` | one org, one binary | to confirm (Terra) |
+| hecate-echo | `io.macula.echo` | `hecate-echo` | one org, one binary | to confirm (Terra) |
+| hecate-search | `hecate_search.web_search` | `hecate-search` | one org, one binary | to confirm (Terra) |
+| hecate-turn-credentials | `hecate_turn_credentials.mint_credential` | `hecate-turn-credentials` | one org, one binary | to confirm (Terra) |
+| hecate-mpong-bot | `hecate-mpong-bot.fill_seat`, `host_game`, `list_active_games`, `withdraw` | `hecate-mpong-bot` | one org, one binary | to confirm (Terra) |
+| archive, grid, news, rumble, sentinel, warden | `archive.collect_observations`, `report_gaps`; `grid.observe_datasets`; `news.report_item`; `rumble.settle_visit`; `sentinel.alert_society`, `correlate_threats`; `warden.ensnare`, `report_threat` | `hecate-archive`, `hecate-grid`, `hecate-news`, `hecate-robo-rumbler`, `hecate-sentinel`, `hecate-warden` | one org each, one binary each | to confirm (Terra) |
 
 With their own advertise, each moving to `advertise_direct` under its org with delegations:
 
 | Service | Procedures | Org | Privilege split | Core cutover |
 |---|---|---|---|---|
-| hecate-dns | `hecate-dns.*` (10 names) | to confirm | to confirm | to confirm |
-| hecate-git | `hecate-git.*` (10 names) | to confirm | to confirm | to confirm |
-| hecate-llm | `hecate-llm.chat`, `stream_chat`, `list_available`, `check_health`, `report_status`, `track_usage` | to confirm | to confirm | to confirm |
-| hecate-nvidia-pair | `hecate-nvidia-pair.chat` | to confirm | to confirm | to confirm |
-| hecate-embedder | `io.hecate.embed` (configurable) | to confirm | to confirm | to confirm |
-| hecate-dronex | `dronex.raid.<island>` | to confirm | to confirm | to confirm |
-| macula-rag | `macula_rag.query` | to confirm | to confirm | to confirm |
+| hecate-dns | `hecate-dns.*` (10 names) | `hecate-dns` | one org, one binary | to confirm (Terra) |
+| hecate-git | `hecate-git.*` (10 names) | `hecate-git` | one org, one binary | to confirm (Terra) |
+| hecate-llm | `hecate-llm.chat`, `stream_chat`, `list_available`, `check_health`, `report_status`, `track_usage` | `hecate-llm` | one org, one binary | to confirm (Terra) |
+| hecate-nvidia-pair | `hecate-nvidia-pair.chat` | `hecate-nvidia-pair` | one org, one binary | to confirm (Terra) |
+| hecate-embedder | `io.hecate.embed` (configurable) | `hecate-embedder` | one org, one binary | to confirm (Terra) |
+| hecate-dronex | `dronex.raid.<island>` | `hecate-dronex` | one org, one binary | to confirm (Terra) |
+| macula-rag | `macula_rag.query` | `macula-rag` | one org, one binary | to confirm (Terra) |
 
 Diagnostics in hecate-stub (`_diag.probe.*`, `diag.*`) are renamed or kept out of production builds.
 
@@ -89,8 +106,13 @@ Owner: Saturnus. Confirmed by Jupiter, 2026-09-15.
   name, so `procedure_namespace/1` reads the realm name as the org (`io.macula`, and `io.macula/<org>/_org/...`
   too).
 - `io.macula`'s delegation lists only the realm node, since a delegation names no procedure scope. The realm registers
-  its own name as an org and issues it through `IssueProviderAuthorizations`. The reissuer refuses a round in which the
-  realm's own org lists any node other than the realm's.
+  its own name as an org and issues it through `IssueProviderAuthorizations`, keyed by the realm's configured name.
+  Each reissue round checks both halves of that org before signing it: its directory must name the realm org key
+  the realm's signer holds, and its providers must be the realm node alone. When either fails, or cannot be checked,
+  only that org is left out of the round, as a miss by name on /health, and every other org renews (Jupiter,
+  2026-09-15).
+- tom-player calls tom-world's names and advertises none. mpong-bot uses `io.macula/beam-campus/...` only as pubsub
+  topics, never as procedure names.
 - macula-portal, tom-ocean and tom-world advertise under their own orgs with their own org keys. tom-ocean and
   tom-world build their names through `macula_mri:derive_procedure/2` as `<realm>/<path>.<name>`, so their naming
   changes with their migration.
@@ -124,9 +146,9 @@ Owner: Saturnus. Confirmed by Jupiter, 2026-09-15.
 
 ## Owners
 
-- The flip pair, both forms in `procedure_org/1`, and macula's advertise-time refusal: Neptune.
+- The flip pair, both forms in `procedure_namespace/1`, and macula's advertise-time refusal: Neptune.
 - The namespace vectors: the table lives in the flip pair, and Go's test cites its sha (Neptune and Venus).
 - Services (C) and realm-name orgs (D): Saturnus.
 - macula-go, macula-cli and the ring's move in macula-mcp: Venus.
-- The station test for A: Mars.
+- The station test for A, and the station's refusal to store a mismatched node-namespaced advertisement: Mars.
 - The trusted node-name binding for the dist tunnel: Pluto.
