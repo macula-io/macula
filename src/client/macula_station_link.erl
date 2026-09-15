@@ -233,6 +233,8 @@
 %% Replies the link refuses are counted by reason, and logged at most once a
 %% window with the count since the last line.
 -define(REFUSED_REPLIES_WINDOW_MS, 60_000).
+%% A relayed overlay frame the link drops is logged at most once a minute per kind.
+-define(REFUSED_RELAYS_WINDOW_MS, 60_000).
 
 %% Grace added on top of `connect_timeout_ms' before the connect
 %% watchdog fires. The dial NIF is meant to bound itself at
@@ -369,6 +371,8 @@
     liveness_misses = 0   :: non_neg_integer(),
     %% Replies refused before they could clear a probe, counted by reason.
     refused_replies       :: macula_refusal_report:t(),
+    %% Relayed overlay frames dropped, counted by kind.
+    refused_relays        :: macula_refusal_report:t(),
     %% Tunable liveness thresholds (start opts `liveness_interval_ms' /
     %% `liveness_max_misses', each defaulting to the module `?LIVENESS_*'
     %% value). A consumer holding many links to variously-loaded stations
@@ -1058,6 +1062,7 @@ started({ok, Seed, Key, Profile, Issuer}, Opts) ->
                       liveness_interval_ms = LiveMs,
                       liveness_max_misses = LiveMiss,
                       refused_replies = macula_refusal_report:new(?REFUSED_REPLIES_WINDOW_MS),
+                      refused_relays = macula_refusal_report:new(?REFUSED_RELAYS_WINDOW_MS),
                       connect_retry_backoff_ms = RetryMs},
     process_flag(trap_exit, true),
     self() ! attempt_connect,
@@ -1676,15 +1681,12 @@ on_frame(#{frame_type := call} = Frame, S) ->
 %% relayed frame is delivered only once its own signature verifies against
 %% `Origin'. The envelope reached this link through its own connection, which
 %% in pq_hybrid checked the station's neighbour signature on it first.
+%% A payload that is not exactly one frame is dropped and counted
+%% (`relayed_payload/3'), and the link carries on.
 %% Must be matched before the bare `#{realm := Realm}' clause below,
 %% since an `overlay_relay' envelope has no `realm' field of its own.
 on_frame(#{frame_type := overlay_relay, peer := Origin, payload := Bytes}, S) ->
-    case macula_frame:decode(Bytes) of
-        {ok, #{frame_type := Type} = Inner, _Rest} ->
-            on_relayed_overlay_frame(relayed(macula_frame:relayed_without_signature(Type), Inner, Origin),
-                                     Origin, S);
-        {error, _Reason} -> S
-    end;
+    relayed_payload(macula_frame:decode(Bytes), Origin, S);
 on_frame(#{realm := Realm} = Frame, S) ->
     deliver_overlay_frame(Realm, Frame, S);
 on_frame(_Frame, S) ->
@@ -2202,20 +2204,50 @@ deliver_overlay_frame_from(_Sender, _Frame, S) ->
     %% the bare-frame catch-all in on_frame/2.
     S.
 
+%% A relayed payload is taken only when it is exactly one frame. A payload
+%% shorter than its length header, one that does not decode, and one with
+%% bytes after its frame are dropped and counted by kind.
+relayed_payload({ok, #{frame_type := Type} = Inner, <<>>}, Origin, S) ->
+    on_relayed_overlay_frame(relayed(macula_frame:relayed_without_signature(Type), Inner, Origin), Origin, S);
+relayed_payload({ok, _Inner, _Trailing}, Origin, S) ->
+    refused_relay(trailing_bytes, Origin, S);
+relayed_payload({more, _Needed}, Origin, S) ->
+    refused_relay(truncated, Origin, S);
+relayed_payload({error, Why}, Origin, S) ->
+    refused_relay(decode_refusal(Why), Origin, S).
+
+%% The kind a payload that does not decode is counted under: one of a fixed
+%% set, never a term of the payload.
+decode_refusal({invalid_frame, _Type, _Field}) -> invalid_frame;
+decode_refusal(Kind) when Kind =:= bad_frame; Kind =:= frame_too_large; Kind =:= too_many_elements -> Kind.
+
 %% A relayed frame of a type D17 leaves unsigned is taken as it is; any other
 %% must verify against `Origin'.
 relayed(true, Inner, _Origin) -> {ok, Inner};
 relayed(false, Inner, Origin) -> macula_frame:verify(Inner, Origin).
 
-%% A relayed frame taken is delivered with `Origin' as its sender; one whose
-%% signature does not verify against `Origin' is dropped.
+%% A relayed frame taken is delivered with `Origin' as its sender. One that
+%% does not verify against `Origin' is dropped and counted: `unsigned' when it
+%% carries no signature verify/2 reads, `signature_invalid' otherwise.
 on_relayed_overlay_frame({ok, Inner}, Origin, S) ->
     deliver_overlay_frame_from(Origin, Inner, S);
-on_relayed_overlay_frame({error, Why}, Origin, S) ->
-    logger:warning("[macula_station_link] dropped relayed overlay frame whose"
-                   " signature does not verify against its origin (~p)"
-                   " origin=~s", [Why, hex_prefix(Origin)]),
-    S.
+on_relayed_overlay_frame({error, bad_frame}, Origin, S) ->
+    refused_relay(unsigned, Origin, S);
+on_relayed_overlay_frame({error, signature_invalid}, Origin, S) ->
+    refused_relay(signature_invalid, Origin, S).
+
+%% A dropped relayed frame changes nothing but its count, and the log hears of
+%% it at most once a window per kind, with the origin of the frame that reports.
+refused_relay(Kind, Origin, #state{refused_relays = Report} = S) ->
+    Refused = macula_refusal_report:refused(Report, Kind, erlang:monotonic_time(millisecond)),
+    S#state{refused_relays = logged_refused_relay(Refused, Kind, Origin)}.
+
+logged_refused_relay({report, Count, Report}, Kind, Origin) ->
+    logger:warning("[macula_station_link] dropped ~b relayed overlay frame(s): ~p origin=~s",
+                   [Count, Kind, hex_prefix(Origin)]),
+    Report;
+logged_refused_relay({quiet, Report}, _Kind, _Origin) ->
+    Report.
 
 deliver_overlay_frame_to(error, _Frame, _Sender, _S) ->
     ok;

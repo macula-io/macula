@@ -71,6 +71,7 @@ an_unsigned_relayed_frame_of_another_type_is_not_delivered_test_() ->
          forward_to(B, node_id(A), macula_frame:overlay_relay(#{peer => node_id(B),
                                                                 payload => macula_frame:encode(Ihave)})),
          ?assertEqual(none, overlay_frame_within(300)),
+         ?assertEqual(#{unsigned => 1}, refused_relays(B)),
          stop_links([A, B])
      end}}.
 
@@ -84,6 +85,7 @@ a_relayed_frame_of_another_type_with_an_invalid_signature_is_refused_test_() ->
          forward_to(B, node_id(A), macula_frame:overlay_relay(#{peer => node_id(B),
                                                                 payload => macula_frame:encode(Forged)})),
          ?assertEqual(none, overlay_frame_within(300)),
+         ?assertEqual(#{signature_invalid => 1}, refused_relays(B)),
          stop_links([A, B])
      end}}.
 
@@ -102,9 +104,50 @@ a_relayed_envelope_from_another_process_reaches_no_subscriber_test_() ->
          stop_links([A, B])
      end}}.
 
+%% A relayed payload that is not exactly one frame is dropped and counted by kind: an empty payload, a truncated JOIN,
+%% bytes that do not decode, and a JOIN with a byte after it. The link carries on, and a JOIN relayed after them still
+%% reaches the subscriber with its origin as sender.
+a_relayed_payload_that_is_not_exactly_one_frame_is_dropped_and_the_link_carries_on_test_() ->
+    {spawn, {timeout, 10,
+     fun() ->
+         {A, B, SubRef} = two_links_with_a_subscriber_on_b(),
+         ANode = node_id(A),
+         Join = macula_frame:encode(macula_frame:hyparview_join(#{realm => ?REALM, new_member => ANode})),
+         Payloads = [<<>>, binary:part(Join, 0, byte_size(Join) - 1), <<3:32, 16#FF, 16#FF, 16#FF>>,
+                     <<Join/binary, 0>>],
+         _ = [forward_to(B, ANode, #{payload => Payload}) || Payload <- Payloads],
+         ?assertEqual(none, overlay_frame_within(300)),
+         forward_to(B, ANode, #{payload => Join}),
+         ?assertMatch({SubRef, #{frame_type := hyparview_join, new_member := ANode}, #{sender := ANode}},
+                      overlay_frame_within(1_000)),
+         ?assert(is_process_alive(B)),
+         ?assertEqual(#{truncated => 2, bad_frame => 1, trailing_bytes => 1}, refused_relays(B)),
+         stop_links([A, B])
+     end}}.
+
+%% A relayed FORWARD_JOIN, one of the overlay types D17 leaves unsigned, reaches the other node's subscriber with the
+%% origin as its sender.
+a_relayed_forward_join_reaches_the_other_node_with_the_origin_as_sender_test_() ->
+    {spawn, {timeout, 10,
+     fun() ->
+         {A, B, SubRef} = two_links_with_a_subscriber_on_b(),
+         ANode = node_id(A),
+         Forward = macula_frame:hyparview_forward_join(#{realm => ?REALM, new_member => <<5:256>>, ttl => 3,
+                                                          arwl => 6, prwl => 3}),
+         ok = macula_station_link:send_overlay_frame(A, node_id(B), Forward),
+         forward_to(B, ANode, sent_envelope(node_id(B))),
+         ?assertMatch({SubRef, #{frame_type := hyparview_forward_join, new_member := <<5:256>>}, #{sender := ANode}},
+                      overlay_frame_within(1_000)),
+         stop_links([A, B])
+     end}}.
+
 %%------------------------------------------------------------------
 %% Helpers
 %%------------------------------------------------------------------
+
+%% The relayed frames a link dropped, counted by kind.
+refused_relays(Pid) ->
+    macula_refusal_report:counts(element(macula_station_link:state_field_index(refused_relays), sys:get_state(Pid))).
 
 two_links_with_a_subscriber_on_b() ->
     A = start_link_to_station(),

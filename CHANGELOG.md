@@ -322,10 +322,12 @@ Post-quantum work on the `post-quantum` branch. Not on `main`.
   `hyparview_join`, `hyparview_forward_join`, `hyparview_neighbor`,
   `hyparview_disconnect`, `hyparview_shuffle` and `hyparview_shuffle_reply`,
   as `macula_frame:relayed_without_signature/1` names them. Every other
-  relayed frame is still delivered only when its own signature verifies
-  against that origin. The envelope reaches the link only through its own
-  connection, which in `pq_hybrid` checks the station's neighbour signature
-  on it first.
+  relayed frame type is delivered only when `macula_frame:verify/2`
+  accepts it for that origin. A relayed payload that is not exactly one
+  frame is dropped, and the link carries on. The relayed frames a link
+  drops are counted by kind and logged at most once a minute per kind. The
+  envelope reaches the link only through its own connection, which in
+  `pq_hybrid` checks the station's neighbour signature on it first.
 
 ### Removed
 
