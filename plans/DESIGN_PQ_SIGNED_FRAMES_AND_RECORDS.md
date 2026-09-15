@@ -293,6 +293,16 @@ Every DHT storage key is 32 bytes.
 - A consumer computes a storage key from ids and names it already holds, before it holds the record.
 - `macula-station` derives the same keys for procedure advertisements and content announcements (WP 1.6).
 
+### Domain record types
+
+Every stack that signs or reads a domain type uses the same tag for it. The 11.0.0 coordinator (Jupiter) allocates
+each tag, and the allocation is added to this table. The owner of a domain type sets its payload rules.
+
+| Tag | Name | Owner | Payload rules |
+|---|---|---|---|
+| 0x20 | reserved, the example tag of the records guide and tests | macula | none |
+| 0x21 | `hecate.ownership_proof.v2` | hecate services | hecate_om's ownership proof |
+
 ### Content ids
 
 A content id is `<<Tag:8, Codec:8, Hash/binary>>` (D24). Tag 2 is SHA-384, with a 48-byte hash: 50 bytes in all.
