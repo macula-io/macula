@@ -328,7 +328,8 @@ Post-quantum work on the `post-quantum` branch. Not on `main`.
 - A station link logs its `_macula.station_link.disconnected` and
   `_macula.station_link.peering_exit` diagnostic events at `notice`, so a
   lost connection shows at OTP's default primary level. Its other
-  diagnostic events stay at `info`.
+  diagnostic events stay at `info`. Every station link diagnostic event
+  names a reason only by `macula_reason_name:text/1`.
 - A pool runs one request admission, `macula_request_admission`, for the
   requests all its links receive, and ends when the admission ends. Its
   limits come from the `request_admission` pool option, then the `macula`

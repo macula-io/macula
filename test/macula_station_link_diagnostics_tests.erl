@@ -24,7 +24,28 @@ diagnostics_test_() ->
      {"a disconnect whose reason holds a key logs no form of it at notice, with the redaction filter removed",
       {spawn, fun a_disconnect_reason_logs_only_its_name/0}},
      {"a peering exit whose reason holds a key logs no form of it at notice, with the redaction filter removed",
-      {spawn, fun a_peering_exit_reason_logs_only_its_name/0}}].
+      {spawn, fun a_peering_exit_reason_logs_only_its_name/0}},
+     {"a failed connect whose reason holds a key logs no form of it, with the redaction filter removed",
+      {spawn, fun a_failed_connect_reason_logs_only_its_name/0}}].
+
+%% A connect that fails with a reason holding a key logs its event at info with the reason's name only: with the
+%% redaction filter removed, no connect_failed event's term or formatted text holds a form of the key.
+a_failed_connect_reason_logs_only_its_name() ->
+    Key = key(),
+    Events = unfiltered(fun() ->
+                            captured(fun() ->
+                                         {ok, Link} = macula_station_link:start_link(
+                                                        with_link_keys(#{seed => #{host => <<"127.0.0.1">>, port => 1},
+                                                                         connect => fun(_PeeringOpts) ->
+                                                                                        {error, crash_reason(Key)}
+                                                                                    end})),
+                                         unlink(Link),
+                                         ok = macula_station_link:stop(Link)
+                                     end)
+                        end),
+    Failed = on_topic(<<"_macula.station_link.connect_failed">>, Events),
+    ?assertMatch([_ | _], Failed),
+    ?assertEqual([{info, []}], lists:usort([{maps:get(level, Event), leaked(Event, Key)} || Event <- Failed])).
 
 %% A reason that holds a key in a stack frame's arguments, as a crash reason can, reaches the default level as its name
 %% only: with the redaction filter removed, neither the event's term nor its formatted text holds a form of the key.

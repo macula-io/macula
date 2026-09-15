@@ -1688,7 +1688,7 @@ after_connect_request({ok, Pid}, S) ->
     {noreply, arm_connect_watchdog(S#state{peer_pid = Pid})};
 after_connect_request({error, Reason}, S) ->
     macula_diagnostics:event(<<"_macula.station_link.connect_failed">>, #{
-        reason => Reason,
+        reason => macula_reason_name:text(Reason),
         seed   => S#state.seed
     }),
     erlang:send_after(S#state.connect_retry_backoff_ms, self(), attempt_connect),
