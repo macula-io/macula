@@ -3,10 +3,10 @@
 This exists so a station's record store and verification work stay bounded, an authorized signer can always get a place
 in a slot, and an honest relay is never slowed.
 
-By Mars and Mercury, 2026-09-11, from proposal A (Mars), proposal B (Mars and Mercury) and the options note on slot
-admission, with Mercury's co-owner corrections and Jupiter's decisions. It details D28 and the D23 refinement in
-`PLAN_POST_QUANTUM_SECURITY_DECISIONS.md`, for WP 1.2, WP 1.3, WP 1.5, WP 1.6, WP 2.2 and Stage 4. Records and frames
-are in `DESIGN_PQ_SIGNED_FRAMES_AND_RECORDS.md`.
+Owned by Mars. Written by Mars and Mercury, 2026-09-11, from proposal A (Mars), proposal B (Mars and Mercury) and the
+options note on slot admission, with Mercury's corrections and Jupiter's decisions. It details D28 and the D23
+refinement in `PLAN_POST_QUANTUM_SECURITY_DECISIONS.md`, for WP 1.2, WP 1.3, WP 1.5, WP 1.6, WP 2.2 and Stage 4.
+Records and frames are in `DESIGN_PQ_SIGNED_FRAMES_AND_RECORDS.md`.
 
 Prerequisite for part 3: receive-side flow control per stream (section 3.4), which waits for Raf's decision.
 
