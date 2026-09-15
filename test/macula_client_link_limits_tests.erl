@@ -1,7 +1,8 @@
 %% EUnit tests for the bounds on the links a pool holds and dials: a limit on its configured seeds, a limit on its
 %% direct-dial links, and a budget of new peers per window that its configured seeds never spend. Refused dials are
-%% counted in the pool's status. Links dial unreachable seeds (127.0.0.1, low ports), so every link stays
-%% disconnected and a fresh direct dial ends in not_connected once its dial timeout passes.
+%% counted in the pool's status. Links dial unreachable seeds (127.0.0.1, low ports), each naming the node_id it
+%% expects as a link requires, so every link starts, stays disconnected, and a fresh direct dial ends in not_connected
+%% once its dial timeout passes.
 -module(macula_client_link_limits_tests).
 
 -include_lib("eunit/include/eunit.hrl").
@@ -109,4 +110,4 @@ call_station(Pool, Seed) ->
     macula_client:call_station(Pool, Seed, ?REALM, <<"x.y">>, #{}, ?DIAL_MS).
 
 seed(Port) ->
-    #{host => <<"127.0.0.1">>, port => Port}.
+    #{host => <<"127.0.0.1">>, port => Port, expected_node_id => <<Port:256>>}.
