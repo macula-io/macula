@@ -284,18 +284,28 @@ Post-quantum work on the `post-quantum` branch. Not on `main`.
     has no link to the target.
 
   A payload no frame can carry is refused before sending as
-  `{error, {refused, Reason}}`. The timeout is 1 to 600000 milliseconds.
-  Every call ends with its reply, its timeout or the link's close, and a
-  reply after the timeout is counted like one for a request the link does
-  not hold. `not_sent/1` is true only for `not_connected`, `noproc` and
-  `{refused, _}`.
+  `{error, {refused, Reason}}`. So is a procedure over 512 bytes or not
+  valid UTF-8, as `macula_frame:text_checked/2` bounds it. The timeout is 1
+  to 600000 milliseconds. Every call ends with one of:
+  - its reply;
+  - its timeout;
+  - `{error, {disconnected, Reason}}` when the connection closes;
+  - `{error, {link_stopped, Reason}}` when the link stops for any other
+    reason, which also answers a call that had not reached the link yet.
+
+  A reply after the timeout is counted like one for a request the link
+  does not hold. `not_sent/1` is true only for `not_connected`, `noproc`
+  and `{refused, _}`.
 - `macula:call/5` reaches a provider through its verified advertisement
   (`macula_direct_dial`), and so do station discovery and the
   distribution pool's tunnel calls. `macula:call_station/7,8` and
   `macula_client:call_station/7` to `10` take the provider's node_id as
   `Target`, after the station. `macula_client:call_linked_station/5`
   replaces `macula_client:call/5` and calls a station the pool is linked
-  to, as the DHT functions do.
+  to, as the DHT functions do. `macula_direct_dial:call_stream/6` takes
+  `dial_timeout_ms` from 1 to 600000 milliseconds, and
+  `macula_request:start_link/6,7,8` and `start_link_direct/6,7,8` refuse a
+  timeout outside that range where the request starts.
 - Direct dial refuses the 10.x trust options by name, with
   `{error, {removed_option, Key}}`, before anything is looked up, dialed,
   registered or published. `macula_direct_dial:call/6` and `call_stream/6`

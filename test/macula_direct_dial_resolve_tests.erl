@@ -124,7 +124,8 @@ resolve_test_() ->
       {timeout, 30, fun put_content_ends_the_lookup_at_an_endpoint_record_that_does_not_verify/0},
       {timeout, 30, fun a_call_with_a_removed_trust_option_is_refused_before_any_lookup/0},
       {timeout, 30, fun a_stream_with_a_removed_trust_option_is_refused_before_any_lookup/0},
-      {timeout, 30, fun an_advertisement_with_a_removed_trust_option_is_not_published/0}]}.
+      {timeout, 30, fun an_advertisement_with_a_removed_trust_option_is_not_published/0},
+      {timeout, 30, fun a_stream_dial_timeout_outside_its_bounds_is_refused_in_the_caller/0}]}.
 
 %%%===================================================================
 %%% Calls
@@ -303,6 +304,14 @@ an_advertisement_with_a_removed_trust_option_is_not_published() ->
                  macula_direct_dial:publish_advertisement(self(), ?REALM, ?PROC, node_key(identity),
                                                           #{cert_chain => <<"pem">>})),
     ?assertEqual(none, receive links_read -> links_read; put -> put after 0 -> none end).
+
+%% A stream's dial timeout is a positive number of milliseconds up to ten minutes, as a call's timeout is; anything else
+%% is refused in the caller before anything is looked up.
+a_stream_dial_timeout_outside_its_bounds_is_refused_in_the_caller() ->
+    [?assertError(function_clause,
+                  macula_direct_dial:call_stream(pool, ?REALM, ?PROC, #{}, #{dial_timeout_ms => Timeout}, #{}))
+     || Timeout <- [infinity, 0, 600_001]],
+    ?assertEqual(0, lookups_and_dials()).
 
 lookups_and_dials() ->
     lists:sum([meck:num_calls(macula, Fun, '_')

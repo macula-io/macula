@@ -80,8 +80,9 @@
 %%   <tr><td>station ERROR, no such next peer</td><td>`{error, {call_error, unknown_next_peer, undefined}}'</td></tr>
 %%   <tr><td>(deadline elapses)</td><td>`{error, timeout}'</td></tr>
 %%   <tr><td>(connection drops)</td><td>`{error, {disconnected, Reason}}' or `{error, {peering_exit, Reason}}'</td></tr>
+%%   <tr><td>(link stops for any other reason, with the call pending or still waiting to reach it)</td><td>`{error, {link_stopped, Reason}}'</td></tr>
 %%   <tr><td>(not connected yet)</td><td>`{error, not_connected}', not sent</td></tr>
-%%   <tr><td>(frame refused before sending)</td><td>`{error, {refused, Reason}}', not sent</td></tr>
+%%   <tr><td>(payload, or procedure text over 512 bytes or not UTF-8, refused before sending)</td><td>`{error, {refused, Reason}}', not sent</td></tr>
 %% </table>
 %%
 %% `not_sent/1' says whether an error means the CALL never went out.
@@ -479,13 +480,14 @@ call(Pid, Target, Realm, Procedure, Payload, TimeoutMs, Token)
                         {call, Target, Realm, Procedure, Payload, DeadlineMs, Token},
                         GenTimeout)
     catch
-        %% try/catch retained: collapses the three distinct gen_server
-        %% exit signals into the SDK's call-result taxonomy. Without
-        %% it the caller sees `exit({timeout, _})' instead of
-        %% `{error, timeout}', breaking the contract documented above.
-        exit:{timeout, _}      -> {error, timeout};
-        exit:{noproc, _}       -> {error, noproc};
-        exit:{normal, _}       -> {error, gone}
+        %% The exits of a gen_server call, read as call results. No link
+        %% process is `noproc': the call never reached a link. A link that
+        %% ended while the call still waited in its mailbox answers
+        %% `{link_stopped, Reason}', as a link that stops answers its pending
+        %% calls, so no stop reads as a call that never went out.
+        exit:{timeout, _}                    -> {error, timeout};
+        exit:{noproc, _}                     -> {error, noproc};
+        exit:{Reason, {gen_server, call, _}} -> {error, {link_stopped, Reason}}
     end.
 
 %% @doc Whether an error from `call/6,7' means the CALL never went out, so
@@ -1449,8 +1451,9 @@ handle_info({'EXIT', Pid, Reason}, #state{peer_pid = Pid, seed = Seed} = S) ->
                               peer_node_id = undefined}};
 
 %% The issuer every connection of this link draws from is gone: the link
-%% ends with a shutdown reason, so its end is no crash report, and the pool
-%% starts it again with the pool's next issuer.
+%% ends with a shutdown reason, so its end is no crash report, its waiting
+%% callers are answered as it ends (terminate/2), and the pool starts it
+%% again with the pool's next issuer.
 handle_info({'DOWN', _Mon, process, Issuer, Reason}, #state{issuer = Issuer} = S) ->
     {stop, {shutdown, {issuer_down, Reason}}, S};
 handle_info({'DOWN', Mon, process, Pid, _Reason}, S) ->
@@ -1488,11 +1491,19 @@ drain_frames(Pid, Acc, N) ->
 fold_frames(Frames, S) ->
     lists:foldl(fun on_frame/2, S, Frames).
 
-terminate(_Reason, #state{peer_pid = Pid}) when is_pid(Pid) ->
+%% A link ends answering every caller still waiting on it, whatever it ends
+%% for, so no caller waits out its timeout or reads the end as a call that
+%% never went out. A stop that already failed its callers left none waiting.
+terminate(Reason, #state{peer_pid = Pid} = S) when is_pid(Pid) ->
+    answer_waiting_callers({link_stopped, Reason}, S),
     try macula_peering:close(Pid, client_stop) catch _:_ -> ok end,
     ok;
-terminate(_Reason, _S) ->
-    ok.
+terminate(Reason, S) ->
+    answer_waiting_callers({link_stopped, Reason}, S).
+
+answer_waiting_callers(Reason, #state{pending = Pending, content_pending = ContentPending}) ->
+    maps:foreach(fun(_RequestId, {From, _TRef, _Request}) -> gen_server:reply(From, {error, Reason}) end, Pending),
+    maps:foreach(fun(_Stream, {From, _TRef}) -> gen_server:reply(From, {error, Reason}) end, ContentPending).
 
 code_change(_OldVsn, S, _Extra) -> {ok, S}.
 
@@ -1520,26 +1531,35 @@ publish_reply({error, _} = Refused, _Seq, S) ->
 %% deadline, and the call waits for its reply until then.
 call_in_time(RemainingMs, _Call, _From, S) when RemainingMs =< 0 ->
     {reply, {error, timeout}, S};
-call_in_time(RemainingMs, {_Target, _Realm, _Proc, Payload, _DeadlineMs, _Token} = Call, From, S) ->
-    call_sendable(macula_frame:check_payload(Payload), RemainingMs, Call, From, S).
+call_in_time(RemainingMs, {_Target, _Realm, Proc, Payload, _DeadlineMs, _Token} = Call, From, S) ->
+    call_sendable(sendable(macula_frame:text_checked(procedure, Proc), Payload), RemainingMs, Call, From, S).
 
-%% A payload the wire cannot carry is refused before anything is built or
-%% signed, so the call never goes out. Otherwise the request is signed with
-%% the node identity key and kept as a verifier reads it, for its reply to be
-%% checked against.
+%% A procedure the frame's text bound refuses, or a payload the wire cannot
+%% carry, is refused before anything is built.
+sendable(ok, Payload) -> macula_frame:check_payload(Payload);
+sendable({error, _} = Refused, _Payload) -> Refused.
+
+%% A call refused before building never goes out. Otherwise the request is
+%% signed with the node identity key and kept as a verifier reads it, for its
+%% reply to be checked against. A request that does not verify as built is
+%% refused as well, so no caller's argument takes the link down.
 call_sendable({error, Unsendable}, _RemainingMs, _Call, _From, S) ->
     {reply, {error, {refused, Unsendable}}, S};
 call_sendable(ok, RemainingMs, {Target, Realm, Proc, Payload, DeadlineMs, Token}, From,
-              #state{peer_pid = Pid, node_identity = Key, profile = Profile, pending = P} = S) ->
+              #state{node_identity = Key, profile = Profile} = S) ->
     RequestId = crypto:strong_rand_bytes(16),
     Frame = macula_frame:call(with_token(Token, #{request_id => RequestId, realm => Realm, procedure => Proc,
                                                    target => target_node_id(Target, S), deadline => DeadlineMs,
                                                    payload => Payload}), Key),
-    {ok, Request} = macula_frame:verify_request(Frame, Profile),
+    call_verified(macula_frame:verify_request(Frame, Profile), Frame, RequestId, From, RemainingMs, S).
+
+call_verified({ok, Request}, Frame, RequestId, From, RemainingMs, #state{peer_pid = Pid, pending = P} = S) ->
     %% NOT `ok = send_frame(...)': a frame the peering refuses comes back as
     %% an error, and a hard match would take this link down for every other
     %% caller on it. Reply with the reason instead.
-    await_call_reply(macula_peering:send_frame(Pid, Frame), RequestId, Request, From, RemainingMs, P, S).
+    await_call_reply(macula_peering:send_frame(Pid, Frame), RequestId, Request, From, RemainingMs, P, S);
+call_verified({error, Refusal}, _Frame, _RequestId, _From, _RemainingMs, S) ->
+    {reply, {error, {refused, Refusal}}, S}.
 
 target_node_id(station, #state{peer_node_id = Station}) -> Station;
 target_node_id(NodeId, _S) -> NodeId.

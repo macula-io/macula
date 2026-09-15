@@ -208,6 +208,100 @@ a_call_nobody_answers_times_out_and_is_forgotten_test_() ->
          macula_station_link:stop(Pid)
      end}}.
 
+%% A procedure that is not valid UTF-8 text is refused before anything is built or sent, and the link keeps serving: a
+%% call pending beside it still completes.
+a_procedure_that_is_not_utf8_text_is_refused_and_the_link_keeps_serving_test_() ->
+    {spawn, {timeout, 5,
+     fun() ->
+         {Pid, _StationKey, Profile} = start_link_to_station(),
+         ProviderKey = new_key(Profile),
+         Ref = call_async(Pid, macula_node_keys:key_id(ProviderKey), ?PROCEDURE, #{}, 2_000),
+         Request = sent_request(Profile),
+         Refused = macula_station_link:call(Pid, station, ?REALM, <<16#ff, 16#fe>>, #{}, 1_000),
+         ?assertEqual({error, {refused, {invalid_text, procedure}}}, Refused),
+         ?assert(macula_station_link:not_sent(Refused)),
+         ?assertEqual(none, sent_frame_within(100)),
+         deliver(Pid, macula_frame:result(#{request => Request, payload => <<"still served">>}, ProviderKey)),
+         ?assertEqual({ok, <<"still served">>}, answer(Ref)),
+         macula_station_link:stop(Pid)
+     end}}.
+
+%% A procedure longer than the frame's text bound for procedures is refused the same way, and the link keeps serving.
+a_procedure_past_its_length_bound_is_refused_and_the_link_keeps_serving_test_() ->
+    {spawn, {timeout, 5,
+     fun() ->
+         {Pid, _StationKey, Profile} = start_link_to_station(),
+         ProviderKey = new_key(Profile),
+         Ref = call_async(Pid, macula_node_keys:key_id(ProviderKey), ?PROCEDURE, #{}, 2_000),
+         Request = sent_request(Profile),
+         Refused = macula_station_link:call(Pid, station, ?REALM, binary:copy(<<"a">>, 513), #{}, 1_000),
+         ?assertEqual({error, {refused, {text_too_long, procedure}}}, Refused),
+         ?assert(macula_station_link:not_sent(Refused)),
+         ?assertEqual(none, sent_frame_within(100)),
+         deliver(Pid, macula_frame:result(#{request => Request, payload => <<"still served">>}, ProviderKey)),
+         ?assertEqual({ok, <<"still served">>}, answer(Ref)),
+         macula_station_link:stop(Pid)
+     end}}.
+
+%% When the link's issuer ends, the link stops, and every pending caller is answered with a final error that counts as
+%% sent, never with a reason that says the call did not go out.
+stopping_the_issuer_answers_every_pending_caller_test_() ->
+    {spawn, {timeout, 5,
+     fun() ->
+         process_flag(trap_exit, true),
+         {Pid, _StationKey, Profile} = start_link_to_station(),
+         Ref = call_async(Pid, macula_node_keys:key_id(new_key(Profile)), ?PROCEDURE, #{}, 4_000),
+         _ = sent_request(Profile),
+         Issuer = element(macula_station_link:state_field_index(issuer), sys:get_state(Pid)),
+         true = exit(Issuer, kill),
+         Answer = answer(Ref),
+         ?assertEqual({error, {link_stopped, {shutdown, {issuer_down, killed}}}}, Answer),
+         ?assertNot(macula_station_link:not_sent(Answer)),
+         ?assertEqual({shutdown, {issuer_down, killed}},
+                      receive {'EXIT', Pid, Reason} -> Reason after 1_000 -> no_exit end)
+     end}}.
+
+%% The link's own end replies to a pending call: a caller that makes the gen_server call itself, without call/7's reading
+%% of exits, still gets the final error as its reply.
+a_stopping_link_replies_to_its_pending_call_test_() ->
+    {spawn, {timeout, 5,
+     fun() ->
+         {Pid, _StationKey, Profile} = start_link_to_station(),
+         Provider = macula_node_keys:key_id(new_key(Profile)),
+         Test = self(),
+         Ref = make_ref(),
+         Call = {call, Provider, ?REALM, ?PROCEDURE, #{}, erlang:system_time(millisecond) + 4_000, <<>>},
+         _ = spawn(fun() -> Test ! {Ref, catch gen_server:call(Pid, Call, 4_500)} end),
+         _ = sent_request(Profile),
+         ok = macula_station_link:stop(Pid),
+         ?assertEqual({error, {link_stopped, normal}}, answer(Ref))
+     end}}.
+
+%% A call still waiting in the link's mailbox when the link stops gets the same final error, not an exit.
+a_call_waiting_for_a_stopping_link_gets_a_final_error_test_() ->
+    {spawn, {timeout, 5,
+     fun() ->
+         {Pid, _StationKey, Profile} = start_link_to_station(),
+         ok = sys:suspend(Pid),
+         Ref = call_async(Pid, macula_node_keys:key_id(new_key(Profile)), ?PROCEDURE, #{}, 4_000),
+         ok = call_waiting(Pid, 100),
+         ok = macula_station_link:stop(Pid),
+         Answer = answer(Ref),
+         ?assertEqual({error, {link_stopped, normal}}, Answer),
+         ?assertNot(macula_station_link:not_sent(Answer))
+     end}}.
+
+%% A link stopped while a call is pending answers that call with a final error before it ends.
+stopping_the_link_answers_every_pending_caller_test_() ->
+    {spawn, {timeout, 5,
+     fun() ->
+         {Pid, _StationKey, Profile} = start_link_to_station(),
+         Ref = call_async(Pid, macula_node_keys:key_id(new_key(Profile)), ?PROCEDURE, #{}, 4_000),
+         _ = sent_request(Profile),
+         ok = macula_station_link:stop(Pid),
+         ?assertEqual({error, {link_stopped, normal}}, answer(Ref))
+     end}}.
+
 %% When the link's connection closes, every pending caller is answered at once, and the calls count as sent.
 closing_the_link_answers_every_pending_caller_test_() ->
     {spawn, {timeout, 5,
@@ -313,6 +407,17 @@ sent_frame_within(Ms) ->
     after Ms ->
         none
     end.
+
+%% Waits, for at most `Tries' times 10 ms, until a call waits in the link's mailbox.
+call_waiting(_Pid, 0) ->
+    erlang:error(no_call_waiting);
+call_waiting(Pid, Tries) ->
+    {messages, Messages} = process_info(Pid, messages),
+    call_in(lists:any(fun({'$gen_call', _From, {call, _, _, _, _, _, _}}) -> true; (_) -> false end, Messages),
+            Pid, Tries).
+
+call_in(true, _Pid, _Tries) -> ok;
+call_in(false, Pid, Tries) -> timer:sleep(10), call_waiting(Pid, Tries - 1).
 
 %% The replies the link refused, counted by reason.
 refused_replies(Pid) ->

@@ -155,7 +155,7 @@
 
 %% @doc As `call/6' with no realm trust.
 -spec call(macula:pool(), macula:realm(), macula:procedure(), term(),
-          pos_integer()) -> {ok, term()} | {error, term()}.
+          1..600_000) -> {ok, term()} | {error, term()}.
 call(Pool, Realm, Procedure, Payload, TimeoutMs) ->
     call(Pool, Realm, Procedure, Payload, TimeoutMs, #{}).
 
@@ -174,7 +174,7 @@ call(Pool, Realm, Procedure, Payload, TimeoutMs) ->
 %% refused with `{error, {removed_option, verify_cert_chain}}' before
 %% anything is looked up.
 -spec call(macula:pool(), macula:realm(), macula:procedure(), term(),
-          pos_integer(), map()) -> {ok, term()} | {error, term()}.
+          1..600_000, map()) -> {ok, term()} | {error, term()}.
 call(Pool, Realm, Procedure, Payload, TimeoutMs, Opts)
   when is_integer(TimeoutMs), TimeoutMs > 0, TimeoutMs =< 600_000 ->
     call_unless_removed(removed_option(call, Opts), Pool, Realm, Procedure, Payload, TimeoutMs,
@@ -199,13 +199,17 @@ call_stream(Pool, Realm, Procedure, Args, StreamOpts) ->
 %% same resolve+trust machinery — see the module doc. `StreamOpts' is
 %% forwarded to `call_stream_station/6' alongside the resolved trust
 %% override (`mode', `owner', etc); its `dial_timeout_ms' (default
-%% 10_000) bounds resolution and each candidate's connect wait, and the
-%% stream itself keeps its own deadline. `Opts' is the resolve-side
-%% `realm_trust' opt, same as `call/6', and `verify_cert_chain' in it is
-%% refused as `call/6' refuses it.
+%% 10_000, from 1 to 600_000 as a call's timeout) bounds resolution and
+%% each candidate's connect wait, and the stream itself keeps its own
+%% deadline. `Opts' is the resolve-side `realm_trust' opt, same as
+%% `call/6', and `verify_cert_chain' in it is refused as `call/6' refuses
+%% it.
 -spec call_stream(macula:pool(), macula:realm(), macula:procedure(), term(),
                   map(), map()) -> {ok, macula:stream()} | {error, term()}.
-call_stream(Pool, Realm, Procedure, Args, StreamOpts, Opts) ->
+call_stream(Pool, Realm, Procedure, Args, StreamOpts, Opts)
+  when not is_map_key(dial_timeout_ms, StreamOpts);
+       is_integer(map_get(dial_timeout_ms, StreamOpts)), map_get(dial_timeout_ms, StreamOpts) > 0,
+       map_get(dial_timeout_ms, StreamOpts) =< 600_000 ->
     call_stream_unless_removed(removed_option(call, Opts), Pool, Realm, Procedure, Args,
                                StreamOpts, Opts).
 

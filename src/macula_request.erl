@@ -98,13 +98,13 @@
 %% `Payload', timing out after `TimeoutMs'; `Args' is passed to
 %% `Module:init/1'.
 -spec start_link(module(), macula:pool(), macula:realm(), macula:procedure(),
-                 term(), pos_integer()) -> {ok, pid()} | {error, term()}.
+                 term(), 1..600_000) -> {ok, pid()} | {error, term()}.
 start_link(Module, Pool, Realm, Procedure, Payload, TimeoutMs) ->
     start_link(Module, Pool, Realm, Procedure, Payload, TimeoutMs, undefined).
 
 %% @doc As `start_link/6', with `Args' passed to `Module:init/1'.
 -spec start_link(module(), macula:pool(), macula:realm(), macula:procedure(),
-                 term(), pos_integer(), term()) -> {ok, pid()} | {error, term()}.
+                 term(), 1..600_000, term()) -> {ok, pid()} | {error, term()}.
 start_link(Module, Pool, Realm, Procedure, Payload, TimeoutMs, Args) ->
     start_link(Module, Pool, Realm, Procedure, Payload, TimeoutMs, Args, #{}).
 
@@ -112,9 +112,10 @@ start_link(Module, Pool, Realm, Procedure, Payload, TimeoutMs, Args) ->
 %% the functions the request calls and announces with (see "Call and
 %% publish functions" above).
 -spec start_link(module(), macula:pool(), macula:realm(), macula:procedure(),
-                 term(), pos_integer(), term(), start_opts()) ->
+                 term(), 1..600_000, term(), start_opts()) ->
     {ok, pid()} | {error, term()}.
-start_link(Module, Pool, Realm, Procedure, Payload, TimeoutMs, Args, Opts) when is_map(Opts) ->
+start_link(Module, Pool, Realm, Procedure, Payload, TimeoutMs, Args, Opts)
+  when is_integer(TimeoutMs), TimeoutMs > 0, TimeoutMs =< 600_000, is_map(Opts) ->
     start(arity_5(maps:get(call, Opts, fun macula:call/5)), Opts,
           {Module, Pool, Realm, Procedure, Payload, TimeoutMs, Args}).
 
@@ -122,14 +123,14 @@ start_link(Module, Pool, Realm, Procedure, Payload, TimeoutMs, Args, Opts) when 
 %% directly instead of routing through the pool's existing links. See
 %% the "Direct-dial" section above.
 -spec start_link_direct(module(), macula:pool(), macula:realm(),
-                        macula:procedure(), term(), pos_integer()) ->
+                        macula:procedure(), term(), 1..600_000) ->
     {ok, pid()} | {error, term()}.
 start_link_direct(Module, Pool, Realm, Procedure, Payload, TimeoutMs) ->
     start_link_direct(Module, Pool, Realm, Procedure, Payload, TimeoutMs, undefined).
 
 %% @doc As `start_link_direct/6', with `Args' passed to `Module:init/1'.
 -spec start_link_direct(module(), macula:pool(), macula:realm(),
-                        macula:procedure(), term(), pos_integer(), term()) ->
+                        macula:procedure(), term(), 1..600_000, term()) ->
     {ok, pid()} | {error, term()}.
 start_link_direct(Module, Pool, Realm, Procedure, Payload, TimeoutMs, Args) ->
     start_link_direct(Module, Pool, Realm, Procedure, Payload, TimeoutMs,
@@ -143,10 +144,10 @@ start_link_direct(Module, Pool, Realm, Procedure, Payload, TimeoutMs, Args) ->
 %% authorization is checked against (see `macula_direct_dial''s module
 %% doc, "Trust model").
 -spec start_link_direct(module(), macula:pool(), macula:realm(),
-                        macula:procedure(), term(), pos_integer(), term(),
+                        macula:procedure(), term(), 1..600_000, term(),
                         direct_opts()) -> {ok, pid()} | {error, term()}.
-start_link_direct(Module, Pool, Realm, Procedure, Payload, TimeoutMs, Args,
-                  Opts) when is_map(Opts) ->
+start_link_direct(Module, Pool, Realm, Procedure, Payload, TimeoutMs, Args, Opts)
+  when is_integer(TimeoutMs), TimeoutMs > 0, TimeoutMs =< 600_000, is_map(Opts) ->
     DirectCall = arity_6(maps:get(direct_call, Opts, fun macula_direct_dial:call/6)),
     DialOpts = maps:without([direct_call, fact_publish], Opts),
     Call = fun(CallPool, CallRealm, CallProcedure, CallPayload, CallTimeoutMs) ->
