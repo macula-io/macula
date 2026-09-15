@@ -328,6 +328,10 @@ which stations set or change per hop, stay outside them.
 - HyParView, the Plumtree control frames and GOODBYE change membership, tree shape or a connection's lifecycle, so
   they are control frames. GOSSIP carries publications that are checked end to end, so it is data; its Plumtree
   routing fields stay unsigned in both profiles.
+- A station relays a HyParView JOIN, FORWARD_JOIN, NEIGHBOR or SHUFFLE, which carry no signature in pq_pure, from a
+  connection it authenticated. A receiver takes such a relayed frame with the relay's origin as its sender and checks
+  no frame signature (`macula_frame:relayed_without_signature/1`). Every other relayed frame keeps its own
+  verification.
 - A neighbour-signed frame is `{version, frame_type, neighbour}`. `neighbour` is `{tbs, signature}` under
   `MACULA-PQ-NEIGHBOUR-V1`, verified with the connection peer's identity key, and its `tbs` holds the frame's fields
   with `frame_type` and `alg`.

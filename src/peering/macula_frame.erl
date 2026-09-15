@@ -89,7 +89,7 @@
     control_frame/1, neighbour_signed/2, sign_neighbour/3, verify_neighbour/2,
 
     %% Sign / verify frame
-    sign/2, verify/2,
+    sign/2, verify/2, relayed_without_signature/1,
 
     %% Wire codec — single frame
     encode/1, decode/1,
@@ -1977,6 +1977,13 @@ validate_manifest_payload(M) when is_map(M) -> ok.
 %% neighbour-signs (D17). One arriving on a dedicated stream is malformed_frame, and the connection closes.
 -spec control_frame(frame_type()) -> boolean().
 control_frame(FrameType) -> lists:member(FrameType, ?NEIGHBOUR_SIGNED).
+
+%% @doc Whether a relayed frame of this type is taken without a frame signature: the HyParView JOIN, FORWARD_JOIN,
+%% NEIGHBOR and SHUFFLE that D17 leaves unsigned in pq_pure. A station relays them from a connection it authenticated,
+%% so a receiver takes the relay's origin as their sender. Every other relayed type keeps its own verification.
+-spec relayed_without_signature(atom()) -> boolean().
+relayed_without_signature(FrameType) ->
+    lists:member(FrameType, [hyparview_join, hyparview_forward_join, hyparview_neighbor, hyparview_shuffle]).
 
 %% @doc Whether a profile neighbour-signs a frame type.
 -spec neighbour_signed(macula_crypto_profile:profile(), frame_type()) -> boolean().
