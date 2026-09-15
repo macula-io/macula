@@ -48,7 +48,7 @@
 
     %% Constructors — CALL (Part 6 §5)
     call/2, result/2, provider_error/2, relay_error/2,
-    verify_request/2, verify_reply/3, verify_relay_error/3,
+    verify_request/2, verify_reply/3, verify_relay_error/4, claimed_reply_ids/1,
 
     %% Constructors — HyParView (Part 3 §7.1)
     hyparview_join/1, hyparview_forward_join/1, hyparview_neighbor/1,
@@ -1105,34 +1105,70 @@ relay_code(true) -> ok.
 optional_hop(#{offending_hop := Hop}, Fields) when byte_size(Hop) =:= 32 -> Fields#{offending_hop => Hop};
 optional_hop(Spec, Fields) when not is_map_key(offending_hop, Spec) -> Fields.
 
-%% @doc Verify a received relay error for the pending request it names: its signature and fields, reported_by as the
-%% key id of its key, and the request's request_id and request_hash.
--spec verify_relay_error(frame(), verified_request(), macula_crypto_profile:profile()) ->
-        {ok, map()} | {error, malformed_frame | signature_invalid | key_id_mismatch | request_mismatch}.
-verify_relay_error(#{frame_type := Type, relay_error := Signed} = Frame, Request, Profile)
+%% @doc Verify a received relay error for the pending request it names, from the station the connection authenticated:
+%% its signature and fields, reported_by as the key id of its key, the request's request_id and request_hash, and
+%% reported_by as `ExpectedReporter', that station's node_id. A relay error another station reports is refused as
+%% not_the_connection.
+-spec verify_relay_error(frame(), verified_request(), macula_crypto_profile:profile(), <<_:256>>) ->
+        {ok, map()} | {error, malformed_frame | signature_invalid | key_id_mismatch | request_mismatch
+                                                                    | not_the_connection}.
+verify_relay_error(#{frame_type := Type, relay_error := Signed} = Frame, Request, Profile, ExpectedReporter)
   when Type =:= error; Type =:= stream_error ->
     relay_signed(only_fields(Frame, [version, frame_type, relay_error, source_route_partial]),
-                 macula_signed_object:verify(?RELAY_ERROR_LABEL, Signed, Profile), Type, Request, Profile);
-verify_relay_error(_Frame, _Request, _Profile) ->
+                 macula_signed_object:verify(?RELAY_ERROR_LABEL, Signed, Profile), Type, Request, Profile,
+                 ExpectedReporter);
+verify_relay_error(_Frame, _Request, _Profile, _ExpectedReporter) ->
     {error, malformed_frame}.
 
-relay_signed(true, {ok, #{key := Key, fields := Fields}}, Type, Request, Profile) ->
-    relay_read(read_fields(maps:to_list(Fields), relay_error_table(Type), #{}), Key, Type, Request, Profile);
-relay_signed(true, {error, signature_invalid}, _Type, _Request, _Profile) ->
+relay_signed(true, {ok, #{key := Key, fields := Fields}}, Type, Request, Profile, Expected) ->
+    relay_read(read_fields(maps:to_list(Fields), relay_error_table(Type), #{}), Key, Type, Request, Profile, Expected);
+relay_signed(true, {error, signature_invalid}, _Type, _Request, _Profile, _Expected) ->
     {error, signature_invalid};
-relay_signed(_OnlyFields, _Verified, _Type, _Request, _Profile) ->
+relay_signed(_OnlyFields, _Verified, _Type, _Request, _Profile, _Expected) ->
     {error, malformed_frame}.
 
 relay_read({ok, #{frame_type := Type, request_id := RequestId, request_hash := RequestHash, reported_by := ReportedBy,
-                  code := _} = Read}, Key, Type, Request, Profile) ->
+                  code := _} = Read}, Key, Type, Request, Profile, Expected) ->
     relay_checked([ReportedBy =:= macula_node_keys:node_id(Key, Profile),
-                   {RequestId, RequestHash} =:= request_names(Request)], Read);
-relay_read(_NotARelayError, _Key, _Type, _Request, _Profile) ->
+                   {RequestId, RequestHash} =:= request_names(Request),
+                   ReportedBy =:= Expected], Read);
+relay_read(_NotARelayError, _Key, _Type, _Request, _Profile, _Expected) ->
     {error, malformed_frame}.
 
 relay_checked([false | _], _Read) -> {error, key_id_mismatch};
-relay_checked([true, false], _Read) -> {error, request_mismatch};
-relay_checked([true, true], Read) -> {ok, maps:without([alg, request_id, request_hash], Read)}.
+relay_checked([true, false | _], _Read) -> {error, request_mismatch};
+relay_checked([true, true, false], _Read) -> {error, not_the_connection};
+relay_checked([true, true, true], Read) -> {ok, maps:without([alg, request_id, request_hash], Read)}.
+
+%% @doc The request_id and request_hash a received reply names, read without verifying it: a RESULT or ERROR carrying
+%% reply, or an ERROR or STREAM_ERROR carrying relay_error. The ids are a key for finding the pending request, and
+%% nothing more: verify_reply/3 or verify_relay_error/4 against that request decides whether the frame answers it. The
+%% frame's fields and the signed object's shape are checked as the verifiers check them, and the tbs is read with the
+%% same strict decoding and field table, so ids of another length or shape never come back. Anything else is
+%% malformed_frame.
+-spec claimed_reply_ids(frame()) ->
+        {ok, #{request_id := <<_:128>>, request_hash := <<_:384>>}} | {error, malformed_frame}.
+claimed_reply_ids(#{frame_type := Type, reply := Object} = Frame) when Type =:= result; Type =:= error ->
+    claimed(only_fields(Frame, [version, frame_type, reply, source_route_reverse]), Object, reply_table(Type), Type);
+claimed_reply_ids(#{frame_type := Type, relay_error := Object} = Frame) when Type =:= error; Type =:= stream_error ->
+    claimed(only_fields(Frame, [version, frame_type, relay_error, source_route_partial]), Object,
+            relay_error_table(Type), Type);
+claimed_reply_ids(_Frame) ->
+    {error, malformed_frame}.
+
+claimed(true, #{key := Key, tbs := Tbs, signature := Signature} = Object, Table, Type)
+  when map_size(Object) =:= 3, is_binary(Key), is_binary(Tbs), is_binary(Signature) ->
+    claimed_ids(claimed_fields(macula_record_cbor:decode_strict(Tbs), Table), Type);
+claimed(_OnlyFields, _Object, _Table, _Type) ->
+    {error, malformed_frame}.
+
+claimed_fields({ok, Fields}, Table) when is_map(Fields) -> read_fields(maps:to_list(Fields), Table, #{});
+claimed_fields(_NotAMap, _Table) -> error.
+
+claimed_ids({ok, #{frame_type := Type, request_id := RequestId, request_hash := RequestHash}}, Type) ->
+    {ok, #{request_id => RequestId, request_hash => RequestHash}};
+claimed_ids(_NoIds, _Type) ->
+    {error, malformed_frame}.
 
 relay_error_table(Type) ->
     #{<<"frame_type">> => {frame_type, {enum, [Type]}},
