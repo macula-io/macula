@@ -726,7 +726,7 @@ unsolved(false, Key) -> Key;
 unsolved(true, _Key) -> unsolved_identity().
 
 issuer(Key, Clock) ->
-    {ok, Issuer} = macula_statement_issuer:start_link(#{identity => Key, owner => self(), clock => Clock}),
+    {ok, Issuer} = macula_statement_issuer:start_link(#{identity => fun() -> Key end, owner => self(), clock => Clock}),
     Issuer.
 
 clock(Start) ->

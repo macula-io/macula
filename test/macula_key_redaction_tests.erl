@@ -114,12 +114,48 @@ the_status_of_a_pubsub_registry_carries_no_private_key_test() ->
 the_status_of_a_statement_issuer_carries_no_private_key_test() ->
     Identity = key(),
     {ok, Tls} = macula_node_keys:generate(tls, profile()),
-    {ok, Issuer} = macula_statement_issuer:start_link(#{identity => Identity, owner => self()}),
+    {ok, Issuer} = macula_statement_issuer:start_link(#{identity => fun() -> Identity end, owner => self()}),
     ok = macula_statement_issuer:register_tls_leaf(Issuer, <<"a leaf">>, Tls),
     #{connect_key := Connect} = macula_statement_issuer:connect_material(Issuer),
     Status = sys:get_status(Issuer),
     ok = gen_server:stop(Issuer),
     assert_no_private_half(Status, privates(Identity) ++ privates(Tls) ++ privates(Connect)).
+
+%% A start the issuer refuses, here for a key that is no identity key, returns the refusal and reports nothing that
+%% holds the key: the key reached the issuer only as a function that returns it.
+a_refused_issuer_start_carries_no_private_key_test() ->
+    started(),
+    {ok, Connect} = macula_node_keys:generate(connect, profile()),
+    Test = self(),
+    Events = captured(fun() ->
+                          Test ! {start_returned, catch macula_statement_issuer_sup:start_issuer(fun() -> Connect end,
+                                                                                                self())}
+                      end),
+    Returned = receive {start_returned, Result} -> Result after 0 -> no_return end,
+    ?assertEqual({error, {identity, not_an_identity_key}}, Returned),
+    ?assertEqual([], exposed({Returned, Events}, privates(Connect))).
+
+the_status_of_a_pool_carries_no_private_key_test() ->
+    started(),
+    Key = key(),
+    {ok, Pool} = macula_client:connect([], #{node_identity => Key}),
+    Status = sys:get_status(Pool),
+    ok = macula_client:close(Pool),
+    ?assertEqual([], exposed(Status, privates(Key))).
+
+the_status_of_a_station_link_carries_no_private_key_test() ->
+    started(),
+    Key = key(),
+    {ok, NodeId} = macula_node_keys:node_id(Key),
+    Issuer = spawn(fun() -> receive stop -> ok end end),
+    {ok, Link} = macula_station_link:start_link(#{seed => #{host => <<"127.0.0.1">>, port => 1,
+                                                            expected_node_id => NodeId},
+                                                  node_identity => fun() -> Key end, issuer => Issuer,
+                                                  connect => fun(_PeeringOpts) -> {error, not_dialed_here} end}),
+    Status = sys:get_status(Link),
+    ok = macula_station_link:stop(Link),
+    Issuer ! stop,
+    assert_no_private_half(Status, privates(Key)).
 
 %%------------------------------------------------------------------
 %% Crash and diagnostics reports, through the application's filter

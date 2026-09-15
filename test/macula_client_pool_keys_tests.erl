@@ -1,43 +1,94 @@
 %% EUnit tests for the pool's keys, identity migration step 3 on the pool side. A pool holds, in the node's crypto
-%% profile, one node identity key that every link shares and one CONNECT key of its own, and starts every link with the
-%% link start options profile, node_identity and connect_key. The tests stop at macula_station_link:start_link/1: what a
-%% link does with those options is the connection side's.
+%% profile, one node identity key that every link shares, and a statement issuer of its own under
+%% macula_statement_issuer_sup that holds the pool's CONNECT key. Every link holds that key, that profile and that
+%% issuer, and no classical identity. The issuer ends with its pool, and a pool whose issuer ends starts a new one and
+%% respawns its links with it. The links are real: their state is read by field name, and their seeds name node_ids
+%% nothing answers for, so nothing connects.
 -module(macula_client_pool_keys_tests).
 
 -include_lib("eunit/include/eunit.hrl").
 
 %% A pq_hybrid key carries an RSA-4096 half, which takes up to about a second to generate.
 -define(EU_TIMEOUT, 120).
--define(SEED1, #{host => <<"127.0.0.1">>, port => 1}).
--define(SEED2, #{host => <<"127.0.0.1">>, port => 2}).
+%% The issuer restart backoff reaches 5 s, and a link respawns a second after it ends.
+-define(RESPAWN_MS, 15_000).
 
 %%------------------------------------------------------------------
-%% The link start options
+%% What every link holds
 %%------------------------------------------------------------------
 
-link_start_options_test_() ->
-    {timeout, ?EU_TIMEOUT, {setup, fun started_links/0, fun stop_links/1, fun link_cases/1}}.
+link_keys_test_() ->
+    {timeout, ?EU_TIMEOUT, {setup, fun started_pool/0, fun stop_pool/1, fun link_cases/1}}.
 
-link_cases(#{profile := Profile, links := [#{opts := First}, #{opts := Second}]}) ->
-    [{"every link starts with the node's crypto profile",
-      ?_assertEqual([Profile, Profile], [maps:get(profile, Opts, undefined) || Opts <- [First, Second]])},
-     {"every link starts with an identity key in that profile",
-      ?_assertMatch(#{node_identity := #{purpose := identity, profile := Profile}}, First)},
-     {"every link starts with a CONNECT key in that profile",
-      ?_assertMatch(#{connect_key := #{purpose := connect, profile := Profile}}, First)},
-     {"the links share one identity key and one CONNECT key", ?_test(assert_shared_keys(First, Second))},
-     {"the CONNECT key shares no half with the identity key", ?_test(assert_separate_keys(First))},
-     {"no link starts with a classical identity",
-      ?_assertEqual([false, false], [maps:is_key(identity, Opts) || Opts <- [First, Second]])}].
+link_cases(#{profile := Profile, pool := Pool}) ->
+    [{"every link holds the node's crypto profile",
+      ?_assertEqual([Profile, Profile], [held(Link, profile) || Link <- links(Pool)])},
+     {"every link holds an identity key in that profile",
+      ?_assertMatch([#{purpose := identity, profile := Profile}, #{purpose := identity, profile := Profile}],
+                    [held(Link, node_identity) || Link <- links(Pool)])},
+     {"every link holds a statement issuer under macula_statement_issuer_sup",
+      ?_test([?assert(lists:member(held(Link, issuer), issuers())) || Link <- links(Pool)])},
+     {"the links share one identity key and one issuer",
+      ?_test(begin
+                 [First, Second] = links(Pool),
+                 ?assertEqual({held(First, node_identity), held(First, issuer)},
+                              {held(Second, node_identity), held(Second, issuer)})
+             end)},
+     {"the issuer's CONNECT key is in that profile and shares no half with the identity key",
+      ?_test(assert_separate_keys(Profile, hd(links(Pool))))},
+     {"no link holds a classical identity",
+      ?_assertError(function_clause, macula_station_link:state_field_index(identity))}].
 
-assert_shared_keys(First, Second) ->
-    ?assertMatch(#{node_identity := _, connect_key := _}, First),
-    ?assertEqual(maps:with([node_identity, connect_key], First), maps:with([node_identity, connect_key], Second)).
-
-assert_separate_keys(#{node_identity := #{components := IdentityHalves},
-                       connect_key := #{components := ConnectHalves}}) ->
+assert_separate_keys(Profile, Link) ->
+    #{components := IdentityHalves} = held(Link, node_identity),
+    #{connect_key := #{purpose := connect, profile := Profile, components := ConnectHalves}} =
+        macula_statement_issuer:connect_material(held(Link, issuer)),
     ConnectPublics = [Public || #{public := Public} <- ConnectHalves],
     ?assertEqual([], [Public || #{public := Public} <- IdentityHalves, lists:member(Public, ConnectPublics)]).
+
+%%------------------------------------------------------------------
+%% The pool's issuer
+%%------------------------------------------------------------------
+
+an_issuer_ends_with_its_pool_test_() ->
+    {timeout, ?EU_TIMEOUT, fun() ->
+        {ok, _Profile} = profile(),
+        Before = issuers(),
+        {ok, Pool} = macula_client:connect([], #{}),
+        [Issuer] = issuers() -- Before,
+        Ref = erlang:monitor(process, Issuer),
+        ok = macula_client:close(Pool),
+        ?assertEqual(normal, receive {'DOWN', Ref, process, Issuer, Reason} -> Reason after 5000 -> still_running end)
+    end}.
+
+two_pools_have_two_issuers_test_() ->
+    {timeout, ?EU_TIMEOUT, fun() ->
+        {ok, _Profile} = profile(),
+        Before = issuers(),
+        {ok, Pool1} = macula_client:connect([], #{}),
+        {ok, Pool2} = macula_client:connect([], #{}),
+        New = issuers() -- Before,
+        ok = macula_client:close(Pool1),
+        ok = macula_client:close(Pool2),
+        ?assertEqual(2, length(New))
+    end}.
+
+%% The pool starts a new issuer once its issuer ends, and only then its links again: every link that runs
+%% afterwards holds the new issuer, and none holds the one that ended.
+a_pool_whose_issuer_ends_respawns_its_links_with_a_new_issuer_test_() ->
+    {timeout, ?EU_TIMEOUT, fun() ->
+        {ok, _Profile} = profile(),
+        {ok, Pool} = macula_client:connect([seed(1)], #{}),
+        [Link] = links(Pool),
+        Ended = held(Link, issuer),
+        exit(Ended, kill),
+        Respawned = respawned(Pool, Link, erlang:monotonic_time(millisecond) + ?RESPAWN_MS),
+        New = held(Respawned, issuer),
+        ok = macula_client:close(Pool),
+        ?assertNotEqual(Ended, New),
+        ?assert(lists:member(New, issuers()) orelse not is_process_alive(New)),
+        ?assertNot(is_process_alive(Ended))
+    end}.
 
 %%------------------------------------------------------------------
 %% The node identity key
@@ -104,30 +155,39 @@ profile() ->
 restore_profile({ok, Profile}) ->
     ok = application:set_env(macula, crypto_profile, Profile).
 
-%% A pool of two seeds whose links are stand-ins, with the options each link was started with.
-started_links() ->
+%% The statement issuers running under macula_statement_issuer_sup.
+issuers() ->
+    [Pid || {_Id, Pid, _Type, _Modules} <- supervisor:which_children(macula_statement_issuer_sup), is_pid(Pid)].
+
+%% A pool of two links whose seeds name node_ids nothing answers for.
+started_pool() ->
     {ok, Profile} = profile(),
-    Test = self(),
-    ok = meck:new(macula_station_link, [passthrough]),
-    ok = meck:expect(macula_station_link, start_link, fun(Opts) -> link_started(Test, Opts) end),
-    ok = meck:expect(macula_station_link, stop, fun(Link) -> Link ! stop, ok end),
-    {ok, Pool} = macula_client:connect([?SEED1, ?SEED2], #{}),
-    #{profile => Profile, pool => Pool, links => [started_link(), started_link()]}.
+    {ok, Pool} = macula_client:connect([seed(1), seed(2)], #{}),
+    #{profile => Profile, pool => Pool}.
 
-stop_links(#{pool := Pool, links := Links}) ->
-    ok = macula_client:close(Pool),
-    lists:foreach(fun(#{link := Link}) -> Link ! stop end, Links),
-    meck:unload(macula_station_link).
+stop_pool(#{pool := Pool}) ->
+    ok = macula_client:close(Pool).
 
-%% Stands in for a link: reports the options it was started with, and waits to be stopped.
-link_started(Test, Opts) ->
-    Link = spawn(fun() -> receive stop -> ok end end),
-    Test ! {link_started, Opts, Link},
-    {ok, Link}.
+seed(Port) ->
+    #{host => <<"127.0.0.1">>, port => Port, expected_node_id => crypto:strong_rand_bytes(32)}.
 
-started_link() ->
-    receive
-        {link_started, Opts, Link} -> #{opts => Opts, link => Link}
-    after 60000 ->
-        erlang:error(no_link_started)
-    end.
+%% The pids of the pool's links that run.
+links(Pool) ->
+    {ok, Infos} = macula_client:links(Pool),
+    [Pid || #{pid := Pid} <- Infos, is_pid(Pid)].
+
+%% A field of a link's state, read by name.
+held(Link, Field) ->
+    element(macula_station_link:state_field_index(Field), sys:get_state(Link)).
+
+%% The pool's link that runs in place of Ended, once one does, before Deadline.
+respawned(Pool, Ended, Deadline) ->
+    respawned_in_time(erlang:monotonic_time(millisecond) < Deadline, links(Pool) -- [Ended], Pool, Ended, Deadline).
+
+respawned_in_time(_InTime, [Link], _Pool, _Ended, _Deadline) ->
+    Link;
+respawned_in_time(true, [], Pool, Ended, Deadline) ->
+    receive after 100 -> ok end,
+    respawned(Pool, Ended, Deadline);
+respawned_in_time(false, Links, _Pool, _Ended, _Deadline) ->
+    erlang:error({no_respawned_link, Links}).

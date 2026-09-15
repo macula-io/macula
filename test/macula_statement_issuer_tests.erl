@@ -33,7 +33,8 @@ cases(Identity) ->
                  fun a_restarted_issuer_without_a_key_directory_starts_a_new_binding/1,
                  fun the_issuer_never_writes_the_identity_key/1,
                  fun saved_connect_and_tls_key_files_are_readable_by_their_owner_only_after_a_rotation/1,
-                 fun a_key_directory_the_issuer_makes_is_readable_by_its_owner_only/1]].
+                 fun a_key_directory_the_issuer_makes_is_readable_by_its_owner_only/1,
+                 fun the_issuer_ends_when_its_owner_does/1]].
 
 %%------------------------------------------------------------------
 %% Cases
@@ -50,6 +51,15 @@ connect_material_is_bound_and_stated_from_the_start(Identity) ->
     ?assertMatch({ok, #{expires_at := ?T0 + ?HOUR}},
                  macula_key_bindings:verify_status(Status, Binding, public(Identity), pq_pure, ?T0)),
     gen_server:stop(Issuer).
+
+%% An issuer serves one owner, a pool or a station, and ends with it, so no issuer and no key it holds outlives the
+%% process it was started for.
+the_issuer_ends_when_its_owner_does(Identity) ->
+    Owner = spawn(fun() -> receive stop -> ok end end),
+    {ok, Issuer} = macula_statement_issuer:start_link(#{identity => fun() -> Identity end, owner => Owner}),
+    Ref = erlang:monitor(process, Issuer),
+    Owner ! stop,
+    ?assertEqual(normal, receive {'DOWN', Ref, process, Issuer, Reason} -> Reason after 5000 -> still_running end).
 
 a_statement_is_reissued_every_15_minutes_and_valid_for_an_hour(Identity) ->
     {Tab, Clock} = clock(),
@@ -231,8 +241,10 @@ clock() ->
 set_time(Tab, Ms) ->
     true = ets:insert(Tab, {now, Ms}).
 
+%% The identity key reaches the issuer as a function that returns it, never as a start argument of its own.
 start(Identity, Clock, Extra) ->
-    {ok, Issuer} = macula_statement_issuer:start_link(Extra#{identity => Identity, owner => self(), clock => Clock}),
+    {ok, Issuer} = macula_statement_issuer:start_link(Extra#{identity => fun() -> Identity end, owner => self(),
+                                                             clock => Clock}),
     Issuer.
 
 tick_at(Issuer, Tab, Ms) ->
