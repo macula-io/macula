@@ -226,7 +226,62 @@ crash_reports_carry_no_private_key_test_() ->
       {"a key map in the message queue at the crash", fun a_key_map_in_the_message_queue/0},
       {"a supervised child's crash", fun a_supervised_child_crash/0},
       {"a diagnostics event whose reason carries a crash", fun a_diagnostics_reason/0},
-      {"a host module's function_clause keeps its arguments", fun a_host_function_clause_keeps_its_arguments/0}]}.
+      {"a host module's function_clause keeps its arguments", fun a_host_function_clause_keeps_its_arguments/0},
+      {"a station link that crashes with its state in its reason", fun a_station_link_crash/0}]}.
+
+%% A station link that crashes with its state, which holds its node key, in its reason: through the application's
+%% filter, neither its terminate report nor proc_lib's crash report holds any form of the key, in the event or in its
+%% formatted text.
+a_station_link_crash() ->
+    started(),
+    Key = key(),
+    Events = captured(fun() -> crash_a_link(Key) end),
+    ?assertEqual([], [{gen_server, terminate}, {proc_lib, crash}] -- [label(Event) || Event <- Events]),
+    ?assertEqual([], leaks(Events, Key)).
+
+%% Every event that holds a form of `Key''s secret slices, as its label and how many forms its term and its formatted
+%% text hold, so a failure names the event and not the bytes.
+leaks(Events, Key) ->
+    [{label(Event), length(macula_key_leak_sample:found([term_to_binary(Event)], Key)),
+      length(macula_key_leak_sample:found([formatted(Event)], Key))}
+     || Event <- Events, macula_key_leak_sample:found([term_to_binary(Event), formatted(Event)], Key) =/= []].
+
+%% Starts a station link holding `Key', connected in its own state to this process, turns its refusal report into its
+%% whole state, and hands it a reply to a request it does not hold: refusing that reply crashes the link in a function
+%% whose arguments carry the state.
+crash_a_link(Key) ->
+    Trapping = process_flag(trap_exit, true),
+    {ok, NodeId} = macula_node_keys:node_id(Key),
+    Issuer = spawn(fun() -> receive stop -> ok end end),
+    {ok, Link} = macula_station_link:start_link(#{seed => #{host => <<"127.0.0.1">>, port => 1,
+                                                            expected_node_id => NodeId},
+                                                  node_identity => fun() -> Key end, issuer => Issuer,
+                                                  connect => fun(_PeeringOpts) -> {error, not_dialed_here} end}),
+    Field = fun macula_station_link:state_field_index/1,
+    Peer = self(),
+    _ = sys:replace_state(Link, fun(S) ->
+            Connected = setelement(Field(peer_node_id), setelement(Field(peer_pid), S, Peer), <<1:256>>),
+            setelement(Field(refused_replies), Connected, Connected)
+        end),
+    Link ! {macula_peering, frame, Peer, unheld_reply()},
+    Ended = receive {'EXIT', Link, _Reason} -> ended after 10_000 -> still_running end,
+    Issuer ! stop,
+    _ = process_flag(trap_exit, Trapping),
+    ?assertEqual(ended, Ended).
+
+%% A RESULT that verifies as a reply, to a request no link holds.
+unheld_reply() ->
+    Caller = key(),
+    Provider = key(),
+    Call = macula_frame:call(#{request_id => crypto:strong_rand_bytes(16), realm => <<0:256>>, procedure => <<"x.y">>,
+                               target => macula_node_keys:key_id(Provider),
+                               deadline => erlang:system_time(millisecond) + 5_000, payload => #{}}, Caller),
+    {ok, Request} = macula_frame:verify_request(link_wire(Call), profile()),
+    link_wire(macula_frame:result(#{request => Request, payload => <<"answer">>}, Provider)).
+
+link_wire(Frame) ->
+    {ok, Decoded, <<>>} = macula_frame:decode(macula_frame:encode(Frame)),
+    Decoded.
 
 a_function_clause_in_a_gen_server_callback() ->
     started(),

@@ -289,12 +289,15 @@ Post-quantum work on the `post-quantum` branch. Not on `main`.
   to 600000 milliseconds. Every call ends with one of:
   - its reply;
   - its timeout;
-  - `{error, {disconnected, Reason}}` when the connection closes;
-  - `{error, {link_stopped, Reason}}` when the link stops for any other
+  - `{error, {disconnected, Name}}` when the connection closes, or
+    `{error, {peering_exit, Name}}` when the connection's process exits;
+  - `{error, {link_stopped, Name}}` when the link stops for any other
     reason, which also answers a call that had not reached the link yet.
 
-  A reply after the timeout is counted like one for a request the link
-  does not hold. `not_sent/1` is true only for `not_connected`, `noproc`
+  `Name` is the reason's name as `macula_reason_name:text/1` gives it, such
+  as `<<"normal">>`, `<<"shutdown">>` or `<<"crashed">>`, and nothing else of
+  the reason reaches a caller. A reply after the timeout is counted like one
+  for a request the link does not hold. `not_sent/1` is true only for `not_connected`, `noproc`
   and `{refused, _}`.
 - `macula:call/5` reaches a provider through its verified advertisement
   (`macula_direct_dial`), and so do station discovery and the

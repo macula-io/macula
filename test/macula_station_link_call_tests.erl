@@ -18,6 +18,8 @@
 -define(PEER_PID_INDEX, macula_station_link:state_field_index(peer_pid)).
 -define(PEER_NODE_ID_INDEX, macula_station_link:state_field_index(peer_node_id)).
 -define(NODE_IDENTITY_INDEX, macula_station_link:state_field_index(node_identity)).
+-define(REFUSED_REPLIES_INDEX, macula_station_link:state_field_index(refused_replies)).
+-define(CONTENT_PENDING_INDEX, macula_station_link:state_field_index(content_pending)).
 
 %% A call to `station' is a request to the node_id of the station the link is connected to, signed with the link's node
 %% identity key, carrying the caller's deadline.
@@ -255,7 +257,7 @@ stopping_the_issuer_answers_every_pending_caller_test_() ->
          Issuer = element(macula_station_link:state_field_index(issuer), sys:get_state(Pid)),
          true = exit(Issuer, kill),
          Answer = answer(Ref),
-         ?assertEqual({error, {link_stopped, {shutdown, {issuer_down, killed}}}}, Answer),
+         ?assertEqual({error, {link_stopped, <<"shutdown">>}}, Answer),
          ?assertNot(macula_station_link:not_sent(Answer)),
          ?assertEqual({shutdown, {issuer_down, killed}},
                       receive {'EXIT', Pid, Reason} -> Reason after 1_000 -> no_exit end)
@@ -274,7 +276,7 @@ a_stopping_link_replies_to_its_pending_call_test_() ->
          _ = spawn(fun() -> Test ! {Ref, catch gen_server:call(Pid, Call, 4_500)} end),
          _ = sent_request(Profile),
          ok = macula_station_link:stop(Pid),
-         ?assertEqual({error, {link_stopped, normal}}, answer(Ref))
+         ?assertEqual({error, {link_stopped, <<"normal">>}}, answer(Ref))
      end}}.
 
 %% A call still waiting in the link's mailbox when the link stops gets the same final error, not an exit.
@@ -287,7 +289,7 @@ a_call_waiting_for_a_stopping_link_gets_a_final_error_test_() ->
          ok = call_waiting(Pid, 100),
          ok = macula_station_link:stop(Pid),
          Answer = answer(Ref),
-         ?assertEqual({error, {link_stopped, normal}}, Answer),
+         ?assertEqual({error, {link_stopped, <<"normal">>}}, Answer),
          ?assertNot(macula_station_link:not_sent(Answer))
      end}}.
 
@@ -299,7 +301,62 @@ stopping_the_link_answers_every_pending_caller_test_() ->
          Ref = call_async(Pid, macula_node_keys:key_id(new_key(Profile)), ?PROCEDURE, #{}, 4_000),
          _ = sent_request(Profile),
          ok = macula_station_link:stop(Pid),
-         ?assertEqual({error, {link_stopped, normal}}, answer(Ref))
+         ?assertEqual({error, {link_stopped, <<"normal">>}}, answer(Ref))
+     end}}.
+
+%% A link that crashes answers every pending caller, and every caller whose call still waits in its mailbox, with only
+%% the name of its reason, and no answer holds the link's private key bytes.
+a_crashing_link_tells_its_callers_only_the_name_of_its_reason_test_() ->
+    {spawn, {timeout, 5,
+     fun() ->
+         process_flag(trap_exit, true),
+         {Pid, _StationKey, Profile} = start_link_to_station(),
+         Privates = privates(link_key(Pid)),
+         Provider = macula_node_keys:key_id(new_key(Profile)),
+         Pending = call_async(Pid, Provider, ?PROCEDURE, #{}, 4_000),
+         Request = sent_request(Profile),
+         %% The link's refusal report becomes its whole state, so refusing the forged reply below crashes the link in a
+         %% function whose arguments carry that state.
+         _ = sys:replace_state(Pid, fun(S) -> setelement(?REFUSED_REPLIES_INDEX, S, S) end),
+         ok = sys:suspend(Pid),
+         deliver(Pid, macula_frame:result(#{request => Request, payload => <<"forged">>}, new_key(Profile))),
+         Queued = call_async(Pid, Provider, ?PROCEDURE, #{}, 4_000),
+         ok = call_waiting(Pid, 100),
+         ok = sys:resume(Pid),
+         Answers = [answer(Pending), answer(Queued)],
+         ?assertEqual([{error, {link_stopped, <<"function_clause">>}}, {error, {link_stopped, <<"function_clause">>}}],
+                      Answers),
+         ?assertEqual([], [Private || Private <- Privates, binary:match(term_to_binary(Answers), Private) =/= nomatch])
+     end}}.
+
+%% A link that stops answers a caller waiting on a content stream call as well.
+stopping_the_link_answers_a_content_stream_caller_test_() ->
+    {spawn, {timeout, 5,
+     fun() ->
+         {Pid, _StationKey, _Profile} = start_link_to_station(),
+         Test = self(),
+         Tag = make_ref(),
+         _ = sys:replace_state(Pid, fun(S) ->
+                 setelement(?CONTENT_PENDING_INDEX, S, #{make_ref() => {{Test, Tag}, make_ref()}})
+             end),
+         ok = macula_station_link:stop(Pid),
+         ?assertEqual({error, {link_stopped, <<"normal">>}}, receive {Tag, Reply} -> Reply after 1_000 -> no_reply end)
+     end}}.
+
+%% A content stream call still waiting in the link's mailbox when the link stops gets the same final error, not an exit.
+a_content_stream_call_waiting_for_a_stopping_link_gets_a_final_error_test_() ->
+    {spawn, {timeout, 5,
+     fun() ->
+         {Pid, _StationKey, _Profile} = start_link_to_station(),
+         ok = sys:suspend(Pid),
+         Test = self(),
+         Ref = make_ref(),
+         _ = spawn(fun() ->
+                       Test ! {Ref, macula_station_link:call_on_stream(Pid, make_ref(), ?REALM, ?PROCEDURE, #{}, 4_000)}
+                   end),
+         ok = waiting(Pid, fun({call_on_stream, _, _, _, _, _}) -> true; (_) -> false end, 100),
+         ok = macula_station_link:stop(Pid),
+         ?assertEqual({error, {link_stopped, <<"normal">>}}, answer(Ref))
      end}}.
 
 %% When the link's connection closes, every pending caller is answered at once, and the calls count as sent.
@@ -312,7 +369,7 @@ closing_the_link_answers_every_pending_caller_test_() ->
          _ = [sent_request(Profile) || _ <- Refs],
          Pid ! {macula_peering, disconnected, self(), peer_closed},
          Answers = [answer(Ref) || Ref <- Refs],
-         ?assertEqual([{error, {disconnected, peer_closed}}, {error, {disconnected, peer_closed}}], Answers),
+         ?assertEqual([{error, {disconnected, <<"peer_closed">>}}, {error, {disconnected, <<"peer_closed">>}}], Answers),
          ?assertEqual([false, false], [macula_station_link:not_sent(Answer) || Answer <- Answers])
      end}}.
 
@@ -409,15 +466,23 @@ sent_frame_within(Ms) ->
     end.
 
 %% Waits, for at most `Tries' times 10 ms, until a call waits in the link's mailbox.
-call_waiting(_Pid, 0) ->
-    erlang:error(no_call_waiting);
 call_waiting(Pid, Tries) ->
-    {messages, Messages} = process_info(Pid, messages),
-    call_in(lists:any(fun({'$gen_call', _From, {call, _, _, _, _, _, _}}) -> true; (_) -> false end, Messages),
-            Pid, Tries).
+    waiting(Pid, fun({call, _, _, _, _, _, _}) -> true; (_) -> false end, Tries).
 
-call_in(true, _Pid, _Tries) -> ok;
-call_in(false, Pid, Tries) -> timer:sleep(10), call_waiting(Pid, Tries - 1).
+%% Waits, for at most `Tries' times 10 ms, until a gen_server call whose request `Match' takes waits in the mailbox.
+waiting(_Pid, _Match, 0) ->
+    erlang:error(no_call_waiting);
+waiting(Pid, Match, Tries) ->
+    {messages, Messages} = process_info(Pid, messages),
+    call_in(lists:any(fun({'$gen_call', _From, Request}) -> Match(Request); (_) -> false end, Messages),
+            Pid, Match, Tries).
+
+call_in(true, _Pid, _Match, _Tries) -> ok;
+call_in(false, Pid, Match, Tries) -> timer:sleep(10), waiting(Pid, Match, Tries - 1).
+
+%% The private halves of a node key.
+privates(#{components := Components}) ->
+    [Private || #{private := Private} <- Components].
 
 %% The replies the link refused, counted by reason.
 refused_replies(Pid) ->

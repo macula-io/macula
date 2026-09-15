@@ -79,8 +79,8 @@
 %%   <tr><td>provider ERROR(code=C, detail=D)</td><td>`{error, {call_error, C, D}}', C and D binaries, D `undefined' when absent</td></tr>
 %%   <tr><td>station ERROR, no such next peer</td><td>`{error, {call_error, unknown_next_peer, undefined}}'</td></tr>
 %%   <tr><td>(deadline elapses)</td><td>`{error, timeout}'</td></tr>
-%%   <tr><td>(connection drops)</td><td>`{error, {disconnected, Reason}}' or `{error, {peering_exit, Reason}}'</td></tr>
-%%   <tr><td>(link stops for any other reason, with the call pending or still waiting to reach it)</td><td>`{error, {link_stopped, Reason}}'</td></tr>
+%%   <tr><td>(connection drops)</td><td>`{error, {disconnected, Name}}' or `{error, {peering_exit, Name}}'</td></tr>
+%%   <tr><td>(link stops for any other reason, with the call pending or still waiting to reach it)</td><td>`{error, {link_stopped, Name}}'</td></tr>
 %%   <tr><td>(not connected yet)</td><td>`{error, not_connected}', not sent</td></tr>
 %%   <tr><td>(payload, or procedure text over 512 bytes or not UTF-8, refused before sending)</td><td>`{error, {refused, Reason}}', not sent</td></tr>
 %% </table>
@@ -483,11 +483,12 @@ call(Pid, Target, Realm, Procedure, Payload, TimeoutMs, Token)
         %% The exits of a gen_server call, read as call results. No link
         %% process is `noproc': the call never reached a link. A link that
         %% ended while the call still waited in its mailbox answers
-        %% `{link_stopped, Reason}', as a link that stops answers its pending
-        %% calls, so no stop reads as a call that never went out.
+        %% `{link_stopped, Name}', as a link that stops answers its pending
+        %% calls, so no stop reads as a call that never went out. A caller is
+        %% told the reason's name, as a stream is.
         exit:{timeout, _}                    -> {error, timeout};
         exit:{noproc, _}                     -> {error, noproc};
-        exit:{Reason, {gen_server, call, _}} -> {error, {link_stopped, Reason}}
+        exit:{Reason, {gen_server, call, _}} -> {error, {link_stopped, macula_reason_name:text(Reason)}}
     end.
 
 %% @doc Whether an error from `call/6,7' means the CALL never went out, so
@@ -536,9 +537,10 @@ call_on_stream(Pid, Stream, Realm, Procedure, Payload, TimeoutMs)
                          TimeoutMs},
                         GenTimeout)
     catch
-        exit:{timeout, _} -> {error, timeout};
-        exit:{noproc, _}  -> {error, noproc};
-        exit:{normal, _}  -> {error, gone}
+        %% Read as call/7 reads the exits of its call, the reason by name only.
+        exit:{timeout, _}                    -> {error, timeout};
+        exit:{noproc, _}                     -> {error, noproc};
+        exit:{Reason, {gen_server, call, _}} -> {error, {link_stopped, macula_reason_name:text(Reason)}}
     end.
 
 %% @doc Close a content stream opened via `open_content_stream/1'.
@@ -1322,7 +1324,7 @@ handle_info({macula_peering, disconnected, Pid, Reason},
         peer_pid => Pid,
         reason   => Reason
     }),
-    NewS = fail_all_pending({disconnected, Reason}, cancel_liveness(S)),
+    NewS = fail_all_pending({disconnected, macula_reason_name:text(Reason)}, cancel_liveness(S)),
     %% Stop normally — the supervisor (or owning gen_server) decides
     %% whether to restart us.
     {stop, normal, NewS#state{peer_pid = undefined,
@@ -1446,7 +1448,7 @@ handle_info({'EXIT', Pid, Reason}, #state{peer_pid = Pid, seed = Seed} = S) ->
         peer_pid => Pid,
         reason   => Reason
     }),
-    NewS = fail_all_pending({peering_exit, Reason}, cancel_liveness(S)),
+    NewS = fail_all_pending({peering_exit, macula_reason_name:text(Reason)}, cancel_liveness(S)),
     {stop, normal, NewS#state{peer_pid = undefined,
                               peer_node_id = undefined}};
 
@@ -1494,12 +1496,13 @@ fold_frames(Frames, S) ->
 %% A link ends answering every caller still waiting on it, whatever it ends
 %% for, so no caller waits out its timeout or reads the end as a call that
 %% never went out. A stop that already failed its callers left none waiting.
+%% A caller is told the reason's name only.
 terminate(Reason, #state{peer_pid = Pid} = S) when is_pid(Pid) ->
-    answer_waiting_callers({link_stopped, Reason}, S),
+    answer_waiting_callers({link_stopped, macula_reason_name:text(Reason)}, S),
     try macula_peering:close(Pid, client_stop) catch _:_ -> ok end,
     ok;
 terminate(Reason, S) ->
-    answer_waiting_callers({link_stopped, Reason}, S).
+    answer_waiting_callers({link_stopped, macula_reason_name:text(Reason)}, S).
 
 answer_waiting_callers(Reason, #state{pending = Pending, content_pending = ContentPending}) ->
     maps:foreach(fun(_RequestId, {From, _TRef, _Request}) -> gen_server:reply(From, {error, Reason}) end, Pending),

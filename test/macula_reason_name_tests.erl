@@ -26,6 +26,20 @@ a_reasons_text_is_the_name_at_its_head_test() ->
     ?assertEqual(<<"crashed">>, Text([?MARKER])),
     ?assertEqual(<<"crashed">>, Text(LongName)).
 
+%% A reason's text is an atom's name or <<"crashed">>, never a term the reason carries: a binary, a string, a number or
+%% a composite at any depth stays on this node.
+a_reasons_text_never_carries_a_term_of_the_reason_test() ->
+    Text = fun macula_reason_name:text/1,
+    Stack = [{a_module, a_function, [?MARKER], [{line, 1}]}],
+    Named = [{?MARKER, <<"crashed">>},
+             {{badmatch, ?MARKER}, <<"badmatch">>},
+             {{?MARKER, Stack}, <<"crashed">>},
+             {binary_to_list(?MARKER), <<"crashed">>},
+             {{{?MARKER}, Stack}, <<"crashed">>},
+             {{error, {42, ?MARKER}}, <<"crashed">>}],
+    [?assertEqual({Reason, Name}, {Reason, Text(Reason)}) || {Reason, Name} <- Named],
+    ?assertEqual([], [Reason || {Reason, _} <- Named, binary:match(Text(Reason), ?MARKER) =/= nomatch]).
+
 a_handlers_own_text_crosses_whole_when_it_fits_test() ->
     Reply = fun macula_reason_name:reply_text/1,
     Cafe = "no room at the caf" ++ [16#E9],

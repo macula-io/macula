@@ -593,7 +593,7 @@ disconnect_notifies_subscribers_test_() ->
          Pid ! {macula_peering, disconnected, FakePeer, peer_closed},
          receive
              {macula_event_gone, SubRef, Reason} ->
-                 ?assertMatch({disconnected, peer_closed}, Reason)
+                 ?assertEqual({disconnected, <<"peer_closed">>}, Reason)
          after 2_000 -> erlang:error(no_event_gone)
          end,
          ok
@@ -912,7 +912,7 @@ disconnect_notifies_overlay_subscribers_test_() ->
          receive
              {macula_overlay_gone, R, Reason} ->
                  ?assertEqual(SubRef, R),
-                 ?assertMatch({disconnected, peer_closed}, Reason)
+                 ?assertEqual({disconnected, <<"peer_closed">>}, Reason)
          after 2_000 -> erlang:error(no_overlay_gone)
          end,
          ok
