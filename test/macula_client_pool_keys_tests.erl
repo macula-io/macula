@@ -319,7 +319,7 @@ a_pool_signs_only_records_about_itself_test_() ->
 %% no signature, and anything else. Each refusal comes back while the pool is suspended, so it is made before the
 %% call, and the pool answers its status after.
 nothing_past_the_record_bound_reaches_the_pool_test_() ->
-    {timeout, ?EU_TIMEOUT, fun() ->
+    {timeout, ?EU_TIMEOUT, {spawn, fun() ->
         {ok, Profile} = profile(),
         {ok, Key} = macula_node_keys:generate(identity, Profile),
         {ok, NodeId} = macula_node_keys:node_id(Key),
@@ -344,12 +344,12 @@ nothing_past_the_record_bound_reaches_the_pool_test_() ->
                       {error, record_too_large}, {error, malformed_record}, {error, malformed_record},
                       {error, malformed_record}], Replies),
         ?assertMatch({ok, #{self_node_id := NodeId}}, Status)
-    end}.
+    end}}.
 
 %% Of a record to sign, the pool is sent only its type, created_at, expires_at and payload, and of a signed record to
 %% withdraw only its key, tbs and signature: a receive trace on the pool shows each request as it arrives.
 the_pool_is_sent_only_the_fields_it_signs_from_test_() ->
-    {timeout, ?EU_TIMEOUT, fun() ->
+    {timeout, ?EU_TIMEOUT, {spawn, fun() ->
         {ok, Profile} = profile(),
         {ok, Key} = macula_node_keys:generate(identity, Profile),
         {ok, NodeId} = macula_node_keys:node_id(Key),
@@ -366,12 +366,12 @@ the_pool_is_sent_only_the_fields_it_signs_from_test_() ->
         ?assertMatch([{ok, #{key_id := NodeId}}, {ok, #{type := 16#0C}}], Replies),
         ?assertEqual([{sign_node_record, maps:with([type, created_at, expires_at, payload], Signed)},
                       {withdraw_node_record, maps:with([key, tbs, signature], Signed), shutdown}], Requests)
-    end}.
+    end}}.
 
 %% Every record this node signed that verifies can be withdrawn: one created four minutes ahead, within the clock
 %% tolerance, at its type's maximum lifetime gets a tombstone that verifies.
 a_record_created_ahead_at_its_maximum_lifetime_is_withdrawn_test_() ->
-    {timeout, ?EU_TIMEOUT, fun() ->
+    {timeout, ?EU_TIMEOUT, {spawn, fun() ->
         {ok, Profile} = profile(),
         {ok, Key} = macula_node_keys:generate(identity, Profile),
         {ok, NodeId} = macula_node_keys:node_id(Key),
@@ -385,14 +385,14 @@ a_record_created_ahead_at_its_maximum_lifetime_is_withdrawn_test_() ->
         ?assertMatch({ok, #{type := 16#0C, key_id := NodeId}}, Withdrawn),
         {ok, Tombstone} = Withdrawn,
         ?assertMatch({ok, #{type := 16#0C}}, macula_record:verify(macula_record:encode(Tombstone), Profile))
-    end}.
+    end}}.
 
 %% A pool signs a domain record as its node. Each refusal comes back while the pool is suspended, so before the call: a
 %% type outside 0x20 to 0xFF, a subject that is not a non-empty binary, a lifetime past the domain maximum of 7 days
 %% or running backwards, a payload and subject past 256 KiB together, and a term that is no record. A node record with
 %% a subject is refused before the call too, and sign_node_record/2 still refuses a domain type.
 a_domain_record_is_refused_before_the_call_test_() ->
-    {timeout, ?EU_TIMEOUT, fun() ->
+    {timeout, ?EU_TIMEOUT, {spawn, fun() ->
         {ok, Profile} = profile(),
         {ok, Key} = macula_node_keys:generate(identity, Profile),
         {ok, NodeId} = macula_node_keys:node_id(Key),
@@ -419,12 +419,12 @@ a_domain_record_is_refused_before_the_call_test_() ->
                       {error, malformed_record}, {error, malformed_record}], Replies),
         ?assertEqual({error, not_a_node_signed_type}, NotNodeSigned),
         ?assertMatch({ok, #{self_node_id := NodeId}}, Status)
-    end}.
+    end}}.
 
 %% Of a domain record to sign, the pool is sent only its type, created_at, expires_at, payload and subject: a receive
 %% trace on the pool shows the request as it arrives.
 the_pool_is_sent_only_the_fields_of_a_domain_record_it_signs_from_test_() ->
-    {timeout, ?EU_TIMEOUT, fun() ->
+    {timeout, ?EU_TIMEOUT, {spawn, fun() ->
         {ok, Profile} = profile(),
         {ok, Key} = macula_node_keys:generate(identity, Profile),
         Built = macula_record:envelope(16#20, #{}, #{subject_id => <<"s1">>}),
@@ -439,13 +439,13 @@ the_pool_is_sent_only_the_fields_of_a_domain_record_it_signs_from_test_() ->
         ?assertMatch({ok, #{type := 16#20, subject := <<"s1">>}}, Signed),
         ?assertEqual([{sign_domain_record, maps:with([type, created_at, expires_at, payload, subject], Built)}],
                      Requests)
-    end}.
+    end}}.
 
 %% A domain record lives at most its type's maximum of 7 days: one at 7 days signs as this node and verifies, one a
 %% millisecond longer is refused and never shortened, and one built with no ttl lives within the maximum. Its key id is
 %% the key id of the pool's key as carried, which is not the node_id a node record names.
 a_domain_record_lives_within_its_type_maximum_test_() ->
-    {timeout, ?EU_TIMEOUT, fun() ->
+    {timeout, ?EU_TIMEOUT, {spawn, fun() ->
         {ok, Profile} = profile(),
         {ok, Key} = macula_node_keys:generate(identity, Profile),
         {ok, NodeId} = macula_node_keys:node_id(Key),
@@ -463,14 +463,14 @@ a_domain_record_lives_within_its_type_maximum_test_() ->
         ?assertEqual({error, lifetime_too_long}, Longer),
         {ok, DefaultSigned} = Default,
         ?assert(macula_record:expires_at(DefaultSigned) - macula_record:created_at(DefaultSigned) =< 7 * Day)
-    end}.
+    end}}.
 
 %% A domain record this node signed is withdrawn through the pool on its own slot: the tombstones of a domain record
 %% with a subject and of one without each share their record's storage key, the two records and the node record hold
 %% three different slots, and all four records verify. Each tombstone outlives its record by the clock tolerance, within
 %% the domain maximum plus twice that tolerance.
 a_domain_record_is_withdrawn_on_its_own_slot_test_() ->
-    {timeout, ?EU_TIMEOUT, fun() ->
+    {timeout, ?EU_TIMEOUT, {spawn, fun() ->
         {ok, Profile} = profile(),
         {ok, Key} = macula_node_keys:generate(identity, Profile),
         {ok, NodeId} = macula_node_keys:node_id(Key),
@@ -493,7 +493,59 @@ a_domain_record_is_withdrawn_on_its_own_slot_test_() ->
          || {Withdrawn, Tombstone} <- [{WithSubject, SubjectTombstone}, {Bare, BareTombstone}]],
         ?assert(macula_record:expires_at(BareTombstone) - macula_record:created_at(BareTombstone)
                 =< 7 * Day + 10 * Minute)
-    end}.
+    end}}.
+
+%% The pool checks a domain record in its own process too, so a record handed to it with a direct call is refused by
+%% name as the caller side refuses it, and the pool never signs what no verifier accepts.
+the_pool_refuses_a_domain_record_handed_to_it_directly_test_() ->
+    {timeout, ?EU_TIMEOUT, {spawn, fun() ->
+        {ok, Profile} = profile(),
+        {ok, Key} = macula_node_keys:generate(identity, Profile),
+        {ok, NodeId} = macula_node_keys:node_id(Key),
+        Domain = macula_record:envelope(16#20, #{}, #{}),
+        {ok, Pool} = macula_client:connect([], #{node_identity => Key}),
+        Replies = [gen_server:call(Pool, {sign_domain_record, Handed})
+                   || Handed <- [Domain#{subject => <<>>}, macula_record:node_record(NodeId, [], 0)]],
+        ok = macula_client:close(Pool),
+        ?assertEqual([{error, invalid_subject}, {error, not_a_domain_type}], Replies)
+    end}}.
+
+%% A domain record the pool's key did not sign is not withdrawn: not one another node's identity key signed, and not one
+%% a realm key signed, both of which verify.
+a_domain_record_another_key_signed_is_not_withdrawn_test_() ->
+    {timeout, ?EU_TIMEOUT, {spawn, fun() ->
+        {ok, Profile} = profile(),
+        {ok, Key} = macula_node_keys:generate(identity, Profile),
+        {ok, Other} = macula_node_keys:generate(identity, Profile),
+        {ok, Realm} = macula_node_keys:generate(realm, Profile),
+        Signed = [macula_record:sign(macula_record:envelope(16#20, #{}, #{}), Signer) || Signer <- [Other, Realm]],
+        {ok, Pool} = macula_client:connect([], #{node_identity => Key}),
+        Withdrawals = [macula_client:withdraw_node_record(Pool, Record, shutdown) || Record <- Signed],
+        ok = macula_client:close(Pool),
+        ?assertEqual([{error, not_this_nodes_record}, {error, not_this_nodes_record}], Withdrawals)
+    end}}.
+
+%% Under pq_hybrid a pool signs and withdraws its domain record as under pq_pure: the pool's key and the verified
+%% record's carry the same bytes, and the tombstone verifies on the record's slot.
+a_domain_record_is_withdrawn_under_pq_hybrid_test_() ->
+    {timeout, ?EU_TIMEOUT, {spawn, fun() ->
+        Configured = profile(),
+        ok = application:set_env(macula, crypto_profile, pq_hybrid),
+        try
+            {ok, Key} = macula_node_keys:generate(identity, pq_hybrid),
+            {ok, Pool} = macula_client:connect([], #{node_identity => Key}),
+            Built = macula_record:envelope(16#20, #{}, #{subject_id => <<"s1">>}),
+            Signed = macula_client:sign_domain_record(Pool, Built),
+            {ok, Record} = Signed,
+            Withdrawn = macula_client:withdraw_node_record(Pool, Record, shutdown),
+            ok = macula_client:close(Pool),
+            {ok, Tombstone} = Withdrawn,
+            ?assertEqual(macula_record:storage_key(Record), macula_record:storage_key(Tombstone)),
+            ?assertMatch({ok, _}, macula_record:verify(macula_record:encode(Tombstone), pq_hybrid))
+        after
+            restore_profile(Configured)
+        end
+    end}}.
 
 %%------------------------------------------------------------------
 %% The node identity key

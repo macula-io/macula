@@ -52,6 +52,15 @@ a_tombstone_names_a_withdrawn_type_within_the_type_range_test() ->
     ?assertMatch({ok, _}, macula_record:verify(macula_record:encode(AtTheTop), pq_pure)),
     ?assertEqual({error, malformed}, macula_record:verify(macula_record:encode(Beyond), pq_pure)).
 
+%% A tombstone's slot subject is a non-empty binary as its record's is: a tombstone signed with an empty slot subject
+%% reads as malformed.
+a_tombstone_with_an_empty_slot_subject_is_malformed_test() ->
+    Id = key(),
+    Withdrawn = macula_record:sign(macula_record:envelope(16#20, #{}, #{subject_id => <<"s1">>}), Id),
+    #{payload := Payload} = Tombstone = macula_record:tombstone(Withdrawn, shutdown),
+    Emptied = macula_record:sign(Tombstone#{payload := Payload#{{text, <<"subject">>} => <<>>}}, Id),
+    ?assertEqual({error, malformed}, macula_record:verify(macula_record:encode(Emptied), pq_pure)).
+
 key() ->
     {ok, Key} = macula_node_keys:generate(identity, pq_pure),
     Key.
