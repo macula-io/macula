@@ -124,6 +124,8 @@
 %% A STREAM_ERROR message is text for people of at most 256 bytes, as a
 %% GOODBYE reason is.
 -define(MAX_ERROR_TEXT_BYTES, 256).
+%% The code an abort sends in place of one a STREAM_ERROR cannot carry.
+-define(ABORTED_CODE, <<"aborted">>).
 
 -record(state, {
     id              :: stream_id(),
@@ -258,14 +260,18 @@ set_error(Pid, Reason) ->
 
 %% @doc Abort the stream with a STREAM_ERROR frame. Both sides close;
 %% any pending recv/await_reply waiters receive {error, {Code, Message}}.
-%% A code a STREAM_ERROR cannot carry, over 64 bytes or not UTF-8, is
-%% refused by name before the stream is called, and the stream goes on.
+%% A code a STREAM_ERROR cannot carry, over 64 bytes or not UTF-8, still
+%% aborts the stream, with the code `aborted', and the caller gets the
+%% code's refusal by name, so a call to abort always stops the stream.
 -spec abort(pid(), binary(), binary()) -> ok | {error, {text_too_long | invalid_text, code}}.
 abort(Pid, Code, Message) when is_binary(Code), is_binary(Message) ->
     aborted(macula_frame:text_checked(code, Code), Pid, Code, Message).
 
-aborted(ok, Pid, Code, Message) -> gen_server:call(Pid, {abort, Code, Message});
-aborted({error, _} = Refused, _Pid, _Code, _Message) -> Refused.
+aborted(ok, Pid, Code, Message) ->
+    gen_server:call(Pid, {abort, Code, Message});
+aborted({error, _} = Refused, Pid, _Code, Message) ->
+    ok = gen_server:call(Pid, {abort, ?ABORTED_CODE, Message}),
+    Refused.
 
 %% @doc Hand the stream to `NewOwner'. A stream ends when its owner ends;
 %% after this it ends when `NewOwner' does, and `NewOwner' is told when the
