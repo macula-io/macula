@@ -28,7 +28,8 @@ cases(Keys) ->
                  fun a_failed_write_ends_the_stream_with_a_transport_failure_and_no_report/1,
                  fun a_control_frame_on_a_stream_rejects_the_connection_and_ends_the_stream_in_pq_pure/1,
                  fun a_control_frame_on_a_stream_rejects_the_connection_and_ends_the_stream_in_pq_hybrid/1,
-                 fun the_status_of_a_stream_carries_its_key_with_no_private_half/1]].
+                 fun the_status_of_a_stream_carries_its_key_loader_and_no_key_half/1,
+                 fun a_stream_given_a_key_instead_of_its_loader_does_not_start/1]].
 
 %%------------------------------------------------------------------
 %% Cases
@@ -181,13 +182,25 @@ a_failed_write_ends_the_stream_with_a_transport_failure_and_no_report(#{provider
     ?assertEqual(none, nothing_sent()),
     gen_server:stop(Stream).
 
-the_status_of_a_stream_carries_its_key_with_no_private_half(#{provider := Provider} = Keys) ->
+%% A stream holds its key's loader, a function that returns the key, and calls it each time it signs. Its state holds
+%% no key map, and its status shows the loader as a printed function, so neither half of the key is in it.
+the_status_of_a_stream_carries_its_key_loader_and_no_key_half(#{provider := Provider} = Keys) ->
     Stream = stream(server, Provider, verified_open(Keys, bidi)),
+    State = sys:get_state(Stream),
     Bytes = term_to_binary(sys:get_status(Stream)),
     gen_server:stop(Stream),
     #{components := Components} = Provider,
-    ?assertNotEqual(nomatch, binary:match(Bytes, macula_node_keys:public_key(Provider))),
+    ?assertEqual([], [Held || Held <- tuple_to_list(State), is_map(Held), is_map_key(components, Held)]),
+    ?assertEqual(nomatch, binary:match(Bytes, macula_node_keys:public_key(Provider))),
     ?assertEqual([], [Private || #{private := Private} <- Components, binary:match(Bytes, Private) =/= nomatch]).
+
+%% A stream is given its key only as a loader. One given the key map itself does not start, and the refusal names the
+%% option without carrying the key.
+a_stream_given_a_key_instead_of_its_loader_does_not_start(#{provider := Provider} = Keys) ->
+    Open = verified_open(Keys, bidi),
+    Started = macula_stream:start_link(#{id => ?SID, role => server, mode => bidi, owner => self(), key => Provider,
+                                         open => Open, conn => self(), profile => pq_pure}),
+    ?assertEqual({error, {key, not_a_loader}}, Started).
 
 %%------------------------------------------------------------------
 %% Helpers
@@ -217,8 +230,9 @@ stream(Role, Key, Open) ->
     stream(Role, Key, Open, pq_pure).
 
 stream(Role, Key, #{mode := Mode} = Open, Profile) ->
-    {ok, Pid} = macula_stream:start_link(#{id => ?SID, role => Role, mode => Mode, owner => self(), key => Key,
-                                            open => Open, conn => self(), profile => Profile}),
+    {ok, Pid} = macula_stream:start_link(#{id => ?SID, role => Role, mode => Mode, owner => self(),
+                                            key => fun() -> Key end, open => Open, conn => self(),
+                                            profile => Profile}),
     ok = macula_stream:attach_to_link(Pid, self(), ?SID),
     Pid.
 

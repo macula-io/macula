@@ -478,9 +478,9 @@ a_read_chunk_gives_its_bytes_back_test() ->
         end
     end).
 
-%% A served bidi stream carried by Link, as a link starts one: with the provider's node identity key, the verified
-%% STREAM_OPEN it serves, Link as its connection and the pq_pure profile. It is admitted as a session of Caller and
-%% owned by the test process.
+%% A served bidi stream carried by Link, as a link starts one: with a loader of the provider's node identity key, the
+%% verified STREAM_OPEN it serves, Link as its connection and the pq_pure profile. It is admitted as a session of Caller
+%% and owned by the test process.
 served_stream(Link, Caller) ->
     Provider = stream_node_key(),
     OpenSpec = #{request_id => crypto:strong_rand_bytes(16), realm => <<0:256>>, procedure => <<"acme/count_v1">>,
@@ -489,7 +489,7 @@ served_stream(Link, Caller) ->
     {ok, Open} = macula_frame:verify_request(as_received(macula_frame:stream_open(OpenSpec, stream_node_key())),
                                              pq_pure),
     {ok, Stream} = macula_stream:start_link(#{id => crypto:strong_rand_bytes(16), role => server, mode => bidi,
-                                              owner => self(), key => Provider, open => Open, conn => Link,
+                                              owner => self(), key => fun() -> Provider end, open => Open, conn => Link,
                                               profile => pq_pure}),
     ok = macula_stream:attach_to_link(Stream, Link, crypto:strong_rand_bytes(16)),
     ok = macula_stream_sessions:admit(Caller, Stream),
