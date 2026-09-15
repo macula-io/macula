@@ -258,6 +258,17 @@ Post-quantum work on the `post-quantum` branch. Not on `main`.
   with the SHUFFLE recorded, and the send to a random active neighbour,
   with a sample of the view. `ctx()` carries `now`, in monotonic
   milliseconds.
+- A station link's liveness probe is a `_macula.ping` request to the
+  station it is connected to, and the link keeps the probe's request. Only
+  a reply that verifies against that request clears the probe: a RESULT
+  or provider ERROR through `macula_frame:verify_reply/3`, or a relay
+  ERROR reported by that station through
+  `macula_frame:verify_relay_error/4`. The link finds the request a reply
+  answers by the ids it claims, `macula_frame:claimed_reply_ids/1`. A reply
+  for a request the link does not hold, or one that does not verify,
+  clears nothing; the link counts it by reason and logs the count at most
+  once a minute. As before, the connection closes after
+  `liveness_max_misses` unanswered probes, two by default.
 
 ### Removed
 

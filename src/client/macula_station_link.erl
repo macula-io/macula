@@ -206,8 +206,9 @@
 
 %% App-level liveness probe. Sends a tiny CALL (`_macula.ping' on the
 %% DHT realm, no handler expected — station replies with
-%% `unknown_next_peer') every `?LIVENESS_INTERVAL_MS' and tracks the
-%% outstanding probe's request_id. On `?LIVENESS_MAX_MISSES' consecutive
+%% `unknown_next_peer') every `?LIVENESS_INTERVAL_MS' and keeps the
+%% outstanding probe's request, which only a verified reply from the
+%% connected station clears. On `?LIVENESS_MAX_MISSES' consecutive
 %% misses (i.e. no reply received within the next tick), close
 %% `peer_pid' to force the supervisor / pool layer to respawn a fresh
 %% link. Closes the "QUIC layer keeps connection alive but server
@@ -218,6 +219,9 @@
 -define(LIVENESS_INTERVAL_MS, 30_000).
 -define(LIVENESS_MAX_MISSES,  2).
 -define(LIVENESS_PROCEDURE,   <<"_macula.ping">>).
+%% Replies the link refuses are counted by reason, and logged at most once a
+%% window with the count since the last line.
+-define(REFUSED_REPLIES_WINDOW_MS, 60_000).
 
 %% Grace added on top of `connect_timeout_ms' before the connect
 %% watchdog fires. The dial NIF is meant to bound itself at
@@ -347,12 +351,15 @@
     content_pending = #{}     :: #{reference() => {gen_server:from(), reference()}},
     %% App-level liveness state. `liveness_timer' is the next-tick
     %% reference (or undefined when not armed). `liveness_outstanding'
-    %% holds the request_id of an in-flight probe (or undefined when no
-    %% probe is awaiting reply). `liveness_misses' is the consecutive-
+    %% holds the request_id and the request of an in-flight probe (or
+    %% undefined when no probe is awaiting reply): a reply is checked
+    %% against that request. `liveness_misses' is the consecutive-
     %% miss count; reaches `?LIVENESS_MAX_MISSES' → close peer_pid.
     liveness_timer        :: undefined | reference(),
-    liveness_outstanding  :: undefined | <<_:128>>,
+    liveness_outstanding  :: undefined | {<<_:128>>, macula_frame:verified_request()},
     liveness_misses = 0   :: non_neg_integer(),
+    %% Replies refused before they could clear a probe, counted by reason.
+    refused_replies       :: macula_refusal_report:t(),
     %% Tunable liveness thresholds (start opts `liveness_interval_ms' /
     %% `liveness_max_misses', each defaulting to the module `?LIVENESS_*'
     %% value). A consumer holding many links to variously-loaded stations
@@ -1033,6 +1040,7 @@ started({ok, Seed, Key, Profile, Issuer}, Opts) ->
                       connect_watchdog_ms = WdMs,
                       liveness_interval_ms = LiveMs,
                       liveness_max_misses = LiveMiss,
+                      refused_replies = macula_refusal_report:new(?REFUSED_REPLIES_WINDOW_MS),
                       connect_retry_backoff_ms = RetryMs},
     process_flag(trap_exit, true),
     self() ! attempt_connect,
@@ -1592,6 +1600,15 @@ after_connect_request({error, Reason}, S) ->
     erlang:send_after(S#state.connect_retry_backoff_ms, self(), attempt_connect),
     {noreply, S}.
 
+%% A RESULT or provider ERROR, or a station's relay ERROR, on the control
+%% stream. The request it answers is found by the ids it claims, and the
+%% verifier against that request decides; only a verified answer to the
+%% outstanding probe clears it. Routes are one station long, so a relay
+%% error on a link is reported by the station it is connected to.
+on_frame(#{frame_type := Type, reply := _} = Frame, S) when Type =:= result; Type =:= error ->
+    on_claimed_reply(macula_frame:claimed_reply_ids(Frame), Frame, S);
+on_frame(#{frame_type := error, relay_error := _} = Frame, S) ->
+    on_claimed_reply(macula_frame:claimed_reply_ids(Frame), Frame, S);
 %% RESULT / ERROR. Acted on only once the frame's signature verifies
 %% against the identity it names as its signer (`responded_by' on a
 %% RESULT, `reported_by' on an ERROR); see `on_reply/4'.
@@ -1661,18 +1678,52 @@ deliver_pending({{From, TRef}, NewP}, Reply, S) ->
     S#state{pending = NewP}.
 
 %% A RESULT or ERROR whose signature does not verify against the identity
-%% it names is dropped before it can complete a pending call or clear a
-%% liveness probe, so the call stays pending for the genuine reply.
+%% it names is dropped before it can complete a pending call, so the call
+%% stays pending for the genuine reply.
 on_reply({ok, _Verified}, CallId, Reply, #state{pending = P} = S) ->
-    case maybe_clear_liveness(CallId, S) of
-        {true, NewS}  -> NewS;
-        {false, NewS} -> deliver_pending(maps:take(CallId, P), Reply, NewS)
-    end;
+    deliver_pending(maps:take(CallId, P), Reply, S);
 on_reply({error, Why}, CallId, _Reply, S) ->
     logger:warning("[macula_station_link] dropped reply whose signature does"
                    " not verify against its signer (~p) call_id=~s",
                    [Why, hex_prefix(CallId)]),
     S.
+
+on_claimed_reply({ok, #{request_id := RequestId}}, Frame, S) ->
+    answered(held_request(RequestId, S), Frame, S);
+on_claimed_reply({error, Refusal}, _Frame, S) ->
+    refused_reply(Refusal, S).
+
+%% The request a claimed request_id names: the outstanding probe's, or none the link holds.
+held_request(RequestId, #state{liveness_outstanding = {RequestId, Request}}) -> {probe, Request};
+held_request(_RequestId, _S) -> unknown_request.
+
+answered({probe, Request}, Frame, S) ->
+    probe_answered(verified_answer(Frame, Request, S), S);
+answered(unknown_request, _Frame, S) ->
+    refused_reply(unknown_request, S).
+
+%% A provider's reply verifies against the request, with responded_by its target. A relay error verifies against the
+%% request and must be reported by the station this link is connected to.
+verified_answer(#{reply := _} = Frame, Request, #state{profile = Profile}) ->
+    macula_frame:verify_reply(Frame, Request, Profile);
+verified_answer(#{relay_error := _} = Frame, Request, #state{profile = Profile, peer_node_id = Station}) ->
+    macula_frame:verify_relay_error(Frame, Request, Profile, Station).
+
+probe_answered({ok, _Verified}, S) ->
+    S#state{liveness_outstanding = undefined, liveness_misses = 0};
+probe_answered({error, Refusal}, S) ->
+    refused_reply(Refusal, S).
+
+%% A refused reply changes nothing but its count, and the log hears of it at most once a window.
+refused_reply(Refusal, #state{refused_replies = Report} = S) ->
+    Refused = macula_refusal_report:refused(Report, Refusal, erlang:monotonic_time(millisecond)),
+    S#state{refused_replies = logged_refused_reply(Refused, Refusal)}.
+
+logged_refused_reply({report, Count, Report}, Refusal) ->
+    logger:warning("[macula_station_link] refused ~b reply frame(s): ~p", [Count, Refusal]),
+    Report;
+logged_refused_reply({quiet, Report}, _Refusal) ->
+    Report.
 
 %% A CALL whose signature does not verify against its own `caller' never
 %% reaches its handler and gets no reply.
@@ -1867,10 +1918,12 @@ abort_stream_process(Pid, Reason) ->
 %%      via macula_peering — emits `disconnected', station_link stops,
 %%      pool respawns.
 %%   2. Otherwise (or after counting the miss), send a fresh probe
-%%      (CALL with procedure `_macula.ping' on the DHT realm). The
-%%      station has no such handler, so it replies with an `error'
-%%      frame (`unknown_next_peer'). Either response shape clears the
-%%      outstanding slot via `maybe_clear_liveness/2'.
+%%      (CALL with procedure `_macula.ping' on the DHT realm), and keep
+%%      its request. The station answers with a RESULT, or with a relay
+%%      ERROR (`unknown_next_peer') when it has no such handler. Either
+%%      clears the outstanding slot once it verifies against the probe's
+%%      request (`on_claimed_reply/3'); any other reply is counted in
+%%      `refused_replies' and clears nothing.
 %%   3. Re-arm the timer.
 %% Connect watchdog helpers. Bounds the time from "peering worker
 %% spawned" to "handshake complete". See the record field docs.
@@ -1913,16 +1966,6 @@ cancel_liveness_timer(#state{liveness_timer = Ref} = S) when is_reference(Ref) -
     _ = erlang:cancel_timer(Ref, [{async, true}, {info, false}]),
     S#state{liveness_timer = undefined}.
 
-%% Called on every inbound RESULT / ERROR. If the call_id matches the
-%% outstanding liveness probe, reset miss counter; tells the caller
-%% (on_frame) not to deliver to user-pending logic.
-maybe_clear_liveness(CallId, #state{liveness_outstanding = CallId} = S)
-        when CallId =/= undefined ->
-    {true, S#state{liveness_outstanding = undefined,
-                   liveness_misses = 0}};
-maybe_clear_liveness(_CallId, S) ->
-    {false, S}.
-
 on_liveness_tick(#state{peer_pid = undefined} = S) ->
     %% Not connected — don't probe, don't re-arm.
     cancel_liveness(S);
@@ -1940,7 +1983,7 @@ on_liveness_tick(S0) ->
 on_outstanding_check(undefined, S) ->
     %% No prior probe pending; nothing to count.
     S;
-on_outstanding_check(_CallId, S) ->
+on_outstanding_check(_Probe, S) ->
     %% Prior probe never got a reply within the tick interval.
     Misses = S#state.liveness_misses + 1,
     case Misses >= S#state.liveness_max_misses of
@@ -1959,16 +2002,18 @@ trigger_zombie_close(#state{peer_pid = Pid} = S) when is_pid(Pid) ->
 trigger_zombie_close(S) ->
     S.
 
-%% The probe is a request to the station the link is connected to, signed with the node identity key. Its request_id is
-%% what a verified reply to it clears.
-send_probe(#state{peer_pid = Pid, peer_node_id = Station, node_identity = Key} = S) when is_pid(Pid) ->
+%% The probe is a request to the station the link is connected to, signed with the node identity key. The link keeps its
+%% request_id and the request as a verifier reads it, which a reply to the probe is checked against.
+send_probe(#state{peer_pid = Pid, peer_node_id = Station, node_identity = Key, profile = Profile} = S)
+  when is_pid(Pid) ->
     RequestId = crypto:strong_rand_bytes(16),
     Probe = macula_frame:call(#{request_id => RequestId, realm => ?DHT_REALM, procedure => ?LIVENESS_PROCEDURE,
                                 target => Station,
                                 deadline => erlang:system_time(millisecond) + S#state.liveness_interval_ms,
                                 payload => #{}}, Key),
+    {ok, Request} = macula_frame:verify_request(Probe, Profile),
     try macula_peering:send_frame(Pid, Probe) catch _:_ -> ok end,
-    S#state{liveness_outstanding = RequestId};
+    S#state{liveness_outstanding = {RequestId, Request}};
 send_probe(S) ->
     S.
 
