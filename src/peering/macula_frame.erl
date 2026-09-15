@@ -1978,12 +1978,14 @@ validate_manifest_payload(M) when is_map(M) -> ok.
 -spec control_frame(frame_type()) -> boolean().
 control_frame(FrameType) -> lists:member(FrameType, ?NEIGHBOUR_SIGNED).
 
-%% @doc Whether a relayed frame of this type is taken without a frame signature: the HyParView JOIN, FORWARD_JOIN,
-%% NEIGHBOR and SHUFFLE that D17 leaves unsigned in pq_pure. A station relays them from a connection it authenticated,
-%% so a receiver takes the relay's origin as their sender. Every other relayed type keeps its own verification.
+%% @doc Whether a relayed frame of this type is taken without a frame signature: every HyParView frame, JOIN,
+%% FORWARD_JOIN, NEIGHBOR, DISCONNECT, SHUFFLE and SHUFFLE_REPLY, which D17 leaves unsigned in pq_pure. A station
+%% relays them from a connection it authenticated, so a receiver takes the relay's origin as their sender. Every other
+%% relayed type keeps its own verification.
 -spec relayed_without_signature(atom()) -> boolean().
 relayed_without_signature(FrameType) ->
-    lists:member(FrameType, [hyparview_join, hyparview_forward_join, hyparview_neighbor, hyparview_shuffle]).
+    lists:member(FrameType, [hyparview_join, hyparview_forward_join, hyparview_neighbor, hyparview_disconnect,
+                             hyparview_shuffle, hyparview_shuffle_reply]).
 
 %% @doc Whether a profile neighbour-signs a frame type.
 -spec neighbour_signed(macula_crypto_profile:profile(), frame_type()) -> boolean().
