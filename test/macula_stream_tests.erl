@@ -122,6 +122,42 @@ late_await_reply(Ending, How) ->
     ?assertEqual(gone, peer_gone_within(Stream, 1_000)),
     ?assertEqual(How, macula_stream:await_reply(Stream, 100)).
 
+%% Once its session has ended with nothing left to read, a stream's recv
+%% returns eof only after a clean close. The peer's abort and the peer ending
+%% read as how the session ended, so a cut-off stream never reads as complete.
+a_late_recv_gets_how_the_session_ended_test_() ->
+    [{"after the peer aborts, and then ends",
+      fun() -> late_recv(abort, {error, {<<"stop">>, <<"why">>}}) end},
+     {"after the peer closes both sides, and then ends",
+      fun() -> late_recv(close, eof) end},
+     {"after the peer ends without a word",
+      fun() -> late_recv(peer_ends, {error, peer_down}) end}].
+
+late_recv(Ending, How) ->
+    {Stream, Peer, PeerOwner} = paired_streams(self()),
+    _ = end_session_from_peer(Ending, Peer, PeerOwner),
+    {told, _} = told(Stream, 1_000),
+    end_owner(PeerOwner, kill),
+    ?assertEqual(gone, peer_gone_within(Stream, 1_000)),
+    ?assertEqual(How, macula_stream:recv(Stream, 100)).
+
+%% A reply that arrives after the session has ended with a result takes no
+%% effect: await_reply still returns how the session ended.
+a_late_reply_keeps_how_the_session_ended_test_() ->
+    [{"after the peer aborts",
+      fun() -> reply_after_the_end(abort, {error, {<<"stop">>, <<"why">>}}) end},
+     {"after the peer closes both sides",
+      fun() -> reply_after_the_end(close, {error, peer_closed}) end}].
+
+reply_after_the_end(Ending, How) ->
+    {Stream, Peer, PeerOwner} = paired_streams(self()),
+    _ = end_from_peer(Ending, Peer),
+    {told, _} = told(Stream, 1_000),
+    ok = macula_stream:deliver_reply(Stream, {ok, <<"late">>}),
+    Reply = macula_stream:await_reply(Stream, 100),
+    end_owner(PeerOwner, normal),
+    ?assertEqual(How, Reply).
+
 end_session_from_peer(peer_ends, _Peer, PeerOwner) ->
     end_owner(PeerOwner, kill);
 end_session_from_peer(Ending, Peer, _PeerOwner) ->

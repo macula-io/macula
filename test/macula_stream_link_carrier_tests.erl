@@ -20,6 +20,9 @@ cases(Keys) ->
                  fun a_frame_with_a_bad_signature_gives_one_charged_report_and_the_stream_carries_on/1,
                  fun an_out_of_order_frame_gives_one_uncharged_report/1,
                  fun a_frame_after_the_peer_ended_gives_one_uncharged_report/1,
+                 fun a_reply_after_an_error_gives_one_uncharged_report_and_await_reply_keeps_the_error/1,
+                 fun a_frame_after_an_abort_gives_one_uncharged_report/1,
+                 fun a_reader_gets_the_data_then_the_error_and_never_eof/1,
                  fun a_frame_for_another_request_gives_one_uncharged_report/1,
                  fun set_error_sends_stream_error_with_the_reason_as_bounded_text/1,
                  fun a_failed_write_ends_the_stream_with_a_transport_failure_and_no_report/1,
@@ -108,6 +111,46 @@ a_frame_after_the_peer_ended_gives_one_uncharged_report(#{caller := Caller, prov
     ?assertEqual(eof, macula_stream:recv(Stream, 1000)),
     gen_server:stop(Stream).
 
+%% Once the session has ended, the peer's later frames take no effect: a STREAM_REPLY after the provider's
+%% STREAM_ERROR, which the verifier still accepts, gives one uncharged stream_ended report, and await_reply returns the
+%% error.
+a_reply_after_an_error_gives_one_uncharged_report_and_await_reply_keeps_the_error(#{caller := Caller,
+                                                                                   provider := Provider} = Keys) ->
+    Open = verified_open(Keys, bidi),
+    Stream = stream(client, Caller, Open),
+    ok = macula_stream:deliver_frame(Stream, provider_frame(error_frame(0), Provider, Open)),
+    ok = macula_stream:deliver_frame(Stream, provider_frame(reply_frame(1), Provider, Open)),
+    ?assertEqual({stream_ended, false}, reported()),
+    ?assertEqual(none, no_more_reports()),
+    ?assertEqual({error, {<<"stop">>, <<"why">>}}, macula_stream:await_reply(Stream, 1000)),
+    gen_server:stop(Stream).
+
+%% A stream this side aborted has ended too: the provider's later STREAM_REPLY gives one uncharged stream_ended
+%% report, and await_reply and recv return the abort.
+a_frame_after_an_abort_gives_one_uncharged_report(#{caller := Caller, provider := Provider} = Keys) ->
+    Open = verified_open(Keys, bidi),
+    Stream = stream(client, Caller, Open),
+    ok = macula_stream:abort(Stream, <<"stop">>, <<"why">>),
+    {#{frame_type := stream_error}, _Last} = sent(),
+    ok = macula_stream:deliver_frame(Stream, provider_frame(reply_frame(0), Provider, Open)),
+    ?assertEqual({stream_ended, false}, reported()),
+    ?assertEqual(none, no_more_reports()),
+    ?assertEqual({error, {<<"stop">>, <<"why">>}}, macula_stream:await_reply(Stream, 1000)),
+    ?assertEqual({error, {<<"stop">>, <<"why">>}}, macula_stream:recv(Stream, 1000)),
+    gen_server:stop(Stream).
+
+%% A stream cut off by the provider's STREAM_ERROR never reads as complete: a reader gets the data that arrived, then
+%% the error on every later read, and never eof.
+a_reader_gets_the_data_then_the_error_and_never_eof(#{caller := Caller, provider := Provider} = Keys) ->
+    Open = verified_open(Keys, bidi),
+    Stream = stream(client, Caller, Open),
+    ok = macula_stream:deliver_frame(Stream, provider_frame(chunk(0, <<"one">>), Provider, Open)),
+    ok = macula_stream:deliver_frame(Stream, provider_frame(error_frame(1), Provider, Open)),
+    ?assertEqual([{chunk, <<"one">>}, {error, {<<"stop">>, <<"why">>}}, {error, {<<"stop">>, <<"why">>}}],
+                 [macula_stream:recv(Stream, 1000) || _Read <- [first, second, third]]),
+    ?assertEqual(none, no_more_reports()),
+    gen_server:stop(Stream).
+
 a_frame_for_another_request_gives_one_uncharged_report(#{caller := Caller, provider := Provider} = Keys) ->
     Open = verified_open(Keys, bidi),
     Other = verified_request(Caller, (open_spec(Keys, bidi))#{request_id => <<8:128>>}),
@@ -181,6 +224,12 @@ stream(Role, Key, #{mode := Mode} = Open, Profile) ->
 
 chunk(Seq, Body) ->
     #{frame_type => stream_data, seq => Seq, encoding => raw, body => Body}.
+
+error_frame(Seq) ->
+    #{frame_type => stream_error, seq => Seq, code => <<"stop">>, message => <<"why">>}.
+
+reply_frame(Seq) ->
+    #{frame_type => stream_reply, seq => Seq, payload => <<"late">>}.
 
 provider_frame(Spec, Provider, Open) ->
     wire(macula_frame:provider_stream(Spec, Provider, Open)).
