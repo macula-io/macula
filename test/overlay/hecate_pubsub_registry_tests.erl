@@ -64,6 +64,25 @@ registry_test_() ->
      ]}.
 
 %%---------------------------------------------------------------------
+%% A registry's identity
+%%---------------------------------------------------------------------
+
+%% A registry's identity is an identity key in the node's configured crypto profile, as a server's is: a key in the
+%% other profile, or a key of another purpose, stops the start by name instead of refusing every relay later.
+a_registry_with_an_identity_it_cannot_use_does_not_start_test_() ->
+    {timeout, 60, fun() ->
+        process_flag(trap_exit, true),
+        {ok, Profile} = macula_crypto_profile:configured(),
+        [Other] = [P || P <- [pq_pure, pq_hybrid], P =/= Profile],
+        {ok, OtherProfileKey} = macula_node_keys:generate(identity, Other),
+        {ok, TlsKey} = macula_node_keys:generate(tls, Profile),
+        ?assertEqual({error, {identity_profile_mismatch, Other, Profile}},
+                     hecate_pubsub_registry:start_link(#{identity => OtherProfileKey})),
+        ?assertEqual({error, {identity, not_an_identity_key}},
+                     hecate_pubsub_registry:start_link(#{identity => TlsKey}))
+    end}.
+
+%%---------------------------------------------------------------------
 %% Per-identity isolation: top-level (no fixture, two registries)
 %%---------------------------------------------------------------------
 
