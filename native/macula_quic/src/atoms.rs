@@ -60,6 +60,16 @@ rustler::atoms! {
     unknown_error,
     error_code_out_of_range,
 
+    // Why a connection closed, as close_reason/1 reports it
+    open,
+    application_closed,
+    transport_closed,
+    transport_error,
+    locally_closed,
+    timed_out,
+    version_mismatch,
+    cids_exhausted,
+
     // Stat keys
     rtt,
     cwnd,

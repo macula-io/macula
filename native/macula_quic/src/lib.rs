@@ -33,6 +33,8 @@ rustler::init!(
         connection::nif_async_open_stream,
         connection::nif_cancel_open_stream,
         connection::nif_close_connection,
+        connection::nif_close_connection_with_code,
+        connection::nif_close_reason,
         connection::nif_async_accept_stream,
         connection::nif_controlling_process_conn,
         connection::nif_peername,

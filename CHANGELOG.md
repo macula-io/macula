@@ -17,6 +17,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `QUIC_CODE_REFUSED` (2), `QUIC_CODE_STREAM_PROTOCOL_ERROR` (3) and
   `QUIC_CODE_REFUSED_BUSY` (4), for a connection a station closes because it
   has no handshake slot free. The codes on the wire do not change.
+- `macula_quic:close_connection/3` closes a connection with an application
+  error code and a reason of at most 256 bytes, which the peer reads with
+  `macula_quic:close_reason/1`. A code that does not fit a QUIC
+  variable-length integer is refused with `{error, error_code_out_of_range}`
+  and a longer reason with `{error, reason_too_long}`; the connection stays
+  open. `close_connection/1` still closes with code 0 and the reason
+  `closed`.
+- `macula_quic:close_reason/1` says why a connection closed, or `open` while
+  it is open: `{application_closed, Code, Reason}` for the peer's
+  application close, `locally_closed` when this side closed it, and the
+  transport's own reason otherwise.
 - `macula_station_link:not_sent/1` says whether an error from `call/5,6`
   means the CALL never went out: the link was not connected yet, there was
   no link process, or the link refused the frame before sending it.
