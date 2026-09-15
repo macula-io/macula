@@ -192,6 +192,10 @@ A tombstone, type tag 0x0C, withdraws one record before that record expires.
 - Within its slot a tombstone replaces only its signer's record with a lower version, and a later record from that
   signer, with a higher version, replaces the tombstone.
 - A station stores or forwards a tombstone only after it verifies.
+- A reader of a slot several signers share takes only the entry of the signer it trusts, found by carried key id
+  without verifying the others (`macula_record:signer_entry/4`), so a tombstone under another key withdraws nothing
+  for it. It verifies at most 4 entries under that key, highest claimed version first. A realm member endorsement is
+  read under the realm key a node pins for the realm (`macula_hyparview_endorsement:slot_endorsement/4`).
 - Its `expires_at` is no earlier than the withdrawn record's, so a replayed copy of that record cannot return after the
   tombstone expires.
 

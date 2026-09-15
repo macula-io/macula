@@ -34,7 +34,8 @@
     tombstone/2, tombstone/3,
     envelope/3
 ]).
--export([sign/2, verify/2, verify/3, refresh/2, encode/1, node_signed/1, payload_bounded/1, wire_bounded/1,
+-export([sign/2, verify/2, verify/3, signer_entry/3, signer_entry/4, refresh/2, encode/1, node_signed/1,
+         payload_bounded/1, wire_bounded/1,
          domain_type/1, domain_record_checked/1]).
 -export([type/1, key/1, key_id/1, version/1, created_at/1, expires_at/1, payload/1, signature/1]).
 -export([payload_field/2, type_procedure_advertisement/0]).
@@ -49,7 +50,7 @@
               realm_stations_opts/0, realm_member_endorsement_opts/0, procedure_advertisement_opts/0,
               content_announcement_opts/0, foundation_seed/0, foundation_seed_list_opts/0,
               foundation_parameter_value/0, foundation_parameter_opts/0, foundation_realm_trust_list_opts/0,
-              foundation_t3_attestation_opts/0, tombstone_opts/0, station_endpoint_opts/0]).
+              foundation_t3_attestation_opts/0, tombstone_opts/0, station_endpoint_opts/0, signer_entry_stats/0]).
 
 -type type_tag() :: 1..16#FF.
 -type version() :: <<_:128>>.
@@ -424,6 +425,78 @@ verify(#{key := Key, tbs := Tbs, signature := Signature} = Object, Profile, Now)
     sized_object(byte_size(macula_signed_object:encode(Object)), Object, Profile, Now);
 verify(_Other, _Profile, _Now) ->
     {error, malformed}.
+
+%% The most entries a slot holds: 64 places for checked signers and 16 for everyone else
+%% (DESIGN_PQ_DHT_SLOTS_AND_BUDGET.md, 2.3).
+-define(SLOT_CAPACITY, 80).
+%% The most entries under the expected key that signer_entry/4 verifies.
+-define(SIGNER_ENTRY_VERIFIES, 4).
+
+-type signer_entry_stats() :: #{matching := non_neg_integer(), verified := non_neg_integer(),
+                                beyond_capacity := non_neg_integer()}.
+
+%% @doc signer_entry/4 at the current time.
+-spec signer_entry([binary() | map()], {key_id | node_id, <<_:256>>}, macula_crypto_profile:profile()) ->
+        {{ok, m_record()} | {error, not_found | refusal()}, signer_entry_stats()}.
+signer_entry(Entries, Expected, Profile) ->
+    signer_entry(Entries, Expected, Profile, erlang:system_time(millisecond)).
+
+%% @doc The entry one signer holds among the entries a lookup of a slot returns, as wire forms or {key, tbs, signature}
+%% maps. Expected is {key_id, Id} for a key named by its MACULA-KEY-ID-V1 key id, or {node_id, Id} for an identity key.
+%% Every entry is read as far as its carried key, whatever the answer's order or length, and no signature is checked
+%% to select. Only the entries under the expected key are verified: highest claimed version first, stopping at the
+%% first that verifies and names Id as its key_id, and at most 4. So an entry under another key costs no verify, and
+%% forged entries under the expected key cost a bounded few. The outcome is that record, not_found when no entry is
+%% under the key, or the refusal of the last entry verified. The stats count the entries under the key, the entries
+%% verified, and the entries past the 80 a slot holds, which a station that keeps to its slot places never sends.
+-spec signer_entry([binary() | map()], {key_id | node_id, <<_:256>>}, macula_crypto_profile:profile(), integer()) ->
+        {{ok, m_record()} | {error, not_found | refusal()}, signer_entry_stats()}.
+signer_entry(Entries, {Kind, <<_:256>> = Id}, Profile, Now)
+  when is_list(Entries), (Kind =:= key_id orelse Kind =:= node_id), is_integer(Now) ->
+    Matching = by_claimed_version([Object || Entry <- Entries, {ok, Object} <- [entry_object(Entry)],
+                                             carried_id(Kind, Object, Profile) =:= Id]),
+    {Outcome, Verified} = first_verified(lists:sublist(Matching, ?SIGNER_ENTRY_VERIFIES), Id, Profile, Now,
+                                         {{error, not_found}, 0}),
+    {Outcome, #{matching => length(Matching), verified => Verified,
+                beyond_capacity => max(0, length(Entries) - ?SLOT_CAPACITY)}}.
+
+%% An entry's outer object, decoded as far as its byte strings: nothing inside its tbs is read.
+entry_object(Bytes) when is_binary(Bytes) ->
+    macula_signed_object:decode(Bytes);
+entry_object(#{key := Key, tbs := Tbs, signature := Signature} = Object)
+  when map_size(Object) =:= 3, is_binary(Key), is_binary(Tbs), is_binary(Signature) ->
+    {ok, Object};
+entry_object(_NotAnObject) ->
+    error.
+
+carried_id(key_id, #{key := Key}, Profile) -> macula_node_keys:key_id(Key, Profile);
+carried_id(node_id, #{key := Key}, Profile) -> macula_node_keys:node_id(Key, Profile);
+carried_id(_Kind, _HeldObject, _Profile) -> none.
+
+%% Entries under one key, highest claimed version first. The version is read from the tbs without verifying it, and an
+%% entry whose version cannot be read comes last.
+by_claimed_version(Objects) ->
+    Claimed = lists:keysort(1, [{claimed_version(Object), Object} || Object <- Objects]),
+    [Object || {_Version, Object} <- lists:reverse(Claimed)].
+
+claimed_version(#{tbs := Tbs}) ->
+    version_claimed(macula_record_cbor:decode_strict(Tbs)).
+
+version_claimed({ok, #{{text, <<"version">>} := <<_:128>> = Version}}) -> Version;
+version_claimed(_Unreadable) -> <<>>.
+
+%% Entries verified in order until one verifies and names Id as its key_id, with the count of entries verified.
+first_verified([], _Id, _Profile, _Now, Last) ->
+    Last;
+first_verified([Object | Rest], Id, Profile, Now, {_Outcome, Verified}) ->
+    entry_verified(verify(Object, Profile, Now), Rest, Id, Profile, Now, Verified + 1).
+
+entry_verified({ok, #{key_id := Id} = Record}, _Rest, Id, _Profile, _Now, Verified) ->
+    {{ok, Record}, Verified};
+entry_verified({ok, _OtherSigner}, Rest, Id, Profile, Now, Verified) ->
+    first_verified(Rest, Id, Profile, Now, {{error, key_id_mismatch}, Verified});
+entry_verified({error, _} = Refusal, Rest, Id, Profile, Now, Verified) ->
+    first_verified(Rest, Id, Profile, Now, {Refusal, Verified}).
 
 %% @doc The record with a new version, created now, with the same lifetime, signed again with Key.
 -spec refresh(m_record(), macula_node_keys:node_key()) -> m_record().
