@@ -9,8 +9,9 @@
 %%% endpoint record the station itself signed, and an org namespaced procedure
 %%% needs a provider authorization.
 %%%
-%%% The DHT, the dials and the transfers are faked with meck on the `macula'
-%%% facade, `macula_client' and `macula_content_transfer'. The records
+%%% The DHT, the dials, the transfers and the realm keys the pool pins are
+%%% faked with meck on the `macula' facade, `macula_client' and
+%%% `macula_content_transfer'. The records
 %%% themselves are real: signed with node keys in the node's crypto profile and
 %%% handed over verified, as the facade hands them over.
 -module(macula_direct_dial_resolve_tests).
@@ -22,6 +23,7 @@
 
 -define(STATE, macula_direct_dial_resolve_tests_state).
 -define(REALM, <<16#11:256>>).
+-define(OTHER_REALM, <<16#22:256>>).
 -define(PROC, <<"echo_v1">>).
 -define(ORG, <<"resolve-tests">>).
 -define(ORG_PROC, <<"resolve-tests/echo_v1">>).
@@ -36,8 +38,10 @@ setup() ->
     ?STATE = ets:new(?STATE, [named_table, public, set]),
     ets:insert(?STATE, {visits, []}),
     meck:new(macula, [passthrough, non_strict]),
-    meck:new(macula_client, [passthrough]),
+    meck:new(macula_client, [passthrough, non_strict]),
     meck:new(macula_content_transfer, [passthrough]),
+    %% A pool pins no realm key unless a test pins one (pin_realm_key/2).
+    meck:expect(macula_client, realm_key, fun(_Pool, _Realm) -> none end),
     meck:expect(macula, find_records, fun(_Pool, Key) -> find_records(Key) end),
     meck:expect(macula, find_records,
                 fun(_Pool, Key, TimeoutMs) -> find_records(Key, TimeoutMs) end),
@@ -91,6 +95,7 @@ resolve_test_() ->
       {timeout, 30, fun an_org_namespaced_procedure_without_an_authorization_resolves_to_nothing/0},
       {timeout, 30, fun call_with_authorization_tries_the_next_advertisement_when_a_station_has_no_endpoint/0},
       {timeout, 30, fun call_with_authorization_asks_again_until_its_deadline/0},
+      {timeout, 30, fun a_realm_key_pinned_for_another_realm_authorizes_nothing_in_this_one/0},
       {timeout, 30, fun call_dials_a_refusing_station_once_per_endpoint_version/0},
       {timeout, 30, fun call_tries_an_advertisement_that_appears_on_a_later_pass/0},
       {timeout, 30, fun resolution_backs_off_between_passes/0},
@@ -124,6 +129,8 @@ resolve_test_() ->
       {timeout, 30, fun put_content_ends_the_lookup_at_an_endpoint_record_that_does_not_verify/0},
       {timeout, 30, fun a_call_with_a_removed_trust_option_is_refused_before_any_lookup/0},
       {timeout, 30, fun a_stream_with_a_removed_trust_option_is_refused_before_any_lookup/0},
+      {timeout, 30, fun a_call_passing_realm_trust_is_refused_before_any_lookup/0},
+      {timeout, 30, fun a_stream_passing_realm_trust_is_refused_before_any_lookup/0},
       {timeout, 30, fun an_advertisement_with_a_removed_trust_option_is_not_published/0},
       {timeout, 30, fun a_stream_dial_timeout_outside_its_bounds_is_refused_in_the_caller/0}]}.
 
@@ -279,7 +286,8 @@ a_published_advertisement_is_signed_by_the_node_identity_and_put_as_its_wire_for
 
 %% verify_cert_chain turned a check on in 10.x and is gone. A call that still
 %% passes it is refused by name before anything is looked up or dialed, instead
-%% of resolving without the check it asked for; realm_trust replaces it.
+%% of resolving without the check it asked for; the realm trust the pool pins
+%% replaces it.
 a_call_with_a_removed_trust_option_is_refused_before_any_lookup() ->
     ?assertEqual({error, {removed_option, verify_cert_chain}},
                  macula_direct_dial:call(pool, ?REALM, ?PROC, #{}, 1000,
@@ -290,6 +298,20 @@ a_stream_with_a_removed_trust_option_is_refused_before_any_lookup() ->
     ?assertEqual({error, {removed_option, verify_cert_chain}},
                  macula_direct_dial:call_stream(pool, ?REALM, ?PROC, #{}, #{dial_timeout_ms => 1000},
                                                 #{verify_cert_chain => {<<"pem">>, ?ORG}})),
+    ?assertEqual(0, lookups_and_dials()).
+
+%% A realm key never arrives with a request: the pool pins each realm's key
+%% when it starts. A call or stream that still passes realm_trust is refused by
+%% name before anything is looked up or dialed.
+a_call_passing_realm_trust_is_refused_before_any_lookup() ->
+    ?assertEqual({error, {removed_option, realm_trust}},
+                 macula_direct_dial:call(pool, ?REALM, ?PROC, #{}, 1000, #{realm_trust => #{?REALM => <<"key">>}})),
+    ?assertEqual(0, lookups_and_dials()).
+
+a_stream_passing_realm_trust_is_refused_before_any_lookup() ->
+    ?assertEqual({error, {removed_option, realm_trust}},
+                 macula_direct_dial:call_stream(pool, ?REALM, ?PROC, #{}, #{dial_timeout_ms => 1000},
+                                                #{realm_trust => #{?REALM => <<"key">>}})),
     ?assertEqual(0, lookups_and_dials()).
 
 %% cert_chain carried a provider's certificate chain in 10.x and is gone. An
@@ -354,8 +376,8 @@ an_org_namespaced_procedure_without_an_authorization_resolves_to_nothing() ->
     ?assertEqual({error, {unresolved, no_trusted_advertisement}}, call(500, ?ORG_PROC, #{})),
     ?assertEqual([], visits()).
 
-%% With provider authorizations checked against the realm key, a station
-%% without an endpoint is passed over just the same.
+%% With provider authorizations checked against the realm key the pool pins,
+%% a station without an endpoint is passed over just the same.
 call_with_authorization_tries_the_next_advertisement_when_a_station_has_no_endpoint() ->
     Authority = authority(),
     A = station(<<"a.test">>), B = station(<<"b.test">>),
@@ -363,7 +385,8 @@ call_with_authorization_tries_the_next_advertisement_when_a_station_has_no_endpo
                                        authorized_advertisement(B, Authority, ?ORG)]]),
     set_endpoint(B, endpoint_record(B)),
     set_answer(dial_url(B), {ok, <<"from b">>}),
-    ?assertEqual({ok, <<"from b">>}, call(3000, ?ORG_PROC, realm_trust(Authority))),
+    pin_realm_key(?REALM, Authority),
+    ?assertEqual({ok, <<"from b">>}, call(3000, ?ORG_PROC, #{})),
     ?assertEqual([dial_url(B)], visits()).
 
 %% An advertisement authorized for another org doesn't qualify, and resolution
@@ -373,11 +396,29 @@ call_with_authorization_asks_again_until_its_deadline() ->
     A = station(<<"a.test">>),
     set_replies(org_procedure_key(), [[authorized_advertisement(A, Authority, <<"another-org">>)]]),
     set_endpoint(A, endpoint_record(A)),
-    {Elapsed, Result} = timed(fun() -> call(300, ?ORG_PROC, realm_trust(Authority)) end),
+    pin_realm_key(?REALM, Authority),
+    {Elapsed, Result} = timed(fun() -> call(300, ?ORG_PROC, #{}) end),
     ?assertEqual({error, {unresolved, no_trusted_advertisement}}, Result),
     ?assert(Elapsed < 1000),
     ?assert(lookups(org_procedure_key()) >= 2),
     ?assertEqual([], visits()).
+
+%% A realm key authorizes its own realm's advertisements only. With the
+%% authority's key pinned for another realm id, an advertisement for ?REALM
+%% whose org directory that key signed is no candidate; pinned for ?REALM, the
+%% same advertisement is.
+a_realm_key_pinned_for_another_realm_authorizes_nothing_in_this_one() ->
+    Authority = authority(),
+    A = station(<<"a.test">>),
+    set_replies(org_procedure_key(), [[authorized_advertisement(A, Authority, ?ORG)]]),
+    set_endpoint(A, endpoint_record(A)),
+    set_answer(dial_url(A), {ok, <<"from a">>}),
+    pin_realm_key(?OTHER_REALM, Authority),
+    ?assertEqual({error, {unresolved, no_trusted_advertisement}}, call(300, ?ORG_PROC, #{})),
+    ?assertEqual([], visits()),
+    pin_realm_key(?REALM, Authority),
+    ?assertEqual({ok, <<"from a">>}, call(3000, ?ORG_PROC, #{})),
+    ?assertEqual([dial_url(A)], visits()).
 
 %%%===================================================================
 %%% A failed candidate is tried again only on a changed record
@@ -813,8 +854,12 @@ announcement(#{key := Key, id := Id} = Station, Mcid) ->
 authority() ->
     #{realm => node_key(realm), org => node_key(org)}.
 
-realm_trust(#{realm := Realm}) ->
-    #{realm_trust => #{realm_key => macula_node_keys:public_key(Realm)}}.
+%% The pool pins the authority's realm key for RealmId alone.
+pin_realm_key(RealmId, #{realm := Realm}) ->
+    Key = macula_node_keys:public_key(Realm),
+    meck:expect(macula_client, realm_key, fun(_Pool, Id) when Id =:= RealmId -> {ok, Key};
+                                             (_Pool, _Other) -> none
+                                          end).
 
 %% An advertisement for ?ORG_PROC from a fresh provider naming Station, carrying
 %% the realm-signed org directory that names OrgName and the org-signed
