@@ -1,6 +1,7 @@
 %% EUnit tests for text a local caller hands the SDK that a frame builder would refuse: a topic over 512 bytes or not
 %% UTF-8 in a pool's publish and subscribe, and a STREAM_ERROR code over 64 bytes or not UTF-8 in macula_stream:abort/3.
-%% Each is refused by name before anything is built, so the pool, its links and the stream keep running.
+%% Each is refused by name before anything is built, so the pool and its links keep running, and an abort with such a
+%% code still stops its stream.
 -module(macula_local_text_refusals_tests).
 
 -include_lib("eunit/include/eunit.hrl").
@@ -15,8 +16,8 @@ local_text_refusals_test_() ->
       [{"macula_frame:text_checked/2 names the bound each builder applies", fun text_checked_names_each_bound/0},
        {"a pool refuses a topic it cannot publish or subscribe to, and keeps answering",
         fun a_pool_refuses_a_topic_before_building/0},
-       {"an abort code a STREAM_ERROR cannot carry is refused before the stream builds it",
-        {timeout, 15, fun an_abort_code_outside_its_bound_is_refused/0}}]}}.
+       {"an abort code a STREAM_ERROR cannot carry is refused, and the stream still ends",
+        {timeout, 15, fun an_abort_code_outside_its_bound_still_ends_the_stream/0}}]}}.
 
 text_checked_names_each_bound() ->
     [begin
@@ -38,12 +39,15 @@ a_pool_refuses_a_topic_before_building() ->
                   {error, {text_too_long, topic}}, {error, {invalid_text, topic}}], Results),
     ?assertMatch({ok, #{}}, Status).
 
-%% The refusal comes before any call to the stream, so a process that is not a stream stands in for one.
-an_abort_code_outside_its_bound_is_refused() ->
-    Stream = spawn(fun() -> receive stop -> ok end end),
-    Results = [catch macula_stream:abort(Stream, binary:copy(<<"c">>, 65), <<"why">>),
-               catch macula_stream:abort(Stream, <<16#ff>>, <<"why">>)],
-    Alive = is_process_alive(Stream),
-    Stream ! stop,
-    ?assertEqual([{error, {text_too_long, code}}, {error, {invalid_text, code}}], Results),
-    ?assert(Alive).
+%% A caller that aborts gets its code's refusal by name, and the stream ends all the same, with the fixed code aborted
+%% and the caller's message, so a call to abort always stops the stream.
+an_abort_code_outside_its_bound_still_ends_the_stream() ->
+    [begin
+         {ok, Stream} = macula_stream:start_link(#{id => crypto:strong_rand_bytes(16), role => client, mode => bidi,
+                                                   owner => self()}),
+         Result = macula_stream:abort(Stream, Code, <<"why">>),
+         Ended = receive {macula_stream, ended, Stream, How} -> How after 1_000 -> not_ended end,
+         true = unlink(Stream),
+         exit(Stream, kill),
+         ?assertEqual({{error, {Refusal, code}}, {error, {<<"aborted">>, <<"why">>}}}, {Result, Ended})
+     end || {Refusal, Code} <- [{text_too_long, binary:copy(<<"c">>, 65)}, {invalid_text, <<16#ff>>}]].
