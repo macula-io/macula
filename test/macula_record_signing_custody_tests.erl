@@ -16,7 +16,8 @@ only_the_pool_signs_records_test_() ->
     {timeout, 60, fun() ->
         ?assertEqual(#{{macula_record, sign, 2} => lists:sort([{macula_client, withdrawable, 5},
                                                               {macula_record, refresh, 2} | ?UNTIL_P2]),
-                       {macula_record, refresh, 2} => [{macula_client, node_record_signed, 3}]},
+                       {macula_record, refresh, 2} => [{macula_client, domain_record_signed, 3},
+                                                       {macula_client, node_record_signed, 3}]},
                      callers([{macula_record, sign, 2}, {macula_record, refresh, 2}]))
     end}.
 

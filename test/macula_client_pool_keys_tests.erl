@@ -387,6 +387,112 @@ a_record_created_ahead_at_its_maximum_lifetime_is_withdrawn_test_() ->
         ?assertMatch({ok, #{type := 16#0C}}, macula_record:verify(macula_record:encode(Tombstone), Profile))
     end}.
 
+%% A pool signs a domain record as its node. Each refusal comes back while the pool is suspended, so before the call: a
+%% type outside 0x20 to 0xFF, a subject that is not a non-empty binary, a lifetime past the domain maximum of 7 days
+%% or running backwards, a payload and subject past 256 KiB together, and a term that is no record. A node record with
+%% a subject is refused before the call too, and sign_node_record/2 still refuses a domain type.
+a_domain_record_is_refused_before_the_call_test_() ->
+    {timeout, ?EU_TIMEOUT, fun() ->
+        {ok, Profile} = profile(),
+        {ok, Key} = macula_node_keys:generate(identity, Profile),
+        {ok, NodeId} = macula_node_keys:node_id(Key),
+        Day = 86_400_000,
+        #{created_at := Created} = Domain = macula_record:envelope(16#20, #{}, #{}),
+        {ok, Pool} = macula_client:connect([], #{node_identity => Key}),
+        ok = sys:suspend(Pool),
+        Replies = try
+                      [macula_client:sign_domain_record(Pool, macula_record:node_record(NodeId, [], 0)),
+                       macula_client:sign_domain_record(Pool, Domain#{subject => not_a_binary}),
+                       macula_client:sign_domain_record(Pool, Domain#{subject => <<>>}),
+                       macula_client:sign_domain_record(Pool, Domain#{expires_at := Created + 7 * Day + 1}),
+                       macula_client:sign_domain_record(Pool, Domain#{expires_at := Created}),
+                       macula_client:sign_domain_record(Pool, Domain#{subject => binary:copy(<<"s">>, 256 * 1024)}),
+                       macula_client:sign_domain_record(Pool, not_a_record),
+                       macula_client:sign_node_record(Pool, Domain#{subject => <<"s">>})]
+                  after ok = sys:resume(Pool)
+                  end,
+        NotNodeSigned = macula_client:sign_node_record(Pool, Domain),
+        Status = macula_client:status(Pool),
+        ok = macula_client:close(Pool),
+        ?assertEqual([{error, not_a_domain_type}, {error, invalid_subject}, {error, invalid_subject},
+                      {error, lifetime_too_long}, {error, lifetime_reversed}, {error, record_too_large},
+                      {error, malformed_record}, {error, malformed_record}], Replies),
+        ?assertEqual({error, not_a_node_signed_type}, NotNodeSigned),
+        ?assertMatch({ok, #{self_node_id := NodeId}}, Status)
+    end}.
+
+%% Of a domain record to sign, the pool is sent only its type, created_at, expires_at, payload and subject: a receive
+%% trace on the pool shows the request as it arrives.
+the_pool_is_sent_only_the_fields_of_a_domain_record_it_signs_from_test_() ->
+    {timeout, ?EU_TIMEOUT, fun() ->
+        {ok, Profile} = profile(),
+        {ok, Key} = macula_node_keys:generate(identity, Profile),
+        Built = macula_record:envelope(16#20, #{}, #{subject_id => <<"s1">>}),
+        {ok, Pool} = macula_client:connect([], #{node_identity => Key}),
+        1 = erlang:trace(Pool, true, ['receive']),
+        Signed = macula_client:sign_domain_record(Pool, Built#{an_extra_field => 1}),
+        1 = erlang:trace(Pool, false, ['receive']),
+        Delivered = erlang:trace_delivered(Pool),
+        receive {trace_delivered, Pool, Delivered} -> ok end,
+        Requests = [Request || {trace, _Pid, 'receive', {'$gen_call', _From, Request}} <- traced(Pool, [])],
+        ok = macula_client:close(Pool),
+        ?assertMatch({ok, #{type := 16#20, subject := <<"s1">>}}, Signed),
+        ?assertEqual([{sign_domain_record, maps:with([type, created_at, expires_at, payload, subject], Built)}],
+                     Requests)
+    end}.
+
+%% A domain record lives at most its type's maximum of 7 days: one at 7 days signs as this node and verifies, one a
+%% millisecond longer is refused and never shortened, and one built with no ttl lives within the maximum.
+a_domain_record_lives_within_its_type_maximum_test_() ->
+    {timeout, ?EU_TIMEOUT, fun() ->
+        {ok, Profile} = profile(),
+        {ok, Key} = macula_node_keys:generate(identity, Profile),
+        {ok, NodeId} = macula_node_keys:node_id(Key),
+        Day = 86_400_000,
+        {ok, Pool} = macula_client:connect([], #{node_identity => Key}),
+        AtMaximum = macula_client:sign_domain_record(Pool, macula_record:envelope(16#20, #{}, #{ttl_ms => 7 * Day})),
+        Longer = macula_client:sign_domain_record(Pool, macula_record:envelope(16#20, #{}, #{ttl_ms => 7 * Day + 1})),
+        Default = macula_client:sign_domain_record(Pool, macula_record:envelope(16#21, #{}, #{})),
+        ok = macula_client:close(Pool),
+        ?assertMatch({ok, #{key_id := NodeId}}, AtMaximum),
+        {ok, Signed} = AtMaximum,
+        ?assertEqual(7 * Day, macula_record:expires_at(Signed) - macula_record:created_at(Signed)),
+        ?assertMatch({ok, _}, macula_record:verify(macula_record:encode(Signed), Profile)),
+        ?assertEqual({error, lifetime_too_long}, Longer),
+        {ok, DefaultSigned} = Default,
+        ?assert(macula_record:expires_at(DefaultSigned) - macula_record:created_at(DefaultSigned) =< 7 * Day)
+    end}.
+
+%% A domain record this node signed is withdrawn through the pool on its own slot: the tombstones of a domain record
+%% with a subject and of one without each share their record's storage key, the two records and the node record hold
+%% three different slots, and all four records verify. Each tombstone outlives its record by the clock tolerance, within
+%% the domain maximum plus twice that tolerance.
+a_domain_record_is_withdrawn_on_its_own_slot_test_() ->
+    {timeout, ?EU_TIMEOUT, fun() ->
+        {ok, Profile} = profile(),
+        {ok, Key} = macula_node_keys:generate(identity, Profile),
+        {ok, NodeId} = macula_node_keys:node_id(Key),
+        Day = 86_400_000,
+        Minute = 60_000,
+        {ok, Pool} = macula_client:connect([], #{node_identity => Key}),
+        {ok, WithSubject} = macula_client:sign_domain_record(
+                              Pool, macula_record:envelope(16#20, #{}, #{subject_id => <<"s1">>, ttl_ms => 7 * Day})),
+        {ok, Bare} = macula_client:sign_domain_record(Pool, macula_record:envelope(16#20, #{}, #{ttl_ms => 7 * Day})),
+        {ok, Node} = macula_client:sign_node_record(Pool, macula_record:node_record(NodeId, [], 0)),
+        {ok, SubjectTombstone} = macula_client:withdraw_node_record(Pool, WithSubject, shutdown),
+        {ok, BareTombstone} = macula_client:withdraw_node_record(Pool, Bare, shutdown),
+        ok = macula_client:close(Pool),
+        Slot = fun macula_record:storage_key/1,
+        ?assertEqual({Slot(WithSubject), Slot(Bare)}, {Slot(SubjectTombstone), Slot(BareTombstone)}),
+        ?assertEqual(3, length(lists:usort([Slot(WithSubject), Slot(Bare), Slot(Node)]))),
+        ?assertEqual([], [Record || Record <- [WithSubject, Bare, SubjectTombstone, BareTombstone],
+                                    element(1, macula_record:verify(macula_record:encode(Record), Profile)) =/= ok]),
+        [?assertEqual(macula_record:expires_at(Withdrawn) + 5 * Minute, macula_record:expires_at(Tombstone))
+         || {Withdrawn, Tombstone} <- [{WithSubject, SubjectTombstone}, {Bare, BareTombstone}]],
+        ?assert(macula_record:expires_at(BareTombstone) - macula_record:created_at(BareTombstone)
+                =< 7 * Day + 10 * Minute)
+    end}.
+
 %%------------------------------------------------------------------
 %% The node identity key
 %%------------------------------------------------------------------
