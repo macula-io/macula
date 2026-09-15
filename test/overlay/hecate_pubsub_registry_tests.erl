@@ -101,6 +101,17 @@ a_registry_given_a_key_instead_of_a_loader_refuses_it_test_() ->
         ?assertEqual({{error, {identity, not_a_loader}}, {error, {identity, not_a_loader}}}, {Started, Registered})
     end}.
 
+%% A registry whose default identity's loader raises refuses to start by name, as a pool does, with nothing of the
+%% error the loader raised. The start runs in a process of its own that traps exits, so a start that crashes fails only
+%% this test.
+a_registry_whose_loader_raises_refuses_to_start_by_name_test_() ->
+    {spawn, ?_test(begin
+        process_flag(trap_exit, true),
+        Key = key(),
+        Raising = fun() -> erlang:error({no_key_here, Key}) end,
+        ?assertEqual({error, {identity, loader_failed}}, hecate_pubsub_registry:start_link(#{identity => Raising}))
+    end)}.
+
 %%---------------------------------------------------------------------
 %% Per-identity isolation: top-level (no fixture, two registries)
 %%---------------------------------------------------------------------

@@ -73,6 +73,17 @@ a_server_given_its_key_instead_of_a_loader_does_not_start_test() ->
     ?assertEqual({error, {identity, not_a_loader}},
                  hecate_pubsub_server:start_link(#{realm => realm(), identity => key()})).
 
+%% A server whose loader raises refuses to start by name, as a pool does, with nothing of the error the loader raised.
+%% The start runs in a process of its own that traps exits, so a start that crashes fails only this test.
+a_server_whose_loader_raises_refuses_to_start_by_name_test_() ->
+    {spawn, ?_test(begin
+        process_flag(trap_exit, true),
+        Key = key(),
+        Raising = fun() -> erlang:error({no_key_here, Key}) end,
+        ?assertEqual({error, {identity, loader_failed}},
+                     hecate_pubsub_server:start_link(#{realm => realm(), identity => Raising}))
+    end)}.
+
 %%---------------------------------------------------------------------
 %% Subscribe / unsubscribe
 %%---------------------------------------------------------------------
