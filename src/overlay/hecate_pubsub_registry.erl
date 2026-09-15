@@ -94,8 +94,9 @@
     max_subscribed_realms :: pos_integer(),
     by_realm = #{}        :: #{realm() => pid()},
     by_pid   = #{}        :: #{pid() => realm()},
-    %% Live realms `register/3' materialised or took over: they stay
-    %% without subscriptions and do not count towards the maximum.
+    %% Realms `register/3' materialised or took over: they stay without
+    %% subscriptions and do not count towards the maximum. A pin outlives
+    %% the realm's server, so a pinned realm may have no server here.
     pinned   = #{}        :: #{realm() => true}
 }).
 
@@ -114,7 +115,9 @@ start_link(Opts) when is_map(Opts) ->
 %% transparently.
 %%
 %% The realm is pinned: it stays when its last subscription leaves, and
-%% it does not count towards `max_subscribed_realms'. Register only a
+%% it does not count towards `max_subscribed_realms'. It stays pinned when
+%% its server stops, so the server the next `register/3' or SUBSCRIBE starts
+%% for it is pinned too. Register only a
 %% realm the station itself chooses, such as one it publishes on, never
 %% a realm a peer names, or peers could grow the registry past its
 %% maximum.
@@ -294,7 +297,7 @@ do_dispatch(_Realm, _From, _Frame, error,
 do_dispatch(Realm, From, #{frame_type := subscribe} = Frame, error, S) ->
     %% Only a SUBSCRIBE materialises a realm, and only while SUBSCRIBE
     %% frames hold fewer realms than the maximum.
-    materialise_for_subscribe(has_room_for_a_subscribed_realm(S), Realm, From, Frame, S);
+    materialise_for_subscribe(has_room_for_a_subscribed_realm(Realm, S), Realm, From, Frame, S);
 do_dispatch(_Realm, _From, _Frame, error, S) ->
     %% An UNSUBSCRIBE or EVENT for a realm with no server has nothing to
     %% act on, and starts none.
@@ -307,11 +310,14 @@ materialise_for_subscribe(false, _Realm, _From, _Frame, S) ->
 materialise_for_subscribe(true, Realm, From, Frame, #state{default_identity = Id} = S) ->
     on_auto_registered(ensure_server(Realm, Id, S), Realm, From, Frame).
 
-%% Pinned realms are live realms, so the realms SUBSCRIBE frames hold are
-%% all the others.
-has_room_for_a_subscribed_realm(#state{by_realm = ByRealm, pinned = Pinned,
-                                       max_subscribed_realms = Max}) ->
-    map_size(ByRealm) - map_size(Pinned) < Max.
+%% The realms SUBSCRIBE frames hold are the served realms that are not
+%% pinned. A pin outlives the realm's server, so pinned realms are left out
+%% by name, not by count, and a SUBSCRIBE for a pinned realm always has room:
+%% a pinned realm never counts, with or without a server.
+has_room_for_a_subscribed_realm(Realm, #state{by_realm = ByRealm, pinned = Pinned,
+                                              max_subscribed_realms = Max}) ->
+    is_map_key(Realm, Pinned) orelse
+        map_size(maps:without(maps:keys(Pinned), ByRealm)) < Max.
 
 on_auto_registered({ok, Pid, S}, Realm, From, Frame) ->
     forward_frame(Realm, Pid, From, Frame, S);
@@ -415,12 +421,14 @@ drop_pid(Pid, S) ->
         error       -> S
     end.
 
+%% A dropped realm's server entries go and its pin stays: a pin records the
+%% station's own choice and lasts until the registry stops, whatever happens
+%% to the realm's server.
 drop_realm(Realm, S) ->
     Pid = maps:get(Realm, S#state.by_realm, undefined),
     S#state{
         by_realm = maps:remove(Realm, S#state.by_realm),
-        by_pid   = drop_pid_entry(Pid, S#state.by_pid),
-        pinned   = maps:remove(Realm, S#state.pinned)
+        by_pid   = drop_pid_entry(Pid, S#state.by_pid)
     }.
 
 drop_pid_entry(undefined, ByPid) -> ByPid;

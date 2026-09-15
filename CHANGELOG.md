@@ -47,10 +47,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   EVENT for fan-out to peer stations but starts no process. When an
   UNSUBSCRIBE or `purge_subscriber/2` takes a realm's last subscription, its
   server stops and its place frees. A realm registered with `register/3` is
-  pinned and stays. At most `max_subscribed_realms` realms, a registry start
-  option of 1000 by default, are materialised by SUBSCRIBE at once; a
+  pinned and stays, also when its server stops. At most
+  `max_subscribed_realms` realms, a registry start option of 1000 by default,
+  are materialised by SUBSCRIBE at once; a
   SUBSCRIBE past that gets `{error, too_many_realms}` and starts no server.
-  Pinned realms do not count. `hecate_pubsub_server:relay_event/2` builds the
+  Pinned realms do not count, with or without a server.
+  `hecate_pubsub_server:relay_event/2` builds the
   EVENT a station relays for a PUBLISH, without a server.
 - A dedicated stream a peer opens may start with a STREAM_OPEN of at most
   1 MiB, set with the `max_stream_open_bytes` macula application env. A

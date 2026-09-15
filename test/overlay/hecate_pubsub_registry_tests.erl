@@ -562,6 +562,56 @@ registering_a_subscribed_realm_pins_it_test() ->
                      hecate_pubsub_registry:dispatch_frame(Reg, Other, SubId, subscribe_frame(Other, SubKp, <<"news">>)))
     end).
 
+%% A realm the station registered stays pinned when its server stops: the
+%% server a SUBSCRIBE starts for it next stays when its last subscription
+%% leaves, and does not count towards the maximum.
+a_registered_realm_stays_pinned_when_its_server_stops_test() ->
+    with_station_registry(#{max_subscribed_realms => 1}, fun(Reg, Station) ->
+        [R, Other] = [realm(), realm()],
+        SubKp = keypair(),
+        SubId = macula_identity:public(SubKp),
+        {ok, Stopped} = hecate_pubsub_registry:register(Reg, R, Station),
+        exit(Stopped, kill),
+        wait_until_gone(Reg, R),
+        {ok, []} = hecate_pubsub_registry:dispatch_frame(Reg, R, SubId, subscribe_frame(R, SubKp, <<"news">>)),
+        {ok, Server} = hecate_pubsub_registry:lookup(Reg, R),
+        {ok, []} = hecate_pubsub_registry:dispatch_frame(Reg, R, SubId, unsubscribe_frame(R, SubKp, <<"news">>)),
+        ?assertEqual({ok, Server}, hecate_pubsub_registry:lookup(Reg, R)),
+        ?assertEqual({ok, []},
+                     hecate_pubsub_registry:dispatch_frame(Reg, Other, SubId, subscribe_frame(Other, SubKp, <<"news">>)))
+    end).
+
+%% A pinned realm whose server stopped frees no place: the realms a SUBSCRIBE
+%% materialises still stop at the maximum.
+a_pinned_realm_without_a_server_frees_no_place_test() ->
+    with_station_registry(#{max_subscribed_realms => 2}, fun(Reg, Station) ->
+        [R, A, B, C] = [realm(), realm(), realm(), realm()],
+        SubKp = keypair(),
+        SubId = macula_identity:public(SubKp),
+        {ok, Stopped} = hecate_pubsub_registry:register(Reg, R, Station),
+        exit(Stopped, kill),
+        wait_until_gone(Reg, R),
+        {ok, []} = hecate_pubsub_registry:dispatch_frame(Reg, A, SubId, subscribe_frame(A, SubKp, <<"t">>)),
+        {ok, []} = hecate_pubsub_registry:dispatch_frame(Reg, B, SubId, subscribe_frame(B, SubKp, <<"t">>)),
+        ?assertEqual({error, too_many_realms},
+                     hecate_pubsub_registry:dispatch_frame(Reg, C, SubId, subscribe_frame(C, SubKp, <<"t">>)))
+    end).
+
+%% A SUBSCRIBE for a pinned realm whose server stopped is admitted at the
+%% maximum: a pinned realm never counts, with or without a server.
+a_pinned_realm_without_a_server_is_admitted_at_the_maximum_test() ->
+    with_station_registry(#{max_subscribed_realms => 1}, fun(Reg, Station) ->
+        [R, A] = [realm(), realm()],
+        SubKp = keypair(),
+        SubId = macula_identity:public(SubKp),
+        {ok, Stopped} = hecate_pubsub_registry:register(Reg, R, Station),
+        exit(Stopped, kill),
+        wait_until_gone(Reg, R),
+        {ok, []} = hecate_pubsub_registry:dispatch_frame(Reg, A, SubId, subscribe_frame(A, SubKp, <<"t">>)),
+        ?assertEqual({ok, []},
+                     hecate_pubsub_registry:dispatch_frame(Reg, R, SubId, subscribe_frame(R, SubKp, <<"t">>)))
+    end).
+
 %% A realm that holds a pattern subscription is never reaped: when its last
 %% exact-topic subscription leaves, by UNSUBSCRIBE or by purge, its server
 %% stays, and the pattern subscriber still gets a matching EVENT.
@@ -630,6 +680,10 @@ publish_frame(R, Kp, Seq) ->
                                              publisher => macula_identity:public(Kp), seq => Seq,
                                              payload => <<"hi">>,
                                              published_at_ms => erlang:system_time(millisecond)}), Kp).
+
+%% Waits until the registry has handled the exit of the realm's server.
+wait_until_gone(Reg, R) ->
+    wait_until(fun() -> hecate_pubsub_registry:lookup(Reg, R) =:= {error, not_found} end, 1000).
 
 down_within(Ref, Ms) ->
     receive
