@@ -235,15 +235,16 @@ init(Opts) ->
 
 %% A registry's identity returns an identity key in the node's configured profile, as a server's does, so a registry
 %% given a key it cannot use, or the key itself in place of a function that returns it, refuses to start instead of
-%% refusing every relay later. A registry that holds a checked key installs the key redaction filter, as a pool does.
+%% refusing every relay later. A loader that raises refuses the start as `{identity, loader_failed}', as a pool's does.
+%% A registry that holds a checked key installs the key redaction filter, as a pool does.
 default_identity(error) ->
     {ok, undefined, undefined};
 default_identity({ok, Load}) when is_function(Load, 0) ->
-    identity_held(hecate_pubsub_server:identity_checked(Load()), Load);
+    identity_held(hecate_pubsub_server:identity_loaded(Load), Load);
 default_identity({ok, _NotALoader}) ->
     {error, {identity, not_a_loader}}.
 
-identity_held({ok, Profile}, Load) ->
+identity_held({ok, Profile, _Key}, Load) ->
     ok = macula_node_keys:install_log_redaction(),
     {ok, Load, Profile};
 identity_held({error, _} = Refusal, _Load) ->

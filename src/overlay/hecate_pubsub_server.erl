@@ -39,7 +39,7 @@
     subscribers/2, topics/1, patterns/1, topic_count/1, subscriber_count/1,
     realm/1,
     publish/3, deliver_event/2, process_frame/3,
-    relay_publish/2, identity_checked/1,
+    relay_publish/2, identity_loaded/1,
     stop/1
 ]).
 
@@ -166,8 +166,29 @@ stop(Pid) ->
 init(#{identity := Load}) when not is_function(Load, 0) ->
     {error, {identity, not_a_loader}};
 init(#{realm := Realm, identity := Load}) ->
-    Key = Load(),
-    started(identity_checked(Key), Realm, Load, Key).
+    started(identity_loaded(Load), Realm, Load).
+
+%% @doc Run an identity loader and check the key it returns, as a pubsub server requires of its identity and a registry
+%% of its default identity. A loader that raises is refused as `{identity, loader_failed}', as a pool's is, and the
+%% error it raised, which can hold the key, goes nowhere. A key that is not an identity key in the node's configured
+%% crypto profile is refused by name. Returns the profile and the key.
+-spec identity_loaded(fun(() -> macula_node_keys:node_key())) ->
+          {ok, macula_crypto_profile:profile(), macula_node_keys:node_key()} | {error, term()}.
+identity_loaded(Load) ->
+    loaded_key(called(Load)).
+
+called(Load) ->
+    try Load() of
+        Key -> {ok, Key}
+    catch
+        _Class:_Reason -> {error, {identity, loader_failed}}
+    end.
+
+loaded_key({ok, Key}) -> checked_key(identity_checked(Key), Key);
+loaded_key({error, _} = Refusal) -> Refusal.
+
+checked_key({ok, Profile}, Key) -> {ok, Profile, Key};
+checked_key({error, _} = Refusal, _Key) -> Refusal.
 
 %% The server's key is an identity key in the node's configured profile, the one the pool reads, so one node never
 %% runs two profiles.
@@ -180,17 +201,16 @@ identity_profile(#{purpose := identity}, {error, _} = Refusal) ->
 identity_profile(_NotAnIdentityKey, _Configured) ->
     {error, {identity, not_an_identity_key}}.
 
-%% @doc Check that a key is an identity key in the node's configured crypto profile, as a pubsub server requires of its
-%% key and a registry of its identity. Returns the profile, or the refusal by name.
+%% Whether a key is an identity key in the node's configured crypto profile: the profile, or the refusal by name.
 -spec identity_checked(term()) -> {ok, macula_crypto_profile:profile()} | {error, term()}.
 identity_checked(Key) ->
     identity_profile(Key, macula_crypto_profile:configured()).
 
 %% A server that holds a checked key installs the key redaction filter, as a pool does, since it can run without the
 %% macula application.
-started({error, _} = Refusal, _Realm, _Load, _Key) ->
+started({error, _} = Refusal, _Realm, _Load) ->
     Refusal;
-started({ok, Profile}, Realm, Load, Key) ->
+started({ok, Profile, Key}, Realm, Load) ->
     ok = macula_node_keys:install_log_redaction(),
     {ok, #state{
         realm    = Realm,
