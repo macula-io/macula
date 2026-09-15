@@ -125,10 +125,18 @@ cross_stack_composite_vectors_test_() ->
 %% A composite that raw RSA-PSS accepts and every stack refuses: a valid composite over message.bin whose RSA half had
 %% its leading zero byte dropped, 4627 + 511 bytes, kept as fixed bytes for the other stacks to check against.
 cross_stack_zero_dropped_composite_is_refused_test() ->
+    Message = fixture("message.bin"),
+    Public = fixture("zero_dropped_composite_pub.bin"),
     Signature = fixture("zero_dropped_composite_sig.bin"),
-    ?assertEqual(5138, byte_size(Signature)),
-    ?assertNot(macula_node_keys:verify(fixture("message.bin"), Signature, fixture("zero_dropped_composite_pub.bin"),
-                                       pq_hybrid)).
+    <<MlDsaSignature:4627/binary, RsaSignature/binary>> = Signature,
+    <<MlDsaPublic:2592/binary, RsaPublicDer/binary>> = Public,
+    #'RSAPublicKey'{modulus = N, publicExponent = E} = public_key:der_decode('RSAPublicKey', RsaPublicDer),
+    Representative = representative(Message),
+    ?assertEqual(511, byte_size(RsaSignature)),
+    %% Each half verifies on its own, so only the composite's length refuses it.
+    ?assert(crypto:verify(mldsa87, none, Representative, MlDsaSignature, MlDsaPublic)),
+    ?assert(crypto:verify(rsa, sha384, Representative, RsaSignature, [E, N], ?PSS_OPTIONS)),
+    ?assertNot(macula_node_keys:verify(Message, Signature, Public, pq_hybrid)).
 
 %%------------------------------------------------------------------
 %% Helpers
