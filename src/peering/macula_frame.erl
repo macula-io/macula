@@ -77,7 +77,7 @@
     advertise/1, unadvertise/1,
 
     %% Constructors — Streaming RPC (Part 6 §5.6)
-    stream_open/2, open_stream/1, provider_stream/3, caller_stream/3,
+    stream_open/2, open_stream/1, provider_stream/3, caller_stream/3, stream_bytes/2, written_bytes/1,
     verify_provider_stream/3, verify_caller_stream/3, charged_refusal/1,
 
     %% Constructors — Content transfer (Part 6 §9)
@@ -128,6 +128,8 @@
 -export_type([
     frame/0,
     frame_type/0,
+    stream_build/0,
+    stream_bytes/0,
     item/0,
     connect_spec/0,
     hello_spec/0,
@@ -598,6 +600,19 @@
     message    => binary(),
     payload    => term()
 }.
+
+%% A frame built here for a dedicated stream, as stream_bytes/2 takes it: a request, a provider's reply, a station's
+%% relay error, or a stream frame of either side under the verified STREAM_OPEN it belongs to.
+-type stream_build() :: {call | stream_open, request_spec()}
+                      | {result, #{request := verified_request(), payload := term(), _ => _}}
+                      | {provider_error, #{request := verified_request(), code := binary(), _ => _}}
+                      | {relay_error, #{frame_type := error | stream_error, request := verified_request(),
+                                        code := unknown_next_peer, _ => _}}
+                      | {provider_stream | caller_stream, stream_spec(), verified_request() | undefined}.
+
+%% The signed and encoded bytes of a frame built here, tagged so that only what stream_bytes/2 returns is written on a
+%% dedicated stream.
+-opaque stream_bytes() :: {macula_stream_bytes, binary()}.
 
 %% What a verifier holds for one stream: the verified STREAM_OPEN and, per side, the next sequence number and whether
 %% that side has ended; for the provider also the key and signer its first frame carried.
@@ -1400,6 +1415,50 @@ caller_stream(#{frame_type := Type, seq := Seq} = Spec, #{purpose := identity} =
     Tbs = to_wire(stream_tbs(Type, Spec, Key, Open)),
     #{version => ?PROTOCOL_VERSION, frame_type => Type,
       caller_stream => macula_signed_object:sign_held(?CALLER_STREAM_LABEL, Tbs, Key)}.
+
+%% @doc The bytes of a frame built here for a dedicated stream: the one step every such frame passes through before it
+%% is written. `Build' names the frame (see `stream_build()'); it is signed with the identity key `Key', under that key's
+%% profile, and encoded. A payload, stream body or reply the wire cannot carry gives
+%% `{error, {unsupported_payload_type, Type, Path}}', and a frame without an identity key, or a stream frame without
+%% its verified STREAM_OPEN, gives `{error, unsignable}'. Neither error builds, signs or returns anything to write, and
+%% neither is for the peer: an error frame carries only the code its build names. `macula_peering:send_on_stream/2'
+%% and `async_send_on_stream/2,3' write the result, through `written_bytes/1'.
+-spec stream_bytes(stream_build(), macula_node_keys:node_key() | undefined) ->
+          {ok, stream_bytes()} | {error, {unsupported_payload_type, atom(), [term()]} | unsignable}.
+stream_bytes(Build, #{purpose := identity} = Key) ->
+    stream_signed(sendable(Build), Build, Key);
+stream_bytes(_Build, _NotAnIdentityKey) ->
+    {error, unsignable}.
+
+%% @doc The bytes stream_bytes/2 built, to write. Anything else is refused with function_clause, in the caller.
+-spec written_bytes(stream_bytes()) -> binary().
+written_bytes({macula_stream_bytes, Bytes}) when is_binary(Bytes) ->
+    Bytes.
+
+%% What of a build the wire must carry, checked before anything is signed.
+sendable({Type, #{payload := Payload}}) when Type =:= call; Type =:= stream_open; Type =:= result ->
+    check_payload(Payload);
+sendable({Type, _Spec}) when Type =:= provider_error; Type =:= relay_error ->
+    ok;
+sendable({Side, Spec, #{frame_type := stream_open}}) when Side =:= provider_stream; Side =:= caller_stream ->
+    stream_sendable(Spec);
+sendable({Side, _Spec, _NoVerifiedOpen}) when Side =:= provider_stream; Side =:= caller_stream ->
+    {error, unsignable}.
+
+stream_sendable(#{encoding := msgpack, body := Body}) -> check_payload(Body);
+stream_sendable(#{payload := Payload})                -> check_payload(Payload);
+stream_sendable(_RawBodyOrNoPayload)                  -> ok.
+
+stream_signed(ok, Build, Key)                   -> {ok, {macula_stream_bytes, encode(built(Build, Key))}};
+stream_signed({error, _} = Unsendable, _Build, _Key) -> Unsendable.
+
+built({call, Spec}, Key)                  -> call(Spec, Key);
+built({stream_open, Spec}, Key)           -> stream_open(Spec, Key);
+built({result, Spec}, Key)                -> result(Spec, Key);
+built({provider_error, Spec}, Key)        -> provider_error(Spec, Key);
+built({relay_error, Spec}, Key)           -> relay_error(Spec, Key);
+built({provider_stream, Spec, Open}, Key) -> provider_stream(Spec, Key, Open);
+built({caller_stream, Spec, Open}, Key)   -> caller_stream(Spec, Key, Open).
 
 stream_tbs(Type, #{seq := Seq} = Spec, Key, #{request_id := RequestId, request_hash := RequestHash}) ->
     (stream_fields(Type, Spec))#{frame_type => Type, request_id => RequestId, request_hash => RequestHash,
