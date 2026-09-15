@@ -12,7 +12,7 @@ carrier_test_() ->
     {setup, fun keys/0, fun cases/1}.
 
 cases(Keys) ->
-    [{case_name(Case), fun() -> Case(Keys) end}
+    [{case_name(Case), {spawn, fun() -> apart(Case, Keys) end}}
      || Case <- [fun a_provider_numbers_its_frames_from_0_across_data_and_reply/1,
                  fun a_caller_numbers_its_frames_from_0_and_sends_nothing_after_its_end/1,
                  fun a_frame_the_side_may_not_send_is_not_sent/1,
@@ -213,6 +213,12 @@ keys() ->
 case_name(Case) ->
     {name, Name} = erlang:fun_info(Case, name),
     atom_to_list(Name).
+
+%% Each case runs in a process of its own that traps exits and stands in for the stream's link and connection, so a
+%% stream that crashes fails that case's own assertions and no other case.
+apart(Case, Keys) ->
+    process_flag(trap_exit, true),
+    Case(Keys).
 
 open_spec(#{provider := Provider}, Mode) ->
     #{request_id => <<7:128>>, realm => <<1:256>>, procedure => <<"acme/count_v1">>,

@@ -420,7 +420,10 @@ decoded_parts_of_a_large_binary() ->
 %% caller together keep no more unread than that budget, a chunk past it ends
 %% its session with resource_exhausted, and another caller's stream still
 %% takes chunks.
-served_streams_of_a_caller_share_its_inbox_budget_test() ->
+served_streams_of_a_caller_share_its_inbox_budget_test_() ->
+    {spawn, ?_test(apart(fun served_streams_of_a_caller_share_its_inbox_budget/0))}.
+
+served_streams_of_a_caller_share_its_inbox_budget() ->
     {ok, _} = application:ensure_all_started(macula),
     Budget = 1_000_000,
     with_macula_env(#{max_served_inbox_bytes_per_caller => Budget}, fun() ->
@@ -443,7 +446,10 @@ served_streams_of_a_caller_share_its_inbox_budget_test() ->
 %% All served streams on the node share its inbox budget, whichever callers
 %% they serve: together they keep no more unread than it, and a chunk past it
 %% ends its session with resource_exhausted.
-served_streams_on_the_node_share_its_inbox_budget_test() ->
+served_streams_on_the_node_share_its_inbox_budget_test_() ->
+    {spawn, ?_test(apart(fun served_streams_on_the_node_share_its_inbox_budget/0))}.
+
+served_streams_on_the_node_share_its_inbox_budget() ->
     {ok, _} = application:ensure_all_started(macula),
     Room = 1_000_000,
     with_macula_env(#{max_served_inbox_bytes => macula_stream_sessions:inbox_bytes() + Room}, fun() ->
@@ -461,7 +467,10 @@ served_streams_on_the_node_share_its_inbox_budget_test() ->
 
 %% A chunk a reader takes gives its bytes back to the caller's budget, so the
 %% stream then takes as much again.
-a_read_chunk_gives_its_bytes_back_test() ->
+a_read_chunk_gives_its_bytes_back_test_() ->
+    {spawn, ?_test(apart(fun a_read_chunk_gives_its_bytes_back/0))}.
+
+a_read_chunk_gives_its_bytes_back() ->
     {ok, _} = application:ensure_all_started(macula),
     with_macula_env(#{max_served_inbox_bytes_per_caller => 250_000}, fun() ->
         Link = spawn(fun park/0),
@@ -477,6 +486,12 @@ a_read_chunk_gives_its_bytes_back_test() ->
             end_served_streams([Stream], Link)
         end
     end).
+
+%% A served stream test runs in a process of its own that traps exits, so a stream that crashes fails that test's own
+%% assertions and no later test in this module.
+apart(Test) ->
+    process_flag(trap_exit, true),
+    Test().
 
 %% A served bidi stream carried by Link, as a link starts one: with a loader of the provider's node identity key, the
 %% verified STREAM_OPEN it serves, Link as its connection and the pq_pure profile. It is admitted as a session of Caller
