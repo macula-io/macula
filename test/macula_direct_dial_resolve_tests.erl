@@ -53,7 +53,10 @@ setup() ->
                         visit(DialUrl)
                 end),
     meck:expect(macula, call_stream_station,
-                fun(_Pool, DialUrl, _Realm, _Proc, _Args, _Opts) -> visit(DialUrl) end),
+                fun(_Pool, DialUrl, Provider, _Realm, _Proc, _Args, _Opts) ->
+                        ets:insert(?STATE, {stream_provider, Provider}),
+                        visit(DialUrl)
+                end),
     meck:expect(macula, get_content_station,
                 fun(_Pool, Endpoint, _Mcid, _TimeoutMs, _Opts) -> visit(Endpoint) end),
     meck:expect(macula, put_content_station,
@@ -85,6 +88,7 @@ resolve_test_() ->
       {timeout, 30, fun call_timeout_bounds_the_endpoint_lookup/0},
       {timeout, 30, fun call_stream_tries_the_next_station_when_a_dial_fails/0},
       {timeout, 30, fun call_stream_never_opens_the_stream_twice/0},
+      {timeout, 30, fun call_stream_names_the_provider_its_advertisement_names/0},
       {timeout, 30, fun get_content_retries_when_no_provider_qualifies/0},
       {timeout, 30, fun get_content_tries_the_next_provider_after_a_failed_fetch/0},
       {timeout, 30, fun get_content_timeout_bounds_resolution/0},
@@ -219,6 +223,18 @@ call_stream_never_opens_the_stream_twice() ->
     set_answer(dial_url(B), {ok, fake_stream}),
     ?assertEqual({error, refused}, call_stream(3000)),
     ?assertEqual([dial_url(A)], visits()).
+
+%% A stream opens at a resolved station naming, as its target, the provider the
+%% advertisement it was resolved from names.
+call_stream_names_the_provider_its_advertisement_names() ->
+    A = station(<<"a.test">>),
+    Advertisement = advertisement(A),
+    set_replies(procedure_key(), [[Advertisement]]),
+    set_endpoint(A, endpoint_record(A)),
+    set_answer(dial_url(A), {ok, fake_stream}),
+    ?assertEqual({ok, fake_stream}, call_stream(3000)),
+    #{advertiser_node := Provider} = macula_record:read_procedure_advertisement(Advertisement),
+    ?assertEqual([{stream_provider, Provider}], ets:lookup(?STATE, stream_provider)).
 
 %%%===================================================================
 %%% Content

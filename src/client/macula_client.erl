@@ -75,7 +75,7 @@
 %% pool's existing links.
 -export([ensure_content_link/4]).
 %% Streaming RPC (since 3.17.0) — called by the `macula' facade.
--export([call_stream/5, call_stream_station/6,
+-export([call_stream_station/7,
          advertise_stream/5, advertise_stream/6, unadvertise_stream/3]).
 
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -773,57 +773,28 @@ unadvertise(Pool, Realm, Procedure)
        is_binary(Procedure) ->
     gen_server:call(Pool, {unadvertise, Realm, Procedure}, 5_000).
 
-%% @doc Open a streaming RPC against the pool. Picks the first
-%% currently-healthy link and opens the stream there; the returned
-%% stream pid is sticky — if the underlying link dies, the stream
-%% errors with `{error, peer_down}' and the caller must re-open.
-%%
-%% Returns `{error, no_healthy_station}' when no link has completed
-%% its CONNECT/HELLO handshake. `Realm' (32 bytes) and `Procedure'
-%% name the remote endpoint. `Args' is the opening payload; `Opts'
-%% accepts `mode' (default `server_stream'), `owner' (default the
-%% calling pid), `deadline_ms', and `ucan_token' (a UCAN presented to a
-%% streaming procedure advertised with an auth policy).
-%%
-%% Returns `{error, {open_too_large, Limit}}', sending nothing, when the
-%% signed STREAM_OPEN would be longer than `Limit' bytes, the
-%% `max_stream_open_bytes' macula application env (1 MiB by default): a
-%% provider closes a stream whose first frame is longer. Send bulk data as
-%% chunks once the stream is open.
--spec call_stream(pool(), <<_:256>>, binary(), term(), map()) ->
-    {ok, pid()} | {error, term()}.
-call_stream(Pool, Realm, Procedure, Args, Opts)
-  when is_pid(Pool),
-       is_binary(Realm), byte_size(Realm) =:= 32,
-       is_binary(Procedure),
-       is_map(Opts) ->
-    gen_server:call(Pool,
-                    {rpc_call_stream, Realm, Procedure, Args,
-                     Opts#{owner => maps:get(owner, Opts, self())}},
-                    5_000).
-
-%% @doc Open a streaming RPC by DIALING a specific station directly
-%% (direct-dial), instead of routing through an existing pool link.
-%% The streaming analogue of `call_station/7': ensure (reuse or dial) a
-%% link to `Station', await the handshake, then open the stream there.
-%% `Opts' may set `dial_timeout_ms' (default 10_000) for the dial +
-%% handshake, plus any `call_stream' option (e.g. `mode').
-%% `Opts' also carries the per-call TLS trust override for this dial —
-%% `verify', `expected_node_id', `pin_tls_cert' — same as
-%% `call_station/8'; extracted into a separate `LinkOpts' internally so
-%% they reach `ensure_link/3' without also leaking into the eventual
-%% underlying stream-open call's own options.
--spec call_stream_station(pool(), seed(), <<_:256>>, binary(), term(),
+%% @doc Open a streaming RPC to `Target', a provider's node_id, by DIALING
+%% a specific station directly (direct-dial). The streaming analogue of
+%% `call_station/7': ensure (reuse or dial) a link to `Station', await the
+%% handshake, then open the stream there, naming `Target'.
+%% `Opts' may set `dial_timeout_ms' (default 10_000) for the dial and
+%% handshake, plus any stream option (e.g. `mode').
+%% `Opts' also carries the per-call TLS trust override for this dial:
+%% `verify', `expected_node_id', `pin_tls_cert', same as
+%% `call_station/8'. They are kept apart as the dial's own options, so
+%% they reach `ensure_link/3' and not the stream open.
+-spec call_stream_station(pool(), seed(), <<_:256>>, <<_:256>>, binary(), term(),
                           map()) -> {ok, pid()} | {error, term()}.
-call_stream_station(Pool, Station, Realm, Procedure, Args, Opts)
+call_stream_station(Pool, Station, Target, Realm, Procedure, Args, Opts)
   when is_pid(Pool),
+       is_binary(Target), byte_size(Target) =:= 32,
        is_binary(Realm), byte_size(Realm) =:= 32,
        is_binary(Procedure),
        is_map(Opts) ->
     DialTimeout = maps:get(dial_timeout_ms, Opts, 10_000),
     LinkOpts = maps:with([verify, expected_node_id, pin_tls_cert], Opts),
     gen_server:call(Pool,
-                    {call_stream_station, Station, Realm, Procedure, Args,
+                    {call_stream_station, Station, Target, Realm, Procedure, Args,
                      Opts#{owner => maps:get(owner, Opts, self())}, LinkOpts},
                     DialTimeout + 2_000).
 
@@ -1373,19 +1344,7 @@ handle_call({unadvertise, Realm, Procedure}, _From,
     _ = fanout_unadvertise(spawned_link_pids(S), Realm, Procedure),
     {reply, ok, S#state{procs = maps:remove({Realm, Procedure}, P)}};
 
-handle_call({rpc_call_stream, Realm, Procedure, Args, Opts}, From, S) ->
-    %% Worker-spawn for the same reason as `rpc_call' — the harness's
-    %% `many_concurrent_streams' fires N parallel `call_stream/4' from
-    %% separate caller processes; without this each one queued behind
-    %% the pool gen_server.
-    Pids = spawned_link_pids(S),
-    _ = spawn(fun() ->
-        Reply = stream_first_healthy(Pids, Realm, Procedure, Args, Opts),
-        gen_server:reply(From, Reply)
-    end),
-    {noreply, S};
-
-handle_call({call_stream_station, Station, Realm, Procedure, Args, Opts,
+handle_call({call_stream_station, Station, Target, Realm, Procedure, Args, Opts,
              LinkOpts}, From, S) ->
     %% Direct-dial streaming: ensure (reuse or dial) a link to the
     %% specific station, then open the stream there. Same worker-spawn
@@ -1393,7 +1352,7 @@ handle_call({call_stream_station, Station, Realm, Procedure, Args, Opts,
     %% the dial + handshake. LinkOpts (verify/expected_node_id/
     %% pin_tls_cert) shapes a fresh dial only, same as call_station.
     on_link(ensure_link(Station, LinkOpts, S), From,
-            fun(Pid) -> stream_when_connected(Pid, Realm, Procedure, Args, Opts) end);
+            fun(Pid) -> stream_when_connected(Pid, Target, Realm, Procedure, Args, Opts) end);
 
 handle_call({advertise_stream, Realm, Procedure, Mode, Handler, Policy}, _From,
             #state{stream_procs = SP} = S) ->
@@ -2082,48 +2041,20 @@ safe_link_unadvertise(Pid, Realm, Proc) ->
     catch _:_ -> skipped
     end.
 
-%% Sticky-to-link selection for streams. Walk the healthy links in
-%% order; the first one that opens cleanly wins. The returned stream
-%% pid is bound to that link's `{remote_via_link, _, _}' peer; if
-%% the link dies, the stream errors and the caller re-opens.
-%% Per-link `{error, not_connected}' (handshake not done) falls
-%% through; any other error short-circuits and is returned to the
-%% caller, since it likely indicates a real problem (deadline,
-%% protocol mismatch) the next link would also hit.
 %% Direct-dial streaming: wait for the ensured link's handshake, then
-%% open the stream there. Mirrors `call_when_connected' for streams.
-stream_when_connected(undefined, _Realm, _Proc, _Args, _Opts) ->
+%% open the stream there, naming its target. Mirrors `call_when_connected'
+%% for streams.
+stream_when_connected(undefined, _Target, _Realm, _Proc, _Args, _Opts) ->
     {error, not_connected};
-stream_when_connected(Pid, Realm, Proc, Args, Opts) ->
+stream_when_connected(Pid, Target, Realm, Proc, Args, Opts) ->
     DialTimeout = maps:get(dial_timeout_ms, Opts, 10_000),
     Deadline = erlang:monotonic_time(millisecond) + DialTimeout,
-    stream_after_connect(await_connected(Pid, Deadline), Pid, Realm, Proc,
-                         Args, Opts).
+    stream_after_connect(await_connected(Pid, Deadline), Pid, Target, Realm, Proc, Args, Opts).
 
-stream_after_connect(true, Pid, Realm, Proc, Args, Opts) ->
-    macula_station_link:call_stream(Pid, Realm, Proc, Args, Opts);
-stream_after_connect(false, _Pid, _Realm, _Proc, _Args, _Opts) ->
+stream_after_connect(true, Pid, Target, Realm, Proc, Args, Opts) ->
+    macula_station_link:call_stream(Pid, Target, Realm, Proc, Args, Opts);
+stream_after_connect(false, _Pid, _Target, _Realm, _Proc, _Args, _Opts) ->
     {error, not_connected}.
-
-stream_first_healthy([], _Realm, _Proc, _Args, _Opts) ->
-    {error, no_healthy_station};
-stream_first_healthy([Pid | Rest], Realm, Proc, Args, Opts) ->
-    on_stream_link(macula_station_link:is_connected(Pid),
-                   Pid, Rest, Realm, Proc, Args, Opts).
-
-on_stream_link(false, _Pid, Rest, Realm, Proc, Args, Opts) ->
-    stream_first_healthy(Rest, Realm, Proc, Args, Opts);
-on_stream_link(true, Pid, Rest, Realm, Proc, Args, Opts) ->
-    keep_or_next_stream(macula_station_link:call_stream(
-                          Pid, Realm, Proc, Args, Opts),
-                        Rest, Realm, Proc, Args, Opts).
-
-keep_or_next_stream({ok, _Stream} = R, _Rest, _Realm, _Proc, _Args, _Opts) ->
-    R;
-keep_or_next_stream({error, not_connected}, Rest, Realm, Proc, Args, Opts) ->
-    stream_first_healthy(Rest, Realm, Proc, Args, Opts);
-keep_or_next_stream({error, _} = E, _Rest, _Realm, _Proc, _Args, _Opts) ->
-    E.
 
 %% Fan-out streaming advertise across every live link. Same shape
 %% as `fanout_advertise/4' for unary; partial success counts. Same

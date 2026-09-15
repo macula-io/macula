@@ -38,7 +38,7 @@
 
 -behaviour(gen_server).
 
--export([start_link/1, admit/4, store_reply/5, sweep/2, refusals/1, stop/1]).
+-export([start_link/1, admit/4, admit/5, store_reply/5, sweep/2, refusals/1, stop/1]).
 -export([init/1, handle_call/3, handle_cast/2]).
 
 -export_type([limits/0, request/0, refusal/0, verdict/0]).
@@ -83,11 +83,19 @@ start_link(#{caller_quota := Quota, share := Share, cap := Cap, reply_bytes := R
 
 %% @doc Judge a verified request arriving on `Share' at `NowMs'.
 -spec admit(pid(), request(), term(), integer()) -> verdict().
+admit(Admission, Request, Share, NowMs) ->
+    admit(Admission, Request, Share, NowMs, 5_000).
+
+%% @doc As `admit/4', waiting at most `TimeoutMs' for the verdict. An admission
+%% that does not answer in time, or has stopped, exits the caller as
+%% `gen_server:call/3' does.
+-spec admit(pid(), request(), term(), integer(), timeout()) -> verdict().
 admit(Admission, #{caller := <<_:256>>, request_id := <<_:128>>, request_hash := <<_:384>>,
-                   deadline := Deadline} = Request, Share, NowMs)
+                   deadline := Deadline} = Request, Share, NowMs, TimeoutMs)
   when is_integer(Deadline), Deadline >= 0, is_integer(NowMs) ->
     gen_server:call(Admission,
-                    {admit, maps:with([caller, request_id, request_hash, deadline], Request), Share, NowMs}).
+                    {admit, maps:with([caller, request_id, request_hash, deadline], Request), Share, NowMs},
+                    TimeoutMs).
 
 %% @doc Store the signed reply of an admitted request, `Bytes' long, for its
 %% copies, at `NowMs'. `not_kept' when a byte bound leaves no room for it, and
