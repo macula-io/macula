@@ -13,8 +13,8 @@
 %%%       `macula_stream_local' dispatch.</li>
 %%%   <li>`{remote_via_link, Link, Sid}': frames over a peering
 %%%       connection through `macula_station_link'. The stream signs
-%%%       and numbers its own frames with the node identity key it is
-%%%       started with, from 0 across STREAM_DATA, STREAM_END,
+%%%       and numbers its own frames with the node identity key its
+%%%       start loader returns, from 0 across STREAM_DATA, STREAM_END,
 %%%       STREAM_ERROR and STREAM_REPLY, and hands the link their
 %%%       bytes. It verifies each frame from the peer against its
 %%%       STREAM_OPEN before the frame takes effect, and reports a
@@ -150,11 +150,12 @@
     reply_waiters = [] :: [{pid(), reference()}],
     %% How the session ended, once it has and the owner has been told
     ended = undefined :: undefined | ended(),
-    %% A link-carried stream: the node identity key it signs with, its
-    %% verified STREAM_OPEN, the peering connection it reports refused
+    %% A link-carried stream: the loader of the node identity key it signs
+    %% with, called each time it signs, so the stream never holds the key;
+    %% its verified STREAM_OPEN, the peering connection it reports refused
     %% frames to, the crypto profile, and what it has verified of the
     %% peer's frames so far.
-    key      :: macula_node_keys:node_key() | undefined,
+    key      :: fun(() -> macula_node_keys:node_key()) | undefined,
     open     :: macula_frame:verified_request() | undefined,
     conn     :: pid() | undefined,
     profile  :: macula_crypto_profile:profile() | undefined,
@@ -170,9 +171,12 @@
 %% Required opts: id, role, mode, owner. Optional: max_inbox_bytes, the
 %% bytes of chunks no reader has taken that the stream keeps; a chunk past
 %% them ends the session (default 16 MiB). A stream carried by a
-%% `macula_station_link' also takes `key' (the node identity key it
-%% signs with), `open' (the verified STREAM_OPEN), `conn' (the peering
-%% connection that carries it) and `profile'.
+%% `macula_station_link' also takes `key' (a function that returns the
+%% node identity key it signs with, called each time it signs, so the
+%% stream never holds the key), `open' (the verified STREAM_OPEN),
+%% `conn' (the peering connection that carries it) and `profile'. A
+%% stream given the key itself as `key' does not start, and start_link
+%% returns `{error, {key, not_a_loader}}'.
 -spec start_link(map()) -> {ok, pid()} | {error, term()}.
 start_link(Opts) ->
     gen_server:start_link(?MODULE, Opts, []).
@@ -354,6 +358,8 @@ deliver_frame(Pid, Frame) when is_map(Frame) ->
 %%% gen_server callbacks
 %%%===================================================================
 
+init(#{key := Key}) when not is_function(Key, 0) ->
+    {error, {key, not_a_loader}};
 init(Opts) ->
     Id = maps:get(id, Opts),
     Role = maps:get(role, Opts),
@@ -516,8 +522,8 @@ handle_info(_Msg, State) ->
 
 terminate(_Reason, _State) -> ok.
 
-%% A link-carried stream holds the node identity key: status output and
-%% crash reports show it redacted.
+%% A link-carried stream holds its key's loader: status output and crash
+%% reports show it as a printed function, and any key they reach redacted.
 format_status(Status) ->
     macula_node_keys:redacted(Status).
 
@@ -601,10 +607,10 @@ sent_via_link(true, ok, Spec, Link, Sid, #state{seq_out = Seq} = S) ->
     Bytes = macula_frame:encode(signed_frame(Spec, S)),
     {macula_station_link:send_stream_bytes(Link, Sid, Bytes, last_frame(Spec)), S#state{seq_out = Seq + 1}}.
 
-signed_frame(Spec, #state{role = server, key = Key, open = Open}) ->
-    macula_frame:provider_stream(Spec, Key, Open);
-signed_frame(Spec, #state{role = client, key = Key, open = Open}) ->
-    macula_frame:caller_stream(Spec, Key, Open).
+signed_frame(Spec, #state{role = server, key = Load, open = Open}) ->
+    macula_frame:provider_stream(Spec, Load(), Open);
+signed_frame(Spec, #state{role = client, key = Load, open = Open}) ->
+    macula_frame:caller_stream(Spec, Load(), Open).
 
 %% @private The last frame from a side, after which its link forgets the
 %% stream.
@@ -619,7 +625,7 @@ replied({{error, not_allowed} = Refused, State}, _Result) ->
 replied({_Sent, State}, Result) ->
     {reply, ok, State#state{reply = Result}}.
 
-%% @private A stream started with the key and STREAM_OPEN of a
+%% @private A stream started with the key loader and STREAM_OPEN of a
 %% link-carried stream signs, numbers and verifies its frames; a local
 %% pair has none of these.
 carried(#{key := Key, open := Open, conn := Conn, profile := Profile}, State) ->
