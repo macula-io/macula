@@ -89,7 +89,7 @@ publish(Pool, Realm, Topic, Payload, Opts)
 %% @doc Subscribe `Subscriber' to `(Realm, Topic)' via `Pool'.
 %% Equivalent to `subscribe/5' with empty opts.
 -spec subscribe(macula_client:pool(), <<_:256>>, binary(), pid()) ->
-    {ok, reference()}.
+    {ok, reference()} | {error, {text_too_long | invalid_text, topic}}.
 subscribe(Pool, Realm, Topic, Subscriber) ->
     subscribe(Pool, Realm, Topic, Subscriber, #{}).
 
@@ -106,7 +106,7 @@ subscribe(Pool, Realm, Topic, Subscriber) ->
 %% subscribe-time options. Future phases (history replay, server-
 %% side filters) will add named keys.
 -spec subscribe(macula_client:pool(), <<_:256>>, binary(), pid(), map()) ->
-    {ok, reference()}.
+    {ok, reference()} | {error, {text_too_long | invalid_text, topic}}.
 subscribe(Pool, Realm, Topic, Subscriber, Opts)
   when is_pid(Pool),
        is_binary(Realm), byte_size(Realm) =:= 32,

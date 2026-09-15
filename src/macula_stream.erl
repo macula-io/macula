@@ -258,9 +258,14 @@ set_error(Pid, Reason) ->
 
 %% @doc Abort the stream with a STREAM_ERROR frame. Both sides close;
 %% any pending recv/await_reply waiters receive {error, {Code, Message}}.
--spec abort(pid(), binary(), binary()) -> ok.
+%% A code a STREAM_ERROR cannot carry, over 64 bytes or not UTF-8, is
+%% refused by name before the stream is called, and the stream goes on.
+-spec abort(pid(), binary(), binary()) -> ok | {error, {text_too_long | invalid_text, code}}.
 abort(Pid, Code, Message) when is_binary(Code), is_binary(Message) ->
-    gen_server:call(Pid, {abort, Code, Message}).
+    aborted(macula_frame:text_checked(code, Code), Pid, Code, Message).
+
+aborted(ok, Pid, Code, Message) -> gen_server:call(Pid, {abort, Code, Message});
+aborted({error, _} = Refused, _Pid, _Code, _Message) -> Refused.
 
 %% @doc Hand the stream to `NewOwner'. A stream ends when its owner ends;
 %% after this it ends when `NewOwner' does, and `NewOwner' is told when the

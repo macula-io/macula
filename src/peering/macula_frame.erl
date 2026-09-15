@@ -44,7 +44,7 @@
     store/1, store_ack/1,
 
     %% DHT helper — build and validate a station_ref entry
-    station_ref/1, addresses_checked/1,
+    station_ref/1, addresses_checked/1, text_checked/2,
 
     %% Constructors — CALL (Part 6 §5)
     call/2, result/2, provider_error/2, relay_error/2,
@@ -1659,6 +1659,17 @@ bounded_text(Field, Text, _Max)                                           -> utf
 
 optional_bounded_text(_Field, error, _Max)     -> ok;
 optional_bounded_text(Field, {ok, Text}, Max) -> bounded_text(Field, Text, Max).
+
+%% @doc Check text a frame builder bounds, before anything is built: a topic or a procedure of at most 512 bytes, a code of
+%% at most 64, and a detail or a message of at most 256, each valid UTF-8. Returns the builder's own refusal, so a caller
+%% refuses local text by name instead of letting a builder raise.
+-spec text_checked(topic | procedure | code | detail | message, term()) ->
+          ok | {error, {text_too_long | invalid_text, topic | procedure | code | detail | message}}.
+text_checked(topic, Text) -> bounded_text(topic, Text, ?MAX_TOPIC_BYTES);
+text_checked(procedure, Text) -> bounded_text(procedure, Text, ?MAX_PROCEDURE_BYTES);
+text_checked(code, Text) -> bounded_text(code, Text, ?MAX_ERROR_CODE_BYTES);
+text_checked(detail, Text) -> bounded_text(detail, Text, ?MAX_ERROR_TEXT_BYTES);
+text_checked(message, Text) -> bounded_text(message, Text, ?MAX_ERROR_TEXT_BYTES).
 
 relay_code_in_set(true)  -> ok;
 relay_code_in_set(false) -> {error, relay_code_outside_its_set}.

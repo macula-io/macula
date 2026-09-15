@@ -880,6 +880,8 @@ links(Pool) when is_pid(Pool) ->
 %% Returns `{error, {unsupported_payload_type, Type, Path}}' naming the
 %% offending value and where it sits in the term. Floats are the common
 %% case: scale them to integers (micro-units) or send binary strings.
+%% A topic over 512 bytes or not UTF-8 is refused first, as
+%% `{error, {text_too_long, topic}}' or `{error, {invalid_text, topic}}'.
 -spec publish(pool(), <<_:256>>, binary(), term(), map()) ->
     ok | {error, term()}.
 publish(Pool, Realm, Topic, Payload, Opts)
@@ -887,8 +889,12 @@ publish(Pool, Realm, Topic, Payload, Opts)
        is_binary(Realm), byte_size(Realm) =:= 32,
        is_binary(Topic),
        is_map(Opts) ->
-    publish_checked(macula_frame:check_payload(Payload),
+    publish_checked(publishable(macula_frame:text_checked(topic, Topic), Payload),
                     Pool, Realm, Topic, Payload, Opts).
+
+%% A topic a PUBLISH cannot carry is refused before the payload is looked at.
+publishable(ok, Payload) -> macula_frame:check_payload(Payload);
+publishable({error, _} = Refused, _Payload) -> Refused.
 
 publish_checked(ok, Pool, Realm, Topic, Payload, Opts) ->
     Timeout = maps:get(timeout_ms, Opts, 5_000),
@@ -899,19 +905,25 @@ publish_checked({error, _} = Rejected, _Pool, _Realm, _Topic, _Payload, _Opts) -
 
 %% @doc Subscribe `Subscriber' to `(Realm, Topic)'. The pool
 %% subscribes every currently-spawned link and dedupes inbound
-%% events before fan-out. Returns `{ok, SubRef}'; `Subscriber'
+%% events before fan-out. Returns `{ok, SubRef}', or the topic's refusal
+%% when a SUBSCRIBE cannot carry it (over 512 bytes, or not UTF-8); `Subscriber'
 %% receives `{macula_event, SubRef, Topic, Payload, Meta}' for each
 %% delivered event and `{macula_event_gone, SubRef, Reason}' once
 %% when the pool closes or the subscriber pid dies.
 -spec subscribe(pool(), <<_:256>>, binary(), pid(), map()) ->
-    {ok, reference()}.
+    {ok, reference()} | {error, {text_too_long | invalid_text, topic}}.
 subscribe(Pool, Realm, Topic, Subscriber, Opts)
   when is_pid(Pool),
        is_binary(Realm), byte_size(Realm) =:= 32,
        is_binary(Topic), is_pid(Subscriber),
        is_map(Opts) ->
-    gen_server:call(Pool, {subscribe, Realm, Topic, Subscriber, Opts},
-                    5_000).
+    subscribed(macula_frame:text_checked(topic, Topic), Pool, Realm, Topic, Subscriber, Opts).
+
+%% A topic a SUBSCRIBE cannot carry is refused before the pool or its links build anything.
+subscribed(ok, Pool, Realm, Topic, Subscriber, Opts) ->
+    gen_server:call(Pool, {subscribe, Realm, Topic, Subscriber, Opts}, 5_000);
+subscribed({error, _} = Refused, _Pool, _Realm, _Topic, _Subscriber, _Opts) ->
+    Refused.
 
 %% @doc Drop a subscription. Idempotent — unknown `SubRef' is a
 %% no-op. The wire-level link subscription persists for the pool's

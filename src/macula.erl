@@ -207,7 +207,7 @@ publish(Pool, Realm, Topic, Payload, Opts) ->
 
 %% @doc Subscribe `Subscriber' to `(Realm, Topic)' on `Pool'.
 %% Equivalent to `subscribe/5' with empty opts.
--spec subscribe(pool(), realm(), topic(), pid()) -> {ok, reference()}.
+-spec subscribe(pool(), realm(), topic(), pid()) -> {ok, reference()} | {error, {text_too_long | invalid_text, topic}}.
 subscribe(Pool, Realm, Topic, Subscriber) ->
     macula_pubsub:subscribe(Pool, Realm, Topic, Subscriber).
 
@@ -230,7 +230,7 @@ subscribe(Pool, Realm, Topic, Subscriber) ->
 %% publisher signature did not verify.
 %% See `macula_pubsub:subscribe/5'.
 -spec subscribe(pool(), realm(), topic(), pid(), map()) ->
-    {ok, reference()}.
+    {ok, reference()} | {error, {text_too_long | invalid_text, topic}}.
 subscribe(Pool, Realm, Topic, Subscriber, Opts) ->
     macula_pubsub:subscribe(Pool, Realm, Topic, Subscriber, Opts).
 
@@ -900,7 +900,7 @@ set_reply(Stream, Result) when is_pid(Stream) ->
     macula_stream:set_reply(Stream, Result).
 
 %% @doc Abort the stream with an error frame.
--spec abort(stream(), binary(), binary()) -> ok.
+-spec abort(stream(), binary(), binary()) -> ok | {error, {text_too_long | invalid_text, code}}.
 abort(Stream, Code, Message)
   when is_pid(Stream), is_binary(Code), is_binary(Message) ->
     macula_stream:abort(Stream, Code, Message).
