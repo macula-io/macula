@@ -18,8 +18,9 @@
 -include_lib("eunit/include/eunit.hrl").
 
 -define(REALM, <<0:256>>).
--define(SEED1, #{host => <<"127.0.0.1">>, port => 1}).
--define(SEED2, #{host => <<"127.0.0.1">>, port => 2}).
+%% Unreachable seeds, each naming the node_id a link to it expects.
+-define(SEED1, #{host => <<"127.0.0.1">>, port => 1, expected_node_id => <<1:256>>}).
+-define(SEED2, #{host => <<"127.0.0.1">>, port => 2, expected_node_id => <<2:256>>}).
 
 %%------------------------------------------------------------------
 %% Boot
@@ -507,7 +508,7 @@ links_host_from_url_seed_test_() ->
      fun() ->
          {ok, _} = application:ensure_all_started(macula),
          {ok, Pool} = macula_client:connect(
-                        [<<"https://relay.example:4433">>], #{}),
+                        [<<"https://relay.example:4433">>], #{expected_node_id => <<1:256>>}),
          {ok, [Link]} = macula_client:links(Pool),
          ?assertEqual(<<"relay.example">>, maps:get(host, Link)),
          ok = macula_client:close(Pool)
@@ -1086,7 +1087,8 @@ discovered_link_that_never_connects_is_given_up_test_() ->
     {setup,
      fun() ->
          {ok, Pool} = macula_client:connect(
-                        [], #{station_discovery =>
+                        [], #{expected_node_id => <<1:256>>,
+                              station_discovery =>
                               #{enabled => true, refresh_ms => 60_000,
                                 giveup_after_ms => 150,
                                 giveup_sweep_ms => 50}}),
@@ -1118,7 +1120,8 @@ bootstrap_seed_that_never_connects_is_not_given_up_test_() ->
      fun() ->
          {ok, Pool} = macula_client:connect(
                         [<<"quic://127.0.0.1:1">>],
-                        #{station_discovery =>
+                        #{expected_node_id => <<1:256>>,
+                          station_discovery =>
                           #{enabled => true, refresh_ms => 60_000,
                             giveup_after_ms => 150,
                             giveup_sweep_ms => 50}}),

@@ -160,7 +160,8 @@
     subscriptions      := non_neg_integer(),
     replication_factor := pos_integer(),
     pubsub_gap_skips   := non_neg_integer(),
-    refused_dials      := #{too_many_direct_links | new_peer_budget_spent => pos_integer()}
+    refused_dials      := #{too_many_direct_links | new_peer_budget_spent | link_start_waits_for_issuer
+                            | seed_without_expected_node_id => pos_integer()}
 }.
 %% Per-link view returned by `links/1'. One entry per configured seed
 %% that currently has a spawned link worker. `node_id' is the peer
@@ -480,8 +481,23 @@
     %% New peers per `?NEW_PEER_WINDOW_MS', by normalized seed. The
     %% configured seeds are exempt.
     dial_budget      :: macula_client_peer_budget:t(),
-    refused_dials    :: macula_refusal_report:t()
+    refused_dials    :: macula_refusal_report:t(),
+    %% The node identity key, for the next issuer, and the pool's statement
+    %% issuer, `undefined' while a new one waits for its backoff.
+    node_identity    :: macula_node_keys:node_key(),
+    issuer           :: pid() | undefined,
+    issuer_started_at :: integer(),
+    issuer_backoff_ms :: pos_integer(),
+    %% Link starts that wait for the next issuer: seed → the start's extra
+    %% options.
+    held_starts = #{} :: #{seed() => map()}
 }).
+
+%% The issuer restart backoff doubles from the least to the most, and
+%% starts from the least again once an issuer has run for a minute.
+-define(ISSUER_RESTART_MIN_MS, 100).
+-define(ISSUER_RESTART_MAX_MS, 5_000).
+-define(ISSUER_STABLE_MS, 60_000).
 
 %%====================================================================
 %% Public API
@@ -496,7 +512,14 @@
 %% returned and no link is dialed.
 -spec connect([seed()], opts()) -> {ok, pool()} | {error, term()}.
 connect(Seeds, Opts) when is_list(Seeds), is_map(Opts) ->
-    gen_server:start_link(?MODULE, {Seeds, Opts}, []).
+    gen_server:start_link(?MODULE, {Seeds, identity_wrapped(Opts)}, []).
+
+%% A supplied node identity key travels as a function that returns it, so
+%% the pool's start arguments, and a supervisor's child spec, hold no key.
+identity_wrapped(#{node_identity := Key} = Opts) when is_map(Key) ->
+    Opts#{node_identity := fun() -> Key end};
+identity_wrapped(Opts) ->
+    Opts.
 
 %% @doc Stop the pool. Every subscriber receives a final
 %% `{macula_event_gone, SubRef, pool_closed}' message; every link
@@ -510,7 +533,7 @@ close(Pool) ->
 -spec child_spec(term(), [seed()], opts()) -> supervisor:child_spec().
 child_spec(Id, Seeds, Opts) ->
     #{id       => Id,
-      start    => {?MODULE, connect, [Seeds, Opts]},
+      start    => {?MODULE, connect, [Seeds, identity_wrapped(Opts)]},
       restart  => permanent,
       shutdown => 5_000,
       type     => worker,
@@ -869,10 +892,14 @@ init_within_seed_limit(Given, Max, _Seeds, _Opts) ->
 %% the refusal and no link is dialed.
 init_with_keys({error, _} = Refusal, _Seeds, _Opts) ->
     Refusal;
-init_with_keys({ok, #{node_identity := NodeIdentity} = Keys}, Seeds, Opts) ->
+init_with_keys({ok, #{node_identity := NodeIdentity, issuer := Issuer} = Keys}, Seeds, Opts) ->
     {ok, NodeId} = macula_node_keys:node_id(NodeIdentity),
+    _ = erlang:monitor(process, Issuer),
+    %% No node identity key in the link options: each link start gets a
+    %% function that returns it, made at that start, so the pool's state
+    %% holds no function over the key that redaction cannot see into.
     LinkOpts = maps:merge(
-        Keys#{
+        (maps:remove(node_identity, Keys))#{
             capabilities       => maps:get(capabilities, Opts, 0),
             alpn               => maps:get(alpn, Opts, [<<"macula">>]),
             connect_timeout_ms => maps:get(connect_timeout_ms, Opts, 30_000)
@@ -904,7 +931,9 @@ init_with_keys({ok, #{node_identity := NodeIdentity} = Keys}, Seeds, Opts) ->
                                     #{budget => maps:get(new_peer_budget, Opts, ?DEFAULT_NEW_PEER_BUDGET),
                                       window_ms => ?NEW_PEER_WINDOW_MS,
                                       exempt => [seed_peer(Seed) || Seed <- Seeds]}),
-                    refused_dials = macula_refusal_report:new(?REFUSAL_REPORT_WINDOW_MS)},
+                    refused_dials = macula_refusal_report:new(?REFUSAL_REPORT_WINDOW_MS),
+                    node_identity = NodeIdentity, issuer = Issuer, issuer_started_at = now_ms(),
+                    issuer_backoff_ms = ?ISSUER_RESTART_MIN_MS},
     State1 = lists:foldl(fun start_link_for_seed/2, State0, Seeds),
     erlang:send_after(DedupSweep, self(), dedup_sweep),
     arm_giveup_sweep(Discovery),
@@ -1136,6 +1165,9 @@ handle_info({'DOWN', Mon, process, Pid, Reason}, S) ->
 handle_info({respawn_link, Seed}, S) ->
     {noreply, on_respawn_link(Seed, S)};
 
+handle_info(restart_issuer, #state{node_identity = NodeIdentity} = S) ->
+    {noreply, issuer_restarted(macula_statement_issuer_sup:start_issuer(fun() -> NodeIdentity end, self()), S)};
+
 handle_info(run_discovery, #state{discovery = undefined} = S) ->
     %% Disabled after being scheduled (should not happen -- discovery
     %% is fixed at connect/2 time today) or a stray message. No-op.
@@ -1197,9 +1229,20 @@ format_status(Status) -> macula_node_keys:redacted(Status).
 
 start_link_for_seed(Seed, S) -> start_link_for_seed(Seed, #{}, S).
 
-start_link_for_seed(Seed, ExtraOpts, S) ->
-    LinkOpts = maps:merge(S#state.link_opts, ExtraOpts#{seed => Seed}),
+start_link_for_seed(Seed, ExtraOpts, #state{issuer = undefined} = S) ->
+    held_start(Seed, ExtraOpts, S);
+start_link_for_seed(Seed, ExtraOpts, #state{node_identity = NodeIdentity} = S) ->
+    LinkOpts = maps:merge(S#state.link_opts,
+                          ExtraOpts#{seed => Seed, node_identity => fun() -> NodeIdentity end}),
     after_link_start(macula_station_link:start_link(LinkOpts), Seed, S).
+
+%% While the pool has no issuer, a link start waits for the next one
+%% instead of starting a link that could not connect, and counts as one
+%% refusal.
+held_start(Seed, ExtraOpts, #state{held_starts = Held, links = Links} = S) ->
+    Empty = (prior_link_state(Seed, S))#link_state{seed = Seed, pid = undefined, mon = undefined},
+    count_refused_dial(link_start_waits_for_issuer,
+                       S#state{held_starts = Held#{Seed => ExtraOpts}, links = Links#{Seed => Empty}}).
 
 after_link_start({ok, Pid}, Seed, S) ->
     Mon = erlang:monitor(process, Pid),
@@ -1209,10 +1252,21 @@ after_link_start({ok, Pid}, Seed, S) ->
 after_link_start({error, Reason}, Seed, S) ->
     macula_diagnostics:event(<<"_macula.client.link_start_failed">>,
                              #{seed => Seed, reason => Reason}),
-    erlang:send_after(?LINK_RESPAWN_DELAY_MS, self(), {respawn_link, Seed}),
     Empty = (prior_link_state(Seed, S))#link_state{
         seed = Seed, pid = undefined, mon = undefined},
-    S#state{links = (S#state.links)#{Seed => Empty}}.
+    start_refused(permanent_refusal(Reason), Seed, S#state{links = (S#state.links)#{Seed => Empty}}).
+
+%% A seed that names no expected node_id will never start a link, so it
+%% counts once and is not tried again; any other refusal is tried again
+%% after the respawn delay.
+start_refused({permanent, Kind}, _Seed, S) ->
+    count_refused_dial(Kind, S);
+start_refused(transient, Seed, S) ->
+    erlang:send_after(?LINK_RESPAWN_DELAY_MS, self(), {respawn_link, Seed}),
+    S.
+
+permanent_refusal({seed, expected_node_id_required}) -> {permanent, seed_without_expected_node_id};
+permanent_refusal(_Transient) -> transient.
 
 %% Carries a seed's `discovered'/`ever_connected'/`spawned_at' across
 %% its own respawn (both branches above) instead of resetting them --
@@ -1470,26 +1524,31 @@ notify_legacy(Keys) ->
     ok.
 
 %% The pool's keys, in the node's crypto profile: the node identity key
-%% that every link shares, and the pool's own CONNECT key, a separate
-%% key that signs each connection's proof under a binding by the
-%% identity key (D16). Every link starts with the profile and both keys.
+%% that every link shares, and the pool's own statement issuer under
+%% macula_statement_issuer_sup, which holds the pool's CONNECT key and
+%% signs each connection's material under a binding by the identity key
+%% (D16). The issuer ends with the pool.
 pool_keys(Opts) ->
     keys_in_profile(macula_crypto_profile:configured(), Opts).
 
 keys_in_profile({ok, Profile}, Opts) ->
-    keys_with_identity(node_identity(maps:find(node_identity, Opts), Profile), Profile);
+    keys_with_identity(node_identity(identity_opt(maps:find(node_identity, Opts)), Profile), Profile);
 keys_in_profile({error, _} = Refusal, _Opts) ->
     Refusal.
 
+identity_opt({ok, Identity}) when is_function(Identity, 0) -> {ok, Identity()};
+identity_opt(NotGiven) -> NotGiven.
+
 keys_with_identity({ok, NodeIdentity}, Profile) ->
-    keys_with_connect_key(macula_node_keys:generate(connect, Profile), NodeIdentity, Profile);
+    keys_with_issuer(macula_statement_issuer_sup:start_issuer(fun() -> NodeIdentity end, self()),
+                     NodeIdentity, Profile);
 keys_with_identity({error, _} = Refusal, _Profile) ->
     Refusal.
 
-keys_with_connect_key({ok, ConnectKey}, NodeIdentity, Profile) ->
-    {ok, #{profile => Profile, node_identity => NodeIdentity, connect_key => ConnectKey}};
-keys_with_connect_key({error, _} = Refusal, _NodeIdentity, _Profile) ->
-    Refusal.
+keys_with_issuer({ok, Issuer}, NodeIdentity, Profile) ->
+    {ok, #{profile => Profile, node_identity => NodeIdentity, issuer => Issuer}};
+keys_with_issuer({error, Reason}, _NodeIdentity, _Profile) ->
+    {error, {issuer, Reason}}.
 
 %% The pool's node identity key. A supplied key is used as it is, puzzle
 %% solved or not, when it is an identity key in the node's profile; any
@@ -2213,8 +2272,40 @@ unwrap_wire_text(V) -> V.
 %% Internals — DOWN routing (link vs subscriber)
 %%====================================================================
 
+on_down(_Mon, Issuer, Reason, #state{issuer = Issuer} = S) ->
+    {noreply, issuer_down(Reason, S)};
 on_down(Mon, Pid, Reason, S) ->
     on_down_routed(find_link_by_mon(Mon, S), Mon, Pid, Reason, S).
+
+%% The pool's issuer ended, and its links end with it. The pool starts a
+%% new issuer after the backoff, reported, and holds every link start
+%% until that issuer runs.
+issuer_down(Reason, #state{issuer_started_at = StartedAt, issuer_backoff_ms = Backoff} = S) ->
+    Delay = restart_delay(now_ms() - StartedAt >= ?ISSUER_STABLE_MS, Backoff),
+    ok = macula_diagnostics:bounded_event(warning, <<"_macula.client.issuer_down">>,
+                                          #{reason => Reason, restart_in_ms => Delay}),
+    erlang:send_after(Delay, self(), restart_issuer),
+    S#state{issuer = undefined, issuer_backoff_ms = min(2 * Delay, ?ISSUER_RESTART_MAX_MS),
+            link_opts = maps:remove(issuer, S#state.link_opts)}.
+
+restart_delay(true, _Backoff) -> ?ISSUER_RESTART_MIN_MS;
+restart_delay(false, Backoff) -> Backoff.
+
+%% A new issuer runs: the held link starts go ahead with it.
+issuer_restarted({ok, Issuer}, #state{held_starts = Held} = S) ->
+    _ = erlang:monitor(process, Issuer),
+    S1 = S#state{issuer = Issuer, issuer_started_at = now_ms(), held_starts = #{},
+                 link_opts = (S#state.link_opts)#{issuer => Issuer}},
+    maps:fold(fun held_start_resumed/3, S1, Held);
+issuer_restarted({error, Reason}, #state{issuer_backoff_ms = Backoff} = S) ->
+    ok = macula_diagnostics:bounded_event(warning, <<"_macula.client.issuer_start_failed">>,
+                                          #{reason => Reason, restart_in_ms => Backoff}),
+    erlang:send_after(Backoff, self(), restart_issuer),
+    S#state{issuer_backoff_ms = min(2 * Backoff, ?ISSUER_RESTART_MAX_MS)}.
+
+held_start_resumed(Seed, ExtraOpts, S) ->
+    Started = start_link_for_seed(Seed, ExtraOpts, S),
+    replay_to_seed(maps:get(Seed, Started#state.links, undefined), Started).
 
 on_down_routed({ok, Seed}, _Mon, Pid, Reason, S) ->
     macula_diagnostics:event(<<"_macula.client.link_down">>,

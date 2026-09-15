@@ -136,7 +136,8 @@ load(Path, Purpose, Profile) ->
 %%------------------------------------------------------------------
 
 %% @doc A term with the private half of every key it holds replaced by the atom `redacted', at any depth: the private
-%% value of every map that holds both a public and a private value, as node key components and key pairs do.
+%% value of every map that holds both a public and a private value, as node key components and key pairs do. A
+%% function that captured values is replaced by its printed form, since what it captured can hold a key.
 -spec redacted(term()) -> term().
 redacted(Term) ->
     redacted(Term, #{}).
@@ -584,11 +585,19 @@ redacted({Module, Function, Arguments, Location}, Modules)
     {Module, Function, length(Arguments), Location};
 redacted(Tuple, Modules) when is_tuple(Tuple) ->
     list_to_tuple(redacted(tuple_to_list(Tuple), Modules));
+redacted(Fun, _Modules) when is_function(Fun) ->
+    fun_redacted(erlang:fun_info(Fun, env), Fun);
 redacted(Other, _Modules) ->
     Other.
 
 redacted_value(Modules) ->
     fun(_Key, Value) -> redacted(Value, Modules) end.
+
+%% A function that captured values shows as its printed form, the way a report prints it, since what it captured can
+%% hold a key: a node identity key travels to a pool or an issuer as a function that returns it. A function that
+%% captured nothing stays as it is.
+fun_redacted({env, []}, Fun) -> Fun;
+fun_redacted({env, _Captured}, Fun) -> erlang:fun_to_list(Fun).
 
 %%------------------------------------------------------------------
 %% Internals: restricted atomic write

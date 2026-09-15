@@ -142,6 +142,18 @@ init([]) ->
             modules => [macula_dist_bridge_sup]
         },
 
+        %% The statement issuers of this node's pools, one for each pool,
+        %% which every connection a pool's links make draws its CONNECT
+        %% material and status statements from. Before peering.
+        #{
+            id => macula_statement_issuer_sup,
+            start => {macula_statement_issuer_sup, start_link, []},
+            restart => permanent,
+            shutdown => infinity,
+            type => supervisor,
+            modules => [macula_statement_issuer_sup]
+        },
+
         %% Peering — per-peer connection state machines (CONNECT/HELLO
         %% handshake + frame send/receive). One macula_peering_conn
         %% gen_statem per peer, supervised by macula_peering_conn_sup

@@ -36,6 +36,17 @@ keys_in_tuples_lists_and_maps_are_redacted_at_any_depth_test() ->
     Term = {state, [#{link_opts => #{node_identity => Key}}], {Key, [first | Key]}},
     ?assertEqual([], exposed(macula_node_keys:redacted(Term), privates(Key))).
 
+%% A node identity key travels to a pool or an issuer as a function that returns it, and a supervisor keeps that
+%% function in the child's start arguments, so a function that captured a key shows only its printed form.
+a_function_that_captured_a_key_shows_as_its_printed_form_test() ->
+    Key = key(),
+    Fun = fun() -> Key end,
+    ?assertEqual({held, erlang:fun_to_list(Fun)}, macula_node_keys:redacted({held, Fun})),
+    ?assertEqual([], exposed(macula_node_keys:redacted({held, Fun}), privates(Key))).
+
+a_function_that_captured_nothing_is_left_as_it_is_test_() ->
+    [?_assertEqual(Fun, macula_node_keys:redacted(Fun)) || Fun <- [fun erlang:self/0, fun() -> ok end]].
+
 a_map_without_both_halves_is_left_as_it_is_test_() ->
     [?_assertEqual(Map, macula_node_keys:redacted(Map))
      || Map <- [#{private => <<"a flag">>}, #{public => <<"a key">>}, #{private => true, name => <<"x">>}, #{}]].
@@ -174,7 +185,7 @@ crash_reports_carry_no_private_key_test_() ->
 a_function_clause_in_a_gen_server_callback() ->
     started(),
     Identity = key(),
-    {ok, Issuer} = gen_server:start(macula_statement_issuer, #{identity => Identity, owner => self()}, []),
+    {ok, Issuer} = gen_server:start(macula_statement_issuer, #{identity => fun() -> Identity end, owner => self()}, []),
     #{connect_key := Connect} = macula_statement_issuer:connect_material(Issuer),
     Events = captured(fun() -> catch gen_server:call(Issuer, not_a_request) end),
     assert_clean(Events, [{gen_server, terminate}, {proc_lib, crash}], privates(Identity) ++ privates(Connect)).
@@ -197,7 +208,7 @@ a_key_map_in_the_message_queue() ->
     started(),
     Identity = key(),
     Carried = key(),
-    {ok, Issuer} = gen_server:start(macula_statement_issuer, #{identity => Identity, owner => self()}, []),
+    {ok, Issuer} = gen_server:start(macula_statement_issuer, #{identity => fun() -> Identity end, owner => self()}, []),
     Events = captured(fun() ->
         ok = sys:suspend(Issuer),
         Issuer ! {'$gen_call', {self(), make_ref()}, not_a_request},
@@ -209,7 +220,7 @@ a_key_map_in_the_message_queue() ->
 a_supervised_child_crash() ->
     started(),
     Identity = key(),
-    {ok, Supervisor} = supervisor:start_link(?MODULE, {supervisor, #{identity => Identity, owner => self()}}),
+    {ok, Supervisor} = supervisor:start_link(?MODULE, {supervisor, #{identity => fun() -> Identity end, owner => self()}}),
     unlink(Supervisor),
     [{issuer, Issuer, worker, _}] = supervisor:which_children(Supervisor),
     Events = captured(fun() -> catch gen_server:call(Issuer, not_a_request) end),

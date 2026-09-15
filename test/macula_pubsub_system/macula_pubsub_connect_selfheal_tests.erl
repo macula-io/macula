@@ -42,13 +42,11 @@ connect_watchdog_recycles_wedged_link_test_() ->
     {timeout, 5,
      fun() ->
          {ok, _} = application:ensure_all_started(macula),
-         Identity = macula_identity:generate(),
          %% Short watchdog + a dead seed: the link never really connects.
-         {ok, Pid} = macula_station_link:start_link(#{
+         {ok, Pid} = macula_station_link:start_link(with_link_keys(#{
              seed                => #{host => <<"127.0.0.1">>, port => 1},
-             identity            => Identity,
              connect_watchdog_ms => 200
-         }),
+         })),
 
          %% A subscriber queued while the link is still un-connected.
          Test = self(),
@@ -120,12 +118,10 @@ connect_watchdog_does_not_recycle_connected_link_test_() ->
     {timeout, 5,
      fun() ->
          {ok, _} = application:ensure_all_started(macula),
-         Identity = macula_identity:generate(),
-         {ok, Pid} = macula_station_link:start_link(#{
+         {ok, Pid} = macula_station_link:start_link(with_link_keys(#{
              seed                => #{host => <<"127.0.0.1">>, port => 1},
-             identity            => Identity,
              connect_watchdog_ms => 200
-         }),
+         })),
          FakePeer   = self(),
          PeerNodeId = macula_identity:public(macula_identity:generate()),
          _ = sys:replace_state(Pid, fun(S) ->
@@ -158,3 +154,13 @@ wait_until_connected(Pid, N) ->
         undefined -> timer:sleep(25), wait_until_connected(Pid, N - 1);
         _NodeId   -> ok
     end.
+
+%% Start options with the keys a link starts with: a node identity key in
+%% the node's profile, an issuer of its own for that key, owned by the
+%% calling process, and the node_id its seed expects.
+with_link_keys(Opts) ->
+    {ok, Profile} = macula_crypto_profile:configured(),
+    {ok, Key} = macula_node_keys:generate(identity, Profile),
+    {ok, Issuer} = macula_statement_issuer_sup:start_issuer(fun() -> Key end, self()),
+    Opts#{node_identity => fun() -> Key end, issuer => Issuer,
+          expected_node_id => <<1:256>>}.

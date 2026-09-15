@@ -158,18 +158,27 @@
 -type opts() :: #{
     %% Endpoint to dial. Either a URL (https://host:port) or a
     %% pre-parsed #{host, port} map. The map form may carry the
-    %% optional `macula_peering_conn:connect_opts()' trust keys,
-    %% forwarded verbatim into the dial target:
-    %%   `expected_node_id' — pin the relay's Ed25519 identity (TLS
-    %%       SPKI pin + HELLO node_id binding), strongest;
+    %% `macula_peering_conn:connect_opts()' trust keys, forwarded
+    %% verbatim into the dial target:
+    %%   `expected_node_id' — the station's node_id, which the
+    %%       handshake checks (D16); required, and a link without one
+    %%       refuses to start;
     %%   `verify' — `webpki' (default) or `none' (dev/self-signed
     %%       only; logs a warning per dial).
     seed     := url() | #{host := binary() | string(),
                           port := inet:port_number(),
                           _    => _},
-    %% Local Ed25519 keypair used to sign the CONNECT frame and any
-    %% subsequent application frames. Auto-generated when absent.
-    identity => macula_identity:key_pair(),
+    %% A function that returns the node identity key, so no start
+    %% argument holds the key. Required: a link makes no key of its own.
+    node_identity := fun(() -> macula_node_keys:node_key()),
+    %% The pool's statement issuer, which every connection draws its
+    %% CONNECT material and status statements from. Required, and the
+    %% link ends when the issuer does.
+    issuer := pid(),
+    %% The function that opens the peering connection, by default
+    %% `macula_peering:connect/1'. An option, so a test replaces no
+    %% shared module.
+    connect => fun((map()) -> {ok, pid()} | {error, term()}),
     %% Capability bitfield announced in CONNECT (default 0).
     capabilities => non_neg_integer(),
     %% ALPN list passed through to QUIC (default [&lt;&lt;"macula"&gt;&gt;]).
@@ -233,7 +242,10 @@
     seed             :: #{host := binary() | string(),
                           port := inet:port_number(),
                           _    => _},
-    identity         :: macula_identity:key_pair(),
+    node_identity    :: macula_node_keys:node_key(),
+    profile          :: macula_crypto_profile:profile(),
+    issuer           :: pid(),
+    connect          :: fun((map()) -> {ok, pid()} | {error, term()}),
     capabilities     :: non_neg_integer(),
     alpn             :: [binary()],
     connect_timeout_ms :: non_neg_integer(),
@@ -241,7 +253,7 @@
     %% disconnected.
     peer_pid         :: pid() | undefined,
     %% peer's node id, set on `connected'.
-    peer_node_id     :: macula_identity:pubkey() | undefined,
+    peer_node_id     :: <<_:256>> | undefined,
     %% map of CALL id (16 bytes) -> {From, TimerRef}.
     pending = #{}    :: #{<<_:128>> => {gen_server:from(), reference()}},
     %% Active topic subscriptions keyed by SubRef returned to the
@@ -819,19 +831,18 @@ send_overlay_frame(Client, Frame) when is_pid(Client), is_map(Frame) ->
     gen_server:call(Client, {send_overlay_frame, Frame}, 5_000).
 
 %% @doc Send a pre-built, pre-signed overlay-protocol frame to a specific
-%% `TargetPeer' (that peer's own 32-byte Ed25519 pubkey), relayed through
-%% whatever station this connection is dialed into. Wraps `Frame' in an
-%% `overlay_relay' envelope (Part 6 §9.x), signed with THIS connection's
-%% own identity — the station verifies that signature against the
-%% authenticated NodeId of whoever sent it before relaying, so a claimed
-%% `TargetPeer' can never be spoofed by an unrelated connection — and
-%% forwards it to whichever of its OTHER connections authenticates as
-%% `TargetPeer'. See `macula_station_peer_observer:dispatch_overlay/5' on
+%% `TargetPeer' (that peer's 32-byte node_id), relayed through whatever
+%% station this connection is dialed into. Wraps `Frame' in an
+%% `overlay_relay' envelope (Part 6 §9.x), a control frame the connection
+%% signs for its neighbour as it sends it, so the station relays it as sent
+%% by this connection's authenticated node_id and a claimed `TargetPeer'
+%% can never be spoofed by an unrelated connection. The station forwards it
+%% to whichever of its OTHER connections authenticates as `TargetPeer'. See `macula_station_peer_observer:dispatch_overlay/5' on
 %% the relay side. `Frame' carries its own, separate signature, which the
 %% caller must make with THIS connection's identity: the receiving link
 %% delivers `Frame' only if that signature verifies against the sender the
 %% station names in the envelope, and that sender is this connection's
-%% authenticated NodeId. This function only signs the envelope around it,
+%% authenticated NodeId. This function only wraps it in the envelope, and
 %% never touches `Frame'.
 %% Silently dropped by the station if `TargetPeer' isn't currently
 %% connected there; HyParView's own periodic shuffle/retry is the
@@ -839,7 +850,7 @@ send_overlay_frame(Client, Frame) when is_pid(Client), is_map(Frame) ->
 %%
 %% `{error, not_connected}' if the peering handshake to the station
 %% itself hasn't completed.
--spec send_overlay_frame(pid(), macula_identity:pubkey(), macula_frame:frame()) ->
+-spec send_overlay_frame(pid(), <<_:256>>, macula_frame:frame()) ->
     ok | {error, term()}.
 send_overlay_frame(Client, TargetPeer, Frame)
   when is_pid(Client), is_binary(TargetPeer), byte_size(TargetPeer) =:= 32,
@@ -961,7 +972,7 @@ is_connected(Pid) ->
         false -> false
     end.
 
--spec peer_node_id(pid()) -> {ok, macula_identity:pubkey()} | {error, not_connected}.
+-spec peer_node_id(pid()) -> {ok, <<_:256>>} | {error, not_connected}.
 peer_node_id(Pid) ->
     gen_server:call(Pid, peer_node_id, 1_000).
 
@@ -969,18 +980,45 @@ peer_node_id(Pid) ->
 %% gen_server
 %%====================================================================
 
-%% The identity a link connects with: the one given, or else a fresh one
-%% that passes the puzzle check, as the macula_client pool's default does.
-identity_or_generate({ok, Identity}) -> Identity;
-identity_or_generate(error) -> macula_identity:generate().
+%% A link starts only with a node identity key, a statement issuer and a
+%% seed that names the node_id it expects. Otherwise it refuses with the
+%% name of what is missing, in that order, and makes no key of its own.
+start_checked(#{node_identity := Identity} = Opts) when is_function(Identity, 0) ->
+    issuer_checked(maps:find(issuer, Opts), Identity, Opts);
+start_checked(_Opts) ->
+    {error, {node_identity, required}}.
 
+issuer_checked({ok, Issuer}, Identity, Opts) when is_pid(Issuer) ->
+    identity_checked(Identity(), Issuer, Opts);
+issuer_checked(_NoIssuer, _Identity, _Opts) ->
+    {error, {issuer, required}}.
+
+identity_checked(#{purpose := identity, profile := Profile} = Key, Issuer, Opts) ->
+    seed_checked(add_tls_opts(parse_seed(maps:get(seed, Opts)), Opts), Key, Profile, Issuer);
+identity_checked(_NotAnIdentityKey, _Issuer, _Opts) ->
+    {error, {node_identity, not_an_identity_key}}.
+
+seed_checked(#{expected_node_id := <<_:256>>} = Seed, Key, Profile, Issuer) ->
+    {ok, Seed, Key, Profile, Issuer};
+seed_checked(_Seed, _Key, _Profile, _Issuer) ->
+    {error, {seed, expected_node_id_required}}.
+
+%% The node_id of the node identity key: the identity the frames this link builds name.
+node_id(Key) ->
+    {ok, NodeId} = macula_node_keys:node_id(Key),
+    NodeId.
+
+%% TLS policy (`verify' / `expected_node_id') rides in the seed map, which
+%% is spread into the peering target at connect. The link watches its
+%% issuer and ends when the issuer does.
 init(Opts) ->
-    %% TLS policy (`verify' / `expected_node_id') rides in the seed map,
-    %% which is spread into the peering target at connect — so a caller
-    %% can dial a self-signed or pubkey-pinned station, same as the
-    %% station-side outbound link.
-    Seed     = add_tls_opts(parse_seed(maps:get(seed, Opts)), Opts),
-    Identity = identity_or_generate(maps:find(identity, Opts)),
+    started(start_checked(Opts), Opts).
+
+started({error, Refusal}, _Opts) ->
+    {stop, Refusal};
+started({ok, Seed, Key, Profile, Issuer}, Opts) ->
+    _ = erlang:monitor(process, Issuer),
+    Connect  = maps:get(connect, Opts, fun macula_peering:connect/1),
     Caps     = maps:get(capabilities, Opts, 0),
     Alpn     = maps:get(alpn, Opts, [<<"macula">>]),
     Tmo      = maps:get(connect_timeout_ms, Opts, 30_000),
@@ -988,7 +1026,8 @@ init(Opts) ->
     LiveMs   = maps:get(liveness_interval_ms, Opts, app_env(liveness_interval_ms, ?LIVENESS_INTERVAL_MS)),
     LiveMiss = maps:get(liveness_max_misses, Opts, app_env(liveness_max_misses, ?LIVENESS_MAX_MISSES)),
     RetryMs  = maps:get(connect_retry_backoff_ms, Opts, app_env(connect_retry_backoff_ms, ?CONNECT_RETRY_BACKOFF_MS)),
-    State    = #state{seed = Seed, identity = Identity,
+    State    = #state{seed = Seed, node_identity = Key, profile = Profile,
+                      issuer = Issuer, connect = Connect,
                       capabilities = Caps, alpn = Alpn,
                       connect_timeout_ms = Tmo,
                       connect_watchdog_ms = WdMs,
@@ -1035,10 +1074,10 @@ handle_call({call_on_stream, _Stream, _Realm, _Proc, _Payload, _Tmo}, _From,
             #state{peer_node_id = undefined} = S) ->
     {reply, {error, not_connected}, S};
 handle_call({call_on_stream, Stream, Realm, Proc, Payload, Tmo}, From,
-            #state{identity = Id, content_pending = CP,
+            #state{node_identity = Id, content_pending = CP,
                    content_stream_bufs = Bufs} = S)
         when is_map_key(Stream, Bufs) ->
-    Caller = macula_identity:public(Id),
+    Caller = node_id(Id),
     DeadlineMs = erlang:system_time(millisecond) + Tmo,
     Frame = macula_frame:call(#{
         call_id     => crypto:strong_rand_bytes(16),
@@ -1158,19 +1197,14 @@ handle_call({send_overlay_frame_to, _Target, _Frame}, _From,
             #state{peer_pid = undefined} = S) ->
     {reply, {error, not_connected}, S};
 handle_call({send_overlay_frame_to, Target, Frame}, _From,
-            #state{peer_pid = Pid, identity = Id} = S) ->
-    %% The ENVELOPE is signed with this connection's own identity — the
-    %% station verifies it against the authenticated NodeId of whoever is
-    %% sending, before relaying (see macula_station_peer_observer:
-    %% dispatch_overlay/5). `Frame' itself (the wrapped inner frame) is
-    %% the caller's own responsibility to sign, same as `send_overlay_
-    %% frame/2' — the two signatures serve different purposes: this one
-    %% proves who asked for the relay, the inner one proves who
-    %% originated the protocol-level frame.
-    Envelope = macula_frame:sign(
-                 macula_frame:overlay_relay(#{peer    => Target,
-                                              payload => macula_frame:encode(Frame)}),
-                 Id),
+            #state{peer_pid = Pid} = S) ->
+    %% The envelope is a control frame: the connection signs it for its
+    %% neighbour as it sends it, and the station relays it as sent by this
+    %% connection's authenticated node_id (see macula_station_peer_observer:
+    %% dispatch_overlay/5). `Frame' itself (the wrapped inner frame) is the
+    %% caller's own responsibility, same as `send_overlay_frame/2'.
+    Envelope = macula_frame:overlay_relay(#{peer    => Target,
+                                            payload => macula_frame:encode(Frame)}),
     Result = try macula_peering:send_frame(Pid, Envelope)
              catch C:R -> {error, {C, R}}
              end,
@@ -1229,22 +1263,20 @@ handle_cast(_Msg, S) -> {noreply, S}.
 %% Connect
 %%-------------------------------------------------------------------
 
-handle_info(attempt_connect, #state{seed = Seed, identity = Id,
-                                    capabilities = Caps, alpn = Alpn,
+%% Each dial carries the node identity key, the pool's issuer and a target
+%% that names the station's node_id.
+handle_info(attempt_connect, #state{seed = Seed, node_identity = Key, issuer = Issuer,
+                                    connect = Connect, capabilities = Caps, alpn = Alpn,
                                     connect_timeout_ms = Tmo} = S) ->
-    Pub = macula_identity:public(Id),
     PeeringOpts = #{
         role            => client,
         target          => Seed#{alpn => Alpn, timeout_ms => Tmo},
-        node_id         => Pub,
-        identity        => Id,
-        %% Realm-agnostic: the link advertises no realm membership.
-        %% Each frame carries its own realm tag.
-        realms          => [],
+        identity        => Key,
+        issuer          => Issuer,
         capabilities    => Caps,
         controlling_pid => self()
     },
-    after_connect_request(macula_peering:connect(PeeringOpts), S);
+    after_connect_request(Connect(PeeringOpts), S);
 
 handle_info({macula_peering, connected, Pid, PeerNodeId},
             #state{peer_pid = Pid} = S) ->
@@ -1419,6 +1451,10 @@ handle_info({'EXIT', Pid, Reason}, #state{peer_pid = Pid, seed = Seed} = S) ->
     {stop, normal, NewS#state{peer_pid = undefined,
                               peer_node_id = undefined}};
 
+%% The issuer every connection of this link draws from is gone: the link
+%% ends, and the pool starts it again with the pool's next issuer.
+handle_info({'DOWN', _Mon, process, Issuer, Reason}, #state{issuer = Issuer} = S) ->
+    {stop, {issuer_down, Reason}, S};
 handle_info({'DOWN', Mon, process, Pid, _Reason}, S) ->
     %% Two monitor sources land here: subscriber pids paired by
     %% `subscribe/4', and stream pids tracked in `streams'. Probe
@@ -1487,7 +1523,7 @@ publish_reply({error, _} = Refused, _Seq, S) ->
 call_in_time(RemainingMs, _Call, _From, S) when RemainingMs =< 0 ->
     {reply, {error, timeout}, S};
 call_in_time(RemainingMs, {Realm, Proc, Payload, DeadlineMs, Ucan}, From,
-             #state{peer_pid = Pid, identity = Id, pending = P} = S) ->
+             #state{peer_pid = Pid, node_identity = Id, pending = P} = S) ->
     CallId = crypto:strong_rand_bytes(16),
     Frame = macula_frame:call(#{
         call_id     => CallId,
@@ -1495,7 +1531,7 @@ call_in_time(RemainingMs, {Realm, Proc, Payload, DeadlineMs, Ucan}, From,
         realm       => Realm,
         payload     => Payload,
         deadline_ms => DeadlineMs,
-        caller      => macula_identity:public(Id),
+        caller      => node_id(Id),
         ucan_token  => Ucan
     }),
     %% NOT `ok = send_frame(...)'. Since the frame is now checked before
@@ -1515,8 +1551,8 @@ await_call_reply({error, Reason}, _CallId, _From, _Tmo, _Pending, S) ->
 -spec send_publish_frame(<<_:256>>, binary(), term(), non_neg_integer(),
                          #state{}) -> ok | {error, term()}.
 send_publish_frame(Realm, Topic, Payload, Seq,
-                   #state{peer_pid = Pid, identity = Id}) ->
-    Pub = macula_identity:public(Id),
+                   #state{peer_pid = Pid, node_identity = Id}) ->
+    Pub = node_id(Id),
     Frame0 = macula_frame:publish(#{
         topic           => Topic,
         realm           => Realm,
@@ -1928,9 +1964,9 @@ trigger_zombie_close(#state{peer_pid = Pid} = S) when is_pid(Pid) ->
 trigger_zombie_close(S) ->
     S.
 
-send_probe(#state{peer_pid = Pid, identity = Id} = S) when is_pid(Pid) ->
+send_probe(#state{peer_pid = Pid, node_identity = Id} = S) when is_pid(Pid) ->
     CallId = crypto:strong_rand_bytes(16),
-    Caller = macula_identity:public(Id),
+    Caller = node_id(Id),
     DeadlineMs = erlang:system_time(millisecond) + S#state.liveness_interval_ms,
     Frame = macula_frame:call(#{
         call_id     => CallId,
@@ -1971,7 +2007,7 @@ on_empty_set(false, Key,  Set, Idx) -> Idx#{Key => Set}.
 on_unsubscribe(SubRef, #state{subscriptions = Subs,
                               topic_index   = Idx,
                               peer_pid      = Pid,
-                              identity      = Id} = S) ->
+                              node_identity = Id} = S) ->
     on_unsubscribe_take(maps:take(SubRef, Subs), SubRef, Idx, Pid, Id, S).
 
 on_unsubscribe_take(error, _SubRef, _Idx, _Pid, _Id, S) ->
@@ -1986,7 +2022,7 @@ on_unsubscribe_take({{Realm, Topic, _Subscriber, Mon}, NewSubs},
 send_unsubscribe(undefined, _Realm, _Topic, _Id) ->
     ok;
 send_unsubscribe(Pid, Realm, Topic, Id) ->
-    SubKey = macula_identity:public(Id),
+    SubKey = node_id(Id),
     Frame  = macula_frame:unsubscribe(#{topic      => Topic,
                                         realm      => Realm,
                                         subscriber => SubKey}),
@@ -2012,8 +2048,8 @@ maybe_send_subscribe(_Realm, _Topic, #state{peer_pid = undefined}) ->
     ok;
 maybe_send_subscribe(_Realm, _Topic, #state{peer_node_id = undefined}) ->
     ok;
-maybe_send_subscribe(Realm, Topic, #state{peer_pid = Pid, identity = Id}) ->
-    SubKey = macula_identity:public(Id),
+maybe_send_subscribe(Realm, Topic, #state{peer_pid = Pid, node_identity = Id}) ->
+    SubKey = node_id(Id),
     Frame  = macula_frame:subscribe(#{topic      => Topic,
                                       realm      => Realm,
                                       subscriber => SubKey}),
@@ -2224,8 +2260,8 @@ fan_event({ok, {_R, _T, Subscriber, _Mon}}, SubRef, Topic, Payload, Meta) ->
 maybe_send_advertise(_Realm, _Procedure, #state{peer_node_id = undefined}) ->
     ok;
 maybe_send_advertise(Realm, Procedure,
-                     #state{peer_pid = Pid, identity = Id}) ->
-    Pub = macula_identity:public(Id),
+                     #state{peer_pid = Pid, node_identity = Id}) ->
+    Pub = node_id(Id),
     Frame = macula_frame:advertise(#{realm      => Realm,
                                      procedure  => Procedure,
                                      advertiser => Pub}),
@@ -2237,8 +2273,8 @@ maybe_send_advertise(Realm, Procedure,
 maybe_send_unadvertise(_Realm, _Procedure, #state{peer_node_id = undefined}) ->
     ok;
 maybe_send_unadvertise(Realm, Procedure,
-                       #state{peer_pid = Pid, identity = Id}) ->
-    Pub = macula_identity:public(Id),
+                       #state{peer_pid = Pid, node_identity = Id}) ->
+    Pub = node_id(Id),
     Frame = macula_frame:unadvertise(#{realm      => Realm,
                                        procedure  => Procedure,
                                        advertiser => Pub}),
@@ -2280,9 +2316,9 @@ drain_pending_advertises(#state{procedures = Procs} = S) ->
 %% (0x01) — same taxonomy as `hecate_handler_dispatch'.
 handle_inbound_call(#{call_id := CallId, procedure := Proc, realm := Realm,
                       payload := Payload} = Frame,
-                    #state{procedures = Procs, policies = Pols, identity = Id,
+                    #state{procedures = Procs, policies = Pols, node_identity = Id,
                            peer_pid = Pid}) when is_pid(Pid) ->
-    SelfPub = macula_identity:public(Id),
+    SelfPub = node_id(Id),
     %% Gate first (Slice 7b): an `open' procedure serves any identified
     %% caller; a gated one requires a valid `ucan_token', else refuse
     %% with BOLT#4 `unauthorized' instead of invoking the handler.
@@ -2600,7 +2636,7 @@ parse_seed(Url) when is_list(Url) ->
 %% STREAM_OPEN frame. The caller drives the stream from outside; the
 %% returned pid is bound to the requested `owner' (default = caller)
 %% so a crashing owner tears the stream down.
-open_client_stream(Realm, Proc, Args, Opts, Caller, #state{identity = Id} = S) ->
+open_client_stream(Realm, Proc, Args, Opts, Caller, #state{node_identity = Id} = S) ->
     Sid       = crypto:strong_rand_bytes(16),
     Mode      = maps:get(mode, Opts, server_stream),
     DeadlineMs = maps:get(deadline_ms, Opts,
@@ -2612,7 +2648,7 @@ open_client_stream(Realm, Proc, Args, Opts, Caller, #state{identity = Id} = S) -
         mode        => Mode,
         args        => Args,
         deadline_ms => DeadlineMs,
-        caller      => macula_identity:public(Id),
+        caller      => node_id(Id),
         ucan_token  => maps:get(ucan_token, Opts, <<>>)
     }), Id),
     open_within_limit(fits_open_limit(macula_frame:check_frame(Frame), Frame),
@@ -2631,7 +2667,7 @@ fits_open_limit({error, _Unsendable}, _Frame) ->
 open_within_limit(false, _Frame, _Sid, _Mode, _Opts, _Caller, S) ->
     {reply_value, {error, {open_too_large, stream_open_limit()}}, S};
 open_within_limit(true, Frame, Sid, Mode, Opts, Caller,
-                  #state{peer_pid = Pid, identity = Id} = S) ->
+                  #state{peer_pid = Pid, node_identity = Id} = S) ->
     Owner = maps:get(owner, Opts, Caller),
     {ok, StreamPid} = macula_stream:start_link(#{
         id    => Sid,
@@ -2997,7 +3033,7 @@ refuse_stream_open(Stream, Sid, Code, Message, S) ->
     ok = send_stream_refusal(Stream, Sid, Code, Message, S),
     close_sessionless_stream(Stream, S).
 
-send_stream_refusal(Stream, Sid, Code, Message, #state{identity = Id}) ->
+send_stream_refusal(Stream, Sid, Code, Message, #state{node_identity = Id}) ->
     Refusal = macula_frame:stream_error(#{stream_id => Sid, code => Code, message => Message}),
     _ = try macula_peering:send_on_stream(Stream, Refusal, Id) catch _:_ -> ok end,
     ok.

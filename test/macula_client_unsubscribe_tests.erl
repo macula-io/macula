@@ -19,7 +19,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 -define(REALM, <<0:256>>).
--define(SEED, #{host => <<"127.0.0.1">>, port => 1}).
+-define(SEED, #{host => <<"127.0.0.1">>, port => 1, expected_node_id => <<1:256>>}).
 -define(TOPIC, <<"unsub.test_v1">>).
 %% The peer_pid and peer_node_id fields of macula_station_link's state, by name.
 -define(PEER_PID_INDEX, macula_station_link:state_field_index(peer_pid)).

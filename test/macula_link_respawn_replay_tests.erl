@@ -15,7 +15,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 -define(REALM, <<0:256>>).
--define(SEED, #{host => <<"127.0.0.1">>, port => 1}).
+-define(SEED, #{host => <<"127.0.0.1">>, port => 1, expected_node_id => <<1:256>>}).
 -define(TOPIC, <<"resp.test_v1">>).
 
 subscription_survives_link_respawn_test_() ->

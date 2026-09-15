@@ -46,9 +46,8 @@ with_link(Test) ->
     try meck:unload(macula_peering) catch _:_ -> ok end,
     ok = meck:new(macula_peering, [passthrough]),
     ok = meck:expect(macula_peering, send_on_stream, fun(_Stream, _Bytes) -> ok end),
-    {ok, Link} = macula_station_link:start_link(#{seed => #{host => <<"127.0.0.1">>, port => 1},
-                                                   connect_timeout_ms => 2000,
-                                                   identity => macula_identity:generate()}),
+    {ok, Link} = macula_station_link:start_link(with_link_keys(#{seed => #{host => <<"127.0.0.1">>, port => 1},
+                                                   connect_timeout_ms => 2000})),
     unlink(Link),
     QuicStream = make_ref(),
     Self = self(),
@@ -59,3 +58,11 @@ with_link(Test) ->
         gen_server:stop(Link),
         meck:unload(macula_peering)
     end.
+
+%% Start options with the keys a link starts with: a node identity key in the node's profile, an issuer of its own for
+%% that key, owned by the calling process, and the node_id its seed expects.
+with_link_keys(Opts) ->
+    {ok, Profile} = macula_crypto_profile:configured(),
+    {ok, Key} = macula_node_keys:generate(identity, Profile),
+    {ok, Issuer} = macula_statement_issuer_sup:start_issuer(fun() -> Key end, self()),
+    Opts#{node_identity => fun() -> Key end, issuer => Issuer, expected_node_id => <<1:256>>}.

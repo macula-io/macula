@@ -30,9 +30,10 @@
 -define(OVERDUE_WITHIN_MS, 86400000).
 -define(OVERDUE_EVENT, <<"_macula.statement_issuer.tls_rotation_overdue">>).
 
-%% `owner' receives `{macula_tls_rotation_due, Issuer}'. `key_dir' keeps CONNECT and TLS keys with their bindings across
-%% restarts. `clock' gives wall-clock milliseconds, for tests.
--type options() :: #{identity := macula_node_keys:node_key(),
+%% `identity' is a function that returns the identity key, so no start argument holds the key. `owner' receives
+%% `{macula_tls_rotation_due, Issuer}', and the issuer ends when its owner does. `key_dir' keeps CONNECT and TLS keys
+%% with their bindings across restarts. `clock' gives wall-clock milliseconds, for tests.
+-type options() :: #{identity := fun(() -> macula_node_keys:node_key()),
                      owner := pid(),
                      key_dir => file:name_all(),
                      clock => fun(() -> non_neg_integer())}.
@@ -45,7 +46,7 @@
 %%====================================================================
 
 -spec start_link(options()) -> {ok, pid()} | {error, term()}.
-start_link(#{identity := #{purpose := identity}, owner := Owner} = Options) when is_pid(Owner) ->
+start_link(#{identity := Identity, owner := Owner} = Options) when is_function(Identity, 0), is_pid(Owner) ->
     gen_server:start_link(?MODULE, Options, []).
 
 %% @doc The current CONNECT key with its binding and a fresh status statement, for a new dial.
@@ -80,7 +81,16 @@ tick(Issuer) ->
 %% gen_server
 %%====================================================================
 
-init(#{identity := #{profile := Profile} = Identity, owner := Owner} = Options) ->
+%% The identity key reaches an issuer only as a function that returns it. A start given anything else stops with a
+%% refusal that names no key.
+init(#{identity := Identity} = Options) when is_function(Identity, 0) ->
+    identity_started(Identity(), Options);
+init(_NoIdentityFunction) ->
+    {stop, {identity, not_a_function}}.
+
+%% Only an identity key starts an issuer. Anything else stops the start with a refusal that names no key.
+identity_started(#{purpose := identity, profile := Profile} = Identity, #{owner := Owner} = Options) ->
+    _ = erlang:monitor(process, Owner),
     Dir = maps:get(key_dir, Options, none),
     ok = key_dir_made(Dir),
     S0 = #{identity => Identity, profile => Profile, owner => Owner, key_dir => Dir,
@@ -88,7 +98,9 @@ init(#{identity := #{profile := Profile} = Identity, owner := Owner} = Options) 
            subscribers => #{}, tls_newest => none, notified => none},
     S1 = ensure_connect(loaded(S0)),
     erlang:send_after(?STATEMENT_EVERY_MS, self(), tick),
-    {ok, S1}.
+    {ok, S1};
+identity_started(_NotAnIdentityKey, _Options) ->
+    {stop, {identity, not_an_identity_key}}.
 
 handle_call(connect_material, _From, #{connect := Hash, bindings := Bindings} = S) ->
     #{key := Key, binding := Binding, statement := Statement} = maps:get(Hash, Bindings),
@@ -108,6 +120,10 @@ handle_cast(_Message, S) ->
 handle_info(tick, S) ->
     erlang:send_after(?STATEMENT_EVERY_MS, self(), tick),
     {noreply, ticked(S)};
+%% The issuer serves its owner and ends with it, so no issuer and no key it holds outlives the process it was started
+%% for.
+handle_info({'DOWN', _Ref, process, Owner, _Reason}, #{owner := Owner} = S) ->
+    {stop, normal, S};
 handle_info({'DOWN', _Ref, process, Pid, _Reason}, #{subscribers := Subscribers} = S) ->
     {noreply, S#{subscribers := maps:map(without_pid(Pid), Subscribers)}};
 handle_info(_Message, S) ->
