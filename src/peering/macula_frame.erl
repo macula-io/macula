@@ -185,6 +185,16 @@
 %% message is text for people of at most 256 bytes, as a GOODBYE reason is.
 -define(MAX_ERROR_CODE_BYTES, 64).
 -define(MAX_ERROR_TEXT_BYTES, 256).
+%% A GOODBYE detail is text for people, bounded as its reason is.
+-define(MAX_GOODBYE_DETAIL_BYTES, 256).
+%% A procedure name and a topic are kept per pending request, subscription and advertisement, so each is bounded, and
+%% 512 bytes is well above any name in use.
+-define(MAX_PROCEDURE_BYTES, 512).
+-define(MAX_TOPIC_BYTES, 512).
+%% A NODES entry lists at most 4 addresses, one per observation today with room for IPv4 and IPv6 beside a host name,
+%% and a host is a DNS name of at most 253 bytes or a literal address.
+-define(MAX_ADDRESSES, 4).
+-define(MAX_HOST_BYTES, 253).
 %% A protocol integer in a signed structure stays below 2^53 (the decoding rule).
 -define(MAX_PROTOCOL_INT, 1 bsl 53).
 -define(REQUEST_LABEL, <<"MACULA-PQ-REQUEST-V1">>).
@@ -309,10 +319,13 @@
 -type tier() :: 0..4.
 -type country() :: <<_:16>>.
 
+%% A NODES entry's address: a host name or literal address, a port, and the transport.
+-type address() :: #{host := binary(), port := 1..65535, transport := quic}.
+
 -type station_ref_spec() :: #{
     node_id      := id256(),
     station_id   := id256(),
-    addresses    => [map()],
+    addresses    => [address()],
     tier         := tier(),
     asn          => non_neg_integer() | undefined,
     country      := country(),
@@ -322,7 +335,7 @@
 -type station_ref() :: #{
     node_id      := id256(),
     station_id   := id256(),
-    addresses    := [map()],
+    addresses    := [address()],
     tier         := tier(),
     asn          := non_neg_integer() | undefined,
     country      := country(),
@@ -538,7 +551,6 @@
     topic      := binary(),
     realm      := id256(),
     subscriber := id256(),
-    filter     => term() | undefined,
     options    => map()
 }.
 
@@ -753,10 +765,14 @@ goodbye(Reason, Detail, Caps)
 
 do_goodbye(Reason, Detail, Caps) ->
     ok = reason_within_bound(byte_size(atom_to_binary(Reason)) =< ?MAX_GOODBYE_REASON_BYTES),
+    ok = goodbye_detail(Detail),
     Header = base(goodbye, Caps),
     Header#{reason => Reason, detail => Detail}.
 
 reason_within_bound(true) -> ok.
+
+goodbye_detail(undefined) -> ok;
+goodbye_detail(Detail) -> bounded_text(detail, Detail, ?MAX_GOODBYE_DETAIL_BYTES).
 
 %%------------------------------------------------------------------
 %% SWIM frame constructors (Part 6 §8)
@@ -909,7 +925,7 @@ station_ref(#{node_id := NodeId, station_id := StationId,
     Addresses = maps:get(addresses, Spec, []),
     Asn       = maps:get(asn, Spec, undefined),
     validate_asn(Asn),
-    validate_addresses(Addresses),
+    ok = addresses_checked(Addresses),
     #{
         node_id      => NodeId,
         station_id   => StationId,
@@ -924,9 +940,23 @@ station_ref(#{node_id := NodeId, station_id := StationId,
 validate_asn(undefined) -> ok;
 validate_asn(N) when is_integer(N), N >= 0 -> ok.
 
--spec validate_addresses([map()]) -> ok.
-validate_addresses([])                        -> ok;
-validate_addresses([A | Rest]) when is_map(A) -> validate_addresses(Rest).
+%% At most ?MAX_ADDRESSES addresses, each exactly a host of 1 to ?MAX_HOST_BYTES bytes, a port and the quic transport.
+%% The builder and the receive rule check an entry's addresses with this one function.
+-spec addresses_checked(term()) -> ok | {error, invalid_addresses}.
+addresses_checked(Addresses) when is_list(Addresses), length(Addresses) =< ?MAX_ADDRESSES ->
+    all_addresses(lists:all(fun address_valid/1, Addresses));
+addresses_checked(_NotAddresses) ->
+    {error, invalid_addresses}.
+
+all_addresses(true) -> ok;
+all_addresses(false) -> {error, invalid_addresses}.
+
+address_valid(#{host := Host, port := Port, transport := quic} = Address)
+  when map_size(Address) =:= 3, is_binary(Host), byte_size(Host) >= 1, byte_size(Host) =< ?MAX_HOST_BYTES,
+       is_integer(Port), Port >= 1, Port =< 65535 ->
+    true;
+address_valid(_NotAnAddress) ->
+    false.
 
 -spec validate_record_bytes(binary()) -> ok.
 validate_record_bytes(Bytes) when is_binary(Bytes) ->
@@ -962,6 +992,7 @@ request(Type, #{request_id := RequestId, realm := Realm, procedure := Procedure,
                 deadline := Deadline, payload := Payload} = Spec, #{purpose := identity} = Key)
   when byte_size(RequestId) =:= 16, byte_size(Realm) =:= 32, is_binary(Procedure), byte_size(Target) =:= 32,
        is_integer(Deadline), Deadline >= 0, Deadline < ?MAX_PROTOCOL_INT ->
+    ok = bounded_text(procedure, Procedure, ?MAX_PROCEDURE_BYTES),
     ok = check_payload(Payload),
     Fields = optional_token(Spec, maps:merge(maps:with([mode], Spec),
                                              #{frame_type => Type, caller => macula_node_keys:key_id(Key),
@@ -1011,7 +1042,7 @@ request_table(Type) ->
       <<"caller">> => {caller, {bytes, 32}},
       <<"request_id">> => {request_id, {bytes, 16}},
       <<"realm">> => {realm, {bytes, 32}},
-      <<"procedure">> => {procedure, text},
+      <<"procedure">> => {procedure, {text_max, ?MAX_PROCEDURE_BYTES}},
       <<"target">> => {target, {bytes, 32}},
       <<"deadline">> => {deadline, uint},
       <<"payload">> => {payload, value},
@@ -1025,10 +1056,13 @@ result(#{request := Request, payload := Payload} = Spec, Key) ->
     ok = check_payload(Payload),
     reply(result, #{payload => Payload}, Request, Spec, Key).
 
-%% @doc Sign a provider's ERROR for a verified request: a code and an optional detail, both text.
+%% @doc Sign a provider's ERROR for a verified request: a code of at most 64 bytes and an optional detail of at most 256,
+%% both UTF-8. Other text raises a badmatch on `{error, {text_too_long, Field}}' or `{error, {invalid_text, Field}}'.
 -spec provider_error(#{request := verified_request(), code := binary(), detail => binary(),
                        source_route_reverse => binary()}, macula_node_keys:node_key()) -> frame().
 provider_error(#{request := Request, code := Code} = Spec, Key) when is_binary(Code) ->
+    ok = bounded_text(code, Code, ?MAX_ERROR_CODE_BYTES),
+    ok = optional_bounded_text(detail, maps:find(detail, Spec), ?MAX_ERROR_TEXT_BYTES),
     reply(error, optional_text(detail, Spec, #{code => {text, Code}}), Request, Spec, Key).
 
 reply(Type, Fields, #{request_id := RequestId, request_hash := RequestHash}, Spec, #{purpose := identity} = Key) ->
@@ -1087,15 +1121,16 @@ reply_table(Type) ->
       <<"detail">> => {detail, {text_max, ?MAX_ERROR_TEXT_BYTES}}}.
 
 %% @doc Sign a station's relay error, an ERROR or STREAM_ERROR for a pending request, with the station's identity key.
+%% It carries a code from the closed set and no free text, so a spec with a detail raises function_clause.
 -spec relay_error(#{frame_type := error | stream_error, request := verified_request(), code := unknown_next_peer,
-                    detail => binary(), offending_hop => binary(), source_route_partial => binary()},
+                    offending_hop => binary(), source_route_partial => binary()},
                   macula_node_keys:node_key()) -> frame().
 relay_error(#{frame_type := Type, request := #{request_id := RequestId, request_hash := RequestHash},
-              code := Code} = Spec, #{purpose := identity} = Key) when Type =:= error; Type =:= stream_error ->
+              code := Code} = Spec, #{purpose := identity} = Key)
+  when (Type =:= error orelse Type =:= stream_error), not is_map_key(detail, Spec) ->
     ok = relay_code(lists:member(Code, ?RELAY_CODES)),
-    Tbs = optional_hop(Spec, optional_text(detail, Spec,
-                                           #{frame_type => Type, request_id => RequestId, request_hash => RequestHash,
-                                             reported_by => macula_node_keys:key_id(Key), code => Code})),
+    Tbs = optional_hop(Spec, #{frame_type => Type, request_id => RequestId, request_hash => RequestHash,
+                               reported_by => macula_node_keys:key_id(Key), code => Code}),
     routed(#{version => ?PROTOCOL_VERSION, frame_type => Type,
              relay_error => macula_signed_object:sign(?RELAY_ERROR_LABEL, to_wire(Tbs), Key)},
            maps:with([source_route_partial], Spec)).
@@ -1178,7 +1213,6 @@ relay_error_table(Type) ->
       <<"request_hash">> => {request_hash, {bytes, 48}},
       <<"reported_by">> => {reported_by, {bytes, 32}},
       <<"code">> => {code, {enum, ?RELAY_CODES}},
-      <<"detail">> => {detail, text},
       <<"offending_hop">> => {offending_hop, {bytes, 32}}}.
 
 request_names(#{request_id := RequestId, request_hash := RequestHash}) ->
@@ -1316,6 +1350,7 @@ publish(#{realm := Realm, topic := Topic, seq := Seq, published_at := PublishedA
         #{purpose := identity} = Key)
   when byte_size(Realm) =:= 32, is_binary(Topic), is_integer(Seq), Seq >= 0, Seq < ?MAX_PROTOCOL_INT,
        is_integer(PublishedAt), PublishedAt >= 0, PublishedAt < ?MAX_PROTOCOL_INT ->
+    ok = bounded_text(topic, Topic, ?MAX_TOPIC_BYTES),
     ok = check_payload(Payload),
     Fields = optional_ttl(Spec, #{publisher => macula_node_keys:key_id(Key), realm => Realm, topic => {text, Topic},
                                   seq => Seq, published_at => PublishedAt, payload => Payload}),
@@ -1330,15 +1365,15 @@ optional_ttl(Spec, Fields) when not is_map_key(ttl_ms, Spec) -> Fields.
 subscribe(#{topic := T, realm := R, subscriber := Sub} = Spec)
   when is_binary(T),
        is_binary(R),   byte_size(R)   =:= 32,
-       is_binary(Sub), byte_size(Sub) =:= 32 ->
-    Filter  = maps:get(filter,  Spec, undefined),
+       is_binary(Sub), byte_size(Sub) =:= 32,
+       not is_map_key(filter, Spec) ->
+    ok = bounded_text(topic, T, ?MAX_TOPIC_BYTES),
     Options = maps:get(options, Spec, #{}),
     validate_options(Options),
     (base(subscribe, 0))#{
         topic      => T,
         realm      => R,
         subscriber => Sub,
-        filter     => Filter,
         options    => Options
     }.
 
@@ -1347,6 +1382,7 @@ unsubscribe(#{topic := T, realm := R, subscriber := Sub})
   when is_binary(T),
        is_binary(R),   byte_size(R)   =:= 32,
        is_binary(Sub), byte_size(Sub) =:= 32 ->
+    ok = bounded_text(topic, T, ?MAX_TOPIC_BYTES),
     (base(unsubscribe, 0))#{
         topic      => T,
         realm      => R,
@@ -1412,7 +1448,7 @@ publication_table() ->
     #{<<"alg">> => {alg, value},
       <<"publisher">> => {publisher, {bytes, 32}},
       <<"realm">> => {realm, {bytes, 32}},
-      <<"topic">> => {topic, text},
+      <<"topic">> => {topic, {text_max, ?MAX_TOPIC_BYTES}},
       <<"seq">> => {seq, uint},
       <<"published_at">> => {published_at, uint},
       <<"ttl_ms">> => {ttl_ms, uint},
@@ -1485,8 +1521,8 @@ caller_stream(#{frame_type := Type, seq := Seq} = Spec, #{purpose := identity} =
 %%   STREAM_OPEN;
 %% - `{not_allowed, Type}' for a stream frame its side does not send: a caller's STREAM_REPLY, or a caller's
 %%   STREAM_DATA in a server_stream;
-%% - `{text_too_long, Field}' for a code over 64 bytes, or a provider error's detail or a STREAM_ERROR message over 256
-%%   bytes, judged before the text itself;
+%% - `{text_too_long, Field}' for a procedure over 512 bytes, a code over 64 bytes, or a provider error's detail or a
+%%   STREAM_ERROR message over 256 bytes, judged before the text itself;
 %% - `{invalid_text, Field}' for a procedure, code, detail or message that is not a binary of valid UTF-8;
 %% - `relay_code_outside_its_set' for a relay error code outside the closed set;
 %% - `{unsupported_payload_type, Type, Path}' for a payload, stream body or reply the wire cannot carry.
@@ -1507,7 +1543,8 @@ caller_stream(#{frame_type := Type, seq := Seq} = Spec, #{purpose := identity} =
 -spec stream_bytes(stream_build(), macula_node_keys:node_key() | undefined) ->
           {ok, stream_bytes()}
         | {error, {unknown_build_key, term()} | unsignable | {not_allowed, stream_reply | stream_data}
-                | {invalid_text, atom()} | {text_too_long, code | detail | message} | relay_code_outside_its_set
+                | {invalid_text, atom()} | {text_too_long, procedure | code | detail | message}
+                | relay_code_outside_its_set
                 | {unsupported_payload_type, atom(), [term()]} | frame_too_large}.
 stream_bytes(Build, #{purpose := identity} = Key) ->
     stream_framed(passed_checks([fun() -> known_build_keys(Build) end,
@@ -1579,7 +1616,7 @@ side_may_send(_BuildItsSideSends) ->
 
 %% Text a receiver reads as text is valid UTF-8 within its bound, and a relay error's code is one of the closed set.
 build_texts({Type, #{procedure := Procedure}}) when Type =:= call; Type =:= stream_open ->
-    utf8_text(procedure, Procedure);
+    bounded_text(procedure, Procedure, ?MAX_PROCEDURE_BYTES);
 build_texts({provider_error, #{code := Code} = Spec}) ->
     passed_checks([fun() -> bounded_text(code, Code, ?MAX_ERROR_CODE_BYTES) end,
                    fun() -> optional_bounded_text(detail, maps:find(detail, Spec), ?MAX_ERROR_TEXT_BYTES) end]);
@@ -1646,6 +1683,8 @@ stream_fields(stream_data, #{encoding := msgpack, body := Body}) ->
 stream_fields(stream_end, #{role := Role}) when Role =:= send; Role =:= both ->
     #{role => Role};
 stream_fields(stream_error, #{code := Code, message := Message}) when is_binary(Code), is_binary(Message) ->
+    ok = bounded_text(code, Code, ?MAX_ERROR_CODE_BYTES),
+    ok = bounded_text(message, Message, ?MAX_ERROR_TEXT_BYTES),
     #{code => {text, Code}, message => {text, Message}};
 stream_fields(stream_reply, #{payload := Payload}) ->
     ok = check_payload(Payload),
@@ -2350,6 +2389,8 @@ value_valid(reason, Value) when is_atom(Value)                        -> true;
 value_valid(reason, {text, Text})                                     -> is_binary(Text);
 value_valid(text, Value) when is_binary(Value); is_atom(Value)        -> true;
 value_valid(text, {text, Text})                                       -> is_binary(Text);
+value_valid({utf8_max, Max}, Value) when is_binary(Value), byte_size(Value) =< Max -> valid_utf8(Value);
+value_valid(addresses, Value)                                         -> addresses_checked(Value) =:= ok;
 value_valid(_Rule, _Value)                                            -> false.
 
 %% A signed object carries its signer's key or leaves it out, as a stream's later frames do, and holds nothing else.
@@ -2386,7 +2427,7 @@ received_rules(hello) ->
                 {accepted, boolean}, {negotiated_capabilities, non_neg}],
                [{addresses, {optional, list}}, {site, {optional, present}}, {refusal_code, {optional, present}}]);
 received_rules(goodbye) ->
-    base_rules([{reason, reason}], [{detail, {optional, text}}]);
+    base_rules([{reason, reason}], [{detail, {optional, {utf8_max, ?MAX_GOODBYE_DETAIL_BYTES}}}]);
 received_rules(swim_ping) ->
     base_rules([{round, non_neg}, {incarnation, non_neg}], [{piggyback, {optional, {list_of, swim_update_rule()}}}]);
 received_rules(swim_ack) ->
@@ -2439,10 +2480,9 @@ received_rules(overlay_relay) ->
 received_rules(publish) ->
     signed_rules([{publication, object}], [], []);
 received_rules(subscribe) ->
-    base_rules([{realm, key}, {topic, binary}, {subscriber, key}],
-               [{filter, {optional, present}}, {options, {optional, map}}]);
+    base_rules([{realm, key}, {topic, {utf8_max, ?MAX_TOPIC_BYTES}}, {subscriber, key}], [{options, {optional, map}}]);
 received_rules(unsubscribe) ->
-    base_rules([{realm, key}, {topic, binary}, {subscriber, key}]);
+    base_rules([{realm, key}, {topic, {utf8_max, ?MAX_TOPIC_BYTES}}, {subscriber, key}]);
 received_rules(event) ->
     signed_rules([{publication, object}, {delivered_via, {one_of, [plumtree, direct]}}], [], []);
 received_rules(advertise) ->
@@ -2494,7 +2534,7 @@ signed_rules(Required, OneOf, Optional) ->
 %% A NODES entry, as station_ref/1 builds it.
 station_ref_rule() ->
     {entry, [{node_id, key}, {station_id, key}, {tier, tier}, {country, country},
-             {last_seen_at, pos}, {addresses, {optional, {list_of, map}}},
+             {last_seen_at, pos}, {addresses, {optional, addresses}},
              {asn, {optional, non_neg}}]}.
 
 %% A SWIM update in a PING's or an ACK's piggyback, as swim_update/1 builds it.
@@ -3027,7 +3067,8 @@ field_table(nodes) ->
       <<"key">> => {key, value},
       <<"nodes">> => {nodes, {list_of, #{<<"node_id">> => {node_id, {bytes, 32}},
           <<"station_id">> => {station_id, {bytes, 32}},
-          <<"addresses">> => {addresses, value},
+          <<"addresses">> => {addresses, {list_of, #{<<"host">> => {host, bytes}, <<"port">> => {port, uint},
+                                                     <<"transport">> => {transport, {enum, [quic]}}}}},
           <<"tier">> => {tier, uint},
           <<"asn">> => {asn, {optional, uint}},
           <<"country">> => {country, {bytes, 2}},
@@ -3252,7 +3293,6 @@ field_table(subscribe) ->
       <<"signature">> => {signature, value},
       <<"topic">> => {topic, value},
       <<"subscriber">> => {subscriber, {bytes, 32}},
-      <<"filter">> => {filter, value},
       <<"options">> => {options, value}};
 field_table(unsubscribe) ->
     #{<<"version">> => {version, value},

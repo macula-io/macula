@@ -57,11 +57,17 @@ data in one form, whatever a node has loaded.
   `malformed_frame`. Payloads carry no CBOR booleans either, since the decoding rule refuses them.
 - **GOODBYE `reason`** is text for people, at most 256 bytes of UTF-8. Any text within that bound is accepted and no
   check reads it; a longer one is `malformed_frame`.
+- **GOODBYE `detail`** is optional: bytes of valid UTF-8 for people, at most 256 of them.
 - **STREAM_ERROR `message`** is text for people, at most 256 bytes of UTF-8, as a GOODBYE `reason` is. A sender
   with no such text sends an empty `message`.
-- **ERROR `detail`** from a provider is text for people, at most 256 bytes of UTF-8, as a STREAM_ERROR `message` is.
+- **ERROR `detail`** from a provider is optional text for people, at most 256 bytes of UTF-8, as a STREAM_ERROR
+  `message` is.
 - **ERROR and STREAM_ERROR `code`** from a provider is text of at most 64 bytes of UTF-8.
 - A received `code`, `detail` or `message` longer than its bound is `malformed_frame`.
+- **A procedure name and a topic** are at most 512 bytes of valid UTF-8: text in a request and in a publication, and
+  bytes in SUBSCRIBE and UNSUBSCRIBE. Nodes keep them per pending request, subscription and advertisement, so each is
+  bounded, and 512 bytes is well above any name in use. A longer one, or one that is not UTF-8, is refused.
+- **SUBSCRIBE** has no `filter`, since nothing reads one. A SUBSCRIBE that carries one is refused.
 - **Accessors on the facade:**
   - `macula:field(Name, Map)` returns a field's value, or `undefined`;
   - `macula:field(Name, Map, Default)` returns `Default` for a missing field;
@@ -145,6 +151,9 @@ About 7.3 KB / 8.3 KB before the payload: 2,592 / 3,118 bytes of key and 4,627 /
 - **Domain record lifetime.** A domain record's `expires_at` is at most 7 days after its `created_at`, and every
   verifier refuses a longer one as malformed. With `created_at` at most 5 minutes ahead, no domain record a station
   accepts expires more than 7 days and 5 minutes after it arrives (D28).
+- **Realm member endorsement window.** Its payload's `valid_until` is at most 30 days after its `valid_from`. The
+  builder refuses a longer window, and a verifier of the endorsement refuses one as `endorsement_window_too_long`, so
+  one endorsement admits its member for at most 30 days.
 - **Checks,** after the steps of a signed object:
   - `tbs` holds exactly these keys, with `subject` only where the type allows it;
   - `created_at` is at most 5 minutes ahead of the verifier's clock, and `expires_at` plus 5 minutes has not passed
@@ -337,6 +346,9 @@ which stations set or change per hop, stay outside them.
   and `version` (`DESIGN_PQ_DHT_SLOTS_AND_BUDGET.md`, 1.4).
 - FIND_VALUE carries `key`, `origin` and an optional `after` (bytes, 32), a signer key id. VALUE carries `key`,
   `records` and `next` (bytes, 32), present only when more entries follow (`DESIGN_PQ_DHT_SLOTS_AND_BUDGET.md`, 1.5).
+- A NODES entry's `addresses` lists at most 4 addresses, each exactly `host` (bytes, 1 to 253: a host name or a
+  literal address), `port` (unsigned, 1 to 65535) and `transport` (`quic`). A station lists one address per
+  observation today, and 4 leaves room for IPv4 and IPv6 beside a host name. A NODES frame outside these is refused.
 - A HyParView `peer_sample` holds at most 7 node_ids. A SHUFFLE or FORWARD_JOIN `ttl`, and a FORWARD_JOIN `arwl`,
   is at most 8, and a `prwl` is at most its `arwl`. A frame outside these is `malformed_frame`. A receiver compares
   a FORWARD_JOIN's `ttl` with its own PRWL, never the frame's.
@@ -444,8 +456,7 @@ The frame is `{version, frame_type, relay_error}`, with the routing field `sourc
 | `request_id` | bytes, 16 | |
 | `request_hash` | bytes, 48 | |
 | `reported_by` | bytes, 32 | the station's node_id, equal to the key id of `key` |
-| `code` | text | a relay error code, distinct from every provider code |
-| `detail` | text | optional |
+| `code` | text | a relay error code from its closed set, distinct from every provider code |
 | `offending_hop` | bytes, 32 | optional |
 
 - A station or the caller accepts a relay error only for a pending request whose `request_id` and `request_hash`

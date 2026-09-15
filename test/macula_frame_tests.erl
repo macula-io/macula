@@ -756,7 +756,7 @@ subscribe_carries_subscriber_and_options_test() ->
     ?assertEqual(subscribe, macula_frame:frame_type(F)),
     ?assertEqual(Sub,       maps:get(subscriber, F)),
     ?assertEqual(#{qos => 1}, maps:get(options, F)),
-    ?assertEqual(undefined, maps:get(filter, F)).
+    ?assertNot(maps:is_key(filter, F)).
 
 unsubscribe_carries_subscriber_test() ->
     Sub = crypto:strong_rand_bytes(32),
