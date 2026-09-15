@@ -94,7 +94,7 @@ a_direct_request_calls_with_the_other_options() ->
                          {ok, #{result => 5}}
                  end,
     Opts = #{direct_call => DirectCall, fact_publish => facts_to(self()),
-             realm_trust => #{realm_ca => <<"pem">>}},
+             realm_trust => #{realm_key => <<"key">>}},
     {ok, _Pid} = macula_request:start_link_direct(?MODULE, pool, ?REALM, ?PROCEDURE, #{a => 2},
                                                   5_000, self(), Opts),
     ?assertEqual({reply_seen, {ok, #{result => 5}}}, wait_reply()),
@@ -104,7 +104,7 @@ a_direct_request_calls_with_the_other_options() ->
                  not_called
              end,
     ?assertEqual({direct_call, pool, ?REALM, ?PROCEDURE, #{a => 2}, 5_000,
-                  #{realm_trust => #{realm_ca => <<"pem">>}}}, Called).
+                  #{realm_trust => #{realm_key => <<"key">>}}}, Called).
 
 %% Without a call function the request's worker calls macula:call/5, which
 %% resolves the procedure through macula_direct_dial and passes a pool that

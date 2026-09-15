@@ -4,7 +4,7 @@
 -module(macula_direct_dial_adv_opts_tests).
 -include_lib("eunit/include/eunit.hrl").
 
--define(AUTHORIZATION, #{certificate_chain => [<<"der">>]}).
+-define(AUTHORIZATION, #{org_directory => <<"dir">>, procedure_delegation => <<"del">>}).
 
 ttl_ms_alone_is_forwarded_test() ->
     ?assertEqual(#{ttl_ms => 120_000},

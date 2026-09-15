@@ -31,12 +31,12 @@ an_org_namespaced_procedure_without_an_authorization_is_not_trusted_test() ->
     ?assertNot(trusted(advertisement(?REALM, Procedure, #{}), ?REALM, Procedure)).
 
 a_procedure_without_an_org_namespace_that_carries_an_authorization_is_not_trusted_test() ->
-    Opts = #{authorization => #{certificate_chain => [<<"not a certificate">>]}},
+    Opts = #{authorization => #{org_directory => <<"not a record">>, procedure_delegation => <<"not a record">>}},
     ?assertNot(trusted(advertisement(?REALM, ?PROCEDURE, Opts), ?REALM, ?PROCEDURE)).
 
 an_authorization_without_the_realm_trust_its_form_needs_is_not_trusted_test() ->
     Procedure = <<"acme/forecast_v1">>,
-    Opts = #{authorization => #{certificate_chain => [<<"not a certificate">>]}},
+    Opts = #{authorization => #{org_directory => <<"not a record">>, procedure_delegation => <<"not a record">>}},
     ?assertNot(trusted(advertisement(?REALM, Procedure, Opts), ?REALM, Procedure)).
 
 %%====================================================================

@@ -1,7 +1,7 @@
 %% EUnit tests for procedure advertisements as DESIGN_PQ_SIGNED_FRAMES_AND_RECORDS.md pins them: the payload holds
 %% realm_id, procedure, advertiser_node, serving_station and, for a procedure with an org namespace, the provider
 %% authorization. A storing verifier checks only the record; verify_authorization/3 is the caller's check of the org
-%% namespace, the authorization and its expiry. Certificate chains are in macula_record_cert_chain_tests.
+%% namespace, the authorization and its expiry. The removed certificate form is in macula_record_cert_chain_tests.
 -module(macula_record_advertisement_tests).
 
 -include_lib("eunit/include/eunit.hrl").
@@ -25,12 +25,7 @@ the_authorization_travels_inside_the_payload_test() ->
     #{adv := Adv, org_dir := OrgDir, delegation := Del} = delegation_bundle(<<"acme/get_forecast_v1">>, #{}),
     ?assertEqual(#{{text, <<"org_directory">>} => macula_record:encode(OrgDir),
                    {text, <<"procedure_delegation">>} => macula_record:encode(Del)},
-                 maps:get({text, <<"authorization">>}, macula_record:payload(Adv))),
-    Chain = [<<1, 2, 3>>, <<4, 5>>],
-    R = macula_record:procedure_advertisement(fill(1), realm_id(), <<"acme/x">>, fill(2),
-                                              #{authorization => #{certificate_chain => Chain}}),
-    ?assertEqual(#{{text, <<"certificate_chain">>} => Chain},
-                 maps:get({text, <<"authorization">>}, macula_record:payload(R))).
+                 maps:get({text, <<"authorization">>}, macula_record:payload(Adv))).
 
 read_procedure_advertisement_returns_the_typed_payload_test() ->
     #{adv := Adv, org_dir := OrgDir, delegation := Del, advertiser := A} =
@@ -152,16 +147,20 @@ a_procedure_name_starting_with_a_slash_is_malformed_test() ->
     #{adv := Adv, realm := Realm} = delegation_bundle(<<"/get_forecast_v1">>, #{}),
     ?assertEqual({error, malformed}, authorize(Adv, Realm)).
 
-an_authorization_in_neither_form_is_malformed_test() ->
+%% An authorization holds exactly org_directory and procedure_delegation, both bytes. Any other map, the removed
+%% certificate form included, is a form no stack accepts, and that pair with a value that is not bytes is malformed.
+%% The builder writes none of them, so each map goes into a signed advertisement by hand.
+an_authorization_in_another_form_is_unsupported_test() ->
     A = key(identity),
     #{org_dir := OrgDir, delegation := Del, realm := Realm} = delegation_bundle(<<"acme/x">>, #{}),
-    Both = #{org_directory => macula_record:encode(OrgDir), procedure_delegation => macula_record:encode(Del),
-             certificate_chain => [<<1>>]},
-    [?assertEqual({error, malformed},
-                  authorize(macula_record:sign(macula_record:procedure_advertisement(
-                      macula_node_keys:key_id(A), realm_id(), <<"acme/x">>, fill(2), #{authorization => Auth}), A),
-                      Realm))
-     || Auth <- [Both, #{org_directory => macula_record:encode(OrgDir)}, #{certificate_chain => []}]].
+    Directory = {text, <<"org_directory">>},
+    Delegation = {text, <<"procedure_delegation">>},
+    Wires = #{Directory => macula_record:encode(OrgDir), Delegation => macula_record:encode(Del)},
+    Unsupported = [Wires#{{text, <<"certificate_chain">>} => [<<1>>]}, maps:remove(Delegation, Wires),
+                   #{{text, <<"certificate_chain">>} => []}, #{}],
+    [?assertEqual({error, authorization_form_unsupported}, authorize(hand_authorized(A, <<"acme/x">>, Auth), Realm))
+     || Auth <- Unsupported],
+    ?assertEqual({error, malformed}, authorize(hand_authorized(A, <<"acme/x">>, Wires#{Delegation := 7}), Realm)).
 
 %%------------------------------------------------------------------
 %% Helpers
@@ -217,6 +216,14 @@ hand_signed(Payload, Key) ->
                {text, <<"created_at">>} => Now, {text, <<"expires_at">>} => Now + 5 * ?MINUTE,
                {text, <<"payload">>} => Payload},
     macula_signed_object:sign(?LABEL, Fields, Key).
+
+%% A provider's advertisement whose payload holds Authorization as written, put in by hand: the builder writes only the
+%% delegation form.
+hand_authorized(A, Procedure, Authorization) ->
+    Unsigned = macula_record:procedure_advertisement(macula_node_keys:key_id(A), realm_id(), Procedure, fill(2),
+                                                     #{ttl_ms => 300_000}),
+    Payload = (macula_record:payload(Unsigned))#{{text, <<"authorization">>} => Authorization},
+    macula_record:sign(Unsigned#{payload := Payload}, A).
 
 key(Purpose) ->
     {ok, Key} = macula_node_keys:generate(Purpose, pq_pure),
