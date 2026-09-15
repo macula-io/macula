@@ -449,6 +449,70 @@ a_pubsub_server_or_registry_started_without_the_application_installs_the_filter_
     end}.
 
 %%------------------------------------------------------------------
+%% Each key holder, sampled in every form
+%%------------------------------------------------------------------
+
+%% Every process that holds a node key leaves nothing of it in what it shows or what is logged about it, sampled in
+%% every form macula_key_leak_sample names: its status; its crash reports, when it crashes in a function whose
+%% arguments carry its state; a station link's peering_exit event, whose reason carries the key in a Macula frame; and a
+%% supervisor's start error for a holder whose loader raises with the key in its error. With the application's filter
+%% on, neither an event nor its formatted text holds a form. A pubsub server and a registry hold only their key's
+%% loader, so their formatted text holds no form with the filter removed after they started either, since a printed
+%% function shows no environment. Their event terms then still carry the loader's environment, which only the filter
+%% redacts: a logger handler that ships raw report terms relies on the filter.
+every_key_holder_leaks_no_form_of_its_key_test_() ->
+    {timeout, ?EU_TIMEOUT,
+     [{"a pool: its status and its crash", fun a_pool_holder/0},
+      {"a station link: its status, its crash and its peering_exit event", fun a_link_holder/0},
+      {"a pubsub server: its status, its crash and a supervised start", fun() -> a_loader_holder(server) end},
+      {"a pubsub registry: its status, its crash and a supervised start", fun() -> a_loader_holder(registry) end}]}.
+
+a_pool_holder() ->
+    started(),
+    Key = key(),
+    {ok, Pool} = macula_client:connect([], #{node_identity => Key}),
+    Status = sys:get_status(Pool),
+    Events = captured(fun() -> crashed(Pool, macula_client, seeds, fun() -> catch macula_client:status(Pool) end) end),
+    ?assertEqual([], macula_key_leak_sample:found([term_to_binary(Status)], Key)),
+    ?assertEqual([], [{gen_server, terminate}, {proc_lib, crash}] -- [label(Event) || Event <- Events]),
+    ?assertEqual([], leaks(Events, Key)).
+
+a_link_holder() ->
+    started(),
+    Key = key(),
+    {Link, Issuer} = started_link(Key),
+    Status = sys:get_status(Link),
+    ok = macula_station_link:stop(Link),
+    Issuer ! stop,
+    Crash = captured(fun() -> crash_a_link(Key) end),
+    Exit = at_every_level(fun() -> captured(fun() -> link_peering_exit(Key) end) end),
+    ?assertEqual([], macula_key_leak_sample:found([term_to_binary(Status)], Key)),
+    ?assertEqual([], [{gen_server, terminate}, {proc_lib, crash}] -- [label(Event) || Event <- Crash]),
+    ?assertEqual([?PEERING_EXIT], [label(Event) || Event <- Exit, label(Event) =:= ?PEERING_EXIT]),
+    ?assertEqual([], leaks(Crash ++ Exit, Key)).
+
+a_loader_holder(Kind) ->
+    started(),
+    Key = key(),
+    {Field, Trigger} = holder_crash(Kind),
+    {ok, Holder} = start_holder(Kind, fun() -> Key end),
+    Status = sys:get_status(Holder),
+    On = captured(fun() -> crashed(Holder, holder_module(Kind), Field, fun() -> catch Trigger(Holder) end) end),
+    {ok, Unfiltered} = start_holder(Kind, fun() -> Key end),
+    Off = filter_off(fun() ->
+              captured(fun() ->
+                  crashed(Unfiltered, holder_module(Kind), Field, fun() -> catch Trigger(Unfiltered) end)
+              end)
+          end),
+    StartOn = captured(fun() -> supervised_start(Kind, Key) end),
+    StartOff = filter_off(fun() -> captured(fun() -> supervised_start(Kind, Key) end) end),
+    ?assertEqual([], macula_key_leak_sample:found([term_to_binary(Status)], Key)),
+    ?assertEqual([], [{gen_server, terminate}, {proc_lib, crash}] -- [label(Event) || Event <- On]),
+    ?assertMatch([_ | _], [Event || Event <- StartOn, label(Event) =:= {supervisor, start_error}]),
+    ?assertEqual([], leaks(On ++ StartOn, Key)),
+    ?assertEqual([], text_leaks(Off ++ StartOff, Key)).
+
+%%------------------------------------------------------------------
 %% A gen_statem that holds a key, a supervisor of one issuer, and a host helper
 %%------------------------------------------------------------------
 
@@ -459,7 +523,9 @@ init({statem, Key}) ->
     {ok, holding, #{key => Key}};
 init({supervisor, Options}) ->
     Issuer = #{id => issuer, start => {macula_statement_issuer, start_link, [Options]}, restart => temporary},
-    {ok, {#{strategy => one_for_one, intensity => 1, period => 5}, [Issuer]}}.
+    {ok, {#{strategy => one_for_one, intensity => 1, period => 5}, [Issuer]}};
+init({child, Spec}) ->
+    {ok, {#{strategy => one_for_one, intensity => 0, period => 1}, [Spec]}}.
 
 holding({call, From}, known, Data) ->
     {keep_state, Data, [{reply, From, ok}]}.
@@ -543,6 +609,84 @@ filter_ids() ->
 
 installed() ->
     length([Id || Id <- filter_ids(), Id =:= ?FILTER]).
+
+%% Sets a holder's state field to its whole state, then runs Trigger, a call that reads that field, so the holder
+%% crashes in a function whose arguments carry its state. Exits are trapped meanwhile, so the crash reaches this
+%% process as a message.
+crashed(Holder, Module, Field, Trigger) ->
+    Trapping = process_flag(trap_exit, true),
+    Index = Module:state_field_index(Field),
+    _ = sys:replace_state(Holder, fun(State) -> setelement(Index, State, State) end),
+    _ = Trigger(),
+    Ended = receive {'EXIT', Holder, _Reason} -> ended after 5_000 -> still_running end,
+    _ = process_flag(trap_exit, Trapping),
+    ?assertEqual(ended, Ended).
+
+%% The field a loader holder's crash sets to its state, and the call that then reads it.
+holder_crash(server) -> {pubsub, fun hecate_pubsub_server:topics/1};
+holder_crash(registry) -> {by_realm, fun(Registry) -> hecate_pubsub_registry:lookup(Registry, <<0:256>>) end}.
+
+holder_module(server) -> hecate_pubsub_server;
+holder_module(registry) -> hecate_pubsub_registry.
+
+holder_opts(server, Load) -> #{realm => <<0:256>>, identity => Load};
+holder_opts(registry, Load) -> #{identity => Load}.
+
+start_holder(Kind, Load) ->
+    (holder_module(Kind)):start_link(holder_opts(Kind, Load)).
+
+%% A supervisor that starts a holder whose loader raises with the key in its error: the holder refuses its start by
+%% name, and the supervisor logs a start error report whose child spec holds the loader.
+supervised_start(Kind, Key) ->
+    Trapping = process_flag(trap_exit, true),
+    Raising = fun() -> erlang:error({no_key_here, Key}) end,
+    Spec = #{id => holder, start => {holder_module(Kind), start_link, [holder_opts(Kind, Raising)]},
+             restart => temporary},
+    Started = supervisor:start_link(?MODULE, {child, Spec}),
+    receive {'EXIT', _Supervisor, _Reason} -> ok after 0 -> ok end,
+    _ = process_flag(trap_exit, Trapping),
+    ?assertMatch({error, _}, Started).
+
+%% A station link holding Key that dials nothing, and the stand-in issuer it waits on.
+started_link(Key) ->
+    {ok, NodeId} = macula_node_keys:node_id(Key),
+    Issuer = spawn(fun() -> receive stop -> ok end end),
+    {ok, Link} = macula_station_link:start_link(#{seed => #{host => <<"127.0.0.1">>, port => 1,
+                                                            expected_node_id => NodeId},
+                                                  node_identity => fun() -> Key end, issuer => Issuer,
+                                                  connect => fun(_PeeringOpts) -> {error, not_dialed_here} end}),
+    {Link, Issuer}.
+
+%% A station link whose peering worker exits with a reason that carries its node key in a Macula stack frame: the link
+%% logs its peering_exit diagnostics event with that reason, and stops.
+link_peering_exit(Key) ->
+    Trapping = process_flag(trap_exit, true),
+    {Link, Issuer} = started_link(Key),
+    Peer = spawn(fun() -> receive stop -> ok end end),
+    Index = macula_station_link:state_field_index(peer_pid),
+    _ = sys:replace_state(Link, fun(State) -> setelement(Index, State, Peer) end),
+    Link ! {'EXIT', Peer, {function_clause, [{macula_station_link, handle_info, [a_probe, Key], [{line, 1}]}]}},
+    Ended = receive {'EXIT', Link, _Reason} -> ended after 5_000 -> still_running end,
+    Peer ! stop,
+    Issuer ! stop,
+    _ = process_flag(trap_exit, Trapping),
+    ?assertEqual(ended, Ended).
+
+%% Runs Act with the application's redaction filter removed, and installs the filter again after.
+filter_off(Act) ->
+    _ = logger:remove_primary_filter(?FILTER),
+    try Act() after ok = macula_node_keys:install_log_redaction() end.
+
+%% The labels of the events whose formatted text holds a form of Key's secret slices.
+text_leaks(Events, Key) ->
+    [label(Event) || Event <- Events, macula_key_leak_sample:found([formatted(Event)], Key) =/= []].
+
+%% Runs Act with the primary logger level at all, as on a node that logs info events, and puts the level back after. A
+%% diagnostics event is logged at info, below the default primary level, so it reaches no handler otherwise.
+at_every_level(Act) ->
+    #{level := Level} = logger:get_primary_config(),
+    ok = logger:set_primary_config(level, all),
+    try Act() after ok = logger:set_primary_config(level, Level) end.
 
 %% How many redaction filters the node holds once Start has started a key holder with none installed. The holder is
 %% stopped after.

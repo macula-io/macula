@@ -93,6 +93,8 @@
 %% Station discovery selection math — exported for direct testing, same
 %% rationale as `select_publish_targets/2' above.
 -export([ordered_for_selection/2, select_discovery_seeds/3, station_seed/1, seed_peer/1]).
+%% A state field's position in the state tuple, by name, for the key redaction tests.
+-export([state_field_index/1]).
 %% How a pool call moves from one link to the next, over any links and
 %% call -- exported for macula_client_call_first_success_tests.erl, which
 %% replaces no module.
@@ -2877,3 +2879,13 @@ summarize_publish(Results, _Targets) ->
 on_publish_results(true,  _Results)        -> ok;
 on_publish_results(false, [First | _])     -> First;
 on_publish_results(false, [])              -> {error, no_publish_attempts}.
+
+-ifdef(TEST).
+%% The position of a field in the state tuple, read from the record itself, for the key redaction tests that set a
+%% field to the whole state on purpose: a test names the field, so a field added to the record cannot shift it.
+state_field_index(Field) ->
+    field_index(Field, record_info(fields, state), 2).
+
+field_index(Field, [Field | _Rest], Index) -> Index;
+field_index(Field, [_Other | Rest], Index) -> field_index(Field, Rest, Index + 1).
+-endif.

@@ -66,6 +66,11 @@
 
 -export_type([opts/0, realm/0, identity/0]).
 
+-ifdef(TEST).
+%% A state field's position in the state tuple, by name, for the key redaction tests.
+-export([state_field_index/1]).
+-endif.
+
 -define(MAX_SUBSCRIBED_REALMS, 1000).
 
 -type realm()    :: <<_:256>>.
@@ -493,3 +498,13 @@ purged(Pid, Sub) ->
         ok -> true
     catch exit:{noproc, _} -> false
     end.
+
+-ifdef(TEST).
+%% The position of a field in the state tuple, read from the record itself, for the key redaction tests that set a
+%% field to the whole state on purpose: a test names the field, so a field added to the record cannot shift it.
+state_field_index(Field) ->
+    field_index(Field, record_info(fields, state), 2).
+
+field_index(Field, [Field | _Rest], Index) -> Index;
+field_index(Field, [_Other | Rest], Index) -> field_index(Field, Rest, Index + 1).
+-endif.

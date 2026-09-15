@@ -47,6 +47,11 @@
 
 -export_type([opts/0]).
 
+-ifdef(TEST).
+%% A state field's position in the state tuple, by name, for the key redaction tests.
+-export([state_field_index/1]).
+-endif.
+
 %% `identity' returns an identity key in the node's configured crypto profile: the server signs its own PUBLISH frames
 %% with that key, calling it at each publication, and verifies publications under that profile. The server holds the
 %% function, never the key.
@@ -303,3 +308,13 @@ terminate(_Reason, _State) ->
 %% Status output and crash reports show this process's keys with their private halves redacted.
 format_status(Status) ->
     macula_node_keys:redacted(Status).
+
+-ifdef(TEST).
+%% The position of a field in the state tuple, read from the record itself, for the key redaction tests that set a
+%% field to the whole state on purpose: a test names the field, so a field added to the record cannot shift it.
+state_field_index(Field) ->
+    field_index(Field, record_info(fields, state), 2).
+
+field_index(Field, [Field | _Rest], Index) -> Index;
+field_index(Field, [_Other | Rest], Index) -> field_index(Field, Rest, Index + 1).
+-endif.
