@@ -34,7 +34,7 @@
     tombstone/2, tombstone/3,
     envelope/3
 ]).
--export([sign/2, verify/2, verify/3, refresh/2, encode/1, node_signed/1, payload_bounded/1]).
+-export([sign/2, verify/2, verify/3, refresh/2, encode/1, node_signed/1, payload_bounded/1, wire_bounded/1]).
 -export([type/1, key/1, key_id/1, version/1, created_at/1, expires_at/1, payload/1, signature/1]).
 -export([payload_field/2, type_procedure_advertisement/0]).
 -export([read_node_record/1, read_procedure_advertisement/1, read_station_endpoint/1, read_tombstone/1,
@@ -153,7 +153,7 @@
 %% procedure advertisement 5 minutes, renewed at half that or sooner, so a provider that stops is gone within minutes; a
 %% station endpoint 5 minutes; realm stations, an org directory and a procedure delegation 6 hours; a realm member
 %% endorsement 30 days; a domain record 7 days (D28); and any other type 30 days, so no record keeps a key trusted
-%% without end. A tombstone lives at most its withdrawn type's maximum plus the clock tolerance.
+%% without end. A tombstone lives at most its withdrawn type's maximum plus twice the clock tolerance.
 -define(NODE_RECORD_MAX_LIFETIME_MS, 48 * 60 * 60 * 1000).
 -define(CONTENT_ANNOUNCEMENT_MAX_LIFETIME_MS, 48 * 60 * 60 * 1000).
 -define(PROCEDURE_ADVERTISEMENT_MAX_LIFETIME_MS, 5 * 60 * 1000).
@@ -678,7 +678,8 @@ node_signed(_NotARecord) ->
 names_its_node(Type) ->
     signer_kind(Type, #{}) =:= node andalso signer_field(Type) =/= none.
 
-%% The longest a record of Type lives. A tombstone's follows the type it withdraws, plus the clock tolerance.
+%% The longest a record of Type lives. A tombstone's follows the type it withdraws, plus twice the clock tolerance: the
+%% record it withdraws may be created up to the tolerance ahead, and the tombstone outlives it by the tolerance.
 max_lifetime(?TYPE_NODE_RECORD, _Payload) -> ?NODE_RECORD_MAX_LIFETIME_MS;
 max_lifetime(?TYPE_CONTENT_ANNOUNCEMENT, _Payload) -> ?CONTENT_ANNOUNCEMENT_MAX_LIFETIME_MS;
 max_lifetime(?TYPE_PROCEDURE_ADVERTISEMENT, _Payload) -> ?PROCEDURE_ADVERTISEMENT_MAX_LIFETIME_MS;
@@ -688,7 +689,7 @@ max_lifetime(Type, _Payload) when Type =:= ?TYPE_REALM_STATIONS; Type =:= ?TYPE_
     ?REALM_AND_ORG_MAX_LIFETIME_MS;
 max_lifetime(?TYPE_REALM_MEMBER_ENDORSEMENT, _Payload) -> ?MAX_ENDORSEMENT_WINDOW_MS;
 max_lifetime(?TYPE_TOMBSTONE, #{{text, <<"withdrawn_type">>} := Withdrawn}) when Withdrawn =/= ?TYPE_TOMBSTONE ->
-    max_lifetime(Withdrawn, #{}) + ?CLOCK_TOLERANCE_MS;
+    max_lifetime(Withdrawn, #{}) + 2 * ?CLOCK_TOLERANCE_MS;
 max_lifetime(Type, _Payload) when is_integer(Type), Type >= ?DOMAIN_TYPE_MIN -> ?DOMAIN_RECORD_MAX_LIFETIME_MS;
 max_lifetime(_Type, _Payload) -> ?DEFAULT_MAX_LIFETIME_MS.
 
@@ -725,6 +726,21 @@ nesting(_Leaf, Depth) -> Depth.
 deepest(_Terms, _Level, Deepest) when Deepest > ?MAX_PAYLOAD_NESTING -> Deepest;
 deepest([Term | Terms], Level, Deepest) -> deepest(Terms, Level, max(Deepest, nesting(Term, Level)));
 deepest(_EndOrImproperTail, _Level, Deepest) -> Deepest.
+
+%% @doc Check a record given as its wire form, or as a signed map, before it is decoded or encoded: a wire form is a
+%% binary of at most 256 KiB, and a signed map's key, tbs and signature are binaries of at most 256 KiB together.
+%% Returns record_too_large or malformed.
+-spec wire_bounded(term()) -> ok | {error, record_too_large | malformed}.
+wire_bounded(Bytes) when is_binary(Bytes) ->
+    sized_wire(byte_size(Bytes));
+wire_bounded(#{key := Key, tbs := Tbs, signature := Signature})
+  when is_binary(Key), is_binary(Tbs), is_binary(Signature) ->
+    sized_wire(byte_size(Key) + byte_size(Tbs) + byte_size(Signature));
+wire_bounded(_NotAWireRecord) ->
+    {error, malformed}.
+
+sized_wire(Bytes) when Bytes =< ?MAX_RECORD_BYTES -> ok;
+sized_wire(_Bytes) -> {error, record_too_large}.
 
 %%------------------------------------------------------------------
 %% Internals: verifying

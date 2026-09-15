@@ -153,9 +153,10 @@ About 7.3 KB / 8.3 KB before the payload: 2,592 / 3,118 bytes of key and 4,627 /
   stations, an org directory and a procedure delegation 6 hours; a realm member endorsement 30 days; a domain record 7
   days (D28); and any other type 30 days, so no record keeps a key trusted without end. A tombstone lives at least
   until the record it withdraws has expired plus the clock tolerance, and at most the withdrawn type's maximum plus
-  that tolerance. A signer refuses to sign any other record, and every verifier refuses one as `lifetime_too_long`, or
-  as `lifetime_reversed` when it expires before it is created. With `created_at` at most 5 minutes ahead, no domain
-  record a station accepts expires more than 7 days and 5 minutes after it arrives.
+  twice that tolerance, since the record it withdraws may be created up to the tolerance ahead. A signer refuses to
+  sign any other record, and every verifier refuses one as `lifetime_too_long`, or as `lifetime_reversed` when it
+  expires before it is created. With `created_at` at most 5 minutes ahead, no domain record a station accepts expires
+  more than 7 days and 5 minutes after it arrives.
 - **Realm member endorsement window.** Its payload's `valid_until` is not before its `valid_from`, and at most 30 days
   after it. The builder refuses another window, and a verifier of the endorsement refuses a reversed one as
   `endorsement_window_reversed` and a longer one as `endorsement_window_too_long`, before its other window checks, so
