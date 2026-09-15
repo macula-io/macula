@@ -20,7 +20,40 @@ diagnostics_test_() ->
      {"a link whose peering process exits logs the exit at notice",
       {spawn, fun a_peering_exit_logs_at_notice/0}},
      {"a link's failed connect stays at info",
-      {spawn, fun a_failed_connect_stays_at_info/0}}].
+      {spawn, fun a_failed_connect_stays_at_info/0}},
+     {"a disconnect whose reason holds a key logs no form of it at notice, with the redaction filter removed",
+      {spawn, fun a_disconnect_reason_logs_only_its_name/0}},
+     {"a peering exit whose reason holds a key logs no form of it at notice, with the redaction filter removed",
+      {spawn, fun a_peering_exit_reason_logs_only_its_name/0}}].
+
+%% A reason that holds a key in a stack frame's arguments, as a crash reason can, reaches the default level as its name
+%% only: with the redaction filter removed, neither the event's term nor its formatted text holds a form of the key.
+a_disconnect_reason_logs_only_its_name() ->
+    Key = key(),
+    Events = unfiltered(fun() ->
+                            captured(fun() ->
+                                         {Link, Peer} = link_with_peer(),
+                                         Mon = erlang:monitor(process, Link),
+                                         Link ! {macula_peering, disconnected, Peer, crash_reason(Key)},
+                                         ok = ended(Mon, Link),
+                                         Peer ! stop
+                                     end)
+                        end),
+    [Event] = on_topic(<<"_macula.station_link.disconnected">>, Events),
+    ?assertEqual({notice, []}, {maps:get(level, Event), leaked(Event, Key)}).
+
+a_peering_exit_reason_logs_only_its_name() ->
+    Key = key(),
+    Events = unfiltered(fun() ->
+                            captured(fun() ->
+                                         {Link, Peer} = link_with_peer(),
+                                         Mon = erlang:monitor(process, Link),
+                                         Peer ! {exit, crash_reason(Key)},
+                                         ok = ended(Mon, Link)
+                                     end)
+                        end),
+    [Event] = on_topic(<<"_macula.station_link.peering_exit">>, Events),
+    ?assertEqual({notice, []}, {maps:get(level, Event), leaked(Event, Key)}).
 
 a_disconnect_logs_at_notice() ->
     Events = captured(fun() ->
@@ -80,6 +113,42 @@ drained(Events) ->
 %% The level of each captured diagnostic event on Topic, in order.
 levels(Topic, Events) ->
     [Level || #{level := Level, msg := {report, #{event := On}}} <- Events, On =:= Topic].
+
+%% The captured diagnostic events on Topic, in order.
+on_topic(Topic, Events) ->
+    [Event || #{msg := {report, #{event := On}}} = Event <- Events, On =:= Topic].
+
+%% A node identity key in the node's profile.
+key() ->
+    {ok, Profile} = macula_crypto_profile:configured(),
+    {ok, Key} = macula_node_keys:generate(identity, Profile),
+    Key.
+
+%% An exit reason as a crash leaves one, with the key among a stack frame's arguments.
+crash_reason(Key) ->
+    {function_clause, [{macula_peering_conn, handle_frame, [Key, <<"frame">>],
+                        [{file, "macula_peering_conn.erl"}, {line, 1}]}]}.
+
+%% Runs Fun with the key redaction filter removed, checks the filter stayed removed, and installs it again after.
+unfiltered(Fun) ->
+    {ok, _} = application:ensure_all_started(macula),
+    _ = logger:remove_primary_filter(macula_key_redaction),
+    try
+        Result = Fun(),
+        ?assertNot(redaction_installed()),
+        Result
+    after
+        _ = macula_node_keys:install_log_redaction()
+    end.
+
+redaction_installed() ->
+    #{filters := Filters} = logger:get_primary_config(),
+    lists:keymember(macula_key_redaction, 1, Filters).
+
+%% The forms of Key's private halves in an event's term or in its formatted text.
+leaked(Event, Key) ->
+    Text = iolist_to_binary(logger_formatter:format(Event, #{single_line => true, legacy_header => false})),
+    macula_key_leak_sample:found([term_to_binary(Event), Text], Key).
 
 %% A link that believes it is connected, whose connect never dials, with a process of this test as its peering
 %% connection, linked to the link as a peering process is.

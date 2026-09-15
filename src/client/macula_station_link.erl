@@ -1330,7 +1330,7 @@ handle_info({macula_peering, disconnected, Pid, Reason},
     macula_diagnostics:event(notice, <<"_macula.station_link.disconnected">>, #{
         seed     => Seed,
         peer_pid => Pid,
-        reason   => Reason
+        reason   => macula_reason_name:text(Reason)
     }),
     NewS = fail_all_pending({disconnected, macula_reason_name:text(Reason)}, cancel_liveness(S)),
     %% Stop normally — the supervisor (or owning gen_server) decides
@@ -1454,7 +1454,7 @@ handle_info({'EXIT', Pid, Reason}, #state{peer_pid = Pid, seed = Seed} = S) ->
     macula_diagnostics:event(notice, <<"_macula.station_link.peering_exit">>, #{
         seed     => Seed,
         peer_pid => Pid,
-        reason   => Reason
+        reason   => macula_reason_name:text(Reason)
     }),
     NewS = fail_all_pending({peering_exit, macula_reason_name:text(Reason)}, cancel_liveness(S)),
     {stop, normal, NewS#state{peer_pid = undefined,
