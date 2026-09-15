@@ -8,6 +8,9 @@
 
 -include_lib("eunit/include/eunit.hrl").
 
+%% The key loader a child spec in these tests names.
+-export([child_key/0]).
+
 %% A pq_hybrid key carries an RSA-4096 half, which takes up to about a second to generate.
 -define(EU_TIMEOUT, 120).
 %% The issuer restart backoff reaches 5 s, and a link respawns a second after it ends.
@@ -37,7 +40,9 @@ link_cases(#{profile := Profile, pool := Pool}) ->
      {"the issuer's CONNECT key is in that profile and shares no half with the identity key",
       ?_test(assert_separate_keys(Profile, hd(links(Pool))))},
      {"no link holds a classical identity",
-      ?_assertError(function_clause, macula_station_link:state_field_index(identity))}].
+      ?_assertError(function_clause, macula_station_link:state_field_index(identity))},
+     {"no value in a link's state is a classical key pair",
+      ?_assertEqual([], [Value || Link <- links(Pool), Value <- tuple_to_list(sys:get_state(Link)), key_pair(Value)])}].
 
 assert_separate_keys(Profile, Link) ->
     #{components := IdentityHalves} = held(Link, node_identity),
@@ -84,10 +89,99 @@ a_pool_whose_issuer_ends_respawns_its_links_with_a_new_issuer_test_() ->
         exit(Ended, kill),
         Respawned = respawned(Pool, Link, erlang:monotonic_time(millisecond) + ?RESPAWN_MS),
         New = held(Respawned, issuer),
+        Seen = {New =/= Ended, lists:member(New, issuers()), is_process_alive(Ended)},
         ok = macula_client:close(Pool),
-        ?assertNotEqual(Ended, New),
-        ?assert(lists:member(New, issuers()) orelse not is_process_alive(New)),
-        ?assertNot(is_process_alive(Ended))
+        ?assertEqual({true, true, false}, Seen)
+    end}.
+
+%% While the pool's issuer cannot start again, a link start waits for the next one and counts once however long it
+%% waits, and the link then starts with the issuer that runs.
+a_held_link_start_counts_once_and_starts_with_the_next_issuer_test_() ->
+    {timeout, ?EU_TIMEOUT, fun() ->
+        {ok, _Profile} = profile(),
+        Gate = ets:new(issuer_gate, [public]),
+        true = ets:insert(Gate, {open, true}),
+        Start = fun(Identity, Owner) -> gated_start(ets:lookup_element(Gate, open, 2), Identity, Owner) end,
+        {ok, Pool} = macula_client:connect([seed(1)], #{issuer_start => Start}),
+        [Link] = links(Pool),
+        true = ets:insert(Gate, {open, false}),
+        exit(held(Link, issuer), kill),
+        Waited = until(fun() -> waits_for_issuer(Pool) =:= 1 end, ?RESPAWN_MS),
+        receive after 2_000 -> ok end,
+        Held = {Waited, waits_for_issuer(Pool), links(Pool)},
+        true = ets:insert(Gate, {open, true}),
+        Respawned = respawned(Pool, Link, erlang:monotonic_time(millisecond) + ?RESPAWN_MS),
+        Resumed = {lists:member(held(Respawned, issuer), issuers()), waits_for_issuer(Pool)},
+        ok = macula_client:close(Pool),
+        ?assertEqual({ok, 1, []}, Held),
+        ?assertEqual({true, 1}, Resumed)
+    end}.
+
+%% A pool whose issuer ends starts a new one and counts the restart in its status. The issuer_down log line is bounded
+%% to one for each window, node-wide, so the count and not the line is what a test reads.
+an_issuer_restart_is_counted_in_the_status_test_() ->
+    {timeout, ?EU_TIMEOUT, fun() ->
+        {ok, _Profile} = profile(),
+        Before = issuers(),
+        {ok, Pool} = macula_client:connect([], #{}),
+        {ok, #{issuer_restarts := Initially}} = macula_client:status(Pool),
+        [Issuer] = issuers() -- Before,
+        exit(Issuer, kill),
+        Restarted = until(fun() -> issuer_restarts(Pool) =:= 1 end, ?RESPAWN_MS),
+        Running = issuers() -- Before,
+        ok = macula_client:close(Pool),
+        ?assertEqual({0, ok}, {Initially, Restarted}),
+        ?assertMatch([New] when New =/= Issuer, Running)
+    end}.
+
+%% A restart_issuer the pool receives while its issuer runs starts no second issuer.
+a_restart_while_the_issuer_runs_starts_no_issuer_test_() ->
+    {timeout, ?EU_TIMEOUT, fun() ->
+        {ok, _Profile} = profile(),
+        Before = issuers(),
+        {ok, Pool} = macula_client:connect([], #{}),
+        Started = issuers() -- Before,
+        Pool ! restart_issuer,
+        _ = sys:get_state(Pool),
+        After = issuers() -- Before,
+        ok = macula_client:close(Pool),
+        ?assertEqual(Started, After)
+    end}.
+
+the_issuer_restart_backoff_doubles_from_100_ms_to_5_s_and_resets_after_a_minute_test() ->
+    Backoffs = lists:foldl(fun(_, [Last | _] = Acc) -> [macula_client:next_issuer_backoff(Last) | Acc] end,
+                           [100], lists:seq(1, 7)),
+    ?assertEqual([100, 200, 400, 800, 1600, 3200, 5000, 5000], lists:reverse(Backoffs)),
+    ?assertEqual(5000, macula_client:issuer_restart_delay(59_999, 5000)),
+    ?assertEqual(100, macula_client:issuer_restart_delay(60_000, 5000)).
+
+%%------------------------------------------------------------------
+%% A child spec loads the key
+%%------------------------------------------------------------------
+
+%% A child spec holds how to load the node identity key, never the key: a supervisor keeps the spec for its child's
+%% life, and a function holding the key would keep the key there too.
+a_child_spec_holds_a_loader_and_not_the_key_test_() ->
+    {timeout, ?EU_TIMEOUT, fun() ->
+        {ok, Profile} = profile(),
+        {ok, Key} = macula_node_keys:generate(identity, Profile),
+        ok = persistent_term:put({?MODULE, child_key}, Key),
+        Spec = macula_client:child_spec(pool, [], #{node_identity => {?MODULE, child_key, []}}),
+        #{start := {Module, Function, Args}} = Spec,
+        {ok, Pool} = apply(Module, Function, Args),
+        {ok, #{self_node_id := NodeId}} = macula_client:status(Pool),
+        ok = macula_client:close(Pool),
+        _ = persistent_term:erase({?MODULE, child_key}),
+        ?assertEqual({ok, NodeId}, macula_node_keys:node_id(Key)),
+        ?assertEqual([], [Private || #{private := Private} <- maps:get(components, Key),
+                                      binary:match(term_to_binary(Spec), Private) =/= nomatch])
+    end}.
+
+a_child_spec_given_a_key_is_refused_test_() ->
+    {timeout, ?EU_TIMEOUT, fun() ->
+        {ok, Profile} = profile(),
+        {ok, Key} = macula_node_keys:generate(identity, Profile),
+        ?assertError({node_identity, loader_required}, macula_client:child_spec(pool, [], #{node_identity => Key}))
     end}.
 
 %%------------------------------------------------------------------
@@ -191,3 +285,36 @@ respawned_in_time(true, [], Pool, Ended, Deadline) ->
     respawned(Pool, Ended, Deadline);
 respawned_in_time(false, Links, _Pool, _Ended, _Deadline) ->
     erlang:error({no_respawned_link, Links}).
+
+%% An issuer start that goes to macula_statement_issuer_sup while the gate is open, and is refused while it is shut.
+gated_start(true, Identity, Owner) -> macula_statement_issuer_sup:start_issuer(Identity, Owner);
+gated_start(false, _Identity, _Owner) -> {error, gate_shut}.
+
+%% The issuers a pool has started after its first, as its status counts them.
+issuer_restarts(Pool) ->
+    {ok, #{issuer_restarts := Restarts}} = macula_client:status(Pool),
+    Restarts.
+
+%% The link starts of a pool that waited for an issuer, as its status counts them.
+waits_for_issuer(Pool) ->
+    {ok, #{refused_dials := Refused}} = macula_client:status(Pool),
+    maps:get(link_start_waits_for_issuer, Refused, 0).
+
+%% ok once Check holds, checked every 50 ms, or {error, timeout} after TimeoutMs.
+until(Check, TimeoutMs) ->
+    until_by(Check, erlang:monotonic_time(millisecond) + TimeoutMs).
+
+until_by(Check, Deadline) ->
+    checked(Check(), erlang:monotonic_time(millisecond) >= Deadline, Check, Deadline).
+
+checked(true, _Late, _Check, _Deadline) -> ok;
+checked(false, true, _Check, _Deadline) -> {error, timeout};
+checked(false, false, Check, Deadline) -> receive after 50 -> ok end, until_by(Check, Deadline).
+
+%% A classical key pair: exactly a public and a private half at the top of a map.
+key_pair(#{public := _, private := _} = Pair) -> map_size(Pair) =:= 2;
+key_pair(_Value) -> false.
+
+%% The loader the child spec test names: the key it stored.
+child_key() ->
+    {ok, persistent_term:get({?MODULE, child_key})}.

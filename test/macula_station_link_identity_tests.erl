@@ -29,6 +29,8 @@ identity_test_() ->
             ?_test(refuses_a_seed_without_an_expected_node_id(Keys))},
            {"a link dials with its node identity key, its issuer and the seed's expected node_id",
             ?_test(dials_with_its_keys(Keys))},
+           {"a seed's own expected node_id stands over one in the link's options",
+            ?_test(a_seed_pin_stands_over_a_link_option(Keys))},
            {"a link ends when its issuer does",
             ?_test(ends_with_its_issuer(Keys))}]
       end}}.
@@ -61,13 +63,30 @@ dials_with_its_keys(#{node_identity := Key} = Keys) ->
                  Dialed),
     ?assertEqual([], [Field || Field <- [node_id, realms], maps:is_key(Field, Dialed)]).
 
+%% A link's expected_node_id option fills a seed that names none, and a seed map that names its own keeps it.
+a_seed_pin_stands_over_a_link_option(#{node_identity := Key} = Keys) ->
+    Test = self(),
+    Connect = fun(PeeringOpts) -> Test ! {dialed, PeeringOpts}, {error, not_dialed_here} end,
+    {ok, NodeId} = macula_node_keys:node_id(Key),
+    Pinned = (link_opts(Key, issuer(Keys)))#{connect => Connect, expected_node_id => <<7:256>>},
+    Unpinned = Pinned#{seed := #{host => <<"127.0.0.1">>, port => 1}},
+    ?assertEqual([NodeId, <<7:256>>], [dialed_pin(Opts) || Opts <- [Pinned, Unpinned]]).
+
+%% The expected node_id a link started with Opts dials.
+dialed_pin(Opts) ->
+    {ok, Link} = macula_station_link:start_link(Opts),
+    #{target := #{expected_node_id := Pin}} = receive {dialed, Dial} -> Dial after ?EVENT_MS -> erlang:error(no_dial) end,
+    ok = macula_station_link:stop(Link),
+    Pin.
+
+%% A link whose issuer ends stops with a shutdown reason, so its end is no crash report.
 ends_with_its_issuer(#{node_identity := Key}) ->
     Issuer = spawn(fun() -> receive stop -> ok end end),
     {ok, Link} = macula_station_link:start_link(link_opts(Key, Issuer)),
     unlink(Link),
     Mon = erlang:monitor(process, Link),
     exit(Issuer, kill),
-    ?assertEqual({issuer_down, killed},
+    ?assertEqual({shutdown, {issuer_down, killed}},
                  receive {'DOWN', Mon, process, Link, Reason} -> Reason after ?EVENT_MS -> still_running end).
 
 %%------------------------------------------------------------------

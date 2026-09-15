@@ -102,6 +102,9 @@ handshake_test_() ->
              fun() ->
                  a_control_frame_without_a_neighbour_signature_closes_the_connection_in_pq_hybrid(Ctx)
              end}},
+           {"an overlay relay goes out neighbour-signed and verifies in pq_hybrid",
+            {timeout, 120,
+             fun() -> an_overlay_relay_goes_out_neighbour_signed_and_verifies_in_pq_hybrid(Ctx) end}},
            {"a frame with a field its table does not name closes with malformed_frame",
             {timeout, 30, fun() -> a_frame_with_a_field_its_table_does_not_name_closes_with_malformed_frame(Ctx) end}},
            {"an application frame on the control stream is delivered",
@@ -838,6 +841,19 @@ a_control_frame_without_a_neighbour_signature_closes_the_connection_in_pq_hybrid
     _ = {await(Client, connected), await(Station, connected)},
     ok = on_control_stream(Client, macula_frame:encode(ping())),
     ?assertEqual(malformed_frame, ended(Station)),
+    finish(World, [Client, Station]).
+
+%% An OVERLAY_RELAY is a control frame: sent on an open pq_hybrid connection
+%% with no signature of its own, it goes out neighbour-signed, and the other
+%% side verifies it and delivers the frame as its producer built it. A control
+%% frame without a neighbour signature would have closed that side instead.
+an_overlay_relay_goes_out_neighbour_signed_and_verifies_in_pq_hybrid(Ctx) ->
+    World = world(Ctx, #{profile => pq_hybrid}),
+    {Client, Station} = connect(World, #{mode => off}),
+    _ = {await(Client, connected), await(Station, connected)},
+    Relay = macula_frame:overlay_relay(#{peer => <<9:256>>, payload => macula_frame:encode(ping())}),
+    ok = sent(Client, Station, [Relay]),
+    ?assertEqual({open, open}, {still_open(Client, 500), still_open(Station, 0)}),
     finish(World, [Client, Station]).
 
 ping() ->

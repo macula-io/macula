@@ -27,6 +27,7 @@
 %% state record, so a field added to the record cannot shift them.
 -define(PEER_PID_INDEX, macula_station_link:state_field_index(peer_pid)).
 -define(PEER_NODE_ID_INDEX, macula_station_link:state_field_index(peer_node_id)).
+-define(NODE_IDENTITY_INDEX, macula_station_link:state_field_index(node_identity)).
 
 %%------------------------------------------------------------------
 %% Seed parsing
@@ -3820,20 +3821,23 @@ liveness_tick_emits_probe_call_test_() ->
     {timeout, 5,
      fun() ->
          {ok, _} = application:ensure_all_started(macula),
-         {Pid, _FakePeer, _PeerNodeId} = start_connected_link(),
+         {Pid, _FakePeer, PeerNodeId} = start_connected_link(),
          %% Drive the tick.
          Pid ! liveness_tick,
-         %% A CALL frame for `_macula.ping' must hit the test
-         %% mailbox as a send_frame cast.
-         CallId = receive
-             {'$gen_cast', {send_frame,
-                            #{frame_type := call,
-                              procedure  := <<"_macula.ping">>,
-                              call_id    := Id}}} -> Id
+         %% A CALL for `_macula.ping' hits the test mailbox as a send_frame
+         %% cast: a request to the station, signed with the link's node
+         %% identity key, that passes the send check. The link keeps running.
+         Probe = receive
+             {'$gen_cast', {send_frame, #{frame_type := call} = Frame}} -> Frame
          after 1_000 ->
              erlang:error(no_probe_call_emitted)
          end,
-         ?assertEqual(16, byte_size(CallId)),
+         ?assertEqual(ok, macula_frame:check_frame(Probe)),
+         #{profile := Profile} = Key = element(?NODE_IDENTITY_INDEX, sys:get_state(Pid)),
+         {ok, Request} = macula_frame:verify_request(Probe, Profile),
+         ?assertMatch(#{procedure := <<"_macula.ping">>, target := PeerNodeId, request_id := <<_:128>>}, Request),
+         ?assertEqual(macula_node_keys:public_key(Key), maps:get(key, Request)),
+         ?assert(is_process_alive(Pid)),
          macula_station_link:stop(Pid),
          ok
      end}.
