@@ -160,8 +160,8 @@
     subscriptions      := non_neg_integer(),
     replication_factor := pos_integer(),
     pubsub_gap_skips   := non_neg_integer(),
-    refused_dials      := #{too_many_direct_links | new_peer_budget_spent | link_start_waits_for_issuer
-                            | seed_without_expected_node_id => pos_integer()}
+    refused_dials      := #{too_many_direct_links | new_peer_budget_spent | unusable_seed
+                            | link_start_waits_for_issuer | seed_without_expected_node_id => pos_integer()}
 }.
 %% Per-link view returned by `links/1'. One entry per configured seed
 %% that currently has a spawned link worker. `node_id' is the peer
@@ -1156,8 +1156,8 @@ handle_call(status, _From,
         %% Per-publisher gaps given up on after the reorder timeout —
         %% the genuine loss rate an `ordered' subscriber could not fill.
         pubsub_gap_skips   => total_skips(Subs),
-        %% Dials refused by `max_direct_links' or the new-peer budget, and
-        %% discovered stations deferred by the budget, by reason.
+        %% Dials and link starts refused, and discovered stations deferred
+        %% by the budget or refused, by reason.
         refused_dials      => macula_refusal_report:counts(S#state.refused_dials)
     },
     {reply, {ok, Status}, S};
@@ -1375,9 +1375,15 @@ reuse_or_dial(Pid, _Station, _ExtraOpts, S) when is_pid(Pid) ->
 reuse_or_dial(undefined, Station, ExtraOpts, S) ->
     dial_fresh(Station, ExtraOpts, S).
 
-%% A fresh direct dial fits the pool's direct links and its new-peer budget,
-%% or is refused with a named error and dials nothing.
-dial_fresh(Station, ExtraOpts, #state{max_direct_links = Max} = S) ->
+%% A fresh direct dial names a seed the pool can dial, and fits the pool's
+%% direct links and its new-peer budget, or is refused with a named error and
+%% dials nothing.
+dial_fresh(Station, ExtraOpts, S) ->
+    usable_dial(usable_seed(Station), Station, ExtraOpts, S).
+
+usable_dial(false, _Station, _ExtraOpts, S) ->
+    refused_dial(unusable_seed, S);
+usable_dial(true, Station, ExtraOpts, #state{max_direct_links = Max} = S) ->
     direct_dial(direct_link_count(S) < Max, Station, ExtraOpts, S).
 
 direct_dial(false, _Station, _ExtraOpts, S) ->
@@ -1409,6 +1415,19 @@ on_link({Pid, S}, From, Work) ->
 %% A peer a pool links to, by its normalized seed.
 seed_peer(Seed) ->
     {seed, normalize_seed(Seed)}.
+
+%% A seed the pool can dial names a text host and a port from 1 to 65535.
+%% Any other seed is refused where it enters the pool, from a direct dial or
+%% from discovery, and counted, instead of starting a link that could never
+%% connect.
+usable_seed(Seed) ->
+    usable_normalized(normalize_seed(Seed)).
+
+usable_normalized(#{host := Host, port := Port})
+  when is_binary(Host), byte_size(Host) > 0, is_integer(Port), Port > 0, Port =< 65535 ->
+    true;
+usable_normalized(_Unusable) ->
+    false.
 
 spend_dial_budget(Station, #state{dial_budget = Budget} = S) ->
     {Verdict, Spent} = macula_client_peer_budget:spend(Budget, seed_peer(Station),
@@ -1891,8 +1910,18 @@ add_discovered_seeds(_Stations, #state{discovery = undefined} = S) ->
     %% possible if a future caller adds a way to toggle it at runtime --
     %% not exposed today) or this is a stray cast. Ignore.
     S;
-add_discovered_seeds(Stations, #state{discovery = D, links = Links,
-                                      seeds = ConfiguredSeeds} = S) ->
+add_discovered_seeds(Stations, S) ->
+    {Usable, Unusable} = lists:partition(fun usable_station/1, Stations),
+    add_usable_discovered_seeds(Usable, lists:foldl(fun refused_unusable_station/2, S, Unusable)).
+
+%% A discovered station whose seed the pool cannot dial is refused and
+%% counted before selection, so it takes no place in the discovery budget.
+usable_station({Seed, _NodeId}) -> usable_seed(Seed).
+
+refused_unusable_station(_Station, S) -> count_refused_dial(unusable_seed, S).
+
+add_usable_discovered_seeds(Stations, #state{discovery = D, links = Links,
+                                             seeds = ConfiguredSeeds} = S) ->
     %% `ConfiguredSeeds' (the pool's original bootstrap list, fixed for
     %% its whole lifetime) is included alongside `maps:keys(Links)'
     %% because a bootstrap seed's *link* drops out of `Links' for the
@@ -1953,27 +1982,49 @@ is_known_seed(Seed, ExistingNormalized) ->
 %% pool over a bad seed string.
 %%
 %% On top of it the host is made canonical, so one station is one seed
-%% however it is spelled: a lowercase binary with no brackets and no
-%% trailing dot, and an IP literal in the one text form `inet:ntoa/1'
-%% gives, with an IPv4 address mapped into IPv6 as that IPv4 address.
+%% however it is spelled: a binary with its ASCII letters lowercased and the
+%% brackets around an IPv6 literal dropped, and an IP literal in the one text
+%% form `inet:ntoa/1' gives, with an IPv4 address mapped into IPv6 as that
+%% IPv4 address. Every other byte stays as it is, a trailing dot included:
+%% DNS compares those exactly, so two such names are two peers, never one.
+%% A host that is not text leaves the seed as its own term. Nothing here
+%% raises, whatever a seed holds.
 normalize_seed(Seed) ->
     try macula_station_link:parse_seed(Seed) of
-        #{host := H, port := P} -> #{host => canonical_host(H), port => P}
+        #{host := H, port := P} -> canonical_seed(canonical_host(H), P, Seed)
     catch
         _:_ -> Seed
     end.
 
-canonical_host(Host) when is_list(Host) ->
-    canonical_host(unicode:characters_to_binary(Host));
+canonical_seed({ok, Host}, Port, _Seed) -> #{host => Host, port => Port};
+canonical_seed(not_text, _Port, Seed)   -> Seed.
+
 canonical_host(Host) when is_binary(Host) ->
-    Bare = string:lowercase(string:trim(string:trim(Host, both, "[]"), trailing, ".")),
+    {ok, canonical_text(Host)};
+canonical_host(Host) ->
+    char_list_host(io_lib:char_list(Host), Host).
+
+char_list_host(true, Host)      -> {ok, canonical_text(unicode:characters_to_binary(Host))};
+char_list_host(false, _NotText) -> not_text.
+
+canonical_text(Host) ->
+    Bare = << <<(ascii_lowercase(Byte))>> || <<Byte>> <= unbracketed(Host) >>,
     ip_literal(inet:parse_address(binary_to_list(Bare)), Bare).
+
+unbracketed(Host) when byte_size(Host) >= 2, binary_part(Host, 0, 1) =:= <<"[">>,
+                       binary_part(Host, byte_size(Host) - 1, 1) =:= <<"]">> ->
+    binary_part(Host, 1, byte_size(Host) - 2);
+unbracketed(Host) ->
+    Host.
+
+ascii_lowercase(Byte) when Byte >= $A, Byte =< $Z -> Byte + ($a - $A);
+ascii_lowercase(Byte)                             -> Byte.
 
 ip_literal({ok, {0, 0, 0, 0, 0, 16#ffff, _, _} = Mapped}, _Bare) ->
     list_to_binary(inet:ntoa(inet:ipv4_mapped_ipv6_address(Mapped)));
 ip_literal({ok, Address}, _Bare) ->
     list_to_binary(inet:ntoa(Address));
-ip_literal({error, einval}, Bare) ->
+ip_literal({error, _NotAnAddress}, Bare) ->
     Bare.
 
 %% Secondary, identity-based backstop for exactly the case

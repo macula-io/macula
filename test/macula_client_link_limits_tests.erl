@@ -21,7 +21,9 @@ link_limits_test_() ->
                   fun a_fresh_direct_dial_past_the_new_peer_budget_is_refused/0,
                   fun configured_seeds_never_spend_the_new_peer_budget/0,
                   fun discovery_past_the_new_peer_budget_defers_its_additions/0,
-                  fun refused_dials_are_counted_in_the_pool_status/0]]}.
+                  fun refused_dials_are_counted_in_the_pool_status/0,
+                  fun a_direct_dial_to_a_seed_the_pool_cannot_dial_is_refused/0,
+                  fun discovered_seeds_the_pool_cannot_dial_are_refused/0]]}.
 
 a_pool_with_more_seeds_than_its_limit_does_not_start() ->
     ?assertEqual({error, {too_many_seeds, 3, 2}},
@@ -35,7 +37,7 @@ a_link_limit_outside_its_range_does_not_start_the_pool() ->
         Value <- [many, 0, -1, Cap + 1]],
     [?assertEqual({error, {invalid_link_limit, max_links, Value}},
                   macula_client:connect([], #{station_discovery => #{enabled => true, max_links => Value}}))
-     || Value <- [many, 0, 65]].
+     || Value <- [many, 0, -1, 65]].
 
 %% A station already linked is reused whatever the limit; only a fresh dial is refused.
 a_fresh_direct_dial_past_the_direct_link_limit_is_refused() ->
@@ -77,15 +79,52 @@ refused_dials_are_counted_in_the_pool_status() ->
     ?assertEqual(#{too_many_direct_links => 2}, Refused),
     ok = macula_client:close(Pool).
 
+%% A seed with no text host, or no port from 1 to 65535, can never be dialed: a direct dial to one is refused, counted,
+%% and starts no link.
+a_direct_dial_to_a_seed_the_pool_cannot_dial_is_refused() ->
+    {ok, Pool} = macula_client:connect([], #{}),
+    ?assertEqual({error, unusable_seed}, call_station(Pool, #{host => {not_a, host}, port => 4433})),
+    ?assertEqual({error, unusable_seed}, call_station(Pool, #{host => <<"127.0.0.1">>, port => 0})),
+    {ok, #{refused_dials := Refused}} = macula_client:status(Pool),
+    ?assertEqual({#{unusable_seed => 2}, {ok, []}}, {Refused, macula_client:links(Pool)}),
+    ok = macula_client:close(Pool).
+
+%% Discovered stations whose seeds cannot be dialed are refused and counted where they enter the pool, which starts no
+%% link for them and keeps serving.
+discovered_seeds_the_pool_cannot_dial_are_refused() ->
+    {ok, Pool} = macula_client:connect([], #{station_discovery => #{enabled => true, max_links => 5}}),
+    Unusable = [#{host => {not_a, host}, port => 4433, expected_node_id => <<1:256>>},
+                #{host => [16#110000], port => 4433, expected_node_id => <<2:256>>},
+                #{host => <<"127.0.0.1">>, port => 0, expected_node_id => <<3:256>>}],
+    ok = gen_server:cast(Pool, {discovered_stations, [{Seed, undefined} || Seed <- Unusable]}),
+    {ok, #{refused_dials := Refused}} = macula_client:status(Pool),
+    ?assertEqual({#{unusable_seed => 3}, {ok, []}}, {Refused, macula_client:links(Pool)}),
+    ok = macula_client:close(Pool).
+
 %%---------------------------------------------------------------------
 %% One peer per station, however its seed is spelled
 %%---------------------------------------------------------------------
 
-%% Scheme, host case, a trailing dot, a charlist or a binary host: one station, one peer.
+%% Scheme, the case of ASCII letters, a charlist or a binary host: one station, one peer.
 a_station_is_one_peer_however_its_seed_is_spelled_test() ->
-    Spellings = [<<"https://Station.Example.:4433">>, <<"quic://station.example:4433">>, "quic://STATION.example:4433",
-                 #{host => "station.example", port => 4433}, #{host => <<"Station.Example.">>, port => 4433}],
+    Spellings = [<<"https://Station.Example:4433">>, <<"quic://station.example:4433">>, "quic://STATION.example:4433",
+                 #{host => "station.example", port => 4433}, #{host => <<"Station.Example">>, port => 4433}],
     ?assertEqual(1, length(lists:usort([macula_client:seed_peer(Seed) || Seed <- Spellings]))).
+
+%% Only ASCII letters fold. A name with a trailing dot, and a name whose non-ASCII letter lowercases to an ASCII one,
+%% are other names to DNS, so each is another peer: two peers counted as one would let more new peers through than
+%% the budget allows.
+a_trailing_dot_or_a_non_ascii_letter_names_another_peer_test() ->
+    ?assertNotEqual(macula_client:seed_peer(#{host => <<"station.example">>, port => 4433}),
+                    macula_client:seed_peer(#{host => <<"station.example.">>, port => 4433})),
+    ?assertNotEqual(macula_client:seed_peer(#{host => <<"k.example">>, port => 4433}),
+                    macula_client:seed_peer(#{host => <<16#212A/utf8, ".example">>, port => 4433})).
+
+%% A host that is not text, or not valid text, still gives its seed a peer, without raising: a malformed seed from
+%% discovery or a direct dial must not stop the pool.
+a_malformed_host_never_raises_test() ->
+    [?assertMatch({seed, _}, macula_client:seed_peer(#{host => Host, port => 4433}))
+     || Host <- [<<255>>, {not_a, host}, [16#110000], [not_a_char]]].
 
 %% An IP literal is one peer in any of its textual forms, and an IPv4 address mapped into IPv6 is that IPv4 address.
 an_ip_literal_is_one_peer_in_any_of_its_forms_test() ->
