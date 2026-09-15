@@ -365,9 +365,14 @@ unadvertise(Pool, Realm, Procedure) ->
 %%
 %% Build the record via the typed constructors in `macula_record'
 %% (`node_record/3,4', `content_announcement/3,4', `tombstone/2,3',
-%% `realm_directory/3,4', `procedure_advertisement/4,5', etc.), sign
-%% it with `macula_record:sign/2', and pass the signed record or its
-%% wire form (`macula_record:encode/1'). The record travels as its
+%% `realm_directory/3,4', `procedure_advertisement/4,5', etc.) and sign
+%% it. A record this node signs about itself is signed by its pool,
+%% which holds the node identity key: through
+%% `macula_client:sign_node_record/2', and its tombstone through
+%% `macula_client:withdraw_node_record/3'. A realm-, org- or
+%% foundation-signed record is signed with `macula_record:sign/2' and
+%% its signer's key. Pass the signed record or its wire form
+%% (`macula_record:encode/1'). The record travels as its
 %% wire form; the station verifies it on receipt and stores it under
 %% `macula_record:storage_key/1', propagating to the K-nearest peers.
 -spec put_record(pool(), m_record() | binary()) -> ok | {error, term()}.
