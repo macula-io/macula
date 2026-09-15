@@ -749,6 +749,11 @@ error_arrived(Code, Message, #state{reply = Reply} = State) ->
     Err = {error, {Code, Message}},
     session_ended(Err, ended_with(Err, State#state{reply = first_reply(Reply, Err)})).
 
+%% A reply takes effect while the session runs, or once it has ended without
+%% a result. A session that ended with a result keeps it, whichever carrier a
+%% later reply comes by.
+reply_arrived(_Late, #state{ended = Ended, reply = Reply} = State) when Ended =/= undefined, Reply =/= undefined ->
+    State;
 reply_arrived(Result, State) ->
     settle_reply_waiters_with(Result, State#state{reply = Result}).
 
@@ -764,10 +769,15 @@ transport_failed(Err, #state{reply = Reply} = State) ->
 %% @private A frame of a type that belongs on the control stream has no place
 %% on a dedicated stream, in either profile. It is the connection peer's
 %% doing, so the connection is rejected with malformed_frame, and this
-%% stream ends with that transport failure. Any other frame is verified.
+%% stream ends with that transport failure. Once the session has ended, any
+%% other frame takes no effect and is reported as stream_ended, which is not
+%% charged. Any other frame is verified.
 peer_frame(true, _Frame, #state{conn = Conn} = State) ->
     ok = macula_peering:reject(Conn, malformed_frame),
     transport_failed({error, {transport, malformed_frame}}, State);
+peer_frame(false, _Frame, #state{ended = Ended, conn = Conn} = State) when Ended =/= undefined ->
+    ok = macula_peering:object_refused(Conn, stream_ended),
+    State;
 peer_frame(false, Frame, #state{role = Role, verifier = Verifier, profile = Profile} = State) ->
     verified_frame(peer_verified(Role, Frame, Verifier, Profile), State).
 
@@ -862,10 +872,18 @@ handle_recv(From, _Timeout, #state{inbox = Inbox} = State) ->
         {{value, {Encoding, Body}}, Rest} ->
             take_queued(Encoding, Body, Rest, State);
         {empty, _} when State#state.closed_recv ->
-            {reply, eof, State};
+            {reply, recv_ended(State#state.ended), State};
         {empty, _} ->
             queue_waiter(From, _Timeout, State)
     end.
+
+%% What a reader gets once the receive side has closed and nothing is queued:
+%% eof after a clean close, or while only the peer's side has closed, and how
+%% the session ended after an error, an abort, a transport failure or a lost
+%% peer, so a cut-off stream never reads as complete.
+recv_ended({error, _} = Err) -> Err;
+recv_ended(peer_down) -> {error, peer_down};
+recv_ended(_ClosedOrRunning) -> eof.
 
 %% A reader takes a queued chunk: its bytes leave the stream's count, and a
 %% served stream gives them back to its caller's and the node's budget.
