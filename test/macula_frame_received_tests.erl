@@ -352,6 +352,18 @@ an_optional_header_field_of_another_length_is_named_test_() ->
            Other <- [binary:part(Value, 0, byte_size(Value) - 1), <<Value/binary, 0>>]]].
 
 %%------------------------------------------------------------------
+%% Relayed frames taken without a frame signature
+%%------------------------------------------------------------------
+
+%% A station relays the HyParView JOIN, FORWARD_JOIN, NEIGHBOR and SHUFFLE that D17 leaves unsigned in pq_pure from a
+%% connection it authenticated, so a receiver takes them without a frame signature, with the relay's origin as their
+%% sender. Exactly those four frame types are taken so; every other type keeps its own verification.
+relayed_without_signature_names_exactly_the_unsigned_overlay_types_test() ->
+    ?assertEqual([hyparview_join, hyparview_forward_join, hyparview_neighbor, hyparview_shuffle],
+                 [Type || Type <- ?FRAME_TYPES, macula_frame:relayed_without_signature(Type)]),
+    ?assertNot(macula_frame:relayed_without_signature(a_future_frame_type)).
+
+%%------------------------------------------------------------------
 %% The rules and the table name the same fields
 %%------------------------------------------------------------------
 
