@@ -380,16 +380,18 @@ before its wire checks are green.
 
 ### D14 How the switch happens
 
-- **Answer, revised on 2026-09-15:** in place, all consumers at once. `macula` 11.0.0 takes over today's 9 stations
-  and their names in one deploy, together with every binary that speaks the mesh, and the mesh of `macula-station`
-  311c0bf ends that day. The deploy is `macula-demo` `plans/PLAN_MACULA_11_DEPLOY.md`.
-- **Why:** there is no production environment and no intermediate release (Raf, 2026-09-15), so no consumer waits
-  for a later stage, which was the reason for a second fleet. A separate fleet would also need new spend or two
-  station instances on every box.
-- **Superseded:** the answer accepted on 2026-09-10, a second post-quantum fleet next to the live one, with its own
-  station instances, seeds, station directory, DHT, realm deployment and hostnames, each consumer moving over in
-  its stage and the live fleet switched off after the last cutover.
-- **Status:** accepted 2026-09-10; superseded by the in-place answer on 2026-09-15.
+- **Answer, reconsidered by Raf on 2026-09-16:** back to the 2026-09-10 answer — a second post-quantum fleet next
+  to the live one, with its own station instances, seeds, station directory, DHT, realm deployment and hostnames,
+  each consumer moving over in its stage and the live fleet switched off after the last cutover. The in-place
+  answer is dropped.
+- **Why:** the in-place answer folded every remaining stage into one blocking coordination tail: all consumers,
+  the realm, the directory and every service ready and green on the same day, with no way to ship anything in
+  between. The cost it avoided — new spend, or two station instances per box — is worth paying for a staggable
+  migration, where the SDK and each consumer move to the post-quantum fleet when ready without waiting on any
+  other consumer (Raf, 2026-09-16).
+- **Superseded:** the answer accepted on 2026-09-15 (in place, all consumers at once).
+- **Status:** accepted 2026-09-10; superseded by the in-place answer on 2026-09-15; reconsidered 2026-09-16 back
+  to the 2026-09-10 answer.
 - **Blocks:** Stages 3 to 6.
 
 ### D15 Profile order
@@ -453,19 +455,22 @@ before its wire checks are green.
 ### D19 Realm in 11.0.0
 
 - **Answer, revised and accepted by Raf on 2026-09-10:** the realm name stays `io.macula`, so the realm id stays
-  the same. `io.macula` runs the EU profile, `pq_hybrid` (D1). With D14 revised, the realm deployment moves to
-  11.0.0 in the same deploy instead of running as a separate deployment.
+  the same. `io.macula` runs the EU profile, `pq_hybrid` (D1). With D14 reconsidered (2026-09-16), the realm
+  deploys as a separate deployment on the second post-quantum fleet again, in its stage, instead of moving in the
+  same deploy.
 - **Why:** programs keep the same realm id when they move over.
 - **Consequence:** US-first work (D15) needs its own US-profile realm. Its name is open for Raf.
-- **Status:** accepted 2026-09-10; revised the same day to give `io.macula` the EU profile, and on 2026-09-15 to
-  move the deployment in place (D14).
+- **Status:** accepted 2026-09-10; revised the same day to give `io.macula` the EU profile, on 2026-09-15 to move
+  the deployment in place (D14), and on 2026-09-16 back to a separate deployment when D14 was reconsidered.
 - **Blocks:** WP 3.1, WP 3.2.
 
 ### D20 Branch and release
 
 - **Answer, revised on 2026-09-15:** the `post-quantum` branch merges into `main` in one merge commit, and `macula`
   11.0.0 is developed on `main` from then on. There is no 10.x line and no intermediate release. `macula` 11.0.0 on
-  hex is the release and the cutover trigger, and only Raf publishes. No repository commits a git or branch
+  hex is the release that opens the post-quantum fleet to consumers, and only Raf publishes. The live fleet is
+  switched off after the last consumer's cutover (D14, reconsidered 2026-09-16), so the hex release no longer
+  triggers a same-day fleet change. No repository commits a git or branch
   dependency on `macula`: development builds against a local checkout, and consumers move to `~> 11.0` from hex
   only after Raf publishes.
 - **Merging, until that merge:** `post-quantum` took `main` by merge commits, never by a rebase, because branches
@@ -476,7 +481,8 @@ before its wire checks are green.
 ### D21 The live fleet during the work
 
 - **Answer:** the live fleet, today's 9 stations, is pinned to a released station version that matches exactly what
-  its stations run, `macula-station` 311c0bf, until the 11.0.0 deploy replaces it (D14). If `main` is ahead of the
+  its stations run, `macula-station` 311c0bf, until the last consumer has moved to the post-quantum fleet and the
+  live fleet is switched off (D14, reconsidered 2026-09-16). If `main` is ahead of the
   latest `v*` tag, the running image is pinned by digest, or Raf tags current `main` first. No station is
   downgraded. Owner: Terra.
 - **Why:** a push to `macula-station` `main` builds and publishes the image the live stations follow ✅, so

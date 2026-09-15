@@ -451,7 +451,8 @@ change, the done criterion and the effort. The US profile goes first; the EU par
   - `issue_membership_ucan` names the device by node_id in `aud` (D7), in the same change as every checker
     (WP 1.4, WP 4.2);
   - the realm carries its profile (D1);
-  - the `io.macula` realm deployment in the EU profile, moved to 11.0.0 in the one deploy (D14, D19), and a
+  - the `io.macula` realm deployment in the EU profile, as a separate deployment on the post-quantum fleet
+    (D14, D19), and a
     US-profile realm whose name is open (Raf);
   - revocation of a realm member's identity, with its freshness window sized against BSI's deactivation
     requirement and ANSSI's hard-fail recommendation (D22).
@@ -466,13 +467,14 @@ change, the done criterion and the effort. The US profile goes first; the EU par
 
 ### WP 3.2 The 11.0.0 stations
 
-- [ ] Station instances run 11.0.0 in their profile on today's boxes and station names, after the one deploy (D14).
+- [ ] The second post-quantum fleet's station instances run 11.0.0 in their profile, on their own boxes and
+  hostnames next to the live fleet, before any consumer moves (D14, reconsidered 2026-09-16).
 - **Owner:** Terra.
 - **Waiting on:** Stage 2; D21 done first.
 - **Change:**
-  - today's stations stay pinned to `macula-station` 311c0bf until the deploy (D21);
-  - station instances take over today's boxes and station names in the one deploy, `macula-demo`
-    `plans/PLAN_MACULA_11_DEPLOY.md`, in their profile (D2), prepared US profile first (D15);
+  - today's stations stay pinned to `macula-station` 311c0bf until the last consumer's cutover (D21);
+  - the post-quantum fleet's station instances run on their own boxes and hostnames, in their profile (D2),
+    prepared US profile first (D15); consumers get the fleet's seeds and move over in their stage;
   - `stations.csv` gains node_id and profile columns, placed before the notes column;
   - seed lists are generated after each station instance's first boot, when its node_id exists, and before the
     client releases that compile them in; every compiled-in seed list is generated from the csv, including the one
@@ -480,9 +482,10 @@ change, the done criterion and the effort. The US profile goes first; the EU par
   - station configurations, including bootstrap `outbound_peers` with node_ids, are generated from the csv. Before
     regenerating, the sync reaches every station, and hand-picked peer choices are pinned in the csv or the
     topology;
-  - the `io.macula` realm deployment moves to 11.0.0 in the same deploy, in the EU profile (D19), and the
+  - the `io.macula` realm deploys on the post-quantum fleet in its stage, in the EU profile (D19), and the
     US-profile realm (name open);
-  - the distribution relay of WP 3.4, one instance per profile, in the same deploy;
+  - the distribution relay of WP 3.4, one instance per profile, deploys on the post-quantum fleet in the same
+    stage;
   - `macula-station` builds against a local checkout of `macula` during development and moves to `macula` `~> 11.0`
     from hex once Raf publishes (D20);
   - every fleet node runs chrony with NTS against at least two independent servers (D22); which servers is open;
@@ -862,7 +865,7 @@ Every stack also meets these, each red first:
 
 ### WP 5.1 Tools
 
-- [ ] The tools run against the 11.0.0 stations, released in the one deploy (D14).
+- [ ] The tools run against the post-quantum fleet's 11.0.0 stations (D14, reconsidered 2026-09-16).
 - **Owners:** Venus (`macula-cli`, `macula-mcp`), Mars (`lazymesh`).
 - **Waiting on:** WP 4.2, WP 3.2; a tool that joins `io.macula` also waits on their EU parts (D19).
 - **Change:**
@@ -959,13 +962,13 @@ removed (D25 item 6, revised 2026-09-15), since the realm issues no X.509 certif
 It lands together with the org namespace migration (`PLAN_11_ORG_NAMESPACE_MIGRATION.md`): no binary running at
 core cutover advertises a procedure without an org or node namespace.
 
-1. `macula` 11.0.0 on hex, the release and the cutover trigger. Raf publishes hex; consumers move to `~> 11.0` only
-   then, and none commits a git or branch dependency on `macula` before (D20).
+1. `macula` 11.0.0 on hex, the release that opens the post-quantum fleet to consumers. Raf publishes hex;
+   consumers move to `~> 11.0` only then, and none commits a git or branch dependency on `macula` before (D20).
 2. SDK releases on their publish triggers: `macula-go` tag, `macula-cli` (goreleaser on tag), `macula-ts` (npm on
    tag), `macula-mcp` (npm on tag), `macula-php`, `macula-rust` (cargo on tag), `macula-py` (PyPI on tag), and
    later `macula-dotnet` (NuGet on tag).
-3. The one deploy replaces today's stations and every consumer in place, and the 311c0bf mesh ends that day (D14,
-   `macula-demo` `plans/PLAN_MACULA_11_DEPLOY.md`).
+3. The post-quantum fleet runs next to the live one, consumers move over in their stages, and the 311c0bf mesh
+   ends after the last cutover (D14, reconsidered 2026-09-16).
 
 ---
 

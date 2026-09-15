@@ -3,10 +3,12 @@
 This exists so every procedure a caller reaches in 11.0.0 is served only by a provider its org or its own node id
 authorizes.
 
-Status: the flip is held. It refuses a procedure without a procedure namespace as `procedure_namespace_required`, in
-callers' `verify_authorization/3` and in the SDKs and CLI when the procedure is advertised. It lands together with the
-migration below, gated by the full suite green with the migrated services (Jupiter's ruling, 2026-09-15). Owners mark
-core cutover, yes or no, per entry.
+Status: the flip lands on the post-quantum fleet only (D14 reconsidered, 2026-09-16). It refuses a procedure without
+a procedure namespace as `procedure_namespace_required`, in callers' `verify_authorization/3` and in the SDKs and CLI
+when the procedure is advertised. Each service takes the new names as it moves to the post-quantum fleet in its
+stage; services still on the live fleet keep their names until their cutover, so the flip no longer waits on one
+full-suite-green day (Jupiter's ruling, 2026-09-15, relaxed by the D14 reconsideration). Owners mark core cutover,
+yes or no, per entry.
 
 ## The rule
 
