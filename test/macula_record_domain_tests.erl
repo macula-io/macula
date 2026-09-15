@@ -40,6 +40,18 @@ a_domain_record_tombstone_signs_within_the_maximum_and_twice_the_tolerance_on_it
     ?assertError({lifetime_too_long, 16#0C},
                  macula_record:sign(Tombstone#{expires_at := Created + 7 * ?DAY + 10 * ?MINUTE + 1}, Id)).
 
+%% A tombstone names a withdrawn type from 1 to 255, since every record type is a tag in that range, and a type beyond
+%% it would be read by its low byte: one naming 16#100 is malformed however it was signed, and one naming 16#FF still
+%% verifies.
+a_tombstone_names_a_withdrawn_type_within_the_type_range_test() ->
+    Id = key(),
+    Withdrawn = macula_record:sign(macula_record:envelope(16#FF, #{}, #{}), Id),
+    #{payload := Payload} = Tombstone = macula_record:tombstone(Withdrawn, shutdown),
+    AtTheTop = macula_record:sign(Tombstone, Id),
+    Beyond = macula_record:sign(Tombstone#{payload := Payload#{{text, <<"withdrawn_type">>} => 16#100}}, Id),
+    ?assertMatch({ok, _}, macula_record:verify(macula_record:encode(AtTheTop), pq_pure)),
+    ?assertEqual({error, malformed}, macula_record:verify(macula_record:encode(Beyond), pq_pure)).
+
 key() ->
     {ok, Key} = macula_node_keys:generate(identity, pq_pure),
     Key.
