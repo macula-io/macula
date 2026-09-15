@@ -1283,7 +1283,7 @@ handle_call({unadvertise_stream, Realm, Procedure}, _From,
 handle_call({sign_node_record, Record}, _From, #state{node_identity = Key} = S) ->
     {reply, node_record_signed(macula_record:node_signed(Record), Record, Key), S};
 handle_call({sign_domain_record, Record}, _From, #state{node_identity = Key} = S) ->
-    {reply, domain_record_signed(macula_record:domain_type(Record), Record, Key), S};
+    {reply, domain_record_signed(macula_record:domain_record_checked(Record), Record, Key), S};
 handle_call({withdraw_node_record, Withdrawn, Reason}, _From, #state{node_identity = Key} = S) ->
     {reply, tombstone_signed(verified_record(Withdrawn, Key), macula_node_keys:public_key(Key), Reason, Key), S};
 handle_call(status, _From,
@@ -1420,11 +1420,15 @@ node_record_signed(true, Record, Key) ->
     signed_here(fun() -> macula_record:refresh(Record, Key) end).
 
 %% A domain record the pool signs is signed as this node: macula_record:refresh/2 stamps it now and signs it, and
-%% sign/2 checks the key's purpose, the lifetime and the size.
-domain_record_signed(false, _Record, _Key) ->
-    {error, not_a_domain_type};
-domain_record_signed(true, Record, Key) ->
-    signed_here(fun() -> macula_record:refresh(Record, Key) end).
+%% sign/2 checks the key's purpose, the lifetime and the size. The pool checks the record in its own process as the
+%% caller side does, so a record handed to it directly is refused by name, and the pool never signs one no verifier
+%% accepts.
+domain_record_signed(ok, Record, Key) ->
+    signed_here(fun() -> macula_record:refresh(Record, Key) end);
+domain_record_signed({error, malformed}, _Record, _Key) ->
+    {error, malformed_record};
+domain_record_signed({error, _} = Refusal, _Record, _Key) ->
+    Refusal.
 
 %% A tombstone is signed only for a record that verifies, is of a type a node signs about itself or a domain type, and
 %% carries this pool's own key. The carried key is compared, not a key id: a domain record's key id is the key id of
