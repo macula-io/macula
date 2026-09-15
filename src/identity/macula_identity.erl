@@ -85,10 +85,13 @@ generate(Opts) ->
 %% @doc Load a key pair from disk.
 %%
 %% The key file is read with macula_owner_only_file:read/1. It must be a
-%% regular file its group and others have no access to, mode 0600 or 0400;
-%% symlinks are followed. Otherwise the error names the file, what was found
-%% and what is required: {file_permissions, #{file, mode, required}} or
-%% {file_type, #{file, type, required}}.
+%% regular file its group and others have no access to, mode 0600 or 0400,
+%% owned by the user the node runs as; symlinks are followed. Otherwise the
+%% error names the file, what was found and what is required:
+%% {file_permissions, #{file, mode, required}}, {file_owner, #{file, owner,
+%% required}} or {file_type, #{file, type, required}}. A key file of another
+%% owner is never reported as missing, so a caller that makes a new identity
+%% only for a missing key file makes none.
 -spec load(file:name_all()) ->
     {ok, key_pair()} | {error, bad_key_file | macula_owner_only_file:refusal() | term()}.
 load(Path) ->

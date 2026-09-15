@@ -17,13 +17,16 @@
 %%% the file with it.
 %%%
 %%% read/1 follows symlinks and accepts a regular file that gives its group
-%%% and others no access, 0600 or 0400, as Erlang's own cookie check does. A
-%%% path that is not a regular file is refused without being opened, and the
-%%% mode is checked on the opened handle, so the file checked is the file
-%%% read.
+%%% and others no access, 0600 or 0400, as Erlang's own cookie check does, and
+%%% that belongs to the user the node runs as (macula_node_user), so another
+%%% user of the host cannot give the node a secret of their own. A host
+%%% without user ids skips the owner check. A path that is not a regular file
+%%% is refused without being opened, and the mode and the owner are checked on
+%%% the opened handle, so the file checked is the file read.
 %%%
 %%% A refusal names the file, what was found and what is required: the mode
-%%% as an octal binary in file_permissions, the file type in file_type.
+%%% as an octal binary in file_permissions, the owner's user id and the node's
+%%% in file_owner, the file type in file_type.
 %%% @end
 %%%-------------------------------------------------------------------
 -module(macula_owner_only_file).
@@ -36,6 +39,8 @@
 
 -type refusal() ::
         {file_permissions, #{file := file:name_all(), mode := binary(), required := binary()}}
+      | {file_owner, #{file := file:name_all(), owner := non_neg_integer(),
+                       required := non_neg_integer()}}
       | {file_type, #{file := file:name_all(), type := atom(), required := regular}}.
 
 -type file_error() :: file:posix() | badarg | terminated | system_limit.
@@ -168,15 +173,24 @@ read_opened({error, _} = Error, _Path) ->
 closed_after(Read, ok) -> Read;
 closed_after(_Read, {error, _} = Error) -> Error.
 
-read_checked({ok, #file_info{type = regular, mode = Mode}}, Fd, _Path)
+read_checked({ok, #file_info{type = regular, mode = Mode, uid = Owner}}, Fd, Path)
   when Mode band ?GROUP_OR_OTHERS =:= 0 ->
-    read_all(Fd, []);
+    owned(macula_node_user:effective_uid(), Owner, Fd, Path);
 read_checked({ok, #file_info{type = regular, mode = Mode}}, _Fd, Path) ->
     {error, {file_permissions, #{file => Path, mode => octal(Mode), required => ?REQUIRED_MODE}}};
 read_checked({ok, #file_info{type = Type}}, _Fd, Path) ->
     {error, not_regular(Path, Type)};
 read_checked({error, _} = Error, _Fd, _Path) ->
     Error.
+
+%% The owner comes from the opened handle, as the mode does. A host without
+%% user ids has no owner to check.
+owned(none, _Owner, Fd, _Path) ->
+    read_all(Fd, []);
+owned(Owner, Owner, Fd, _Path) ->
+    read_all(Fd, []);
+owned(Required, Owner, _Fd, Path) ->
+    {error, {file_owner, #{file => Path, owner => Owner, required => Required}}}.
 
 read_all(Fd, Chunks) ->
     read_chunk(file:read(Fd, ?READ_CHUNK), Fd, Chunks).
