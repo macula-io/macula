@@ -152,22 +152,25 @@ applies to the whole slot.
 - A checkable slot keeps up to 64 places for checked signers and up to 16 for everyone else. An unchecked writer never
   takes a checked place, and nothing is evicted.
 - Every other slot keeps 64 places.
-- An advertisement authorized by a certificate chain gets an unchecked place.
+- An advertisement whose authorization is not the org directory and delegation pair gets no place in any slot: the
+  station refuses its STORE as `authorization_form_unsupported`, as every caller's `verify_authorization/3` refuses
+  it, deciding from the authorization's form alone and decoding nothing inside it.
 - When a trust list change makes a slot checkable, or no longer checkable, held entries stay until they expire, are
   replaced or are withdrawn, and new entries follow the slot's current places. A renewal always replaces its signer's
   held entry and takes the place its signer qualifies for now.
 
 ### 2.5 What a station never does
 
-- Parse a certificate chain.
+- Decode an authorization that is not the org directory and delegation pair, or configure or load a realm CA, a
+  `realm_ca` trust key, or a certificate-chain option for authorization.
 - Show callers whether an entry holds a checked place. VALUE carries the records only, and callers run
   `verify_authorization/3` themselves, because a station's trust list can be stale.
 - Fetch anything while it handles a STORE. The trust list refreshes in the background, and the embedded records ride
   inside the advertisement.
 
-The Procedure advertisements section of `DESIGN_PQ_SIGNED_FRAMES_AND_RECORDS.md` states the rule: "A station that
-stores or forwards an advertisement verifies its embedded org directory and delegation, once per hash, to decide a
-checked place, and never parses a certificate chain or shows that decision to callers."
+The Procedure advertisements section of `DESIGN_PQ_SIGNED_FRAMES_AND_RECORDS.md` defines the advertisement and its
+authorization. This part decides places from it at STORE, verifying the embedded org directory and delegation once
+per hash and never showing callers the decision.
 
 ### 2.6 Cost per STORE
 
@@ -175,11 +178,13 @@ checked place, and never parses a certificate chain or shows that decision to ca
 - An advertisement with an org namespace: two verifications the first time its embedded records' bytes are seen,
   about 0.5 ms (US) or 0.9 ms (EU), and a hash lookup on every renewal after that.
 - One trust list verification per refresh.
+- An advertisement whose authorization is not the pair: a check of its form, with no verification.
 
 ### 2.7 What stays open
 
-- Providers authorized by a certificate chain, and content announcements (no authority exists for them, D27): their
-  entries hold unchecked places only. Procedures without an org namespace are refused in 11.0.0 (D25).
+- Content announcements (no authority exists for them, D27): their entries hold unchecked places only. Procedures
+  without an org namespace are refused in 11.0.0 (D25), and so is any authorization but the org directory and
+  delegation pair: the certificate-chain form is removed, since the 11.0.0 realm issues no X.509 certificates.
 - Realms not on a trust list, and stations with no trust list.
 
 ### 2.8 Tests
@@ -190,7 +195,13 @@ checked place, and never parses a certificate chain or shows that decision to ca
 - A realm-signed record signed by one listed realm's key for another listed realm's `realm_id` gets no checked place.
 - Renewals carrying the same embedded record bytes cost no further verification.
 - After a realm is removed from the trust list, its signers get no checked place on the next STORE.
-- An advertisement authorized by a certificate chain gets an unchecked place, and the station never decodes the chain.
+- An advertisement whose authorization holds a `certificate_chain`, or anything but the org directory and delegation
+  pair, is refused at STORE as `authorization_form_unsupported`, takes no place in a checkable slot or any other, and
+  costs its connection 1.
+- An advertisement with such an authorization is never counted as authorized in anything the station serves or
+  relays.
+- No station source file names a realm CA PEM, a `realm_ca` trust key, or a `cert_chain` or `verify_cert_chain`
+  option, and the check asserts that its file pattern matches files.
 - A VALUE for a slot holding checked and unchecked entries carries only the records' bytes, in signer key id order.
 - A station with no trust list keeps 64 places in every slot.
 - A slot that becomes checkable keeps its held unchecked entries, and admits no new unchecked entry until fewer than
@@ -206,10 +217,10 @@ Each connection has one budget. Each of these costs 1:
 
 - An object refusal that every verifier reaches from the same bytes: the signed object's shape, the carried key's
   form, the signature, the decoding of `tbs`, its keys and field types, `alg`, a signer field that differs from the key
-  id, a record over 256 KiB, and a domain record lifetime over 7 days (3.5). Every station verifies an object before it
-  forwards it: a request before routing, a reply against the request's target, a relay error only for a pending
-  request, a stream frame by key and sequence, a publication at every Plumtree node, and a record on STORE. So an honest
-  relay never passes one on.
+  id, a record over 256 KiB, a domain record lifetime over 7 days (3.5), and an advertisement whose authorization is
+  not the org directory and delegation pair (2.4). Every station verifies an object before it forwards it: a request
+  before routing, a reply against the request's target, a relay error only for a pending request, a stream frame by key
+  and sequence, a publication at every Plumtree node, and a record on STORE. So an honest relay never passes one on.
 - A freshness refusal more than 10 minutes past the moment the object's own freshness rule starts refusing it, on
   either side. A relay whose clock is within 5 minutes of the receiver's cannot have accepted such an object, with
   5 minutes to spare.
