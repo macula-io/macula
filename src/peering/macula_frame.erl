@@ -1438,30 +1438,40 @@ caller_stream(#{frame_type := Type, seq := Seq} = Spec, #{purpose := identity} =
 
 %% @doc The bytes of a frame built here for a dedicated stream: the one step every such frame passes through before it
 %% is written. `Build' names the frame (see `stream_build()'); it is signed with the identity key `Key', under that key's
-%% profile, and encoded. Before anything is signed, a build that its receiver would refuse, or that the wire cannot
-%% carry, returns an error, never raises, and leaves nothing to write:
+%% profile, and encoded. A build that its receiver would refuse, or that the wire cannot carry, returns an error and
+%% leaves nothing to write. These checks run in order, before anything is signed:
 %%
 %% - `{unknown_build_key, Key}' for a field its frame does not have;
 %% - `unsignable' for a key that is not an identity key or not the sender the receiver verifies (the verified
 %%   request's target for a reply or a provider's stream frame, its caller for a caller's stream frame; a key id holds
 %%   its profile, so a key of the other profile is not the sender either), or a stream frame without its verified
 %%   STREAM_OPEN;
-%% - `{invalid_text, Field}' for text that is not valid UTF-8, `{text_too_long, detail}' for a provider detail over
-%%   256 bytes, and `relay_code_outside_its_set' for a relay error code outside the closed set;
-%% - `{unsupported_payload_type, Type, Path}' for a payload, stream body or reply the wire cannot carry;
-%% - `frame_too_large' for a frame whose encoding is over the 16 MiB frame cap.
+%% - `{not_allowed, Type}' for a stream frame its side does not send: a caller's STREAM_REPLY, or a caller's
+%%   STREAM_DATA in a server_stream;
+%% - `{invalid_text, Field}' for a procedure, code, detail or message that is not a binary of valid UTF-8. A local
+%%   error term is not text: rendering one as text is the call site's job;
+%% - `{text_too_long, Field}' for a code over 64 bytes, or a provider error's detail or a STREAM_ERROR message over 256
+%%   bytes;
+%% - `relay_code_outside_its_set' for a relay error code outside the closed set;
+%% - `{unsupported_payload_type, Type, Path}' for a payload, stream body or reply the wire cannot carry.
 %%
-%% None of these is for the peer: an error frame carries only the code its build names. A stream frame's `seq' is its
-%% side's own next sequence number, from 0; a `seq' outside the protocol's range is a programming error and raises
-%% function_clause. `macula_peering:send_on_stream/2' and `async_send_on_stream/2,3' write the result, through
-%% `written_bytes/1'.
+%% After encoding, `frame_too_large' is returned for a frame whose encoding is over the 16 MiB frame cap.
+%%
+%% None of these is for the peer: an error frame carries only the code its build names. A build that leaves out a field
+%% its frame requires (a result without its payload, a STREAM_ERROR without its message), an id, realm or target of the
+%% wrong size, a relay error whose offending hop is not 32 bytes, a stream frame type other than STREAM_DATA,
+%% STREAM_END, STREAM_ERROR and STREAM_REPLY, or a `seq' outside the protocol's range is a programming error and raises
+%% function_clause. A stream frame's `seq' is its side's own next sequence number, from 0.
+%% `macula_peering:send_on_stream/2' and `async_send_on_stream/2,3' write the result, through `written_bytes/1'.
 -spec stream_bytes(stream_build(), macula_node_keys:node_key() | undefined) ->
           {ok, stream_bytes()}
-        | {error, {unknown_build_key, term()} | unsignable | {invalid_text, atom()} | {text_too_long, detail}
-                | relay_code_outside_its_set | {unsupported_payload_type, atom(), [term()]} | frame_too_large}.
+        | {error, {unknown_build_key, term()} | unsignable | {not_allowed, stream_reply | stream_data}
+                | {invalid_text, atom()} | {text_too_long, code | detail | message} | relay_code_outside_its_set
+                | {unsupported_payload_type, atom(), [term()]} | frame_too_large}.
 stream_bytes(Build, #{purpose := identity} = Key) ->
     stream_framed(passed_checks([fun() -> known_build_keys(Build) end,
                                  fun() -> signer(Build, Key) end,
+                                 fun() -> side_may_send(Build) end,
                                  fun() -> build_texts(Build) end,
                                  fun() -> sendable(Build) end]), Build, Key);
 stream_bytes(_Build, _NotAnIdentityKey) ->
@@ -1518,18 +1528,26 @@ sender_is(Id, Key) -> sender_matches(macula_node_keys:key_id(Key) =:= Id).
 sender_matches(true)  -> ok;
 sender_matches(false) -> {error, unsignable}.
 
-%% Text a receiver reads as text is valid UTF-8, a provider's detail is at most 256 bytes, and a relay error's code is
-%% one of the closed set.
+%% A caller sends no STREAM_REPLY, and no STREAM_DATA in a server_stream. A provider sends every stream frame type.
+side_may_send({caller_stream, #{frame_type := stream_reply}, _Open}) ->
+    {error, {not_allowed, stream_reply}};
+side_may_send({caller_stream, #{frame_type := stream_data}, #{mode := server_stream}}) ->
+    {error, {not_allowed, stream_data}};
+side_may_send(_BuildItsSideSends) ->
+    ok.
+
+%% Text a receiver reads as text is valid UTF-8 within its bound, and a relay error's code is one of the closed set.
 build_texts({Type, #{procedure := Procedure}}) when Type =:= call; Type =:= stream_open ->
     utf8_text(procedure, Procedure);
 build_texts({provider_error, #{code := Code} = Spec}) ->
-    passed_checks([fun() -> utf8_text(code, Code) end,
-                   fun() -> provider_detail(maps:find(detail, Spec)) end]);
+    passed_checks([fun() -> bounded_text(code, Code, ?MAX_ERROR_CODE_BYTES) end,
+                   fun() -> optional_bounded_text(detail, maps:find(detail, Spec), ?MAX_ERROR_TEXT_BYTES) end]);
 build_texts({relay_error, #{code := Code}}) ->
     relay_code_in_set(lists:member(Code, ?RELAY_CODES));
 build_texts({Side, #{frame_type := stream_error, code := Code, message := Message}, _Open})
   when Side =:= provider_stream; Side =:= caller_stream ->
-    passed_checks([fun() -> utf8_text(code, Code) end, fun() -> utf8_text(message, Message) end]);
+    passed_checks([fun() -> bounded_text(code, Code, ?MAX_ERROR_CODE_BYTES) end,
+                   fun() -> bounded_text(message, Message, ?MAX_ERROR_TEXT_BYTES) end]);
 build_texts(_BuildWithoutText) ->
     ok.
 
@@ -1539,9 +1557,11 @@ utf8_text(Field, _NotText)                  -> {error, {invalid_text, Field}}.
 valid_utf8(true, _Field)  -> ok;
 valid_utf8(false, Field)  -> {error, {invalid_text, Field}}.
 
-provider_detail(error)                                          -> ok;
-provider_detail({ok, Detail}) when is_binary(Detail), byte_size(Detail) > 256 -> {error, {text_too_long, detail}};
-provider_detail({ok, Detail})                                   -> utf8_text(detail, Detail).
+bounded_text(Field, Text, Max) when is_binary(Text), byte_size(Text) > Max -> {error, {text_too_long, Field}};
+bounded_text(Field, Text, _Max)                                           -> utf8_text(Field, Text).
+
+optional_bounded_text(_Field, error, _Max)     -> ok;
+optional_bounded_text(Field, {ok, Text}, Max) -> bounded_text(Field, Text, Max).
 
 relay_code_in_set(true)  -> ok;
 relay_code_in_set(false) -> {error, relay_code_outside_its_set}.
@@ -2096,14 +2116,15 @@ drain_step({error, Reason}, _Buf, _Cap, Acc) ->
     {malformed, lists:reverse(Acc), Reason}.
 
 %% @doc Parse bytes a relay received on a stream, for it to pass on. Each whole
-%% frame that passes the checks of `parse_received/2' comes with a unit of
-%% exactly the bytes received for it, its length header included; only such a
-%% unit is written, by `macula_peering:relay_on_stream/2' and
-%% `async_relay_on_stream/2,3', through `relayed_bytes/1'. A frame whose fields
-%% its type refuses comes back as `{refused, {invalid_frame, Type, Field}}', in
-%% its place and with no unit. A length header above `MaxFrameBytes', or a
-%% whole frame that does not decode, ends the parse as in `parse_received/2',
-%% and nothing after it yields a unit.
+%% frame that passes the checks of `parse_received/2' comes with a unit holding
+%% a copy of exactly the bytes received for it, its length header included, so
+%% a unit keeps nothing else of the buffer alive. Only such a unit is written,
+%% by `macula_peering:relay_on_stream/2' and `async_relay_on_stream/2,3',
+%% through `relayed_bytes/1'. A frame whose fields its type refuses comes back
+%% as `{refused, {invalid_frame, Type, Field}}', in its place and with no unit.
+%% A length header above `MaxFrameBytes', or a whole frame that does not
+%% decode, ends the parse as in `parse_received/2', and nothing after it yields
+%% a unit.
 -spec parse_for_relay(binary(), pos_integer()) ->
           {ok, [relay_item()], binary()}
         | {malformed, [relay_item()], frame_too_large | bad_frame | too_many_elements}.
@@ -2128,8 +2149,9 @@ relay_step({more, _Needed}, Buf, _Cap, Acc) ->
 relay_step({error, Reason}, _Buf, _Cap, Acc) ->
     {malformed, lists:reverse(Acc), Reason}.
 
+%% A unit is a copy of its bytes, so a unit waiting to be written holds no reference into the buffer it was read from.
 relay_item({ok, Frame, Rest}, Received, Cap, Acc) ->
-    relay_drain(Rest, Cap, [{Frame, {macula_received_frame, Received}} | Acc]);
+    relay_drain(Rest, Cap, [{Frame, {macula_received_frame, binary:copy(Received)}} | Acc]);
 relay_item({invalid, Invalid, Rest}, _Received, Cap, Acc) ->
     relay_drain(Rest, Cap, [{refused, Invalid} | Acc]);
 relay_item({error, Reason}, _Received, _Cap, Acc) ->
