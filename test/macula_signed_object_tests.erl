@@ -50,7 +50,29 @@ cases(Keys) ->
                  fun decode_refuses_an_extra_key/1,
                  fun decode_refuses_a_value_that_is_not_bytes/1,
                  fun decode_refuses_trailing_bytes/1,
-                 fun decode_refuses_malformed_bytes/1]].
+                 fun decode_refuses_malformed_bytes/1,
+                 fun a_signature_of_another_length_is_refused/1]].
+
+%%------------------------------------------------------------------
+%% Signature length
+%%------------------------------------------------------------------
+
+%% A signature is exactly its profile's length. One byte short or long is refused as signature_invalid, and in
+%% pq_hybrid so is a valid composite whose RSA half had its leading zero byte dropped: the same RSA value, one byte short.
+a_signature_of_another_length_is_refused(#{key := Key, profile := Profile}) ->
+    #{signature := Signature} = Object = object(Key),
+    Others = [binary:part(Signature, 0, byte_size(Signature) - 1), <<Signature/binary, 0>>
+              | leading_zero_dropped(Profile, Key)],
+    [?assertEqual({error, signature_invalid}, macula_signed_object:verify(?LABEL, Object#{signature := Other}, Profile))
+     || Other <- Others].
+
+%% In pq_hybrid, a composite for object(Key) whose RSA half began with a zero byte, with that byte dropped. The object's
+%% tbs is the same at every signing, and a PSS salt is random, so signing again finds one about once in 256 signatures.
+leading_zero_dropped(pq_hybrid, Key) -> [zero_dropped(object(Key), Key, 4096)];
+leading_zero_dropped(pq_pure, _Key) -> [].
+
+zero_dropped(#{signature := <<MlDsa:4627/binary, 0, Rest/binary>>}, _Key, _Left) -> <<MlDsa/binary, Rest/binary>>;
+zero_dropped(_Object, Key, Left) when Left > 0 -> zero_dropped(object(Key), Key, Left - 1).
 
 %%------------------------------------------------------------------
 %% Objects that carry their key: {key, tbs, signature}

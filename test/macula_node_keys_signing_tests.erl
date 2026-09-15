@@ -71,6 +71,27 @@ eu_signing_test_() ->
          ?_assertNot(macula_node_keys:verify(Message, Signature, <<Public/binary, 0>>, pq_hybrid))]
     end}}.
 
+%% A composite is exactly 4627 + 512 bytes, its RSA half as long as the modulus, as the Go stack requires. One byte
+%% short or long is refused, including the same RSA value with its leading zero byte dropped.
+a_composite_of_another_length_is_refused_test_() ->
+    {timeout, ?EU_TIMEOUT, {setup, fun eu_identity_key/0, fun(Key) ->
+        Message = <<"a record to sign">>,
+        Public = macula_node_keys:public_key(Key),
+        <<MlDsaSignature:4627/binary, 0, RsaRest/binary>> = Leading = leading_zero_rsa_half(Message, Key, 4096),
+        [?_assert(macula_node_keys:verify(Message, Leading, Public, pq_hybrid)),
+         ?_assertNot(macula_node_keys:verify(Message, <<MlDsaSignature/binary, RsaRest/binary>>, Public, pq_hybrid)),
+         ?_assertNot(macula_node_keys:verify(Message, binary:part(Leading, 0, 5138), Public, pq_hybrid)),
+         ?_assertNot(macula_node_keys:verify(Message, <<Leading/binary, 0>>, Public, pq_hybrid))]
+    end}}.
+
+%% A composite signature of Message whose RSA half begins with a zero byte. A PSS salt is random, so signing again finds
+%% one about once in 256 signatures.
+leading_zero_rsa_half(Message, Key, Left) when Left > 0 ->
+    leading_zero_half(macula_node_keys:sign(Message, Key), Message, Key, Left).
+
+leading_zero_half(<<_:4627/binary, 0, _/binary>> = Signature, _Message, _Key, _Left) -> Signature;
+leading_zero_half(_Signature, Message, Key, Left) -> leading_zero_rsa_half(Message, Key, Left - 1).
+
 %%------------------------------------------------------------------
 %% Malformed input
 %%------------------------------------------------------------------
