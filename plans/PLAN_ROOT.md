@@ -14,6 +14,7 @@ Plans, designs and research for the `macula` SDK. The master index of every Macu
 | [DESIGN_PQ_HANDSHAKE_FRAMES.md][frames] | Handshake frames, bindings and status statements, byte for byte | Agreed |
 | [DESIGN_PQ_SIGNED_FRAMES_AND_RECORDS.md][signed] | Signed records and frames after the handshake | Agreed |
 | [DESIGN_PQ_DHT_SLOTS_AND_BUDGET.md][slots] | DHT slot bounds, slot admission and the verification budget | Agreed |
+| [PLAN_11_ORG_NAMESPACE_MIGRATION.md][orgns] | What every provider changes before the namespace flip | Active |
 
 ## Research
 
@@ -37,6 +38,7 @@ Plans, designs and research for the `macula` SDK. The master index of every Macu
 [frames]: DESIGN_PQ_HANDSHAKE_FRAMES.md
 [signed]: DESIGN_PQ_SIGNED_FRAMES_AND_RECORDS.md
 [slots]: DESIGN_PQ_DHT_SLOTS_AND_BUDGET.md
+[orgns]: PLAN_11_ORG_NAMESPACE_MIGRATION.md
 [explore]: EXPLORATION_POST_QUANTUM.md
 [stations]: RESEARCH_SDK_STATION_SELECTION_SURVEY.md
 [military]: PLAN_MILITARY_GRADE.md
