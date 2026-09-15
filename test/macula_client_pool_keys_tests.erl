@@ -229,6 +229,38 @@ a_supervised_start_whose_loader_raises_logs_no_key_test_() ->
     end}.
 
 %%------------------------------------------------------------------
+%% The pool signs records about itself
+%%------------------------------------------------------------------
+
+%% A pool signs a record a node signs about itself with its node identity key, in its own process, and returns only the
+%% signed record. A record that names another node, a type a node does not sign, and anything that is not a record are
+%% refused by name, and the pool keeps answering.
+a_pool_signs_only_records_about_itself_test_() ->
+    {timeout, ?EU_TIMEOUT, fun() ->
+        {ok, Profile} = profile(),
+        {ok, Key} = macula_node_keys:generate(identity, Profile),
+        {ok, NodeId} = macula_node_keys:node_id(Key),
+        {ok, Pool} = macula_client:connect([], #{node_identity => Key}),
+        Signed = macula_client:sign_node_record(Pool, macula_record:node_record(NodeId, [], 0)),
+        Another = macula_client:sign_node_record(Pool, macula_record:node_record(<<7:256>>, [], 0)),
+        Endorsement = macula_record:realm_member_endorsement(<<1:256>>, #{realm => <<1:256>>, member_node => NodeId,
+                                                                          roles => []}),
+        RealmSigned = macula_client:sign_node_record(Pool, Endorsement),
+        NotARecord = macula_client:sign_node_record(Pool, #{type => 1}),
+        {ok, #{self_node_id := SelfNodeId}} = macula_client:status(Pool),
+        ok = macula_client:close(Pool),
+        ?assertMatch({ok, #{key_id := NodeId}}, Signed),
+        {ok, Record} = Signed,
+        ?assertMatch({ok, _}, macula_record:verify(macula_record:encode(Record), Profile)),
+        ?assertEqual({error, key_id_mismatch}, Another),
+        ?assertEqual({error, not_a_node_signed_type}, RealmSigned),
+        ?assertEqual({error, malformed_record}, NotARecord),
+        ?assertEqual(NodeId, SelfNodeId),
+        ?assertEqual([], [Private || #{private := Private} <- maps:get(components, Key),
+                                      binary:match(term_to_binary(Signed), Private) =/= nomatch])
+    end}.
+
+%%------------------------------------------------------------------
 %% The node identity key
 %%------------------------------------------------------------------
 
