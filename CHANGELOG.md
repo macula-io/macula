@@ -233,6 +233,11 @@ Post-quantum work on the `post-quantum` branch. Not on `main`.
 - The `macula_record:envelope/4` documentation said a per-subject storage
   key is a BLAKE3 digest. `macula_record:storage_key/1` derives it with
   SHA-256, like every other derived storage key.
+- `macula_content_transfer:start_get/3` and `start_get_station/5` refuse an
+  MCID that is not the SHA-384 id of a single block or of a manifest with
+  `function_clause`, in the caller, as the module documents for input of
+  another shape. Such an id used to start a transfer whose process then
+  crashed.
 
 ## [Unreleased]
 

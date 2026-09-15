@@ -51,6 +51,7 @@ content_transfer_test_() ->
                   fun pause_on_single_block_put_is_a_harmless_noop/0,
                   fun cancel_while_paused_between_chunks_still_resets_the_stream/0,
                   fun a_link_io_of_another_shape_is_refused/0,
+                  fun a_get_for_an_mcid_of_another_shape_is_refused/0,
                   fun a_transfer_io_of_another_shape_is_refused/0]]}.
 
 single_block_put_resolves_mcid() ->
@@ -361,6 +362,23 @@ a_link_io_of_another_shape_is_refused() ->
     ?assertError(function_clause, Start(maps:remove(abort_content_stream, LinkIo))),
     ?assertError(function_clause, Start(LinkIo#{call_on_stream := fun(_, _, _, _, _) -> ok end})),
     ?assertError(function_clause, Start(LinkIo#{open_stream => fun(_) -> ok end})),
+    ?assertEqual([], macula_scripted_link:calls()).
+
+%% An MCID is a SHA-384 id of a single block or a manifest. A get for an id
+%% of another shape (an earlier tag, another codec, a hash of another
+%% length) is refused with function_clause, in the caller: no transfer
+%% starts and no link function is called.
+a_get_for_an_mcid_of_another_shape_is_refused() ->
+    LinkIo = macula_scripted_link:link_io(),
+    Hash = crypto:hash(sha384, <<"x">>),
+    Get = fun(Mcid) -> macula_content_transfer:start_get(dummy_pid(), Mcid, #{link_io => LinkIo}) end,
+    ?assertError(function_clause, Get(<<1, ?MANIFEST_CODEC, Hash/binary>>)),
+    ?assertError(function_clause, Get(<<2, 16#57, Hash/binary>>)),
+    ?assertError(function_clause, Get(<<2, ?SINGLE_CODEC, (crypto:hash(sha256, <<"x">>))/binary>>)),
+    ?assertError(function_clause,
+                 macula_content_transfer:start_get_station(dummy_pid(), <<"quic://station.example:4433">>,
+                                                           <<1, ?SINGLE_CODEC, Hash/binary>>, 1_000,
+                                                           #{link_io => LinkIo})),
     ?assertEqual([], macula_scripted_link:calls()).
 
 %% transfer_io/2 gives the defaults for none, a set with every function a

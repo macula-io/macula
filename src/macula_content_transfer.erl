@@ -288,9 +288,12 @@ start_put_station(Pool, Station, Bytes, TimeoutMs, Opts)
 start_get(Pool, Mcid) -> start_get(Pool, Mcid, #{}).
 
 %% @doc As `start_get/2'. `Opts' may carry `share_id' and
-%% `stream_count' (see `start_put/3').
+%% `stream_count' (see `start_put/3'). `Mcid' is the SHA-384 id of a
+%% single block or of a manifest; an id of any other shape is refused with
+%% function_clause, in the caller, and no transfer starts.
 -spec start_get(macula:pool(), macula:mcid(), map()) -> {ok, pid()}.
-start_get(Pool, Mcid, Opts) when is_pid(Pool), is_binary(Mcid), is_map(Opts) ->
+start_get(Pool, <<2, Codec, _:48/binary>> = Mcid, Opts)
+  when is_pid(Pool), (Codec =:= 16#55 orelse Codec =:= 16#56), is_map(Opts) ->
     start(get, {pooled, Pool}, Mcid, Opts).
 
 %% @doc As `start_get/2', dialing `Station' directly — the addressable
@@ -300,12 +303,13 @@ start_get(Pool, Mcid, Opts) when is_pid(Pool), is_binary(Mcid), is_map(Opts) ->
 start_get_station(Pool, Station, Mcid, TimeoutMs) ->
     start_get_station(Pool, Station, Mcid, TimeoutMs, #{}).
 
-%% @doc As `start_get_station/4'. `Opts' as `start_put_station/5'.
+%% @doc As `start_get_station/4'. `Opts' as `start_put_station/5'. An
+%% `Mcid' of another shape is refused as by `start_get/3'.
 -spec start_get_station(macula:pool(), macula_client:seed(), macula:mcid(),
                         pos_integer(), map()) -> {ok, pid()}.
-start_get_station(Pool, Station, Mcid, TimeoutMs, Opts)
-  when is_pid(Pool), is_binary(Mcid), is_integer(TimeoutMs), TimeoutMs > 0,
-       is_map(Opts) ->
+start_get_station(Pool, Station, <<2, Codec, _:48/binary>> = Mcid, TimeoutMs, Opts)
+  when is_pid(Pool), (Codec =:= 16#55 orelse Codec =:= 16#56),
+       is_integer(TimeoutMs), TimeoutMs > 0, is_map(Opts) ->
     LinkOpts = maps:with([verify, expected_node_id, pin_tls_cert], Opts),
     start(get, {station, Pool, Station, TimeoutMs, LinkOpts}, Mcid, Opts).
 
