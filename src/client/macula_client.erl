@@ -37,10 +37,15 @@
 %%
 %% == Dedup ==
 %%
-%% Inbound EVENT frames are keyed by `(Realm, Publisher, Seq)' in an
-%% ETS table owned by the pool. The table is swept every
-%% `dedup_sweep_ms' (default 30s) for entries older than
-%% `dedup_window_ms' (default 60s).
+%% A link verifies each publication before it hands the event to the
+%% pool, and the pool delivers each publication at most once. It keys an
+%% ETS table it owns on the event's `publication_hash', the SHA-384 of
+%% the publication's `tbs', and keeps each entry until the publication's
+%% `expires_at', after which every verifier refuses it. The table is swept
+%% every `dedup_sweep_ms' (default 30s). The pool checks an event only
+%% while a subscription matches it, so a copy that arrives while nothing
+%% is subscribed never hides the publication from a later subscriber, and
+%% it drops an event whose `expires_at' has passed when the check runs.
 %%
 %% == Replay ==
 %%
@@ -73,7 +78,7 @@
          advertise_stream/5, advertise_stream/6, unadvertise_stream/3]).
 
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
-         terminate/2, code_change/3]).
+         terminate/2, code_change/3, format_status/1]).
 
 -ifdef(TEST).
 %% Probe guards — exported so a test can hang a link and prove the pool
@@ -151,7 +156,7 @@
     seeds              := [seed()],
     healthy_links      := non_neg_integer(),
     failed_links       := non_neg_integer(),
-    self_node_id       := macula_identity:pubkey(),
+    self_node_id       := <<_:256>>,
     subscriptions      := non_neg_integer(),
     replication_factor := pos_integer(),
     pubsub_gap_skips   := non_neg_integer()
@@ -172,10 +177,11 @@
                   port := inet:port_number()}.
 
 -type opts() :: #{
-    %% Shared Ed25519 keypair for every link in the pool. Stations see
-    %% the pool as a single peer (one pubkey across N links).
-    %% Auto-generated when absent.
-    identity           => macula_identity:key_pair(),
+    %% The node identity key that every link in the pool shares: an
+    %% identity key in the node's crypto profile. Stations see the pool
+    %% as a single peer (one node_id across N links). Generated when
+    %% absent, with a node_id that meets the puzzle.
+    node_identity      => macula_node_keys:node_key(),
 
     %% How many of the pool's currently-connected links accept a
     %% single PUBLISH frame. Partial success counts as success
@@ -196,14 +202,8 @@
     %% wallclock can be up to N×timeout for sequential dial fallback.
     connect_timeout_ms => pos_integer(),
 
-    %% Inbound-EVENT dedup window in milliseconds. The pool keys
-    %% inbound events on `(Realm, Publisher, Seq)' so duplicate
-    %% deliveries from multiple subscribed links collapse to one
-    %% emission per consumer. Default 60_000.
-    dedup_window_ms    => non_neg_integer(),
-
-    %% How often the dedup table is swept for entries older than
-    %% `dedup_window_ms'. Default 30_000.
+    %% How often the inbound publication dedup table is swept for
+    %% entries whose publication has expired. Default 30_000.
     dedup_sweep_ms     => pos_integer(),
 
     %% Opt-in dynamic station discovery via `hecate_stations.list_stations'
@@ -318,7 +318,6 @@
 %% replication_factor=1 there was never a "later" link for that to matter;
 %% raising the default makes it matter for everyone.
 -define(DEFAULT_REPLICATION, 2).
--define(DEFAULT_DEDUP_WINDOW_MS, 60_000).
 -define(DEFAULT_DEDUP_SWEEP_MS, 30_000).
 %% How long an `ordered' subscription waits for a missing seq before
 %% skipping the gap (a genuinely lost fact). Bounds head-of-line delay.
@@ -401,21 +400,10 @@
 
 -record(state, {
     seeds         :: [seed()],
-    identity      :: macula_identity:key_pair(),
+    node_id       :: <<_:256>>,
     link_opts     :: map(),
     replication   :: pos_integer(),
-    dedup_window  :: non_neg_integer(),
     dedup_sweep   :: pos_integer(),
-    %% Pool-owned monotonic publish sequence. Stamped onto every
-    %% outbound PUBLISH (via `macula_station_link:publish/5') so the
-    %% station-side `(publisher, seq)' dedup stays stable across link
-    %% respawns — the publisher pubkey is the pool's, shared by all
-    %% links, so the seq must be owned by the pool, not the link.
-    %% Seeded from wall-clock µs at init so a pool restart does not
-    %% re-issue seqs that collide with the pre-restart tail still in a
-    %% station's dedup window (see
-    %% macula-station/plans/PLAN_PUBSUB_E2E_SIGNED_EVENTS.md).
-    publish_seq   :: non_neg_integer(),
     %% seed → link_state
     links = #{}   :: #{seed() => #link_state{}},
     %% pool-owned SubRef → sub_spec
@@ -459,6 +447,9 @@
 %% link handshakes complete asynchronously. Publish/subscribe block
 %% until at least one link is connected (or fail with
 %% `{error, {transient, no_healthy_station}}' on the publish path).
+%% A node with no crypto profile, or a `node_identity' that is not an
+%% identity key in the node's profile, starts no pool: the refusal is
+%% returned and no link is dialed.
 -spec connect([seed()], opts()) -> {ok, pool()} | {error, term()}.
 connect(Seeds, Opts) when is_list(Seeds), is_map(Opts) ->
     gen_server:start_link(?MODULE, {Seeds, Opts}, []).
@@ -822,10 +813,16 @@ unsubscribe(Pool, SubRef) when is_pid(Pool), is_reference(SubRef) ->
 init({Seeds, Opts}) ->
     process_flag(trap_exit, true),
     warn_legacy_opts(Opts),
-    Identity = resolve_identity(Opts),
+    init_with_keys(pool_keys(Opts), Seeds, Opts).
+
+%% A pool whose keys cannot be had does not start: `connect/2' returns
+%% the refusal and no link is dialed.
+init_with_keys({error, _} = Refusal, _Seeds, _Opts) ->
+    Refusal;
+init_with_keys({ok, #{node_identity := NodeIdentity} = Keys}, Seeds, Opts) ->
+    {ok, NodeId} = macula_node_keys:node_id(NodeIdentity),
     LinkOpts = maps:merge(
-        #{
-            identity           => Identity,
+        Keys#{
             capabilities       => maps:get(capabilities, Opts, 0),
             alpn               => maps:get(alpn, Opts, [<<"macula">>]),
             connect_timeout_ms => maps:get(connect_timeout_ms, Opts, 30_000)
@@ -838,7 +835,6 @@ init({Seeds, Opts}) ->
         %% `macula_peering_conn:connect_opts()'). Forwarded only when
         %% the caller set them.
         maps:with([verify, expected_node_id, pin_tls_cert], Opts)),
-    DedupWindow = maps:get(dedup_window_ms, Opts, ?DEFAULT_DEDUP_WINDOW_MS),
     DedupSweep  = maps:get(dedup_sweep_ms, Opts, ?DEFAULT_DEDUP_SWEEP_MS),
     Replication = maps:get(replication_factor, Opts, ?DEFAULT_REPLICATION),
     DedupTab    = macula_client_dedup:new(),
@@ -846,13 +842,12 @@ init({Seeds, Opts}) ->
     OrderMaxBuf  = maps:get(order_max_buffer, Opts, ?DEFAULT_ORDER_MAX_BUFFER),
     Discovery = init_discovery(maps:get(station_discovery, Opts, #{})),
     LinkSelection = maps:get(link_selection, Opts, default_link_selection(Discovery)),
-    State0 = #state{seeds = Seeds, identity = Identity,
+    State0 = #state{seeds = Seeds, node_id = NodeId,
                     link_opts = LinkOpts, replication = Replication,
-                    dedup_window = DedupWindow, dedup_sweep = DedupSweep,
+                    dedup_sweep = DedupSweep,
                     dedup_tab = DedupTab,
                     order_timeout = OrderTimeout, order_max_buffer = OrderMaxBuf,
                     flush_timer = undefined,
-                    publish_seq = erlang:system_time(microsecond),
                     discovery = Discovery, link_selection = LinkSelection},
     State1 = lists:foldl(fun start_link_for_seed/2, State0, Seeds),
     erlang:send_after(DedupSweep, self(), dedup_sweep),
@@ -915,16 +910,15 @@ handle_call({publish, Realm, Topic, Payload, _Opts}, From, S) ->
     Targets = ordered_for_selection(connected_link_pids(S), S#state.link_selection),
     Selected = select_publish_targets(Targets, S#state.replication),
     AllTargets = Targets,
-    %% One pool-monotone seq per fact, reused across every replicated
-    %% link so `{publisher, seq}' identifies the fact regardless of
-    %% which station relayed it.
-    Seq = S#state.publish_seq,
+    %% One seq per publication, from the node's counter for the pool's key
+    %% (macula_publication_seq), reused across every replicated link.
+    Seq = macula_publication_seq:next(S#state.node_id),
     _ = spawn(fun() ->
         Results = [safe_link_publish(P, Realm, Topic, Payload, Seq)
                    || P <- Selected],
         gen_server:reply(From, summarize_publish(Results, AllTargets))
     end),
-    {noreply, S#state{publish_seq = Seq + 1}};
+    {noreply, S};
 
 handle_call({subscribe, Realm, Topic, Subscriber, Opts}, _From, S) ->
     SubRef = make_ref(),
@@ -1039,13 +1033,13 @@ handle_call({unadvertise_stream, Realm, Procedure}, _From,
 
 handle_call(status, _From,
             #state{seeds = Seeds, links = Links, subs = Subs,
-                   identity = Identity, replication = Replication} = S) ->
+                   node_id = NodeId, replication = Replication} = S) ->
     {Healthy, Failed} = count_link_health(Seeds, Links),
     Status = #{
         seeds              => Seeds,
         healthy_links      => Healthy,
         failed_links       => Failed,
-        self_node_id       => macula_identity:public(Identity),
+        self_node_id       => NodeId,
         subscriptions      => map_size(Subs),
         %% How many links one publish/5 call fans to (Opts'
         %% `replication_factor', or the pool default) — surfaced so a
@@ -1075,13 +1069,11 @@ handle_cast({discovered_stations, NewSeeds}, S) ->
 
 handle_cast(_Msg, S) -> {noreply, S}.
 
-handle_info({macula_event, _LinkSubRef, Topic, Payload, Meta}, S) ->
-    Realm     = maps:get(realm, Meta, <<0:256>>),
-    Publisher = maps:get(publisher, Meta),
-    Seq       = maps:get(seq, Meta),
-    on_inbound_event(dedup_check(S#state.dedup_tab, attested(Meta), Realm,
-                                 Publisher, Seq, {Topic, Payload}),
-                     Realm, Topic, Payload, Meta, S);
+handle_info({macula_event, _LinkSubRef, Topic, Payload,
+             #{realm := Realm, publication_hash := Hash,
+               expires_at := ExpiresAt} = Meta}, S) ->
+    {noreply, on_inbound_event(matching_subscriptions(Realm, Topic, S),
+                               Hash, ExpiresAt, Topic, Payload, Meta, S)};
 
 handle_info({macula_event_gone, LinkSubRef, _Reason}, S) ->
     %% A link torn down its subscription end. Pool will respawn the
@@ -1106,7 +1098,7 @@ handle_info(run_discovery, #state{discovery = D} = S) ->
     {noreply, schedule_discovery(D#discovery_state.refresh_ms, S)};
 
 handle_info(dedup_sweep, S) ->
-    _ = macula_client_dedup:sweep(S#state.dedup_tab, S#state.dedup_window),
+    _ = macula_client_dedup:sweep(S#state.dedup_tab, erlang:system_time(millisecond)),
     erlang:send_after(S#state.dedup_sweep, self(), dedup_sweep),
     {noreply, S};
 
@@ -1146,6 +1138,10 @@ terminate(_Reason, #state{subs = Subs}) ->
     ok.
 
 code_change(_OldVsn, S, _Extra) -> {ok, S}.
+
+%% The link options hold the node's keys: status output and crash reports show them with their private halves
+%% redacted.
+format_status(Status) -> macula_node_keys:redacted(Status).
 
 %%====================================================================
 %% Internals — link lifecycle
@@ -1374,28 +1370,50 @@ notify_legacy(Keys) ->
       "and one-link-per-seed. See macula:connect/2 docs.", [Keys]),
     ok.
 
-%% The pool's own identity when the caller doesn't supply one.
-%%
-%% A fresh one from `macula_identity:generate/0', which passes the puzzle
-%% check every station's `puzzle_enforcement_mode/0' applies on
-%% CONNECT/HELLO. A caller who didn't think to pass one is the caller most
-%% likely to be surprised by a silent rejection: the underlying QUIC/TLS
-%% connection still reports healthy, and `subscribe/5' still returns
-%% `{ok, _}' locally, because both succeed before the station ever closes
-%% the handshake it rejected. Confirmed live 2026-08-21: `MaculaRealm.Mesh'
-%% connected with `%{}' opts, and its dashboard sat dark for over an hour,
-%% five links reporting healthy and zero events ever delivered, before the
-%% identity itself turned out to be the reason. A caller who needs a plain
-%% key passes one from `macula_identity:generate(#{puzzle => false})'.
-%%
-%% Lazy on purpose: `maps:get/3' evaluates its default argument
-%% unconditionally, which would grind a puzzle on every `connect/2' call
-%% even when the caller DID pass an identity.
-resolve_identity(Opts) ->
-    identity_or_generate(maps:find(identity, Opts)).
+%% The pool's keys, in the node's crypto profile: the node identity key
+%% that every link shares, and the pool's own CONNECT key, a separate
+%% key that signs each connection's proof under a binding by the
+%% identity key (D16). Every link starts with the profile and both keys.
+pool_keys(Opts) ->
+    keys_in_profile(macula_crypto_profile:configured(), Opts).
 
-identity_or_generate({ok, Identity}) -> Identity;
-identity_or_generate(error) -> macula_identity:generate().
+keys_in_profile({ok, Profile}, Opts) ->
+    keys_with_identity(node_identity(maps:find(node_identity, Opts), Profile), Profile);
+keys_in_profile({error, _} = Refusal, _Opts) ->
+    Refusal.
+
+keys_with_identity({ok, NodeIdentity}, Profile) ->
+    keys_with_connect_key(macula_node_keys:generate(connect, Profile), NodeIdentity, Profile);
+keys_with_identity({error, _} = Refusal, _Profile) ->
+    Refusal.
+
+keys_with_connect_key({ok, ConnectKey}, NodeIdentity, Profile) ->
+    {ok, #{profile => Profile, node_identity => NodeIdentity, connect_key => ConnectKey}};
+keys_with_connect_key({error, _} = Refusal, _NodeIdentity, _Profile) ->
+    Refusal.
+
+%% The pool's node identity key. A supplied key is used as it is, puzzle
+%% solved or not, when it is an identity key in the node's profile; any
+%% other key is refused.
+%%
+%% Without one, the pool generates a key whose node_id meets
+%% `macula_node_keys:puzzle_difficulty/0', not a bare
+%% `macula_node_keys:generate/2' key: stations check the puzzle on the
+%% node_id derived from the identity key in CONNECT, and the caller who
+%% did not think to pass a key is the one most surprised by a refused
+%% handshake behind links that report healthy (seen live 2026-08-21: a
+%% pool started with no options showed five healthy links and delivered
+%% no event for over an hour). `maps:find/2' keeps the puzzle from being
+%% ground when the caller did pass a key.
+node_identity(error, Profile) ->
+    macula_node_keys:generate(identity, Profile,
+                              #{puzzle_difficulty => macula_node_keys:puzzle_difficulty()});
+node_identity({ok, #{purpose := identity, profile := Profile} = Key}, Profile) ->
+    {ok, Key};
+node_identity({ok, #{purpose := identity, profile := Other}}, _Profile) ->
+    {error, {node_identity, {wrong_profile, Other}}};
+node_identity({ok, _NotAnIdentityKey}, _Profile) ->
+    {error, {node_identity, not_an_identity_key}}.
 
 %% First-success across the pool's healthy links. Tries each link in
 %% turn; the first non-error reply wins. It moves on to the next link only
@@ -2225,37 +2243,19 @@ without_link_sub(LinkSubRef, Keys) ->
 %% Internals — inbound event fan-out
 %%====================================================================
 
-%% Only an event whose publisher signature verified claims its
-%% `(realm, publisher, seq)' key. Any other event is deduplicated on that
-%% triple plus a digest of its topic and payload, in a key space of its
-%% own: identical copies arriving over several links are still delivered
-%% once, and such an event only ever matches an identical copy of itself.
-dedup_check(Tab, true, Realm, Publisher, Seq, _Content) ->
-    macula_client_dedup:check(Tab, Realm, Publisher, Seq);
-dedup_check(Tab, false, Realm, Publisher, Seq, Content) ->
-    Digest = crypto:hash(sha256, term_to_binary(Content, [deterministic])),
-    macula_client_dedup:check_unverified(Tab, Realm, Publisher, Seq, Digest).
+%% The subscriptions an event reaches: those of its own topic and those of
+%% every wildcard pattern it matches (`macula_topic_pattern:matches/2'), as
+%% one set, so the publication is checked once and each subscription gets it
+%% once.
+matching_subscriptions(Realm, Topic, #state{topic_index = Idx, wildcard_topics = Wildcards}) ->
+    Keys = [{Realm, Topic} | matching_wildcards(Realm, Topic, Wildcards)],
+    subscriptions_found([Set || {ok, Set} <- [maps:find(Key, Idx) || Key <- Keys]]).
 
-attested(#{publisher_verified := true}) -> true;
-attested(_Meta)                         -> false.
-
-on_inbound_event(duplicate, _Realm, _Topic, _Payload, _Meta, S) ->
-    {noreply, S};
-on_inbound_event(new, Realm, Topic, Payload, Meta, S) ->
-    {noreply, ensure_flush_timer(fan_to_local(Realm, Topic, Payload, Meta, S))}.
-
-%% An event reaches the subscribers of its own topic and those of every
-%% wildcard pattern it matches (`macula_topic_pattern:matches/2'), each set
-%% once: the event was deduplicated before this single fan-out.
-fan_to_local(Realm, Topic, Payload, Meta, #state{topic_index = Idx} = S) ->
-    Exact = fan_to_set(maps:find({Realm, Topic}, Idx), Topic, Payload, Meta, S),
-    lists:foldl(fun(Key, Acc) ->
-                    fan_to_set(maps:find(Key, Idx), Topic, Payload, Meta, Acc)
-                end,
-                Exact, matching_wildcards(Realm, Topic, S#state.wildcard_topics)).
+subscriptions_found([]) -> error;
+subscriptions_found(Sets) -> {ok, sets:union(Sets)}.
 
 %% The wildcard patterns in `Realm' that `Topic' matches. A topic that is
-%% itself one of them was already delivered by the exact lookup.
+%% itself one of them is found by the exact lookup.
 matching_wildcards(Realm, Topic, Wildcards) ->
     Segments = topic_segments(Topic),
     [Key || {{R, T} = Key, Pattern} <- maps:to_list(Wildcards),
@@ -2265,9 +2265,23 @@ matching_wildcards(Realm, Topic, Wildcards) ->
 topic_segments(Topic) ->
     binary:split(Topic, <<"/">>, [global]).
 
-fan_to_set(error, _Topic, _Payload, _Meta, S) ->
+%% A publication is checked, and so recorded, only while a subscription
+%% matches it: a copy that arrives while nothing is subscribed must not
+%% hide the publication from a later subscriber. The check drops a
+%% publication whose expiry has passed.
+on_inbound_event(error, _Hash, _ExpiresAt, _Topic, _Payload, _Meta, S) ->
     S;
-fan_to_set({ok, Set}, Topic, Payload, Meta, S) ->
+on_inbound_event({ok, Set}, Hash, ExpiresAt, Topic, Payload, Meta, S) ->
+    on_sighting(macula_client_dedup:check(S#state.dedup_tab, Hash, ExpiresAt,
+                                          erlang:system_time(millisecond)),
+                Set, Topic, Payload, Meta, S).
+
+on_sighting(new, Set, Topic, Payload, Meta, S) ->
+    ensure_flush_timer(fan_to_set(Set, Topic, Payload, Meta, S));
+on_sighting(_DuplicateOrExpired, _Set, _Topic, _Payload, _Meta, S) ->
+    S.
+
+fan_to_set(Set, Topic, Payload, Meta, S) ->
     sets:fold(fun(SubRef, Acc) ->
         deliver_one(SubRef, Topic, Payload, Meta, Acc)
     end, S, Set).
@@ -2288,11 +2302,9 @@ deliver_to({ok, #sub_spec{subscriber = Pid, order = Order} = Spec}, SubRef,
     S#state{subs = maps:put(SubRef, Spec#sub_spec{order = Order2},
                             S#state.subs)}.
 
-%% A verified publisher's ordering state is its own. Events whose publisher
-%% signature did not verify, or that carried none, are ordered among
-%% themselves per publisher and never move that state.
-order_key(#{publisher := Pub, publisher_verified := true}) -> Pub;
-order_key(#{publisher := Pub})                              -> {unverified, Pub}.
+%% Every event reaching the pool carries a publication its link verified,
+%% so each publisher's ordering state is its own.
+order_key(#{publisher := Pub}) -> Pub.
 
 send_events(Pid, SubRef, Topic, Events) ->
     _ = [Pid ! {macula_event, SubRef, Topic, P, M} || {P, M} <- Events],

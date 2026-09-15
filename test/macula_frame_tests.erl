@@ -192,12 +192,12 @@ build_hello(Kp) ->
 swim_ping_has_expected_shape_test() ->
     Kp = macula_identity:generate(),
     Pub = macula_identity:public(Kp),
-    U   = signed_update(Pub, alive, Kp),
+    U   = observed_update(Pub, alive, Kp),
     F = macula_frame:swim_ping(#{round => 3, incarnation => 7, piggyback => [U]}),
     ?assertEqual(swim_ping, macula_frame:frame_type(F)),
     ?assertEqual(3, maps:get(round, F)),
     ?assertEqual(7, maps:get(incarnation, F)),
-    ?assertMatch([#{signature := _}], maps:get(piggyback, F)).
+    ?assertMatch([#{by := Pub, state := alive}], maps:get(piggyback, F)).
 
 swim_ack_carries_responder_test() ->
     Kp = macula_identity:generate(),
@@ -240,60 +240,17 @@ swim_ping_wire_roundtrip_test() ->
                  macula_frame:verify(Decoded, macula_identity:public(Kp))).
 
 %%------------------------------------------------------------------
-%% SWIM piggyback updates — signed independently by observer
-%%------------------------------------------------------------------
-
-swim_update_sign_verify_roundtrip_test() ->
-    Kp = macula_identity:generate(),
-    U = signed_update(macula_identity:public(Kp), alive, Kp),
-    ?assertMatch({ok, _}, macula_frame:verify_swim_update(U)).
-
-swim_update_rejects_tamper_test() ->
-    Kp = macula_identity:generate(),
-    U = signed_update(macula_identity:public(Kp), alive, Kp),
-    Tampered = U#{state => suspect},
-    ?assertEqual({error, signature_invalid},
-                 macula_frame:verify_swim_update(Tampered)).
-
-swim_update_rejects_wrong_observer_test() ->
-    Kp1 = macula_identity:generate(),
-    Kp2 = macula_identity:generate(),
-    %% Claim "by = Kp1" but sign with Kp2.
-    Unsigned = macula_frame:swim_update(#{
-        target      => crypto:strong_rand_bytes(32),
-        state       => alive,
-        incarnation => 0,
-        observed_at => erlang:system_time(millisecond),
-        by          => macula_identity:public(Kp1)
-    }),
-    Signed = macula_frame:sign_swim_update(Unsigned, Kp2),
-    ?assertEqual({error, signature_invalid},
-                 macula_frame:verify_swim_update(Signed)).
-
-swim_update_domain_is_distinct_from_frame_domain_test() ->
-    %% Signing a swim_update with the swim-update domain should not verify
-    %% if the frame sig-verify path (different domain) is tried.
-    Kp = macula_identity:generate(),
-    U = signed_update(macula_identity:public(Kp), alive, Kp),
-    %% Attempt frame-verify on a signed update — must fail (bad_frame
-    %% because it's missing frame fields, or signature_invalid).
-    Result = macula_frame:verify(U, macula_identity:public(Kp)),
-    ?assertNotMatch({ok, _}, Result).
-
-%%------------------------------------------------------------------
 %% Helpers
 %%------------------------------------------------------------------
 
-signed_update(Target, State, Kp) ->
-    By = macula_identity:public(Kp),
-    U = macula_frame:swim_update(#{
+observed_update(Target, State, Kp) ->
+    macula_frame:swim_update(#{
         target      => Target,
         state       => State,
         incarnation => 0,
         observed_at => erlang:system_time(millisecond),
-        by          => By
-    }),
-    macula_frame:sign_swim_update(U, Kp).
+        by          => macula_identity:public(Kp)
+    }).
 
 %%------------------------------------------------------------------
 %% DHT frames — Part 6 §7
@@ -445,20 +402,18 @@ store_ack_positive_test() ->
     F = macula_frame:store_ack(#{key => Key, stored => true}),
     ?assertEqual(store_ack, macula_frame:frame_type(F)),
     ?assertEqual(true, maps:get(stored, F)),
-    ?assertEqual(undefined, maps:get(reason, F)).
+    ?assertNot(maps:is_key(reason, F)).
 
-store_ack_with_rejection_reason_test() ->
-    F = macula_frame:store_ack(#{key => crypto:strong_rand_bytes(32),
-                                 stored => false,
-                                 reason => quota}),
+store_ack_refusal_carries_no_reason_test() ->
+    F = macula_frame:store_ack(#{key => crypto:strong_rand_bytes(32), stored => false}),
     ?assertEqual(false, maps:get(stored, F)),
-    ?assertEqual(quota, maps:get(reason, F)).
+    ?assertNot(maps:is_key(reason, F)).
 
-store_ack_rejects_non_atom_reason_test() ->
+store_ack_refuses_a_reason_test() ->
     ?assertError(function_clause,
                  macula_frame:store_ack(#{key    => crypto:strong_rand_bytes(32),
                                           stored => false,
-                                          reason => <<"bad">>})).
+                                          reason => quota})).
 
 store_wire_roundtrip_test() ->
     Kp = macula_identity:generate(),
@@ -468,36 +423,15 @@ store_wire_roundtrip_test() ->
     ?assertMatch({ok, _},
                  macula_frame:verify(D, macula_identity:public(Kp))).
 
-%% -- REPLICATE / REPLICATE_ACK ------------------------------------
+%% -- No REPLICATE / REPLICATE_ACK ---------------------------------
 
-replicate_carries_record_and_custodian_flag_test() ->
-    F = macula_frame:replicate(#{record => sample_record(),
-                                 new_custodian => true}),
-    ?assertEqual(replicate, macula_frame:frame_type(F)),
-    ?assertEqual(true, maps:get(new_custodian, F)).
-
-replicate_rejects_non_boolean_flag_test() ->
-    ?assertError(function_clause,
-                 macula_frame:replicate(#{record => sample_record(),
-                                          new_custodian => perhaps})).
-
-replicate_ack_test() ->
-    Key = crypto:strong_rand_bytes(32),
-    F = macula_frame:replicate_ack(#{key => Key, accepted => true}),
-    ?assertEqual(replicate_ack, macula_frame:frame_type(F)),
-    ?assertEqual(Key, maps:get(key, F)),
-    ?assertEqual(true, maps:get(accepted, F)).
-
-replicate_wire_roundtrip_test() ->
-    Kp = macula_identity:generate(),
-    F  = macula_frame:sign(
-           macula_frame:replicate(#{record => sample_record(),
-                                    new_custodian => false}),
-           Kp),
-    {ok, D, <<>>} = macula_frame:decode(macula_frame:encode(F)),
-    ?assertEqual(F, D),
-    ?assertMatch({ok, _},
-                 macula_frame:verify(D, macula_identity:public(Kp))).
+%% Replication runs as STOREs, so the codec has no REPLICATE or REPLICATE_ACK.
+replicate_frames_are_not_frame_types_test() ->
+    {module, macula_frame} = code:ensure_loaded(macula_frame),
+    ?assertNot(erlang:function_exported(macula_frame, replicate, 1)),
+    ?assertNot(erlang:function_exported(macula_frame, replicate_ack, 1)),
+    [?assertEqual({error, bad_frame}, macula_frame:decode(macula_frame:encode(#{frame_type => Type})))
+     || Type <- [replicate, replicate_ack]].
 
 %% -- station_ref helper -------------------------------------------
 
@@ -547,175 +481,24 @@ sample_station_ref() ->
         last_seen_at => erlang:system_time(millisecond)
     }).
 
+%% A signed record in its wire form, as a frame carries it.
 sample_record() ->
-    Kp = macula_identity:generate(),
-    Node = macula_record:node_record(macula_identity:public(Kp), [], 0),
-    macula_record:sign(Node, Kp).
+    {ok, Id} = macula_node_keys:generate(identity, pq_pure),
+    Node = macula_record:node_record(macula_node_keys:key_id(Id), [], 0),
+    macula_record:encode(macula_record:sign(Node, Id)).
+
+%% A realm's signed member endorsement in its wire form.
+endorsement(RealmId, Member) ->
+    {ok, Realm} = macula_node_keys:generate(realm, pq_pure),
+    Unsigned = macula_record:realm_member_endorsement(RealmId, #{realm => RealmId, member_node => Member,
+                                                                 roles => [<<"member">>]}),
+    macula_record:encode(macula_record:sign(Unsigned, Realm)).
 
 %%------------------------------------------------------------------
 %% CALL / RESULT / ERROR frames — Part 6 §5
 %%------------------------------------------------------------------
 
-%% -- CALL ---------------------------------------------------------
-
-call_has_required_header_fields_test() ->
-    F = sample_call(),
-    ?assertEqual(call, macula_frame:frame_type(F)),
-    ?assertEqual(16, byte_size(maps:get(call_id, F))),
-    ?assertEqual(32, byte_size(maps:get(realm, F))),
-    ?assertEqual(32, byte_size(maps:get(caller, F))),
-    ?assertEqual(<<>>, maps:get(source_route, F)),
-    ?assertEqual(0,    maps:get(retry_budget, F)).
-
-call_with_optional_fields_test() ->
-    Caller = crypto:strong_rand_bytes(32),
-    F = macula_frame:call(#{
-        call_id      => macula_record_uuid:v7(),
-        procedure    => <<"realm/acme/weather/forecast/get_v1">>,
-        realm        => crypto:strong_rand_bytes(32),
-        payload      => #{city => <<"Brussels">>},
-        deadline_ms  => erlang:system_time(millisecond) + 5_000,
-        caller       => Caller,
-        source_route => <<1, 2, 3>>,
-        retry_budget => 3
-    }),
-    ?assertEqual(<<1, 2, 3>>, maps:get(source_route, F)),
-    ?assertEqual(3, maps:get(retry_budget, F)).
-
-call_rejects_wrong_call_id_size_test() ->
-    ?assertError(function_clause,
-                 macula_frame:call(spec_with(call_id, <<0:64>>))).
-
-call_rejects_wrong_realm_size_test() ->
-    ?assertError(function_clause,
-                 macula_frame:call(spec_with(realm, <<0:128>>))).
-
-call_sign_verify_wire_roundtrip_test() ->
-    Kp = macula_identity:generate(),
-    F  = macula_frame:sign(sample_call(macula_identity:public(Kp)), Kp),
-    {ok, Decoded, <<>>} = macula_frame:decode(macula_frame:encode(F)),
-    ?assertEqual(F, Decoded),
-    ?assertMatch({ok, _},
-                 macula_frame:verify(Decoded, macula_identity:public(Kp))).
-
-%% -- RESULT -------------------------------------------------------
-
-result_has_required_fields_test() ->
-    Responded = crypto:strong_rand_bytes(32),
-    F = macula_frame:result(#{
-        call_id      => macula_record_uuid:v7(),
-        payload      => #{ok => true},
-        responded_by => Responded
-    }),
-    ?assertEqual(result,    macula_frame:frame_type(F)),
-    ?assertEqual(Responded, maps:get(responded_by, F)),
-    ?assertEqual(<<>>,      maps:get(source_route_reverse, F)).
-
-result_rejects_wrong_responded_by_size_test() ->
-    ?assertError(function_clause,
-                 macula_frame:result(#{
-                     call_id      => macula_record_uuid:v7(),
-                     payload      => ok,
-                     responded_by => <<0:64>>})).
-
-result_wire_roundtrip_test() ->
-    Kp = macula_identity:generate(),
-    F = macula_frame:sign(macula_frame:result(#{
-            call_id      => macula_record_uuid:v7(),
-            payload      => <<"hello">>,
-            responded_by => macula_identity:public(Kp)
-        }), Kp),
-    {ok, D, <<>>} = macula_frame:decode(macula_frame:encode(F)),
-    ?assertEqual(F, D).
-
-%% -- ERROR --------------------------------------------------------
-
-call_error_carries_code_and_derived_name_test() ->
-    F = macula_frame:call_error(#{
-        call_id     => macula_record_uuid:v7(),
-        code        => 16#01,
-        reported_by => crypto:strong_rand_bytes(32)
-    }),
-    ?assertEqual(error,             macula_frame:frame_type(F)),
-    ?assertEqual(16#01,             maps:get(code, F)),
-    ?assertEqual(unknown_next_peer, maps:get(name, F)),
-    ?assertEqual(undefined,         maps:get(detail, F)),
-    ?assertEqual(undefined,         maps:get(offending_hop, F)).
-
-call_error_with_offending_hop_and_detail_test() ->
-    Hop = crypto:strong_rand_bytes(32),
-    F = macula_frame:call_error(#{
-        call_id       => macula_record_uuid:v7(),
-        code          => 16#02,
-        reported_by   => crypto:strong_rand_bytes(32),
-        detail        => <<"backend down">>,
-        offending_hop => Hop,
-        source_route_partial => <<9, 8, 7>>
-    }),
-    ?assertEqual(temporary_relay_failure, maps:get(name, F)),
-    ?assertEqual(<<"backend down">>,      maps:get(detail, F)),
-    ?assertEqual(Hop,                     maps:get(offending_hop, F)),
-    ?assertEqual(<<9, 8, 7>>,             maps:get(source_route_partial, F)).
-
-call_error_rejects_unknown_code_test() ->
-    %% macula_bolt4:name/1 raises on unknown code; ensure that
-    %% propagates out of the constructor.
-    ?assertError({bolt4_unknown, _, _},
-                 macula_frame:call_error(#{
-                     call_id => macula_record_uuid:v7(),
-                     code    => 99,
-                     reported_by => crypto:strong_rand_bytes(32)})).
-
-call_error_rejects_wrong_offending_hop_size_test() ->
-    ?assertError(function_clause,
-                 macula_frame:call_error(#{
-                     call_id     => macula_record_uuid:v7(),
-                     code        => 16#01,
-                     reported_by => crypto:strong_rand_bytes(32),
-                     offending_hop => <<0:64>>})).
-
-call_error_wire_roundtrip_test() ->
-    Kp = macula_identity:generate(),
-    F = macula_frame:sign(macula_frame:call_error(#{
-            call_id     => macula_record_uuid:v7(),
-            code        => 16#0E,
-            reported_by => macula_identity:public(Kp)
-        }), Kp),
-    {ok, D, <<>>} = macula_frame:decode(macula_frame:encode(F)),
-    ?assertEqual(F, D),
-    ?assertEqual(signature_invalid, maps:get(name, D)),
-    ?assertMatch({ok, _},
-                 macula_frame:verify(D, macula_identity:public(Kp))).
-
-%%------------------------------------------------------------------
-%% CALL helpers
-%%------------------------------------------------------------------
-
-sample_call() ->
-    sample_call(crypto:strong_rand_bytes(32)).
-
-sample_call(Caller) ->
-    macula_frame:call(#{
-        call_id     => macula_record_uuid:v7(),
-        procedure   => <<"realm/acme/weather/forecast/get_v1">>,
-        realm       => crypto:strong_rand_bytes(32),
-        payload     => #{city => <<"Brussels">>},
-        deadline_ms => erlang:system_time(millisecond) + 5_000,
-        caller      => Caller
-    }).
-
-%% Build a CALL spec replacing one field with a bad value, used to
-%% test guard rejection.
-spec_with(Field, BadValue) ->
-    Base = #{
-        call_id     => macula_record_uuid:v7(),
-        procedure   => <<"foo">>,
-        realm       => crypto:strong_rand_bytes(32),
-        payload     => ok,
-        deadline_ms => erlang:system_time(millisecond) + 1_000,
-        caller      => crypto:strong_rand_bytes(32)
-    },
-    maps:put(Field, BadValue, Base).
+%% -- CALL, RESULT and ERROR: signed objects, in macula_frame_request_tests ------
 
 %%------------------------------------------------------------------
 %% HyParView frames — Part 3 §7.1
@@ -826,18 +609,13 @@ hyparview_forward_join_wire_roundtrip_test() ->
     ?assertEqual(F, D).
 
 %% The `record' field (realm-admin-signed endorsement) must survive a
-%% full wire round trip as a decoded map, not an opaque binary blob --
+%% full wire round trip byte for byte, and verify at the receiver --
 %% this is exactly the gap that shipped broken (the endorsement was
 %% computed and then discarded, never attached to the frame at all).
 hyparview_join_carries_endorsement_through_wire_roundtrip_test() ->
-    RealmKp = macula_identity:generate(),
-    RealmId = macula_identity:public(RealmKp),
+    RealmId = crypto:strong_rand_bytes(32),
     Member  = crypto:strong_rand_bytes(32),
-    Endorsement = macula_record:sign(
-        macula_record:realm_member_endorsement(RealmId, #{
-            realm => RealmId, member_node => Member,
-            roles => [<<"member">>]}),
-        RealmKp),
+    Endorsement = endorsement(RealmId, Member),
     LinkKp = macula_identity:generate(),
     F = macula_frame:sign(macula_frame:hyparview_join(#{
             realm => RealmId, new_member => Member,
@@ -846,7 +624,7 @@ hyparview_join_carries_endorsement_through_wire_roundtrip_test() ->
     {ok, D, <<>>} = macula_frame:decode(macula_frame:encode(F)),
     ?assertEqual(F, D),
     ?assertEqual(Endorsement, maps:get(record, D)),
-    ?assertMatch({ok, _}, macula_record:verify(maps:get(record, D))).
+    ?assertMatch({ok, _}, macula_record:verify(maps:get(record, D), pq_pure)).
 
 hyparview_join_without_endorsement_omits_record_field_test() ->
     F = macula_frame:hyparview_join(#{
@@ -859,14 +637,9 @@ hyparview_join_without_endorsement_omits_record_field_test() ->
 %% it needs the same endorsement-carrying capability, not just a
 %% frame shaped like an ack.
 hyparview_neighbor_carries_endorsement_through_wire_roundtrip_test() ->
-    RealmKp = macula_identity:generate(),
-    RealmId = macula_identity:public(RealmKp),
+    RealmId = crypto:strong_rand_bytes(32),
     Sender  = crypto:strong_rand_bytes(32),
-    Endorsement = macula_record:sign(
-        macula_record:realm_member_endorsement(RealmId, #{
-            realm => RealmId, member_node => Sender,
-            roles => [<<"member">>]}),
-        RealmKp),
+    Endorsement = endorsement(RealmId, Sender),
     F = macula_frame:hyparview_neighbor(#{
             realm => RealmId, priority => high, record => Endorsement}),
     ?assertEqual(Endorsement, maps:get(record, F)),
@@ -910,32 +683,11 @@ hyparview_disconnect_wire_roundtrip_test() ->
 %% Plumtree frames — Part 3 §7.2
 %%------------------------------------------------------------------
 
-plumtree_gossip_carries_msg_id_round_payload_test() ->
-    MsgId = crypto:strong_rand_bytes(16),
-    F = macula_frame:plumtree_gossip(#{
-        realm   => crypto:strong_rand_bytes(32),
-        msg_id  => MsgId,
-        round   => 3,
-        payload => #{event => <<"hello">>}
-    }),
-    ?assertEqual(plumtree_gossip, macula_frame:frame_type(F)),
-    ?assertEqual(MsgId, maps:get(msg_id, F)),
-    ?assertEqual(3, maps:get(round, F)),
-    ?assertEqual(#{event => <<"hello">>}, maps:get(payload, F)).
-
-plumtree_gossip_rejects_short_msg_id_test() ->
-    ?assertError(function_clause,
-                 macula_frame:plumtree_gossip(#{
-                     realm   => crypto:strong_rand_bytes(32),
-                     msg_id  => <<0:64>>,
-                     round   => 0,
-                     payload => ok})).
-
 plumtree_ihave_round_trip_test() ->
     Kp = macula_identity:generate(),
     F = macula_frame:sign(macula_frame:plumtree_ihave(#{
             realm  => crypto:strong_rand_bytes(32),
-            msg_id => crypto:strong_rand_bytes(16),
+            msg_id => crypto:strong_rand_bytes(48),
             round  => 1}), Kp),
     {ok, D, <<>>} = macula_frame:decode(macula_frame:encode(F)),
     ?assertEqual(F, D),
@@ -945,7 +697,7 @@ plumtree_graft_round_trip_test() ->
     Kp = macula_identity:generate(),
     F = macula_frame:sign(macula_frame:plumtree_graft(#{
             realm  => crypto:strong_rand_bytes(32),
-            msg_id => crypto:strong_rand_bytes(16),
+            msg_id => crypto:strong_rand_bytes(48),
             round  => 2}), Kp),
     {ok, D, <<>>} = macula_frame:decode(macula_frame:encode(F)),
     ?assertEqual(F, D).
@@ -956,17 +708,7 @@ plumtree_prune_carries_realm_only_test() ->
     ?assertEqual(plumtree_prune, macula_frame:frame_type(F)),
     ?assertEqual(R, maps:get(realm, F)).
 
-plumtree_gossip_wire_roundtrip_test() ->
-    Kp = macula_identity:generate(),
-    F = macula_frame:sign(macula_frame:plumtree_gossip(#{
-            realm   => crypto:strong_rand_bytes(32),
-            msg_id  => crypto:strong_rand_bytes(16),
-            round   => 0,
-            payload => <<"data">>}), Kp),
-    {ok, D, <<>>} = macula_frame:decode(macula_frame:encode(F)),
-    ?assertEqual(F, D),
-    ?assertMatch({ok, _},
-                 macula_frame:verify(D, macula_identity:public(Kp))).
+%% GOSSIP carries a signed publication: macula_frame_publication_tests.
 
 %%------------------------------------------------------------------
 %% Overlay relay envelope — Phase 3.5
@@ -1001,32 +743,7 @@ overlay_relay_wire_roundtrip_preserves_wrapped_frame_bytes_test() ->
 %% PubSub frames — Part 6 §6
 %%------------------------------------------------------------------
 
-publish_carries_topic_and_payload_test() ->
-    Pub = crypto:strong_rand_bytes(32),
-    F = macula_frame:publish(#{
-        topic           => <<"realm/acme/news/headlines">>,
-        realm           => crypto:strong_rand_bytes(32),
-        publisher       => Pub,
-        seq             => 42,
-        payload         => #{headline => <<"breaking">>},
-        published_at_ms => erlang:system_time(millisecond)
-    }),
-    ?assertEqual(publish, macula_frame:frame_type(F)),
-    ?assertEqual(Pub,     maps:get(publisher, F)),
-    ?assertEqual(42,      maps:get(seq, F)),
-    ?assertEqual(undefined, maps:get(ttl_ms, F)).
-
-publish_with_ttl_test() ->
-    F = macula_frame:publish(#{
-        topic           => <<"t">>,
-        realm           => crypto:strong_rand_bytes(32),
-        publisher       => crypto:strong_rand_bytes(32),
-        seq             => 0,
-        payload         => ok,
-        published_at_ms => 1,
-        ttl_ms          => 60_000
-    }),
-    ?assertEqual(60_000, maps:get(ttl_ms, F)).
+%% PUBLISH and EVENT carry a signed publication: macula_frame_publication_tests.
 
 subscribe_carries_subscriber_and_options_test() ->
     Sub = crypto:strong_rand_bytes(32),
@@ -1051,138 +768,11 @@ unsubscribe_carries_subscriber_test() ->
     ?assertEqual(unsubscribe, macula_frame:frame_type(F)),
     ?assertEqual(Sub,         maps:get(subscriber, F)).
 
-event_carries_delivery_channel_test() ->
-    F = macula_frame:event(#{
-        topic         => <<"t">>,
-        realm         => crypto:strong_rand_bytes(32),
-        publisher     => crypto:strong_rand_bytes(32),
-        seq           => 7,
-        payload       => <<"data">>,
-        delivered_via => plumtree
-    }),
-    ?assertEqual(event, macula_frame:frame_type(F)),
-    ?assertEqual(plumtree, maps:get(delivered_via, F)).
-
-event_rejects_unknown_delivery_channel_test() ->
-    ?assertError(function_clause,
-                 macula_frame:event(#{
-                     topic         => <<"t">>,
-                     realm         => crypto:strong_rand_bytes(32),
-                     publisher     => crypto:strong_rand_bytes(32),
-                     seq           => 0,
-                     payload       => ok,
-                     delivered_via => carrier_pigeon})).
-
-%%------------------------------------------------------------------
-%% Publisher-end-to-end signature (publisher_sig)
-%%------------------------------------------------------------------
-
-%% A frame built without `publisher_sig' has no such key — byte-for-
-%% byte identical to a pre-4.4.0 frame. This is what makes the
-%% feature wire-safe to ship before the emitter populates it.
-publisher_sig_absent_by_default_test() ->
-    P = macula_frame:publish(#{
-        topic => <<"t">>, realm => crypto:strong_rand_bytes(32),
-        publisher => crypto:strong_rand_bytes(32), seq => 0,
-        payload => ok, published_at_ms => 1}),
-    E = macula_frame:event(#{
-        topic => <<"t">>, realm => crypto:strong_rand_bytes(32),
-        publisher => crypto:strong_rand_bytes(32), seq => 0,
-        payload => ok, delivered_via => direct}),
-    ?assertNot(maps:is_key(publisher_sig, P)),
-    ?assertNot(maps:is_key(publisher_sig, E)).
-
-sign_publisher_attaches_64_byte_sig_test() ->
-    Kp = macula_identity:generate(),
-    Signed = macula_frame:sign_publisher(sample_publish(Kp), Kp),
-    Sig = maps:get(publisher_sig, Signed),
-    ?assert(is_binary(Sig)),
-    ?assertEqual(64, byte_size(Sig)).
-
-verify_publisher_roundtrip_test() ->
-    Kp = macula_identity:generate(),
-    Signed = macula_frame:sign_publisher(sample_publish(Kp), Kp),
-    ?assertMatch({ok, _}, macula_frame:verify_publisher(Signed)).
-
-%% The publisher signature is over (topic, realm, publisher, seq,
-%% payload) only — frame-type-independent — so the signature a
-%% publisher put on its PUBLISH is still valid on the EVENT a relay
-%% derives from it.
-verify_publisher_survives_publish_to_event_conversion_test() ->
-    Kp = macula_identity:generate(),
-    P  = macula_frame:sign_publisher(sample_publish(Kp), Kp),
-    E  = macula_frame:event(#{
-        topic         => maps:get(topic, P),
-        realm         => maps:get(realm, P),
-        publisher     => maps:get(publisher, P),
-        seq           => maps:get(seq, P),
-        payload       => maps:get(payload, P),
-        delivered_via => direct,
-        publisher_sig => maps:get(publisher_sig, P)}),
-    ?assertMatch({ok, _}, macula_frame:verify_publisher(E)).
-
-verify_publisher_rejects_tampered_payload_test() ->
-    Kp = macula_identity:generate(),
-    Signed = macula_frame:sign_publisher(sample_publish(Kp), Kp),
-    Tampered = Signed#{payload => <<"evil">>},
-    ?assertEqual({error, signature_invalid},
-                 macula_frame:verify_publisher(Tampered)).
-
-verify_publisher_rejects_wrong_publisher_test() ->
-    Kp1 = macula_identity:generate(),
-    Kp2 = macula_identity:generate(),
-    %% Signed by Kp1 but the frame claims Kp2 published it.
-    F = (sample_publish(Kp1))#{publisher => macula_identity:public(Kp2)},
-    Signed = macula_frame:sign_publisher(F, Kp1),
-    ?assertEqual({error, signature_invalid},
-                 macula_frame:verify_publisher(Signed)).
-
-verify_publisher_reports_absence_test() ->
-    ?assertEqual({error, no_publisher_sig},
-                 macula_frame:verify_publisher(sample_publish(
-                     macula_identity:generate()))).
-
-%% `publisher_sig' must NOT be covered by the frame's own per-hop
-%% `signature' — adding it after signing must leave the per-hop
-%% signature valid.
-publisher_sig_outside_per_hop_signature_test() ->
-    Kp = macula_identity:generate(),
-    Signed = macula_frame:sign(sample_publish(Kp), Kp),
-    WithPubSig = macula_frame:sign_publisher(Signed, Kp),
-    ?assertMatch({ok, _},
-                 macula_frame:verify(WithPubSig, macula_identity:public(Kp))).
-
-publisher_sig_wire_roundtrip_test() ->
-    Kp = macula_identity:generate(),
-    F = macula_frame:sign(
-          macula_frame:sign_publisher(sample_publish(Kp), Kp), Kp),
-    {ok, D, <<>>} = macula_frame:decode(macula_frame:encode(F)),
-    ?assertEqual(F, D),
-    ?assertMatch({ok, _}, macula_frame:verify_publisher(D)),
-    ?assertMatch({ok, _}, macula_frame:verify(D, macula_identity:public(Kp))).
-
-sample_publish(Kp) ->
-    macula_frame:publish(#{
-        topic           => <<"io.macula/demo/topic/v1">>,
-        realm           => crypto:strong_rand_bytes(32),
-        publisher       => macula_identity:public(Kp),
-        seq             => 7,
-        payload         => #{a => 1, b => <<"two">>},
-        published_at_ms => 1_000}).
-
-publish_wire_roundtrip_test() ->
-    Kp = macula_identity:generate(),
-    F = macula_frame:sign(macula_frame:publish(#{
-            topic           => <<"t">>,
-            realm           => crypto:strong_rand_bytes(32),
-            publisher       => macula_identity:public(Kp),
-            seq             => 3,
-            payload         => <<"hi">>,
-            published_at_ms => 1_000}), Kp),
-    {ok, D, <<>>} = macula_frame:decode(macula_frame:encode(F)),
-    ?assertEqual(F, D),
-    ?assertMatch({ok, _},
-                 macula_frame:verify(D, macula_identity:public(Kp))).
+%% An EVENT names how its publication was delivered, from a closed set.
+event_refuses_an_unknown_or_dht_delivery_channel_test() ->
+    Publication = #{key => <<1>>, tbs => <<2>>, signature => <<3>>},
+    [?assertError(function_clause, macula_frame:event(#{publication => Publication, delivered_via => Via}))
+     || Via <- [carrier_pigeon, dht]].
 
 subscribe_wire_roundtrip_test() ->
     Kp = macula_identity:generate(),
@@ -1193,86 +783,15 @@ subscribe_wire_roundtrip_test() ->
     {ok, D, <<>>} = macula_frame:decode(macula_frame:encode(F)),
     ?assertEqual(F, D).
 
-event_wire_roundtrip_test() ->
-    Kp = macula_identity:generate(),
-    F = macula_frame:sign(macula_frame:event(#{
-            topic         => <<"t">>,
-            realm         => crypto:strong_rand_bytes(32),
-            publisher     => macula_identity:public(Kp),
-            seq           => 0,
-            payload       => ok,
-            delivered_via => direct}), Kp),
-    {ok, D, <<>>} = macula_frame:decode(macula_frame:encode(F)),
-    ?assertEqual(F, D).
-
 %%------------------------------------------------------------------
-%% advertise / unadvertise — Part 6 §5.5
+%% ADVERTISE and UNADVERTISE carry the advertisement record and its tombstone: macula_frame_control_fields_tests
 %%------------------------------------------------------------------
-
-advertise_carries_required_fields_test() ->
-    Kp    = macula_identity:generate(),
-    Realm = crypto:strong_rand_bytes(32),
-    Adv   = macula_identity:public(Kp),
-    F     = macula_frame:advertise(#{realm      => Realm,
-                                     procedure  => <<"_p">>,
-                                     advertiser => Adv}),
-    ?assertEqual(advertise, macula_frame:frame_type(F)),
-    ?assertEqual(Realm, maps:get(realm, F)),
-    ?assertEqual(<<"_p">>, maps:get(procedure, F)),
-    ?assertEqual(Adv, maps:get(advertiser, F)),
-    ?assertEqual(#{}, maps:get(options, F)).
-
-advertise_rejects_short_realm_test() ->
-    Adv = macula_identity:public(macula_identity:generate()),
-    ?assertError(function_clause,
-                 macula_frame:advertise(#{realm      => <<0:8>>,
-                                          procedure  => <<"_p">>,
-                                          advertiser => Adv})).
-
-advertise_rejects_short_advertiser_test() ->
-    ?assertError(function_clause,
-                 macula_frame:advertise(#{realm      => <<0:256>>,
-                                          procedure  => <<"_p">>,
-                                          advertiser => <<0:8>>})).
-
-advertise_wire_roundtrip_test() ->
-    Kp = macula_identity:generate(),
-    F = macula_frame:sign(macula_frame:advertise(#{
-            realm      => crypto:strong_rand_bytes(32),
-            procedure  => <<"_realm.membership.join_with_token_v1">>,
-            advertiser => macula_identity:public(Kp),
-            options    => #{rate_limit_qps => 100}}), Kp),
-    {ok, D, <<>>} = macula_frame:decode(macula_frame:encode(F)),
-    ?assertEqual(F, D),
-    ?assertMatch({ok, _},
-                 macula_frame:verify(D, macula_identity:public(Kp))).
-
-unadvertise_carries_required_fields_test() ->
-    Kp    = macula_identity:generate(),
-    Realm = crypto:strong_rand_bytes(32),
-    Adv   = macula_identity:public(Kp),
-    F     = macula_frame:unadvertise(#{realm      => Realm,
-                                       procedure  => <<"_p">>,
-                                       advertiser => Adv}),
-    ?assertEqual(unadvertise, macula_frame:frame_type(F)),
-    ?assertEqual(Realm, maps:get(realm, F)),
-    ?assertEqual(<<"_p">>, maps:get(procedure, F)),
-    ?assertEqual(Adv, maps:get(advertiser, F)).
-
-unadvertise_wire_roundtrip_test() ->
-    Kp = macula_identity:generate(),
-    F = macula_frame:sign(macula_frame:unadvertise(#{
-            realm      => crypto:strong_rand_bytes(32),
-            procedure  => <<"_p">>,
-            advertiser => macula_identity:public(Kp)}), Kp),
-    {ok, D, <<>>} = macula_frame:decode(macula_frame:encode(F)),
-    ?assertEqual(F, D).
 
 %%------------------------------------------------------------------
 %% Content transfer frames — Part 6 §9
 %%------------------------------------------------------------------
 
-mcid()     -> <<1, 1, (crypto:strong_rand_bytes(32))/binary>>.
+mcid()     -> <<2, 16#55, (crypto:strong_rand_bytes(48))/binary>>.
 
 want_carries_blocks_with_priority_test() ->
     M1 = mcid(), M2 = mcid(),
@@ -1337,10 +856,8 @@ manifest_res_carries_manifest_test() ->
     ?assertEqual(manifest_res, macula_frame:frame_type(F)),
     ?assertEqual(Manifest,     maps:get(manifest, F)).
 
-manifest_res_accepts_not_found_test() ->
-    M = mcid(),
-    F = macula_frame:manifest_res(#{mcid => M, manifest => not_found}),
-    ?assertEqual(not_found, maps:get(manifest, F)).
+manifest_res_refuses_not_found_test() ->
+    ?assertError(function_clause, macula_frame:manifest_res(#{mcid => mcid(), manifest => not_found})).
 
 cancel_carries_mcid_list_test() ->
     M1 = mcid(), M2 = mcid(),
@@ -1374,229 +891,12 @@ manifest_res_wire_roundtrip_test() ->
             mcid     => mcid(),
             manifest => #{name => <<"x">>, size => 42}}), Kp),
     {ok, D, <<>>} = macula_frame:decode(macula_frame:encode(F)),
-    ?assertEqual(F, D).
+    ?assertEqual(F#{manifest := #{{text, <<"name">>} => <<"x">>, {text, <<"size">>} => 42}}, D).
 
 %%------------------------------------------------------------------
-%% Streaming RPC frames — Part 6 §5.6
+%% Streaming RPC frames: STREAM_OPEN in macula_frame_request_tests, and STREAM_DATA, STREAM_END,
+%% STREAM_ERROR and STREAM_REPLY in macula_frame_stream_tests
 %%------------------------------------------------------------------
-
-stream_id() -> crypto:strong_rand_bytes(16).
-
-%% -- STREAM_OPEN --------------------------------------------------
-
-stream_open_has_required_header_fields_test() ->
-    F = sample_stream_open(),
-    ?assertEqual(stream_open, macula_frame:frame_type(F)),
-    ?assertEqual(16, byte_size(maps:get(stream_id, F))),
-    ?assertEqual(32, byte_size(maps:get(realm, F))),
-    ?assertEqual(32, byte_size(maps:get(caller, F))),
-    ?assertEqual(server_stream, maps:get(mode, F)),
-    ?assertEqual(<<>>, maps:get(source_route, F)),
-    ?assertEqual(0,    maps:get(retry_budget, F)).
-
-stream_open_with_optional_fields_test() ->
-    Caller = crypto:strong_rand_bytes(32),
-    F = macula_frame:stream_open(#{
-        stream_id    => stream_id(),
-        procedure    => <<"foo.count">>,
-        realm        => crypto:strong_rand_bytes(32),
-        mode         => bidi,
-        args         => #{n => 5},
-        deadline_ms  => erlang:system_time(millisecond) + 5_000,
-        caller       => Caller,
-        source_route => <<1, 2, 3>>,
-        retry_budget => 2
-    }),
-    ?assertEqual(bidi,        maps:get(mode, F)),
-    ?assertEqual(<<1, 2, 3>>, maps:get(source_route, F)),
-    ?assertEqual(2,           maps:get(retry_budget, F)).
-
-stream_open_rejects_wrong_stream_id_size_test() ->
-    ?assertError(function_clause,
-                 macula_frame:stream_open(stream_open_spec_with(stream_id, <<0:64>>))).
-
-stream_open_rejects_unknown_mode_test() ->
-    ?assertError(function_clause,
-                 macula_frame:stream_open(stream_open_spec_with(mode, ohno))).
-
-stream_open_sign_verify_wire_roundtrip_test() ->
-    Kp = macula_identity:generate(),
-    F  = macula_frame:sign(sample_stream_open(macula_identity:public(Kp)), Kp),
-    {ok, D, <<>>} = macula_frame:decode(macula_frame:encode(F)),
-    ?assertEqual(F, D),
-    ?assertMatch({ok, _},
-                 macula_frame:verify(D, macula_identity:public(Kp))).
-
-%% -- STREAM_DATA --------------------------------------------------
-
-stream_data_carries_chunk_test() ->
-    Sid = stream_id(),
-    F = macula_frame:stream_data(#{
-        stream_id => Sid,
-        seq       => 7,
-        encoding  => raw,
-        body      => <<"chunk-bytes">>
-    }),
-    ?assertEqual(stream_data,    macula_frame:frame_type(F)),
-    ?assertEqual(Sid,            maps:get(stream_id, F)),
-    ?assertEqual(7,              maps:get(seq, F)),
-    ?assertEqual(raw,            maps:get(encoding, F)),
-    ?assertEqual(<<"chunk-bytes">>, maps:get(body, F)).
-
-stream_data_msgpack_accepts_term_body_test() ->
-    F = macula_frame:stream_data(#{
-        stream_id => stream_id(),
-        seq       => 0,
-        encoding  => msgpack,
-        body      => #{user => <<"alice">>, n => 3}
-    }),
-    ?assertEqual(msgpack, maps:get(encoding, F)),
-    ?assertEqual(#{user => <<"alice">>, n => 3}, maps:get(body, F)).
-
-stream_data_raw_rejects_non_binary_body_test() ->
-    ?assertError(function_clause,
-                 macula_frame:stream_data(#{
-                     stream_id => stream_id(),
-                     seq       => 0,
-                     encoding  => raw,
-                     body      => 42})).
-
-stream_data_rejects_negative_seq_test() ->
-    ?assertError(function_clause,
-                 macula_frame:stream_data(#{
-                     stream_id => stream_id(),
-                     seq       => -1,
-                     encoding  => raw,
-                     body      => <<>>})).
-
-stream_data_wire_roundtrip_test() ->
-    Kp = macula_identity:generate(),
-    F = macula_frame:sign(macula_frame:stream_data(#{
-            stream_id => stream_id(),
-            seq       => 1,
-            encoding  => raw,
-            body      => <<"hello">>}), Kp),
-    {ok, D, <<>>} = macula_frame:decode(macula_frame:encode(F)),
-    ?assertEqual(F, D).
-
-%% -- STREAM_END ---------------------------------------------------
-
-stream_end_half_close_test() ->
-    Sid = stream_id(),
-    F = macula_frame:stream_end(#{stream_id => Sid, role => send}),
-    ?assertEqual(stream_end, macula_frame:frame_type(F)),
-    ?assertEqual(Sid,        maps:get(stream_id, F)),
-    ?assertEqual(send,       maps:get(role, F)).
-
-stream_end_full_close_test() ->
-    F = macula_frame:stream_end(#{stream_id => stream_id(), role => both}),
-    ?assertEqual(both, maps:get(role, F)).
-
-stream_end_rejects_unknown_role_test() ->
-    ?assertError(function_clause,
-                 macula_frame:stream_end(#{stream_id => stream_id(),
-                                           role      => recv})).
-
-stream_end_wire_roundtrip_test() ->
-    Kp = macula_identity:generate(),
-    F = macula_frame:sign(macula_frame:stream_end(#{
-            stream_id => stream_id(),
-            role      => both}), Kp),
-    {ok, D, <<>>} = macula_frame:decode(macula_frame:encode(F)),
-    ?assertEqual(F, D).
-
-%% -- STREAM_ERROR -------------------------------------------------
-
-stream_error_carries_code_and_message_test() ->
-    Sid = stream_id(),
-    F = macula_frame:stream_error(#{
-        stream_id => Sid,
-        code      => <<"deadline_exceeded">>,
-        message   => <<"too slow">>
-    }),
-    ?assertEqual(stream_error,           macula_frame:frame_type(F)),
-    ?assertEqual(Sid,                    maps:get(stream_id, F)),
-    ?assertEqual(<<"deadline_exceeded">>, maps:get(code, F)),
-    ?assertEqual(<<"too slow">>,         maps:get(message, F)).
-
-stream_error_rejects_non_binary_code_test() ->
-    ?assertError(function_clause,
-                 macula_frame:stream_error(#{
-                     stream_id => stream_id(),
-                     code      => deadline_exceeded,
-                     message   => <<"x">>})).
-
-stream_error_wire_roundtrip_test() ->
-    Kp = macula_identity:generate(),
-    F = macula_frame:sign(macula_frame:stream_error(#{
-            stream_id => stream_id(),
-            code      => <<"aborted">>,
-            message   => <<"client gone">>}), Kp),
-    {ok, D, <<>>} = macula_frame:decode(macula_frame:encode(F)),
-    ?assertEqual(F, D).
-
-%% -- STREAM_REPLY -------------------------------------------------
-
-stream_reply_carries_payload_test() ->
-    Sid = stream_id(),
-    Responded = crypto:strong_rand_bytes(32),
-    F = macula_frame:stream_reply(#{
-        stream_id    => Sid,
-        payload      => #{count => 12},
-        responded_by => Responded
-    }),
-    ?assertEqual(stream_reply, macula_frame:frame_type(F)),
-    ?assertEqual(Sid,          maps:get(stream_id, F)),
-    ?assertEqual(#{count => 12}, maps:get(payload, F)),
-    ?assertEqual(Responded,    maps:get(responded_by, F)).
-
-stream_reply_rejects_wrong_responded_by_size_test() ->
-    ?assertError(function_clause,
-                 macula_frame:stream_reply(#{
-                     stream_id    => stream_id(),
-                     payload      => ok,
-                     responded_by => <<0:64>>})).
-
-stream_reply_wire_roundtrip_test() ->
-    Kp = macula_identity:generate(),
-    F = macula_frame:sign(macula_frame:stream_reply(#{
-            stream_id    => stream_id(),
-            payload      => #{count => 12, last => <<"done">>},
-            responded_by => macula_identity:public(Kp)}), Kp),
-    {ok, D, <<>>} = macula_frame:decode(macula_frame:encode(F)),
-    ?assertEqual(F, D),
-    ?assertMatch({ok, _},
-                 macula_frame:verify(D, macula_identity:public(Kp))).
-
-%%------------------------------------------------------------------
-%% Streaming RPC helpers
-%%------------------------------------------------------------------
-
-sample_stream_open() ->
-    sample_stream_open(crypto:strong_rand_bytes(32)).
-
-sample_stream_open(Caller) ->
-    macula_frame:stream_open(#{
-        stream_id   => stream_id(),
-        procedure   => <<"foo.count">>,
-        realm       => crypto:strong_rand_bytes(32),
-        mode        => server_stream,
-        args        => #{n => 5},
-        deadline_ms => erlang:system_time(millisecond) + 5_000,
-        caller      => Caller
-    }).
-
-stream_open_spec_with(Field, BadValue) ->
-    Base = #{
-        stream_id   => stream_id(),
-        procedure   => <<"foo">>,
-        realm       => crypto:strong_rand_bytes(32),
-        mode        => server_stream,
-        args        => ok,
-        deadline_ms => 0,
-        caller      => crypto:strong_rand_bytes(32)
-    },
-    Base#{Field => BadValue}.
 
 %%------------------------------------------------------------------
 %% check_payload/1 — wire admissibility
@@ -1717,16 +1017,50 @@ check_payload_rejects_only_what_cannot_survive_test() ->
 %% stopped being true, and it did. Now it pins the fix.
 float_payload_round_trips_exactly_test() ->
     [begin
-         {ok, Frame, <<>>} = received_round_trip(F),
-         ?assertEqual(F, maps:get(payload, Frame))
+         ?assertEqual({ok, F}, decode_request_payload(F))
      end || F <- [52.34, -1234.5, 0.0, 1.0e300, 1.0e-300, 3.141592653589793]].
 
 
-%% SURVIVES = encodes, decodes as a peer receives it, and comes back
-%% with its structure intact. NOT "did not raise": that predicate is
-%% blind to silent corruption, which is the entire bug class here, and it
-%% let two false oks (oversized payloads, colliding wire keys) sit in a
-%% green suite.
+%% A payload travels in the tbs of a signed CALL. The request builder consults check_payload/1, so a payload the
+%% checker rejects cannot be sent at all; the generated soundness test below guards the unsafe direction.
+decode_request_payload(Term) ->
+    Frame = macula_frame:call(#{request_id => <<1:128>>, realm => <<1:256>>, procedure => <<"p">>, target => <<2:256>>,
+                                deadline => 1, payload => Term}, request_key()),
+    {ok, Decoded, <<>>} = macula_frame:decode(macula_frame:encode(Frame)),
+    {ok, #{payload := Payload}} = macula_frame:verify_request(Decoded, pq_pure),
+    {ok, Payload}.
+
+%% A payload whose keys collide as text, carried past the builder's check in a CALL tbs signed by hand.
+colliding_payload(Colliding) ->
+    Key = request_key(),
+    Wire = maps:from_list([{{text, atom_or_binary(K)}, V} || K := V <- Colliding]),
+    Tbs = #{{text, <<"frame_type">>} => {text, <<"call">>}, {text, <<"caller">>} => macula_node_keys:key_id(Key),
+            {text, <<"request_id">>} => <<1:128>>, {text, <<"realm">>} => <<1:256>>,
+            {text, <<"procedure">>} => {text, <<"p">>}, {text, <<"target">>} => <<2:256>>,
+            {text, <<"deadline">>} => 1, {text, <<"payload">>} => Wire},
+    Frame = #{version => macula_frame:version(macula_frame:ping(#{nonce => <<0:128>>})), frame_type => call,
+              request => macula_signed_object:sign(<<"MACULA-PQ-REQUEST-V1">>, Tbs, Key)},
+    {ok, #{payload := Payload}} = macula_frame:verify_request(Frame, pq_pure),
+    Payload.
+
+atom_or_binary(A) when is_atom(A) -> atom_to_binary(A);
+atom_or_binary(B) when is_binary(B) -> B.
+
+%% One caller key for every payload round trip in this module, made once.
+request_key() ->
+    request_key(persistent_term:get({?MODULE, request_key}, undefined)).
+
+request_key(undefined) ->
+    {ok, Key} = macula_node_keys:generate(identity, pq_pure),
+    persistent_term:put({?MODULE, request_key}, Key),
+    Key;
+request_key(Key) ->
+    Key.
+
+%% SURVIVES = encodes, decodes, and comes back with its structure
+%% intact. NOT "did not raise": that predicate is blind to silent
+%% corruption, which is the entire bug class here, and it let two false
+%% oks (oversized payloads, colliding wire keys) sit in a green suite.
 %%
 %% Leaf identity is deliberately NOT asserted, because the wire aliases
 %% leaves by design: an atom, and a `{text, Binary}' of the same name,
@@ -1734,22 +1068,12 @@ float_payload_round_trips_exactly_test() ->
 %% receiving node knows the atom. Node count is invariant under that
 %% aliasing and still changes the moment a map pair is swallowed.
 survives(Term) ->
-    try received_round_trip(Term) of
-        {ok, Frame, <<>>} -> intact(Term, maps:get(payload, Frame));
-        _Other            -> false
+    try decode_request_payload(Term) of
+        {ok, Payload} -> intact(Term, Payload);
+        _Other        -> false
     catch
         _:_ -> false
     end.
-
-%% A payload's trip over the wire to a peer. decode/1 checks the fields
-%% of a received frame and refuses a map without frame_type, so the
-%% payload travels in a RESULT frame, whose payload may be any term.
-received_round_trip(Payload) ->
-    macula_frame:decode(macula_frame:encode(result_carrying(Payload))).
-
-result_carrying(Payload) ->
-    #{frame_type => result, call_id => <<0:128>>, responded_by => <<0:256>>,
-      payload => Payload}.
 
 %% Structure AND leaves. Node count alone was not enough: it cannot see
 %% 52.34 arrive as {text, <<"52.34">>}, so survives(52.34) was true and
@@ -1837,15 +1161,13 @@ check_payload_rejects_colliding_wire_keys_test() ->
 
 collision_actually_loses_data_test() ->
     Colliding = #{foo => 1, <<"foo">> => 2},
-    {ok, Frame, <<>>} = received_round_trip(Colliding),
     ?assertEqual(2, maps:size(Colliding)),
-    ?assertEqual(1, maps:size(maps:get(payload, Frame))).
+    ?assertEqual(1, maps:size(colliding_payload(Colliding))).
 
-%% check_frame/1 guards the whole frame at the send_frame seam, but must
-%% not judge record fields — those go through macula_record:encode/1.
-check_frame_ignores_record_fields_test() ->
-    ?assertEqual(ok, macula_frame:check_frame(
-                       #{frame_type => publish, record => #{f => {a, b}}})),
+%% check_frame/1 guards the whole frame at the send_frame seam. Records travel as
+%% their wire bytes, so every field is judged the same way.
+check_frame_judges_every_field_test() ->
+    ?assertEqual(ok, macula_frame:check_frame(#{frame_type => store, record => <<"record bytes">>})),
     ?assertMatch({error, {unsupported_payload_type, tuple, [payload]}},
                  macula_frame:check_frame(
                    #{frame_type => publish, payload => {a, b}})).
@@ -1871,3 +1193,9 @@ survives_detects_the_float_rewrite_test() ->
     %% ...while the wire's deliberate atom/text aliasing is NOT flagged.
     ?assert(survives(an_atom)),
     ?assert(survives(#{<<"k">> => [1, <<"two">>, undefined]})).
+
+%% The post-quantum format has only tag 2, SHA-384 (D24): a BLAKE3 id, tag 1, is refused in content frames.
+content_frames_reject_a_blake3_mcid_test_() ->
+    Blake3 = <<1, 16#55, 0:256>>,
+    [?_assertError(function_clause, macula_frame:block(#{mcid => Blake3, payload => <<"x">>})),
+     ?_assertError(function_clause, macula_frame:manifest_req(#{mcid => Blake3}))].

@@ -1,128 +1,82 @@
+%% EUnit tests for content announcements in the signed-object format: the announcer signs its own announcement of a
+%% tag 2 content id, and the announcement is stored under the content id's storage key, so every announcer of one
+%% content id shares a slot.
 -module(macula_record_content_announcement_tests).
+
 -include_lib("eunit/include/eunit.hrl").
 
-mcid()     -> <<1, 16#56, (crypto:strong_rand_bytes(32))/binary>>.
-keypair()  -> macula_identity:generate().
-station()  -> Kp = keypair(), {Kp, macula_identity:public(Kp)}.
+-define(LABEL, <<"MACULA-PQ-RECORD-V1">>).
+-define(HOUR, 3600000).
 
-constructor_3_arg_carries_announcer_mcid_endpoint_test() ->
-    {_Kp, Pub} = station(),
-    M = mcid(),
-    R = macula_record:content_announcement(Pub, M, <<"quic://h:4">>),
-    ?assertEqual(16#11, macula_record:type(R)),
-    ?assertEqual(Pub,   macula_record:key(R)).
+the_payload_names_announcer_content_id_and_endpoint_test() ->
+    R = macula_record:content_announcement(fill(1), mcid(), <<"quic://beam00.lab:4433">>),
+    ?assertEqual(#{{text, <<"announcer_node">>} => fill(1), {text, <<"mcid">>} => mcid(),
+                   {text, <<"endpoint">>} => {text, <<"quic://beam00.lab:4433">>}},
+                 macula_record:payload(R)).
 
-constructor_4_arg_with_metadata_test() ->
-    {_Kp, Pub} = station(),
-    M = mcid(),
-    R = macula_record:content_announcement(Pub, M, <<"quic://h:4">>,
-                                            #{name => <<"file.txt">>,
-                                              size => 4096,
-                                              chunk_count => 2}),
-    Payload = macula_record:payload(R),
-    ?assertEqual({text, <<"file.txt">>},
-                 maps:get({text, <<"name">>}, Payload)),
-    ?assertEqual(4096,
-                 maps:get({text, <<"size">>}, Payload)),
-    ?assertEqual(2,
-                 maps:get({text, <<"chunk_count">>}, Payload)).
+metadata_is_carried_when_given_test() ->
+    R = macula_record:content_announcement(fill(1), mcid(), <<"quic://h:1">>,
+                                           #{name => <<"report.pdf">>, size => 1048576, chunk_count => 4}),
+    P = macula_record:payload(R),
+    ?assertEqual({text, <<"report.pdf">>}, maps:get({text, <<"name">>}, P)),
+    ?assertEqual(1048576, maps:get({text, <<"size">>}, P)),
+    ?assertEqual(4, maps:get({text, <<"chunk_count">>}, P)).
 
-constructor_rejects_short_mcid_test() ->
-    {_Kp, Pub} = station(),
-    ?assertError(function_clause,
-                 macula_record:content_announcement(
-                   Pub, <<"too short">>, <<"quic://h:4">>)).
+the_constructor_refuses_a_content_id_that_is_not_tag_2_sha384_test() ->
+    ?assertError(function_clause, macula_record:content_announcement(fill(1), <<2, 16#55, 0:256>>, <<"e">>)),
+    ?assertError(function_clause, macula_record:content_announcement(fill(1), <<1, 16#55, 0:384>>, <<"e">>)).
 
-sign_verify_roundtrip_test() ->
-    {Kp, Pub} = station(),
-    R = macula_record:content_announcement(Pub, mcid(), <<"e">>),
-    Signed = macula_record:sign(R, Kp),
-    ?assertMatch({ok, _}, macula_record:verify(Signed)).
+a_signed_announcement_verifies_test() ->
+    Id = key(),
+    Unsigned = macula_record:content_announcement(macula_node_keys:key_id(Id), mcid(), <<"quic://h:1">>),
+    R = macula_record:sign(Unsigned, Id),
+    ?assertMatch({ok, _}, macula_record:verify(macula_record:encode(R), pq_pure)).
 
-encode_decode_roundtrip_test() ->
-    {Kp, Pub} = station(),
-    R = macula_record:content_announcement(
-          Pub, mcid(), <<"quic://h:4">>,
-          #{name => <<"x">>, size => 1, chunk_count => 1}),
-    Signed = macula_record:sign(R, Kp),
-    Bin = macula_record:encode(Signed),
-    {ok, Decoded} = macula_record:decode(Bin),
-    ?assertEqual(macula_record:type(Signed),    macula_record:type(Decoded)),
-    ?assertEqual(macula_record:key(Signed),     macula_record:key(Decoded)),
-    ?assertEqual(macula_record:payload(Signed), macula_record:payload(Decoded)),
-    ?assertMatch({ok, _}, macula_record:verify(Decoded)).
+sign_refuses_an_announcement_for_another_announcer_test() ->
+    ?assertError({key_id_mismatch, _},
+                 macula_record:sign(macula_record:content_announcement(fill(9), mcid(), <<"quic://h:1">>), key())).
 
-%%------------------------------------------------------------------
-%% storage_key/1 — was a `function_clause' crash for every
-%% content_announcement (type 0x11 is below DOMAIN_TYPE_MIN, so it
-%% never reached the generic domain-type clauses). Fixed to key by
-%% SHA-256(MCID), matching content_key/1 and macula-station's
-%% independent macula_content_dht:dht_key/1.
-%%------------------------------------------------------------------
+a_verifier_refuses_a_content_id_that_is_not_tag_2_test() ->
+    Id = key(),
+    Now = erlang:system_time(millisecond),
+    Payload = #{{text, <<"announcer_node">>} => macula_node_keys:key_id(Id), {text, <<"mcid">>} => <<1, 16#55, 0:384>>,
+                {text, <<"endpoint">>} => {text, <<"quic://h:1">>}},
+    Fields = #{{text, <<"type">>} => 16#11, {text, <<"version">>} => macula_record_uuid:v7_monotonic(Now),
+               {text, <<"created_at">>} => Now, {text, <<"expires_at">>} => Now + ?HOUR,
+               {text, <<"payload">>} => Payload},
+    ?assertEqual({error, malformed},
+                 macula_record:verify(macula_signed_object:sign(?LABEL, Fields, Id), pq_pure)).
 
-storage_key_matches_content_key_test() ->
-    {Kp, Pub} = station(),
-    M = mcid(),
-    R = macula_record:sign(
-          macula_record:content_announcement(Pub, M, <<"quic://h:4">>), Kp),
-    ?assertEqual(macula_record:content_key(M), macula_record:storage_key(R)).
+every_announcer_of_one_content_id_shares_its_slot_test() ->
+    Key = fun(Announcer) ->
+        macula_record:storage_key(macula_record:content_announcement(Announcer, mcid(), <<"e">>))
+    end,
+    ?assertEqual(macula_record:content_key(mcid()), Key(fill(1))),
+    ?assertEqual(Key(fill(1)), Key(fill(2))).
 
-%% Two different hosts announcing the SAME MCID must land in the SAME
-%% bag slot — storage_key keys on the MCID, not the announcer (the
-%% envelope `key'), so `find_records' can see every provider.
-storage_key_same_for_different_announcers_test() ->
-    {KpA, PubA} = station(),
-    {KpB, PubB} = station(),
-    M = mcid(),
-    RA = macula_record:sign(
-           macula_record:content_announcement(PubA, M, <<"quic://a:4">>), KpA),
-    RB = macula_record:sign(
-           macula_record:content_announcement(PubB, M, <<"quic://b:4">>), KpB),
-    ?assertEqual(macula_record:storage_key(RA), macula_record:storage_key(RB)).
+content_key_refuses_a_content_id_of_the_wrong_size_test() ->
+    ?assertError(function_clause, macula_record:content_key(<<2, 16#55, 0:256>>)).
 
-content_key_rejects_wrong_size_test() ->
-    ?assertError(function_clause, macula_record:content_key(<<"too short">>)).
-
-%%------------------------------------------------------------------
-%% read_content_announcement/1
-%%------------------------------------------------------------------
-
-read_content_announcement_canonical_test() ->
-    {_Kp, Pub} = station(),
-    M = mcid(),
-    R = macula_record:content_announcement(
-          Pub, M, <<"quic://h:4">>,
-          #{name => <<"file.txt">>, size => 4096, chunk_count => 2}),
-    ?assertEqual(#{announcer_node => Pub, mcid => M,
-                   endpoint => <<"quic://h:4">>, name => <<"file.txt">>,
-                   size => 4096, chunk_count => 2},
-                 macula_record:read_content_announcement(R)).
-
-%% Unset opts read back as `undefined', not a KeyError.
-read_content_announcement_no_metadata_test() ->
-    {_Kp, Pub} = station(),
-    M = mcid(),
-    R = macula_record:content_announcement(Pub, M, <<"quic://h:4">>),
-    ?assertEqual(#{announcer_node => Pub, mcid => M,
-                   endpoint => <<"quic://h:4">>, name => undefined,
-                   size => undefined, chunk_count => undefined},
-                 macula_record:read_content_announcement(R)).
-
-%% The frame decoder atomises payload keys when a record is returned
-%% inside an RPC result (the SDK `find_records/2' path) — same shape
-%% that broke the procedure_advertisement reader before it was made
-%% robust. Prove content_announcement's reader handles it too.
-read_content_announcement_atom_keys_test() ->
-    {_Kp, Pub} = station(),
-    M = mcid(),
-    Rec = #{type    => 16#11,
-            payload => #{announcer_node => Pub,
-                         mcid           => {text, M},
-                         endpoint       => <<"quic://h:4">>,
-                         name           => {text, <<"x">>},
-                         size           => 10,
-                         chunk_count    => 1}},
-    ?assertEqual(#{announcer_node => Pub, mcid => M,
-                   endpoint => <<"quic://h:4">>, name => <<"x">>,
+read_content_announcement_returns_the_typed_payload_test() ->
+    Id = key(),
+    NodeId = macula_node_keys:key_id(Id),
+    Full = macula_record:content_announcement(NodeId, mcid(), <<"quic://h:1">>,
+                                              #{name => <<"a.bin">>, size => 10, chunk_count => 1}),
+    {ok, V} = macula_record:verify(macula_record:encode(macula_record:sign(Full, Id)), pq_pure),
+    ?assertEqual(#{announcer_node => NodeId, mcid => mcid(), endpoint => <<"quic://h:1">>, name => <<"a.bin">>,
                    size => 10, chunk_count => 1},
-                 macula_record:read_content_announcement(Rec)).
+                 macula_record:read_content_announcement(V)),
+    ?assertEqual(#{announcer_node => NodeId, mcid => mcid(), endpoint => <<"quic://h:1">>, name => undefined,
+                   size => undefined, chunk_count => undefined},
+                 macula_record:read_content_announcement(macula_record:content_announcement(NodeId, mcid(),
+                                                                                            <<"quic://h:1">>))).
+
+key() ->
+    {ok, Key} = macula_node_keys:generate(identity, pq_pure),
+    Key.
+
+mcid() ->
+    <<2, 16#55, (binary:copy(<<16#88>>, 48))/binary>>.
+
+fill(Byte) ->
+    binary:copy(<<Byte>>, 32).

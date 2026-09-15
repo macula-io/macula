@@ -10,16 +10,17 @@
 %%
 %% PLAN_WIRE_CBOR.md migrated this codec from BERT to CBOR so
 %% hecate-station and the macula 3.x SDK share a wire format. Frame
-%% schemas (atom-keyed maps in process memory) are unchanged; the codec
-%% transparently round-trips atom keys/values to text strings on the wire
-%% and reconstitutes them via `binary_to_existing_atom' on decode.
+%% schemas (atom-keyed maps in process memory) are unchanged. Atoms go out
+%% as text; on decode a frame type's own fields come back through a fixed
+%% table, and peer-supplied maps keep the one key form (D26).
 %%
 %% Phase 1 covers CONNECT / HELLO / GOODBYE. Phase 2 adds SWIM. Phase 3
 %% (Session 3.4) adds the DHT operation frames from Part 6 §7:
-%% PING / PONG, FIND_NODE / NODES, FIND_VALUE / VALUE, STORE / STORE_ACK,
-%% REPLICATE / REPLICATE_ACK. Phase 4 (Session 4.1) adds the CALL /
-%% RESULT / ERROR frames from Part 6 §5 plus the BOLT#4 error
-%% taxonomy in `hecate_bolt4'. PUBLISH frames land later.
+%% PING / PONG, FIND_NODE / NODES, FIND_VALUE / VALUE and STORE / STORE_ACK.
+%% CALL and STREAM_OPEN carry a request signed by the caller, RESULT and
+%% ERROR a reply signed by the provider, and ERROR and STREAM_ERROR from a
+%% station a relay error signed by that station (D25). PUBLISH frames land
+%% later.
 %%
 %% Signatures are Ed25519 over `"macula-v2-frame\0" ++ canonical_cbor(unsigned)'
 %% where `canonical_cbor' is `macula_cbor_nif:pack_deterministic/1' (RFC 8949
@@ -35,20 +36,19 @@
     %% Constructors — SWIM
     swim_ping/1, swim_ack/1, swim_suspect/1, swim_confirm/1,
     swim_update/1,
-    sign_swim_update/2, verify_swim_update/1,
 
     %% Constructors — DHT (Part 6 §7)
     ping/1, pong/1,
     find_node/1, nodes/1,
     find_value/1, value/1,
     store/1, store_ack/1,
-    replicate/1, replicate_ack/1,
 
     %% DHT helper — build and validate a station_ref entry
     station_ref/1,
 
     %% Constructors — CALL (Part 6 §5)
-    call/1, result/1, call_error/1,
+    call/2, result/2, provider_error/2, relay_error/2,
+    verify_request/2, verify_reply/3, verify_relay_error/3,
 
     %% Constructors — HyParView (Part 3 §7.1)
     hyparview_join/1, hyparview_forward_join/1, hyparview_neighbor/1,
@@ -65,7 +65,7 @@
     overlay_relay/1,
 
     %% Constructors — PubSub (Part 6 §6)
-    publish/1, subscribe/1, unsubscribe/1, event/1,
+    publish/2, subscribe/1, unsubscribe/1, event/1, verify_publication/3,
 
     %% Constructors — RPC procedure advertise (connection-scoped,
     %% Part 6 §5.5). Companions to call/result/error: a peer connected
@@ -77,21 +77,25 @@
     advertise/1, unadvertise/1,
 
     %% Constructors — Streaming RPC (Part 6 §5.6)
-    stream_open/1, stream_data/1, stream_end/1,
-    stream_error/1, stream_reply/1,
+    stream_open/2, open_stream/1, provider_stream/3, caller_stream/3,
+    verify_provider_stream/3, verify_caller_stream/3, charged_refusal/1,
 
     %% Constructors — Content transfer (Part 6 §9)
     want/1, have/1, block/1,
     manifest_req/1, manifest_res/1, cancel/1,
 
+    %% Neighbour signatures on control frames in pq_hybrid (D17)
+    control_frame/1, neighbour_signed/2, sign_neighbour/3, verify_neighbour/2,
+
     %% Sign / verify frame
     sign/2, verify/2,
 
-    %% Publisher-end-to-end pubsub signature (PUBLISH / EVENT frames)
-    sign_publisher/2, verify_publisher/1,
-
     %% Wire codec — single frame
     encode/1, decode/1,
+
+    %% Wire codec for the post-quantum handshake: frame CBOR bytes exactly as
+    %% sent and received, which the connection proof hashes
+    encode_bytes/1, parse_stream_bytes/1, parse_stream_bytes/2, read_wire/1,
 
     %% Sendability, checked before a frame is cast at a peering
     %% connection. Mirrors `to_wire/1' + `macula_record_cbor'.
@@ -132,9 +136,8 @@
     find_node_spec/0, nodes_spec/0,
     find_value_spec/0, value_spec/0,
     store_spec/0, store_ack_spec/0,
-    replicate_spec/0, replicate_ack_spec/0,
     station_ref/0, station_ref_spec/0,
-    call_spec/0, result_spec/0, call_error_spec/0,
+    request_spec/0, verified_request/0,
     call_id/0,
     hyparview_join_spec/0, hyparview_forward_join_spec/0,
     hyparview_neighbor_spec/0, hyparview_disconnect_spec/0,
@@ -144,26 +147,53 @@
     plumtree_graft_spec/0, plumtree_prune_spec/0,
     msg_id/0,
     overlay_relay_spec/0,
-    publish_spec/0, subscribe_spec/0, unsubscribe_spec/0, event_spec/0,
+    publish_spec/0, subscribe_spec/0, unsubscribe_spec/0, event_spec/0, verified_publication/0,
     advertise_spec/0, unadvertise_spec/0,
     delivery_channel/0,
     stream_id/0, stream_mode/0, stream_encoding/0, stream_role/0,
-    stream_open_spec/0, stream_data_spec/0, stream_end_spec/0,
-    stream_error_spec/0, stream_reply_spec/0,
+    stream_spec/0, stream_state/0,
     mcid/0, want_priority/0, want_entry/0, have_entry/0,
     want_spec/0, have_spec/0, block_spec/0,
     manifest_req_spec/0, manifest_res_spec/0, cancel_spec/0
 ]).
 
 -define(SIG_DOMAIN,        "macula-v2-frame\0").
--define(SWIM_UPDATE_DOMAIN, "macula-v2-swim-update\0").
-%% Domain-separated signing context for the publisher-end-to-end
-%% pubsub signature (`publisher_sig'). Distinct from ?SIG_DOMAIN so a
-%% per-frame signature can never be replayed as a publisher signature
-%% or vice versa.
--define(EVENT_PUBLISHER_DOMAIN, "macula-v2-event-pub\0").
 -define(PROTOCOL_VERSION,   2).
+%% A HyParView SHUFFLE or FORWARD_JOIN ttl and a FORWARD_JOIN arwl are at most 8, and a peer_sample holds at
+%% most 7 node_ids (DESIGN_PQ_SIGNED_FRAMES_AND_RECORDS.md, DHT and HyParView fields).
+-define(HYPARVIEW_MAX_WALK, 8).
+-define(HYPARVIEW_MAX_SAMPLE, 7).
+%% A freshness refusal is charged only when it is more than 10 minutes past the moment its rule starts refusing
+%% (DESIGN_PQ_DHT_SLOTS_AND_BUDGET.md, 3.1).
+-define(FRESHNESS_CHARGE_AFTER_MS, 10 * 60000).
 -define(MAX_FRAME_BYTES,    16#FFFFFF).   %% 16 MiB cap (Part 6 §2.2).
+%% A payload sits in the frame map, so a container at payload path length L
+%% is at nesting depth L + 2, and the decoding rule allows depth 64.
+-define(MAX_PAYLOAD_NESTING, 62).
+%% A GOODBYE reason is text for people, bounded because it ends up in logs.
+-define(MAX_GOODBYE_REASON_BYTES, 256).
+%% A protocol integer in a signed structure stays below 2^53 (the decoding rule).
+-define(MAX_PROTOCOL_INT, 1 bsl 53).
+-define(REQUEST_LABEL, <<"MACULA-PQ-REQUEST-V1">>).
+-define(REPLY_LABEL, <<"MACULA-PQ-REPLY-V1">>).
+-define(RELAY_ERROR_LABEL, <<"MACULA-PQ-RELAY-ERROR-V1">>).
+%% The relay error codes, a closed set disjoint from every provider code (D25 item 7).
+-define(RELAY_CODES, [unknown_next_peer]).
+-define(STREAM_LABEL, <<"MACULA-PQ-STREAM-V1">>).
+-define(CALLER_STREAM_LABEL, <<"MACULA-PQ-CALLER-STREAM-V1">>).
+-define(PUBLICATION_LABEL, <<"MACULA-PQ-PUBLICATION-V1">>).
+%% A publication verifies from 5 minutes before its published_at until its ttl_ms, or 10 minutes without one, plus 5.
+-define(PUBLICATION_TOLERANCE_MS, 5 * 60000).
+-define(PUBLICATION_DEFAULT_TTL_MS, 10 * 60000).
+-define(PUBLICATION_MAX_TTL_MS, 60 * 60000).
+-define(NEIGHBOUR_LABEL, <<"MACULA-PQ-NEIGHBOUR-V1">>).
+%% The control frames, which pq_hybrid neighbour-signs (D17). Data frames carry their own end-to-end signatures.
+-define(NEIGHBOUR_SIGNED,
+        [swim_ping, swim_ack, swim_suspect, swim_confirm, ping, pong, find_node, nodes, find_value, value,
+         store, store_ack, advertise, unadvertise, subscribe, unsubscribe,
+         overlay_relay, hyparview_join, hyparview_forward_join, hyparview_neighbor, hyparview_disconnect,
+         hyparview_shuffle, hyparview_shuffle_reply, plumtree_ihave, plumtree_graft, plumtree_prune,
+         goodbye]).
 
 -type frame_type() :: connect | hello | goodbye
                     | swim_ping | swim_ack | swim_suspect | swim_confirm
@@ -171,7 +201,6 @@
                     | find_node | nodes
                     | find_value | value
                     | store | store_ack
-                    | replicate | replicate_ack
                     | call | result | error
                     | hyparview_join | hyparview_forward_join
                     | hyparview_neighbor | hyparview_disconnect
@@ -218,20 +247,19 @@
 }.
 
 -type swim_update_spec() :: #{
-    target      := macula_identity:pubkey(),
+    target      := id256(),
     state       := member_state(),
     incarnation := non_neg_integer(),
     observed_at := pos_integer(),
-    by          := macula_identity:pubkey()
+    by          := id256()
 }.
 
 -type swim_update() :: #{
-    target      := macula_identity:pubkey(),
+    target      := id256(),
     state       := member_state(),
     incarnation := non_neg_integer(),
     observed_at := pos_integer(),
-    by          := macula_identity:pubkey(),
-    signature   => <<_:512>>
+    by          := id256()
 }.
 
 -type swim_ping_spec() :: #{
@@ -242,15 +270,15 @@
 
 -type swim_ack_spec() :: #{
     round       := non_neg_integer(),
-    responder   := macula_identity:pubkey(),
+    responder   := id256(),
     incarnation := non_neg_integer(),
     piggyback   => [swim_update()]
 }.
 
 -type swim_suspect_spec() :: #{
-    target             := macula_identity:pubkey(),
+    target             := id256(),
     target_incarnation := non_neg_integer(),
-    suspected_by       := macula_identity:pubkey(),
+    suspected_by       := id256(),
     ttl                := non_neg_integer()
 }.
 
@@ -269,8 +297,8 @@
 -type country() :: <<_:16>>.
 
 -type station_ref_spec() :: #{
-    node_id      := macula_identity:pubkey(),
-    station_id   := macula_identity:pubkey(),
+    node_id      := id256(),
+    station_id   := id256(),
     addresses    => [map()],
     tier         := tier(),
     asn          => non_neg_integer() | undefined,
@@ -279,8 +307,8 @@
 }.
 
 -type station_ref() :: #{
-    node_id      := macula_identity:pubkey(),
-    station_id   := macula_identity:pubkey(),
+    node_id      := id256(),
+    station_id   := id256(),
     addresses    := [map()],
     tier         := tier(),
     asn          := non_neg_integer() | undefined,
@@ -293,7 +321,7 @@
 
 -type find_node_spec()     :: #{
     key    := id256(),
-    origin := macula_identity:pubkey(),
+    origin := id256(),
     depth  := non_neg_integer()
 }.
 
@@ -304,30 +332,19 @@
 
 -type find_value_spec()    :: #{
     key    := id256(),
-    origin := macula_identity:pubkey()
+    origin := id256()
 }.
 
 -type value_spec()         :: #{
     key     := id256(),
-    records := [macula_record:m_record()]
+    records := [binary()]
 }.
 
--type store_spec()         :: #{record := macula_record:m_record()}.
+-type store_spec()         :: #{record := binary()}.
 
 -type store_ack_spec()     :: #{
     key    := id256(),
-    stored := boolean(),
-    reason => atom() | undefined
-}.
-
--type replicate_spec()     :: #{
-    record        := macula_record:m_record(),
-    new_custodian := boolean()
-}.
-
--type replicate_ack_spec() :: #{
-    key      := id256(),
-    accepted := boolean()
+    stored := boolean()
 }.
 
 %%------------------------------------------------------------------
@@ -336,34 +353,35 @@
 
 -type call_id() :: <<_:128>>.
 
--type call_spec() :: #{
-    call_id      := call_id(),
-    procedure    := binary(),
+%% A request as its caller gives it to call/2 and stream_open/2 (D25). mode belongs to STREAM_OPEN only, and
+%% source_route and retry_budget are routing fields outside the signature.
+-type request_spec() :: #{
+    request_id   := <<_:128>>,
     realm        := id256(),
+    procedure    := binary(),
+    target       := id256(),
+    deadline     := non_neg_integer(),
     payload      := term(),
-    deadline_ms  := integer(),
-    caller       := macula_identity:pubkey(),
+    mode         => stream_mode(),
+    token        => binary(),
     source_route => binary(),
-    retry_budget => non_neg_integer(),
-    %% Optional capability token (UCAN) presented to a gated provider.
-    %% Empty = none. Rides through the generic wire codec. Slice 7b.
-    ucan_token   => binary()
+    retry_budget => non_neg_integer()
 }.
 
--type result_spec() :: #{
-    call_id              := call_id(),
-    payload              := term(),
-    responded_by         := macula_identity:pubkey(),
-    source_route_reverse => binary()
-}.
-
--type call_error_spec() :: #{
-    call_id              := call_id(),
-    code                 := macula_bolt4:code(),
-    reported_by          := macula_identity:pubkey(),
-    detail               => binary() | undefined,
-    offending_hop        => macula_identity:pubkey() | undefined,
-    source_route_partial => binary()
+%% A request that verified: its fields, the caller's carried key, and request_hash, the SHA-384 of its tbs.
+-type verified_request() :: #{
+    frame_type   := call | stream_open,
+    key          := binary(),
+    request_hash := <<_:384>>,
+    caller       := id256(),
+    request_id   := <<_:128>>,
+    realm        := id256(),
+    procedure    := binary(),
+    target       := id256(),
+    deadline     := non_neg_integer(),
+    payload      := term(),
+    mode         => stream_mode(),
+    token        => binary()
 }.
 
 %%------------------------------------------------------------------
@@ -374,21 +392,19 @@
 
 -type hyparview_join_spec() :: #{
     realm      := id256(),
-    new_member := macula_identity:pubkey(),
+    new_member := id256(),
     %% Signed `realm_member_endorsement' macula_record (see
     %% hecate_overlay's hecate_realm_join module), proving the realm's
     %% admin authorised `new_member' to join. Optional at the type
     %% level since not every realm may require admission-gated JOIN,
-    %% but any realm that does MUST reject a JOIN missing it. Reuses
-    %% the generic `record'-field encode/decode machinery
-    %% (`prepare_records/1'/`restore_records/1') -- pass the decoded
-    %% macula_record map here, not a pre-encoded binary.
-    record     => macula_record:m_record()
+    %% but any realm that does MUST reject a JOIN missing it. The record
+    %% travels as its wire form, as received, and the receiver verifies it.
+    record     => binary()
 }.
 
 -type hyparview_forward_join_spec() :: #{
     realm      := id256(),
-    new_member := macula_identity:pubkey(),
+    new_member := id256(),
     ttl        := non_neg_integer(),
     arwl       := non_neg_integer(),
     prwl       := non_neg_integer(),
@@ -397,7 +413,7 @@
     %% FORWARD_JOIN verifies the same admission proof the original
     %% JOIN carried -- trust is never transitively assumed from
     %% "my neighbour forwarded this to me." See `record' above.
-    record     => macula_record:m_record()
+    record     => binary()
 }.
 
 -type hyparview_neighbor_spec() :: #{
@@ -410,7 +426,7 @@
     %% an ack to a JOIN the receiver itself initiated), so trust is
     %% never assumed just because a frame is shaped like an ack. See
     %% `record' on `hyparview_join_spec()'.
-    record   => macula_record:m_record()
+    record   => binary()
 }.
 
 -type hyparview_disconnect_spec() :: #{
@@ -419,27 +435,26 @@
 
 -type hyparview_shuffle_spec() :: #{
     realm       := id256(),
-    origin      := macula_identity:pubkey(),
+    origin      := id256(),
     ttl         := non_neg_integer(),
-    peer_sample := [macula_identity:pubkey()]
+    peer_sample := [id256()]
 }.
 
 -type hyparview_shuffle_reply_spec() :: #{
     realm       := id256(),
-    peer_sample := [macula_identity:pubkey()]
+    peer_sample := [id256()]
 }.
 
 %%------------------------------------------------------------------
 %% Plumtree frame specs (Part 3 §7.2)
 %%------------------------------------------------------------------
 
--type msg_id() :: <<_:128>>.
+%% A publication's id in Plumtree bookkeeping: the SHA-384 of its tbs.
+-type msg_id() :: <<_:384>>.
 
 -type plumtree_gossip_spec() :: #{
-    realm   := id256(),
-    msg_id  := msg_id(),
-    round   := non_neg_integer(),
-    payload := term()
+    publication := macula_signed_object:object(),
+    round       := non_neg_integer()
 }.
 
 -type plumtree_ihave_spec() :: #{
@@ -469,7 +484,7 @@
 %%------------------------------------------------------------------
 
 -type overlay_relay_spec() :: #{
-    peer    := macula_identity:pubkey(),
+    peer    := id256(),
     payload := binary()
 }.
 
@@ -477,29 +492,39 @@
 %% PubSub frame specs (Part 6 §6)
 %%------------------------------------------------------------------
 
--type delivery_channel() :: plumtree | dht | direct.
+-type delivery_channel() :: plumtree | direct.
 
+%% A publication as its publisher gives it to publish/2.
 -type publish_spec() :: #{
-    topic           := binary(),
-    realm           := id256(),
-    publisher       := macula_identity:pubkey(),
-    seq             := non_neg_integer(),
-    payload         := term(),
-    published_at_ms := non_neg_integer(),
-    ttl_ms          => non_neg_integer() | undefined,
-    %% Optional publisher-end-to-end signature over the canonical
-    %% tuple (topic, realm, publisher, seq, payload) — see
-    %% `sign_publisher/2'. Carried verbatim through relay hops so any
-    %% consumer can verify authenticity against the publisher
-    %% regardless of which relay delivered it. Absent on legacy
-    %% frames; only emitted when the caller opts in.
-    publisher_sig   => binary()
+    realm        := id256(),
+    topic        := binary(),
+    seq          := non_neg_integer(),
+    published_at := non_neg_integer(),
+    payload      := term(),
+    ttl_ms       => 0..3600000
+}.
+
+%% A publication that verified: its fields, the publisher's carried key, publication_hash, the SHA-384 of its tbs, which
+%% deduplication and Plumtree bookkeeping key on, and expires_at, the last moment a verifier accepts it: published_at
+%% plus its ttl_ms, or 10 minutes without one, plus 5 minutes. A subscriber keeps a delivered publication's hash until
+%% then.
+-type verified_publication() :: #{
+    publisher        := id256(),
+    realm            := id256(),
+    topic            := binary(),
+    seq              := non_neg_integer(),
+    published_at     := non_neg_integer(),
+    ttl_ms           => 0..3600000,
+    payload          := term(),
+    key              := binary(),
+    publication_hash := msg_id(),
+    expires_at       := non_neg_integer()
 }.
 
 -type subscribe_spec() :: #{
     topic      := binary(),
     realm      := id256(),
-    subscriber := macula_identity:pubkey(),
+    subscriber := id256(),
     filter     => term() | undefined,
     options    => map()
 }.
@@ -507,19 +532,13 @@
 -type unsubscribe_spec() :: #{
     topic      := binary(),
     realm      := id256(),
-    subscriber := macula_identity:pubkey()
+    subscriber := id256()
 }.
 
+%% An EVENT carries the publication bytes of the PUBLISH it was made from, unchanged.
 -type event_spec() :: #{
-    topic         := binary(),
-    realm         := id256(),
-    publisher     := macula_identity:pubkey(),
-    seq           := non_neg_integer(),
-    payload       := term(),
-    delivered_via := delivery_channel(),
-    %% See publish_spec()'s `publisher_sig'. Relay stations copy it
-    %% from the inbound PUBLISH onto the EVENT they fan out.
-    publisher_sig => binary()
+    publication   := macula_signed_object:object(),
+    delivered_via := delivery_channel()
 }.
 
 %%------------------------------------------------------------------
@@ -533,18 +552,11 @@
 %% peer_observer's terminate path).
 %%------------------------------------------------------------------
 
--type advertise_spec() :: #{
-    realm      := id256(),
-    procedure  := binary(),
-    advertiser := macula_identity:pubkey(),
-    options    => map()
-}.
+%% ADVERTISE carries the provider's signed procedure advertisement record, and UNADVERTISE the tombstone that
+%% withdraws it, each as record bytes that stations forward unchanged.
+-type advertise_spec() :: #{advertisement := binary()}.
 
--type unadvertise_spec() :: #{
-    realm      := id256(),
-    procedure  := binary(),
-    advertiser := macula_identity:pubkey()
-}.
+-type unadvertise_spec() :: #{withdrawal := binary()}.
 
 %%------------------------------------------------------------------
 %% Streaming RPC frame specs (Part 6 §5.6)
@@ -569,55 +581,39 @@
 
 -type stream_role() :: send | both.
 
--type stream_open_spec() :: #{
-    stream_id    := stream_id(),
-    procedure    := binary(),
-    realm        := id256(),
-    mode         := stream_mode(),
-    args         := term(),
-    deadline_ms  := integer(),
-    caller       := macula_identity:pubkey(),
-    source_route => binary(),
-    retry_budget => non_neg_integer(),
-    ucan_token   => binary()
+%% A stream frame as its sender gives it to provider_stream/3 or caller_stream/3: its type, the sender's own sequence
+%% number and the fields of its type. STREAM_REPLY is the provider's only.
+-type stream_spec() :: #{
+    frame_type := stream_data | stream_end | stream_error | stream_reply,
+    seq        := non_neg_integer(),
+    encoding   => stream_encoding(),
+    body       => term(),
+    role       => stream_role(),
+    code       => binary(),
+    message    => binary(),
+    payload    => term()
 }.
 
--type stream_data_spec() :: #{
-    stream_id := stream_id(),
-    seq       := non_neg_integer(),
-    encoding  := stream_encoding(),
-    body      := term()
-}.
-
--type stream_end_spec() :: #{
-    stream_id := stream_id(),
-    role      := stream_role()
-}.
-
--type stream_error_spec() :: #{
-    stream_id := stream_id(),
-    code      := binary(),
-    message   := binary()
-}.
-
--type stream_reply_spec() :: #{
-    stream_id    := stream_id(),
-    payload      := term(),
-    responded_by := macula_identity:pubkey()
+%% What a verifier holds for one stream: the verified STREAM_OPEN and, per side, the next sequence number and whether
+%% that side has ended; for the provider also the key and signer its first frame carried.
+-type stream_state() :: #{
+    request  := verified_request(),
+    provider := #{next := non_neg_integer(), ended := boolean(), key => binary(), signer => id256()},
+    caller   := #{next := non_neg_integer(), ended := boolean()}
 }.
 
 %%------------------------------------------------------------------
 %% Content transfer frame specs (Part 6 §9)
 %%
-%% MCID — Macula Content IDentifier — 34 bytes:
-%% &lt;&lt;Version:8, Codec:8, Hash:32/binary&gt;&gt;. Block payloads carry
+%% MCID, Macula Content IDentifier, 50 bytes:
+%% &lt;&lt;Tag:8, Codec:8, Hash:48/binary&gt;&gt;, tag 2 for SHA-384 (D24). Block payloads carry
 %% raw chunk bytes; manifest payloads carry the structured manifest
 %% map. Frames are signed by the sender for accountability; the
 %% recipient verifies the signature on top of the per-block /
 %% per-manifest hash check.
 %%------------------------------------------------------------------
 
--type mcid() :: <<_:272>>.
+-type mcid() :: <<_:400>>.
 
 -type want_priority() :: 0..255.
 
@@ -650,7 +646,7 @@
 
 -type manifest_res_spec() :: #{
     mcid     := mcid(),
-    manifest := map() | not_found
+    manifest := map()
 }.
 
 -type cancel_spec() :: #{
@@ -716,8 +712,11 @@ goodbye(Reason, Detail, Caps)
     do_goodbye(Reason, Detail, Caps).
 
 do_goodbye(Reason, Detail, Caps) ->
+    ok = reason_within_bound(byte_size(atom_to_binary(Reason)) =< ?MAX_GOODBYE_REASON_BYTES),
     Header = base(goodbye, Caps),
     Header#{reason => Reason, detail => Detail}.
+
+reason_within_bound(true) -> ok.
 
 %%------------------------------------------------------------------
 %% SWIM frame constructors (Part 6 §8)
@@ -779,9 +778,8 @@ build_suspect_like(Type,
 %%------------------------------------------------------------------
 %% SWIM piggyback updates
 %%
-%% Updates are individually signed by the observer (`by') so piggyback
-%% propagation can be verified end-to-end. Domain separator differs
-%% from the frame signature (`macula-v2-swim-update\0').
+%% An update names its observer in `by' and travels as piggyback inside
+%% PING and ACK frames.
 %%------------------------------------------------------------------
 
 -spec swim_update(swim_update_spec()) -> swim_update().
@@ -799,31 +797,6 @@ swim_update(#{target := T, state := St, incarnation := Inc,
         observed_at => Ts,
         by          => By
     }.
-
--spec sign_swim_update(swim_update(),
-                       macula_identity:key_pair() | macula_identity:privkey()) ->
-    swim_update().
-sign_swim_update(Update, Identity) ->
-    Bytes = canonical_swim_update(Update),
-    Sig = macula_identity:sign([?SWIM_UPDATE_DOMAIN, Bytes], Identity),
-    Update#{signature => Sig}.
-
--spec verify_swim_update(swim_update()) -> {ok, swim_update()} | {error, term()}.
-verify_swim_update(#{signature := Sig, by := By} = Update)
-  when is_binary(Sig), byte_size(Sig) =:= 64,
-       is_binary(By),  byte_size(By)  =:= 32 ->
-    Bytes = canonical_swim_update(Update),
-    verify_update_result(
-        macula_identity:verify([?SWIM_UPDATE_DOMAIN, Bytes], Sig, By),
-        Update);
-verify_swim_update(_Update) ->
-    {error, bad_swim_update}.
-
-verify_update_result(true,  Update) -> {ok, Update};
-verify_update_result(false, _Update) -> {error, signature_invalid}.
-
-canonical_swim_update(Update) ->
-    macula_cbor_nif:pack_deterministic(to_wire(maps:without([signature], Update))).
 
 %%------------------------------------------------------------------
 %% DHT frame constructors (Part 6 §7)
@@ -866,33 +839,19 @@ find_value(#{key := K, origin := O})
 value(#{key := K, records := Rs})
   when is_binary(K), byte_size(K) =:= 32,
        is_list(Rs) ->
-    lists:foreach(fun validate_record/1, Rs),
+    lists:foreach(fun validate_record_bytes/1, Rs),
     (base(value, 0))#{key => K, records => Rs}.
 
 -spec store(store_spec()) -> frame().
-store(#{record := R}) ->
-    validate_record(R),
+store(#{record := R}) when is_binary(R) ->
     (base(store, 0))#{record => R}.
 
+%% A STORE_ACK carries no reason: nothing reads one, so a spec that brings one is refused.
 -spec store_ack(store_ack_spec()) -> frame().
 store_ack(#{key := K, stored := Stored} = Spec)
   when is_binary(K), byte_size(K) =:= 32,
-       is_boolean(Stored) ->
-    Reason = maps:get(reason, Spec, undefined),
-    validate_optional_reason(Reason),
-    (base(store_ack, 0))#{key => K, stored => Stored, reason => Reason}.
-
--spec replicate(replicate_spec()) -> frame().
-replicate(#{record := R, new_custodian := NC})
-  when is_boolean(NC) ->
-    validate_record(R),
-    (base(replicate, 0))#{record => R, new_custodian => NC}.
-
--spec replicate_ack(replicate_ack_spec()) -> frame().
-replicate_ack(#{key := K, accepted := A})
-  when is_binary(K), byte_size(K) =:= 32,
-       is_boolean(A) ->
-    (base(replicate_ack, 0))#{key => K, accepted => A}.
+       is_boolean(Stored), not is_map_key(reason, Spec) ->
+    (base(store_ack, 0))#{key => K, stored => Stored}.
 
 %%------------------------------------------------------------------
 %% station_ref — validated payload for NODES responses
@@ -929,104 +888,241 @@ validate_asn(N) when is_integer(N), N >= 0 -> ok.
 validate_addresses([])                        -> ok;
 validate_addresses([A | Rest]) when is_map(A) -> validate_addresses(Rest).
 
--spec validate_record(macula_record:m_record()) -> ok.
-validate_record(#{type := _, key := <<_:256>>, payload := P}) when is_map(P) ->
+-spec validate_record_bytes(binary()) -> ok.
+validate_record_bytes(Bytes) when is_binary(Bytes) ->
     ok.
 
--spec validate_optional_reason(atom() | undefined) -> ok.
-validate_optional_reason(undefined)                      -> ok;
-validate_optional_reason(R) when is_atom(R), R =/= true, R =/= false -> ok.
-
 %%------------------------------------------------------------------
-%% CALL / RESULT / ERROR constructors (Part 6 §5)
+%% Requests, replies and relay errors (D25)
 %%
-%% CALL is the request envelope; RESULT is the success response;
-%% `call_error/1' (avoids clashing with the auto-imported
-%% `error/1' BIF) builds a structured BOLT#4 failure.
-%%
-%% Source-route fields are accepted as opaque binaries here —
-%% encoding/decoding the source-route header lands in Phase 4
-%% Session 4.2 against `macula_routing'.
+%% CALL and STREAM_OPEN are {version, frame_type, request}, with the routing
+%% fields source_route and retry_budget. request is {key, tbs, signature}
+%% under MACULA-PQ-REQUEST-V1, signed with the caller's identity key, and
+%% its caller is that key's key id. RESULT and ERROR from a provider carry
+%% reply under MACULA-PQ-REPLY-V1, with source_route_reverse; ERROR and
+%% STREAM_ERROR from a station carry relay_error under
+%% MACULA-PQ-RELAY-ERROR-V1, with source_route_partial. A reply and a relay
+%% error name their request by request_id and request_hash. The checks that
+%% belong to a provider or a station, such as its own node_id as target, the
+%% deadline window, replays and tokens, stay with the caller of these
+%% functions.
 %%------------------------------------------------------------------
 
--spec call(call_spec()) -> frame().
-call(#{call_id := CallId, procedure := Proc, realm := Realm,
-       payload := Payload, deadline_ms := DeadlineMs,
-       caller := Caller} = Spec)
-  when is_binary(CallId),  byte_size(CallId) =:= 16,
-       is_binary(Proc),
-       is_binary(Realm),   byte_size(Realm)  =:= 32,
-       is_integer(DeadlineMs),
-       is_binary(Caller),  byte_size(Caller) =:= 32 ->
-    SourceRoute = maps:get(source_route, Spec, <<>>),
-    RetryBudget = maps:get(retry_budget, Spec, 0),
-    validate_source_route(SourceRoute),
-    validate_retry_budget(RetryBudget),
-    Header = base(call, 0),
-    Header#{
-        call_id      => CallId,
-        procedure    => Proc,
-        realm        => Realm,
-        payload      => Payload,
-        deadline_ms  => DeadlineMs,
-        caller       => Caller,
-        source_route => SourceRoute,
-        retry_budget => RetryBudget,
-        ucan_token   => maps:get(ucan_token, Spec, <<>>)
-    }.
+%% @doc Sign a CALL with the caller's identity key.
+-spec call(request_spec(), macula_node_keys:node_key()) -> frame().
+call(Spec, Key) when not is_map_key(mode, Spec) ->
+    request(call, Spec, Key).
 
--spec result(result_spec()) -> frame().
-result(#{call_id := CallId, payload := Payload,
-         responded_by := RespondedBy} = Spec)
-  when is_binary(CallId),       byte_size(CallId) =:= 16,
-       is_binary(RespondedBy),  byte_size(RespondedBy) =:= 32 ->
-    Reverse = maps:get(source_route_reverse, Spec, <<>>),
-    validate_source_route(Reverse),
-    Header = base(result, 0),
-    Header#{
-        call_id              => CallId,
-        payload              => Payload,
-        responded_by         => RespondedBy,
-        source_route_reverse => Reverse
-    }.
+%% @doc Sign a STREAM_OPEN, which carries its stream mode, with the caller's identity key.
+-spec stream_open(request_spec(), macula_node_keys:node_key()) -> frame().
+stream_open(#{mode := Mode} = Spec, Key) when Mode =:= server_stream; Mode =:= client_stream; Mode =:= bidi ->
+    request(stream_open, Spec, Key).
 
--spec call_error(call_error_spec()) -> frame().
-call_error(#{call_id := CallId, code := Code,
-             reported_by := ReportedBy} = Spec)
-  when is_binary(CallId),       byte_size(CallId) =:= 16,
-       is_integer(Code),        Code >= 0, Code =< 255,
-       is_binary(ReportedBy),   byte_size(ReportedBy) =:= 32 ->
-    Name      = macula_bolt4:name(Code),
-    Detail    = maps:get(detail, Spec, undefined),
-    Hop       = maps:get(offending_hop, Spec, undefined),
-    Partial   = maps:get(source_route_partial, Spec, <<>>),
-    validate_optional_detail(Detail),
-    validate_optional_hop(Hop),
-    validate_source_route(Partial),
-    Header = base(error, 0),
-    Header#{
-        call_id              => CallId,
-        code                 => Code,
-        name                 => Name,
-        reported_by          => ReportedBy,
-        detail               => Detail,
-        offending_hop        => Hop,
-        source_route_partial => Partial
-    }.
+request(Type, #{request_id := RequestId, realm := Realm, procedure := Procedure, target := Target,
+                deadline := Deadline, payload := Payload} = Spec, #{purpose := identity} = Key)
+  when byte_size(RequestId) =:= 16, byte_size(Realm) =:= 32, is_binary(Procedure), byte_size(Target) =:= 32,
+       is_integer(Deadline), Deadline >= 0, Deadline < ?MAX_PROTOCOL_INT ->
+    ok = check_payload(Payload),
+    Fields = optional_token(Spec, maps:merge(maps:with([mode], Spec),
+                                             #{frame_type => Type, caller => macula_node_keys:key_id(Key),
+                                               request_id => RequestId, realm => Realm, procedure => {text, Procedure},
+                                               target => Target, deadline => Deadline, payload => Payload})),
+    routed(#{version => ?PROTOCOL_VERSION, frame_type => Type,
+             request => macula_signed_object:sign(?REQUEST_LABEL, to_wire(Fields), Key)},
+           maps:with([source_route, retry_budget], Spec)).
 
--spec validate_source_route(binary()) -> ok.
-validate_source_route(B) when is_binary(B) -> ok.
+optional_token(#{token := Token}, Fields) when is_binary(Token) -> Fields#{token => Token};
+optional_token(Spec, Fields) when not is_map_key(token, Spec) -> Fields.
 
--spec validate_retry_budget(non_neg_integer()) -> ok.
-validate_retry_budget(N) when is_integer(N), N >= 0 -> ok.
+%% @doc Verify a received CALL or STREAM_OPEN under the connection's profile: the request's signature and fields, and
+%% caller as the key id of its key. A station checks this before it routes, a provider before its own checks.
+-spec verify_request(frame(), macula_crypto_profile:profile()) ->
+        {ok, verified_request()} | {error, malformed_frame | signature_invalid | key_id_mismatch}.
+verify_request(#{frame_type := Type, request := Signed} = Frame, Profile) when Type =:= call; Type =:= stream_open ->
+    request_signed(only_fields(Frame, [version, frame_type, request, source_route, retry_budget]),
+                   macula_signed_object:verify(?REQUEST_LABEL, Signed, Profile), Type, Profile);
+verify_request(_Frame, _Profile) ->
+    {error, malformed_frame}.
 
--spec validate_optional_detail(binary() | undefined) -> ok.
-validate_optional_detail(undefined)                  -> ok;
-validate_optional_detail(B) when is_binary(B)        -> ok.
+request_signed(true, {ok, #{key := Key, tbs := Tbs, fields := Fields}}, Type, Profile) ->
+    request_read(read_fields(maps:to_list(Fields), request_table(Type), #{}), Key, Tbs, Type, Profile);
+request_signed(true, {error, signature_invalid}, _Type, _Profile) ->
+    {error, signature_invalid};
+request_signed(_OnlyFields, _Verified, _Type, _Profile) ->
+    {error, malformed_frame}.
 
--spec validate_optional_hop(macula_identity:pubkey() | undefined) -> ok.
-validate_optional_hop(undefined)                              -> ok;
-validate_optional_hop(B) when is_binary(B), byte_size(B) =:= 32 -> ok.
+request_read({ok, #{frame_type := Type, caller := Caller, request_id := _, realm := _, procedure := _, target := _,
+                    deadline := _, payload := _} = Read}, Key, Tbs, Type, Profile) ->
+    request_checked(is_map_key(mode, Read) =:= (Type =:= stream_open),
+                    Caller =:= macula_node_keys:node_id(Key, Profile), Read, Key, Tbs);
+request_read(_NotARequest, _Key, _Tbs, _Type, _Profile) ->
+    {error, malformed_frame}.
+
+request_checked(false, _CallerIsKey, _Read, _Key, _Tbs) ->
+    {error, malformed_frame};
+request_checked(true, false, _Read, _Key, _Tbs) ->
+    {error, key_id_mismatch};
+request_checked(true, true, Read, Key, Tbs) ->
+    {ok, (maps:remove(alg, Read))#{key => Key, request_hash => crypto:hash(sha384, Tbs)}}.
+
+request_table(Type) ->
+    #{<<"frame_type">> => {frame_type, {enum, [Type]}},
+      <<"alg">> => {alg, value},
+      <<"caller">> => {caller, {bytes, 32}},
+      <<"request_id">> => {request_id, {bytes, 16}},
+      <<"realm">> => {realm, {bytes, 32}},
+      <<"procedure">> => {procedure, text},
+      <<"target">> => {target, {bytes, 32}},
+      <<"deadline">> => {deadline, uint},
+      <<"payload">> => {payload, value},
+      <<"mode">> => {mode, {enum, [server_stream, client_stream, bidi]}},
+      <<"token">> => {token, bytes}}.
+
+%% @doc Sign a RESULT for a verified request with the provider's identity key.
+-spec result(#{request := verified_request(), payload := term(), source_route_reverse => binary()},
+             macula_node_keys:node_key()) -> frame().
+result(#{request := Request, payload := Payload} = Spec, Key) ->
+    ok = check_payload(Payload),
+    reply(result, #{payload => Payload}, Request, Spec, Key).
+
+%% @doc Sign a provider's ERROR for a verified request: a code and an optional detail, both text.
+-spec provider_error(#{request := verified_request(), code := binary(), detail => binary(),
+                       source_route_reverse => binary()}, macula_node_keys:node_key()) -> frame().
+provider_error(#{request := Request, code := Code} = Spec, Key) when is_binary(Code) ->
+    reply(error, optional_text(detail, Spec, #{code => {text, Code}}), Request, Spec, Key).
+
+reply(Type, Fields, #{request_id := RequestId, request_hash := RequestHash}, Spec, #{purpose := identity} = Key) ->
+    Tbs = Fields#{frame_type => Type, request_id => RequestId, request_hash => RequestHash,
+                  responded_by => macula_node_keys:key_id(Key)},
+    routed(#{version => ?PROTOCOL_VERSION, frame_type => Type,
+             reply => macula_signed_object:sign(?REPLY_LABEL, to_wire(Tbs), Key)},
+           maps:with([source_route_reverse], Spec)).
+
+%% @doc Verify a received RESULT or provider ERROR for the request it answers: its signature and fields, responded_by
+%% as the key id of its key, the request's request_id and request_hash, and responded_by as the request's target.
+-spec verify_reply(frame(), verified_request(), macula_crypto_profile:profile()) ->
+        {ok, map()} | {error, malformed_frame | signature_invalid | key_id_mismatch | request_mismatch
+                                                                    | not_the_target}.
+verify_reply(#{frame_type := Type, reply := Signed} = Frame, Request, Profile) when Type =:= result; Type =:= error ->
+    reply_signed(only_fields(Frame, [version, frame_type, reply, source_route_reverse]),
+                 macula_signed_object:verify(?REPLY_LABEL, Signed, Profile), Type, Request, Profile);
+verify_reply(_Frame, _Request, _Profile) ->
+    {error, malformed_frame}.
+
+reply_signed(true, {ok, #{key := Key, fields := Fields}}, Type, Request, Profile) ->
+    reply_read(read_fields(maps:to_list(Fields), reply_table(Type), #{}), Key, Type, Request, Profile);
+reply_signed(true, {error, signature_invalid}, _Type, _Request, _Profile) ->
+    {error, signature_invalid};
+reply_signed(_OnlyFields, _Verified, _Type, _Request, _Profile) ->
+    {error, malformed_frame}.
+
+reply_read({ok, #{frame_type := Type, request_id := RequestId, request_hash := RequestHash,
+                  responded_by := RespondedBy} = Read}, Key, Type, Request, Profile) ->
+    reply_checked([reply_shape(Type, Read),
+                   RespondedBy =:= macula_node_keys:node_id(Key, Profile),
+                   {RequestId, RequestHash} =:= request_names(Request),
+                   RespondedBy =:= maps:get(target, Request)], Read);
+reply_read(_NotAReply, _Key, _Type, _Request, _Profile) ->
+    {error, malformed_frame}.
+
+reply_shape(result, Read) ->
+    is_map_key(payload, Read) andalso not is_map_key(code, Read) andalso not is_map_key(detail, Read);
+reply_shape(error, Read) ->
+    is_map_key(code, Read) andalso not is_map_key(payload, Read).
+
+reply_checked([false | _], _Read) -> {error, malformed_frame};
+reply_checked([true, false | _], _Read) -> {error, key_id_mismatch};
+reply_checked([true, true, false | _], _Read) -> {error, request_mismatch};
+reply_checked([true, true, true, false], _Read) -> {error, not_the_target};
+reply_checked([true, true, true, true], Read) -> {ok, maps:without([alg, request_id, request_hash], Read)}.
+
+reply_table(Type) ->
+    #{<<"frame_type">> => {frame_type, {enum, [Type]}},
+      <<"alg">> => {alg, value},
+      <<"request_id">> => {request_id, {bytes, 16}},
+      <<"request_hash">> => {request_hash, {bytes, 48}},
+      <<"responded_by">> => {responded_by, {bytes, 32}},
+      <<"payload">> => {payload, value},
+      <<"code">> => {code, text},
+      <<"detail">> => {detail, text}}.
+
+%% @doc Sign a station's relay error, an ERROR or STREAM_ERROR for a pending request, with the station's identity key.
+-spec relay_error(#{frame_type := error | stream_error, request := verified_request(), code := unknown_next_peer,
+                    detail => binary(), offending_hop => binary(), source_route_partial => binary()},
+                  macula_node_keys:node_key()) -> frame().
+relay_error(#{frame_type := Type, request := #{request_id := RequestId, request_hash := RequestHash},
+              code := Code} = Spec, #{purpose := identity} = Key) when Type =:= error; Type =:= stream_error ->
+    ok = relay_code(lists:member(Code, ?RELAY_CODES)),
+    Tbs = optional_hop(Spec, optional_text(detail, Spec,
+                                           #{frame_type => Type, request_id => RequestId, request_hash => RequestHash,
+                                             reported_by => macula_node_keys:key_id(Key), code => Code})),
+    routed(#{version => ?PROTOCOL_VERSION, frame_type => Type,
+             relay_error => macula_signed_object:sign(?RELAY_ERROR_LABEL, to_wire(Tbs), Key)},
+           maps:with([source_route_partial], Spec)).
+
+relay_code(true) -> ok.
+
+optional_hop(#{offending_hop := Hop}, Fields) when byte_size(Hop) =:= 32 -> Fields#{offending_hop => Hop};
+optional_hop(Spec, Fields) when not is_map_key(offending_hop, Spec) -> Fields.
+
+%% @doc Verify a received relay error for the pending request it names: its signature and fields, reported_by as the
+%% key id of its key, and the request's request_id and request_hash.
+-spec verify_relay_error(frame(), verified_request(), macula_crypto_profile:profile()) ->
+        {ok, map()} | {error, malformed_frame | signature_invalid | key_id_mismatch | request_mismatch}.
+verify_relay_error(#{frame_type := Type, relay_error := Signed} = Frame, Request, Profile)
+  when Type =:= error; Type =:= stream_error ->
+    relay_signed(only_fields(Frame, [version, frame_type, relay_error, source_route_partial]),
+                 macula_signed_object:verify(?RELAY_ERROR_LABEL, Signed, Profile), Type, Request, Profile);
+verify_relay_error(_Frame, _Request, _Profile) ->
+    {error, malformed_frame}.
+
+relay_signed(true, {ok, #{key := Key, fields := Fields}}, Type, Request, Profile) ->
+    relay_read(read_fields(maps:to_list(Fields), relay_error_table(Type), #{}), Key, Type, Request, Profile);
+relay_signed(true, {error, signature_invalid}, _Type, _Request, _Profile) ->
+    {error, signature_invalid};
+relay_signed(_OnlyFields, _Verified, _Type, _Request, _Profile) ->
+    {error, malformed_frame}.
+
+relay_read({ok, #{frame_type := Type, request_id := RequestId, request_hash := RequestHash, reported_by := ReportedBy,
+                  code := _} = Read}, Key, Type, Request, Profile) ->
+    relay_checked([ReportedBy =:= macula_node_keys:node_id(Key, Profile),
+                   {RequestId, RequestHash} =:= request_names(Request)], Read);
+relay_read(_NotARelayError, _Key, _Type, _Request, _Profile) ->
+    {error, malformed_frame}.
+
+relay_checked([false | _], _Read) -> {error, key_id_mismatch};
+relay_checked([true, false], _Read) -> {error, request_mismatch};
+relay_checked([true, true], Read) -> {ok, maps:without([alg, request_id, request_hash], Read)}.
+
+relay_error_table(Type) ->
+    #{<<"frame_type">> => {frame_type, {enum, [Type]}},
+      <<"alg">> => {alg, value},
+      <<"request_id">> => {request_id, {bytes, 16}},
+      <<"request_hash">> => {request_hash, {bytes, 48}},
+      <<"reported_by">> => {reported_by, {bytes, 32}},
+      <<"code">> => {code, {enum, ?RELAY_CODES}},
+      <<"detail">> => {detail, text},
+      <<"offending_hop">> => {offending_hop, {bytes, 32}}}.
+
+request_names(#{request_id := RequestId, request_hash := RequestHash}) ->
+    {RequestId, RequestHash}.
+
+optional_text(Name, Spec, Fields) ->
+    text_field(maps:find(Name, Spec), Name, Fields).
+
+text_field({ok, Text}, Name, Fields) when is_binary(Text) -> Fields#{Name => {text, Text}};
+text_field(error, _Name, Fields) -> Fields.
+
+%% The routing fields a frame carries outside its signed object: a source route as bytes, a retry budget as a
+%% protocol integer.
+routed(Frame, Routing) ->
+    maps:merge(Frame, maps:map(fun routing_value/2, Routing)).
+
+routing_value(retry_budget, Budget) when is_integer(Budget), Budget >= 0, Budget < ?MAX_PROTOCOL_INT -> Budget;
+routing_value(_Route, Route) when is_binary(Route) -> Route.
+
+only_fields(Frame, Allowed) ->
+    map_size(maps:without(Allowed, Frame)) =:= 0.
 
 %%------------------------------------------------------------------
 %% HyParView constructors (Part 3 §7.1)
@@ -1043,9 +1139,9 @@ hyparview_forward_join(#{realm := R, new_member := M,
                          ttl := Ttl, arwl := A, prwl := P} = Spec)
   when is_binary(R), byte_size(R) =:= 32,
        is_binary(M), byte_size(M) =:= 32,
-       is_integer(Ttl), Ttl >= 0,
-       is_integer(A),   A >= 0,
-       is_integer(P),   P >= 0 ->
+       is_integer(Ttl), Ttl >= 0, Ttl =< ?HYPARVIEW_MAX_WALK,
+       is_integer(A),   A >= 0,   A =< ?HYPARVIEW_MAX_WALK,
+       is_integer(P),   P >= 0,   P =< A ->
     with_endorsement(Spec, (base(hyparview_forward_join, 0))#{
         realm => R, new_member => M,
         ttl => Ttl, arwl => A, prwl => P
@@ -1055,7 +1151,7 @@ hyparview_forward_join(#{realm := R, new_member := M,
 %% only set it on the outgoing frame when the caller actually supplied
 %% one, so a realm that doesn't require admission-gated JOIN isn't
 %% forced to carry an empty/dummy record.
-with_endorsement(#{record := R}, Frame) when is_map(R) -> Frame#{record => R};
+with_endorsement(#{record := R}, Frame) when is_binary(R) -> Frame#{record => R};
 with_endorsement(_Spec, Frame) -> Frame.
 
 -spec hyparview_neighbor(hyparview_neighbor_spec()) -> frame().
@@ -1074,8 +1170,8 @@ hyparview_shuffle(#{realm := R, origin := O,
                     ttl := Ttl, peer_sample := S})
   when is_binary(R), byte_size(R) =:= 32,
        is_binary(O), byte_size(O) =:= 32,
-       is_integer(Ttl), Ttl >= 0,
-       is_list(S) ->
+       is_integer(Ttl), Ttl >= 0, Ttl =< ?HYPARVIEW_MAX_WALK,
+       is_list(S), length(S) =< ?HYPARVIEW_MAX_SAMPLE ->
     lists:foreach(fun validate_pubkey/1, S),
     (base(hyparview_shuffle, 0))#{
         realm => R, origin => O, ttl => Ttl, peer_sample => S
@@ -1084,7 +1180,7 @@ hyparview_shuffle(#{realm := R, origin := O,
 -spec hyparview_shuffle_reply(hyparview_shuffle_reply_spec()) -> frame().
 hyparview_shuffle_reply(#{realm := R, peer_sample := S})
   when is_binary(R), byte_size(R) =:= 32,
-       is_list(S) ->
+       is_list(S), length(S) =< ?HYPARVIEW_MAX_SAMPLE ->
     lists:foreach(fun validate_pubkey/1, S),
     (base(hyparview_shuffle_reply, 0))#{
         realm => R, peer_sample => S
@@ -1097,30 +1193,24 @@ validate_pubkey(B) when is_binary(B), byte_size(B) =:= 32 -> ok.
 %% Plumtree constructors (Part 3 §7.2)
 %%------------------------------------------------------------------
 
+%% GOSSIP carries a publication as received, so every node checks it end to end, and a round that stays unsigned.
 -spec plumtree_gossip(plumtree_gossip_spec()) -> frame().
-plumtree_gossip(#{realm := R, msg_id := M, round := Rd,
-                  payload := Payload})
-  when is_binary(R), byte_size(R) =:= 32,
-       is_binary(M), byte_size(M) =:= 16,
-       is_integer(Rd), Rd >= 0 ->
-    (base(plumtree_gossip, 0))#{
-        realm   => R,
-        msg_id  => M,
-        round   => Rd,
-        payload => Payload
-    }.
+plumtree_gossip(#{publication := Publication, round := Round})
+  when is_integer(Round), Round >= 0, Round < ?MAX_PROTOCOL_INT ->
+    #{version => ?PROTOCOL_VERSION, frame_type => plumtree_gossip, publication => publication_object(Publication),
+      round => Round}.
 
 -spec plumtree_ihave(plumtree_ihave_spec()) -> frame().
 plumtree_ihave(#{realm := R, msg_id := M, round := Rd})
   when is_binary(R), byte_size(R) =:= 32,
-       is_binary(M), byte_size(M) =:= 16,
+       is_binary(M), byte_size(M) =:= 48,
        is_integer(Rd), Rd >= 0 ->
     (base(plumtree_ihave, 0))#{realm => R, msg_id => M, round => Rd}.
 
 -spec plumtree_graft(plumtree_graft_spec()) -> frame().
 plumtree_graft(#{realm := R, msg_id := M, round := Rd})
   when is_binary(R), byte_size(R) =:= 32,
-       is_binary(M), byte_size(M) =:= 16,
+       is_binary(M), byte_size(M) =:= 48,
        is_integer(Rd), Rd >= 0 ->
     (base(plumtree_graft, 0))#{realm => R, msg_id => M, round => Rd}.
 
@@ -1142,38 +1232,22 @@ overlay_relay(#{peer := P, payload := Bin})
 %% PubSub constructors (Part 6 §6)
 %%------------------------------------------------------------------
 
--spec publish(publish_spec()) -> frame().
-publish(#{topic := T, realm := R, publisher := Pub, seq := Seq,
-          payload := Payload, published_at_ms := PubAt} = Spec)
-  when is_binary(T),
-       is_binary(R),   byte_size(R)   =:= 32,
-       is_binary(Pub), byte_size(Pub) =:= 32,
-       is_integer(Seq),   Seq   >= 0,
-       is_integer(PubAt), PubAt >= 0 ->
-    Ttl = maps:get(ttl_ms, Spec, undefined),
-    validate_optional_ttl(Ttl),
-    with_optional_publisher_sig(Spec, (base(publish, 0))#{
-        topic           => T,
-        realm           => R,
-        publisher       => Pub,
-        seq             => Seq,
-        payload         => Payload,
-        published_at_ms => PubAt,
-        ttl_ms          => Ttl
-    }).
+%% @doc Sign a publication with the publisher's identity key, as a PUBLISH. Its tbs holds no frame_type, because the
+%% same bytes ride in every EVENT and GOSSIP made from it.
+-spec publish(publish_spec(), macula_node_keys:node_key()) -> frame().
+publish(#{realm := Realm, topic := Topic, seq := Seq, published_at := PublishedAt, payload := Payload} = Spec,
+        #{purpose := identity} = Key)
+  when byte_size(Realm) =:= 32, is_binary(Topic), is_integer(Seq), Seq >= 0, Seq < ?MAX_PROTOCOL_INT,
+       is_integer(PublishedAt), PublishedAt >= 0, PublishedAt < ?MAX_PROTOCOL_INT ->
+    ok = check_payload(Payload),
+    Fields = optional_ttl(Spec, #{publisher => macula_node_keys:key_id(Key), realm => Realm, topic => {text, Topic},
+                                  seq => Seq, published_at => PublishedAt, payload => Payload}),
+    #{version => ?PROTOCOL_VERSION, frame_type => publish,
+      publication => macula_signed_object:sign(?PUBLICATION_LABEL, to_wire(Fields), Key)}.
 
-%% @private Copy a caller-supplied `publisher_sig' (64-byte Ed25519)
-%% onto the frame, if present. Absent → frame unchanged (so legacy
-%% callers produce byte-identical frames). A malformed value is a
-%% caller bug — let it crash rather than ship a frame that won't
-%% verify downstream.
-with_optional_publisher_sig(Spec, Frame) ->
-    case maps:get(publisher_sig, Spec, undefined) of
-        undefined ->
-            Frame;
-        Sig when is_binary(Sig), byte_size(Sig) =:= 64 ->
-            Frame#{publisher_sig => Sig}
-    end.
+optional_ttl(#{ttl_ms := Ttl}, Fields) when is_integer(Ttl), Ttl >= 0, Ttl =< ?PUBLICATION_MAX_TTL_MS ->
+    Fields#{ttl_ms => Ttl};
+optional_ttl(Spec, Fields) when not is_map_key(ttl_ms, Spec) -> Fields.
 
 -spec subscribe(subscribe_spec()) -> frame().
 subscribe(#{topic := T, realm := R, subscriber := Sub} = Spec)
@@ -1202,26 +1276,70 @@ unsubscribe(#{topic := T, realm := R, subscriber := Sub})
         subscriber => Sub
     }.
 
+%% @doc An EVENT for a verified publication, carrying its bytes unchanged and how it was delivered.
 -spec event(event_spec()) -> frame().
-event(#{topic := T, realm := R, publisher := Pub, seq := Seq,
-        payload := Payload, delivered_via := Via} = Spec)
-  when is_binary(T),
-       is_binary(R),   byte_size(R)   =:= 32,
-       is_binary(Pub), byte_size(Pub) =:= 32,
-       is_integer(Seq), Seq >= 0,
-       (Via =:= plumtree orelse Via =:= dht orelse Via =:= direct) ->
-    with_optional_publisher_sig(Spec, (base(event, 0))#{
-        topic         => T,
-        realm         => R,
-        publisher     => Pub,
-        seq           => Seq,
-        payload       => Payload,
-        delivered_via => Via
-    }).
+event(#{publication := Publication, delivered_via := Via}) when Via =:= plumtree; Via =:= direct ->
+    #{version => ?PROTOCOL_VERSION, frame_type => event, publication => publication_object(Publication),
+      delivered_via => Via}.
 
--spec validate_optional_ttl(non_neg_integer() | undefined) -> ok.
-validate_optional_ttl(undefined)                             -> ok;
-validate_optional_ttl(N) when is_integer(N), N >= 0          -> ok.
+publication_object(#{key := Key, tbs := Tbs, signature := Signature} = Publication)
+  when map_size(Publication) =:= 3, is_binary(Key), is_binary(Tbs), is_binary(Signature) ->
+    Publication.
+
+%% @doc Verify the publication a PUBLISH, EVENT or GOSSIP carries, under the connection's profile and a clock in
+%% milliseconds: its signature and fields, a ttl_ms of at most one hour, publisher as the key id of its key, a
+%% published_at no more than 5 minutes ahead, and not past published_at plus its ttl_ms, or 10 minutes without one,
+%% plus 5 minutes. The origin station checks this before fan-out, and every subscriber before delivery. A
+%% refusal for its time says how far outside its window the publication is, in milliseconds:
+%% {not_yet_valid, AheadMs} past the 5 minutes ahead it may be, and {expired, PastMs} past its expiry.
+-spec verify_publication(frame(), macula_crypto_profile:profile(), integer()) ->
+        {ok, verified_publication()}
+      | {error, malformed_frame | signature_invalid | key_id_mismatch | {not_yet_valid, pos_integer()}
+                | {expired, pos_integer()}}.
+verify_publication(#{frame_type := Type, publication := Signed} = Frame, Profile, Now)
+  when (Type =:= publish orelse Type =:= event orelse Type =:= plumtree_gossip), is_integer(Now) ->
+    publication_signed(only_fields(Frame, publication_frame_fields(Type)),
+                       macula_signed_object:verify(?PUBLICATION_LABEL, Signed, Profile), Profile, Now);
+verify_publication(_Frame, _Profile, _Now) ->
+    {error, malformed_frame}.
+
+publication_frame_fields(publish) -> [version, frame_type, publication];
+publication_frame_fields(event) -> [version, frame_type, publication, delivered_via];
+publication_frame_fields(plumtree_gossip) -> [version, frame_type, publication, round].
+
+publication_signed(true, {ok, #{key := Key, tbs := Tbs, fields := Fields}}, Profile, Now) ->
+    publication_read(read_fields(maps:to_list(Fields), publication_table(), #{}), Key, Tbs, Profile, Now);
+publication_signed(true, {error, signature_invalid}, _Profile, _Now) ->
+    {error, signature_invalid};
+publication_signed(_OnlyFields, _Verified, _Profile, _Now) ->
+    {error, malformed_frame}.
+
+publication_read({ok, #{publisher := Publisher, realm := _, topic := _, seq := _, published_at := PublishedAt,
+                        payload := _} = Read}, Key, Tbs, Profile, Now) ->
+    Expiry = PublishedAt + maps:get(ttl_ms, Read, ?PUBLICATION_DEFAULT_TTL_MS) + ?PUBLICATION_TOLERANCE_MS,
+    publication_checked([{maps:get(ttl_ms, Read, 0) =< ?PUBLICATION_MAX_TTL_MS, malformed_frame},
+                         {Publisher =:= macula_node_keys:node_id(Key, Profile), key_id_mismatch},
+                         {PublishedAt =< Now + ?PUBLICATION_TOLERANCE_MS,
+                          {not_yet_valid, PublishedAt - (Now + ?PUBLICATION_TOLERANCE_MS)}},
+                         {Now =< Expiry, {expired, Now - Expiry}}],
+                        (maps:remove(alg, Read))#{key => Key, publication_hash => crypto:hash(sha384, Tbs),
+                                                  expires_at => Expiry});
+publication_read(_NotAPublication, _Key, _Tbs, _Profile, _Now) ->
+    {error, malformed_frame}.
+
+publication_checked([{true, _Refusal} | Checks], Verified) -> publication_checked(Checks, Verified);
+publication_checked([{false, Refusal} | _Checks], _Verified) -> {error, Refusal};
+publication_checked([], Verified) -> {ok, Verified}.
+
+publication_table() ->
+    #{<<"alg">> => {alg, value},
+      <<"publisher">> => {publisher, {bytes, 32}},
+      <<"realm">> => {realm, {bytes, 32}},
+      <<"topic">> => {topic, text},
+      <<"seq">> => {seq, uint},
+      <<"published_at">> => {published_at, uint},
+      <<"ttl_ms">> => {ttl_ms, uint},
+      <<"payload">> => {payload, value}}.
 
 -spec validate_options(map()) -> ok.
 validate_options(M) when is_map(M) -> ok.
@@ -1231,138 +1349,250 @@ validate_options(M) when is_map(M) -> ok.
 %%------------------------------------------------------------------
 
 -spec advertise(advertise_spec()) -> frame().
-advertise(#{realm := R, procedure := Proc, advertiser := Adv} = Spec)
-  when is_binary(R),    byte_size(R)   =:= 32,
-       is_binary(Proc),
-       is_binary(Adv),  byte_size(Adv) =:= 32 ->
-    Options = maps:get(options, Spec, #{}),
-    validate_options(Options),
-    (base(advertise, 0))#{
-        realm      => R,
-        procedure  => Proc,
-        advertiser => Adv,
-        options    => Options
-    }.
+advertise(#{advertisement := Advertisement}) when is_binary(Advertisement) ->
+    (base(advertise, 0))#{advertisement => Advertisement}.
 
 -spec unadvertise(unadvertise_spec()) -> frame().
-unadvertise(#{realm := R, procedure := Proc, advertiser := Adv})
-  when is_binary(R),    byte_size(R)   =:= 32,
-       is_binary(Proc),
-       is_binary(Adv),  byte_size(Adv) =:= 32 ->
-    (base(unadvertise, 0))#{
-        realm      => R,
-        procedure  => Proc,
-        advertiser => Adv
-    }.
+unadvertise(#{withdrawal := Withdrawal}) when is_binary(Withdrawal) ->
+    (base(unadvertise, 0))#{withdrawal => Withdrawal}.
 
 %%------------------------------------------------------------------
 %% Streaming RPC constructors (Part 6 §5.6)
 %%
-%% STREAM_OPEN mirrors the CALL envelope (deadline, caller,
-%% source-route) so a stream's authentication and routing
-%% characteristics match the unary path. Subsequent STREAM_DATA /
-%% STREAM_END / STREAM_ERROR / STREAM_REPLY frames carry only the
-%% `stream_id' for correlation; the relay forwards them as opaque
-%% bytes between the two endpoints already bound by the OPEN.
+%% STREAM_OPEN is a request, built by stream_open/2 with the rules of
+%% requests above. A provider's STREAM_DATA, STREAM_END, STREAM_ERROR and
+%% STREAM_REPLY carry stream under MACULA-PQ-STREAM-V1, with the provider's
+%% key on its first frame only; a caller's STREAM_DATA, STREAM_END and
+%% STREAM_ERROR carry caller_stream under MACULA-PQ-CALLER-STREAM-V1, which
+%% verifies with the STREAM_OPEN's key. Each tbs names the stream by
+%% request_id and request_hash, and each side numbers its own frames.
 %%------------------------------------------------------------------
 
--spec stream_open(stream_open_spec()) -> frame().
-stream_open(#{stream_id := Sid, procedure := Proc, realm := Realm,
-              mode := Mode, args := Args, deadline_ms := DeadlineMs,
-              caller := Caller} = Spec)
-  when is_binary(Sid),    byte_size(Sid)    =:= 16,
-       is_binary(Proc),
-       is_binary(Realm),  byte_size(Realm)  =:= 32,
-       is_binary(Caller), byte_size(Caller) =:= 32,
-       is_integer(DeadlineMs),
-       (Mode =:= server_stream orelse Mode =:= client_stream
-        orelse Mode =:= bidi) ->
-    SourceRoute = maps:get(source_route, Spec, <<>>),
-    RetryBudget = maps:get(retry_budget, Spec, 0),
-    validate_source_route(SourceRoute),
-    validate_retry_budget(RetryBudget),
-    Header = base(stream_open, 0),
-    with_ucan_token(maps:get(ucan_token, Spec, <<>>), Header#{
-        stream_id    => Sid,
-        procedure    => Proc,
-        realm        => Realm,
-        mode         => Mode,
-        args         => Args,
-        deadline_ms  => DeadlineMs,
-        caller       => Caller,
-        source_route => SourceRoute,
-        retry_budget => RetryBudget
-    }).
+%% @doc The state a verifier starts a stream with: nothing seen from either side yet.
+-spec open_stream(verified_request()) -> stream_state().
+open_stream(#{frame_type := stream_open} = Open) ->
+    #{request => Open, provider => #{next => 0, ended => false}, caller => #{next => 0, ended => false}}.
 
-%% A STREAM_OPEN carries `ucan_token' only when the caller presents one, so
-%% a stream opened without a token is the same frame it always was.
-with_ucan_token(<<>>, Frame) -> Frame;
-with_ucan_token(Token, Frame) when is_binary(Token) -> Frame#{ucan_token => Token}.
+%% @doc Sign a provider's stream frame for a verified STREAM_OPEN with the provider's identity key. The first frame, seq
+%% 0, carries the key; later frames do not.
+-spec provider_stream(stream_spec(), macula_node_keys:node_key(), verified_request()) -> frame().
+provider_stream(#{frame_type := Type, seq := Seq} = Spec, #{purpose := identity} = Key,
+                #{frame_type := stream_open} = Open)
+  when is_integer(Seq), Seq >= 0, Seq < ?MAX_PROTOCOL_INT ->
+    Tbs = to_wire(stream_tbs(Type, Spec, Key, Open)),
+    #{version => ?PROTOCOL_VERSION, frame_type => Type, stream => provider_signed(Seq, Tbs, Key)}.
 
--spec stream_data(stream_data_spec()) -> frame().
-stream_data(#{stream_id := Sid, seq := Seq,
-              encoding := Encoding, body := Body} = Spec)
-  when is_binary(Sid), byte_size(Sid) =:= 16,
-       is_integer(Seq), Seq >= 0,
-       (Encoding =:= raw orelse Encoding =:= msgpack) ->
-    validate_stream_body(Encoding, Body),
-    maybe_add_signer(
-      (base(stream_data, 0))#{
-        stream_id => Sid,
-        seq       => Seq,
-        encoding  => Encoding,
-        body      => Body
-      }, Spec).
+provider_signed(0, Tbs, Key) -> macula_signed_object:sign(?STREAM_LABEL, Tbs, Key);
+provider_signed(_Later, Tbs, Key) -> macula_signed_object:sign_held(?STREAM_LABEL, Tbs, Key).
 
--spec stream_end(stream_end_spec()) -> frame().
-stream_end(#{stream_id := Sid, role := Role} = Spec)
-  when is_binary(Sid), byte_size(Sid) =:= 16,
-       (Role =:= send orelse Role =:= both) ->
-    maybe_add_signer(
-      (base(stream_end, 0))#{
-        stream_id => Sid,
-        role      => Role
-      }, Spec).
+%% @doc Sign a caller's stream frame for a verified STREAM_OPEN with the caller's identity key. A caller sends no
+%% STREAM_REPLY, and no STREAM_DATA in a server_stream.
+-spec caller_stream(stream_spec(), macula_node_keys:node_key(), verified_request()) -> frame().
+caller_stream(#{frame_type := Type, seq := Seq} = Spec, #{purpose := identity} = Key,
+              #{frame_type := stream_open, mode := Mode} = Open)
+  when (Type =:= stream_end orelse Type =:= stream_error orelse (Type =:= stream_data andalso Mode =/= server_stream)),
+       is_integer(Seq), Seq >= 0, Seq < ?MAX_PROTOCOL_INT ->
+    Tbs = to_wire(stream_tbs(Type, Spec, Key, Open)),
+    #{version => ?PROTOCOL_VERSION, frame_type => Type,
+      caller_stream => macula_signed_object:sign_held(?CALLER_STREAM_LABEL, Tbs, Key)}.
 
--spec stream_error(stream_error_spec()) -> frame().
-stream_error(#{stream_id := Sid, code := Code, message := Msg} = Spec)
-  when is_binary(Sid), byte_size(Sid) =:= 16,
-       is_binary(Code),
-       is_binary(Msg) ->
-    maybe_add_signer(
-      (base(stream_error, 0))#{
-        stream_id => Sid,
-        code      => Code,
-        message   => Msg
-      }, Spec).
+stream_tbs(Type, #{seq := Seq} = Spec, Key, #{request_id := RequestId, request_hash := RequestHash}) ->
+    (stream_fields(Type, Spec))#{frame_type => Type, request_id => RequestId, request_hash => RequestHash,
+                                signer => macula_node_keys:key_id(Key), seq => Seq}.
 
-%% Optionally stamp the emitter's pubkey into the frame. Used by the
-%% station-side verify path to authenticate non-OPEN stream frames
-%% end-to-end across multi-hop relays. Without `signer`, the station
-%% can only verify against the inbound conn's NodeId — fine for the
-%% direct edge (daemon → first station) but it fails on every
-%% subsequent station-to-station hop, because the signature was made
-%% by the originating daemon, not the relaying station.
-maybe_add_signer(Frame, #{signer := Pub})
-  when is_binary(Pub), byte_size(Pub) =:= 32 ->
-    Frame#{signer => Pub};
-maybe_add_signer(Frame, _Spec) ->
-    Frame.
+stream_fields(stream_data, #{encoding := raw, body := Body}) when is_binary(Body) ->
+    #{encoding => raw, body => Body};
+stream_fields(stream_data, #{encoding := msgpack, body := Body}) ->
+    ok = check_payload(Body),
+    #{encoding => msgpack, body => Body};
+stream_fields(stream_end, #{role := Role}) when Role =:= send; Role =:= both ->
+    #{role => Role};
+stream_fields(stream_error, #{code := Code, message := Message}) when is_binary(Code), is_binary(Message) ->
+    #{code => {text, Code}, message => {text, Message}};
+stream_fields(stream_reply, #{payload := Payload}) ->
+    ok = check_payload(Payload),
+    #{payload => Payload}.
 
--spec stream_reply(stream_reply_spec()) -> frame().
-stream_reply(#{stream_id := Sid, payload := Payload,
-               responded_by := RespondedBy})
-  when is_binary(Sid), byte_size(Sid) =:= 16,
-       is_binary(RespondedBy), byte_size(RespondedBy) =:= 32 ->
-    (base(stream_reply, 0))#{
-        stream_id    => Sid,
-        payload      => Payload,
-        responded_by => RespondedBy
-    }.
+%% @doc Verify a provider's stream frame against the stream's state, and return its fields and the next state.
+%% Before the provider's first frame the verifier holds no provider key, so a frame without one is out of order. The
+%% first frame's key must be the key id of its signer and the STREAM_OPEN's target; later frames verify with that key.
+%% Each side's seq is the previous one plus one, and nothing follows its STREAM_END.
+-spec verify_provider_stream(frame(), stream_state(), macula_crypto_profile:profile()) ->
+        {ok, map(), stream_state()}
+      | {error, malformed_frame | signature_invalid | key_id_mismatch | not_the_target | request_mismatch
+                | seq_mismatch | stream_ended}.
+verify_provider_stream(#{frame_type := Type, stream := Object} = Frame, #{provider := Side} = State, Profile)
+  when Type =:= stream_data; Type =:= stream_end; Type =:= stream_error; Type =:= stream_reply ->
+    provider_frame(only_fields(Frame, [version, frame_type, stream]), Side, Object, Type, State, Profile);
+verify_provider_stream(_Frame, _State, _Profile) ->
+    {error, malformed_frame}.
 
--spec validate_stream_body(stream_encoding(), term()) -> ok.
-validate_stream_body(raw, B) when is_binary(B) -> ok;
-validate_stream_body(msgpack, _Term)           -> ok.
+provider_frame(false, _Side, _Object, _Type, _State, _Profile) ->
+    {error, malformed_frame};
+provider_frame(true, #{ended := true}, _Object, _Type, _State, _Profile) ->
+    {error, stream_ended};
+provider_frame(true, #{key := HeldKey}, Object, Type, State, Profile) ->
+    provider_later(provider_object(Object, HeldKey, Profile), Type, State);
+provider_frame(true, _NoKeyYet, #{key := _} = Object, Type, State, Profile) ->
+    provider_first(macula_signed_object:verify(?STREAM_LABEL, Object, Profile), Type, State, Profile);
+provider_frame(true, _NoKeyYet, _WithoutKey, _Type, _State, _Profile) ->
+    {error, seq_mismatch}.
+
+%% A later frame verifies with the held key. One that still carries a key verifies with that key, which must be the
+%% held one, and its shape is refused once its sequence number has been checked.
+provider_object(#{key := _} = Object, HeldKey, Profile) ->
+    carried_later(macula_signed_object:verify(?STREAM_LABEL, Object, Profile), HeldKey);
+provider_object(Object, HeldKey, Profile) ->
+    held_later(macula_signed_object:verify_held(?STREAM_LABEL, Object, HeldKey, Profile)).
+
+carried_later({ok, #{key := HeldKey, fields := Fields}}, HeldKey) -> {ok, carried, Fields};
+carried_later({ok, _OtherKey}, _HeldKey) -> {error, key_id_mismatch};
+carried_later({error, _} = Refused, _HeldKey) -> Refused.
+
+held_later({ok, #{fields := Fields}}) -> {ok, held, Fields};
+held_later({error, _} = Refused) -> Refused.
+
+provider_later({ok, Shape, Fields}, Type,
+               #{request := Open, provider := #{next := Next, signer := Signer} = Side} = State) ->
+    later_checked(stream_read(read_fields(maps:to_list(Fields), stream_table(Type), #{}), Type), Shape, Signer, Next,
+                  Open, Side, State);
+provider_later({error, Refusal}, _Type, _State) when Refusal =:= signature_invalid; Refusal =:= key_id_mismatch ->
+    {error, Refusal};
+provider_later({error, _MalformedOrAlgMismatch}, _Type, _State) ->
+    {error, malformed_frame}.
+
+later_checked({ok, #{signer := FrameSigner, seq := Seq} = Read}, Shape, Signer, Next, Open, Side, State) ->
+    stream_result([{FrameSigner =:= Signer, key_id_mismatch},
+                   {request_names(Read) =:= request_names(Open), request_mismatch},
+                   {Seq =:= Next, seq_mismatch},
+                   {Shape =:= held, malformed_frame}], Read, provider, Side, State);
+later_checked(error, _Shape, _Signer, _Next, _Open, _Side, _State) ->
+    {error, malformed_frame}.
+
+provider_first({ok, #{key := Key, fields := Fields}}, Type, #{request := Open, provider := Side} = State, Profile) ->
+    first_checked(stream_read(read_fields(maps:to_list(Fields), stream_table(Type), #{}), Type), Key, Open, Side,
+                  State, Profile);
+provider_first({error, signature_invalid}, _Type, _State, _Profile) ->
+    {error, signature_invalid};
+provider_first({error, _MalformedOrAlgMismatch}, _Type, _State, _Profile) ->
+    {error, malformed_frame}.
+
+first_checked({ok, #{signer := Signer, seq := Seq} = Read}, Key, Open, Side, State, Profile) ->
+    stream_result([{Signer =:= macula_node_keys:node_id(Key, Profile), key_id_mismatch},
+                   {request_names(Read) =:= request_names(Open), request_mismatch},
+                   {Signer =:= maps:get(target, Open), not_the_target},
+                   {Seq =:= 0, seq_mismatch}], Read, provider, Side#{key => Key, signer => Signer}, State);
+first_checked(error, _Key, _Open, _Side, _State, _Profile) ->
+    {error, malformed_frame}.
+
+%% @doc Verify a caller's stream frame against the stream's state with the STREAM_OPEN's key, and return its fields
+%% and the next state. The signer must be the STREAM_OPEN's caller, and in a server_stream a caller sends no
+%% STREAM_DATA.
+-spec verify_caller_stream(frame(), stream_state(), macula_crypto_profile:profile()) ->
+        {ok, map(), stream_state()}
+      | {error, malformed_frame | signature_invalid | key_id_mismatch | request_mismatch | seq_mismatch
+                | stream_ended}.
+verify_caller_stream(#{frame_type := Type, caller_stream := Object} = Frame, #{caller := Side} = State, Profile)
+  when Type =:= stream_data; Type =:= stream_end; Type =:= stream_error ->
+    caller_frame(only_fields(Frame, [version, frame_type, caller_stream]), Side, Object, Type, State, Profile);
+verify_caller_stream(_Frame, _State, _Profile) ->
+    {error, malformed_frame}.
+
+%% @doc Whether a refusal of a signed object is charged to the connection that carried it
+%% (DESIGN_PQ_DHT_SLOTS_AND_BUDGET.md, 3.1). A refusal every verifier reaches from the same bytes is charged: a
+%% malformed shape, key, field or alg, a signature that does not verify, or a signer that is not its key. One that
+%% depends on what the receiver holds is not: a sequence number, a stream that has ended, or a match with the
+%% request or its target. A neighbour's HyParView placements past its allowance, and a SHUFFLE_REPLY that
+%% answers no SHUFFLE, are charged. A freshness refusal is charged only when it is more than 10 minutes past the
+%% moment its rule starts refusing. A Plumtree neighbour's IHAVE past its open entries, a GRAFT it leaves
+%% unanswered, and a publication for another realm are charged.
+-spec charged_refusal(malformed_frame | signature_invalid | key_id_mismatch | seq_mismatch | stream_ended
+                      | request_mismatch | not_the_target | placement_allowance | unsolicited_shuffle_reply
+                      | {expired, pos_integer()} | {not_yet_valid, pos_integer()} | ihave_allowance
+                      | graft_unanswered | wrong_realm) ->
+        boolean().
+charged_refusal(malformed_frame) -> true;
+charged_refusal(signature_invalid) -> true;
+charged_refusal(key_id_mismatch) -> true;
+charged_refusal(seq_mismatch) -> false;
+charged_refusal(stream_ended) -> false;
+charged_refusal(request_mismatch) -> false;
+charged_refusal(not_the_target) -> false;
+charged_refusal(placement_allowance) -> true;
+charged_refusal(unsolicited_shuffle_reply) -> true;
+charged_refusal({expired, PastMs}) -> PastMs > ?FRESHNESS_CHARGE_AFTER_MS;
+charged_refusal({not_yet_valid, AheadMs}) -> AheadMs > ?FRESHNESS_CHARGE_AFTER_MS;
+charged_refusal(ihave_allowance) -> true;
+charged_refusal(graft_unanswered) -> true;
+charged_refusal(wrong_realm) -> true.
+
+caller_frame(false, _Side, _Object, _Type, _State, _Profile) ->
+    {error, malformed_frame};
+caller_frame(true, #{ended := true}, _Object, _Type, _State, _Profile) ->
+    {error, stream_ended};
+caller_frame(true, Side, Object, Type, #{request := #{key := CallerKey}} = State, Profile) ->
+    caller_verified(macula_signed_object:verify_held(?CALLER_STREAM_LABEL, Object, CallerKey, Profile), Type, Side,
+                    State).
+
+caller_verified({ok, #{fields := Fields}}, Type, Side, #{request := Open} = State) ->
+    caller_checked(stream_read(read_fields(maps:to_list(Fields), stream_table(Type), #{}), Type), Type, Side, Open,
+                   State);
+caller_verified({error, signature_invalid}, _Type, _Side, _State) ->
+    {error, signature_invalid};
+caller_verified({error, _MalformedOrAlgMismatch}, _Type, _Side, _State) ->
+    {error, malformed_frame}.
+
+caller_checked({ok, #{signer := Signer, seq := Seq} = Read}, Type, #{next := Next} = Side, Open, State) ->
+    stream_result([{not (Type =:= stream_data andalso maps:get(mode, Open) =:= server_stream), malformed_frame},
+                   {Signer =:= maps:get(caller, Open), key_id_mismatch},
+                   {request_names(Read) =:= request_names(Open), request_mismatch},
+                   {Seq =:= Next, seq_mismatch}], Read, caller, Side, State);
+caller_checked(error, _Type, _Side, _Open, _State) ->
+    {error, malformed_frame}.
+
+%% The fields of a stream frame's tbs, with exactly the fields its type carries.
+stream_read({ok, #{frame_type := Type, request_id := _, request_hash := _, signer := _, seq := _} = Read}, Type) ->
+    shaped(stream_shape(Type, Read), Read);
+stream_read(_NotAStreamFrame, _Type) ->
+    error.
+
+stream_shape(stream_data, #{encoding := raw, body := Body} = Read) ->
+    is_binary(Body) andalso only_type_fields(Read, [encoding, body]);
+stream_shape(stream_data, #{encoding := msgpack, body := _} = Read) -> only_type_fields(Read, [encoding, body]);
+stream_shape(stream_end, #{role := _} = Read) -> only_type_fields(Read, [role]);
+stream_shape(stream_error, #{code := _, message := _} = Read) -> only_type_fields(Read, [code, message]);
+stream_shape(stream_reply, #{payload := _} = Read) -> only_type_fields(Read, [payload]);
+stream_shape(_Type, _Read) -> false.
+
+only_type_fields(Read, TypeFields) ->
+    only_fields(Read, [frame_type, alg, request_id, request_hash, signer, seq | TypeFields]).
+
+shaped(true, Read) -> {ok, Read};
+shaped(false, _Read) -> error.
+
+%% Run the checks in order; the first that fails names the refusal. When all hold, the side moves to its next
+%% sequence number and records whether it has ended.
+stream_result([{true, _Refusal} | Checks], Read, SideName, Side, State) ->
+    stream_result(Checks, Read, SideName, Side, State);
+stream_result([{false, Refusal} | _Checks], _Read, _SideName, _Side, _State) ->
+    {error, Refusal};
+stream_result([], #{frame_type := Type, seq := Seq} = Read, SideName, Side, State) ->
+    {ok, maps:without([alg, request_id, request_hash], Read),
+     State#{SideName := Side#{next := Seq + 1, ended := Type =:= stream_end}}}.
+
+stream_table(Type) ->
+    #{<<"frame_type">> => {frame_type, {enum, [Type]}},
+      <<"alg">> => {alg, value},
+      <<"request_id">> => {request_id, {bytes, 16}},
+      <<"request_hash">> => {request_hash, {bytes, 48}},
+      <<"signer">> => {signer, {bytes, 32}},
+      <<"seq">> => {seq, uint},
+      <<"encoding">> => {encoding, {enum, [raw, msgpack]}},
+      <<"body">> => {body, value},
+      <<"role">> => {role, {enum, [send, both]}},
+      <<"code">> => {code, text},
+      <<"message">> => {message, text},
+      <<"payload">> => {payload, value}}.
 
 %%------------------------------------------------------------------
 %% Content transfer constructors (Part 6 §9)
@@ -1405,7 +1635,7 @@ cancel(#{blocks := Bs}) when is_list(Bs) ->
     (base(cancel, 0))#{blocks => Bs}.
 
 -spec validate_mcid(mcid()) -> ok.
-validate_mcid(<<_:272>>) -> ok.
+validate_mcid(<<2, _Codec:8, _Hash:48/binary>>) -> ok.
 
 -spec validate_want_entry(want_entry()) -> want_entry().
 validate_want_entry(#{mcid := M} = E) ->
@@ -1423,9 +1653,80 @@ validate_have_entry(#{mcid := M, size := S})
     validate_mcid(M),
     #{mcid => M, size => S}.
 
--spec validate_manifest_payload(map() | not_found) -> ok.
-validate_manifest_payload(not_found)              -> ok;
-validate_manifest_payload(M) when is_map(M)       -> ok.
+-spec validate_manifest_payload(map()) -> ok.
+validate_manifest_payload(M) when is_map(M) -> ok.
+
+%%------------------------------------------------------------------
+%% Neighbour signatures (D17)
+%%
+%% In pq_hybrid a control frame travels as {version, frame_type, neighbour}. neighbour is {tbs, signature} under
+%% MACULA-PQ-NEIGHBOUR-V1, signed with the sender's identity key, which the receiver holds from the connection's
+%% handshake. Its tbs holds the frame's fields with frame_type and alg, the connection hash (the SHA-384 of the
+%% challenge frame's bytes) and seq: 0 on the first neighbour-signed frame in each direction, one more on each after.
+%% In pq_pure no frame carries one. The caller counts seq per direction and closes the connection on a refusal.
+%%------------------------------------------------------------------
+
+%% @doc Whether a frame type belongs on a connection's control stream, in either profile: the frames pq_hybrid
+%% neighbour-signs (D17). One arriving on a dedicated stream is malformed_frame, and the connection closes.
+-spec control_frame(frame_type()) -> boolean().
+control_frame(FrameType) -> lists:member(FrameType, ?NEIGHBOUR_SIGNED).
+
+%% @doc Whether a profile neighbour-signs a frame type.
+-spec neighbour_signed(macula_crypto_profile:profile(), frame_type()) -> boolean().
+neighbour_signed(pq_hybrid, FrameType) -> control_frame(FrameType);
+neighbour_signed(pq_pure, _FrameType) -> false.
+
+%% @doc Neighbour-sign a control frame with the sender's identity key, for one connection and one seq.
+-spec sign_neighbour(frame(), macula_node_keys:node_key(), #{connection := binary(), seq := non_neg_integer()}) ->
+        frame().
+sign_neighbour(#{frame_type := Type} = Frame, #{profile := Profile} = Key, #{connection := Connection, seq := Seq})
+  when not is_map_key(neighbour, Frame), byte_size(Connection) =:= 48, is_integer(Seq), Seq >= 0 ->
+    neighbour_signature(neighbour_signed(Profile, Type), Frame, Key, Connection, Seq).
+
+neighbour_signature(true, #{version := Version, frame_type := Type} = Frame, Key, Connection, Seq) ->
+    Fields = wire_form(maps:without([version, signature], Frame)),
+    Tbs = Fields#{{text, <<"connection">>} => Connection, {text, <<"seq">>} => Seq},
+    #{version => Version, frame_type => Type, neighbour => macula_signed_object:sign_held(?NEIGHBOUR_LABEL, Tbs, Key)}.
+
+%% @doc Read a received frame under the connection's profile. A frame type the profile signs must be exactly
+%% {version, frame_type, neighbour}, signed by the peer's identity key for this connection and the next seq, and comes
+%% back as the frame its tbs holds. Any other frame must not carry neighbour and comes back as it is.
+-spec verify_neighbour(frame(), #{profile := macula_crypto_profile:profile(), peer_key := binary(),
+                                  connection := binary(), seq := non_neg_integer()}) ->
+        {ok, frame()} | {error, malformed_frame | signature_invalid}.
+verify_neighbour(#{frame_type := Type} = Frame, #{profile := Profile} = Opts) ->
+    neighbour_read(neighbour_signed(Profile, Type), Frame, Opts).
+
+neighbour_read(true, #{version := _, neighbour := Held} = Frame, Opts) when map_size(Frame) =:= 3 ->
+    neighbour_opened(neighbour_held(Held, Opts), Frame, Opts);
+neighbour_read(true, _Frame, _Opts) ->
+    {error, malformed_frame};
+neighbour_read(false, #{neighbour := _}, _Opts) ->
+    {error, malformed_frame};
+neighbour_read(false, Frame, _Opts) ->
+    {ok, Frame}.
+
+neighbour_held(Held, #{profile := Profile, peer_key := PeerKey}) ->
+    macula_signed_object:verify_held(?NEIGHBOUR_LABEL, Held, PeerKey, Profile).
+
+neighbour_opened({ok, #{fields := Fields}}, #{version := Version, frame_type := Type}, Opts) ->
+    neighbour_frame(read_fields(maps:to_list(Fields), neighbour_tbs_table(Type), #{}), Version, Type, Opts);
+neighbour_opened({error, signature_invalid}, _Frame, _Opts) ->
+    {error, signature_invalid};
+neighbour_opened({error, _MalformedOrAlgMismatch}, _Frame, _Opts) ->
+    {error, malformed_frame}.
+
+%% A neighbour tbs holds the frame type's own fields, without version, the per-hop signature and neighbour itself, and
+%% adds alg, connection and seq.
+neighbour_tbs_table(Type) ->
+    (maps:without([<<"version">>, <<"signature">>, <<"neighbour">>], field_table(Type)))#{
+        <<"alg">> => {alg, value}, <<"connection">> => {connection, value}, <<"seq">> => {seq, value}}.
+
+neighbour_frame({ok, #{frame_type := Type, connection := Connection, seq := Seq} = Read}, Version, Type,
+                #{connection := Connection, seq := Seq}) ->
+    {ok, (maps:without([alg, connection, seq], Read))#{version => Version}};
+neighbour_frame(_NotThisConnectionOrSeq, _Version, _Type, _Opts) ->
+    {error, malformed_frame}.
 
 %%------------------------------------------------------------------
 %% Sign / verify
@@ -1453,110 +1754,28 @@ verify_result(true,  Frame) -> {ok, Frame};
 verify_result(false, _Frame) -> {error, signature_invalid}.
 
 %%------------------------------------------------------------------
-%% Publisher-end-to-end pubsub signature
-%%
-%% A PUBLISH / EVENT frame's own `signature' (above) is per-hop: it
-%% authenticates whoever last touched the frame (the publishing
-%% daemon on the daemon->station hop; the relay station on a
-%% station->station hop). That is enough for adjacent-hop checks but
-%% not for end-to-end authenticity once a frame is relayed beyond one
-%% hop.
-%%
-%% `publisher_sig' is the publisher's Ed25519 signature over the
-%% canonical tuple (topic, realm, publisher, seq, payload) — the
-%% frame-type-independent content that survives PUBLISH->EVENT
-%% conversion. It is computed once by the original publisher and
-%% carried verbatim through every relay. `verify_publisher/1' checks
-%% it against the frame's own `publisher' field, so any consumer can
-%% confirm "this daemon emitted this event" no matter which relay
-%% delivered it.
-%%
-%% (Authenticity, not authorization: this proves the publisher
-%% emitted it, not that the publisher is permitted to publish on the
-%% realm/topic — realm-level publish authz lives with membership
-%% credentials, not here.)
-%%------------------------------------------------------------------
-
-%% @doc Add `publisher_sig' to a PUBLISH or EVENT frame: the
-%% publisher's Ed25519 signature over (topic, realm, publisher, seq,
-%% payload). `Identity' must be the key pair / private key of the
-%% pubkey in the frame's `publisher' field.
--spec sign_publisher(frame(),
-                     macula_identity:key_pair() | macula_identity:privkey()) ->
-    frame().
-sign_publisher(#{frame_type := FT} = Frame, Identity)
-  when FT =:= publish; FT =:= event ->
-    Bytes = publisher_signing_bytes(Frame),
-    Sig = macula_identity:sign([?EVENT_PUBLISHER_DOMAIN, Bytes], Identity),
-    Frame#{publisher_sig => Sig}.
-
-%% @doc Verify a frame's `publisher_sig' against its `publisher'
-%% field. Returns `{ok, Frame}' on success, `{error, Reason}'
-%% otherwise (`no_publisher_sig' when the field is absent —
-%% callers that want it MUST treat absence as a verification
-%% failure, not as "trusted").
--spec verify_publisher(frame()) -> {ok, frame()} | {error, term()}.
-verify_publisher(#{publisher_sig := Sig, publisher := Pub} = Frame)
-  when is_binary(Sig), byte_size(Sig) =:= 64,
-       is_binary(Pub), byte_size(Pub) =:= 32 ->
-    Bytes = publisher_signing_bytes(Frame),
-    verify_publisher_result(
-        macula_identity:verify([?EVENT_PUBLISHER_DOMAIN, Bytes], Sig, Pub),
-        Frame);
-verify_publisher(#{publisher_sig := _}) ->
-    {error, bad_publisher_sig};
-verify_publisher(_Frame) ->
-    {error, no_publisher_sig}.
-
-verify_publisher_result(true,  Frame) -> {ok, Frame};
-verify_publisher_result(false, _Frame) -> {error, signature_invalid}.
-
-%% @private The canonical bytes the publisher signs — a fixed tuple,
-%% independent of frame type, header fields, `delivered_via', or
-%% `ttl_ms', so the same signature is valid on the PUBLISH the
-%% publisher sent and on the EVENT a relay derives from it.
-publisher_signing_bytes(#{topic := T, realm := R, publisher := Pub,
-                          seq := Seq, payload := Payload}) ->
-    macula_cbor_nif:pack_deterministic(to_wire(prepare_records(#{
-        topic     => T,
-        realm     => R,
-        publisher => Pub,
-        seq       => Seq,
-        payload   => Payload
-    }))).
-
-%%------------------------------------------------------------------
 %% Wire codec — CBOR (RFC 8949 §4.2.1 deterministic, Part 6 §3)
 %%------------------------------------------------------------------
 %%
-%% Atom-keyed maps round-trip via two helpers:
-%%   to_wire/1   — atoms → `{text, atom_to_binary(A)}', recursing into
-%%                 nested maps and lists.
-%%   from_wire/1 — `{text, Bin}' values whose binary is a known atom
-%%                 spelling become atoms again; binary keys whose name
-%%                 matches an existing atom are restored.
-%%
-%% `binary_to_existing_atom' is safe: the codec never creates new atoms
-%% from untrusted wire input, so a malicious peer cannot exhaust the
-%% atom table.
+%% A frame map is encoded with wire_form/1: a boolean field of the frame
+%% type's table becomes 1 or 0, other atoms become text and undefined
+%% becomes null. A frame is decoded under the decoding rule of
+%% DESIGN_PQ_SIGNED_FRAMES_AND_RECORDS.md, and a frame type's own fields
+%% come back through a fixed table (D26): each field the table defines
+%% takes its atom key, an enum value takes one of the atoms the table
+%% lists, a boolean is 1 or 0, and everything else keeps the one key form
+%% of peer-supplied maps. No atom is made or looked up from what a peer sent.
 
 -spec encode(frame()) -> binary().
 encode(Frame) when is_map(Frame) ->
-    Bytes = macula_cbor_nif:pack_deterministic(to_wire(prepare_records(Frame))),
-    Len = byte_size(Bytes),
-    encode_with_check(Len, Bytes).
+    encode_bytes(macula_cbor_nif:pack_deterministic(wire_form(Frame))).
 
-%% Records (`record', `records' fields) are delegated to
-%% `macula_record:encode/1' so the SDK's canonical CBOR shape is
-%% preserved verbatim. The frame map carries the resulting opaque
-%% binary blob; on decode `restore_records/1' inflates it back to a
-%% record map. This keeps the macula_record payload's `{text, Bin}'
-%% keys from being mistaken for frame-envelope atoms.
-prepare_records(F = #{record := R}) when is_map(R) ->
-    F#{record := macula_record:encode(R)};
-prepare_records(F = #{records := L}) when is_list(L) ->
-    F#{records := [macula_record:encode(R) || R <- L, is_map(R)]};
-prepare_records(F) -> F.
+%% @doc Prefix frame CBOR bytes with their length, leaving the bytes as they
+%% are. The handshake keeps the bytes it passes here, because the connection
+%% proof hashes a frame's bytes without the prefix.
+-spec encode_bytes(binary()) -> binary().
+encode_bytes(Bytes) when is_binary(Bytes) ->
+    encode_with_check(byte_size(Bytes), Bytes).
 
 encode_with_check(Len, _Bytes) when Len > ?MAX_FRAME_BYTES ->
     error({frame_too_large, Len});
@@ -1584,17 +1803,36 @@ decode(Buf) when is_binary(Buf) ->
 single({invalid, Invalid, _Rest}) -> {error, Invalid};
 single(Decoded) -> Decoded.
 
+%% @doc Read a frame from its decoded CBOR value, the way decode/1 reads one after decoding its bytes. A connection
+%% decodes each frame once to route it by its frame_type, and passes the value here. A frame whose fields its type
+%% refuses is `bad_frame' here too.
+-spec read_wire(term()) -> {ok, frame()} | {error, bad_frame}.
+read_wire(Wire) ->
+    whole_frame(fields_checked(frame_read({ok, Wire}, <<>>))).
+
+whole_frame({ok, Frame, <<>>}) -> {ok, Frame};
+whole_frame({invalid, _Invalid, <<>>}) -> {error, bad_frame};
+whole_frame({error, _Refused}) -> {error, bad_frame}.
+
 %% One frame from the head of a buffer, with its fields checked once it
 %% decodes. A length header above Cap is refused from its four bytes. A
 %% frame whose fields are refused comes back with the rest of the buffer,
 %% since its bytes were read in full.
-decode_item(<<Len:32/big, _Rest/binary>>, Cap) when Len > Cap ->
+decode_item(Buf, Cap) ->
+    item_bytes(split_frame(Buf, Cap)).
+
+item_bytes({ok, Bytes, Rest}) -> fields_checked(decode_cbor(Bytes, Rest));
+item_bytes(NotWhole) -> NotWhole.
+
+%% The length prefix, shared by decode/1 and parse_stream_bytes/1,2. A
+%% length header above Cap is refused from its four bytes.
+split_frame(<<Len:32/big, _Rest/binary>>, Cap) when Len > Cap ->
     {error, frame_too_large};
-decode_item(<<Len:32/big, Bytes:Len/binary, Rest/binary>>, _Cap) ->
-    fields_checked(decode_cbor(Bytes, Rest));
-decode_item(<<Len:32/big, Tail/binary>>, _Cap) ->
+split_frame(<<Len:32/big, Bytes:Len/binary, Rest/binary>>, _Cap) ->
+    {ok, Bytes, Rest};
+split_frame(<<Len:32/big, Tail/binary>>, _Cap) ->
     {more, Len - byte_size(Tail)};
-decode_item(Buf, _Cap) when byte_size(Buf) < 4 ->
+split_frame(Buf, _Cap) when byte_size(Buf) < 4 ->
     {more, 4 - byte_size(Buf)}.
 
 fields_checked({ok, Frame, Rest}) ->
@@ -1605,44 +1843,30 @@ fields_checked(BadFrame) ->
 received(ok, Frame, Rest) -> {ok, Frame, Rest};
 received({error, Invalid}, _Frame, Rest) -> {invalid, Invalid, Rest}.
 
+%% A frame's bytes decode under the decoding rule within the element budget,
+%% so one frame holds at most 131,072 CBOR items, and its fields come back
+%% through its frame type's table.
 decode_cbor(Bytes, Rest) ->
-    try macula_cbor_nif:unpack_deterministic(Bytes, macula_cbor_nif:element_budget()) of
-        {Term, Left} when is_map(Term) ->
-            Frame = from_wire_envelope(Term),
-            {ok, restore_records(Frame, Left), Rest};
-        _Other ->
-            {error, bad_frame}
-    catch
-        error:too_many_elements -> {error, too_many_elements};
-        _:_ -> {error, bad_frame}
-    end.
+    frame_read(macula_record_cbor:decode_strict(Bytes), Rest).
 
-%% Inverse of `prepare_records/1' — opaque binary blobs in `record' /
-%% `records' fields are decoded via `macula_record:decode/2' so the
-%% frame map exposes record values in their natural map shape. A record
-%% decodes within `Left', what the frame's own items and the records
-%% before it left of the element budget, so a frame and its records hold
-%% at most one budget of CBOR items together. Bytes that do not decode as
-%% a record within what is left stay bytes, and so do the records after
-%% them, and `validate_received/1' refuses the frame for that field.
-restore_records(F = #{record := B}, Left) when is_binary(B) ->
-    restored_record(macula_record:decode(B, Left), F);
-restore_records(F = #{records := L}, Left) when is_list(L) ->
-    F#{records := decode_records(L, Left)};
-restore_records(F, _Left) -> F.
+frame_read({ok, #{{text, <<"frame_type">>} := {text, TypeName}} = Wire}, Rest) ->
+    typed_frame(frame_type_named(TypeName), Wire, Rest);
+frame_read({error, too_many_elements}, _Rest) ->
+    {error, too_many_elements};
+frame_read(_NotAFrame, _Rest) ->
+    {error, bad_frame}.
 
-restored_record({ok, R, _Left}, F) -> F#{record := R};
-restored_record({error, _Reason}, F) -> F.
+typed_frame({ok, Type}, Wire, Rest) ->
+    read_frame(fields_agree(Type, read_fields(maps:to_list(Wire), field_table(Type), #{})), Rest);
+typed_frame(error, _Wire, _Rest) ->
+    {error, bad_frame}.
 
-decode_records([B | Rest], Left) when is_binary(B) ->
-    decoded_record(macula_record:decode(B, Left), B, Rest);
-decode_records([Other | Rest], Left) ->
-    [Other | decode_records(Rest, Left)];
-decode_records([], _Left) ->
-    [].
+read_frame({ok, Frame}, Rest) -> {ok, Frame, Rest};
+read_frame(error, _Rest) -> {error, bad_frame}.
 
-decoded_record({ok, R, Left}, _B, Rest) -> [R | decode_records(Rest, Left)];
-decoded_record({error, _Reason}, B, Rest) -> [B | Rest].
+%% A rule between the fields of one frame, once each field has been read: a FORWARD_JOIN's prwl is at most its arwl.
+fields_agree(hyparview_forward_join, {ok, #{arwl := Arwl, prwl := Prwl}}) when Prwl > Arwl -> error;
+fields_agree(_Type, Read) -> Read.
 
 %% @doc Drain all complete frames a peer sent from a buffer.
 %%
@@ -1904,6 +2128,32 @@ station_ref_rule() ->
              {last_seen_at, pos}, {addresses, {optional, {list_of, map}}},
              {asn, {optional, non_neg}}]}.
 
+%% @doc Drain every complete frame from a buffer as its CBOR bytes, exactly as
+%% received and without the length prefix, and return the incomplete rest.
+%% The handshake reads frames this way, because the connection proof hashes
+%% the challenge bytes as received. A length over the 16 MiB frame cap is
+%% refused.
+-spec parse_stream_bytes(binary()) -> {ok, [binary()], binary()} | {error, frame_too_large}.
+parse_stream_bytes(Buf) when is_binary(Buf) ->
+    parse_stream_bytes(Buf, ?MAX_FRAME_BYTES).
+
+%% @doc `parse_stream_bytes/1' with a frame cap of `MaxFrameBytes', at most
+%% the 16 MiB frame cap. A length header above it is refused from its four
+%% bytes, before the frame's bytes are buffered, so a caller that keeps the
+%% rest holds at most `MaxFrameBytes' plus the header and one read. The
+%% handshake reads with a 64 KiB cap.
+-spec parse_stream_bytes(binary(), pos_integer()) -> {ok, [binary()], binary()} | {error, frame_too_large}.
+parse_stream_bytes(Buf, MaxFrameBytes)
+  when is_binary(Buf), is_integer(MaxFrameBytes), MaxFrameBytes > 0, MaxFrameBytes =< ?MAX_FRAME_BYTES ->
+    drain_bytes(split_frame(Buf, MaxFrameBytes), Buf, MaxFrameBytes, []).
+
+drain_bytes({ok, Bytes, Rest}, _Buf, Cap, Acc) ->
+    drain_bytes(split_frame(Rest, Cap), Rest, Cap, [Bytes | Acc]);
+drain_bytes({more, _Needed}, Buf, _Cap, Acc) ->
+    {ok, lists:reverse(Acc), Buf};
+drain_bytes({error, frame_too_large} = Error, _Buf, _Cap, _Acc) ->
+    Error.
+
 %%------------------------------------------------------------------
 %% Accessors
 %%------------------------------------------------------------------
@@ -1931,15 +2181,8 @@ base(FrameType, Caps) ->
     }.
 
 canonical_unsigned(Frame) ->
-    %% `publisher_sig' is excluded alongside `signature': it is itself
-    %% a signature field, and it must be omittable so that adding it
-    %% to a frame does not change the bytes the frame's own per-hop
-    %% `signature' covers. (A pre-`publisher_sig' node strips only
-    %% `signature'; that is why the wire emitter must not add
-    %% `publisher_sig' to frames until every relay is on a build that
-    %% strips it here too — see CHANGELOG 4.4.0.)
-    Unsigned = maps:without([signature, publisher_sig], Frame),
-    macula_cbor_nif:pack_deterministic(to_wire(prepare_records(Unsigned))).
+    Unsigned = maps:without([signature], Frame),
+    macula_cbor_nif:pack_deterministic(wire_form(Unsigned)).
 
 %%------------------------------------------------------------------
 %% Atom <-> wire-binary translation
@@ -1947,9 +2190,10 @@ canonical_unsigned(Frame) ->
 %% The CBOR codec ships text strings as `{text, Bin}' tuples and byte
 %% strings as plain binaries (per `macula_record_cbor'). Atoms in the
 %% in-process frame map are converted to `{text, atom_to_binary(A)}'
-%% before encoding, and reconstructed via `binary_to_existing_atom'
-%% on the decode path. Binaries (signatures, node ids, payloads,
-%% nonces) stay as binaries on the wire.
+%% before encoding, except envelope booleans, which travel as 1 or 0.
+%% On the decode path envelope fields come back through the frame
+%% type's table, and payload text stays `{text, Bin}'. Binaries
+%% (signatures, node ids, payloads, nonces) stay as binaries on the wire.
 %%------------------------------------------------------------------
 
 %% @doc Is this term admissible as a frame payload?
@@ -1984,26 +2228,12 @@ check_payload(Payload) ->
     sized(check_value(Payload, []), Payload).
 
 %% @doc Is this whole frame sendable? Used by `macula_peering:send_frame/2',
-%% which is the single seam every producer passes through.
-%%
-%% `record' / `records' are excluded: `prepare_records/1' hands those to
-%% `macula_record:encode/1', a different encoder with its own rules, so
-%% judging them by payload rules would reject frames that encode fine.
-%%
-%% KNOWN LIMIT, stated rather than papered over. That exclusion means
-%% record-bearing frames (STORE, REPLICATE, VALUE) get weaker
-%% guarantees than payload-bearing ones: an unsigned record passes here
-%% and then fails in `macula_record:encode/1', and `byte_floor/1' never
-%% sees record bytes, so an oversized record is not caught synchronously.
-%% Neither can kill the connection — `encode_or_drop/2' catches both —
-%% but the caller is told `ok' and the frame is dropped. So "callers get
-%% a structured reason" is true for payload-bearing frames and NOT for
-%% record-bearing ones. Closing it means teaching this function the
-%% record shape and folding record size into the floor.
+%% which is the single seam every producer passes through. Records travel
+%% as their wire bytes, so a record-bearing frame is judged like any other.
 -spec check_frame(frame()) ->
     ok | {error, {unsupported_payload_type, atom(), [term()]}}.
 check_frame(Frame) when is_map(Frame) ->
-    check_payload(maps:without([record, records], Frame)).
+    check_payload(Frame).
 
 %% @doc Render a rejection as a sentence, with the remedy where there is
 %% one. The operator reading a log at 03:00 is not reading edoc.
@@ -2055,24 +2285,26 @@ byte_floor(_Scalar)                      -> 1.
 sum_floor([], Acc)      -> Acc;
 sum_floor([H | T], Acc) -> sum_floor(T, Acc + byte_floor(H)).
 
-%% Integers: the codec renders major 0 / major 1 and bounds both at 64
-%% bits. The bound is NOT restated here — a bignum past it matches no
-%% clause in either CBOR encoder (`macula_cbor_nif:pack_deterministic/1',
-%% the live path, or `macula_record_cbor:encode/1', its differentially-
-%% tested reference), so the codec is asked.
+%% Integers: the decoding rule refuses an integer below -2^63 or above
+%% 2^63-1, so a payload integer must lie between them. Both CBOR encoders
+%% render that whole range, so no integer outside it reaches them.
 check_value(I, Path) when is_integer(I) ->
-    int_ok(macula_record_cbor:is_encodable_int(I), Path);
+    int_ok(I >= -(1 bsl 63) andalso I < 1 bsl 63, Path);
 check_value(F, _Path) when is_float(F) ->
     ok;
 check_value(B, _Path) when is_binary(B) ->
     ok;
-%% `{text, Binary}' is the codec's own major-3 marker, not a user tuple.
-check_value({text, B}, _Path) when is_binary(B) ->
-    ok;
+%% `{text, Binary}' is the codec's own major-3 marker, not a user tuple. Its
+%% bytes must be valid UTF-8, as the decoding rule requires of text.
+check_value({text, B}, Path) when is_binary(B) ->
+    text_ok(valid_utf8(B), Path);
 %% Every atom survives: `undefined' becomes null, the rest become text
 %% and are restored via `binary_to_existing_atom'.
 check_value(A, _Path) when is_atom(A) ->
     ok;
+check_value(Container, Path)
+  when (is_list(Container) orelse is_map(Container)), length(Path) > ?MAX_PAYLOAD_NESTING ->
+    unsupported(too_deep, Path);
 check_value(L, Path) when is_list(L) ->
     check_list(L, 0, Path);
 check_value(M, Path) when is_map(M) ->
@@ -2116,10 +2348,10 @@ check_map_tail({error, _} = Error, _T, _Path) ->
 %% either sign, and nothing else — a float or nested key crashes it.
 check_key(A, _Path) when is_atom(A) ->
     ok;
-check_key({text, B}, _Path) when is_binary(B) ->
-    ok;
-check_key(B, _Path) when is_binary(B) ->
-    ok;
+check_key({text, B}, Path) when is_binary(B) ->
+    text_ok(valid_utf8(B), Path);
+check_key(B, Path) when is_binary(B) ->
+    text_ok(valid_utf8(B), Path);
 check_key(I, Path) when is_integer(I) ->
     check_value(I, Path);
 check_key(_Other, Path) ->
@@ -2127,6 +2359,12 @@ check_key(_Other, Path) ->
 
 int_ok(true, _Path)  -> ok;
 int_ok(false, Path)  -> unsupported(integer_out_of_range, Path).
+
+text_ok(true, _Path)  -> ok;
+text_ok(false, Path)  -> unsupported(invalid_text, Path).
+
+valid_utf8(Bin) ->
+    unicode:characters_to_binary(Bin, utf8, utf8) =:= Bin.
 
 %% `to_wire/1' projects an atom, a binary and a `{text, Binary}' of the
 %% same name onto ONE wire key, and folds them into one map. Two distinct
@@ -2146,12 +2384,27 @@ distinct(false, Path) -> unsupported(duplicate_wire_key, Path).
 unsupported(Type, Path) ->
     {error, {unsupported_payload_type, Type, lists:reverse(Path)}}.
 
+%% @private The wire form of a frame map: the boolean fields its frame
+%% type's table names become 1 or 0, then to_wire/1 applies.
+wire_form(#{frame_type := Type} = Frame) when is_atom(Type) ->
+    booleans_on_wire(frame_type_named(atom_to_binary(Type)), Frame);
+wire_form(Frame) ->
+    to_wire(Frame).
+
+booleans_on_wire({ok, Type}, Frame) ->
+    Booleans = [Field || {Field, boolean} <- maps:values(field_table(Type))],
+    to_wire(maps:map(fun(Field, Value) -> boolean_on_wire(lists:member(Field, Booleans), Value) end, Frame));
+booleans_on_wire(error, Frame) ->
+    to_wire(Frame).
+
+boolean_on_wire(true, true) -> 1;
+boolean_on_wire(true, false) -> 0;
+boolean_on_wire(_Boolean, Value) -> Value.
+
 %% @private Convert a frame map (atom keys, atom values where used)
-%% into the shape the CBOR encoders understand. Booleans
-%% (`true' / `false') are atoms in Erlang and round-trip the same way
-%% as any other atom — encoded as text strings, decoded via
-%% `binary_to_existing_atom'. Floats are stringified compactly so the
-%% canonical-byte derivation is independent of platform float encoding.
+%% into the shape the CBOR encoders understand: atoms, including true and
+%% false outside an envelope boolean field, become text, undefined becomes
+%% null, and binaries, integers and floats stay as they are.
 to_wire(M) when is_map(M) ->
     maps:fold(fun(K, V, Acc) ->
                   Acc#{wire_key(K) => to_wire(V)}
@@ -2175,35 +2428,668 @@ wire_key(B) when is_binary(B) -> {text, B};
 %% (e.g. per-wall sub-maps in mpong game state).
 wire_key(I) when is_integer(I) -> I.
 
-%% @private Walk the decoded CBOR term and restore atom keys/values
-%% via `binary_to_existing_atom'. Records (`record' / `records'
-%% fields) are pre-encoded as opaque CBOR binaries by `prepare_records'
-%% on the encode path and re-decoded by `restore_records' after this
-%% walk; their internal `{text, Bin}' payload keys never reach this
-%% function, so unconditional atom restoration is safe.
-%%
-%% `binary_to_existing_atom' raises `badarg' on names that are not
-%% already in the runtime atom table — that is the safety guarantee
-%% against atom-table exhaustion. Names hecate-station never declared
-%% (e.g. a peer-supplied custom field) come back as `{text, Bin}'
-%% (text string) or plain binary (byte string).
-from_wire_envelope(M) when is_map(M) ->
-    maps:fold(fun(K, V, Acc) ->
-                  Acc#{envelope_key(K) => from_wire_envelope(V)}
-              end, #{}, M);
-from_wire_envelope(L) when is_list(L) ->
-    [from_wire_envelope(E) || E <- L];
-from_wire_envelope(null)  -> undefined;
-from_wire_envelope({text, B}) when is_binary(B) -> maybe_atom(B, {text, B});
-from_wire_envelope(B) when is_binary(B) -> B;
-from_wire_envelope(I) when is_integer(I) -> I;
-from_wire_envelope(Other) -> Other.
+%%------------------------------------------------------------------
+%% Decoding through a fixed table (D26)
+%%------------------------------------------------------------------
 
-envelope_key({text, B}) when is_binary(B) -> maybe_atom(B, {text, B});
-envelope_key(B) when is_binary(B)         -> maybe_atom(B, B);
-envelope_key(K)                            -> K.
+%% A frame type from its wire name. Only the frame types below exist.
+frame_type_named(<<"connect">>) -> {ok, connect};
+frame_type_named(<<"hello">>) -> {ok, hello};
+frame_type_named(<<"goodbye">>) -> {ok, goodbye};
+frame_type_named(<<"swim_ping">>) -> {ok, swim_ping};
+frame_type_named(<<"swim_ack">>) -> {ok, swim_ack};
+frame_type_named(<<"swim_suspect">>) -> {ok, swim_suspect};
+frame_type_named(<<"swim_confirm">>) -> {ok, swim_confirm};
+frame_type_named(<<"ping">>) -> {ok, ping};
+frame_type_named(<<"pong">>) -> {ok, pong};
+frame_type_named(<<"find_node">>) -> {ok, find_node};
+frame_type_named(<<"nodes">>) -> {ok, nodes};
+frame_type_named(<<"find_value">>) -> {ok, find_value};
+frame_type_named(<<"value">>) -> {ok, value};
+frame_type_named(<<"store">>) -> {ok, store};
+frame_type_named(<<"store_ack">>) -> {ok, store_ack};
+frame_type_named(<<"call">>) -> {ok, call};
+frame_type_named(<<"result">>) -> {ok, result};
+frame_type_named(<<"error">>) -> {ok, error};
+frame_type_named(<<"hyparview_join">>) -> {ok, hyparview_join};
+frame_type_named(<<"hyparview_forward_join">>) -> {ok, hyparview_forward_join};
+frame_type_named(<<"hyparview_neighbor">>) -> {ok, hyparview_neighbor};
+frame_type_named(<<"hyparview_disconnect">>) -> {ok, hyparview_disconnect};
+frame_type_named(<<"hyparview_shuffle">>) -> {ok, hyparview_shuffle};
+frame_type_named(<<"hyparview_shuffle_reply">>) -> {ok, hyparview_shuffle_reply};
+frame_type_named(<<"plumtree_gossip">>) -> {ok, plumtree_gossip};
+frame_type_named(<<"plumtree_ihave">>) -> {ok, plumtree_ihave};
+frame_type_named(<<"plumtree_graft">>) -> {ok, plumtree_graft};
+frame_type_named(<<"plumtree_prune">>) -> {ok, plumtree_prune};
+frame_type_named(<<"overlay_relay">>) -> {ok, overlay_relay};
+frame_type_named(<<"publish">>) -> {ok, publish};
+frame_type_named(<<"subscribe">>) -> {ok, subscribe};
+frame_type_named(<<"unsubscribe">>) -> {ok, unsubscribe};
+frame_type_named(<<"event">>) -> {ok, event};
+frame_type_named(<<"advertise">>) -> {ok, advertise};
+frame_type_named(<<"unadvertise">>) -> {ok, unadvertise};
+frame_type_named(<<"stream_open">>) -> {ok, stream_open};
+frame_type_named(<<"stream_data">>) -> {ok, stream_data};
+frame_type_named(<<"stream_end">>) -> {ok, stream_end};
+frame_type_named(<<"stream_error">>) -> {ok, stream_error};
+frame_type_named(<<"stream_reply">>) -> {ok, stream_reply};
+frame_type_named(<<"want">>) -> {ok, want};
+frame_type_named(<<"have">>) -> {ok, have};
+frame_type_named(<<"block">>) -> {ok, block};
+frame_type_named(<<"manifest_req">>) -> {ok, manifest_req};
+frame_type_named(<<"manifest_res">>) -> {ok, manifest_res};
+frame_type_named(<<"cancel">>) -> {ok, cancel};
+frame_type_named(_Other) -> error.
 
-maybe_atom(B, Default) ->
-    try binary_to_existing_atom(B, utf8)
-    catch error:badarg -> Default
-    end.
+%% The fields each frame type defines, by wire name: the atom key a field
+%% decodes to, and how its value is read. `value' keeps a value in the one
+%% key form of peer-supplied maps; an enum takes only the atoms it lists; a
+%% reason takes its listed atoms and keeps any other reason as text; a list
+%% of entries reads each entry through its own table.
+field_table(connect) ->
+    #{<<"version">> => {version, value},
+      <<"frame_type">> => {frame_type, frame_type},
+      <<"frame_id">> => {frame_id, value},
+      <<"sent_at_ms">> => {sent_at_ms, uint},
+      <<"capabilities">> => {capabilities, uint},
+      <<"realm">> => {realm, value},
+      <<"call_id">> => {call_id, value},
+      <<"source_route">> => {source_route, value},
+      <<"signature">> => {signature, value},
+      <<"node_id">> => {node_id, value},
+      <<"station_id">> => {station_id, value},
+      <<"realms">> => {realms, value},
+      <<"addresses">> => {addresses, value},
+      <<"site">> => {site, value},
+      <<"puzzle_evidence">> => {puzzle_evidence, value},
+      <<"endorsements">> => {endorsements, value}};
+field_table(hello) ->
+    #{<<"version">> => {version, value},
+      <<"frame_type">> => {frame_type, frame_type},
+      <<"frame_id">> => {frame_id, value},
+      <<"sent_at_ms">> => {sent_at_ms, uint},
+      <<"capabilities">> => {capabilities, uint},
+      <<"realm">> => {realm, value},
+      <<"call_id">> => {call_id, value},
+      <<"source_route">> => {source_route, value},
+      <<"signature">> => {signature, value},
+      <<"node_id">> => {node_id, value},
+      <<"station_id">> => {station_id, value},
+      <<"realms">> => {realms, value},
+      <<"addresses">> => {addresses, value},
+      <<"site">> => {site, value},
+      <<"accepted">> => {accepted, boolean},
+      <<"refusal_code">> => {refusal_code, value},
+      <<"negotiated_capabilities">> => {negotiated_capabilities, value}};
+field_table(goodbye) ->
+    #{<<"version">> => {version, value},
+      <<"neighbour">> => {neighbour, held_object},
+      <<"frame_type">> => {frame_type, frame_type},
+      <<"frame_id">> => {frame_id, value},
+      <<"sent_at_ms">> => {sent_at_ms, uint},
+      <<"capabilities">> => {capabilities, uint},
+      <<"realm">> => {realm, value},
+      <<"call_id">> => {call_id, value},
+      <<"source_route">> => {source_route, value},
+      <<"signature">> => {signature, value},
+      <<"reason">> => {reason, {bounded_text, ?MAX_GOODBYE_REASON_BYTES}},
+      <<"detail">> => {detail, value}};
+field_table(swim_ping) ->
+    #{<<"version">> => {version, value},
+      <<"neighbour">> => {neighbour, held_object},
+      <<"frame_type">> => {frame_type, frame_type},
+      <<"frame_id">> => {frame_id, value},
+      <<"sent_at_ms">> => {sent_at_ms, uint},
+      <<"capabilities">> => {capabilities, uint},
+      <<"realm">> => {realm, value},
+      <<"call_id">> => {call_id, value},
+      <<"source_route">> => {source_route, value},
+      <<"signature">> => {signature, value},
+      <<"round">> => {round, uint},
+      <<"incarnation">> => {incarnation, uint},
+      <<"piggyback">> => {piggyback, {list_of, #{<<"target">> => {target, {bytes, 32}},
+          <<"state">> => {state, {enum, [alive, suspect, confirmed_failed]}},
+          <<"incarnation">> => {incarnation, uint},
+          <<"observed_at">> => {observed_at, uint},
+          <<"by">> => {by, {bytes, 32}}}}}};
+field_table(swim_ack) ->
+    #{<<"version">> => {version, value},
+      <<"neighbour">> => {neighbour, held_object},
+      <<"frame_type">> => {frame_type, frame_type},
+      <<"frame_id">> => {frame_id, value},
+      <<"sent_at_ms">> => {sent_at_ms, uint},
+      <<"capabilities">> => {capabilities, uint},
+      <<"realm">> => {realm, value},
+      <<"call_id">> => {call_id, value},
+      <<"source_route">> => {source_route, value},
+      <<"signature">> => {signature, value},
+      <<"round">> => {round, uint},
+      <<"responder">> => {responder, {bytes, 32}},
+      <<"incarnation">> => {incarnation, uint},
+      <<"piggyback">> => {piggyback, {list_of, #{<<"target">> => {target, {bytes, 32}},
+          <<"state">> => {state, {enum, [alive, suspect, confirmed_failed]}},
+          <<"incarnation">> => {incarnation, uint},
+          <<"observed_at">> => {observed_at, uint},
+          <<"by">> => {by, {bytes, 32}}}}}};
+field_table(swim_suspect) ->
+    #{<<"version">> => {version, value},
+      <<"neighbour">> => {neighbour, held_object},
+      <<"frame_type">> => {frame_type, frame_type},
+      <<"frame_id">> => {frame_id, value},
+      <<"sent_at_ms">> => {sent_at_ms, uint},
+      <<"capabilities">> => {capabilities, uint},
+      <<"realm">> => {realm, value},
+      <<"call_id">> => {call_id, value},
+      <<"source_route">> => {source_route, value},
+      <<"signature">> => {signature, value},
+      <<"target">> => {target, {bytes, 32}},
+      <<"target_incarnation">> => {target_incarnation, uint},
+      <<"suspected_by">> => {suspected_by, {bytes, 32}},
+      <<"ttl">> => {ttl, uint}};
+field_table(swim_confirm) ->
+    #{<<"version">> => {version, value},
+      <<"neighbour">> => {neighbour, held_object},
+      <<"frame_type">> => {frame_type, frame_type},
+      <<"frame_id">> => {frame_id, value},
+      <<"sent_at_ms">> => {sent_at_ms, uint},
+      <<"capabilities">> => {capabilities, uint},
+      <<"realm">> => {realm, value},
+      <<"call_id">> => {call_id, value},
+      <<"source_route">> => {source_route, value},
+      <<"signature">> => {signature, value},
+      <<"target">> => {target, {bytes, 32}},
+      <<"target_incarnation">> => {target_incarnation, uint},
+      <<"suspected_by">> => {suspected_by, {bytes, 32}},
+      <<"ttl">> => {ttl, uint}};
+field_table(ping) ->
+    #{<<"version">> => {version, value},
+      <<"neighbour">> => {neighbour, held_object},
+      <<"frame_type">> => {frame_type, frame_type},
+      <<"frame_id">> => {frame_id, value},
+      <<"sent_at_ms">> => {sent_at_ms, uint},
+      <<"capabilities">> => {capabilities, uint},
+      <<"realm">> => {realm, value},
+      <<"call_id">> => {call_id, value},
+      <<"source_route">> => {source_route, value},
+      <<"signature">> => {signature, value},
+      <<"nonce">> => {nonce, value}};
+field_table(pong) ->
+    #{<<"version">> => {version, value},
+      <<"neighbour">> => {neighbour, held_object},
+      <<"frame_type">> => {frame_type, frame_type},
+      <<"frame_id">> => {frame_id, value},
+      <<"sent_at_ms">> => {sent_at_ms, uint},
+      <<"capabilities">> => {capabilities, uint},
+      <<"realm">> => {realm, value},
+      <<"call_id">> => {call_id, value},
+      <<"source_route">> => {source_route, value},
+      <<"signature">> => {signature, value},
+      <<"nonce">> => {nonce, value}};
+field_table(find_node) ->
+    #{<<"version">> => {version, value},
+      <<"neighbour">> => {neighbour, held_object},
+      <<"frame_type">> => {frame_type, frame_type},
+      <<"frame_id">> => {frame_id, value},
+      <<"sent_at_ms">> => {sent_at_ms, uint},
+      <<"capabilities">> => {capabilities, uint},
+      <<"realm">> => {realm, value},
+      <<"call_id">> => {call_id, value},
+      <<"source_route">> => {source_route, value},
+      <<"signature">> => {signature, value},
+      <<"key">> => {key, value},
+      <<"origin">> => {origin, {bytes, 32}},
+      <<"depth">> => {depth, uint}};
+field_table(nodes) ->
+    #{<<"version">> => {version, value},
+      <<"neighbour">> => {neighbour, held_object},
+      <<"frame_type">> => {frame_type, frame_type},
+      <<"frame_id">> => {frame_id, value},
+      <<"sent_at_ms">> => {sent_at_ms, uint},
+      <<"capabilities">> => {capabilities, uint},
+      <<"realm">> => {realm, value},
+      <<"call_id">> => {call_id, value},
+      <<"source_route">> => {source_route, value},
+      <<"signature">> => {signature, value},
+      <<"key">> => {key, value},
+      <<"nodes">> => {nodes, {list_of, #{<<"node_id">> => {node_id, {bytes, 32}},
+          <<"station_id">> => {station_id, {bytes, 32}},
+          <<"addresses">> => {addresses, value},
+          <<"tier">> => {tier, uint},
+          <<"asn">> => {asn, {optional, uint}},
+          <<"country">> => {country, {bytes, 2}},
+          <<"last_seen_at">> => {last_seen_at, uint}}}}};
+field_table(find_value) ->
+    #{<<"version">> => {version, value},
+      <<"neighbour">> => {neighbour, held_object},
+      <<"frame_type">> => {frame_type, frame_type},
+      <<"frame_id">> => {frame_id, value},
+      <<"sent_at_ms">> => {sent_at_ms, uint},
+      <<"capabilities">> => {capabilities, uint},
+      <<"realm">> => {realm, value},
+      <<"call_id">> => {call_id, value},
+      <<"source_route">> => {source_route, value},
+      <<"signature">> => {signature, value},
+      <<"key">> => {key, value},
+      <<"origin">> => {origin, {bytes, 32}}};
+field_table(value) ->
+    #{<<"version">> => {version, value},
+      <<"neighbour">> => {neighbour, held_object},
+      <<"frame_type">> => {frame_type, frame_type},
+      <<"frame_id">> => {frame_id, value},
+      <<"sent_at_ms">> => {sent_at_ms, uint},
+      <<"capabilities">> => {capabilities, uint},
+      <<"realm">> => {realm, value},
+      <<"call_id">> => {call_id, value},
+      <<"source_route">> => {source_route, value},
+      <<"signature">> => {signature, value},
+      <<"key">> => {key, value},
+      <<"records">> => {records, value}};
+field_table(store) ->
+    #{<<"version">> => {version, value},
+      <<"neighbour">> => {neighbour, held_object},
+      <<"frame_type">> => {frame_type, frame_type},
+      <<"frame_id">> => {frame_id, value},
+      <<"sent_at_ms">> => {sent_at_ms, uint},
+      <<"capabilities">> => {capabilities, uint},
+      <<"realm">> => {realm, value},
+      <<"call_id">> => {call_id, value},
+      <<"source_route">> => {source_route, value},
+      <<"signature">> => {signature, value},
+      <<"record">> => {record, value}};
+field_table(store_ack) ->
+    #{<<"version">> => {version, value},
+      <<"neighbour">> => {neighbour, held_object},
+      <<"frame_type">> => {frame_type, frame_type},
+      <<"frame_id">> => {frame_id, value},
+      <<"sent_at_ms">> => {sent_at_ms, uint},
+      <<"capabilities">> => {capabilities, uint},
+      <<"realm">> => {realm, value},
+      <<"call_id">> => {call_id, value},
+      <<"source_route">> => {source_route, value},
+      <<"signature">> => {signature, value},
+      <<"key">> => {key, value},
+      <<"stored">> => {stored, boolean}};
+field_table(call) ->
+    #{<<"version">> => {version, value},
+      <<"frame_type">> => {frame_type, frame_type},
+      <<"request">> => {request, signed_object},
+      <<"source_route">> => {source_route, bytes},
+      <<"retry_budget">> => {retry_budget, uint}};
+field_table(result) ->
+    #{<<"version">> => {version, value},
+      <<"frame_type">> => {frame_type, frame_type},
+      <<"reply">> => {reply, signed_object},
+      <<"source_route_reverse">> => {source_route_reverse, bytes}};
+field_table(error) ->
+    #{<<"version">> => {version, value},
+      <<"frame_type">> => {frame_type, frame_type},
+      <<"reply">> => {reply, signed_object},
+      <<"relay_error">> => {relay_error, signed_object},
+      <<"source_route_reverse">> => {source_route_reverse, bytes},
+      <<"source_route_partial">> => {source_route_partial, bytes}};
+field_table(hyparview_join) ->
+    #{<<"version">> => {version, value},
+      <<"neighbour">> => {neighbour, held_object},
+      <<"frame_type">> => {frame_type, frame_type},
+      <<"frame_id">> => {frame_id, value},
+      <<"sent_at_ms">> => {sent_at_ms, uint},
+      <<"capabilities">> => {capabilities, uint},
+      <<"realm">> => {realm, value},
+      <<"call_id">> => {call_id, value},
+      <<"source_route">> => {source_route, value},
+      <<"signature">> => {signature, value},
+      <<"new_member">> => {new_member, {bytes, 32}},
+      <<"record">> => {record, value}};
+field_table(hyparview_forward_join) ->
+    #{<<"version">> => {version, value},
+      <<"neighbour">> => {neighbour, held_object},
+      <<"frame_type">> => {frame_type, frame_type},
+      <<"frame_id">> => {frame_id, value},
+      <<"sent_at_ms">> => {sent_at_ms, uint},
+      <<"capabilities">> => {capabilities, uint},
+      <<"realm">> => {realm, value},
+      <<"call_id">> => {call_id, value},
+      <<"source_route">> => {source_route, value},
+      <<"signature">> => {signature, value},
+      <<"new_member">> => {new_member, {bytes, 32}},
+      <<"ttl">> => {ttl, {uint_max, ?HYPARVIEW_MAX_WALK}},
+      <<"arwl">> => {arwl, {uint_max, ?HYPARVIEW_MAX_WALK}},
+      <<"prwl">> => {prwl, {uint_max, ?HYPARVIEW_MAX_WALK}},
+      <<"record">> => {record, value}};
+field_table(hyparview_neighbor) ->
+    #{<<"version">> => {version, value},
+      <<"neighbour">> => {neighbour, held_object},
+      <<"frame_type">> => {frame_type, frame_type},
+      <<"frame_id">> => {frame_id, value},
+      <<"sent_at_ms">> => {sent_at_ms, uint},
+      <<"capabilities">> => {capabilities, uint},
+      <<"realm">> => {realm, value},
+      <<"call_id">> => {call_id, value},
+      <<"source_route">> => {source_route, value},
+      <<"signature">> => {signature, value},
+      <<"priority">> => {priority, {enum, [high, low]}},
+      <<"record">> => {record, value}};
+field_table(hyparview_disconnect) ->
+    #{<<"version">> => {version, value},
+      <<"neighbour">> => {neighbour, held_object},
+      <<"frame_type">> => {frame_type, frame_type},
+      <<"frame_id">> => {frame_id, value},
+      <<"sent_at_ms">> => {sent_at_ms, uint},
+      <<"capabilities">> => {capabilities, uint},
+      <<"realm">> => {realm, value},
+      <<"call_id">> => {call_id, value},
+      <<"source_route">> => {source_route, value},
+      <<"signature">> => {signature, value}};
+field_table(hyparview_shuffle) ->
+    #{<<"version">> => {version, value},
+      <<"neighbour">> => {neighbour, held_object},
+      <<"frame_type">> => {frame_type, frame_type},
+      <<"frame_id">> => {frame_id, value},
+      <<"sent_at_ms">> => {sent_at_ms, uint},
+      <<"capabilities">> => {capabilities, uint},
+      <<"realm">> => {realm, value},
+      <<"call_id">> => {call_id, value},
+      <<"source_route">> => {source_route, value},
+      <<"signature">> => {signature, value},
+      <<"origin">> => {origin, {bytes, 32}},
+      <<"ttl">> => {ttl, {uint_max, ?HYPARVIEW_MAX_WALK}},
+      <<"peer_sample">> => {peer_sample, {list_of_bytes, 32, ?HYPARVIEW_MAX_SAMPLE}}};
+field_table(hyparview_shuffle_reply) ->
+    #{<<"version">> => {version, value},
+      <<"neighbour">> => {neighbour, held_object},
+      <<"frame_type">> => {frame_type, frame_type},
+      <<"frame_id">> => {frame_id, value},
+      <<"sent_at_ms">> => {sent_at_ms, uint},
+      <<"capabilities">> => {capabilities, uint},
+      <<"realm">> => {realm, value},
+      <<"call_id">> => {call_id, value},
+      <<"source_route">> => {source_route, value},
+      <<"signature">> => {signature, value},
+      <<"peer_sample">> => {peer_sample, {list_of_bytes, 32, ?HYPARVIEW_MAX_SAMPLE}}};
+field_table(plumtree_gossip) ->
+    #{<<"version">> => {version, value},
+      <<"frame_type">> => {frame_type, frame_type},
+      <<"publication">> => {publication, signed_object},
+      <<"round">> => {round, uint}};
+field_table(plumtree_ihave) ->
+    #{<<"version">> => {version, value},
+      <<"neighbour">> => {neighbour, held_object},
+      <<"frame_type">> => {frame_type, frame_type},
+      <<"frame_id">> => {frame_id, value},
+      <<"sent_at_ms">> => {sent_at_ms, uint},
+      <<"capabilities">> => {capabilities, uint},
+      <<"realm">> => {realm, value},
+      <<"call_id">> => {call_id, value},
+      <<"source_route">> => {source_route, value},
+      <<"signature">> => {signature, value},
+      <<"msg_id">> => {msg_id, {bytes, 48}},
+      <<"round">> => {round, uint}};
+field_table(plumtree_graft) ->
+    #{<<"version">> => {version, value},
+      <<"neighbour">> => {neighbour, held_object},
+      <<"frame_type">> => {frame_type, frame_type},
+      <<"frame_id">> => {frame_id, value},
+      <<"sent_at_ms">> => {sent_at_ms, uint},
+      <<"capabilities">> => {capabilities, uint},
+      <<"realm">> => {realm, value},
+      <<"call_id">> => {call_id, value},
+      <<"source_route">> => {source_route, value},
+      <<"signature">> => {signature, value},
+      <<"msg_id">> => {msg_id, {bytes, 48}},
+      <<"round">> => {round, uint}};
+field_table(plumtree_prune) ->
+    #{<<"version">> => {version, value},
+      <<"neighbour">> => {neighbour, held_object},
+      <<"frame_type">> => {frame_type, frame_type},
+      <<"frame_id">> => {frame_id, value},
+      <<"sent_at_ms">> => {sent_at_ms, uint},
+      <<"capabilities">> => {capabilities, uint},
+      <<"realm">> => {realm, value},
+      <<"call_id">> => {call_id, value},
+      <<"source_route">> => {source_route, value},
+      <<"signature">> => {signature, value}};
+field_table(overlay_relay) ->
+    #{<<"version">> => {version, value},
+      <<"neighbour">> => {neighbour, held_object},
+      <<"frame_type">> => {frame_type, frame_type},
+      <<"frame_id">> => {frame_id, value},
+      <<"sent_at_ms">> => {sent_at_ms, uint},
+      <<"capabilities">> => {capabilities, uint},
+      <<"realm">> => {realm, value},
+      <<"call_id">> => {call_id, value},
+      <<"source_route">> => {source_route, value},
+      <<"signature">> => {signature, value},
+      <<"peer">> => {peer, {bytes, 32}},
+      <<"payload">> => {payload, value}};
+field_table(publish) ->
+    #{<<"version">> => {version, value},
+      <<"frame_type">> => {frame_type, frame_type},
+      <<"publication">> => {publication, signed_object}};
+field_table(subscribe) ->
+    #{<<"version">> => {version, value},
+      <<"neighbour">> => {neighbour, held_object},
+      <<"frame_type">> => {frame_type, frame_type},
+      <<"frame_id">> => {frame_id, value},
+      <<"sent_at_ms">> => {sent_at_ms, uint},
+      <<"capabilities">> => {capabilities, uint},
+      <<"realm">> => {realm, value},
+      <<"call_id">> => {call_id, value},
+      <<"source_route">> => {source_route, value},
+      <<"signature">> => {signature, value},
+      <<"topic">> => {topic, value},
+      <<"subscriber">> => {subscriber, {bytes, 32}},
+      <<"filter">> => {filter, value},
+      <<"options">> => {options, value}};
+field_table(unsubscribe) ->
+    #{<<"version">> => {version, value},
+      <<"neighbour">> => {neighbour, held_object},
+      <<"frame_type">> => {frame_type, frame_type},
+      <<"frame_id">> => {frame_id, value},
+      <<"sent_at_ms">> => {sent_at_ms, uint},
+      <<"capabilities">> => {capabilities, uint},
+      <<"realm">> => {realm, value},
+      <<"call_id">> => {call_id, value},
+      <<"source_route">> => {source_route, value},
+      <<"signature">> => {signature, value},
+      <<"topic">> => {topic, value},
+      <<"subscriber">> => {subscriber, {bytes, 32}}};
+field_table(event) ->
+    #{<<"version">> => {version, value},
+      <<"frame_type">> => {frame_type, frame_type},
+      <<"publication">> => {publication, signed_object},
+      <<"delivered_via">> => {delivered_via, {enum, [plumtree, direct]}}};
+field_table(advertise) ->
+    #{<<"version">> => {version, value},
+      <<"neighbour">> => {neighbour, held_object},
+      <<"frame_type">> => {frame_type, frame_type},
+      <<"frame_id">> => {frame_id, value},
+      <<"sent_at_ms">> => {sent_at_ms, uint},
+      <<"capabilities">> => {capabilities, uint},
+      <<"realm">> => {realm, value},
+      <<"call_id">> => {call_id, value},
+      <<"source_route">> => {source_route, value},
+      <<"signature">> => {signature, value},
+      <<"advertisement">> => {advertisement, bytes}};
+field_table(unadvertise) ->
+    #{<<"version">> => {version, value},
+      <<"neighbour">> => {neighbour, held_object},
+      <<"frame_type">> => {frame_type, frame_type},
+      <<"frame_id">> => {frame_id, value},
+      <<"sent_at_ms">> => {sent_at_ms, uint},
+      <<"capabilities">> => {capabilities, uint},
+      <<"realm">> => {realm, value},
+      <<"call_id">> => {call_id, value},
+      <<"source_route">> => {source_route, value},
+      <<"signature">> => {signature, value},
+      <<"withdrawal">> => {withdrawal, bytes}};
+field_table(stream_open) ->
+    #{<<"version">> => {version, value},
+      <<"frame_type">> => {frame_type, frame_type},
+      <<"request">> => {request, signed_object},
+      <<"source_route">> => {source_route, bytes},
+      <<"retry_budget">> => {retry_budget, uint}};
+field_table(stream_data) ->
+    #{<<"version">> => {version, value},
+      <<"frame_type">> => {frame_type, frame_type},
+      <<"stream">> => {stream, stream_object},
+      <<"caller_stream">> => {caller_stream, held_object}};
+field_table(stream_end) ->
+    #{<<"version">> => {version, value},
+      <<"frame_type">> => {frame_type, frame_type},
+      <<"stream">> => {stream, stream_object},
+      <<"caller_stream">> => {caller_stream, held_object}};
+field_table(stream_error) ->
+    #{<<"version">> => {version, value},
+      <<"frame_type">> => {frame_type, frame_type},
+      <<"stream">> => {stream, stream_object},
+      <<"caller_stream">> => {caller_stream, held_object},
+      <<"relay_error">> => {relay_error, signed_object},
+      <<"source_route_partial">> => {source_route_partial, bytes}};
+field_table(stream_reply) ->
+    #{<<"version">> => {version, value},
+      <<"frame_type">> => {frame_type, frame_type},
+      <<"stream">> => {stream, stream_object}};
+field_table(want) ->
+    #{<<"version">> => {version, value},
+      <<"frame_type">> => {frame_type, frame_type},
+      <<"frame_id">> => {frame_id, value},
+      <<"sent_at_ms">> => {sent_at_ms, uint},
+      <<"capabilities">> => {capabilities, uint},
+      <<"realm">> => {realm, value},
+      <<"call_id">> => {call_id, value},
+      <<"source_route">> => {source_route, value},
+      <<"signature">> => {signature, value},
+      <<"blocks">> => {blocks, {list_of, #{<<"mcid">> => {mcid, value},
+          <<"priority">> => {priority, value}}}}};
+field_table(have) ->
+    #{<<"version">> => {version, value},
+      <<"frame_type">> => {frame_type, frame_type},
+      <<"frame_id">> => {frame_id, value},
+      <<"sent_at_ms">> => {sent_at_ms, uint},
+      <<"capabilities">> => {capabilities, uint},
+      <<"realm">> => {realm, value},
+      <<"call_id">> => {call_id, value},
+      <<"source_route">> => {source_route, value},
+      <<"signature">> => {signature, value},
+      <<"blocks">> => {blocks, {list_of, #{<<"mcid">> => {mcid, value},
+          <<"size">> => {size, value}}}}};
+field_table(block) ->
+    #{<<"version">> => {version, value},
+      <<"frame_type">> => {frame_type, frame_type},
+      <<"frame_id">> => {frame_id, value},
+      <<"sent_at_ms">> => {sent_at_ms, uint},
+      <<"capabilities">> => {capabilities, uint},
+      <<"realm">> => {realm, value},
+      <<"call_id">> => {call_id, value},
+      <<"source_route">> => {source_route, value},
+      <<"signature">> => {signature, value},
+      <<"mcid">> => {mcid, value},
+      <<"payload">> => {payload, value}};
+field_table(manifest_req) ->
+    #{<<"version">> => {version, value},
+      <<"frame_type">> => {frame_type, frame_type},
+      <<"frame_id">> => {frame_id, value},
+      <<"sent_at_ms">> => {sent_at_ms, uint},
+      <<"capabilities">> => {capabilities, uint},
+      <<"realm">> => {realm, value},
+      <<"call_id">> => {call_id, value},
+      <<"source_route">> => {source_route, value},
+      <<"signature">> => {signature, value},
+      <<"mcid">> => {mcid, value}};
+field_table(manifest_res) ->
+    #{<<"version">> => {version, value},
+      <<"frame_type">> => {frame_type, frame_type},
+      <<"frame_id">> => {frame_id, value},
+      <<"sent_at_ms">> => {sent_at_ms, uint},
+      <<"capabilities">> => {capabilities, uint},
+      <<"realm">> => {realm, value},
+      <<"call_id">> => {call_id, value},
+      <<"source_route">> => {source_route, value},
+      <<"signature">> => {signature, value},
+      <<"mcid">> => {mcid, value},
+      <<"manifest">> => {manifest, manifest}};
+field_table(cancel) ->
+    #{<<"version">> => {version, value},
+      <<"frame_type">> => {frame_type, frame_type},
+      <<"frame_id">> => {frame_id, value},
+      <<"sent_at_ms">> => {sent_at_ms, uint},
+      <<"capabilities">> => {capabilities, uint},
+      <<"realm">> => {realm, value},
+      <<"call_id">> => {call_id, value},
+      <<"source_route">> => {source_route, value},
+      <<"signature">> => {signature, value},
+      <<"blocks">> => {blocks, value}}.
+
+read_fields([{{text, Name}, Value} | Rest], Table, Frame) ->
+    field_read(maps:get(Name, Table, undefined), Value, Rest, Table, Frame);
+read_fields([], _Table, Frame) ->
+    {ok, Frame};
+read_fields(_KeyTheTableCannotName, _Table, _Frame) ->
+    error.
+
+field_read({Field, Kind}, Value, Rest, Table, Frame) ->
+    field_value(read_value(Kind, Value), Field, Rest, Table, Frame);
+field_read(undefined, _Value, _Rest, _Table, _Frame) ->
+    error.
+
+field_value({ok, Read}, Field, Rest, Table, Frame) -> read_fields(Rest, Table, Frame#{Field => Read});
+field_value(error, _Field, _Rest, _Table, _Frame) -> error.
+
+read_value(value, Value) -> {ok, peer_value(Value)};
+read_value(frame_type, {text, Name}) -> frame_type_named(Name);
+read_value({enum, Atoms}, {text, Name}) -> enum_value(Name, Atoms);
+read_value({bounded_text, Max}, {text, Bin} = Text) when byte_size(Bin) =< Max -> {ok, Text};
+read_value(boolean, 1) -> {ok, true};
+read_value(boolean, 0) -> {ok, false};
+read_value({list_of, Table}, Entries) when is_list(Entries) -> entries_read(Entries, Table, []);
+read_value(manifest, Manifest) when is_map(Manifest) -> {ok, peer_value(Manifest)};
+read_value(signed_object, #{{text, <<"key">>} := Key, {text, <<"tbs">>} := Tbs,
+                            {text, <<"signature">>} := Signature} = Object)
+  when map_size(Object) =:= 3, is_binary(Key), is_binary(Tbs), is_binary(Signature) ->
+    {ok, #{key => Key, tbs => Tbs, signature => Signature}};
+read_value(bytes, Bytes) when is_binary(Bytes) -> {ok, Bytes};
+read_value({bytes, Size}, Bytes) when byte_size(Bytes) =:= Size -> {ok, Bytes};
+read_value(text, {text, Text}) -> {ok, Text};
+read_value(uint, N) when is_integer(N), N >= 0, N < ?MAX_PROTOCOL_INT -> {ok, N};
+read_value({uint_max, Max}, N) when is_integer(N), N >= 0, N =< Max -> {ok, N};
+read_value(held_object, #{{text, <<"tbs">>} := Tbs, {text, <<"signature">>} := Signature} = Held)
+  when map_size(Held) =:= 2, is_binary(Tbs), is_binary(Signature) ->
+    {ok, #{tbs => Tbs, signature => Signature}};
+read_value(stream_object, Object) -> either_object(read_value(signed_object, Object), Object);
+read_value({list_of_bytes, Size}, Items) when is_list(Items) ->
+    sized_items([Item || Item <- Items, is_binary(Item), byte_size(Item) =:= Size], Items);
+read_value({list_of_bytes, Size, Max}, Items) when is_list(Items), length(Items) =< Max ->
+    read_value({list_of_bytes, Size}, Items);
+read_value({optional, _Kind}, null) -> {ok, undefined};
+read_value({optional, Kind}, Value) -> read_value(Kind, Value);
+read_value(_Kind, _Value) -> error.
+
+sized_items(Items, Items) -> {ok, Items};
+sized_items(_Sized, _Items) -> error.
+
+%% A provider's stream object carries its key on the first frame and not after, so either shape reads.
+either_object({ok, _Carried} = Read, _Object) -> Read;
+either_object(error, Object) -> read_value(held_object, Object).
+
+enum_value(Name, [Atom | Atoms]) -> enum_match(atom_to_binary(Atom) =:= Name, Atom, Name, Atoms);
+enum_value(_Name, []) -> error.
+
+enum_match(true, Atom, _Name, _Atoms) -> {ok, Atom};
+enum_match(false, _Atom, Name, Atoms) -> enum_value(Name, Atoms).
+
+entries_read([Entry | Rest], Table, Acc) when is_map(Entry) ->
+    entry_read(read_fields(maps:to_list(Entry), Table, #{}), Rest, Table, Acc);
+entries_read([], _Table, Acc) ->
+    {ok, lists:reverse(Acc)};
+entries_read(_NotEntries, _Table, _Acc) ->
+    error.
+
+entry_read({ok, Entry}, Rest, Table, Acc) -> entries_read(Rest, Table, [Entry | Acc]);
+entry_read(error, _Rest, _Table, _Acc) -> error.
+
+%% A peer-supplied value in the one key form (D26): text stays `{text, Bin}',
+%% byte strings stay binaries, null reads as undefined, and no atom is made.
+peer_value(null) -> undefined;
+peer_value(List) when is_list(List) -> [peer_value(Element) || Element <- List];
+peer_value(Map) when is_map(Map) -> maps:map(fun(_Key, Value) -> peer_value(Value) end, Map);
+peer_value(Other) -> Other.

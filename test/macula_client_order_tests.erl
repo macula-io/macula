@@ -70,10 +70,14 @@ stop(Pool, Ref) ->
     try macula_client:unsubscribe(Pool, Ref) catch _:_ -> ok end,
     ok = macula_client:close(Pool).
 
+%% Each (publisher, seq) stands in for one verified publication, with its
+%% own publication_hash and an expiry a minute from now.
 inject(Pool, Topic, Pub, Seq) ->
     Pool ! {macula_event, make_ref(), Topic, Seq,
             #{realm => ?REALM, publisher => Pub, seq => Seq,
-              delivered_via => direct}},
+              delivered_via => direct,
+              publication_hash => crypto:hash(sha384, <<Pub/binary, Seq:64>>),
+              expires_at => erlang:system_time(millisecond) + 60_000}},
     ok.
 
 collect(_Ref, _Topic, 0, _Timeout) ->

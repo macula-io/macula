@@ -5,6 +5,9 @@
 %% upgrades to Prometheus / OpenTelemetry exporters without changing this
 %% module's public surface.
 %%
+%% `bounded_event/3' logs an event at most once per 10 seconds per event
+%% name, node-wide, with a count of the rest (`macula_diagnostics_bound').
+%%
 %% Topic namespacing convention:
 %% <ul>
 %%   <li>`_macula.*' — protocol-layer events (SDK)</li>
@@ -14,6 +17,7 @@
 
 -export([
     event/2, event/3,
+    bounded_event/3,
     metric/3,
     snapshot/0,
     reset/0,
@@ -42,6 +46,15 @@ event(Level, Topic, Properties)
     Report = #{event => Topic, properties => Properties},
     Meta   = #{report_cb => fun report_cb/1, domain => [macula]},
     logger:log(Level, Report, Meta).
+
+%% @doc Emit a structured event at most once per 10 seconds per event name,
+%% node-wide. An event inside that window is counted instead, and the next
+%% line for the name carries the latest properties with `suppressed', the
+%% number held back since the line before. Callers update the counts table
+%% themselves, so a burst of events never queues on a process.
+-spec bounded_event(level(), binary(), map()) -> ok.
+bounded_event(Level, Topic, Properties) when is_atom(Level), is_binary(Topic), is_map(Properties) ->
+    macula_diagnostics_bound:event(macula_diagnostics_bound, Level, Topic, Properties).
 
 %% Logger report callback — flat single-line format.
 report_cb(#{event := Topic, properties := Props}) ->

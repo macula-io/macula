@@ -37,8 +37,7 @@ round_trip_through_slice_test_() ->
          {ok, SubRef} = macula_pubsub:subscribe(Pool, ?REALM,
                                                 Topic, self()),
          Pool ! {macula_event, make_ref(), Topic, world,
-                 #{realm => ?REALM, publisher => <<1:256>>,
-                   seq => 1, delivered_via => direct}},
+                 publication_meta(<<1:256>>, 1, <<"tbs world">>)},
          receive
              {macula_event, SubRef, Topic, world, _} -> ok
          after 2_000 -> erlang:error(no_event)
@@ -74,8 +73,7 @@ subscribe_callback_invokes_fun_per_event_test_() ->
          {ok, SubRef} = macula_pubsub:subscribe_callback(
                            Pool, ?REALM, Topic, CB),
          Pool ! {macula_event, make_ref(), Topic, hello,
-                 #{realm => ?REALM, publisher => <<2:256>>,
-                   seq => 1, delivered_via => direct}},
+                 publication_meta(<<2:256>>, 1, <<"tbs hello">>)},
          receive
              {got, Topic, hello, #{publisher := <<2:256>>}} -> ok
          after 2_000 -> erlang:error(no_callback)
@@ -105,11 +103,9 @@ subscribe_callback_swallows_callback_crash_test_() ->
          {ok, SubRef} = macula_pubsub:subscribe_callback(
                            Pool, ?REALM, Topic, CB),
          Pool ! {macula_event, make_ref(), Topic, first,
-                 #{realm => ?REALM, publisher => <<3:256>>,
-                   seq => 1, delivered_via => direct}},
+                 publication_meta(<<3:256>>, 1, <<"tbs first">>)},
          Pool ! {macula_event, make_ref(), Topic, second,
-                 #{realm => ?REALM, publisher => <<3:256>>,
-                   seq => 2, delivered_via => direct}},
+                 publication_meta(<<3:256>>, 2, <<"tbs second">>)},
          receive
              {got, Topic, second, _} -> ok
          after 2_000 -> erlang:error(receiver_died_on_crash)
@@ -164,3 +160,11 @@ wait_subscriptions_eq(Pool, Target, N) ->
         Target -> ok;
         _ -> timer:sleep(50), wait_subscriptions_eq(Pool, Target, N - 1)
     end.
+
+%% The meta a station link hands the pool with an event it verified: the
+%% publication's fields, publication_hash, the SHA-384 of its tbs (here
+%% of a stand-in), and expires_at, a minute from now.
+publication_meta(Publisher, Seq, Tbs) ->
+    #{realm => ?REALM, publisher => Publisher, seq => Seq,
+      delivered_via => direct, publication_hash => crypto:hash(sha384, Tbs),
+      expires_at => erlang:system_time(millisecond) + 60_000}.

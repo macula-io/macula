@@ -114,7 +114,7 @@
     advertise_stream/5,
     advertise_stream/6,
     unadvertise_stream/3,
-    send_stream_frame/3,
+    send_stream_bytes/4,
     is_connected/1,
     not_sent/1,
     peer_node_id/1,
@@ -135,8 +135,12 @@
 
 -export_type([handler/0, stream_handler/0, overlay_subscription/0]).
 
+-ifdef(TEST).
+-export([with_client_stream/3]).
+-endif.
+
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
-         terminate/2, code_change/3]).
+         terminate/2, code_change/3, format_status/1]).
 
 -export_type([opts/0]).
 
@@ -937,18 +941,18 @@ unadvertise_stream(Pid, Realm, Procedure)
                     {stream_unadvertise, Realm, Procedure},
                     5_000).
 
-%% @doc Cast a STREAM_* outbound frame. Called by `macula_stream'
-%% processes paired against this link via the
-%% `{remote_via_link, Pid, Sid}' peer shape — the stream invokes this
-%% to ship its STREAM_DATA / STREAM_END / STREAM_ERROR / STREAM_REPLY
-%% bytes through the link's peering connection.
+%% @doc Write the bytes of one frame a paired `macula_stream' built,
+%% signed and encoded onto that stream's dedicated QUIC stream. `Last'
+%% is true for the last frame from the stream's side (STREAM_END with
+%% role both, STREAM_ERROR or STREAM_REPLY), after which the link
+%% forgets the stream. A write that fails is reported to the stream as
+%% `{stream_write_failed, Sid, Reason}', and the link forgets the stream.
 %%
-%% Always returns `ok' (the operation is fire-and-forget; the link
-%% drops the frame if not yet connected and the stream's own backoff
-%% policy decides what to do).
--spec send_stream_frame(pid(), atom(), map()) -> ok.
-send_stream_frame(Pid, Type, Spec) when is_pid(Pid), is_atom(Type), is_map(Spec) ->
-    gen_server:cast(Pid, {send_stream_frame, Type, Spec}).
+%% Always returns `ok': the write happens in the link.
+-spec send_stream_bytes(pid(), binary(), binary(), boolean()) -> ok.
+send_stream_bytes(Pid, Sid, Bytes, Last)
+  when is_pid(Pid), is_binary(Sid), is_binary(Bytes), is_boolean(Last) ->
+    gen_server:cast(Pid, {send_stream_bytes, Sid, Bytes, Last}).
 
 -spec is_connected(pid()) -> boolean().
 is_connected(Pid) ->
@@ -1202,16 +1206,10 @@ handle_call({stream_unadvertise, Realm, Proc}, _From,
 handle_call(_Req, _From, S) ->
     {reply, {error, unknown_call}, S}.
 
-%%-- Outbound STREAM_* from a paired stream_v1 process ---------------
+%%-- Outbound STREAM_* bytes from a paired macula_stream -------------
 
-handle_cast({send_stream_frame, _Type, _Spec},
-            #state{peer_pid = undefined} = S) ->
-    {noreply, S};
-handle_cast({send_stream_frame, Type, #{stream_id := Sid} = Spec},
-            #state{identity = Id} = S) ->
-    Frame = build_stream_frame(Type, finalise_stream_spec(Type, Spec, Id)),
-    send_on_dedicated_stream(find_stream(Sid, S), Frame, Id),
-    {noreply, on_outbound_stream_frame(Type, Spec, S)};
+handle_cast({send_stream_bytes, Sid, Bytes, Last}, S) ->
+    {noreply, stream_bytes_sent(find_stream(Sid, S), Sid, Bytes, Last, S)};
 
 handle_cast({close_content_stream, Stream}, S) ->
     {noreply, close_content_stream_state(Stream, S)};
@@ -1463,6 +1461,9 @@ terminate(_Reason, _S) ->
     ok.
 
 code_change(_OldVsn, S, _Extra) -> {ok, S}.
+
+%% Status output and crash reports show this process's keys with their private halves redacted.
+format_status(Status) -> macula_node_keys:redacted(Status).
 
 %%====================================================================
 %% Internals
@@ -2676,42 +2677,31 @@ dedicated_open_result({error, _Reason}, _Frame, _Sid, StreamPid, Mon, _Id, S) ->
 %%-------------------------------------------------------------------
 
 %% Each `macula_stream' bound to this link via the
-%% `{remote_via_link, _, Sid}' peer shape casts an outbound frame
-%% spec here. Build the corresponding `macula_frame:stream_*' and
-%% ship through the peering connection. Outbound STREAM_END (full
-%% close), STREAM_ERROR, or STREAM_REPLY also drop the local
-%% routing entry — the stream is finished from our side.
-build_stream_frame(stream_data, Spec)  -> macula_frame:stream_data(Spec);
-build_stream_frame(stream_end, Spec)   -> macula_frame:stream_end(Spec);
-build_stream_frame(stream_error, Spec) -> macula_frame:stream_error(Spec);
-build_stream_frame(stream_reply, Spec) -> macula_frame:stream_reply(Spec).
+%% `{remote_via_link, _, Sid}' peer shape casts the bytes of each frame
+%% it signs here, and the link writes them on the stream's dedicated
+%% QUIC stream. Every open stream session has its own dedicated QUIC
+%% stream by the time anything is outbound on it: `find_stream/2'
+%% returning `error' means the session already tore down (peer closed,
+%% monitor DOWN raced this cast), and there is nothing to write to.
+stream_bytes_sent(error, _Sid, _Bytes, _Last, S) ->
+    S;
+stream_bytes_sent({ok, {Pid, _Mon, Stream}}, Sid, Bytes, Last, S) ->
+    stream_written(written(Stream, Bytes), Pid, Sid, Last, S).
 
-%% Every open stream session has its own dedicated QUIC stream by
-%% the time anything is outbound on it — `find_stream/2' returning
-%% `error' here means the session already tore down (peer closed,
-%% monitor DOWN raced this cast); nothing to send to.
-send_on_dedicated_stream(error, _Frame, _Id) ->
-    ok;
-send_on_dedicated_stream({ok, {_Pid, _Mon, Stream}}, Frame, Id) ->
-    try macula_peering:send_on_stream(Stream, Frame, Id) catch _:_ -> ok end.
+written(Stream, Bytes) ->
+    try macula_peering:send_on_stream(Stream, Bytes)
+    catch Class:Reason -> {error, {Class, Reason}}
+    end.
 
-%% `stream_reply' carries `responded_by' (the link's own pubkey) which
-%% the v1 stream gen_server has no way to know. `stream_data',
-%% `stream_end' and `stream_error' carry `signer' (the emitter's
-%% pubkey) so the station-side verify path can authenticate non-OPEN
-%% stream frames end-to-end across multi-hop relays — same pattern as
-%% CALL's `caller'. Without it, station_B receiving a chunk forwarded
-%% by station_A would verify the signature against station_A's NodeId,
-%% but the frame was signed by the originating daemon, and verify
-%% would fail silently — every cross-station stream chunk dropped.
-finalise_stream_spec(stream_reply, Spec, Id) ->
-    Spec#{responded_by => macula_identity:public(Id)};
-finalise_stream_spec(Type, Spec, Id) when Type =:= stream_data;
-                                          Type =:= stream_end;
-                                          Type =:= stream_error ->
-    Spec#{signer => macula_identity:public(Id)};
-finalise_stream_spec(_Type, Spec, _Id) ->
-    Spec.
+%% A failed write ends the session: the stream hears why, and the link
+%% forgets it.
+stream_written(ok, _Pid, Sid, true, S) ->
+    maybe_drop_outbound(Sid, S);
+stream_written(ok, _Pid, _Sid, false, S) ->
+    S;
+stream_written({error, Reason}, Pid, Sid, _Last, S) ->
+    Pid ! {stream_write_failed, Sid, Reason},
+    drop_stream(Sid, S).
 
 %% After sending an outbound terminal frame, drop the local routing
 %% entry — but ONLY when this link owns just one side of the stream.
@@ -2726,15 +2716,6 @@ finalise_stream_spec(_Type, Spec, _Id) ->
 %% the inbound terminal handler (`deliver_stream_end' /
 %% `deliver_stream_error' / `deliver_stream_reply') which fires
 %% after the bounce and tears down both entries via `drop_stream'.
-on_outbound_stream_frame(stream_end, #{role := both, stream_id := Sid}, S) ->
-    maybe_drop_outbound(Sid, S);
-on_outbound_stream_frame(stream_error, #{stream_id := Sid}, S) ->
-    maybe_drop_outbound(Sid, S);
-on_outbound_stream_frame(stream_reply, #{stream_id := Sid}, S) ->
-    maybe_drop_outbound(Sid, S);
-on_outbound_stream_frame(_Type, _Spec, S) ->
-    S.
-
 maybe_drop_outbound(Sid, #state{client_streams = CS,
                                 server_streams = SS} = S) ->
     case {maps:is_key(Sid, CS), maps:is_key(Sid, SS)} of
@@ -3170,6 +3151,13 @@ close_dedicated_stream(undefined) -> ok;
 close_dedicated_stream(Stream) ->
     try macula_peering:close_dedicated_stream(Stream) catch _:_ -> ok end,
     ok.
+
+-ifdef(TEST).
+%% A client stream entry as `call_stream/5' makes one, for tests of the
+%% stream write path.
+with_client_stream(#state{client_streams = CS} = S, Sid, {StreamPid, Stream}) ->
+    S#state{client_streams = CS#{Sid => {StreamPid, erlang:monitor(process, StreamPid), Stream}}}.
+-endif.
 
 %% Lookup a stream by Sid across both maps. Client-side first (the
 %% common server_stream mode delivers server→client chunks to the

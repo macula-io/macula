@@ -1,25 +1,32 @@
 %%% @doc Direct-dial resolution in `macula_direct_dial': every advertisement
-%%% that verifies is a candidate; one whose endpoint can't be resolved or
-%%% whose dial doesn't connect is passed over for the next before anything is
-%%% sent; resolution asks the DHT again until the call's deadline, backing off
-%%% to one second; a candidate that failed is tried again only on a changed
-%%% record; a content fetch that fails moves on to the next provider.
+%%% that passes the trust check is a candidate; one whose endpoint can't be
+%%% resolved or whose dial doesn't connect is passed over for the next before
+%%% anything is sent; resolution asks the DHT again until the call's deadline,
+%%% backing off to one second; a candidate that failed is tried again only on
+%%% a changed record; a content fetch that fails moves on to the next provider.
+%%% The record part: a provider's advertisement is signed with its node
+%%% identity key and put as its wire form, a station is dialled only through an
+%%% endpoint record the station itself signed, and an org namespaced procedure
+%%% needs a provider authorization.
 %%%
 %%% The DHT, the dials and the transfers are faked with meck on the `macula'
-%%% facade and `macula_content_transfer'; the records themselves are real and
-%%% signed.
+%%% facade, `macula_client' and `macula_content_transfer'. The records
+%%% themselves are real: signed with node keys in the node's crypto profile and
+%%% handed over verified, as the facade hands them over.
 -module(macula_direct_dial_resolve_tests).
 
 -include_lib("eunit/include/eunit.hrl").
--include_lib("public_key/include/public_key.hrl").
 
 -behaviour(macula_download).
 -export([init/1, handle_downloaded/2]).
 
 -define(STATE, macula_direct_dial_resolve_tests_state).
--define(REALM, <<0:256>>).
+-define(REALM, <<16#11:256>>).
+-define(PROC, <<"echo_v1">>).
 -define(ORG, <<"resolve-tests">>).
--define(PROC, <<"resolve-tests/echo_v1">>).
+-define(ORG_PROC, <<"resolve-tests/echo_v1">>).
+-define(HOUR_MS, 3_600_000).
+-define(DAY_MS, 86_400_000).
 
 %%%===================================================================
 %%% Fixture
@@ -29,6 +36,7 @@ setup() ->
     ?STATE = ets:new(?STATE, [named_table, public, set]),
     ets:insert(?STATE, {visits, []}),
     meck:new(macula, [passthrough, non_strict]),
+    meck:new(macula_client, [passthrough]),
     meck:new(macula_content_transfer, [passthrough]),
     meck:expect(macula, find_records, fun(_Pool, Key) -> find_records(Key) end),
     meck:expect(macula, find_records,
@@ -36,8 +44,6 @@ setup() ->
     meck:expect(macula, find_record, fun(_Pool, Key) -> find_record(Key) end),
     meck:expect(macula, find_record,
                 fun(_Pool, Key, TimeoutMs) -> find_record(Key, TimeoutMs) end),
-    meck:expect(macula, find_content_providers,
-                fun(_Pool, Mcid) -> {ok, providers(Mcid)} end),
     meck:expect(macula, call_station,
                 fun(_Pool, DialUrl, _Realm, _Proc, _Payload, _TimeoutMs, _Opts) ->
                         visit(DialUrl)
@@ -58,10 +64,11 @@ setup() ->
                 fun({fake_transfer, Endpoint}) -> visit(Endpoint) end),
     meck:expect(macula_content_transfer, cancel, fun(_Transfer) -> ok end),
     meck:expect(macula, publish, fun(_Pool, _Realm, _Topic, _Payload) -> ok end),
+    meck:expect(macula, publish, fun(_Pool, _Realm, _Topic, _Payload, _Opts) -> ok end),
     ok.
 
 teardown(_) ->
-    meck:unload([macula, macula_content_transfer]),
+    meck:unload([macula, macula_client, macula_content_transfer]),
     ets:delete(?STATE).
 
 resolve_test_() ->
@@ -78,8 +85,12 @@ resolve_test_() ->
       {timeout, 30, fun get_content_tries_the_next_provider_after_a_failed_fetch/0},
       {timeout, 30, fun get_content_timeout_bounds_resolution/0},
       {timeout, 30, fun put_content_timeout_bounds_the_endpoint_lookup/0},
-      {timeout, 30, fun call_with_cert_chain_tries_the_next_advertisement_when_a_station_has_no_endpoint/0},
-      {timeout, 30, fun call_with_cert_chain_asks_again_until_its_deadline/0},
+      {timeout, 30, fun a_published_advertisement_is_signed_by_the_node_identity_and_put_as_its_wire_form/0},
+      {timeout, 30, fun a_call_dials_the_station_a_trusted_advertisement_names_pinned_to_its_node_id/0},
+      {timeout, 30, fun an_endpoint_signed_by_another_node_is_not_dialed/0},
+      {timeout, 30, fun an_org_namespaced_procedure_without_an_authorization_resolves_to_nothing/0},
+      {timeout, 30, fun call_with_authorization_tries_the_next_advertisement_when_a_station_has_no_endpoint/0},
+      {timeout, 30, fun call_with_authorization_asks_again_until_its_deadline/0},
       {timeout, 30, fun call_dials_a_refusing_station_once_per_endpoint_version/0},
       {timeout, 30, fun call_tries_an_advertisement_that_appears_on_a_later_pass/0},
       {timeout, 30, fun resolution_backs_off_between_passes/0},
@@ -108,7 +119,9 @@ resolve_test_() ->
       {timeout, 30, fun put_content_keeps_a_lookup_error_when_a_later_endpoint_lookup_is_cut_off_by_the_deadline/0},
       {timeout, 30, fun call_reports_a_timeout_when_no_endpoint_lookup_was_answered_in_time/0},
       {timeout, 30, fun put_content_asks_again_past_a_malformed_endpoint_record/0},
-      {timeout, 30, fun put_content_reports_a_malformed_endpoint_record_at_its_deadline/0}]}.
+      {timeout, 30, fun put_content_reports_a_malformed_endpoint_record_at_its_deadline/0},
+      {timeout, 30, fun put_content_asks_again_past_an_expired_endpoint_record/0},
+      {timeout, 30, fun put_content_ends_the_lookup_at_an_endpoint_record_that_does_not_verify/0}]}.
 
 %%%===================================================================
 %%% Calls
@@ -124,10 +137,11 @@ call_tries_the_next_advertisement_when_a_station_has_no_endpoint() ->
     ?assertEqual({ok, <<"from b">>}, call(3000)),
     ?assertEqual([dial_url(B)], visits()).
 
-%% When records come back but none qualifies, resolution asks again.
+%% When records come back but none qualifies, here one for another procedure,
+%% resolution asks again.
 call_retries_when_no_advertisement_qualifies() ->
-    Stale = station(<<"stale.test">>), Fresh = station(<<"fresh.test">>),
-    set_replies(procedure_key(), [[expired(advertisement(Stale))], [advertisement(Fresh)]]),
+    Other = station(<<"other.test">>), Fresh = station(<<"fresh.test">>),
+    set_replies(procedure_key(), [[advertisement(Other, <<"other_v1">>)], [advertisement(Fresh)]]),
     set_endpoint(Fresh, endpoint_record(Fresh)),
     set_answer(dial_url(Fresh), {ok, <<"from fresh">>}),
     ?assertEqual({ok, <<"from fresh">>}, call(3000)),
@@ -231,43 +245,92 @@ get_content_timeout_bounds_resolution() ->
 %% The timeout bounds the lookup of the station a put goes to.
 put_content_timeout_bounds_the_endpoint_lookup() ->
     S = station(<<"s.test">>),
-    {Elapsed, Result} =
-        timed(fun() ->
-                      macula_direct_dial:put_content(self(), maps:get(key, S),
-                                                     <<"bytes">>, 300)
-              end),
+    {Elapsed, Result} = timed(fun() -> put_at_station(S, 300) end),
     ?assertMatch({error, {unresolved, _}}, Result),
     ?assert(Elapsed < 1000).
 
 %%%===================================================================
-%%% Cert chains
+%%% Records and trust
 %%%===================================================================
 
-%% With cert-chain verification, a station without an endpoint is passed over
-%% just the same.
-call_with_cert_chain_tries_the_next_advertisement_when_a_station_has_no_endpoint() ->
-    Ca = realm_ca(),
+%% A provider's advertisement is signed with its node identity key, names the
+%% pool's connected station, and is put as its wire form.
+a_published_advertisement_is_signed_by_the_node_identity_and_put_as_its_wire_form() ->
+    Provider = node_key(identity),
+    Station = station(<<"s.test">>),
+    Test = self(),
+    StationId = maps:get(id, Station),
+    meck:expect(macula, links, fun(_Pool) -> {ok, [#{connected => true, node_id => StationId}]} end),
+    meck:expect(macula_client, call,
+                fun(_Pool, _Realm, Procedure, Payload, _TimeoutMs) ->
+                        Test ! {called, Procedure, Payload},
+                        {ok, ok}
+                end),
+    ?assertEqual(ok, macula_direct_dial:publish_advertisement(self(), ?REALM, ?PROC, Provider)),
+    {<<"_dht.put_record">>, Wire} = receive {called, P, W} -> {P, W} after 1000 -> erlang:error(not_put) end,
+    {ok, Verified} = macula_record:verify(Wire, profile()),
+    ?assertEqual(#{realm_id => ?REALM, procedure => ?PROC, advertiser_node => macula_node_keys:key_id(Provider),
+                   serving_station => StationId, authorization => undefined},
+                 macula_record:read_procedure_advertisement(Verified)).
+
+%% The dial goes to the station a trusted advertisement names, pinned to that
+%% station's node_id.
+a_call_dials_the_station_a_trusted_advertisement_names_pinned_to_its_node_id() ->
+    A = station(<<"a.test">>),
+    Test = self(),
+    set_replies(procedure_key(), [[advertisement(A)]]),
+    set_endpoint(A, endpoint_record(A)),
+    meck:expect(macula, call_station,
+                fun(_Pool, DialUrl, _Realm, _Proc, _Payload, _TimeoutMs, Opts) ->
+                        Test ! {dialed, DialUrl, Opts},
+                        {ok, answered}
+                end),
+    ?assertEqual({ok, answered}, call(3000)),
+    AId = maps:get(id, A),
+    ?assertMatch({<<"quic://[a.test]:4433">>, #{expected_node_id := AId}},
+                 receive {dialed, Url, Opts} -> {Url, Opts} after 0 -> none end).
+
+%% An endpoint record under the station's key but signed by another node is
+%% never dialled.
+an_endpoint_signed_by_another_node_is_not_dialed() ->
+    A = station(<<"a.test">>), Other = station(<<"other.test">>),
+    set_replies(procedure_key(), [[advertisement(A)]]),
+    set_endpoint(A, endpoint_record_signed_by(A, Other)),
+    ?assertEqual({error, {unresolved, station_endpoint_signer_mismatch}}, call(1000)),
+    ?assertEqual([], visits()).
+
+%% An advertisement for an org namespaced procedure that carries no provider
+%% authorization is no candidate.
+an_org_namespaced_procedure_without_an_authorization_resolves_to_nothing() ->
+    A = station(<<"a.test">>),
+    set_replies(org_procedure_key(), [[advertisement(A, ?ORG_PROC)]]),
+    set_endpoint(A, endpoint_record(A)),
+    ?assertEqual({error, {unresolved, no_trusted_advertisement}}, call(500, ?ORG_PROC, #{})),
+    ?assertEqual([], visits()).
+
+%% With provider authorizations checked against the realm key, a station
+%% without an endpoint is passed over just the same.
+call_with_authorization_tries_the_next_advertisement_when_a_station_has_no_endpoint() ->
+    Authority = authority(),
     A = station(<<"a.test">>), B = station(<<"b.test">>),
-    set_replies(procedure_key(), [[authorized_advertisement(A, Ca, ?ORG),
-                                   authorized_advertisement(B, Ca, ?ORG)]]),
+    set_replies(org_procedure_key(), [[authorized_advertisement(A, Authority, ?ORG),
+                                       authorized_advertisement(B, Authority, ?ORG)]]),
     set_endpoint(B, endpoint_record(B)),
     set_answer(dial_url(B), {ok, <<"from b">>}),
-    ?assertEqual({ok, <<"from b">>},
-                 call(3000, #{verify_cert_chain => {realm_ca_pem(Ca), ?ORG}})),
+    ?assertEqual({ok, <<"from b">>}, call(3000, ?ORG_PROC, realm_trust(Authority))),
     ?assertEqual([dial_url(B)], visits()).
 
 %% An advertisement authorized for another org doesn't qualify, and resolution
 %% keeps asking until the deadline instead of giving up at once.
-call_with_cert_chain_asks_again_until_its_deadline() ->
-    Ca = realm_ca(),
+call_with_authorization_asks_again_until_its_deadline() ->
+    Authority = authority(),
     A = station(<<"a.test">>),
-    set_replies(procedure_key(), [[authorized_advertisement(A, Ca, <<"another-org">>)]]),
+    set_replies(org_procedure_key(), [[authorized_advertisement(A, Authority, <<"another-org">>)]]),
     set_endpoint(A, endpoint_record(A)),
-    {Elapsed, Result} =
-        timed(fun() -> call(300, #{verify_cert_chain => {realm_ca_pem(Ca), ?ORG}}) end),
+    {Elapsed, Result} = timed(fun() -> call(300, ?ORG_PROC, realm_trust(Authority)) end),
     ?assertEqual({error, {unresolved, no_trusted_advertisement}}, Result),
     ?assert(Elapsed < 1000),
-    ?assert(lookups(procedure_key()) >= 2),
+    ?assert(lookups(org_procedure_key()) >= 2),
     ?assertEqual([], visits()).
 
 %%%===================================================================
@@ -360,19 +423,19 @@ download_direct_retries_when_no_provider_qualifies() ->
     {ok, _Download} = macula_download:start_link_direct(?MODULE, self(), ?REALM, Mcid, self()),
     ?assertEqual({downloaded, {ok, <<"content">>}}, downloaded()).
 
-%% resolve_content_provider/2 stays for 10.x callers: it returns the first
-%% provider whose announcement qualifies, asking again until one does.
+%% resolve_content_provider/2 returns the first provider whose announcement
+%% qualifies, asking again until one does.
 resolve_content_provider_returns_the_first_qualifying_provider() ->
     P = station(<<"p.test">>),
     Mcid = mcid(),
     set_replies(macula_record:content_key(Mcid), [[], [announcement(P, Mcid)]]),
-    Node = maps:get(key, P),
+    Node = maps:get(id, P),
     Endpoint = dial_url(P),
     ?assertMatch({ok, #{announcer_node := Node, endpoint := Endpoint}},
                  macula_direct_dial:resolve_content_provider(self(), Mcid)).
 
 %% When no provider qualifies within its 10 seconds, resolve_content_provider/2
-%% reports the content as not announced, as it did before.
+%% reports the content as not announced.
 resolve_content_provider_reports_content_not_announced() ->
     Mcid = mcid(),
     set_replies(macula_record:content_key(Mcid), [[]]),
@@ -518,8 +581,25 @@ put_content_reports_a_malformed_endpoint_record_at_its_deadline() ->
     ?assertEqual({error, {unresolved, malformed_station_endpoint}}, put_at_station(S, 1000)),
     ?assert(endpoint_lookups(S) > 1).
 
-put_at_station(#{key := Key}, TimeoutMs) ->
-    macula_direct_dial:put_content(self(), Key, <<"bytes">>, TimeoutMs).
+%% The facade refuses an expired endpoint record as `expired'; that is asked
+%% about again, as an absent record is.
+put_content_asks_again_past_an_expired_endpoint_record() ->
+    S = station(<<"s.test">>),
+    set_endpoint_replies(S, [{error, expired}, endpoint_record(S)]),
+    set_answer(dial_url(S), {ok, <<"mcid">>}),
+    ?assertEqual({ok, <<"mcid">>}, put_at_station(S, 2000)).
+
+%% A record the facade refuses for any other reason is a record that does not
+%% verify, and ends the lookup with that reason.
+put_content_ends_the_lookup_at_an_endpoint_record_that_does_not_verify() ->
+    S = station(<<"s.test">>),
+    set_endpoint_replies(S, [{error, signature_invalid}, endpoint_record(S)]),
+    ?assertEqual({error, {unresolved, signature_invalid}}, put_at_station(S, 1000)),
+    ?assertEqual(1, endpoint_lookups(S)),
+    ?assertEqual([], visits()).
+
+put_at_station(#{id := Id}, TimeoutMs) ->
+    macula_direct_dial:put_content(self(), Id, <<"bytes">>, TimeoutMs).
 
 %% macula_download callbacks: hand the outcome back to the test process.
 init(Parent) -> {ok, Parent}.
@@ -538,10 +618,10 @@ downloaded() ->
 %%% Helpers: calls and fakes
 %%%===================================================================
 
-call(TimeoutMs) -> call(TimeoutMs, #{}).
+call(TimeoutMs) -> call(TimeoutMs, ?PROC, #{}).
 
-call(TimeoutMs, Opts) ->
-    macula_direct_dial:call(self(), ?REALM, ?PROC, <<"hi">>, TimeoutMs, Opts).
+call(TimeoutMs, Procedure, Opts) ->
+    macula_direct_dial:call(self(), ?REALM, Procedure, <<"hi">>, TimeoutMs, Opts).
 
 call_stream(DialTimeoutMs) ->
     macula_direct_dial:call_stream(self(), ?REALM, ?PROC, <<"args">>,
@@ -574,8 +654,9 @@ find_record(Key) -> find_record(Key, 0).
 
 %% A station's endpoint lookups answer from its scripted replies when it has
 %% them (set_endpoint_replies/2), the last one repeating: a record, `not_found',
-%% `{error, Reason}' for a lookup that fails, or `silent' for one that never
-%% answers. Otherwise they answer from its one record, if any.
+%% `{error, Reason}' for a lookup that fails or a record the facade refused, or
+%% `silent' for one that never answers. Otherwise they answer from its one
+%% record, if any.
 find_record(Key, TimeoutMs) ->
     endpoint_reply(ets:lookup(?STATE, {endpoint_replies, Key}), Key, TimeoutMs).
 
@@ -593,19 +674,14 @@ endpoint_lookup_reply(silent, TimeoutMs) ->
 endpoint_lookup_reply({error, _} = Failed, _TimeoutMs) -> Failed;
 endpoint_lookup_reply(Record, _TimeoutMs) -> {ok, Record}.
 
-set_endpoint_replies(#{key := Key}, Replies) ->
-    ets:insert(?STATE, {{endpoint_replies, macula_record:station_endpoint_key(Key)}, Replies}).
+set_endpoint_replies(#{id := Id}, Replies) ->
+    ets:insert(?STATE, {{endpoint_replies, macula_record:station_endpoint_key(Id)}, Replies}).
 
-endpoint_lookups(#{key := Key}) ->
-    lookup_count(ets:lookup(?STATE, {endpoint_asked, macula_record:station_endpoint_key(Key)})).
+endpoint_lookups(#{id := Id}) ->
+    lookup_count(ets:lookup(?STATE, {endpoint_asked, macula_record:station_endpoint_key(Id)})).
 
 endpoint_found([{_, Record}]) -> {ok, Record};
 endpoint_found([]) -> {error, not_found}.
-
-%% The decoded providers find_content_providers/2 would return for Mcid.
-providers(Mcid) ->
-    {ok, Records} = find_records(macula_record:content_key(Mcid)),
-    [Provider || {true, Provider} <- [macula:decode_provider(R) || R <- Records]].
 
 visit(Target) ->
     [{visits, Seen}] = ets:lookup(?STATE, visits),
@@ -629,125 +705,84 @@ set_replies(Key, Replies) -> ets:insert(?STATE, {{replies, Key}, Replies}).
 
 set_endpoint(Station, Record) -> ets:insert(?STATE, {endpoint_entry(Station), Record}).
 
-endpoint_entry(#{key := Key}) -> {endpoint, macula_record:station_endpoint_key(Key)}.
+endpoint_entry(#{id := Id}) -> {endpoint, macula_record:station_endpoint_key(Id)}.
 
 set_answer(Target, Answer) -> ets:insert(?STATE, {{answer, Target}, Answer}).
 
 %%%===================================================================
-%%% Helpers: records
+%%% Helpers: keys and records
 %%%===================================================================
 
+profile() ->
+    {ok, Profile} = macula_crypto_profile:configured(),
+    Profile.
+
+node_key(Purpose) ->
+    {ok, Key} = macula_node_keys:generate(Purpose, profile()),
+    Key.
+
+%% A record as the facade hands it over: verified under the node's profile.
+verified(Signed) ->
+    {ok, Verified} = macula_record:verify(macula_record:encode(Signed), profile()),
+    Verified.
+
 station(Host) ->
-    Kp = macula_identity:generate(),
-    #{kp => Kp, key => macula_identity:public(Kp), host => Host}.
+    Key = node_key(identity),
+    #{key => Key, id => macula_node_keys:key_id(Key), host => Host}.
 
 dial_url(#{host := Host}) -> <<"quic://[", Host/binary, "]:4433">>.
 
-endpoint_record(#{kp := Kp, key := Key, host := Host}) ->
-    macula_record:sign(macula_record:station_endpoint(Key, 4433, #{host_advertised => [Host]}), Kp).
+endpoint_record(Station) ->
+    endpoint_record_signed_by(Station, Station).
+
+%% A station_endpoint record naming Station's host, signed by Signer's key.
+endpoint_record_signed_by(#{host := Host}, #{key := SignerKey}) ->
+    verified(macula_record:sign(macula_record:station_endpoint(4433, #{host_advertised => [Host]}), SignerKey)).
 
 %% Station's own signed station_endpoint record, naming no host.
-malformed_endpoint_record(#{kp := Kp, key := Key}) ->
-    macula_record:sign(macula_record:station_endpoint(Key, 4433, #{host_advertised => []}), Kp).
+malformed_endpoint_record(#{key := Key}) ->
+    verified(macula_record:sign(macula_record:station_endpoint(4433, #{}), Key)).
 
-procedure_uri() ->
-    <<(binary:encode_hex(?REALM, uppercase))/binary, "/", ?PROC/binary>>.
+procedure_key() -> macula_record:procedure_key(?REALM, ?PROC).
 
-procedure_key() -> macula_record:procedure_key(procedure_uri()).
+org_procedure_key() -> macula_record:procedure_key(?REALM, ?ORG_PROC).
 
-%% A signed procedure_advertisement from a fresh provider naming Station.
-advertisement(#{key := Station}) ->
-    Provider = macula_identity:generate(),
-    macula_record:sign(
-      macula_record:procedure_advertisement(macula_identity:public(Provider),
-                                            procedure_uri(), Station),
-      Provider).
+advertisement(Station) -> advertisement(Station, ?PROC).
 
-%% Record with its validity ended, re-signed by the same provider is not
-%% possible without its key, so expire before signing instead.
-expired(#{key := _} = Signed) ->
-    Provider = macula_identity:generate(),
-    Now = erlang:system_time(millisecond),
-    Unsigned = maps:remove(signature, Signed),
-    macula_record:sign(Unsigned#{key => macula_identity:public(Provider),
-                                 payload => (maps:get(payload, Unsigned))#{
-                                              {text, <<"advertiser_node">>} =>
-                                                  macula_identity:public(Provider)},
-                                 created_at => Now - 7_200_000,
-                                 expires_at => Now - 3_600_000},
-                       Provider).
+%% A signed procedure_advertisement for Procedure from a fresh provider naming
+%% Station.
+advertisement(#{id := StationId}, Procedure) ->
+    Provider = node_key(identity),
+    verified(macula_record:sign(
+               macula_record:procedure_advertisement(macula_node_keys:key_id(Provider), ?REALM, Procedure,
+                                                     StationId),
+               Provider)).
 
-mcid() -> <<1, 16#55, (crypto:strong_rand_bytes(32))/binary>>.
+mcid() -> <<2, 16#55, (crypto:strong_rand_bytes(48))/binary>>.
 
-announcement(#{kp := Kp, key := Key} = Station, Mcid) ->
-    macula_record:sign(macula_record:content_announcement(Key, Mcid, dial_url(Station)), Kp).
+announcement(#{key := Key, id := Id} = Station, Mcid) ->
+    verified(macula_record:sign(macula_record:content_announcement(Id, Mcid, dial_url(Station)), Key)).
 
-authorized_advertisement(#{key := Station}, Ca, Org) ->
-    Provider = macula_identity:generate(),
-    ProviderKey = macula_identity:public(Provider),
-    ChainPem = issue_leaf(Ca, ProviderKey, Org),
-    macula_record:sign(
-      macula_record:procedure_advertisement(ProviderKey, procedure_uri(), Station,
-                                            #{cert_chain => ChainPem}),
-      Provider).
+%% The realm key and the org key an authorization chains to.
+authority() ->
+    #{realm => node_key(realm), org => node_key(org)}.
 
-%%%===================================================================
-%%% Helpers: a minimal in-process realm CA (OTP public_key), as in
-%%% macula_record_cert_chain_tests
-%%%===================================================================
+realm_trust(#{realm := Realm}) ->
+    #{realm_trust => #{realm_key => macula_node_keys:public_key(Realm)}}.
 
-realm_ca() ->
-    {Pub, Priv} = ca_key(),
-    Subject = subject(<<"io.macula">>, <<"io.macula">>),
-    #{subject => Subject, key => Priv,
-      der => sign_cert(Subject, ed_spki(Pub), Subject, Priv, true)}.
-
-realm_ca_pem(#{der := Der}) -> pem([Der]).
-
-%% realm CA -> org CA (O=Org) -> Ed25519 leaf binding LeafPub; returns the
-%% leaf-first [leaf, org CA] bundle an advertiser embeds.
-issue_leaf(#{subject := RealmSubject, key := RealmKey}, LeafPub, Org) ->
-    {OrgPub, OrgPriv} = ca_key(),
-    OrgSubject = subject(<<"io.macula.", Org/binary>>, Org),
-    LeafSubject = subject(<<"mri:app:io.macula/", Org/binary, "/svc">>, Org),
-    OrgDer = sign_cert(OrgSubject, ed_spki(OrgPub), RealmSubject, RealmKey, true),
-    LeafDer = sign_cert(LeafSubject, ed_spki(LeafPub), OrgSubject, OrgPriv, false),
-    pem([LeafDer, OrgDer]).
-
-ca_key() ->
-    {Pub, Priv} = crypto:generate_key(eddsa, ed25519),
-    {Pub, #'ECPrivateKey'{version = 1, privateKey = Priv,
-                          parameters = {namedCurve, ?'id-Ed25519'},
-                          publicKey = Pub}}.
-
-ed_spki(Pub) ->
-    #'OTPSubjectPublicKeyInfo'{
-       algorithm = #'PublicKeyAlgorithm'{algorithm = ?'id-Ed25519',
-                                         parameters = asn1_NOVALUE},
-       subjectPublicKey = #'ECPoint'{point = Pub}}.
-
-subject(CN, O) ->
-    {rdnSequence,
-     [[#'AttributeTypeAndValue'{type = {2, 5, 4, 3}, value = {utf8String, CN}}],
-      [#'AttributeTypeAndValue'{type = {2, 5, 4, 10}, value = {utf8String, O}}]]}.
-
-sign_cert(Subject, Spki, IssuerSubject, IssuerKey, IsCA) ->
-    TBS = #'OTPTBSCertificate'{
-             version = v3,
-             serialNumber = rand:uniform(1 bsl 60),
-             signature = #'SignatureAlgorithm'{algorithm = ?'id-Ed25519',
-                                               parameters = asn1_NOVALUE},
-             issuer = IssuerSubject,
-             validity = #'Validity'{notBefore = {utcTime, "230101000000Z"},
-                                    notAfter  = {utcTime, "330101000000Z"}},
-             subject = Subject,
-             subjectPublicKeyInfo = Spki,
-             extensions = [#'Extension'{extnID = ?'id-ce-basicConstraints',
-                                        critical = true,
-                                        extnValue = #'BasicConstraints'{
-                                                       cA = IsCA,
-                                                       pathLenConstraint = asn1_NOVALUE}}]},
-    public_key:pkix_sign(TBS, IssuerKey).
-
-pem(Ders) ->
-    public_key:pem_encode([{'Certificate', D, not_encrypted} || D <- Ders]).
+%% An advertisement for ?ORG_PROC from a fresh provider naming Station, carrying
+%% the realm-signed org directory that names OrgName and the org-signed
+%% delegation to that provider.
+authorized_advertisement(#{id := StationId}, #{realm := Realm, org := Org}, OrgName) ->
+    Provider = node_key(identity),
+    ProviderId = macula_node_keys:key_id(Provider),
+    OrgId = macula_node_keys:key_id(Org),
+    OrgDirectory = macula_record:sign(macula_record:org_directory(?REALM, OrgName, OrgId), Realm),
+    Delegation = macula_record:sign(macula_record:procedure_delegation(OrgId, ProviderId, #{ttl_ms => ?DAY_MS}),
+                                    Org),
+    Authorization = #{org_directory => macula_record:encode(OrgDirectory),
+                      procedure_delegation => macula_record:encode(Delegation)},
+    verified(macula_record:sign(
+               macula_record:procedure_advertisement(ProviderId, ?REALM, ?ORG_PROC, StationId,
+                                                     #{authorization => Authorization, ttl_ms => ?HOUR_MS}),
+               Provider)).

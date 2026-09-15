@@ -587,8 +587,8 @@ stream_opened({error, _} = E, _LinkPid) -> E.
 %% @doc Known upfront, no network needed: put by size against the
 %% chunk threshold, get by the MCID's own codec byte.
 is_chunked(put, Bytes) -> byte_size(Bytes) > macula_manifest:default_chunk_size();
-is_chunked(get, <<1, 16#56, _/binary>>) -> true;
-is_chunked(get, <<1, 16#55, _/binary>>) -> false.
+is_chunked(get, <<2, 16#56, _:48/binary>>) -> true;
+is_chunked(get, <<2, 16#55, _:48/binary>>) -> false.
 
 transfer(LinkIo, put, LinkPid, Stream, Bytes) -> put_single_block(LinkIo, LinkPid, Stream, Bytes);
 transfer(LinkIo, get, LinkPid, Stream, Mcid)  -> get_single_block(LinkIo, LinkPid, Stream, Mcid).
@@ -601,8 +601,7 @@ transfer(LinkIo, get, LinkPid, Stream, Mcid)  -> get_single_block(LinkIo, LinkPi
 %%%===================================================================
 
 put_single_block(LinkIo, LinkPid, Stream, Bytes) ->
-    Hash = macula_blake3_nif:hash(Bytes),
-    MCID = <<1, 16#55, Hash/binary>>,
+    MCID = <<2, 16#55, (crypto:hash(sha384, Bytes))/binary>>,
     classify_put_content(put_block(LinkIo, LinkPid, Stream, MCID, Bytes), MCID).
 
 put_block(LinkIo, LinkPid, Stream, MCID, Bytes) ->
@@ -639,8 +638,8 @@ classify_get_content({error, _} = E, _MCID)         -> E.
 %% — see `macula_content_block_hash_tests').
 -spec verify_block_hash(macula:mcid(), binary()) ->
         {ok, binary()} | {error, hash_mismatch | invalid_mcid}.
-verify_block_hash(<<1, 16#55, Hash:32/binary>>, Bin) ->
-    hash_result(macula_blake3_nif:hash(Bin) =:= Hash, Bin);
+verify_block_hash(<<2, 16#55, Hash:48/binary>>, Bin) ->
+    hash_result(crypto:hash(sha384, Bin) =:= Hash, Bin);
 verify_block_hash(_MCID, _Bin) ->
     {error, invalid_mcid}.
 
@@ -747,12 +746,12 @@ maybe_start_lane(#state{kind = Kind, link_io = LinkIo, link_pid = LinkPid,
     Lane#lane{remaining = Rest, in_flight = Item, worker = Worker}.
 
 run_lane_step(Self, LinkIo, put, LinkPid, Stream, Manifest, {Index, Bytes}) ->
-    {ok, ChunkMcid} = macula_manifest:chunk_mcid(Manifest, Index, blake3),
+    {ok, ChunkMcid} = macula_manifest:chunk_mcid(Manifest, Index),
     Put = put_block(LinkIo, LinkPid, Stream, ChunkMcid, Bytes),
     Outcome = put_chunk_outcome(classify_put_content(Put, ChunkMcid)),
     Self ! {lane_step_result, Stream, Outcome};
 run_lane_step(Self, LinkIo, get, LinkPid, Stream, Manifest, Index) ->
-    {ok, ChunkMcid} = macula_manifest:chunk_mcid(Manifest, Index, blake3),
+    {ok, ChunkMcid} = macula_manifest:chunk_mcid(Manifest, Index),
     Outcome = classify_get_content(get_block(LinkIo, LinkPid, Stream, ChunkMcid), ChunkMcid),
     Self ! {lane_step_result, Stream, Outcome}.
 

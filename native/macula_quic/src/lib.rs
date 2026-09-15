@@ -27,6 +27,7 @@ rustler::init!(
         endpoint::nif_listen,
         endpoint::nif_close_listener,
         endpoint::nif_async_accept,
+        endpoint::nif_reload_certificate,
         // Connection
         connection::nif_async_connect,
         connection::nif_cancel_connect,
@@ -39,6 +40,8 @@ rustler::init!(
         connection::nif_controlling_process_conn,
         connection::nif_peername,
         connection::nif_max_datagram_size,
+        connection::nif_peer_leaf,
+        connection::nif_presented_leaf,
         // Stream
         stream::nif_send,
         stream::nif_async_send,

@@ -12,16 +12,18 @@
 %%   <li><strong>Local subscribe</strong> — `subscribe/3' adds the
 %%       subscriber to the topic's set. The wrapper builds a
 %%       SUBSCRIBE frame for upstream propagation if needed.</li>
-%%   <li><strong>Local publish</strong> — `build_event/3' takes a
-%%       PUBLISH spec and produces a signed EVENT frame the
-%%       wrapper hands to Plumtree for fan-out. The publisher
-%%       signs the EVENT once; intermediate hops do NOT re-sign,
-%%       so every subscriber can verify authenticity end-to-end
-%%       (Part 6 §6.4).</li>
-%%   <li><strong>Receive EVENT</strong> — `deliver_event/2'
-%%       returns the list of local subscribers whose subscription
-%%       matches the event's topic + realm. The wrapper notifies
-%%       each via the application channel.</li>
+%%   <li><strong>Local publish</strong>: `build_event/2' makes the
+%%       EVENT for a PUBLISH, carrying its publication bytes
+%%       unchanged, and the wrapper hands it to Plumtree for
+%%       fan-out. The publisher signs the publication once and no
+%%       hop re-signs it, so every subscriber verifies it end to end
+%%       (D17).</li>
+%%   <li><strong>Receive EVENT</strong>: `deliver_event/2' verifies
+%%       the EVENT's publication under the state's crypto profile
+%%       and returns the local subscribers whose subscription
+%%       matches its realm and topic; a publication that does not
+%%       verify reaches no one. The wrapper notifies each via the
+%%       application channel.</li>
 %%   <li><strong>Receive SUBSCRIBE / UNSUBSCRIBE</strong> —
 %%       `process/3' updates local state.</li>
 %% </ul>
@@ -62,7 +64,7 @@
 -module(hecate_pubsub).
 
 -export([
-    new/1,
+    new/2,
     realm/1,
     subscribe/3,
     unsubscribe/3,
@@ -74,17 +76,18 @@
     topic_count/1,
     subscriber_count/1,
     deliver_event/2,
-    build_event/3,
+    build_event/2,
     process/3
 ]).
 
 -export_type([state/0, topic/0, subscriber/0]).
 
 -type topic()      :: binary().
--type subscriber() :: macula_identity:pubkey().
+-type subscriber() :: <<_:256>>.
 
 -type state() :: #{
     realm         := <<_:256>>,
+    profile       := macula_crypto_profile:profile(),
     subscriptions := #{topic() => sets:set(subscriber())},
     patterns      := #{topic() => sets:set(subscriber())}
 }.
@@ -93,9 +96,10 @@
 %% Construction
 %%=====================================================================
 
--spec new(<<_:256>>) -> state().
-new(<<_:256>> = Realm) ->
-    #{realm => Realm, subscriptions => #{}, patterns => #{}}.
+%% @doc The PubSub state for a realm, verifying publications under Profile.
+-spec new(<<_:256>>, macula_crypto_profile:profile()) -> state().
+new(<<_:256>> = Realm, Profile) ->
+    #{realm => Realm, profile => Profile, subscriptions => #{}, patterns => #{}}.
 
 %%=====================================================================
 %% Inspection
@@ -256,47 +260,41 @@ purge_from(Map, Sub) ->
 %% Delivery
 %%=====================================================================
 
-%% @doc Match an incoming EVENT frame to local subscribers. Returns
-%% an empty list if the realm doesn't match (defensive — the
-%% transport should already route by realm) or no-one is
-%% subscribed.
+%% @doc Match an incoming EVENT frame to local subscribers. Its
+%% publication is verified first, under the state's crypto profile
+%% and the clock; the result is empty when it does not verify, when
+%% its realm is not this state's (defensive: the transport should
+%% already route by realm), or when no one is subscribed.
 -spec deliver_event(state(), macula_frame:frame()) ->
         [subscriber()].
-deliver_event(#{realm := R} = State,
-              #{frame_type := event, realm := Eventr,
-                topic := Topic}) when Eventr =:= R ->
-    subscribers(State, Topic);
+deliver_event(#{profile := Profile} = State, #{frame_type := event} = Frame) ->
+    matched(macula_frame:verify_publication(Frame, Profile, erlang:system_time(millisecond)), State);
 deliver_event(_State, _Frame) ->
+    [].
+
+matched({ok, #{realm := Realm, topic := Topic}}, #{realm := Realm} = State) ->
+    subscribers(State, Topic);
+matched(_RefusedOrAnotherRealm, _State) ->
     [].
 
 %%=====================================================================
 %% Construction helpers
 %%
-%% `build_event/3' takes a published payload + signing identity
-%% and builds the signed EVENT frame the wrapper feeds into
-%% Plumtree.
+%% `build_event/2' makes the EVENT the wrapper feeds into Plumtree
+%% from a PUBLISH, carrying its publication bytes unchanged.
 %%=====================================================================
 
--spec build_event(state(), macula_frame:publish_spec(),
-                  macula_identity:key_pair()) ->
-        macula_frame:frame().
-build_event(#{realm := R}, #{topic := T, publisher := Pub,
-                              seq := Seq, payload := Payload},
-            Identity) ->
-    macula_frame:sign(macula_frame:event(#{
-        topic         => T,
-        realm         => R,
-        publisher     => Pub,
-        seq           => Seq,
-        payload       => Payload,
-        delivered_via => plumtree
-    }), Identity).
+%% @doc The EVENT for a PUBLISH: its publication bytes, unchanged, and
+%% how the EVENT was delivered.
+-spec build_event(macula_frame:frame(), plumtree | direct) -> macula_frame:frame().
+build_event(#{frame_type := publish, publication := Publication}, Via) ->
+    macula_frame:event(#{publication => Publication, delivered_via => Via}).
 
 %%=====================================================================
 %% Inbound dispatch
 %%=====================================================================
 
--spec process(state(), macula_identity:pubkey(),
+-spec process(state(), <<_:256>>,
               macula_frame:frame()) ->
         {state(), [subscriber()]}.
 process(State, _From, #{frame_type := subscribe} = F) ->

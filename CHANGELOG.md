@@ -7,6 +7,233 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [11.0.0] - Unreleased
+
+Post-quantum work on the `post-quantum` branch. Not on `main`.
+
+### Added
+
+- `macula_crypto_profile`: the two post-quantum profiles,
+  `pq_pure` and `pq_hybrid`, each with its key exchange group, TLS
+  signature scheme, cipher suite, signature algorithms and digests.
+- `macula_node_keys`: a node's identity, CONNECT and TLS keys for its
+  profile. ML-DSA-87 private keys are stored in their expanded form and
+  RSA-PSS-4096 keys as DER. A key file is restricted to its owner before
+  the key is written into it. `load/3` refuses a key file its group or
+  others can read, a key saved for another purpose or profile, a stored
+  public key that differs from the one derived from its private key, and
+  a key that fails a sign-and-verify round trip.
+- `macula_node_keys:sign/2`, `verify/4` and `public_key/1`: ML-DSA-87
+  alone in the US profile, and Macula's composite ML-DSA-87-PS384 in the
+  EU profile, valid only if both halves verify. Verification refuses
+  malformed input without raising.
+- `macula_node_keys:node_id/1` and `node_id/2`: node_ids per plan decision
+  D5, SHA-256 over the label `MACULA-NODE-ID-V1`, the profile name and the
+  identity key as carried. The reference vectors match Go, Rust and Python.
+- `macula_node_keys:key_id/1` and `key_id/2`: the key id of a key that is
+  not an identity key, SHA-256 over the label `MACULA-KEY-ID-V1`, the
+  profile name and the key as carried; an identity key's key id is its
+  node_id. Realm, org and foundation keys are purposes of their own, with
+  the identity key's algorithms.
+- Private keys stay out of status output and of crash and diagnostics
+  reports. Every process that holds a key formats its status through
+  `macula_node_keys:redacted/1`, which replaces each key's private half
+  with `redacted`. The application adds the primary logger filter
+  `macula_key_redaction` on start and removes it on stop: in report
+  events of the `otp` and `macula` domains it redacts every key the same
+  way, and a stack frame of a Macula module shows its arity in place of
+  its arguments, since those can hold a key. Frames of other
+  applications' modules keep their arguments.
+- `macula_signed_object`: the signed objects of the post-quantum records
+  and frames. `sign/3` and `sign_held/3` sign fields under a label over
+  the label, a zero byte, the SHA-384 of the key as carried and tbs,
+  adding `alg`. `verify/3` and `verify_held/4` check the shape, the carried
+  key, the signature over tbs as received, the decoding rule and `alg`,
+  without raising. `encode/1` and `decode/1` give the wire form.
+- `macula_record` in the signed-object format: a record is `{key, tbs,
+  signature}` under `MACULA-PQ-RECORD-V1`, signed with a node key whose
+  purpose fits its type and named by its key id. `verify/2,3` refuses a
+  record over 256 KiB, a malformed tbs, a clock outside five minutes, a
+  payload that breaks its type's rules and a payload naming another
+  signer. Storage keys derive under `MACULA-PQ-STORAGE-KEY-V1`.
+  Tombstones and procedure advertisements take the design's pinned
+  payloads, and `verify_authorization/3` checks an advertisement's org
+  namespace and its org directory and delegation or certificate chain.
+  It replaces `decode/1`, `verify/1`, `procedure_key/1`,
+  `verify_delegation_chain/4` and `verify_advertisement_cert_chain/3`.
+- `macula_frame` decodes every frame under the post-quantum decoding
+  rule, and a frame type's own fields through a fixed table (D26): a
+  frame type, a field or an enum value the table does not list is
+  refused, and payloads keep the one key form, the same on every node.
+  Records in STORE, VALUE, REPLICATE and HyParView frames travel as their
+  wire bytes. `check_payload/1` refuses what the decoding rule refuses.
+- `macula_node_keys:generate/3` with `puzzle_difficulty`, and
+  `puzzle_solved/2`: an identity key whose node_id starts with that many
+  zero bits. Each try makes a new ML-DSA-87 half; a hybrid key keeps its
+  RSA-PSS half, since the node_id covers both halves.
+- `macula_record_cbor:decode_strict/1`: decodes one CBOR item under the
+  post-quantum decoding rule, without raising. It refuses bytes after the
+  top-level item, map keys other than text or integers, duplicate keys,
+  invalid UTF-8, nesting deeper than 64 levels, negative integers below
+  -2^63, and malformed input. `decode/1` is unchanged.
+- `macula:field/2`, `field/3` and `text/1`: read fields of maps a peer
+  supplies (D26), whose text keys and values arrive as `{text, Bin}`. A
+  field is looked up as `{text, Name}`, then as the atom, then as the
+  binary, so maps handed over in process read the same way. The
+  distribution pool reads its tunnel RPC payloads through them.
+- `macula_key_bindings`: bindings of a node's TLS and CONNECT keys to its
+  identity key, and the status statements that keep a binding in force,
+  as the handshake frame design lays them out. Each travels as its signed
+  `tbs` bytes and a signature. A verifier checks the signature over the
+  bytes it received before decoding them strictly, refuses an unknown key
+  or a field of the wrong type or length as `malformed_frame`, and checks
+  validity with 5 minutes of clock tolerance.
+- `macula_frame:encode_bytes/1` and `parse_stream_bytes/1`: frame CBOR
+  bytes with and without the length prefix, exactly as sent and
+  received, for the post-quantum handshake. `decode/1` shares their
+  length-prefix code.
+- `macula_handshake`: the post-quantum connection handshake frames, built
+  as CBOR bytes and checked as received. The client checks the challenge
+  before it signs the proof. The station checks CONNECT, the node_id puzzle
+  under `off`, `log_only` or `enforce` before any signature, and returns
+  the HELLO bytes to send; a refusing HELLO carries one coarse refusal code.
+  A key that would serve a second purpose is refused as `key_purpose_reuse`.
+- `macula_node_keys:carried_key_well_formed/2` and `signature_bytes/1`: the
+  one carried form of a key per profile, and the signature size per profile.
+- `macula_key_bindings:verify_status/5` returns when the statement expires.
+- `macula_quic:peer_leaf/1` and `presented_leaf/1`: the leaf certificate DER
+  of a connection's own TLS handshake. A dialed connection reports the leaf
+  it received, byte for byte, and an accepted connection the leaf it
+  presented.
+- `macula_quic:reload_certificate/3`: a listener loads a new certificate and
+  key from files and presents them to the connections it accepts from then
+  on. Each certificate is a generation of its own, and an accepted
+  connection keeps the leaf of the generation it was accepted with. A reload
+  that cannot read its files, or whose key does not match its certificate,
+  returns an error and keeps the current certificate.
+- `macula_peering` connections run the post-quantum handshake of
+  `macula_handshake` with the node's identity key and its
+  `macula_statement_issuer`. After HELLO each side sends a status frame
+  at every reissue of its statement. A connection closes with
+  `status_expired` once the peer's statement is 5 minutes past its
+  expiry, with `binding_expired` at the peer binding's not_after, and
+  with a check's reason when a status frame fails that check. Close
+  reasons are local: the controlling process hears them in
+  `disconnected`, and the peer does not. A station under `log_only`
+  reports an unsolved puzzle as `_macula.peering.puzzle_unsolved`.
+  In `pq_hybrid` a connection neighbour-signs every control frame it
+  sends and checks every one it reads, for the connection hash and the
+  seq in that direction, and closes on a refusal.
+- `macula_diagnostics:bounded_event/3`: a diagnostics event logged at most
+  once per 10 seconds per event name, node-wide. An event inside that
+  window is counted, and the next line for the name carries the latest
+  properties with `suppressed`, the number held back since the line
+  before; once per window the table's owner, `macula_diagnostics_bound`,
+  logs a count a burst left. Callers update the counts table themselves.
+  `macula_peering` connections log `_macula.peering.closed`,
+  `_macula.peering.handshake_timeout` and
+  `_macula.peering.puzzle_unsolved` through it.
+- `macula_record_uuid:v7_monotonic/1`: the version of a record a node
+  signs. Its rand_a bits count within a millisecond from a random 11-bit
+  seed, and each version is the larger of that fresh value and the last
+  one issued plus one, so the versions a node issues strictly increase,
+  also across a wall-clock step back, and a tombstone built in the same
+  millisecond as its record replaces it. A version is an order, not a
+  time. `macula_record` signs new, refreshed and withdrawing records with
+  it.
+- `macula_peering:peer_identity/1`: the peer's node_id, its identity key
+  as carried, the profile and its capabilities, once the handshake has
+  completed.
+- `macula_handshake` results carry the not_after of the peer's binding,
+  and `macula_frame:read_wire/1` reads a frame from its decoded CBOR value.
+  On an open connection a frame is decoded once and routed by its
+  frame_type (`macula_handshake:open_frame_kind/1` and
+  `read_status_wire/2`): a handshake frame, a frame `macula_frame`
+  refuses and bytes that are not CBOR close it as `malformed_frame`.
+- HyParView frames are bounded: a `peer_sample` holds at most 7 node_ids,
+  a SHUFFLE or FORWARD_JOIN `ttl` and a FORWARD_JOIN `arwl` are at most 8,
+  and a `prwl` is at most its `arwl`. A frame outside these is
+  `malformed_frame`, and the constructors refuse to build one. A neighbour
+  places at most 20 node_ids per minute in the passive view, a token
+  bucket with one back every 3 seconds counting only node_ids new to the
+  view. A FORWARD_JOIN places its new member when its `ttl` equals the
+  receiver's own PRWL. A SHUFFLE_REPLY is merged only while a SHUFFLE sent
+  in the last 30 seconds has no reply yet. `macula_hyparview_proto` returns
+  `{refused, Neighbour, Kind}` for a frame past the allowance and for an
+  unsolicited SHUFFLE_REPLY, and `macula_frame:charged_refusal/1` charges
+  both kinds.
+- A link-carried `macula_stream` that receives a frame of a type that
+  belongs on the control stream rejects its peering connection with
+  `malformed_frame` and ends, in either profile.
+  `macula_frame:control_frame/1` names those types.
+- `macula_frame:verify_publication/3` sizes a refusal for time:
+  `{not_yet_valid, AheadMs}` and `{expired, PastMs}`, the milliseconds
+  past the moment its rule starts refusing. `charged_refusal/1` charges
+  them only beyond 10 minutes.
+- `hecate_plumtree` takes its clocks from the caller: `process/4` with
+  wall-clock and monotonic milliseconds, `publish/3` with the wall clock.
+  A neighbour is on at most 1,024 open missing entries: an IHAVE past that
+  is not recorded, gets no GRAFT and returns `{refused, Neighbour,
+  ihave_allowance}`. `expired_grafts/2` takes a neighbour off an entry
+  whose GRAFT it left unanswered for 10 seconds and returns
+  `graft_unanswered`. A GOSSIP of an id, verified or refused, ends its
+  whole entry at no charge to its announcers, and a refused GOSSIP returns
+  its refusal. `macula_frame:charged_refusal/1` charges `ihave_allowance`,
+  `graft_unanswered` and `wrong_realm`.
+
+### Changed
+
+- Content ids are SHA-384 (D24): `<<2, Codec, Hash:48>>`, 50 bytes, with
+  byte 0 as the hash tag. A tag 1 (BLAKE3) id is refused on fetch, in
+  manifests, for chunks and in content announcements. New blocks,
+  manifests and chunks are hashed with SHA-384, a manifest names `sha384`
+  as its only hash algorithm, and `macula_manifest:chunk_mcid/2` replaces
+  `chunk_mcid/3`.
+- The `macula` application starts only with `crypto_profile` set to
+  `pq_pure` or `pq_hybrid` in its environment. A missing value, an
+  unknown value or a list of profiles makes the start return an error.
+  There is no default. The test configuration, `config/test.sys.config`,
+  sets `pq_pure`.
+- `macula_cluster:start_cluster/1` returns
+  `{error, {unknown_strategy, Strategy}}` for a strategy other than `auto`,
+  `gossip` or `static`, and does not start distribution.
+- `macula_peering:connect/1` and `accept/2` take `identity`, a
+  `macula_node_keys` identity key, and `issuer`, the node's statement
+  issuer. A dial's `target` requires `expected_node_id`, the station's
+  node_id, and a station requires `puzzle => #{mode => Mode}`. A
+  connection without them does not start. `connected` and
+  `handshake_complete` carry the peer's node_id. A connection sends
+  frames as their producers built them, adding only the neighbour
+  signature of a control frame in `pq_hybrid`.
+- `macula_hyparview_proto:build_shuffle/2` takes the view and returns it
+  with the SHUFFLE recorded, and the send to a random active neighbour,
+  with a sample of the view. `ctx()` carries `now`, in monotonic
+  milliseconds.
+
+### Removed
+
+- The `mdns` and `dht` cluster strategies and the discovery code behind
+  them: `macula_cluster_strategy`, `macula_dist_discovery` and
+  `macula_dist_mdns_advertiser`, with the `macula_mdns` dependency and the
+  `optional_applications` entry for `mdns`. The macula application never
+  started this code.
+- `macula_frame:sign_swim_update/2` and `macula_frame:verify_swim_update/1`,
+  with their private helpers and the `macula-v2-swim-update` signing
+  domain. Nothing signed or verified SWIM membership updates. SWIM itself
+  stays: `macula_frame:swim_update/1` and the piggyback updates in SWIM
+  PING and ACK frames are unchanged. An update no longer has an optional
+  `signature` key.
+- The Ed25519 CONNECT and HELLO frames of `macula_peering_conn`, with the
+  `realms`, `verify` and `pin_tls_cert` options.
+- `macula_record_uuid:v7/1`. Record versions come from `v7_monotonic/1`,
+  and `v7/0` stays for ids that need no order.
+
+### Fixed
+
+- The `macula_record:envelope/4` documentation said a per-subject storage
+  key is a BLAKE3 digest. `macula_record:storage_key/1` derives it with
+  SHA-256, like every other derived storage key.
+
 ## [Unreleased]
 
 ### Added

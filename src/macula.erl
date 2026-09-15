@@ -29,6 +29,9 @@
 %% Connection
 -export([connect/2, close/1, child_spec/3, status/1, links/1]).
 
+%% Reading fields of peer-supplied maps (D26)
+-export([field/2, field/3, text/1]).
+
 %% Pub/Sub — realm-per-call against a V2 pool
 -export([subscribe/4, subscribe/5,
          subscribe_callback/4,
@@ -57,9 +60,9 @@
 
 %% Content-addressed blob storage. `_content.put_block' /
 %% `_content.get_block' RPCs against the relay's local content
-%% store. MCID is a 34-byte binary: 1 codec byte, 1 algo byte
-%% (BLAKE3 = 16#55), 32-byte BLAKE3 hash. The relay validates the
-%% payload's hash on `put_block' and rejects mismatches.
+%% store. MCID is a 50-byte binary: the hash tag (2, SHA-384), the
+%% codec (16#55 raw, 16#56 manifest), then the 48-byte SHA-384 hash. The
+%% relay validates the payload's hash on `put_block' and rejects mismatches.
 -export([put_content/2,
          put_content_station/4, put_content_station/5,
          get_content/2,
@@ -92,7 +95,7 @@
 %% `verify_block_hash/2' moved to `macula_content_transfer' (Phase 1,
 %% PLAN_PUSH_UPLOAD.md) along with the rest of the content-stream
 %% transfer internals — see `macula_content_transfer:verify_block_hash/2'.
--export([decode_provider/1]).
+-export([decode_provider/2]).
 -endif.
 
 %% Types
@@ -128,12 +131,13 @@
 %%
 %% Honored opts (full reference: `macula_client:opts()'):
 %% <ul>
-%%   <li>`identity' — pool's Ed25519 keypair; auto-generated if absent.</li>
+%%   <li>`node_identity': the pool's node identity key, in the node's crypto
+%%       profile; generated with a puzzle-solved node_id if absent.</li>
 %%   <li>`replication_factor' — links per PUBLISH (default 2, since 10.19.0).</li>
 %%   <li>`capabilities' — per-link bitfield (default 0).</li>
 %%   <li>`alpn' — QUIC ALPN list (default `[<<"macula">>]').</li>
 %%   <li>`connect_timeout_ms' — per-link CONNECT/HELLO deadline (default 30_000).</li>
-%%   <li>`dedup_window_ms', `dedup_sweep_ms' — inbound-EVENT dedup tunables.</li>
+%%   <li>`dedup_sweep_ms': how often the inbound publication dedup table is swept.</li>
 %% </ul>
 %%
 %% Legacy opts silently dropped (with a one-shot `logger:notice'):
@@ -305,17 +309,19 @@ unadvertise(Pool, Realm, Procedure) ->
 %%% Signed DHT records (v3.3.0)
 %%%===================================================================
 %%%
-%%% Records are typed, signed payloads stored in the relay mesh's
-%%% distributed hash table. The record format follows Macula V2
-%%% spec Part 6 §9 (PKARR-compatible CBOR with single-letter keys
-%%% `t', `k', `v', `c', `x', `p', `s'), Part 6 §10.2 (signing
-%%% domain `"macula-v2-record\\0" || canonical_cbor(unsigned)'),
-%%% and Part 3 §3.3 (domain-separated storage keys).
+%%% Records are typed payloads signed in the signed-object format of
+%%% DESIGN_PQ_SIGNED_FRAMES_AND_RECORDS.md and stored in the relay
+%%% mesh's distributed hash table. A record travels as its wire form:
+%%% stations store and forward its bytes as received. A record reaches
+%%% a caller only after it verifies under the node's crypto profile
+%%% (`macula_record:verify/2'): `find_record/2' returns the refusal of
+%%% one that does not, and the list functions and `subscribe_records/3'
+%%% drop it.
 %%%
 %%% See `macula_record' for the record shape, the typed
 %%% constructors (`node_record/3', `realm_directory/3',
-%%% `realm_stations/2', `procedure_advertisement/3',
-%%% `content_announcement/3', `tombstone/3', and the foundation_*
+%%% `realm_stations/2', `procedure_advertisement/4',
+%%% `content_announcement/3', `tombstone/2', and the foundation_*
 %%% constructors), and `storage_key/1' for the DHT addressing rule.
 %%%
 %%% Two complementary retrieval paths:
@@ -342,6 +348,7 @@ unadvertise(Pool, Realm, Procedure) ->
 -define(DHT_FIND_RECORDS_PROC,         <<"_dht.find_records">>).
 -define(DHT_FIND_RECORDS_BY_TYPE_PROC, <<"_dht.find_records_by_type">>).
 -define(DHT_RECORD_TIMEOUT_MS,         5_000).
+-define(TYPE_CONTENT_ANNOUNCEMENT,     16#11).
 
 %% `_content.*' procedure names, realm, and timeouts moved to
 %% `macula_content_transfer' (Phase 1, PLAN_PUSH_UPLOAD.md) along with
@@ -350,18 +357,19 @@ unadvertise(Pool, Realm, Procedure) ->
 %% @doc Store a signed record in the mesh DHT via a V2 pool.
 %%
 %% Build the record via the typed constructors in `macula_record'
-%% (`node_record/3,4', `content_announcement/3,4', `tombstone/3,4',
-%% `realm_directory/3,4', `procedure_advertisement/3,4', etc.) then
-%% sign it with `macula_record:sign/2'. The relay validates the
-%% signature on receipt; an invalid signature returns
-%% `{error, bad_signature}'. Successful stores propagate to the
-%% K-nearest peers in the DHT under the record's
-%% `macula_record:storage_key/1'.
--spec put_record(pool(), m_record()) -> ok | {error, term()}.
-put_record(Pool, Record) when is_pid(Pool), is_map(Record) ->
+%% (`node_record/3,4', `content_announcement/3,4', `tombstone/2,3',
+%% `realm_directory/3,4', `procedure_advertisement/4,5', etc.), sign
+%% it with `macula_record:sign/2', and pass the signed record or its
+%% wire form (`macula_record:encode/1'). The record travels as its
+%% wire form; the station verifies it on receipt and stores it under
+%% `macula_record:storage_key/1', propagating to the K-nearest peers.
+-spec put_record(pool(), m_record() | binary()) -> ok | {error, term()}.
+put_record(Pool, #{key := _, tbs := _, signature := _} = Signed) when is_pid(Pool) ->
+    put_record(Pool, macula_record:encode(Signed));
+put_record(Pool, Wire) when is_pid(Pool), is_binary(Wire) ->
     classify_put(macula_client:call(Pool, ?DHT_REALM,
                                     ?DHT_PUT_RECORD_PROC,
-                                    Record, ?DHT_RECORD_TIMEOUT_MS)).
+                                    Wire, ?DHT_RECORD_TIMEOUT_MS)).
 
 classify_put({ok, ok})       -> ok;
 classify_put({ok, Reply})    -> {error, {unexpected_reply, Reply}};
@@ -370,9 +378,10 @@ classify_put({error, _} = E) -> E.
 %% @doc Fetch a record from the mesh DHT by its
 %% `macula_record:storage_key/1'.
 %%
-%% Returns `{error, not_found}' when no record exists at the key.
-%% The returned record's signature should be verified via
-%% `macula_record:verify/1' before its payload is trusted.
+%% Returns `{error, not_found}' when no record exists at the key. The
+%% record is verified under the node's crypto profile before it is
+%% returned; one that does not verify returns its refusal from
+%% `macula_record:verify/2', such as `{error, expired}'.
 -spec find_record(pool(), record_key()) ->
     {ok, m_record()} | {error, not_found | term()}.
 find_record(Pool, Key) ->
@@ -389,8 +398,8 @@ find_record(Pool, Key, TimeoutMs)
                                      ?DHT_FIND_RECORD_PROC,
                                      #{key => Key}, TimeoutMs)).
 
-classify_find({ok, #{type := _, payload := _, signature := _} = Record}) ->
-    {ok, Record};
+classify_find({ok, Wire}) when is_binary(Wire) ->
+    with_profile(fun(Profile) -> macula_record:verify(Wire, Profile) end);
 classify_find({ok, not_found})     -> {error, not_found};
 classify_find({ok, Reply})         -> {error, {unexpected_reply, Reply}};
 classify_find({error, _} = E)      -> E.
@@ -402,9 +411,8 @@ classify_find({error, _} = E)      -> E.
 %%
 %% The relay's local store is a signer-deduped multiset: one record
 %% per signing key at a storage key, so N providers of one procedure
-%% return N records. Each returned record's signature should be
-%% verified via `macula_record:verify/1' before its payload is
-%% trusted.
+%% return N records. Each record is verified under the node's crypto
+%% profile, and a record that does not verify is dropped.
 -spec find_records(pool(), record_key()) ->
     {ok, [m_record()]} | {error, term()}.
 find_records(Pool, Key) ->
@@ -421,12 +429,13 @@ find_records(Pool, Key, TimeoutMs)
                                           ?DHT_FIND_RECORDS_PROC,
                                           #{key => Key}, TimeoutMs)).
 
-classify_find_list({ok, Records}) when is_list(Records) -> {ok, Records};
+classify_find_list({ok, Wires}) when is_list(Wires) -> verified_records(Wires);
 classify_find_list({ok, Reply})    -> {error, {unexpected_reply, Reply}};
 classify_find_list({error, _} = E) -> E.
 
 %% @doc Return every record of a given type currently visible from
-%% the pool's connected stations.
+%% the pool's connected stations, each verified under the node's
+%% crypto profile; a record that does not verify is dropped.
 %%
 %% Coverage depends on each station's view of the DHT — a single
 %% station sees its local replicas plus whatever its peers have
@@ -441,14 +450,30 @@ find_records_by_type(Pool, Type)
                                      #{type => Type},
                                      ?DHT_RECORD_TIMEOUT_MS)).
 
-classify_list({ok, Records}) when is_list(Records) -> {ok, Records};
+classify_list({ok, Wires}) when is_list(Wires) -> verified_records(Wires);
 classify_list({ok, Reply})    -> {error, {unexpected_reply, Reply}};
 classify_list({error, _} = E) -> E.
 
+%% The records among Wires that verify under the node's crypto profile;
+%% the rest are dropped.
+verified_records(Wires) ->
+    with_profile(fun(Profile) ->
+                     {ok, [Record || Wire <- Wires, {ok, Record} <- [macula_record:verify(Wire, Profile)]]}
+                 end).
+
+%% Verify with the node's crypto profile, or return the refusal of a
+%% node that has none.
+with_profile(Verify) ->
+    profile_verified(macula_crypto_profile:configured(), Verify).
+
+profile_verified({ok, Profile}, Verify) -> Verify(Profile);
+profile_verified({error, _} = Refusal, _Verify) -> Refusal.
+
 %% @doc Subscribe to live record-stored events filtered by type.
 %%
-%% The callback receives each newly-stored record of the given
-%% type. Returns a subscription reference for `unsubscribe_records/2'.
+%% The callback receives each newly-stored record of the given type
+%% that verifies under the node's crypto profile. Returns a
+%% subscription reference for `unsubscribe_records/2'.
 %% Topic shape is `_dht.records.<type>.stored', rendered with the
 %% type tag as a decimal integer for log friendliness.
 -spec subscribe_records(pool(), record_type(),
@@ -475,45 +500,39 @@ record_stored_topic(Type) ->
 %% Adapt a 1-arg `(Record) -> any()' user callback to the 3-arg
 %% `(Topic, Payload, Meta) -> any()' shape `macula_pubsub' delivers.
 %%
-%% PubSub delivers the payload as the wire-format encoded record
-%% binary (the substrate's `record_fanout' publishes
-%% `macula_record:encode/1' output on the `_dht.records.<type>.stored'
-%% topic). Decode here so the user-supplied callback receives the
-%% record map per the documented contract. Malformed payloads are
-%% dropped silently — surfacing them to the callback would force
-%% every user to handle decode errors for what is fundamentally a
-%% protocol-internal channel.
+%% PubSub delivers the payload as the record's wire form (the
+%% substrate's `record_fanout' publishes `macula_record:encode/1'
+%% output on the `_dht.records.<type>.stored' topic). The record is
+%% verified here under the node's crypto profile, so the callback
+%% receives only verified records. A payload that does not verify is
+%% dropped silently: surfacing it would force every user to handle
+%% refusals on a protocol-internal channel.
 wrap_record_callback(Fun) ->
-    fun(_Topic, Payload, _Meta) -> apply_callback_with_decode(Fun, Payload) end.
+    fun(_Topic, Payload, _Meta) -> apply_callback_with_verified(Fun, Payload) end.
 
-apply_callback_with_decode(Fun, Payload) when is_binary(Payload) ->
-    case macula_record:decode(Payload) of
-        {ok, Record} -> Fun(Record), ok;
-        _            -> ok
-    end;
-apply_callback_with_decode(Fun, Payload) when is_map(Payload) ->
-    %% Already-decoded record (legacy callers / direct injection).
-    Fun(Payload), ok;
-apply_callback_with_decode(_Fun, _Other) ->
-    ok.
+apply_callback_with_verified(Fun, Payload) ->
+    callback_with(with_profile(fun(Profile) -> macula_record:verify(Payload, Profile) end), Fun).
+
+callback_with({ok, Record}, Fun) -> Fun(Record), ok;
+callback_with({error, _}, _Fun) -> ok.
 
 %%%===================================================================
 %%% Content-addressed blob storage (v4.2.7+)
 %%%===================================================================
 
--type mcid() :: <<_:272>>.
+-type mcid() :: <<_:400>>.
 
 
 %% @doc Store `Bytes' in the mesh's content store and return its MCID
-%% (Macula Content ID — 34 bytes: version, codec, then a 32-byte hash).
+%% (Macula Content ID, 50 bytes: tag 2 for SHA-384, codec, then the 48-byte hash).
 %% Content that fits in one block (`byte_size(Bytes) =&lt;
 %% macula_manifest:default_chunk_size/0', 256 KiB) is sent as a
-%% single `_content.put_block' — the MCID is `&lt;&lt;1, 16#55,
-%% BLAKE3(Bytes)&gt;&gt;', unchanged since v4.2.7. Larger content is split
+%% single `_content.put_block', and the MCID is `&lt;&lt;2, 16#55,
+%% SHA-384(Bytes)&gt;&gt;'. Larger content is split
 %% into chunks (`macula_manifest:create/1'), each chunk sent
 %% via its own `_content.put_block', then a `content_manifest' via
 %% `_content.put_manifest'; the returned MCID is the manifest's
-%% (`&lt;&lt;1, 16#56, _/binary&gt;&gt;'), Merkle-rooted over every chunk. Either
+%% (`&lt;&lt;2, 16#56, _/binary&gt;&gt;'), Merkle-rooted over every chunk. Either
 %% way the station verifies each block's hash before accepting it.
 %%
 %% The whole transfer — every block call plus the manifest call for
@@ -580,7 +599,7 @@ put_content_station(Pool, Station, Bytes, TimeoutMs, Opts) ->
 %% crashed the calling process's linked worker on anything else.
 -spec get_content(pool(), mcid()) ->
     {ok, binary()} | {error, not_found | invalid_mcid | term()}.
-get_content(Pool, <<1, Codec, _/binary>> = MCID)
+get_content(Pool, <<2, Codec, _:48/binary>> = MCID)
   when is_pid(Pool), (Codec =:= 16#55 orelse Codec =:= 16#56) ->
     {ok, Pid} = macula_content_transfer:start_get(Pool, MCID),
     Result = macula_content_transfer:await(Pid),
@@ -612,7 +631,7 @@ get_content_station(Pool, Station, MCID, TimeoutMs) ->
 -spec get_content_station(pool(), macula_client:seed(), mcid(),
                           pos_integer(), map()) ->
     {ok, binary()} | {error, not_found | invalid_mcid | term()}.
-get_content_station(Pool, Station, <<1, Codec, _/binary>> = MCID, TimeoutMs, Opts)
+get_content_station(Pool, Station, <<2, Codec, _:48/binary>> = MCID, TimeoutMs, Opts)
   when Codec =:= 16#55 orelse Codec =:= 16#56 ->
     {ok, Pid} = macula_content_transfer:start_get_station(
                   Pool, Station, MCID, TimeoutMs, Opts),
@@ -633,45 +652,41 @@ get_content_station(_Pool, _Station, _MCID, _TimeoutMs, _Opts) ->
 %% partial-mesh pair with no mutual peer), or to route around a
 %% specific host deliberately.
 %%
-%% Each entry's signature is verified, AND its signer must equal the
-%% `announcer_node' it claims — same discipline as `station_endpoint'
-%% resolution — before its `endpoint' is trusted; unverifiable,
-%% signer-mismatched, or malformed records are dropped, not surfaced as
-%% errors. Single-block content (put via `_content.put_block' alone) is
-%% not announced — resolving its MCID returns `{ok, []}'.
+%% Each entry is verified under the node's crypto profile before its
+%% `endpoint' is trusted: its signature, and that its signer is the
+%% `announcer_node' it names, since `macula_record:verify/2' refuses a
+%% record whose payload names another signer. Unverifiable records and
+%% records of another type are dropped, not surfaced as errors.
+%% Single-block content (put via `_content.put_block' alone) is not
+%% announced: resolving its MCID returns `{ok, []}'.
 -spec find_content_providers(pool(), mcid()) -> {ok, [map()]} | {error, term()}.
-find_content_providers(Pool, MCID)
-  when is_pid(Pool), is_binary(MCID), byte_size(MCID) =:= 34 ->
+find_content_providers(Pool, <<2, _Codec:8, _Hash:48/binary>> = MCID) when is_pid(Pool) ->
     classify_find_providers(
       macula_client:call(Pool, ?DHT_REALM, ?DHT_FIND_RECORDS_PROC,
                          #{key => macula_record:content_key(MCID)},
                          ?DHT_RECORD_TIMEOUT_MS)).
 
-classify_find_providers({ok, Records}) when is_list(Records) ->
-    {ok, decode_providers(Records)};
+classify_find_providers({ok, Wires}) when is_list(Wires) ->
+    with_profile(fun(Profile) -> {ok, providers(Wires, Profile)} end);
 classify_find_providers({ok, Reply}) ->
     {error, {unexpected_reply, Reply}};
 classify_find_providers({error, _} = E) ->
     E.
 
-decode_providers(Records) ->
-    lists:filtermap(fun decode_provider/1, Records).
+providers(Wires, Profile) ->
+    lists:filtermap(fun(Wire) -> decode_provider(Wire, Profile) end, Wires).
 
-decode_provider(#{key := Key} = Record) ->
-    provider_verified(macula_record:verify(Record), Key, Record).
+%% A provider from a content announcement that verifies under Profile.
+%% The verification covers the signer: a record merely stored under the
+%% right key but signed by a node other than the `announcer_node' it
+%% names is refused with key_id_mismatch, the same class of gap
+%% `macula_direct_dial' closes for `station_endpoint'.
+decode_provider(Signed, Profile) ->
+    provider(macula_record:verify(Signed, Profile)).
 
-%% The record's own signature proves SOME identity signed it; the
-%% signer must also equal the `announcer_node' the payload claims — a
-%% record merely stored under the right key but self-signed by someone
-%% else's identity would otherwise still be trusted (same class of gap
-%% `macula_direct_dial:verify_and_build/2' closes for `station_endpoint').
-provider_verified({ok, _}, Key, Record) ->
-    try macula_record:read_content_announcement(Record) of
-        #{announcer_node := Key, endpoint := _} = Provider -> {true, Provider};
-        _Mismatched -> false
-    catch _:_ -> false
-    end;
-provider_verified({error, _}, _Key, _Record) ->
+provider({ok, #{type := ?TYPE_CONTENT_ANNOUNCEMENT} = Record}) ->
+    {true, macula_record:read_content_announcement(Record)};
+provider(_RefusedOrAnotherType) ->
     false.
 
 %%%===================================================================
@@ -917,8 +932,8 @@ unmonitor_nodes() -> macula_cluster:unmonitor_nodes().
 %% `Opts' takes:
 %% <ul>
 %%   <li>`relays' (required) — list of seed URLs for the V2 pool.</li>
-%%   <li>`identity' — V2 pool's `macula_identity:key_pair()'.
-%%       Default: auto-generated.</li>
+%%   <li>`node_identity': the V2 pool's node identity key,
+%%       `macula_node_keys:node_key()'. Default: generated.</li>
 %% </ul>
 %%
 %% Internally builds a V2 `macula_client:pool()' and registers it
@@ -932,10 +947,7 @@ join_mesh(Opts) ->
     on_pool_for_join(macula_client:connect(Relays, PoolOpts)).
 
 pool_opts_for_join(Opts) ->
-    case maps:find(identity, Opts) of
-        {ok, Identity} -> #{identity => Identity};
-        error          -> #{}
-    end.
+    maps:with([node_identity], Opts).
 
 on_pool_for_join({ok, Pool}) ->
     wait_for_pool(Pool, 30),
@@ -1021,3 +1033,44 @@ on_pool_status({ok, #{healthy_links := N}}, _Pool, _Retries) when N > 0 ->
 on_pool_status(_Other, Pool, Retries) ->
     timer:sleep(1000),
     wait_for_pool(Pool, Retries - 1).
+
+%%%===================================================================
+%%% Peer-supplied maps (D26)
+%%%===================================================================
+
+%% @doc A field of a map a peer supplied, or `undefined' when it is absent. See `field/3'.
+-spec field(atom() | binary(), map()) -> term().
+field(Name, Map) ->
+    field(Name, Map, undefined).
+
+%% @doc A field of a map a peer supplied (D26), or `Default' when it is absent. A map from the codec carries its text
+%% keys as `{text, Bin}'; a map handed over in process may carry atom or binary keys. The lookup tries `{text, Name}',
+%% then the atom, then the binary, so a handler reads both kinds of map the same way. Looking up a binary name never
+%% creates an atom.
+-spec field(atom() | binary(), map(), term()) -> term().
+field(Name, Map, Default) when (is_atom(Name) orelse is_binary(Name)), is_map(Map) ->
+    first_found(field_keys(Name), Map, Default).
+
+%% @doc The binary of a text value a peer supplied (D26): the binary of `{text, Bin}', a binary unchanged, and
+%% `badarg' for anything else.
+-spec text({text, binary()} | binary()) -> binary().
+text({text, Bin}) when is_binary(Bin) -> Bin;
+text(Bin) when is_binary(Bin) -> Bin;
+text(Other) -> erlang:error(badarg, [Other]).
+
+field_keys(Name) when is_atom(Name) ->
+    Bin = atom_to_binary(Name),
+    [{text, Bin}, Name, Bin];
+field_keys(Name) when is_binary(Name) ->
+    [{text, Name}] ++ existing_atom(Name) ++ [Name].
+
+existing_atom(Name) ->
+    try [binary_to_existing_atom(Name)]
+    catch error:badarg -> []
+    end.
+
+first_found([], _Map, Default) -> Default;
+first_found([Key | Keys], Map, Default) -> found(maps:find(Key, Map), Keys, Map, Default).
+
+found({ok, Value}, _Keys, _Map, _Default) -> Value;
+found(error, Keys, Map, Default) -> first_found(Keys, Map, Default).

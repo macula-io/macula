@@ -185,26 +185,26 @@ advertise(Pool, Realm, Procedure, Module, Args, Opts) ->
 %% station as the server, so `macula_pusher:start_link_direct/5,6' can
 %% resolve and dial here directly. See `macula_streamer:advertise_direct/6,7'.
 -spec advertise_direct(macula:pool(), macula:realm(), macula:procedure(),
-                       module(), term(), macula_identity:key_pair()) ->
+                       module(), term(), macula_node_keys:node_key()) ->
     {ok, pid()} | {error, term()}.
-advertise_direct(Pool, Realm, Procedure, Module, Args, Identity) ->
-    advertise_direct(Pool, Realm, Procedure, Module, Args, Identity, #{}).
+advertise_direct(Pool, Realm, Procedure, Module, Args, NodeIdentity) ->
+    advertise_direct(Pool, Realm, Procedure, Module, Args, NodeIdentity, #{}).
 
 %% @doc As `advertise_direct/6', with `Opts' forwarded to
 %% `macula_streamer:advertise_direct/7', and so to the advertisement
-%% publish, e.g. `cert_chain => ChainPem' (Slice 7c Direction B, managed
-%% realms only), except `fact_publish', the function this module
-%% announces its own facts with.
+%% publish, e.g. `authorization', the provider authorization an org
+%% namespaced procedure needs, except `fact_publish', the function this
+%% module announces its own facts with.
 -spec advertise_direct(macula:pool(), macula:realm(), macula:procedure(),
-                       module(), term(), macula_identity:key_pair(), map()) ->
+                       module(), term(), macula_node_keys:node_key(), map()) ->
     {ok, pid()} | {error, term()}.
-advertise_direct(Pool, Realm, Procedure, Module, Args, Identity, Opts) ->
+advertise_direct(Pool, Realm, Procedure, Module, Args, NodeIdentity, Opts) ->
     Announce = maps:get(announce, Opts, true),
     FactPublish = arity_4(maps:get(fact_publish, Opts, fun macula:publish/4)),
     StreamerOpts = maps:remove(fact_publish, Opts),
     macula_streamer:advertise_direct(Pool, Realm, Procedure, ?MODULE,
                                      {Module, Pool, Realm, Announce, FactPublish, Args},
-                                     Identity,
+                                     NodeIdentity,
                                      StreamerOpts#{mode => client_stream, announce => false}).
 
 %% @doc Stop advertising `Procedure'.

@@ -153,6 +153,12 @@ Abort with a BOLT#4-style code and message when something goes wrong:
 macula:abort(Stream, <<"0F">>, <<"source unavailable">>).
 ```
 
+Over the mesh the message is text for people, at most 256 bytes of UTF-8;
+a longer message, or one that is not valid UTF-8, travels empty. An error
+reply from `macula_stream:set_error/2` travels as the same STREAM_ERROR, with
+code `error` and the reason as its message when the reason is a binary or an
+atom.
+
 A stream takes chunks only from the side its mode lets send: the server in
 `server_stream`, the client in `client_stream`, and both in `bidi`. A chunk
 from the other side ends the session with code `stream_protocol_error`, and a

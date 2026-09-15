@@ -22,7 +22,20 @@ an_empty_mcid_is_rejected_test() ->
     ?assertEqual({error, invalid_mcid}, macula:get_content(self(), <<>>)).
 
 a_wrong_codec_byte_is_rejected_test() ->
-    ?assertEqual({error, invalid_mcid}, macula:get_content(self(), <<1, 16#57, 0:256>>)).
+    ?assertEqual({error, invalid_mcid}, macula:get_content(self(), <<2, 16#57, 0:384>>)).
+
+%% The post-quantum format has only tag 2, SHA-384 (D24): a BLAKE3 id,
+%% tag 1, is refused like any other malformed MCID.
+a_blake3_content_id_is_rejected_test_() ->
+    [?_assertEqual({error, invalid_mcid}, macula:get_content(self(), <<1, Codec, 0:256>>))
+     || Codec <- [16#55, 16#56]].
+
+a_tag_2_id_with_a_short_hash_is_rejected_test() ->
+    ?assertEqual({error, invalid_mcid}, macula:get_content(self(), <<2, 16#55, 0:256>>)).
+
+get_content_station_rejects_a_blake3_content_id_test() ->
+    ?assertEqual({error, invalid_mcid},
+                 macula:get_content_station(self(), <<"seed">>, <<1, 16#55, 0:256>>, 1000)).
 
 get_content_station_also_rejects_a_malformed_mcid_test() ->
     Result = macula:get_content_station(self(), <<"seed">>, <<"not-an-mcid">>, 1000),

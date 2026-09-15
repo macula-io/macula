@@ -1,121 +1,93 @@
 %% @doc Realm-join handshake helpers (Phase 5.6).
 %%
-%% Building block for the admission flow of a new station into a
-%% realm. The station presents a signed `realm_member_endorsement'
-%% record (issued by the realm admin) and the receiving peers
-%% verify it against the realm's admin key before admitting the
-%% station into the HyParView active/passive view.
+%% Building block for the admission flow of a new station into a realm. The station presents a
+%% realm_member_endorsement record signed with the realm key, and the receiving peers verify it against the realm key
+%% id they trust for that realm before admitting the station into the HyParView active or passive view.
 %%
-%% This module is pure — it does not talk to the network. Callers
-%% (typically the per-station dispatcher) feed the decoded endorsement
-%% record into `verify_endorsement/3' and act on the outcome.
+%% This module is pure: it does not talk to the network. Callers (typically the per-station dispatcher) feed the
+%% endorsement, as its wire form as received, into verify_endorsement/3 and act on the outcome.
 %%
 %% == Acceptance rules ==
 %%
 %% <ul>
-%%   <li>Record type MUST be the endorsement tag
-%%       (`#?TYPE_REALM_MEMBER_ENDORSEMENT').</li>
-%%   <li>Envelope signature MUST verify against the admin key the
-%%       local node trusts for that realm. `verify/1' guards both
-%%       signature and expiry already.</li>
-%%   <li>Payload `realm' field MUST equal the expected realm id.</li>
-%%   <li>Payload `member_node' field MUST equal the candidate node
-%%       id claimed by the joining peer — prevents stealing another
-%%       member's endorsement.</li>
-%%   <li>`valid_from ≤ now ≤ valid_until' — the endorsement must be
-%%       currently active.</li>
+%%   <li>The record verifies under the verifier's profile (macula_record:verify/2): its carried key, its signature, and
+%%       its created_at and expires_at.</li>
+%%   <li>Its type is the realm member endorsement (0x05).</li>
+%%   <li>Its signer's key id is the realm key id the node trusts for the realm.</li>
+%%   <li>The payload realm_id equals the expected realm id.</li>
+%%   <li>The payload member_node equals the node_id the joining peer claims, so no peer can present another member's
+%%       endorsement.</li>
+%%   <li>valid_from is at most now and valid_until at least now: the endorsement is active.</li>
 %% </ul>
 %%
 %% Reference: plans/PLAN_MACULA_V2_PART6_PROTOCOL.md §9.6.
 -module(macula_hyparview_endorsement).
 
--export([verify_endorsement/3, build_join/4]).
+-export([verify_endorsement/3, build_join/3]).
+
+-export_type([trust/0, verify_error/0]).
 
 -define(TYPE_REALM_MEMBER_ENDORSEMENT, 16#05).
 
 -type realm()   :: <<_:256>>.
 -type node_id() :: <<_:256>>.
 
+%% What a node trusts for a realm: its crypto profile, the realm id, and the key id of the realm key.
+-type trust() :: #{profile := macula_crypto_profile:profile(), realm := realm(), realm_key_id := <<_:256>>}.
+
 -type verify_error() ::
-        bad_record
-      | signature_invalid
-      | expired
+        record_too_large | malformed | signature_invalid | alg_mismatch | not_yet_valid | expired | key_id_mismatch
       | wrong_type
+      | untrusted_signer
       | wrong_realm
       | wrong_member
-      | not_yet_valid
       | endorsement_expired.
 
-%% @doc Verify an endorsement record authorises `Member' for `Realm'.
-%%
-%% Returns `{ok, Roles}' with the endorsed role list on success, or
-%% `{error, Reason}' otherwise. Callers typically treat any error as
-%% a rejection and drop the pending join.
--spec verify_endorsement(macula_record:m_record(), realm(), node_id()) ->
-        {ok, [binary()]} | {error, verify_error()}.
-verify_endorsement(Record, Realm, Member)
-  when is_binary(Realm),  byte_size(Realm)  =:= 32,
-       is_binary(Member), byte_size(Member) =:= 32 ->
-    verify_shape_then_payload(macula_record:verify(Record), Realm, Member).
+%% @doc Verify that an endorsement, as its wire form or its {key, tbs, signature} map, admits Member to the realm that
+%% Trust names. Returns {ok, Roles} with the endorsed roles, or {error, Reason}; callers treat any error as a refusal
+%% and drop the pending join.
+-spec verify_endorsement(binary() | map(), trust(), node_id()) -> {ok, [binary()]} | {error, verify_error()}.
+verify_endorsement(Signed, #{profile := Profile, realm := <<_:256>>, realm_key_id := <<_:256>>} = Trust,
+                   <<_:256>> = Member) ->
+    verified(macula_record:verify(Signed, Profile), Trust, Member).
 
-verify_shape_then_payload({error, Reason}, _Realm, _Member) ->
-    {error, Reason};
-verify_shape_then_payload({ok, Record}, Realm, Member) ->
-    check_type(Record, Realm, Member).
+verified({ok, #{type := ?TYPE_REALM_MEMBER_ENDORSEMENT} = Record}, Trust, Member) ->
+    check_signer(Record, Trust, Member);
+verified({ok, _OtherType}, _Trust, _Member) ->
+    {error, wrong_type};
+verified({error, _} = Refusal, _Trust, _Member) ->
+    Refusal.
 
-check_type(#{type := ?TYPE_REALM_MEMBER_ENDORSEMENT} = R, Realm, Member) ->
-    check_realm(R, Realm, Member);
-check_type(_R, _Realm, _Member) ->
-    {error, wrong_type}.
+check_signer(#{key_id := KeyId} = Record, #{realm_key_id := KeyId, realm := Realm}, Member) ->
+    check_realm(Record, Realm, Member);
+check_signer(_Record, _Trust, _Member) ->
+    {error, untrusted_signer}.
 
-check_realm(#{key := Realm, payload := P} = R, Realm, Member) ->
-    case maps:get({text, <<"realm">>}, P, undefined) of
-        Realm -> check_member(R, Member);
-        _     -> {error, wrong_realm}
-    end;
-check_realm(_R, _Realm, _Member) ->
+check_realm(#{payload := #{{text, <<"realm_id">>} := Realm}} = Record, Realm, Member) ->
+    check_member(Record, Member);
+check_realm(_Record, _Realm, _Member) ->
     {error, wrong_realm}.
 
-check_member(#{payload := P} = R, Member) ->
-    case maps:get({text, <<"member_node">>}, P, undefined) of
-        Member -> check_window(R);
-        _      -> {error, wrong_member}
-    end.
+check_member(#{payload := #{{text, <<"member_node">>} := Member} = Payload}, Member) ->
+    check_window(maps:get({text, <<"valid_from">>}, Payload, undefined),
+                 maps:get({text, <<"valid_until">>}, Payload, undefined),
+                 erlang:system_time(millisecond), Payload);
+check_member(_Record, _Member) ->
+    {error, wrong_member}.
 
-check_window(#{payload := P}) ->
-    NowMs = erlang:system_time(millisecond),
-    From  = maps:get({text, <<"valid_from">>}, P, 0),
-    Until = maps:get({text, <<"valid_until">>}, P, 0),
-    evaluate_window(NowMs, From, Until, P).
-
-evaluate_window(Now, From, _Until, _P) when Now < From ->
+check_window(From, Until, Now, Payload) when is_integer(From), is_integer(Until), From =< Now, Now =< Until ->
+    endorsed_roles(maps:get({text, <<"roles">>}, Payload, []));
+check_window(From, _Until, Now, _Payload) when is_integer(From), Now < From ->
     {error, not_yet_valid};
-evaluate_window(Now, _From, Until, _P) when Now > Until ->
-    {error, endorsement_expired};
-evaluate_window(_Now, _From, _Until, P) ->
-    {ok, extract_roles(P)}.
+check_window(_From, _Until, _Now, _Payload) ->
+    {error, endorsement_expired}.
 
-extract_roles(P) ->
-    Raw = maps:get({text, <<"roles">>}, P, []),
-    [role_to_binary(R) || R <- Raw].
+endorsed_roles(Roles) when is_list(Roles) -> {ok, [Role || {text, Role} <- Roles]};
+endorsed_roles(_NotAList) -> {error, malformed}.
 
-role_to_binary({text, R}) when is_binary(R) -> R;
-role_to_binary(R)        when is_binary(R) -> R.
-
-%% @doc Build the initial JOIN frame the joining station sends to
-%% one of the realm's known stations.
-%%
-%% The joining station signs the frame with `Identity' so the
-%% receiver can bind the join attempt to the candidate member key
-%% (the endorsement binds it to the realm).
--spec build_join(realm(), node_id(), macula_record:m_record(),
-                 macula_identity:key_pair()) -> macula_frame:frame().
-build_join(Realm, NewMember, Endorsement, Identity)
-  when is_binary(Realm), byte_size(Realm) =:= 32,
-       is_binary(NewMember), byte_size(NewMember) =:= 32,
-       is_map(Endorsement) ->
-    macula_frame:sign(macula_frame:hyparview_join(#{
-        realm      => Realm,
-        new_member => NewMember,
-        record     => Endorsement
-    }), Identity).
+%% @doc Build the JOIN frame a joining station sends to one of the realm's known stations, carrying its endorsement as
+%% the record's wire form. The frame carries no signature of its own: neighbour signatures belong to the connection
+%% (D17).
+-spec build_join(realm(), node_id(), binary()) -> macula_frame:frame().
+build_join(<<_:256>> = Realm, <<_:256>> = NewMember, Endorsement) when is_binary(Endorsement) ->
+    macula_frame:hyparview_join(#{realm => Realm, new_member => NewMember, record => Endorsement}).

@@ -63,12 +63,13 @@ controlling_process_exit_stops_the_dial() ->
 %%%===================================================================
 
 conn_opts(Controller, Port) ->
-    #{identity        => macula_identity:generate(),
-      realms          => [],
+    {ok, Identity} = macula_node_keys:generate(identity, pq_pure),
+    #{identity        => Identity,
+      issuer          => Controller,
       capabilities    => 0,
       controlling_pid => Controller,
       target          => #{host => <<"127.0.0.1">>, port => Port,
-                           timeout_ms => 10_000, verify => none}}.
+                           timeout_ms => 10_000, expected_node_id => <<0:256>>}}.
 
 exited_within(Mon, TimeoutMs) ->
     receive

@@ -1,17 +1,16 @@
 %%%-------------------------------------------------------------------
-%%% @doc macula_peering:async_send_on_stream/3,4, driven over a loopback QUIC
+%%% @doc macula_peering:async_send_on_stream/2,3, driven over a loopback QUIC
 %%% stream whose reader can stop reading.
 %%%
 %%% The variant never waits in the calling process, whatever the reader does.
-%%% It checks, signs and encodes a frame with send_on_stream/3's own
-%%% functions, so it refuses what send_on_stream/3 refuses, the same way.
 %%% When the stream's send queue is full it returns {error, busy} and queues
 %%% nothing, and the calling process later gets {quic, send_ready, Stream, _}.
-%%% A tagged frame it accepted ends with exactly one notice to the calling
-%%% process: {quic, send_complete, Stream, Tag} once its bytes are written, or
+%%% Tagged bytes it accepted end with exactly one notice to the calling
+%%% process: {quic, send_complete, Stream, Tag} once they are written, or
 %%% {quic, send_incomplete, Stream, {Tag, Reason}} when the stream is reset or
 %%% fails first, never both. A caller that is not the stream's owner gets
-%%% these messages, and the owner gets none of them.
+%%% these messages, and the owner gets none of them. The bytes arrive as they
+%%% were given, in order, as a relay passes a frame on.
 %%%
 %%% Senders run in monitored processes, so a sender that fails fails its own
 %%% test with the reason, and the other tests still run.
@@ -25,7 +24,7 @@
 %% The listener's stream receive window: a reader that stops reading stops
 %% crediting the sender after this much.
 -define(WINDOW, 64 * ?KIB).
--define(PAYLOAD_BYTES, 32 * ?KIB).
+-define(BLOCK_BYTES, 32 * ?KIB).
 -define(EVENT_MS, 5_000).
 -define(PROBE_MS, 100).
 -define(RACE_ROUNDS, 20).
@@ -37,14 +36,14 @@ async_send_on_stream_test_() ->
       fun(ok) -> ok end,
       [{"a caller whose reader stopped keeps answering within 100 ms, gets busy, then send_ready",
         {timeout, 30, fun a_stopped_reader_never_holds_the_caller/0}},
-       {"each tagged frame gets one send_complete, and only once its bytes are written",
-        {timeout, 30, fun each_tagged_frame_completes_once_written/0}},
-       {"a reset with tagged frames queued gives each exactly one notice, and a non-owner caller gets them",
+       {"each tagged block gets one send_complete, and only once its bytes are written",
+        {timeout, 30, fun each_tagged_block_completes_once_written/0}},
+       {"a reset with tagged blocks queued gives each exactly one notice, and a non-owner caller gets them",
         {timeout, 30, fun a_reset_gives_each_queued_tag_one_notice/0}},
        {"a reset racing a tagged write gives exactly one notice for that tag",
         {timeout, 60, fun a_reset_racing_a_write_gives_one_notice/0}},
-       {"the same invalid frame is refused identically by send_on_stream and the async variant",
-        {timeout, 30, fun an_invalid_frame_is_refused_the_same_way/0}}]}}.
+       {"the bytes arrive as they were given, in order",
+        {timeout, 30, fun the_bytes_arrive_as_given/0}}]}}.
 
 %%%===================================================================
 %%% Scenarios
@@ -52,15 +51,14 @@ async_send_on_stream_test_() ->
 
 %% A sender process, not the stream's owner, sends until busy while this
 %% process probes it. Once the reader reads again, the sender gets send_ready,
-%% and every frame it had queued arrives. The owner gets no send_ready.
+%% and every block it had queued arrives. The owner gets no send_ready.
 a_stopped_reader_never_holds_the_caller() ->
     with_pair(fun(#{client_stream := Stream, server_stream := ServerStream}) ->
         Test = self(),
-        Identity = macula_identity:generate(),
-        Sender = spawn_monitor(fun() -> send_until_busy(Test, Stream, Identity, 0) end),
+        Sender = spawn_monitor(fun() -> send_until_busy(Test, Stream, 0) end),
         {Accepted, Latencies} = probe_until_busy(Sender, []),
         AfterBusy = probe(Sender),
-        Arrived = frames_read(ServerStream, Accepted),
+        Arrived = blocks_read(ServerStream, Accepted),
         Ready = from_sender(Sender, fun({ready, _Pid}) -> ready end),
         OwnerGot = receive {quic, send_ready, Stream, _} -> send_ready after 0 -> nothing end,
         ?assertEqual({true, true, ready, Accepted, nothing},
@@ -68,12 +66,11 @@ a_stopped_reader_never_holds_the_caller() ->
                       Ready, Arrived, OwnerGot})
     end).
 
-%% With the reader stopped, most tagged frames stay queued and get no notice;
+%% With the reader stopped, most tagged blocks stay queued and get no notice;
 %% once it reads, every tag gets exactly one send_complete.
-each_tagged_frame_completes_once_written() ->
+each_tagged_block_completes_once_written() ->
     with_pair(fun(#{client_stream := Stream, server_stream := ServerStream}) ->
-        Identity = macula_identity:generate(),
-        Accepted = tagged_until_busy(Stream, Identity, 1),
+        Accepted = tagged_until_busy(Stream, 1),
         Early = notices(Stream, 300),
         ok = macula_quic:setopt(ServerStream, active, true),
         Late = notices_until(Stream, Accepted - length(Early)),
@@ -84,15 +81,14 @@ each_tagged_frame_completes_once_written() ->
                       [N || {incomplete, _, _} = N <- All]})
     end).
 
-%% A sender process, not the owner, queues tagged frames to a stopped reader
+%% A sender process, not the owner, queues tagged blocks to a stopped reader
 %% and resets the stream. Every accepted tag gets exactly one notice, the
 %% queued ones send_incomplete with reason reset, and the owner gets none.
 a_reset_gives_each_queued_tag_one_notice() ->
     with_pair(fun(#{client_stream := Stream}) ->
         Test = self(),
-        Identity = macula_identity:generate(),
         Sender = spawn_monitor(fun() ->
-                     Accepted = tagged_until_busy(Stream, Identity, 1),
+                     Accepted = tagged_until_busy(Stream, 1),
                      ok = macula_quic:reset_stream(Stream, 7),
                      Test ! {reset_notices, self(), Accepted, notices(Stream, 1_000)}
                  end),
@@ -106,37 +102,37 @@ a_reset_gives_each_queued_tag_one_notice() ->
                       OwnerGot})
     end).
 
-%% A reading peer and a 256 KiB tagged frame, reset at once or after a short
+%% A reading peer and a 256 KiB tagged block, reset at once or after a short
 %% delay: its one notice is send_complete when its bytes were written and
 %% send_incomplete otherwise, and never both.
 a_reset_racing_a_write_gives_one_notice() ->
     Counts = [race_round(Round rem 4) || Round <- lists:seq(1, ?RACE_ROUNDS)],
     ?assertEqual(lists:duplicate(?RACE_ROUNDS, 1), Counts).
 
-an_invalid_frame_is_refused_the_same_way() ->
-    with_pair(fun(#{client_stream := Stream}) ->
-        Identity = macula_identity:generate(),
-        Invalid = call_with_payload(#{<<"unsendable">> => {1, 2}}),
-        Waiting = macula_peering:send_on_stream(Stream, Invalid, Identity),
-        Async = macula_peering:async_send_on_stream(Stream, Invalid, Identity),
-        Tagged = macula_peering:async_send_on_stream(Stream, Invalid, Identity, refused),
-        ?assertMatch({{error, {unsupported_payload_type, _, _}}, Same, Same, []}
-                       when Same =:= Waiting,
-                     {Waiting, Async, Tagged, notices(Stream, 200)})
+%% Numbered blocks, some tagged and some not, to a reading peer: the peer reads
+%% exactly their bytes, in the order they were given.
+the_bytes_arrive_as_given() ->
+    with_pair(fun(#{client_stream := Stream, server_stream := ServerStream}) ->
+        ok = macula_quic:setopt(ServerStream, active, true),
+        Blocks = [block(N) || N <- lists:seq(1, 8)],
+        Sent = [send_block(Stream, N, Block) || {N, Block} <- lists:zip(lists:seq(1, 8), Blocks)],
+        Expected = iolist_to_binary([<<"open">> | Blocks]),
+        Read = read_bytes(ServerStream, byte_size(Expected), <<>>,
+                          erlang:monotonic_time(millisecond) + ?EVENT_MS),
+        ?assertEqual({lists:duplicate(8, ok), Expected}, {Sent, Read})
     end).
 
 %%%===================================================================
 %%% Senders
 %%%===================================================================
 
-send_until_busy(Test, Stream, Identity, Accepted) ->
+send_until_busy(Test, Stream, Accepted) ->
     answer_probes(),
-    sent(macula_peering:async_send_on_stream(Stream, frame(), Identity),
-         Test, Stream, Identity, Accepted).
+    sent(macula_peering:async_send_on_stream(Stream, block(Accepted + 1)), Test, Stream, Accepted).
 
-sent(ok, Test, Stream, Identity, Accepted) ->
-    send_until_busy(Test, Stream, Identity, Accepted + 1);
-sent({error, busy}, Test, Stream, _Identity, Accepted) ->
+sent(ok, Test, Stream, Accepted) ->
+    send_until_busy(Test, Stream, Accepted + 1);
+sent({error, busy}, Test, Stream, Accepted) ->
     Test ! {busy, self(), Accepted},
     await_ready(Test, Stream).
 
@@ -158,22 +154,27 @@ answer_probes() ->
         ok
     end.
 
-%% Sends frames tagged Tag, Tag + 1, ... until busy; returns how many were
+%% Sends blocks tagged Tag, Tag + 1, ... until busy; returns how many were
 %% accepted.
-tagged_until_busy(Stream, Identity, Tag) ->
-    tagged_sent(macula_peering:async_send_on_stream(Stream, frame(), Identity, Tag),
-                Stream, Identity, Tag).
+tagged_until_busy(Stream, Tag) ->
+    tagged_sent(macula_peering:async_send_on_stream(Stream, block(Tag), Tag), Stream, Tag).
 
-tagged_sent(ok, Stream, Identity, Tag) ->
-    tagged_until_busy(Stream, Identity, Tag + 1);
-tagged_sent({error, busy}, _Stream, _Identity, Tag) ->
+tagged_sent(ok, Stream, Tag) ->
+    tagged_until_busy(Stream, Tag + 1);
+tagged_sent({error, busy}, _Stream, Tag) ->
     Tag - 1.
+
+%% Odd blocks go untagged, even blocks tagged with their number.
+send_block(Stream, N, Block) when N rem 2 =:= 1 ->
+    macula_peering:async_send_on_stream(Stream, Block);
+send_block(Stream, N, Block) ->
+    macula_peering:async_send_on_stream(Stream, Block, N).
 
 race_round(DelayMs) ->
     with_pair(fun(#{client_stream := Stream, server_stream := ServerStream}) ->
         ok = macula_quic:setopt(ServerStream, active, true),
-        Frame = call_with_payload(#{<<"pad">> => binary:copy(<<0>>, 256 * ?KIB)}),
-        ok = macula_peering:async_send_on_stream(Stream, Frame, macula_identity:generate(), race),
+        Block = binary:copy(<<0>>, 256 * ?KIB),
+        ok = macula_peering:async_send_on_stream(Stream, Block, race),
         timer:sleep(DelayMs),
         _ = macula_quic:reset_stream(Stream, 7),
         length(notices(Stream, 1_000))
@@ -243,16 +244,14 @@ fewer(N) -> N - 1.
 tag({complete, Tag}) -> Tag;
 tag({incomplete, Tag, _Reason}) -> Tag.
 
-%% How many frames arrive on ServerStream once it reads again, reading until
-%% Expected frames' bytes are in or EVENT_MS passes. The stream's first four
-%% bytes are the "open" that made the listener side accept it.
-frames_read(ServerStream, Expected) ->
+%% How many whole blocks arrive on ServerStream once it reads again, reading
+%% until Expected blocks' bytes are in or EVENT_MS passes. The stream's first
+%% four bytes are the "open" that made the listener side accept it.
+blocks_read(ServerStream, Expected) ->
     ok = macula_quic:setopt(ServerStream, active, true),
-    Wanted = 4 + Expected * byte_size(macula_frame:encode(macula_frame:sign(frame(), macula_identity:generate()))),
-    <<"open", Frames/binary>> = read_bytes(ServerStream, Wanted, <<>>,
+    <<"open", Blocks/binary>> = read_bytes(ServerStream, 4 + Expected * ?BLOCK_BYTES, <<>>,
                                            erlang:monotonic_time(millisecond) + ?EVENT_MS),
-    {ok, Items, _Tail} = macula_frame:parse_received(Frames),
-    length(Items).
+    byte_size(Blocks) div ?BLOCK_BYTES.
 
 read_bytes(_Stream, Wanted, Acc, _Deadline) when byte_size(Acc) >= Wanted ->
     Acc;
@@ -265,22 +264,9 @@ read_bytes(Stream, Wanted, Acc, Deadline) ->
         Acc
     end.
 
-%%%===================================================================
-%%% Frames
-%%%===================================================================
-
-frame() ->
-    call_with_payload(#{<<"pad">> => binary:copy(<<0>>, ?PAYLOAD_BYTES)}).
-
-call_with_payload(Payload) ->
-    macula_frame:call(#{
-        call_id     => crypto:strong_rand_bytes(16),
-        procedure   => <<"io.macula.test.async_send">>,
-        realm       => <<0:256>>,
-        payload     => Payload,
-        deadline_ms => 60_000,
-        caller      => <<1:256>>
-    }).
+%% A numbered block of BLOCK_BYTES.
+block(N) ->
+    <<N:32/big, (binary:copy(<<0>>, ?BLOCK_BYTES - 4))/binary>>.
 
 %%%===================================================================
 %%% Pair

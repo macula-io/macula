@@ -62,14 +62,14 @@
     stop/1
 ]).
 
--export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
+-export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, format_status/1]).
 
 -export_type([opts/0, realm/0, identity/0]).
 
 -define(MAX_SUBSCRIBED_REALMS, 1000).
 
 -type realm()    :: <<_:256>>.
--type identity() :: macula_identity:key_pair().
+-type identity() :: macula_node_keys:node_key().
 
 -type opts() :: #{
     %% Default identity used when a `register/3' caller does not
@@ -254,6 +254,10 @@ terminate(_Reason, _State) ->
     %% Linked workers are taken down automatically by the runtime;
     %% no manual teardown required.
     ok.
+
+%% Status output and crash reports show this process's keys with their private halves redacted.
+format_status(Status) ->
+    macula_node_keys:redacted(Status).
 
 %%====================================================================
 %% Helpers

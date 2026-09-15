@@ -173,7 +173,7 @@
                                  macula_stream:mode(), fun((pid(), term()) -> ok), map()) ->
                                     ok | {error, term()}).
 -type publish_advertisement() :: fun((macula:pool(), macula:realm(), macula:procedure(),
-                                      macula_identity:key_pair(), map()) ->
+                                      macula_node_keys:node_key(), map()) ->
                                          ok | {error, term()}).
 -type advertise_opts() :: #{advertise_stream => advertise_stream(),
                             publish_advertisement => publish_advertisement(),
@@ -284,9 +284,9 @@ new_sup() ->
 %% @doc As `advertise/5', and additionally publishes a signed
 %% `procedure_advertisement' DHT record naming this pool's connected
 %% station as the server, so `macula_stream_sink:start_link_direct/5,6'
-%% can resolve and dial here directly. `Identity' signs it — reuse the
-%% same one across re-advertises so each one doesn't mint a fresh
-%% advertiser identity.
+%% can resolve and dial here directly. `NodeIdentity', the provider's
+%% node identity key, signs it: reuse the same key across re-advertises
+%% so each one doesn't mint a fresh advertiser.
 %%
 %% The DHT publish is best-effort: if it fails, the handler is still
 %% advertised and reachable via the ordinary pooled path — direct-dial
@@ -296,19 +296,19 @@ new_sup() ->
 %% retries) has no other way to learn its handler is pooled-only, and
 %% "a later publish succeeds" cannot happen if nothing ever tries again.
 -spec advertise_direct(macula:pool(), macula:realm(), macula:procedure(),
-                       module(), term(), macula_identity:key_pair()) ->
+                       module(), term(), macula_node_keys:node_key()) ->
     {ok, pid()} | {error, term()}.
-advertise_direct(Pool, Realm, Procedure, Module, Args, Identity) ->
-    advertise_direct(Pool, Realm, Procedure, Module, Args, Identity, #{}).
+advertise_direct(Pool, Realm, Procedure, Module, Args, NodeIdentity) ->
+    advertise_direct(Pool, Realm, Procedure, Module, Args, NodeIdentity, #{}).
 
 %% @doc As `advertise_direct/6', with `Opts' forwarded BOTH to
 %% `advertise/6' (so `mode'/`announce'/`reuse_sup' and the functions
 %% apply here too, e.g. `mode => client_stream') and, without the
 %% functions, to the advertisement publish, `publish_advertisement' in
 %% `Opts' or `macula_direct_dial:publish_advertisement/5' (e.g.
-%% `cert_chain => ChainPem', Slice 7c Direction B, managed realms only):
-%% each side reads only the keys it recognizes, so one `Opts' map serves
-%% both.
+%% `authorization', the provider authorization an org namespaced
+%% procedure needs): each side reads only the keys it recognizes, so one
+%% `Opts' map serves both.
 %% `reuse_sup' matters here specifically: a station's wire-level
 %% registration for a procedure is tied to whichever connection sent
 %% the `ADVERTISE' frame, and does not survive that connection being
@@ -317,15 +317,15 @@ advertise_direct(Pool, Realm, Procedure, Module, Args, Identity) ->
 %% returned the first time) re-sends both the wire frame and the DHT
 %% record without leaking a new supervisor per tick.
 -spec advertise_direct(macula:pool(), macula:realm(), macula:procedure(),
-                       module(), term(), macula_identity:key_pair(), advertise_opts()) ->
+                       module(), term(), macula_node_keys:node_key(), advertise_opts()) ->
     {ok, pid()} | {error, term()}.
-advertise_direct(Pool, Realm, Procedure, Module, Args, Identity, Opts) ->
+advertise_direct(Pool, Realm, Procedure, Module, Args, NodeIdentity, Opts) ->
     PublishAdvertisement = arity_5(maps:get(publish_advertisement, Opts,
                                             fun macula_direct_dial:publish_advertisement/5)),
     case advertise(Pool, Realm, Procedure, Module, Args, Opts) of
         {ok, Sup} ->
             log_publish_result(
-              PublishAdvertisement(Pool, Realm, Procedure, Identity, without_functions(Opts)),
+              PublishAdvertisement(Pool, Realm, Procedure, NodeIdentity, without_functions(Opts)),
               Procedure),
             {ok, Sup};
         {error, _} = Error ->

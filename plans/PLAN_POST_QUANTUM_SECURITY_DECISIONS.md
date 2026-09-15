@@ -287,8 +287,8 @@ table there gives each decision's answer in short and its status.
 ### D10 A stack that cannot do its profile after Stage 0
 
 - **.NET, accepted 2026-09-10 (option a):** .NET is left out of the first post-quantum switch. .NET programs keep
-  working against the live fleet until it is switched off, then stop until msquic supports post-quantum key
-  exchange.
+  working against today's stations until the 11.0.0 deploy replaces them (D14), then stop until msquic supports
+  post-quantum key exchange.
   - Not chosen: patching msquic ourselves (only if a paying customer needs .NET), and our own msquic bindings.
   - Offering a fix upstream is public and needs Raf's explicit yes.
   - Why: no msquic build today can offer ML-KEM ✅ (V6).
@@ -348,12 +348,12 @@ before its wire checks are green.
   unqualified "revoked keys are rejected".
 - **Blocks:** public text.
 
-### D12 Separate TLS key and its binding, on the new fleet only
+### D12 Separate TLS key and its binding
 
 - **Answer:** every station instance has a TLS key used only for the TLS handshake, with a self-signed ML-DSA-87
   certificate. The identity key certifies it with a binding (key model). The station sends the binding in its
-  challenge, and the client checks it against the leaf it verified before signing anything. This applies only on
-  the post-quantum fleet.
+  challenge, and the client checks it against the leaf it verified before signing anything. This applies to every
+  11.0.0 station instance.
 - **Why:**
   - BSI asks for dedicated keys for hybrid signatures ✅, so in the EU profile the ML-DSA-87 key that signs alone
     inside TLS cannot also be part of the hybrid identity.
@@ -378,15 +378,18 @@ before its wire checks are green.
 - **Status:** accepted 2026-09-10.
 - **Blocks:** WP 1.3 and everything after it.
 
-### D14 A second post-quantum fleet
+### D14 How the switch happens
 
-- **Answer:** the post-quantum fleet runs next to the live fleet, with its own station instances, seeds, station
-  directory, DHT and realm deployment (D19), and hostnames distinct from the live fleet. The two fleets cannot
-  reach each other. Each consumer moves over in its stage, and the live fleet is switched off after the last
-  cutover.
-- **Why:** with no classical fallback, switching the live fleet in place would cut off every consumer until its
-  own stage.
-- **Status:** accepted 2026-09-10.
+- **Answer, revised on 2026-09-15:** in place, all consumers at once. `macula` 11.0.0 takes over today's 9 stations
+  and their names in one deploy, together with every binary that speaks the mesh, and the mesh of `macula-station`
+  311c0bf ends that day. The deploy is `macula-demo` `plans/PLAN_MACULA_11_DEPLOY.md`.
+- **Why:** there is no production environment and no intermediate release (Raf, 2026-09-15), so no consumer waits
+  for a later stage, which was the reason for a second fleet. A separate fleet would also need new spend or two
+  station instances on every box.
+- **Superseded:** the answer accepted on 2026-09-10, a second post-quantum fleet next to the live one, with its own
+  station instances, seeds, station directory, DHT, realm deployment and hostnames, each consumer moving over in
+  its stage and the live fleet switched off after the last cutover.
+- **Status:** accepted 2026-09-10; superseded by the in-place answer on 2026-09-15.
 - **Blocks:** Stages 3 to 6.
 
 ### D15 Profile order
@@ -447,32 +450,35 @@ before its wire checks are green.
   acceptor, with a red-first test that a reversed order is refused.
 - **Status:** accepted 2026-09-10.
 
-### D19 Realm on the post-quantum fleet
+### D19 Realm in 11.0.0
 
 - **Answer, revised and accepted by Raf on 2026-09-10:** the realm name stays `io.macula`, so the realm id stays
-  the same, on a separate realm deployment on the post-quantum fleet. `io.macula` runs the EU profile, `pq_hybrid`
-  (D1).
-- **Why:** programs keep the same realm id when they move over. The fleets cannot reach each other.
-- **Consequence:** US-first work (D15) needs its own US-profile realm on the post-quantum fleet. Its name is open
-  for Raf.
-- **Status:** accepted 2026-09-10; revised the same day to give `io.macula` the EU profile.
+  the same. `io.macula` runs the EU profile, `pq_hybrid` (D1). With D14 revised, the realm deployment moves to
+  11.0.0 in the same deploy instead of running as a separate deployment.
+- **Why:** programs keep the same realm id when they move over.
+- **Consequence:** US-first work (D15) needs its own US-profile realm. Its name is open for Raf.
+- **Status:** accepted 2026-09-10; revised the same day to give `io.macula` the EU profile, and on 2026-09-15 to
+  move the deployment in place (D14).
 - **Blocks:** WP 3.1, WP 3.2.
 
 ### D20 Branch and release
 
-- **Answer:** `macula` develops the post-quantum work on the git branch `post-quantum`. `macula-station` and the
-  post-quantum fleet build against that git ref instead of hex during development. Once proven, `macula` 11.0.0
-  goes to hex, and only Raf publishes. Changes for the live fleet stay on `main`, the 10.x line.
-- **Merging:** `post-quantum` takes `main` by merge commits after `main` releases, never by a rebase, because
-  branches hang off it (agreed 2026-09-10).
-- **Status:** accepted 2026-09-10.
+- **Answer, revised on 2026-09-15:** the `post-quantum` branch merges into `main` in one merge commit, and `macula`
+  11.0.0 is developed on `main` from then on. There is no 10.x line and no intermediate release. `macula` 11.0.0 on
+  hex is the release and the cutover trigger, and only Raf publishes. No repository commits a git or branch
+  dependency on `macula`: development builds against a local checkout, and consumers move to `~> 11.0` from hex
+  only after Raf publishes.
+- **Merging, until that merge:** `post-quantum` took `main` by merge commits, never by a rebase, because branches
+  hung off it (agreed 2026-09-10).
+- **Status:** accepted 2026-09-10; revised on 2026-09-15 to one target, `macula` 11.0.0 on `main` (Raf).
 - **Blocks:** Stage 1, WP 3.2, WP 3.4.
 
 ### D21 The live fleet during the work
 
-- **Answer:** the live fleet is pinned to a released station version that matches exactly what its stations run.
-  If `main` is ahead of the latest `v*` tag, the running image is pinned by digest, or Raf tags current `main`
-  first. No station is downgraded. Owner: Terra.
+- **Answer:** the live fleet, today's 9 stations, is pinned to a released station version that matches exactly what
+  its stations run, `macula-station` 311c0bf, until the 11.0.0 deploy replaces it (D14). If `main` is ahead of the
+  latest `v*` tag, the running image is pinned by digest, or Raf tags current `main` first. No station is
+  downgraded. Owner: Terra.
 - **Why:** a push to `macula-station` `main` builds and publishes the image the live stations follow ✅, so
   post-quantum work on the station would otherwise reach the live fleet.
 - **Status:** accepted 2026-09-10.

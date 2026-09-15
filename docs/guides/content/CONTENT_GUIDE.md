@@ -42,7 +42,7 @@ Two ways to move bytes:
 Building something either wrapper doesn't fit (custom retry logic,
 observability, an SDK for another language)? See
 [CONTENT_PROTOCOL.md](CONTENT_PROTOCOL.md) for the raw `put_content/2` /
-`get_content/2` primitives underneath, and the 34-byte MCID wire format.
+`get_content/2` primitives underneath, and the 50-byte MCID wire format.
 
 ---
 
@@ -131,12 +131,12 @@ announced, so `start_link_direct` has nothing to resolve for one.
 | `> 256 KiB` | chunked manifest | `16#56` | N `_content.put_block` + one `_content.put_manifest`; symmetric on get |
 
 The single-block shape is unchanged since v4.2.7 — same MCID formula
-(`<<1, 16#55, BLAKE3(Bytes)>>`), same single RPC round trip. It is not a
+(`<<2, 16#55, SHA-384(Bytes)>>`), same single RPC round trip. It is not a
 special case bolted on top of chunking; a one-chunk manifest's chunk MCID is
 *identical* to the single-block MCID, so the two shapes agree at the boundary.
 
 For content over the chunk size, `put_content/2` splits the bytes into
-fixed-size chunks, uploads each (BLAKE3-verified by the station), builds a
+fixed-size chunks, uploads each (SHA-384-verified by the station), builds a
 **manifest** — chunk count, per-chunk offsets/sizes/hashes, and a Merkle
 root over the chunk hashes — and uploads that too, returning the manifest's
 own MCID (codec `16#56`). `get_content/2` on a manifest MCID fetches the

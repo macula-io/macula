@@ -34,18 +34,19 @@ building something the wrappers don't fit.
 
 ## MCID format
 
-An MCID is a **34-byte** binary:
+An MCID is a **50-byte** binary:
 
 ```
-<<Version:8, Codec:8, Hash:32/binary>>
-    1         1        32
+<<Tag:8, Codec:8, Hash:48/binary>>
+  1      1       48
 ```
 
-- byte 0 — version (`1`)
-- byte 1 — codec: `16#55` (raw) for a single block, `16#56` (manifest) for
+- byte 0: the hash tag. The post-quantum format has only tag `2`, SHA-384, and
+  refuses an MCID with any other tag.
+- byte 1: the codec, `16#55` (raw) for a single block, `16#56` (manifest) for
   chunked content
-- bytes 2..33 — the 32-byte hash: BLAKE3 of the bytes (raw), or BLAKE3 over a
-  canonical encoding of the manifest's metadata (manifest — see
+- bytes 2..49: the 48-byte hash, SHA-384 of the bytes (raw), or SHA-384 over a
+  canonical encoding of the manifest's metadata (manifest, see
   [Single block vs. chunked](CONTENT_GUIDE.md#single-block-vs-chunked) in the
   Guide)
 
@@ -252,14 +253,14 @@ budget — the same value `call_station` already gives unary RPC calls.
 | Function | Role |
 |---|---|
 | `put_content(Pool, Bytes)` | store a blob (single-block or chunked, by size), return its MCID |
-| `get_content(Pool, MCID)` | fetch the bytes for an MCID (`{error, not_found}` if none reachable); single-block bytes are re-verified against the MCID's BLAKE3 hash client-side, and a chunked MCID's manifest is used only if its recomputed MCID is the one requested (`{error, manifest_mcid_mismatch}` otherwise) and it describes whole content (`{error, invalid_manifest}` otherwise, see [What a manifest must describe](#what-a-manifest-must-describe)) |
+| `get_content(Pool, MCID)` | fetch the bytes for an MCID (`{error, not_found}` if none reachable); single-block bytes are re-verified against the MCID's SHA-384 hash client-side, and a chunked MCID's manifest is used only if its recomputed MCID is the one requested (`{error, manifest_mcid_mismatch}` otherwise) and it describes whole content (`{error, invalid_manifest}` otherwise, see [What a manifest must describe](#what-a-manifest-must-describe)) |
 | `get_content_station(Pool, Station, MCID, TimeoutMs, Opts)` | **direct-dial**: fetch from a specific, already-resolved station, with the same checks as `get_content/2` |
 | `put_content_station(Pool, Station, Bytes, TimeoutMs, Opts)` | **direct-dial**: seed a specific station directly |
 | `find_content_providers(Pool, MCID)` | resolve every host currently announcing an MCID (signature- and signer-verified) |
 | `macula_direct_dial:get_content(Pool, MCID, TimeoutMs)` | **direct-dial**: resolve a provider and fetch, in one call |
 | `macula_direct_dial:put_content(Pool, Station, Bytes, TimeoutMs)` | **direct-dial**: resolve `Station`'s endpoint and put, in one call |
 | `macula_manifest:default_chunk_size()` | the single-block / chunked threshold (256 KiB) |
-| `macula_blake3_nif:hash(Bytes)` | the BLAKE3 hash a single-block MCID wraps |
+| `crypto:hash(sha384, Bytes)` | the SHA-384 hash a single-block MCID wraps |
 | `macula_content_transfer:start_put/2,3`, `start_get/2,3` | addressable put/get — `put_content`/`get_content`'s foundation, real `cancel/1,3` |
 | `macula_content_transfer:start_put_station/4,5`, `start_get_station/4,5` | **direct-dial** addressable variants |
 | `macula_content_transfer:await/1,2` | block for an addressable transfer's outcome, repeatable, cacheable |

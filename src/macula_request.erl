@@ -142,8 +142,9 @@ start_link_direct(Module, Pool, Realm, Procedure, Payload, TimeoutMs, Args) ->
 %% `fact_publish' give the functions the request calls and announces with
 %% (see "Call and publish functions" above), and the other options go to
 %% the call as `macula_direct_dial:call/6' takes them, for example
-%% `verify_cert_chain => {RealmCaPem, Org}' (Slice 7c Direction B, managed
-%% realms only; see `macula_direct_dial''s module doc, "Trust model").
+%% `realm_trust', the realm trust an org namespaced procedure's
+%% authorization is checked against (see `macula_direct_dial''s module
+%% doc, "Trust model").
 -spec start_link_direct(module(), macula:pool(), macula:realm(),
                         macula:procedure(), term(), pos_integer(), term(),
                         direct_opts()) -> {ok, pid()} | {error, term()}.

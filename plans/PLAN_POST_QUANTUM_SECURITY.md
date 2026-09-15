@@ -40,7 +40,7 @@ testable, and Raf can point to a concrete plan in a partner offer.**
   - Mercury: identity core, profile model, realm, this plan;
   - Neptune: Rust, the NIF, and the client dial options;
   - Mars: station, peering handshake, `lazymesh`;
-  - Terra: test suites, the post-quantum fleet, the station directory;
+  - Terra: test suites, the 11.0.0 deploy, the station directory;
   - Venus: Go, TypeScript, PHP, `macula-cli`, `macula-mcp`;
   - Uranus: .NET;
   - Pluto: Python;
@@ -191,19 +191,23 @@ as identities.
 
 **Not in scope:**
 
-- no transport or handshake changes on the live fleet; the connection handshake of the post-quantum fleet (D16)
-  replaces its dial behaviour at cutover;
-- changes to the live fleet otherwise stay on the `macula` 10.x line on `main`;
+- no transport or handshake changes on today's stations while they run `macula-station` 311c0bf; the connection
+  handshake (D16) replaces their dial behaviour in the 11.0.0 deploy (D14);
+- no other change reaches today's stations before that deploy (D21);
 - `reckon_gater` capability signing (D9).
 
 **Delivery model.**
 
 - Everything is a development environment.
-- A second, post-quantum fleet runs next to the live fleet (D14). The two fleets cannot reach each other.
-- Each consumer moves to the new fleet in its stage. The live fleet is switched off after the last cutover.
-- `macula` develops on the git branch `post-quantum`, and `macula-station` and the new fleet build against that
-  git ref. `macula` 11.0.0 goes to hex once proven, and only Raf publishes (D20).
-- No compatibility with Ed25519, RSA or ECDSA-only keys on the new fleet.
+- `macula` 11.0.0 replaces today's 9 stations and their names in place, and every consumer moves in the same
+  deploy (D14). The mesh of `macula-station` 311c0bf ends that day. The deploy is `macula-demo`
+  `plans/PLAN_MACULA_11_DEPLOY.md`.
+- Before the deploy nothing on today's boxes runs 11.0.0: Stages 3 to 6 prepare each layer and wait on branches.
+- The `post-quantum` branch merges into `main`, and `macula` 11.0.0 is developed there (D20). `macula` 11.0.0 on hex
+  is the release and the cutover trigger, and only Raf publishes. No repository commits a git or branch dependency
+  on `macula`: development builds against a local checkout, and consumers move to `~> 11.0` from hex only after
+  Raf publishes.
+- No compatibility with Ed25519, RSA or ECDSA-only keys in 11.0.0.
 - The US profile goes first in every stage, and the EU profile follows right after (D15).
 
 **Nothing is claimed in public for a stack before its wire checks are green** (Stage 7, D11).
@@ -241,7 +245,7 @@ Notes on the table:
 
 ## Key model and connection design
 
-This is the design every stage builds on the post-quantum fleet. Decisions: D2, D6, D12, D13, D16, D17, D22, D29.
+This is the design every stage builds for 11.0.0. Decisions: D2, D6, D12, D13, D16, D17, D22, D29.
 The frames, bindings and status statements are laid out byte for byte in `DESIGN_PQ_HANDSHAKE_FRAMES.md`.
 
 ### Keys per node
@@ -407,12 +411,13 @@ Part 2 has the work packages.
 | Stage | Scope | Owners | Waiting on |
 |---|---|---|---|
 | 0 | Checks before building (V items, Part 1) | per check | nothing |
-| 1 | `macula` on branch `post-quantum`, and `macula-station` | Mercury, Neptune, Mars | nothing |
+| 1 | `macula` 11.0.0 and `macula-station` | Mercury, Neptune, Mars | nothing |
 | 2 | Erlang-only test suite | Terra | Stage 1 |
-| 3 | Post-quantum fleet, station directory, realm and distribution relay | Terra, Mercury, Neptune | Stage 2 |
-| 4 | Each other stack, with its suite against the fleet | Neptune, Venus, Pluto; Uranus later | Stage 3 |
-| 5 | Cutover of `macula-cli`, `macula-mcp` and `lazymesh` | Venus, Mars | Stage 4 (Go); EU parts for `io.macula` |
-| 6 | Cutover of the hecate services | Saturnus | Stage 5, EU parts included; the Reckon plan (D9) |
+| 3 | 11.0.0 stations, station directory, realm and distribution relay, ready for the deploy | Terra, Mercury, Neptune | Stage 2 |
+| 4 | Each other stack on 11.0.0, with its suite | Neptune, Venus, Pluto; Uranus later | Stage 3 |
+| 5 | `macula-cli`, `macula-mcp` and `lazymesh` on 11.0.0 | Venus, Mars | Stage 4 (Go); EU parts for `io.macula` |
+| 6 | The hecate services on 11.0.0 | Saturnus | Stage 5, EU parts included; the Reckon plan (D9) |
+| Deploy | Every layer in one deploy (D14), `macula-demo` `plans/PLAN_MACULA_11_DEPLOY.md` | Terra | Stages 3 to 6; `macula` 11.0.0 on hex; Raf's yes |
 | 7 | Quality and security gates | Fable, Jupiter | runs throughout |
 
 - The EU parts of every stage also wait on V8.
@@ -421,11 +426,13 @@ Part 2 has the work packages.
 - `io.macula` runs the EU profile (D19). Stage 5 tools that join `io.macula` and the Stage 6 hecate services wait on
   the EU parts of the stages before them, not only the US parts. The US parts still go first (D15), against a
   US-profile realm whose name is open.
-- After Stage 6, Raf publishes `macula` 11.0.0 on hex, and the live fleet is switched off (D14, D20).
-- .NET programs keep working against the live fleet until it is switched off, then stop until msquic supports
+- After Stage 6, Raf publishes `macula` 11.0.0 on hex, and the one deploy replaces today's stations and every
+  consumer in place; the 311c0bf mesh ends that day (D14, D20).
+- .NET programs keep working against today's stations until the deploy, then stop until msquic supports
   post-quantum key exchange (D10).
 - Published SDK versions stay on hex, crates.io, NuGet, PyPI, npm and the Go module proxy and cannot be
-  withdrawn. Old clients fail to connect to the new fleet, which is acceptable in a development environment.
+  withdrawn. Old clients fail to connect to the stations after the deploy, which is acceptable in a development
+  environment.
 
 ---
 
@@ -450,16 +457,16 @@ Raf answered "go with the recommendations" on 2026-09-10.
 | D9 | `reckon_gater` capability signing | Separate plan in `reckon-db-org`, finished before Stage 6 | Accepted |
 | D10 | A stack that cannot do its profile | .NET out of the first switch; Python ships a patch | Accepted (.NET) |
 | D11 | What public text may claim | Alignment wording only, per the rules in D11 | Accepted |
-| D12 | TLS key and its binding | Separate TLS key, binding in the challenge, new fleet only | Accepted |
+| D12 | TLS key and its binding | Separate TLS key, binding in the challenge, every 11.0.0 station | Accepted |
 | D13 | Where a verifier gets the full key | Handshake for neighbours, carried in objects, no lookups | Accepted |
-| D14 | How the switch happens | A second post-quantum fleet next to the live one | Accepted |
+| D14 | How the switch happens | In place, all consumers at once, in one deploy | Accepted (revised; supersedes a second fleet) |
 | D15 | Profile order | US first, EU right after | Accepted |
 | D16 | Connection handshake and client proof | Signed CONNECT proof, one dial mode, no resumption | Accepted |
 | D17 | Signatures between neighbours | US drops most; EU keeps control frames; caller stream frames signed | Accepted |
 | D18 | EU session proof | Fixed binding; exporter proof only when an offer needs it | Accepted |
-| D19 | Realm on the new fleet | `io.macula` with the EU profile, separate realm deployment | Accepted |
-| D20 | Branch and release | Branch `post-quantum`, then `macula` 11.0.0 | Accepted |
-| D21 | Live fleet during the work | Pinned to a released station version | Accepted |
+| D19 | Realm in 11.0.0 | `io.macula` with the EU profile, moved in the same deploy | Accepted (revised) |
+| D20 | Branch and release | One merge into `main`; `macula` 11.0.0 on hex is the release | Accepted (revised) |
+| D21 | Live fleet during the work | Pinned to `macula-station` 311c0bf until the deploy | Accepted |
 | D22 | Binding lifetime and revocation | 7 days, rotated every 5; stapled status statements | Accepted (revised) |
 | D23 | Endorsement of stations | None to use a station; a later one is its own signed record | Accepted |
 | D24 | Hashes under signatures | SHA-384 for content and UCAN parent ids; node ids stay SHA-256 | Accepted |
@@ -484,7 +491,7 @@ The full text of each decision is in
 | Procedures in use without an org namespace: listed, then renamed (D25) | Pluto, owners, Saturnus (WP 6.1) | open |
 | An org directory entry for every publisher (D25, WP 3.1) | Mercury | open |
 | Cross-profile federation: how realms of different profiles exchange calls and facts | Raf, with Jupiter | open |
-| Name of the US-profile realm on the post-quantum fleet (D19) | Raf | open |
+| Name of the US-profile realm (D19) | Raf | open |
 | Owner of the Reckon post-quantum plan, assigned when Stage 4 starts (D9) | Raf | open |
 | Retiring `macula-portal`, `macula-relay`, `hecate-daemon` and `hecate-stub` (D8) | Raf | open |
 | How the aioquic patch ships (D10) | Pluto | open |
@@ -523,7 +530,7 @@ Rough, for planning. Items marked ⚠ are not estimated yet.
 | 4 | Rust transport in `macula-rust` | 3 to 4 days |
 | 4 | Identity in the SDKs | 13 to 17 days |
 | 4 | .NET | not in the first switch |
-| 5 | Cutovers | ⚠ |
+| 5 | Tools on 11.0.0 | ⚠ |
 | 6 | hecate services | 3 to 5 days, plus the images on OTP 27 ⚠ |
 | 1, 4 | Reply binding to provider and request (D25) | ⚠ |
 | 7 | Gates | throughout |
@@ -536,7 +543,7 @@ Stage 0 checks, the Stage 4 stacks and the SDK identity work can run in parallel
 ## Success criteria
 
 - [ ] Every V item closed with a recorded result, and every decision taken.
-- [ ] Every stack's wire checks green against the new fleet in its profile: group, signature scheme and cipher
+- [ ] Every stack's wire checks green against the 11.0.0 stations in its profile: group, signature scheme and cipher
   suite reported by two independent views that agree, and the connection handshake checked (D16).
 - [ ] Every station instance refuses a classical-only client and X25519MLKEM768, in both profiles.
 - [ ] The claim-gate tests pass (Stage 7).
@@ -545,5 +552,5 @@ Stage 0 checks, the Stage 4 stacks and the SDK identity work can run in parallel
   dedicated to hybrid use, classical half from BSI's lists, no Ed25519.
 - [ ] No Ed25519, RSA or ECDSA-only signing path remains in `macula`, the SDKs, the realm or hecate-om, enforced by
   a failing test rather than by review.
-- [ ] Every consumer cut over, the live fleet switched off, and `macula` 11.0.0 published by Raf.
+- [ ] `macula` 11.0.0 published by Raf, and every consumer moved in the one deploy (D14).
 - [ ] No public claim made for a stack before its wire checks are green.

@@ -186,7 +186,8 @@ dispatch_overlay(#{realm := Realm} = Frame, State) ->
         self_id  => maps:get(pubkey, State),
         identity => maps:get(kp, State),
         arwl     => 6, prwl => 3,
-        shuffle_ttl => 4
+        shuffle_ttl => 4,
+        now      => erlang:monotonic_time(millisecond)
     },
     From = maps:get(new_member, Frame, undefined),
     {NewView, Actions} = macula_hyparview_proto:process(

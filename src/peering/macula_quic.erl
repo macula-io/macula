@@ -49,6 +49,7 @@
     async_accept/1,
     async_accept/2,
     close_listener/1,
+    reload_certificate/3,
 
     %% Connection
     connect/4,
@@ -70,6 +71,8 @@
     handshake/1,
     peername/1,
     max_datagram_size/1,
+    peer_leaf/1,
+    presented_leaf/1,
 
     %% Stream
     send/2,
@@ -211,6 +214,18 @@ async_accept(Listener, _Opts) ->
 -spec close_listener(reference()) -> ok.
 close_listener(Listener) ->
     nif_close_listener(Listener).
+
+%% @doc Make a new certificate the one a listener presents. `CertFile' and
+%% `KeyFile' are read like the `cert' and `key' options of `listen/3', and
+%% the listener's other settings stay as they are. Connections accepted
+%% after this returns present the new leaf; a connection accepted earlier
+%% keeps the leaf it presented (see `presented_leaf/1'). A file that cannot
+%% be read, holds no certificate or key, or a key that does not match the
+%% certificate returns `{error, Reason}' and keeps the current certificate.
+-spec reload_certificate(reference(), binary() | string(), binary() | string()) ->
+    ok | {error, term()}.
+reload_certificate(Listener, CertFile, KeyFile) ->
+    nif_reload_certificate(Listener, to_binary(CertFile), to_binary(KeyFile)).
 
 %%%===================================================================
 %%% Connection API
@@ -493,6 +508,24 @@ peername(Conn) ->
 max_datagram_size(Conn) ->
     nif_max_datagram_size(Conn).
 
+%% @doc The leaf certificate the other side sent in this connection's TLS
+%% handshake, as DER, exactly as received. A dialed connection has the
+%% station's leaf. An accepted connection returns `{error, no_peer_leaf}',
+%% since clients send no certificate.
+-spec peer_leaf(reference()) -> {ok, public_key:der_encoded()} | {error, no_peer_leaf}.
+peer_leaf(Conn) ->
+    nif_peer_leaf(Conn).
+
+%% @doc The leaf certificate this side sent in this connection's TLS
+%% handshake, as DER. An accepted connection has the leaf its listener
+%% presented when it accepted the connection, also after
+%% `reload_certificate/3'. A dialed connection returns
+%% `{error, no_presented_leaf}'.
+-spec presented_leaf(reference()) ->
+    {ok, public_key:der_encoded()} | {error, no_presented_leaf}.
+presented_leaf(Conn) ->
+    nif_presented_leaf(Conn).
+
 %%%===================================================================
 %%% Stream API
 %%%===================================================================
@@ -706,6 +739,9 @@ nif_async_accept(_Listener) ->
 nif_close_listener(_Listener) ->
     erlang:nif_error(nif_not_loaded).
 
+nif_reload_certificate(_Listener, _CertFile, _KeyFile) ->
+    erlang:nif_error(nif_not_loaded).
+
 nif_async_connect(_Tag, _Host, _Port, _Alpn, _Verify, _VerifyPubkey,
                   _IdleTimeoutMs, _KeepAliveMs, _TimeoutMs) ->
     erlang:nif_error(nif_not_loaded).
@@ -738,6 +774,12 @@ nif_peername(_Conn) ->
     erlang:nif_error(nif_not_loaded).
 
 nif_max_datagram_size(_Conn) ->
+    erlang:nif_error(nif_not_loaded).
+
+nif_peer_leaf(_Conn) ->
+    erlang:nif_error(nif_not_loaded).
+
+nif_presented_leaf(_Conn) ->
     erlang:nif_error(nif_not_loaded).
 
 nif_send(_Stream, _Data, _Ref) ->

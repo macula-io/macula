@@ -35,6 +35,37 @@ init([]) ->
     SupFlags = #{strategy => one_for_one, intensity => 10, period => 5},
 
     ChildSpecs = [
+        %% The seq counter every publication a node signs draws from, one per
+        %% key. First, so it runs before any pool or pubsub server publishes.
+        #{
+            id => macula_publication_seq,
+            start => {macula_publication_seq, start_link, []},
+            restart => permanent,
+            shutdown => 5000,
+            type => worker
+        },
+
+        %% The counts table behind macula_diagnostics:bounded_event/3, which
+        %% callers update themselves. Before any connection logs through it.
+        #{
+            id => macula_diagnostics_bound,
+            start => {macula_diagnostics_bound, start_link, []},
+            restart => permanent,
+            shutdown => 5000,
+            type => worker
+        },
+
+        %% The last record version this node issued, which callers of
+        %% macula_record_uuid:v7_monotonic/1 advance themselves. Before any
+        %% record is signed.
+        #{
+            id => macula_record_uuid,
+            start => {macula_record_uuid, start_link, []},
+            restart => permanent,
+            shutdown => 5000,
+            type => worker
+        },
+
         %% MRI Type Registry (type validation, custom type registration)
         #{
             id => macula_mri_registry,

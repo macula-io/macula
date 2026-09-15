@@ -67,8 +67,8 @@ small_put_reports_unchunked() ->
 
     {ok, _Pid} = macula_feeder:start_link(?MODULE, dummy_pid(), ?REALM, Bytes, self(),
                                           opts(#{link_io => LinkIo})),
-    Hash = macula_blake3_nif:hash(Bytes),
-    ExpectedMcid = <<1, ?SINGLE_CODEC, Hash/binary>>,
+    Hash = crypto:hash(sha384, Bytes),
+    ExpectedMcid = <<2, ?SINGLE_CODEC, Hash/binary>>,
     ?assertEqual({fed, {ok, ExpectedMcid}}, wait_msg()),
     Published = macula_scripted_stream:published(),
     ?assertEqual([<<"sharing.put_started_v1">>, <<"sharing.put_completed_v1">>],
@@ -149,8 +149,8 @@ direct_dial_resolves_then_puts_through_the_resolved_station() ->
     Opts = opts(#{link_io => LinkIo, resolve_station_endpoint => Resolve}),
     {ok, _Pid} = macula_feeder:start_link_direct(?MODULE, dummy_pid(), Station, ?REALM, Bytes,
                                                  self(), Opts),
-    Hash = macula_blake3_nif:hash(Bytes),
-    ExpectedMcid = <<1, ?SINGLE_CODEC, Hash/binary>>,
+    Hash = crypto:hash(sha384, Bytes),
+    ExpectedMcid = <<2, ?SINGLE_CODEC, Hash/binary>>,
     ?assertEqual({fed, {ok, ExpectedMcid}}, wait_msg()).
 
 %% Transfer functions without one the feeder calls or of another arity,

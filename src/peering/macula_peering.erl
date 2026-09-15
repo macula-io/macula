@@ -19,6 +19,9 @@
 %%   <li>`{macula_peering, disconnected, ConnPid, Reason}'</li>
 %% </ul>
 %%
+%% `PeerNodeId' is the peer's node_id, derived from the identity key the
+%% handshake verified (plans/DESIGN_PQ_HANDSHAKE_FRAMES.md).
+%%
 %% An optional `accept_owner' pid in opts receives a single
 %% `{macula_peering, handshake_complete, ConnPid, PeerNodeId}'
 %% message the moment the worker transitions from `handshaking' to
@@ -35,18 +38,21 @@
     reject/2,
     send_frame/2,
     peer_capabilities/1,
+    peer_identity/1,
     open_dedicated_stream/1,
     async_open_dedicated_stream/1,
-    send_on_stream/3,
+    send_on_stream/2,
+    async_send_on_stream/2,
     async_send_on_stream/3,
-    async_send_on_stream/4,
-    close_dedicated_stream/1
+    close_dedicated_stream/1,
+    object_refused/2,
+    refusals/1
 ]).
 
 %% Exports with no caller inside macula yet: macula-station's observer relays
 %% stream frames with them, so a peer that stops reading never holds it.
+-ignore_xref([{macula_peering, async_send_on_stream, 2}]).
 -ignore_xref([{macula_peering, async_send_on_stream, 3}]).
--ignore_xref([{macula_peering, async_send_on_stream, 4}]).
 
 %% Capability bit asserting the peer is a relay-station (i.e. it
 %% advertises on behalf of others via gossip). Daemons MUST leave this
@@ -63,7 +69,7 @@
 %%------------------------------------------------------------------
 
 %% @doc Outbound connect. Spawns a worker that opens a QUIC connection to
-%% `target' and runs the CONNECT/HELLO handshake.
+%% `target' and runs the post-quantum handshake.
 -spec connect(opts()) -> {ok, pid()} | {error, term()}.
 connect(Opts) ->
     macula_peering_conn_sup:start_conn(Opts#{role => client}).
@@ -116,8 +122,9 @@ close(Pid, Reason) ->
 reject(Pid, Reason) ->
     gen_statem:cast(Pid, {reject, Reason}).
 
-%% @doc Send a frame through the peer connection. Signs the frame with
-%% the local identity if it isn't already signed.
+%% @doc Send a frame through the peer connection. The frame goes out as
+%% its producer built it, and in pq_hybrid the connection adds a
+%% neighbour signature to a control frame.
 %%
 %% The send is a cast, so encoding happens later, inside the shared
 %% connection process. This is therefore the LAST synchronous point at
@@ -147,7 +154,7 @@ cast_checked({error, Reason} = Rejected, _Pid, Frame) ->
 %% session (a streaming RPC call, a content transfer) instead of
 %% sharing the connection's control stream, waiting for it in the
 %% calling process. Ownership transfers to the calling process: it
-%% drives the stream directly via `send_on_stream/3' and
+%% drives the stream directly via `send_on_stream/2' and
 %% `macula_quic:*', and receives the stream's `{quic, Bin, Stream, Flags}'
 %% events straight into its own mailbox — the peering connection
 %% process is not in this stream's path at all once this call returns.
@@ -187,58 +194,53 @@ async_open_dedicated_stream(Pid) ->
     ok = gen_statem:cast(Pid, {open_dedicated_stream, self(), Ref}),
     Ref.
 
-%% @doc Encode, sign, and write one frame directly onto a dedicated
-%% stream obtained from `open_dedicated_stream/1' — no peering
-%% connection process involved, unlike `send_frame/2'. `Identity' is
-%% the caller's own key pair (the connection process is not asked to
-%% sign on the caller's behalf here, since it is not a party to this
-%% stream). Synchronous: waits in the calling process until the frame
-%% is written, for as long as the peer withholds QUIC flow-control
+%% @doc Write one frame's bytes directly onto a dedicated stream
+%% obtained from `open_dedicated_stream/1', with no peering connection
+%% process involved, unlike `send_frame/2'. The stream's writer builds,
+%% signs and encodes the frame itself; this writes the bytes it is
+%% given and nothing else. Synchronous: waits in the calling process until
+%% the bytes are written, for as long as the peer withholds QUIC flow-control
 %% credit, as `macula_quic:send/2' does. A process that must not wait on a
-%% peer uses `async_send_on_stream/3' instead.
--spec send_on_stream(reference(), macula_frame:frame(),
-                     macula_identity:key_pair()) -> ok | {error, term()}.
-send_on_stream(Stream, Frame, Identity) when is_map(Frame) ->
-    checked_send(macula_frame:check_frame(Frame),
-                 fun(Bytes) -> macula_quic:send(Stream, Bytes) end, Frame, Identity).
+%% peer uses `async_send_on_stream/2' instead.
+-spec send_on_stream(reference(), binary()) -> ok | {error, term()}.
+send_on_stream(Stream, Bytes) when is_binary(Bytes) ->
+    macula_quic:send(Stream, Bytes).
 
-%% @doc `send_on_stream/3' without waiting: the frame is checked, signed and
-%% encoded the same way, then queued with `macula_quic:async_send/2', so a
-%% peer that stops reading cannot hold the calling process. Returns `ok' once
-%% the frame is queued. When the stream already holds 1 MiB unwritten, queues
-%% nothing and returns `{error, busy}', and the calling process later gets
-%% `{quic, send_ready, Stream, undefined}' when it may send again. A frame
-%% `send_on_stream/3' refuses is refused with the same error.
--spec async_send_on_stream(reference(), macula_frame:frame(),
-                           macula_identity:key_pair()) -> ok | {error, term()}.
-async_send_on_stream(Stream, Frame, Identity) when is_map(Frame) ->
-    checked_send(macula_frame:check_frame(Frame),
-                 fun(Bytes) -> macula_quic:async_send(Stream, Bytes) end, Frame, Identity).
+%% @doc `send_on_stream/2' without waiting: the bytes are queued with
+%% `macula_quic:async_send/2', so a peer that stops reading cannot hold the
+%% calling process. Returns `ok' once they are queued. When the stream
+%% already holds 1 MiB unwritten, queues nothing and returns
+%% `{error, busy}', and the calling process later gets
+%% `{quic, send_ready, Stream, undefined}' when it may send again. A relay
+%% passes a frame on as the bytes it received.
+-spec async_send_on_stream(reference(), binary()) -> ok | {error, term()}.
+async_send_on_stream(Stream, Bytes) when is_binary(Bytes) ->
+    macula_quic:async_send(Stream, Bytes).
 
-%% @doc `async_send_on_stream/3' for a frame whose end the calling process
-%% hears about. For a frame it queued, that process gets exactly one of
-%% `{quic, send_complete, Stream, Tag}', once the frame's bytes are written,
-%% and `{quic, send_incomplete, Stream, {Tag, Reason}}', when the stream is
+%% @doc `async_send_on_stream/2' for bytes whose end the calling process
+%% hears about. For bytes it queued, that process gets exactly one of
+%% `{quic, send_complete, Stream, Tag}', once they are written, and
+%% `{quic, send_incomplete, Stream, {Tag, Reason}}', when the stream is
 %% reset, closed or fails first. `Tag' is the caller's own term, copied into
 %% that message, so keep it small.
--spec async_send_on_stream(reference(), macula_frame:frame(),
-                           macula_identity:key_pair(), term()) -> ok | {error, term()}.
-async_send_on_stream(Stream, Frame, Identity, Tag) when is_map(Frame) ->
-    checked_send(macula_frame:check_frame(Frame),
-                 fun(Bytes) -> macula_quic:async_send(Stream, Bytes, Tag) end, Frame, Identity).
+-spec async_send_on_stream(reference(), binary(), term()) -> ok | {error, term()}.
+async_send_on_stream(Stream, Bytes, Tag) when is_binary(Bytes) ->
+    macula_quic:async_send(Stream, Bytes, Tag).
 
-%% The one path for a frame written straight onto a stream: checked, signed
-%% unless it already is, encoded, and handed to Send.
-checked_send(ok, Send, Frame, Identity) ->
-    Send(macula_frame:encode(ensure_signed(Frame, Identity)));
-checked_send({error, Reason} = Rejected, _Send, Frame, _Identity) ->
-    logger:error("[macula_peering] refused unsendable ~p frame: ~ts",
-                 [maps:get(frame_type, Frame, unknown),
-                  macula_frame:explain(Reason)]),
-    Rejected.
+%% @doc Report an object a connection carried that its receiver
+%% refused, by the kind of refusal. The connection counts refusals by
+%% kind, and counts the ones `macula_frame:charged_refusal/1' charges.
+%% A kind outside that classification is refused here, where it is
+%% reported.
+-spec object_refused(pid(), atom()) -> ok.
+object_refused(Conn, Kind) when is_pid(Conn) ->
+    gen_statem:cast(Conn, {object_refused, Kind, macula_frame:charged_refusal(Kind)}).
 
-ensure_signed(#{signature := _} = Frame, _Id) -> Frame;
-ensure_signed(Frame, Id) -> macula_frame:sign(Frame, Id).
+%% @doc The refusals reported on a connection: a count per kind, and
+%% how many of them were charged.
+-spec refusals(pid()) -> #{counts := #{atom() => pos_integer()}, charged := non_neg_integer()}.
+refusals(Conn) when is_pid(Conn) ->
+    gen_statem:call(Conn, refusals).
 
 %% @doc Close a dedicated stream, one obtained from `open_dedicated_stream/1'
 %% or one the peer opened, gracefully: data already written still goes out,
@@ -262,5 +264,19 @@ peer_capabilities(Pid) when is_pid(Pid) ->
     try gen_statem:call(Pid, peer_capabilities, 1_000) of
         {ok, _Caps} = Ok -> Ok;
         not_connected   -> {error, not_connected}
+    catch _:_ -> {error, not_connected}
+    end.
+
+%% @doc What the handshake verified of the peer: its node_id, its identity
+%% key as carried, the profile and its capabilities. Returns
+%% `{error, not_connected}' until the handshake has completed.
+-spec peer_identity(pid()) ->
+    {ok, #{node_id := <<_:256>>, identity_key := binary(), profile := macula_crypto_profile:profile(),
+           capabilities := non_neg_integer()}}
+  | {error, not_connected}.
+peer_identity(Pid) when is_pid(Pid) ->
+    try gen_statem:call(Pid, peer_identity, 1_000) of
+        {ok, _Identity} = Ok -> Ok;
+        not_connected        -> {error, not_connected}
     catch _:_ -> {error, not_connected}
     end.
