@@ -34,7 +34,8 @@
     tombstone/2, tombstone/3,
     envelope/3
 ]).
--export([sign/2, verify/2, verify/3, refresh/2, encode/1, node_signed/1, payload_bounded/1, wire_bounded/1]).
+-export([sign/2, verify/2, verify/3, refresh/2, encode/1, node_signed/1, payload_bounded/1, wire_bounded/1,
+         domain_type/1, domain_record_checked/1]).
 -export([type/1, key/1, key_id/1, version/1, created_at/1, expires_at/1, payload/1, signature/1]).
 -export([payload_field/2, type_procedure_advertisement/0]).
 -export([read_node_record/1, read_procedure_advertisement/1, read_station_endpoint/1, read_tombstone/1,
@@ -375,7 +376,8 @@ tombstone(#{type := Type, version := Version, expires_at := WithdrawnExpiry, pay
     Unsigned#{expires_at := max(Created + maps:get(ttl_ms, Opts, ?CLOCK_TOLERANCE_MS),
                                 WithdrawnExpiry + ?CLOCK_TOLERANCE_MS)}.
 
-%% @doc An unsigned record of a domain type (tags 0x20 to 0xFF). The subject_id option names the record's subject.
+%% @doc An unsigned record of a domain type (tags 0x20 to 0xFF). The subject_id option names the record's subject, a
+%% non-empty binary: an empty subject would name a slot apart from no subject.
 -spec envelope(type_tag(), map(), map()) -> m_record().
 envelope(Type, Payload, Opts)
   when is_integer(Type), Type >= ?DOMAIN_TYPE_MIN, Type =< 16#FF, is_map(Payload), is_map(Opts) ->
@@ -603,7 +605,7 @@ unsigned(Type, Payload, Opts) ->
       expires_at => Now + maps:get(ttl_ms, Opts, default_ttl(Type)), payload => Payload}.
 
 with_subject(Record, undefined) -> Record;
-with_subject(Record, Subject) when is_binary(Subject) -> Record#{subject => Subject}.
+with_subject(Record, Subject) when is_binary(Subject), byte_size(Subject) > 0 -> Record#{subject => Subject}.
 
 tbs_fields(#{type := Type, version := Version, created_at := Created, expires_at := Expires, payload := Payload} = R) ->
     Fields = #{{text, <<"type">>} => Type, {text, <<"version">>} => Version, {text, <<"created_at">>} => Created,
@@ -744,6 +746,39 @@ wire_bounded(_NotAWireRecord) ->
 sized_wire(Bytes) when Bytes =< ?MAX_RECORD_BYTES -> ok;
 sized_wire(_Bytes) -> {error, record_too_large}.
 
+%% @doc Whether a record is of a domain type (tags 0x20 to 0xFF): its owner sets its payload rules, and its slot is its
+%% signer's key id, with its subject when it has one.
+-spec domain_type(term()) -> boolean().
+domain_type(#{type := Type}) when is_integer(Type), Type >= ?DOMAIN_TYPE_MIN, Type =< 16#FF -> true;
+domain_type(_Other) -> false.
+
+%% @doc Check an unsigned domain record before a pool signs it as its node: a domain type, a payload map, a subject that
+%% is absent or a non-empty binary, a lifetime that runs forward and fits the type's maximum, never shortened, and a
+%% payload and subject of at most 256 KiB together that nest at most 63 levels. Returns the refusal by name.
+-spec domain_record_checked(term()) ->
+          ok | {error, not_a_domain_type | invalid_subject | lifetime_too_long | lifetime_reversed | record_too_large
+                       | malformed}.
+domain_record_checked(#{type := Type, created_at := Created, expires_at := Expires, payload := Payload} = Record)
+  when is_integer(Type), Type >= ?DOMAIN_TYPE_MIN, Type =< 16#FF, is_integer(Created), is_integer(Expires),
+       is_map(Payload) ->
+    domain_subject_checked(maps:get(subject, Record, none), Record);
+domain_record_checked(#{type := Type}) when is_integer(Type), (Type < ?DOMAIN_TYPE_MIN orelse Type > 16#FF) ->
+    {error, not_a_domain_type};
+domain_record_checked(_NotADomainRecord) ->
+    {error, malformed}.
+
+domain_subject_checked(none, Record) ->
+    domain_lifetime_checked(lifetime(Record), Record);
+domain_subject_checked(Subject, Record) when is_binary(Subject), byte_size(Subject) > 0 ->
+    domain_lifetime_checked(lifetime(Record), Record);
+domain_subject_checked(_NotASubject, _Record) ->
+    {error, invalid_subject}.
+
+domain_lifetime_checked(ok, #{payload := Payload} = Record) ->
+    payload_bounded({Payload, maps:get(subject, Record, <<>>)});
+domain_lifetime_checked(Refusal, _Record) ->
+    {error, Refusal}.
+
 %%------------------------------------------------------------------
 %% Internals: verifying
 %%------------------------------------------------------------------
@@ -776,7 +811,8 @@ read_tbs(_Fields) ->
 
 with_read_subject(6, undefined, Record) ->
     {ok, Record};
-with_read_subject(7, Subject, #{type := Type} = Record) when is_binary(Subject), Type >= ?DOMAIN_TYPE_MIN ->
+with_read_subject(7, Subject, #{type := Type} = Record)
+  when is_binary(Subject), byte_size(Subject) > 0, Type >= ?DOMAIN_TYPE_MIN ->
     {ok, Record#{subject => Subject}};
 with_read_subject(_Size, _Subject, _Record) ->
     malformed.
@@ -860,8 +896,12 @@ detail_ok(absent) -> true;
 detail_ok({text, Detail}) when is_binary(Detail) -> true;
 detail_ok(_Other) -> false.
 
+%% A domain record's subject is a non-empty binary, in the record and in its tombstone's slot fields alike.
+non_empty_subject(Subject) -> is_binary(Subject) andalso byte_size(Subject) > 0.
+
 slot_ok(Type, Slot) when Type >= ?DOMAIN_TYPE_MIN ->
-    map_size(Slot) =:= 0 orelse (map_size(Slot) =:= 1 andalso is_binary(maps:get({text, <<"subject">>}, Slot, none)));
+    map_size(Slot) =:= 0
+        orelse (map_size(Slot) =:= 1 andalso non_empty_subject(maps:get({text, <<"subject">>}, Slot, none)));
 slot_ok(Type, Slot) ->
     Names = slot_field_names(Type, undefined),
     lists:sort(maps:keys(Slot)) =:= lists:sort([{text, Name} || Name <- Names])

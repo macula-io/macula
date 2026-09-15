@@ -376,8 +376,10 @@ unadvertise(Pool, Realm, Procedure) ->
 %% `realm_directory/3,4', `procedure_advertisement/4,5', etc.) and sign
 %% it. A record this node signs about itself is signed by its pool,
 %% which holds the node identity key: through
-%% `macula_client:sign_node_record/2', and its tombstone through
-%% `macula_client:withdraw_node_record/3'. A realm-, org- or
+%% `macula_client:sign_node_record/2', a domain record (tags 0x20 to
+%% 0xFF) through `macula_client:sign_domain_record/2', and the
+%% tombstone of either through `macula_client:withdraw_node_record/3'.
+%% A realm-, org- or
 %% foundation-signed record is signed with `macula_record:sign/2' and
 %% its signer's key. Pass the signed record or its wire form
 %% (`macula_record:encode/1'). The record travels as its

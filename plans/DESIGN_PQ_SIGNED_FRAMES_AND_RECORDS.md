@@ -143,7 +143,7 @@ A record is the signed object `{key, tbs, signature}`, with `key` the signer's k
 | `version` | bytes, 16 | UUIDv7 |
 | `created_at`, `expires_at` | unsigned, ms | |
 | `payload` | map | the type's fields, text keys |
-| `subject` | bytes | domain types (tags 0x20 to 0xFF) only, and optional there |
+| `subject` | bytes, at least one | domain types (tags 0x20 to 0xFF) only, and optional there; an empty one is refused |
 
 About 7.3 KB / 8.3 KB before the payload: 2,592 / 3,118 bytes of key and 4,627 / 5,139 bytes of signature.
 
@@ -282,6 +282,9 @@ Every DHT storage key is 32 bytes.
 | domain type | 0x20 to 0xFF | signer key id, then the subject when present |
 
 - A procedure name is the name within its realm; the realm enters only as the 32-byte realm id.
+- A domain record's signer key id is the key id of its key as carried (`MACULA-KEY-ID-V1`), whatever the key's
+  purpose. A node identity key's domain records therefore sit in slots apart from its node record, whose key is its
+  node_id.
 - A consumer computes a storage key from ids and names it already holds, before it holds the record.
 - `macula-station` derives the same keys for procedure advertisements and content announcements (WP 1.6).
 

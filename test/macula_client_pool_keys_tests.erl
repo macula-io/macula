@@ -442,7 +442,8 @@ the_pool_is_sent_only_the_fields_of_a_domain_record_it_signs_from_test_() ->
     end}.
 
 %% A domain record lives at most its type's maximum of 7 days: one at 7 days signs as this node and verifies, one a
-%% millisecond longer is refused and never shortened, and one built with no ttl lives within the maximum.
+%% millisecond longer is refused and never shortened, and one built with no ttl lives within the maximum. Its key id is
+%% the key id of the pool's key as carried, which is not the node_id a node record names.
 a_domain_record_lives_within_its_type_maximum_test_() ->
     {timeout, ?EU_TIMEOUT, fun() ->
         {ok, Profile} = profile(),
@@ -454,8 +455,9 @@ a_domain_record_lives_within_its_type_maximum_test_() ->
         Longer = macula_client:sign_domain_record(Pool, macula_record:envelope(16#20, #{}, #{ttl_ms => 7 * Day + 1})),
         Default = macula_client:sign_domain_record(Pool, macula_record:envelope(16#21, #{}, #{})),
         ok = macula_client:close(Pool),
-        ?assertMatch({ok, #{key_id := NodeId}}, AtMaximum),
-        {ok, Signed} = AtMaximum,
+        {ok, #{key_id := DomainKeyId} = Signed} = AtMaximum,
+        ?assertEqual({macula_node_keys:key_id(macula_node_keys:public_key(Key), Profile), true},
+                     {DomainKeyId, DomainKeyId =/= NodeId}),
         ?assertEqual(7 * Day, macula_record:expires_at(Signed) - macula_record:created_at(Signed)),
         ?assertMatch({ok, _}, macula_record:verify(macula_record:encode(Signed), Profile)),
         ?assertEqual({error, lifetime_too_long}, Longer),
