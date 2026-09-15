@@ -1497,8 +1497,8 @@ code_change(_OldVsn, S, _Extra) -> {ok, S}.
 format_status(Status) -> macula_node_keys:redacted(Status).
 
 %% A record the pool signs is one a node signs about itself. macula_record:refresh/2 stamps it now and signs it, and
-%% sign/2 checks the key's purpose, the lifetime, that the payload names this node, and the size. A refusal names what
-%% failed and carries neither the key nor a stack.
+%% sign/2 checks the key's purpose, the lifetime, that the payload names this node, verify/3's field and payload
+%% rules, and the size. A refusal names what failed and carries neither the key nor a stack.
 node_record_signed(false, _Record, _Key) ->
     {error, not_a_node_signed_type};
 node_record_signed(true, Record, Key) ->
@@ -1547,6 +1547,7 @@ signed_here(Sign) ->
         error:{lifetime_too_long, _Type} -> {error, lifetime_too_long};
         error:{lifetime_reversed, _Type} -> {error, lifetime_reversed};
         error:{record_too_large, _Bytes} -> {error, record_too_large};
+        error:{malformed, _Type} -> {error, malformed_record};
         _:_ -> {error, malformed_record}
     end.
 

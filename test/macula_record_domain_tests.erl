@@ -1,20 +1,22 @@
 %% EUnit tests for domain records (tags 0x20 to 0xFF) in macula_record. A subject is a non-empty binary: the builder
 %% and every verifier refuse an empty one, since it would name a slot of its own apart from no subject.
 %% domain_record_checked/1 names each refusal a pool makes before it signs a domain record, and a domain record's
-%% tombstone signs within the domain maximum plus twice the clock tolerance, on the record's slot.
+%% tombstone signs within the domain maximum plus twice the clock tolerance, on the record's slot. sign/2 refuses a
+%% malformed record before signing, so a record only a verifier can refuse is signed as another stack would sign it.
 -module(macula_record_domain_tests).
 
 -include_lib("eunit/include/eunit.hrl").
 
 -define(DAY, 86_400_000).
 -define(MINUTE, 60_000).
+-define(LABEL, <<"MACULA-PQ-RECORD-V1">>).
 
 an_empty_subject_is_refused_by_the_builder_test() ->
     ?assertError(function_clause, macula_record:envelope(16#20, #{}, #{subject_id => <<>>})).
 
 an_empty_subject_is_refused_by_a_verifier_test() ->
     Id = key(),
-    Signed = macula_record:sign((macula_record:envelope(16#20, #{}, #{}))#{subject => <<>>}, Id),
+    Signed = signed_by_another_stack((macula_record:envelope(16#20, #{}, #{}))#{subject => <<>>}, Id),
     ?assertEqual({error, malformed}, macula_record:verify(macula_record:encode(Signed), pq_pure)).
 
 a_domain_record_is_checked_by_name_before_signing_test() ->
@@ -48,7 +50,7 @@ a_tombstone_names_a_withdrawn_type_within_the_type_range_test() ->
     Withdrawn = macula_record:sign(macula_record:envelope(16#FF, #{}, #{}), Id),
     #{payload := Payload} = Tombstone = macula_record:tombstone(Withdrawn, shutdown),
     AtTheTop = macula_record:sign(Tombstone, Id),
-    Beyond = macula_record:sign(Tombstone#{payload := Payload#{{text, <<"withdrawn_type">>} => 16#100}}, Id),
+    Beyond = signed_by_another_stack(Tombstone#{payload := Payload#{{text, <<"withdrawn_type">>} => 16#100}}, Id),
     ?assertMatch({ok, _}, macula_record:verify(macula_record:encode(AtTheTop), pq_pure)),
     ?assertEqual({error, malformed}, macula_record:verify(macula_record:encode(Beyond), pq_pure)).
 
@@ -58,9 +60,19 @@ a_tombstone_with_an_empty_slot_subject_is_malformed_test() ->
     Id = key(),
     Withdrawn = macula_record:sign(macula_record:envelope(16#20, #{}, #{subject_id => <<"s1">>}), Id),
     #{payload := Payload} = Tombstone = macula_record:tombstone(Withdrawn, shutdown),
-    Emptied = macula_record:sign(Tombstone#{payload := Payload#{{text, <<"subject">>} => <<>>}}, Id),
+    Emptied = signed_by_another_stack(Tombstone#{payload := Payload#{{text, <<"subject">>} => <<>>}}, Id),
     ?assertEqual({error, malformed}, macula_record:verify(macula_record:encode(Emptied), pq_pure)).
 
 key() ->
     {ok, Key} = macula_node_keys:generate(identity, pq_pure),
     Key.
+
+%% The fields sign/2 signs, signed without sign/2's checks.
+signed_by_another_stack(#{type := Type, version := Version, created_at := Created, expires_at := Expires,
+                          payload := Payload} = Record, Key) ->
+    Fields = #{{text, <<"type">>} => Type, {text, <<"version">>} => Version, {text, <<"created_at">>} => Created,
+               {text, <<"expires_at">>} => Expires, {text, <<"payload">>} => Payload},
+    macula_signed_object:sign(?LABEL, with_subject(Fields, maps:get(subject, Record, undefined)), Key).
+
+with_subject(Fields, undefined) -> Fields;
+with_subject(Fields, Subject) -> Fields#{{text, <<"subject">>} => Subject}.

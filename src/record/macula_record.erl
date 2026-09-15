@@ -387,7 +387,10 @@ envelope(Type, Payload, Opts)
 %%------------------------------------------------------------------
 
 %% @doc Sign a record with a key whose purpose fits its type. Raises key_purpose_mismatch for a key of another
-%% purpose, key_id_mismatch when the payload names a signer other than this key, and record_too_large past 256 KiB.
+%% purpose, key_id_mismatch when the payload names a signer other than this key, {malformed, Type} for a record whose
+%% fields, subject or payload verify/3 would refuse, and record_too_large past 256 KiB. The field and payload checks
+%% are verify/3's own, run before anything is signed, so sign/2 never returns a record verify/3 refuses apart from
+%% the clock.
 -spec sign(m_record(), macula_node_keys:node_key()) -> m_record().
 sign(#{type := Type, payload := Payload} = Record, #{purpose := Purpose, profile := Profile} = Key) ->
     ok = purpose_fits(lists:member(Purpose, signer_purposes(Type, Payload)), {Type, Purpose}),
@@ -396,6 +399,8 @@ sign(#{type := Type, payload := Payload} = Record, #{purpose := Purpose, profile
     KeyId = key_id_of(signer_kind(Type, Payload), Carried, Profile),
     ok = signer_matches(named_signer(Type, Payload, KeyId), Type),
     Fields = tbs_fields(Record),
+    ok = verifiable(read_tbs(Fields#{{text, <<"alg">>} => {text, macula_signed_object:alg(Profile)}}), Type),
+    ok = verifiable(payload_ok(Type, Payload), Type),
     ok = size_fits(byte_size(macula_record_cbor:encode(Fields)) + byte_size(Carried)
                    + macula_node_keys:signature_bytes(Profile)),
     Object = macula_signed_object:sign(?LABEL, Fields, Key),
@@ -697,6 +702,12 @@ lifetime_checked(Refusal, Type) -> erlang:error({Refusal, Type}).
 
 signer_matches(true, _Type) -> ok;
 signer_matches(false, Type) -> erlang:error({key_id_mismatch, Type}).
+
+%% A record handed to sign/2 passes verify/3's own tbs reader and payload rules, or it is refused before anything is
+%% signed.
+verifiable({ok, _Read}, _Type) -> ok;
+verifiable(true, _Type) -> ok;
+verifiable(_Refused, Type) -> erlang:error({malformed, Type}).
 
 size_fits(Bytes) when Bytes =< ?MAX_RECORD_BYTES -> ok;
 size_fits(Bytes) -> erlang:error({record_too_large, Bytes}).
