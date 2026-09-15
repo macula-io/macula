@@ -120,11 +120,9 @@ advertise(Pool, Realm, Procedure, Module, Args) ->
 %% @doc As `advertise/5'. `Opts' may include `announce' (default
 %% `true'), `auth' (forwarded to `macula:advertise/5'), and
 %% `reuse_sup' — an existing supervisor pid (as returned by a prior
-%% `advertise/5,6' call) to re-send the wire `ADVERTISE' frame on
-%% without starting a new factory supervisor. Use this for periodic
-%% re-advertise (a station's registration for a procedure is tied to
-%% the connection that sent it, and does not survive that connection
-%% being replaced — see `advertise_direct/6,7''s own doc) — calling
+%% `advertise/5,6' call) to register the handler again on without
+%% starting a new factory supervisor. Use this for a periodic
+%% re-advertise (see `advertise_direct/6,7''s own doc) — calling
 %% plain `advertise/5,6' on a timer would leak one orphaned
 %% supervisor per tick, since each call otherwise starts a fresh one.
 -spec advertise(macula:pool(), macula:realm(), macula:procedure(),
@@ -192,13 +190,13 @@ advertise_direct(Pool, Realm, Procedure, Module, Args, NodeIdentity) ->
 %% the provider authorization an org namespaced procedure needs (see
 %% `macula_direct_dial''s module doc, "Trust model"). Each side reads
 %% only the keys it recognizes, so one `Opts' map serves both.
-%% `reuse_sup' matters here specifically: a station's wire-level
-%% registration for a procedure is tied to whichever connection sent
-%% the `ADVERTISE' frame, and does not survive that connection being
-%% replaced (reconnect, station-side eviction, etc.) — a periodic
+%% `reuse_sup' matters here specifically: the procedure's DHT record
+%% expires with its TTL, and callers reach the provider only through
+%% that record, so the provider republishes it — a periodic
 %% re-advertise with `reuse_sup => Sup' (the pid this function
-%% returned the first time) re-sends both the wire frame and the DHT
-%% record without leaking a new supervisor per tick.
+%% returned the first time) registers the handler again and
+%% republishes the DHT record without leaking a new supervisor per
+%% tick.
 -spec advertise_direct(macula:pool(), macula:realm(), macula:procedure(),
                        module(), term(), macula_node_keys:node_key(), advertise_opts()) ->
     {ok, pid()} | {error, term()}.

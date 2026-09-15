@@ -288,8 +288,11 @@ call_station(Pool, Station, Realm, Procedure, Payload, TimeoutMs, Opts) ->
     macula_client:call_station(Pool, Station, Realm, Procedure, Payload,
                                TimeoutMs, Ucan, LinkOpts, DialTimeoutMs).
 
-%% @doc Advertise a procedure handler on a V2 pool. Fans out to every
+%% @doc Register a procedure handler on a V2 pool. Fans out to every
 %% healthy link and stores in pool state for replay on link respawn.
+%% A caller reaches this provider only through a
+%% `procedure_advertisement' record that names it; registering the
+%% handler publishes none.
 %% A handler that answers `{error, Text}' with a binary or a printable
 %% charlist sends that text to its caller, up to 256 bytes of it; any
 %% other error reason reaches the caller as its name only. See
@@ -811,9 +814,11 @@ advertise_stream(Procedure, Mode, Handler)
   when is_binary(Procedure), is_atom(Mode), is_function(Handler, 2) ->
     macula_stream_local:advertise(Procedure, Mode, Handler).
 
-%% @doc Advertise a streaming procedure on a V2 pool. Fans out to
+%% @doc Register a streaming procedure handler on a V2 pool. Fans out to
 %% every healthy link and stores in pool state for replay on link
-%% respawn. See `macula_client:advertise_stream/5'.
+%% respawn. A caller reaches this provider only through a
+%% `procedure_advertisement' record that names it; registering the
+%% handler publishes none. See `macula_client:advertise_stream/5'.
 -spec advertise_stream(pool(), realm(), procedure(),
                         stream_mode(), stream_handler()) ->
         ok | {error, term()}.

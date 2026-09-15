@@ -33,6 +33,8 @@ an_advertisement_made_before_connect_sends_no_frame_on_connect_test_() ->
          Pid = start_link_with_peer(),
          ok = macula_station_link:advertise(Pid, ?REALM, ?PROCEDURE, fun unary_handler/1),
          Pid ! {macula_peering, connected, self(), <<9:256>>},
+         %% The link has handled the connected message before its mailbox is read.
+         ?assertEqual(<<9:256>>, element(?PEER_NODE_ID_INDEX, sys:get_state(Pid))),
          ?assertEqual(none, sent_frame_within(300)),
          ?assert(maps:is_key({?REALM, ?PROCEDURE}, registered(procedures, Pid))),
          macula_station_link:stop(Pid)

@@ -1602,8 +1602,8 @@ on_frame(#{frame_type := error, call_id := CallId} = Frame, S) ->
 %% silently drop those.
 on_frame(#{frame_type := event, topic := Topic, realm := Realm} = Frame, S) ->
     on_inbound_event(check_publisher_sig(Frame), Realm, Topic, Frame, S);
-%% Inbound CALL — relay forwarded a CALL whose (realm, procedure)
-%% this link advertised. Once the CALL's signature verifies against its
+%% Inbound CALL — a CALL the station delivered to this link, for a
+%% (realm, procedure) with a registered handler. Once the CALL's signature verifies against its
 %% own `caller' (`on_inbound_call/3'), dispatch to the registered handler
 %% and ship the resulting RESULT or call_error frame back over the same
 %% peering connection.
@@ -2283,8 +2283,8 @@ fan_event({ok, {_R, _T, Subscriber, _Mon}}, SubRef, Topic, Payload, Meta) ->
 %% link to this process and a peer gone by reply time is harmless.
 %%
 %% A handler crash maps to BOLT#4 `temporary_relay_failure' (0x02);
-%% an unknown `(realm, procedure)' (race between UNADVERTISE in
-%% flight and a stale forwarded CALL) maps to `unknown_next_peer'
+%% an unknown `(realm, procedure)' (no handler registered on this
+%% link) maps to `unknown_next_peer'
 %% (0x01) — same taxonomy as `hecate_handler_dispatch'.
 handle_inbound_call(#{call_id := CallId, procedure := Proc, realm := Realm,
                       payload := Payload} = Frame,

@@ -692,8 +692,10 @@ call_station(Pool, Station, Realm, Procedure, Payload, TimeoutMs, UcanToken,
                      TimeoutMs, DialTimeoutMs, UcanToken, LinkOpts},
                     TimeoutMs + 2_000).
 
-%% @doc Advertise a procedure handler on every healthy link. Stored
-%% in pool state so links respawned later replay the advertisement.
+%% @doc Register a procedure handler on every healthy link. Stored
+%% in pool state so a respawned link registers it again. A caller
+%% reaches this provider only through a `procedure_advertisement'
+%% record that names it; registering the handler publishes none.
 %% Returns `ok' when at least one link accepted the registration.
 %% A handler that answers `{error, Text}' with a binary or a printable
 %% charlist sends that text to its caller, up to 256 bytes of it; any
@@ -1119,8 +1121,7 @@ cancel_discovery_timer(Timer)     -> erlang:cancel_timer(Timer).
 
 handle_call({publish, Realm, Topic, Payload, _Opts}, From, S) ->
     %% Publish only to links that have completed CONNECT/HELLO. A
-    %% frame sent to a still-handshaking link is dropped on the floor
-    %% — unlike ADVERTISE, which the link replays on connect — so
+    %% frame sent to a still-handshaking link is dropped on the floor, so
     %% selecting the first `replication' *spawned* links could report
     %% `{error, not_connected}' while other links are healthy. RPC and
     %% streams already filter by `is_connected/1'; publish must too.
@@ -2078,8 +2079,8 @@ replay_to_seed(_, S) ->
 %% against the same cap). Each added seed is spawned and replayed
 %% exactly like a respawned link (`start_link_for_seed/2' +
 %% `replay_to_seed/2', both pre-existing) -- a discovered station joins
-%% the pool the same way any other link does; SUBSCRIBE/ADVERTISE
-%% fan-out (`spawned_link_pids/1') reaches it automatically from then on.
+%% the pool the same way any other link does; SUBSCRIBE and handler
+%% registration fan-out (`spawned_link_pids/1') reach it from then on.
 add_discovered_seeds(_Stations, #state{discovery = undefined} = S) ->
     %% Discovery was disabled after a worker was already in flight (only
     %% possible if a future caller adds a way to toggle it at runtime --
