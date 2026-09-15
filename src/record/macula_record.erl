@@ -889,8 +889,14 @@ tombstone_payload_ok(#{{text, <<"withdrawn_type">>} := Type, {text, <<"withdrawn
 tombstone_payload_ok(_P) ->
     false.
 
-withdrawable(Type) when Type >= ?DOMAIN_TYPE_MIN, Type =< 16#FF -> true;
-withdrawable(Type) -> Type =/= ?TYPE_TOMBSTONE andalso signer_purposes(Type, #{}) =/= [].
+%% A tombstone withdraws a record type, a tag from 1 to 255: a domain type, or a built-in type some key signs, other
+%% than a tombstone. Any other integer names no record type.
+withdrawable(Type) when Type >= ?DOMAIN_TYPE_MIN, Type =< 16#FF ->
+    true;
+withdrawable(Type) when Type >= 1, Type < ?DOMAIN_TYPE_MIN ->
+    Type =/= ?TYPE_TOMBSTONE andalso signer_purposes(Type, #{}) =/= [];
+withdrawable(_OutsideTheTypeRange) ->
+    false.
 
 detail_ok(absent) -> true;
 detail_ok({text, Detail}) when is_binary(Detail) -> true;
