@@ -186,7 +186,7 @@ direct_dial_resolves_then_fetches_from_the_resolved_provider() ->
     Endpoint = <<"quic://provider.example:4433">>,
     LinkPid = dummy_pid(),
     LinkIo = (macula_scripted_link:link_io())#{
-               ensure_content_link := link_to(Endpoint, LinkPid),
+               ensure_station_link := link_to(Endpoint, LinkPid),
                call_on_stream := fun(_, _, _, <<"_content.get_block">>, _, _) -> {ok, Bytes} end},
 
     {ok, _Pid} = macula_download:start_link_direct(?MODULE, dummy_pid(), ?REALM, Mcid, self(),
@@ -233,7 +233,7 @@ cancel_while_a_direct_transfer_is_handed_over_still_reaches_it() ->
     Stream = make_ref(),
     Endpoint = <<"quic://provider.example:4433">>,
     LinkIo = (open_get_link_io(Self, LinkPid, Stream))#{
-               ensure_content_link := link_to(Endpoint, LinkPid)},
+               ensure_station_link := link_to(Endpoint, LinkPid)},
     Held = fun(Pool, Station, Mcid, TimeoutMs, TransferOpts) ->
                    hold_handover(Self, macula_content_transfer:start_get_station(
                                          Pool, Station, Mcid, TimeoutMs, TransferOpts))
@@ -277,7 +277,7 @@ fetch_from(Endpoint) ->
             Fetch(Endpoint, #{verify => none}, 1_000, 30_000)
     end.
 
-%% An ensure_content_link/4 that dials only Seed, as LinkPid.
+%% An ensure_station_link/4 that dials only Seed, as LinkPid.
 link_to(Seed, LinkPid) ->
     fun(_Pool, Dialed, _LinkOpts, _TimeoutMs) when Dialed =:= Seed -> {ok, LinkPid} end.
 
