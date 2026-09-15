@@ -121,7 +121,7 @@ an_expired_delegation_is_refused_test() ->
     ?assertEqual({error, delegation_invalid}, authorize(Adv, Realm, now_ms() + 10 * ?MINUTE)).
 
 an_advertisement_that_outlives_its_authorization_is_refused_test() ->
-    #{adv := Adv, realm := Realm} = delegation_bundle(<<"acme/get_forecast_v1">>, #{del_ttl => 10 * ?MINUTE}),
+    #{adv := Adv, realm := Realm} = delegation_bundle(<<"acme/get_forecast_v1">>, #{del_ttl => 2 * ?MINUTE}),
     ?assertEqual({error, authorization_outlived}, authorize(Adv, Realm)).
 
 the_delegation_form_needs_the_realm_key_test() ->
@@ -181,12 +181,12 @@ delegation_bundle(Procedure, Overrides) ->
     Del = macula_record:sign(macula_record:procedure_delegation(
                                  macula_node_keys:key_id(DelSigner),
                                  maps:get(del_advertiser, Overrides, macula_node_keys:key_id(A)),
-                                 #{ttl_ms => maps:get(del_ttl, Overrides, ?DAY)}), DelSigner),
+                                 #{ttl_ms => maps:get(del_ttl, Overrides, 6 * ?HOUR)}), DelSigner),
     DirBytes = corrupt(maps:get(corrupt_dir, Overrides, false), macula_record:encode(OrgDir)),
     Authorization = #{org_directory => DirBytes, procedure_delegation => macula_record:encode(Del)},
     Adv = macula_record:sign(macula_record:procedure_advertisement(
                                  macula_node_keys:key_id(A), realm_id(), Procedure, fill(16#77),
-                                 #{authorization => Authorization, ttl_ms => ?HOUR}), A),
+                                 #{authorization => Authorization, ttl_ms => 300_000}), A),
     #{realm => Realm, org => Org, advertiser => A, org_dir => OrgDir, delegation => Del, adv => Adv}.
 
 authorize(Adv, Realm) ->

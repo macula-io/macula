@@ -39,9 +39,23 @@ only_shutdown_moved_and_revoked_are_reasons_test() ->
 
 a_tombstone_expires_no_earlier_than_the_withdrawn_record_test() ->
     Id = key(identity),
-    Unsigned = macula_record:node_record(macula_node_keys:key_id(Id), [], 0, #{ttl_ms => 30 * ?DAY}),
+    Unsigned = macula_record:node_record(macula_node_keys:key_id(Id), [], 0, #{ttl_ms => 2 * ?DAY}),
     Long = macula_record:sign(Unsigned, Id),
     ?assert(macula_record:expires_at(macula_record:tombstone(Long, shutdown)) >= macula_record:expires_at(Long)).
+
+%% A tombstone lives until the record it withdraws has expired plus the five-minute clock tolerance, so no replica serves
+%% the record again after the tombstone lapses. It signs within the withdrawn type's maximum plus that tolerance: here a
+%% tombstone for a procedure advertisement with time left signs, and one a millisecond past that bound is refused.
+a_tombstone_outlives_the_withdrawn_record_by_the_clock_tolerance_test() ->
+    Minute = 60_000,
+    Id = key(identity),
+    Advertisement = macula_record:procedure_advertisement(macula_node_keys:key_id(Id), fill(16#11), <<"acme/echo_v1">>,
+                                                          fill(16#77), #{ttl_ms => 4 * Minute}),
+    Withdrawn = macula_record:sign(Advertisement, Id),
+    #{created_at := Created} = Tomb = macula_record:tombstone(Withdrawn, shutdown),
+    ?assert(macula_record:expires_at(Tomb) >= macula_record:expires_at(Withdrawn) + 5 * Minute),
+    ?assertEqual(macula_record:expires_at(Tomb), macula_record:expires_at(macula_record:sign(Tomb, Id))),
+    ?assertError({lifetime_too_long, 16#0C}, macula_record:sign(Tomb#{expires_at := Created + 10 * Minute + 1}, Id)).
 
 a_member_endorsement_tombstone_names_realm_and_member_and_the_realm_signs_it_test() ->
     Realm = key(realm),

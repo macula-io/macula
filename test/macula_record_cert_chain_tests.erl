@@ -33,7 +33,7 @@ a_leaf_for_another_key_is_refused_test() ->
     ?assertEqual({error, cert_key_mismatch}, authorize(Adv, Ca)).
 
 an_advertisement_that_outlives_its_leaf_is_refused_test() ->
-    #{realm_ca := Ca, adv := Adv} = fixture(#{leaf_valid_for => 10 * ?MINUTE}),
+    #{realm_ca := Ca, adv := Adv} = fixture(#{leaf_valid_for => 2 * ?MINUTE}),
     ?assertEqual({error, authorization_outlived}, authorize(Adv, Ca)).
 
 the_certificate_form_needs_the_realm_ca_test() ->
@@ -80,7 +80,7 @@ fixture(Opts) ->
       org_ca => OrgPriv, org_subject => OrgSubj, org_der => OrgDer}.
 
 advertisement(A, Chain) ->
-    Opts = #{authorization => #{certificate_chain => Chain}, ttl_ms => ?HOUR},
+    Opts = #{authorization => #{certificate_chain => Chain}, ttl_ms => 300_000},
     Unsigned = macula_record:procedure_advertisement(macula_node_keys:key_id(A), fill(16#11), ?PROCEDURE, fill(16#77),
                                                      Opts),
     macula_record:sign(Unsigned, A).

@@ -165,6 +165,101 @@ the_clock_tolerance_is_five_minutes_test() ->
     ?assertEqual({error, expired}, macula_record:verify(Bytes, pq_pure, Expires + 6 * ?MINUTE)).
 
 %%------------------------------------------------------------------
+%% Lifetimes and bounds
+%%------------------------------------------------------------------
+
+%% Every type lives at most its type's maximum, created_at to expires_at: a node record and a content announcement 48
+%% hours; a procedure advertisement and a station endpoint 5 minutes; realm stations, an org directory and a procedure
+%% delegation 6 hours; a realm member endorsement 30 days; a domain record 7 days; and a type with no rule of its own,
+%% such as a realm directory, 30 days. At the maximum a record signs; a millisecond past it sign/2 raises
+%% {lifetime_too_long, Type}.
+each_type_signs_within_its_maximum_lifetime_test_() ->
+    {timeout, ?EU_TIMEOUT, fun() ->
+        Id = key(identity),
+        Realm = key(realm),
+        Org = key(org),
+        NodeId = macula_node_keys:key_id(Id),
+        OrgKeyId = macula_node_keys:key_id(Org),
+        RealmId = fill(16#11),
+        Hour = 60 * ?MINUTE,
+        Day = 24 * Hour,
+        Mcid = <<2, 16#55, 0:384>>,
+        Endorsed = #{realm => RealmId, member_node => NodeId, roles => []},
+        Builds =
+            [{Id, 48 * Hour, fun(Ttl) -> macula_record:node_record(NodeId, [], 0, #{ttl_ms => Ttl}) end},
+             {Id, 48 * Hour,
+              fun(Ttl) -> macula_record:content_announcement(NodeId, Mcid, <<"quic://a.example:4433">>, #{ttl_ms => Ttl})
+              end},
+             {Id, 5 * ?MINUTE,
+              fun(Ttl) -> macula_record:procedure_advertisement(NodeId, RealmId, <<"acme/echo_v1">>, fill(16#77),
+                                                                #{ttl_ms => Ttl})
+              end},
+             {Id, 5 * ?MINUTE, fun(Ttl) -> macula_record:station_endpoint(4433, #{ttl_ms => Ttl}) end},
+             {Realm, 6 * Hour,
+              fun(Ttl) -> macula_record:realm_stations(RealmId, [#{station_id => fill(3), roles => [<<"seed">>]}],
+                                                       #{ttl_ms => Ttl})
+              end},
+             {Realm, 6 * Hour, fun(Ttl) -> macula_record:org_directory(RealmId, <<"acme">>, OrgKeyId, #{ttl_ms => Ttl}) end},
+             {Org, 6 * Hour, fun(Ttl) -> macula_record:procedure_delegation(OrgKeyId, NodeId, #{ttl_ms => Ttl}) end},
+             {Realm, 30 * Day, fun(Ttl) -> macula_record:realm_member_endorsement(RealmId, Endorsed, #{ttl_ms => Ttl}) end},
+             {Realm, 30 * Day,
+              fun(Ttl) -> macula_record:realm_directory(RealmId, <<"io.macula">>, fill(5), #{ttl_ms => Ttl}) end},
+             {Id, 7 * Day, fun(Ttl) -> macula_record:envelope(16#20, #{}, #{ttl_ms => Ttl}) end}],
+        [begin
+             Type = macula_record:type(Build(Max)),
+             ?assertMatch(#{signature := _}, macula_record:sign(Build(Max), Key)),
+             ?assertError({lifetime_too_long, Type}, macula_record:sign(Build(Max + 1), Key))
+         end || {Key, Max, Build} <- Builds]
+    end}.
+
+%% A verifier refuses a record signed past its type's maximum lifetime as lifetime_too_long: a node record a millisecond
+%% over 48 hours, a domain record a millisecond over 7 days (D28), and a realm directory signed for a year.
+a_record_signed_past_its_maximum_lifetime_is_refused_test() ->
+    Id = key(identity),
+    Realm = key(realm),
+    Day = 24 * 60 * ?MINUTE,
+    Fields = fun(#{type := Type, version := Version, created_at := Created, payload := Payload}, Lifetime) ->
+                 #{{text, <<"type">>} => Type, {text, <<"version">>} => Version, {text, <<"created_at">>} => Created,
+                   {text, <<"expires_at">>} => Created + Lifetime, {text, <<"payload">>} => Payload}
+             end,
+    Signed = [{Id, macula_record:node_record(macula_node_keys:key_id(Id), [], 0), 2 * Day + 1},
+              {Id, macula_record:envelope(16#20, #{}, #{}), 7 * Day + 1},
+              {Realm, macula_record:realm_directory(fill(16#11), <<"io.macula">>, fill(5)), 365 * Day}],
+    [?assertEqual({error, lifetime_too_long},
+                  macula_record:verify(macula_signed_object:encode(
+                                         macula_signed_object:sign(?LABEL, Fields(Unsigned, Lifetime), Key)), pq_pure))
+     || {Key, Unsigned, Lifetime} <- Signed].
+
+%% A record whose expires_at is not after its created_at is refused as lifetime_reversed, at sign and at verify, even
+%% with created_at two minutes ahead, inside the clock tolerance.
+a_record_that_expires_before_it_is_created_is_refused_test() ->
+    Id = key(identity),
+    Created = now_ms() + 2 * ?MINUTE,
+    #{type := Type, version := Version, payload := Payload} = Reversed =
+        (macula_record:node_record(macula_node_keys:key_id(Id), [], 0))#{created_at := Created, expires_at := Created - 1},
+    ?assertError({lifetime_reversed, Type}, macula_record:sign(Reversed, Id)),
+    Fields = #{{text, <<"type">>} => Type, {text, <<"version">>} => Version, {text, <<"created_at">>} => Created,
+               {text, <<"expires_at">>} => Created - 1, {text, <<"payload">>} => Payload},
+    ?assertEqual({error, lifetime_reversed},
+                 macula_record:verify(macula_signed_object:encode(macula_signed_object:sign(?LABEL, Fields, Id)),
+                                      pq_pure)).
+
+%% A procedure advertisement built without a ttl lives its type's maximum, five minutes.
+a_procedure_advertisement_defaults_to_its_maximum_lifetime_test() ->
+    Advertisement = macula_record:procedure_advertisement(fill(1), fill(16#11), <<"acme/echo_v1">>, fill(16#77)),
+    ?assertEqual(5 * ?MINUTE, macula_record:expires_at(Advertisement) - macula_record:created_at(Advertisement)).
+
+%% A payload is refused before anything is encoded when its external size is over 256 KiB, or when it nests past the 63
+%% levels a record's tbs leaves it under the decoder's 64.
+a_payload_past_the_record_bounds_is_refused_before_encoding_test() ->
+    Nested = fun(Depth) -> lists:foldl(fun(_, Inner) -> #{{text, <<"n">>} => Inner} end, 1, lists:seq(1, Depth)) end,
+    ?assertEqual(ok, macula_record:payload_bounded(Nested(63))),
+    ?assertEqual({error, malformed}, macula_record:payload_bounded(Nested(64))),
+    ?assertEqual(ok, macula_record:payload_bounded(#{{text, <<"a">>} => binary:copy(<<0>>, 200 * ?KIB)})),
+    ?assertEqual({error, record_too_large},
+                 macula_record:payload_bounded(#{{text, <<"a">>} => binary:copy(<<0>>, 256 * ?KIB)})).
+
+%%------------------------------------------------------------------
 %% Key ids by record type
 %%------------------------------------------------------------------
 

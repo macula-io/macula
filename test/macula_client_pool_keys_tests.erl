@@ -233,31 +233,69 @@ a_supervised_start_whose_loader_raises_logs_no_key_test_() ->
 %%------------------------------------------------------------------
 
 %% A pool signs a record a node signs about itself with its node identity key, in its own process, and returns only the
-%% signed record. A record that names another node, a type a node does not sign, and anything that is not a record are
-%% refused by name, and the pool keeps answering.
+%% signed record, stamped now with a new version and the lifetime it was built with. It refuses by name a record that
+%% names another node, one that lives past its type's maximum, a type a node does not sign about itself (a station
+%% endpoint, realm- and org-signed types, a domain type, a tombstone), a payload past the record bound, and a record it
+%% cannot sign, and it keeps answering. A tombstone comes only from withdraw_node_record/3, for a verified record this
+%% node signed. No reply, and no log event captured with macula's redaction filter removed, holds a private half.
 a_pool_signs_only_records_about_itself_test_() ->
     {timeout, ?EU_TIMEOUT, fun() ->
         {ok, Profile} = profile(),
         {ok, Key} = macula_node_keys:generate(identity, Profile),
+        {ok, Other} = macula_node_keys:generate(identity, Profile),
+        {ok, Realm} = macula_node_keys:generate(realm, Profile),
         {ok, NodeId} = macula_node_keys:node_id(Key),
-        {ok, Pool} = macula_client:connect([], #{node_identity => Key}),
-        Signed = macula_client:sign_node_record(Pool, macula_record:node_record(NodeId, [], 0)),
-        Another = macula_client:sign_node_record(Pool, macula_record:node_record(<<7:256>>, [], 0)),
+        Hour = 3_600_000,
+        Advertisement = fun(Advertiser) ->
+                            macula_record:procedure_advertisement(Advertiser, <<1:256>>, <<"acme/echo_v1">>, <<7:256>>)
+                        end,
         Endorsement = macula_record:realm_member_endorsement(<<1:256>>, #{realm => <<1:256>>, member_node => NodeId,
                                                                           roles => []}),
-        RealmSigned = macula_client:sign_node_record(Pool, Endorsement),
-        NotARecord = macula_client:sign_node_record(Pool, #{type => 1}),
-        {ok, #{self_node_id := SelfNodeId}} = macula_client:status(Pool),
+        OthersAdvertisement = macula_record:sign(Advertisement(macula_node_keys:key_id(Other)), Other),
+        Refused = [{key_id_mismatch, macula_record:node_record(<<7:256>>, [], 0)},
+                   {lifetime_too_long, macula_record:node_record(NodeId, [], 0, #{ttl_ms => 365 * 24 * Hour})},
+                   {not_a_node_signed_type, macula_record:station_endpoint(4433)},
+                   {not_a_node_signed_type, Endorsement},
+                   {not_a_node_signed_type, macula_record:org_directory(<<1:256>>, <<"acme">>, <<9:256>>)},
+                   {not_a_node_signed_type, macula_record:procedure_delegation(<<9:256>>, NodeId)},
+                   {not_a_node_signed_type, macula_record:envelope(16#20, #{}, #{})},
+                   {not_a_node_signed_type, macula_record:tombstone(OthersAdvertisement, shutdown)},
+                   {record_too_large,
+                    macula_record:node_record(NodeId, [], 0, #{hostname => binary:copy(<<"h">>, 300 * 1024)})},
+                   {malformed_record, #{type => 1, payload => #{{text, <<"node_id">>} => NodeId}}}],
+        Old = (macula_record:node_record(NodeId, [], 0))#{created_at := 1_000, expires_at := 1_000 + Hour},
+        {ok, Pool} = macula_client:connect([], #{node_identity => Key}),
+        Test = self(),
+        Run = fun() ->
+                  Before = erlang:system_time(millisecond),
+                  Signed = macula_client:sign_node_record(Pool, Old),
+                  Replies = [{Name, macula_client:sign_node_record(Pool, Unsigned)} || {Name, Unsigned} <- Refused],
+                  {ok, Own} = macula_client:sign_node_record(Pool, Advertisement(NodeId)),
+                  <<First, Rest/binary>> = maps:get(signature, Own),
+                  Tampered = Own#{signature := <<(First bxor 1), Rest/binary>>},
+                  Withdrawn = macula_client:withdraw_node_record(Pool, Own, shutdown),
+                  Withdrawals = [macula_client:withdraw_node_record(Pool, Withdrawable, shutdown)
+                                 || Withdrawable <- [OthersAdvertisement, macula_record:sign(Endorsement, Realm), Tampered]],
+                  Test ! {ran, Before, Signed, Replies, Withdrawn, Withdrawals, macula_client:status(Pool)}
+              end,
+        {_Redaction, Events} = unredacted(fun() -> captured(Run) end),
         ok = macula_client:close(Pool),
+        {Before, Signed, Replies, Withdrawn, Withdrawals, Status} =
+            receive {ran, B, S, R, W, Ws, St} -> {B, S, R, W, Ws, St} after 0 -> erlang:error(no_run) end,
+        ?assertMatch({ok, #{self_node_id := NodeId}}, Status),
         ?assertMatch({ok, #{key_id := NodeId}}, Signed),
         {ok, Record} = Signed,
+        ?assert(macula_record:created_at(Record) >= Before),
+        ?assertEqual(Hour, macula_record:expires_at(Record) - macula_record:created_at(Record)),
+        ?assertNotEqual(macula_record:version(Old), macula_record:version(Record)),
         ?assertMatch({ok, _}, macula_record:verify(macula_record:encode(Record), Profile)),
-        ?assertEqual({error, key_id_mismatch}, Another),
-        ?assertEqual({error, not_a_node_signed_type}, RealmSigned),
-        ?assertEqual({error, malformed_record}, NotARecord),
-        ?assertEqual(NodeId, SelfNodeId),
+        ?assertEqual([{Name, {error, Name}} || {Name, _} <- Refused], Replies),
+        ?assertMatch({ok, #{type := 16#0C, key_id := NodeId}}, Withdrawn),
+        ?assertEqual([{error, not_this_nodes_record}, {error, not_a_node_signed_type}, {error, signature_invalid}],
+                     Withdrawals),
         ?assertEqual([], [Private || #{private := Private} <- maps:get(components, Key),
-                                      binary:match(term_to_binary(Signed), Private) =/= nomatch])
+                                      binary:match(term_to_binary({Signed, Replies, Withdrawn, Withdrawals, Events}),
+                                                   Private) =/= nomatch])
     end}.
 
 %%------------------------------------------------------------------

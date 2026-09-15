@@ -778,11 +778,11 @@ authorized_advertisement(#{id := StationId}, #{realm := Realm, org := Org}, OrgN
     ProviderId = macula_node_keys:key_id(Provider),
     OrgId = macula_node_keys:key_id(Org),
     OrgDirectory = macula_record:sign(macula_record:org_directory(?REALM, OrgName, OrgId), Realm),
-    Delegation = macula_record:sign(macula_record:procedure_delegation(OrgId, ProviderId, #{ttl_ms => ?DAY_MS}),
+    Delegation = macula_record:sign(macula_record:procedure_delegation(OrgId, ProviderId, #{ttl_ms => 6 * ?HOUR_MS}),
                                     Org),
     Authorization = #{org_directory => macula_record:encode(OrgDirectory),
                       procedure_delegation => macula_record:encode(Delegation)},
     verified(macula_record:sign(
                macula_record:procedure_advertisement(ProviderId, ?REALM, ?ORG_PROC, StationId,
-                                                     #{authorization => Authorization, ttl_ms => ?HOUR_MS}),
+                                                     #{authorization => Authorization, ttl_ms => 300_000}),
                Provider)).
