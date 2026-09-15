@@ -195,9 +195,13 @@ Post-quantum work on the `post-quantum` branch. Not on `main`.
   direct links, 256 new peers, 64 discovered links); any other value, an
   atom included, does not start the pool, and `connect/2` returns
   `{error, {invalid_link_limit, Key, Value}}`. A seed's host is compared in
-  canonical form: lowercase, without brackets or a trailing dot, and an IP
-  literal in one text form, with an IPv4-mapped IPv6 address as its IPv4
-  address.
+  canonical form: its ASCII letters lowercased, without the brackets around
+  an IPv6 literal, and an IP literal in one text form, with an IPv4-mapped
+  IPv6 address as its IPv4 address. Other bytes, a trailing dot included,
+  are kept, so two names DNS tells apart are two peers. A direct dial or a
+  discovered station whose seed has no text host, or no port from 1 to
+  65535, is refused with `unusable_seed` and counted, and the pool keeps
+  serving.
 - `macula_frame:stream_bytes/2` signs and encodes a frame built for a
   dedicated stream: a CALL or STREAM_OPEN, a RESULT or provider ERROR, a
   station's relay error, or either side's stream frame under its verified

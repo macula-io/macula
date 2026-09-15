@@ -106,8 +106,9 @@ already a link is refused, before anything is dialed, with
 them (default 8), and with `{error, new_peer_budget_spent}` once it has
 linked to `new_peer_budget` new peers in the last 15 minutes (default 16).
 Your configured seeds never count against either. Try another station you
-already hold a link to, or retry later; both refusals are counted in
-`macula_client:status/1` under `refused_dials`.
+already hold a link to, or retry later. A station URL or map with no text
+host, or no port from 1 to 65535, is refused with `{error, unusable_seed}`.
+Every refusal is counted in `macula_client:status/1` under `refused_dials`.
 
 **Most applications don't need this.** Knowing a procedure's URL up front is
 the exception — normally you know the *procedure*, not which station serves
