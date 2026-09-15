@@ -345,14 +345,17 @@ past_the_bound_ends_the_stream(Chunks) ->
 
 %% The bound limits what the stream process holds, not only what it counts.
 %% Parts of a larger binary, as a decoded frame's body is, keep none of the
-%% rest of it; empty chunks and decoded terms count for the memory they take.
+%% rest of it, whether they arrive raw or inside a decoded term; empty chunks
+%% and decoded terms count for the memory they take.
 %% The stream holds at most a small multiple of the bound once the chunks are
 %% queued or the session has ended.
 the_inbox_bound_limits_what_the_stream_holds_test_() ->
     [{Name, fun() -> holds_no_more_than_the_bound(Chunks()) end}
      || {Name, Chunks} <- [{"65-byte parts of a 1 MiB binary", fun parts_of_a_large_binary/0},
                            {"empty chunks", fun empty_chunks/0},
-                           {"a decoded list of small integers", fun small_integers/0}]].
+                           {"a decoded list of small integers", fun small_integers/0},
+                           {"decoded terms holding 65-byte parts of a 1 MiB binary",
+                            fun decoded_parts_of_a_large_binary/0}]].
 
 holds_no_more_than_the_bound(Chunks) ->
     Bound = 64_000,
@@ -372,6 +375,10 @@ empty_chunks() ->
 
 small_integers() ->
     [{msgpack, [N rem 256 || N <- lists:seq(1, 30_000)]}].
+
+decoded_parts_of_a_large_binary() ->
+    Large = crypto:strong_rand_bytes(1 bsl 20),
+    [{msgpack, #{part => binary:part(Large, N * 65, 65)}} || N <- lists:seq(0, 199)].
 
 %% Served streams share their caller's inbox budget: the streams of one
 %% caller together keep no more unread than that budget, a chunk past it ends
