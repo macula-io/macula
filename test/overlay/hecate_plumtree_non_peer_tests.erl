@@ -2,8 +2,9 @@
 %% lazy_push and never adds one: only add_peer/2 and remove_peer/2 change who is in them, as HyParView changes its
 %% active view. Through a station's relay a frame's sender is its origin, which need not be a neighbour. From such a
 %% sender a GRAFT, a PRUNE and an IHAVE move no one, send nothing and are refused as not_a_peer, which is not charged. A
-%% first GOSSIP from it delivers and forwards its verified publication but moves no one, and a duplicate gets no PRUNE.
-%% The same frames from a peer still move it, and charged_refusal/1 classifies every refusal kind Plumtree returns.
+%% first GOSSIP from it delivers and forwards its verified publication but moves no one. A duplicate from it gets no
+%% PRUNE and is refused as not_a_peer too, so the connection counts it. The same frames from a peer still move it, and
+%% charged_refusal/1 classifies every refusal kind Plumtree returns.
 -module(hecate_plumtree_non_peer_tests).
 
 -include_lib("eunit/include/eunit.hrl").
@@ -41,11 +42,11 @@ a_first_gossip_from_a_non_peer_delivers_and_forwards_but_moves_no_one_test() ->
     ?assertEqual(sets_of(S1), sets_of(S2)),
     ?assertEqual([id(1), id(2)], lists:sort([To || {send, To, _Frame} <- Actions])).
 
-a_duplicate_gossip_from_a_non_peer_gets_no_prune_test() ->
+a_duplicate_gossip_from_a_non_peer_gets_no_prune_and_is_refused_test() ->
     Publish = publish_frame(),
     {S1, _Pushes, _Delivered} = process(peers(), id(1), gossip_of(Publish, 1)),
     {S2, Actions, []} = process(S1, id(9), gossip_of(Publish, 2)),
-    ?assertEqual([], Actions),
+    ?assertEqual([{refused, id(9), not_a_peer}], Actions),
     ?assertEqual(sets_of(S1), sets_of(S2)).
 
 the_same_frames_from_a_peer_still_move_it_test() ->
