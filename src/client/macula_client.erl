@@ -159,7 +159,8 @@
     self_node_id       := <<_:256>>,
     subscriptions      := non_neg_integer(),
     replication_factor := pos_integer(),
-    pubsub_gap_skips   := non_neg_integer()
+    pubsub_gap_skips   := non_neg_integer(),
+    refused_dials      := #{too_many_direct_links | new_peer_budget_spent => pos_integer()}
 }.
 %% Per-link view returned by `links/1'. One entry per configured seed
 %% that currently has a spawned link worker. `node_id' is the peer
@@ -278,7 +279,27 @@
     %% and then still only ever call the first one) and `first_success'
     %% otherwise, but either can be set explicitly to override that
     %% pairing.
-    link_selection => first_success | random
+    link_selection => first_success | random,
+
+    %% Most configured seeds a pool starts with. A pool given more does
+    %% not start: `connect/2' returns `{error, {too_many_seeds, Given,
+    %% Max}}'. Every link a pool holds can carry inbound requests, so the
+    %% links it holds at once are bounded: its seeds, `max_links' for
+    %% discovery, and `max_direct_links'. Default 16.
+    max_seeds => pos_integer(),
+
+    %% Most direct-dial links a pool holds at once: links dialed by
+    %% `call_station', `ensure_content_link' or `call_stream_station' to a
+    %% station that is not already a link. A fresh dial past it is refused
+    %% with `{error, too_many_direct_links}'. Default 8.
+    max_direct_links => pos_integer(),
+
+    %% Most new peers a pool links to per 15 minutes, each counted once by
+    %% its normalized seed, for a fresh direct dial and for a discovered
+    %% station alike. A configured seed never spends it. Past it, a fresh
+    %% direct dial is refused with `{error, new_peer_budget_spent}' and a
+    %% discovered station is left for a later discovery run. Default 16.
+    new_peer_budget => pos_integer()
 }.
 
 %% V1 multi_relay options that have NO V2 equivalent. Callers passing
@@ -354,10 +375,28 @@
 -define(DEFAULT_DISCOVERY_GIVEUP_MS, 60_000).
 -define(DEFAULT_DISCOVERY_GIVEUP_SWEEP_MS, 5_000).
 
+%% The links a pool holds and dials are bounded: every link can carry
+%% inbound requests, and each peer behind a link holds a share of the
+%% provider's seen requests while they live (`macula_request_admission').
+-define(DEFAULT_MAX_SEEDS, 16).
+-define(DEFAULT_MAX_DIRECT_LINKS, 8).
+-define(DEFAULT_NEW_PEER_BUDGET, 16).
+%% A seen request lives until its deadline plus 5 minutes, and a deadline
+%% lies at most 10 minutes ahead of the provider's clock, so 15 minutes is
+%% the longest one entry lives. The new-peer budget counts over that window.
+-define(NEW_PEER_WINDOW_MS, 15 * 60_000).
+%% A refused dial is counted every time and logged at most once a minute per
+%% reason.
+-define(REFUSAL_REPORT_WINDOW_MS, 60_000).
+
 -record(link_state, {
     seed          :: seed(),
     pid           :: pid() | undefined,
     mon           :: reference() | undefined,
+    %% `true' for a link a fresh direct dial made (`dial_fresh/3'). It
+    %% counts against `max_direct_links' for its whole life, respawns
+    %% included.
+    direct = false :: boolean(),
     %% The three fields below are meaningless (left at their defaults)
     %% for a bootstrap or direct-dial link -- only
     %% `add_one_discovered_seed/2' ever sets `discovered = true', via
@@ -436,7 +475,12 @@
     %% default). See `#discovery_state{}' and the `station_discovery'
     %% opt.
     discovery        :: #discovery_state{} | undefined,
-    link_selection   :: first_success | random
+    link_selection   :: first_success | random,
+    max_direct_links :: pos_integer(),
+    %% New peers per `?NEW_PEER_WINDOW_MS', by normalized seed. The
+    %% configured seeds are exempt.
+    dial_budget      :: macula_client_peer_budget:t(),
+    refused_dials    :: macula_refusal_report:t()
 }).
 
 %%====================================================================
@@ -813,7 +857,13 @@ unsubscribe(Pool, SubRef) when is_pid(Pool), is_reference(SubRef) ->
 init({Seeds, Opts}) ->
     process_flag(trap_exit, true),
     warn_legacy_opts(Opts),
-    init_with_keys(pool_keys(Opts), Seeds, Opts).
+    init_within_seed_limit(length(Seeds), maps:get(max_seeds, Opts, ?DEFAULT_MAX_SEEDS), Seeds, Opts).
+
+%% A pool given more seeds than its limit does not start, and dials nothing.
+init_within_seed_limit(Given, Max, Seeds, Opts) when Given =< Max ->
+    init_with_keys(pool_keys(Opts), Seeds, Opts);
+init_within_seed_limit(Given, Max, _Seeds, _Opts) ->
+    {error, {too_many_seeds, Given, Max}}.
 
 %% A pool whose keys cannot be had does not start: `connect/2' returns
 %% the refusal and no link is dialed.
@@ -848,7 +898,13 @@ init_with_keys({ok, #{node_identity := NodeIdentity} = Keys}, Seeds, Opts) ->
                     dedup_tab = DedupTab,
                     order_timeout = OrderTimeout, order_max_buffer = OrderMaxBuf,
                     flush_timer = undefined,
-                    discovery = Discovery, link_selection = LinkSelection},
+                    discovery = Discovery, link_selection = LinkSelection,
+                    max_direct_links = maps:get(max_direct_links, Opts, ?DEFAULT_MAX_DIRECT_LINKS),
+                    dial_budget = macula_client_peer_budget:new(
+                                    #{budget => maps:get(new_peer_budget, Opts, ?DEFAULT_NEW_PEER_BUDGET),
+                                      window_ms => ?NEW_PEER_WINDOW_MS,
+                                      exempt => [seed_peer(Seed) || Seed <- Seeds]}),
+                    refused_dials = macula_refusal_report:new(?REFUSAL_REPORT_WINDOW_MS)},
     State1 = lists:foldl(fun start_link_for_seed/2, State0, Seeds),
     erlang:send_after(DedupSweep, self(), dedup_sweep),
     arm_giveup_sweep(Discovery),
@@ -958,13 +1014,10 @@ handle_call({call_station, Station, Realm, Procedure, Payload, TimeoutMs,
     %% Ensure (reuse or dial) a link to the specific station, then hand
     %% the wait-for-handshake + call to a worker so the pool gen_server
     %% is never blocked (same rationale as rpc_call).
-    {Pid, S1} = ensure_link(Station, LinkOpts, S),
-    _ = spawn(fun() ->
-        Reply = call_when_connected(Pid, Realm, Procedure, Payload,
-                                    TimeoutMs, DialTimeoutMs, Ucan),
-        gen_server:reply(From, Reply)
-    end),
-    {noreply, S1};
+    on_link(ensure_link(Station, LinkOpts, S), From,
+            fun(Pid) ->
+                call_when_connected(Pid, Realm, Procedure, Payload, TimeoutMs, DialTimeoutMs, Ucan)
+            end);
 
 handle_call({ensure_content_link, Station, LinkOpts, TimeoutMs}, From, S) ->
     %% Same shape as call_station: ensure the link, wait for its
@@ -972,12 +1025,8 @@ handle_call({ensure_content_link, Station, LinkOpts, TimeoutMs}, From, S) ->
     %% call_station this hands back the connected pid itself rather
     %% than making a call over it — the caller opens a dedicated
     %% content stream on it directly (see macula:with_content_stream/2).
-    {Pid, S1} = ensure_link(Station, LinkOpts, S),
-    _ = spawn(fun() ->
-        Reply = content_link_when_connected(Pid, TimeoutMs),
-        gen_server:reply(From, Reply)
-    end),
-    {noreply, S1};
+    on_link(ensure_link(Station, LinkOpts, S), From,
+            fun(Pid) -> content_link_when_connected(Pid, TimeoutMs) end);
 
 handle_call({advertise, Realm, Procedure, Handler, Policy}, _From,
             #state{procs = P} = S) ->
@@ -1010,12 +1059,8 @@ handle_call({call_stream_station, Station, Realm, Procedure, Args, Opts,
     %% rationale as call_station — the pool gen_server never blocks on
     %% the dial + handshake. LinkOpts (verify/expected_node_id/
     %% pin_tls_cert) shapes a fresh dial only, same as call_station.
-    {Pid, S1} = ensure_link(Station, LinkOpts, S),
-    _ = spawn(fun() ->
-        Reply = stream_when_connected(Pid, Realm, Procedure, Args, Opts),
-        gen_server:reply(From, Reply)
-    end),
-    {noreply, S1};
+    on_link(ensure_link(Station, LinkOpts, S), From,
+            fun(Pid) -> stream_when_connected(Pid, Realm, Procedure, Args, Opts) end);
 
 handle_call({advertise_stream, Realm, Procedure, Mode, Handler, Policy}, _From,
             #state{stream_procs = SP} = S) ->
@@ -1048,7 +1093,10 @@ handle_call(status, _From,
         replication_factor => Replication,
         %% Per-publisher gaps given up on after the reorder timeout —
         %% the genuine loss rate an `ordered' subscriber could not fill.
-        pubsub_gap_skips   => total_skips(Subs)
+        pubsub_gap_skips   => total_skips(Subs),
+        %% Dials refused by `max_direct_links' or the new-peer budget, and
+        %% discovered stations deferred by the budget, by reason.
+        refused_dials      => macula_refusal_report:counts(S#state.refused_dials)
     },
     {reply, {ok, Status}, S};
 
@@ -1240,9 +1288,60 @@ reuse_or_dial(Pid, _Station, _ExtraOpts, S) when is_pid(Pid) ->
 reuse_or_dial(undefined, Station, ExtraOpts, S) ->
     dial_fresh(Station, ExtraOpts, S).
 
-dial_fresh(Station, ExtraOpts, S) ->
-    S1 = start_link_for_seed(Station, ExtraOpts, S),
+%% A fresh direct dial fits the pool's direct links and its new-peer budget,
+%% or is refused with a named error and dials nothing.
+dial_fresh(Station, ExtraOpts, #state{max_direct_links = Max} = S) ->
+    direct_dial(direct_link_count(S) < Max, Station, ExtraOpts, S).
+
+direct_dial(false, _Station, _ExtraOpts, S) ->
+    refused_dial(too_many_direct_links, S);
+direct_dial(true, Station, ExtraOpts, S) ->
+    budgeted_dial(spend_dial_budget(Station, S), Station, ExtraOpts).
+
+budgeted_dial({spent, S}, _Station, _ExtraOpts) ->
+    refused_dial(new_peer_budget_spent, S);
+budgeted_dial({ok, S}, Station, ExtraOpts) ->
+    S1 = mark_direct(Station, start_link_for_seed(Station, ExtraOpts, S)),
     {link_pid(Station, S1), S1}.
+
+direct_link_count(#state{links = Links}) ->
+    length([Seed || Seed := #link_state{direct = true} <- Links]).
+
+%% `start_link_for_seed/3' always leaves an entry for the seed.
+mark_direct(Station, #state{links = Links} = S) ->
+    S#state{links = maps:update_with(Station, fun(L) -> L#link_state{direct = true} end, Links)}.
+
+%% A link to work on, or a refused dial: the refusal is the reply, and no
+%% worker starts.
+on_link({{error, _} = Refused, S}, _From, _Work) ->
+    {reply, Refused, S};
+on_link({Pid, S}, From, Work) ->
+    _ = spawn(fun() -> gen_server:reply(From, Work(Pid)) end),
+    {noreply, S}.
+
+%% A peer a pool links to, by its normalized seed.
+seed_peer(Seed) ->
+    {seed, normalize_seed(Seed)}.
+
+spend_dial_budget(Station, #state{dial_budget = Budget} = S) ->
+    {Verdict, Spent} = macula_client_peer_budget:spend(Budget, seed_peer(Station),
+                                                       erlang:monotonic_time(millisecond)),
+    {Verdict, S#state{dial_budget = Spent}}.
+
+refused_dial(Reason, S) ->
+    {{error, Reason}, count_refused_dial(Reason, S)}.
+
+%% Counted every time, logged at most once per window per reason with the
+%% count since the last line.
+count_refused_dial(Reason, #state{refused_dials = Report} = S) ->
+    Refused = macula_refusal_report:refused(Report, Reason, erlang:monotonic_time(millisecond)),
+    S#state{refused_dials = logged_refusal(Refused, Reason)}.
+
+logged_refusal({report, Count, Report}, Reason) ->
+    logger:warning("[macula_client] refused ~b dial(s): ~p", [Count, Reason]),
+    Report;
+logged_refusal({quiet, Report}, _Reason) ->
+    Report.
 
 %% Bounded by however many links this pool currently holds — typically
 %% a handful (its configured seeds plus any prior direct-dial targets),
@@ -1796,6 +1895,13 @@ already_connected_to(NodeId, Links) ->
     find_link_by_node_id(NodeId, Links) =/= undefined.
 
 add_one_discovered_seed(Seed, S) ->
+    discovered_within_budget(spend_dial_budget(Seed, S), Seed).
+
+%% A discovered station past the new-peer budget is left for a later
+%% discovery run, and the deferral is counted like a refused dial.
+discovered_within_budget({spent, S}, _Seed) ->
+    count_refused_dial(new_peer_budget_spent, S);
+discovered_within_budget({ok, S}, Seed) ->
     NewS = mark_discovered(Seed, start_link_for_seed(Seed, S)),
     replay_to_seed(maps:get(Seed, NewS#state.links, undefined), NewS).
 

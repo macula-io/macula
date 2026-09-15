@@ -180,6 +180,17 @@ Post-quantum work on the `post-quantum` branch. Not on `main`.
   whole entry at no charge to its announcers, and a refused GOSSIP returns
   its refusal. `macula_frame:charged_refusal/1` charges `ihave_allowance`,
   `graft_unanswered` and `wrong_realm`.
+- `macula_client` bounds the links a pool holds and the new peers it dials.
+  With more seeds than `max_seeds` (default 16) a pool does not start, and
+  `connect/2` returns `{error, {too_many_seeds, Given, Max}}`. A fresh
+  direct dial past `max_direct_links` (default 8) is refused with
+  `{error, too_many_direct_links}`. `new_peer_budget` (default 16) is the
+  most new peers per 15 minutes, each counted once by its normalized seed:
+  past it a fresh direct dial is refused with
+  `{error, new_peer_budget_spent}` and a discovered station is left for a
+  later discovery run. The configured seeds never spend it. `status/1`
+  counts refused dials by reason in `refused_dials`, and each reason is
+  logged at most once a minute with its count.
 
 ### Changed
 

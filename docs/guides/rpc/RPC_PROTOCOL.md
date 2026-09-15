@@ -100,6 +100,15 @@ link or opening and monitoring a new one, waiting for the handshake, then
 calling through it. One hop, no dependency on your pool's own seed set. Use
 it when you already know *which* station's URL to dial.
 
+A pool bounds the links it dials this way. A call to a station that is not
+already a link is refused, before anything is dialed, with
+`{error, too_many_direct_links}` while the pool holds `max_direct_links` of
+them (default 8), and with `{error, new_peer_budget_spent}` once it has
+linked to `new_peer_budget` new peers in the last 15 minutes (default 16).
+Your configured seeds never count against either. Try another station you
+already hold a link to, or retry later; both refusals are counted in
+`macula_client:status/1` under `refused_dials`.
+
 **Most applications don't need this.** Knowing a procedure's URL up front is
 the exception — normally you know the *procedure*, not which station serves
 it. [`macula_request:start_link_direct/6,7,8` and
