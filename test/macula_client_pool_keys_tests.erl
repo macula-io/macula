@@ -510,6 +510,21 @@ the_pool_refuses_a_domain_record_handed_to_it_directly_test_() ->
         ?assertEqual([{error, invalid_subject}, {error, not_a_domain_type}], Replies)
     end}}.
 
+%% A node record verify would refuse, handed to the pool with a direct call, is refused by name and the pool lives: a
+%% node record carrying a subject, which no node-signed type has, is never signed.
+the_pool_refuses_a_node_record_verify_would_refuse_handed_to_it_directly_test_() ->
+    {timeout, ?EU_TIMEOUT, {spawn, fun() ->
+        {ok, Profile} = profile(),
+        {ok, Key} = macula_node_keys:generate(identity, Profile),
+        {ok, NodeId} = macula_node_keys:node_id(Key),
+        {ok, Pool} = macula_client:connect([], #{node_identity => Key}),
+        Node = macula_record:node_record(NodeId, [], 0),
+        Reply = gen_server:call(Pool, {sign_node_record, Node#{subject => <<"s1">>}}),
+        Alive = is_process_alive(Pool),
+        ok = macula_client:close(Pool),
+        ?assertEqual({{error, malformed_record}, true}, {Reply, Alive})
+    end}}.
+
 %% A domain record the pool's key did not sign is not withdrawn: not one another node's identity key signed, and not one
 %% a realm key signed, both of which verify.
 a_domain_record_another_key_signed_is_not_withdrawn_test_() ->

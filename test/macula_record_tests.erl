@@ -64,6 +64,55 @@ sign_refuses_a_record_larger_than_256_kib_test() ->
     Unsigned = macula_record:node_record(macula_node_keys:key_id(Id), [], 0, #{display_name => Big}),
     ?assertError({record_too_large, _}, macula_record:sign(Unsigned, Id)).
 
+%% sign/2 never returns a record verify/3 refuses apart from the clock: it runs verify's own tbs reader and payload
+%% rules before signing, and raises {malformed, Type} for a record they refuse. A node record carrying a subject, a
+%% domain record with an empty subject, a version that is not 16 bytes, a tombstone withdrawing type 300, and a
+%% tombstone giving a reason no rule names.
+sign_refuses_a_record_verify_would_refuse_test_() ->
+    Id = key(identity),
+    Node = macula_record:node_record(macula_node_keys:key_id(Id), [], 0),
+    Domain = macula_record:envelope(16#20, #{}, #{}),
+    #{payload := Withdrawal} = Tombstone = macula_record:tombstone(macula_record:sign(Domain, Id), shutdown),
+    Withdrawing = fun(Field, Value) -> Tombstone#{payload := Withdrawal#{{text, Field} := Value}} end,
+    [?_assertError({malformed, 16#01}, macula_record:sign(Node#{subject => <<"s1">>}, Id)),
+     ?_assertError({malformed, 16#20}, macula_record:sign(Domain#{subject => <<>>}, Id)),
+     ?_assertError({malformed, 16#01}, macula_record:sign(Node#{version := <<1, 2, 3>>}, Id)),
+     ?_assertError({malformed, 16#0C}, macula_record:sign(Withdrawing(<<"withdrawn_type">>, 300), Id)),
+     ?_assertError({malformed, 16#0C},
+                   macula_record:sign(Withdrawing(<<"reason">>, {text, <<"retired">>}), Id))].
+
+%% Every builder's record, signed with a key whose purpose fits its type, still signs and verifies.
+every_builder_record_signs_and_verifies_test() ->
+    Id = key(identity),
+    Realm = key(realm),
+    Org = key(org),
+    Foundation = key(foundation),
+    NodeId = macula_node_keys:key_id(Id),
+    OrgKeyId = macula_node_keys:key_id(Org),
+    RealmId = fill(16#11),
+    Mcid = <<2, 16#55, (binary:copy(<<16#88>>, 48))/binary>>,
+    Node = macula_record:sign(macula_record:node_record(NodeId, [], 0), Id),
+    Endorsement = macula_record:realm_member_endorsement(RealmId, #{realm => RealmId, member_node => fill(2),
+                                                                    roles => []}),
+    Signed = [Node,
+              macula_record:sign(macula_record:tombstone(Node, shutdown), Id),
+              macula_record:sign(macula_record:station_endpoint(4433), Id),
+              macula_record:sign(macula_record:content_announcement(NodeId, Mcid, <<"quic://h:1">>), Id),
+              macula_record:sign(macula_record:procedure_advertisement(NodeId, RealmId, <<"acme/x">>, fill(2)), Id),
+              macula_record:sign(macula_record:envelope(16#20, #{}, #{}), Id),
+              macula_record:sign(macula_record:envelope(16#20, #{}, #{subject_id => <<"s1">>}), Id),
+              macula_record:sign(macula_record:realm_directory(RealmId, <<"io.macula">>, fill(2)), Realm),
+              macula_record:sign(macula_record:realm_stations(RealmId, []), Realm),
+              macula_record:sign(Endorsement, Realm),
+              macula_record:sign(macula_record:org_directory(RealmId, <<"acme">>, OrgKeyId), Realm),
+              macula_record:sign(macula_record:procedure_delegation(OrgKeyId, NodeId), Org),
+              macula_record:sign(macula_record:foundation_seed_list([]), Foundation),
+              macula_record:sign(macula_record:foundation_parameter(<<"max_hops">>, 8), Foundation),
+              macula_record:sign(macula_record:foundation_realm_trust_list([]), Foundation),
+              macula_record:sign(macula_record:foundation_t3_attestation(fill(16#77), 1789000000000), Foundation)],
+    ?assertEqual([], [macula_record:type(Record) || Record <- Signed,
+                      element(1, macula_record:verify(macula_record:encode(Record), pq_pure)) =/= ok]).
+
 %%------------------------------------------------------------------
 %% Verifying
 %%------------------------------------------------------------------
