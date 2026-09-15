@@ -1144,8 +1144,9 @@ relay_checked([true, true, true], Read) -> {ok, maps:without([alg, request_id, r
 %% reply, or an ERROR or STREAM_ERROR carrying relay_error. The ids are a key for finding the pending request, and
 %% nothing more: verify_reply/3 or verify_relay_error/4 against that request decides whether the frame answers it. The
 %% frame's fields and the signed object's shape are checked as the verifiers check them, and the tbs is read with the
-%% same strict decoding and field table, so ids of another length or shape never come back. Anything else is
-%% malformed_frame.
+%% same strict decoding and field table, so ids of another length or shape never come back. It checks neither the
+%% signed object's key nor that key's size for the profile: nothing it returns is trusted, and the verifiers check both.
+%% Anything else is malformed_frame.
 -spec claimed_reply_ids(frame()) ->
         {ok, #{request_id := <<_:128>>, request_hash := <<_:384>>}} | {error, malformed_frame}.
 claimed_reply_ids(#{frame_type := Type, reply := Object} = Frame) when Type =:= result; Type =:= error ->

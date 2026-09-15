@@ -47,7 +47,8 @@ cases(Keys) ->
                  fun an_error_frame_is_either_a_reply_or_a_relay_error/1,
                  fun claimed_ids_come_from_a_result_an_error_and_a_relay_error/1,
                  fun claimed_ids_are_malformed_for_anything_else/1,
-                 fun claimed_ids_are_only_a_lookup_key/1]].
+                 fun claimed_ids_are_only_a_lookup_key/1,
+                 fun claimed_ids_refuse_a_short_id_and_a_malformed_relay_error/1]].
 
 %%------------------------------------------------------------------
 %% Requests: CALL and STREAM_OPEN
@@ -329,6 +330,23 @@ claimed_ids_are_only_a_lookup_key(#{provider := Provider, other := Other} = Keys
     ?assertEqual([Named, Named], [macula_frame:claimed_reply_ids(Frame) || Frame <- [FromOther, Unsigned]]),
     ?assertEqual([{error, not_the_target}, {error, signature_invalid}],
                  [macula_frame:verify_reply(Frame, Request, pq_pure) || Frame <- [FromOther, Unsigned]]).
+
+%% A request_id of another length is refused as a request_hash of another length is, and the relay_error branch
+%% refuses a signed object without its key and a tbs that is not CBOR, as the reply branch does.
+claimed_ids_refuse_a_short_id_and_a_malformed_relay_error(#{provider := Provider, station := Station} = Keys) ->
+    Request = verified_call(Keys),
+    ShortId = (reply_tbs(Request, result))#{{text, <<"request_id">>} := <<0:120>>},
+    Short = crafted(result, reply, macula_signed_object:sign(?REPLY_LABEL, ShortId, Provider)),
+    #{relay_error := StreamSigned} = StreamRelay =
+        macula_frame:relay_error(#{frame_type => stream_error, request => verified_stream_open(Keys),
+                                   code => unknown_next_peer}, Station),
+    #{relay_error := ErrorSigned} = ErrorRelay =
+        macula_frame:relay_error(#{frame_type => error, request => Request, code => unknown_next_peer}, Station),
+    Refused = [Short,
+               StreamRelay#{relay_error := maps:remove(key, StreamSigned)},
+               ErrorRelay#{relay_error := ErrorSigned#{tbs := <<"not cbor">>}}],
+    ?assertEqual([{error, malformed_frame} || _ <- Refused],
+                 [macula_frame:claimed_reply_ids(Frame) || Frame <- Refused]).
 
 %%------------------------------------------------------------------
 %% Helpers
