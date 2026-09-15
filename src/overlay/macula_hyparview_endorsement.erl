@@ -18,7 +18,8 @@
 %%   <li>The payload member_node equals the node_id the joining peer claims, so no peer can present another member's
 %%       endorsement.</li>
 %%   <li>valid_from is at most now and valid_until at least now: the endorsement is active.</li>
-%%   <li>valid_until is at most 30 days after valid_from (macula_record:max_endorsement_window_ms/0).</li>
+%%   <li>valid_until is not before valid_from, and at most 30 days after it
+%%       (macula_record:max_endorsement_window_ms/0).</li>
 %% </ul>
 %%
 %% Reference: plans/PLAN_MACULA_V2_PART6_PROTOCOL.md §9.6.
@@ -43,7 +44,8 @@
       | wrong_realm
       | wrong_member
       | endorsement_expired
-      | endorsement_window_too_long.
+      | endorsement_window_too_long
+      | endorsement_window_reversed.
 
 %% @doc Verify that an endorsement, as its wire form or its {key, tbs, signature} map, admits Member to the realm that
 %% Trust names. Returns {ok, Roles} with the endorsed roles, or {error, Reason}; callers treat any error as a refusal
@@ -77,6 +79,8 @@ check_member(#{payload := #{{text, <<"member_node">>} := Member} = Payload}, Mem
 check_member(_Record, _Member) ->
     {error, wrong_member}.
 
+check_window(From, Until, _Now, _Payload) when is_integer(From), is_integer(Until), Until < From ->
+    {error, endorsement_window_reversed};
 check_window(From, Until, Now, Payload) when is_integer(From), is_integer(Until) ->
     active_window(Until - From =< macula_record:max_endorsement_window_ms(), From, Until, Now, Payload);
 check_window(_From, _Until, _Now, _Payload) ->

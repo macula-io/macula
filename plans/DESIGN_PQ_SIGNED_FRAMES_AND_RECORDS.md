@@ -151,8 +151,9 @@ About 7.3 KB / 8.3 KB before the payload: 2,592 / 3,118 bytes of key and 4,627 /
 - **Domain record lifetime.** A domain record's `expires_at` is at most 7 days after its `created_at`, and every
   verifier refuses a longer one as malformed. With `created_at` at most 5 minutes ahead, no domain record a station
   accepts expires more than 7 days and 5 minutes after it arrives (D28).
-- **Realm member endorsement window.** Its payload's `valid_until` is at most 30 days after its `valid_from`. The
-  builder refuses a longer window, and a verifier of the endorsement refuses one as `endorsement_window_too_long`, so
+- **Realm member endorsement window.** Its payload's `valid_until` is not before its `valid_from`, and at most 30 days
+  after it. The builder refuses another window, and a verifier of the endorsement refuses a reversed one as
+  `endorsement_window_reversed` and a longer one as `endorsement_window_too_long`, before its other window checks, so
   one endorsement admits its member for at most 30 days.
 - **Checks,** after the steps of a signed object:
   - `tbs` holds exactly these keys, with `subject` only where the type allows it;

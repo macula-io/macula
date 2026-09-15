@@ -186,7 +186,8 @@ realm_stations(RealmId, Entries, Opts) when is_binary(RealmId), byte_size(RealmI
     unsigned(?TYPE_REALM_STATIONS, realm_stations_payload(RealmId, Entries), Opts).
 
 %% @doc A realm's statement, signed by the realm key, that a node is a member with roles. Its window, valid_from to
-%% valid_until, is at most 30 days: a longer one raises a badmatch on `{error, endorsement_window_too_long}'.
+%% valid_until, is at most 30 days and never ends before it starts: a longer one raises a badmatch on
+%% `{error, endorsement_window_too_long}', and a reversed one on `{error, endorsement_window_reversed}'.
 -spec realm_member_endorsement(<<_:256>>, #{realm := <<_:256>>, member_node := <<_:256>>, roles := [binary()]}) ->
           m_record().
 realm_member_endorsement(RealmId, Spec) ->
@@ -200,12 +201,13 @@ realm_member_endorsement(RealmId, #{realm := RealmId, member_node := Member, rol
     Now = erlang:system_time(millisecond),
     ValidFrom = maps:get(valid_from, Opts, Now),
     ValidUntil = maps:get(valid_until, Opts, ValidFrom + ?MAX_ENDORSEMENT_WINDOW_MS),
-    ok = endorsement_window(ValidUntil - ValidFrom =< ?MAX_ENDORSEMENT_WINDOW_MS),
+    ok = endorsement_window(ValidFrom, ValidUntil),
     unsigned(?TYPE_REALM_MEMBER_ENDORSEMENT,
              realm_member_endorsement_payload(RealmId, Member, Roles, ValidFrom, ValidUntil), Opts).
 
-endorsement_window(true) -> ok;
-endorsement_window(false) -> {error, endorsement_window_too_long}.
+endorsement_window(From, Until) when Until < From -> {error, endorsement_window_reversed};
+endorsement_window(From, Until) when Until - From > ?MAX_ENDORSEMENT_WINDOW_MS -> {error, endorsement_window_too_long};
+endorsement_window(_From, _Until) -> ok.
 
 %% @doc The longest window a realm member endorsement may have, valid_from to valid_until, in milliseconds: 30 days.
 %% Its builder refuses a longer one, and macula_hyparview_endorsement:verify_endorsement/3 refuses one it receives.
