@@ -152,26 +152,31 @@ dispatch_frame(RegistryPid, <<_:256>> = Realm, From, Frame) ->
     gen_server:call(RegistryPid, {dispatch_frame, Realm, From, Frame}).
 
 %% @doc Relay an inbound PUBLISH frame for `Realm' to the matching
-%% pubsub_server. The server builds an EVENT frame and returns it
-%% together with the local subscribers that should receive it. The
-%% caller is responsible for sending `EventFrame' on each
-%% subscriber's peering connection.
+%% pubsub_server. The server verifies the publication, builds an EVENT
+%% frame from its bytes and returns it together with the local
+%% subscribers that should receive it. The caller is responsible for
+%% sending `EventFrame' on each subscriber's peering connection.
 %%
-%% Returns `{ok, EventFrame, [Subs]}' on success,
-%% `{error, not_found}' when no server is registered for the realm
-%% AND no `default_identity' was configured at start-up.
+%% Returns `{ok, EventFrame, [Subs]}' on success, the publication's
+%% refusal when it does not verify, `{error, realm_mismatch}' when it
+%% names another realm, and `{error, not_found}' when no server is
+%% registered for the realm AND no `default_identity' was configured
+%% at start-up.
 %%
 %% For a realm without a server and a `default_identity' set (the
-%% production path under `macula_station_identity_sup'), the EVENT is
-%% still built, signed with that identity, with no local subscribers.
-%% This keeps the EVENT available for publisher-side bloom-fan
-%% forwarding to peer stations that have the topic in their Bloom filter
-%% but no subscribe-on-peer chain terminating at us, and starts no
-%% process for a realm nobody here subscribes to. Tests that omit
-%% `default_identity' retain the strict `{error, not_found}' semantics.
+%% production path under `macula_station_identity_sup'), the registry
+%% verifies the publication under that identity's profile and still
+%% builds the EVENT from the same publication bytes, delivered direct,
+%% with no local subscribers. An EVENT carries no signature of its own,
+%% so the publisher's signature goes end to end. This keeps the EVENT
+%% available for publisher-side bloom-fan forwarding to peer stations
+%% that have the topic in their Bloom filter but no subscribe-on-peer
+%% chain terminating at us, and starts no process for a realm nobody
+%% here subscribes to. Tests that omit `default_identity' retain the
+%% strict `{error, not_found}' semantics.
 -spec relay_publish(pid(), realm(), macula_frame:frame()) ->
         {ok, macula_frame:frame(), [<<_:256>>]}
-      | {error, not_found | realm_mismatch}.
+      | {error, term()}.
 relay_publish(RegistryPid, <<_:256>> = Realm, Frame) ->
     gen_server:call(RegistryPid, {relay_publish, Realm, Frame}).
 
@@ -379,19 +384,24 @@ do_relay_publish(_Realm, _Frame, error,
     {reply, {error, not_found}, S};
 do_relay_publish(Realm, Frame, error,
                  #state{default_identity = Id} = S) ->
-    %% No server for the realm: the EVENT is still built, signed by the
-    %% station, so the caller (pubsub_dispatcher) can fan it out to peer
-    %% stations whose Bloom filter matches the topic, but no process
+    %% No server for the realm: the publication is verified and the
+    %% EVENT still built from its bytes, so the caller can fan it out to
+    %% peer stations whose Bloom filter matches the topic, but no process
     %% starts for a realm nobody here subscribes to, and there is no
     %% local subscriber to match.
     {reply, relay_without_server(Realm, Frame, Id), S};
 do_relay_publish(Realm, Frame, {ok, Pid}, S) ->
     forward_relay_publish(Realm, Pid, Frame, S).
 
-relay_without_server(Realm, #{frame_type := publish, realm := Realm} = Frame, Id) ->
-    {ok, hecate_pubsub_server:relay_event(Frame, Id), []};
+%% The checks a server's relay makes: the publication verifies under the identity's profile and names this realm.
+relay_without_server(Realm, #{frame_type := publish} = Frame, #{profile := Profile}) ->
+    without_server(macula_frame:verify_publication(Frame, Profile, erlang:system_time(millisecond)), Realm, Frame);
 relay_without_server(_Realm, _Frame, _Id) ->
-    {error, realm_mismatch}.
+    {error, malformed_frame}.
+
+without_server({ok, #{realm := Realm}}, Realm, Frame) -> {ok, hecate_pubsub:build_event(Frame, direct), []};
+without_server({ok, _AnotherRealm}, _Realm, _Frame) -> {error, realm_mismatch};
+without_server({error, _} = Refusal, _Realm, _Frame) -> Refusal.
 
 forward_relay_publish(Realm, Pid, Frame, S) ->
     try hecate_pubsub_server:relay_publish(Pid, Frame) of
