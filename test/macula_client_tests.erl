@@ -1024,6 +1024,15 @@ station_seed_with_no_quic_port_is_skipped_test() ->
 station_seed_of_a_non_map_is_skipped_test() ->
     ?assertEqual(false, macula_client:station_seed(<<"not-a-station">>)).
 
+%% A station row is remote data: trust keys it carries never reach the seed built from it, so a row cannot lower the
+%% pool's verification or name another pin.
+station_seed_ignores_trust_keys_a_row_carries_test() ->
+    Rows = [#{host_advertised => [<<"2600:3c04::2000:f0ff:feb9:e155">>], quic_port => 4433, node_id => <<1:256>>},
+            #{hostname => <<"station-ca-toronto">>, quic_port => 4433, node_id => <<1:256>>}],
+    Carried = #{verify => none, pin_tls_cert => true, expected_node_id => <<2:256>>},
+    ?assertEqual([macula_client:station_seed(Row) || Row <- Rows],
+                 [macula_client:station_seed(maps:merge(Row, Carried)) || Row <- Rows]).
+
 %% `node_id' passes through even when `undefined' (a defensive shape
 %% `already_connected_to/2' -- not exported, covered live -- treats as
 %% "can't rule in or out", not a reason to skip the station outright).

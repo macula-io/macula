@@ -8,8 +8,8 @@
 
 -include_lib("eunit/include/eunit.hrl").
 
-%% The key loader a child spec in these tests names.
--export([child_key/0]).
+%% The key loader a child spec in these tests names, and the logger handler callback that captures reports.
+-export([child_key/0, log/2]).
 
 %% A pq_hybrid key carries an RSA-4096 half, which takes up to about a second to generate.
 -define(EU_TIMEOUT, 120).
@@ -41,8 +41,8 @@ link_cases(#{profile := Profile, pool := Pool}) ->
       ?_test(assert_separate_keys(Profile, hd(links(Pool))))},
      {"no link holds a classical identity",
       ?_assertError(function_clause, macula_station_link:state_field_index(identity))},
-     {"no value in a link's state is a classical key pair",
-      ?_assertEqual([], [Value || Link <- links(Pool), Value <- tuple_to_list(sys:get_state(Link)), key_pair(Value)])}].
+     {"no value in a link's state, at any depth, is a classical key pair",
+      ?_assertEqual([], [Pair || Link <- links(Pool), Pair <- key_pairs(sys:get_state(Link))])}].
 
 assert_separate_keys(Profile, Link) ->
     #{components := IdentityHalves} = held(Link, node_identity),
@@ -124,13 +124,14 @@ an_issuer_restart_is_counted_in_the_status_test_() ->
         {ok, _Profile} = profile(),
         Before = issuers(),
         {ok, Pool} = macula_client:connect([], #{}),
-        {ok, #{issuer_restarts := Initially}} = macula_client:status(Pool),
+        {ok, #{issuer_restarts := Initially, issuer_losses := InitiallyLost}} = macula_client:status(Pool),
         [Issuer] = issuers() -- Before,
         exit(Issuer, kill),
         Restarted = until(fun() -> issuer_restarts(Pool) =:= 1 end, ?RESPAWN_MS),
+        {ok, #{issuer_losses := Lost}} = macula_client:status(Pool),
         Running = issuers() -- Before,
         ok = macula_client:close(Pool),
-        ?assertEqual({0, ok}, {Initially, Restarted}),
+        ?assertEqual({0, 0, ok, 1}, {Initially, InitiallyLost, Restarted, Lost}),
         ?assertMatch([New] when New =/= Issuer, Running)
     end}.
 
@@ -177,11 +178,30 @@ a_child_spec_holds_a_loader_and_not_the_key_test_() ->
                                       binary:match(term_to_binary(Spec), Private) =/= nomatch])
     end}.
 
-a_child_spec_given_a_key_is_refused_test_() ->
+%% A child spec given the key, or a function that can hold the key, is refused: only a loader names how to get it.
+a_child_spec_given_a_key_or_a_function_is_refused_test_() ->
     {timeout, ?EU_TIMEOUT, fun() ->
         {ok, Profile} = profile(),
         {ok, Key} = macula_node_keys:generate(identity, Profile),
-        ?assertError({node_identity, loader_required}, macula_client:child_spec(pool, [], #{node_identity => Key}))
+        ?assertError({node_identity, loader_required}, macula_client:child_spec(pool, [], #{node_identity => Key})),
+        ?assertError({node_identity, loader_required},
+                     macula_client:child_spec(pool, [], #{node_identity => fun() -> Key end}))
+    end}.
+
+%% A loader that raises refuses the pool by name. The start leaves no key in its result or in any report, even when
+%% the loader's error carries one.
+a_loader_that_raises_refuses_the_pool_by_name_test_() ->
+    {timeout, ?EU_TIMEOUT, fun() ->
+        {ok, Profile} = profile(),
+        {ok, Key} = macula_node_keys:generate(identity, Profile),
+        process_flag(trap_exit, true),
+        Test = self(),
+        Loader = {erlang, error, [{no_key_here, Key}]},
+        Events = captured(fun() -> Test ! {started, catch macula_client:connect([], #{node_identity => Loader})} end),
+        Started = receive {started, Result} -> Result after 0 -> no_result end,
+        ?assertEqual({error, {node_identity, loader_failed}}, Started),
+        ?assertEqual([], [Private || #{private := Private} <- maps:get(components, Key),
+                                      binary:match(term_to_binary({Started, Events}), Private) =/= nomatch])
     end}.
 
 %%------------------------------------------------------------------
@@ -311,9 +331,31 @@ checked(true, _Late, _Check, _Deadline) -> ok;
 checked(false, true, _Check, _Deadline) -> {error, timeout};
 checked(false, false, Check, Deadline) -> receive after 50 -> ok end, until_by(Check, Deadline).
 
-%% A classical key pair: exactly a public and a private half at the top of a map.
-key_pair(#{public := _, private := _} = Pair) -> map_size(Pair) =:= 2;
-key_pair(_Value) -> false.
+%% Every classical key pair in a term, at any depth: a map of exactly a public and a private half.
+key_pairs(#{public := _, private := _} = Pair) when map_size(Pair) =:= 2 -> [Pair];
+key_pairs(Map) when is_map(Map) -> key_pairs(maps:values(Map));
+key_pairs([Head | Tail]) -> key_pairs(Head) ++ key_pairs(Tail);
+key_pairs(Tuple) when is_tuple(Tuple) -> key_pairs(tuple_to_list(Tuple));
+key_pairs(_Other) -> [].
+
+%% The log events that running Act leaves, caught by a logger handler added for the run.
+captured(Act) ->
+    Handler = list_to_atom("macula_pool_keys_capture_" ++ integer_to_list(erlang:unique_integer([positive]))),
+    ok = logger:add_handler(Handler, ?MODULE, #{config => #{test => self()}, level => all, filter_default => log}),
+    _ = Act(),
+    receive after 500 -> ok end,
+    ok = logger:remove_handler(Handler),
+    drained([]).
+
+log(Event, #{config := #{test := Test}}) ->
+    Test ! {captured, Event}.
+
+drained(Events) ->
+    receive
+        {captured, Event} -> drained([Event | Events])
+    after 0 ->
+        lists:reverse(Events)
+    end.
 
 %% The loader the child spec test names: the key it stored.
 child_key() ->
