@@ -345,13 +345,15 @@ free_udp_port() ->
 
 start_node(Prefix) ->
     Name = Prefix ++ "_" ++ integer_to_list(erlang:unique_integer([positive])),
+    %% A peer reads no test sys.config, and macula refuses to start without a profile: give it this VM's.
+    {ok, Profile} = macula_crypto_profile:configured(),
     {ok, Peer, Node} = peer:start_link(#{
         name => Name,
         host => "127.0.0.1",
         longnames => true,
         connection => standard_io,
-        args => ["-proto_dist", "macula", "-start_epmd", "false",
-                 "-setcookie", ?COOKIE, "-pa" | code:get_path()],
+        args => ["-proto_dist", "macula", "-start_epmd", "false", "-setcookie", ?COOKIE,
+                 "-macula", "crypto_profile", atom_to_list(Profile), "-pa" | code:get_path()],
         env => [{"MACULA_DIST_MODE", "dist_relay"},
                 {"MACULA_TLS_MODE", "development"}]}),
     #{peer => Peer, node => Node,

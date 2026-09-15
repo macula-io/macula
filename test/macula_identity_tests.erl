@@ -196,9 +196,12 @@ bad_difficulty_stops_start(Value) ->
 %% returns what application:ensure_all_started/1 returned there.
 start_macula_with_puzzle_difficulty(Value) ->
     Paths = lists:append([["-pa", P] || P <- code:get_path()]),
+    {ok, Profile} = macula_crypto_profile:configured(),
     {ok, Peer, _Node} = peer:start_link(#{connection => standard_io, args => Paths}),
     try
         ok = peer:call(Peer, application, load, [macula]),
+        %% A peer reads no test sys.config, and macula refuses to start without a profile: give it this VM's.
+        ok = peer:call(Peer, application, set_env, [macula, crypto_profile, Profile]),
         ok = peer:call(Peer, application, set_env, [macula, puzzle_difficulty, Value]),
         peer:call(Peer, application, ensure_all_started, [macula], 60_000)
     after
