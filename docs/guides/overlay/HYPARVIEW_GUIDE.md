@@ -169,6 +169,7 @@ overlay transport in macula_station_link (`overlay_subscribe/3`,
 {ok, SubRef} = macula_station_link:overlay_subscribe(Link, Realm, self()),
 %% ... your process now receives:
 %%   {macula_overlay_frame, SubRef, Frame, #{sender := FromNodeId}}
+%%     (a relayed frame's Meta also has via, the station that relayed it)
 %%   {macula_overlay_gone, SubRef, Reason}   -- on disconnect
 
 ok = macula_station_link:send_overlay_frame(Link, macula_hyparview_proto:build_join(Ctx)).

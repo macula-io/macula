@@ -332,12 +332,21 @@ which stations set or change per hop, stay outside them.
 - HyParView, the Plumtree control frames and GOODBYE change membership, tree shape or a connection's lifecycle, so
   they are control frames. GOSSIP carries publications that are checked end to end, so it is data; its Plumtree
   routing fields stay unsigned in both profiles.
-- A station relays every HyParView frame, JOIN, FORWARD_JOIN, NEIGHBOR, DISCONNECT, SHUFFLE and SHUFFLE_REPLY, which
-  carry no signature in pq_pure, from a connection it authenticated. SHUFFLE_REPLY goes to the node where the shuffle
-  walk started and DISCONNECT to a member evicted from the active view, and neither need be a neighbour of the sender,
-  so both travel only by relay. A receiver takes such a relayed frame with the relay's origin as its sender and checks
-  no frame signature (`macula_frame:relayed_without_signature/1`). Every other relayed frame keeps its own
-  verification.
+- A station relays every HyParView frame, JOIN, FORWARD_JOIN, NEIGHBOR, DISCONNECT, SHUFFLE and SHUFFLE_REPLY, and
+  the Plumtree IHAVE, GRAFT and PRUNE, which carry no signature in pq_pure, and the Plumtree GOSSIP, from a connection
+  it authenticated. SHUFFLE_REPLY goes to the node where the shuffle walk started and DISCONNECT to a member evicted
+  from the active view, and neither need be a neighbour of the sender, so both travel only by relay. A receiver takes
+  such a relayed frame with the relay's origin as its sender and checks no frame signature
+  (`macula_frame:relayed_without_signature/1`). Every other relayed frame keeps its own verification.
+- The relay is trusted for who sent a relayed frame, not for what it carries. A GOSSIP's publication is checked end to
+  end: a link routes a GOSSIP by the realm its publication claims, read without verifying
+  (`macula_frame:claimed_publication_realm/1`), and the subscriber verifies the publication before acting on it. The
+  Plumtree layer is that verifying subscriber, and whoever wires it to a link keeps plumtree frames from reaching any
+  other overlay subscriber unverified. A link counts a relayed frame that names no realm, or a realm with no subscriber
+  there, instead of delivering it.
+- A refusal of what a relayed frame carries is counted by kind and never charged to the station connection that
+  relayed it. A subscriber reports it through `macula_station_link:overlay_frame_refused/3`, which charges a connection
+  only for a frame that came from that connection's current peer, not through a relay.
 - A neighbour-signed frame is `{version, frame_type, neighbour}`. `neighbour` is `{tbs, signature}` under
   `MACULA-PQ-NEIGHBOUR-V1`, verified with the connection peer's identity key, and its `tbs` holds the frame's fields
   with `frame_type` and `alg`.

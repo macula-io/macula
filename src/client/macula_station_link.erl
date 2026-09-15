@@ -114,6 +114,7 @@
     overlay_unsubscribe/2,
     send_overlay_frame/2,
     send_overlay_frame/3,
+    overlay_frame_refused/3,
     %% Streaming RPC (SDK 3.17+, Part 6 §5.6)
     call_stream/5,
     advertise_stream/5,
@@ -371,7 +372,8 @@
     liveness_misses = 0   :: non_neg_integer(),
     %% Replies refused before they could clear a probe, counted by reason.
     refused_replies       :: macula_refusal_report:t(),
-    %% Relayed overlay frames dropped, counted by kind.
+    %% Relayed overlay frames dropped, and refusals of delivered overlay
+    %% frames charged to no connection, counted by kind.
     refused_relays        :: macula_refusal_report:t(),
     %% Tunable liveness thresholds (start opts `liveness_interval_ms' /
     %% `liveness_max_misses', each defaulting to the module `?LIVENESS_*'
@@ -816,7 +818,8 @@ unadvertise(Pid, Realm, Procedure)
 %%       with a `sender' field: the connected peer's NodeId, or for a frame
 %%       relayed in an `overlay_relay' envelope, the envelope's origin, since
 %%       a frame does not self-identify its sender at the application
-%%       layer.</li>
+%%       layer. A relayed frame's `Meta' also has `via', the NodeId of the
+%%       station that relayed it.</li>
 %%   <li>`{macula_overlay_gone, SubRef, Reason}' — once, when the
 %%       connection drops or the client stops. The subscription is
 %%       cleared on the same transition.</li>
@@ -824,6 +827,25 @@ unadvertise(Pid, Realm, Procedure)
 %%
 %% The client monitors `Subscriber'; if it dies the subscription is
 %% torn down.
+%%
+%% A frame goes to the subscribers of its `realm'. A `plumtree_gossip'
+%% names its realm only inside its publication, so it goes to the
+%% subscribers of the realm its publication claims
+%% (`macula_frame:claimed_publication_realm/1'). A relayed plumtree_gossip
+%% frame is delivered as it arrived: its publication is unverified until
+%% macula_frame:verify_publication/3 accepts it, and a subscriber other
+%% than the Plumtree layer verifies it before acting on it. Whoever wires
+%% the Plumtree layer to a link makes it the verifying consumer, and keeps
+%% plumtree frames from reaching any other overlay subscriber unverified.
+%% A frame that names no realm, or a realm with no subscriber on this
+%% link, is counted and not delivered.
+%%
+%% A subscriber that refuses what a delivered frame carries reports it
+%% with `overlay_frame_refused/3'. A refusal of what a relayed frame
+%% carries is counted on this link by kind and never charged to the
+%% station connection that relayed it; a refusal of a frame from the
+%% connected peer is charged to that connection as
+%% `macula_frame:charged_refusal/1' says.
 -spec overlay_subscribe(pid(), <<_:256>>, pid()) ->
     {ok, reference()} | {error, term()}.
 overlay_subscribe(Client, Realm, Subscriber)
@@ -868,12 +890,11 @@ send_overlay_frame(Client, Frame) when is_pid(Client), is_map(Frame) ->
 %% by this connection's authenticated node_id and a claimed `TargetPeer'
 %% can never be spoofed by an unrelated connection. The station forwards it
 %% to whichever of its OTHER connections authenticates as `TargetPeer'. See `macula_station_peer_observer:dispatch_overlay/5' on
-%% the relay side. `Frame' carries its own, separate signature, which the
-%% caller must make with THIS connection's identity: the receiving link
-%% delivers `Frame' only if that signature verifies against the sender the
-%% station names in the envelope, and that sender is this connection's
-%% authenticated NodeId. This function only wraps it in the envelope, and
-%% never touches `Frame'.
+%% the relay side. The receiving link takes `Frame' only when its type is
+%% one `macula_frame:relayed_without_signature/1' names, and delivers it
+%% with this connection's authenticated NodeId as sender and the station as
+%% `via'; a frame of any other type is dropped and counted there. This
+%% function only wraps it in the envelope, and never touches `Frame'.
 %% Silently dropped by the station if `TargetPeer' isn't currently
 %% connected there; HyParView's own periodic shuffle/retry is the
 %% recovery path, the same way it already tolerates ordinary packet loss.
@@ -886,6 +907,21 @@ send_overlay_frame(Client, TargetPeer, Frame)
   when is_pid(Client), is_binary(TargetPeer), byte_size(TargetPeer) =:= 32,
        is_map(Frame) ->
     gen_server:call(Client, {send_overlay_frame_to, TargetPeer, Frame}, 5_000).
+
+%% @doc Report that an overlay frame this link delivered was refused for
+%% what it carries. `Meta' is the map the frame was delivered with, and
+%% `Kind' the refusal's kind, as `hecate_plumtree' returns it. The report
+%% goes to the connection, which charges it as
+%% `macula_frame:charged_refusal/1' says, only when the frame provably came
+%% from the link's current peer: `Meta' has no `via' and names that peer as
+%% `sender'. Every other report, for a relayed frame, for a `Meta' that lost
+%% its `via', or from before the link took another peer, is counted on this
+%% link by kind and charges no one. A kind `charged_refusal/1' does not
+%% classify is counted as `unknown_refusal'. A cast: it never blocks the
+%% caller, and a link that has stopped ignores it.
+-spec overlay_frame_refused(pid(), map(), term()) -> ok.
+overlay_frame_refused(Client, Meta, Kind) when is_pid(Client) ->
+    gen_server:cast(Client, {overlay_frame_refused, Meta, Kind}).
 
 %% @doc Open a streaming RPC on this link. Returns `{ok, StreamPid}'
 %% bound to the caller; the caller drives the stream via
@@ -1273,6 +1309,9 @@ handle_cast({abort_content_stream, Stream, Code, Message}, S) ->
 
 handle_cast({unsubscribe, SubRef}, S) ->
     {noreply, on_unsubscribe(SubRef, S)};
+
+handle_cast({overlay_frame_refused, Meta, Kind}, S) ->
+    {noreply, overlay_refusal(macula_frame:refusal_charge(Kind), Meta, Kind, S)};
 
 handle_cast(_Msg, S) -> {noreply, S}.
 
@@ -1675,18 +1714,23 @@ on_frame(#{frame_type := call} = Frame, S) ->
 %% frame from another node, and `Origin' is that node's identity as the
 %% station authenticated it. It is delivered to the realm's overlay
 %% subscribers with `Meta.sender' set to `Origin', not `peer_node_id' (the
-%% station's own identity). The overlay frames D17 leaves unsigned
-%% (`macula_frame:relayed_without_signature/1') are taken as they are, and
-%% `Origin' is their sender whatever the frame itself names. A relayed frame
-%% of any other type is dropped and counted as `not_overlay', never verified
-%% and never delivered. The envelope reached this link through its own connection, which
-%% in pq_hybrid checked the station's neighbour signature on it first.
+%% station's own identity), and `Meta.via' set to the station. The frames
+%% `macula_frame:relayed_without_signature/1' names are taken as they are,
+%% and `Origin' is their sender whatever the frame itself names. A relayed
+%% frame of any other type is dropped and counted as `not_overlay', never
+%% verified and never delivered. The envelope reached this link through its
+%% own connection, which in pq_hybrid checked the station's neighbour
+%% signature on it first.
 %% A payload that is not exactly one frame is dropped and counted
 %% (`relayed_payload/3'), and the link carries on.
 %% Must be matched before the bare `#{realm := Realm}' clause below,
-%% since an `overlay_relay' envelope has no `realm' field of its own.
+%% since an `overlay_relay' envelope has no `realm' field of its own. So
+%% must a GOSSIP, which names its realm only inside its publication
+%% (`direct_gossip/3').
 on_frame(#{frame_type := overlay_relay, peer := Origin, payload := Bytes}, S) ->
     relayed_payload(macula_frame:decode(Bytes), Origin, S);
+on_frame(#{frame_type := plumtree_gossip} = Frame, S) ->
+    direct_gossip(macula_frame:claimed_publication_realm(Frame), Frame, S);
 on_frame(#{realm := Realm} = Frame, S) ->
     deliver_overlay_frame(Realm, Frame, S);
 on_frame(_Frame, S) ->
@@ -2186,23 +2230,50 @@ on_overlay_unsubscribe_take({{Realm, _Subscriber, Mon}, NewSubs}, SubRef, Idx, S
 %% genuinely arrived directly from the connected peer.
 deliver_overlay_frame(Realm, Frame, #state{overlay_realm_index = Idx,
                                            peer_node_id        = PeerNodeId} = S) ->
-    deliver_overlay_frame_to(maps:find(Realm, Idx), Frame, PeerNodeId, S),
+    deliver_overlay_frame_to(maps:find(Realm, Idx), Frame, #{sender => PeerNodeId}, S),
     S.
 
-%% Phase 3.5: a relayed third-party frame arrived wrapped in an
-%% `overlay_relay' envelope. `Sender' is the envelope's own `peer' field
-%% (the station-authenticated origin of the ORIGINAL frame), never this
-%% connection's own `peer_node_id' — that would always be the station's
-%% identity, not the logical HyParView peer. See `on_frame/2''s
-%% `overlay_relay' clause.
-deliver_overlay_frame_from(Sender, #{realm := Realm} = Frame,
-                           #state{overlay_realm_index = Idx} = S) ->
-    deliver_overlay_frame_to(maps:find(Realm, Idx), Frame, Sender, S),
+%% A GOSSIP from the connected peer goes to the subscribers of the realm
+%% its publication claims, read without verifying: they verify it. The
+%% peer sent it, so what the link refuses goes to its connection: a
+%% publication that names no realm as malformed_frame, which is charged,
+%% and a realm with no subscriber on this link as no_subscriber, which is
+%% not.
+direct_gossip({ok, Realm}, Frame, #state{overlay_realm_index = Idx} = S) ->
+    direct_gossip_delivered(maps:find(Realm, Idx), Frame, S);
+direct_gossip({error, no_realm}, _Frame, S) ->
+    connection_refused(malformed_frame, S).
+
+direct_gossip_delivered({ok, _Set} = Found, Frame, #state{peer_node_id = PeerNodeId} = S) ->
+    deliver_overlay_frame_to(Found, Frame, #{sender => PeerNodeId}, S),
     S;
-deliver_overlay_frame_from(_Sender, _Frame, S) ->
-    %% Wrapped frame carries no `realm' — nothing to route on, same as
-    %% the bare-frame catch-all in on_frame/2.
-    S.
+direct_gossip_delivered(error, _Frame, S) ->
+    connection_refused(no_subscriber, S).
+
+%% A relayed third-party frame arrived wrapped in an `overlay_relay'
+%% envelope. `Origin' is the envelope's own `peer' field (the
+%% station-authenticated origin of the ORIGINAL frame), never this
+%% connection's own `peer_node_id', which is the station's identity and
+%% goes in `via'. The frame goes to the subscribers of its realm: its own
+%% `realm' field, or for a GOSSIP the realm its publication claims, read
+%% without verifying. A frame that names no realm is counted as no_realm,
+%% and one for a realm with no subscriber on this link as no_subscriber, so
+%% a relayed frame taken is always delivered or counted.
+relayed_routed({ok, Realm}, Frame, Origin, #state{overlay_realm_index = Idx} = S) ->
+    relayed_delivered(maps:find(Realm, Idx), Frame, Origin, S);
+relayed_routed({error, no_realm}, _Frame, Origin, S) ->
+    refused_relay(no_realm, Origin, S).
+
+relayed_delivered({ok, _Set} = Found, Frame, Origin, #state{peer_node_id = Station} = S) ->
+    deliver_overlay_frame_to(Found, Frame, #{sender => Origin, via => Station}, S),
+    S;
+relayed_delivered(error, _Frame, Origin, S) ->
+    refused_relay(no_subscriber, Origin, S).
+
+%% The realm an overlay frame is routed by.
+overlay_realm(#{frame_type := plumtree_gossip} = Frame) -> macula_frame:claimed_publication_realm(Frame);
+overlay_realm(#{realm := Realm}) -> {ok, Realm};
+overlay_realm(_Frame) -> {error, no_realm}.
 
 %% A relayed payload is taken only when it is exactly one frame. A payload
 %% shorter than its length header, one that does not decode, and one with
@@ -2223,15 +2294,16 @@ decode_refusal({invalid_frame, _Type, _Field}) -> invalid_frame;
 decode_refusal(Kind) when Kind =:= frame_too_large; Kind =:= too_many_elements -> Kind;
 decode_refusal(_BadFrame) -> bad_frame.
 
-%% A relayed frame of an overlay type D17 leaves unsigned is taken as it is;
-%% a frame of any other type is not taken.
+%% A relayed frame of a type `macula_frame:relayed_without_signature/1'
+%% names is taken as it is; a frame of any other type is not taken.
 relayed(true, Inner) -> {ok, Inner};
 relayed(false, _Inner) -> not_overlay.
 
-%% A relayed frame taken is delivered with `Origin' as its sender. A frame of
-%% any other type is dropped and counted as `not_overlay'.
+%% A relayed frame taken is routed by its realm, with `Origin' as its
+%% sender (`relayed_routed/4'). A frame of any other type is dropped and
+%% counted as `not_overlay'.
 on_relayed_overlay_frame({ok, Inner}, Origin, S) ->
-    deliver_overlay_frame_from(Origin, Inner, S);
+    relayed_routed(overlay_realm(Inner), Inner, Origin, S);
 on_relayed_overlay_frame(not_overlay, Origin, S) ->
     refused_relay(not_overlay, Origin, S).
 
@@ -2248,11 +2320,46 @@ logged_refused_relay({report, Count, Report}, Kind, Origin) ->
 logged_refused_relay({quiet, Report}, _Kind, _Origin) ->
     Report.
 
-deliver_overlay_frame_to(error, _Frame, _Sender, _S) ->
+%% A consumer's report of a refused overlay frame (`overlay_frame_refused/3')
+%% reaches the connection only for a kind `macula_frame:charged_refusal/1'
+%% classifies, and only for a frame that provably came from the link's
+%% current peer. Every other report is counted on the link, under the kind's
+%% name, or as unknown_refusal for a kind no rule classifies.
+overlay_refusal(unclassified, Meta, _Kind, S) ->
+    refused_relay(unknown_refusal, reported_sender(Meta), S);
+overlay_refusal(_Classified, Meta, Kind, S) ->
+    reported_refusal(from_current_peer(Meta, S), Meta, Kind, S).
+
+reported_refusal(true, _Meta, Kind, S) ->
+    connection_refused(Kind, S);
+reported_refusal(false, Meta, Kind, S) ->
+    refused_relay(refusal_name(Kind), reported_sender(Meta), S).
+
+%% A frame provably came from the current peer when its Meta has no via and
+%% names that peer as sender, while the link has a connection.
+from_current_peer(#{sender := Peer} = Meta, #state{peer_pid = Conn, peer_node_id = Peer}) ->
+    is_pid(Conn) andalso not is_map_key(via, Meta);
+from_current_peer(_Meta, _S) ->
+    false.
+
+refusal_name({Name, _Amount}) -> Name;
+refusal_name(Name) -> Name.
+
+reported_sender(#{sender := Sender}) -> Sender;
+reported_sender(_Meta) -> undefined.
+
+%% A refusal of a frame from the connected peer goes to its connection,
+%% which counts it and charges it as `macula_frame:charged_refusal/1' says.
+connection_refused(Kind, #state{peer_pid = Conn} = S) when is_pid(Conn) ->
+    ok = macula_peering:object_refused(Conn, Kind),
+    S;
+connection_refused(_Kind, S) ->
+    S.
+
+deliver_overlay_frame_to(error, _Frame, _Meta, _S) ->
     ok;
-deliver_overlay_frame_to({ok, Set}, Frame, Sender,
+deliver_overlay_frame_to({ok, Set}, Frame, Meta,
                          #state{overlay_subscriptions = Subs}) ->
-    Meta = #{sender => Sender},
     sets:fold(fun(SubRef, _) ->
         fan_overlay_frame(maps:find(SubRef, Subs), SubRef, Frame, Meta)
     end, ok, Set).

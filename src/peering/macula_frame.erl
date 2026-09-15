@@ -48,7 +48,7 @@
 
     %% Constructors — CALL (Part 6 §5)
     call/2, result/2, provider_error/2, relay_error/2,
-    verify_request/2, verify_reply/3, verify_relay_error/4, claimed_reply_ids/1,
+    verify_request/2, verify_reply/3, verify_relay_error/4, claimed_reply_ids/1, claimed_publication_realm/1,
 
     %% Constructors — HyParView (Part 3 §7.1)
     hyparview_join/1, hyparview_forward_join/1, hyparview_neighbor/1,
@@ -79,7 +79,7 @@
     %% Constructors — Streaming RPC (Part 6 §5.6)
     stream_open/2, open_stream/1, provider_stream/3, caller_stream/3, stream_bytes/2, written_bytes/1,
     parse_for_relay/2, relayed_bytes/1,
-    verify_provider_stream/3, verify_caller_stream/3, charged_refusal/1,
+    verify_provider_stream/3, verify_caller_stream/3, charged_refusal/1, refusal_charge/1,
 
     %% Constructors — Content transfer (Part 6 §9)
     want/1, have/1, block/1,
@@ -1225,6 +1225,27 @@ claimed_ids({ok, #{frame_type := Type, request_id := RequestId, request_hash := 
 claimed_ids(_NoIds, _Type) ->
     {error, malformed_frame}.
 
+%% @doc The realm a GOSSIP's publication names, read without verifying it. A GOSSIP names its realm only inside its
+%% signed publication, so this is the key a station link routes one to its realm's overlay subscribers by, and nothing
+%% more: verify_publication/3 decides whether the publication is genuine and for that realm. The frame's fields and the
+%% signed object's shape are checked as verify_publication/3 checks them, and the tbs is read with the same strict
+%% decoding, within the decoder's element budget, and the same field table, so a realm of another length never comes
+%% back. Anything else is no_realm: a tbs that does not decode or names no realm, and any frame that is not a GOSSIP.
+-spec claimed_publication_realm(frame()) -> {ok, <<_:256>>} | {error, no_realm}.
+claimed_publication_realm(#{frame_type := plumtree_gossip, publication := Object} = Frame) ->
+    claimed_realm(only_fields(Frame, publication_frame_fields(plumtree_gossip)), Object);
+claimed_publication_realm(_Frame) ->
+    {error, no_realm}.
+
+claimed_realm(true, #{key := Key, tbs := Tbs, signature := Signature} = Object)
+  when map_size(Object) =:= 3, is_binary(Key), is_binary(Tbs), is_binary(Signature) ->
+    realm_claimed(claimed_fields(macula_record_cbor:decode_strict(Tbs), publication_table()));
+claimed_realm(_OnlyFields, _Object) ->
+    {error, no_realm}.
+
+realm_claimed({ok, #{realm := Realm}}) -> {ok, Realm};
+realm_claimed(_NoRealm) -> {error, no_realm}.
+
 relay_error_table(Type) ->
     #{<<"frame_type">> => {frame_type, {enum, [Type]}},
       <<"alg">> => {alg, value},
@@ -1808,8 +1829,9 @@ verify_caller_stream(_Frame, _State, _Profile) ->
 %% @doc Whether a refusal of a signed object is charged to the connection that carried it
 %% (DESIGN_PQ_DHT_SLOTS_AND_BUDGET.md, 3.1). A refusal every verifier reaches from the same bytes is charged: a
 %% malformed shape, key, field or alg, a signature that does not verify, or a signer that is not its key. One that
-%% depends on what the receiver holds is not: a sequence number, a stream that has ended, or a match with the
-%% request or its target. A neighbour's HyParView placements past its allowance, and a SHUFFLE_REPLY that
+%% depends on what the receiver holds is not: a sequence number, a stream that has ended, a match with the request or
+%% its target, or a subscriber on this node for the frame's realm. A neighbour's HyParView placements past its
+%% allowance, and a SHUFFLE_REPLY that
 %% answers no SHUFFLE, are charged. A freshness refusal is charged only when it is more than 10 minutes past the
 %% moment its rule starts refusing. A Plumtree neighbour's IHAVE past its open entries, a GRAFT it leaves
 %% unanswered, and a publication for another realm are charged. A Plumtree frame from a sender outside the receiver's
@@ -1818,23 +1840,37 @@ verify_caller_stream(_Frame, _State, _Profile) ->
 -spec charged_refusal(malformed_frame | signature_invalid | key_id_mismatch | seq_mismatch | stream_ended
                       | request_mismatch | not_the_target | placement_allowance | unsolicited_shuffle_reply
                       | {expired, pos_integer()} | {not_yet_valid, pos_integer()} | ihave_allowance
-                      | graft_unanswered | wrong_realm | not_a_peer) ->
+                      | graft_unanswered | wrong_realm | not_a_peer | no_subscriber) ->
         boolean().
-charged_refusal(malformed_frame) -> true;
-charged_refusal(signature_invalid) -> true;
-charged_refusal(key_id_mismatch) -> true;
-charged_refusal(seq_mismatch) -> false;
-charged_refusal(stream_ended) -> false;
-charged_refusal(request_mismatch) -> false;
-charged_refusal(not_the_target) -> false;
-charged_refusal(placement_allowance) -> true;
-charged_refusal(unsolicited_shuffle_reply) -> true;
-charged_refusal({expired, PastMs}) -> PastMs > ?FRESHNESS_CHARGE_AFTER_MS;
-charged_refusal({not_yet_valid, AheadMs}) -> AheadMs > ?FRESHNESS_CHARGE_AFTER_MS;
-charged_refusal(ihave_allowance) -> true;
-charged_refusal(graft_unanswered) -> true;
-charged_refusal(wrong_realm) -> true;
-charged_refusal(not_a_peer) -> false.
+charged_refusal(Kind) ->
+    is_charged(refusal_charge(Kind)).
+
+is_charged(charged) -> true;
+is_charged(uncharged) -> false.
+
+%% @doc charged_refusal/1 over any term, for a caller that must not raise on a kind it was handed: charged or uncharged
+%% for a kind charged_refusal/1 classifies, and unclassified for any other term.
+-spec refusal_charge(term()) -> charged | uncharged | unclassified.
+refusal_charge(malformed_frame) -> charged;
+refusal_charge(signature_invalid) -> charged;
+refusal_charge(key_id_mismatch) -> charged;
+refusal_charge(seq_mismatch) -> uncharged;
+refusal_charge(stream_ended) -> uncharged;
+refusal_charge(request_mismatch) -> uncharged;
+refusal_charge(not_the_target) -> uncharged;
+refusal_charge(placement_allowance) -> charged;
+refusal_charge(unsolicited_shuffle_reply) -> charged;
+refusal_charge({expired, PastMs}) when is_integer(PastMs) -> freshness_charge(PastMs);
+refusal_charge({not_yet_valid, AheadMs}) when is_integer(AheadMs) -> freshness_charge(AheadMs);
+refusal_charge(ihave_allowance) -> charged;
+refusal_charge(graft_unanswered) -> charged;
+refusal_charge(wrong_realm) -> charged;
+refusal_charge(not_a_peer) -> uncharged;
+refusal_charge(no_subscriber) -> uncharged;
+refusal_charge(_Unclassified) -> unclassified.
+
+freshness_charge(Ms) when Ms > ?FRESHNESS_CHARGE_AFTER_MS -> charged;
+freshness_charge(_Ms) -> uncharged.
 
 caller_frame(false, _Side, _Object, _Type, _State, _Profile) ->
     {error, malformed_frame};
@@ -1982,13 +2018,16 @@ validate_manifest_payload(M) when is_map(M) -> ok.
 control_frame(FrameType) -> lists:member(FrameType, ?NEIGHBOUR_SIGNED).
 
 %% @doc Whether a relayed frame of this type is taken without a frame signature: every HyParView frame, JOIN,
-%% FORWARD_JOIN, NEIGHBOR, DISCONNECT, SHUFFLE and SHUFFLE_REPLY, which D17 leaves unsigned in pq_pure. A station
-%% relays them from a connection it authenticated, so a receiver takes the relay's origin as their sender. Every other
-%% relayed type keeps its own verification.
+%% FORWARD_JOIN, NEIGHBOR, DISCONNECT, SHUFFLE and SHUFFLE_REPLY, and the Plumtree IHAVE, GRAFT and PRUNE, which D17
+%% leaves unsigned in pq_pure, and the Plumtree GOSSIP, whose publication is signed end to end. A station relays them
+%% from a connection it authenticated, so a receiver takes the relay's origin as their sender. A GOSSIP's publication
+%% stays unverified until verify_publication/3 accepts it, and its subscriber verifies it before acting on it. Every
+%% other relayed type keeps its own verification.
 -spec relayed_without_signature(atom()) -> boolean().
 relayed_without_signature(FrameType) ->
     lists:member(FrameType, [hyparview_join, hyparview_forward_join, hyparview_neighbor, hyparview_disconnect,
-                             hyparview_shuffle, hyparview_shuffle_reply]).
+                             hyparview_shuffle, hyparview_shuffle_reply, plumtree_ihave, plumtree_graft,
+                             plumtree_prune, plumtree_gossip]).
 
 %% @doc Whether a profile neighbour-signs a frame type.
 -spec neighbour_signed(macula_crypto_profile:profile(), frame_type()) -> boolean().
