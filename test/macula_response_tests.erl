@@ -65,6 +65,7 @@ response_test_() ->
                  fun crash_propagates_to_caller/0,
                  fun advertise_failure_is_surfaced/0,
                  fun advertise_direct_forwards_opts_to_advertise/0,
+                 fun advertise_direct_with_a_removed_trust_option_registers_and_publishes_nothing/0,
                  fun reuse_sup_resends_advertise_without_a_new_supervisor/0,
                  fun reuse_sup_with_a_dead_pid_starts_a_fresh_supervisor/0,
                  fun without_an_advertise_function_it_advertises_through_macula/0,
@@ -126,6 +127,21 @@ advertise_direct_forwards_opts_to_advertise() ->
                     not_published
                 end,
     ?assertEqual(#{announce => false}, Published).
+
+%% cert_chain is gone in 11.0.0. advertise_direct/7 refuses it by name before it
+%% registers the handler, so no handler is left registered with no advertisement
+%% to reach it; authorization replaces it.
+advertise_direct_with_a_removed_trust_option_registers_and_publishes_nothing() ->
+    Test = self(),
+    PublishAdvertisement = fun(_Pool, _Realm, _Procedure, _Identity, _Opts) ->
+                                   Test ! published,
+                                   ok
+                           end,
+    Opts = (functions(Test))#{publish_advertisement => PublishAdvertisement, cert_chain => <<"pem">>},
+    ?assertEqual({error, {removed_option, cert_chain}},
+                 macula_response:advertise_direct(pool, ?REALM, ?PROCEDURE, ?MODULE, [],
+                                                  macula_identity:generate(), Opts)),
+    ?assertEqual(none, receive {advertised, _, _} -> advertised; published -> published after 0 -> none end).
 
 replies_and_publishes_lifecycle() ->
     {ok, _Sup} = advertise(functions(self())),

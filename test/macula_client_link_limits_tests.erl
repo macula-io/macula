@@ -164,7 +164,7 @@ a_different_port_or_host_is_another_peer_test() ->
 %%---------------------------------------------------------------------
 
 call_station(Pool, Seed) ->
-    macula_client:call_station(Pool, Seed, ?REALM, <<"x.y">>, #{}, ?DIAL_MS).
+    macula_client:call_station(Pool, Seed, <<2:256>>, ?REALM, <<"x.y">>, #{}, ?DIAL_MS).
 
 seed(Port) ->
     #{host => <<"127.0.0.1">>, port => Port, expected_node_id => <<Port:256>>}.

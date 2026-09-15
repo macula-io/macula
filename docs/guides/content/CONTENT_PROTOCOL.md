@@ -203,7 +203,7 @@ peer relay — for most topologies that is enough. When it is not (a
 partial-mesh pair with no mutual peer, or you want to route around a specific
 host deliberately), dial an announced host **directly** with
 `get_content_station/4,5` — the content-transfer counterpart to
-[direct-dial RPC](../rpc/RPC_GUIDE.md)'s `call_station/6,7`:
+[direct-dial RPC](../rpc/RPC_GUIDE.md)'s `call_station/7,8`:
 
 ```erlang
 {ok, [#{announcer_node := Node, endpoint := Url} | _]} =

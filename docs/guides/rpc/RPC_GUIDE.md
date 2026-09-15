@@ -20,11 +20,13 @@ by name and gets a result back — `macula_response` and `macula_request`, an
 addressable pid you can monitor and cancel, with `rpc.*_v1` mesh facts
 around every call.
 
-Calling means "ask any of my pool's connected stations to handle this" —
-whichever one answers is responsible for finding a handler, locally or by
-forwarding to a peer. **Direct-dial** — resolving a specific provider's
-station in the DHT and dialing it in one hop, bypassing your own pool's
-seeds entirely — is `macula_request:start_link_direct/6,7,8`, below.
+Calling means resolving the procedure's provider and calling it in one hop.
+The provider's signed `procedure_advertisement` in the DHT names its node_id
+and the station it is connected to, and the call goes to that provider
+through that station, bypassing your own pool's seeds entirely. A provider
+is callable once its advertisement is published.
+`macula_request:start_link_direct/6,7,8`, below, also takes options for that
+resolution, such as the realm trust an org's procedures are checked against.
 
 ---
 
@@ -91,21 +93,25 @@ supervision tree if you want to enumerate or cancel in-flight requests via
 
 ### Direct-dial: `start_link_direct` / `advertise_direct`
 
-The direct-dial counterparts to `start_link/6,7` and `advertise/5,6` above —
-same callback modules, same behaviour, but resolving and dialing the
-provider's station directly instead of routing through the pool's existing
-links. See [RPC_PROTOCOL.md](RPC_PROTOCOL.md) for the full trust-model
-writeup (signature verification, station-endpoint resolution, why the TLS
-cert itself stays unpinned).
+The counterparts to `start_link/6,7` and `advertise/5,6` above, with the
+same callback modules and the same behaviour. `start_link/6,7` already
+resolves and dials the provider's station directly, through `macula:call/5`;
+`start_link_direct` also takes options for that resolution.
+`advertise_direct` publishes the advertisement a caller resolves. See
+[RPC_PROTOCOL.md](RPC_PROTOCOL.md) for the full trust-model writeup
+(signature verification, station-endpoint resolution, why the TLS cert
+itself stays unpinned).
 
 Provider — `advertise_direct/6,7` does everything `advertise/5,6` does, and
 additionally publishes a signed `procedure_advertisement` naming this pool's
 connected station as the server, so a direct-dial consumer can find it:
 
 ```erlang
-Identity = macula_identity:generate(),  %% reuse the same one across re-advertises
+%% NodeIdentity must be the node identity key this pool was started with: a
+%% caller targets the node_id that signed the advertisement, and the station
+%% knows this pool's connection by that node_id.
 {ok, _Sup} = macula_response:advertise_direct(Pool, Realm, Procedure,
-                                              math_service, [], Identity).
+                                              math_service, [], NodeIdentity).
 ```
 
 Consumer — `start_link_direct/6,7,8` resolves the advertisement, resolves
@@ -124,14 +130,17 @@ that the call itself failed. Requires the provider to have advertised via
 `advertise_direct/6,7`, not plain `advertise/5,6` — a plain advertise
 publishes no discoverable record.
 
-A fourth, **opt-in** check exists for managed realms: pass
-`verify_cert_chain => {RealmCaPem, Org}` to
-`macula_request:start_link_direct/8` (or `cert_chain => ChainPem` to
-`macula_response:advertise_direct/7` on the provider side) to additionally
-require the advertisement's embedded X.509 service-cert chain to verify to
-the realm CA — proving the *advertiser*, not just the station it names, is
-an org/realm-authorized identity. Unmanaged realms have no realm CA to check
-against, so this stays opt-in rather than mandatory.
+For a procedure with an org namespace, resolution also checks the provider's
+authorization against the realm trust you hold. Pass it in
+`macula_request:start_link_direct/8`'s options as
+`realm_trust => #{realm_key => RealmKey}`, for an org directory with a
+procedure delegation, or `realm_trust => #{realm_ca => RealmCaPem}`, for a
+certificate chain. The provider publishes its authorization with
+`macula_response:advertise_direct/7`'s `authorization` option. Without the
+realm trust its authorization needs, an advertisement for an org namespaced
+procedure is never trusted. The 10.x options `verify_cert_chain` and
+`cert_chain` are refused with `{error, {removed_option, Key}}`. See
+[RPC_PROTOCOL.md](RPC_PROTOCOL.md#what-resolution-does-if-you-need-it-raw).
 
 ---
 
@@ -145,13 +154,13 @@ receive it:
 handle_reply({ok, Value}, Parent) ->
     Parent ! {add_result, Value},
     {stop, normal, Parent};
-handle_reply({error, {call_error, Code, Name}}, Parent) ->
-    %% wire-level BOLT#4 error — see RPC_PROTOCOL.md's Errors section
-    maybe_retry(Code, Name),
+handle_reply({error, {call_error, Code, Detail}}, Parent) ->
+    %% refused with a code: see RPC_PROTOCOL.md's Errors section
+    logger:warning("RPC refused: ~p ~p", [Code, Detail]),
     {stop, normal, Parent};
 handle_reply({error, Detail}, Parent) ->
-    %% the handler itself returned {error, Detail}
-    logger:warning("RPC refused: ~p", [Detail]),
+    %% the handler returned {error, Detail}, or the call failed
+    logger:warning("RPC failed: ~p", [Detail]),
     {stop, normal, Parent}.
 ```
 
@@ -161,10 +170,10 @@ handler's own text when it returned a binary or a printable charlist, up to
 `<<"refused">>`. A handler's error text is sent to its caller as it is, so a
 provider returns only text meant for the caller.
 
-`{error, {call_error, Code, Name}}` carries a wire-level BOLT#4 code, telling
-you whether the same path is worth retrying after backoff, or whether you
-need a fresh resolve. See [RPC_PROTOCOL.md](RPC_PROTOCOL.md#errors) for the
-full code table and retry semantics.
+`{error, {call_error, Code, Detail}}` is a refusal with a code. It is either
+the provider's own code, a binary, or `unknown_next_peer` from the station
+when it holds no connection to the provider. See
+[RPC_PROTOCOL.md](RPC_PROTOCOL.md#errors) for every error a call returns.
 
 ---
 
@@ -178,8 +187,8 @@ never inline strings.
 
 ## See also
 
-- [RPC_PROTOCOL.md](RPC_PROTOCOL.md) — the raw primitives underneath, full
-  error code table, direct-dial trust-model internals.
+- [RPC_PROTOCOL.md](RPC_PROTOCOL.md) — the raw primitives underneath, every
+  error a call returns, direct-dial trust-model internals.
 - [Streaming Guide](../streaming/STREAMING_GUIDE.md) — when one request/response isn't
   enough: a live feed, an upload, a duplex session.
 - [Authorization Guide](../shared/AUTHORIZATION_GUIDE.md) — gating a procedure with

@@ -122,7 +122,7 @@ tampered(#{tbs := <<Head:20/binary, Byte, Tail/binary>>} = Signed) ->
 %% The pool's RPC answers Reply, and tells the test what was called with what.
 replying(Reply) ->
     Test = self(),
-    ok = meck:expect(macula_client, call,
+    ok = meck:expect(macula_client, call_linked_station,
                      fun(_Pool, _Realm, Procedure, Payload, _TimeoutMs) ->
                          Test ! {called, Procedure, Payload},
                          Reply

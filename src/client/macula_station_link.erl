@@ -23,10 +23,11 @@
 %% exposes three surfaces over the same peering pipe:
 %%
 %% <ul>
-%%   <li><strong>Request/response</strong> — `call/5' sends a CALL
-%%       frame and matches inbound RESULT/ERROR frames against
-%%       pending callers using the 16-byte CALL id. Convenience
-%%       wrappers cover `_dht.put_record', `_dht.find_record', and
+%%   <li><strong>Request/response</strong> — `call/6' sends a signed
+%%       CALL to a target, the connected station or a provider's
+%%       node_id, and completes the pending caller when a reply
+%%       verifies against that request. Convenience wrappers call the
+%%       station for `_dht.put_record', `_dht.find_record', and
 %%       `_dht.find_records_by_type'.</li>
 %%   <li><strong>Streaming subscribe</strong> — `subscribe/4' sends
 %%       a SUBSCRIBE frame and registers a delivery pid. Inbound
@@ -56,11 +57,13 @@
 %%       `macula_peering:connect/1', store the worker pid.</li>
 %%   <li>Peering handshake completes → `{macula_peering, connected,
 %%       Pid, PeerNodeId}' arrives → state moves to `connected'.</li>
-%%   <li>`call/5' from caller → build CALL frame, sign happens inside
-%%       peering, store `{from, deadline_timer}` keyed by CALL id, send
-%%       frame via `macula_peering:send_frame/2'.</li>
-%%   <li>RESULT or ERROR arrives as `{macula_peering, frame, Pid, Frame}'
-%%       → look up `call_id', cancel timer, reply to caller.</li>
+%%   <li>`call/6' from caller → sign the CALL with the link's key, keep
+%%       the caller, its deadline timer and the request under the
+%%       request_id, send the frame via `macula_peering:send_frame/2'.</li>
+%%   <li>A reply arrives as `{macula_peering, frame, Pid, Frame}' → look
+%%       up its request_id, verify it against the held request, cancel
+%%       the timer, reply to the caller. A reply that does not verify is
+%%       counted and leaves the call pending.</li>
 %%   <li>`{macula_peering, disconnected, Pid, Reason}' → fail all
 %%       pending calls with `{error, {disconnected, Reason}}', notify
 %%       all subscribers via `macula_event_gone', stop the client
@@ -70,13 +73,13 @@
 %% == Call reply taxonomy ==
 %%
 %% <table>
-%%   <tr><th>Inbound frame</th><th>`call/5' returns</th></tr>
-%%   <tr><td>RESULT(payload=`{error, Reason}')</td><td>`{ok, {error, Reason}}'</td></tr>
-%%   <tr><td>RESULT(payload=Value)</td><td>`{ok, Value}'</td></tr>
-%%   <tr><td>ERROR(code=0x0F, detail=D)</td><td>`{error, D}' — the handler's own reason</td></tr>
-%%   <tr><td>ERROR(code=C, name=N)</td><td>`{error, {call_error, C, N}}'</td></tr>
+%%   <tr><th>Verified reply</th><th>`call/6' returns</th></tr>
+%%   <tr><td>RESULT(payload=Value)</td><td>`{ok, Value}', its text as `{text, Bin}'</td></tr>
+%%   <tr><td>provider ERROR(code=`handler_error', detail=D)</td><td>`{error, D}' — the handler's own reason</td></tr>
+%%   <tr><td>provider ERROR(code=C, detail=D)</td><td>`{error, {call_error, C, D}}', C and D binaries, D `undefined' when absent</td></tr>
+%%   <tr><td>station ERROR, no such next peer</td><td>`{error, {call_error, unknown_next_peer, undefined}}'</td></tr>
 %%   <tr><td>(deadline elapses)</td><td>`{error, timeout}'</td></tr>
-%%   <tr><td>(connection drops)</td><td>`{error, {disconnected, Reason}}'</td></tr>
+%%   <tr><td>(connection drops)</td><td>`{error, {disconnected, Reason}}' or `{error, {peering_exit, Reason}}'</td></tr>
 %%   <tr><td>(not connected yet)</td><td>`{error, not_connected}', not sent</td></tr>
 %%   <tr><td>(frame refused before sending)</td><td>`{error, {refused, Reason}}', not sent</td></tr>
 %% </table>
@@ -88,8 +91,8 @@
 -export([
     start_link/1,
     stop/1,
-    call/5,
     call/6,
+    call/7,
     publish/4,
     publish/5,
     put_record/2, put_record/3,
@@ -202,6 +205,12 @@
 
 -define(DHT_REALM, <<0:256>>).
 -define(DEFAULT_DEADLINE_MS, 5_000).
+%% The longest a call waits: the deadline window a provider accepts, ten
+%% minutes past its clock.
+-define(MAX_CALL_TIMEOUT_MS, 600_000).
+%% The code a provider's ERROR carries for a handler that refused, with the
+%% handler's text as its detail.
+-define(HANDLER_ERROR_CODE, <<"handler_error">>).
 -define(CONNECT_RETRY_BACKOFF_MS, 1_000).
 
 %% App-level liveness probe. Sends a tiny CALL (`_macula.ping' on the
@@ -259,7 +268,7 @@
     %% peer's node id, set on `connected'.
     peer_node_id     :: <<_:256>> | undefined,
     %% map of CALL id (16 bytes) -> {From, TimerRef}.
-    pending = #{}    :: #{<<_:128>> => {gen_server:from(), reference()}},
+    pending = #{}    :: #{<<_:128>> => {gen_server:from(), reference(), macula_frame:verified_request()}},
     %% Active topic subscriptions keyed by SubRef returned to the
     %% subscriber. The reverse `topic_index' lets inbound EVENT
     %% frames fan out to all SubRefs subscribed to a given
@@ -416,7 +425,7 @@
 %% @doc Start a station-client connected to `seed'.
 %% Returns once the gen_server is alive; the QUIC handshake completes
 %% asynchronously. Use `is_connected/1' to poll readiness or just
-%% issue `call/5' (which blocks the caller until ready or until its
+%% issue `call/6' (which blocks the caller until ready or until its
 %% timeout elapses).
 -spec start_link(opts()) -> {ok, pid()} | {error, term()}.
 start_link(Opts) when is_map(Opts) ->
@@ -426,31 +435,39 @@ start_link(Opts) when is_map(Opts) ->
 stop(Pid) ->
     gen_server:stop(Pid).
 
-%% @doc Issue a CALL frame and block until the station replies, the
-%% deadline elapses, or the connection drops.
+%% @doc Issue a CALL to `Target' and block until its verified reply, the
+%% deadline, or the connection dropping.
 %%
-%% `Realm' is the 32-byte realm id stamped on the outbound CALL frame.
-%% Stations are realm-agnostic infrastructure; the realm is carried
-%% per-frame so a single link can multiplex many realms.
+%% `Target' is `station', the station this link is connected to, for the
+%% procedures a station serves itself such as `_dht.*', or a provider's
+%% node_id. `Realm' is the 32-byte realm id and `Procedure' the procedure
+%% name. `Payload' is any term the wire carries (typically a map).
+%% `TimeoutMs' is from 1 ms to ten minutes, the deadline window a provider
+%% accepts; anything else raises `function_clause' in the caller.
 %%
-%% `Procedure' is the V2 procedure name, e.g.
-%% `&lt;&lt;"_dht.find_records_by_type"&gt;&gt;'. `Payload' is any term that
-%% `macula_frame:call/1' accepts (typically a map).
--spec call(pid(), <<_:256>>, binary(), term(), pos_integer()) ->
+%% The result is `{ok, Payload}' for a RESULT; `{error, Text}' for a
+%% provider's `handler_error' carrying its detail text; `{error, {call_error,
+%% Code, Detail}}' for any other provider error, `Code' a binary and `Detail'
+%% a binary or `undefined'; `{error, {call_error, unknown_next_peer,
+%% undefined}}' when the station reports it holds no connection to the
+%% target; or `{error, Reason}' for a call refused, timed out or lost with
+%% the connection (see `not_sent/1').
+-spec call(pid(), station | <<_:256>>, <<_:256>>, binary(), term(), 1..600_000) ->
     {ok, term()} | {error, term()}.
-call(Pid, Realm, Procedure, Payload, TimeoutMs) ->
-    call(Pid, Realm, Procedure, Payload, TimeoutMs, <<>>).
+call(Pid, Target, Realm, Procedure, Payload, TimeoutMs) ->
+    call(Pid, Target, Realm, Procedure, Payload, TimeoutMs, <<>>).
 
-%% @doc As `call/5', presenting a capability token (UCAN) to a gated
-%% provider. Empty token = none. Slice 7b.
--spec call(pid(), <<_:256>>, binary(), term(), pos_integer(), binary()) ->
+%% @doc As `call/6', presenting a capability token to a gated provider. An
+%% empty token is none.
+-spec call(pid(), station | <<_:256>>, <<_:256>>, binary(), term(), 1..600_000, binary()) ->
     {ok, term()} | {error, term()}.
-call(Pid, Realm, Procedure, Payload, TimeoutMs, UcanToken)
+call(Pid, Target, Realm, Procedure, Payload, TimeoutMs, Token)
   when is_pid(Pid),
+       (Target =:= station orelse (is_binary(Target) andalso byte_size(Target) =:= 32)),
        is_binary(Realm), byte_size(Realm) =:= 32,
        is_binary(Procedure),
-       is_integer(TimeoutMs), TimeoutMs > 0,
-       is_binary(UcanToken) ->
+       is_integer(TimeoutMs), TimeoutMs > 0, TimeoutMs =< ?MAX_CALL_TIMEOUT_MS,
+       is_binary(Token) ->
     %% The deadline is the caller's: a link busy past it doesn't send the
     %% CALL at all (see call_in_time/4). gen_server timeout = TimeoutMs +
     %% 500 to give the server time to report a clean `{error, timeout}'
@@ -459,7 +476,7 @@ call(Pid, Realm, Procedure, Payload, TimeoutMs, UcanToken)
     GenTimeout = TimeoutMs + 500,
     try
         gen_server:call(Pid,
-                        {call, Realm, Procedure, Payload, DeadlineMs, UcanToken},
+                        {call, Target, Realm, Procedure, Payload, DeadlineMs, Token},
                         GenTimeout)
     catch
         %% try/catch retained: collapses the three distinct gen_server
@@ -471,11 +488,13 @@ call(Pid, Realm, Procedure, Payload, TimeoutMs, UcanToken)
         exit:{normal, _}       -> {error, gone}
     end.
 
-%% @doc Whether an error from `call/5,6' means the CALL never went out, so
+%% @doc Whether an error from `call/6,7' means the CALL never went out, so
 %% the call can be tried on another link without a provider running it
 %% twice: the link was not connected yet, there was no link process, or
-%% the link refused the frame before sending it. Any other error, a
-%% timeout included, may follow a CALL that reached its provider.
+%% the link refused the call before sending it. Any other error, a timeout
+%% or a station's `unknown_next_peer' included, may follow a CALL that
+%% reached its provider. It matches only terms the link builds; a
+%% provider's code or detail is a binary and never matches.
 -spec not_sent({error, term()}) -> boolean().
 not_sent({error, not_connected}) -> true;
 not_sent({error, noproc}) -> true;
@@ -485,7 +504,7 @@ not_sent({error, _Reason}) -> false.
 %% @doc Open a dedicated QUIC stream for a sequence of related unary
 %% CALLs — content transfer's one purpose so far (see
 %% PLAN_PER_STREAM_QUIC_ISOLATION.md Phase 2). NOT a general-purpose
-%% "any RPC can have its own stream" facility: `call/5,6' remains the
+%% "any RPC can have its own stream" facility: `call/6,7' remains the
 %% right choice for an ordinary one-off CALL, and this link's pool
 %% caller is expected to have already picked ONE link for the whole
 %% sequence (`macula_client:pick_connected_link/1') before opening a
@@ -598,7 +617,7 @@ put_record(Pid, Record) ->
 
 -spec put_record(pid(), map(), pos_integer()) -> ok | {error, term()}.
 put_record(Pid, Record, TimeoutMs) when is_pid(Pid), is_map(Record) ->
-    classify_put(call(Pid, ?DHT_REALM, <<"_dht.put_record">>,
+    classify_put(call(Pid, station, ?DHT_REALM,<<"_dht.put_record">>,
                       Record, TimeoutMs)).
 
 classify_put({ok, ok})       -> ok;
@@ -620,7 +639,7 @@ find_record(Pid, Key) ->
     {ok, map()} | {error, not_found | term()}.
 find_record(Pid, Key, TimeoutMs)
   when is_pid(Pid), is_binary(Key), byte_size(Key) =:= 32 ->
-    classify_find(call(Pid, ?DHT_REALM, <<"_dht.find_record">>,
+    classify_find(call(Pid, station, ?DHT_REALM,<<"_dht.find_record">>,
                        #{key => Key}, TimeoutMs)).
 
 classify_find({ok, #{type := _, payload := _, signature := _} = R}) -> {ok, R};
@@ -640,7 +659,7 @@ find_records_by_type(Pid, Type) ->
     {ok, [map()]} | {error, term()}.
 find_records_by_type(Pid, Type, TimeoutMs)
   when is_integer(Type), Type >= 0, Type =< 255 ->
-    classify_records(call(Pid, ?DHT_REALM, <<"_dht.find_records_by_type">>,
+    classify_records(call(Pid, station, ?DHT_REALM,<<"_dht.find_records_by_type">>,
                           #{type => Type}, TimeoutMs)).
 
 classify_records({ok, Records}) when is_list(Records) -> {ok, Records};
@@ -1046,7 +1065,7 @@ started({ok, Seed, Key, Profile, Issuer}, Opts) ->
 app_env(Key, Default) ->
     application:get_env(macula, Key, Default).
 
-handle_call({call, _Realm, _Proc, _Payload, _DeadlineMs, _Ucan}, _From,
+handle_call({call, _Target, _Realm, _Proc, _Payload, _DeadlineMs, _Token}, _From,
             #state{peer_node_id = undefined} = S) ->
     %% Gate CALL on the full CONNECT/HELLO handshake (mirrors the
     %% `{publish, ...}' clause below). `peer_pid' is set the moment
@@ -1059,9 +1078,9 @@ handle_call({call, _Realm, _Proc, _Payload, _DeadlineMs, _Ucan}, _From,
     %% `{error, not_connected}' here lets the caller back off and
     %% retry once the handshake completes.
     {reply, {error, not_connected}, S};
-handle_call({call, Realm, Proc, Payload, DeadlineMs, Ucan}, From, S) ->
+handle_call({call, Target, Realm, Proc, Payload, DeadlineMs, Token}, From, S) ->
     call_in_time(DeadlineMs - erlang:system_time(millisecond),
-                 {Realm, Proc, Payload, DeadlineMs, Ucan}, From, S);
+                 {Target, Realm, Proc, Payload, DeadlineMs, Token}, From, S);
 
 handle_call(open_content_stream, _From, #state{peer_node_id = undefined} = S) ->
     {reply, {error, not_connected}, S};
@@ -1384,8 +1403,8 @@ handle_info({quic, send_failed, Stream, Reason},
     {noreply, teardown_content_stream_state(Stream, {error, {send_failed, Reason}},
                                             fun macula_quic:close_stream/1, S)};
 
-handle_info({call_timeout, CallId}, #state{pending = P} = S) ->
-    on_timeout(maps:take(CallId, P), S);
+handle_info({call_timeout, RequestId}, #state{pending = P} = S) ->
+    on_timeout(maps:take(RequestId, P), S);
 
 handle_info({content_call_timeout, Stream}, #state{content_pending = CP} = S) ->
     on_content_timeout(maps:take(Stream, CP), S);
@@ -1497,34 +1516,41 @@ publish_reply({error, _} = Refused, _Seq, S) ->
 
 %% A CALL the link reaches after its caller's deadline is not sent: the
 %% caller has already been told it timed out, and a provider must not run a
-%% call its caller gave up on. Otherwise the frame carries the caller's
+%% call its caller gave up on. Otherwise the request carries the caller's
 %% deadline, and the call waits for its reply until then.
 call_in_time(RemainingMs, _Call, _From, S) when RemainingMs =< 0 ->
     {reply, {error, timeout}, S};
-call_in_time(RemainingMs, {Realm, Proc, Payload, DeadlineMs, Ucan}, From,
-             #state{peer_pid = Pid, node_identity = Id, pending = P} = S) ->
-    CallId = crypto:strong_rand_bytes(16),
-    Frame = macula_frame:call(#{
-        call_id     => CallId,
-        procedure   => Proc,
-        realm       => Realm,
-        payload     => Payload,
-        deadline_ms => DeadlineMs,
-        caller      => node_id(Id),
-        ucan_token  => Ucan
-    }),
-    %% NOT `ok = send_frame(...)'. Since the frame is now checked before
-    %% the cast, an unsendable RPC payload comes back as an error, and a
-    %% hard match on `ok' would badmatch here and take this link's
-    %% gen_server down — turning a caller's bad argument into an outage
-    %% for every other caller on the link. Reply with the reason instead.
-    await_call_reply(macula_peering:send_frame(Pid, Frame),
-                     CallId, From, RemainingMs, P, S).
+call_in_time(RemainingMs, {_Target, _Realm, _Proc, Payload, _DeadlineMs, _Token} = Call, From, S) ->
+    call_sendable(macula_frame:check_payload(Payload), RemainingMs, Call, From, S).
 
-await_call_reply(ok, CallId, From, Tmo, Pending, S) ->
-    TRef = erlang:send_after(Tmo, self(), {call_timeout, CallId}),
-    {noreply, S#state{pending = Pending#{CallId => {From, TRef}}}};
-await_call_reply({error, Reason}, _CallId, _From, _Tmo, _Pending, S) ->
+%% A payload the wire cannot carry is refused before anything is built or
+%% signed, so the call never goes out. Otherwise the request is signed with
+%% the node identity key and kept as a verifier reads it, for its reply to be
+%% checked against.
+call_sendable({error, Unsendable}, _RemainingMs, _Call, _From, S) ->
+    {reply, {error, {refused, Unsendable}}, S};
+call_sendable(ok, RemainingMs, {Target, Realm, Proc, Payload, DeadlineMs, Token}, From,
+              #state{peer_pid = Pid, node_identity = Key, profile = Profile, pending = P} = S) ->
+    RequestId = crypto:strong_rand_bytes(16),
+    Frame = macula_frame:call(with_token(Token, #{request_id => RequestId, realm => Realm, procedure => Proc,
+                                                   target => target_node_id(Target, S), deadline => DeadlineMs,
+                                                   payload => Payload}), Key),
+    {ok, Request} = macula_frame:verify_request(Frame, Profile),
+    %% NOT `ok = send_frame(...)': a frame the peering refuses comes back as
+    %% an error, and a hard match would take this link down for every other
+    %% caller on it. Reply with the reason instead.
+    await_call_reply(macula_peering:send_frame(Pid, Frame), RequestId, Request, From, RemainingMs, P, S).
+
+target_node_id(station, #state{peer_node_id = Station}) -> Station;
+target_node_id(NodeId, _S) -> NodeId.
+
+with_token(<<>>, Spec) -> Spec;
+with_token(Token, Spec) -> Spec#{token => Token}.
+
+await_call_reply(ok, RequestId, Request, From, Tmo, Pending, S) ->
+    TRef = erlang:send_after(Tmo, self(), {call_timeout, RequestId}),
+    {noreply, S#state{pending = Pending#{RequestId => {From, TRef, Request}}}};
+await_call_reply({error, Reason}, _RequestId, _Request, _From, _Tmo, _Pending, S) ->
     {reply, {error, {refused, Reason}}, S}.
 
 -spec send_publish_frame(<<_:256>>, binary(), term(), non_neg_integer(),
@@ -1578,24 +1604,14 @@ after_connect_request({error, Reason}, S) ->
 
 %% A RESULT or provider ERROR, or a station's relay ERROR, on the control
 %% stream. The request it answers is found by the ids it claims, and the
-%% verifier against that request decides; only a verified answer to the
-%% outstanding probe clears it. Routes are one station long, so a relay
-%% error on a link is reported by the station it is connected to.
+%% verifier against that request decides; only a verified answer completes
+%% the pending call, or clears the probe, it names. Routes are one station
+%% long, so a relay error on a link is reported by the station it is
+%% connected to.
 on_frame(#{frame_type := Type, reply := _} = Frame, S) when Type =:= result; Type =:= error ->
     on_claimed_reply(macula_frame:claimed_reply_ids(Frame), Frame, S);
 on_frame(#{frame_type := error, relay_error := _} = Frame, S) ->
     on_claimed_reply(macula_frame:claimed_reply_ids(Frame), Frame, S);
-%% RESULT / ERROR. Acted on only once the frame's signature verifies
-%% against the identity it names as its signer (`responded_by' on a
-%% RESULT, `reported_by' on an ERROR); see `on_reply/4'.
-on_frame(#{frame_type := result, call_id := CallId, payload := Payload} = Frame, S) ->
-    on_reply(verify_signed_by(Frame, reply_signer(Frame)), CallId,
-             {ok, Payload}, S);
-on_frame(#{frame_type := error, call_id := CallId} = Frame, S) ->
-    Failure = call_failure(maps:get(code, Frame, 0),
-                           maps:get(name, Frame, undefined),
-                           maps:get(detail, Frame, undefined)),
-    on_reply(verify_signed_by(Frame, reply_signer(Frame)), CallId, Failure, S);
 %% EVENT — pubsub delivery. Fan out to every subscriber whose
 %% (realm, topic) matches. Stations may push EVENTs without a prior
 %% SUBSCRIBE on this connection (e.g. wildcard / catalog channels);
@@ -1645,36 +1661,26 @@ on_frame(#{realm := Realm} = Frame, S) ->
 on_frame(_Frame, S) ->
     S.
 
-deliver_pending(error, _Reply, S) ->
-    %% Unknown call_id (race with timeout, or duplicate reply).
-    S;
-deliver_pending({{From, TRef}, NewP}, Reply, S) ->
-    _ = erlang:cancel_timer(TRef),
-    gen_server:reply(From, Reply),
-    S#state{pending = NewP}.
-
-%% A RESULT or ERROR whose signature does not verify against the identity
-%% it names is dropped before it can complete a pending call, so the call
-%% stays pending for the genuine reply.
-on_reply({ok, _Verified}, CallId, Reply, #state{pending = P} = S) ->
-    deliver_pending(maps:take(CallId, P), Reply, S);
-on_reply({error, Why}, CallId, _Reply, S) ->
-    logger:warning("[macula_station_link] dropped reply whose signature does"
-                   " not verify against its signer (~p) call_id=~s",
-                   [Why, hex_prefix(CallId)]),
-    S.
-
 on_claimed_reply({ok, #{request_id := RequestId}}, Frame, S) ->
     answered(held_request(RequestId, S), Frame, S);
 on_claimed_reply({error, Refusal}, _Frame, S) ->
     refused_reply(Refusal, S).
 
-%% The request a claimed request_id names: the outstanding probe's, or none the link holds.
-held_request(RequestId, #state{liveness_outstanding = {RequestId, Request}}) -> {probe, Request};
-held_request(_RequestId, _S) -> unknown_request.
+%% The request a claimed request_id names: the outstanding probe's, a pending call's, or none the link holds.
+held_request(RequestId, #state{liveness_outstanding = {RequestId, Request}}) ->
+    {probe, Request};
+held_request(RequestId, #state{pending = Pending}) ->
+    pending_request(RequestId, maps:find(RequestId, Pending)).
+
+pending_request(RequestId, {ok, {From, TRef, Request}}) ->
+    {call, RequestId, From, TRef, Request};
+pending_request(_RequestId, error) ->
+    unknown_request.
 
 answered({probe, Request}, Frame, S) ->
     probe_answered(verified_answer(Frame, Request, S), S);
+answered({call, RequestId, From, TRef, Request}, Frame, S) ->
+    call_answered(verified_answer(Frame, Request, S), RequestId, From, TRef, S);
 answered(unknown_request, _Frame, S) ->
     refused_reply(unknown_request, S).
 
@@ -1689,6 +1695,27 @@ probe_answered({ok, _Verified}, S) ->
     S#state{liveness_outstanding = undefined, liveness_misses = 0};
 probe_answered({error, Refusal}, S) ->
     refused_reply(Refusal, S).
+
+%% A verified answer completes the call; a refused one leaves it pending.
+call_answered({ok, Fields}, RequestId, From, TRef, #state{pending = P} = S) ->
+    _ = erlang:cancel_timer(TRef),
+    gen_server:reply(From, call_result(Fields)),
+    S#state{pending = maps:remove(RequestId, P)};
+call_answered({error, Refusal}, _RequestId, _From, _TRef, S) ->
+    refused_reply(Refusal, S).
+
+%% What a verified answer means to its caller. A provider's code and detail
+%% reach the caller as the binaries they arrived as, so nothing a provider
+%% sends takes the shape of a reason the link or the pool builds itself. A
+%% relay error names its code from a closed set.
+call_result(#{frame_type := result, payload := Payload}) ->
+    {ok, Payload};
+call_result(#{frame_type := error, reported_by := _, code := Code}) ->
+    {error, {call_error, Code, undefined}};
+call_result(#{frame_type := error, code := ?HANDLER_ERROR_CODE, detail := Detail}) ->
+    {error, Detail};
+call_result(#{frame_type := error, code := Code} = Fields) ->
+    {error, {call_error, Code, maps:get(detail, Fields, undefined)}}.
 
 %% A refused reply changes nothing but its count, and the log hears of it at most once a window.
 refused_reply(Refusal, #state{refused_replies = Report} = S) ->
@@ -1712,14 +1739,7 @@ on_inbound_call({error, Why}, Frame, S) ->
                    [Why, maps:get(procedure, Frame, undefined)]),
     S.
 
-%% The identity a frame names as its signer: `responded_by' on a RESULT,
-%% `reported_by' on an ERROR (the same two fields
-%% `macula_station_peer_observer' verifies a reply against before relaying
-%% it), `caller' on a CALL.
-reply_signer(#{responded_by := <<_:256>> = Pub}) -> {ok, Pub};
-reply_signer(#{reported_by := <<_:256>> = Pub})  -> {ok, Pub};
-reply_signer(_Frame)                            -> {error, no_signer}.
-
+%% The identity a CALL names as its signer, `caller'.
 call_signer(#{caller := <<_:256>> = Pub}) -> {ok, Pub};
 call_signer(_Frame)                      -> {error, no_signer}.
 
@@ -1728,7 +1748,7 @@ verify_signed_by(_Frame, {error, _} = E) -> E.
 
 on_timeout(error, S) ->
     {noreply, S};
-on_timeout({{From, _OldTRef}, NewP}, S) ->
+on_timeout({{From, _OldTRef, _Request}, NewP}, S) ->
     gen_server:reply(From, {error, timeout}),
     {noreply, S#state{pending = NewP}}.
 
@@ -1837,7 +1857,7 @@ fail_all_pending(Reason, #state{pending = P, subscriptions = Subs,
                                 client_streams = CS,
                                 server_streams = SS,
                                 content_pending = ContentP} = S) ->
-    maps:foreach(fun(_CallId, {From, TRef}) ->
+    maps:foreach(fun(_RequestId, {From, TRef, _Request}) ->
         _ = erlang:cancel_timer(TRef),
         gen_server:reply(From, {error, Reason})
     end, P),

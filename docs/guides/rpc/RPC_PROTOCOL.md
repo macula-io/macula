@@ -61,7 +61,7 @@ ok = macula:unadvertise(Pool, Realm, Procedure).
 A handler is `fun((term()) -> term())` or `{Module, Function}`, called as
 `Handler(Payload)`. What it returns decides what the caller sees:
 
-| Handler returns | Caller's `call/5` / `call_station/6` sees |
+| Handler returns | Caller's `call/5` / `call_station/7` sees |
 |---|---|
 | `{ok, Value}` | `{ok, Value}` — the `{ok, _}` wrapper is stripped and reapplied, so this is the idiomatic Erlang shape |
 | any other `Value` | `{ok, Value}` — passed through as-is |
@@ -79,26 +79,30 @@ instead.
 
 ---
 
-## Direct-dial: `call_station/6,7`
+## Direct-dial: `call_station/7,8`
 
 This is the raw primitive [`macula_request`/`macula_response`'s own
 direct-dial wraps](RPC_GUIDE.md#direct-dial-start_link_direct-advertise_direct).
 
 ```erlang
--spec call_station(pool(), seed(), realm(), procedure(), term(), timeout_ms()) ->
+-spec call_station(pool(), seed(), node_id(), realm(), procedure(), term(), timeout_ms()) ->
     {ok, term()} | {error, term()}.
--spec call_station(pool(), seed(), realm(), procedure(), term(), timeout_ms(), opts()) ->
+-spec call_station(pool(), seed(), node_id(), realm(), procedure(), term(), timeout_ms(), opts()) ->
     {ok, term()} | {error, term()}.
 %% opts: #{ucan_token => Token,
 %%         verify => webpki | none,     %% TLS trust for a fresh dial
-%%         expected_node_id => Pubkey,  %% pin app-layer identity to this key
+%%         expected_node_id => NodeId,  %% the station's node_id
 %%         pin_tls_cert => boolean()}   %% also pin the TLS cert itself (default true)
 ```
 
-`call_station/6` dials a specific station URL directly — reusing an existing
+`call_station/7` dials a specific station URL directly, reusing an existing
 link or opening and monitoring a new one, waiting for the handshake, then
-calling through it. One hop, no dependency on your pool's own seed set. Use
-it when you already know *which* station's URL to dial.
+calling through it. The third argument is the target: the node_id of the
+provider, from its verified `procedure_advertisement`. The station delivers
+the CALL to that provider's connection, and only a reply signed by that
+provider completes the call. One hop, no dependency on your pool's own seed
+set. Use it when you already know *which* station's URL to dial and which
+provider behind it to call.
 
 A pool bounds the links it dials this way. A call to a station that is not
 already a link is refused, before anything is dialed, with
@@ -121,50 +125,68 @@ wired in.
 
 Building something outside the supervised wrappers (custom retry logic,
 observability, an SDK for another language)? This is the sequence
-`macula_request:start_link_direct` runs internally:
+`macula:call/5` and `macula_request:start_link_direct` run internally:
 
-1. Find every `procedure_advertisement` for `Procedure` in the DHT, and keep
-   only the ones whose signature verifies — an unsigned or badly-signed
-   record is never trusted, however plausible its `serving_station` claim
-   looks.
-2. Read the first trusted advertisement's `serving_station`, then resolve
-   *that* station's own `station_endpoint` record — verified, and its
-   signer checked to be exactly the station it claims (not just anyone).
+1. Find every `procedure_advertisement` for `Procedure` in `Realm` in the
+   DHT. `macula:find_records/2` returns only the records whose signature
+   verifies under the node's crypto profile. Keep the ones that advertise
+   exactly this procedure in this realm and whose provider authorization
+   verifies (`macula_record:verify_authorization/3`): a procedure with an
+   org namespace needs an authorization for that org, and a procedure
+   without one carries none.
+2. Take the provider from a trusted advertisement: the node_id that signed
+   it, its `key_id`. Read its `serving_station`, then resolve *that*
+   station's own `station_endpoint` record, verified, and its signer
+   checked to be exactly the station it claims (not just anyone).
 3. Dial the resolved `quic://[Host]:Port` (note the brackets — required for
    the IPv6 hosts most stations advertise) with the TLS certificate itself
    **unpinned** (`pin_tls_cert => false`): a production station's TLS is
    terminated by an unrelated PKI (Let's Encrypt), so pinning the cert's
    own key can never succeed there. Trust instead rests on the
-   application-layer CONNECT/HELLO handshake, which independently,
-   cryptographically proves the peer holds the private key for the exact
-   pubkey step 2 resolved — real trust, just enforced above the TLS layer
-   rather than at it.
+   application-layer CONNECT/HELLO handshake, which proves the peer holds
+   the identity key of the exact node_id step 2 resolved.
+4. Call the provider through that station, with its node_id as the target.
+   The station delivers the CALL to that provider's connection, and only a
+   reply the provider signed completes the call.
 
 ```erlang
-{ok, Records} = macula:find_records(Pool, macula_record:procedure_key(Procedure)),
-[Advertisement | _] = [R || R <- Records, {ok, _} =:= macula_record:verify(R)],
+{ok, Profile} = macula_crypto_profile:configured(),
+{ok, Records} = macula:find_records(Pool, macula_record:procedure_key(Realm, Procedure)),
+Trusted = fun(#{type := Type} = Record) ->
+              Type =:= macula_record:type_procedure_advertisement() andalso
+                  maps:with([realm_id, procedure],
+                            macula_record:read_procedure_advertisement(Record))
+                      =:= #{realm_id => Realm, procedure => Procedure} andalso
+                  ok =:= macula_record:verify_authorization(
+                             Record, #{profile => Profile}, erlang:system_time(millisecond))
+          end,
+[#{key_id := Provider} = Advertisement | _] = lists:filter(Trusted, Records),
 #{serving_station := Station} = macula_record:read_procedure_advertisement(Advertisement),
 
 {ok, EndpointRecord} = macula:find_record(Pool, macula_record:station_endpoint_key(Station)),
-#{key := Station} = EndpointRecord,          %% signer must be the station itself
-{ok, _} = macula_record:verify(EndpointRecord),
+#{key_id := Station} = EndpointRecord,          %% signer must be the station itself
 #{quic_port := Port, host_advertised := [Host | _]} =
     macula_record:read_station_endpoint(EndpointRecord),
 StationUrl = <<"quic://[", Host/binary, "]:", (integer_to_binary(Port))/binary>>,
 
-{ok, Result} = macula:call_station(Pool, StationUrl, Realm, Procedure, Payload, 5_000,
-                                   #{expected_node_id => Station,
-                                     pin_tls_cert => false, verify => none}).
+{ok, Result} = macula:call_station(Pool, StationUrl, Provider, Realm, Procedure, Payload,
+                                   5_000, #{expected_node_id => Station,
+                                            pin_tls_cert => false, verify => none}).
 ```
 
-A fourth, **opt-in** check exists for managed realms: pass
-`verify_cert_chain => {RealmCaPem, Org}` to
-`macula_request:start_link_direct/8` (or `cert_chain => ChainPem` to
-`macula_response:advertise_direct/7` on the provider side) to additionally
-require the advertisement's embedded X.509 service-cert chain to verify to
-the realm CA — proving the *advertiser*, not just the station it names, is
-an org/realm-authorized identity. Unmanaged realms have no realm CA to check
-against, so this stays opt-in rather than mandatory.
+For an org namespaced procedure, add the realm trust you hold to the map
+`verify_authorization/3` takes: `realm_key`, the realm key as carried, for an
+authorization that is an org directory with a procedure delegation, and
+`realm_ca`, the realm CA in PEM, for one that is a certificate chain. Without
+the realm trust its authorization needs, an advertisement for an org
+namespaced procedure is never trusted. The supervised wrappers take the same
+two keys as `realm_trust => #{...}` in their options
+(`macula_request:start_link_direct/8`). A provider publishes its
+authorization with `macula_response:advertise_direct/7`'s `authorization`
+option, as `#{org_directory => Wire, procedure_delegation => Wire}` or
+`#{certificate_chain => [Der]}`. The 10.x options `verify_cert_chain` and
+`cert_chain` are refused with `{error, {removed_option, Key}}` before anything
+is looked up or published: `realm_trust` and `authorization` replace them.
 
 This is the same resolve shape used by [content](../content/CONTENT_PROTOCOL.md)'s
 `get_content_station/4,5` and [streaming](../streaming/STREAMING_PROTOCOL.md)'s
@@ -176,46 +198,51 @@ pair.
 ## Errors
 
 ```erlang
-case macula:call(Pool, Realm, Procedure, Payload, Timeout) of
+case macula:call(Pool, Realm, Procedure, Payload, TimeoutMs) of
     {ok, Result} ->
         Result;
     {error, timeout} ->
         retry_later;
-    {error, {disconnected, Reason}} ->
+    {error, {disconnected, _Reason}} ->
         %% the link went down mid-call; pending calls on it all fail this way
         retry_later;
-    {error, {call_error, Code, Name}} ->
-        %% wire-level BOLT#4 error -- see macula_bolt4:is_retryable/1
-        maybe_retry(Code, Name);
+    {error, {unresolved, _Reason}} ->
+        %% no trusted advertisement named a provider to call
+        retry_later;
+    {error, {call_error, unknown_next_peer, undefined}} ->
+        %% the station holds no connection to the provider
+        retry_later;
+    {error, {call_error, Code, Detail}} ->
+        %% the provider refused the call with its own code
+        logger:warning("RPC refused: ~p ~p", [Code, Detail]);
     {error, Detail} ->
-        %% the handler itself returned {error, Detail}
-        logger:warning("RPC refused: ~p", [Detail])
+        %% the handler returned {error, Detail}, or the call failed as listed below
+        logger:warning("RPC failed: ~p", [Detail])
 end.
 ```
 
-`{error, no_healthy_station}` (from `call/5`) or `{error, not_connected}`
-(from `call_station/6`) means no link has completed its handshake yet — the
-pool hasn't connected, or the direct-dial target hasn't finished handshaking
-within the deadline.
+`{error, {unresolved, Reason}}` means resolution found no provider to call:
+`procedure_not_advertised`, no advertisement that passed its trust checks,
+or `no_healthy_station` when the pool had no connected station to look the
+advertisement up through. Once a candidate station has been tried, a failure
+before the CALL went out moves on to the next candidate, and the last such
+failure is the result. `{error, not_connected}` means no link to the station
+completed its handshake within the deadline. `{error, {refused, Reason}}`
+means the payload was refused before anything was sent, because no frame
+can carry it.
 
-Wire-level errors carry a BOLT#4 code; `macula_bolt4:is_retryable/1` tells
-you whether the *same* path is worth retrying after backoff, or whether you
-need a fresh resolve:
+A reply completes a call only if it verifies against the request. A result
+or a provider's error must be signed by the provider the call targets, and a
+station's error by the station the link is connected to. Any other reply is
+counted and dropped, and the call waits for its timeout.
 
-| Code | Name | Retry |
-|---|---|---|
-| `0x01` | `unknown_next_peer` | different path |
-| `0x02` | `temporary_relay_failure` | same path, after backoff |
-| `0x03` | `relay_disabled` | different path |
-| `0x04` | `node_not_found_at_target_relay` | re-resolve and recompute |
-| `0x08` | `upstream_congestion` | exponential backoff |
-| `0x0A` | `crypto_puzzle_invalid` | drop — do not retry |
-| `0x0E` | `signature_invalid` | drop — do not retry |
-| `0x0F` | `unknown_error` | a handler's own `{error, Reason}` — see the handler contract above |
-| `0x10` | `unauthorized` | application concern — present a valid UCAN, don't retry as-is |
-
-The full table, including codes not relevant to RPC, is in `macula_bolt4`'s
-own moduledoc.
+A provider's error code is a binary. The code `handler_error` is the
+handler's own `{error, Reason}` and arrives as `{error, Detail}`. Any other
+code arrives as `{error, {call_error, Code, Detail}}`, where `Detail` is a
+binary, or `undefined` when the provider sent none. The station's one error,
+`{error, {call_error, unknown_next_peer, undefined}}`, means it holds no
+connection to the provider. The advertisement may be stale, so resolve again
+before retrying.
 
 ---
 

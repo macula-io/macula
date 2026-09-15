@@ -51,7 +51,7 @@ connect_with_unreachable_seed_returns_pool_test() ->
 call_station_unreachable_returns_not_connected_test() ->
     {ok, _} = application:ensure_all_started(macula),
     {ok, Pool} = macula_client:connect([], #{}),
-    Result = macula_client:call_station(Pool, ?SEED1, ?REALM,
+    Result = macula_client:call_station(Pool, ?SEED1, <<2:256>>, ?REALM,
                                         <<"x.y">>, #{}, 300),
     ?assertEqual({error, not_connected}, Result),
     ?assert(is_process_alive(Pool)),
@@ -73,7 +73,7 @@ call_station_with_expected_node_id_and_no_match_falls_through_to_dial_test() ->
     {ok, _} = application:ensure_all_started(macula),
     {ok, Pool} = macula_client:connect([], #{}),
     SomeNodeId = crypto:strong_rand_bytes(32),
-    Result = macula_client:call_station(Pool, ?SEED1, ?REALM, <<"x.y">>,
+    Result = macula_client:call_station(Pool, ?SEED1, <<2:256>>, ?REALM, <<"x.y">>,
                                         #{}, 300, <<>>,
                                         #{expected_node_id => SomeNodeId,
                                           verify => none,
@@ -524,7 +524,7 @@ facade_links_delegates_test_() ->
      end}.
 
 %%------------------------------------------------------------------
-%% RPC fan-out — call/5, advertise/4, unadvertise/3
+%% RPC fan-out — call_linked_station/5, advertise/4, unadvertise/3
 %%------------------------------------------------------------------
 
 call_with_no_seeds_returns_no_healthy_test_() ->
@@ -532,8 +532,8 @@ call_with_no_seeds_returns_no_healthy_test_() ->
      fun() ->
          {ok, _} = application:ensure_all_started(macula),
          {ok, Pool} = macula_client:connect([], #{}),
-         R = macula_client:call(Pool, ?REALM, <<"ping.v1">>,
-                                 #{}, 1_000),
+         R = macula_client:call_linked_station(Pool, ?REALM, <<"ping.v1">>,
+                                               #{}, 1_000),
          ?assertEqual({error, no_healthy_station}, R),
          ok = macula_client:close(Pool)
      end}.
@@ -543,8 +543,8 @@ call_with_unreachable_seeds_returns_no_healthy_test_() ->
      fun() ->
          {ok, _} = application:ensure_all_started(macula),
          {ok, Pool} = macula_client:connect([?SEED1, ?SEED2], #{}),
-         R = macula_client:call(Pool, ?REALM, <<"ping.v1">>,
-                                 #{}, 1_000),
+         R = macula_client:call_linked_station(Pool, ?REALM, <<"ping.v1">>,
+                                               #{}, 1_000),
          ?assertEqual({error, no_healthy_station}, R),
          ok = macula_client:close(Pool)
      end}.
@@ -581,8 +581,8 @@ facade_v2_rpc_delegates_test() ->
                  macula:advertise(Pool, ?REALM, <<"x.v1">>, Handler, #{})),
     %% V2 unadvertise/3
     ?assertEqual(ok, macula:unadvertise(Pool, ?REALM, <<"x.v1">>)),
-    %% V2 call/5
-    ?assertEqual({error, no_healthy_station},
+    %% call/5 resolves the provider through the DHT, which no linked station can answer
+    ?assertEqual({error, {unresolved, no_healthy_station}},
                  macula:call(Pool, ?REALM, <<"y.v1">>, #{}, 500)),
     ok = macula_client:close(Pool).
 

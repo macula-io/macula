@@ -61,13 +61,13 @@
 %% Internal API — called by `macula_pubsub' (and future surfaces).
 -export([publish/5, subscribe/5, unsubscribe/2]).
 %% RPC fan-out (since 3.16.0) — called by the `macula' facade.
--export([call/5, call_station/6, call_station/7, call_station/8,
-         call_station/9,
+-export([call_linked_station/5, call_station/7, call_station/8, call_station/9,
+         call_station/10,
          advertise/4, advertise/5, unadvertise/3]).
 %% Dedicated-stream content transfer (see
 %% PLAN_PER_STREAM_QUIC_ISOLATION.md Phase 2) — called by the
 %% `macula' facade to pin one link for a whole put_content/get_content
-%% transfer instead of letting `call/5' pick per underlying block CALL.
+%% transfer instead of letting `call_linked_station/5' pick per underlying block CALL.
 -export([pick_connected_link/1]).
 %% Direct-dial content transfer — called by the `macula' facade to pin
 %% a link to a SPECIFIC (resolved) station rather than picking from the
@@ -279,7 +279,7 @@
         giveup_sweep_ms => pos_integer()
     },
 
-    %% How a one-shot CALL (`call/5') or PUBLISH (`publish/5', within its
+    %% How a one-shot CALL (`call_linked_station/5') or PUBLISH (`publish/5', within its
     %% `replication_factor' slice) picks among currently-connected links.
     %% `first_success' (default, unless `station_discovery' is enabled --
     %% see below): today's behaviour, unchanged -- try links in the order
@@ -572,21 +572,25 @@ child_spec(Id, Seeds, Opts) ->
       type     => worker,
       modules  => [?MODULE]}.
 
-%% @doc Issue a CALL frame against the pool. Tries each healthy link
-%% in turn and returns the first non-error reply. Returns
+%% @doc Issue a CALL for a procedure the pool's linked stations serve
+%% themselves, such as `_dht.*': first success across the pool's healthy
+%% links, each CALL targeting the station its link is connected to. It
+%% moves on to the next link only when the CALL never went out on the one
+%% before (`macula_station_link:not_sent/1'). Returns
 %% `{error, no_healthy_station}' when no link has completed its
-%% CONNECT/HELLO handshake.
+%% CONNECT/HELLO handshake. A procedure a provider serves is called through
+%% `macula:call/5', which resolves the provider.
 %%
-%% Realm is per-call (32 bytes). Different realms can share a single
-%% pool with no extra plumbing.
--spec call(pool(), <<_:256>>, binary(), term(), pos_integer()) ->
+%% Realm is per-call (32 bytes). `TimeoutMs' is from 1 ms to ten minutes,
+%% the deadline window a provider accepts.
+-spec call_linked_station(pool(), <<_:256>>, binary(), term(), 1..600_000) ->
     {ok, term()} | {error, term()}.
-call(Pool, Realm, Procedure, Payload, TimeoutMs)
+call_linked_station(Pool, Realm, Procedure, Payload, TimeoutMs)
   when is_pid(Pool),
        is_binary(Realm), byte_size(Realm) =:= 32,
        is_binary(Procedure),
-       is_integer(TimeoutMs), TimeoutMs > 0 ->
-    gen_server:call(Pool, {rpc_call, Realm, Procedure, Payload, TimeoutMs},
+       is_integer(TimeoutMs), TimeoutMs > 0, TimeoutMs =< 600_000 ->
+    gen_server:call(Pool, {linked_station_call, Realm, Procedure, Payload, TimeoutMs},
                     TimeoutMs + 1_000).
 
 %% @doc Pick one currently-connected link and return its pid, without
@@ -594,7 +598,7 @@ call(Pool, Realm, Procedure, Payload, TimeoutMs)
 %% sequence of related calls — a dedicated QUIC stream, opened once
 %% on the returned pid (via the internal station-link module's
 %% content-stream API), only isolates one link's traffic, so every
-%% call in the sequence must go over that same link. `call/5' picks
+%% call in the sequence must go over that same link. `call_linked_station/5' picks
 %% fresh per call (`call_first_success/5') and is the wrong primitive
 %% for that.
 %%
@@ -609,7 +613,7 @@ pick_connected_link(Pool) when is_pid(Pool) ->
 %% a live link to `Station' or dial (and wait up to `TimeoutMs' for the
 %% handshake on) a fresh one, per-call trust-overridable via `LinkOpts'
 %% (`verify' / `expected_node_id' / `pin_tls_cert', mirroring
-%% `call_station/8'). This is direct-dial's content-transfer primitive:
+%% `call_station/9'). This is direct-dial's content-transfer primitive:
 %% the returned pid is pinned for a whole `put_content'/`get_content'
 %% dedicated-stream transfer exactly like `pick_connected_link/1', just
 %% against a caller-resolved station instead of whichever pool link is
@@ -622,33 +626,34 @@ ensure_content_link(Pool, Station, LinkOpts, TimeoutMs)
     gen_server:call(Pool, {ensure_content_link, Station, LinkOpts, TimeoutMs},
                     TimeoutMs + 2_000).
 
-%% @doc Issue a CALL to ONE specific station, dialing it directly even
-%% if it is not in the pool's seed set. `Station' is a seed URL (e.g.
-%% `<<"quic://[::1]:4433">>'). The pool ensures a link to it (reusing an
-%% existing one, or dialing and monitoring a new one exactly like a
-%% seed), waits for the handshake within the deadline, and calls through
-%% that link. This is the direct-dial data path: resolve a
-%% serving_station (Slice 2) to its endpoint (Slice 3), then reach it in
-%% one hop here — no mesh relay.
+%% @doc Issue a CALL to `Target', a provider's node_id, at ONE specific
+%% station, dialing it directly even if it is not in the pool's seed set.
+%% `Station' is a seed URL (e.g. `<<"quic://[::1]:4433">>'). The pool
+%% ensures a link to it (reusing an existing one, or dialing and monitoring
+%% a new one exactly like a seed), waits for the handshake within the
+%% deadline, and calls through that link; the station delivers the CALL to
+%% the provider `Target' names. This is the direct-dial data path: resolve a
+%% provider's serving_station to its endpoint, then reach it in one hop
+%% here, with no mesh relay.
 %%
 %% Returns `{error, not_connected}' if the link does not complete its
 %% handshake before the deadline.
--spec call_station(pool(), seed(), <<_:256>>, binary(), term(),
-                   pos_integer()) -> {ok, term()} | {error, term()}.
-call_station(Pool, Station, Realm, Procedure, Payload, TimeoutMs) ->
-    call_station(Pool, Station, Realm, Procedure, Payload, TimeoutMs, <<>>).
+-spec call_station(pool(), seed(), <<_:256>>, <<_:256>>, binary(), term(),
+                   1..600_000) -> {ok, term()} | {error, term()}.
+call_station(Pool, Station, Target, Realm, Procedure, Payload, TimeoutMs) ->
+    call_station(Pool, Station, Target, Realm, Procedure, Payload, TimeoutMs, <<>>).
 
-%% @doc As `call_station/6', presenting a capability token (UCAN) to a
+%% @doc As `call_station/7', presenting a capability token (UCAN) to a
 %% gated provider. Empty token = none. Slice 7b.
--spec call_station(pool(), seed(), <<_:256>>, binary(), term(),
-                   pos_integer(), binary()) -> {ok, term()} | {error, term()}.
-call_station(Pool, Station, Realm, Procedure, Payload, TimeoutMs, UcanToken) ->
-    call_station(Pool, Station, Realm, Procedure, Payload, TimeoutMs,
-                UcanToken, #{}).
+-spec call_station(pool(), seed(), <<_:256>>, <<_:256>>, binary(), term(),
+                   1..600_000, binary()) -> {ok, term()} | {error, term()}.
+call_station(Pool, Station, Target, Realm, Procedure, Payload, TimeoutMs, UcanToken) ->
+    call_station(Pool, Station, Target, Realm, Procedure, Payload, TimeoutMs,
+                 UcanToken, #{}).
 
-%% @doc As `call_station/7', with a per-call TLS trust override for
+%% @doc As `call_station/8', with a per-call TLS trust override for
 %% THIS dial only — `verify' (webpki | none), `expected_node_id' (pin
-%% the station's Ed25519 identity), and/or `pin_tls_cert' (`false' to
+%% the station's node_id), and/or `pin_tls_cert' (`false' to
 %% enforce that pin at the application layer only — see
 %% `macula_peering_conn:connect_opts()' — needed against a station
 %% whose TLS is terminated by a PKI unrelated to its macula identity,
@@ -662,33 +667,34 @@ call_station(Pool, Station, Realm, Procedure, Payload, TimeoutMs, UcanToken) ->
 %% needing to know in advance) the pool's default verification for its
 %% other links. Only applies when a NEW link is dialed for `Station' —
 %% an already-connected link keeps whatever trust it was dialed under.
--spec call_station(pool(), seed(), <<_:256>>, binary(), term(),
-                   pos_integer(), binary(), map()) ->
+-spec call_station(pool(), seed(), <<_:256>>, <<_:256>>, binary(), term(),
+                   1..600_000, binary(), map()) ->
     {ok, term()} | {error, term()}.
-call_station(Pool, Station, Realm, Procedure, Payload, TimeoutMs, UcanToken,
-            LinkOpts) ->
-    call_station(Pool, Station, Realm, Procedure, Payload, TimeoutMs, UcanToken,
+call_station(Pool, Station, Target, Realm, Procedure, Payload, TimeoutMs, UcanToken,
+             LinkOpts) ->
+    call_station(Pool, Station, Target, Realm, Procedure, Payload, TimeoutMs, UcanToken,
                  LinkOpts, TimeoutMs).
 
-%% @doc As `call_station/8', waiting at most `DialTimeoutMs' of `TimeoutMs'
+%% @doc As `call_station/9', waiting at most `DialTimeoutMs' of `TimeoutMs'
 %% for a freshly-dialed link's handshake; the CALL gets whatever remains of
 %% `TimeoutMs'. `{error, not_connected}' then comes back after
 %% `DialTimeoutMs', before any CALL was sent, so a direct-dial caller can
 %% move on to another station within its own deadline.
--spec call_station(pool(), seed(), <<_:256>>, binary(), term(),
-                   pos_integer(), binary(), map(), pos_integer()) ->
+-spec call_station(pool(), seed(), <<_:256>>, <<_:256>>, binary(), term(),
+                   1..600_000, binary(), map(), pos_integer()) ->
     {ok, term()} | {error, term()}.
-call_station(Pool, Station, Realm, Procedure, Payload, TimeoutMs, UcanToken,
-            LinkOpts, DialTimeoutMs)
+call_station(Pool, Station, Target, Realm, Procedure, Payload, TimeoutMs, UcanToken,
+             LinkOpts, DialTimeoutMs)
   when is_pid(Pool),
+       is_binary(Target), byte_size(Target) =:= 32,
        is_binary(Realm), byte_size(Realm) =:= 32,
        is_binary(Procedure),
-       is_integer(TimeoutMs), TimeoutMs > 0,
+       is_integer(TimeoutMs), TimeoutMs > 0, TimeoutMs =< 600_000,
        is_binary(UcanToken),
        is_map(LinkOpts),
        is_integer(DialTimeoutMs), DialTimeoutMs > 0 ->
     gen_server:call(Pool,
-                    {call_station, Station, Realm, Procedure, Payload,
+                    {call_station, Station, Target, Realm, Procedure, Payload,
                      TimeoutMs, DialTimeoutMs, UcanToken, LinkOpts},
                     TimeoutMs + 2_000).
 
@@ -1163,9 +1169,9 @@ handle_call(pick_connected_link, _From, S) ->
     {reply, first_connected_link(ordered_for_selection(connected_link_pids(S),
                                                        S#state.link_selection)), S};
 
-handle_call({rpc_call, Realm, Procedure, Payload, TimeoutMs}, From, S) ->
+handle_call({linked_station_call, Realm, Procedure, Payload, TimeoutMs}, From, S) ->
     %% Worker-spawn so concurrent CALLs don't serialise through the
-    %% pool gen_server. Each per-link `macula_station_link:call/5'
+    %% pool gen_server. Each per-link `macula_station_link:call/6'
     %% is a sync gen_server:call to the link; with the old
     %% `{reply, ..., S}' shape every caller blocked the pool until
     %% the link replied, capping concurrent CALL throughput at 1.
@@ -1177,14 +1183,14 @@ handle_call({rpc_call, Realm, Procedure, Payload, TimeoutMs}, From, S) ->
     end),
     {noreply, S};
 
-handle_call({call_station, Station, Realm, Procedure, Payload, TimeoutMs,
+handle_call({call_station, Station, Target, Realm, Procedure, Payload, TimeoutMs,
              DialTimeoutMs, Ucan, LinkOpts}, From, S) ->
     %% Ensure (reuse or dial) a link to the specific station, then hand
     %% the wait-for-handshake + call to a worker so the pool gen_server
-    %% is never blocked (same rationale as rpc_call).
+    %% is never blocked (same rationale as a linked station call).
     on_link(ensure_link(Station, LinkOpts, S), From,
             fun(Pid) ->
-                call_when_connected(Pid, Realm, Procedure, Payload, TimeoutMs, DialTimeoutMs, Ucan)
+                call_when_connected(Pid, Target, Realm, Procedure, Payload, TimeoutMs, DialTimeoutMs, Ucan)
             end);
 
 handle_call({ensure_content_link, Station, LinkOpts, TimeoutMs}, From, S) ->
@@ -1639,14 +1645,14 @@ link_pid(Station, #state{links = Links}) ->
 %% never past the call's own deadline), then call over it with whatever
 %% time remains of `TimeoutMs'. A reused, already-connected link calls
 %% immediately.
-call_when_connected(undefined, _Realm, _Proc, _Payload, _TimeoutMs, _DialTimeoutMs,
+call_when_connected(undefined, _Target, _Realm, _Proc, _Payload, _TimeoutMs, _DialTimeoutMs,
                     _Ucan) ->
     {error, not_connected};
-call_when_connected(Pid, Realm, Proc, Payload, TimeoutMs, DialTimeoutMs, Ucan) ->
+call_when_connected(Pid, Target, Realm, Proc, Payload, TimeoutMs, DialTimeoutMs, Ucan) ->
     Now = erlang:monotonic_time(millisecond),
     Deadline = Now + TimeoutMs,
     call_after_connect(await_connected(Pid, Now + min(DialTimeoutMs, TimeoutMs)), Pid,
-                       Realm, Proc, Payload, Deadline, Ucan).
+                       Target, Realm, Proc, Payload, Deadline, Ucan).
 
 await_connected(Pid, Deadline) ->
     connected_or_wait(safe_is_connected(Pid), Pid, Deadline).
@@ -1662,13 +1668,13 @@ wait_or_give_up(true, Pid, Deadline) ->
 wait_or_give_up(false, _Pid, _Deadline) ->
     false.
 
-call_after_connect(true, Pid, Realm, Proc, Payload, Deadline, Ucan) ->
+call_after_connect(true, Pid, Target, Realm, Proc, Payload, Deadline, Ucan) ->
     Remaining = max(100, Deadline - erlang:monotonic_time(millisecond)),
-    macula_station_link:call(Pid, Realm, Proc, Payload, Remaining, Ucan);
-call_after_connect(false, _Pid, _Realm, _Proc, _Payload, _Deadline, _Ucan) ->
+    macula_station_link:call(Pid, Target, Realm, Proc, Payload, Remaining, Ucan);
+call_after_connect(false, _Pid, _Target, _Realm, _Proc, _Payload, _Deadline, _Ucan) ->
     {error, not_connected}.
 
-%% As `call_when_connected/7', but for `ensure_content_link/4': waits
+%% As `call_when_connected/8', but for `ensure_content_link/4': waits
 %% for a freshly-dialed link's handshake, then hands back the pid
 %% itself rather than making a call over it.
 content_link_when_connected(undefined, _TimeoutMs) ->
@@ -1817,7 +1823,7 @@ node_identity({ok, _NotAnIdentityKey}, _Profile) ->
 %% included, is never sent again, so a provider never runs one call twice.
 call_first_success(Pids, Realm, Proc, Payload, Tmo) ->
     first_success(Pids, fun macula_station_link:is_connected/1,
-                  fun(Pid) -> macula_station_link:call(Pid, Realm, Proc, Payload, Tmo) end).
+                  fun(Pid) -> macula_station_link:call(Pid, station, Realm, Proc, Payload, Tmo) end).
 
 %% `call_first_success/5' over any links: `Connected(Link)' says whether a
 %% link can take the call, and `Call(Link)' makes it there.
@@ -2387,8 +2393,8 @@ valid_realm(_NotAValidRealm) ->
     false.
 
 list_stations_with_realm({ok, Realm}, Pool) ->
-    report_discovered(macula_client:call(Pool, Realm, ?LIST_STATIONS_PROCEDURE,
-                                         #{}, ?DISCOVERY_CALL_TIMEOUT_MS),
+    report_discovered(macula:call(Pool, Realm, ?LIST_STATIONS_PROCEDURE,
+                                  #{}, ?DISCOVERY_CALL_TIMEOUT_MS),
                       Pool);
 list_stations_with_realm(error, _Pool) ->
     ok.

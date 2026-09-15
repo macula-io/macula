@@ -73,7 +73,9 @@
 %%% the realm key as carried, for an org directory with a procedure
 %%% delegation, and the realm CA in PEM, for a certificate chain.
 %%% Without the realm trust its form needs, an advertisement for an org
-%%% namespaced procedure is never trusted.
+%%% namespaced procedure is never trusted. The 10.x options
+%%% `verify_cert_chain' and `cert_chain' are refused by name, with
+%%% `{error, {removed_option, Key}}' (see `removed_option/2').
 %%%
 %%% == Content ==
 %%%
@@ -111,7 +113,8 @@
 -export([call/5, call/6, call_stream/5, call_stream/6,
         publish_advertisement/4, publish_advertisement/5,
         get_content/3, fetch_content/4, resolve_content_provider/2,
-        put_content/4, resolve_station_endpoint/2, resolve_station_endpoint/3]).
+        put_content/4, resolve_station_endpoint/2, resolve_station_endpoint/3,
+        removed_option/2]).
 
 -ifdef(TEST).
 %% Exports for unit tests — pure helpers that are otherwise private.
@@ -143,6 +146,12 @@
         (Reason =:= record_too_large orelse Reason =:= malformed orelse
          Reason =:= signature_invalid orelse Reason =:= alg_mismatch orelse
          Reason =:= not_yet_valid orelse Reason =:= key_id_mismatch)).
+%% Options 10.x read that each turned a trust check on and 11.0.0 does not
+%% read: `realm_trust' replaces `verify_cert_chain' on a call, and
+%% `authorization' replaces `cert_chain' on an advertisement. One still given
+%% is refused by name, so nobody goes on without the check they asked for.
+-define(REMOVED_CALL_OPTIONS, [verify_cert_chain]).
+-define(REMOVED_ADVERTISE_OPTIONS, [cert_chain]).
 
 %% @doc As `call/6' with no realm trust.
 -spec call(macula:pool(), macula:realm(), macula:procedure(), term(),
@@ -161,14 +170,23 @@ call(Pool, Realm, Procedure, Payload, TimeoutMs) ->
 %% CALL itself (see "Resolution" in the module doc). `Opts' may include
 %% `realm_trust', the realm trust an org namespaced procedure's
 %% authorization is checked against: see the module doc's "Trust model"
-%% section.
+%% section. `verify_cert_chain', a 10.x option `realm_trust' replaces, is
+%% refused with `{error, {removed_option, verify_cert_chain}}' before
+%% anything is looked up.
 -spec call(macula:pool(), macula:realm(), macula:procedure(), term(),
           pos_integer(), map()) -> {ok, term()} | {error, term()}.
-call(Pool, Realm, Procedure, Payload, TimeoutMs, Opts) ->
+call(Pool, Realm, Procedure, Payload, TimeoutMs, Opts)
+  when is_integer(TimeoutMs), TimeoutMs > 0, TimeoutMs =< 600_000 ->
+    call_unless_removed(removed_option(call, Opts), Pool, Realm, Procedure, Payload, TimeoutMs,
+                        Opts).
+
+call_unless_removed(none, Pool, Realm, Procedure, Payload, TimeoutMs, Opts) ->
     Deadline = deadline(TimeoutMs),
     each_candidate(advertised_stations(Pool, Realm, Procedure, Opts),
                    station_try(Pool, call_work(Pool, Realm, Procedure, Payload, Deadline)),
-                   Deadline).
+                   Deadline);
+call_unless_removed(Removed, _Pool, _Realm, _Procedure, _Payload, _TimeoutMs, _Opts) ->
+    {error, Removed}.
 
 %% @doc As `call_stream/6' with no realm trust.
 -spec call_stream(macula:pool(), macula:realm(), macula:procedure(), term(),
@@ -183,14 +201,21 @@ call_stream(Pool, Realm, Procedure, Args, StreamOpts) ->
 %% override (`mode', `owner', etc); its `dial_timeout_ms' (default
 %% 10_000) bounds resolution and each candidate's connect wait, and the
 %% stream itself keeps its own deadline. `Opts' is the resolve-side
-%% `realm_trust' opt, same as `call/6'.
+%% `realm_trust' opt, same as `call/6', and `verify_cert_chain' in it is
+%% refused as `call/6' refuses it.
 -spec call_stream(macula:pool(), macula:realm(), macula:procedure(), term(),
                   map(), map()) -> {ok, macula:stream()} | {error, term()}.
 call_stream(Pool, Realm, Procedure, Args, StreamOpts, Opts) ->
+    call_stream_unless_removed(removed_option(call, Opts), Pool, Realm, Procedure, Args,
+                               StreamOpts, Opts).
+
+call_stream_unless_removed(none, Pool, Realm, Procedure, Args, StreamOpts, Opts) ->
     Deadline = deadline(maps:get(dial_timeout_ms, StreamOpts, ?DEFAULT_DIAL_TIMEOUT_MS)),
     each_candidate(advertised_stations(Pool, Realm, Procedure, Opts),
                    station_try(Pool, stream_work(Pool, Realm, Procedure, Args, StreamOpts)),
-                   Deadline).
+                   Deadline);
+call_stream_unless_removed(Removed, _Pool, _Realm, _Procedure, _Args, _StreamOpts, _Opts) ->
+    {error, Removed}.
 
 %% @doc As `publish_advertisement/5' with no provider authorization.
 -spec publish_advertisement(macula:pool(), macula:realm(), macula:procedure(),
@@ -200,22 +225,44 @@ publish_advertisement(Pool, Realm, Procedure, NodeIdentity) ->
 
 %% @doc Publish a signed `procedure_advertisement' for `Procedure',
 %% naming `Pool''s currently-connected station as the serving station.
-%% `NodeIdentity', the provider's node identity key, signs it, and its
-%% node_id is the advertiser (reuse the same key across re-advertises;
-%% a fresh key per call is valid but needless DHT churn). `Opts' may
-%% include `authorization', the provider authorization an org
+%% `NodeIdentity' signs it, and its node_id is the advertiser: it must be
+%% the node identity key `Pool' was started with, since a caller targets
+%% that node_id and the station knows the pool's connection by it.
+%% `Opts' may include `authorization', the provider authorization an org
 %% namespaced procedure needs (D25 item 6), as
 %% `#{org_directory => Wire, procedure_delegation => Wire}' or
-%% `#{certificate_chain => [Der]}', and `ttl_ms'.
+%% `#{certificate_chain => [Der]}', and `ttl_ms'. `cert_chain', a 10.x
+%% option `authorization' replaces, is refused with
+%% `{error, {removed_option, cert_chain}}' before anything is read or put.
 -spec publish_advertisement(macula:pool(), macula:realm(), macula:procedure(),
                             macula_node_keys:node_key(), map()) ->
     ok | {error, term()}.
 publish_advertisement(Pool, Realm, Procedure, NodeIdentity, Opts) ->
+    publish_unless_removed(removed_option(advertise, Opts), Pool, Realm, Procedure,
+                           NodeIdentity, Opts).
+
+publish_unless_removed(none, Pool, Realm, Procedure, NodeIdentity, Opts) ->
     case macula:links(Pool) of
         {ok, Links} -> on_links(connected_station(Links), Pool, Realm,
                                 Procedure, NodeIdentity, Opts);
         {error, _} = Error -> Error
-    end.
+    end;
+publish_unless_removed(Removed, _Pool, _Realm, _Procedure, _NodeIdentity, _Opts) ->
+    {error, Removed}.
+
+%% @doc The first option in `Opts' that 11.0.0 removed from a call or an
+%% advertisement, as `{removed_option, Key}', or `none'. Each one turned a
+%% trust check on in 10.x: `realm_trust' replaces `verify_cert_chain' on a
+%% call, and `authorization' replaces `cert_chain' on an advertisement.
+-spec removed_option(call | advertise, map()) -> none | {removed_option, atom()}.
+removed_option(call, Opts) -> first_given(?REMOVED_CALL_OPTIONS, Opts);
+removed_option(advertise, Opts) -> first_given(?REMOVED_ADVERTISE_OPTIONS, Opts).
+
+first_given(Keys, Opts) ->
+    given([Key || Key <- Keys, maps:is_key(Key, Opts)]).
+
+given([Key | _]) -> {removed_option, Key};
+given([]) -> none.
 
 on_links({ok, Station}, Pool, Realm, Procedure, NodeIdentity, Opts) ->
     Advertiser = macula_node_keys:key_id(NodeIdentity),
@@ -485,15 +532,15 @@ for_procedure(_OtherProcedure, _Rec, _Realm, _Procedure, _Trust) ->
 %% never came up within the candidate's share, so nothing was sent and the
 %% next candidate may be tried; any other outcome means the CALL went out.
 call_work(Pool, Realm, Procedure, Payload, Deadline) ->
-    fun(Station, DialUrl, Share) ->
-        sent_or_not(macula:call_station(Pool, DialUrl, Realm, Procedure, Payload,
+    fun(Provider, Station, DialUrl, Share) ->
+        sent_or_not(macula:call_station(Pool, DialUrl, Provider, Realm, Procedure, Payload,
                                         budget(Deadline),
                                         (pinned(Station))#{dial_timeout_ms => budget(Share)}))
     end.
 
 %% Opens the stream at one resolved station, on the same terms as `call_work/5'.
 stream_work(Pool, Realm, Procedure, Args, StreamOpts) ->
-    fun(Station, DialUrl, Share) ->
+    fun(_Provider, Station, DialUrl, Share) ->
         sent_or_not(macula:call_stream_station(Pool, DialUrl, Realm, Procedure, Args,
                                                maps:merge(StreamOpts, (pinned(Station))#{
                                                    dial_timeout_ms => budget(Share)})))
@@ -538,7 +585,7 @@ endpoint_version({absent, _Error}) -> none.
 
 attempt({found, {ok, {Station, DialUrl}}, EndpointVersion}, Key, Version, Share, Seen,
         Work) ->
-    worked(Work(Station, DialUrl, Share), Key, Version, EndpointVersion, Seen);
+    worked(Work(Key, Station, DialUrl, Share), Key, Version, EndpointVersion, Seen);
 attempt({found, {error, expired}, EndpointVersion}, Key, Version, _Share, Seen,
         _Work) ->
     failed(Key, Version, EndpointVersion,

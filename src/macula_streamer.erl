@@ -211,7 +211,7 @@ advertise(Pool, Realm, Procedure, Module, Args) ->
 %% auth policy, default `open', see `macula:advertise_stream/6'), and
 %% `reuse_sup' — an
 %% existing supervisor pid (as returned by a prior `advertise/5,6'
-%% call) to register the handler again on without starting a new
+%% call) to register the handler again with, without starting a new
 %% factory supervisor. Use this for a periodic re-advertise (see
 %% `advertise_direct/6,7''s own doc) — calling plain
 %% `advertise/5,6' on a timer would leak one orphaned supervisor per
@@ -282,9 +282,9 @@ new_sup() ->
 %% @doc As `advertise/5', and additionally publishes a signed
 %% `procedure_advertisement' DHT record naming this pool's connected
 %% station as the server, so `macula_stream_sink:start_link_direct/5,6'
-%% can resolve and dial here directly. `NodeIdentity', the provider's
-%% node identity key, signs it: reuse the same key across re-advertises
-%% so each one doesn't mint a fresh advertiser.
+%% can resolve and dial here directly. `NodeIdentity' signs it and must be
+%% the node identity key `Pool' was started with: a caller targets that
+%% node_id, and the station knows the pool's connection by it.
 %%
 %% The DHT publish is best-effort: if it fails, the handler is still
 %% advertised and reachable via the ordinary pooled path — direct-dial
@@ -313,11 +313,17 @@ advertise_direct(Pool, Realm, Procedure, Module, Args, NodeIdentity) ->
 %% re-advertise with `reuse_sup => Sup' (the pid this function
 %% returned the first time) registers the handler again and
 %% republishes the DHT record without leaking a new supervisor per
-%% tick.
+%% tick. `cert_chain', a 10.x option `authorization' replaces, is refused
+%% with `{error, {removed_option, cert_chain}}' before the handler is
+%% registered.
 -spec advertise_direct(macula:pool(), macula:realm(), macula:procedure(),
                        module(), term(), macula_node_keys:node_key(), advertise_opts()) ->
     {ok, pid()} | {error, term()}.
 advertise_direct(Pool, Realm, Procedure, Module, Args, NodeIdentity, Opts) ->
+    advertise_direct_unless_removed(macula_direct_dial:removed_option(advertise, Opts), Pool,
+                                    Realm, Procedure, Module, Args, NodeIdentity, Opts).
+
+advertise_direct_unless_removed(none, Pool, Realm, Procedure, Module, Args, NodeIdentity, Opts) ->
     PublishAdvertisement = arity_5(maps:get(publish_advertisement, Opts,
                                             fun macula_direct_dial:publish_advertisement/5)),
     case advertise(Pool, Realm, Procedure, Module, Args, Opts) of
@@ -328,7 +334,10 @@ advertise_direct(Pool, Realm, Procedure, Module, Args, NodeIdentity, Opts) ->
             {ok, Sup};
         {error, _} = Error ->
             Error
-    end.
+    end;
+advertise_direct_unless_removed(Removed, _Pool, _Realm, _Procedure, _Module, _Args, _NodeIdentity,
+                                _Opts) ->
+    {error, Removed}.
 
 log_publish_result(ok, _Procedure) ->
     ok;

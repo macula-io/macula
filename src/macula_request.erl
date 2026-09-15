@@ -40,19 +40,16 @@
 %%%
 %%% == Direct-dial ==
 %%%
-%%% `start_link/6,7' routes through the pool's existing links — first
-%%% success across whichever are healthy, the same gossip-propagated
-%%% routing `call/5' always used. `start_link_direct/6,7' is the
-%%% direct-dial counterpart: it resolves the procedure's
-%%% `procedure_advertisement' from the DHT (published by
-%%% `macula_response:advertise_direct/6' on the provider side),
-%%% resolves that record's `serving_station' to a dialable endpoint via
-%%% the station's own `station_endpoint' record (every macula-station
-%%% publishes its own automatically), and calls there in one hop via
-%%% `macula:call_station/6' — instead of depending on advertise-gossip
-%%% having propagated a route between arbitrary stations. Requires the
-%%% provider to have advertised via `advertise_direct/6', not plain
-%%% `advertise/5' — a plain advertise publishes no discoverable record.
+%%% Both starts reach a provider the same way. `macula:call/5' resolves
+%%% the procedure's `procedure_advertisement' from the DHT (published by
+%%% `macula_response:advertise_direct/6' on the provider side), resolves
+%%% that record's `serving_station' to a dialable endpoint via the
+%%% station's own `station_endpoint' record (every macula-station
+%%% publishes its own automatically), and calls the advertised provider
+%%% there in one hop via `macula:call_station/8'. `start_link_direct'
+%%% also hands its options to that resolution. Requires the provider to
+%%% have advertised via `advertise_direct/6', not plain `advertise/5':
+%%% a plain advertise publishes no discoverable record.
 %%% @end
 %%%-------------------------------------------------------------------
 -module(macula_request).

@@ -93,7 +93,7 @@ a_direct_request_calls_with_the_other_options() ->
                          {ok, #{result => 5}}
                  end,
     Opts = #{direct_call => DirectCall, fact_publish => facts_to(self()),
-             verify_cert_chain => chain},
+             realm_trust => #{realm_ca => <<"pem">>}},
     {ok, _Pid} = macula_request:start_link_direct(?MODULE, pool, ?REALM, ?PROCEDURE, #{a => 2},
                                                   5_000, self(), Opts),
     ?assertEqual({reply_seen, {ok, #{result => 5}}}, wait_reply()),
@@ -103,11 +103,12 @@ a_direct_request_calls_with_the_other_options() ->
                  not_called
              end,
     ?assertEqual({direct_call, pool, ?REALM, ?PROCEDURE, #{a => 2}, 5_000,
-                  #{verify_cert_chain => chain}}, Called).
+                  #{realm_trust => #{realm_ca => <<"pem">>}}}, Called).
 
-%% Without a call function the request's worker calls macula:call/5,
-%% which passes a pool that is not a process on to macula_client:call/5,
-%% whose guard refuses it, and the worker's crash stops the request.
+%% Without a call function the request's worker calls macula:call/5, which
+%% resolves the procedure through macula_direct_dial and passes a pool that
+%% is not a process on to macula:find_records/3, whose guard refuses it, and
+%% the worker's crash stops the request.
 without_a_call_function_it_calls_through_macula() ->
     process_flag(trap_exit, true),
     {ok, Pid} = macula_request:start_link(?MODULE, pool, ?REALM, ?PROCEDURE, #{}, 5_000, self(),
@@ -117,7 +118,7 @@ without_a_call_function_it_calls_through_macula() ->
              after 5000 ->
                  no_exit
              end,
-    ?assertMatch({worker_crashed, {function_clause, [{macula_client, call, _, _} | _]}}, Reason).
+    ?assertMatch({worker_crashed, {function_clause, [{macula, find_records, _, _} | _]}}, Reason).
 
 a_call_option_that_is_not_an_arity_5_fun_is_refused() ->
     ?assertError(function_clause,

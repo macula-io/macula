@@ -18,7 +18,7 @@ Two ways to open one, mirroring unary RPC:
   the STREAM_OPEN to whichever connection advertised the procedure. Good when you
   don't know or care which station serves it.
 - **`call_stream_station/6`** (direct-dial) — dials a *specific* station and opens
-  the stream there in one hop, exactly like `call_station/6` for unary RPC. Use it
+  the stream there in one hop, exactly like `call_station/7` for unary RPC. Use it
   after resolving a provider's `procedure_advertisement` and `station_endpoint` in
   the DHT (see the [RPC Guide](../rpc/RPC_GUIDE.md)), so a stream reaches its provider the
   same way a unary call does.

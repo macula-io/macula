@@ -167,10 +167,10 @@ request_tunnel(Pool, NodeStr) ->
     Args = #{<<"from_node">> => atom_to_binary(node()),
              <<"target_node">> => list_to_binary(NodeStr)},
     ?LOG_INFO("[dist_pool] RPC ~s via ~p", [Procedure, Pool]),
-    %% V2 pool: first-success across healthy links. The pool itself
-    %% does the multi-station fan-out the V1 multi_relay used to do.
-    Result = macula_client:call(Pool, ?DIST_REALM, Procedure, Args,
-                                ?DIST_TIMEOUT),
+    %% The tunnel procedure's provider is resolved through its
+    %% advertisement and called at the station that advertisement names.
+    Result = macula:call(Pool, ?DIST_REALM, Procedure, Args,
+                         ?DIST_TIMEOUT),
     on_tunnel_rpc_reply(Result, Pool).
 
 on_tunnel_rpc_reply({ok, Reply}, Pool) when is_map(Reply) ->

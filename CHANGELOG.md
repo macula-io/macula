@@ -269,6 +269,40 @@ Post-quantum work on the `post-quantum` branch. Not on `main`.
   clears nothing; the link counts it by reason and logs the count at most
   once a minute. As before, the connection closes after
   `liveness_max_misses` unanswered probes, two by default.
+- A station link's calls name their target (D25).
+  `macula_station_link:call/6,7` take `station`, the station the link is
+  connected to, or a provider's node_id, and replace `call/5,6`. The link
+  signs the CALL and keeps the request. A reply completes the call only if
+  it verifies against that request, found by the ids it claims, as for the
+  liveness probe; any other reply is counted and the call stays pending.
+  A call returns:
+  - `{ok, Payload}`;
+  - `{error, Detail}` for a provider's `handler_error`;
+  - `{error, {call_error, Code, Detail}}` for another provider code, with
+    `Code` and `Detail` as binaries and `Detail` `undefined` when absent;
+  - `{error, {call_error, unknown_next_peer, undefined}}` when the station
+    has no link to the target.
+
+  A payload no frame can carry is refused before sending as
+  `{error, {refused, Reason}}`. The timeout is 1 to 600000 milliseconds.
+  Every call ends with its reply, its timeout or the link's close, and a
+  reply after the timeout is counted like one for a request the link does
+  not hold. `not_sent/1` is true only for `not_connected`, `noproc` and
+  `{refused, _}`.
+- `macula:call/5` reaches a provider through its verified advertisement
+  (`macula_direct_dial`), and so do station discovery and the
+  distribution pool's tunnel calls. `macula:call_station/7,8` and
+  `macula_client:call_station/7` to `10` take the provider's node_id as
+  `Target`, after the station. `macula_client:call_linked_station/5`
+  replaces `macula_client:call/5` and calls a station the pool is linked
+  to, as the DHT functions do.
+- Direct dial refuses the 10.x trust options by name, with
+  `{error, {removed_option, Key}}`, before anything is looked up, dialed,
+  registered or published. `macula_direct_dial:call/6` and `call_stream/6`
+  refuse `verify_cert_chain`. `macula_direct_dial:publish_advertisement/5`
+  and the `advertise_direct/7` functions of `macula_response` and
+  `macula_streamer` refuse `cert_chain`. `realm_trust` and `authorization`
+  replace them.
 
 ### Removed
 

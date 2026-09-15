@@ -19,7 +19,7 @@ both_are_forwarded_together_test() ->
                  macula_direct_dial:adv_opts(#{authorization => ?AUTHORIZATION, ttl_ms => 120_000})).
 
 unrecognized_opts_are_dropped_test() ->
-    ?assertEqual(#{}, macula_direct_dial:adv_opts(#{reuse_sup => self(), cert_chain => <<"pem">>})).
+    ?assertEqual(#{}, macula_direct_dial:adv_opts(#{reuse_sup => self(), auth => open})).
 
 an_authorization_that_is_not_a_map_is_dropped_test() ->
     ?assertEqual(#{}, macula_direct_dial:adv_opts(#{authorization => <<"pem">>})).

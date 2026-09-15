@@ -40,8 +40,8 @@
 
 %% RPC — realm-per-call against a V2 pool
 -export([call/5,
-         call_station/6,
          call_station/7,
+         call_station/8,
          advertise/5,
          unadvertise/3]).
 
@@ -252,40 +252,45 @@ unsubscribe(Pool, SubRef) when is_pid(Pool), is_reference(SubRef) ->
 %%% RPC — realm-per-call against a V2 pool
 %%%===================================================================
 
-%% @doc Issue a CALL frame against a V2 pool. First-success across
-%% the pool's healthy links. See `macula_client:call/5'.
--spec call(pool(), realm(), procedure(), term(), pos_integer()) ->
+%% @doc Call `Procedure' in `Realm' at the provider that serves it: resolve
+%% the procedure's verified, authorized advertisements, reach the station a
+%% candidate names directly, and call its provider there. See
+%% `macula_direct_dial:call/5'. A procedure the pool's linked stations serve
+%% themselves, such as `_dht.*', goes through
+%% `macula_client:call_linked_station/5'.
+-spec call(pool(), realm(), procedure(), term(), 1..600_000) ->
     {ok, term()} | {error, term()}.
 call(Pool, Realm, Procedure, Payload, TimeoutMs) ->
-    macula_client:call(Pool, Realm, Procedure, Payload, TimeoutMs).
+    macula_direct_dial:call(Pool, Realm, Procedure, Payload, TimeoutMs).
 
-%% @doc Issue a CALL to ONE specific station, dialing it directly even
-%% if it is not in the pool's seed set. `Station' is a seed URL (e.g.
-%% `<<"quic://[::1]:4433">>'). The pool reuses an existing link or dials
-%% and monitors a new one, waits for the handshake, and calls there.
-%% This is the direct-dial data path: resolve a serving_station and its
-%% endpoint, then reach it in one hop. See `macula_client:call_station/6'.
--spec call_station(pool(), macula_client:seed(), realm(), procedure(),
-                   term(), pos_integer()) -> {ok, term()} | {error, term()}.
-call_station(Pool, Station, Realm, Procedure, Payload, TimeoutMs) ->
-    macula_client:call_station(Pool, Station, Realm, Procedure, Payload,
+%% @doc Issue a CALL to `Target', a provider's node_id, at ONE specific
+%% station, dialing it directly even if it is not in the pool's seed set.
+%% `Station' is a seed URL (e.g. `<<"quic://[::1]:4433">>'). The pool reuses
+%% an existing link or dials and monitors a new one, waits for the
+%% handshake, and calls there. This is the direct-dial data path: resolve a
+%% provider's serving_station and its endpoint, then reach it in one hop.
+%% See `macula_client:call_station/7'.
+-spec call_station(pool(), macula_client:seed(), <<_:256>>, realm(), procedure(),
+                   term(), 1..600_000) -> {ok, term()} | {error, term()}.
+call_station(Pool, Station, Target, Realm, Procedure, Payload, TimeoutMs) ->
+    macula_client:call_station(Pool, Station, Target, Realm, Procedure, Payload,
                                TimeoutMs).
 
-%% @doc As `call_station/6', presenting a capability token to a gated
+%% @doc As `call_station/7', presenting a capability token to a gated
 %% provider via `Opts' (`#{ucan_token => Token}'). Empty/absent = none.
 %% Slice 7b dual-trust. `Opts' also carries the per-call TLS trust
 %% override for this dial: `verify', `expected_node_id', and
-%% `pin_tls_cert' (see `macula_client:call_station/8'), and may set
+%% `pin_tls_cert' (see `macula_client:call_station/9'), and may set
 %% `dial_timeout_ms', how much of `TimeoutMs' the wait for a fresh link's
 %% handshake may take (default: all of it).
--spec call_station(pool(), macula_client:seed(), realm(), procedure(),
-                   term(), pos_integer(), map()) ->
+-spec call_station(pool(), macula_client:seed(), <<_:256>>, realm(), procedure(),
+                   term(), 1..600_000, map()) ->
     {ok, term()} | {error, term()}.
-call_station(Pool, Station, Realm, Procedure, Payload, TimeoutMs, Opts) ->
+call_station(Pool, Station, Target, Realm, Procedure, Payload, TimeoutMs, Opts) ->
     Ucan = maps:get(ucan_token, Opts, <<>>),
     LinkOpts = maps:with([verify, expected_node_id, pin_tls_cert], Opts),
     DialTimeoutMs = maps:get(dial_timeout_ms, Opts, TimeoutMs),
-    macula_client:call_station(Pool, Station, Realm, Procedure, Payload,
+    macula_client:call_station(Pool, Station, Target, Realm, Procedure, Payload,
                                TimeoutMs, Ucan, LinkOpts, DialTimeoutMs).
 
 %% @doc Register a procedure handler on a V2 pool. Fans out to every
@@ -382,7 +387,7 @@ unadvertise(Pool, Realm, Procedure) ->
 put_record(Pool, #{key := _, tbs := _, signature := _} = Signed) when is_pid(Pool) ->
     put_record(Pool, macula_record:encode(Signed));
 put_record(Pool, Wire) when is_pid(Pool), is_binary(Wire) ->
-    classify_put(macula_client:call(Pool, ?DHT_REALM,
+    classify_put(macula_client:call_linked_station(Pool, ?DHT_REALM,
                                     ?DHT_PUT_RECORD_PROC,
                                     Wire, ?DHT_RECORD_TIMEOUT_MS)).
 
@@ -409,7 +414,7 @@ find_record(Pool, Key) ->
 find_record(Pool, Key, TimeoutMs)
   when is_pid(Pool), is_binary(Key), byte_size(Key) =:= 32,
        is_integer(TimeoutMs), TimeoutMs > 0 ->
-    classify_find(macula_client:call(Pool, ?DHT_REALM,
+    classify_find(macula_client:call_linked_station(Pool, ?DHT_REALM,
                                      ?DHT_FIND_RECORD_PROC,
                                      #{key => Key}, TimeoutMs)).
 
@@ -440,7 +445,7 @@ find_records(Pool, Key) ->
 find_records(Pool, Key, TimeoutMs)
   when is_pid(Pool), is_binary(Key), byte_size(Key) =:= 32,
        is_integer(TimeoutMs), TimeoutMs > 0 ->
-    classify_find_list(macula_client:call(Pool, ?DHT_REALM,
+    classify_find_list(macula_client:call_linked_station(Pool, ?DHT_REALM,
                                           ?DHT_FIND_RECORDS_PROC,
                                           #{key => Key}, TimeoutMs)).
 
@@ -460,7 +465,7 @@ classify_find_list({error, _} = E) -> E.
     {ok, [m_record()]} | {error, term()}.
 find_records_by_type(Pool, Type)
   when is_pid(Pool), is_integer(Type), Type >= 0, Type =< 255 ->
-    classify_list(macula_client:call(Pool, ?DHT_REALM,
+    classify_list(macula_client:call_linked_station(Pool, ?DHT_REALM,
                                      ?DHT_FIND_RECORDS_BY_TYPE_PROC,
                                      #{type => Type},
                                      ?DHT_RECORD_TIMEOUT_MS)).
@@ -570,7 +575,7 @@ put_content(Pool, Bytes) when is_pid(Pool), is_binary(Bytes) ->
 %% @doc As `put_content/2', dialing `Station' directly (reusing a live
 %% link or dialing + waiting up to `TimeoutMs' for one) instead of
 %% picking from the pool's existing links — the content-transfer
-%% counterpart to `call_station/6'. `Station' and `TimeoutMs' mean
+%% counterpart to `call_station/7'. `Station' and `TimeoutMs' mean
 %% exactly what they do there; the underlying block/manifest transfer
 %% has its own internal timeouts regardless of `TimeoutMs', which
 %% bounds only the connect wait. See `macula_direct_dial:put_content/4'
@@ -626,7 +631,7 @@ get_content(Pool, _MCID) when is_pid(Pool) ->
 %% @doc As `get_content/2', dialing `Station' directly (reusing a live
 %% link or dialing + waiting up to `TimeoutMs' for one) instead of
 %% picking from the pool's existing links — the content-transfer
-%% counterpart to `call_station/6'. `Station' and `TimeoutMs' mean
+%% counterpart to `call_station/7'. `Station' and `TimeoutMs' mean
 %% exactly what they do there; the underlying block/manifest transfer
 %% has its own internal timeouts regardless of `TimeoutMs', which
 %% bounds only the connect wait. See `find_content_providers/2' to
@@ -677,7 +682,7 @@ get_content_station(_Pool, _Station, _MCID, _TimeoutMs, _Opts) ->
 -spec find_content_providers(pool(), mcid()) -> {ok, [map()]} | {error, term()}.
 find_content_providers(Pool, <<2, _Codec:8, _Hash:48/binary>> = MCID) when is_pid(Pool) ->
     classify_find_providers(
-      macula_client:call(Pool, ?DHT_REALM, ?DHT_FIND_RECORDS_PROC,
+      macula_client:call_linked_station(Pool, ?DHT_REALM, ?DHT_FIND_RECORDS_PROC,
                          #{key => macula_record:content_key(MCID)},
                          ?DHT_RECORD_TIMEOUT_MS)).
 
@@ -770,7 +775,7 @@ call_stream(Pool, Realm, Procedure, Args, Opts)
 
 %% @doc Open a streaming RPC by DIALING a specific station directly
 %% (direct-dial), instead of routing through an existing pool link — the
-%% streaming analogue of `call_station/6'. Compose it with DHT resolution
+%% streaming analogue of `call_station/7'. Compose it with DHT resolution
 %% (`find_records' -> `read_procedure_advertisement' -> `station_endpoint')
 %% to reach a stream provider in one hop, exactly as a unary caller does.
 %% `Opts' may set `dial_timeout_ms' (default 10_000) and a `mode'.

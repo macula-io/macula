@@ -45,7 +45,7 @@ setup() ->
     meck:expect(macula, find_record,
                 fun(_Pool, Key, TimeoutMs) -> find_record(Key, TimeoutMs) end),
     meck:expect(macula, call_station,
-                fun(_Pool, DialUrl, _Realm, _Proc, _Payload, _TimeoutMs, _Opts) ->
+                fun(_Pool, DialUrl, _Provider, _Realm, _Proc, _Payload, _TimeoutMs, _Opts) ->
                         visit(DialUrl)
                 end),
     meck:expect(macula, call_stream_station,
@@ -121,7 +121,10 @@ resolve_test_() ->
       {timeout, 30, fun put_content_asks_again_past_a_malformed_endpoint_record/0},
       {timeout, 30, fun put_content_reports_a_malformed_endpoint_record_at_its_deadline/0},
       {timeout, 30, fun put_content_asks_again_past_an_expired_endpoint_record/0},
-      {timeout, 30, fun put_content_ends_the_lookup_at_an_endpoint_record_that_does_not_verify/0}]}.
+      {timeout, 30, fun put_content_ends_the_lookup_at_an_endpoint_record_that_does_not_verify/0},
+      {timeout, 30, fun a_call_with_a_removed_trust_option_is_refused_before_any_lookup/0},
+      {timeout, 30, fun a_stream_with_a_removed_trust_option_is_refused_before_any_lookup/0},
+      {timeout, 30, fun an_advertisement_with_a_removed_trust_option_is_not_published/0}]}.
 
 %%%===================================================================
 %%% Calls
@@ -261,7 +264,7 @@ a_published_advertisement_is_signed_by_the_node_identity_and_put_as_its_wire_for
     Test = self(),
     StationId = maps:get(id, Station),
     meck:expect(macula, links, fun(_Pool) -> {ok, [#{connected => true, node_id => StationId}]} end),
-    meck:expect(macula_client, call,
+    meck:expect(macula_client, call_linked_station,
                 fun(_Pool, _Realm, Procedure, Payload, _TimeoutMs) ->
                         Test ! {called, Procedure, Payload},
                         {ok, ok}
@@ -273,22 +276,56 @@ a_published_advertisement_is_signed_by_the_node_identity_and_put_as_its_wire_for
                    serving_station => StationId, authorization => undefined},
                  macula_record:read_procedure_advertisement(Verified)).
 
+%% verify_cert_chain turned a check on in 10.x and is gone. A call that still
+%% passes it is refused by name before anything is looked up or dialed, instead
+%% of resolving without the check it asked for; realm_trust replaces it.
+a_call_with_a_removed_trust_option_is_refused_before_any_lookup() ->
+    ?assertEqual({error, {removed_option, verify_cert_chain}},
+                 macula_direct_dial:call(pool, ?REALM, ?PROC, #{}, 1000,
+                                         #{verify_cert_chain => {<<"pem">>, ?ORG}})),
+    ?assertEqual(0, lookups_and_dials()).
+
+a_stream_with_a_removed_trust_option_is_refused_before_any_lookup() ->
+    ?assertEqual({error, {removed_option, verify_cert_chain}},
+                 macula_direct_dial:call_stream(pool, ?REALM, ?PROC, #{}, #{dial_timeout_ms => 1000},
+                                                #{verify_cert_chain => {<<"pem">>, ?ORG}})),
+    ?assertEqual(0, lookups_and_dials()).
+
+%% cert_chain carried a provider's certificate chain in 10.x and is gone. An
+%% advertisement that still passes it is refused by name before the pool's
+%% links are read or anything is put; authorization replaces it.
+an_advertisement_with_a_removed_trust_option_is_not_published() ->
+    Test = self(),
+    meck:expect(macula, links, fun(_Pool) -> Test ! links_read, {ok, []} end),
+    meck:expect(macula_client, call_linked_station,
+                fun(_Pool, _Realm, _Procedure, _Payload, _TimeoutMs) -> Test ! put, {ok, ok} end),
+    ?assertEqual({error, {removed_option, cert_chain}},
+                 macula_direct_dial:publish_advertisement(self(), ?REALM, ?PROC, node_key(identity),
+                                                          #{cert_chain => <<"pem">>})),
+    ?assertEqual(none, receive links_read -> links_read; put -> put after 0 -> none end).
+
+lookups_and_dials() ->
+    lists:sum([meck:num_calls(macula, Fun, '_')
+               || Fun <- [find_records, find_record, call_station, call_stream_station]]).
+
 %% The dial goes to the station a trusted advertisement names, pinned to that
-%% station's node_id.
+%% station's node_id, and the CALL targets the provider that signed the
+%% advertisement.
 a_call_dials_the_station_a_trusted_advertisement_names_pinned_to_its_node_id() ->
     A = station(<<"a.test">>),
     Test = self(),
-    set_replies(procedure_key(), [[advertisement(A)]]),
+    #{key_id := Provider} = Advertisement = advertisement(A),
+    set_replies(procedure_key(), [[Advertisement]]),
     set_endpoint(A, endpoint_record(A)),
     meck:expect(macula, call_station,
-                fun(_Pool, DialUrl, _Realm, _Proc, _Payload, _TimeoutMs, Opts) ->
-                        Test ! {dialed, DialUrl, Opts},
+                fun(_Pool, DialUrl, Target, _Realm, _Proc, _Payload, _TimeoutMs, Opts) ->
+                        Test ! {dialed, DialUrl, Target, Opts},
                         {ok, answered}
                 end),
     ?assertEqual({ok, answered}, call(3000)),
     AId = maps:get(id, A),
-    ?assertMatch({<<"quic://[a.test]:4433">>, #{expected_node_id := AId}},
-                 receive {dialed, Url, Opts} -> {Url, Opts} after 0 -> none end).
+    ?assertMatch({<<"quic://[a.test]:4433">>, Provider, #{expected_node_id := AId}},
+                 receive {dialed, Url, Target, Opts} -> {Url, Target, Opts} after 0 -> none end).
 
 %% An endpoint record under the station's key but signed by another node is
 %% never dialled.

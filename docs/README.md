@@ -32,7 +32,7 @@ Macula SDK is an Erlang/OTP client library for connecting to a **federated relay
 | [Connecting](guides/shared/CONNECTING_GUIDE.md) | Pool model, seeds, identity, replication, lifecycle |
 | [PubSub](guides/pubsub/PUBSUB_GUIDE.md) | Topic-based messaging through the relay mesh |
 | [Topic Naming](guides/shared/TOPIC_NAMING_GUIDE.md) | Canonical 5-segment topic shape |
-| [RPC](guides/rpc/RPC_GUIDE.md) | Request/response; direct-dial via `call_station/6,7` or the supervised `start_link_direct`/`advertise_direct` |
+| [RPC](guides/rpc/RPC_GUIDE.md) | Request/response; direct-dial via `call_station/7,8` or the supervised `start_link_direct`/`advertise_direct` |
 | [Content](guides/content/CONTENT_GUIDE.md) | Content-addressed blobs (MCID), single-block or chunked, plus push/upload at a known recipient; direct-dial fetch/seed |
 | [Records](guides/shared/RECORDS_GUIDE.md) | Signed, TTL'd facts in the DHT — your own record types |
 | [Streaming](guides/streaming/STREAMING_GUIDE.md) | Streaming RPC (server / client / bidi); direct-dial via `call_stream_station/6` |
