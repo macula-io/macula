@@ -50,6 +50,24 @@ records_named_by_their_payload_match_the_vectors_test() ->
               macula_record:org_directory(RealmId, <<"acme">>, fill(16#44))}],
     [?assertEqual(hex(list_to_binary(Hex)), macula_record:storage_key(Record)) || {Hex, Record} <- Cases].
 
+%% Records named by their signer, with key id 0x33 repeated. The vectors were computed in Python (2026-09-15) from the
+%% design's formula, by a script that first reproduces procedure_key_vector_test's vector, and macula-go pins the same
+%% rows, so a change of field order or prefix in either stack fails here or there. Each row names its vector.
+records_named_by_their_signer_match_the_vectors_test() ->
+    Signer = fill(16#33),
+    Cases = [{"76f0c1daf5c481e36fe610398b395a8bca902297e292e1a21e1b161b01007c47",
+              macula_record:foundation_seed_list([])},
+             {"a5aad8cf95e5bbd30728b699bd8f1ed4434edc6b3cfa7fb508ec18a9a104cc29",
+              macula_record:foundation_parameter(<<"max_hops">>, 8)},
+             {"7c37bc0dac3384f930fe1c367743b0fb5ebedead7ac8d1e2590cdc94c92d3399",
+              macula_record:foundation_realm_trust_list([])},
+             {"a860117ee3bbb136d84a9638bb8221945de34588d8fbd2e67b7d9458b2aaffa5",
+              macula_record:envelope(16#20, #{}, #{})},
+             {"3ce72b62311244b1a9e502755545360a62bea31f6fc1e22aad680a257e657eab",
+              macula_record:envelope(16#20, #{}, #{subject_id => <<"s1">>})}],
+    [?assertEqual({Hex, hex(list_to_binary(Hex))}, {Hex, macula_record:storage_key(Record#{key_id => Signer})})
+     || {Hex, Record} <- Cases].
+
 %%------------------------------------------------------------------
 %% Records named by their signer
 %%------------------------------------------------------------------
