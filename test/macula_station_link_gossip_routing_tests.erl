@@ -117,8 +117,24 @@ a_report_from_before_the_link_took_another_peer_charges_no_one_test_() ->
          stop_links([B])
      end}}.
 
+%% A report whose Meta names no current peer charges no one and is counted on the link: one made while the link is
+%% still connecting, with no peer node_id yet and a Meta whose sender is undefined, one whose Meta has no sender, and
+%% one whose Meta is not a map.
+a_report_whose_meta_names_no_current_peer_charges_no_one_test_() ->
+    {spawn, {timeout, 10,
+     fun() ->
+         {B, _SubRef} = link_with_a_subscriber(),
+         _ = sys:replace_state(B, fun(S) -> setelement(?PEER_NODE_ID_INDEX, S, undefined) end),
+         _ = [ok = macula_station_link:overlay_frame_refused(B, Meta, signature_invalid)
+              || Meta <- [#{sender => undefined}, #{}, not_a_map]],
+         ?assertEqual(#{signature_invalid => 3}, refused_relays(B)),
+         ?assertEqual(none, connection_report(0)),
+         ?assert(is_process_alive(B)),
+         stop_links([B])
+     end}}.
+
 %% A report of a kind charged_refusal/1 does not classify is counted as unknown_refusal and charges no one, even for a
-%% frame from the connected peer, and the link stays up.
+%% frame from the connected peer, and whatever its Meta, and the link stays up.
 a_report_of_a_kind_no_rule_classifies_is_counted_as_unknown_refusal_test_() ->
     {spawn, {timeout, 10,
      fun() ->
@@ -126,9 +142,10 @@ a_report_of_a_kind_no_rule_classifies_is_counted_as_unknown_refusal_test_() ->
          Gossip = received(gossip(publication(?REALM))),
          B ! {macula_peering, frame, self(), Gossip},
          {SubRef, Gossip, Meta} = overlay_frame_within(1_000),
-         _ = [ok = macula_station_link:overlay_frame_refused(B, Meta, Kind)
-              || Kind <- [not_a_kind, {expired, soon}, {signature_invalid, 1}, "text"]],
-         ?assertEqual(#{unknown_refusal => 4}, refused_relays(B)),
+         Reports = [{Meta, Kind} || Kind <- [not_a_kind, {expired, soon}, {signature_invalid, 1}, "text", #{kind => 1}]]
+                   ++ [{maps:remove(sender, Meta), not_a_kind}, {not_a_map, not_a_kind}],
+         _ = [ok = macula_station_link:overlay_frame_refused(B, ReportMeta, Kind) || {ReportMeta, Kind} <- Reports],
+         ?assertEqual(#{unknown_refusal => 7}, refused_relays(B)),
          ?assertEqual(none, connection_report(0)),
          ?assert(is_process_alive(B)),
          stop_links([B])
