@@ -284,16 +284,25 @@ keeps them out of what those processes show and what the node logs:
 - A process that holds a key formats its status with the private half
   of each key replaced by `redacted`. `sys:get_status/1`, and the crash
   and logger reports of that process, show a key's public half only.
-- Starting the `macula` application adds the primary logger filter
-  `macula_key_redaction`, and stopping it removes that filter and no
-  other. In report events of the `otp` and `macula` domains the filter
-  redacts every key the same way, wherever the report holds it, and a
-  stack frame of a Macula module shows its arity in place of its
-  arguments, since those can hold a key. Stack frames of your own
-  modules keep their arguments.
+- Starting the `macula` application, and starting a pool, installs the
+  primary logger filter `macula_key_redaction` once, so a pool you
+  start without the application is covered too. Nothing removes it,
+  stopping the application included, because a process that holds a
+  key can outlive the application. In report events of the `otp` and
+  `macula` domains the filter redacts every key the same way, wherever
+  the report holds it, and a stack frame of a Macula module shows its
+  arity in place of its arguments, since those can hold a key. Stack
+  frames of your own modules keep their arguments.
+- A crash report's stack trace sits outside a process's formatted
+  status, so only the filter keeps key material out of it. A logger
+  handler of yours that ships raw report terms relies on that filter.
 
 `sys:get_state/1` returns a process's state as it is, keys included, so
 keep its output out of logs.
+
+A crash dump copies every process heap, keys included. A release that
+runs a pool should set `ERL_CRASH_DUMP_SECONDS=0`, or treat its crash
+dumps as secret.
 
 ---
 

@@ -14,8 +14,8 @@
 %% private key and must equal the stored one, and every component passes a sign-and-verify round trip. A key file
 %% its group or others can read is refused.
 %%
-%% A process that holds keys shows them through redacted/1, and the application's primary logger filter
-%% redacted_log_event/2 keeps their private halves out of crash and diagnostics reports.
+%% A process that holds keys shows them through redacted/1, and the primary logger filter redacted_log_event/2, which
+%% install_log_redaction/0 puts in place, keeps their private halves out of crash and diagnostics reports.
 %%
 %% A key with one component signs with ML-DSA-87 alone. A hybrid key signs with Macula's composite
 %% ML-DSA-87-PS384: both halves sign M' = Prefix || Label || len(ctx) || ctx || SHA-512(M), with an empty ctx and
@@ -38,6 +38,9 @@
 -include_lib("public_key/include/public_key.hrl").
 -include_lib("kernel/include/file.hrl").
 
+%% The id of the primary logger filter that redacts keys in log events.
+-define(KEY_REDACTION, macula_key_redaction).
+
 -export([
     generate/2,
     generate/3,
@@ -45,6 +48,7 @@
     load/3,
     redacted/1,
     redacted_log_event/2,
+    install_log_redaction/0,
     public_key/1,
     sign/2,
     verify/4,
@@ -151,6 +155,29 @@ redacted_log_event(#{msg := {report, Report}, meta := #{domain := [Domain | _]}}
     Event#{msg := {report, redacted(Report, Modules)}};
 redacted_log_event(Event, _Modules) ->
     Event.
+
+%% @doc Put the primary logger filter redacted_log_event/2, with the macula application's modules, in place, unless the
+%% node already holds it. Another value held under its id, as an earlier load can leave behind, is replaced. The
+%% application's start and every pool call it, and nothing removes it, since a process that holds a key can outlive
+%% the application. Returns ok, also when a concurrent call added the filter first.
+-spec install_log_redaction() -> ok.
+install_log_redaction() ->
+    ok = application_loaded(application:load(macula)),
+    {ok, Modules} = application:get_key(macula, modules),
+    Filter = {fun macula_node_keys:redacted_log_event/2, maps:from_keys(Modules, true)},
+    log_redaction(lists:keyfind(?KEY_REDACTION, 1, maps:get(filters, logger:get_primary_config())), Filter).
+
+application_loaded(ok) -> ok;
+application_loaded({error, {already_loaded, macula}}) -> ok.
+
+log_redaction({?KEY_REDACTION, Filter}, Filter) ->
+    ok;
+log_redaction(_MissingOrOther, Filter) ->
+    _ = logger:remove_primary_filter(?KEY_REDACTION),
+    filter_added(logger:add_primary_filter(?KEY_REDACTION, Filter)).
+
+filter_added(ok) -> ok;
+filter_added({error, {already_exist, ?KEY_REDACTION}}) -> ok.
 
 %%------------------------------------------------------------------
 %% Signing

@@ -1769,7 +1769,11 @@ loaded(_NoKey) -> {error, {node_identity, loader_failed}}.
 issuer_start(#{issuer_start := Start}) when is_function(Start, 2) -> Start;
 issuer_start(_Opts) -> fun macula_statement_issuer_sup:start_issuer/2.
 
+%% The key redaction filter goes in place once the pool holds its key and before anything uses it, so a pool started
+%% without the macula application still keeps private halves out of its tree's crash reports. A loader that fails
+%% installs nothing, and its refusal alone keeps the key out.
 keys_with_identity({ok, NodeIdentity}, Profile, Start) ->
+    ok = macula_node_keys:install_log_redaction(),
     keys_with_issuer(Start(fun() -> NodeIdentity end, self()), NodeIdentity, Profile, Start);
 keys_with_identity({error, _} = Refusal, _Profile, _Start) ->
     Refusal.
