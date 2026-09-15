@@ -152,10 +152,11 @@ applies to the whole slot.
 - A checkable slot keeps up to 64 places for checked signers and up to 16 for everyone else. An unchecked writer never
   takes a checked place, and nothing is evicted.
 - Every other slot keeps 64 places.
-- An advertisement with no authorization, or with any authorization but the org directory and delegation pair, gets no
-  place in any slot: the station refuses its STORE as `authorization_form_unsupported`, the name every caller's
-  `verify_authorization/3` refuses it with, deciding from the authorization's form alone and decoding nothing inside
-  it.
+- An advertisement with no authorization, or with any authorization but exactly the org directory and delegation pair,
+  gets no place in any slot. The station refuses its STORE with the refusal `verify_authorization/3` gives every
+  caller for that form: `no_authorization` when it has none, `authorization_form_unsupported` for any other
+  authorization, and `malformed` when the pair holds something other than bytes. It decides from the form alone and
+  decodes nothing inside it.
 - When a trust list change makes a slot checkable, or no longer checkable, held entries stay until they expire, are
   replaced or are withdrawn, and new entries follow the slot's current places. A renewal always replaces its signer's
   held entry and takes the place its signer qualifies for now.
@@ -179,7 +180,7 @@ per hash and never showing callers the decision.
 - An advertisement with an org namespace: two verifications the first time its embedded records' bytes are seen,
   about 0.5 ms (US) or 0.9 ms (EU), and a hash lookup on every renewal after that.
 - One trust list verification per refresh.
-- An advertisement whose authorization is not the pair: a check of its form, with no verification.
+- An advertisement refused by its authorization's form: a check of that form, with no verification.
 
 ### 2.7 What stays open
 
@@ -196,9 +197,10 @@ per hash and never showing callers the decision.
 - A realm-signed record signed by one listed realm's key for another listed realm's `realm_id` gets no checked place.
 - Renewals carrying the same embedded record bytes cost no further verification.
 - After a realm is removed from the trust list, its signers get no checked place on the next STORE.
-- An advertisement with no authorization, or whose authorization holds a `certificate_chain` or anything but the org
-  directory and delegation pair, is refused at STORE as `authorization_form_unsupported`, takes no place in a
-  checkable slot or any other, and costs its connection 1.
+- An advertisement with no authorization is refused at STORE as `no_authorization`, one whose authorization holds a
+  `certificate_chain` or anything but exactly the org directory and delegation pair as
+  `authorization_form_unsupported`, and one whose pair holds something other than bytes as `malformed`. None takes a
+  place in any slot, and each costs its connection 1.
 - An advertisement with such an authorization is never counted as authorized in anything the station serves or
   relays.
 - No station source file names a realm CA PEM, a `realm_ca` trust key, or a `cert_chain` or `verify_cert_chain`
@@ -218,8 +220,8 @@ Each connection has one budget. Each of these costs 1:
 
 - An object refusal that every verifier reaches from the same bytes: the signed object's shape, the carried key's
   form, the signature, the decoding of `tbs`, its keys and field types, `alg`, a signer field that differs from the key
-  id, a record over 256 KiB, a domain record lifetime over 7 days (3.5), and an advertisement whose authorization is
-  not the org directory and delegation pair (2.4). A station verifies what it routes, stores and serves: a request
+  id, a record over 256 KiB, a domain record lifetime over 7 days (3.5), and an advertisement refused by its
+  authorization's form (2.4). A station verifies what it routes, stores and serves: a request
   before routing, a reply against the request's target, a relay error only for a pending request, a stream frame by key
   and sequence, and a record on STORE. A Plumtree node verifies a publication before it forwards it. So an honest relay
   never passes one of those on. The payload of an `overlay_relay` is the exception: a station forwards it unread
