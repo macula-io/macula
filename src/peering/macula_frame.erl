@@ -78,6 +78,7 @@
 
     %% Constructors — Streaming RPC (Part 6 §5.6)
     stream_open/2, open_stream/1, provider_stream/3, caller_stream/3, stream_bytes/2, written_bytes/1,
+    parse_for_relay/2, relayed_bytes/1,
     verify_provider_stream/3, verify_caller_stream/3, charged_refusal/1,
 
     %% Constructors — Content transfer (Part 6 §9)
@@ -130,6 +131,7 @@
     frame_type/0,
     stream_build/0,
     stream_bytes/0,
+    received_frame/0,
     item/0,
     connect_spec/0,
     hello_spec/0,
@@ -613,6 +615,13 @@
 %% The signed and encoded bytes of a frame built here, tagged so that only what stream_bytes/2 returns is written on a
 %% dedicated stream.
 -opaque stream_bytes() :: {macula_stream_bytes, binary()}.
+
+%% The bytes a relay received for one frame that passed the reader's checks, tagged so that a relay writes only what
+%% parse_for_relay/2 accepted.
+-opaque received_frame() :: {macula_received_frame, binary()}.
+
+%% What parse_for_relay/2 gives for each whole frame it read.
+-type relay_item() :: {frame(), received_frame()} | {refused, {invalid_frame, frame_type() | unknown, atom()}}.
 
 %% What a verifier holds for one stream: the verified STREAM_OPEN and, per side, the next sequence number and whether
 %% that side has ended; for the provider also the key and signer its first frame carried.
@@ -1984,6 +1993,46 @@ drain_step({invalid, Invalid, Rest}, _Buf, Cap, Acc) ->
 drain_step({more, _N}, Buf, _Cap, Acc) ->
     {ok, lists:reverse(Acc), Buf};
 drain_step({error, Reason}, _Buf, _Cap, Acc) ->
+    {malformed, lists:reverse(Acc), Reason}.
+
+%% @doc Parse bytes a relay received on a stream, for it to pass on. Each whole
+%% frame that passes the checks of `parse_received/2' comes with a unit of
+%% exactly the bytes received for it, its length header included; only such a
+%% unit is written, by `macula_peering:relay_on_stream/2' and
+%% `async_relay_on_stream/2,3', through `relayed_bytes/1'. A frame whose fields
+%% its type refuses comes back as `{refused, {invalid_frame, Type, Field}}', in
+%% its place and with no unit. A length header above `MaxFrameBytes', or a
+%% whole frame that does not decode, ends the parse as in `parse_received/2',
+%% and nothing after it yields a unit.
+-spec parse_for_relay(binary(), pos_integer()) ->
+          {ok, [relay_item()], binary()}
+        | {malformed, [relay_item()], frame_too_large | bad_frame | too_many_elements}.
+parse_for_relay(Buf, MaxFrameBytes)
+  when is_binary(Buf), is_integer(MaxFrameBytes), MaxFrameBytes > 0, MaxFrameBytes =< ?MAX_FRAME_BYTES ->
+    relay_drain(Buf, MaxFrameBytes, []).
+
+%% @doc The bytes a relay received for a frame `parse_for_relay/2' accepted,
+%% to write. Anything else is refused with function_clause, in the caller.
+-spec relayed_bytes(received_frame()) -> binary().
+relayed_bytes({macula_received_frame, Bytes}) when is_binary(Bytes) ->
+    Bytes.
+
+relay_drain(Buf, Cap, Acc) ->
+    relay_step(split_frame(Buf, Cap), Buf, Cap, Acc).
+
+relay_step({ok, Bytes, Rest}, Buf, Cap, Acc) ->
+    Received = binary:part(Buf, 0, byte_size(Buf) - byte_size(Rest)),
+    relay_item(fields_checked(decode_cbor(Bytes, Rest)), Received, Cap, Acc);
+relay_step({more, _Needed}, Buf, _Cap, Acc) ->
+    {ok, lists:reverse(Acc), Buf};
+relay_step({error, Reason}, _Buf, _Cap, Acc) ->
+    {malformed, lists:reverse(Acc), Reason}.
+
+relay_item({ok, Frame, Rest}, Received, Cap, Acc) ->
+    relay_drain(Rest, Cap, [{Frame, {macula_received_frame, Received}} | Acc]);
+relay_item({invalid, Invalid, Rest}, _Received, Cap, Acc) ->
+    relay_drain(Rest, Cap, [{refused, Invalid} | Acc]);
+relay_item({error, Reason}, _Received, _Cap, Acc) ->
     {malformed, lists:reverse(Acc), Reason}.
 
 %% @doc Drain the complete frames in a buffer, in the `{Frames, Tail}'

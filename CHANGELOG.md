@@ -200,6 +200,14 @@ Post-quantum work on the `post-quantum` branch. Not on `main`.
   an identity key or a stream frame without its verified STREAM_OPEN,
   without raising and with nothing to write. `written_bytes/1` gives the
   bytes of a `stream_bytes()` and refuses anything else.
+- `macula_frame:parse_for_relay/2` parses bytes a relay received on a
+  stream: each whole frame that passes the checks of `parse_received/2`
+  comes with a unit of exactly the bytes received for it, a frame whose
+  fields its type refuses comes back refused with no unit, and a length
+  header over the cap or a frame that does not decode ends the parse.
+  `macula_peering:relay_on_stream/2` and `async_relay_on_stream/2,3` write
+  only such units, through `macula_frame:relayed_bytes/1`, so a relay
+  writes nothing its reader did not accept.
 
 ### Changed
 
