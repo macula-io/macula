@@ -713,7 +713,8 @@ before its wire checks are green.
     not stored, and nothing held is evicted for it; built-in and domain types each have a station total; VALUE
     answers in pages of at most 256 KiB;
   - a slot a station can check through its realm trust list keeps 64 places for checked signers and 16 for everyone
-    else; a station never parses a certificate chain, fetches anything during a STORE, or shows callers which place an
+    else; an advertisement authorized other than by the org directory and delegation pair gets no place, since the
+    certificate-chain form is removed; a station never fetches anything during a STORE or shows callers which place an
     entry holds;
   - each connection has a budget of 32 tokens, refilled at 1 per second, spent only on refusals that every verifier
     reaches from the same bytes and on allowances passed; an empty budget pauses reading from that connection, from
