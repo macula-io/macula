@@ -122,6 +122,14 @@ cross_stack_composite_vectors_test_() ->
         Public <- [fixture(Signer ++ "_composite_pub.bin")],
         Signature <- [fixture(Signer ++ "_composite_sig.bin")]].
 
+%% A composite that raw RSA-PSS accepts and every stack refuses: a valid composite over message.bin whose RSA half had
+%% its leading zero byte dropped, 4627 + 511 bytes, kept as fixed bytes for the other stacks to check against.
+cross_stack_zero_dropped_composite_is_refused_test() ->
+    Signature = fixture("zero_dropped_composite_sig.bin"),
+    ?assertEqual(5138, byte_size(Signature)),
+    ?assertNot(macula_node_keys:verify(fixture("message.bin"), Signature, fixture("zero_dropped_composite_pub.bin"),
+                                       pq_hybrid)).
+
 %%------------------------------------------------------------------
 %% Helpers
 %%------------------------------------------------------------------
