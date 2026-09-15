@@ -954,8 +954,8 @@ Every stack also meets these, each red first:
 
 ## Release after Stage 6
 
-`macula` 11.0.0 waits on WP 3.1 settling how an EU-profile credential carries the composite key, so that EU-profile
-provider certificate chains verify (D25 item 6). Until then `macula` refuses them.
+`macula` 11.0.0 no longer waits on WP 3.1 for provider certificate chains: the certificate authorization form is
+removed (D25 item 6, revised 2026-09-15), since the realm issues no X.509 certificates (design B1).
 
 1. `macula` 11.0.0 on hex, the release and the cutover trigger. Raf publishes hex; consumers move to `~> 11.0` only
    then, and none commits a git or branch dependency on `macula` before (D20).
