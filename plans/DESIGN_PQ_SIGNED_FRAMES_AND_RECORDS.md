@@ -301,12 +301,14 @@ Every DHT storage key is 32 bytes.
 ### Domain record types
 
 Every stack that signs or reads a domain type uses the same tag for it. The 11.0.0 coordinator (Jupiter) allocates
-each tag, and the allocation is added to this table. The owner of a domain type sets its payload rules.
+each tag, and the allocation is added to this table. The owner of a domain type sets its payload rules. A retired tag
+stays reserved and is never allocated again, since a node of an older release can still publish it.
 
 | Tag | Name | Owner | Payload rules |
 |---|---|---|---|
-| 0x20 | reserved, the example tag of the records guide and tests | macula | none |
-| 0x21 | `hecate.ownership_proof.v2` | hecate services | hecate_om's ownership proof |
+| 0x20 | reserved: the retired 10.x realm member identity record, and the example tag of the records guide and tests | macula-realm 10.x | none |
+| 0x21 | reserved: the retired 10.x `realm_member_resigned_v1` | macula-realm 10.x | none |
+| 0x22 | `hecate.ownership_proof.v2` | hecate services | hecate_om's ownership proof |
 
 ### Content ids
 
