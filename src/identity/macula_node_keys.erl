@@ -177,20 +177,28 @@ sign(Message, #{profile := Profile,
     <<MlDsaSignature/binary, RsaSignature/binary>>.
 
 %% @doc Verify a signature with the public key a node carries, under a profile. Malformed input is refused, never
-%% raised on.
+%% raised on. A signature is exactly signature_bytes/1 of the profile long, and one of another length is refused
+%% before either half is verified.
 -spec verify(iodata(), binary(), binary(), term()) -> boolean().
 verify(Message, Signature, Public, pq_pure)
   when byte_size(Signature) =:= ?MLDSA87_SIGNATURE_BYTES, byte_size(Public) =:= ?MLDSA87_PUBLIC_BYTES ->
     verified_call(fun() -> crypto:verify(mldsa87, none, Message, Signature, Public) end);
-verify(Message, <<MlDsaSignature:?MLDSA87_SIGNATURE_BYTES/binary, RsaSignature/binary>>,
-       <<MlDsaPublic:?MLDSA87_PUBLIC_BYTES/binary, RsaPublicDer/binary>>, pq_hybrid) ->
+verify(Message, Signature, Public, pq_hybrid) when is_binary(Signature), is_binary(Public) ->
+    composite_verified(byte_size(Signature) =:= signature_bytes(pq_hybrid), Message, Signature, Public);
+verify(_Message, _Signature, _Public, _Profile) ->
+    false.
+
+%% A composite's RSA half is as long as the modulus. RSA would accept the same value in fewer bytes, with its leading
+%% zero bytes dropped, and the other stacks refuse that, so the length is checked first.
+composite_verified(true, Message, <<MlDsaSignature:?MLDSA87_SIGNATURE_BYTES/binary, RsaSignature/binary>>,
+                   <<MlDsaPublic:?MLDSA87_PUBLIC_BYTES/binary, RsaPublicDer/binary>>) ->
     Representative = composite_representative(Message),
     MlDsaValid = verified_call(fun() ->
         crypto:verify(mldsa87, none, Representative, MlDsaSignature, MlDsaPublic)
     end),
     rsa_half_verifies(MlDsaValid, decode_rsa_public(RsaPublicDer), RsaSignature, Representative,
                       composite_rsa_params(pq_hybrid));
-verify(_Message, _Signature, _Public, _Profile) ->
+composite_verified(_LengthHolds, _Message, _Signature, _Public) ->
     false.
 
 %%------------------------------------------------------------------
