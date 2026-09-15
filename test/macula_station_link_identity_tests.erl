@@ -80,13 +80,16 @@ dialed_pin(Opts) ->
     Pin.
 
 %% A link whose issuer ends stops with a shutdown reason, so its end is no crash report.
+%% The issuer's reason reads killed, or noproc when the kill reaches the issuer
+%% before the link's monitor does: the runtime orders signals only between one
+%% sender and one receiver.
 ends_with_its_issuer(#{node_identity := Key}) ->
     Issuer = spawn(fun() -> receive stop -> ok end end),
     {ok, Link} = macula_station_link:start_link(link_opts(Key, Issuer)),
     unlink(Link),
     Mon = erlang:monitor(process, Link),
     exit(Issuer, kill),
-    ?assertEqual({shutdown, {issuer_down, killed}},
+    ?assertMatch({shutdown, {issuer_down, Why}} when Why =:= killed; Why =:= noproc,
                  receive {'DOWN', Mon, process, Link, Reason} -> Reason after ?EVENT_MS -> still_running end).
 
 %%------------------------------------------------------------------
