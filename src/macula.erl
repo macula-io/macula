@@ -91,6 +91,7 @@
 -export([join_mesh/1, join_dist_relay/1, dist_relay_client/0]).
 
 -ifdef(TEST).
+-export([join_pool_args/1]).
 %% Exports for unit tests — pure helpers that are otherwise private.
 %% `verify_block_hash/2' moved to `macula_content_transfer' (Phase 1,
 %% PLAN_PUSH_UPLOAD.md) along with the rest of the content-stream
@@ -931,7 +932,11 @@ unmonitor_nodes() -> macula_cluster:unmonitor_nodes().
 %% After calling this, standard OTP distribution works across firewalls.
 %% `Opts' takes:
 %% <ul>
-%%   <li>`relays' (required) — list of seed URLs for the V2 pool.</li>
+%%   <li>`relays' (required): the V2 pool's seeds, each a map with `host',
+%%       `port' and `expected_node_id', the relay's 32-byte node_id, which
+%%       every dial checks (D16). A relay without one refuses the join with
+%%       `{error, {relays, expected_node_id_required}}' before any pool
+%%       starts.</li>
 %%   <li>`node_identity': the V2 pool's node identity key,
 %%       `macula_node_keys:node_key()'. Default: generated.</li>
 %% </ul>
@@ -942,12 +947,23 @@ unmonitor_nodes() -> macula_cluster:unmonitor_nodes().
 %% (protocol-internal infrastructure, not bound to any user realm).
 -spec join_mesh(map()) -> ok | {error, term()}.
 join_mesh(Opts) ->
-    Relays = maps:get(relays, Opts),
-    PoolOpts = pool_opts_for_join(Opts),
-    on_pool_for_join(macula_client:connect(Relays, PoolOpts)).
+    joined(join_pool_args(Opts)).
 
-pool_opts_for_join(Opts) ->
-    maps:with([node_identity], Opts).
+joined({ok, Relays, PoolOpts}) ->
+    on_pool_for_join(macula_client:connect(Relays, PoolOpts));
+joined({error, _} = Refusal) ->
+    Refusal.
+
+%% The seeds and options of the pool a join starts: the relays, when every one names the node_id it expects, and the
+%% node identity key when one is given.
+join_pool_args(#{relays := Relays} = Opts) ->
+    pinned_relays(lists:all(fun pinned_relay/1, Relays), Relays, maps:with([node_identity], Opts)).
+
+pinned_relays(true, Relays, PoolOpts) -> {ok, Relays, PoolOpts};
+pinned_relays(false, _Relays, _PoolOpts) -> {error, {relays, expected_node_id_required}}.
+
+pinned_relay(#{host := _, port := _, expected_node_id := <<_:256>>}) -> true;
+pinned_relay(_Relay) -> false.
 
 on_pool_for_join({ok, Pool}) ->
     wait_for_pool(Pool, 30),

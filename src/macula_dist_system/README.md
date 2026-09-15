@@ -31,7 +31,8 @@ Erlang distribution over the Macula mesh: three transports, one goal — `net_ad
 ```
 
 ```erlang
-ok = macula:join_mesh(#{relays => [<<"https://relay-de-berlin.macula.io:4433">>]}).
+ok = macula:join_mesh(#{relays => [#{host => <<"relay-de-berlin.macula.io">>, port => 4433,
+                                     expected_node_id => RelayNodeId}]}).
 pong = net_adm:ping('othernode@otherhost').
 ```
 

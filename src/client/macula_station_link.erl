@@ -207,7 +207,7 @@
 %% App-level liveness probe. Sends a tiny CALL (`_macula.ping' on the
 %% DHT realm, no handler expected — station replies with
 %% `unknown_next_peer') every `?LIVENESS_INTERVAL_MS' and tracks the
-%% outstanding probe's call_id. On `?LIVENESS_MAX_MISSES' consecutive
+%% outstanding probe's request_id. On `?LIVENESS_MAX_MISSES' consecutive
 %% misses (i.e. no reply received within the next tick), close
 %% `peer_pid' to force the supervisor / pool layer to respawn a fresh
 %% link. Closes the "QUIC layer keeps connection alive but server
@@ -347,7 +347,7 @@
     content_pending = #{}     :: #{reference() => {gen_server:from(), reference()}},
     %% App-level liveness state. `liveness_timer' is the next-tick
     %% reference (or undefined when not armed). `liveness_outstanding'
-    %% holds the call_id of an in-flight probe (or undefined when no
+    %% holds the request_id of an in-flight probe (or undefined when no
     %% probe is awaiting reply). `liveness_misses' is the consecutive-
     %% miss count; reaches `?LIVENESS_MAX_MISSES' → close peer_pid.
     liveness_timer        :: undefined | reference(),
@@ -1446,9 +1446,10 @@ handle_info({'EXIT', Pid, Reason}, #state{peer_pid = Pid, seed = Seed} = S) ->
                               peer_node_id = undefined}};
 
 %% The issuer every connection of this link draws from is gone: the link
-%% ends, and the pool starts it again with the pool's next issuer.
+%% ends with a shutdown reason, so its end is no crash report, and the pool
+%% starts it again with the pool's next issuer.
 handle_info({'DOWN', _Mon, process, Issuer, Reason}, #state{issuer = Issuer} = S) ->
-    {stop, {issuer_down, Reason}, S};
+    {stop, {shutdown, {issuer_down, Reason}}, S};
 handle_info({'DOWN', Mon, process, Pid, _Reason}, S) ->
     %% Two monitor sources land here: subscriber pids paired by
     %% `subscribe/4', and stream pids tracked in `streams'. Probe
@@ -1958,21 +1959,16 @@ trigger_zombie_close(#state{peer_pid = Pid} = S) when is_pid(Pid) ->
 trigger_zombie_close(S) ->
     S.
 
-send_probe(#state{peer_pid = Pid, node_identity = Id} = S) when is_pid(Pid) ->
-    CallId = crypto:strong_rand_bytes(16),
-    Caller = node_id(Id),
-    DeadlineMs = erlang:system_time(millisecond) + S#state.liveness_interval_ms,
-    Frame = macula_frame:call(#{
-        call_id     => CallId,
-        procedure   => ?LIVENESS_PROCEDURE,
-        realm       => ?DHT_REALM,
-        payload     => #{},
-        deadline_ms => DeadlineMs,
-        caller      => Caller
-    }),
-    Signed = macula_frame:sign(Frame, Id),
-    try macula_peering:send_frame(Pid, Signed) catch _:_ -> ok end,
-    S#state{liveness_outstanding = CallId};
+%% The probe is a request to the station the link is connected to, signed with the node identity key. Its request_id is
+%% what a verified reply to it clears.
+send_probe(#state{peer_pid = Pid, peer_node_id = Station, node_identity = Key} = S) when is_pid(Pid) ->
+    RequestId = crypto:strong_rand_bytes(16),
+    Probe = macula_frame:call(#{request_id => RequestId, realm => ?DHT_REALM, procedure => ?LIVENESS_PROCEDURE,
+                                target => Station,
+                                deadline => erlang:system_time(millisecond) + S#state.liveness_interval_ms,
+                                payload => #{}}, Key),
+    try macula_peering:send_frame(Pid, Probe) catch _:_ -> ok end,
+    S#state{liveness_outstanding = RequestId};
 send_probe(S) ->
     S.
 
@@ -2597,15 +2593,10 @@ call_failure(Code, Name, _Detail) ->
 %% Fold TLS-policy opts (`verify' / `expected_node_id' / `pin_tls_cert')
 %% from the link opts into the seed map, so they reach the peering
 %% target at connect.
+%% The trust keys a seed map names stand, and the link's options fill only the ones it leaves out, so a pool-wide
+%% expected_node_id never replaces a seed's own pin.
 add_tls_opts(Seed, Opts) ->
-    lists:foldl(fun(K, Acc) -> copy_opt(K, Opts, Acc) end,
-                Seed, [verify, expected_node_id, pin_tls_cert]).
-
-copy_opt(K, Opts, Seed) ->
-    case maps:find(K, Opts) of
-        {ok, V} -> Seed#{K => V};
-        error   -> Seed
-    end.
+    maps:merge(maps:with([verify, expected_node_id, pin_tls_cert], Opts), Seed).
 
 parse_seed(#{host := _, port := _} = Map) ->
     Map;
