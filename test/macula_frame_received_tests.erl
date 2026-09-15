@@ -355,12 +355,15 @@ an_optional_header_field_of_another_length_is_named_test_() ->
 %% Relayed frames taken without a frame signature
 %%------------------------------------------------------------------
 
-%% A station relays the HyParView JOIN, FORWARD_JOIN, NEIGHBOR and SHUFFLE that D17 leaves unsigned in pq_pure from a
-%% connection it authenticated, so a receiver takes them without a frame signature, with the relay's origin as their
-%% sender. Exactly those four frame types are taken so; every other type keeps its own verification.
+%% A station relays every HyParView frame, JOIN, FORWARD_JOIN, NEIGHBOR, DISCONNECT, SHUFFLE and SHUFFLE_REPLY, which
+%% D17 leaves unsigned in pq_pure, from a connection it authenticated. SHUFFLE_REPLY goes to the node a shuffle walk
+%% started from and DISCONNECT to an evicted member, and neither need be a neighbour, so the relay is their only way
+%% there. A receiver takes them without a frame signature, with the relay's origin as their sender. Exactly those six
+%% frame types are taken so; every other type keeps its own verification.
 relayed_without_signature_names_exactly_the_unsigned_overlay_types_test() ->
-    ?assertEqual([hyparview_join, hyparview_forward_join, hyparview_neighbor, hyparview_shuffle],
-                 [Type || Type <- ?FRAME_TYPES, macula_frame:relayed_without_signature(Type)]),
+    ?assertEqual(lists:sort([hyparview_join, hyparview_forward_join, hyparview_neighbor, hyparview_disconnect,
+                             hyparview_shuffle, hyparview_shuffle_reply]),
+                 lists:sort([Type || Type <- ?FRAME_TYPES, macula_frame:relayed_without_signature(Type)])),
     ?assertNot(macula_frame:relayed_without_signature(a_future_frame_type)).
 
 %%------------------------------------------------------------------
