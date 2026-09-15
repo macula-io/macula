@@ -25,6 +25,7 @@ cases(Keys) ->
                  fun a_tampered_publication_is_refused/1,
                  fun a_publication_under_the_other_profile_is_malformed/1,
                  fun publication_fields_the_design_does_not_allow_are_malformed/1,
+                 fun a_topic_is_text_of_at_most_512_bytes/1,
                  fun a_publication_more_than_5_minutes_ahead_is_refused/1,
                  fun a_publication_past_its_ttl_plus_5_minutes_is_refused/1,
                  fun without_ttl_a_publication_lives_10_minutes_plus_5/1,
@@ -97,6 +98,17 @@ publication_fields_the_design_does_not_allow_are_malformed(#{publisher := Publis
                 Base#{{text, <<"seq">>} := 1 bsl 53},
                 Base#{{text, <<"published_at">>} := {text, <<"now">>}},
                 Base#{{text, <<"ttl_ms">>} => -1}]].
+
+%% A topic is text of at most 512 bytes: the builder refuses a longer one and one that is not UTF-8, and a verifier
+%% refuses a publication whose topic is longer.
+a_topic_is_text_of_at_most_512_bytes(#{publisher := Publisher}) ->
+    Long = binary:copy(<<"t">>, 512),
+    Publish = fun(Topic) -> macula_frame:publish((publish_spec(?NOW))#{topic => Topic}, Publisher) end,
+    ?assertMatch({ok, #{topic := Long}}, macula_frame:verify_publication(wire(Publish(Long)), pq_pure, ?NOW)),
+    ?assertError({badmatch, {error, {text_too_long, topic}}}, Publish(<<Long/binary, "t">>)),
+    ?assertError({badmatch, {error, {invalid_text, topic}}}, Publish(<<16#ff, 16#fe>>)),
+    Longer = (publication_tbs(Publisher, ?NOW))#{{text, <<"topic">>} := {text, <<Long/binary, "t">>}},
+    ?assertEqual({error, malformed_frame}, verify_crafted(Longer, Publisher)).
 
 a_publication_more_than_5_minutes_ahead_is_refused(#{publisher := Publisher}) ->
     Verify = fun(PublishedAt) ->

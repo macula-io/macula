@@ -7,7 +7,12 @@
 %%% not allow, refuses the frame and is named in the error, and so does a
 %%% field the frame type does not have, a version other than the protocol's, a
 %%% FORWARD_JOIN prwl above its arwl, a SWIM piggyback entry without one of its
-%%% fields, and SUBSCRIBE options that are not a map. A
+%%% fields, SUBSCRIBE options that are not a map, a SUBSCRIBE or UNSUBSCRIBE
+%%% topic that is not UTF-8 of at most 512 bytes, a SUBSCRIBE filter, a GOODBYE
+%%% detail that is not UTF-8 of at most 256 bytes, and a NODES entry whose
+%%% addresses are not at most 4 of exactly a host, a port and quic. A
+%%% fixed-length field in a list entry or in the optional header is checked as
+%%% a top-level one is. A
 %%% frame type that carries one of several signed objects needs exactly one of
 %%% them. A control frame signed for its neighbour holds version, frame_type
 %%% and neighbour and nothing else; its own fields are checked when it is
@@ -226,14 +231,109 @@ a_piggyback_entry_needs_each_of_its_fields_test_() ->
                        macula_frame:validate_received(Frame#{piggyback => [Entry]}))}
         || #{frame_type := Type} = Frame <- [Ping, Ack], {Name, Entry} <- Missing ++ Mistyped]].
 
-subscribe_options_are_a_map_test() ->
+subscribe_options_are_optional_and_a_map_test() ->
     Subscribe = over_the_wire(macula_frame:subscribe(#{topic => <<"probe.topic">>, realm => key(),
                                                        subscriber => key(), options => #{}})),
     ?assertEqual(ok, macula_frame:validate_received(Subscribe)),
+    ?assertEqual(ok, macula_frame:validate_received(maps:remove(options, Subscribe))),
     ?assertEqual({error, {invalid_frame, subscribe, options}},
                  macula_frame:validate_received(Subscribe#{options => [ordered]})),
     ?assertEqual({error, {invalid_frame, subscribe, options}},
                  macula_frame:validate_received(Subscribe#{options => 1})).
+
+%% A SUBSCRIBE or UNSUBSCRIBE topic is bytes of valid UTF-8, at most 512 of them, in the builder and in the receiver.
+a_subscription_topic_is_utf8_of_at_most_512_bytes_test_() ->
+    Long = binary:copy(<<"t">>, 512),
+    Spec = #{topic => Long, realm => key(), subscriber => key()},
+    [{atom_to_list(Type),
+      fun() ->
+          Received = over_the_wire(Build(Spec)),
+          ?assertEqual(ok, macula_frame:validate_received(Received)),
+          [?assertEqual({error, {invalid_frame, Type, topic}}, macula_frame:validate_received(Received#{topic => Topic}))
+           || Topic <- [<<Long/binary, "t">>, <<16#ff, 16#fe>>, {text, <<"probe.topic">>}]],
+          ?assertError({badmatch, {error, {text_too_long, topic}}}, Build(Spec#{topic => <<Long/binary, "t">>})),
+          ?assertError({badmatch, {error, {invalid_text, topic}}}, Build(Spec#{topic => <<16#ff, 16#fe>>}))
+      end}
+     || {Type, Build} <- [{subscribe, fun macula_frame:subscribe/1}, {unsubscribe, fun macula_frame:unsubscribe/1}]].
+
+%% A SUBSCRIBE has no filter: the builder refuses one, a received SUBSCRIBE that holds one is refused by name, and
+%% bytes that carry one do not decode.
+a_subscribe_has_no_filter_test() ->
+    Spec = #{topic => <<"probe.topic">>, realm => key(), subscriber => key()},
+    Built = macula_frame:subscribe(Spec),
+    Subscribe = over_the_wire(Built),
+    ?assertNot(maps:is_key(filter, Subscribe)),
+    ?assertEqual({error, {invalid_frame, subscribe, filter}},
+                 macula_frame:validate_received(Subscribe#{filter => <<"weather.*">>})),
+    ?assertEqual({error, bad_frame}, macula_frame:decode(macula_frame:encode(Built#{filter => <<"weather.*">>}))),
+    ?assertError(function_clause, macula_frame:subscribe(Spec#{filter => <<"weather.*">>})).
+
+%% A GOODBYE detail is optional bytes of valid UTF-8, at most 256 of them, in the builder and in the receiver.
+a_goodbye_detail_is_utf8_of_at_most_256_bytes_test() ->
+    Long = binary:copy(<<"d">>, 256),
+    Goodbye = over_the_wire(macula_frame:goodbye(draining, Long)),
+    ?assertEqual(ok, macula_frame:validate_received(Goodbye)),
+    ?assertEqual(ok, macula_frame:validate_received(over_the_wire(macula_frame:goodbye(draining, undefined)))),
+    [?assertEqual({error, {invalid_frame, goodbye, detail}}, macula_frame:validate_received(Goodbye#{detail => Detail}))
+     || Detail <- [<<Long/binary, "d">>, <<16#ff, 16#fe>>, {text, <<"bye">>}]],
+    Unbounded = (macula_frame:goodbye(draining, undefined))#{detail => <<Long/binary, "d">>},
+    ?assertEqual({error, {invalid_frame, goodbye, detail}}, macula_frame:decode(macula_frame:encode(Unbounded))),
+    ?assertError({badmatch, {error, {text_too_long, detail}}}, macula_frame:goodbye(draining, <<Long/binary, "d">>)),
+    ?assertError({badmatch, {error, {invalid_text, detail}}}, macula_frame:goodbye(draining, <<16#ff, 16#fe>>)).
+
+%% A NODES entry lists at most 4 addresses, each exactly a host of 1 to 253 bytes, a port from 1 to 65535 and the quic
+%% transport, in the builder and in the receiver. A received entry reads back as the entry its builder took.
+a_nodes_address_is_a_host_a_port_and_quic_test() ->
+    Address = #{host => <<"station.example">>, port => 4433, transport => quic},
+    Nodes = over_the_wire(macula_frame:nodes(#{key => key(), nodes => [station_ref([Address])]})),
+    [Entry] = maps:get(nodes, Nodes),
+    ?assertEqual([Address], maps:get(addresses, Entry)),
+    Received = fun(Addresses) -> macula_frame:validate_received(Nodes#{nodes => [Entry#{addresses => Addresses}]}) end,
+    Longest = Address#{host => binary:copy(<<"h">>, 253), port => 65535},
+    ?assertEqual(ok, Received([Longest, Address#{port => 1}, Address, Address])),
+    Refused = [lists:duplicate(5, Address), [Address#{host => <<>>}], [Address#{host => binary:copy(<<"h">>, 254)}],
+               [Address#{port => 0}], [Address#{port => 65536}], [Address#{transport => tcp}],
+               [maps:remove(transport, Address)], [Address#{via => relay}], [#{}]],
+    [?assertEqual({error, {invalid_frame, nodes, nodes}}, Received(Addresses)) || Addresses <- Refused],
+    [?assertError({badmatch, {error, invalid_addresses}}, station_ref(Addresses)) || Addresses <- Refused].
+
+%% Each fixed-length field of a list entry, one byte short and one byte long: a NODES entry's node_id, station_id and
+%% country, the mcid of a WANT or HAVE block, a SWIM update's target and by, and an mcid a CANCEL lists.
+a_fixed_length_field_in_a_list_entry_of_another_length_is_named_test_() ->
+    Mcid = mcid(),
+    Update = macula_frame:swim_update(#{target => key(), state => suspect, incarnation => 1, observed_at => 1,
+                                        by => key()}),
+    Lists = [{nodes, macula_frame:nodes(#{key => key(), nodes => [station_ref()]})},
+             {blocks, macula_frame:want(#{blocks => [#{mcid => Mcid}]})},
+             {blocks, macula_frame:have(#{blocks => [#{mcid => Mcid, size => 10}]})},
+             {piggyback, macula_frame:swim_ping(#{round => 0, incarnation => 0, piggyback => [Update]})},
+             {piggyback, macula_frame:swim_ack(#{round => 0, responder => key(), incarnation => 0,
+                                                 piggyback => [Update]})}],
+    Cancel = over_the_wire(macula_frame:cancel(#{blocks => [Mcid]})),
+    [{lists:concat([Type, " ", List, " entry with a ", Field, " of ", byte_size(Other), " bytes"]),
+      ?_assertEqual({error, {invalid_frame, Type, List}},
+                    macula_frame:validate_received(Received#{List => [Entry#{Field => Other}]}))}
+     || {List, Frame} <- Lists,
+        Received <- [over_the_wire(Frame)],
+        #{frame_type := Type} <- [Received],
+        [Entry] <- [maps:get(List, Received)],
+        {Field, Value} <- maps:to_list(Entry),
+        lists:member(Field, [node_id, station_id, country, mcid, target, by]),
+        Other <- [binary:part(Value, 0, byte_size(Value) - 1), <<Value/binary, 0>>]]
+    ++ [{lists:concat(["cancel with an mcid of ", byte_size(Other), " bytes"]),
+         ?_assertEqual({error, {invalid_frame, cancel, blocks}},
+                       macula_frame:validate_received(Cancel#{blocks => [Other]}))}
+        || Other <- [binary:part(Mcid, 0, 49), <<Mcid/binary, 0>>]].
+
+%% The optional header fields of a fixed length, realm and call_id, one byte short and one byte long.
+an_optional_header_field_of_another_length_is_named_test_() ->
+    Ping = over_the_wire(macula_frame:ping(#{nonce => id()})),
+    [{"a ping with a realm and a call_id passes",
+      ?_assertEqual(ok, macula_frame:validate_received(Ping#{realm => key(), call_id => id()}))}
+     | [{lists:concat(["a ping with a ", Field, " of ", byte_size(Other), " bytes"]),
+         ?_assertEqual({error, {invalid_frame, ping, Field}}, macula_frame:validate_received(Ping#{Field => Other}))}
+        || {Field, Value} <- [{realm, key()}, {call_id, id()}],
+           Other <- [binary:part(Value, 0, byte_size(Value) - 1), <<Value/binary, 0>>]]].
 
 %%------------------------------------------------------------------
 %% The rules and the table name the same fields
@@ -426,5 +526,8 @@ suspect_spec() ->
     #{target => key(), target_incarnation => 0, suspected_by => key(), ttl => 3}.
 
 station_ref() ->
+    station_ref([#{host => <<"station.example">>, port => 4433, transport => quic}]).
+
+station_ref(Addresses) ->
     macula_frame:station_ref(#{node_id => key(), station_id => key(), tier => 2, country => <<"BE">>,
-                               last_seen_at => erlang:system_time(millisecond)}).
+                               last_seen_at => erlang:system_time(millisecond), addresses => Addresses}).

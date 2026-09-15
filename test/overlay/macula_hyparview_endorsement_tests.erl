@@ -24,6 +24,8 @@ cases(Keys) ->
                  fun an_endorsement_for_another_realm_is_refused/1,
                  fun an_endorsement_not_yet_valid_is_refused/1,
                  fun an_endorsement_past_its_window_is_refused/1,
+                 fun an_endorsement_window_of_30_days_is_accepted/1,
+                 fun an_endorsement_window_over_30_days_is_refused/1,
                  fun a_join_frame_carries_no_signature_of_its_own/1,
                  fun a_join_frame_carries_a_verifiable_endorsement/1]].
 
@@ -80,6 +82,22 @@ an_endorsement_past_its_window_is_refused(#{realm_key := Key} = Keys) ->
     Window = #{valid_from => Now - 10 * ?MINUTE, valid_until => Now - 5 * ?MINUTE},
     Wire = signed(unsigned(Keys, Member, [], Window), Key),
     ?assertEqual({error, endorsement_expired}, verify(Wire, Keys, Member)).
+
+%% An endorsement's window, valid_from to valid_until, is at most 30 days.
+an_endorsement_window_of_30_days_is_accepted(#{realm_key := Key} = Keys) ->
+    Member = id(),
+    From = erlang:system_time(millisecond) - ?MINUTE,
+    Wire = signed(unsigned(Keys, Member, [], #{valid_from => From, valid_until => From + 30 * 24 * 60 * ?MINUTE}), Key),
+    ?assertEqual({ok, []}, verify(Wire, Keys, Member)).
+
+%% The builder refuses a longer window, so the test lengthens the record's window before signing it.
+an_endorsement_window_over_30_days_is_refused(#{realm_key := Key} = Keys) ->
+    Member = id(),
+    From = erlang:system_time(millisecond) - ?MINUTE,
+    Until = From + 30 * 24 * 60 * ?MINUTE,
+    Record = unsigned(Keys, Member, [], #{valid_from => From, valid_until => Until}),
+    Longer = Record#{payload := (maps:get(payload, Record))#{{text, <<"valid_until">>} := Until + 1}},
+    ?assertEqual({error, endorsement_window_too_long}, verify(signed(Longer, Key), Keys, Member)).
 
 %%------------------------------------------------------------------
 %% The JOIN frame

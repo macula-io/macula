@@ -31,6 +31,7 @@ cases(Keys) ->
                  fun a_key_that_is_not_the_verified_sender_is_unsignable/1,
                  fun a_key_of_the_other_profile_is_unsignable/1,
                  fun text_that_is_not_utf8_is_a_named_error/1,
+                 fun a_procedure_over_512_bytes_is_refused/1,
                  fun a_provider_detail_over_256_bytes_is_refused/1,
                  fun a_relay_error_takes_no_free_detail_and_no_code_outside_its_set/1,
                  fun a_build_key_the_frame_does_not_have_is_refused/1,
@@ -168,6 +169,13 @@ a_provider_detail_over_256_bytes_is_refused(#{provider := Provider} = Keys) ->
                  macula_frame:stream_bytes({provider_error, Error#{detail => binary:copy(<<"a">>, 257)}}, Provider)),
     ?assertMatch({ok, _},
                  macula_frame:stream_bytes({provider_error, Error#{detail => binary:copy(<<"a">>, 256)}}, Provider)).
+
+%% A procedure name is at most 512 bytes: one byte over is a named error with nothing to write.
+a_procedure_over_512_bytes_is_refused(#{caller := Caller} = Keys) ->
+    Long = binary:copy(<<"p">>, 512),
+    ?assertMatch({ok, _}, macula_frame:stream_bytes({call, (call_spec(Keys))#{procedure => Long}}, Caller)),
+    ?assertEqual({error, {text_too_long, procedure}},
+                 macula_frame:stream_bytes({call, (call_spec(Keys))#{procedure => <<Long/binary, "p">>}}, Caller)).
 
 %% A relay error carries a code from its closed set and no free text.
 a_relay_error_takes_no_free_detail_and_no_code_outside_its_set(#{station := Station} = Keys) ->

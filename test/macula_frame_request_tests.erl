@@ -28,17 +28,20 @@ cases(Keys) ->
                  fun a_tampered_request_is_refused/1,
                  fun a_request_under_another_label_is_refused/1,
                  fun request_fields_the_design_does_not_allow_are_malformed/1,
+                 fun a_procedure_is_text_of_at_most_512_bytes/1,
                  fun a_request_under_the_other_profile_is_malformed/1,
                  fun two_callers_never_share_a_request_hash/1,
                  fun a_result_from_the_target_verifies_for_its_request/1,
                  fun a_provider_error_carries_its_code_and_detail/1,
                  fun an_error_code_and_detail_are_read_within_their_bounds/1,
+                 fun a_provider_error_builder_refuses_text_outside_its_bounds/1,
                  fun a_reply_from_a_node_other_than_the_target_is_refused/1,
                  fun a_reply_for_another_request_is_refused/1,
                  fun a_responded_by_that_is_not_the_key_id_of_key_is_refused/1,
                  fun a_tampered_reply_is_refused/1,
                  fun reply_fields_the_design_does_not_allow_are_malformed/1,
                  fun a_relay_error_verifies_for_its_request/1,
+                 fun a_relay_error_carries_no_detail/1,
                  fun a_stream_error_from_a_station_is_a_relay_error/1,
                  fun a_relay_code_outside_the_closed_set_is_refused/1,
                  fun a_relay_error_for_another_request_is_refused/1,
@@ -117,6 +120,18 @@ request_fields_the_design_does_not_allow_are_malformed(#{caller := Caller} = Key
                 Base#{{text, <<"procedure">>} := ?PROCEDURE},
                 Base#{{text, <<"frame_type">>} := {text, <<"result">>}}]].
 
+%% A procedure name is text of at most 512 bytes: the builder refuses a longer one and one that is not UTF-8, and a
+%% verifier refuses a request whose procedure is longer.
+a_procedure_is_text_of_at_most_512_bytes(#{caller := Caller} = Keys) ->
+    Long = binary:copy(<<"p">>, 512),
+    Call = fun(Procedure) -> macula_frame:call((call_spec(Keys))#{procedure => Procedure}, Caller) end,
+    ?assertMatch({ok, #{procedure := Long}}, macula_frame:verify_request(wire(Call(Long)), pq_pure)),
+    ?assertError({badmatch, {error, {text_too_long, procedure}}}, Call(<<Long/binary, "p">>)),
+    ?assertError({badmatch, {error, {invalid_text, procedure}}},
+                 macula_frame:stream_open((call_spec(Keys))#{procedure => <<16#ff, 16#fe>>, mode => bidi}, Caller)),
+    Longer = (request_tbs(Keys))#{{text, <<"procedure">>} := {text, <<Long/binary, "p">>}},
+    ?assertEqual({error, malformed_frame}, verify_crafted_request(call, Longer, Caller)).
+
 a_request_under_the_other_profile_is_malformed(#{caller := Caller} = Keys) ->
     Frame = wire(macula_frame:call(call_spec(Keys), Caller)),
     ?assertEqual({error, malformed_frame}, macula_frame:verify_request(Frame, pq_hybrid)).
@@ -164,6 +179,17 @@ an_error_code_and_detail_are_read_within_their_bounds(#{provider := Provider} = 
     ?assertMatch({ok, #{detail := <<_:2048>>}}, Verify(<<"detail">>, 256)),
     ?assertEqual({error, malformed_frame}, Verify(<<"code">>, 65)),
     ?assertEqual({error, malformed_frame}, Verify(<<"detail">>, 257)).
+
+%% A provider error is built with a code of at most 64 bytes and a detail of at most 256, both UTF-8.
+a_provider_error_builder_refuses_text_outside_its_bounds(#{provider := Provider} = Keys) ->
+    Request = verified_call(Keys),
+    Error = fun(Spec) -> macula_frame:provider_error(Spec#{request => Request}, Provider) end,
+    ?assertMatch(#{reply := _}, Error(#{code => binary:copy(<<"c">>, 64), detail => binary:copy(<<"d">>, 256)})),
+    ?assertError({badmatch, {error, {text_too_long, code}}}, Error(#{code => binary:copy(<<"c">>, 65)})),
+    ?assertError({badmatch, {error, {text_too_long, detail}}},
+                 Error(#{code => <<"c">>, detail => binary:copy(<<"d">>, 257)})),
+    ?assertError({badmatch, {error, {invalid_text, code}}}, Error(#{code => <<16#ff>>})),
+    ?assertError({badmatch, {error, {invalid_text, detail}}}, Error(#{code => <<"c">>, detail => <<16#ff>>})).
 
 a_reply_from_a_node_other_than_the_target_is_refused(#{other := Other} = Keys) ->
     Request = verified_call(Keys),
@@ -215,13 +241,24 @@ reply_fields_the_design_does_not_allow_are_malformed(#{provider := Provider} = K
 
 a_relay_error_verifies_for_its_request(#{station := Station} = Keys) ->
     Request = verified_call(Keys),
-    Spec = #{frame_type => error, request => Request, code => unknown_next_peer, detail => <<"no route">>,
-             offending_hop => <<9:256>>},
+    Spec = #{frame_type => error, request => Request, code => unknown_next_peer, offending_hop => <<9:256>>},
     Relay = wire(macula_frame:relay_error(Spec, Station)),
     ?assertEqual([frame_type, relay_error, version], lists:sort(maps:keys(Relay))),
     ?assertEqual({ok, #{frame_type => error, reported_by => macula_node_keys:key_id(Station), code => unknown_next_peer,
-                        detail => <<"no route">>, offending_hop => <<9:256>>}},
+                        offending_hop => <<9:256>>}},
                  macula_frame:verify_relay_error(Relay, Request, pq_pure, macula_node_keys:key_id(Station))).
+
+%% A relay error carries a code from its closed set and no free text: the builder refuses a detail, and a verifier
+%% refuses a relay error whose tbs holds one.
+a_relay_error_carries_no_detail(#{station := Station} = Keys) ->
+    Request = verified_call(Keys),
+    ?assertError(function_clause,
+                 macula_frame:relay_error(#{frame_type => error, request => Request, code => unknown_next_peer,
+                                            detail => <<"no route">>}, Station)),
+    Tbs = (relay_tbs(Request, Station))#{{text, <<"detail">>} => {text, <<"no route">>}},
+    Frame = crafted(error, relay_error, macula_signed_object:sign(?RELAY_ERROR_LABEL, Tbs, Station)),
+    ?assertEqual({error, malformed_frame},
+                 macula_frame:verify_relay_error(wire(Frame), Request, pq_pure, macula_node_keys:key_id(Station))).
 
 a_stream_error_from_a_station_is_a_relay_error(#{station := Station} = Keys) ->
     Request = verified_stream_open(Keys),

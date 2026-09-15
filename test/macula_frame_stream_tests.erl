@@ -28,6 +28,7 @@ cases(Keys) ->
                  fun a_first_frame_carries_the_provider_key_and_a_later_one_does_not/1,
                  fun a_provider_stream_error_and_stream_reply_carry_their_fields/1,
                  fun a_stream_error_code_and_message_are_read_within_their_bounds/1,
+                 fun a_stream_error_builder_refuses_text_outside_its_bounds/1,
                  fun a_caller_frame_verifies_with_the_caller_key_from_the_open/1,
                  fun caller_and_provider_count_their_frames_apart/1,
                  fun a_caller_frame_signed_by_another_key_is_refused/1,
@@ -164,6 +165,21 @@ a_stream_error_code_and_message_are_read_within_their_bounds(#{provider := Provi
     ?assertMatch({ok, #{message := <<_:2048>>}, _}, Verify(<<"message">>, 256)),
     ?assertEqual({error, malformed_frame}, Verify(<<"code">>, 65)),
     ?assertEqual({error, malformed_frame}, Verify(<<"message">>, 257)).
+
+%% A STREAM_ERROR is built on either side with a code of at most 64 bytes and a message of at most 256, both UTF-8.
+a_stream_error_builder_refuses_text_outside_its_bounds(#{provider := Provider, caller := Caller} = Keys) ->
+    Open = verified_open(Keys, bidi),
+    Error = fun(Code, Message) -> #{frame_type => stream_error, seq => 0, code => Code, message => Message} end,
+    ?assertMatch(#{stream := _},
+                 macula_frame:provider_stream(Error(binary:copy(<<"c">>, 64), binary:copy(<<"m">>, 256)), Provider,
+                                              Open)),
+    Sides = [fun(Built) -> macula_frame:provider_stream(Built, Provider, Open) end,
+             fun(Built) -> macula_frame:caller_stream(Built, Caller, Open) end],
+    Refused = [{{text_too_long, code}, Error(binary:copy(<<"c">>, 65), <<>>)},
+               {{text_too_long, message}, Error(<<"c">>, binary:copy(<<"m">>, 257))},
+               {{invalid_text, code}, Error(<<16#ff>>, <<>>)},
+               {{invalid_text, message}, Error(<<"c">>, <<16#ff>>)}],
+    [?assertError({badmatch, {error, Refusal}}, Side(Spec)) || Side <- Sides, {Refusal, Spec} <- Refused].
 
 %%------------------------------------------------------------------
 %% Caller stream frames
