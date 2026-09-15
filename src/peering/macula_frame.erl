@@ -44,7 +44,7 @@
     store/1, store_ack/1,
 
     %% DHT helper — build and validate a station_ref entry
-    station_ref/1,
+    station_ref/1, addresses_checked/1,
 
     %% Constructors — CALL (Part 6 §5)
     call/2, result/2, provider_error/2, relay_error/2,
@@ -940,8 +940,10 @@ station_ref(#{node_id := NodeId, station_id := StationId,
 validate_asn(undefined) -> ok;
 validate_asn(N) when is_integer(N), N >= 0 -> ok.
 
-%% At most ?MAX_ADDRESSES addresses, each exactly a host of 1 to ?MAX_HOST_BYTES bytes, a port and the quic transport.
-%% The builder and the receive rule check an entry's addresses with this one function.
+%% @doc Check the addresses of a NODES entry: at most 4, each exactly a host, a port from 1 to 65535 and the quic
+%% transport. A host is 1 to 253 bytes: an IP literal without a zone, or a host name of labels of 1 to 63 letters, digits
+%% and hyphens that neither start nor end with a hyphen, with no trailing dot. The builder and the receive rule use this
+%% function, and a station can run it on the addresses it stores before it lists them.
 -spec addresses_checked(term()) -> ok | {error, invalid_addresses}.
 addresses_checked(Addresses) when is_list(Addresses), length(Addresses) =< ?MAX_ADDRESSES ->
     all_addresses(lists:all(fun address_valid/1, Addresses));
@@ -954,9 +956,26 @@ all_addresses(false) -> {error, invalid_addresses}.
 address_valid(#{host := Host, port := Port, transport := quic} = Address)
   when map_size(Address) =:= 3, is_binary(Host), byte_size(Host) >= 1, byte_size(Host) =< ?MAX_HOST_BYTES,
        is_integer(Port), Port >= 1, Port =< 65535 ->
-    true;
+    host_valid(Host);
 address_valid(_NotAnAddress) ->
     false.
+
+%% A zone names an interface on the sender's own host, so a host with one means nothing to the receiver.
+host_valid(Host) ->
+    unzoned_host(binary:match(Host, <<"%">>), Host).
+
+unzoned_host(nomatch, Host) -> ip_or_name(inet:parse_strict_address(binary_to_list(Host)), Host);
+unzoned_host(_Zone, _Host) -> false.
+
+ip_or_name({ok, _IpLiteral}, _Host) -> true;
+ip_or_name({error, _NotAnIpLiteral}, Host) -> lists:all(fun label_valid/1, binary:split(Host, <<".">>, [global])).
+
+label_valid(Label) when byte_size(Label) >= 1, byte_size(Label) =< 63 ->
+    binary:first(Label) =/= $- andalso binary:last(Label) =/= $- andalso lists:all(fun ldh/1, binary_to_list(Label));
+label_valid(_EmptyOrLongLabel) ->
+    false.
+
+ldh(C) -> (C >= $a andalso C =< $z) orelse (C >= $A andalso C =< $Z) orelse (C >= $0 andalso C =< $9) orelse C =:= $-.
 
 -spec validate_record_bytes(binary()) -> ok.
 validate_record_bytes(Bytes) when is_binary(Bytes) ->

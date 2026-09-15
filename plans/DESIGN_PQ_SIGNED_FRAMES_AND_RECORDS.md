@@ -346,9 +346,14 @@ which stations set or change per hop, stay outside them.
   and `version` (`DESIGN_PQ_DHT_SLOTS_AND_BUDGET.md`, 1.4).
 - FIND_VALUE carries `key`, `origin` and an optional `after` (bytes, 32), a signer key id. VALUE carries `key`,
   `records` and `next` (bytes, 32), present only when more entries follow (`DESIGN_PQ_DHT_SLOTS_AND_BUDGET.md`, 1.5).
-- A NODES entry's `addresses` lists at most 4 addresses, each exactly `host` (bytes, 1 to 253: a host name or a
-  literal address), `port` (unsigned, 1 to 65535) and `transport` (`quic`). A station lists one address per
-  observation today, and 4 leaves room for IPv4 and IPv6 beside a host name. A NODES frame outside these is refused.
+- A NODES entry's `addresses` lists at most 4 addresses, each exactly `host`, `port` (unsigned, 1 to 65535) and
+  `transport` (`quic`). A station lists one address per observation today, and 4 leaves room for IPv4 and IPv6 beside
+  a host name. A NODES frame outside these is refused.
+- A NODES `host` is bytes, 1 to 253: an IP literal without a zone, since a zone names an interface on the sender's own
+  host, or a host name of labels of 1 to 63 letters, digits and hyphens that neither start nor end with a hyphen, with
+  no trailing dot. `macula_frame:addresses_checked/1` is the one check, for the builder, the receive rule and a
+  station's stored addresses. Whether an address is worth dialing, such as a wildcard or link-local one, is the
+  dialer's decision.
 - A HyParView `peer_sample` holds at most 7 node_ids. A SHUFFLE or FORWARD_JOIN `ttl`, and a FORWARD_JOIN `arwl`,
   is at most 8, and a `prwl` is at most its `arwl`. A frame outside these is `malformed_frame`. A receiver compares
   a FORWARD_JOIN's `ttl` with its own PRWL, never the frame's.
