@@ -234,17 +234,21 @@ a_supervised_start_whose_loader_raises_logs_no_key_test_() ->
 
 %% A pool signs a record a node signs about itself with its node identity key, in its own process, and returns only the
 %% signed record, stamped now with a new version and the lifetime it was built with. It refuses by name a record that
-%% names another node, one that lives past its type's maximum, a type a node does not sign about itself (a station
-%% endpoint, realm- and org-signed types, a domain type, a tombstone), a payload past the record bound, and a record it
-%% cannot sign, and it keeps answering. A tombstone comes only from withdraw_node_record/3, for a verified record this
-%% node signed. No reply, and no log event captured with macula's redaction filter removed, holds a private half.
+%% names another node, one that lives past its type's maximum or runs backwards, a type a node does not sign about
+%% itself (a station endpoint, realm- and org-signed types, a domain type, a tombstone), a payload past the record
+%% bound, one within it whose signed record would pass that bound, and a record it cannot sign, and it keeps
+%% answering. A tombstone comes only from withdraw_node_record/3, for a verified record this node signed: another
+%% node's record, a realm- or org-signed record, a tombstone, an expired record and a tampered record are each refused
+%% by name. No reply, and no log event captured with macula's redaction filter removed, holds a private half.
 a_pool_signs_only_records_about_itself_test_() ->
     {timeout, ?EU_TIMEOUT, fun() ->
         {ok, Profile} = profile(),
         {ok, Key} = macula_node_keys:generate(identity, Profile),
         {ok, Other} = macula_node_keys:generate(identity, Profile),
         {ok, Realm} = macula_node_keys:generate(realm, Profile),
+        {ok, Org} = macula_node_keys:generate(org, Profile),
         {ok, NodeId} = macula_node_keys:node_id(Key),
+        Minute = 60_000,
         Hour = 3_600_000,
         Advertisement = fun(Advertiser) ->
                             macula_record:procedure_advertisement(Advertiser, <<1:256>>, <<"acme/echo_v1">>, <<7:256>>)
@@ -252,8 +256,13 @@ a_pool_signs_only_records_about_itself_test_() ->
         Endorsement = macula_record:realm_member_endorsement(<<1:256>>, #{realm => <<1:256>>, member_node => NodeId,
                                                                           roles => []}),
         OthersAdvertisement = macula_record:sign(Advertisement(macula_node_keys:key_id(Other)), Other),
+        Delegation = macula_record:sign(macula_record:procedure_delegation(macula_node_keys:key_id(Org), NodeId), Org),
+        Reversed = (macula_record:node_record(NodeId, [], 0))#{created_at := 2_000, expires_at := 1_000},
+        %% Its payload passes payload_bounded/1, and the key and signature take the signed record past 256 KiB.
+        NearBound = macula_record:node_record(NodeId, [], 0, #{hostname => binary:copy(<<"h">>, 256 * 1024 - 4096)}),
         Refused = [{key_id_mismatch, macula_record:node_record(<<7:256>>, [], 0)},
                    {lifetime_too_long, macula_record:node_record(NodeId, [], 0, #{ttl_ms => 365 * 24 * Hour})},
+                   {lifetime_reversed, Reversed},
                    {not_a_node_signed_type, macula_record:station_endpoint(4433)},
                    {not_a_node_signed_type, Endorsement},
                    {not_a_node_signed_type, macula_record:org_directory(<<1:256>>, <<"acme">>, <<9:256>>)},
@@ -262,6 +271,7 @@ a_pool_signs_only_records_about_itself_test_() ->
                    {not_a_node_signed_type, macula_record:tombstone(OthersAdvertisement, shutdown)},
                    {record_too_large,
                     macula_record:node_record(NodeId, [], 0, #{hostname => binary:copy(<<"h">>, 300 * 1024)})},
+                   {record_too_large, NearBound},
                    {malformed_record, #{type => 1, payload => #{{text, <<"node_id">>} => NodeId}}}],
         Old = (macula_record:node_record(NodeId, [], 0))#{created_at := 1_000, expires_at := 1_000 + Hour},
         {ok, Pool} = macula_client:connect([], #{node_identity => Key}),
@@ -273,9 +283,12 @@ a_pool_signs_only_records_about_itself_test_() ->
                   {ok, Own} = macula_client:sign_node_record(Pool, Advertisement(NodeId)),
                   <<First, Rest/binary>> = maps:get(signature, Own),
                   Tampered = Own#{signature := <<(First bxor 1), Rest/binary>>},
-                  Withdrawn = macula_client:withdraw_node_record(Pool, Own, shutdown),
+                  {ok, Tombstone} = Withdrawn = macula_client:withdraw_node_record(Pool, Own, shutdown),
+                  Expired = macula_record:sign((Advertisement(NodeId))#{created_at := Before - 20 * Minute,
+                                                                        expires_at := Before - 15 * Minute}, Key),
                   Withdrawals = [macula_client:withdraw_node_record(Pool, Withdrawable, shutdown)
-                                 || Withdrawable <- [OthersAdvertisement, macula_record:sign(Endorsement, Realm), Tampered]],
+                                 || Withdrawable <- [OthersAdvertisement, macula_record:sign(Endorsement, Realm),
+                                                     Delegation, Tombstone, Expired, Tampered]],
                   Test ! {ran, Before, Signed, Replies, Withdrawn, Withdrawals, macula_client:status(Pool)}
               end,
         {_Redaction, Events} = unredacted(fun() -> captured(Run) end),
@@ -290,12 +303,88 @@ a_pool_signs_only_records_about_itself_test_() ->
         ?assertNotEqual(macula_record:version(Old), macula_record:version(Record)),
         ?assertMatch({ok, _}, macula_record:verify(macula_record:encode(Record), Profile)),
         ?assertEqual([{Name, {error, Name}} || {Name, _} <- Refused], Replies),
+        ?assertEqual(ok, macula_record:payload_bounded(macula_record:payload(NearBound))),
         ?assertMatch({ok, #{type := 16#0C, key_id := NodeId}}, Withdrawn),
-        ?assertEqual([{error, not_this_nodes_record}, {error, not_a_node_signed_type}, {error, signature_invalid}],
+        ?assertEqual([{error, not_this_nodes_record}, {error, not_a_node_signed_type}, {error, not_a_node_signed_type},
+                      {error, not_a_node_signed_type}, {error, expired}, {error, signature_invalid}],
                      Withdrawals),
         ?assertEqual([], [Private || #{private := Private} <- maps:get(components, Key),
                                       binary:match(term_to_binary({Signed, Replies, Withdrawn, Withdrawals, Events}),
                                                    Private) =/= nomatch])
+    end}.
+
+%% Nothing past the record bound reaches the pool to be encoded there. sign_node_record/2 refuses a record with a
+%% subject, which no type a node signs about itself carries, and withdraw_node_record/3 refuses a wire form over
+%% 256 KiB, a signed map whose key, tbs and signature pass 256 KiB together, one whose tbs is not a binary or that has
+%% no signature, and anything else. Each refusal comes back while the pool is suspended, so it is made before the
+%% call, and the pool answers its status after.
+nothing_past_the_record_bound_reaches_the_pool_test_() ->
+    {timeout, ?EU_TIMEOUT, fun() ->
+        {ok, Profile} = profile(),
+        {ok, Key} = macula_node_keys:generate(identity, Profile),
+        {ok, NodeId} = macula_node_keys:node_id(Key),
+        Node = macula_record:node_record(NodeId, [], 0),
+        #{tbs := Tbs} = Signed = macula_record:sign(Node, Key),
+        Over = binary:copy(<<"s">>, 256 * 1024),
+        {ok, Pool} = macula_client:connect([], #{node_identity => Key}),
+        ok = sys:suspend(Pool),
+        Replies = try [macula_client:sign_node_record(Pool, Node#{subject => Over}),
+                       macula_client:sign_node_record(Pool, Node#{subject => <<"s">>}),
+                       macula_client:withdraw_node_record(Pool, <<(macula_record:encode(Signed))/binary, Over/binary>>,
+                                                          shutdown),
+                       macula_client:withdraw_node_record(Pool, Signed#{tbs := <<Tbs/binary, Over/binary>>}, shutdown),
+                       macula_client:withdraw_node_record(Pool, Signed#{tbs := binary_to_list(Tbs)}, shutdown),
+                       macula_client:withdraw_node_record(Pool, maps:remove(signature, Signed), shutdown),
+                       macula_client:withdraw_node_record(Pool, not_a_record, shutdown)]
+                  after ok = sys:resume(Pool)
+                  end,
+        Status = macula_client:status(Pool),
+        ok = macula_client:close(Pool),
+        ?assertEqual([{error, malformed_record}, {error, malformed_record}, {error, record_too_large},
+                      {error, record_too_large}, {error, malformed_record}, {error, malformed_record},
+                      {error, malformed_record}], Replies),
+        ?assertMatch({ok, #{self_node_id := NodeId}}, Status)
+    end}.
+
+%% Of a record to sign, the pool is sent only its type, created_at, expires_at and payload, and of a signed record to
+%% withdraw only its key, tbs and signature: a receive trace on the pool shows each request as it arrives.
+the_pool_is_sent_only_the_fields_it_signs_from_test_() ->
+    {timeout, ?EU_TIMEOUT, fun() ->
+        {ok, Profile} = profile(),
+        {ok, Key} = macula_node_keys:generate(identity, Profile),
+        {ok, NodeId} = macula_node_keys:node_id(Key),
+        Signed = macula_record:sign(macula_record:node_record(NodeId, [], 0), Key),
+        {ok, Pool} = macula_client:connect([], #{node_identity => Key}),
+        1 = erlang:trace(Pool, true, ['receive']),
+        Replies = [macula_client:sign_node_record(Pool, Signed),
+                   macula_client:withdraw_node_record(Pool, Signed, shutdown)],
+        1 = erlang:trace(Pool, false, ['receive']),
+        Delivered = erlang:trace_delivered(Pool),
+        receive {trace_delivered, Pool, Delivered} -> ok end,
+        Requests = [Request || {trace, _Pid, 'receive', {'$gen_call', _From, Request}} <- traced(Pool, [])],
+        ok = macula_client:close(Pool),
+        ?assertMatch([{ok, #{key_id := NodeId}}, {ok, #{type := 16#0C}}], Replies),
+        ?assertEqual([{sign_node_record, maps:with([type, created_at, expires_at, payload], Signed)},
+                      {withdraw_node_record, maps:with([key, tbs, signature], Signed), shutdown}], Requests)
+    end}.
+
+%% Every record this node signed that verifies can be withdrawn: one created four minutes ahead, within the clock
+%% tolerance, at its type's maximum lifetime gets a tombstone that verifies.
+a_record_created_ahead_at_its_maximum_lifetime_is_withdrawn_test_() ->
+    {timeout, ?EU_TIMEOUT, fun() ->
+        {ok, Profile} = profile(),
+        {ok, Key} = macula_node_keys:generate(identity, Profile),
+        {ok, NodeId} = macula_node_keys:node_id(Key),
+        Minute = 60_000,
+        Now = erlang:system_time(millisecond),
+        Advertisement = macula_record:procedure_advertisement(NodeId, <<1:256>>, <<"acme/echo_v1">>, <<7:256>>),
+        Ahead = macula_record:sign(Advertisement#{created_at := Now + 4 * Minute, expires_at := Now + 9 * Minute}, Key),
+        {ok, Pool} = macula_client:connect([], #{node_identity => Key}),
+        Withdrawn = macula_client:withdraw_node_record(Pool, Ahead, shutdown),
+        ok = macula_client:close(Pool),
+        ?assertMatch({ok, #{type := 16#0C, key_id := NodeId}}, Withdrawn),
+        {ok, Tombstone} = Withdrawn,
+        ?assertMatch({ok, #{type := 16#0C}}, macula_record:verify(macula_record:encode(Tombstone), Profile))
     end}.
 
 %%------------------------------------------------------------------
@@ -451,6 +540,14 @@ drained(Events) ->
         {captured, Event} -> drained([Event | Events])
     after 0 ->
         lists:reverse(Events)
+    end.
+
+%% The trace messages about Pid in the mailbox, oldest first.
+traced(Pid, Messages) ->
+    receive
+        {trace, Pid, _Tag, _Detail} = Message -> traced(Pid, [Message | Messages])
+    after 0 ->
+        lists:reverse(Messages)
     end.
 
 %% The loader the child spec test names: the key it stored.
