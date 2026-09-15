@@ -846,8 +846,10 @@ unadvertise(Pid, Realm, Procedure)
 %% than the Plumtree layer verifies it before acting on it. Whoever wires
 %% the Plumtree layer to a link makes it the verifying consumer, and keeps
 %% plumtree frames from reaching any other overlay subscriber unverified.
-%% A frame that names no realm, or a realm with no subscriber on this
-%% link, is counted and not delivered.
+%% A relayed frame, or a GOSSIP from the connected peer, that names no
+%% realm, or a realm with no subscriber on this link, is counted and not
+%% delivered. Any other frame from the connected peer with no subscriber
+%% for its realm is dropped.
 %%
 %% A subscriber that refuses what a delivered frame carries reports it
 %% with `overlay_frame_refused/3'. A refusal of what a relayed frame
@@ -2358,8 +2360,9 @@ reported_refusal(false, Meta, Kind, S) ->
     refused_relay(refusal_name(Kind), reported_sender(Meta), S).
 
 %% A frame provably came from the current peer when its Meta has no via and
-%% names that peer as sender, while the link has a connection.
-from_current_peer(#{sender := Peer} = Meta, #state{peer_pid = Conn, peer_node_id = Peer}) ->
+%% names that peer's node_id as sender, while the link has a connection. A
+%% link still connecting has no peer node_id yet, so no report charges it.
+from_current_peer(#{sender := Peer} = Meta, #state{peer_pid = Conn, peer_node_id = Peer}) when is_binary(Peer) ->
     is_pid(Conn) andalso not is_map_key(via, Meta);
 from_current_peer(_Meta, _S) ->
     false.
