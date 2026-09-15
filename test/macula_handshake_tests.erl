@@ -145,7 +145,13 @@ station_refusal_cases(#{profile := Profile, client_public := ClientPublic, stati
      ?_assertEqual({error, {refused, not_accepted}}, hello_of(Accept(Connect, #{challenge => OtherChallenge}))),
      ?_assertEqual({error, {refused, not_accepted}}, hello_of(Accept(<<"not cbor">>, #{}))),
      ?_assertEqual({error, {refused, unsupported_version}}, hello_of(Accept(Version2, #{})))]
+        ++ missing_key_cases(Accept, Connect)
         ++ shared_half_cases(Accept, Connect, ConnectPublic, ClientPublic, Profile).
+
+%% A CONNECT that lacks one of its keys beside version and frame_type is malformed, whichever key it lacks.
+missing_key_cases(Accept, Connect) ->
+    [?_assertMatch({refused, malformed_frame, _}, Accept(without(Connect, Key), #{}))
+     || Key <- frame_keys(Connect), Key =/= <<"version">>, Key =/= <<"frame_type">>].
 
 %% In pq_hybrid, a CONNECT key that shares either half with the identity key serves two purposes too.
 shared_half_cases(Accept, Connect, <<ConnectMlDsa:2592/binary, ConnectRsa/binary>>,

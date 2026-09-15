@@ -3,8 +3,11 @@
 %%% post-quantum frame shapes (D26).
 %%%
 %%% Every builder's output passes after the wire codec. A required field that
-%%% is missing, or holds a value of the wrong type, refuses the frame and is
-%%% named in the error, and so does a field the frame type does not have. A
+%%% is missing, or holds a value of the wrong type or of a length its rule does
+%%% not allow, refuses the frame and is named in the error, and so does a
+%%% field the frame type does not have, a version other than the protocol's, a
+%%% FORWARD_JOIN prwl above its arwl, a SWIM piggyback entry without one of its
+%%% fields, and SUBSCRIBE options that are not a map. A
 %%% frame type that carries one of several signed objects needs exactly one of
 %%% them. A control frame signed for its neighbour holds version, frame_type
 %%% and neighbour and nothing else; its own fields are checked when it is
@@ -28,6 +31,8 @@
          plumtree_ihave, plumtree_graft, plumtree_prune, overlay_relay, publish, subscribe, unsubscribe, event,
          advertise, unadvertise, stream_open, stream_data, stream_end, stream_error, stream_reply, want, have,
          block, manifest_req, manifest_res, cancel]).
+%% The rules that fix the length of a field's bytes.
+-define(FIXED_LENGTH, [key, id16, hash48, mcid, country]).
 %% The control frame types a neighbour signature may carry in pq_hybrid.
 -define(NEIGHBOUR_SIGNED,
         [swim_ping, swim_ack, swim_suspect, swim_confirm, ping, pong, find_node, nodes, find_value, value,
@@ -66,6 +71,24 @@ a_field_the_frame_type_does_not_have_is_named_test_() ->
     [{lists:concat([Type, " with an extra field"]),
       ?_assertEqual({error, {invalid_frame, Type, zz_extra}},
                     macula_frame:validate_received((over_the_wire(Frame))#{zz_extra => 1}))}
+     || {Type, Frame, _Required, _AnyValue} <- samples()].
+
+%% Each field a sample holds under a rule that fixes its length, one byte short and one byte long.
+a_fixed_length_field_of_another_length_is_named_test_() ->
+    [{lists:concat([Type, " with a ", Field, " of ", byte_size(Other), " bytes"]),
+      ?_assertEqual({error, {invalid_frame, Type, Field}}, macula_frame:validate_received(Received#{Field => Other}))}
+     || {Type, Frame, _Required, _AnyValue} <- samples(),
+        Received <- [over_the_wire(Frame)],
+        {Field, Rule} <- all_rules(Type),
+        lists:member(bare(Rule), ?FIXED_LENGTH),
+        Value <- [maps:get(Field, Received, undefined)],
+        is_binary(Value),
+        Other <- [binary:part(Value, 0, byte_size(Value) - 1), <<Value/binary, 0>>]].
+
+a_frame_of_another_version_is_named_test_() ->
+    [{atom_to_list(Type),
+      ?_assertEqual({error, {invalid_frame, Type, version}},
+                    macula_frame:validate_received((over_the_wire(Frame))#{version => version() + 1}))}
      || {Type, Frame, _Required, _AnyValue} <- samples()].
 
 %%------------------------------------------------------------------
@@ -109,6 +132,8 @@ a_neighbour_signed_control_frame_holds_only_its_neighbour_object_test_() ->
                               macula_frame:validate_received(Frame#{frame_id => <<0:128>>})),
                  ?assertEqual({error, {invalid_frame, Type, version}},
                               macula_frame:validate_received(maps:remove(version, Frame))),
+                 ?assertEqual({error, {invalid_frame, Type, version}},
+                              macula_frame:validate_received(Frame#{version => version() + 1})),
                  ?assertEqual({error, {invalid_frame, Type, neighbour}},
                               macula_frame:validate_received(Frame#{neighbour => <<"not a held object">>}))
              end)}
@@ -174,6 +199,42 @@ a_goodbye_reason_is_text_test() ->
     ?assertEqual({error, {invalid_frame, goodbye, reason}},
                  macula_frame:validate_received(Goodbye#{reason => 42})).
 
+a_forward_join_whose_prwl_is_above_its_arwl_is_named_test() ->
+    Joined = over_the_wire(macula_frame:hyparview_forward_join(#{realm => key(), new_member => key(), ttl => 2,
+                                                                 arwl => 4, prwl => 4})),
+    ?assertEqual(ok, macula_frame:validate_received(Joined)),
+    ?assertEqual({error, {invalid_frame, hyparview_forward_join, prwl}},
+                 macula_frame:validate_received(Joined#{prwl => 5})).
+
+%% A SWIM update travels in PING and ACK piggyback with each of the five fields swim_update/1 writes.
+a_piggyback_entry_needs_each_of_its_fields_test_() ->
+    Update = macula_frame:swim_update(#{target => key(), state => suspect, incarnation => 1, observed_at => 1,
+                                        by => key()}),
+    Ping = over_the_wire(macula_frame:swim_ping(#{round => 0, incarnation => 0, piggyback => [Update]})),
+    Ack = over_the_wire(macula_frame:swim_ack(#{round => 0, responder => key(), incarnation => 0,
+                                                piggyback => [Update]})),
+    Missing = [{lists:concat(["without ", Field]), maps:remove(Field, Update)} || Field <- maps:keys(Update)],
+    Mistyped = [{"with a state SWIM does not have", Update#{state => dead}},
+                {"with a target one byte short", Update#{target => <<1:248>>}},
+                {"observed at 0", Update#{observed_at => 0}},
+                {"with a negative incarnation", Update#{incarnation => -1}}],
+    [{"a ping and an ack with a whole entry pass",
+      [?_assertEqual(ok, macula_frame:validate_received(Ping)),
+       ?_assertEqual(ok, macula_frame:validate_received(Ack))]}
+     | [{lists:concat([Type, " piggyback entry ", Name]),
+         ?_assertEqual({error, {invalid_frame, Type, piggyback}},
+                       macula_frame:validate_received(Frame#{piggyback => [Entry]}))}
+        || #{frame_type := Type} = Frame <- [Ping, Ack], {Name, Entry} <- Missing ++ Mistyped]].
+
+subscribe_options_are_a_map_test() ->
+    Subscribe = over_the_wire(macula_frame:subscribe(#{topic => <<"probe.topic">>, realm => key(),
+                                                       subscriber => key(), options => #{}})),
+    ?assertEqual(ok, macula_frame:validate_received(Subscribe)),
+    ?assertEqual({error, {invalid_frame, subscribe, options}},
+                 macula_frame:validate_received(Subscribe#{options => [ordered]})),
+    ?assertEqual({error, {invalid_frame, subscribe, options}},
+                 macula_frame:validate_received(Subscribe#{options => 1})).
+
 %%------------------------------------------------------------------
 %% The rules and the table name the same fields
 %%------------------------------------------------------------------
@@ -186,8 +247,14 @@ every_table_field_has_a_rule_test_() ->
      || Type <- ?FRAME_TYPES].
 
 rule_fields(Type) ->
+    lists:usort([Field || {Field, _Rule} <- all_rules(Type)]).
+
+all_rules(Type) ->
     #{required := Required, one_of := Groups, optional := Optional} = macula_frame:received_rules(Type),
-    lists:usort([Field || {Field, _Rule} <- Required ++ lists:append(Groups) ++ Optional]).
+    Required ++ lists:append(Groups) ++ Optional.
+
+bare({optional, Rule}) -> Rule;
+bare(Rule) -> Rule.
 
 table_fields(Type) ->
     lists:usort([Field || {Field, _Kind} <- maps:values(macula_frame:field_table(Type))]).

@@ -1,7 +1,7 @@
 %% EUnit tests for the HyParView frame table rules (DESIGN_PQ_SIGNED_FRAMES_AND_RECORDS.md, DHT and HyParView fields;
 %% DESIGN_PQ_DHT_SLOTS_AND_BUDGET.md, 3.1): a peer_sample of at most 7 node_ids, a SHUFFLE or FORWARD_JOIN ttl and a
-%% FORWARD_JOIN arwl of at most 8, and a prwl of at most its arwl. A frame outside these is refused as it is decoded,
-%% and the constructors refuse to build one. A placement past a neighbour's allowance and an unsolicited SHUFFLE_REPLY
+%% FORWARD_JOIN arwl of at most 8, and a prwl of at most its arwl. A frame outside these is refused as it is decoded, a
+%% prwl above its arwl by name, and the constructors refuse to build one. A placement past a neighbour's allowance and an unsolicited SHUFFLE_REPLY
 %% are charged refusals.
 -module(macula_hyparview_bounds_tests).
 
@@ -25,7 +25,8 @@ a_walk_length_of_8_decodes_and_of_9_is_refused_test_() ->
 
 a_prwl_above_its_arwl_is_refused_test_() ->
     [?_assertMatch({ok, _, <<>>}, decoded(forward_join_with(#{arwl => 4, prwl => 4}))),
-     ?_assertEqual({error, bad_frame}, decoded(forward_join_with(#{arwl => 4, prwl => 5})))].
+     ?_assertEqual({error, {invalid_frame, hyparview_forward_join, prwl}},
+                   decoded(forward_join_with(#{arwl => 4, prwl => 5})))].
 
 the_constructors_refuse_frames_outside_the_bounds_test_() ->
     [?_assertError(function_clause, macula_frame:hyparview_shuffle(shuffle_spec(#{ttl => 9}))),

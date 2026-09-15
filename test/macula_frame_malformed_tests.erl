@@ -11,10 +11,10 @@
 %%% caller keeps never exceeds the frame cap plus the header.
 %%%
 %%% A frame with more CBOR items than the element budget is
-%%% `too_many_elements'. A STORE, REPLICATE or VALUE whose record bytes do
-%%% not decode as a record, whether they are not CBOR or over the element
-%%% budget, is an invalid frame named by its `record' or `records' field:
-%%% decode/1 refuses it, and parse_received/1 reads on past it.
+%%% `too_many_elements'. A STORE and a VALUE carry their records as bytes:
+%%% decode/1 and parse_received/1 deliver them as they came, whether or not
+%%% they are a record, and macula_record:verify/2, which a recipient reads a
+%%% record with, refuses bytes that are not one as malformed.
 %%%
 %%% parse_stream/1 keeps the `{Frames, Tail}' shape of 10.x. It returns only
 %%% frames that pass validate_received/1, and the first frame that does not
@@ -89,90 +89,34 @@ over_budget_frame() ->
 over_budget_array() ->
     <<16#9A, ?ELEMENT_BUDGET:32/big, (binary:copy(<<0>>, ?ELEMENT_BUDGET))/binary>>.
 
-record_field_test_() ->
+%% A STORE and a VALUE carry their records as bytes. decode/1 and
+%% parse_received/1 deliver them as they came, whether or not they are a
+%% record, and macula_record:verify/2, which a recipient reads a record with,
+%% refuses bytes that are not one.
+record_bytes_test_() ->
     [{lists:concat([Type, " whose ", Field, " holds ", Kind]),
-      [{"decode/1 refuses it as an invalid frame named by that field",
-        ?_assertEqual({error, {invalid_frame, Type, Field}}, macula_frame:decode(Wire))},
-       {"parse_received/1 gives it as an invalid frame and reads the frame after it",
-        ?_assertMatch({ok, [{invalid_frame, Type, Field}, #{frame_type := connect}], <<>>},
-                      macula_frame:parse_received(<<Wire/binary, (wire(connect))/binary>>))}]}
-     || {Type, Field, Kind, Wire} <- record_field_frames()].
+      [{"decode/1 delivers them as they came",
+        ?_assertMatch({ok, #{frame_type := Type, Field := Sent}, <<>>}, macula_frame:decode(Wire))},
+       {"parse_received/1 delivers them and reads the frame after it",
+        ?_assertMatch({ok, [#{frame_type := Type, Field := Sent}, #{frame_type := connect}], <<>>},
+                      macula_frame:parse_received(<<Wire/binary, (wire(connect))/binary>>))},
+       {"macula_record:verify/2 refuses them as malformed",
+        ?_assertEqual([{error, malformed}],
+                      lists:usort([macula_record:verify(Bytes, pq_pure) || Bytes <- records_in(Field, Sent)]))}]}
+     || {Type, Field, Kind, Sent, Wire} <- record_bytes_frames()].
 
-%% A STORE, a REPLICATE and a VALUE whose record bytes do not decode as a
-%% record: bytes that are not CBOR, and an array over the element budget.
-record_field_frames() ->
-    Record = sample_record(),
-    Frames = [{store, record, macula_frame:store(#{record => Record})},
-              {replicate, record,
-               macula_frame:replicate(#{record => Record, new_custodian => false})},
-              {value, records,
-               macula_frame:value(#{key => crypto:strong_rand_bytes(32), records => [Record]})}],
-    [{Type, Field, Kind, wire_with(Frame, Field, field_value(Field, Bytes))}
-     || {Type, Field, Frame} <- Frames,
-        {Kind, Bytes} <- [{"bytes that are not CBOR", <<255, 255, 255, 255>>},
-                          {"an array over the element budget", over_budget_array()}]].
+%% A STORE and a VALUE whose record bytes are not a record: bytes that are
+%% not CBOR, and an array over the element budget.
+record_bytes_frames() ->
+    [{Type, Field, Kind, Sent, macula_frame:encode(Frame)}
+     || {Kind, Bytes} <- [{"bytes that are not CBOR", <<255, 255, 255, 255>>},
+                          {"an array over the element budget", over_budget_array()}],
+        {Type, Field, Sent, Frame} <- [{store, record, Bytes, macula_frame:store(#{record => Bytes})},
+                                       {value, records, [Bytes],
+                                        macula_frame:value(#{key => <<6:256>>, records => [Bytes]})}]].
 
-field_value(records, Bytes) -> [Bytes];
-field_value(record, Bytes) -> Bytes.
-
-%% Frame on the wire with Field holding Value, which a builder would not put
-%% there: the signed frame is encoded, and its field replaced in the CBOR map.
-wire_with(Frame, Field, Value) ->
-    Kp = macula_identity:generate(),
-    <<_Len:32/big, Body/binary>> = macula_frame:encode(macula_frame:sign(Frame, Kp)),
-    Map = macula_cbor_nif:unpack_deterministic(Body),
-    Bytes = macula_cbor_nif:pack_deterministic(Map#{{text, atom_to_binary(Field)} := Value}),
-    <<(byte_size(Bytes)):32/big, Bytes/binary>>.
-
-sample_record() ->
-    Kp = macula_identity:generate(),
-    macula_record:sign(macula_record:node_record(macula_identity:public(Kp), [], 0), Kp).
-
-%% A frame and the records in it share one element budget: a record gets
-%% what the frame's own items and the records before it left.
-shared_budget_test_() ->
-    [{"a VALUE of two records of 70,000 items, each under the element budget, is invalid",
-      ?_assertEqual({error, {invalid_frame, value, records}},
-                    macula_frame:decode(value_wire([record_of_items(70000),
-                                                    record_of_items(70000)])))},
-     {"a VALUE of two records of 60,000 items decodes",
-      ?_assertMatch({ok, #{frame_type := value, records := [#{}, #{}]}, <<>>},
-                    macula_frame:decode(value_wire([record_of_items(60000),
-                                                    record_of_items(60000)])))},
-     {"a STORE whose own items and record together pass the element budget is invalid",
-      ?_assertEqual({error, {invalid_frame, store, record}},
-                    macula_frame:decode(padded_store_wire(70000, record_of_items(70000))))}].
-
-%% A VALUE for one key holding Records, on the wire.
-value_wire(Records) ->
-    macula_frame:encode(macula_frame:value(#{key => <<6:256>>, records => Records})).
-
-%% A STORE of Record whose frame also carries a list of Padding zeros, in a
-%% field a STORE does not read, on the wire.
-padded_store_wire(Padding, Record) ->
-    Store = macula_frame:store(#{record => Record}),
-    macula_frame:encode(Store#{padding => lists:duplicate(Padding, 0)}).
-
-%% A record of exactly Items CBOR items: its payload holds a list of zeros
-%% long enough to make up the count. Its signature is not checked here.
-record_of_items(Items) ->
-    record_with(lists:duplicate(Items - record_items(record_with([])), 0)).
-
-record_with(List) ->
-    #{type => 1, key => <<4:256>>, version => <<5:128>>, created_at => 1,
-      expires_at => 2, payload => #{list => List}, signature => <<0:512>>}.
-
-record_items(Record) ->
-    count_items(macula_cbor_nif:unpack_deterministic(macula_record:encode(Record))).
-
-%% Every CBOR item in a decoded term: a map or a list counts one, and so
-%% does each key, value and element in it.
-count_items(Map) when is_map(Map) ->
-    maps:fold(fun(K, V, Acc) -> Acc + count_items(K) + count_items(V) end, 1, Map);
-count_items(List) when is_list(List) ->
-    lists:foldl(fun(E, Acc) -> Acc + count_items(E) end, 1, List);
-count_items(_Scalar) ->
-    1.
+records_in(record, Bytes) -> [Bytes];
+records_in(records, List) -> List.
 
 parse_stream_test_() ->
     [{"complete frames and a partial one give the frames and the partial tail",

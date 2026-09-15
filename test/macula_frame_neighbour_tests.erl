@@ -50,6 +50,7 @@ cases(Keys) ->
                  fun a_tampered_tbs_is_refused/1,
                  fun an_outer_frame_type_other_than_the_tbs_one_is_refused/1,
                  fun a_tbs_field_the_frame_type_does_not_define_is_refused/1,
+                 fun a_forward_join_whose_prwl_is_above_its_arwl_is_refused/1,
                  fun a_control_frame_without_neighbour_is_refused_in_pq_hybrid/1,
                  fun a_frame_with_neighbour_is_refused_in_pq_pure/1,
                  fun a_control_frame_without_neighbour_is_read_as_is_in_pq_pure/1,
@@ -118,8 +119,18 @@ an_outer_frame_type_other_than_the_tbs_one_is_refused(#{key := Key} = Keys) ->
 a_tbs_field_the_frame_type_does_not_define_is_refused(#{key := Key, connection := C} = Keys) ->
     Fields = #{{text, <<"frame_type">>} => {text, <<"ping">>}, {text, <<"nonce">>} => <<0:128>>,
                {text, <<"connection">>} => C, {text, <<"seq">>} => 0, {text, <<"payload">>} => 1},
-    Frame = #{version => 3, frame_type => ping, neighbour => macula_signed_object:sign_held(?LABEL, Fields, Key)},
+    Frame = #{version => macula_frame:version(ping()), frame_type => ping,
+              neighbour => macula_signed_object:sign_held(?LABEL, Fields, Key)},
     ?assertEqual({error, malformed_frame}, macula_frame:verify_neighbour(wire(Frame), opts(Keys, 0))).
+
+%% The rule between a FORWARD_JOIN's fields holds for the frame a neighbour signature opens, as for any received frame.
+a_forward_join_whose_prwl_is_above_its_arwl_is_refused(#{key := Key} = Keys) ->
+    Joined = wire(macula_frame:hyparview_forward_join(#{realm => <<7:256>>, new_member => <<1:256>>, ttl => 2,
+                                                        arwl => 4, prwl => 4})),
+    Within = wire(macula_frame:sign_neighbour(Joined, Key, at(Keys, 0))),
+    ?assertEqual({ok, Joined}, macula_frame:verify_neighbour(Within, opts(Keys, 0))),
+    Above = wire(macula_frame:sign_neighbour(Joined#{prwl := 5}, Key, at(Keys, 0))),
+    ?assertEqual({error, malformed_frame}, macula_frame:verify_neighbour(Above, opts(Keys, 0))).
 
 a_control_frame_without_neighbour_is_refused_in_pq_hybrid(Keys) ->
     ?assertEqual({error, malformed_frame}, macula_frame:verify_neighbour(wire(ping()), opts(Keys, 0))).
