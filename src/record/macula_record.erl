@@ -15,8 +15,6 @@
 %% so a station that stores records never parses it; verify_authorization/3 is the caller's check.
 -module(macula_record).
 
--include_lib("public_key/include/public_key.hrl").
-
 -export([
     node_record/3, node_record/4,
     realm_directory/3, realm_directory/4,
@@ -74,14 +72,12 @@
 -type refusal() :: record_too_large | malformed | signature_invalid | alg_mismatch | not_yet_valid | expired
                  | key_id_mismatch | lifetime_too_long | lifetime_reversed.
 -type reason() :: shutdown | moved | revoked.
--type authorization() :: #{org_directory := binary(), procedure_delegation := binary()}
-                       | #{certificate_chain := [binary(), ...]}.
--type trust() :: #{profile := macula_crypto_profile:profile(), realm_key => binary(), realm_ca => binary()}.
--type authorization_refusal() :: malformed | no_authorization | authorization_not_allowed | no_realm_key
-                               | no_realm_ca | org_directory_invalid | org_directory_wrong_realm
-                               | org_directory_wrong_org | delegation_invalid | delegation_mismatch
-                               | cert_chain_undecodable | cert_key_mismatch | cert_chain_untrusted
-                               | cert_org_mismatch | authorization_outlived.
+-type authorization() :: #{org_directory := binary(), procedure_delegation := binary()}.
+-type trust() :: #{profile := macula_crypto_profile:profile(), realm_key => binary()}.
+-type authorization_refusal() :: malformed | no_authorization | authorization_not_allowed
+                               | authorization_form_unsupported | no_realm_key | org_directory_invalid
+                               | org_directory_wrong_realm | org_directory_wrong_org | delegation_invalid
+                               | delegation_mismatch | authorization_outlived.
 
 -type node_record_opts() :: #{
     station_id   => <<_:256>>,
@@ -130,7 +126,6 @@
 -define(CLOCK_TOLERANCE_MS, 5 * 60 * 1000).
 %% A protocol integer in a signed structure stays below 2^53 (the decoding rule).
 -define(MAX_PROTOCOL_INT, 1 bsl 53).
--define(UNIX_EPOCH_GREGORIAN_SECONDS, 62167219200).
 
 -define(TYPE_NODE_RECORD,                  16#01).
 -define(TYPE_REALM_DIRECTORY,              16#03).
@@ -262,7 +257,7 @@ procedure_delegation(OrgKeyId, Advertiser, Opts)
 
 %% @doc A provider's advertisement of a procedure in a realm, signed by the provider. For a procedure with an org
 %% namespace the authorization option carries the provider authorization: org_directory and procedure_delegation as
-%% the records' wire form, or certificate_chain as DER certificates, leaf first.
+%% the records' wire form, the only authorization form. The builder refuses any other.
 -spec procedure_advertisement(<<_:256>>, <<_:256>>, binary(), <<_:256>>) -> m_record().
 procedure_advertisement(AdvertiserNode, RealmId, Procedure, ServingStation) ->
     procedure_advertisement(AdvertiserNode, RealmId, Procedure, ServingStation, #{}).
@@ -626,12 +621,11 @@ read_content_announcement(#{type := ?TYPE_CONTENT_ANNOUNCEMENT, payload := P}) -
 procedure_org(Procedure) when is_binary(Procedure) ->
     org_of(binary:split(Procedure, <<"/">>)).
 
-%% @doc The caller's check of a verified advertisement's provider authorization, against the realm it trusts: the
-%% realm key for the org directory and the delegation, the realm CA (PEM) for a certificate chain. A procedure with an
-%% org namespace needs an authorization for that org, a procedure without one carries none, and the advertisement
-%% expires no later than any part of its authorization. A certificate chain holds at most 4 certificates below the
-%% realm CA, a longer one refused as cert_chain_undecodable before any is parsed, and each certificate's validity is
-%% judged at Now, not the wall clock.
+%% @doc The caller's check of a verified advertisement's provider authorization, against the realm key it trusts: the
+%% realm-signed org directory and the org-signed procedure delegation, the only authorization form. A procedure with
+%% an org namespace needs an authorization for that org, a procedure without one carries none, and the advertisement
+%% expires no later than any part of its authorization. An authorization in any other form, a certificate chain
+%% included, is refused as authorization_form_unsupported: 11.0.0 has no certificate form.
 -spec verify_authorization(m_record(), trust(), integer()) -> ok | {error, authorization_refusal()}.
 verify_authorization(#{type := ?TYPE_PROCEDURE_ADVERTISEMENT} = Advertisement, #{profile := _} = Trust, Now) ->
     #{procedure := Procedure, authorization := Authorization} = read_procedure_advertisement(Advertisement),
@@ -1089,20 +1083,28 @@ org_of([<<>>, _Rest]) -> {error, malformed};
 org_of([<<"_">>, _Rest]) -> none;
 org_of([Org, _Rest]) -> {org, Org}.
 
+%% An authorization holds exactly org_directory and procedure_delegation, both bytes. That pair with a value that is not
+%% bytes, or an authorization that is not a map, is malformed; any other map is a form 11.0.0 does not accept.
 read_authorization(undefined) ->
     undefined;
 read_authorization(#{{text, <<"org_directory">>} := Directory, {text, <<"procedure_delegation">>} := Delegation} = A)
-  when map_size(A) =:= 2 ->
+  when map_size(A) =:= 2, is_binary(Directory), is_binary(Delegation) ->
     #{org_directory => Directory, procedure_delegation => Delegation};
-read_authorization(#{{text, <<"certificate_chain">>} := Chain} = A) when map_size(A) =:= 1 ->
-    #{certificate_chain => Chain};
-read_authorization(_Other) ->
+read_authorization(#{{text, <<"org_directory">>} := _, {text, <<"procedure_delegation">>} := _} = A)
+  when map_size(A) =:= 2 ->
+    malformed;
+read_authorization(A) when is_map(A) ->
+    unsupported;
+read_authorization(_NotAMap) ->
     malformed.
 
+%% The builder writes only the delegation form.
 with_authorization(Payload, undefined) ->
     Payload;
-with_authorization(Payload, Authorization) when is_map(Authorization) ->
-    Payload#{{text, <<"authorization">>} => #{{text, atom_to_binary(Name)} => Value || Name := Value <- Authorization}}.
+with_authorization(Payload, #{org_directory := Directory, procedure_delegation := Delegation} = Authorization)
+  when map_size(Authorization) =:= 2, is_binary(Directory), is_binary(Delegation) ->
+    Payload#{{text, <<"authorization">>} => #{{text, <<"org_directory">>} => Directory,
+                                              {text, <<"procedure_delegation">>} => Delegation}}.
 
 authorization_for({error, malformed}, _Authorization, _Adv, _Trust, _Now) ->
     {error, malformed};
@@ -1115,9 +1117,9 @@ authorization_for({org, _Org}, undefined, _Adv, _Trust, _Now) ->
 authorization_for({org, Org}, #{org_directory := Directory, procedure_delegation := Delegation}, Adv, Trust, Now)
   when is_binary(Directory), is_binary(Delegation) ->
     delegation_path(maps:get(realm_key, Trust, undefined), Directory, Delegation, Org, Adv, Trust, Now);
-authorization_for({org, Org}, #{certificate_chain := [_ | _] = Chain}, Adv, Trust, Now) ->
-    certificate_path(maps:get(realm_ca, Trust, undefined), Chain, Org, Adv, Now);
-authorization_for({org, _Org}, _Other, _Adv, _Trust, _Now) ->
+authorization_for({org, _Org}, unsupported, _Adv, _Trust, _Now) ->
+    {error, authorization_form_unsupported};
+authorization_for({org, _Org}, _Malformed, _Adv, _Trust, _Now) ->
     {error, malformed}.
 
 delegation_path(undefined, _Directory, _Delegation, _Org, _Adv, _Trust, _Now) ->
@@ -1154,133 +1156,6 @@ delegation_matched(true, Earliest, Adv) -> within(expires_at(Adv) =< Earliest).
 
 within(true) -> ok;
 within(false) -> {error, authorization_outlived}.
-
-%% The most certificates a chain holds below the realm CA.
--define(MAX_CERT_CHAIN, 4).
-
-%% A chain longer than ?MAX_CERT_CHAIN is refused before any certificate in it is parsed.
-certificate_path(undefined, _Chain, _Org, _Adv, _Now) ->
-    {error, no_realm_ca};
-certificate_path(_RealmCaPem, Chain, _Org, _Adv, _Now) when length(Chain) > ?MAX_CERT_CHAIN ->
-    {error, cert_chain_undecodable};
-certificate_path(RealmCaPem, Chain, Org, #{key := AdvKey} = Adv, Now) ->
-    chain_decoded(decode_chain(Chain), Chain, RealmCaPem, Org, AdvKey, Adv, Now).
-
-decode_chain(Ders) ->
-    try [public_key:der_decode('Certificate', Der) || Der <- Ders] of
-        Certificates -> {ok, Certificates}
-    catch
-        _:_ -> error
-    end.
-
-chain_decoded(error, _Chain, _RealmCaPem, _Org, _AdvKey, _Adv, _Now) ->
-    {error, cert_chain_undecodable};
-chain_decoded({ok, [Leaf | _] = Certificates}, Chain, RealmCaPem, Org, AdvKey, Adv, Now) ->
-    leaf_matched(leaf_key(Leaf) =:= {ok, AdvKey}, Certificates, Chain, RealmCaPem, Org, Adv, Now).
-
-leaf_matched(false, _Certificates, _Chain, _RealmCaPem, _Org, _Adv, _Now) ->
-    {error, cert_key_mismatch};
-leaf_matched(true, Certificates, [LeafDer | _] = Chain, RealmCaPem, Org, Adv, Now) ->
-    path_checked(validate_path(RealmCaPem, Chain, Now), cert_org(LeafDer) =:= {ok, Org}, Certificates, Adv).
-
-path_checked({error, _}, _SameOrg, _Certificates, _Adv) ->
-    {error, cert_chain_untrusted};
-path_checked(ok, false, _Certificates, _Adv) ->
-    {error, cert_org_mismatch};
-path_checked(ok, true, Certificates, Adv) ->
-    within(expires_at(Adv) =< lists:min([not_after_ms(Certificate) || Certificate <- Certificates])).
-
-%% The raw ML-DSA-87 key a leaf certifies. A composite key has no X.509 form yet (WP 3.1), so no leaf matches one.
-leaf_key(#'Certificate'{tbsCertificate = #'TBSCertificate'{subjectPublicKeyInfo = Spki}}) ->
-    spki_key(Spki).
-
-spki_key(#'SubjectPublicKeyInfo'{algorithm = {'AlgorithmIdentifier', ?'id-ml-dsa-87', _}, subjectPublicKey = Key}) ->
-    key_bytes(Key);
-spki_key(_OtherAlgorithm) ->
-    error.
-
-key_bytes({0, Key}) when is_binary(Key) -> {ok, Key};
-key_bytes(Key) when is_binary(Key) -> {ok, Key};
-key_bytes(_Other) -> error.
-
-not_after_ms(#'Certificate'{tbsCertificate = #'TBSCertificate'{validity = #'Validity'{notAfter = NotAfter}}}) ->
-    time_ms(NotAfter).
-
-time_ms({utcTime, [Y1, Y2 | Rest]}) -> gregorian_ms(utc_year(list_to_integer([Y1, Y2])), Rest);
-time_ms({generalTime, [Y1, Y2, Y3, Y4 | Rest]}) -> gregorian_ms(list_to_integer([Y1, Y2, Y3, Y4]), Rest).
-
-%% RFC 5280: a two-digit year of 50 or more is 19YY, below 50 is 20YY.
-utc_year(Year) when Year >= 50 -> 1900 + Year;
-utc_year(Year) -> 2000 + Year.
-
-gregorian_ms(Year, [Mo1, Mo2, D1, D2, H1, H2, Mi1, Mi2, S1, S2, $Z]) ->
-    Date = {Year, list_to_integer([Mo1, Mo2]), list_to_integer([D1, D2])},
-    Time = {list_to_integer([H1, H2]), list_to_integer([Mi1, Mi2]), list_to_integer([S1, S2])},
-    (calendar:datetime_to_gregorian_seconds({Date, Time}) - ?UNIX_EPOCH_GREGORIAN_SECONDS) * 1000.
-
-%% Validate leaf -> ... -> realm CA at the verifier's Now. pkix_path_validation wants the chain from the anchor's direct
-%% child down to the leaf, so the leaf-first chain is reversed.
-validate_path(RealmCaPem, ChainDers, Now) ->
-    validate_path_anchor(realm_ca_der(RealmCaPem), ChainDers, Now).
-
-validate_path_anchor({ok, AnchorDer}, ChainDers, Now) ->
-    Options = [{verify_fun, {fun valid_at/3, Now}}],
-    validate_path_result(public_key:pkix_path_validation(AnchorDer, lists:reverse(ChainDers), Options));
-validate_path_anchor({error, _} = Error, _ChainDers, _Now) ->
-    Error.
-
-%% Path validation judges each certificate's validity window at the verifier's Now, not the wall clock, so every stack
-%% judges a chain at the same instant. public_key's own verdict on the window at the wall clock, cert_expired, is set
-%% aside, and each certificate's notBefore and notAfter are compared with Now once public_key has validated the rest of
-%% it. Every other event keeps public_key's default: a bad certificate fails, and an extension public_key does not
-%% handle stays unknown, so a critical one fails.
-valid_at(_Certificate, {bad_cert, cert_expired}, Now) ->
-    {valid, Now};
-valid_at(_Certificate, {bad_cert, _} = Reason, _Now) ->
-    {fail, Reason};
-valid_at(_Certificate, {extension, _}, Now) ->
-    {unknown, Now};
-valid_at(Certificate, Validated, Now) when Validated =:= valid; Validated =:= valid_peer ->
-    window_at(certificate_window(Certificate), Now).
-
-certificate_window(#'OTPCertificate'{tbsCertificate = #'OTPTBSCertificate'{validity = Validity}}) ->
-    #'Validity'{notBefore = NotBefore, notAfter = NotAfter} = Validity,
-    {time_ms(NotBefore), time_ms(NotAfter)}.
-
-window_at({NotBefore, NotAfter}, Now) when NotBefore =< Now, Now =< NotAfter -> {valid, Now};
-window_at(_Window, _Now) -> {fail, {bad_cert, cert_expired}}.
-
-validate_path_result({ok, _}) -> ok;
-validate_path_result({error, Reason}) -> {error, {bad_cert, Reason}}.
-
-realm_ca_der(Pem) when is_binary(Pem) ->
-    realm_ca_der_result([Der || {'Certificate', Der, not_encrypted} <- public_key:pem_decode(Pem)]);
-realm_ca_der(_Other) ->
-    {error, no_realm_ca}.
-
-realm_ca_der_result([Der | _]) -> {ok, Der};
-realm_ca_der_result([]) -> {error, no_realm_ca}.
-
-%% The organization (O) of a certificate's subject.
-cert_org(Der) ->
-    #'OTPCertificate'{tbsCertificate = #'OTPTBSCertificate'{subject = Subject}} = public_key:pkix_decode_cert(Der, otp),
-    subject_org(Subject).
-
-subject_org({rdnSequence, RDNs}) -> org_from_rdns(lists:append(RDNs));
-subject_org(_Other) -> {error, no_subject}.
-
-%% id-at-organizationName = OID {2,5,4,10}.
-org_from_rdns([#'AttributeTypeAndValue'{type = {2, 5, 4, 10}, value = Value} | _]) -> {ok, rdn_string(Value)};
-org_from_rdns([_ | Rest]) -> org_from_rdns(Rest);
-org_from_rdns([]) -> {error, no_org_rdn}.
-
-rdn_string({utf8String, String}) -> to_bin(String);
-rdn_string({printableString, String}) -> to_bin(String);
-rdn_string(String) when is_binary(String) -> String;
-rdn_string(String) when is_list(String) -> list_to_binary(String).
-
-to_bin(Bin) when is_binary(Bin) -> Bin;
-to_bin(List) when is_list(List) -> unicode:characters_to_binary(List).
 
 %%------------------------------------------------------------------
 %% Internals: payloads

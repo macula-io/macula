@@ -242,26 +242,24 @@ The payload of a procedure advertisement, type tag 0x06, holds exactly these key
 | `serving_station` | bytes, 32 | the node_id of the station that serves the provider |
 | `authorization` | map | the provider authorization (D25 item 6); every procedure has one |
 
-- `authorization` holds either `org_directory` and `procedure_delegation`, each bytes, the wire form as received of
-  the realm-signed org directory and of the org-signed procedure delegation that names the provider, or
-  `certificate_chain`, an array of bytes, the provider's certificate chain in DER, leaf first. It holds nothing else.
+- `authorization` holds `org_directory` and `procedure_delegation`, each bytes, the wire form as received of the
+  realm-signed org directory and of the org-signed procedure delegation that names the provider. It holds nothing
+  else. 11.0.0 has no certificate form: the realm issues no X.509 certificates (design B1). A caller refuses an
+  authorization in any other form as `authorization_form_unsupported`, and one that pairs those keys with a value that
+  is not bytes as `malformed`.
 - **Org namespace.** A procedure's org namespace is the text before the first `/` of its name, when there is one and
   it is not `_`. A name with no `/`, or whose first segment is `_`, has none, and a name that starts with `/` is
   malformed. Capability grants use the same definition (D7).
 - Every procedure has an org namespace (D25). A verifier refuses an advertisement for a procedure without one, and
   one that carries no `authorization`.
-- The org directory's `org_name`, or the O of the leaf certificate, equals the org namespace byte for byte.
+- The org directory's `org_name` equals the org namespace byte for byte.
 - The provider's signature covers `authorization`. The caller, and a serving station that gates a CALL, check each
-  embedded record's own signature and validity, or the chain against the realm's trust anchor (D25 item 6). A
-  certificate's validity is judged at the verifier's clock for the check, not the wall clock, so every stack judges a
-  chain at the same instant, and a chain of more than 4 certificates below the realm CA is refused as
-  `cert_chain_undecodable` before any certificate is parsed.
-- They also refuse an advertisement that expires later than the earliest expiry in its authorization: an embedded
-  record's `expires_at`, or a certificate's notAfter. Renewing an authorization therefore means signing the
-  advertisement again, at a new version.
+  embedded record's own signature and validity (D25 item 6).
+- They also refuse an advertisement that expires later than the earliest expiry in its authorization, an embedded
+  record's `expires_at`. Renewing an authorization therefore means signing the advertisement again, at a new version.
 - A station that stores or forwards an advertisement verifies its embedded org directory and delegation, once per
-  hash, to decide a checked place, and never parses a certificate chain or shows that decision to callers
-  (`DESIGN_PQ_DHT_SLOTS_AND_BUDGET.md`, part 2).
+  hash, to decide a checked place, and never shows that decision to callers (`DESIGN_PQ_DHT_SLOTS_AND_BUDGET.md`,
+  part 2).
 - A consumer takes the realm and the procedure from these fields; no advertisement carries a procedure URI.
 
 ### Storage keys

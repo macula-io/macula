@@ -131,14 +131,13 @@ that the call itself failed. Requires the provider to have advertised via
 publishes no discoverable record.
 
 For a procedure with an org namespace, resolution also checks the provider's
-authorization against the realm trust you hold. Pass it in
-`macula_request:start_link_direct/8`'s options as
-`realm_trust => #{realm_key => RealmKey}`, for an org directory with a
-procedure delegation, or `realm_trust => #{realm_ca => RealmCaPem}`, for a
-certificate chain. The provider publishes its authorization with
-`macula_response:advertise_direct/7`'s `authorization` option. Without the
-realm trust its authorization needs, an advertisement for an org namespaced
-procedure is never trusted. The 10.x options `verify_cert_chain` and
+authorization, the org directory and the procedure delegation, against the
+realm key you hold. Pass it in `macula_request:start_link_direct/8`'s options
+as `realm_trust => #{realm_key => RealmKey}`. The provider publishes its
+authorization with `macula_response:advertise_direct/7`'s `authorization`
+option. 11.0.0 has no certificate form. Without the realm key, an
+advertisement for an org namespaced procedure is never trusted. The 10.x
+options `verify_cert_chain` and
 `cert_chain` are refused with `{error, {removed_option, Key}}`. See
 [RPC_PROTOCOL.md](RPC_PROTOCOL.md#what-resolution-does-if-you-need-it-raw).
 

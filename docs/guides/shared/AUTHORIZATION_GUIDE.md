@@ -270,28 +270,27 @@ layer is always open, and each endpoint independently chooses what it checks.
 A procedure with an org namespace, the text before the first `/` of its name,
 is served only by a provider that org authorized, and a caller checks that
 before it calls. The provider's `procedure_advertisement` carries its
-authorization in one of two forms: an org directory with a procedure
-delegation, checked against the realm key, or a certificate chain, checked
-against the realm CA. A chain holds at most 4 certificates below the realm
-CA, and each certificate's validity is judged at the time the caller passes,
-not the wall clock. A procedure without an org namespace carries none, and
-an advertisement expires no later than any part of its authorization. A
-provider publishes its authorization with
-`macula_response:advertise_direct/7`'s `authorization` option.
+authorization: the realm-signed org directory and the org-signed procedure
+delegation that names the provider, checked against the realm key. It is the
+only form. 11.0.0 has no certificate form, and an advertisement carrying any
+other authorization is refused as `authorization_form_unsupported`. A
+procedure without an org namespace carries none, and an advertisement
+expires no later than any part of its authorization. A provider publishes
+its authorization with `macula_response:advertise_direct/7`'s
+`authorization` option.
 
 A caller passes the realm trust it holds to resolution, as
-`realm_trust => #{realm_key => RealmKey}` or
-`realm_trust => #{realm_ca => RealmCaPem}` in
-`macula_request:start_link_direct/8`'s options. Without the realm trust an
-authorization needs, the advertisement is never trusted, so writing an
-advertisement next to the real one does not make a node the server of an
-org's procedure. The 10.x options `verify_cert_chain` and `cert_chain` are
-refused with `{error, {removed_option, Key}}`.
+`realm_trust => #{realm_key => RealmKey}` in
+`macula_request:start_link_direct/8`'s options. Without the realm key, the
+advertisement is never trusted, so writing an advertisement next to the real
+one does not make a node the server of an org's procedure. The 10.x options
+`verify_cert_chain` and `cert_chain` are refused with
+`{error, {removed_option, Key}}`.
 
 ```erlang
 %% consumer side (the check resolution runs on each verified advertisement)
 ok = macula_record:verify_authorization(Advertisement,
-                                        #{profile => Profile, realm_ca => RealmCaPem},
+                                        #{profile => Profile, realm_key => RealmKey},
                                         erlang:system_time(millisecond)).
 ```
 

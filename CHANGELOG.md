@@ -58,7 +58,7 @@ Post-quantum work on the `post-quantum` branch. Not on `main`.
   signer. Storage keys derive under `MACULA-PQ-STORAGE-KEY-V1`.
   Tombstones and procedure advertisements take the design's pinned
   payloads, and `verify_authorization/3` checks an advertisement's org
-  namespace and its org directory and delegation or certificate chain.
+  namespace and its org directory and delegation.
   It replaces `decode/1`, `verify/1`, `procedure_key/1`,
   `verify_delegation_chain/4` and `verify_advertisement_cert_chain/3`.
 - `macula_frame` decodes every frame under the post-quantum decoding
@@ -362,6 +362,15 @@ Post-quantum work on the `post-quantum` branch. Not on `main`.
   `unadvertise/3` and `unadvertise_stream/3` register or remove a handler
   on the link, for the CALLs and STREAM_OPENs its station delivers to it by
   target, and send nothing, before or after the link connects.
+- The certificate-chain form of a provider authorization. The 11.0.0
+  realm issues no X.509 certificates, so a provider is authorized only by
+  the realm-signed org directory and the org-signed procedure delegation.
+  `macula_record:verify_authorization/3` refuses an authorization in any
+  other form as `authorization_form_unsupported`, and
+  `procedure_advertisement/5` builds only the delegation form.
+  `realm_trust` and `macula_record`'s trust take only `realm_key`. The
+  `realm_ca` trust key, certificate path validation, and the
+  `no_realm_ca` and `cert_*` refusals are gone.
 
 ### Fixed
 

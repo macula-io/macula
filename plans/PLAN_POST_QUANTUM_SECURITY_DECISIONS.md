@@ -612,6 +612,9 @@ before its wire checks are green.
      names the provider, or the provider's service certificate chain to the realm CA with the org of the procedure
      name. The authorization travels with the advertisement, so no lookup sits in the check (D13). A caller may also
      pin the org key or the provider's node_id for a procedure.
+     - Revised 2026-09-15: the certificate form is gone. The realm issues no X.509 certificates (design B1), so only
+       the org directory and the delegation authorize a provider, and a verifier refuses any other form as
+       `authorization_form_unsupported`.
   7. **Stations report transport failures only.** A station may sign an ERROR or STREAM_ERROR as reported_by only with
      a relay error code distinct from every provider result, and never a RESULT. A relay error means the outcome is
      unknown, not that the call failed. Providers deduplicate requests on caller and call id.

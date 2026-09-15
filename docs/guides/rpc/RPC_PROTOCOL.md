@@ -175,16 +175,16 @@ StationUrl = <<"quic://[", Host/binary, "]:", (integer_to_binary(Port))/binary>>
 ```
 
 For an org namespaced procedure, add the realm trust you hold to the map
-`verify_authorization/3` takes: `realm_key`, the realm key as carried, for an
-authorization that is an org directory with a procedure delegation, and
-`realm_ca`, the realm CA in PEM, for one that is a certificate chain. Without
-the realm trust its authorization needs, an advertisement for an org
-namespaced procedure is never trusted. The supervised wrappers take the same
-two keys as `realm_trust => #{...}` in their options
+`verify_authorization/3` takes: `realm_key`, the realm key as carried, for the
+org directory and the procedure delegation, the only authorization form. An
+authorization in any other form, a certificate chain included, is refused as
+`authorization_form_unsupported`. Without the realm key, an advertisement for
+an org namespaced procedure is never trusted. The supervised wrappers take
+the same key as `realm_trust => #{realm_key => RealmKey}` in their options
 (`macula_request:start_link_direct/8`). A provider publishes its
 authorization with `macula_response:advertise_direct/7`'s `authorization`
-option, as `#{org_directory => Wire, procedure_delegation => Wire}` or
-`#{certificate_chain => [Der]}`. The 10.x options `verify_cert_chain` and
+option, as `#{org_directory => Wire, procedure_delegation => Wire}`. The 10.x
+options `verify_cert_chain` and
 `cert_chain` are refused with `{error, {removed_option, Key}}` before anything
 is looked up or published: `realm_trust` and `authorization` replace them.
 

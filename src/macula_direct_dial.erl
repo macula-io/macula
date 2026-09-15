@@ -69,10 +69,9 @@
 %%% exact node_id the signed DHT chain above resolved.
 %%%
 %%% An authorization verifies against the realm trust in `Opts',
-%%% `realm_trust => #{realm_key => RealmKey, realm_ca => RealmCaPem}':
-%%% the realm key as carried, for an org directory with a procedure
-%%% delegation, and the realm CA in PEM, for a certificate chain.
-%%% Without the realm trust its form needs, an advertisement for an org
+%%% `realm_trust => #{realm_key => RealmKey}': the realm key as carried,
+%%% for the org directory and the procedure delegation, the only
+%%% authorization form. Without the realm key, an advertisement for an org
 %%% namespaced procedure is never trusted. The 10.x options
 %%% `verify_cert_chain' and `cert_chain' are refused by name, with
 %%% `{error, {removed_option, Key}}' (see `removed_option/2').
@@ -234,8 +233,8 @@ publish_advertisement(Pool, Realm, Procedure, NodeIdentity) ->
 %% that node_id and the station knows the pool's connection by it.
 %% `Opts' may include `authorization', the provider authorization an org
 %% namespaced procedure needs (D25 item 6), as
-%% `#{org_directory => Wire, procedure_delegation => Wire}' or
-%% `#{certificate_chain => [Der]}', and `ttl_ms'. `cert_chain', a 10.x
+%% `#{org_directory => Wire, procedure_delegation => Wire}', and `ttl_ms'.
+%% `cert_chain', a 10.x
 %% option `authorization' replaces, is refused with
 %% `{error, {removed_option, cert_chain}}' before anything is read or put.
 -spec publish_advertisement(macula:pool(), macula:realm(), macula:procedure(),
@@ -514,7 +513,7 @@ serving_station(Rec) ->
 %% module doc's "Trust model" section.
 trust(Realm, Procedure, Opts) ->
     {ok, Profile} = macula_crypto_profile:configured(),
-    RealmTrust = maps:with([realm_key, realm_ca], maps:get(realm_trust, Opts, #{})),
+    RealmTrust = maps:with([realm_key], maps:get(realm_trust, Opts, #{})),
     RealmTrust#{realm => Realm, procedure => Procedure, profile => Profile}.
 
 %% A verified advertisement is trusted when it advertises the resolved
