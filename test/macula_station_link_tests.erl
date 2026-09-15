@@ -2643,29 +2643,6 @@ undecodable_new_stream(Bytes) ->
         teardown_link_for_streams(Pid)
     end.
 
-%% The peering connection's notice of a control-stream frame that lacked a
-%% required field changes nothing on the link: the next CALL is served.
-an_invalid_frame_notice_leaves_the_link_serving_test_() ->
-    {timeout, 5,
-     fun() ->
-         Test = self(),
-         Handler = fun(#{tag := Tag}) -> {ok, #{tag => Tag}} end,
-         {Pid, CallerKp} = inbound_call_fixture([{<<"probe.notice">>, Handler}]),
-         Pid ! {macula_peering, invalid_frame, Test, call, caller},
-         CallId = crypto:strong_rand_bytes(16),
-         Pid ! {macula_peering, frame, Test, macula_frame:sign(#{
-             frame_type  => call,
-             call_id     => CallId,
-             realm       => ?REALM,
-             procedure   => <<"probe.notice">>,
-             payload     => #{tag => served},
-             deadline_ms => erlang:system_time(millisecond) + 5_000,
-             caller      => macula_identity:public(CallerKp)
-         }, CallerKp)},
-         ?assertEqual({ok, #{tag => served}}, await_result(CallId, 2_000)),
-         macula_station_link:stop(Pid)
-     end}.
-
 -define(CONTENT_STREAM_BUFS_INDEX, macula_station_link:state_field_index(content_stream_bufs)).
 
 %% A reply on a content stream whose bytes do not decode ends that stream

@@ -548,6 +548,8 @@ Stage 0 checks, the Stage 4 stacks and the SDK identity work can run in parallel
 - [ ] Every station instance refuses a classical-only client and X25519MLKEM768, in both profiles.
 - [ ] The claim-gate tests pass (Stage 7).
 - [ ] Replies are accepted only from the provider the caller targeted, and only for the request they answer (D25).
+- [ ] A refused frame that reaches a station link inside an overlay relay is dropped and counted without charging the
+  connection, and the link stays up; a test holds this.
 - [ ] EU hybrid signatures follow BSI TR-02102-1 section 5.3.4: concatenated, valid only if all parts verify, keys
   dedicated to hybrid use, classical half from BSI's lists, no Ed25519.
 - [ ] No Ed25519, RSA or ECDSA-only signing path remains in `macula`, the SDKs, the realm or hecate-om, enforced by

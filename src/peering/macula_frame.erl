@@ -177,6 +177,10 @@
 -define(MAX_PAYLOAD_NESTING, 62).
 %% A GOODBYE reason is text for people, bounded because it ends up in logs.
 -define(MAX_GOODBYE_REASON_BYTES, 256).
+%% A provider error's or a STREAM_ERROR's code is at most 64 bytes, and a provider error's detail or a STREAM_ERROR
+%% message is text for people of at most 256 bytes, as a GOODBYE reason is.
+-define(MAX_ERROR_CODE_BYTES, 64).
+-define(MAX_ERROR_TEXT_BYTES, 256).
 %% A protocol integer in a signed structure stays below 2^53 (the decoding rule).
 -define(MAX_PROTOCOL_INT, 1 bsl 53).
 -define(REQUEST_LABEL, <<"MACULA-PQ-REQUEST-V1">>).
@@ -1048,8 +1052,8 @@ reply_table(Type) ->
       <<"request_hash">> => {request_hash, {bytes, 48}},
       <<"responded_by">> => {responded_by, {bytes, 32}},
       <<"payload">> => {payload, value},
-      <<"code">> => {code, text},
-      <<"detail">> => {detail, text}}.
+      <<"code">> => {code, {text_max, ?MAX_ERROR_CODE_BYTES}},
+      <<"detail">> => {detail, {text_max, ?MAX_ERROR_TEXT_BYTES}}}.
 
 %% @doc Sign a station's relay error, an ERROR or STREAM_ERROR for a pending request, with the station's identity key.
 -spec relay_error(#{frame_type := error | stream_error, request := verified_request(), code := unknown_next_peer,
@@ -1595,8 +1599,8 @@ stream_table(Type) ->
       <<"encoding">> => {encoding, {enum, [raw, msgpack]}},
       <<"body">> => {body, value},
       <<"role">> => {role, {enum, [send, both]}},
-      <<"code">> => {code, text},
-      <<"message">> => {message, text},
+      <<"code">> => {code, {text_max, ?MAX_ERROR_CODE_BYTES}},
+      <<"message">> => {message, {text_max, ?MAX_ERROR_TEXT_BYTES}},
       <<"payload">> => {payload, value}}.
 
 %%------------------------------------------------------------------
@@ -1870,16 +1874,12 @@ frame_read(_NotAFrame, _Rest) ->
     {error, bad_frame}.
 
 typed_frame({ok, Type}, Wire, Rest) ->
-    read_frame(fields_agree(Type, read_fields(maps:to_list(Wire), field_table(Type), #{})), Rest);
+    read_frame(read_fields(maps:to_list(Wire), field_table(Type), #{}), Rest);
 typed_frame(error, _Wire, _Rest) ->
     {error, bad_frame}.
 
 read_frame({ok, Frame}, Rest) -> {ok, Frame, Rest};
 read_frame(error, _Rest) -> {error, bad_frame}.
-
-%% A rule between the fields of one frame, once each field has been read: a FORWARD_JOIN's prwl is at most its arwl.
-fields_agree(hyparview_forward_join, {ok, #{arwl := Arwl, prwl := Prwl}}) when Prwl > Arwl -> error;
-fields_agree(_Type, Read) -> Read.
 
 %% @doc Drain all complete frames a peer sent from a buffer.
 %%
@@ -1961,7 +1961,9 @@ valid_frames(Items) ->
 %% closed set, a signed object, or a list of well-formed entries. A type that
 %% carries one of several signed objects holds exactly one of them. An
 %% optional field may be missing or undefined, a CBOR null. A field the type
-%% does not have refuses the frame. A control frame signed for its neighbour
+%% does not have refuses the frame, and so do a version other than the
+%% protocol's and a FORWARD_JOIN whose prwl is above its arwl, the one rule
+%% between fields. A control frame signed for its neighbour
 %% holds version, frame_type and neighbour and nothing else, and the frame
 %% `verify_neighbour/2' opens from it is checked the same way. A handler of a
 %% received frame then never meets a missing key or a value it cannot match.
@@ -1975,13 +1977,18 @@ valid_frames(Items) ->
 -spec validate_received(frame()) ->
     ok | {error, {invalid_frame, frame_type() | unknown, atom()}}.
 validate_received(#{frame_type := Type} = Frame) ->
-    named(received_shape(received_rules(Type), Type, Frame), Type);
+    named(agreed(received_shape(received_rules(Type), Type, Frame), Type, Frame), Type);
 validate_received(_Frame) ->
     {error, {invalid_frame, unknown, frame_type}}.
 
 named(ok, _Type) -> ok;
 named({refused, Field}, Type) -> {error, {invalid_frame, Type, Field}};
 named(unknown_type, _Type) -> {error, {invalid_frame, unknown, frame_type}}.
+
+%% The rule between the fields of a frame that has its shape: a FORWARD_JOIN's prwl is at most its arwl. Every path a
+%% received frame takes checks it here, the frame a neighbour signature opens included.
+agreed(ok, hyparview_forward_join, #{arwl := Arwl, prwl := Prwl}) when Prwl > Arwl -> {refused, prwl};
+agreed(Shaped, _Type, _Frame) -> Shaped.
 
 received_shape(unknown_type, _Type, _Frame) ->
     unknown_type;
@@ -1992,7 +1999,7 @@ received_shape(Rules, _Type, Frame) ->
 
 %% A control frame signed for its neighbour holds only version, frame_type and the held object.
 neighbour_shape(true, _Rules, Frame) ->
-    shape(#{required => [{version, non_neg}, {neighbour, held}], one_of => [], optional => []}, Frame);
+    shape(#{required => [{version, version}, {neighbour, held}], one_of => [], optional => []}, Frame);
 neighbour_shape(false, _Rules, _Frame) ->
     {refused, neighbour}.
 
@@ -2045,6 +2052,7 @@ field_valid(_Rule, error)                       -> false;
 field_valid(Rule, {ok, Value})                  -> value_valid(Rule, Value).
 
 value_valid(_Rule, undefined)                                         -> false;
+value_valid(version, ?PROTOCOL_VERSION)                               -> true;
 value_valid(present, _Value)                                          -> true;
 value_valid(id16, <<_:128>>)                                          -> true;
 value_valid(key, <<_:256>>)                                           -> true;
@@ -2109,9 +2117,10 @@ received_rules(hello) ->
 received_rules(goodbye) ->
     base_rules([{reason, reason}], [{detail, {optional, text}}]);
 received_rules(swim_ping) ->
-    base_rules([{round, non_neg}, {incarnation, non_neg}], [{piggyback, {optional, list}}]);
+    base_rules([{round, non_neg}, {incarnation, non_neg}], [{piggyback, {optional, {list_of, swim_update_rule()}}}]);
 received_rules(swim_ack) ->
-    base_rules([{round, non_neg}, {responder, key}, {incarnation, non_neg}], [{piggyback, {optional, list}}]);
+    base_rules([{round, non_neg}, {responder, key}, {incarnation, non_neg}],
+               [{piggyback, {optional, {list_of, swim_update_rule()}}}]);
 received_rules(Type) when Type =:= swim_suspect; Type =:= swim_confirm ->
     base_rules([{target, key}, {target_incarnation, non_neg}, {suspected_by, key}, {ttl, non_neg}]);
 received_rules(Type) when Type =:= ping; Type =:= pong ->
@@ -2160,7 +2169,7 @@ received_rules(publish) ->
     signed_rules([{publication, object}], [], []);
 received_rules(subscribe) ->
     base_rules([{realm, key}, {topic, binary}, {subscriber, key}],
-               [{filter, {optional, present}}, {options, {optional, present}}]);
+               [{filter, {optional, present}}, {options, {optional, map}}]);
 received_rules(unsubscribe) ->
     base_rules([{realm, key}, {topic, binary}, {subscriber, key}]);
 received_rules(event) ->
@@ -2198,7 +2207,7 @@ base_rules(Required) ->
 
 base_rules(Required, Optional) ->
     Own = [Field || {Field, _Rule} <- Required ++ Optional],
-    #{required => [{version, non_neg} | Required], one_of => [],
+    #{required => [{version, version} | Required], one_of => [],
       optional => Optional ++ [Header || {Field, _Rule} = Header <- base_header(), not lists:member(Field, Own)]}.
 
 base_header() ->
@@ -2209,12 +2218,18 @@ base_header() ->
 %% A frame that carries its fields in signed objects: version and frame_type beside those objects, and its routing
 %% fields.
 signed_rules(Required, OneOf, Optional) ->
-    #{required => [{version, non_neg} | Required], one_of => OneOf, optional => Optional}.
+    #{required => [{version, version} | Required], one_of => OneOf, optional => Optional}.
+
 %% A NODES entry, as station_ref/1 builds it.
 station_ref_rule() ->
     {entry, [{node_id, key}, {station_id, key}, {tier, tier}, {country, country},
              {last_seen_at, pos}, {addresses, {optional, {list_of, map}}},
              {asn, {optional, non_neg}}]}.
+
+%% A SWIM update in a PING's or an ACK's piggyback, as swim_update/1 builds it.
+swim_update_rule() ->
+    {entry, [{target, key}, {state, {one_of, [alive, suspect, confirmed_failed]}}, {incarnation, non_neg},
+             {observed_at, pos}, {by, key}]}.
 
 %% @doc Drain every complete frame from a buffer as its CBOR bytes, exactly as
 %% received and without the length prefix, and return the incomplete rest.
@@ -3138,6 +3153,7 @@ read_value(signed_object, #{{text, <<"key">>} := Key, {text, <<"tbs">>} := Tbs,
 read_value(bytes, Bytes) when is_binary(Bytes) -> {ok, Bytes};
 read_value({bytes, Size}, Bytes) when byte_size(Bytes) =:= Size -> {ok, Bytes};
 read_value(text, {text, Text}) -> {ok, Text};
+read_value({text_max, Max}, {text, Text}) when byte_size(Text) =< Max -> {ok, Text};
 read_value(uint, N) when is_integer(N), N >= 0, N < ?MAX_PROTOCOL_INT -> {ok, N};
 read_value({uint_max, Max}, N) when is_integer(N), N >= 0, N =< Max -> {ok, N};
 read_value(held_object, #{{text, <<"tbs">>} := Tbs, {text, <<"signature">>} := Signature} = Held)

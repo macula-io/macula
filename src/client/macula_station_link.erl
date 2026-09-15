@@ -1291,12 +1291,6 @@ handle_info({macula_peering, connected, Pid, PeerNodeId},
     drain_pending_stream_advertises(NewS),
     {noreply, NewS};
 
-%% A frame from the peer that decoded but lacks a field its type requires
-%% (`macula_frame:validate_received/1'). The peering connection dropped it
-%% and kept the connection, and there is nothing here to act on.
-handle_info({macula_peering, invalid_frame, _Pid, _Type, _Field}, S) ->
-    {noreply, S};
-
 handle_info({macula_peering, frame, Pid, Frame},
             #state{peer_pid = Pid} = S) ->
     {noreply, fold_frames(drain_frames(Pid, [Frame]), S)};

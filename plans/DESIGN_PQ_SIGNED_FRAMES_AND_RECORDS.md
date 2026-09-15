@@ -59,6 +59,9 @@ data in one form, whatever a node has loaded.
   check reads it; a longer one is `malformed_frame`.
 - **STREAM_ERROR `message`** is text for people, at most 256 bytes of UTF-8, as a GOODBYE `reason` is. A sender
   with no such text sends an empty `message`.
+- **ERROR `detail`** from a provider is text for people, at most 256 bytes of UTF-8, as a STREAM_ERROR `message` is.
+- **ERROR and STREAM_ERROR `code`** from a provider is text of at most 64 bytes of UTF-8.
+- A received `code`, `detail` or `message` longer than its bound is `malformed_frame`.
 - **Accessors on the facade:**
   - `macula:field(Name, Map)` returns a field's value, or `undefined`;
   - `macula:field(Name, Map, Default)` returns `Default` for a missing field;
@@ -424,7 +427,7 @@ The frame is `{version, frame_type, reply}`, with the routing field `source_rout
 | `request_hash` | bytes, 48 | SHA-384 of the request's `tbs` |
 | `responded_by` | bytes, 32 | the provider's node_id, equal to the key id of `key` |
 | `payload` | any | RESULT only |
-| `code`, `detail` | text | ERROR only; `detail` optional |
+| `code`, `detail` | text | ERROR only; `code` at most 64 bytes, `detail` optional and at most 256 bytes |
 
 - The caller and every station on the path accept a reply only when `responded_by` equals the request's `target`, the
   signature verifies, and `request_hash` and `request_id` match the request (D25 item 4).
@@ -472,7 +475,7 @@ identity key: `{key, tbs, signature}` on the provider's first frame of a stream,
 | `seq` | unsigned | 0 on the provider's first frame, one more on each |
 | `encoding`, `body` | text, any | STREAM_DATA only |
 | `role` | text | STREAM_END only |
-| `code`, `message` | text | STREAM_ERROR only |
+| `code`, `message` | text | STREAM_ERROR only; `code` at most 64 bytes, `message` at most 256 bytes |
 | `payload` | any | STREAM_REPLY only |
 
 - The first frame's key id equals `signer` and the STREAM_OPEN's `target`. Later frames verify with that key, which
@@ -501,7 +504,7 @@ verified STREAM_OPEN, which is not carried again.
 | `seq` | unsigned | 0 on the caller's first frame, one more on each |
 | `encoding`, `body` | text, any | STREAM_DATA only |
 | `role` | text | STREAM_END only |
-| `code`, `message` | text | STREAM_ERROR only |
+| `code`, `message` | text | STREAM_ERROR only; `code` at most 64 bytes, `message` at most 256 bytes |
 
 - The caller's `seq` counts its own frames, apart from the provider's. STREAM_END is the caller's last frame, so no
   caller frame follows its number.
