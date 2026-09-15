@@ -45,6 +45,10 @@
 %%   <li><strong>Receive GRAFT</strong>: for a publication this node holds, the sender becomes eager and gets the
 %%       GOSSIP publication; for any other id nothing changes, the push sets included.</li>
 %%   <li><strong>Receive PRUNE</strong>: move the sender from eager to lazy.</li>
+%%   <li><strong>A sender outside both push sets</strong>: a frame moves a peer between the sets and never adds one.
+%%       Through a station's relay the sender is the frame's origin, which need not be a neighbour, so from such a
+%%       sender a GRAFT, a PRUNE and an IHAVE move no one, send nothing and are refused as `not_a_peer', a first GOSSIP
+%%       delivers and forwards its verified publication but moves no one, and a duplicate GOSSIP gets no PRUNE.</li>
 %% </ul>
 %%
 %% This module is pure apart from reading the configured profile when a node starts. The caller passes the clocks:
@@ -105,7 +109,8 @@
 -type clocks() :: #{wall := integer(), monotonic := integer()}.
 
 -type action()   :: {send, peer(), macula_frame:frame()}
-                  | {refused, peer(), ihave_allowance | graft_unanswered | wrong_realm | macula_frame_refusal()}.
+                  | {refused, peer(), ihave_allowance | graft_unanswered | wrong_realm | not_a_peer
+                                      | macula_frame_refusal()}.
 -type macula_frame_refusal() :: malformed_frame | signature_invalid | key_id_mismatch
                               | {not_yet_valid, pos_integer()} | {expired, pos_integer()}.
 %% A delivery is the message id and the verified publication: publisher, realm, topic, seq, published_at, payload.
@@ -244,10 +249,14 @@ on_gossip(From, #{publication := #{tbs := Tbs} = Publication} = Frame, State, Wa
     classify_gossip(has_received(MsgId, State), From, MsgId, Publication, Frame, State, WallMs).
 
 classify_gossip(true, From, _MsgId, _Publication, _Frame, State, _WallMs) ->
-    %% A duplicate, recognised by its id and not verified again. The sender should not be eager: PRUNE it.
-    {move_to_lazy(State, From), [{send, From, prune(State)}], []};
+    %% A duplicate, recognised by its id and not verified again. The sender should not be eager: PRUNE it, unless it
+    %% is no peer at all, which gets nothing.
+    duplicate_from(is_peer(From, State), From, State);
 classify_gossip(false, From, MsgId, Publication, #{round := Round} = Frame, State, WallMs) ->
     first_gossip(verified(Frame, State, WallMs), From, MsgId, Round, Publication, State).
+
+duplicate_from(true, From, State) -> {move_to_lazy(State, From), [{send, From, prune(State)}], []};
+duplicate_from(false, _From, State) -> {State, [], []}.
 
 first_gossip({ok, #{expires_at := ExpiresAt} = Verified}, From, MsgId, Round, Publication, State) ->
     State1 = mark_received(State, MsgId, Publication, ExpiresAt),
@@ -260,18 +269,24 @@ first_gossip({error, Refused}, From, MsgId, _Round, _Publication, State) ->
 %% An IHAVE for a publication not yet received records its sender with the time of its GRAFT and GRAFTs it, unless the
 %% sender is already on that entry, which changes nothing, or is on 1,024 open entries already, which records nothing,
 %% sends no GRAFT and is refused.
+%% An IHAVE from a sender outside both push sets records nothing, sends no GRAFT and is refused as not_a_peer.
 on_ihave(From, #{msg_id := MsgId, round := Round}, State, Clocks) ->
-    classify_ihave(ihave_kind(has_received(MsgId, State), From, MsgId, State), From, MsgId, Round, State, Clocks).
+    Kind = ihave_kind(is_peer(From, State), has_received(MsgId, State), From, MsgId, State),
+    classify_ihave(Kind, From, MsgId, Round, State, Clocks).
 
-ihave_kind(true, _From, _MsgId, _State) ->
+ihave_kind(false, _Received, _From, _MsgId, _State) ->
+    not_a_peer;
+ihave_kind(true, true, _From, _MsgId, _State) ->
     received;
-ihave_kind(false, From, MsgId, #{missing := M, open := O}) ->
+ihave_kind(true, false, From, MsgId, #{missing := M, open := O}) ->
     announcer_kind(maps:find(MsgId, M), From, maps:get(From, O, 0)).
 
 announcer_kind({ok, {Peers, _NotedAt}}, From, _Open) when is_map_key(From, Peers) -> announced;
 announcer_kind(_Entry, _From, Open) when Open >= ?OPEN_ENTRIES_MAX -> over_allowance;
 announcer_kind(_Entry, _From, _Open) -> new_announcer.
 
+classify_ihave(not_a_peer, From, _MsgId, _Round, State, _Clocks) ->
+    {State, [{refused, From, not_a_peer}], []};
 classify_ihave(received, _From, _MsgId, _Round, State, _Clocks) ->
     {State, [], []};
 classify_ihave(announced, _From, _MsgId, _Round, State, _Clocks) ->
@@ -281,17 +296,26 @@ classify_ihave(over_allowance, From, _MsgId, _Round, State, _Clocks) ->
 classify_ihave(new_announcer, From, MsgId, Round, State, Clocks) ->
     {note_missing(State, MsgId, From, Clocks), [{send, From, graft(State, MsgId, Round + 1)}], []}.
 
-%% The tree moves only for a publication this node holds and sends: a GRAFT for any other id changes nothing.
+%% The tree moves only for a publication this node holds and sends: a GRAFT for any other id changes nothing. A GRAFT
+%% from a sender outside both push sets gets nothing, moves no one and is refused as not_a_peer.
 on_graft(From, #{msg_id := MsgId, round := Round}, State) ->
-    answer_graft(maps:find(MsgId, maps:get(received, State)), From, Round, State).
+    graft_from(is_peer(From, State), maps:find(MsgId, maps:get(received, State)), From, Round, State).
+
+graft_from(false, _Held, From, _Round, State) -> {State, [{refused, From, not_a_peer}], []};
+graft_from(true, Held, From, Round, State) -> answer_graft(Held, From, Round, State).
 
 answer_graft(error, _From, _Round, State) ->
     {State, [], []};
 answer_graft({ok, {Publication, _ExpiresAt}}, From, Round, State) ->
     {move_to_eager(State, From), [{send, From, gossip(Publication, Round)}], []}.
 
+%% A PRUNE moves its sender from eager to lazy. From a sender outside both push sets it moves no one and is refused as
+%% not_a_peer.
 on_prune(From, State) ->
-    {move_to_lazy(State, From), [], []}.
+    prune_from(is_peer(From, State), From, State).
+
+prune_from(true, From, State) -> {move_to_lazy(State, From), [], []};
+prune_from(false, From, State) -> {State, [{refused, From, not_a_peer}], []}.
 
 %% A publication verified under the node's profile at `WallMs', for this node's realm.
 verified(Frame, #{profile := Profile, realm := Realm}, WallMs) ->
@@ -328,13 +352,28 @@ note_missing(#{missing := M, open := O} = S, MsgId, From, #{wall := WallMs, mono
     {Peers, NotedAt} = maps:get(MsgId, M, {#{}, WallMs}),
     S#{missing := M#{MsgId => {Peers#{From => MonoMs}, NotedAt}}, open := O#{From => maps:get(From, O, 0) + 1}}.
 
-move_to_eager(#{eager_push := E, lazy_push := L} = S, Peer) ->
-    S#{eager_push := sets:add_element(Peer, E),
-       lazy_push  := sets:del_element(Peer, L)}.
+%% A frame moves a peer between the push sets and never adds one: only add_peer/2 and remove_peer/2, as HyParView
+%% changes its active view, change who is in them. A sender in neither set, such as a relayed origin that is no
+%% neighbour, leaves both sets as they are.
+move_to_eager(S, Peer) ->
+    moved_to_eager(is_peer(Peer, S), S, Peer).
 
-move_to_lazy(#{eager_push := E, lazy_push := L} = S, Peer) ->
-    S#{eager_push := sets:del_element(Peer, E),
-       lazy_push  := sets:add_element(Peer, L)}.
+moved_to_eager(true, #{eager_push := E, lazy_push := L} = S, Peer) ->
+    S#{eager_push := sets:add_element(Peer, E), lazy_push := sets:del_element(Peer, L)};
+moved_to_eager(false, S, _Peer) ->
+    S.
+
+move_to_lazy(S, Peer) ->
+    moved_to_lazy(is_peer(Peer, S), S, Peer).
+
+moved_to_lazy(true, #{eager_push := E, lazy_push := L} = S, Peer) ->
+    S#{eager_push := sets:del_element(Peer, E), lazy_push := sets:add_element(Peer, L)};
+moved_to_lazy(false, S, _Peer) ->
+    S.
+
+%% Whether a sender is one of this node's peers, in either push set.
+is_peer(Peer, #{eager_push := E, lazy_push := L}) ->
+    sets:is_element(Peer, E) orelse sets:is_element(Peer, L).
 
 %%=====================================================================
 %% Outbound builders

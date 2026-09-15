@@ -1812,11 +1812,13 @@ verify_caller_stream(_Frame, _State, _Profile) ->
 %% request or its target. A neighbour's HyParView placements past its allowance, and a SHUFFLE_REPLY that
 %% answers no SHUFFLE, are charged. A freshness refusal is charged only when it is more than 10 minutes past the
 %% moment its rule starts refusing. A Plumtree neighbour's IHAVE past its open entries, a GRAFT it leaves
-%% unanswered, and a publication for another realm are charged.
+%% unanswered, and a publication for another realm are charged. A Plumtree frame from a sender outside the receiver's
+%% push sets is not: through a relay that sender is the frame's origin, not the connection peer, and it may be no
+%% neighbour during view churn through no fault of the relay.
 -spec charged_refusal(malformed_frame | signature_invalid | key_id_mismatch | seq_mismatch | stream_ended
                       | request_mismatch | not_the_target | placement_allowance | unsolicited_shuffle_reply
                       | {expired, pos_integer()} | {not_yet_valid, pos_integer()} | ihave_allowance
-                      | graft_unanswered | wrong_realm) ->
+                      | graft_unanswered | wrong_realm | not_a_peer) ->
         boolean().
 charged_refusal(malformed_frame) -> true;
 charged_refusal(signature_invalid) -> true;
@@ -1831,7 +1833,8 @@ charged_refusal({expired, PastMs}) -> PastMs > ?FRESHNESS_CHARGE_AFTER_MS;
 charged_refusal({not_yet_valid, AheadMs}) -> AheadMs > ?FRESHNESS_CHARGE_AFTER_MS;
 charged_refusal(ihave_allowance) -> true;
 charged_refusal(graft_unanswered) -> true;
-charged_refusal(wrong_realm) -> true.
+charged_refusal(wrong_realm) -> true;
+charged_refusal(not_a_peer) -> false.
 
 caller_frame(false, _Side, _Object, _Type, _State, _Profile) ->
     {error, malformed_frame};

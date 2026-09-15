@@ -87,7 +87,9 @@ receive_first_gossip_delivers_and_forwards_test() ->
     Sender = id(11),
     Other = id(12),
     %% Other peer in eager view; gossip is re-forwarded to Other, not back to Sender.
-    S1 = hecate_plumtree:add_peer(fresh(id(99)), Other),
+    %% Sender is a peer that starts lazy, so its move to eager on a first GOSSIP shows.
+    S0 = hecate_plumtree:add_peer(hecate_plumtree:add_peer(fresh(id(99)), Other), Sender),
+    {S1, [], []} = process(S0, Sender, macula_frame:plumtree_prune(#{realm => ?REALM})),
     Publish = publish_frame(<<"x">>),
     MsgId = msg_id_of(Publish),
     {S2, Actions, Deliveries} = process(S1, Sender, gossip_of(Publish, 0)),
@@ -154,7 +156,7 @@ ihave_for_unknown_msg_emits_graft_test() ->
     Sender = id(30),
     MsgId = crypto:strong_rand_bytes(48),
     Frame = macula_frame:plumtree_ihave(#{realm => ?REALM, msg_id => MsgId, round => 2}),
-    {S1, [{send, T, F}], []} = process(fresh(id(99)), Sender, Frame),
+    {S1, [{send, T, F}], []} = process(hecate_plumtree:add_peer(fresh(id(99)), Sender), Sender, Frame),
     ?assertEqual(Sender, T),
     ?assertEqual(plumtree_graft, macula_frame:frame_type(F)),
     ?assertEqual(MsgId, maps:get(msg_id, F)),
@@ -164,7 +166,7 @@ ihave_for_known_msg_is_silent_test() ->
     Publish = publish_frame(<<"already">>),
     {S1, _, _} = publish(fresh(id(99)), Publish),
     Frame = macula_frame:plumtree_ihave(#{realm => ?REALM, msg_id => msg_id_of(Publish), round => 1}),
-    {S2, [], []} = process(S1, id(31), Frame),
+    {S2, [], []} = process(hecate_plumtree:add_peer(S1, id(31)), id(31), Frame),
     ?assertEqual(0, hecate_plumtree:missing_count(S2)).
 
 %%---------------------------------------------------------------------
@@ -174,7 +176,10 @@ ihave_for_known_msg_is_silent_test() ->
 graft_for_known_msg_replies_with_gossip_test() ->
     Sender = id(40),
     #{publication := Publication} = Publish = publish_frame(<<"payload">>),
-    {S1, _, _} = publish(fresh(id(99)), Publish),
+    {S0, _, _} = publish(fresh(id(99)), Publish),
+    %% Sender is a peer that starts lazy, so its move to eager on the GRAFT shows.
+    Peered = hecate_plumtree:add_peer(S0, Sender),
+    {S1, [], []} = process(Peered, Sender, macula_frame:plumtree_prune(#{realm => ?REALM})),
     Frame = macula_frame:plumtree_graft(#{realm => ?REALM, msg_id => msg_id_of(Publish), round => 0}),
     {S2, [{send, T, F}], []} = process(S1, Sender, Frame),
     ?assertEqual(Sender, T),
@@ -187,7 +192,7 @@ graft_for_known_msg_replies_with_gossip_test() ->
 graft_for_unknown_msg_is_silent_test() ->
     Sender = id(41),
     Frame = macula_frame:plumtree_graft(#{realm => ?REALM, msg_id => crypto:strong_rand_bytes(48), round => 0}),
-    S0 = fresh(id(99)),
+    S0 = hecate_plumtree:add_peer(fresh(id(99)), Sender),
     {S1, [], []} = process(S0, Sender, Frame),
     ?assertEqual(S0, S1).
 
@@ -227,7 +232,9 @@ a_graft_for_a_forgotten_publication_gets_no_answer_test() ->
     Publish = publish_frame(<<"forgotten">>),
     MsgId = msg_id_of(Publish),
     {S1, _, [{MsgId, #{expires_at := ExpiresAt}}]} = publish(fresh(id(99)), Publish),
-    S2 = hecate_plumtree:sweep(S1, ExpiresAt + 1),
+    Swept = hecate_plumtree:add_peer(hecate_plumtree:sweep(S1, ExpiresAt + 1), id(42)),
+    %% id(42) is a peer that starts lazy, so staying out of eager shows the GRAFT moved no one.
+    {S2, [], []} = process(Swept, id(42), macula_frame:plumtree_prune(#{realm => ?REALM})),
     Frame = macula_frame:plumtree_graft(#{realm => ?REALM, msg_id => MsgId, round => 0}),
     {S3, [], []} = process(S2, id(42), Frame),
     ?assertNot(lists:member(id(42), hecate_plumtree:eager_peers(S3))).
@@ -235,7 +242,8 @@ a_graft_for_a_forgotten_publication_gets_no_answer_test() ->
 %% An IHAVE for a publication never received is forgotten once it is older than 70 minutes, the longest a
 %% publication can live.
 sweep_forgets_a_missing_publication_announced_over_70_minutes_ago_test() ->
-    {S1, _, []} = hecate_plumtree:process(fresh(id(99)), id(60), ihave(crypto:strong_rand_bytes(48)), at(?T0)),
+    Peered = hecate_plumtree:add_peer(fresh(id(99)), id(60)),
+    {S1, _, []} = hecate_plumtree:process(Peered, id(60), ihave(crypto:strong_rand_bytes(48)), at(?T0)),
     ?assertEqual(1, hecate_plumtree:missing_count(S1)),
     ?assertEqual(1, hecate_plumtree:missing_count(hecate_plumtree:sweep(S1, ?T0 + 70 * 60000))),
     ?assertEqual(0, hecate_plumtree:missing_count(hecate_plumtree:sweep(S1, ?T0 + 70 * 60000 + 1))).
@@ -243,7 +251,8 @@ sweep_forgets_a_missing_publication_announced_over_70_minutes_ago_test() ->
 a_sweep_keeps_a_recently_announced_missing_publication_test() ->
     Old = crypto:strong_rand_bytes(48),
     Recent = crypto:strong_rand_bytes(48),
-    {S1, _, []} = hecate_plumtree:process(fresh(id(99)), id(60), ihave(Old), at(?T0)),
+    Peered = lists:foldl(fun(N, Acc) -> hecate_plumtree:add_peer(Acc, id(N)) end, fresh(id(99)), [60, 61, 62]),
+    {S1, _, []} = hecate_plumtree:process(Peered, id(60), ihave(Old), at(?T0)),
     {S2, _, []} = hecate_plumtree:process(S1, id(61), ihave(Recent), at(?T0 + 20)),
     S3 = hecate_plumtree:sweep(S2, ?T0 + 20 + 70 * 60000),
     ?assertEqual(1, hecate_plumtree:missing_count(S3)),

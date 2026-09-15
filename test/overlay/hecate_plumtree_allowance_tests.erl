@@ -83,9 +83,10 @@ a_wrong_realm_an_ihave_past_the_allowance_and_an_unanswered_graft_are_charged_te
 %% Helpers
 %%---------------------------------------------------------------------
 
+%% A node whose neighbours id(7), id(8) and id(9) are in its push sets: Plumtree moves and refuses only its peers.
 fresh() ->
     {ok, S} = hecate_plumtree:new(id(99), ?REALM),
-    S.
+    lists:foldl(fun(N, Acc) -> hecate_plumtree:add_peer(Acc, id(N)) end, S, [7, 8, 9]).
 
 id(N) -> <<N:256>>.
 
