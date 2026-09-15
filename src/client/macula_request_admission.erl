@@ -17,7 +17,8 @@
 %%
 %% - each caller holds at most `caller_quota' entries;
 %% - each share holds at most `share' entries. A share is one incoming
-%%   connection's place: a configured seed's slot, or a peer's node_id;
+%%   connection's place: the normalized seed of its link, as the pool's
+%%   new-peer budget counts peers;
 %% - the set holds at most `cap' entries. The pool sets it to `share' times
 %%   the most distinct shares one entry lifetime can see, so the set cannot
 %%   fill before every share has;

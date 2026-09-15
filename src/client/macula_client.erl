@@ -314,7 +314,22 @@
     %% station alike. A configured seed never spends it. Past it, a fresh
     %% direct dial is refused with `{error, new_peer_budget_spent}' and a
     %% discovered station is left for a later discovery run. Default 16.
-    new_peer_budget => pos_integer()
+    new_peer_budget => pos_integer(),
+
+    %% Limits of the request admission the pool runs for every request its
+    %% links receive (plans/DESIGN_PQ_SIGNED_FRAMES_AND_RECORDS.md,
+    %% Requests): entries per caller (default 256) and per link's share
+    %% (1024), and stored reply bytes per caller (256 KiB) and in total
+    %% (16 MiB). A link's share is its normalized seed. A key not given here
+    %% falls back to the `macula' application environment's
+    %% `request_admission', then to its default. Each is an integer from 1 to
+    %% a cap (65,536; 65,536; 16 MiB; 1 GiB), with the quota per caller no
+    %% larger than the share and the reply bytes per caller no larger than
+    %% the total, or the pool does not start: `{error,
+    %% {invalid_admission_limit, Key, Value}}' or `{error,
+    %% {admission_limit_above, Smaller, Larger}}'.
+    request_admission => #{caller_quota => pos_integer(), share => pos_integer(),
+                           reply_bytes => pos_integer(), reply_bytes_total => pos_integer()}
 }.
 
 %% V1 multi_relay options that have NO V2 equivalent. Callers passing
@@ -410,6 +425,14 @@
 -define(MAX_DIRECT_LINKS_CAP, 64).
 -define(NEW_PEER_BUDGET_CAP, 256).
 -define(DISCOVERY_MAX_LINKS_CAP, 64).
+%% The request admission limits a pool starts with unless it is given others
+%% (plans/DESIGN_PQ_SIGNED_FRAMES_AND_RECORDS.md, Requests), and the most each
+%% may be set to. The admission's cap is the share times the pool's link
+%% limits summed, the most distinct shares one entry lifetime can see.
+-define(DEFAULT_ADMISSION_LIMITS, #{caller_quota => 256, share => 1024, reply_bytes => 262144,
+                                    reply_bytes_total => 16777216}).
+-define(ADMISSION_LIMIT_CAPS, #{caller_quota => 65536, share => 65536, reply_bytes => 16777216,
+                                reply_bytes_total => 1073741824}).
 
 -record(link_state, {
     seed          :: seed(),
@@ -515,7 +538,10 @@
     issuer_losses = 0 :: non_neg_integer(),
     %% Link starts that wait for the next issuer: seed → the start's extra
     %% options.
-    held_starts = #{} :: #{seed() => map()}
+    held_starts = #{} :: #{seed() => map()},
+    %% The request admission in which all the pool's links judge the requests
+    %% they receive.
+    admission :: pid()
 }).
 
 %% The issuer restart backoff doubles from the least to the most, and
@@ -1022,9 +1048,56 @@ init({Seeds, Opts}) ->
 %% pool, and nothing is dialed: an atom would otherwise sort above every
 %% integer and lift its bound.
 init_within_link_limits(none, Seeds, Opts) ->
-    init_within_seed_limit(length(Seeds), maps:get(max_seeds, Opts, ?DEFAULT_MAX_SEEDS), Seeds, Opts);
+    init_within_admission_limits(admission_limits_refusal(admission_given(Opts)), Seeds, Opts);
 init_within_link_limits({Key, Value}, _Seeds, _Opts) ->
     {error, {invalid_link_limit, Key, Value}}.
+
+%% Request admission limits outside their ranges, or out of order, do not
+%% start the pool, and nothing is dialed.
+init_within_admission_limits(none, Seeds, Opts) ->
+    init_within_seed_limit(length(Seeds), maps:get(max_seeds, Opts, ?DEFAULT_MAX_SEEDS), Seeds, Opts);
+init_within_admission_limits(Refusal, _Seeds, _Opts) ->
+    {error, Refusal}.
+
+%% The request admission limits a pool is given, key by key: its
+%% `request_admission' option over the `macula' application environment's
+%% `request_admission'. A value that is not a map is refused as a limit of
+%% that name.
+admission_given(Opts) ->
+    maps:merge(given_limits(application:get_env(macula, request_admission, #{})),
+               given_limits(maps:get(request_admission, Opts, #{}))).
+
+given_limits(#{} = Given) -> Given;
+given_limits(NotAMap)     -> #{request_admission => NotAMap}.
+
+%% A given key the admission does not take, or a value that is not an integer
+%% from 1 to its cap, is refused by name. So is a quota per caller above the
+%% share, or stored reply bytes per caller above the total, since the smaller
+%% limit would then never bind.
+admission_limits_refusal(Given) ->
+    admission_range_refusal(first_outside([{Key, Value} || Key := Value <- Given,
+                                                           not admission_limit_in_range(Key, Value)]),
+                            maps:merge(?DEFAULT_ADMISSION_LIMITS, Given)).
+
+admission_range_refusal(none, Limits)          -> admission_order_refusal(Limits);
+admission_range_refusal({Key, Value}, _Limits) -> {invalid_admission_limit, Key, Value}.
+
+admission_order_refusal(#{caller_quota := Quota, share := Share}) when Quota > Share ->
+    {admission_limit_above, caller_quota, share};
+admission_order_refusal(#{reply_bytes := Bytes, reply_bytes_total := Total}) when Bytes > Total ->
+    {admission_limit_above, reply_bytes, reply_bytes_total};
+admission_order_refusal(_InOrder) ->
+    none.
+
+admission_limit_in_range(Key, Value) ->
+    is_map_key(Key, ?ADMISSION_LIMIT_CAPS) andalso in_link_range(Value, maps:get(Key, ?ADMISSION_LIMIT_CAPS)).
+
+%% The limits the pool's admission starts with: the given limits over the
+%% defaults, and a cap of the share times the pool's link limits summed, the
+%% most distinct shares one entry lifetime can see.
+admission_start_limits(Opts) ->
+    #{share := Share} = Limits = maps:merge(?DEFAULT_ADMISSION_LIMITS, admission_given(Opts)),
+    Limits#{cap => Share * lists:sum([Value || {_Key, Value, _Cap} <- link_limits(Opts)])}.
 
 link_limit_outside_its_range(Opts) ->
     first_outside([{Key, Value} || {Key, Value, Cap} <- link_limits(Opts), not in_link_range(Value, Cap)]).
@@ -1071,6 +1144,9 @@ init_with_keys({error, _} = Refusal, _Seeds, _Opts) ->
 init_with_keys({ok, #{node_identity := NodeIdentity, issuer := Issuer, issuer_start := Start} = Keys}, Seeds, Opts) ->
     {ok, NodeId} = macula_node_keys:node_id(NodeIdentity),
     _ = erlang:monitor(process, Issuer),
+    %% One request admission for every link. The pool ends when it ends, and
+    %% ends it in terminate.
+    {ok, Admission} = macula_request_admission:start_link(admission_start_limits(Opts)),
     %% No node identity key in the link options: each link start gets a
     %% function that returns it, made at that start, so the pool's state
     %% holds no function over the key that redaction cannot see into.
@@ -1078,7 +1154,8 @@ init_with_keys({ok, #{node_identity := NodeIdentity, issuer := Issuer, issuer_st
         (maps:without([node_identity, issuer_start], Keys))#{
             capabilities       => maps:get(capabilities, Opts, 0),
             alpn               => maps:get(alpn, Opts, [<<"macula">>]),
-            connect_timeout_ms => maps:get(connect_timeout_ms, Opts, 30_000)
+            connect_timeout_ms => maps:get(connect_timeout_ms, Opts, 30_000),
+            admission          => Admission
         },
         %% TLS policy for the links this pool dials (seeds AND
         %% `call_station' targets): `verify' (webpki | none),
@@ -1109,7 +1186,8 @@ init_with_keys({ok, #{node_identity := NodeIdentity, issuer := Issuer, issuer_st
                                       exempt => [seed_peer(Seed) || Seed <- Seeds]}),
                     refused_dials = macula_refusal_report:new(?REFUSAL_REPORT_WINDOW_MS),
                     node_identity = NodeIdentity, issuer = Issuer, issuer_started_at = now_ms(),
-                    issuer_backoff_ms = ?ISSUER_RESTART_MIN_MS, issuer_start = Start},
+                    issuer_backoff_ms = ?ISSUER_RESTART_MIN_MS, issuer_start = Start,
+                    admission = Admission},
     State1 = lists:foldl(fun start_link_for_seed/2, State0, Seeds),
     erlang:send_after(DedupSweep, self(), dedup_sweep),
     arm_giveup_sweep(Discovery),
@@ -1387,6 +1465,11 @@ handle_info(order_flush, S) ->
     S1 = flush_all_subs(S#state{flush_timer = undefined}),
     {noreply, ensure_flush_timer(S1)};
 
+handle_info({'EXIT', Admission, Reason}, #state{admission = Admission} = S) ->
+    %% The pool's request admission ended. A pool that went on would judge
+    %% requests without the ones it has seen, so it stops, and its owner
+    %% starts a fresh one.
+    {stop, {shutdown, {admission_down, Reason}}, S};
 handle_info({'EXIT', _Pid, _Reason}, S) ->
     %% Links are linked to us via gen_server:start_link in
     %% start_link_for_seed (we trap_exit). The DOWN monitor fires
@@ -1396,13 +1479,15 @@ handle_info({'EXIT', _Pid, _Reason}, S) ->
 handle_info(_Other, S) ->
     {noreply, S}.
 
-terminate(_Reason, #state{subs = Subs}) ->
+terminate(_Reason, #state{subs = Subs, admission = Admission}) ->
     %% Notify every subscriber that the pool is gone.
     maps:foreach(
       fun(SubRef, #sub_spec{subscriber = Pid, mon = Mon}) ->
           erlang:demonitor(Mon, [flush]),
           Pid ! {macula_event_gone, SubRef, pool_closed}
       end, Subs),
+    %% The admission is linked to the pool, and a normal exit would not end it.
+    true = exit(Admission, shutdown),
     ok.
 
 code_change(_OldVsn, S, _Extra) -> {ok, S}.
@@ -1475,7 +1560,8 @@ start_link_for_seed(Seed, ExtraOpts, #state{issuer = undefined} = S) ->
     held_start(Seed, ExtraOpts, S);
 start_link_for_seed(Seed, ExtraOpts, #state{node_identity = NodeIdentity} = S) ->
     LinkOpts = maps:merge(S#state.link_opts,
-                          ExtraOpts#{seed => Seed, node_identity => fun() -> NodeIdentity end}),
+                          ExtraOpts#{seed => Seed, node_identity => fun() -> NodeIdentity end,
+                                     share => seed_peer(Seed)}),
     after_link_start(macula_station_link:start_link(LinkOpts), Seed, S).
 
 %% While the pool has no issuer, a link start waits for the next one

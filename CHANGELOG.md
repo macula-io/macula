@@ -329,6 +329,15 @@ Post-quantum work on the `post-quantum` branch. Not on `main`.
   `_macula.station_link.peering_exit` diagnostic events at `notice`, so a
   lost connection shows at OTP's default primary level. Its other
   diagnostic events stay at `info`.
+- A pool runs one request admission, `macula_request_admission`, for the
+  requests all its links receive, and ends when the admission ends. Its
+  limits come from the `request_admission` pool option, then the `macula`
+  application environment, then the defaults: 256 entries per caller, 1024
+  per link's share, and 256 KiB of stored reply bytes per caller and
+  16 MiB in total. A limit outside its range, a quota per caller above the
+  share, or reply bytes per caller above the total refuses the pool start.
+  A link's share is its normalized seed. `macula_station_link:start_link/1`
+  requires `admission` and `share`.
 
 ### Removed
 

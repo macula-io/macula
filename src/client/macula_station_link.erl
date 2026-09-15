@@ -181,6 +181,11 @@
     %% CONNECT material and status statements from. Required, and the
     %% link ends when the issuer does.
     issuer := pid(),
+    %% The pool's request admission, where every verified request the link
+    %% receives is judged, and this link's share in it: the normalized seed
+    %% the pool counts the peer by. Both required.
+    admission := pid(),
+    share := term(),
     %% The function that opens the peering connection, by default
     %% `macula_peering:connect/1'. An option, so a test replaces no
     %% shared module.
@@ -263,6 +268,10 @@
     node_identity    :: macula_node_keys:node_key(),
     profile          :: macula_crypto_profile:profile(),
     issuer           :: pid(),
+    %% The pool's request admission, which judges every verified request
+    %% this link receives, and this link's share in it.
+    admission        :: pid(),
+    share            :: term(),
     connect          :: fun((map()) -> {ok, pid()} | {error, term()}),
     capabilities     :: non_neg_integer(),
     alpn             :: [binary()],
@@ -1053,9 +1062,21 @@ start_checked(_Opts) ->
     {error, {node_identity, required}}.
 
 issuer_checked({ok, Issuer}, Identity, Opts) when is_pid(Issuer) ->
-    identity_checked(Identity(), Issuer, Opts);
+    admission_checked(maps:find(admission, Opts), Identity, Issuer, Opts);
 issuer_checked(_NoIssuer, _Identity, _Opts) ->
     {error, {issuer, required}}.
+
+%% The pool's request admission and this link's share in it are required: every
+%% request the link receives is judged there, under that share.
+admission_checked({ok, Admission}, Identity, Issuer, Opts) when is_pid(Admission) ->
+    share_checked(is_map_key(share, Opts), Identity, Issuer, Opts);
+admission_checked(_NoAdmission, _Identity, _Issuer, _Opts) ->
+    {error, {admission, required}}.
+
+share_checked(true, Identity, Issuer, Opts) ->
+    identity_checked(Identity(), Issuer, Opts);
+share_checked(false, _Identity, _Issuer, _Opts) ->
+    {error, {share, required}}.
 
 identity_checked(#{purpose := identity, profile := Profile} = Key, Issuer, Opts) ->
     seed_checked(add_tls_opts(parse_seed(maps:get(seed, Opts)), Opts), Key, Profile, Issuer);
@@ -1091,7 +1112,8 @@ started({ok, Seed, Key, Profile, Issuer}, Opts) ->
     LiveMiss = maps:get(liveness_max_misses, Opts, app_env(liveness_max_misses, ?LIVENESS_MAX_MISSES)),
     RetryMs  = maps:get(connect_retry_backoff_ms, Opts, app_env(connect_retry_backoff_ms, ?CONNECT_RETRY_BACKOFF_MS)),
     State    = #state{seed = Seed, node_identity = Key, profile = Profile,
-                      issuer = Issuer, connect = Connect,
+                      issuer = Issuer, admission = maps:get(admission, Opts),
+                      share = maps:get(share, Opts), connect = Connect,
                       capabilities = Caps, alpn = Alpn,
                       connect_timeout_ms = Tmo,
                       connect_watchdog_ms = WdMs,

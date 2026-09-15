@@ -179,7 +179,11 @@ with_link_keys(Opts) ->
     {ok, Profile} = macula_crypto_profile:configured(),
     {ok, Key} = macula_node_keys:generate(identity, Profile),
     {ok, Issuer} = macula_statement_issuer_sup:start_issuer(fun() -> Key end, self()),
-    Opts#{node_identity => fun() -> Key end, issuer => Issuer, expected_node_id => <<1:256>>}.
+    %% A link also starts with a request admission and its share in it.
+    {ok, Admission} = macula_request_admission:start_link(#{caller_quota => 256, share => 1024, cap => 46080,
+                                                             reply_bytes => 262144, reply_bytes_total => 16777216}),
+    Opts#{node_identity => fun() -> Key end, issuer => Issuer, admission => Admission,
+          share => {seed, {<<"127.0.0.1">>, 1}}, expected_node_id => <<1:256>>}.
 
 %% A link that believes it is connected to a station, with this process as its peer.
 start_link_to_station() ->

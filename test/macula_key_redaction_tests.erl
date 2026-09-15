@@ -208,6 +208,7 @@ the_status_of_a_station_link_carries_no_private_key_test() ->
     {ok, Link} = macula_station_link:start_link(#{seed => #{host => <<"127.0.0.1">>, port => 1,
                                                             expected_node_id => NodeId},
                                                   node_identity => fun() -> Key end, issuer => Issuer,
+                                                  admission => link_admission(), share => {seed, {<<"127.0.0.1">>, 1}},
                                                   connect => fun(_PeeringOpts) -> {error, not_dialed_here} end}),
     Status = sys:get_status(Link),
     ok = macula_station_link:stop(Link),
@@ -256,6 +257,7 @@ crash_a_link(Key) ->
     {ok, Link} = macula_station_link:start_link(#{seed => #{host => <<"127.0.0.1">>, port => 1,
                                                             expected_node_id => NodeId},
                                                   node_identity => fun() -> Key end, issuer => Issuer,
+                                                  admission => link_admission(), share => {seed, {<<"127.0.0.1">>, 1}},
                                                   connect => fun(_PeeringOpts) -> {error, not_dialed_here} end}),
     Field = fun macula_station_link:state_field_index/1,
     Peer = self(),
@@ -654,6 +656,7 @@ started_link(Key) ->
     {ok, Link} = macula_station_link:start_link(#{seed => #{host => <<"127.0.0.1">>, port => 1,
                                                             expected_node_id => NodeId},
                                                   node_identity => fun() -> Key end, issuer => Issuer,
+                                                  admission => link_admission(), share => {seed, {<<"127.0.0.1">>, 1}},
                                                   connect => fun(_PeeringOpts) -> {error, not_dialed_here} end}),
     {Link, Issuer}.
 
@@ -697,6 +700,12 @@ installed_by(Start) ->
     true = unlink(Holder),
     ok = gen_server:stop(Holder),
     Installed.
+
+%% A request admission for a link started without a pool, with the pool's default limits.
+link_admission() ->
+    {ok, Admission} = macula_request_admission:start_link(#{caller_quota => 256, share => 1024, cap => 46080,
+                                                             reply_bytes => 262144, reply_bytes_total => 16777216}),
+    Admission.
 
 %% The filter the installer puts in place: the external function redacted_log_event/2 with the application's modules.
 expected_filter() ->

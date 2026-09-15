@@ -23,6 +23,10 @@ identity_test_() ->
             ?_test(refuses_without(node_identity, Keys))},
            {"a link started without a statement issuer refuses to start",
             ?_test(refuses_without(issuer, Keys))},
+           {"a link started without a request admission refuses to start",
+            ?_test(refuses_without(admission, Keys))},
+           {"a link started without its share of the admission refuses to start",
+            ?_test(refuses_without(share, Keys))},
            {"a link started with a key of another purpose as its identity refuses to start",
             ?_test(refuses_another_purpose(Keys))},
            {"a link whose seed names no expected node_id refuses to start",
@@ -113,10 +117,17 @@ issuer(#{issuers := Issuers}) ->
     true = ets:insert(Issuers, {issuer, Pid}),
     Pid.
 
-%% Start options a link starts with: its seed names the node_id it expects, here the node's own, and its connect
-%% function refuses, so it dials nothing.
+%% Start options a link starts with: its seed names the node_id it expects, here the node's own, its connect function
+%% refuses, so it dials nothing, and it has an admission and its share in it.
 link_opts(Key, Issuer) ->
     {ok, NodeId} = macula_node_keys:node_id(Key),
     #{seed => #{host => <<"127.0.0.1">>, port => 1, expected_node_id => NodeId},
-      node_identity => fun() -> Key end, issuer => Issuer, connect_timeout_ms => 2000,
+      node_identity => fun() -> Key end, issuer => Issuer, admission => admission(),
+      share => {seed, {<<"127.0.0.1">>, 1}}, connect_timeout_ms => 2000,
       connect => fun(_PeeringOpts) -> {error, not_dialed_here} end}.
+
+%% An admission with the pool's default limits, for a link started without a pool.
+admission() ->
+    {ok, Admission} = macula_request_admission:start_link(#{caller_quota => 256, share => 1024, cap => 46080,
+                                                             reply_bytes => 262144, reply_bytes_total => 16777216}),
+    Admission.

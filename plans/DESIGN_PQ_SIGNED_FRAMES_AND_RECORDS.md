@@ -450,6 +450,29 @@ apply. `request` is `{key, tbs, signature}` under `MACULA-PQ-REQUEST-V1`, and `k
   signed reply, or the reply once the work finishes, along the path the copy came from. A copy with another request
   hash is refused. A provider bounds the stored reply bytes per caller; a reply beyond the bound is not kept, and a
   copy of its request is then refused.
+- **Decision: request admission limits.** A pool runs one admission for the requests all its links receive. Its entries
+  are bounded by a quota per caller, a limit per share and a cap on the set, and its stored replies by bytes per caller
+  and in total. A full bound refuses a request and never evicts an entry. A share is one incoming connection's place:
+  the normalized seed of its link, which is what the pool's new-peer budget counts peers by, so the shares stay the
+  ones the budget bounds.
+  - Defaults: `caller_quota` 256, `share` 1024, `reply_bytes` 256 KiB, `reply_bytes_total` 16 MiB. Each is a key of the
+    pool option `request_admission`, falling back to the `macula` application environment, and an integer from 1 to a
+    cap: 65,536 for `caller_quota` and `share`, 16 MiB for `reply_bytes`, 1 GiB for `reply_bytes_total`. A pool does
+    not start with `reply_bytes` above `reply_bytes_total`, or `caller_quota` above `share`.
+  - `cap` is `share` times the most distinct shares one entry lifetime can see: `max_seeds` + discovery `max_links` +
+    `max_direct_links` + `new_peer_budget`, 16 + 5 + 8 + 16 = 45 at the pool defaults, so 46,080 entries. It is never
+    set below `share` times that sum, so a few shares cannot fill the set.
+  - Worst case: one entry takes 413 bytes (measured on OTP 28 over 100,000 entries from 1,024 callers and 45 shares),
+    so 46,080 entries take about 18 MiB, and with 16 MiB of stored replies about 34 MiB in all.
+  - Sustained rate before refusals: an entry lives until `deadline` plus 5 minutes, so with a 30 second deadline a
+    share of 1024 allows about 3 requests a second per link and a quota of 256 about 0.8 per caller; with a 10 minute
+    deadline, about 1.1 and 0.3.
+  - `admit` at the full cap of 46,080: 203 µs at the 99.9th percentile while filling, 33 µs refusing at the cap, 14 ms
+    at most. The entries stay on the admission process's heap. A link waits at most 1 second for a verdict and refuses
+    the request when none comes.
+  - These are starting values: they refuse only sustained high rates, never a burst. A station that serves a busier
+    provider raises `share`, and memory grows by 413 bytes × 45 per unit; the fairness holds because `cap` is always
+    `share` times the sum. `share_full` refusals on a real workload are the evidence to raise it.
 - **A station** checks the signature and `caller`, and routes on `target`. It keeps forwarding state per connection
   the request was forwarded on and request hash, never per `request_id` alone, because past the first hop requests
   from many callers share one upstream connection. Entries per incoming connection have a configured maximum, and a
