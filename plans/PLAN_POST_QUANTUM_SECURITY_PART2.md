@@ -467,14 +467,17 @@ change, the done criterion and the effort. The US profile goes first; the EU par
 
 ### WP 3.2 The 11.0.0 stations
 
-- [ ] The second post-quantum fleet's station instances run 11.0.0 in their profile, on their own boxes and
-  hostnames next to the live fleet, before any consumer moves (D14, reconsidered 2026-09-16).
+- [ ] The second post-quantum fleet's station instances run 11.0.0 in their profile, on reprovisioned boxes
+  and hostnames next to the live fleet, before any consumer moves (D14 reconsidered, 2026-09-16).
 - **Owner:** Terra.
 - **Waiting on:** Stage 2; D21 done first.
 - **Change:**
   - today's stations stay pinned to `macula-station` 311c0bf until the last consumer's cutover (D21);
-  - the post-quantum fleet's station instances run on their own boxes and hostnames, in their profile (D2),
-    prepared US profile first (D15); consumers get the fleet's seeds and move over in their stage;
+  - the 2+2 split (decided 2026-09-16, `macula-demo` `plans/PLAN_MACULA_11_DEPLOY.md`): the live fleet ends at
+    frankfurt + falkenstein, and the post-quantum fleet takes over the existing Hetzner boxes —
+    `relays-hetzner-nuremberg` first as `pq.station-de-nuremberg`, `relays-hetzner-helsinki` second as
+    `pq.station-fi-helsinki` — in their profile (D2), prepared US profile first (D15), zero new spend;
+    consumers get the fleet's seeds and move over in their stage;
   - `stations.csv` gains node_id and profile columns, placed before the notes column;
   - seed lists are generated after each station instance's first boot, when its node_id exists, and before the
     client releases that compile them in; every compiled-in seed list is generated from the csv, including the one
