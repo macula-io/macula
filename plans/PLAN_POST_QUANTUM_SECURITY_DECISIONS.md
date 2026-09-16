@@ -480,9 +480,10 @@ before its wire checks are green.
 
 ### D21 The live fleet during the work
 
-- **Answer:** the live fleet, today's 9 stations, is pinned to a released station version that matches exactly what
-  its stations run, `macula-station` 311c0bf, until the last consumer has moved to the post-quantum fleet and the
-  live fleet is switched off (D14, reconsidered 2026-09-16). If `main` is ahead of the
+- **Answer:** the live fleet, today's 9 stations (cut to 4 on 2026-09-16 when the five Linode nanodes were
+  decommissioned; the post-quantum fleet adds 3 new public boxes), is pinned to a released station version that
+  matches exactly what its stations run, `macula-station` 311c0bf, until the last consumer has moved to the
+  post-quantum fleet and the live fleet is switched off (D14, reconsidered 2026-09-16). If `main` is ahead of the
   latest `v*` tag, the running image is pinned by digest, or Raf tags current `main` first. No station is
   downgraded. Owner: Terra.
 - **Why:** a push to `macula-station` `main` builds and publishes the image the live stations follow ✅, so
