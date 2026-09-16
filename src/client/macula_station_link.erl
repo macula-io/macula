@@ -386,7 +386,7 @@
     %% / `server_streams' even though the underlying primitive
     %% (`macula_peering:open_dedicated_stream/1') is the same one.
     content_stream_bufs = #{} :: #{reference() => binary()},
-    content_pending = #{}     :: #{reference() => {gen_server:from(), reference()}},
+    content_pending = #{}     :: #{reference() => {gen_server:from(), reference(), macula_frame:verified_request()}},
     %% App-level liveness state. `liveness_timer' is the next-tick
     %% reference (or undefined when not armed). `liveness_outstanding'
     %% holds the request_id and the request of an in-flight probe (or
@@ -1750,12 +1750,18 @@ on_frame(#{frame_type := event} = Frame, S) ->
                                                       erlang:system_time(millisecond)),
                      Frame, S);
 %% Inbound CALL — a CALL the station delivered to this link, for a
-%% (realm, procedure) with a registered handler. Once the CALL's signature verifies against its
-%% own `caller' (`on_inbound_call/3'), dispatch to the registered handler
-%% and ship the resulting RESULT or call_error frame back over the same
-%% peering connection.
+%% (realm, procedure) with a registered handler. The request verifies
+%% under the link's profile first; only a verified one reaches the
+%% registered handler. Dispatch to the handler and ship the resulting
+%% RESULT or provider ERROR back over the same peering connection.
 on_frame(#{frame_type := call} = Frame, S) ->
-    on_inbound_call(verify_signed_by(Frame, call_signer(Frame)), Frame, S);
+    V = macula_frame:verify_request(Frame, S#state.profile),
+    C = erlang:get(served_debug_count),
+    C1 = case element(1, V) of ok -> (case C of undefined -> 0; N -> N end) + 1; _ -> case C of undefined -> 0; N -> N end end,
+    erlang:put(served_debug_count, C1),
+
+    io:format("T=~p ONFRAME ~p count=~p~n", [erlang:monotonic_time(microsecond), element(1, V), C1]),
+    on_inbound_call(V, Frame, S);
 %% STREAM_OPEN / STREAM_DATA / STREAM_END / STREAM_ERROR / STREAM_REPLY
 %% no longer arrive here — every streaming session travels on its
 %% own dedicated QUIC stream (see PLAN_PER_STREAM_QUIC_ISOLATION.md
@@ -1866,21 +1872,13 @@ logged_refused_reply({quiet, Report}, _Refusal) ->
 
 %% A CALL whose signature does not verify against its own `caller' never
 %% reaches its handler and gets no reply.
-on_inbound_call({ok, _Verified}, Frame, S) ->
-    handle_inbound_call(Frame, S),
+on_inbound_call({ok, _Verified} = VerifiedRequest, _Frame, S) ->
+    handle_inbound_call(VerifiedRequest, S),
     S;
-on_inbound_call({error, Why}, Frame, S) ->
-    logger:warning("[macula_station_link] dropped inbound CALL whose signature"
-                   " does not verify against its caller (~p) procedure=~p",
-                   [Why, maps:get(procedure, Frame, undefined)]),
+on_inbound_call({error, Why}, _Frame, S) ->
+    logger:warning("[macula_station_link] dropped inbound CALL whose request"
+                   " does not verify (~p)", [Why]),
     S.
-
-%% The identity a CALL names as its signer, `caller'.
-call_signer(#{caller := <<_:256>> = Pub}) -> {ok, Pub};
-call_signer(_Frame)                      -> {error, no_signer}.
-
-verify_signed_by(Frame, {ok, Pub})       -> macula_frame:verify(Frame, Pub);
-verify_signed_by(_Frame, {error, _} = E) -> E.
 
 on_timeout(error, S) ->
     {noreply, S};
@@ -1898,15 +1896,28 @@ open_content_stream_result({error, _} = E, _Bufs, S) ->
 send_on_content_stream(Stream, CallSpec, Id) ->
     try
         case macula_frame:stream_bytes({call, CallSpec}, Id) of
-            {ok, Built} -> macula_peering:send_on_stream(Stream, macula_frame:written_bytes(Built));
+            {ok, Built} ->
+                Bytes = macula_frame:written_bytes(Built),
+                case macula_peering:send_on_stream(Stream, Bytes) of
+                    ok -> {ok, content_request(CallSpec, Id)};
+                    {error, _} = E -> E
+                end;
             {error, _} = Refused -> Refused
         end
     catch C:R -> {error, {C, R}}
     end.
 
-await_content_call_reply(ok, Stream, From, Tmo, Pending, S) ->
+%% The request data a content reply verifies against: the id, the hash
+%% of the request's signed tbs, and the target the reply must report.
+content_request(CallSpec, Id) ->
+    #{request := #{tbs := Tbs}} = macula_frame:call(CallSpec, Id),
+    #{request_id   => maps:get(request_id, CallSpec),
+      request_hash => crypto:hash(sha384, Tbs),
+      target       => maps:get(target, CallSpec)}.
+
+await_content_call_reply({ok, Request}, Stream, From, Tmo, Pending, S) ->
     TRef = erlang:send_after(Tmo, self(), {content_call_timeout, Stream}),
-    {noreply, S#state{content_pending = Pending#{Stream => {From, TRef}}}};
+    {noreply, S#state{content_pending = Pending#{Stream => {From, TRef, Request}}}};
 await_content_call_reply({error, _} = Refused, _Stream, _From, _Tmo, _Pending, S) ->
     {reply, Refused, S}.
 
@@ -1916,18 +1927,36 @@ on_content_timeout({{From, _OldTRef}, NewCP}, S) ->
     gen_server:reply(From, {error, timeout}),
     {noreply, S#state{content_pending = NewCP}}.
 
-dispatch_content_frame(#{frame_type := result, payload := Payload}, Stream, S) ->
-    deliver_content_reply(Stream, {ok, Payload}, S);
-dispatch_content_frame(#{frame_type := error} = Frame, Stream, S) ->
-    deliver_content_reply(Stream, call_failure(maps:get(code, Frame, 0),
-                                               maps:get(name, Frame, undefined),
-                                               maps:get(detail, Frame, undefined)),
-                          S);
+dispatch_content_frame(#{frame_type := Type} = Frame, Stream, S)
+  when Type =:= result; Type =:= error ->
+    verify_content_reply(Frame, Stream, S);
 dispatch_content_frame(_Frame, _Stream, S) ->
     %% Anything else arriving on a content stream is a protocol
     %% violation — this side only ever sends CALL on one, so the only
     %% legitimate replies are RESULT/ERROR.
     S.
+
+%% A reply on a content stream verifies against the request the stream
+%% carries; one that does not ends the stream and fails the call
+%% waiting on it, naming the refusal.
+verify_content_reply(Frame, Stream, #state{content_pending = CP, profile = Profile} = S) ->
+    case maps:find(Stream, CP) of
+        {ok, {_From, _TRef, Request}} ->
+            case macula_frame:verify_reply(Frame, Request, Profile) of
+                {ok, Fields} ->
+                    deliver_content_reply(Stream, content_reply_result(Fields), S);
+                {error, Refusal} ->
+                    teardown_content_stream_state(Stream, {error, Refusal},
+                                                  fun macula_quic:close_stream/1, S)
+            end;
+        error ->
+            S
+    end.
+
+content_reply_result(#{frame_type := result, payload := Payload}) ->
+    {ok, Payload};
+content_reply_result(#{frame_type := error, code := Code} = Fields) ->
+    {error, {call_error, Code, maps:get(detail, Fields, undefined)}}.
 
 %% What `macula_frame:parse_received/1' gave for a content stream, handled as
 %% `dedicated_items/3' handles a dedicated stream's: a reply that does not
@@ -1963,7 +1992,7 @@ reply_content_pending(error, _Reply, S) ->
     %% No caller waiting (race with timeout, or a stray reply after
     %% `close_content_stream/2' already failed it).
     S;
-reply_content_pending({{From, TRef}, NewCP}, Reply, S) ->
+reply_content_pending({{From, TRef, _Request}, NewCP}, Reply, S) ->
     _ = erlang:cancel_timer(TRef),
     gen_server:reply(From, Reply),
     S#state{content_pending = NewCP}.
@@ -1987,7 +2016,7 @@ teardown_content_stream_state(Stream, LocalFailReason, CloseFun,
 
 fail_content_pending(error, CP, _Reason) ->
     CP;
-fail_content_pending({{From, TRef}, NewCP}, _CP, Reason) ->
+fail_content_pending({{From, TRef, _Request}, NewCP}, _CP, Reason) ->
     _ = erlang:cancel_timer(TRef),
     gen_server:reply(From, Reason),
     NewCP.
@@ -2530,25 +2559,29 @@ fan_event({ok, {_R, _T, Subscriber, _Mon}}, SubRef, Topic, Payload, Meta) ->
 %% an unknown `(realm, procedure)' (no handler registered on this
 %% link) maps to `unknown_next_peer'
 %% (0x01) — same taxonomy as `hecate_handler_dispatch'.
-handle_inbound_call(#{call_id := CallId, procedure := Proc, realm := Realm,
-                      payload := Payload} = Frame,
+handle_inbound_call({ok, #{request_id := _CallId, procedure := Proc, realm := Realm,
+                            payload := Payload} = Request},
                     #state{procedures = Procs, policies = Pols, node_identity = Id,
                            peer_pid = Pid}) when is_pid(Pid) ->
-    SelfPub = node_id(Id),
     %% Gate first (Slice 7b): an `open' procedure serves any identified
-    %% caller; a gated one requires a valid `ucan_token', else refuse
+    %% caller; a gated one requires a valid `token', else refuse
     %% with BOLT#4 `unauthorized' instead of invoking the handler.
-    Verdict = authorize({Realm, Proc}, Frame, Pols),
+    Verdict = authorize({Realm, Proc}, Request, Pols),
     Found   = maps:find({Realm, Proc}, Procs),
-    PayloadWithCaller = with_caller(Payload, maps:get(caller, Frame, undefined)),
+    PayloadWithCaller = with_caller(Payload, maps:get(caller, Request, undefined)),
     _ = spawn(fun() ->
-            Reply = authorized_reply(Verdict, Found, CallId,
-                                     PayloadWithCaller, SelfPub),
+            Reply = try authorized_reply(Verdict, Found, Request,
+                                         PayloadWithCaller, Id)
+                    catch
+                        error:Reason ->
+                            macula_frame:provider_error(
+                              #{request => Request, code => fault_code(Reason)}, Id)
+                    end,
             sent_or_faulted(macula_peering:send_frame(Pid, Reply),
-                            Pid, CallId, SelfPub)
+                            Pid, Request, Id)
         end),
     ok;
-handle_inbound_call(_Frame, _State) ->
+handle_inbound_call(_VerifiedRequest, _State) ->
     ok.
 
 %% The CALL frame carries `caller' (a required, wire-authenticated field,
@@ -2574,12 +2607,11 @@ with_caller(Payload, Caller) when is_map(Payload), Caller =/= undefined ->
 with_caller(Payload, _Caller) ->
     Payload.
 
-authorized_reply(ok, Found, CallId, Payload, SelfPub) ->
-    build_inbound_call_reply(Found, CallId, Payload, SelfPub);
-authorized_reply(unauthorized, _Found, CallId, _Payload, SelfPub) ->
-    macula_frame:call_error(#{call_id     => CallId,
-                              code        => macula_bolt4:code(unauthorized),
-                              reported_by => SelfPub}).
+authorized_reply(ok, Found, Request, Payload, Key) ->
+    build_inbound_call_reply(Found, Request, Payload, Key);
+authorized_reply(unauthorized, _Found, Request, _Payload, Key) ->
+    macula_frame:provider_error(#{request => Request, code => <<"unauthorized">>},
+                                Key).
 
 authorize(Key, Frame, Pols) ->
     authorize_policy(maps:get(Key, Pols, open), Frame).
@@ -2682,71 +2714,65 @@ set_policy(Key, Policy, Pols) -> Pols#{Key => Policy}.
 %% the remote caller burning its entire deadline waiting for a frame
 %% that died here, which is a timeout where a taxonomy was available:
 %% the handler's return value was the problem and BOLT#4 can say so.
-%% A `call_error' frame is all binaries and small integers, so it is
-%% sendable by construction and cannot recurse into this path.
-sent_or_faulted(ok, _Pid, _CallId, _SelfPub) ->
+sent_or_faulted(ok, _Pid, _Request, _Key) ->
     ok;
-sent_or_faulted({error, Reason}, Pid, CallId, SelfPub) ->
+sent_or_faulted({error, Reason}, Pid, Request, Key) ->
     logger:error("[macula_station_link] handler result unsendable, "
                  "faulting the call: ~ts", [macula_frame:explain(Reason)]),
     _ = macula_peering:send_frame(
-          Pid, macula_frame:call_error(#{call_id     => CallId,
-                                         code        => refusal_code(Reason),
-                                         reported_by => SelfPub})),
+          Pid, macula_frame:provider_error(#{request => Request,
+                                             code    => fault_code(Reason)}, Key)),
     ok.
 
-refusal_code({unsupported_payload_type, payload_too_large, _Path}) -> 16#0D;
-refusal_code(_Other)                                               -> 16#0F.
+fault_code({unsupported_payload_type, payload_too_large, _Path}) -> <<"payload_too_large">>;
+fault_code(_Other)                                               -> <<"unknown_error">>.
 
 %% Handler not registered locally — synthesise a signed
 %% `unknown_next_peer' BOLT#4 error.
-build_inbound_call_reply(error, CallId, _Payload, SelfPub) ->
-    macula_frame:call_error(#{call_id     => CallId,
-                              code        => 16#01,
-                              reported_by => SelfPub});
-build_inbound_call_reply({ok, Handler}, CallId, Payload, SelfPub) ->
-    safe_invoke_handler(Handler, Payload, CallId, SelfPub).
+build_inbound_call_reply(error, Request, _Payload, Key) ->
+    macula_frame:provider_error(#{request => Request, code => <<"unknown_next_peer">>},
+                                Key);
+build_inbound_call_reply({ok, Handler}, Request, Payload, Key) ->
+    safe_invoke_handler(Handler, Payload, Request, Key).
 
 %% Handler dispatch with crash trap and error-return funnel.
 %%
-%% Two failure paths reach the wire as a BOLT#4 `call_error' frame
+%% Two failure paths reach the wire as a BOLT#4 provider ERROR frame
 %% so the caller observes a reliable taxonomy rather than either
 %%
 %%   * a `{disconnected, killed}' signal when a single bad CALL
 %%     takes the link down, or
 %%   * a successful-looking RESULT frame whose payload was an
 %%     `{error, _}' tuple — the CBOR encoder has no clause for raw
-%%     tuples and crashes the peering gen_statem at frame-sign
-%%     time, dropping every other multiplexed RPC on the same
-%%     connection.
+%%     tuples and crashes the frame build, dropping every other
+%%     multiplexed RPC on the same connection.
 %%
 %% Mapping:
 %%   * handler returns `{error, Reason}' →
-%%     `call_error(code = 0x0F unknown_error,
-%%                 detail = handler_error_detail(Reason))'
+%%     `provider_error(code = <<"unknown_error">>,
+%%                     detail = handler_error_detail(Reason))'
 %%   * handler crashes →
-%%     `call_error(code = 0x02 temporary_relay_failure)'
+%%     `provider_error(code = <<"temporary_relay_failure">>)'
 %%   * handler returns anything else →
 %%     `result(payload = normalise_reply(Reply))'
-safe_invoke_handler(Handler, Payload, CallId, SelfPub) ->
+safe_invoke_handler(Handler, Payload, Request, Key) ->
     try invoke_handler(Handler, Payload) of
         {error, Reason} ->
-            macula_frame:call_error(#{call_id     => CallId,
-                                      code        => 16#0F,
-                                      reported_by => SelfPub,
-                                      detail      => handler_error_detail(Reason)});
+            macula_frame:provider_error(#{request => Request,
+                                          code    => <<"unknown_error">>,
+                                          detail  => handler_error_detail(Reason)},
+                                        Key);
         Reply ->
-            macula_frame:result(#{call_id      => CallId,
-                                  payload      => normalise_reply(Reply),
-                                  responded_by => SelfPub})
+            macula_frame:result(#{request => Request,
+                                  payload => normalise_reply(Reply)}, Key)
     catch
         Class:Reason:Stack ->
             logger:warning(
               "[station_link] handler crashed: ~ts",
               [macula_reason_name:logged("~p:~p~n  stack=~p", [Class, Reason, Stack])]),
-            macula_frame:call_error(#{call_id     => CallId,
-                                      code        => 16#02,
-                                      reported_by => SelfPub})
+            macula_frame:provider_error(#{request => Request,
+                                          code    => <<"temporary_relay_failure">>},
+                                        Key)
     end.
 
 invoke_handler(Fun, Args) when is_function(Fun, 1) ->
@@ -2803,11 +2829,6 @@ detail_or_none(error) -> undefined.
 %% `true' for it, which is right for a genuinely unknown error and wrong
 %% for a handler that has just said no. The spec table is the spec's and
 %% is left alone; a caller who gets the reason back does not need to ask.
-call_failure(16#0F, _Name, Detail) when is_binary(Detail) ->
-    {error, Detail};
-call_failure(Code, Name, _Detail) ->
-    {error, {call_error, Code, Name}}.
-
 %%-------------------------------------------------------------------
 %% Helpers
 %%-------------------------------------------------------------------
