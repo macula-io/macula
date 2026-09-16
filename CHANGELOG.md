@@ -473,6 +473,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the foundation realm trust list names for the advertisement's realm
   (D28).
 
+- DHT frames carry the D28 paging and acknowledgement fields: STORE_ACK
+  gains `signer` (the record's key id) and `record_version` (the record's
+  version), FIND_VALUE an optional `after` (a signer key id, to page a
+  slot), and VALUE an optional `next` (the last entry's signer key id,
+  present only when more follow). The wire names the STORE_ACK version
+  `record_version`, not `version`: the base frame header already carries a
+  `version` field.
+
 ### Changed
 
 - `macula_identity:load/1` and `macula_owner_only_file:read/1` accept only

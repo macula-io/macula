@@ -47,12 +47,13 @@ Replacement by version keeps one entry per signer key id.
 
 ### 1.4 STORE_ACK
 
-- Fields: `key`; `signer` (bytes, 32: the key id of the record's `key`); `version` (bytes, 16: the version of the
-  record in the STORE); `stored`.
+- Fields: `key`; `signer` (bytes, 32: the key id of the record's `key`); `record_version` (bytes, 16: the version
+  of the record in the STORE); `stored`. The wire field is `record_version`, not `version`: the base frame header
+  already carries a `version` field (the protocol version), and one CBOR map cannot hold two.
 - `stored` is 1 when the station holds this version or a later one from that signer in that slot, and 0 otherwise.
   No reason is sent.
-- The sender matches an acknowledgement on `key`, `signer` and `version`, so concurrent STOREs of different signers'
-  records into one slot on one connection each get their own answer.
+- The sender matches an acknowledgement on `key`, `signer` and `record_version`, so concurrent STOREs of
+  different signers' records into one slot on one connection each get their own answer.
 - A STORE whose record bytes equal a held entry's bytes is answered from that entry without verifying again.
 
 ### 1.5 VALUE paging
