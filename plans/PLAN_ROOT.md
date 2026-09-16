@@ -14,6 +14,7 @@ Plans, designs and research for the `macula` SDK. The master index of every Macu
 | [DESIGN_PQ_HANDSHAKE_FRAMES.md][frames] | Handshake frames, bindings and status statements, byte for byte | Agreed |
 | [DESIGN_PQ_SIGNED_FRAMES_AND_RECORDS.md][signed] | Signed records and frames after the handshake | Agreed |
 | [DESIGN_PQ_DHT_SLOTS_AND_BUDGET.md][slots] | DHT slot bounds, slot admission and the verification budget | Agreed |
+| [PLAN_RESOURCE_LEAK_HARDENING.md][leaks] | Resource and memory leak survey of the macula core | Survey complete |
 
 ## Research
 
@@ -42,3 +43,4 @@ Plans, designs and research for the `macula` SDK. The master index of every Macu
 [military]: PLAN_MILITARY_GRADE.md
 [isolation]: PLAN_PER_STREAM_QUIC_ISOLATION.md
 [push]: PLAN_PUSH_UPLOAD.md
+[leaks]: PLAN_RESOURCE_LEAK_HARDENING.md
