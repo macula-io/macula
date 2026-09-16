@@ -57,8 +57,17 @@ data in one form, whatever a node has loaded.
   `malformed_frame`. Payloads carry no CBOR booleans either, since the decoding rule refuses them.
 - **GOODBYE `reason`** is text for people, at most 256 bytes of UTF-8. Any text within that bound is accepted and no
   check reads it; a longer one is `malformed_frame`.
+- **GOODBYE `detail`** is optional: bytes of valid UTF-8 for people, at most 256 of them.
 - **STREAM_ERROR `message`** is text for people, at most 256 bytes of UTF-8, as a GOODBYE `reason` is. A sender
   with no such text sends an empty `message`.
+- **ERROR `detail`** from a provider is optional text for people, at most 256 bytes of UTF-8, as a STREAM_ERROR
+  `message` is.
+- **ERROR and STREAM_ERROR `code`** from a provider is text of at most 64 bytes of UTF-8.
+- A received `code`, `detail` or `message` longer than its bound is `malformed_frame`.
+- **A procedure name and a topic** are at most 512 bytes of valid UTF-8: text in a request and in a publication, and
+  bytes in SUBSCRIBE and UNSUBSCRIBE. Nodes keep them per pending request, subscription and advertisement, so each is
+  bounded, and 512 bytes is well above any name in use. A longer one, or one that is not UTF-8, is refused.
+- **SUBSCRIBE** has no `filter`, since nothing reads one. A SUBSCRIBE that carries one is refused.
 - **Accessors on the facade:**
   - `macula:field(Name, Map)` returns a field's value, or `undefined`;
   - `macula:field(Name, Map, Default)` returns `Default` for a missing field;
@@ -134,14 +143,24 @@ A record is the signed object `{key, tbs, signature}`, with `key` the signer's k
 | `version` | bytes, 16 | UUIDv7 |
 | `created_at`, `expires_at` | unsigned, ms | |
 | `payload` | map | the type's fields, text keys |
-| `subject` | bytes | domain types (tags 0x20 to 0xFF) only, and optional there |
+| `subject` | bytes, at least one | domain types (tags 0x20 to 0xFF) only, and optional there; an empty one is refused |
 
 About 7.3 KB / 8.3 KB before the payload: 2,592 / 3,118 bytes of key and 4,627 / 5,139 bytes of signature.
 
 - **Size.** Every stack refuses a record whose wire form is larger than 256 KiB, before any other check.
-- **Domain record lifetime.** A domain record's `expires_at` is at most 7 days after its `created_at`, and every
-  verifier refuses a longer one as malformed. With `created_at` at most 5 minutes ahead, no domain record a station
-  accepts expires more than 7 days and 5 minutes after it arrives (D28).
+- **Record lifetime.** A record's `expires_at` is after its `created_at` and at most its type's maximum after it: a
+  node record and a content announcement 48 hours; a procedure advertisement and a station endpoint 5 minutes; realm
+  stations, an org directory and a procedure delegation 6 hours; a realm member endorsement 30 days; a domain record 7
+  days (D28); and any other type 30 days, so no record keeps a key trusted without end. A tombstone lives at least
+  until the record it withdraws has expired plus the clock tolerance, and at most the withdrawn type's maximum plus
+  twice that tolerance, since the record it withdraws may be created up to the tolerance ahead. A signer refuses to
+  sign any other record, and every verifier refuses one as `lifetime_too_long`, or as `lifetime_reversed` when it
+  expires before it is created. With `created_at` at most 5 minutes ahead, no domain record a station accepts expires
+  more than 7 days and 5 minutes after it arrives.
+- **Realm member endorsement window.** Its payload's `valid_until` is not before its `valid_from`, and at most 30 days
+  after it. The builder refuses another window, and a verifier of the endorsement refuses a reversed one as
+  `endorsement_window_reversed` and a longer one as `endorsement_window_too_long`, before its other window checks, so
+  one endorsement admits its member for at most 30 days.
 - **Checks,** after the steps of a signed object:
   - `tbs` holds exactly these keys, with `subject` only where the type allows it;
   - `created_at` is at most 5 minutes ahead of the verifier's clock, and `expires_at` plus 5 minutes has not passed
@@ -173,6 +192,10 @@ A tombstone, type tag 0x0C, withdraws one record before that record expires.
 - Within its slot a tombstone replaces only its signer's record with a lower version, and a later record from that
   signer, with a higher version, replaces the tombstone.
 - A station stores or forwards a tombstone only after it verifies.
+- A reader of a slot several signers share takes only the entry of the signer it trusts, found by carried key id
+  without verifying the others (`macula_record:signer_entry/4`), so a tombstone under another key withdraws nothing
+  for it. It verifies at most 4 entries under that key, highest claimed version first. A realm member endorsement is
+  read under the realm key a node pins for the realm (`macula_hyparview_endorsement:slot_endorsement/4`).
 - Its `expires_at` is no earlier than the withdrawn record's, so a replayed copy of that record cannot return after the
   tombstone expires.
 
@@ -219,23 +242,29 @@ The payload of a procedure advertisement, type tag 0x06, holds exactly these key
 | `serving_station` | bytes, 32 | the node_id of the station that serves the provider |
 | `authorization` | map | the provider authorization (D25 item 6); every procedure has one |
 
-- `authorization` holds either `org_directory` and `procedure_delegation`, each bytes, the wire form as received of
-  the realm-signed org directory and of the org-signed procedure delegation that names the provider, or
-  `certificate_chain`, an array of bytes, the provider's certificate chain in DER, leaf first. It holds nothing else.
+- `authorization` holds `org_directory` and `procedure_delegation`, each bytes, the wire form as received of the
+  realm-signed org directory and of the org-signed procedure delegation that names the provider. It holds nothing
+  else. 11.0.0 has no certificate form: the realm issues no X.509 certificates (design B1). A caller refuses an
+  authorization in any other form as `authorization_form_unsupported`, and one that pairs those keys with a value that
+  is not bytes as `malformed`.
 - **Org namespace.** A procedure's org namespace is the text before the first `/` of its name, when there is one and
   it is not `_`. A name with no `/`, or whose first segment is `_`, has none, and a name that starts with `/` is
   malformed. Capability grants use the same definition (D7).
 - Every procedure has an org namespace (D25). A verifier refuses an advertisement for a procedure without one, and
   one that carries no `authorization`.
-- The org directory's `org_name`, or the O of the leaf certificate, equals the org namespace byte for byte.
+- The org directory's `org_name` equals the org namespace byte for byte.
 - The provider's signature covers `authorization`. The caller, and a serving station that gates a CALL, check each
-  embedded record's own signature and validity, or the chain against the realm's trust anchor (D25 item 6).
-- They also refuse an advertisement that expires later than the earliest expiry in its authorization: an embedded
-  record's `expires_at`, or a certificate's notAfter. Renewing an authorization therefore means signing the
-  advertisement again, at a new version.
+  embedded record's own signature and validity (D25 item 6).
+- They also refuse an advertisement that expires later than the earliest expiry in its authorization, an embedded
+  record's `expires_at`. Renewing an authorization therefore means signing the advertisement again, at a new version.
+- A caller holds a realm key for each realm it trusts, pinned when its pool starts and keyed by realm id, and checks an
+  org directory only against the key pinned for the advertisement's realm.
+- A caller checks the authorization from the advertisement alone and looks up no tombstone. A delegation its org
+  withdraws is honoured until it expires, so the caller-side revocation bound is the delegation's maximum lifetime, six
+  hours, and it lengthens with that lifetime (Jupiter, 2026-09-15).
 - A station that stores or forwards an advertisement verifies its embedded org directory and delegation, once per
-  hash, to decide a checked place, and never parses a certificate chain or shows that decision to callers
-  (`DESIGN_PQ_DHT_SLOTS_AND_BUDGET.md`, part 2).
+  hash, to decide a checked place, and never shows that decision to callers (`DESIGN_PQ_DHT_SLOTS_AND_BUDGET.md`,
+  part 2).
 - A consumer takes the realm and the procedure from these fields; no advertisement carries a procedure URI.
 
 ### Storage keys
@@ -263,8 +292,23 @@ Every DHT storage key is 32 bytes.
 | domain type | 0x20 to 0xFF | signer key id, then the subject when present |
 
 - A procedure name is the name within its realm; the realm enters only as the 32-byte realm id.
+- A domain record's signer key id is the key id of its key as carried (`MACULA-KEY-ID-V1`), whatever the key's
+  purpose. A node identity key's domain records therefore sit in slots apart from its node record, whose key is its
+  node_id.
 - A consumer computes a storage key from ids and names it already holds, before it holds the record.
 - `macula-station` derives the same keys for procedure advertisements and content announcements (WP 1.6).
+
+### Domain record types
+
+Every stack that signs or reads a domain type uses the same tag for it. The 11.0.0 coordinator (Jupiter) allocates
+each tag, and the allocation is added to this table. The owner of a domain type sets its payload rules. A retired tag
+stays reserved and is never allocated again, since a node of an older release can still publish it.
+
+| Tag | Name | Owner | Payload rules |
+|---|---|---|---|
+| 0x20 | reserved: the retired 10.x realm member identity record, and the example tag of the records guide and tests | macula-realm 10.x | none |
+| 0x21 | reserved: the retired 10.x `realm_member_resigned_v1` | macula-realm 10.x | none |
+| 0x22 | `hecate.ownership_proof.v2` | hecate services | hecate_om's ownership proof |
 
 ### Content ids
 
@@ -310,6 +354,21 @@ which stations set or change per hop, stay outside them.
 - HyParView, the Plumtree control frames and GOODBYE change membership, tree shape or a connection's lifecycle, so
   they are control frames. GOSSIP carries publications that are checked end to end, so it is data; its Plumtree
   routing fields stay unsigned in both profiles.
+- A station relays every HyParView frame, JOIN, FORWARD_JOIN, NEIGHBOR, DISCONNECT, SHUFFLE and SHUFFLE_REPLY, and
+  the Plumtree IHAVE, GRAFT and PRUNE, which carry no signature in pq_pure, and the Plumtree GOSSIP, from a connection
+  it authenticated. SHUFFLE_REPLY goes to the node where the shuffle walk started and DISCONNECT to a member evicted
+  from the active view, and neither need be a neighbour of the sender, so both travel only by relay. A receiver takes
+  such a relayed frame with the relay's origin as its sender and checks no frame signature
+  (`macula_frame:relayed_without_signature/1`). Every other relayed frame keeps its own verification.
+- The relay is trusted for who sent a relayed frame, not for what it carries. A GOSSIP's publication is checked end to
+  end: a link routes a GOSSIP by the realm its publication claims, read without verifying
+  (`macula_frame:claimed_publication_realm/1`), and the subscriber verifies the publication before acting on it. The
+  Plumtree layer is that verifying subscriber, and whoever wires it to a link keeps plumtree frames from reaching any
+  other overlay subscriber unverified. A link counts a relayed frame that names no realm, or a realm with no subscriber
+  there, instead of delivering it.
+- A refusal of what a relayed frame carries is counted by kind and never charged to the station connection that
+  relayed it. A subscriber reports it through `macula_station_link:overlay_frame_refused/3`, which charges a connection
+  only for a frame that came from that connection's current peer, not through a relay.
 - A neighbour-signed frame is `{version, frame_type, neighbour}`. `neighbour` is `{tbs, signature}` under
   `MACULA-PQ-NEIGHBOUR-V1`, verified with the connection peer's identity key, and its `tbs` holds the frame's fields
   with `frame_type` and `alg`.
@@ -334,6 +393,14 @@ which stations set or change per hop, stay outside them.
   and `version` (`DESIGN_PQ_DHT_SLOTS_AND_BUDGET.md`, 1.4).
 - FIND_VALUE carries `key`, `origin` and an optional `after` (bytes, 32), a signer key id. VALUE carries `key`,
   `records` and `next` (bytes, 32), present only when more entries follow (`DESIGN_PQ_DHT_SLOTS_AND_BUDGET.md`, 1.5).
+- A NODES entry's `addresses` lists at most 4 addresses, each exactly `host`, `port` (unsigned, 1 to 65535) and
+  `transport` (`quic`). A station lists one address per observation today, and 4 leaves room for IPv4 and IPv6 beside
+  a host name. A NODES frame outside these is refused.
+- A NODES `host` is bytes, 1 to 253: an IP literal without a zone, since a zone names an interface on the sender's own
+  host, or a host name of labels of 1 to 63 letters, digits and hyphens that neither start nor end with a hyphen, with
+  no trailing dot. `macula_frame:addresses_checked/1` is the one check, for the builder, the receive rule and a
+  station's stored addresses. Whether an address is worth dialing, such as a wildcard or link-local one, is the
+  dialer's decision.
 - A HyParView `peer_sample` holds at most 7 node_ids. A SHUFFLE or FORWARD_JOIN `ttl`, and a FORWARD_JOIN `arwl`,
   is at most 8, and a `prwl` is at most its `arwl`. A frame outside these is `malformed_frame`. A receiver compares
   a FORWARD_JOIN's `ttl` with its own PRWL, never the frame's.
@@ -405,6 +472,29 @@ apply. `request` is `{key, tbs, signature}` under `MACULA-PQ-REQUEST-V1`, and `k
   signed reply, or the reply once the work finishes, along the path the copy came from. A copy with another request
   hash is refused. A provider bounds the stored reply bytes per caller; a reply beyond the bound is not kept, and a
   copy of its request is then refused.
+- **Decision: request admission limits.** A pool runs one admission for the requests all its links receive. Its entries
+  are bounded by a quota per caller, a limit per share and a cap on the set, and its stored replies by bytes per caller
+  and in total. A full bound refuses a request and never evicts an entry. A share is one incoming connection's place:
+  the normalized seed of its link, which is what the pool's new-peer budget counts peers by, so the shares stay the
+  ones the budget bounds.
+  - Defaults: `caller_quota` 256, `share` 1024, `reply_bytes` 256 KiB, `reply_bytes_total` 16 MiB. Each is a key of the
+    pool option `request_admission`, falling back to the `macula` application environment, and an integer from 1 to a
+    cap: 65,536 for `caller_quota` and `share`, 16 MiB for `reply_bytes`, 1 GiB for `reply_bytes_total`. A pool does
+    not start with `reply_bytes` above `reply_bytes_total`, or `caller_quota` above `share`.
+  - `cap` is `share` times the most distinct shares one entry lifetime can see: `max_seeds` + discovery `max_links` +
+    `max_direct_links` + `new_peer_budget`, 16 + 5 + 8 + 16 = 45 at the pool defaults, so 46,080 entries. It is never
+    set below `share` times that sum, so a few shares cannot fill the set.
+  - Worst case: one entry takes 413 bytes (measured on OTP 28 over 100,000 entries from 1,024 callers and 45 shares),
+    so 46,080 entries take about 18 MiB, and with 16 MiB of stored replies about 34 MiB in all.
+  - Sustained rate before refusals: an entry lives until `deadline` plus 5 minutes, so with a 30 second deadline a
+    share of 1024 allows about 3 requests a second per link and a quota of 256 about 0.8 per caller; with a 10 minute
+    deadline, about 1.1 and 0.3.
+  - `admit` at the full cap of 46,080: 203 µs at the 99.9th percentile while filling, 33 µs refusing at the cap, 14 ms
+    at most. The entries stay on the admission process's heap. A link waits at most 1 second for a verdict and refuses
+    the request when none comes.
+  - These are starting values: they refuse only sustained high rates, never a burst. A station that serves a busier
+    provider raises `share`, and memory grows by 413 bytes × 45 per unit; the fairness holds because `cap` is always
+    `share` times the sum. `share_full` refusals on a real workload are the evidence to raise it.
 - **A station** checks the signature and `caller`, and routes on `target`. It keeps forwarding state per connection
   the request was forwarded on and request hash, never per `request_id` alone, because past the first hop requests
   from many callers share one upstream connection. Entries per incoming connection have a configured maximum, and a
@@ -424,7 +514,7 @@ The frame is `{version, frame_type, reply}`, with the routing field `source_rout
 | `request_hash` | bytes, 48 | SHA-384 of the request's `tbs` |
 | `responded_by` | bytes, 32 | the provider's node_id, equal to the key id of `key` |
 | `payload` | any | RESULT only |
-| `code`, `detail` | text | ERROR only; `detail` optional |
+| `code`, `detail` | text | ERROR only; `code` at most 64 bytes, `detail` optional and at most 256 bytes |
 
 - The caller and every station on the path accept a reply only when `responded_by` equals the request's `target`, the
   signature verifies, and `request_hash` and `request_id` match the request (D25 item 4).
@@ -441,8 +531,7 @@ The frame is `{version, frame_type, relay_error}`, with the routing field `sourc
 | `request_id` | bytes, 16 | |
 | `request_hash` | bytes, 48 | |
 | `reported_by` | bytes, 32 | the station's node_id, equal to the key id of `key` |
-| `code` | text | a relay error code, distinct from every provider code |
-| `detail` | text | optional |
+| `code` | text | a relay error code from its closed set, distinct from every provider code |
 | `offending_hop` | bytes, 32 | optional |
 
 - A station or the caller accepts a relay error only for a pending request whose `request_id` and `request_hash`
@@ -472,7 +561,7 @@ identity key: `{key, tbs, signature}` on the provider's first frame of a stream,
 | `seq` | unsigned | 0 on the provider's first frame, one more on each |
 | `encoding`, `body` | text, any | STREAM_DATA only |
 | `role` | text | STREAM_END only |
-| `code`, `message` | text | STREAM_ERROR only |
+| `code`, `message` | text | STREAM_ERROR only; `code` at most 64 bytes, `message` at most 256 bytes |
 | `payload` | any | STREAM_REPLY only |
 
 - The first frame's key id equals `signer` and the STREAM_OPEN's `target`. Later frames verify with that key, which
@@ -501,7 +590,7 @@ verified STREAM_OPEN, which is not carried again.
 | `seq` | unsigned | 0 on the caller's first frame, one more on each |
 | `encoding`, `body` | text, any | STREAM_DATA only |
 | `role` | text | STREAM_END only |
-| `code`, `message` | text | STREAM_ERROR only |
+| `code`, `message` | text | STREAM_ERROR only; `code` at most 64 bytes, `message` at most 256 bytes |
 
 - The caller's `seq` counts its own frames, apart from the provider's. STREAM_END is the caller's last frame, so no
   caller frame follows its number.

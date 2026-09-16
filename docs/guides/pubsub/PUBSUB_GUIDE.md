@@ -51,9 +51,12 @@ wrapper doesn't fit). `handle_event/4` receives `Topic`, `Payload`, and
 | Key | Type | Meaning |
 |---|---|---|
 | `realm` | `<<_:256>>` | Realm tag (matches the subscribe call) |
-| `publisher` | `binary()` | Publisher pubkey (the original publisher, not the relay) |
+| `publisher` | `<<_:256>>` | The publisher's node_id (the original publisher, not the relay) |
 | `seq` | `non_neg_integer()` | Per-publisher monotonic sequence |
-| `delivered_via` | `binary()` | Pubkey of the link/station that delivered this copy |
+| `published_at` | `non_neg_integer()` | When the publisher published it, in milliseconds since the epoch |
+| `delivered_via` | `plumtree \| direct` | How this copy reached the station link |
+| `publication_hash` | `<<_:384>>` | SHA-384 of the publication's signed `tbs`; the pool delivers each hash once |
+| `expires_at` | `non_neg_integer()` | The last moment, in milliseconds, a verifier accepts the publication |
 
 ```erlang
 -module(my_orders_listener).
@@ -327,12 +330,12 @@ signal to look at delivery, not ordering.
 
 ## Dedup and delivery guarantees
 
-For an EVENT whose publisher signature verified, `{publisher, seq}` is the
-dedup key: the pool guarantees you see each `(Realm, Publisher, Seq)` tuple
-**at most once**, even when the same EVENT arrives via multiple links (e.g.
-with `replication_factor > 1`). Any other EVENT is deduplicated on that tuple
-plus a digest of its topic and payload, so identical copies still arrive
-once, and it never uses a verified EVENT's key. In
+Every EVENT's publication is verified before delivery, and one that does
+not verify is dropped. The dedup key is the publication's hash, the SHA-384
+of its signed `tbs`: the pool guarantees you see each publication **at most
+once**, even when it arrives via multiple links (e.g. with
+`replication_factor > 1`). Two publications that share a realm, publisher
+and seq are still two publications, with two hashes. In
 `ordered` and `latest_only` modes the delivery layer additionally uses the
 seq to order or drop; in `as_arrives` the dedup layer is the only filter.
 
@@ -350,16 +353,17 @@ seq to order or drop; in `as_arrives` the dedup layer is the only filter.
 - **Cross-publisher ordering** — none, by design. Two publishers' events
   arrive in arbitrary interleaving; see "Total order is not offered, by
   design" above.
-- **Cross-link dedup** — the pool dedupes by `(Realm, Publisher, Seq)`,
-  plus a digest of topic and payload for an EVENT whose publisher signature
-  did not verify, over a 60-second window (configurable; see `dedup_window_ms` in
-  [CONNECTING_GUIDE.md](../shared/CONNECTING_GUIDE.md)).
+- **Cross-link dedup**: the pool dedupes by publication hash and keeps
+  each hash until the publication expires, `published_at` plus its
+  `ttl_ms` (at most 1 hour), or 10 minutes without one, plus 5 minutes,
+  after which every verifier refuses it. The pool judges expiry when an
+  event arrives, and records a hash only while a subscription matches it.
 - **Cross-station gossip** — default since 4.5.0. A daemon connected to
   station A and a daemon connected to station B see each other's
   publishes once subscription interest and the fact itself have gossiped
-  between the stations; publisher-end-to-end signatures plus
-  `(publisher, seq)` dedup at each hop is what makes this safe past one
-  hop.
+  between the stations; every hop verifies a publication once, keyed by
+  its hash, before it delivers or forwards it, which is what makes this
+  safe past one hop.
 
 ---
 
@@ -417,9 +421,9 @@ mailbox-flow-control patterns (process throttling, batching, etc.).
 
 ### Idempotent handlers
 
-Even though the pool dedupes by `(Realm, Publisher, Seq)`, network
-weirdness across long restarts can theoretically allow a duplicate
-sneak through after the dedup window expires. Make handlers
+The pool delivers each publication at most once, and verifiers refuse
+a copy that arrives after the publication expired. A publisher that
+sends the same fact twice still makes two publications, so make handlers
 idempotent — match on a payload-level key (order id, sensor id +
 timestamp, etc.) when correctness matters.
 
@@ -434,9 +438,9 @@ timestamp, etc.) when correctness matters.
 4. **Include a timestamp** — `erlang:system_time(millisecond)` in
    every payload.
 5. **Keep handlers fast** — spawn workers for heavy processing.
-6. **Make handlers idempotent** — `(publisher, seq)` is a strong dedup
-   key, but cross-restart edge cases exist; don't rely on
-   exactly-once.
+6. **Make handlers idempotent**: the pool delivers each publication once,
+   but a publisher can send one fact as two publications; don't rely
+   on exactly-once.
 
 ---
 

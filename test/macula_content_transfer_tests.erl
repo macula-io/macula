@@ -51,6 +51,7 @@ content_transfer_test_() ->
                   fun pause_on_single_block_put_is_a_harmless_noop/0,
                   fun cancel_while_paused_between_chunks_still_resets_the_stream/0,
                   fun a_link_io_of_another_shape_is_refused/0,
+                  fun a_get_for_an_mcid_of_another_shape_is_refused/0,
                   fun a_transfer_io_of_another_shape_is_refused/0]]}.
 
 single_block_put_resolves_mcid() ->
@@ -61,15 +62,15 @@ single_block_put_resolves_mcid() ->
                                  end},
 
     {ok, Pid} = macula_content_transfer:start_put(dummy_pid(), Bytes, #{link_io => LinkIo}),
-    Hash = macula_blake3_nif:hash(Bytes),
-    ExpectedMcid = <<1, ?SINGLE_CODEC, Hash/binary>>,
+    Hash = crypto:hash(sha384, Bytes),
+    ExpectedMcid = <<2, ?SINGLE_CODEC, Hash/binary>>,
     ?assertEqual({ok, ExpectedMcid}, macula_content_transfer:await(Pid)),
     ok = macula_content_transfer:cancel(Pid).
 
 single_block_get_resolves_bytes() ->
     Bytes = <<"round tripped bytes">>,
-    Hash = macula_blake3_nif:hash(Bytes),
-    Mcid = <<1, ?SINGLE_CODEC, Hash/binary>>,
+    Hash = crypto:hash(sha384, Bytes),
+    Mcid = <<2, ?SINGLE_CODEC, Hash/binary>>,
     LinkIo = (macula_scripted_link:link_io())#{
                call_on_stream := fun(_LinkPid, _Stream, _Realm, <<"_content.get_block">>,
                                      _Payload, _Tmo) -> {ok, Bytes}
@@ -321,8 +322,8 @@ pause_on_single_block_put_is_a_harmless_noop() ->
     {ok, Pid} = macula_content_transfer:start_put(dummy_pid(), Bytes, #{link_io => LinkIo}),
     ok = macula_content_transfer:pause(Pid),
     ok = macula_content_transfer:resume(Pid),
-    Hash = macula_blake3_nif:hash(Bytes),
-    ExpectedMcid = <<1, ?SINGLE_CODEC, Hash/binary>>,
+    Hash = crypto:hash(sha384, Bytes),
+    ExpectedMcid = <<2, ?SINGLE_CODEC, Hash/binary>>,
     ?assertEqual({ok, ExpectedMcid}, macula_content_transfer:await(Pid)),
     ok = macula_content_transfer:cancel(Pid).
 
@@ -361,6 +362,23 @@ a_link_io_of_another_shape_is_refused() ->
     ?assertError(function_clause, Start(maps:remove(abort_content_stream, LinkIo))),
     ?assertError(function_clause, Start(LinkIo#{call_on_stream := fun(_, _, _, _, _) -> ok end})),
     ?assertError(function_clause, Start(LinkIo#{open_stream => fun(_) -> ok end})),
+    ?assertEqual([], macula_scripted_link:calls()).
+
+%% An MCID is a SHA-384 id of a single block or a manifest. A get for an id
+%% of another shape (an earlier tag, another codec, a hash of another
+%% length) is refused with function_clause, in the caller: no transfer
+%% starts and no link function is called.
+a_get_for_an_mcid_of_another_shape_is_refused() ->
+    LinkIo = macula_scripted_link:link_io(),
+    Hash = crypto:hash(sha384, <<"x">>),
+    Get = fun(Mcid) -> macula_content_transfer:start_get(dummy_pid(), Mcid, #{link_io => LinkIo}) end,
+    ?assertError(function_clause, Get(<<1, ?MANIFEST_CODEC, Hash/binary>>)),
+    ?assertError(function_clause, Get(<<2, 16#57, Hash/binary>>)),
+    ?assertError(function_clause, Get(<<2, ?SINGLE_CODEC, (crypto:hash(sha256, <<"x">>))/binary>>)),
+    ?assertError(function_clause,
+                 macula_content_transfer:start_get_station(dummy_pid(), <<"quic://station.example:4433">>,
+                                                           <<1, ?SINGLE_CODEC, Hash/binary>>, 1_000,
+                                                           #{link_io => LinkIo})),
     ?assertEqual([], macula_scripted_link:calls()).
 
 %% transfer_io/2 gives the defaults for none, a set with every function a
@@ -439,6 +457,6 @@ assert_no_call_started() ->
 chunk_mcid_map(Manifest, Chunks) ->
     Indices = lists:seq(0, length(Chunks) - 1),
     maps:from_list([begin
-        {ok, ChunkMcid} = macula_manifest:chunk_mcid(Manifest, I, blake3),
+        {ok, ChunkMcid} = macula_manifest:chunk_mcid(Manifest, I),
         {ChunkMcid, C}
     end || {I, C} <- lists:zip(Indices, Chunks)]).

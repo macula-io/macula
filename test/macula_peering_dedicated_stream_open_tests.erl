@@ -45,7 +45,8 @@ setup() ->
     Key = filename:join(Dir, "listener.key"),
     ok = file:write_file(Cert, CertPem),
     ok = file:write_file(Key, KeyPem),
-    #{dir => Dir, cert => Cert, key => Key}.
+    [{'Certificate', Der, not_encrypted}] = public_key:pem_decode(CertPem),
+    #{dir => Dir, cert => Cert, key => Key, der => Der}.
 
 cleanup(#{dir := Dir}) ->
     ok = file:del_dir_r(Dir).
@@ -100,19 +101,29 @@ ended_connection_fails_the_open(Ctx) ->
 %% A client and a server peering connection over a listener that allows the
 %% client its control stream and one dedicated stream, with that dedicated
 %% stream opened by the client and handed to this process on both sides.
-pair_at_stream_limit(#{cert := Cert, key := Key}) ->
+%% Each side holds a node identity key and a statement issuer, the station's
+%% issuer binds the listener's TLS leaf, and the client dials the station's
+%% node_id.
+pair_at_stream_limit(#{cert := Cert, key := Key, der := Der}) ->
     Port = free_udp_port(),
     {ok, Listener} = macula_quic:listen(<<"127.0.0.1">>, Port,
                                         [{cert, Cert}, {key, Key}, {alpn, [<<"macula">>]},
                                          {peer_bidi_stream_count, 2}]),
     ok = macula_quic:async_accept(Listener),
+    StationKey = identity(),
+    StationIssuer = issuer(StationKey),
+    {ok, TlsKey} = macula_node_keys:generate(tls, pq_pure),
+    ok = macula_statement_issuer:register_tls_leaf(StationIssuer, Der, TlsKey),
+    {ok, StationId} = macula_node_keys:node_id(StationKey),
+    ClientKey = identity(),
+    ClientIssuer = issuer(ClientKey),
     {ok, Client} = macula_peering:connect(#{
-        identity        => macula_identity:generate(),
-        realms          => [],
+        identity        => ClientKey,
+        issuer          => ClientIssuer,
         capabilities    => 0,
         controlling_pid => self(),
-        target          => #{host => "127.0.0.1", port => Port,
-                             timeout_ms => 5_000, verify => none}
+        target          => #{host => <<"127.0.0.1">>, port => Port,
+                             timeout_ms => 5_000, expected_node_id => StationId}
     }),
     ServerConn = receive
         {quic, new_conn, C, _Info} -> C
@@ -120,10 +131,11 @@ pair_at_stream_limit(#{cert := Cert, key := Key}) ->
         error(no_inbound_conn)
     end,
     {ok, Server} = macula_peering:accept(ServerConn, #{
-        identity        => macula_identity:generate(),
-        realms          => [],
+        identity        => StationKey,
+        issuer          => StationIssuer,
         capabilities    => 0,
-        controlling_pid => self()
+        controlling_pid => self(),
+        puzzle          => #{mode => off}
     }),
     ok = connected(Client),
     ok = connected(Server),
@@ -135,7 +147,7 @@ pair_at_stream_limit(#{cert := Cert, key := Key}) ->
     after ?EVENT_TIMEOUT_MS ->
         error(no_dedicated_stream)
     end,
-    #{listener => Listener, client => Client, server => Server,
+    #{listener => Listener, client => Client, server => Server, issuers => [ClientIssuer, StationIssuer],
       client_stream => ClientStream, server_stream => ServerStream}.
 
 connected(Pid) ->
@@ -207,10 +219,11 @@ answer_within(Fun, Ms) ->
         no_answer
     end.
 
-stop_pair(#{listener := Listener, client := Client, server := Server}) ->
+stop_pair(#{listener := Listener, client := Client, server := Server, issuers := Issuers}) ->
     _ = [try macula_peering:reject(Pid, test_cleanup) catch _:_ -> ok end
          || Pid <- [Client, Server]],
     _ = try macula_quic:close_listener(Listener) catch _:_ -> ok end,
+    _ = [try gen_server:stop(Issuer) catch _:_ -> ok end || Issuer <- Issuers],
     drain().
 
 drain() ->
@@ -220,6 +233,15 @@ drain() ->
     after 100 ->
         ok
     end.
+
+identity() ->
+    {ok, Key} = macula_node_keys:generate(identity, pq_pure),
+    Key.
+
+%% A statement issuer for a key, owned by this process.
+issuer(Key) ->
+    {ok, Issuer} = macula_statement_issuer:start_link(#{identity => fun() -> Key end, owner => self()}),
+    Issuer.
 
 free_udp_port() ->
     {ok, Sock} = gen_udp:open(0, [binary, {ip, {127, 0, 0, 1}}]),

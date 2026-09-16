@@ -11,7 +11,7 @@ change, the done criterion and the effort. The US profile goes first; the EU par
 
 ---
 
-## Stage 1: `macula` on branch `post-quantum`, and `macula-station`
+## Stage 1: `macula` 11.0.0 and `macula-station`
 
 ### WP 1.1 Profile model in `macula`
 
@@ -320,7 +320,7 @@ change, the done criterion and the effort. The US profile goes first; the EU par
   - `apps/macula_content/src/macula_content_hasher.erl`, `macula_content_store.erl`, `macula_content_manifest.erl`
     and `macula_content_dht.erl` (D24, D27)
   - `Dockerfile` (builder `erlang:28-slim`, runner `debian:trixie-slim`, D8)
-  - `rebar.config` (`macula` by git ref, D20)
+  - `rebar.config` (`macula` `~> 11.0` from hex once Raf publishes, a local checkout before that, D20)
 - **Change:**
   - node_id and public key become separate types across those files;
   - frame checks take the signer's key from the connection or from the object (D13);
@@ -358,7 +358,7 @@ change, the done criterion and the effort. The US profile goes first; the EU par
   - every dial, including a redundancy dial, refuses an endpoint whose identity differs from the chosen node_id,
     and the DHT dialer returns its error reply;
   - the station handshake tests of WP 1.5 pass against a station instance.
-- **Done:** green; the station builds against `macula` branch `post-quantum`.
+- **Done:** green; the station builds against a local checkout of `macula` 11.0.0 (D20).
 - **Effort:** 11 to 22 days:
   - node_id and key types: 4 to 6 days;
   - frame checks: 1 to 2 days;
@@ -406,7 +406,7 @@ change, the done criterion and the effort. The US profile goes first; the EU par
 
 ---
 
-## Stage 3: post-quantum fleet, station directory and realm
+## Stage 3: 11.0.0 stations, station directory and realm
 
 ### WP 3.1 Realm (`macula-realm`)
 
@@ -451,7 +451,8 @@ change, the done criterion and the effort. The US profile goes first; the EU par
   - `issue_membership_ucan` names the device by node_id in `aud` (D7), in the same change as every checker
     (WP 1.4, WP 4.2);
   - the realm carries its profile (D1);
-  - a separate realm deployment named `io.macula`, in the EU profile, on the post-quantum fleet (D19), and a
+  - the `io.macula` realm deployment in the EU profile, as a separate deployment on the post-quantum fleet
+    (D14, D19), and a
     US-profile realm whose name is open (Raf);
   - revocation of a realm member's identity, with its freshness window sized against BSI's deactivation
     requirement and ANSSI's hard-fail recommendation (D22).
@@ -464,14 +465,19 @@ change, the done criterion and the effort. The US profile goes first; the EU par
 - **Done:** green in `test.yml`.
 - **Effort:** 7 to 10 days.
 
-### WP 3.2 The post-quantum fleet
+### WP 3.2 The 11.0.0 stations
 
-- [ ] Station instances run on the new fleet in their profile.
+- [ ] The second post-quantum fleet's station instances run 11.0.0 in their profile, on reprovisioned boxes
+  and hostnames next to the live fleet, before any consumer moves (D14 reconsidered, 2026-09-16).
 - **Owner:** Terra.
 - **Waiting on:** Stage 2; D21 done first.
 - **Change:**
-  - pin the live fleet first (D21);
-  - station instances on the new fleet, one per profile, US first, with hostnames distinct from the live fleet;
+  - today's stations stay pinned to `macula-station` 311c0bf until the last consumer's cutover (D21);
+  - the 2+2 split (decided 2026-09-16, `macula-demo` `plans/PLAN_MACULA_11_DEPLOY.md`): the live fleet ends at
+    frankfurt + falkenstein, and the post-quantum fleet takes over the existing Hetzner boxes —
+    `relays-hetzner-nuremberg` first as `pq.station-de-nuremberg`, `relays-hetzner-helsinki` second as
+    `pq.station-fi-helsinki` — in their profile (D2), prepared US profile first (D15), zero new spend;
+    consumers get the fleet's seeds and move over in their stage;
   - `stations.csv` gains node_id and profile columns, placed before the notes column;
   - seed lists are generated after each station instance's first boot, when its node_id exists, and before the
     client releases that compile them in; every compiled-in seed list is generated from the csv, including the one
@@ -479,12 +485,15 @@ change, the done criterion and the effort. The US profile goes first; the EU par
   - station configurations, including bootstrap `outbound_peers` with node_ids, are generated from the csv. Before
     regenerating, the sync reaches every station, and hand-picked peer choices are pinned in the csv or the
     topology;
-  - a separate realm deployment `io.macula` in the EU profile (D19), and the US-profile realm (name open);
-  - the distribution relay of WP 3.4, one instance per profile, with hostnames distinct from the live fleet;
-  - `macula-station` builds against `macula` branch `post-quantum` (D20);
+  - the `io.macula` realm deploys on the post-quantum fleet in its stage, in the EU profile (D19), and the
+    US-profile realm (name open);
+  - the distribution relay of WP 3.4, one instance per profile, deploys on the post-quantum fleet in the same
+    stage;
+  - `macula-station` builds against a local checkout of `macula` during development and moves to `macula` `~> 11.0`
+    from hex once Raf publishes (D20);
   - every fleet node runs chrony with NTS against at least two independent servers (D22); which servers is open;
   - station instances start with puzzle enforcement in `log_only`; `enforce` follows in WP 4.5.
-- **Red first:** the Stage 2 smoke check against the new fleet fails before provisioning.
+- **Red first:** the Stage 2 smoke check against the 11.0.0 station instances fails before they start.
 - **Done:** every station instance is reachable in its profile under the node_ids in its seeds.
 - **Effort:** 3 to 5 days, plus configuration generation ⚠.
 
@@ -519,20 +528,20 @@ change, the done criterion and the effort. The US profile goes first; the EU par
 - **Owner:** Neptune for the code; Terra deploys it (WP 3.2).
 - **Waiting on:** WP 1.2, WP 1.5.
 - **Files:**
-  - `rebar.config` (`macula` by git ref, D20)
+  - `rebar.config` (`macula` `~> 11.0` from hex once Raf publishes, a local checkout before that, D20)
   - `Dockerfile` (builder and runtime per D8)
 - **Change:**
-  - the relay builds against `macula` branch `post-quantum` and uses its connection handshake and dials
+  - the relay builds against `macula` 11.0.0 and uses its connection handshake and dials
     (WP 1.5), with one profile per instance, as station instances do (D2);
   - the relay client in `macula` dials with an expected identity, like every other dial (WP 1.5).
-- **Red first:** two BEAM nodes on the new fleet reach each other through the relay in each profile, a node that
+- **Red first:** two BEAM nodes reach each other through the 11.0.0 relay in each profile, a node that
   offers only classical algorithms is refused, and the relay sees no distribution plaintext (D29).
-- **Done:** green on the new fleet.
+- **Done:** green against the 11.0.0 relay.
 - **Effort:** ⚠.
 
 ### WP 3.5 Demonstration video plan
 
-- [ ] A plan for a video that shows the post-quantum fleet at work, with its shot list and the claim each shot makes.
+- [ ] A plan for a video that shows the 11.0.0 mesh at work, with its shot list and the claim each shot makes.
 - **Owner:** Mercury.
 - **Waiting on:** WP 3.2.
 - **Files:**
@@ -553,7 +562,7 @@ change, the done criterion and the effort. The US profile goes first; the EU par
 ## Stage 4: each other stack, with its suite against the fleet
 
 Every stack runs the connection handshake, carries full keys (D13), binds replies to the target and the request
-(D25), and passes its own wire checks against the new fleet (WP 4.5). Public claims are made per stack (D11).
+(D25), and passes its own wire checks against the 11.0.0 stations (WP 4.5). Public claims are made per stack (D11).
 
 Every stack also meets these, each red first:
 
@@ -600,7 +609,7 @@ Every stack also meets these, each red first:
     identity;
   - the handshake frames and identity per WP 1.3, with the EU classical half per D4 and V8.
 - **Red first:**
-  - the WP 1.2 and WP 1.5 assertions, as integration tests against the new fleet;
+  - the WP 1.2 and WP 1.5 assertions, as integration tests against the 11.0.0 stations;
   - identity key generation runs the node_id puzzle loop, regenerating only the ML-DSA-87 half of a pq_hybrid key;
   - a provider verifies every inbound CALL's signature against its caller before the handler runs; an unverified
     CALL reaches no handler and gets no reply;
@@ -768,7 +777,7 @@ Every stack also meets these, each red first:
   - the token checks of WP 1.4, for calls and streams.
 - **Red first:**
   - identity key generation runs the node_id puzzle loop, regenerating only the ML-DSA-87 half of a pq_hybrid key;
-  - `tests/test_pq_handshake.py`, against the new fleet: success in the client's profile, and failure against a
+  - `tests/test_pq_handshake.py`, against the 11.0.0 stations: success in the client's profile, and failure against a
     classical-only station and against an unbound TLS key;
   - `Session.connect` takes the expected station identity from the seed list and refuses a station whose HELLO
     identity differs; the client refuses a station whose TLS leaf key is not bound to its HELLO identity, and no
@@ -808,7 +817,7 @@ Every stack also meets these, each red first:
 
 - [ ] Not in the first switch (D10).
 - **Owner:** Uranus.
-- .NET programs keep working against the live fleet until it is switched off.
+- .NET programs keep working against today's stations until the 11.0.0 deploy (D14).
 - **Recorded for when msquic supports post-quantum key exchange:**
   - msquic on OpenSSL 3.5 or newer;
   - the binding check after the handshake, against `QuicConnection.RemoteCertificate`;
@@ -839,11 +848,11 @@ Every stack also meets these, each red first:
 
 ### WP 4.5 Wire checks per stack against the fleet
 
-- [ ] Every client stack's cells are green against the new fleet.
+- [ ] Every client stack's cells are green against the 11.0.0 stations.
 - **Owners:** each stack owner; Terra for the harness and captures.
 - **Waiting on:** the stack's work package, V10.
 - **Change:**
-  - each client stack against the new fleet's station instances, in its profile;
+  - each client stack against the 11.0.0 station instances, in its profile;
   - the group, signature scheme and cipher suite checked two independent ways that agree;
   - the connection handshake checked, and a classical-only client and X25519MLKEM768 refused;
   - the cross-stack leaf-hash vector through each stack's real handshake and accessor;
@@ -855,11 +864,11 @@ Every stack also meets these, each red first:
 
 ---
 
-## Stage 5: cutover of `macula-cli`, `macula-mcp` and `lazymesh`
+## Stage 5: `macula-cli`, `macula-mcp` and `lazymesh` on 11.0.0
 
 ### WP 5.1 Tools
 
-- [ ] The tools run against the new fleet.
+- [ ] The tools run against the post-quantum fleet's 11.0.0 stations (D14, reconsidered 2026-09-16).
 - **Owners:** Venus (`macula-cli`, `macula-mcp`), Mars (`lazymesh`).
 - **Waiting on:** WP 4.2, WP 3.2; a tool that joins `io.macula` also waits on their EU parts (D19).
 - **Change:**
@@ -880,12 +889,12 @@ Every stack also meets these, each red first:
   - every procedure a tool advertises, and every procedure its examples and defaults name, has an org namespace
     (D25);
   - release on tag: goreleaser for `macula-cli`, npm for `macula-mcp`.
-- **Red first:** each tool's connection test against the new fleet fails before its cutover.
+- **Red first:** each tool's connection test against 11.0.0 station instances fails before its change.
 - **Effort:** ⚠.
 
 ---
 
-## Stage 6: cutover of the hecate services
+## Stage 6: the hecate services on 11.0.0
 
 ### WP 6.1 hecate services
 
@@ -951,20 +960,24 @@ Every stack also meets these, each red first:
 
 ## Release after Stage 6
 
-`macula` 11.0.0 waits on WP 3.1 settling how an EU-profile credential carries the composite key, so that EU-profile
-provider certificate chains verify (D25 item 6). Until then `macula` refuses them.
+`macula` 11.0.0 no longer waits on WP 3.1 for provider certificate chains: the certificate authorization form is
+removed (D25 item 6, revised 2026-09-15), since the realm issues no X.509 certificates (design B1).
+It lands together with the org namespace migration (`PLAN_11_ORG_NAMESPACE_MIGRATION.md`): no binary running at
+core cutover advertises a procedure without an org or node namespace.
 
-1. `macula` 11.0.0 on hex. Raf publishes hex.
+1. `macula` 11.0.0 on hex, the release that opens the post-quantum fleet to consumers. Raf publishes hex;
+   consumers move to `~> 11.0` only then, and none commits a git or branch dependency on `macula` before (D20).
 2. SDK releases on their publish triggers: `macula-go` tag, `macula-cli` (goreleaser on tag), `macula-ts` (npm on
    tag), `macula-mcp` (npm on tag), `macula-php`, `macula-rust` (cargo on tag), `macula-py` (PyPI on tag), and
    later `macula-dotnet` (NuGet on tag).
-3. The live fleet is switched off.
+3. The post-quantum fleet runs next to the live one, consumers move over in their stages, and the 311c0bf mesh
+   ends after the last cutover (D14, reconsidered 2026-09-16).
 
 ---
 
 ## Files to create or change
 
-### `macula` (Stage 1, branch `post-quantum`)
+### `macula` (Stage 1)
 
 - WP 1.1:
   - `src/crypto_profile/macula_crypto_profile.erl` (new)

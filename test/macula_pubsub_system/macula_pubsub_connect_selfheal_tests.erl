@@ -26,11 +26,10 @@
 -include_lib("eunit/include/eunit.hrl").
 
 -define(REALM, <<0:256>>).
-%% #state record layout — peer_pid at 7, peer_node_id at 8 (see
-%% macula_station_link_tests.erl for the full map). These are the only
-%% fields these tests patch, so the numeric coupling stays minimal.
--define(PEER_PID_INDEX, 7).
--define(PEER_NODE_INDEX, 8).
+%% The two fields of macula_station_link's state these tests patch, looked up
+%% by name, so a field added to the state record cannot shift them.
+-define(PEER_PID_INDEX, macula_station_link:state_field_index(peer_pid)).
+-define(PEER_NODE_INDEX, macula_station_link:state_field_index(peer_node_id)).
 
 %%------------------------------------------------------------------
 %% A wedged (never-connected) link recycles itself when the watchdog
@@ -43,13 +42,11 @@ connect_watchdog_recycles_wedged_link_test_() ->
     {timeout, 5,
      fun() ->
          {ok, _} = application:ensure_all_started(macula),
-         Identity = macula_identity:generate(),
          %% Short watchdog + a dead seed: the link never really connects.
-         {ok, Pid} = macula_station_link:start_link(#{
+         {ok, Pid} = macula_station_link:start_link(with_link_keys(#{
              seed                => #{host => <<"127.0.0.1">>, port => 1},
-             identity            => Identity,
              connect_watchdog_ms => 200
-         }),
+         })),
 
          %% A subscriber queued while the link is still un-connected.
          Test = self(),
@@ -121,12 +118,10 @@ connect_watchdog_does_not_recycle_connected_link_test_() ->
     {timeout, 5,
      fun() ->
          {ok, _} = application:ensure_all_started(macula),
-         Identity = macula_identity:generate(),
-         {ok, Pid} = macula_station_link:start_link(#{
+         {ok, Pid} = macula_station_link:start_link(with_link_keys(#{
              seed                => #{host => <<"127.0.0.1">>, port => 1},
-             identity            => Identity,
              connect_watchdog_ms => 200
-         }),
+         })),
          FakePeer   = self(),
          PeerNodeId = macula_identity:public(macula_identity:generate()),
          _ = sys:replace_state(Pid, fun(S) ->
@@ -159,3 +154,16 @@ wait_until_connected(Pid, N) ->
         undefined -> timer:sleep(25), wait_until_connected(Pid, N - 1);
         _NodeId   -> ok
     end.
+
+%% Start options with the keys a link starts with: a node identity key in
+%% the node's profile, an issuer of its own for that key, owned by the
+%% calling process, and the node_id its seed expects.
+with_link_keys(Opts) ->
+    {ok, Profile} = macula_crypto_profile:configured(),
+    {ok, Key} = macula_node_keys:generate(identity, Profile),
+    {ok, Issuer} = macula_statement_issuer_sup:start_issuer(fun() -> Key end, self()),
+    %% A link also starts with a request admission and its share in it.
+    {ok, Admission} = macula_request_admission:start_link(#{caller_quota => 256, share => 1024, cap => 46080,
+                                                             reply_bytes => 262144, reply_bytes_total => 16777216}),
+    Opts#{node_identity => fun() -> Key end, issuer => Issuer, admission => Admission,
+          share => {seed, {<<"127.0.0.1">>, 1}}, expected_node_id => <<1:256>>}.

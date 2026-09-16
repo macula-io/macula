@@ -86,13 +86,17 @@ duration_ms_large_duration_test() ->
     Duration = macula_time:duration_ms(Start, End),
     ?assertEqual(86400000, Duration).
 
+%% Two timestamps 100 ms apart are at least 100 ms apart, and no further apart than the monotonic time that passed
+%% around both, plus 1 ms for the rounding of the two clocks. A loaded machine can sleep well past 100 ms.
 duration_ms_actual_timestamps_test() ->
+    Before = erlang:monotonic_time(millisecond),
     Start = macula_time:timestamp(),
     timer:sleep(100),
     End = macula_time:timestamp(),
+    After = erlang:monotonic_time(millisecond),
     Duration = macula_time:duration_ms(Start, End),
     ?assert(Duration >= 100),
-    ?assert(Duration < 200).  % Allow some timing variation
+    ?assert(Duration =< After - Before + 1).
 
 %%%===================================================================
 %%% is_expired/2 Tests

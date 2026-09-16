@@ -15,7 +15,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 -define(REALM, <<0:256>>).
--define(SEED, #{host => <<"127.0.0.1">>, port => 1}).
+-define(SEED, #{host => <<"127.0.0.1">>, port => 1, expected_node_id => <<1:256>>}).
 -define(TOPIC, <<"resp.test_v1">>).
 
 subscription_survives_link_respawn_test_() ->
@@ -63,7 +63,9 @@ subscription_survives_link_respawn_test_() ->
          %% with no re-subscribe from us.
          Pool ! {macula_event, make_ref(), ?TOPIC, #{probe => true},
                  #{realm => ?REALM, publisher => <<1:256>>, seq => 1,
-                   delivered_via => direct}},
+                   delivered_via => direct,
+                   publication_hash => crypto:hash(sha384, <<"tbs probe">>),
+                   expires_at => erlang:system_time(millisecond) + 60_000}},
          receive
              {macula_event, R, T, P, _Meta} ->
                  ?assertEqual(SubRef, R),

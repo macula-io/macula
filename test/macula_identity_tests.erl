@@ -109,6 +109,127 @@ puzzle_higher_difficulty_implies_lower_difficulty_test_() ->
          ?assert(macula_identity:puzzle_valid(Kp, 10))
      end}.
 
+%% Every identity macula generates by default passes the puzzle check a
+%% station applies. Eight keys each, so a plain key passing by chance cannot
+%% make these pass.
+generate_returns_identities_that_pass_the_puzzle_test_() ->
+    {timeout, 30,
+     fun() ->
+         Ids = [macula_identity:generate() || _ <- lists:seq(1, 8)],
+         ?assertEqual(lists:duplicate(8, true), [macula_identity:puzzle_valid(Id) || Id <- Ids])
+     end}.
+
+generate_without_a_puzzle_option_returns_identities_that_pass_the_puzzle_test_() ->
+    {timeout, 30,
+     fun() ->
+         Ids = [macula_identity:generate(#{}) || _ <- lists:seq(1, 8)],
+         ?assertEqual(lists:duplicate(8, true), [macula_identity:puzzle_valid(Id) || Id <- Ids])
+     end}.
+
+%% puzzle => false gives plain keys: of 64, at least one fails difficulty 8.
+generate_with_puzzle_false_returns_plain_keys_test() ->
+    Ids = [macula_identity:generate(#{puzzle => false}) || _ <- lists:seq(1, 64)],
+    ?assert(lists:member(false, [macula_identity:puzzle_valid(Id, 8) || Id <- Ids])).
+
+%% puzzle_valid/1 applies the macula application's puzzle_difficulty.
+configured_lower_difficulty_is_honoured_test() ->
+    Kp = key_meeting(0, 8),
+    ?assert(with_puzzle_difficulty(0, fun() -> macula_identity:puzzle_valid(Kp) end)).
+
+configured_higher_difficulty_is_honoured_test() ->
+    Kp = key_meeting(8, 12),
+    ?assertNot(with_puzzle_difficulty(12, fun() -> macula_identity:puzzle_valid(Kp) end)).
+
+unset_difficulty_is_eight_bits_test() ->
+    ok = application:unset_env(macula, puzzle_difficulty),
+    ?assertEqual({true, false},
+                 {macula_identity:puzzle_valid(key_meeting(8, 9)),
+                  macula_identity:puzzle_valid(key_meeting(7, 8))}).
+
+%% generate/0 grinds to the configured puzzle_difficulty, not to the default:
+%% at difficulty 10 all eight keys pass 10 bits, which keys ground to 8 bits
+%% would do only about once in 65,536 runs.
+generate_grinds_to_the_configured_difficulty_test_() ->
+    {timeout, 30,
+     fun() ->
+         Ids = with_puzzle_difficulty(10, fun() ->
+                   [macula_identity:generate() || _ <- lists:seq(1, 8)]
+               end),
+         ?assertEqual(lists:duplicate(8, true), [macula_identity:puzzle_valid(Id, 10) || Id <- Ids])
+     end}.
+
+%% The setting's checks below use a plain key: generate/0 grinds to the
+%% configured difficulty, which is the setting under test.
+non_integer_difficulty_is_a_configuration_error_test() ->
+    Kp = macula_identity:generate(#{puzzle => false}),
+    ?assertError({bad_config, {macula, puzzle_difficulty, <<"12">>}},
+                 with_puzzle_difficulty(<<"12">>, fun() -> macula_identity:puzzle_valid(Kp) end)).
+
+%% The largest puzzle_difficulty the setting accepts.
+maximum_difficulty_is_accepted_test() ->
+    Kp = macula_identity:generate(#{puzzle => false}),
+    ?assert(is_boolean(with_puzzle_difficulty(16, fun() -> macula_identity:puzzle_valid(Kp) end))).
+
+difficulty_above_the_maximum_is_a_configuration_error_test() ->
+    Kp = macula_identity:generate(#{puzzle => false}),
+    ?assertError({bad_config, {macula, puzzle_difficulty, 17}},
+                 with_puzzle_difficulty(17, fun() -> macula_identity:puzzle_valid(Kp) end)).
+
+%% The macula application checks puzzle_difficulty when it starts, so a node
+%% with a bad value does not start, instead of failing its puzzle checks one
+%% CONNECT at a time. Each case starts macula on a fresh peer node; the valid
+%% value shows that the peer can start macula at all.
+application_start_checks_puzzle_difficulty_test_() ->
+    {timeout, 300,
+     [{"a valid puzzle_difficulty lets the macula application start",
+       {timeout, 90, fun() -> ?assertMatch({ok, _}, start_macula_with_puzzle_difficulty(10)) end}},
+      {"a puzzle_difficulty that is not an integer stops the macula application starting",
+       {timeout, 90, fun() -> bad_difficulty_stops_start(<<"12">>) end}},
+      {"a puzzle_difficulty above the maximum stops the macula application starting",
+       {timeout, 90, fun() -> bad_difficulty_stops_start(17) end}}]}.
+
+bad_difficulty_stops_start(Value) ->
+    Started = start_macula_with_puzzle_difficulty(Value),
+    ?assert(names(Started, {bad_config, {macula, puzzle_difficulty, Value}})).
+
+%% Starts macula on a fresh peer node with puzzle_difficulty set to Value, and
+%% returns what application:ensure_all_started/1 returned there.
+start_macula_with_puzzle_difficulty(Value) ->
+    Paths = lists:append([["-pa", P] || P <- code:get_path()]),
+    {ok, Profile} = macula_crypto_profile:configured(),
+    {ok, Peer, _Node} = peer:start_link(#{connection => standard_io, args => Paths}),
+    try
+        ok = peer:call(Peer, application, load, [macula]),
+        %% A peer reads no test sys.config, and macula refuses to start without a profile: give it this VM's.
+        ok = peer:call(Peer, application, set_env, [macula, crypto_profile, Profile]),
+        ok = peer:call(Peer, application, set_env, [macula, puzzle_difficulty, Value]),
+        peer:call(Peer, application, ensure_all_started, [macula], 60_000)
+    after
+        peer:stop(Peer)
+    end.
+
+%% Whether Wanted appears anywhere inside Term.
+names(Wanted, Wanted) -> true;
+names(Tuple, Wanted) when is_tuple(Tuple) -> names(tuple_to_list(Tuple), Wanted);
+names([Head | Tail], Wanted) -> names(Head, Wanted) orelse names(Tail, Wanted);
+names(_Other, _Wanted) -> false.
+
+%% A key whose puzzle meets Met leading zero bits but not Missed.
+key_meeting(Met, Missed) ->
+    Kp = macula_identity:generate(#{puzzle => true, difficulty => Met}),
+    key_meeting(macula_identity:puzzle_valid(Kp, Missed), Kp, Met, Missed).
+
+key_meeting(false, Kp, _Met, _Missed) -> Kp;
+key_meeting(true, _Kp, Met, Missed) -> key_meeting(Met, Missed).
+
+with_puzzle_difficulty(Difficulty, Fun) ->
+    ok = application:set_env(macula, puzzle_difficulty, Difficulty),
+    try
+        Fun()
+    after
+        application:unset_env(macula, puzzle_difficulty)
+    end.
+
 %%------------------------------------------------------------------
 %% Persistence
 %%------------------------------------------------------------------
@@ -195,6 +316,27 @@ load_refuses_directory_test() ->
     with_tmp_dir(fun(Dir) ->
         ?assertEqual({error, {file_type, #{file => Dir, type => directory, required => regular}}},
                      macula_identity:load(Dir))
+    end).
+
+%% A key file only its owner can read, owned by a user other than the one the
+%% node runs as, is refused with its owner rather than reported missing, so a
+%% caller that makes a new identity only for a missing key file makes none;
+%% the file is left as it was.
+load_refuses_key_file_owned_by_another_user_test() ->
+    with_tmp_dir(fun(Dir) ->
+        Path = saved_key_with_mode(Dir, 8#600),
+        {ok, Before} = file:read_file(Path),
+        {ok, #file_info{uid = Owner}} = file:read_file_info(Path),
+        ok = meck:new(macula_node_user, [non_strict]),
+        Loaded = try
+                     ok = meck:expect(macula_node_user, effective_uid, fun() -> Owner + 1 end),
+                     macula_identity:load(Path)
+                 after
+                     meck:unload(macula_node_user)
+                 end,
+        ?assertEqual({{error, {file_owner, #{file => Path, owner => Owner, required => Owner + 1}}},
+                      {ok, Before}},
+                     {Loaded, file:read_file(Path)})
     end).
 
 save_never_writes_through_symlink_at_path_plus_tmp_test() ->

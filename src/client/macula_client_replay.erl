@@ -15,26 +15,26 @@
 -export([subs_to/2, advs_to/2, stream_advs_to/2]).
 
 %% @doc Re-issue a SUBSCRIBE frame for every distinct `{Realm, Topic}'
-%% in `TopicIndex' against `LinkPid'. The calling process (pool's
-%% gen_server pid via `self()') receives subsequent EVENT messages
-%% from the link.
+%% in `TopicIndex' against `LinkPid', and return the SubRef the link
+%% gave each one it accepted, so the pool can unsubscribe that link
+%% later. The calling process (pool's gen_server pid via `self()')
+%% receives subsequent EVENT messages from the link.
 %%
 %% Errors from individual link subscriptions are swallowed — the
 %% pool's `{macula_peering, disconnected}' path will fire if the
 %% link can't establish, triggering another respawn cycle.
 -spec subs_to(pid(), #{{<<_:256>>, binary()} => sets:set(reference())}) ->
-    ok.
+    #{{<<_:256>>, binary()} => reference()}.
 subs_to(LinkPid, TopicIndex) when is_pid(LinkPid), is_map(TopicIndex) ->
     PoolPid = self(),
-    Pairs = maps:keys(TopicIndex),
-    [_ = macula_station_link:subscribe(LinkPid, R, T, PoolPid)
-     || {R, T} <- Pairs],
-    ok.
+    maps:from_list(
+      [{{R, T}, LinkSubRef}
+       || {R, T} <- maps:keys(TopicIndex),
+          {ok, LinkSubRef} <- [macula_station_link:subscribe(LinkPid, R, T, PoolPid)]]).
 
-%% @doc Re-issue an ADVERTISE frame for every advertised procedure
-%% in `Procs' against `LinkPid'. Mirrors `subs_to/2' for the RPC
-%% surface — used by the pool to restore wire-level advertisement
-%% bindings whenever a station link respawns.
+%% @doc Register the handler of every advertised procedure in `Procs'
+%% on `LinkPid'. Mirrors `subs_to/2' for the RPC surface — used by the
+%% pool to restore a respawned station link's handlers.
 %%
 %% Errors from individual link advertise calls are swallowed: the
 %% next link respawn cycle re-tries.
@@ -49,8 +49,8 @@ advs_to(LinkPid, Procs) when is_pid(LinkPid), is_map(Procs) ->
       end, Procs),
     ok.
 
-%% @doc Re-issue an ADVERTISE frame for every streaming procedure in
-%% `StreamProcs' against `LinkPid'. Mirrors `advs_to/2' for the
+%% @doc Register the handler of every streaming procedure in
+%% `StreamProcs' on `LinkPid'. Mirrors `advs_to/2' for the
 %% streaming RPC surface (SDK 3.17+). Stored shape is
 %% `{Mode, Handler, Policy}' so the receiving link dispatches inbound
 %% STREAM_OPEN frames with the correct mode and keeps enforcing the

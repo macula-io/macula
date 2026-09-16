@@ -23,10 +23,11 @@
 %% exposes three surfaces over the same peering pipe:
 %%
 %% <ul>
-%%   <li><strong>Request/response</strong> — `call/5' sends a CALL
-%%       frame and matches inbound RESULT/ERROR frames against
-%%       pending callers using the 16-byte CALL id. Convenience
-%%       wrappers cover `_dht.put_record', `_dht.find_record', and
+%%   <li><strong>Request/response</strong> — `call/6' sends a signed
+%%       CALL to a target, the connected station or a provider's
+%%       node_id, and completes the pending caller when a reply
+%%       verifies against that request. Convenience wrappers call the
+%%       station for `_dht.put_record', `_dht.find_record', and
 %%       `_dht.find_records_by_type'.</li>
 %%   <li><strong>Streaming subscribe</strong> — `subscribe/4' sends
 %%       a SUBSCRIBE frame and registers a delivery pid. Inbound
@@ -56,13 +57,16 @@
 %%       `macula_peering:connect/1', store the worker pid.</li>
 %%   <li>Peering handshake completes → `{macula_peering, connected,
 %%       Pid, PeerNodeId}' arrives → state moves to `connected'.</li>
-%%   <li>`call/5' from caller → build CALL frame, sign happens inside
-%%       peering, store `{from, deadline_timer}` keyed by CALL id, send
-%%       frame via `macula_peering:send_frame/2'.</li>
-%%   <li>RESULT or ERROR arrives as `{macula_peering, frame, Pid, Frame}'
-%%       → look up `call_id', cancel timer, reply to caller.</li>
+%%   <li>`call/6' from caller → sign the CALL with the link's key, keep
+%%       the caller, its deadline timer and the request under the
+%%       request_id, send the frame via `macula_peering:send_frame/2'.</li>
+%%   <li>A reply arrives as `{macula_peering, frame, Pid, Frame}' → look
+%%       up its request_id, verify it against the held request, cancel
+%%       the timer, reply to the caller. A reply that does not verify is
+%%       counted and leaves the call pending.</li>
 %%   <li>`{macula_peering, disconnected, Pid, Reason}' → fail all
-%%       pending calls with `{error, {disconnected, Reason}}', notify
+%%       pending calls with `{error, {disconnected, Name}}', `Name'
+%%       being the reason's name from `macula_reason_name:text/1', notify
 %%       all subscribers via `macula_event_gone', stop the client
 %%       (caller is responsible for restart / reconnect).</li>
 %% </ol>
@@ -70,15 +74,16 @@
 %% == Call reply taxonomy ==
 %%
 %% <table>
-%%   <tr><th>Inbound frame</th><th>`call/5' returns</th></tr>
-%%   <tr><td>RESULT(payload=`{error, Reason}')</td><td>`{ok, {error, Reason}}'</td></tr>
-%%   <tr><td>RESULT(payload=Value)</td><td>`{ok, Value}'</td></tr>
-%%   <tr><td>ERROR(code=0x0F, detail=D)</td><td>`{error, D}' — the handler's own reason</td></tr>
-%%   <tr><td>ERROR(code=C, name=N)</td><td>`{error, {call_error, C, N}}'</td></tr>
+%%   <tr><th>Verified reply</th><th>`call/6' returns</th></tr>
+%%   <tr><td>RESULT(payload=Value)</td><td>`{ok, Value}', its text as `{text, Bin}'</td></tr>
+%%   <tr><td>provider ERROR(code=`handler_error', detail=D)</td><td>`{error, D}' — the handler's own reason</td></tr>
+%%   <tr><td>provider ERROR(code=C, detail=D)</td><td>`{error, {call_error, C, D}}', C and D binaries, D `undefined' when absent</td></tr>
+%%   <tr><td>station ERROR, no such next peer</td><td>`{error, {call_error, unknown_next_peer, undefined}}'</td></tr>
 %%   <tr><td>(deadline elapses)</td><td>`{error, timeout}'</td></tr>
-%%   <tr><td>(connection drops)</td><td>`{error, {disconnected, Reason}}'</td></tr>
+%%   <tr><td>(connection drops)</td><td>`{error, {disconnected, Name}}' or `{error, {peering_exit, Name}}'</td></tr>
+%%   <tr><td>(link stops for any other reason, with the call pending or still waiting to reach it)</td><td>`{error, {link_stopped, Name}}'</td></tr>
 %%   <tr><td>(not connected yet)</td><td>`{error, not_connected}', not sent</td></tr>
-%%   <tr><td>(frame refused before sending)</td><td>`{error, {refused, Reason}}', not sent</td></tr>
+%%   <tr><td>(payload, or procedure text over 512 bytes or not UTF-8, refused before sending)</td><td>`{error, {refused, Reason}}', not sent</td></tr>
 %% </table>
 %%
 %% `not_sent/1' says whether an error means the CALL never went out.
@@ -88,8 +93,8 @@
 -export([
     start_link/1,
     stop/1,
-    call/5,
     call/6,
+    call/7,
     publish/4,
     publish/5,
     put_record/2, put_record/3,
@@ -97,6 +102,7 @@
     find_records_by_type/2, find_records_by_type/3,
     subscribe/4,
     unsubscribe/2,
+    unsubscribe_async/2,
     advertise/4,
     advertise/5,
     unadvertise/3,
@@ -108,12 +114,13 @@
     overlay_unsubscribe/2,
     send_overlay_frame/2,
     send_overlay_frame/3,
+    overlay_frame_refused/3,
     %% Streaming RPC (SDK 3.17+, Part 6 §5.6)
-    call_stream/5,
+    call_stream/6,
     advertise_stream/5,
     advertise_stream/6,
     unadvertise_stream/3,
-    send_stream_frame/3,
+    send_stream_bytes/4,
     is_connected/1,
     not_sent/1,
     peer_node_id/1,
@@ -134,28 +141,63 @@
 
 -export_type([handler/0, stream_handler/0, overlay_subscription/0]).
 
+-ifdef(TEST).
+-export([with_client_stream/3]).
+-endif.
+
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
-         terminate/2, code_change/3]).
+         terminate/2, code_change/3, format_status/1]).
 
 -export_type([opts/0]).
+
+-ifdef(TEST).
+%% The process a served stream's handler runs in, spawned before the stream
+%% exists: exported for macula_stream_tests.erl.
+-export([spawn_stream_handler/3]).
+%% A state field's position in the state tuple, by name, for tests that read
+%% or set the state.
+-export([state_field_index/1]).
+-endif.
 
 -type url() :: binary() | string().
 
 -type opts() :: #{
     %% Endpoint to dial. Either a URL (https://host:port) or a
     %% pre-parsed #{host, port} map. The map form may carry the
-    %% optional `macula_peering_conn:connect_opts()' trust keys,
-    %% forwarded verbatim into the dial target:
-    %%   `expected_node_id' — pin the relay's Ed25519 identity (TLS
-    %%       SPKI pin + HELLO node_id binding), strongest;
+    %% `macula_peering_conn:connect_opts()' trust keys, forwarded
+    %% verbatim into the dial target:
+    %%   `expected_node_id' — the station's node_id, which the
+    %%       handshake checks (D16); required, and a link without one
+    %%       refuses to start;
     %%   `verify' — `webpki' (default) or `none' (dev/self-signed
     %%       only; logs a warning per dial).
     seed     := url() | #{host := binary() | string(),
                           port := inet:port_number(),
                           _    => _},
-    %% Local Ed25519 keypair used to sign the CONNECT frame and any
-    %% subsequent application frames. Auto-generated when absent.
-    identity => macula_identity:key_pair(),
+    %% A function that returns the node identity key, so no start
+    %% argument holds the key. Required: a link makes no key of its own.
+    node_identity := fun(() -> macula_node_keys:node_key()),
+    %% The pool's statement issuer, which every connection draws its
+    %% CONNECT material and status statements from. Required, and the
+    %% link ends when the issuer does.
+    issuer := pid(),
+    %% The pool's request admission, where every verified request the link
+    %% receives is judged, and this link's share in it: the normalized seed
+    %% the pool counts the peer by. Both required.
+    admission := pid(),
+    share := term(),
+    %% The function that opens the peering connection, by default
+    %% `macula_peering:connect/1'. An option, so a test replaces no
+    %% shared module.
+    connect => fun((map()) -> {ok, pid()} | {error, term()}),
+    %% The functions that open a dedicated stream on the peering
+    %% connection, write the bytes of one frame on one, and close one, by
+    %% default `macula_peering:open_dedicated_stream/1', `send_on_stream/2'
+    %% and `close_dedicated_stream/1'. Options, so a test replaces no
+    %% shared module. A link given one of another shape refuses to start.
+    open_stream => fun((pid()) -> {ok, reference()} | {error, term()}),
+    send_on_stream => fun((reference(), binary()) -> ok | {error, term()}),
+    close_stream => fun((reference()) -> ok),
     %% Capability bitfield announced in CONNECT (default 0).
     capabilities => non_neg_integer(),
     %% ALPN list passed through to QUIC (default [&lt;&lt;"macula"&gt;&gt;]).
@@ -179,12 +221,19 @@
 
 -define(DHT_REALM, <<0:256>>).
 -define(DEFAULT_DEADLINE_MS, 5_000).
+%% The longest a call waits: the deadline window a provider accepts, ten
+%% minutes past its clock.
+-define(MAX_CALL_TIMEOUT_MS, 600_000).
+%% The code a provider's ERROR carries for a handler that refused, with the
+%% handler's text as its detail.
+-define(HANDLER_ERROR_CODE, <<"handler_error">>).
 -define(CONNECT_RETRY_BACKOFF_MS, 1_000).
 
 %% App-level liveness probe. Sends a tiny CALL (`_macula.ping' on the
 %% DHT realm, no handler expected — station replies with
-%% `unknown_next_peer') every `?LIVENESS_INTERVAL_MS' and tracks the
-%% outstanding probe's call_id. On `?LIVENESS_MAX_MISSES' consecutive
+%% `unknown_next_peer') every `?LIVENESS_INTERVAL_MS' and keeps the
+%% outstanding probe's request, which only a verified reply from the
+%% connected station clears. On `?LIVENESS_MAX_MISSES' consecutive
 %% misses (i.e. no reply received within the next tick), close
 %% `peer_pid' to force the supervisor / pool layer to respawn a fresh
 %% link. Closes the "QUIC layer keeps connection alive but server
@@ -195,6 +244,11 @@
 -define(LIVENESS_INTERVAL_MS, 30_000).
 -define(LIVENESS_MAX_MISSES,  2).
 -define(LIVENESS_PROCEDURE,   <<"_macula.ping">>).
+%% Replies the link refuses are counted by reason, and logged at most once a
+%% window with the count since the last line.
+-define(REFUSED_REPLIES_WINDOW_MS, 60_000).
+%% A relayed overlay frame the link drops is logged at most once a minute per kind.
+-define(REFUSED_RELAYS_WINDOW_MS, 60_000).
 
 %% Grace added on top of `connect_timeout_ms' before the connect
 %% watchdog fires. The dial NIF is meant to bound itself at
@@ -204,11 +258,38 @@
 %% wedged and we recycle the link.
 -define(CONNECT_WATCHDOG_GRACE_MS, 10_000).
 
+%% How long a dedicated stream the peer opened may take to bring its first
+%% whole frame before it closes, unless `dedicated_stream_open_timeout_ms'
+%% in the macula application env says otherwise.
+-define(DEDICATED_STREAM_OPEN_TIMEOUT_MS, 10_000).
+
+%% The longest STREAM_OPEN a dedicated stream may start with, 1 MiB, unless
+%% `max_stream_open_bytes' in the macula application env says otherwise.
+%% `call_stream/6' refuses a longer open by the same limit, so both sides on
+%% one node agree.
+-define(MAX_STREAM_OPEN_BYTES, 16#100000).
+
+%% How long a received request waits on the pool's admission for its verdict
+%% before it is refused, so a stalled admission never holds up the link.
+-define(ADMIT_TIMEOUT_MS, 1_000).
+
 -record(state, {
     seed             :: #{host := binary() | string(),
                           port := inet:port_number(),
                           _    => _},
-    identity         :: macula_identity:key_pair(),
+    node_identity    :: macula_node_keys:node_key(),
+    profile          :: macula_crypto_profile:profile(),
+    issuer           :: pid(),
+    %% The pool's request admission, which judges every verified request
+    %% this link receives, and this link's share in it.
+    admission        :: pid(),
+    share            :: term(),
+    connect          :: fun((map()) -> {ok, pid()} | {error, term()}),
+    %% The functions every dedicated stream is opened, written and closed
+    %% through (start opts `open_stream', `send_on_stream', `close_stream').
+    open_stream      :: fun((pid()) -> {ok, reference()} | {error, term()}),
+    send_on_stream   :: fun((reference(), binary()) -> ok | {error, term()}),
+    close_stream     :: fun((reference()) -> ok),
     capabilities     :: non_neg_integer(),
     alpn             :: [binary()],
     connect_timeout_ms :: non_neg_integer(),
@@ -216,9 +297,9 @@
     %% disconnected.
     peer_pid         :: pid() | undefined,
     %% peer's node id, set on `connected'.
-    peer_node_id     :: macula_identity:pubkey() | undefined,
+    peer_node_id     :: <<_:256>> | undefined,
     %% map of CALL id (16 bytes) -> {From, TimerRef}.
-    pending = #{}    :: #{<<_:128>> => {gen_server:from(), reference()}},
+    pending = #{}    :: #{<<_:128>> => {gen_server:from(), reference(), macula_frame:verified_request()}},
     %% Active topic subscriptions keyed by SubRef returned to the
     %% subscriber. The reverse `topic_index' lets inbound EVENT
     %% frames fan out to all SubRefs subscribed to a given
@@ -238,12 +319,10 @@
     %% frames). Resets on link respawn — pool dedup absorbs the gap.
     publish_seq = 0 :: non_neg_integer(),
     %% Advertised RPC procedures. Keyed by `{Realm, Procedure}`. The
-    %% link sends one ADVERTISE frame per entry on every successful
-    %% (re)connect (drained alongside subscriptions on `connected').
-    %% Inbound CALL frames whose `(realm, procedure)' is in this map
-    %% are dispatched to the registered handler; the resulting
-    %% RESULT or call_error frame is shipped back over the same
-    %% peering connection.
+    %% link sends nothing for them. Inbound CALL frames whose
+    %% `(realm, procedure)' is in this map are dispatched to the
+    %% registered handler; the resulting RESULT or call_error frame is
+    %% shipped back over the same peering connection.
     procedures = #{} :: #{{<<_:256>>, binary()} => handler()},
     %% Per-procedure auth policy. Absent = `open' (serve any identified
     %% caller). `{ucan_required, Issuer}' gates the procedure: an inbound
@@ -285,10 +364,15 @@
     %% Inbound byte buffer per dedicated QUIC stream, keyed by the
     %% QUIC stream reference itself (stable for the stream's life,
     %% known before any frame — let alone its `stream_id' — has been
-    %% decoded off it). Entries are created the moment a
-    %% `new_dedicated_stream' notification arrives and removed when
-    %% the session tears down.
+    %% decoded off it). An entry is created when this link opens a
+    %% client stream, or when a stream the peer opened brings its first
+    %% whole frame, and removed when the session tears down.
     stream_bufs = #{} :: #{reference() => binary()},
+    %% A dedicated stream the peer opened is buffered here until its first
+    %% whole frame comes, which decides whether the stream moves on to
+    %% `stream_bufs' or closes. A dedicated stream stays open only while it
+    %% carries a session or is this link's own client stream.
+    opening_bufs = #{} :: #{reference() => binary()},
     %% Dedicated content-transfer streams (PLAN_PER_STREAM_QUIC_ISOLATION.md
     %% Phase 2). One `put_content'/`get_content' call pins one link and
     %% opens one of these via `open_content_stream/1', then issues every
@@ -302,15 +386,21 @@
     %% / `server_streams' even though the underlying primitive
     %% (`macula_peering:open_dedicated_stream/1') is the same one.
     content_stream_bufs = #{} :: #{reference() => binary()},
-    content_pending = #{}     :: #{reference() => {gen_server:from(), reference()}},
+    content_pending = #{}     :: #{reference() => {gen_server:from(), reference(), macula_frame:verified_request()}},
     %% App-level liveness state. `liveness_timer' is the next-tick
     %% reference (or undefined when not armed). `liveness_outstanding'
-    %% holds the call_id of an in-flight probe (or undefined when no
-    %% probe is awaiting reply). `liveness_misses' is the consecutive-
+    %% holds the request_id and the request of an in-flight probe (or
+    %% undefined when no probe is awaiting reply): a reply is checked
+    %% against that request. `liveness_misses' is the consecutive-
     %% miss count; reaches `?LIVENESS_MAX_MISSES' → close peer_pid.
     liveness_timer        :: undefined | reference(),
-    liveness_outstanding  :: undefined | <<_:128>>,
+    liveness_outstanding  :: undefined | {<<_:128>>, macula_frame:verified_request()},
     liveness_misses = 0   :: non_neg_integer(),
+    %% Replies refused before they could clear a probe, counted by reason.
+    refused_replies       :: macula_refusal_report:t(),
+    %% Relayed overlay frames dropped, and refusals of delivered overlay
+    %% frames charged to no connection, counted by kind.
+    refused_relays        :: macula_refusal_report:t(),
     %% Tunable liveness thresholds (start opts `liveness_interval_ms' /
     %% `liveness_max_misses', each defaulting to the module `?LIVENESS_*'
     %% value). A consumer holding many links to variously-loaded stations
@@ -369,7 +459,7 @@
 %% @doc Start a station-client connected to `seed'.
 %% Returns once the gen_server is alive; the QUIC handshake completes
 %% asynchronously. Use `is_connected/1' to poll readiness or just
-%% issue `call/5' (which blocks the caller until ready or until its
+%% issue `call/6' (which blocks the caller until ready or until its
 %% timeout elapses).
 -spec start_link(opts()) -> {ok, pid()} | {error, term()}.
 start_link(Opts) when is_map(Opts) ->
@@ -379,31 +469,39 @@ start_link(Opts) when is_map(Opts) ->
 stop(Pid) ->
     gen_server:stop(Pid).
 
-%% @doc Issue a CALL frame and block until the station replies, the
-%% deadline elapses, or the connection drops.
+%% @doc Issue a CALL to `Target' and block until its verified reply, the
+%% deadline, or the connection dropping.
 %%
-%% `Realm' is the 32-byte realm id stamped on the outbound CALL frame.
-%% Stations are realm-agnostic infrastructure; the realm is carried
-%% per-frame so a single link can multiplex many realms.
+%% `Target' is `station', the station this link is connected to, for the
+%% procedures a station serves itself such as `_dht.*', or a provider's
+%% node_id. `Realm' is the 32-byte realm id and `Procedure' the procedure
+%% name. `Payload' is any term the wire carries (typically a map).
+%% `TimeoutMs' is from 1 ms to ten minutes, the deadline window a provider
+%% accepts; anything else raises `function_clause' in the caller.
 %%
-%% `Procedure' is the V2 procedure name, e.g.
-%% `&lt;&lt;"_dht.find_records_by_type"&gt;&gt;'. `Payload' is any term that
-%% `macula_frame:call/1' accepts (typically a map).
--spec call(pid(), <<_:256>>, binary(), term(), pos_integer()) ->
+%% The result is `{ok, Payload}' for a RESULT; `{error, Text}' for a
+%% provider's `handler_error' carrying its detail text; `{error, {call_error,
+%% Code, Detail}}' for any other provider error, `Code' a binary and `Detail'
+%% a binary or `undefined'; `{error, {call_error, unknown_next_peer,
+%% undefined}}' when the station reports it holds no connection to the
+%% target; or `{error, Reason}' for a call refused, timed out or lost with
+%% the connection (see `not_sent/1').
+-spec call(pid(), station | <<_:256>>, <<_:256>>, binary(), term(), 1..600_000) ->
     {ok, term()} | {error, term()}.
-call(Pid, Realm, Procedure, Payload, TimeoutMs) ->
-    call(Pid, Realm, Procedure, Payload, TimeoutMs, <<>>).
+call(Pid, Target, Realm, Procedure, Payload, TimeoutMs) ->
+    call(Pid, Target, Realm, Procedure, Payload, TimeoutMs, <<>>).
 
-%% @doc As `call/5', presenting a capability token (UCAN) to a gated
-%% provider. Empty token = none. Slice 7b.
--spec call(pid(), <<_:256>>, binary(), term(), pos_integer(), binary()) ->
+%% @doc As `call/6', presenting a capability token to a gated provider. An
+%% empty token is none.
+-spec call(pid(), station | <<_:256>>, <<_:256>>, binary(), term(), 1..600_000, binary()) ->
     {ok, term()} | {error, term()}.
-call(Pid, Realm, Procedure, Payload, TimeoutMs, UcanToken)
+call(Pid, Target, Realm, Procedure, Payload, TimeoutMs, Token)
   when is_pid(Pid),
+       (Target =:= station orelse (is_binary(Target) andalso byte_size(Target) =:= 32)),
        is_binary(Realm), byte_size(Realm) =:= 32,
        is_binary(Procedure),
-       is_integer(TimeoutMs), TimeoutMs > 0,
-       is_binary(UcanToken) ->
+       is_integer(TimeoutMs), TimeoutMs > 0, TimeoutMs =< ?MAX_CALL_TIMEOUT_MS,
+       is_binary(Token) ->
     %% The deadline is the caller's: a link busy past it doesn't send the
     %% CALL at all (see call_in_time/4). gen_server timeout = TimeoutMs +
     %% 500 to give the server time to report a clean `{error, timeout}'
@@ -412,23 +510,27 @@ call(Pid, Realm, Procedure, Payload, TimeoutMs, UcanToken)
     GenTimeout = TimeoutMs + 500,
     try
         gen_server:call(Pid,
-                        {call, Realm, Procedure, Payload, DeadlineMs, UcanToken},
+                        {call, Target, Realm, Procedure, Payload, DeadlineMs, Token},
                         GenTimeout)
     catch
-        %% try/catch retained: collapses the three distinct gen_server
-        %% exit signals into the SDK's call-result taxonomy. Without
-        %% it the caller sees `exit({timeout, _})' instead of
-        %% `{error, timeout}', breaking the contract documented above.
-        exit:{timeout, _}      -> {error, timeout};
-        exit:{noproc, _}       -> {error, noproc};
-        exit:{normal, _}       -> {error, gone}
+        %% The exits of a gen_server call, read as call results. No link
+        %% process is `noproc': the call never reached a link. A link that
+        %% ended while the call still waited in its mailbox answers
+        %% `{link_stopped, Name}', as a link that stops answers its pending
+        %% calls, so no stop reads as a call that never went out. A caller is
+        %% told the reason's name, as a stream is.
+        exit:{timeout, _}                    -> {error, timeout};
+        exit:{noproc, _}                     -> {error, noproc};
+        exit:{Reason, {gen_server, call, _}} -> {error, {link_stopped, macula_reason_name:text(Reason)}}
     end.
 
-%% @doc Whether an error from `call/5,6' means the CALL never went out, so
+%% @doc Whether an error from `call/6,7' means the CALL never went out, so
 %% the call can be tried on another link without a provider running it
 %% twice: the link was not connected yet, there was no link process, or
-%% the link refused the frame before sending it. Any other error, a
-%% timeout included, may follow a CALL that reached its provider.
+%% the link refused the call before sending it. Any other error, a timeout
+%% or a station's `unknown_next_peer' included, may follow a CALL that
+%% reached its provider. It matches only terms the link builds; a
+%% provider's code or detail is a binary and never matches.
 -spec not_sent({error, term()}) -> boolean().
 not_sent({error, not_connected}) -> true;
 not_sent({error, noproc}) -> true;
@@ -438,7 +540,7 @@ not_sent({error, _Reason}) -> false.
 %% @doc Open a dedicated QUIC stream for a sequence of related unary
 %% CALLs — content transfer's one purpose so far (see
 %% PLAN_PER_STREAM_QUIC_ISOLATION.md Phase 2). NOT a general-purpose
-%% "any RPC can have its own stream" facility: `call/5,6' remains the
+%% "any RPC can have its own stream" facility: `call/6,7' remains the
 %% right choice for an ordinary one-off CALL, and this link's pool
 %% caller is expected to have already picked ONE link for the whole
 %% sequence (`macula_client:pick_connected_link/1') before opening a
@@ -468,9 +570,10 @@ call_on_stream(Pid, Stream, Realm, Procedure, Payload, TimeoutMs)
                          TimeoutMs},
                         GenTimeout)
     catch
-        exit:{timeout, _} -> {error, timeout};
-        exit:{noproc, _}  -> {error, noproc};
-        exit:{normal, _}  -> {error, gone}
+        %% Read as call/7 reads the exits of its call, the reason by name only.
+        exit:{timeout, _}                    -> {error, timeout};
+        exit:{noproc, _}                     -> {error, noproc};
+        exit:{Reason, {gen_server, call, _}} -> {error, {link_stopped, macula_reason_name:text(Reason)}}
     end.
 
 %% @doc Close a content stream opened via `open_content_stream/1'.
@@ -551,7 +654,7 @@ put_record(Pid, Record) ->
 
 -spec put_record(pid(), map(), pos_integer()) -> ok | {error, term()}.
 put_record(Pid, Record, TimeoutMs) when is_pid(Pid), is_map(Record) ->
-    classify_put(call(Pid, ?DHT_REALM, <<"_dht.put_record">>,
+    classify_put(call(Pid, station, ?DHT_REALM,<<"_dht.put_record">>,
                       Record, TimeoutMs)).
 
 classify_put({ok, ok})       -> ok;
@@ -573,7 +676,7 @@ find_record(Pid, Key) ->
     {ok, map()} | {error, not_found | term()}.
 find_record(Pid, Key, TimeoutMs)
   when is_pid(Pid), is_binary(Key), byte_size(Key) =:= 32 ->
-    classify_find(call(Pid, ?DHT_REALM, <<"_dht.find_record">>,
+    classify_find(call(Pid, station, ?DHT_REALM,<<"_dht.find_record">>,
                        #{key => Key}, TimeoutMs)).
 
 classify_find({ok, #{type := _, payload := _, signature := _} = R}) -> {ok, R};
@@ -593,7 +696,7 @@ find_records_by_type(Pid, Type) ->
     {ok, [map()]} | {error, term()}.
 find_records_by_type(Pid, Type, TimeoutMs)
   when is_integer(Type), Type >= 0, Type =< 255 ->
-    classify_records(call(Pid, ?DHT_REALM, <<"_dht.find_records_by_type">>,
+    classify_records(call(Pid, station, ?DHT_REALM,<<"_dht.find_records_by_type">>,
                           #{type => Type}, TimeoutMs)).
 
 classify_records({ok, Records}) when is_list(Records) -> {ok, Records};
@@ -641,19 +744,24 @@ unsubscribe(Client, SubRef)
   when is_pid(Client), is_reference(SubRef) ->
     gen_server:call(Client, {unsubscribe, SubRef}, 5_000).
 
-%% @doc Advertise an RPC procedure handler. The link sends an
-%% ADVERTISE frame to the connected station; the station forwards
-%% inbound CALL frames matching `(Realm, Procedure)' back over the
-%% peering connection where this link dispatches them to `Handler'.
+%% @doc As `unsubscribe/2', without waiting for the link. The request
+%% queues behind whatever the caller sent this link before it, so a
+%% `subscribe/4' the same caller makes afterwards reaches the link after
+%% it. For a caller that must not wait on a busy link, such as the pool.
+-spec unsubscribe_async(pid(), reference()) -> ok.
+unsubscribe_async(Client, SubRef)
+  when is_pid(Client), is_reference(SubRef) ->
+    gen_server:cast(Client, {unsubscribe, SubRef}).
+
+%% @doc Register an RPC procedure handler on this link. A CALL for
+%% `(Realm, Procedure)' that the connected station delivers to this
+%% node, by its target, is dispatched to `Handler'. The link sends no
+%% frame for it.
 %%
-%% Idempotent: re-advertising replaces the prior handler. Replayed
-%% on every (re)connect — the caller does not need to re-call
-%% `advertise/4' after a peering reconnect.
+%% Idempotent: re-advertising replaces the prior handler. The pool
+%% registers its handlers again on a link it respawns.
 %%
-%% Returns once the handler is registered locally. The wire frame
-%% goes out immediately if the peering handshake has completed; if
-%% not, it is queued for the post-HELLO drain (matches `subscribe/4'
-%% semantics).
+%% Returns once the handler is registered.
 %%
 %% Handlers run in a transient process spawned per CALL. They must
 %% return `{ok, Reply}', `{error, Reason}', or any other term (treated
@@ -703,9 +811,8 @@ advertise(Pid, Realm, Procedure, Handler,
        is_binary(RequiredCan), RequiredCan =/= <<>> ->
     gen_server:call(Pid, {advertise, Realm, Procedure, Handler, Policy}, 5_000).
 
-%% @doc Drop a previously-advertised procedure. Sends a best-effort
-%% UNADVERTISE frame to the station and clears the local handler
-%% binding. Idempotent: unknown `(Realm, Procedure)' is a no-op.
+%% @doc Drop a previously-advertised procedure's handler from this link.
+%% Sends nothing. Idempotent: unknown `(Realm, Procedure)' is a no-op.
 -spec unadvertise(pid(), <<_:256>>, binary()) -> ok | {error, term()}.
 unadvertise(Pid, Realm, Procedure)
   when is_pid(Pid),
@@ -729,13 +836,16 @@ unadvertise(Pid, Realm, Procedure)
 %% Subscriber receives one of:
 %%
 %% <ul>
-%%   <li>`{macula_overlay_frame, SubRef, Frame, Meta}' — every time a
+%%   <li>`{macula_overlay_frame, SubRef, Frame, Meta}': every time a
 %%       matching frame arrives. `Frame' is the fully decoded frame
-%%       map (including a `record' field already inflated to a
-%%       `macula_record:m_record()' if the frame carried one — see
-%%       `macula_frame:hyparview_join_spec()'). `Meta' is a map with
-%%       a `sender' field: the connected peer's NodeId, since a frame
-%%       does not self-identify its sender at the application layer.</li>
+%%       map (a `record' field, if the frame carried one, as its wire
+%%       form, the form `macula_hyparview_endorsement:verify_endorsement/3'
+%%       takes; see `macula_frame:hyparview_join_spec()'). `Meta' is a map
+%%       with a `sender' field: the connected peer's NodeId, or for a frame
+%%       relayed in an `overlay_relay' envelope, the envelope's origin, since
+%%       a frame does not self-identify its sender at the application
+%%       layer. A relayed frame's `Meta' also has `via', the NodeId of the
+%%       station that relayed it.</li>
 %%   <li>`{macula_overlay_gone, SubRef, Reason}' — once, when the
 %%       connection drops or the client stops. The subscription is
 %%       cleared on the same transition.</li>
@@ -743,6 +853,27 @@ unadvertise(Pid, Realm, Procedure)
 %%
 %% The client monitors `Subscriber'; if it dies the subscription is
 %% torn down.
+%%
+%% A frame goes to the subscribers of its `realm'. A `plumtree_gossip'
+%% names its realm only inside its publication, so it goes to the
+%% subscribers of the realm its publication claims
+%% (`macula_frame:claimed_publication_realm/1'). A relayed plumtree_gossip
+%% frame is delivered as it arrived: its publication is unverified until
+%% macula_frame:verify_publication/3 accepts it, and a subscriber other
+%% than the Plumtree layer verifies it before acting on it. Whoever wires
+%% the Plumtree layer to a link makes it the verifying consumer, and keeps
+%% plumtree frames from reaching any other overlay subscriber unverified.
+%% A relayed frame, or a GOSSIP from the connected peer, that names no
+%% realm, or a realm with no subscriber on this link, is counted and not
+%% delivered. Any other frame from the connected peer with no subscriber
+%% for its realm is dropped.
+%%
+%% A subscriber that refuses what a delivered frame carries reports it
+%% with `overlay_frame_refused/3'. A refusal of what a relayed frame
+%% carries is counted on this link by kind and never charged to the
+%% station connection that relayed it; a refusal of a frame from the
+%% connected peer is charged to that connection as
+%% `macula_frame:charged_refusal/1' says.
 -spec overlay_subscribe(pid(), <<_:256>>, pid()) ->
     {ok, reference()} | {error, term()}.
 overlay_subscribe(Client, Realm, Subscriber)
@@ -780,41 +911,55 @@ send_overlay_frame(Client, Frame) when is_pid(Client), is_map(Frame) ->
     gen_server:call(Client, {send_overlay_frame, Frame}, 5_000).
 
 %% @doc Send a pre-built, pre-signed overlay-protocol frame to a specific
-%% `TargetPeer' (that peer's own 32-byte Ed25519 pubkey), relayed through
-%% whatever station this connection is dialed into. Wraps `Frame' in an
-%% `overlay_relay' envelope (Part 6 §9.x), signed with THIS connection's
-%% own identity — the station verifies that signature against the
-%% authenticated NodeId of whoever sent it before relaying, so a claimed
-%% `TargetPeer' can never be spoofed by an unrelated connection — and
-%% forwards it to whichever of its OTHER connections authenticates as
-%% `TargetPeer'. See `macula_station_peer_observer:dispatch_overlay/5' on
-%% the relay side. `Frame' carries its own, separate signature, which the
-%% caller must make with THIS connection's identity: the receiving link
-%% delivers `Frame' only if that signature verifies against the sender the
-%% station names in the envelope, and that sender is this connection's
-%% authenticated NodeId. This function only signs the envelope around it,
-%% never touches `Frame'.
+%% `TargetPeer' (that peer's 32-byte node_id), relayed through whatever
+%% station this connection is dialed into. Wraps `Frame' in an
+%% `overlay_relay' envelope (Part 6 §9.x), a control frame the connection
+%% signs for its neighbour as it sends it, so the station relays it as sent
+%% by this connection's authenticated node_id and a claimed `TargetPeer'
+%% can never be spoofed by an unrelated connection. The station forwards it
+%% to whichever of its OTHER connections authenticates as `TargetPeer'. See `macula_station_peer_observer:dispatch_overlay/5' on
+%% the relay side. The receiving link takes `Frame' only when its type is
+%% one `macula_frame:relayed_without_signature/1' names, and delivers it
+%% with this connection's authenticated NodeId as sender and the station as
+%% `via'; a frame of any other type is dropped and counted there. This
+%% function only wraps it in the envelope, and never touches `Frame'.
 %% Silently dropped by the station if `TargetPeer' isn't currently
 %% connected there; HyParView's own periodic shuffle/retry is the
 %% recovery path, the same way it already tolerates ordinary packet loss.
 %%
 %% `{error, not_connected}' if the peering handshake to the station
 %% itself hasn't completed.
--spec send_overlay_frame(pid(), macula_identity:pubkey(), macula_frame:frame()) ->
+-spec send_overlay_frame(pid(), <<_:256>>, macula_frame:frame()) ->
     ok | {error, term()}.
 send_overlay_frame(Client, TargetPeer, Frame)
   when is_pid(Client), is_binary(TargetPeer), byte_size(TargetPeer) =:= 32,
        is_map(Frame) ->
     gen_server:call(Client, {send_overlay_frame_to, TargetPeer, Frame}, 5_000).
 
+%% @doc Report that an overlay frame this link delivered was refused for
+%% what it carries. `Meta' is the map the frame was delivered with, and
+%% `Kind' the refusal's kind, as `hecate_plumtree' returns it. The report
+%% goes to the connection, which charges it as
+%% `macula_frame:charged_refusal/1' says, only when the frame provably came
+%% from the link's current peer: `Meta' has no `via' and names that peer as
+%% `sender'. Every other report, for a relayed frame, for a `Meta' that lost
+%% its `via', or from before the link took another peer, is counted on this
+%% link by kind and charges no one. A kind `charged_refusal/1' does not
+%% classify is counted as `unknown_refusal'. A cast: it never blocks the
+%% caller, and a link that has stopped ignores it.
+-spec overlay_frame_refused(pid(), map(), term()) -> ok.
+overlay_frame_refused(Client, Meta, Kind) when is_pid(Client) ->
+    gen_server:cast(Client, {overlay_frame_refused, Meta, Kind}).
+
 %% @doc Open a streaming RPC on this link. Returns `{ok, StreamPid}'
 %% bound to the caller; the caller drives the stream via
 %% `macula_stream:send/2,3', `recv/1,2', `close_send/1', `close/1',
 %% and `await_reply/1,2' (for client-stream / bidi modes).
 %%
-%% `Realm' and `Procedure' name the remote streaming endpoint.
-%% `Args' is the opening payload (any term that
-%% `macula_frame:stream_open/1' accepts). `Opts' may include:
+%% `Target' is the provider the open names: `station', the station this
+%% link is connected to, or a provider's node_id. `Realm' and `Procedure'
+%% name the remote streaming endpoint. `Args' is the opening payload (any
+%% term `macula_frame:stream_open/2' takes as a payload). `Opts' may include:
 %%
 %% <ul>
 %%   <li>`mode'  — `server_stream' (default), `client_stream', or
@@ -832,28 +977,45 @@ send_overlay_frame(Client, TargetPeer, Frame)
 %%
 %% Returns `{error, not_connected}' when the QUIC handshake has not
 %% completed; the caller may retry once the link reports
-%% `is_connected/1'. The pool layer (`macula_client') should be
-%% preferred over direct invocation — it picks a healthy link
-%% transparently.
--spec call_stream(pid(), <<_:256>>, binary(), term(), map()) ->
+%% `is_connected/1'. Returns `{error, {open_too_large, Limit}}', sending
+%% nothing and starting no stream, when the signed STREAM_OPEN would be
+%% longer than `Limit' bytes, the `max_stream_open_bytes' macula
+%% application env (1 MiB by default), and `{error, {refused, Why}}' the
+%% same way for an open the frame refuses to build, such as a procedure
+%% name over 512 bytes. A consumer opens a stream through
+%% `macula:call_stream/5', which resolves the provider and its station,
+%% or `macula:call_stream_station/7', rather than on a link directly.
+-spec call_stream(pid(), station | <<_:256>>, <<_:256>>, binary(), term(), map()) ->
     {ok, pid()} | {error, term()}.
-call_stream(Pid, Realm, Procedure, Args, Opts)
+call_stream(Pid, Target, Realm, Procedure, Args, Opts)
   when is_pid(Pid),
+       (Target =:= station orelse (is_binary(Target) andalso byte_size(Target) =:= 32)),
        is_binary(Realm), byte_size(Realm) =:= 32,
        is_binary(Procedure),
        is_map(Opts) ->
-    gen_server:call(Pid,
-                    {stream_open, Realm, Procedure, Args, Opts, self()},
-                    5_000).
+    ok = valid_stream_opts(Opts),
+    gen_server:call(Pid, {stream_open, Target, Realm, Procedure, Args, Opts, self()}, 5_000).
 
-%% @doc Advertise a streaming RPC handler. Idempotent — re-advertising
-%% replaces the prior `{Mode, Handler}'. Replayed on every
-%% (re)connect alongside unary advertisements. Wire shape is the
-%% existing `advertise' frame; the receiving station routes inbound
-%% STREAM_OPEN frames for `(Realm, Procedure)' back over this peering
-%% connection where this link spawns a server-side
-%% `macula_stream' and dispatches `Handler(StreamPid, Args)' in a
-%% transient process. Same as `advertise_stream/6' with policy `open'.
+%% A stream open's options are checked here, in the calling process, as
+%% `advertise_stream/6' checks a policy: one outside its type raises
+%% `function_clause' in the caller and never in the link.
+valid_stream_opts(Opts) ->
+    ok = valid_stream_mode(maps:get(mode, Opts, server_stream)),
+    ok = valid_stream_token(maps:get(ucan_token, Opts, <<>>)),
+    valid_stream_deadline(maps:get(deadline_ms, Opts, 0)).
+
+valid_stream_mode(Mode) when Mode =:= server_stream; Mode =:= client_stream; Mode =:= bidi -> ok.
+
+valid_stream_token(Token) when is_binary(Token) -> ok.
+
+valid_stream_deadline(DeadlineMs) when is_integer(DeadlineMs), DeadlineMs >= 0 -> ok.
+
+%% @doc Register a streaming RPC handler on this link. Idempotent —
+%% re-advertising replaces the prior `{Mode, Handler}'. A STREAM_OPEN
+%% for `(Realm, Procedure)' that the connected station delivers to this
+%% node spawns a server-side `macula_stream' and dispatches
+%% `Handler(StreamPid, Args)' in a transient process. The link sends no
+%% frame for it. Same as `advertise_stream/6' with policy `open'.
 -spec advertise_stream(pid(), <<_:256>>, binary(),
                         macula_frame:stream_mode(), stream_handler()) ->
     ok | {error, term()}.
@@ -899,18 +1061,18 @@ unadvertise_stream(Pid, Realm, Procedure)
                     {stream_unadvertise, Realm, Procedure},
                     5_000).
 
-%% @doc Cast a STREAM_* outbound frame. Called by `macula_stream'
-%% processes paired against this link via the
-%% `{remote_via_link, Pid, Sid}' peer shape — the stream invokes this
-%% to ship its STREAM_DATA / STREAM_END / STREAM_ERROR / STREAM_REPLY
-%% bytes through the link's peering connection.
+%% @doc Write the bytes of one frame a paired `macula_stream' built,
+%% signed and encoded onto that stream's dedicated QUIC stream. `Last'
+%% is true for the last frame from the stream's side (STREAM_END with
+%% role both, STREAM_ERROR or STREAM_REPLY), after which the link
+%% forgets the stream. A write that fails is reported to the stream as
+%% `{stream_write_failed, Sid, Reason}', and the link forgets the stream.
 %%
-%% Always returns `ok' (the operation is fire-and-forget; the link
-%% drops the frame if not yet connected and the stream's own backoff
-%% policy decides what to do).
--spec send_stream_frame(pid(), atom(), map()) -> ok.
-send_stream_frame(Pid, Type, Spec) when is_pid(Pid), is_atom(Type), is_map(Spec) ->
-    gen_server:cast(Pid, {send_stream_frame, Type, Spec}).
+%% Always returns `ok': the write happens in the link.
+-spec send_stream_bytes(pid(), binary(), binary(), boolean()) -> ok.
+send_stream_bytes(Pid, Sid, Bytes, Last)
+  when is_pid(Pid), is_binary(Sid), is_binary(Bytes), is_boolean(Last) ->
+    gen_server:cast(Pid, {send_stream_bytes, Sid, Bytes, Last}).
 
 -spec is_connected(pid()) -> boolean().
 is_connected(Pid) ->
@@ -919,7 +1081,7 @@ is_connected(Pid) ->
         false -> false
     end.
 
--spec peer_node_id(pid()) -> {ok, macula_identity:pubkey()} | {error, not_connected}.
+-spec peer_node_id(pid()) -> {ok, <<_:256>>} | {error, not_connected}.
 peer_node_id(Pid) ->
     gen_server:call(Pid, peer_node_id, 1_000).
 
@@ -927,13 +1089,82 @@ peer_node_id(Pid) ->
 %% gen_server
 %%====================================================================
 
+%% A link starts only with a node identity key, a statement issuer and a
+%% seed that names the node_id it expects. Otherwise it refuses with the
+%% name of what is missing, in that order, and makes no key of its own.
+start_checked(#{node_identity := Identity} = Opts) when is_function(Identity, 0) ->
+    issuer_checked(maps:find(issuer, Opts), Identity, Opts);
+start_checked(_Opts) ->
+    {error, {node_identity, required}}.
+
+issuer_checked({ok, Issuer}, Identity, Opts) when is_pid(Issuer) ->
+    admission_checked(maps:find(admission, Opts), Identity, Issuer, Opts);
+issuer_checked(_NoIssuer, _Identity, _Opts) ->
+    {error, {issuer, required}}.
+
+%% The pool's request admission and this link's share in it are required: every
+%% request the link receives is judged there, under that share.
+admission_checked({ok, Admission}, Identity, Issuer, Opts) when is_pid(Admission) ->
+    share_checked(is_map_key(share, Opts), Identity, Issuer, Opts);
+admission_checked(_NoAdmission, _Identity, _Issuer, _Opts) ->
+    {error, {admission, required}}.
+
+share_checked(true, Identity, Issuer, Opts) ->
+    stream_functions_checked(first_refusal([stream_function(open_stream, 1, not_an_opener, Opts),
+                                            stream_function(send_on_stream, 2, not_a_writer, Opts),
+                                            stream_function(close_stream, 1, not_a_closer, Opts)]),
+                             Identity, Issuer, Opts);
+share_checked(false, _Identity, _Issuer, _Opts) ->
+    {error, {share, required}}.
+
+%% A dedicated-stream function the link is given takes the place of the
+%% peering connection's own, so it must be a function of the arity the link
+%% calls it with.
+stream_functions_checked(none, Identity, Issuer, Opts) ->
+    identity_checked(Identity(), Issuer, Opts);
+stream_functions_checked(Refusal, _Identity, _Issuer, _Opts) ->
+    {error, Refusal}.
+
+stream_function(Key, Arity, Refusal, Opts) ->
+    given_function(maps:find(Key, Opts), Key, Arity, Refusal).
+
+given_function(error, _Key, _Arity, _Refusal) -> none;
+given_function({ok, Fun}, _Key, Arity, _Refusal) when is_function(Fun, Arity) -> none;
+given_function({ok, _OtherShape}, Key, _Arity, Refusal) -> {Key, Refusal}.
+
+first_refusal([none | Rest]) -> first_refusal(Rest);
+first_refusal([Refusal | _Rest]) -> Refusal;
+first_refusal([]) -> none.
+
+identity_checked(#{purpose := identity, profile := Profile} = Key, Issuer, Opts) ->
+    seed_checked(add_tls_opts(parse_seed(maps:get(seed, Opts)), Opts), Key, Profile, Issuer);
+identity_checked(_NotAnIdentityKey, _Issuer, _Opts) ->
+    {error, {node_identity, not_an_identity_key}}.
+
+seed_checked(#{expected_node_id := <<_:256>>} = Seed, Key, Profile, Issuer) ->
+    {ok, Seed, Key, Profile, Issuer};
+seed_checked(_Seed, _Key, _Profile, _Issuer) ->
+    {error, {seed, expected_node_id_required}}.
+
+%% The node_id of the node identity key: the identity the frames this link builds name.
+node_id(Key) ->
+    {ok, NodeId} = macula_node_keys:node_id(Key),
+    NodeId.
+
+%% TLS policy (`verify' / `expected_node_id') rides in the seed map, which
+%% is spread into the peering target at connect. The link watches its
+%% issuer and ends when the issuer does.
 init(Opts) ->
-    %% TLS policy (`verify' / `expected_node_id') rides in the seed map,
-    %% which is spread into the peering target at connect — so a caller
-    %% can dial a self-signed or pubkey-pinned station, same as the
-    %% station-side outbound link.
-    Seed     = add_tls_opts(parse_seed(maps:get(seed, Opts)), Opts),
-    Identity = maps:get(identity, Opts, macula_identity:generate()),
+    started(start_checked(Opts), Opts).
+
+started({error, Refusal}, _Opts) ->
+    {stop, Refusal};
+started({ok, Seed, Key, Profile, Issuer}, Opts) ->
+    _ = erlang:monitor(process, Issuer),
+    Connect  = maps:get(connect, Opts, fun macula_peering:connect/1),
+    OpenStream   = maps:get(open_stream, Opts, fun macula_peering:open_dedicated_stream/1),
+    SendOnStream = maps:get(send_on_stream, Opts, fun macula_peering:send_on_stream/2),
+    CloseStream  = maps:get(close_stream, Opts, fun macula_peering:close_dedicated_stream/1),
     Caps     = maps:get(capabilities, Opts, 0),
     Alpn     = maps:get(alpn, Opts, [<<"macula">>]),
     Tmo      = maps:get(connect_timeout_ms, Opts, 30_000),
@@ -941,12 +1172,17 @@ init(Opts) ->
     LiveMs   = maps:get(liveness_interval_ms, Opts, app_env(liveness_interval_ms, ?LIVENESS_INTERVAL_MS)),
     LiveMiss = maps:get(liveness_max_misses, Opts, app_env(liveness_max_misses, ?LIVENESS_MAX_MISSES)),
     RetryMs  = maps:get(connect_retry_backoff_ms, Opts, app_env(connect_retry_backoff_ms, ?CONNECT_RETRY_BACKOFF_MS)),
-    State    = #state{seed = Seed, identity = Identity,
+    State    = #state{seed = Seed, node_identity = Key, profile = Profile,
+                      issuer = Issuer, admission = maps:get(admission, Opts),
+                      share = maps:get(share, Opts), connect = Connect, open_stream = OpenStream,
+                      send_on_stream = SendOnStream, close_stream = CloseStream,
                       capabilities = Caps, alpn = Alpn,
                       connect_timeout_ms = Tmo,
                       connect_watchdog_ms = WdMs,
                       liveness_interval_ms = LiveMs,
                       liveness_max_misses = LiveMiss,
+                      refused_replies = macula_refusal_report:new(?REFUSED_REPLIES_WINDOW_MS),
+                      refused_relays = macula_refusal_report:new(?REFUSED_RELAYS_WINDOW_MS),
                       connect_retry_backoff_ms = RetryMs},
     process_flag(trap_exit, true),
     self() ! attempt_connect,
@@ -961,7 +1197,7 @@ init(Opts) ->
 app_env(Key, Default) ->
     application:get_env(macula, Key, Default).
 
-handle_call({call, _Realm, _Proc, _Payload, _DeadlineMs, _Ucan}, _From,
+handle_call({call, _Target, _Realm, _Proc, _Payload, _DeadlineMs, _Token}, _From,
             #state{peer_node_id = undefined} = S) ->
     %% Gate CALL on the full CONNECT/HELLO handshake (mirrors the
     %% `{publish, ...}' clause below). `peer_pid' is set the moment
@@ -974,9 +1210,9 @@ handle_call({call, _Realm, _Proc, _Payload, _DeadlineMs, _Ucan}, _From,
     %% `{error, not_connected}' here lets the caller back off and
     %% retry once the handshake completes.
     {reply, {error, not_connected}, S};
-handle_call({call, Realm, Proc, Payload, DeadlineMs, Ucan}, From, S) ->
+handle_call({call, Target, Realm, Proc, Payload, DeadlineMs, Token}, From, S) ->
     call_in_time(DeadlineMs - erlang:system_time(millisecond),
-                 {Realm, Proc, Payload, DeadlineMs, Ucan}, From, S);
+                 {Target, Realm, Proc, Payload, DeadlineMs, Token}, From, S);
 
 handle_call(open_content_stream, _From, #state{peer_node_id = undefined} = S) ->
     {reply, {error, not_connected}, S};
@@ -988,22 +1224,19 @@ handle_call({call_on_stream, _Stream, _Realm, _Proc, _Payload, _Tmo}, _From,
             #state{peer_node_id = undefined} = S) ->
     {reply, {error, not_connected}, S};
 handle_call({call_on_stream, Stream, Realm, Proc, Payload, Tmo}, From,
-            #state{identity = Id, content_pending = CP,
-                   content_stream_bufs = Bufs} = S)
+            #state{node_identity = Id, peer_node_id = Station,
+                   content_pending = CP, content_stream_bufs = Bufs} = S)
         when is_map_key(Stream, Bufs) ->
-    Caller = macula_identity:public(Id),
-    DeadlineMs = erlang:system_time(millisecond) + Tmo,
-    Frame = macula_frame:call(#{
-        call_id     => crypto:strong_rand_bytes(16),
-        procedure   => Proc,
-        realm       => Realm,
-        payload     => Payload,
-        deadline_ms => DeadlineMs,
-        caller      => Caller,
-        ucan_token  => <<>>
-    }),
+    CallSpec = #{
+        request_id => crypto:strong_rand_bytes(16),
+        procedure  => Proc,
+        realm      => Realm,
+        target     => Station,
+        deadline   => erlang:system_time(millisecond) + Tmo,
+        payload    => Payload
+    },
     await_content_call_reply(
-      send_on_content_stream(Stream, Frame, Id), Stream, From, Tmo, CP, S);
+      send_on_content_stream(Stream, CallSpec, Id), Stream, From, Tmo, CP, S);
 handle_call({call_on_stream, _Stream, _Realm, _Proc, _Payload, _Tmo}, _From, S) ->
     {reply, {error, invalid_stream}, S};
 
@@ -1064,25 +1297,16 @@ handle_call({subscribe, Realm, Topic, Subscriber}, _From,
 handle_call({unsubscribe, SubRef}, _From, S) ->
     {reply, ok, on_unsubscribe(SubRef, S)};
 
+%% Advertising registers the handler on the link and sends nothing.
 handle_call({advertise, Realm, Proc, Handler, Policy}, _From,
             #state{procedures = P, policies = Pols} = S) ->
-    %% Register locally first so that any CALL frame arriving in the
-    %% same scheduler tick as the ADVERTISE round-trips correctly.
-    %% Replays from the post-HELLO drain pick up the same map.
-    NewS = S#state{procedures = P#{{Realm, Proc} => Handler},
-                   policies   = set_policy({Realm, Proc}, Policy, Pols)},
-    maybe_send_advertise(Realm, Proc, NewS),
-    {reply, ok, NewS};
+    {reply, ok, S#state{procedures = P#{{Realm, Proc} => Handler},
+                        policies   = set_policy({Realm, Proc}, Policy, Pols)}};
 
 handle_call({unadvertise, Realm, Proc}, _From,
             #state{procedures = P, policies = Pols} = S) ->
-    %% Best-effort UNADVERTISE on the wire; ignore disconnected.
-    %% Local clear happens regardless so subsequent inbound CALLs for
-    %% this procedure surface as `unknown_next_peer' from the relay.
-    NewS = S#state{procedures = maps:remove({Realm, Proc}, P),
-                   policies   = maps:remove({Realm, Proc}, Pols)},
-    maybe_send_unadvertise(Realm, Proc, S),
-    {reply, ok, NewS};
+    {reply, ok, S#state{procedures = maps:remove({Realm, Proc}, P),
+                        policies   = maps:remove({Realm, Proc}, Pols)}};
 
 %%-- Overlay-protocol frame transport --------------------------------
 
@@ -1111,19 +1335,14 @@ handle_call({send_overlay_frame_to, _Target, _Frame}, _From,
             #state{peer_pid = undefined} = S) ->
     {reply, {error, not_connected}, S};
 handle_call({send_overlay_frame_to, Target, Frame}, _From,
-            #state{peer_pid = Pid, identity = Id} = S) ->
-    %% The ENVELOPE is signed with this connection's own identity — the
-    %% station verifies it against the authenticated NodeId of whoever is
-    %% sending, before relaying (see macula_station_peer_observer:
-    %% dispatch_overlay/5). `Frame' itself (the wrapped inner frame) is
-    %% the caller's own responsibility to sign, same as `send_overlay_
-    %% frame/2' — the two signatures serve different purposes: this one
-    %% proves who asked for the relay, the inner one proves who
-    %% originated the protocol-level frame.
-    Envelope = macula_frame:sign(
-                 macula_frame:overlay_relay(#{peer    => Target,
-                                              payload => macula_frame:encode(Frame)}),
-                 Id),
+            #state{peer_pid = Pid} = S) ->
+    %% The envelope is a control frame: the connection signs it for its
+    %% neighbour as it sends it, and the station relays it as sent by this
+    %% connection's authenticated node_id (see macula_station_peer_observer:
+    %% dispatch_overlay/5). `Frame' itself (the wrapped inner frame) is the
+    %% caller's own responsibility, same as `send_overlay_frame/2'.
+    Envelope = macula_frame:overlay_relay(#{peer    => Target,
+                                            payload => macula_frame:encode(Frame)}),
     Result = try macula_peering:send_frame(Pid, Envelope)
              catch C:R -> {error, {C, R}}
              end,
@@ -1131,44 +1350,33 @@ handle_call({send_overlay_frame_to, Target, Frame}, _From,
 
 %%-- Streaming RPC ---------------------------------------------------
 
-handle_call({stream_open, _R, _P, _A, _O, _Caller}, _From,
+handle_call({stream_open, _Target, _R, _P, _A, _O, _Caller}, _From,
             #state{peer_node_id = undefined} = S) ->
     %% Mirror the gating used for `call' / `publish' — STREAM_OPEN
     %% frames sent before HELLO completes hit `drop_unexpected' in
     %% the peering statem and never make it to the wire.
     {reply, {error, not_connected}, S};
-handle_call({stream_open, Realm, Proc, Args, Opts, Caller}, _From, S) ->
-    {reply_value, Reply, NewS} = open_client_stream(Realm, Proc, Args, Opts,
-                                                    Caller, S),
+handle_call({stream_open, Target, Realm, Proc, Args, Opts, Caller}, _From, S) ->
+    {reply_value, Reply, NewS} = open_client_stream(Target, Realm, Proc, Args, Opts, Caller, S),
     {reply, Reply, NewS};
 
 handle_call({stream_advertise, Realm, Proc, Mode, Handler, Policy}, _From,
             #state{stream_procedures = SP, stream_policies = SPols} = S) ->
-    NewS = S#state{stream_procedures = SP#{{Realm, Proc} => {Mode, Handler}},
-                   stream_policies   = set_policy({Realm, Proc}, Policy, SPols)},
-    maybe_send_advertise(Realm, Proc, NewS),
-    {reply, ok, NewS};
+    {reply, ok, S#state{stream_procedures = SP#{{Realm, Proc} => {Mode, Handler}},
+                        stream_policies   = set_policy({Realm, Proc}, Policy, SPols)}};
 
 handle_call({stream_unadvertise, Realm, Proc}, _From,
             #state{stream_procedures = SP, stream_policies = SPols} = S) ->
-    NewS = S#state{stream_procedures = maps:remove({Realm, Proc}, SP),
-                   stream_policies   = maps:remove({Realm, Proc}, SPols)},
-    maybe_send_unadvertise(Realm, Proc, S),
-    {reply, ok, NewS};
+    {reply, ok, S#state{stream_procedures = maps:remove({Realm, Proc}, SP),
+                        stream_policies   = maps:remove({Realm, Proc}, SPols)}};
 
 handle_call(_Req, _From, S) ->
     {reply, {error, unknown_call}, S}.
 
-%%-- Outbound STREAM_* from a paired stream_v1 process ---------------
+%%-- Outbound STREAM_* bytes from a paired macula_stream -------------
 
-handle_cast({send_stream_frame, _Type, _Spec},
-            #state{peer_pid = undefined} = S) ->
-    {noreply, S};
-handle_cast({send_stream_frame, Type, #{stream_id := Sid} = Spec},
-            #state{identity = Id} = S) ->
-    Frame = build_stream_frame(Type, finalise_stream_spec(Type, Spec, Id)),
-    send_on_dedicated_stream(find_stream(Sid, S), Frame, Id),
-    {noreply, on_outbound_stream_frame(Type, Spec, S)};
+handle_cast({send_stream_bytes, Sid, Bytes, Last}, S) ->
+    {noreply, stream_bytes_sent(find_stream(Sid, S), Sid, Bytes, Last, S)};
 
 handle_cast({close_content_stream, Stream}, S) ->
     {noreply, close_content_stream_state(Stream, S)};
@@ -1179,28 +1387,32 @@ handle_cast({abort_content_stream, Stream, Code, Message}, S) ->
                                message => Message}),
     {noreply, abort_content_stream_state(Stream, Code, S)};
 
+handle_cast({unsubscribe, SubRef}, S) ->
+    {noreply, on_unsubscribe(SubRef, S)};
+
+handle_cast({overlay_frame_refused, Meta, Kind}, S) ->
+    {noreply, overlay_refusal(macula_frame:refusal_charge(Kind), Meta, Kind, S)};
+
 handle_cast(_Msg, S) -> {noreply, S}.
 
 %%-------------------------------------------------------------------
 %% Connect
 %%-------------------------------------------------------------------
 
-handle_info(attempt_connect, #state{seed = Seed, identity = Id,
-                                    capabilities = Caps, alpn = Alpn,
+%% Each dial carries the node identity key, the pool's issuer and a target
+%% that names the station's node_id.
+handle_info(attempt_connect, #state{seed = Seed, node_identity = Key, issuer = Issuer,
+                                    connect = Connect, capabilities = Caps, alpn = Alpn,
                                     connect_timeout_ms = Tmo} = S) ->
-    Pub = macula_identity:public(Id),
     PeeringOpts = #{
         role            => client,
         target          => Seed#{alpn => Alpn, timeout_ms => Tmo},
-        node_id         => Pub,
-        identity        => Id,
-        %% Realm-agnostic: the link advertises no realm membership.
-        %% Each frame carries its own realm tag.
-        realms          => [],
+        identity        => Key,
+        issuer          => Issuer,
         capabilities    => Caps,
         controlling_pid => self()
     },
-    after_connect_request(macula_peering:connect(PeeringOpts), S);
+    after_connect_request(Connect(PeeringOpts), S);
 
 handle_info({macula_peering, connected, Pid, PeerNodeId},
             #state{peer_pid = Pid} = S) ->
@@ -1211,15 +1423,7 @@ handle_info({macula_peering, connected, Pid, PeerNodeId},
                                  liveness_misses = 0,
                                  liveness_outstanding = undefined}),
     drain_pending_subscribes(NewS),
-    drain_pending_advertises(NewS),
-    drain_pending_stream_advertises(NewS),
     {noreply, NewS};
-
-%% A frame from the peer that decoded but lacks a field its type requires
-%% (`macula_frame:validate_received/1'). The peering connection dropped it
-%% and kept the connection, and there is nothing here to act on.
-handle_info({macula_peering, invalid_frame, _Pid, _Type, _Field}, S) ->
-    {noreply, S};
 
 handle_info({macula_peering, frame, Pid, Frame},
             #state{peer_pid = Pid} = S) ->
@@ -1242,12 +1446,12 @@ handle_info({macula_peering, disconnected, Pid, Reason},
     %% `macula_client:on_down_routed/5' has left to log. Without this,
     %% a station-initiated close is indistinguishable from any other
     %% disconnect in every log this link ever produces.
-    macula_diagnostics:event(<<"_macula.station_link.disconnected">>, #{
+    macula_diagnostics:event(notice, <<"_macula.station_link.disconnected">>, #{
         seed     => Seed,
         peer_pid => Pid,
-        reason   => Reason
+        reason   => macula_reason_name:text(Reason)
     }),
-    NewS = fail_all_pending({disconnected, Reason}, cancel_liveness(S)),
+    NewS = fail_all_pending({disconnected, macula_reason_name:text(Reason)}, cancel_liveness(S)),
     %% Stop normally — the supervisor (or owning gen_server) decides
     %% whether to restart us.
     {stop, normal, NewS#state{peer_pid = undefined,
@@ -1259,12 +1463,37 @@ handle_info({macula_peering, disconnected, Pid, Reason},
 %% buffer and wait for its first frame (expected: STREAM_OPEN). See
 %% PLAN_PER_STREAM_QUIC_ISOLATION.md.
 handle_info({macula_peering, new_dedicated_stream, Pid, Stream},
-            #state{peer_pid = Pid, stream_bufs = Bufs} = S) ->
-    {noreply, S#state{stream_bufs = Bufs#{Stream => <<>>}}};
+            #state{peer_pid = Pid, opening_bufs = Opening} = S) ->
+    _ = erlang:send_after(application:get_env(macula, dedicated_stream_open_timeout_ms,
+                                              ?DEDICATED_STREAM_OPEN_TIMEOUT_MS),
+                          self(), {dedicated_stream_open_deadline, Stream}),
+    {noreply, S#state{opening_bufs = Opening#{Stream => <<>>}}};
 handle_info({macula_peering, new_dedicated_stream, _OtherPid, _Stream}, S) ->
     %% Stale notification from a link that is no longer `peer_pid'
     %% (respawned mid-flight) — nothing to attach it to.
     {noreply, S};
+
+%% A dedicated stream the peer opened that brought no whole first frame
+%% within `dedicated_stream_open_timeout_ms' closes without a word.
+handle_info({dedicated_stream_open_deadline, Stream}, #state{opening_bufs = Opening} = S)
+        when is_map_key(Stream, Opening) ->
+    ok = close_dedicated_stream(Stream, S),
+    {noreply, S#state{opening_bufs = maps:remove(Stream, Opening)}};
+handle_info({dedicated_stream_open_deadline, _Stream}, S) ->
+    {noreply, S};
+
+%% Bytes on a dedicated stream the peer opened, before its first whole
+%% frame. That frame is read with a cap of `max_stream_open_bytes', the way
+%% the handshake reads its frames, so a longer length header closes the
+%% stream as soon as it arrives (`opening_parse/2'). Once a whole first
+%% frame has come, the stream's buffer moves on to `stream_bufs' and the
+%% first item decides whether the stream stays open; the items after it go
+%% the way of any dedicated stream's (`opening_items/3').
+handle_info({quic, Bin, Stream, _Flags}, #state{opening_bufs = Opening} = S)
+        when is_binary(Bin), is_map_key(Stream, Opening) ->
+    Bytes = <<(maps:get(Stream, Opening))/binary, Bin/binary>>,
+    {noreply, opening_items(opening_parse(macula_frame:parse_received(Bytes, stream_open_limit()), Bytes),
+                            Stream, S)};
 
 %% Bytes on one of our dedicated streams. Decode whatever complete
 %% frames are available and dispatch each; the tail (a partial frame)
@@ -1305,8 +1534,8 @@ handle_info({quic, send_failed, Stream, Reason},
     {noreply, teardown_content_stream_state(Stream, {error, {send_failed, Reason}},
                                             fun macula_quic:close_stream/1, S)};
 
-handle_info({call_timeout, CallId}, #state{pending = P} = S) ->
-    on_timeout(maps:take(CallId, P), S);
+handle_info({call_timeout, RequestId}, #state{pending = P} = S) ->
+    on_timeout(maps:take(RequestId, P), S);
 
 handle_info({content_call_timeout, Stream}, #state{content_pending = CP} = S) ->
     on_content_timeout(maps:take(Stream, CP), S);
@@ -1341,15 +1570,21 @@ handle_info({'EXIT', Pid, Reason}, #state{peer_pid = Pid, seed = Seed} = S) ->
     %% Same swallowed-reason gap as the `disconnected' clause above, for
     %% the case where the peering worker itself exits (crash or
     %% deliberate stop) rather than sending a `disconnected' notification.
-    macula_diagnostics:event(<<"_macula.station_link.peering_exit">>, #{
+    macula_diagnostics:event(notice, <<"_macula.station_link.peering_exit">>, #{
         seed     => Seed,
         peer_pid => Pid,
-        reason   => Reason
+        reason   => macula_reason_name:text(Reason)
     }),
-    NewS = fail_all_pending({peering_exit, Reason}, cancel_liveness(S)),
+    NewS = fail_all_pending({peering_exit, macula_reason_name:text(Reason)}, cancel_liveness(S)),
     {stop, normal, NewS#state{peer_pid = undefined,
                               peer_node_id = undefined}};
 
+%% The issuer every connection of this link draws from is gone: the link
+%% ends with a shutdown reason, so its end is no crash report, its waiting
+%% callers are answered as it ends (terminate/2), and the pool starts it
+%% again with the pool's next issuer.
+handle_info({'DOWN', _Mon, process, Issuer, Reason}, #state{issuer = Issuer} = S) ->
+    {stop, {shutdown, {issuer_down, Reason}}, S};
 handle_info({'DOWN', Mon, process, Pid, _Reason}, S) ->
     %% Two monitor sources land here: subscriber pids paired by
     %% `subscribe/4', and stream pids tracked in `streams'. Probe
@@ -1385,13 +1620,25 @@ drain_frames(Pid, Acc, N) ->
 fold_frames(Frames, S) ->
     lists:foldl(fun on_frame/2, S, Frames).
 
-terminate(_Reason, #state{peer_pid = Pid}) when is_pid(Pid) ->
+%% A link ends answering every caller still waiting on it, whatever it ends
+%% for, so no caller waits out its timeout or reads the end as a call that
+%% never went out. A stop that already failed its callers left none waiting.
+%% A caller is told the reason's name only.
+terminate(Reason, #state{peer_pid = Pid} = S) when is_pid(Pid) ->
+    answer_waiting_callers({link_stopped, macula_reason_name:text(Reason)}, S),
     try macula_peering:close(Pid, client_stop) catch _:_ -> ok end,
     ok;
-terminate(_Reason, _S) ->
-    ok.
+terminate(Reason, S) ->
+    answer_waiting_callers({link_stopped, macula_reason_name:text(Reason)}, S).
+
+answer_waiting_callers(Reason, #state{pending = Pending, content_pending = ContentPending}) ->
+    maps:foreach(fun(_RequestId, {From, _TRef, _Request}) -> gen_server:reply(From, {error, Reason}) end, Pending),
+    maps:foreach(fun(_Stream, {From, _TRef}) -> gen_server:reply(From, {error, Reason}) end, ContentPending).
 
 code_change(_OldVsn, S, _Extra) -> {ok, S}.
+
+%% Status output and crash reports show this process's keys with their private halves redacted.
+format_status(Status) -> macula_node_keys:redacted(Status).
 
 %%====================================================================
 %% Internals
@@ -1410,70 +1657,64 @@ publish_reply({error, _} = Refused, _Seq, S) ->
 
 %% A CALL the link reaches after its caller's deadline is not sent: the
 %% caller has already been told it timed out, and a provider must not run a
-%% call its caller gave up on. Otherwise the frame carries the caller's
+%% call its caller gave up on. Otherwise the request carries the caller's
 %% deadline, and the call waits for its reply until then.
 call_in_time(RemainingMs, _Call, _From, S) when RemainingMs =< 0 ->
     {reply, {error, timeout}, S};
-call_in_time(RemainingMs, {Realm, Proc, Payload, DeadlineMs, Ucan}, From,
-             #state{peer_pid = Pid, identity = Id, pending = P} = S) ->
-    CallId = crypto:strong_rand_bytes(16),
-    Frame = macula_frame:call(#{
-        call_id     => CallId,
-        procedure   => Proc,
-        realm       => Realm,
-        payload     => Payload,
-        deadline_ms => DeadlineMs,
-        caller      => macula_identity:public(Id),
-        ucan_token  => Ucan
-    }),
-    %% NOT `ok = send_frame(...)'. Since the frame is now checked before
-    %% the cast, an unsendable RPC payload comes back as an error, and a
-    %% hard match on `ok' would badmatch here and take this link's
-    %% gen_server down — turning a caller's bad argument into an outage
-    %% for every other caller on the link. Reply with the reason instead.
-    await_call_reply(macula_peering:send_frame(Pid, Frame),
-                     CallId, From, RemainingMs, P, S).
+call_in_time(RemainingMs, {_Target, _Realm, Proc, Payload, _DeadlineMs, _Token} = Call, From, S) ->
+    call_sendable(sendable(macula_frame:text_checked(procedure, Proc), Payload), RemainingMs, Call, From, S).
 
-await_call_reply(ok, CallId, From, Tmo, Pending, S) ->
-    TRef = erlang:send_after(Tmo, self(), {call_timeout, CallId}),
-    {noreply, S#state{pending = Pending#{CallId => {From, TRef}}}};
-await_call_reply({error, Reason}, _CallId, _From, _Tmo, _Pending, S) ->
+%% A procedure the frame's text bound refuses, or a payload the wire cannot
+%% carry, is refused before anything is built.
+sendable(ok, Payload) -> macula_frame:check_payload(Payload);
+sendable({error, _} = Refused, _Payload) -> Refused.
+
+%% A call refused before building never goes out. Otherwise the request is
+%% signed with the node identity key and kept as a verifier reads it, for its
+%% reply to be checked against. A request that does not verify as built is
+%% refused as well, so no caller's argument takes the link down.
+call_sendable({error, Unsendable}, _RemainingMs, _Call, _From, S) ->
+    {reply, {error, {refused, Unsendable}}, S};
+call_sendable(ok, RemainingMs, {Target, Realm, Proc, Payload, DeadlineMs, Token}, From,
+              #state{node_identity = Key, profile = Profile} = S) ->
+    RequestId = crypto:strong_rand_bytes(16),
+    Frame = macula_frame:call(with_token(Token, #{request_id => RequestId, realm => Realm, procedure => Proc,
+                                                   target => target_node_id(Target, S), deadline => DeadlineMs,
+                                                   payload => Payload}), Key),
+    call_verified(macula_frame:verify_request(Frame, Profile), Frame, RequestId, From, RemainingMs, S).
+
+call_verified({ok, Request}, Frame, RequestId, From, RemainingMs, #state{peer_pid = Pid, pending = P} = S) ->
+    %% NOT `ok = send_frame(...)': a frame the peering refuses comes back as
+    %% an error, and a hard match would take this link down for every other
+    %% caller on it. Reply with the reason instead.
+    await_call_reply(macula_peering:send_frame(Pid, Frame), RequestId, Request, From, RemainingMs, P, S);
+call_verified({error, Refusal}, _Frame, _RequestId, _From, _RemainingMs, S) ->
+    {reply, {error, {refused, Refusal}}, S}.
+
+target_node_id(station, #state{peer_node_id = Station}) -> Station;
+target_node_id(NodeId, _S) -> NodeId.
+
+with_token(<<>>, Spec) -> Spec;
+with_token(Token, Spec) -> Spec#{token => Token}.
+
+await_call_reply(ok, RequestId, Request, From, Tmo, Pending, S) ->
+    TRef = erlang:send_after(Tmo, self(), {call_timeout, RequestId}),
+    {noreply, S#state{pending = Pending#{RequestId => {From, TRef, Request}}}};
+await_call_reply({error, Reason}, _RequestId, _Request, _From, _Tmo, _Pending, S) ->
     {reply, {error, {refused, Reason}}, S}.
 
 -spec send_publish_frame(<<_:256>>, binary(), term(), non_neg_integer(),
                          #state{}) -> ok | {error, term()}.
 send_publish_frame(Realm, Topic, Payload, Seq,
-                   #state{peer_pid = Pid, identity = Id}) ->
-    Pub = macula_identity:public(Id),
-    Frame0 = macula_frame:publish(#{
-        topic           => Topic,
-        realm           => Realm,
-        publisher       => Pub,
-        seq             => Seq,
-        payload         => Payload,
-        published_at_ms => erlang:system_time(millisecond)
-    }),
-    Frame = maybe_add_publisher_sig(Frame0, Id),
+                   #state{peer_pid = Pid, node_identity = Id}) ->
+    Frame = macula_frame:publish(#{
+        realm        => Realm,
+        topic        => Topic,
+        seq          => Seq,
+        published_at => erlang:system_time(millisecond),
+        payload      => Payload
+    }, Id),
     macula_peering:send_frame(Pid, Frame).
-
-%% Attach the publisher-end-to-end signature to an outbound PUBLISH.
-%% Default flipped to `true' in 4.6.0 (was `false' since 4.4.0 when
-%% the field was introduced). Flipping enables multi-hop pubsub: the
-%% receiving station verifies against `publisher' via
-%% `macula_frame:verify_publisher/1' so the frame stays valid across
-%% any relay path, and the (publisher, seq) dedup cache on each
-%% station kills loops. See `macula_station_event_dedup' in the
-%% station repo for the dedup side. Wire-compat: the field has been
-%% carried verbatim through relay hops since macula 4.4.0; stations
-%% on >= 4.4.0 strip it from their canonical-signing bytes so adding
-%% it does not break the per-hop relay signature. Operators can
-%% override per-app via `application:set_env(macula,
-%% pubsub_emit_publisher_sig, false)` if a regression surfaces.
-maybe_add_publisher_sig(Frame, Identity) ->
-    case application:get_env(macula, pubsub_emit_publisher_sig, true) of
-        true  -> macula_frame:sign_publisher(Frame, Identity);
-        _     -> Frame
-    end.
 
 after_connect_request({ok, Pid}, S) ->
     link(Pid),
@@ -1483,36 +1724,38 @@ after_connect_request({ok, Pid}, S) ->
     {noreply, arm_connect_watchdog(S#state{peer_pid = Pid})};
 after_connect_request({error, Reason}, S) ->
     macula_diagnostics:event(<<"_macula.station_link.connect_failed">>, #{
-        reason => Reason,
+        reason => macula_reason_name:text(Reason),
         seed   => S#state.seed
     }),
     erlang:send_after(S#state.connect_retry_backoff_ms, self(), attempt_connect),
     {noreply, S}.
 
-%% RESULT / ERROR. Acted on only once the frame's signature verifies
-%% against the identity it names as its signer (`responded_by' on a
-%% RESULT, `reported_by' on an ERROR); see `on_reply/4'.
-on_frame(#{frame_type := result, call_id := CallId, payload := Payload} = Frame, S) ->
-    on_reply(verify_signed_by(Frame, reply_signer(Frame)), CallId,
-             {ok, Payload}, S);
-on_frame(#{frame_type := error, call_id := CallId} = Frame, S) ->
-    Failure = call_failure(maps:get(code, Frame, 0),
-                           maps:get(name, Frame, undefined),
-                           maps:get(detail, Frame, undefined)),
-    on_reply(verify_signed_by(Frame, reply_signer(Frame)), CallId, Failure, S);
-%% EVENT — pubsub delivery. Fan out to every subscriber whose
-%% (realm, topic) matches. Stations may push EVENTs without a prior
-%% SUBSCRIBE on this connection (e.g. wildcard / catalog channels);
-%% silently drop those.
-on_frame(#{frame_type := event, topic := Topic, realm := Realm} = Frame, S) ->
-    on_inbound_event(check_publisher_sig(Frame), Realm, Topic, Frame, S);
-%% Inbound CALL — relay forwarded a CALL whose (realm, procedure)
-%% this link advertised. Once the CALL's signature verifies against its
-%% own `caller' (`on_inbound_call/3'), dispatch to the registered handler
-%% and ship the resulting RESULT or call_error frame back over the same
-%% peering connection.
+%% A RESULT or provider ERROR, or a station's relay ERROR, on the control
+%% stream. The request it answers is found by the ids it claims, and the
+%% verifier against that request decides; only a verified answer completes
+%% the pending call, or clears the probe, it names. Routes are one station
+%% long, so a relay error on a link is reported by the station it is
+%% connected to.
+on_frame(#{frame_type := Type, reply := _} = Frame, S) when Type =:= result; Type =:= error ->
+    on_claimed_reply(macula_frame:claimed_reply_ids(Frame), Frame, S);
+on_frame(#{frame_type := error, relay_error := _} = Frame, S) ->
+    on_claimed_reply(macula_frame:claimed_reply_ids(Frame), Frame, S);
+%% EVENT — pubsub delivery. The publication the EVENT carries is
+%% verified before fan-out, and its verified fields name the
+%% (realm, topic) the event is delivered to. Stations may push EVENTs
+%% without a prior SUBSCRIBE on this connection (e.g. wildcard /
+%% catalog channels); silently drop those.
+on_frame(#{frame_type := event} = Frame, S) ->
+    on_inbound_event(macula_frame:verify_publication(Frame, S#state.profile,
+                                                      erlang:system_time(millisecond)),
+                     Frame, S);
+%% Inbound CALL — a CALL the station delivered to this link, for a
+%% (realm, procedure) with a registered handler. The request verifies
+%% under the link's profile first; only a verified one reaches the
+%% registered handler. Dispatch to the handler and ship the resulting
+%% RESULT or provider ERROR back over the same peering connection.
 on_frame(#{frame_type := call} = Frame, S) ->
-    on_inbound_call(verify_signed_by(Frame, call_signer(Frame)), Frame, S);
+    on_inbound_call(macula_frame:verify_request(Frame, S#state.profile), Frame, S);
 %% STREAM_OPEN / STREAM_DATA / STREAM_END / STREAM_ERROR / STREAM_REPLY
 %% no longer arrive here — every streaming session travels on its
 %% own dedicated QUIC stream (see PLAN_PER_STREAM_QUIC_ISOLATION.md
@@ -1528,77 +1771,112 @@ on_frame(#{frame_type := call} = Frame, S) ->
 %% anyone. A frame with no `realm' field, or no matching subscriber,
 %% is dropped, same as every overlay frame was before this existed.
 %%
-%% `overlay_relay' is a relayed third-party frame (Phase 3.5): the
-%% station forwarded it here because its `peer' field named US, having
-%% received it from a DIFFERENT connection whose authenticated identity
-%% is `Origin'. Decode the wrapped frame and deliver with `Origin' as
-%% `Meta.sender' — NOT `peer_node_id' (that's the station's own
-%% identity, always wrong for a genuine third-party HyParView peer).
+%% `overlay_relay' is a relayed third-party frame: the station forwards a
+%% frame from another node, and `Origin' is that node's identity as the
+%% station authenticated it. It is delivered to the realm's overlay
+%% subscribers with `Meta.sender' set to `Origin', not `peer_node_id' (the
+%% station's own identity), and `Meta.via' set to the station. The frames
+%% `macula_frame:relayed_without_signature/1' names are taken as they are,
+%% and `Origin' is their sender whatever the frame itself names. A relayed
+%% frame of any other type is dropped and counted as `not_overlay', never
+%% verified and never delivered. The envelope reached this link through its
+%% own connection, which in pq_hybrid checked the station's neighbour
+%% signature on it first.
+%% A payload that is not exactly one frame is dropped and counted
+%% (`relayed_payload/3'), and the link carries on.
 %% Must be matched before the bare `#{realm := Realm}' clause below,
-%% since an `overlay_relay' envelope has no `realm' field of its own.
-%% The wrapped frame is delivered only once its own signature verifies
-%% against `Origin' (`on_relayed_overlay_frame/3').
+%% since an `overlay_relay' envelope has no `realm' field of its own. So
+%% must a GOSSIP, which names its realm only inside its publication
+%% (`direct_gossip/3').
 on_frame(#{frame_type := overlay_relay, peer := Origin, payload := Bytes}, S) ->
-    case macula_frame:decode(Bytes) of
-        {ok, Inner, _Rest} ->
-            on_relayed_overlay_frame(macula_frame:verify(Inner, Origin), Origin, S);
-        {error, _Reason} -> S
-    end;
+    relayed_payload(macula_frame:decode(Bytes), Origin, S);
+on_frame(#{frame_type := plumtree_gossip} = Frame, S) ->
+    direct_gossip(macula_frame:claimed_publication_realm(Frame), Frame, S);
 on_frame(#{realm := Realm} = Frame, S) ->
     deliver_overlay_frame(Realm, Frame, S);
 on_frame(_Frame, S) ->
     S.
 
-deliver_pending(error, _Reply, S) ->
-    %% Unknown call_id (race with timeout, or duplicate reply).
-    S;
-deliver_pending({{From, TRef}, NewP}, Reply, S) ->
-    _ = erlang:cancel_timer(TRef),
-    gen_server:reply(From, Reply),
-    S#state{pending = NewP}.
+on_claimed_reply({ok, #{request_id := RequestId}}, Frame, S) ->
+    answered(held_request(RequestId, S), Frame, S);
+on_claimed_reply({error, Refusal}, _Frame, S) ->
+    refused_reply(Refusal, S).
 
-%% A RESULT or ERROR whose signature does not verify against the identity
-%% it names is dropped before it can complete a pending call or clear a
-%% liveness probe, so the call stays pending for the genuine reply.
-on_reply({ok, _Verified}, CallId, Reply, #state{pending = P} = S) ->
-    case maybe_clear_liveness(CallId, S) of
-        {true, NewS}  -> NewS;
-        {false, NewS} -> deliver_pending(maps:take(CallId, P), Reply, NewS)
-    end;
-on_reply({error, Why}, CallId, _Reply, S) ->
-    logger:warning("[macula_station_link] dropped reply whose signature does"
-                   " not verify against its signer (~p) call_id=~s",
-                   [Why, hex_prefix(CallId)]),
-    S.
+%% The request a claimed request_id names: the outstanding probe's, a pending call's, or none the link holds.
+held_request(RequestId, #state{liveness_outstanding = {RequestId, Request}}) ->
+    {probe, Request};
+held_request(RequestId, #state{pending = Pending}) ->
+    pending_request(RequestId, maps:find(RequestId, Pending)).
+
+pending_request(RequestId, {ok, {From, TRef, Request}}) ->
+    {call, RequestId, From, TRef, Request};
+pending_request(_RequestId, error) ->
+    unknown_request.
+
+answered({probe, Request}, Frame, S) ->
+    probe_answered(verified_answer(Frame, Request, S), S);
+answered({call, RequestId, From, TRef, Request}, Frame, S) ->
+    call_answered(verified_answer(Frame, Request, S), RequestId, From, TRef, S);
+answered(unknown_request, _Frame, S) ->
+    refused_reply(unknown_request, S).
+
+%% A provider's reply verifies against the request, with responded_by its target. A relay error verifies against the
+%% request and must be reported by the station this link is connected to.
+verified_answer(#{reply := _} = Frame, Request, #state{profile = Profile}) ->
+    macula_frame:verify_reply(Frame, Request, Profile);
+verified_answer(#{relay_error := _} = Frame, Request, #state{profile = Profile, peer_node_id = Station}) ->
+    macula_frame:verify_relay_error(Frame, Request, Profile, Station).
+
+probe_answered({ok, _Verified}, S) ->
+    S#state{liveness_outstanding = undefined, liveness_misses = 0};
+probe_answered({error, Refusal}, S) ->
+    refused_reply(Refusal, S).
+
+%% A verified answer completes the call; a refused one leaves it pending.
+call_answered({ok, Fields}, RequestId, From, TRef, #state{pending = P} = S) ->
+    _ = erlang:cancel_timer(TRef),
+    gen_server:reply(From, call_result(Fields)),
+    S#state{pending = maps:remove(RequestId, P)};
+call_answered({error, Refusal}, _RequestId, _From, _TRef, S) ->
+    refused_reply(Refusal, S).
+
+%% What a verified answer means to its caller. A provider's code and detail
+%% reach the caller as the binaries they arrived as, so nothing a provider
+%% sends takes the shape of a reason the link or the pool builds itself. A
+%% relay error names its code from a closed set.
+call_result(#{frame_type := result, payload := Payload}) ->
+    {ok, Payload};
+call_result(#{frame_type := error, reported_by := _, code := Code}) ->
+    {error, {call_error, Code, undefined}};
+call_result(#{frame_type := error, code := ?HANDLER_ERROR_CODE, detail := Detail}) ->
+    {error, Detail};
+call_result(#{frame_type := error, code := Code} = Fields) ->
+    {error, {call_error, Code, maps:get(detail, Fields, undefined)}}.
+
+%% A refused reply changes nothing but its count, and the log hears of it at most once a window.
+refused_reply(Refusal, #state{refused_replies = Report} = S) ->
+    Refused = macula_refusal_report:refused(Report, Refusal, erlang:monotonic_time(millisecond)),
+    S#state{refused_replies = logged_refused_reply(Refused, Refusal)}.
+
+logged_refused_reply({report, Count, Report}, Refusal) ->
+    logger:warning("[macula_station_link] refused ~b reply frame(s): ~p", [Count, Refusal]),
+    Report;
+logged_refused_reply({quiet, Report}, _Refusal) ->
+    Report.
 
 %% A CALL whose signature does not verify against its own `caller' never
 %% reaches its handler and gets no reply.
-on_inbound_call({ok, _Verified}, Frame, S) ->
-    handle_inbound_call(Frame, S),
+on_inbound_call({ok, _Verified} = VerifiedRequest, _Frame, S) ->
+    handle_inbound_call(VerifiedRequest, S),
     S;
-on_inbound_call({error, Why}, Frame, S) ->
-    logger:warning("[macula_station_link] dropped inbound CALL whose signature"
-                   " does not verify against its caller (~p) procedure=~p",
-                   [Why, maps:get(procedure, Frame, undefined)]),
+on_inbound_call({error, Why}, _Frame, S) ->
+    logger:warning("[macula_station_link] dropped inbound CALL whose request"
+                   " does not verify (~p)", [Why]),
     S.
-
-%% The identity a frame names as its signer: `responded_by' on a RESULT,
-%% `reported_by' on an ERROR (the same two fields
-%% `macula_station_peer_observer' verifies a reply against before relaying
-%% it), `caller' on a CALL.
-reply_signer(#{responded_by := <<_:256>> = Pub}) -> {ok, Pub};
-reply_signer(#{reported_by := <<_:256>> = Pub})  -> {ok, Pub};
-reply_signer(_Frame)                            -> {error, no_signer}.
-
-call_signer(#{caller := <<_:256>> = Pub}) -> {ok, Pub};
-call_signer(_Frame)                      -> {error, no_signer}.
-
-verify_signed_by(Frame, {ok, Pub})       -> macula_frame:verify(Frame, Pub);
-verify_signed_by(_Frame, {error, _} = E) -> E.
 
 on_timeout(error, S) ->
     {noreply, S};
-on_timeout({{From, _OldTRef}, NewP}, S) ->
+on_timeout({{From, _OldTRef, _Request}, NewP}, S) ->
     gen_server:reply(From, {error, timeout}),
     {noreply, S#state{pending = NewP}}.
 
@@ -1609,14 +1887,34 @@ open_content_stream_result({ok, Stream}, Bufs, S) ->
 open_content_stream_result({error, _} = E, _Bufs, S) ->
     {reply, E, S}.
 
-send_on_content_stream(Stream, Frame, Id) ->
-    try macula_peering:send_on_stream(Stream, Frame, Id)
+send_on_content_stream(Stream, CallSpec, Id) ->
+    try content_call_sent(Stream, CallSpec, Id)
     catch C:R -> {error, {C, R}}
     end.
 
-await_content_call_reply(ok, Stream, From, Tmo, Pending, S) ->
+content_call_sent(Stream, CallSpec, Id) ->
+    case macula_frame:stream_bytes({call, CallSpec}, Id) of
+        {ok, Built} ->
+            Bytes = macula_frame:written_bytes(Built),
+            content_call_written(macula_peering:send_on_stream(Stream, Bytes),
+                                 CallSpec, Id);
+        {error, _} = Refused -> Refused
+    end.
+
+content_call_written(ok, CallSpec, Id) -> {ok, content_request(CallSpec, Id)};
+content_call_written({error, _} = E, _CallSpec, _Id) -> E.
+
+%% The request data a content reply verifies against: the id, the hash
+%% of the request's signed tbs, and the target the reply must report.
+content_request(CallSpec, Id) ->
+    #{request := #{tbs := Tbs}} = macula_frame:call(CallSpec, Id),
+    #{request_id   => maps:get(request_id, CallSpec),
+      request_hash => crypto:hash(sha384, Tbs),
+      target       => maps:get(target, CallSpec)}.
+
+await_content_call_reply({ok, Request}, Stream, From, Tmo, Pending, S) ->
     TRef = erlang:send_after(Tmo, self(), {content_call_timeout, Stream}),
-    {noreply, S#state{content_pending = Pending#{Stream => {From, TRef}}}};
+    {noreply, S#state{content_pending = Pending#{Stream => {From, TRef, Request}}}};
 await_content_call_reply({error, _} = Refused, _Stream, _From, _Tmo, _Pending, S) ->
     {reply, Refused, S}.
 
@@ -1626,18 +1924,37 @@ on_content_timeout({{From, _OldTRef}, NewCP}, S) ->
     gen_server:reply(From, {error, timeout}),
     {noreply, S#state{content_pending = NewCP}}.
 
-dispatch_content_frame(#{frame_type := result, payload := Payload}, Stream, S) ->
-    deliver_content_reply(Stream, {ok, Payload}, S);
-dispatch_content_frame(#{frame_type := error} = Frame, Stream, S) ->
-    deliver_content_reply(Stream, call_failure(maps:get(code, Frame, 0),
-                                               maps:get(name, Frame, undefined),
-                                               maps:get(detail, Frame, undefined)),
-                          S);
+dispatch_content_frame(#{frame_type := Type} = Frame, Stream, S)
+  when Type =:= result; Type =:= error ->
+    verify_content_reply(Frame, Stream, S);
 dispatch_content_frame(_Frame, _Stream, S) ->
     %% Anything else arriving on a content stream is a protocol
     %% violation — this side only ever sends CALL on one, so the only
     %% legitimate replies are RESULT/ERROR.
     S.
+
+%% A reply on a content stream verifies against the request the stream
+%% carries; one that does not ends the stream and fails the call
+%% waiting on it, naming the refusal.
+verify_content_reply(Frame, Stream, #state{content_pending = CP, profile = Profile} = S) ->
+    case maps:find(Stream, CP) of
+        {ok, {_From, _TRef, Request}} ->
+            content_reply_verified(macula_frame:verify_reply(Frame, Request, Profile),
+                                   Stream, S);
+        error ->
+            S
+    end.
+
+content_reply_verified({ok, Fields}, Stream, S) ->
+    deliver_content_reply(Stream, content_reply_result(Fields), S);
+content_reply_verified({error, Refusal}, Stream, S) ->
+    teardown_content_stream_state(Stream, {error, Refusal},
+                                  fun macula_quic:close_stream/1, S).
+
+content_reply_result(#{frame_type := result, payload := Payload}) ->
+    {ok, Payload};
+content_reply_result(#{frame_type := error, code := Code} = Fields) ->
+    {error, {call_error, Code, maps:get(detail, Fields, undefined)}}.
 
 %% What `macula_frame:parse_received/1' gave for a content stream, handled as
 %% `dedicated_items/3' handles a dedicated stream's: a reply that does not
@@ -1673,7 +1990,7 @@ reply_content_pending(error, _Reply, S) ->
     %% No caller waiting (race with timeout, or a stray reply after
     %% `close_content_stream/2' already failed it).
     S;
-reply_content_pending({{From, TRef}, NewCP}, Reply, S) ->
+reply_content_pending({{From, TRef, _Request}, NewCP}, Reply, S) ->
     _ = erlang:cancel_timer(TRef),
     gen_server:reply(From, Reply),
     S#state{content_pending = NewCP}.
@@ -1697,7 +2014,7 @@ teardown_content_stream_state(Stream, LocalFailReason, CloseFun,
 
 fail_content_pending(error, CP, _Reason) ->
     CP;
-fail_content_pending({{From, TRef}, NewCP}, _CP, Reason) ->
+fail_content_pending({{From, TRef, _Request}, NewCP}, _CP, Reason) ->
     _ = erlang:cancel_timer(TRef),
     gen_server:reply(From, Reason),
     NewCP.
@@ -1707,7 +2024,7 @@ fail_all_pending(Reason, #state{pending = P, subscriptions = Subs,
                                 client_streams = CS,
                                 server_streams = SS,
                                 content_pending = ContentP} = S) ->
-    maps:foreach(fun(_CallId, {From, TRef}) ->
+    maps:foreach(fun(_RequestId, {From, TRef, _Request}) ->
         _ = erlang:cancel_timer(TRef),
         gen_server:reply(From, {error, Reason})
     end, P),
@@ -1731,7 +2048,7 @@ fail_all_pending(Reason, #state{pending = P, subscriptions = Subs,
     %% transient handler processes see the abort and exit.
     AbortFun = fun(_Sid, {Pid, Mon, Stream}) ->
         erlang:demonitor(Mon, [flush]),
-        close_dedicated_stream(Stream),
+        close_dedicated_stream(Stream, S),
         abort_stream_process(Pid, Reason)
     end,
     maps:foreach(AbortFun, CS),
@@ -1739,12 +2056,16 @@ fail_all_pending(Reason, #state{pending = P, subscriptions = Subs,
     %% Content streams have no paired process to abort — just reclaim
     %% the QUIC resource, same as `close_content_stream_state/2' does
     %% on a normal close.
-    maps:foreach(fun(Stream, _Buf) -> close_dedicated_stream(Stream) end,
+    maps:foreach(fun(Stream, _Buf) -> close_dedicated_stream(Stream, S) end,
                 S#state.content_stream_bufs),
+    %% A stream the peer opened that brought no whole frame yet carries no
+    %% session to abort either.
+    maps:foreach(fun(Stream, _Buf) -> close_dedicated_stream(Stream, S) end,
+                S#state.opening_bufs),
     S#state{pending = #{}, subscriptions = #{}, topic_index = #{},
             overlay_subscriptions = #{}, overlay_realm_index = #{},
             client_streams = #{}, server_streams = #{}, stream_bufs = #{},
-            content_pending = #{}, content_stream_bufs = #{}}.
+            opening_bufs = #{}, content_pending = #{}, content_stream_bufs = #{}}.
 
 abort_stream_process(Pid, Reason) ->
     try
@@ -1760,10 +2081,12 @@ abort_stream_process(Pid, Reason) ->
 %%      via macula_peering — emits `disconnected', station_link stops,
 %%      pool respawns.
 %%   2. Otherwise (or after counting the miss), send a fresh probe
-%%      (CALL with procedure `_macula.ping' on the DHT realm). The
-%%      station has no such handler, so it replies with an `error'
-%%      frame (`unknown_next_peer'). Either response shape clears the
-%%      outstanding slot via `maybe_clear_liveness/2'.
+%%      (CALL with procedure `_macula.ping' on the DHT realm), and keep
+%%      its request. The station answers with a RESULT, or with a relay
+%%      ERROR (`unknown_next_peer') when it has no such handler. Either
+%%      clears the outstanding slot once it verifies against the probe's
+%%      request (`on_claimed_reply/3'); any other reply is counted in
+%%      `refused_replies' and clears nothing.
 %%   3. Re-arm the timer.
 %% Connect watchdog helpers. Bounds the time from "peering worker
 %% spawned" to "handshake complete". See the record field docs.
@@ -1806,16 +2129,6 @@ cancel_liveness_timer(#state{liveness_timer = Ref} = S) when is_reference(Ref) -
     _ = erlang:cancel_timer(Ref, [{async, true}, {info, false}]),
     S#state{liveness_timer = undefined}.
 
-%% Called on every inbound RESULT / ERROR. If the call_id matches the
-%% outstanding liveness probe, reset miss counter; tells the caller
-%% (on_frame) not to deliver to user-pending logic.
-maybe_clear_liveness(CallId, #state{liveness_outstanding = CallId} = S)
-        when CallId =/= undefined ->
-    {true, S#state{liveness_outstanding = undefined,
-                   liveness_misses = 0}};
-maybe_clear_liveness(_CallId, S) ->
-    {false, S}.
-
 on_liveness_tick(#state{peer_pid = undefined} = S) ->
     %% Not connected — don't probe, don't re-arm.
     cancel_liveness(S);
@@ -1833,7 +2146,7 @@ on_liveness_tick(S0) ->
 on_outstanding_check(undefined, S) ->
     %% No prior probe pending; nothing to count.
     S;
-on_outstanding_check(_CallId, S) ->
+on_outstanding_check(_Probe, S) ->
     %% Prior probe never got a reply within the tick interval.
     Misses = S#state.liveness_misses + 1,
     case Misses >= S#state.liveness_max_misses of
@@ -1852,21 +2165,18 @@ trigger_zombie_close(#state{peer_pid = Pid} = S) when is_pid(Pid) ->
 trigger_zombie_close(S) ->
     S.
 
-send_probe(#state{peer_pid = Pid, identity = Id} = S) when is_pid(Pid) ->
-    CallId = crypto:strong_rand_bytes(16),
-    Caller = macula_identity:public(Id),
-    DeadlineMs = erlang:system_time(millisecond) + S#state.liveness_interval_ms,
-    Frame = macula_frame:call(#{
-        call_id     => CallId,
-        procedure   => ?LIVENESS_PROCEDURE,
-        realm       => ?DHT_REALM,
-        payload     => #{},
-        deadline_ms => DeadlineMs,
-        caller      => Caller
-    }),
-    Signed = macula_frame:sign(Frame, Id),
-    try macula_peering:send_frame(Pid, Signed) catch _:_ -> ok end,
-    S#state{liveness_outstanding = CallId};
+%% The probe is a request to the station the link is connected to, signed with the node identity key. The link keeps its
+%% request_id and the request as a verifier reads it, which a reply to the probe is checked against.
+send_probe(#state{peer_pid = Pid, peer_node_id = Station, node_identity = Key, profile = Profile} = S)
+  when is_pid(Pid) ->
+    RequestId = crypto:strong_rand_bytes(16),
+    Probe = macula_frame:call(#{request_id => RequestId, realm => ?DHT_REALM, procedure => ?LIVENESS_PROCEDURE,
+                                target => Station,
+                                deadline => erlang:system_time(millisecond) + S#state.liveness_interval_ms,
+                                payload => #{}}, Key),
+    {ok, Request} = macula_frame:verify_request(Probe, Profile),
+    try macula_peering:send_frame(Pid, Probe) catch _:_ -> ok end,
+    S#state{liveness_outstanding = {RequestId, Request}};
 send_probe(S) ->
     S.
 
@@ -1895,7 +2205,7 @@ on_empty_set(false, Key,  Set, Idx) -> Idx#{Key => Set}.
 on_unsubscribe(SubRef, #state{subscriptions = Subs,
                               topic_index   = Idx,
                               peer_pid      = Pid,
-                              identity      = Id} = S) ->
+                              node_identity = Id} = S) ->
     on_unsubscribe_take(maps:take(SubRef, Subs), SubRef, Idx, Pid, Id, S).
 
 on_unsubscribe_take(error, _SubRef, _Idx, _Pid, _Id, S) ->
@@ -1910,7 +2220,7 @@ on_unsubscribe_take({{Realm, Topic, _Subscriber, Mon}, NewSubs},
 send_unsubscribe(undefined, _Realm, _Topic, _Id) ->
     ok;
 send_unsubscribe(Pid, Realm, Topic, Id) ->
-    SubKey = macula_identity:public(Id),
+    SubKey = node_id(Id),
     Frame  = macula_frame:unsubscribe(#{topic      => Topic,
                                         realm      => Realm,
                                         subscriber => SubKey}),
@@ -1920,9 +2230,8 @@ send_unsubscribe(Pid, Realm, Topic, Id) ->
 %% Send a SUBSCRIBE frame for `(Realm, Topic)' iff peering is connected.
 %% Must gate on `peer_node_id' (set only once the CONNECT/HELLO handshake
 %% completes), not `peer_pid' (set the moment `macula_peering:connect/1'
-%% returns, before handshaking finishes) -- matches `is_connected/1' and
-%% mirrors `maybe_send_advertise/3'/`maybe_send_unadvertise/3' below,
-%% which already gate correctly. Gating on `peer_pid' alone let a
+%% returns, before handshaking finishes) -- matches `is_connected/1'.
+%% Gating on `peer_pid' alone let a
 %% SUBSCRIBE frame through mid-handshake, where the peering statem has no
 %% clause for `cast({send_frame, _})' and silently drops it via
 %% `drop_unexpected' (logged as `_macula.peering.unexpected_event') --
@@ -1936,8 +2245,8 @@ maybe_send_subscribe(_Realm, _Topic, #state{peer_pid = undefined}) ->
     ok;
 maybe_send_subscribe(_Realm, _Topic, #state{peer_node_id = undefined}) ->
     ok;
-maybe_send_subscribe(Realm, Topic, #state{peer_pid = Pid, identity = Id}) ->
-    SubKey = macula_identity:public(Id),
+maybe_send_subscribe(Realm, Topic, #state{peer_pid = Pid, node_identity = Id}) ->
+    SubKey = node_id(Id),
     Frame  = macula_frame:subscribe(#{topic      => Topic,
                                       realm      => Realm,
                                       subscriber => SubKey}),
@@ -2013,42 +2322,137 @@ on_overlay_unsubscribe_take({{Realm, _Subscriber, Mon}, NewSubs}, SubRef, Idx, S
 %% genuinely arrived directly from the connected peer.
 deliver_overlay_frame(Realm, Frame, #state{overlay_realm_index = Idx,
                                            peer_node_id        = PeerNodeId} = S) ->
-    deliver_overlay_frame_to(maps:find(Realm, Idx), Frame, PeerNodeId, S),
+    deliver_overlay_frame_to(maps:find(Realm, Idx), Frame, #{sender => PeerNodeId}, S),
     S.
 
-%% Phase 3.5: a relayed third-party frame arrived wrapped in an
-%% `overlay_relay' envelope. `Sender' is the envelope's own `peer' field
-%% (the station-authenticated origin of the ORIGINAL frame), never this
-%% connection's own `peer_node_id' — that would always be the station's
-%% identity, not the logical HyParView peer. See `on_frame/2''s
-%% `overlay_relay' clause.
-deliver_overlay_frame_from(Sender, #{realm := Realm} = Frame,
-                           #state{overlay_realm_index = Idx} = S) ->
-    deliver_overlay_frame_to(maps:find(Realm, Idx), Frame, Sender, S),
+%% A GOSSIP from the connected peer goes to the subscribers of the realm
+%% its publication claims, read without verifying: they verify it. The
+%% peer sent it, so what the link refuses goes to its connection: a
+%% publication that names no realm as malformed_frame, which is charged,
+%% and a realm with no subscriber on this link as no_subscriber, which is
+%% not.
+direct_gossip({ok, Realm}, Frame, #state{overlay_realm_index = Idx} = S) ->
+    direct_gossip_delivered(maps:find(Realm, Idx), Frame, S);
+direct_gossip({error, no_realm}, _Frame, S) ->
+    connection_refused(malformed_frame, S).
+
+direct_gossip_delivered({ok, _Set} = Found, Frame, #state{peer_node_id = PeerNodeId} = S) ->
+    deliver_overlay_frame_to(Found, Frame, #{sender => PeerNodeId}, S),
     S;
-deliver_overlay_frame_from(_Sender, _Frame, S) ->
-    %% Wrapped frame carries no `realm' — nothing to route on, same as
-    %% the bare-frame catch-all in on_frame/2.
-    S.
+direct_gossip_delivered(error, _Frame, S) ->
+    connection_refused(no_subscriber, S).
 
-%% The inner frame of an `overlay_relay' is signed by the peer that emitted
-%% it, and `Origin' is that peer's identity as the station authenticated
-%% it. Every HyParView frame `macula_hyparview_proto' emits is signed with
-%% the emitting peer's own identity, the one its link connects with, so a
-%% genuine relayed frame verifies here. One that does not is dropped.
+%% A relayed third-party frame arrived wrapped in an `overlay_relay'
+%% envelope. `Origin' is the envelope's own `peer' field (the
+%% station-authenticated origin of the ORIGINAL frame), never this
+%% connection's own `peer_node_id', which is the station's identity and
+%% goes in `via'. The frame goes to the subscribers of its realm: its own
+%% `realm' field, or for a GOSSIP the realm its publication claims, read
+%% without verifying. A frame that names no realm is counted as no_realm,
+%% and one for a realm with no subscriber on this link as no_subscriber, so
+%% a relayed frame taken is always delivered or counted.
+relayed_routed({ok, Realm}, Frame, Origin, #state{overlay_realm_index = Idx} = S) ->
+    relayed_delivered(maps:find(Realm, Idx), Frame, Origin, S);
+relayed_routed({error, no_realm}, _Frame, Origin, S) ->
+    refused_relay(no_realm, Origin, S).
+
+relayed_delivered({ok, _Set} = Found, Frame, Origin, #state{peer_node_id = Station} = S) ->
+    deliver_overlay_frame_to(Found, Frame, #{sender => Origin, via => Station}, S),
+    S;
+relayed_delivered(error, _Frame, Origin, S) ->
+    refused_relay(no_subscriber, Origin, S).
+
+%% The realm an overlay frame is routed by.
+overlay_realm(#{frame_type := plumtree_gossip} = Frame) -> macula_frame:claimed_publication_realm(Frame);
+overlay_realm(#{realm := Realm}) -> {ok, Realm};
+overlay_realm(_Frame) -> {error, no_realm}.
+
+%% A relayed payload is taken only when it is exactly one frame. A payload
+%% shorter than its length header, one that does not decode, and one with
+%% bytes after its frame are dropped and counted by kind.
+relayed_payload({ok, #{frame_type := Type} = Inner, <<>>}, Origin, S) ->
+    on_relayed_overlay_frame(relayed(macula_frame:relayed_without_signature(Type), Inner), Origin, S);
+relayed_payload({ok, _Inner, _Trailing}, Origin, S) ->
+    refused_relay(trailing_bytes, Origin, S);
+relayed_payload({more, _Needed}, Origin, S) ->
+    refused_relay(truncated, Origin, S);
+relayed_payload({error, Why}, Origin, S) ->
+    refused_relay(decode_refusal(Why), Origin, S).
+
+%% The kind a payload that does not decode is counted under: one of a fixed
+%% set, never a term of the payload. An error decode/1 comes to name later
+%% counts as bad_frame, so no relayed payload takes the link down.
+decode_refusal({invalid_frame, _Type, _Field}) -> invalid_frame;
+decode_refusal(Kind) when Kind =:= frame_too_large; Kind =:= too_many_elements -> Kind;
+decode_refusal(_BadFrame) -> bad_frame.
+
+%% A relayed frame of a type `macula_frame:relayed_without_signature/1'
+%% names is taken as it is; a frame of any other type is not taken.
+relayed(true, Inner) -> {ok, Inner};
+relayed(false, _Inner) -> not_overlay.
+
+%% A relayed frame taken is routed by its realm, with `Origin' as its
+%% sender (`relayed_routed/4'). A frame of any other type is dropped and
+%% counted as `not_overlay'.
 on_relayed_overlay_frame({ok, Inner}, Origin, S) ->
-    deliver_overlay_frame_from(Origin, Inner, S);
-on_relayed_overlay_frame({error, Why}, Origin, S) ->
-    logger:warning("[macula_station_link] dropped relayed overlay frame whose"
-                   " signature does not verify against its origin (~p)"
-                   " origin=~s", [Why, hex_prefix(Origin)]),
+    relayed_routed(overlay_realm(Inner), Inner, Origin, S);
+on_relayed_overlay_frame(not_overlay, Origin, S) ->
+    refused_relay(not_overlay, Origin, S).
+
+%% A dropped relayed frame changes nothing but its count, and the log hears of
+%% it at most once a window per kind, with the origin of the frame that reports.
+refused_relay(Kind, Origin, #state{refused_relays = Report} = S) ->
+    Refused = macula_refusal_report:refused(Report, Kind, erlang:monotonic_time(millisecond)),
+    S#state{refused_relays = logged_refused_relay(Refused, Kind, Origin)}.
+
+logged_refused_relay({report, Count, Report}, Kind, Origin) ->
+    logger:warning("[macula_station_link] dropped ~b relayed overlay frame(s): ~p origin=~s",
+                   [Count, Kind, hex_prefix(Origin)]),
+    Report;
+logged_refused_relay({quiet, Report}, _Kind, _Origin) ->
+    Report.
+
+%% A consumer's report of a refused overlay frame (`overlay_frame_refused/3')
+%% reaches the connection only for a kind `macula_frame:charged_refusal/1'
+%% classifies, and only for a frame that provably came from the link's
+%% current peer. Every other report is counted on the link, under the kind's
+%% name, or as unknown_refusal for a kind no rule classifies.
+overlay_refusal(unclassified, Meta, _Kind, S) ->
+    refused_relay(unknown_refusal, reported_sender(Meta), S);
+overlay_refusal(_Classified, Meta, Kind, S) ->
+    reported_refusal(from_current_peer(Meta, S), Meta, Kind, S).
+
+reported_refusal(true, _Meta, Kind, S) ->
+    connection_refused(Kind, S);
+reported_refusal(false, Meta, Kind, S) ->
+    refused_relay(refusal_name(Kind), reported_sender(Meta), S).
+
+%% A frame provably came from the current peer when its Meta has no via and
+%% names that peer's node_id as sender, while the link has a connection. A
+%% link still connecting has no peer node_id yet, so no report charges it.
+from_current_peer(#{sender := Peer} = Meta, #state{peer_pid = Conn, peer_node_id = Peer}) when is_binary(Peer) ->
+    is_pid(Conn) andalso not is_map_key(via, Meta);
+from_current_peer(_Meta, _S) ->
+    false.
+
+refusal_name({Name, _Amount}) -> Name;
+refusal_name(Name) -> Name.
+
+reported_sender(#{sender := Sender}) -> Sender;
+reported_sender(_Meta) -> undefined.
+
+%% A refusal of a frame from the connected peer goes to its connection,
+%% which counts it and charges it as `macula_frame:charged_refusal/1' says.
+connection_refused(Kind, #state{peer_pid = Conn} = S) when is_pid(Conn) ->
+    ok = macula_peering:object_refused(Conn, Kind),
+    S;
+connection_refused(_Kind, S) ->
     S.
 
-deliver_overlay_frame_to(error, _Frame, _Sender, _S) ->
+deliver_overlay_frame_to(error, _Frame, _Meta, _S) ->
     ok;
-deliver_overlay_frame_to({ok, Set}, Frame, Sender,
+deliver_overlay_frame_to({ok, Set}, Frame, Meta,
                          #state{overlay_subscriptions = Subs}) ->
-    Meta = #{sender => Sender},
     sets:fold(fun(SubRef, _) ->
         fan_overlay_frame(maps:find(SubRef, Subs), SubRef, Frame, Meta)
     end, ok, Set).
@@ -2059,45 +2463,32 @@ fan_overlay_frame({ok, {_Realm, Subscriber, _Mon}}, SubRef, Frame, Meta) ->
     Subscriber ! {macula_overlay_frame, SubRef, Frame, Meta},
     ok.
 
-%% Pubsub Phase 2 — verify the publisher-end-to-end signature on an
-%% inbound EVENT if it carries one (a relay propagates `publisher_sig'
-%% when the original publisher had `pubsub_emit_publisher_sig'
-%% enabled). No `publisher_sig' on the frame → nothing to check
-%% (feature off everywhere, or a legacy relay).
-check_publisher_sig(#{publisher_sig := _} = Frame) ->
-    macula_frame:verify_publisher(Frame);
-check_publisher_sig(_Frame) ->
-    ok.
-
-%% `ok'           — no publisher_sig present → deliver as before.
-%% `{ok, _}'      — publisher_sig verified → deliver.
-%% `{error, Why}' — publisher_sig present but invalid: always warn, and
-%%                  drop unless `pubsub_strict_publisher_sig' is
-%%                  explicitly `false', which delivers it with
-%%                  `publisher_verified => false'.
-%%
-%% The verification OUTCOME itself used to stop here: `deliver_event/4'
-%% got only `Frame', so a subscriber could see `publisher' but never
-%% learn whether its signature checked out — indistinguishable from
-%% "never signed" for anyone downstream trying to weight a fact's
-%% confidence by provenance quality. `not_signed' / `true' / `false'
-%% now rides through to `Meta' as `publisher_verified' precisely so
-%% that distinction survives to the subscriber.
-on_inbound_event(ok, Realm, Topic, Frame, S) ->
-    deliver_event(Realm, Topic, Frame, not_signed, S);
-on_inbound_event({ok, _Verified}, Realm, Topic, Frame, S) ->
-    deliver_event(Realm, Topic, Frame, true, S);
-on_inbound_event({error, Why}, Realm, Topic, Frame, S) ->
-    logger:warning("[macula_pubsub] inbound EVENT publisher_sig invalid (~p)"
-                   " realm=~s topic=~s", [Why, hex_prefix(Realm), Topic]),
-    on_invalid_publisher_sig(
+%% Pubsub — verify the publication an EVENT carries, under the link's
+%% profile, before anything is delivered. A publication that verifies
+%% delivers with `publisher_verified => true'. One that does not is
+%% dropped (the strict default), or, when
+%% `pubsub_strict_publisher_sig' is explicitly `false', delivered with
+%% `publisher_verified => false', its fields read from the publication
+%% without trusting the signature. An EVENT without a publication has
+%% no fields to deliver and is dropped either way.
+on_inbound_event({ok, Verified}, Frame, S) ->
+    deliver_event(Verified, Frame, true, S);
+on_inbound_event({error, Why}, Frame, S) ->
+    logger:warning("[macula_pubsub] inbound EVENT publication invalid (~p)",
+                   [Why]),
+    on_invalid_publication(
       application:get_env(macula, pubsub_strict_publisher_sig, true),
-      Realm, Topic, Frame, S).
+      Frame, S).
 
-on_invalid_publisher_sig(true, _Realm, _Topic, _Frame, S) ->
+on_invalid_publication(true, _Frame, S) ->
     S;
-on_invalid_publisher_sig(_Lenient, Realm, Topic, Frame, S) ->
-    deliver_event(Realm, Topic, Frame, false, S).
+on_invalid_publication(_Lenient, Frame, S) ->
+    on_claimed_publication(macula_frame:claimed_publication(Frame), Frame, S).
+
+on_claimed_publication({ok, Fields}, Frame, S) ->
+    deliver_event(Fields, Frame, false, S);
+on_claimed_publication({error, _}, _Frame, S) ->
+    S.
 
 hex_prefix(B) when is_binary(B), byte_size(B) >= 4 ->
     binary:encode_hex(binary:part(B, 0, 4));
@@ -2106,26 +2497,46 @@ hex_prefix(B) when is_binary(B) ->
 hex_prefix(_) ->
     <<"?">>.
 
-%% Fan an EVENT frame out to every subscriber for that (realm, topic).
-%% `PublisherVerified' is `on_inbound_event/5''s already-computed
-%% signature-check outcome (`not_signed' | `true' | `false') — see its
-%% own doc for why this must ride through rather than be recomputed or
-%% dropped.
-deliver_event(Realm, Topic, Frame, PublisherVerified, #state{topic_index = Idx} = S) ->
-    deliver_event_to(maps:find({Realm, Topic}, Idx), Realm, Topic, Frame,
+%% The publication's hash, for the pool's dedup: the verified
+%% publication carries it; a claimed one (lenient mode) recomputes it
+%% from the tbs the signature covers.
+publication_hash_of(#{publication_hash := Hash}, _Frame) ->
+    Hash;
+publication_hash_of(_Fields, #{publication := #{tbs := Tbs}}) ->
+    crypto:hash(sha384, Tbs).
+
+%% The last moment a verifier accepts the publication: its published_at
+%% plus ttl (10 minutes without one) plus 5 minutes, as verify says.
+publication_expiry(#{expires_at := Expiry}) ->
+    Expiry;
+publication_expiry(#{published_at := PublishedAt} = Fields) ->
+    Ttl = maps:get(ttl_ms, Fields, 600_000),
+    PublishedAt + Ttl + 300_000.
+
+%% Fan an EVENT out to every subscriber for its (realm, topic). The
+%% fields come from the verified (or claimed) publication; the frame
+%% contributes only `delivered_via'. `PublisherVerified' is
+%% `on_inbound_event/3''s already-computed outcome (`true' | `false').
+deliver_event(Fields, Frame, PublisherVerified, #state{topic_index = Idx} = S) ->
+    Realm = maps:get(realm, Fields),
+    Topic = maps:get(topic, Fields),
+    deliver_event_to(maps:find({Realm, Topic}, Idx), Fields, Frame,
                       PublisherVerified, S),
     S.
 
-deliver_event_to(error, _Realm, _Topic, _Frame, _PublisherVerified, _S) ->
+deliver_event_to(error, _Fields, _Frame, _PublisherVerified, _S) ->
     ok;
-deliver_event_to({ok, Set}, Realm, Topic, Frame, PublisherVerified,
+deliver_event_to({ok, Set}, Fields, Frame, PublisherVerified,
                  #state{subscriptions = Subs}) ->
-    Payload = maps:get(payload, Frame),
-    Meta = #{realm              => Realm,
-             publisher          => maps:get(publisher, Frame),
+    Topic = maps:get(topic, Fields),
+    Payload = maps:get(payload, Fields),
+    Meta = #{realm              => maps:get(realm, Fields),
+             publisher          => maps:get(publisher, Fields),
              publisher_verified => PublisherVerified,
-             seq                => maps:get(seq, Frame),
-             delivered_via      => maps:get(delivered_via, Frame, direct)},
+             seq                => maps:get(seq, Fields),
+             delivered_via      => maps:get(delivered_via, Frame, direct),
+             publication_hash   => publication_hash_of(Fields, Frame),
+             expires_at         => publication_expiry(Fields)},
     sets:fold(fun(SubRef, _) ->
         deliver_event_one(SubRef, Topic, Payload, Meta, Subs)
     end, ok, Set).
@@ -2137,44 +2548,6 @@ fan_event(error, _SubRef, _Topic, _Payload, _Meta) ->
     ok;
 fan_event({ok, {_R, _T, Subscriber, _Mon}}, SubRef, Topic, Payload, Meta) ->
     Subscriber ! {macula_event, SubRef, Topic, Payload, Meta},
-    ok.
-
-%%-------------------------------------------------------------------
-%% Advertise helpers
-%%-------------------------------------------------------------------
-
-%% Send an ADVERTISE frame iff peering is connected. Otherwise the
-%% post-HELLO drain replays it. Mirrors `maybe_send_subscribe/3'.
-maybe_send_advertise(_Realm, _Procedure, #state{peer_node_id = undefined}) ->
-    ok;
-maybe_send_advertise(Realm, Procedure,
-                     #state{peer_pid = Pid, identity = Id}) ->
-    Pub = macula_identity:public(Id),
-    Frame = macula_frame:advertise(#{realm      => Realm,
-                                     procedure  => Procedure,
-                                     advertiser => Pub}),
-    try macula_peering:send_frame(Pid, Frame) catch _:_ -> ok end,
-    ok.
-
-%% Best-effort UNADVERTISE on the wire. Disconnected → no-op (the
-%% station purges advertised procedures on peer disconnect anyway).
-maybe_send_unadvertise(_Realm, _Procedure, #state{peer_node_id = undefined}) ->
-    ok;
-maybe_send_unadvertise(Realm, Procedure,
-                       #state{peer_pid = Pid, identity = Id}) ->
-    Pub = macula_identity:public(Id),
-    Frame = macula_frame:unadvertise(#{realm      => Realm,
-                                       procedure  => Procedure,
-                                       advertiser => Pub}),
-    try macula_peering:send_frame(Pid, Frame) catch _:_ -> ok end,
-    ok.
-
-%% On handshake completion, send an ADVERTISE frame for every stored
-%% procedure. Mirrors `drain_pending_subscribes/1'.
-drain_pending_advertises(#state{procedures = Procs} = S) ->
-    maps:foreach(fun({Realm, Procedure}, _Handler) ->
-        maybe_send_advertise(Realm, Procedure, S)
-    end, Procs),
     ok.
 
 %% Inbound CALL — relay forwarded a CALL whose `(realm, procedure)'
@@ -2199,28 +2572,26 @@ drain_pending_advertises(#state{procedures = Procs} = S) ->
 %% link to this process and a peer gone by reply time is harmless.
 %%
 %% A handler crash maps to BOLT#4 `temporary_relay_failure' (0x02);
-%% an unknown `(realm, procedure)' (race between UNADVERTISE in
-%% flight and a stale forwarded CALL) maps to `unknown_next_peer'
+%% an unknown `(realm, procedure)' (no handler registered on this
+%% link) maps to `unknown_next_peer'
 %% (0x01) — same taxonomy as `hecate_handler_dispatch'.
-handle_inbound_call(#{call_id := CallId, procedure := Proc, realm := Realm,
-                      payload := Payload} = Frame,
-                    #state{procedures = Procs, policies = Pols, identity = Id,
+handle_inbound_call({ok, #{request_id := _CallId, procedure := Proc, realm := Realm,
+                            payload := Payload} = Request},
+                    #state{procedures = Procs, policies = Pols, node_identity = Id,
                            peer_pid = Pid}) when is_pid(Pid) ->
-    SelfPub = macula_identity:public(Id),
     %% Gate first (Slice 7b): an `open' procedure serves any identified
-    %% caller; a gated one requires a valid `ucan_token', else refuse
+    %% caller; a gated one requires a valid `token', else refuse
     %% with BOLT#4 `unauthorized' instead of invoking the handler.
-    Verdict = authorize({Realm, Proc}, Frame, Pols),
+    Verdict = authorize({Realm, Proc}, Request, Pols),
     Found   = maps:find({Realm, Proc}, Procs),
-    PayloadWithCaller = with_caller(Payload, maps:get(caller, Frame, undefined)),
+    PayloadWithCaller = with_caller(Payload, maps:get(caller, Request, undefined)),
     _ = spawn(fun() ->
-            Reply = authorized_reply(Verdict, Found, CallId,
-                                     PayloadWithCaller, SelfPub),
+            Reply = inbound_reply(Verdict, Found, Request, PayloadWithCaller, Id),
             sent_or_faulted(macula_peering:send_frame(Pid, Reply),
-                            Pid, CallId, SelfPub)
+                            Pid, Request, Id)
         end),
     ok;
-handle_inbound_call(_Frame, _State) ->
+handle_inbound_call(_VerifiedRequest, _State) ->
     ok.
 
 %% The CALL frame carries `caller' (a required, wire-authenticated field,
@@ -2246,12 +2617,21 @@ with_caller(Payload, Caller) when is_map(Payload), Caller =/= undefined ->
 with_caller(Payload, _Caller) ->
     Payload.
 
-authorized_reply(ok, Found, CallId, Payload, SelfPub) ->
-    build_inbound_call_reply(Found, CallId, Payload, SelfPub);
-authorized_reply(unauthorized, _Found, CallId, _Payload, SelfPub) ->
-    macula_frame:call_error(#{call_id     => CallId,
-                              code        => macula_bolt4:code(unauthorized),
-                              reported_by => SelfPub}).
+%% The handler's reply, or a provider error when the reply frame
+%% refused to build: the unsendable handler result's fault code.
+inbound_reply(Verdict, Found, Request, Payload, Key) ->
+    try authorized_reply(Verdict, Found, Request, Payload, Key)
+    catch
+        error:Reason ->
+            macula_frame:provider_error(#{request => Request,
+                                          code => fault_code(Reason)}, Key)
+    end.
+
+authorized_reply(ok, Found, Request, Payload, Key) ->
+    build_inbound_call_reply(Found, Request, Payload, Key);
+authorized_reply(unauthorized, _Found, Request, _Payload, Key) ->
+    macula_frame:provider_error(#{request => Request, code => <<"unauthorized">>},
+                                Key).
 
 authorize(Key, Frame, Pols) ->
     authorize_policy(maps:get(Key, Pols, open), Frame).
@@ -2259,10 +2639,10 @@ authorize(Key, Frame, Pols) ->
 authorize_policy(open, _Frame) ->
     ok;
 authorize_policy({ucan_required, Issuer}, Frame) ->
-    check_ucan(maps:get(ucan_token, Frame, <<>>), Issuer,
+    check_ucan(maps:get(token, Frame, <<>>), Issuer,
                maps:get(caller, Frame, undefined));
 authorize_policy({realm_member_required, RealmDid, RequiredCan}, Frame) ->
-    check_realm_membership(maps:get(ucan_token, Frame, <<>>), RealmDid,
+    check_realm_membership(maps:get(token, Frame, <<>>), RealmDid,
                             maps:get(caller, Frame, undefined), RequiredCan).
 
 %% `macula_ucan_nif:verify/2' checks signature + `exp' + `nbf' only. It does
@@ -2272,11 +2652,9 @@ authorize_policy({realm_member_required, RealmDid, RequiredCan}, Frame) ->
 %% token's audience to be the caller, through `audience_is_caller/2'.
 %% Without that, any token a caller obtained a copy of -- not necessarily
 %% its own -- would authorize as if it were the caller it was minted for.
-%% `Caller' is the frame's own `caller' field: `on_inbound_call/3' lets a
-%% CALL through to `handle_inbound_call/2', and `on_inbound_stream_open/4'
-%% lets a STREAM_OPEN through to `authorize/3', only once the frame's
-%% signature verifies against that same `caller', so by the time these
-%% checks run `Caller' is the identity that signed the frame.
+%% `Caller' is the verified request's `caller', the key id of the key its
+%% signature verified under, so by the time these checks run `Caller' is the
+%% identity that signed the request. The token is the request's `token'.
 check_ucan(Token, Issuer, Caller)
   when is_binary(Token), Token =/= <<>>, is_binary(Caller) ->
     ucan_verdict(macula_ucan_nif:verify(Token, Issuer), Caller);
@@ -2325,11 +2703,9 @@ membership_verdict(_Result, _Caller, _RequiredCan) ->
     unauthorized.
 
 %% The one audience check both gated policies share. A token names its
-%% audience as that identity's public key, hex-encoded in lowercase (as
-%% `macula-realm''s `RealmUcanIssuer.mint_membership/2' does); `Caller' is
-%% the same identity's raw wire public key, so hex-encoding it the same way
-%% makes the two directly comparable. A token without a binary `aud' has no
-%% audience to match.
+%% audience as the caller's key id, hex-encoded in lowercase; `Caller' is
+%% that key id, so hex-encoding it the same way makes the two directly
+%% comparable. A token without a binary `aud' has no audience to match.
 audience_is_caller(#{<<"aud">> := Aud}, Caller) when is_binary(Aud) ->
     Aud =:= binary:encode_hex(Caller, lowercase);
 audience_is_caller(_Payload, _Caller) ->
@@ -2358,71 +2734,65 @@ set_policy(Key, Policy, Pols) -> Pols#{Key => Policy}.
 %% the remote caller burning its entire deadline waiting for a frame
 %% that died here, which is a timeout where a taxonomy was available:
 %% the handler's return value was the problem and BOLT#4 can say so.
-%% A `call_error' frame is all binaries and small integers, so it is
-%% sendable by construction and cannot recurse into this path.
-sent_or_faulted(ok, _Pid, _CallId, _SelfPub) ->
+sent_or_faulted(ok, _Pid, _Request, _Key) ->
     ok;
-sent_or_faulted({error, Reason}, Pid, CallId, SelfPub) ->
+sent_or_faulted({error, Reason}, Pid, Request, Key) ->
     logger:error("[macula_station_link] handler result unsendable, "
                  "faulting the call: ~ts", [macula_frame:explain(Reason)]),
     _ = macula_peering:send_frame(
-          Pid, macula_frame:call_error(#{call_id     => CallId,
-                                         code        => refusal_code(Reason),
-                                         reported_by => SelfPub})),
+          Pid, macula_frame:provider_error(#{request => Request,
+                                             code    => fault_code(Reason)}, Key)),
     ok.
 
-refusal_code({unsupported_payload_type, payload_too_large, _Path}) -> 16#0D;
-refusal_code(_Other)                                               -> 16#0F.
+fault_code({unsupported_payload_type, payload_too_large, _Path}) -> <<"payload_too_large">>;
+fault_code(_Other)                                               -> <<"unknown_error">>.
 
 %% Handler not registered locally — synthesise a signed
 %% `unknown_next_peer' BOLT#4 error.
-build_inbound_call_reply(error, CallId, _Payload, SelfPub) ->
-    macula_frame:call_error(#{call_id     => CallId,
-                              code        => 16#01,
-                              reported_by => SelfPub});
-build_inbound_call_reply({ok, Handler}, CallId, Payload, SelfPub) ->
-    safe_invoke_handler(Handler, Payload, CallId, SelfPub).
+build_inbound_call_reply(error, Request, _Payload, Key) ->
+    macula_frame:provider_error(#{request => Request, code => <<"unknown_next_peer">>},
+                                Key);
+build_inbound_call_reply({ok, Handler}, Request, Payload, Key) ->
+    safe_invoke_handler(Handler, Payload, Request, Key).
 
 %% Handler dispatch with crash trap and error-return funnel.
 %%
-%% Two failure paths reach the wire as a BOLT#4 `call_error' frame
+%% Two failure paths reach the wire as a BOLT#4 provider ERROR frame
 %% so the caller observes a reliable taxonomy rather than either
 %%
 %%   * a `{disconnected, killed}' signal when a single bad CALL
 %%     takes the link down, or
 %%   * a successful-looking RESULT frame whose payload was an
 %%     `{error, _}' tuple — the CBOR encoder has no clause for raw
-%%     tuples and crashes the peering gen_statem at frame-sign
-%%     time, dropping every other multiplexed RPC on the same
-%%     connection.
+%%     tuples and crashes the frame build, dropping every other
+%%     multiplexed RPC on the same connection.
 %%
 %% Mapping:
 %%   * handler returns `{error, Reason}' →
-%%     `call_error(code = 0x0F unknown_error,
-%%                 detail = handler_error_detail(Reason))'
+%%     `provider_error(code = <<"unknown_error">>,
+%%                     detail = handler_error_detail(Reason))'
 %%   * handler crashes →
-%%     `call_error(code = 0x02 temporary_relay_failure)'
+%%     `provider_error(code = <<"temporary_relay_failure">>)'
 %%   * handler returns anything else →
 %%     `result(payload = normalise_reply(Reply))'
-safe_invoke_handler(Handler, Payload, CallId, SelfPub) ->
+safe_invoke_handler(Handler, Payload, Request, Key) ->
     try invoke_handler(Handler, Payload) of
         {error, Reason} ->
-            macula_frame:call_error(#{call_id     => CallId,
-                                      code        => 16#0F,
-                                      reported_by => SelfPub,
-                                      detail      => handler_error_detail(Reason)});
+            macula_frame:provider_error(#{request => Request,
+                                          code    => <<"unknown_error">>,
+                                          detail  => handler_error_detail(Reason)},
+                                        Key);
         Reply ->
-            macula_frame:result(#{call_id      => CallId,
-                                  payload      => normalise_reply(Reply),
-                                  responded_by => SelfPub})
+            macula_frame:result(#{request => Request,
+                                  payload => normalise_reply(Reply)}, Key)
     catch
         Class:Reason:Stack ->
             logger:warning(
               "[station_link] handler crashed: ~ts",
               [macula_reason_name:logged("~p:~p~n  stack=~p", [Class, Reason, Stack])]),
-            macula_frame:call_error(#{call_id     => CallId,
-                                      code        => 16#02,
-                                      reported_by => SelfPub})
+            macula_frame:provider_error(#{request => Request,
+                                          code    => <<"temporary_relay_failure">>},
+                                        Key)
     end.
 
 invoke_handler(Fun, Args) when is_function(Fun, 1) ->
@@ -2479,11 +2849,6 @@ detail_or_none(error) -> undefined.
 %% `true' for it, which is right for a genuinely unknown error and wrong
 %% for a handler that has just said no. The spec table is the spec's and
 %% is left alone; a caller who gets the reason back does not need to ask.
-call_failure(16#0F, _Name, Detail) when is_binary(Detail) ->
-    {error, Detail};
-call_failure(Code, Name, _Detail) ->
-    {error, {call_error, Code, Name}}.
-
 %%-------------------------------------------------------------------
 %% Helpers
 %%-------------------------------------------------------------------
@@ -2491,15 +2856,10 @@ call_failure(Code, Name, _Detail) ->
 %% Fold TLS-policy opts (`verify' / `expected_node_id' / `pin_tls_cert')
 %% from the link opts into the seed map, so they reach the peering
 %% target at connect.
+%% The trust keys a seed map names stand, and the link's options fill only the ones it leaves out, so a pool-wide
+%% expected_node_id never replaces a seed's own pin.
 add_tls_opts(Seed, Opts) ->
-    lists:foldl(fun(K, Acc) -> copy_opt(K, Opts, Acc) end,
-                Seed, [verify, expected_node_id, pin_tls_cert]).
-
-copy_opt(K, Opts, Seed) ->
-    case maps:find(K, Opts) of
-        {ok, V} -> Seed#{K => V};
-        error   -> Seed
-    end.
+    maps:merge(maps:with([verify, expected_node_id, pin_tls_cert], Opts), Seed).
 
 parse_seed(#{host := _, port := _} = Map) ->
     Map;
@@ -2519,155 +2879,117 @@ parse_seed(Url) when is_list(Url) ->
 %% Streaming RPC — outbound CALL_STREAM (client-side)
 %%-------------------------------------------------------------------
 
-%% Spawn a client-side `macula_stream' linked to this link, attach
-%% it as a `{remote_via_link, self(), Sid}' peer, then ship the
-%% STREAM_OPEN frame. The caller drives the stream from outside; the
-%% returned pid is bound to the requested `owner' (default = caller)
-%% so a crashing owner tears the stream down.
-open_client_stream(Realm, Proc, Args, Opts, Caller,
-                   #state{peer_pid = Pid, identity = Id} = S) ->
-    Sid       = crypto:strong_rand_bytes(16),
-    Mode      = maps:get(mode, Opts, server_stream),
-    Owner     = maps:get(owner, Opts, Caller),
-    DeadlineMs = maps:get(deadline_ms, Opts,
-                          erlang:system_time(millisecond) + 30_000),
-    {ok, StreamPid} = macula_stream:start_link(#{
-        id    => Sid,
-        role  => client,
-        mode  => Mode,
-        owner => Owner
-    }),
-    ok = macula_stream:attach_to_link(StreamPid, self(), Sid),
+%% A client session's STREAM_OPEN is built, signed and encoded before anything
+%% starts: a build the frame refuses, or an open longer than the limit a
+%% provider reads a stream's first frame by, is refused here, so the caller
+%% learns at once and no stream process or dedicated stream exists for it.
+%% Otherwise the session's stream starts with the link's key as a closure, the
+%% open as its provider verifies it, the peering connection and the profile,
+%% under the request id as its attach id, and the open goes out as the first
+%% bytes on a dedicated stream of its own. The returned pid is bound to the
+%% requested `owner' (default: the caller), so a crashing owner ends it.
+open_client_stream(Target, Realm, Proc, Args, Opts, Caller, #state{node_identity = Key} = S) ->
+    Spec = maps:merge(#{request_id => crypto:strong_rand_bytes(16), realm => Realm, procedure => Proc,
+                        target => target_node_id(Target, S),
+                        deadline => maps:get(deadline_ms, Opts, erlang:system_time(millisecond) + 30_000),
+                        payload => Args, mode => maps:get(mode, Opts, server_stream)},
+                      open_token(maps:get(ucan_token, Opts, <<>>))),
+    open_built(macula_frame:stream_bytes({stream_open, Spec}, Key), Opts, Caller, S).
+
+%% An absent or empty token sends none.
+open_token(<<>>) -> #{};
+open_token(Token) -> #{token => Token}.
+
+open_built({error, Refusal}, _Opts, _Caller, S) ->
+    {reply_value, {error, {refused, Refusal}}, S};
+open_built({ok, Built}, Opts, Caller, S) ->
+    Bytes = macula_frame:written_bytes(Built),
+    open_within_limit(byte_size(Bytes) - 4 =< stream_open_limit(), Bytes, Opts, Caller, S).
+
+open_within_limit(false, _Bytes, _Opts, _Caller, S) ->
+    {reply_value, {error, {open_too_large, stream_open_limit()}}, S};
+open_within_limit(true, Bytes, Opts, Caller, #state{profile = Profile} = S) ->
+    {ok, Frame, <<>>} = macula_frame:decode(Bytes),
+    {ok, Open} = macula_frame:verify_request(Frame, Profile),
+    client_session(attach_id_free(maps:get(request_id, Open), S), Bytes, Open, Opts, Caller, S).
+
+client_session(false, _Bytes, _Open, _Opts, _Caller, S) ->
+    {reply_value, {error, {refused, attach_id_taken}}, S};
+client_session(true, Bytes, #{request_id := AttachId, mode := Mode} = Open, Opts, Caller,
+               #state{peer_pid = Conn, profile = Profile, node_identity = Key} = S) ->
+    {ok, StreamPid} = macula_stream:start_link(#{id => AttachId, role => client, mode => Mode,
+                                                 owner => maps:get(owner, Opts, Caller),
+                                                 key => fun() -> Key end, open => Open, conn => Conn,
+                                                 profile => Profile}),
+    ok = macula_stream:attach_to_link(StreamPid, self(), AttachId),
     Mon = erlang:monitor(process, StreamPid),
-    Frame = macula_frame:stream_open(#{
-        stream_id   => Sid,
-        procedure   => Proc,
-        realm       => Realm,
-        mode        => Mode,
-        args        => Args,
-        deadline_ms => DeadlineMs,
-        caller      => macula_identity:public(Id),
-        ucan_token  => maps:get(ucan_token, Opts, <<>>)
-    }),
-    NewS = open_client_stream_dedicated(Pid, Frame, Sid, StreamPid, Mon, Id, S),
-    {reply_value, {ok, StreamPid}, NewS}.
+    {reply_value, {ok, StreamPid}, client_stream_opened(opened_stream(S), Bytes, AttachId, StreamPid, Mon, S)}.
 
-%% Open this session's dedicated QUIC stream and write STREAM_OPEN as
-%% the first bytes on it — not the shared control stream. If the
-%% dedicated stream can't be opened (connection gone, flow-control
-%% credit exhausted), the `macula_stream' already spawned above gets
-%% a clean error the same way an unknown procedure does on the
-%% inbound side, instead of hanging until its deadline.
-open_client_stream_dedicated(Pid, Frame, Sid, StreamPid, Mon, Id, S) ->
-    dedicated_open_result(macula_peering:open_dedicated_stream(Pid),
-                          Frame, Sid, StreamPid, Mon, Id, S).
+%% Opens this session's dedicated stream on the peering connection.
+opened_stream(#state{open_stream = Open, peer_pid = Conn}) ->
+    try Open(Conn)
+    catch Class:Reason -> {error, {Class, Reason}}
+    end.
 
-dedicated_open_result({ok, Stream}, Frame, Sid, StreamPid, Mon, Id,
-                      #state{stream_bufs = Bufs} = S) ->
-    try macula_peering:send_on_stream(Stream, Frame, Id) catch _:_ -> ok end,
-    CS = S#state.client_streams,
-    S#state{client_streams = CS#{Sid => {StreamPid, Mon, Stream}},
-            %% This stream is bidirectional (`open_bi/1`) — the
-            %% provider's STREAM_DATA/END/ERROR/REPLY arrives back on
-            %% this same stream, so its inbound buffer needs to exist
-            %% now, not just for peer-initiated streams (see the
-            %% `new_dedicated_stream' handler).
-            stream_bufs = Bufs#{Stream => <<>>}};
-dedicated_open_result({error, _Reason}, _Frame, _Sid, StreamPid, Mon, _Id, S) ->
+%% The provider's frames come back on the stream the open goes out on, so its
+%% buffer exists from the start. A dedicated stream that does not open, or an
+%% open that is not written, ends the session as a failed write does.
+client_stream_opened({ok, Stream}, Bytes, AttachId, StreamPid, Mon,
+                     #state{client_streams = CS, stream_bufs = Bufs} = S) ->
+    Opened = S#state{client_streams = CS#{AttachId => {StreamPid, Mon, Stream}}, stream_bufs = Bufs#{Stream => <<>>}},
+    stream_written(written(Stream, Bytes, Opened), StreamPid, AttachId, false, Opened);
+client_stream_opened({error, Reason}, _Bytes, AttachId, StreamPid, Mon, S) ->
     erlang:demonitor(Mon, [flush]),
-    try macula_stream:deliver_error(StreamPid, <<"unavailable">>,
-                                    <<"failed to open dedicated stream">>)
-    catch _:_ -> ok end,
+    StreamPid ! {stream_write_failed, AttachId, Reason},
     S.
+
+%% A session's attach id names it in both session maps, so an id already taken
+%% there is not given to another session.
+attach_id_free(AttachId, #state{client_streams = CS, server_streams = SS}) ->
+    not (is_map_key(AttachId, CS) orelse is_map_key(AttachId, SS)).
 
 %%-------------------------------------------------------------------
 %% Streaming RPC — outbound STREAM_DATA / END / ERROR / REPLY
 %%-------------------------------------------------------------------
 
 %% Each `macula_stream' bound to this link via the
-%% `{remote_via_link, _, Sid}' peer shape casts an outbound frame
-%% spec here. Build the corresponding `macula_frame:stream_*' and
-%% ship through the peering connection. Outbound STREAM_END (full
-%% close), STREAM_ERROR, or STREAM_REPLY also drop the local
-%% routing entry — the stream is finished from our side.
-build_stream_frame(stream_data, Spec)  -> macula_frame:stream_data(Spec);
-build_stream_frame(stream_end, Spec)   -> macula_frame:stream_end(Spec);
-build_stream_frame(stream_error, Spec) -> macula_frame:stream_error(Spec);
-build_stream_frame(stream_reply, Spec) -> macula_frame:stream_reply(Spec).
+%% `{remote_via_link, _, Sid}' peer shape casts the bytes of each frame
+%% it signs here, and the link writes them on the stream's dedicated
+%% QUIC stream. Every open stream session has its own dedicated QUIC
+%% stream by the time anything is outbound on it: `find_stream/2'
+%% returning `error' means the session already tore down (peer closed,
+%% monitor DOWN raced this cast), and there is nothing to write to.
+stream_bytes_sent(error, _Sid, _Bytes, _Last, S) ->
+    S;
+stream_bytes_sent({ok, {Pid, _Mon, Stream}}, Sid, Bytes, Last, S) ->
+    stream_written(written(Stream, Bytes, S), Pid, Sid, Last, S).
 
-%% Every open stream session has its own dedicated QUIC stream by
-%% the time anything is outbound on it — `find_stream/2' returning
-%% `error' here means the session already tore down (peer closed,
-%% monitor DOWN raced this cast); nothing to send to.
-send_on_dedicated_stream(error, _Frame, _Id) ->
-    ok;
-send_on_dedicated_stream({ok, {_Pid, _Mon, Stream}}, Frame, Id) ->
-    try macula_peering:send_on_stream(Stream, Frame, Id) catch _:_ -> ok end.
-
-%% `stream_reply' carries `responded_by' (the link's own pubkey) which
-%% the v1 stream gen_server has no way to know. `stream_data',
-%% `stream_end' and `stream_error' carry `signer' (the emitter's
-%% pubkey) so the station-side verify path can authenticate non-OPEN
-%% stream frames end-to-end across multi-hop relays — same pattern as
-%% CALL's `caller'. Without it, station_B receiving a chunk forwarded
-%% by station_A would verify the signature against station_A's NodeId,
-%% but the frame was signed by the originating daemon, and verify
-%% would fail silently — every cross-station stream chunk dropped.
-finalise_stream_spec(stream_reply, Spec, Id) ->
-    Spec#{responded_by => macula_identity:public(Id)};
-finalise_stream_spec(Type, Spec, Id) when Type =:= stream_data;
-                                          Type =:= stream_end;
-                                          Type =:= stream_error ->
-    Spec#{signer => macula_identity:public(Id)};
-finalise_stream_spec(_Type, Spec, _Id) ->
-    Spec.
-
-%% After sending an outbound terminal frame, drop the local routing
-%% entry — but ONLY when this link owns just one side of the stream.
-%% Same-pool streaming RPC keeps the same Sid in BOTH client_streams
-%% and server_streams (one link is both caller and advertiser, the
-%% relay bounces the frames back); the handler emits STREAM_END
-%% outbound on the server side, and the station then bounces back
-%% server-emitted STREAM_DATA chunks plus the STREAM_END itself.
-%% Dropping on the outbound here would clear the client_streams
-%% entry before any of those bounced inbound frames arrive, and the
-%% caller's recv waiter would silently miss every chunk. Defer to
-%% the inbound terminal handler (`deliver_stream_end' /
-%% `deliver_stream_error' / `deliver_stream_reply') which fires
-%% after the bounce and tears down both entries via `drop_stream'.
-on_outbound_stream_frame(stream_end, #{role := both, stream_id := Sid}, S) ->
-    maybe_drop_outbound(Sid, S);
-on_outbound_stream_frame(stream_error, #{stream_id := Sid}, S) ->
-    maybe_drop_outbound(Sid, S);
-on_outbound_stream_frame(stream_reply, #{stream_id := Sid}, S) ->
-    maybe_drop_outbound(Sid, S);
-on_outbound_stream_frame(_Type, _Spec, S) ->
-    S.
-
-maybe_drop_outbound(Sid, #state{client_streams = CS,
-                                server_streams = SS} = S) ->
-    case {maps:is_key(Sid, CS), maps:is_key(Sid, SS)} of
-        {true, true}  -> S;
-        _             -> drop_stream(Sid, S)
+written(Stream, Bytes, #state{send_on_stream = Send}) ->
+    try Send(Stream, Bytes)
+    catch Class:Reason -> {error, {Class, Reason}}
     end.
 
-%% Terminal frames (stream_end role=both, stream_error, stream_reply)
-%% close the stream from both ends. Drop the Sid from whichever map
-%% holds it, and the dedicated QUIC stream's inbound buffer along
-%% with it — otherwise `stream_bufs' leaks one entry per finished
-%% session. Same-pool case has the same Sid in BOTH maps (and, in
-%% principle, the same dedicated stream); drop both so the link
-%% doesn't leak entries.
+%% A failed write ends the session: the stream hears why, and the link
+%% forgets it.
+stream_written(ok, _Pid, Sid, true, S) ->
+    drop_stream(Sid, S);
+stream_written(ok, _Pid, _Sid, false, S) ->
+    S;
+stream_written({error, Reason}, Pid, Sid, _Last, S) ->
+    Pid ! {stream_write_failed, Sid, Reason},
+    drop_stream(Sid, S).
+
+%% A session's own last frame, a failed write, or a stream that carried a
+%% malformed frame ends its routing: its attach id leaves whichever map holds
+%% it, its dedicated stream closes, and the stream's inbound buffer goes with
+%% it, so `stream_bufs' keeps no entry for a finished session.
 drop_stream(Sid, #state{client_streams = CS, server_streams = SS,
                         stream_bufs = Bufs} = S) ->
     {CS2, ClientMon, ClientStream} = drop_one(Sid, CS),
     {SS2, ServerMon, ServerStream} = drop_one(Sid, SS),
     _ = [erlang:demonitor(M, [flush])
          || M <- [ClientMon, ServerMon], M =/= undefined],
-    %% Same-pool sessions share one dedicated stream across both
-    %% maps; closing it twice is harmless (`nif_close_stream` is
-    %% idempotent against an already-finished send half).
-    _ = [close_dedicated_stream(Stream)
+    _ = [close_dedicated_stream(Stream, S)
          || Stream <- lists:usort([ClientStream, ServerStream]),
             Stream =/= undefined],
     Bufs2 = drop_bufs([ClientStream, ServerStream], Bufs),
@@ -2701,7 +3023,7 @@ dispatch_dedicated_items([], _Stream, S) ->
 dispatch_dedicated_items([{invalid_frame, _Type, _Field} = Invalid | _Rest], Stream, S) ->
     {ended, end_sessions_on_stream(Stream, {malformed, Invalid}, S)};
 dispatch_dedicated_items([Frame | Rest], Stream, S) ->
-    dispatch_dedicated_items(Rest, Stream, dispatch_dedicated_frame(Frame, Stream, S)).
+    dispatch_dedicated_items(Rest, Stream, dispatch_while_open(Frame, Stream, S)).
 
 end_malformed_dedicated({open, S}, Stream, Reason) ->
     end_sessions_on_stream(Stream, {malformed, Reason}, S);
@@ -2721,129 +3043,262 @@ end_sessions_on_stream(Stream, Reason, #state{client_streams = CS,
                              On =:= Stream],
     _ = [abort_stream_process(Pid, Reason) || Pid <- lists:usort([P || {_, P} <- Carried])],
     S2 = lists:foldl(fun drop_stream/2, S, lists:usort([Sid || {Sid, _} <- Carried])),
-    close_dedicated_stream(Stream),
+    close_dedicated_stream(Stream, S2),
     S2#state{stream_bufs = maps:remove(Stream, S2#state.stream_bufs)}.
 
 %%-------------------------------------------------------------------
 %% Streaming RPC — dispatch for frames decoded off a dedicated stream
 %%-------------------------------------------------------------------
 
-%% Every stream-related frame type this link ever needs to act on,
-%% now sourced from a session's own dedicated QUIC stream instead of
-%% the shared control stream's `on_frame/2'. STREAM_OPEN is the only
-%% one that can legitimately be the *first* frame on a freshly
-%% handed-off inbound stream; the rest belong to a session already
-%% tracked in `client_streams' / `server_streams'.
-dispatch_dedicated_frame(#{frame_type := stream_open} = Frame, Stream, S) ->
-    on_inbound_stream_open(verify_signed_by(Frame, call_signer(Frame)), Frame,
-                           Stream, S);
-dispatch_dedicated_frame(#{frame_type := stream_data} = Frame, _Stream, S) ->
-    deliver_stream_data(Frame, S);
-dispatch_dedicated_frame(#{frame_type := stream_end} = Frame, _Stream, S) ->
-    deliver_stream_end(Frame, S);
-dispatch_dedicated_frame(#{frame_type := stream_error} = Frame, _Stream, S) ->
-    deliver_stream_error(Frame, S);
-dispatch_dedicated_frame(#{frame_type := stream_reply} = Frame, _Stream, S) ->
-    deliver_stream_reply(Frame, S);
+%% A frame read off a dedicated stream is dispatched only while the stream
+%% is open: once a frame closes it, as a refused STREAM_OPEN does, the frames
+%% after it in the same read are not taken either.
+dispatch_while_open(Frame, Stream, #state{stream_bufs = Bufs} = S) when is_map_key(Stream, Bufs) ->
+    dispatch_dedicated_frame(Frame, Stream, S);
+dispatch_while_open(_Frame, _Stream, S) ->
+    S.
+
+%% A STREAM_OPEN is verified here, and the link decides whether a session starts
+%% for it. Every other stream frame belongs to the one session whose dedicated
+%% stream it arrived on, and goes to that session's stream process, which
+%% verifies it under its own open and tells the connection of a refusal. A
+%% session frame on a stream that carries no session closes that stream. Any
+%% other frame type has no place on a dedicated stream and is dropped.
+dispatch_dedicated_frame(#{frame_type := stream_open} = Frame, Stream, #state{profile = Profile} = S) ->
+    on_inbound_stream_open(macula_frame:verify_request(Frame, Profile), Stream, S);
+dispatch_dedicated_frame(#{frame_type := Type} = Frame, Stream, S)
+  when Type =:= stream_data; Type =:= stream_end; Type =:= stream_error; Type =:= stream_reply ->
+    deliver_on_stream(session_on(Stream, S), Frame, Stream, S);
 dispatch_dedicated_frame(_Frame, _Stream, S) ->
-    %% Anything else arriving first on a dedicated stream is a
-    %% protocol violation — nothing but our own peer code opens one
-    %% of these, and only for a stream session.
     S.
 
 %%-------------------------------------------------------------------
 %% Streaming RPC — inbound STREAM_OPEN (server-side dispatch)
 %%-------------------------------------------------------------------
 
-%% STREAM_OPEN arrives as the first frame decoded off a freshly
-%% handed-off dedicated QUIC stream (see `dispatch_dedicated_frame/3'
-%% below) — `Stream' is that stream's reference, and every frame
-%% this session sends or receives from here on travels on it.
-%% Look up `(Realm, Procedure)' this link advertised, spawn a
-%% server-side stream_v1 paired to this link, then dispatch the
-%% registered handler in a transient process so a slow / crashing
-%% handler can't block the link's gen_server.
-handle_inbound_stream_open(#{stream_id := Sid, procedure := Proc,
-                              realm := Realm, args := Args} = Frame,
-                           Stream, S) ->
-    DeclaredMode = maps:get(mode, Frame, server_stream),
-    dispatch_stream_open(maps:find({Realm, Proc}, S#state.stream_procedures),
-                         Sid, Proc, DeclaredMode, Args, Stream, S).
+%% A verified, admitted and authorized STREAM_OPEN is served by the procedure
+%% this link advertised under its realm and name: `Stream' is the dedicated
+%% stream it came in on, and every frame of its session travels there.
+handle_inbound_stream_open(#{realm := Realm, procedure := Proc} = Open, Stream, S) ->
+    dispatch_stream_open(maps:find({Realm, Proc}, S#state.stream_procedures), Open, Stream, S).
 
-%% A STREAM_OPEN whose signature does not verify against its own `caller'
-%% never reaches a handler and gets nothing back on its stream, the same
-%% rule `on_inbound_call/3' applies to a unary CALL. Once it verifies, the
-%% procedure's auth policy (`advertise_stream/6') decides through the same
-%% `authorize/3' a unary CALL goes through, before any handler runs.
-on_inbound_stream_open({ok, _Verified}, Frame, Stream,
-                       #state{stream_policies = SPols} = S) ->
-    Key = {maps:get(realm, Frame, undefined), maps:get(procedure, Frame, undefined)},
-    on_stream_open_verdict(authorize(Key, Frame, SPols), Frame, Stream, S);
-on_inbound_stream_open({error, Why}, Frame, _Stream, S) ->
-    logger:warning("[macula_station_link] dropped inbound STREAM_OPEN whose"
-                   " signature does not verify against its caller (~p)"
-                   " procedure=~p",
-                   [Why, maps:get(procedure, Frame, undefined)]),
+%% A first frame longer than the limit is refused from its length header, as
+%% `{malformed, [], frame_too_large}', which closes the stream
+%% (`opening_items/3'). The frames after a first frame that fits have the
+%% usual frame cap, so when only a later frame in the same read is longer
+%% than the limit, the read is parsed again with that cap.
+opening_parse({malformed, [_First | _], frame_too_large}, Bytes) ->
+    macula_frame:parse_received(Bytes);
+opening_parse(Parsed, _Bytes) ->
+    Parsed.
+
+%% The longest STREAM_OPEN a dedicated stream may start with, and the limit
+%% `call_stream/6' refuses a longer open by. No frame is longer than the
+%% 16 MiB frame cap, so a setting above it reads as that cap, which is also
+%% the most `macula_frame:parse_received/2' takes.
+stream_open_limit() ->
+    min(application:get_env(macula, max_stream_open_bytes, ?MAX_STREAM_OPEN_BYTES), 16#FFFFFF).
+
+%% What `macula_frame:parse_received/1' gave for a dedicated stream the peer
+%% opened, before its first whole frame. With no whole frame yet the bytes
+%% wait, and bytes that do not decode close the stream. Otherwise the
+%% stream's buffer moves on to `stream_bufs' first, so a served STREAM_OPEN
+%% keeps it and every refusal takes it away again, and the first item decides
+%% whether the stream stays open. The items after it go the way of any
+%% dedicated stream's (`dedicated_items/3'), and only while it stays open.
+opening_items({ok, [], Tail}, Stream, #state{opening_bufs = Opening} = S) ->
+    S#state{opening_bufs = Opening#{Stream => Tail}};
+opening_items({malformed, [], _Reason}, Stream, #state{opening_bufs = Opening} = S) ->
+    ok = close_dedicated_stream(Stream, S),
+    S#state{opening_bufs = maps:remove(Stream, Opening)};
+opening_items({Outcome, [First | Rest], TailOrReason}, Stream,
+              #state{opening_bufs = Opening, stream_bufs = Bufs} = S) ->
+    Moved = S#state{opening_bufs = maps:remove(Stream, Opening), stream_bufs = Bufs#{Stream => <<>>}},
+    after_first_item(dispatch_first_frame(First, Stream, Moved), {Outcome, Rest, TailOrReason}, Stream).
+
+after_first_item(#state{stream_bufs = Bufs} = S, Parsed, Stream) when is_map_key(Stream, Bufs) ->
+    dedicated_items(Parsed, Stream, S);
+after_first_item(S, _Parsed, _Stream) ->
     S.
 
-%% Refused by the procedure's auth policy: a STREAM_ERROR on the caller's
-%% own stream, so it fails fast instead of waiting out its deadline, and no
-%% handler runs.
-on_stream_open_verdict(ok, Frame, Stream, S) ->
-    handle_inbound_stream_open(Frame, Stream, S);
-on_stream_open_verdict(unauthorized, Frame, Stream, #state{identity = Id} = S) ->
-    Refusal = macula_frame:stream_error(#{
-        stream_id => maps:get(stream_id, Frame),
-        code      => <<"unauthorized">>,
-        message   => <<"not authorized for this procedure">>
-    }),
-    try macula_peering:send_on_stream(Stream, Refusal, Id) catch _:_ -> ok end,
-    S.
+%% A dedicated stream the peer opens must start with a STREAM_OPEN that
+%% decodes whole. On any other first item, a frame of another type or one
+%% that failed validation, it closes without a word: it carries no session,
+%% and nothing on it is authenticated to answer.
+dispatch_first_frame(#{frame_type := stream_open} = Frame, Stream, S) ->
+    dispatch_dedicated_frame(Frame, Stream, S);
+dispatch_first_frame(_NotAnOpen, Stream, S) ->
+    close_sessionless_stream(Stream, S).
 
-%% Unknown (Realm, Procedure) → ship a STREAM_ERROR back on the
-%% caller's own dedicated stream so it unblocks immediately rather
-%% than waiting for its deadline. The shared control stream is not
-%% in this session's path at all, so the reply has to go here.
-dispatch_stream_open(error, Sid, _Proc, _Declared, _Args, Stream,
-                     #state{identity = Id} = S) ->
-    Frame = macula_frame:stream_error(#{
-        stream_id => Sid,
-        code      => <<"not_found">>,
-        message   => <<"procedure not advertised">>
-    }),
-    try macula_peering:send_on_stream(Stream, Frame, Id) catch _:_ -> ok end,
+%% A STREAM_OPEN that does not verify never reaches a handler and gets nothing
+%% back on its stream: the connection is told why, and a stream that carries no
+%% session closes with it. A verified open for another node is not this node's
+%% to answer either: the connection is told `not_the_target', and nothing is
+%% signed, written or admitted for it.
+on_inbound_stream_open({error, Kind}, Stream, #state{peer_pid = Conn} = S) ->
+    ok = refusal_reported(Conn, Kind),
+    close_unless_carrying(carries_a_session(Stream, S), Stream, S);
+on_inbound_stream_open({ok, Open}, Stream, S) ->
+    on_open_for(for_this_node(Open, S), Open, Stream, S).
+
+on_open_for(false, _Open, Stream, #state{peer_pid = Conn} = S) ->
+    ok = refusal_reported(Conn, not_the_target),
+    close_unless_carrying(carries_a_session(Stream, S), Stream, S);
+on_open_for(true, Open, Stream, #state{admission = Admission, share = Share} = S) ->
+    on_admission(admitted(Admission, Open, Share), Open, Stream, S).
+
+%% A verified request is for this node when its target is this link's node_id.
+for_this_node(#{target := Target}, #state{node_identity = Key}) ->
+    Target =:= node_id(Key).
+
+refusal_reported(Conn, Kind) when is_pid(Conn) ->
+    macula_peering:object_refused(Conn, Kind);
+refusal_reported(_NoConnection, _Kind) ->
+    ok.
+
+%% The pool's admission judges a verified request once per caller and request
+%% id, before any policy or handler. An admission that does not answer within
+%% `?ADMIT_TIMEOUT_MS', or has stopped, refuses the request and never holds up
+%% or ends the link.
+admitted(Admission, Open, Share) ->
+    try macula_request_admission:admit(Admission, Open, Share, erlang:system_time(millisecond), ?ADMIT_TIMEOUT_MS)
+    catch exit:_NotAnswered -> {refused, unavailable}
+    end.
+
+%% A copy of an admitted open starts no second session, and a refused one none
+%% at all: each gets a STREAM_ERROR under its own open, whose code names why.
+on_admission(new, Open, Stream, S) ->
+    on_stream_open_on(carries_a_session(Stream, S), Open, Stream, S);
+on_admission({copy, _Reply}, Open, Stream, S) ->
+    refuse_open(Stream, Open, <<"request_copy">>, <<"this request is already admitted">>, S);
+on_admission({refused, Refusal}, Open, Stream, S) ->
+    refuse_open(Stream, Open, admission_code(Refusal), <<"this request is not admitted">>, S).
+
+%% The code a refusal by the request admission travels as: its kind's name.
+admission_code({Kind, _Ms}) when is_atom(Kind) -> atom_to_binary(Kind);
+admission_code(Kind) when is_atom(Kind) -> atom_to_binary(Kind).
+
+close_unless_carrying(true, _Stream, S) ->
     S;
-dispatch_stream_open({ok, {AdvMode, Handler}}, Sid, Proc, _Declared, Args,
-                     Stream, S) ->
-    %% Advertised mode wins — the server declared the shape.
-    spawn_inbound_stream(Sid, Proc, AdvMode, Handler, Args, Stream, S).
+close_unless_carrying(false, Stream, S) ->
+    close_sessionless_stream(Stream, S).
 
-spawn_inbound_stream(Sid, Proc, Mode, Handler, Args, Stream,
-                     #state{server_streams = SS} = S) ->
-    Host = spawn(fun stream_host_loop/0),
-    {ok, StreamPid} = macula_stream:start_link(#{
-        id    => Sid,
-        role  => server,
-        mode  => Mode,
-        owner => Host
-    }),
-    ok = macula_stream:attach_to_link(StreamPid, self(), Sid),
+%% Closes a dedicated stream that carries no session and forgets its buffer,
+%% so the link takes no more frames from it.
+close_sessionless_stream(Stream, #state{stream_bufs = Bufs} = S) ->
+    ok = close_dedicated_stream(Stream, S),
+    S#state{stream_bufs = maps:remove(Stream, Bufs)}.
+
+%% A dedicated stream carries one session. A STREAM_OPEN on a stream that
+%% already carries one, served here or opened by this link as a caller, is
+%% refused under that open, before its procedure's policy is asked; the session
+%% already on the stream keeps it, and the stream stays open for that session.
+on_stream_open_on(true, Open, Stream, S) ->
+    refuse_open(Stream, Open, <<"refused">>, <<"this stream already carries a session">>, S);
+on_stream_open_on(false, #{realm := Realm, procedure := Proc} = Open, Stream, #state{stream_policies = SPols} = S) ->
+    on_stream_open_verdict(authorize({Realm, Proc}, Open, SPols), Open, Stream, S).
+
+carries_a_session(Stream, #state{client_streams = CS, server_streams = SS}) ->
+    lists:any(fun({_Pid, _Mon, On}) -> On =:= Stream end, maps:values(CS) ++ maps:values(SS)).
+
+%% Refused by the procedure's auth policy: a STREAM_ERROR on the caller's own
+%% stream, so it fails fast instead of waiting out its deadline, and no handler
+%% runs.
+on_stream_open_verdict(ok, Open, Stream, S) ->
+    handle_inbound_stream_open(Open, Stream, S);
+on_stream_open_verdict(unauthorized, Open, Stream, S) ->
+    refuse_open(Stream, Open, <<"unauthorized">>, <<"not authorized for this procedure">>, S).
+
+%% A procedure this link does not advertise is refused `not_found'. The open's
+%% signed mode binds both sides' verifiers, so an open in a mode other than the
+%% one its procedure is advertised in is refused `mode_mismatch', not served.
+dispatch_stream_open(error, Open, Stream, S) ->
+    refuse_open(Stream, Open, <<"not_found">>, <<"procedure not advertised">>, S);
+dispatch_stream_open({ok, {Mode, Handler}}, #{mode := Mode} = Open, Stream, S) ->
+    AttachId = crypto:strong_rand_bytes(16),
+    served_with_id(attach_id_free(AttachId, S), AttachId, Handler, Open, Stream, S);
+dispatch_stream_open({ok, {_OtherMode, _Handler}}, Open, Stream, S) ->
+    refuse_open(Stream, Open, <<"mode_mismatch">>, <<"the procedure is advertised in another mode">>, S).
+
+%% A served session's attach id is chosen here, since callers choose request
+%% ids and two callers' opens may carry the same one. Its stream starts with the
+%% link's key as a closure, the verified open, the peering connection and the
+%% profile, owned by the process its handler will run in.
+served_with_id(false, _AttachId, _Handler, Open, Stream, S) ->
+    refuse_open(Stream, Open, <<"unavailable">>, <<"sessions are not being admitted now">>, S);
+served_with_id(true, AttachId, Handler, #{procedure := Proc, payload := Args, caller := Caller, mode := Mode} = Open,
+               Stream, #state{peer_pid = Conn, profile = Profile, node_identity = Key} = S) ->
+    Worker = spawn_stream_handler(Handler, Args, Proc),
+    {ok, StreamPid} = macula_stream:start_link(#{id => AttachId, role => server, mode => Mode, owner => Worker,
+                                                 key => fun() -> Key end, open => Open, conn => Conn,
+                                                 profile => Profile}),
+    serve_if_admitted(macula_stream_sessions:admit(Caller, StreamPid), AttachId, Worker, StreamPid, Open, Stream, S).
+
+%% A session past its caller's or the node's cap on served sessions, or one
+%% the session counter could not admit, is refused on its own stream: its
+%% handler process ends before it serves, and the stream process it would
+%% have owned ends with it.
+serve_if_admitted(ok, AttachId, Worker, StreamPid, _Open, Stream, #state{server_streams = SS} = S) ->
+    ok = macula_stream:attach_to_link(StreamPid, self(), AttachId),
     Mon = erlang:monitor(process, StreamPid),
-    _Worker = spawn_stream_handler(Handler, StreamPid, Args, Proc),
-    S#state{server_streams = SS#{Sid => {StreamPid, Mon, Stream}}}.
+    Worker ! {serve, StreamPid},
+    S#state{server_streams = SS#{AttachId => {StreamPid, Mon, Stream}}};
+serve_if_admitted({error, Refusal}, _AttachId, Worker, _StreamPid, Open, Stream, S) ->
+    exit(Worker, kill),
+    {Code, Message} = admission_refusal(Refusal),
+    refuse_open(Stream, Open, Code, Message, S).
 
-stream_host_loop() ->
-    receive stop -> ok end.
+admission_refusal(unavailable) ->
+    {<<"unavailable">>, <<"sessions are not being admitted now">>};
+admission_refusal(_AtACap) ->
+    {<<"too_many_sessions">>, <<"no more sessions are served now">>}.
 
-%% Handler runs in a transient process. A handler crash maps to a
-%% STREAM_ERROR abort with the crash class as the code and the reason's
-%% name as the message, so callers see a stable error taxonomy and none
-%% of the crash's terms; the crash goes to the node's log. The try/catch
-%% is justified (mirrors `safe_invoke_handler/4' for unary CALLs):
-%% without it a crash would silently leave the caller waiting on its
-%% deadline.
-spawn_stream_handler(Handler, Stream, Args, Proc) ->
-    spawn(fun() -> run_stream_handler(Handler, Stream, Args, Proc) end).
+%% A refused STREAM_OPEN gets a STREAM_ERROR, the provider's first frame under
+%% that open, and then a stream that carries no session closes: the link keeps
+%% no buffer for it and takes no more frames from it. The STREAM_ERROR is
+%% written before the close, and a close lets written data through before its
+%% FIN.
+refuse_open(Stream, Open, Code, Message, S) ->
+    ok = send_stream_refusal(Stream, Open, Code, Message, S),
+    close_unless_carrying(carries_a_session(Stream, S), Stream, S).
+
+%% A refusal this link cannot build is not written.
+send_stream_refusal(Stream, Open, Code, Message, #state{node_identity = Key} = S) ->
+    refusal_built(macula_frame:stream_bytes({provider_stream, #{frame_type => stream_error, seq => 0, code => Code,
+                                                               message => Message}, Open}, Key),
+                  Stream, S).
+
+refusal_built({ok, Built}, Stream, S) ->
+    _ = written(Stream, macula_frame:written_bytes(Built), S),
+    ok;
+refusal_built({error, _Unbuildable}, _Stream, _S) ->
+    ok.
+
+%% Handler runs in a transient process, which owns the session's stream:
+%% the stream ends when the handler returns or crashes, unless the handler
+%% hands it over first (`macula_stream:controlling_process/2'). The process
+%% runs the handler once the link has attached the stream, and ends without
+%% running it when the link ends first. A handler crash
+%% maps to a STREAM_ERROR abort with the crash class as the code and the
+%% reason's name as the message, so callers see a stable error taxonomy and
+%% none of the crash's terms; the crash goes to the node's log. The
+%% try/catch is justified (mirrors `safe_invoke_handler/4' for unary
+%% CALLs): without it a crash would silently leave the caller waiting on
+%% its deadline.
+spawn_stream_handler(Handler, Args, Proc) ->
+    Link = self(),
+    spawn(fun() -> serve_stream_when_attached(erlang:monitor(process, Link), Handler, Args, Proc) end).
+
+%% Once the handler runs, the link's end is no concern of it, so no notice of
+%% it is left in the handler's mailbox.
+serve_stream_when_attached(LinkRef, Handler, Args, Proc) ->
+    receive
+        {serve, Stream} ->
+            true = erlang:demonitor(LinkRef, [flush]),
+            run_stream_handler(Handler, Stream, Args, Proc);
+        {'DOWN', LinkRef, process, _Link, _Reason} ->
+            ok
+    end.
 
 run_stream_handler(Handler, Stream, Args, Proc) ->
     try Handler(Stream, Args)
@@ -2861,70 +3316,20 @@ run_stream_handler(Handler, Stream, Args, Proc) ->
 %% Streaming RPC — inbound STREAM_DATA / END / ERROR / REPLY
 %%-------------------------------------------------------------------
 
-%% Unknown stream_id (race with terminal frame from our side) is
-%% silently dropped — same policy as `mesh_client'. Lookup order:
-%% client_streams first (server_stream mode flows server→client, the
-%% common case; in same-pool both maps hold Sid and the bounced
-%% server-emitted STREAM_DATA must reach the caller's recv waiter),
-%% then server_streams (client_stream / bidi server-receive).
-deliver_stream_data(#{stream_id := Sid} = Frame, S) ->
-    deliver_to_stream(find_stream(Sid, S),
-                      fun({Pid, _Mon, _Stream}) ->
-                          macula_stream:deliver_chunk(
-                            Pid,
-                            maps:get(encoding, Frame, raw),
-                            maps:get(body, Frame, <<>>))
-                      end),
-    S.
+%% The session a dedicated stream carries: at most one, in whichever map holds
+%% it.
+session_on(Stream, #state{client_streams = CS, server_streams = SS}) ->
+    first_or_error([Pid || {Pid, _Mon, On} <- maps:values(CS) ++ maps:values(SS), On =:= Stream]).
 
-deliver_stream_end(#{stream_id := Sid} = Frame, S) ->
-    Role = maps:get(role, Frame, both),
-    deliver_to_stream(find_stream(Sid, S),
-                      fun({Pid, _Mon, _Stream}) ->
-                          macula_stream:deliver_end(Pid, Role)
-                      end),
-    %% Full close drops the routing entry; half close keeps it open
-    %% for outbound chunks back to the peer.
-    forget_on_full_close(Role, Sid, S).
-
-deliver_stream_error(#{stream_id := Sid} = Frame, S) ->
-    Code = maps:get(code, Frame, <<"error">>),
-    Message = maps:get(message, Frame, <<>>),
-    deliver_to_stream(find_stream(Sid, S),
-                      fun({Pid, _Mon, _Stream}) ->
-                          macula_stream:deliver_error(Pid, Code, Message)
-                      end),
-    drop_stream(Sid, S).
-
-deliver_stream_reply(#{stream_id := Sid, payload := Payload}, S) ->
-    deliver_to_stream(find_stream(Sid, S),
-                      fun({Pid, _Mon, _Stream}) ->
-                          macula_stream:deliver_reply(Pid, {ok, Payload})
-                      end),
-    S.
-
-deliver_to_stream(error, _Fun) ->
-    ok;
-deliver_to_stream({ok, Entry}, Fun) ->
-    _ = Fun(Entry),
-    ok.
-
-forget_on_full_close(both, Sid, S) -> drop_stream(Sid, S);
-forget_on_full_close(_, _, S)      -> S.
-
-%%-------------------------------------------------------------------
-%% Streaming RPC — replay on (re)connect
-%%-------------------------------------------------------------------
-
-%% Mirror `drain_pending_advertises/1' for streaming procedures. The
-%% wire frame is the existing `advertise' (no separate streaming
-%% advertise frame); the link's local `stream_procedures' map
-%% remains the source of truth for mode-aware dispatch.
-drain_pending_stream_advertises(#state{stream_procedures = SP} = S) ->
-    maps:foreach(fun({Realm, Procedure}, _Entry) ->
-        maybe_send_advertise(Realm, Procedure, S)
-    end, SP),
-    ok.
+%% A session frame goes to the stream process of the session its stream
+%% carries. A peer's terminal frame does not end the routing: the session's
+%% stream verifies it first, and the routing goes when that process ends or the
+%% session writes its own last frame.
+deliver_on_stream({ok, Pid}, Frame, _Stream, S) ->
+    ok = macula_stream:deliver_frame(Pid, Frame),
+    S;
+deliver_on_stream(error, _Frame, Stream, S) ->
+    close_sessionless_stream(Stream, S).
 
 %%-------------------------------------------------------------------
 %% Streaming RPC — DOWN routing (stream pid vs subscriber pid)
@@ -2932,7 +3337,7 @@ drain_pending_stream_advertises(#state{stream_procedures = SP} = S) ->
 
 %% Probe the client_streams and server_streams maps by pid; fall back
 %% to the subscriber path. Stream pids are added by
-%% `open_client_stream/6' (client_streams) and `spawn_inbound_stream/6'
+%% `open_client_stream/6' (client_streams) and `spawn_inbound_stream/8'
 %% (server_streams).
 on_monitor_down(Pid, Mon, #state{client_streams = CS} = S) ->
     on_client_stream_down(find_stream_by_pid(Pid, CS), Pid, Mon, S).
@@ -2941,7 +3346,7 @@ on_client_stream_down({ok, Sid}, _Pid, Mon, #state{client_streams = CS,
                                                    stream_bufs = Bufs} = S) ->
     erlang:demonitor(Mon, [flush]),
     {CS2, Stream} = take_dedicated_stream(Sid, CS),
-    close_dedicated_stream(Stream),
+    close_dedicated_stream(Stream, S),
     S#state{client_streams = CS2, stream_bufs = drop_bufs([Stream], Bufs)};
 on_client_stream_down(error, Pid, Mon, #state{server_streams = SS} = S) ->
     on_server_stream_down(find_stream_by_pid(Pid, SS), Mon, S).
@@ -2950,7 +3355,7 @@ on_server_stream_down({ok, Sid}, Mon, #state{server_streams = SS,
                                              stream_bufs = Bufs} = S) ->
     erlang:demonitor(Mon, [flush]),
     {SS2, Stream} = take_dedicated_stream(Sid, SS),
-    close_dedicated_stream(Stream),
+    close_dedicated_stream(Stream, S),
     S#state{server_streams = SS2, stream_bufs = drop_bufs([Stream], Bufs)};
 on_server_stream_down(error, Mon, S) ->
     on_subscriber_down(Mon, S).
@@ -2964,10 +3369,17 @@ take_dedicated_stream(Sid, Map) ->
 %% The owning `macula_stream' died — nothing is driving this
 %% dedicated QUIC stream anymore. Close it rather than leaking a live
 %% stream resource for a session that will never resume.
-close_dedicated_stream(undefined) -> ok;
-close_dedicated_stream(Stream) ->
-    try macula_quic:close_stream(Stream) catch _:_ -> ok end,
+close_dedicated_stream(undefined, _S) -> ok;
+close_dedicated_stream(Stream, #state{close_stream = Close}) ->
+    try Close(Stream) catch _:_ -> ok end,
     ok.
+
+-ifdef(TEST).
+%% A client stream entry as `call_stream/6' makes one, for tests of the
+%% stream write path.
+with_client_stream(#state{client_streams = CS} = S, Sid, {StreamPid, Stream}) ->
+    S#state{client_streams = CS#{Sid => {StreamPid, erlang:monitor(process, StreamPid), Stream}}}.
+-endif.
 
 %% Lookup a stream by Sid across both maps. Client-side first (the
 %% common server_stream mode delivers server→client chunks to the
@@ -2985,3 +3397,14 @@ find_stream_by_pid(Pid, Streams) ->
 
 first_or_error([H | _]) -> {ok, H};
 first_or_error([])      -> error.
+
+-ifdef(TEST).
+%% The position of a field in the state tuple, read from the record itself:
+%% a test names the field, so a field added to the record cannot shift what
+%% the test reads or sets.
+state_field_index(Field) ->
+    field_index(Field, record_info(fields, state), 2).
+
+field_index(Field, [Field | _Rest], Index) -> Index;
+field_index(Field, [_Other | Rest], Index) -> field_index(Field, Rest, Index + 1).
+-endif.

@@ -2,14 +2,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
 use rustler::env::SavedTerm;
-use rustler::{Binary, Encoder, Env, LocalPid, NifResult, OwnedEnv, ResourceArc, Term};
+use rustler::{Binary, Encoder, Env, LocalPid, NifResult, OwnedBinary, OwnedEnv, ResourceArc, Term};
+use rustls::pki_types::CertificateDer;
 use tokio::task::{AbortHandle, JoinHandle};
 
-use crate::{atoms, config, message, runtime, stream};
-
-/// Application error code for a stream whose open was cancelled after the
-/// peer allowed it: the stream is reset and stopped with this code.
-const OPEN_CANCELLED_CODE: u32 = 0;
+use crate::{atoms, config, error_codes, message, runtime, stream};
 
 /// Opaque connection handle exposed to Erlang via ResourceArc.
 pub struct ConnectionResource {
@@ -17,15 +14,44 @@ pub struct ConnectionResource {
     pub owner: RwLock<LocalPid>,
     stream_accept_task: Mutex<Option<JoinHandle<()>>>,
     pub closed: AtomicBool,
+    /// The leaf certificate the other side sent in this connection's TLS
+    /// handshake, as received. Only a dialed connection has one.
+    peer_leaf: Option<Arc<[u8]>>,
+    /// The leaf certificate this side sent in this connection's TLS
+    /// handshake. Only an accepted connection has one.
+    presented_leaf: Option<Arc<[u8]>>,
 }
 
 impl ConnectionResource {
-    pub fn new(connection: quinn::Connection, owner: LocalPid) -> Self {
+    /// A connection this side dialed, with the leaf the other side sent.
+    pub fn dialed(connection: quinn::Connection, owner: LocalPid) -> Self {
+        let peer_leaf = received_leaf(&connection);
+        Self::new(connection, owner, peer_leaf, None)
+    }
+
+    /// A connection a listener accepted, with the leaf of the certificate
+    /// generation it was accepted with.
+    pub fn accepted(
+        connection: quinn::Connection,
+        owner: LocalPid,
+        presented_leaf: Arc<[u8]>,
+    ) -> Self {
+        Self::new(connection, owner, None, Some(presented_leaf))
+    }
+
+    fn new(
+        connection: quinn::Connection,
+        owner: LocalPid,
+        peer_leaf: Option<Arc<[u8]>>,
+        presented_leaf: Option<Arc<[u8]>>,
+    ) -> Self {
         Self {
             connection,
             owner: RwLock::new(owner),
             stream_accept_task: Mutex::new(None),
             closed: AtomicBool::new(false),
+            peer_leaf,
+            presented_leaf,
         }
     }
 
@@ -33,6 +59,17 @@ impl ConnectionResource {
         let mut task = self.stream_accept_task.lock().unwrap();
         *task = Some(handle);
     }
+}
+
+/// The first certificate of the chain the other side sent in this
+/// connection's TLS handshake, byte for byte, if it sent one. quinn's rustls
+/// session hands the chain over as received, leaf first.
+fn received_leaf(connection: &quinn::Connection) -> Option<Arc<[u8]>> {
+    let chain = connection
+        .peer_identity()?
+        .downcast::<Vec<CertificateDer<'static>>>()
+        .ok()?;
+    chain.first().map(|leaf| Arc::from(&leaf[..]))
 }
 
 impl Drop for ConnectionResource {
@@ -237,7 +274,7 @@ fn deliver_dial_result(
         let tag = tag.load(env);
         match result {
             Ok(connection) => {
-                let conn = ResourceArc::new(ConnectionResource::new(connection, owner));
+                let conn = ResourceArc::new(ConnectionResource::dialed(connection, owner));
                 (atoms::quic(), atoms::connected(), tag, conn).encode(env)
             }
             Err(reason) => (atoms::quic(), atoms::connect_failed(), tag, reason).encode(env),
@@ -319,8 +356,8 @@ fn deliver_open_result(
     let mut state = state.lock().unwrap();
     if state.cancelled {
         if let Ok((mut send, mut recv)) = result {
-            let _ = send.reset(OPEN_CANCELLED_CODE.into());
-            let _ = recv.stop(OPEN_CANCELLED_CODE.into());
+            let _ = send.reset(error_codes::CANCELLED.into());
+            let _ = recv.stop(error_codes::CANCELLED.into());
         }
         return;
     }
@@ -341,17 +378,89 @@ fn deliver_open_result(
 }
 
 /// NIF: close_connection(ConnRef) -> ok
+/// Closes with application error code 0 and the reason "closed".
 #[rustler::nif]
 fn nif_close_connection<'a>(
     env: Env<'a>,
     conn: ResourceArc<ConnectionResource>,
 ) -> NifResult<Term<'a>> {
+    close_with(&conn, 0u32.into(), b"closed");
+    Ok(atoms::ok().encode(env))
+}
+
+/// NIF: close_connection(ConnRef, Code, Reason) -> ok | {error, error_code_out_of_range}
+/// Closes with an application error code and reason, which the peer reads
+/// from its own close reason. The code must fit a QUIC variable-length
+/// integer.
+#[rustler::nif]
+fn nif_close_connection_with_code<'a>(
+    env: Env<'a>,
+    conn: ResourceArc<ConnectionResource>,
+    code: u64,
+    reason: Binary<'a>,
+) -> NifResult<Term<'a>> {
+    let Ok(code) = quinn::VarInt::from_u64(code) else {
+        return Ok((atoms::error(), atoms::error_code_out_of_range()).encode(env));
+    };
+    close_with(&conn, code, reason.as_slice());
+    Ok(atoms::ok().encode(env))
+}
+
+fn close_with(conn: &ConnectionResource, code: quinn::VarInt, reason: &[u8]) {
     conn.closed.store(true, Ordering::SeqCst);
     if let Some(task) = conn.stream_accept_task.lock().unwrap().take() {
         task.abort();
     }
-    conn.connection.close(0u32.into(), b"closed");
-    Ok(atoms::ok().encode(env))
+    conn.connection.close(code, reason);
+}
+
+/// NIF: close_reason(ConnRef) -> open | locally_closed | reset | timed_out
+///   | version_mismatch | cids_exhausted
+///   | {application_closed | transport_closed | transport_error, Code, Reason}
+/// Why the connection closed, or `open` while it is open.
+#[rustler::nif]
+fn nif_close_reason<'a>(
+    env: Env<'a>,
+    conn: ResourceArc<ConnectionResource>,
+) -> NifResult<Term<'a>> {
+    Ok(close_reason_term(env, conn.connection.close_reason()))
+}
+
+fn close_reason_term<'a>(env: Env<'a>, reason: Option<quinn::ConnectionError>) -> Term<'a> {
+    use quinn::ConnectionError;
+    match reason {
+        None => atoms::open().encode(env),
+        Some(ConnectionError::ApplicationClosed(close)) => (
+            atoms::application_closed(),
+            close.error_code.into_inner(),
+            binary_term(env, &close.reason),
+        )
+            .encode(env),
+        Some(ConnectionError::ConnectionClosed(close)) => (
+            atoms::transport_closed(),
+            u64::from(close.error_code),
+            binary_term(env, &close.reason),
+        )
+            .encode(env),
+        Some(ConnectionError::TransportError(error)) => (
+            atoms::transport_error(),
+            u64::from(error.code),
+            binary_term(env, error.reason.as_bytes()),
+        )
+            .encode(env),
+        Some(ConnectionError::LocallyClosed) => atoms::locally_closed().encode(env),
+        Some(ConnectionError::Reset) => atoms::reset().encode(env),
+        Some(ConnectionError::TimedOut) => atoms::timed_out().encode(env),
+        Some(ConnectionError::VersionMismatch) => atoms::version_mismatch().encode(env),
+        Some(ConnectionError::CidsExhausted) => atoms::cids_exhausted().encode(env),
+    }
+}
+
+/// `bytes` copied into a binary made in `env`.
+fn binary_term<'a>(env: Env<'a>, bytes: &[u8]) -> Term<'a> {
+    let mut binary = rustler::NewBinary::new(env, bytes.len());
+    binary.as_mut_slice().copy_from_slice(bytes);
+    binary.into()
 }
 
 /// NIF: async_accept_stream(ConnRef) -> ok
@@ -443,4 +552,43 @@ fn nif_max_datagram_size<'a>(
     let stats = conn.connection.stats();
     let mtu = stats.path.current_mtu as u64;
     Ok((atoms::ok(), mtu).encode(env))
+}
+
+/// NIF: peer_leaf(ConnRef) -> {ok, Der} | {error, no_peer_leaf}
+///
+/// The leaf certificate the other side sent in this connection's TLS
+/// handshake, exactly as received. A dialed connection has the station's;
+/// an accepted connection has none, since clients send no certificate.
+#[rustler::nif]
+fn nif_peer_leaf<'a>(
+    env: Env<'a>,
+    conn: ResourceArc<ConnectionResource>,
+) -> NifResult<Term<'a>> {
+    Ok(match conn.peer_leaf.as_deref() {
+        Some(leaf) => (atoms::ok(), der_binary(env, leaf)).encode(env),
+        None => (atoms::error(), atoms::no_peer_leaf()).encode(env),
+    })
+}
+
+/// NIF: presented_leaf(ConnRef) -> {ok, Der} | {error, no_presented_leaf}
+///
+/// The leaf certificate this side sent in this connection's TLS handshake.
+/// An accepted connection has the leaf of the certificate generation it was
+/// accepted with, whatever its listener presents now; a dialed connection
+/// has none.
+#[rustler::nif]
+fn nif_presented_leaf<'a>(
+    env: Env<'a>,
+    conn: ResourceArc<ConnectionResource>,
+) -> NifResult<Term<'a>> {
+    Ok(match conn.presented_leaf.as_deref() {
+        Some(leaf) => (atoms::ok(), der_binary(env, leaf)).encode(env),
+        None => (atoms::error(), atoms::no_presented_leaf()).encode(env),
+    })
+}
+
+fn der_binary<'a>(env: Env<'a>, der: &[u8]) -> Binary<'a> {
+    let mut binary = OwnedBinary::new(der.len()).expect("allocate a certificate binary");
+    binary.as_mut_slice().copy_from_slice(der);
+    binary.release(env)
 }

@@ -90,7 +90,7 @@
 -type advertise() :: fun((macula:pool(), macula:realm(), macula:procedure(),
                           macula_client:handler(), map()) -> ok | {error, term()}).
 -type publish_advertisement() :: fun((macula:pool(), macula:realm(), macula:procedure(),
-                                      macula_identity:key_pair(), map()) ->
+                                      macula_node_keys:node_key(), map()) ->
                                          ok | {error, term()}).
 -type advertise_opts() :: #{advertise => advertise(),
                             publish_advertisement => publish_advertisement(),
@@ -120,11 +120,9 @@ advertise(Pool, Realm, Procedure, Module, Args) ->
 %% @doc As `advertise/5'. `Opts' may include `announce' (default
 %% `true'), `auth' (forwarded to `macula:advertise/5'), and
 %% `reuse_sup' — an existing supervisor pid (as returned by a prior
-%% `advertise/5,6' call) to re-send the wire `ADVERTISE' frame on
-%% without starting a new factory supervisor. Use this for periodic
-%% re-advertise (a station's registration for a procedure is tied to
-%% the connection that sent it, and does not survive that connection
-%% being replaced — see `advertise_direct/6,7''s own doc) — calling
+%% `advertise/5,6' call) to register the handler again with, without
+%% starting a new factory supervisor. Use this for a periodic
+%% re-advertise (see `advertise_direct/6,7''s own doc) — calling
 %% plain `advertise/5,6' on a timer would leak one orphaned
 %% supervisor per tick, since each call otherwise starts a fresh one.
 -spec advertise(macula:pool(), macula:realm(), macula:procedure(),
@@ -168,9 +166,10 @@ new_sup() ->
 %% @doc As `advertise/5', and additionally publishes a signed
 %% `procedure_advertisement' DHT record naming this pool's connected
 %% station as the server, so `macula_request:start_link_direct/6,7'
-%% can resolve and dial here directly. `Identity' signs the
-%% advertisement — reuse the same one across re-advertises so each one
-%% doesn't mint a fresh advertiser identity.
+%% can resolve and dial here directly. `NodeIdentity' signs the
+%% advertisement and must be the node identity key `Pool' was started
+%% with: a caller targets that node_id, and the station knows the pool's
+%% connection by it.
 %%
 %% The DHT publish is best-effort: if it fails (e.g. no healthy link
 %% at that instant), the handler is still advertised and reachable via
@@ -181,41 +180,48 @@ new_sup() ->
 %% learn its handler is pooled-only, and "a later publish succeeds"
 %% cannot happen if nothing ever tries again.
 -spec advertise_direct(macula:pool(), macula:realm(), macula:procedure(),
-                       module(), term(), macula_identity:key_pair()) ->
+                       module(), term(), macula_node_keys:node_key()) ->
     {ok, pid()} | {error, term()}.
-advertise_direct(Pool, Realm, Procedure, Module, Args, Identity) ->
-    advertise_direct(Pool, Realm, Procedure, Module, Args, Identity, #{}).
+advertise_direct(Pool, Realm, Procedure, Module, Args, NodeIdentity) ->
+    advertise_direct(Pool, Realm, Procedure, Module, Args, NodeIdentity, #{}).
 
 %% @doc As `advertise_direct/6', with `Opts' forwarded BOTH to
 %% `advertise/6' (so `announce'/`auth'/`reuse_sup' apply here too) and
-%% to `macula_direct_dial:publish_advertisement/5' — e.g. `cert_chain =>
-%% ChainPem' (leaf ++ org CA, PEM), so a verifying consumer's
-%% `verify_cert_chain' opt can check this advertiser's org/realm
-%% authorization (Slice 7c Direction B, managed realms only. See
-%% `macula_direct_dial''s module doc, "Trust model") — each side reads
+%% to `macula_direct_dial:publish_advertisement/5', e.g. `authorization',
+%% the provider authorization an org namespaced procedure needs (see
+%% `macula_direct_dial''s module doc, "Trust model"). Each side reads
 %% only the keys it recognizes, so one `Opts' map serves both.
-%% `reuse_sup' matters here specifically: a station's wire-level
-%% registration for a procedure is tied to whichever connection sent
-%% the `ADVERTISE' frame, and does not survive that connection being
-%% replaced (reconnect, station-side eviction, etc.) — a periodic
+%% `reuse_sup' matters here specifically: the procedure's DHT record
+%% expires with its TTL, and callers reach the provider only through
+%% that record, so the provider republishes it — a periodic
 %% re-advertise with `reuse_sup => Sup' (the pid this function
-%% returned the first time) re-sends both the wire frame and the DHT
-%% record without leaking a new supervisor per tick.
+%% returned the first time) registers the handler again and
+%% republishes the DHT record without leaking a new supervisor per
+%% tick. `cert_chain', a 10.x option `authorization' replaces, is refused
+%% with `{error, {removed_option, cert_chain}}' before the handler is
+%% registered.
 -spec advertise_direct(macula:pool(), macula:realm(), macula:procedure(),
-                       module(), term(), macula_identity:key_pair(), advertise_opts()) ->
+                       module(), term(), macula_node_keys:node_key(), advertise_opts()) ->
     {ok, pid()} | {error, term()}.
-advertise_direct(Pool, Realm, Procedure, Module, Args, Identity, Opts) when is_map(Opts) ->
+advertise_direct(Pool, Realm, Procedure, Module, Args, NodeIdentity, Opts) when is_map(Opts) ->
+    advertise_direct_unless_removed(macula_direct_dial:removed_option(advertise, Opts), Pool,
+                                    Realm, Procedure, Module, Args, NodeIdentity, Opts).
+
+advertise_direct_unless_removed(none, Pool, Realm, Procedure, Module, Args, NodeIdentity, Opts) ->
     PublishAdvertisement = arity_5(maps:get(publish_advertisement, Opts,
                                             fun macula_direct_dial:publish_advertisement/5)),
     case advertise(Pool, Realm, Procedure, Module, Args, Opts) of
         {ok, Sup} ->
             log_publish_result(
-              PublishAdvertisement(Pool, Realm, Procedure, Identity, without_functions(Opts)),
+              PublishAdvertisement(Pool, Realm, Procedure, NodeIdentity, without_functions(Opts)),
               Procedure),
             {ok, Sup};
         {error, _} = Error ->
             Error
-    end.
+    end;
+advertise_direct_unless_removed(Removed, _Pool, _Realm, _Procedure, _Module, _Args, _NodeIdentity,
+                                _Opts) ->
+    {error, Removed}.
 
 log_publish_result(ok, _Procedure) ->
     ok;

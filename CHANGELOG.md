@@ -7,7 +7,597 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [11.0.0] - Unreleased
+
+Post-quantum work on the `post-quantum` branch. Not on `main`.
+
+### Added
+
+- `macula_crypto_profile`: the two post-quantum profiles,
+  `pq_pure` and `pq_hybrid`, each with its key exchange group, TLS
+  signature scheme, cipher suite, signature algorithms and digests.
+- `macula_node_keys`: a node's identity, CONNECT and TLS keys for its
+  profile. ML-DSA-87 private keys are stored in their expanded form and
+  RSA-PSS-4096 keys as DER. A key file is restricted to its owner before
+  the key is written into it. `load/3` refuses a key file its group or
+  others can read, a key saved for another purpose or profile, a stored
+  public key that differs from the one derived from its private key, and
+  a key that fails a sign-and-verify round trip.
+- `macula_node_keys:sign/2`, `verify/4` and `public_key/1`: ML-DSA-87
+  alone in the US profile, and Macula's composite ML-DSA-87-PS384 in the
+  EU profile, valid only if both halves verify. Verification refuses
+  malformed input without raising.
+- `macula_node_keys:node_id/1` and `node_id/2`: node_ids per plan decision
+  D5, SHA-256 over the label `MACULA-NODE-ID-V1`, the profile name and the
+  identity key as carried. The reference vectors match Go, Rust and Python.
+- `macula_node_keys:key_id/1` and `key_id/2`: the key id of a key that is
+  not an identity key, SHA-256 over the label `MACULA-KEY-ID-V1`, the
+  profile name and the key as carried; an identity key's key id is its
+  node_id. Realm, org and foundation keys are purposes of their own, with
+  the identity key's algorithms.
+- Private keys stay out of status output and of crash and diagnostics
+  reports. Every process that holds a key formats its status through
+  `macula_node_keys:redacted/1`, which replaces each key's private half
+  with `redacted`. The application adds the primary logger filter
+  `macula_key_redaction` on start and removes it on stop: in report
+  events of the `otp` and `macula` domains it redacts every key the same
+  way, and a stack frame of a Macula module shows its arity in place of
+  its arguments, since those can hold a key. Frames of other
+  applications' modules keep their arguments.
+- `macula_signed_object`: the signed objects of the post-quantum records
+  and frames. `sign/3` and `sign_held/3` sign fields under a label over
+  the label, a zero byte, the SHA-384 of the key as carried and tbs,
+  adding `alg`. `verify/3` and `verify_held/4` check the shape, the carried
+  key, the signature over tbs as received, the decoding rule and `alg`,
+  without raising. `encode/1` and `decode/1` give the wire form.
+- `macula_record` in the signed-object format: a record is `{key, tbs,
+  signature}` under `MACULA-PQ-RECORD-V1`, signed with a node key whose
+  purpose fits its type and named by its key id. `verify/2,3` refuses a
+  record over 256 KiB, a malformed tbs, a clock outside five minutes, a
+  payload that breaks its type's rules and a payload naming another
+  signer. Storage keys derive under `MACULA-PQ-STORAGE-KEY-V1`.
+  Tombstones and procedure advertisements take the design's pinned
+  payloads, and `verify_authorization/3` checks an advertisement's org
+  namespace and its org directory and delegation.
+  It replaces `decode/1`, `verify/1`, `procedure_key/1`,
+  `verify_delegation_chain/4` and `verify_advertisement_cert_chain/3`.
+- `macula_frame` decodes every frame under the post-quantum decoding
+  rule, and a frame type's own fields through a fixed table (D26): a
+  frame type, a field or an enum value the table does not list is
+  refused, and payloads keep the one key form, the same on every node.
+  Records in STORE, VALUE, REPLICATE and HyParView frames travel as their
+  wire bytes. `check_payload/1` refuses what the decoding rule refuses.
+- `macula_node_keys:generate/3` with `puzzle_difficulty`, and
+  `puzzle_solved/2`: an identity key whose node_id starts with that many
+  zero bits. Each try makes a new ML-DSA-87 half; a hybrid key keeps its
+  RSA-PSS half, since the node_id covers both halves.
+- `macula_record_cbor:decode_strict/1`: decodes one CBOR item under the
+  post-quantum decoding rule, without raising. It refuses bytes after the
+  top-level item, map keys other than text or integers, duplicate keys,
+  invalid UTF-8, nesting deeper than 64 levels, negative integers below
+  -2^63, and malformed input. `decode/1` is unchanged.
+- `macula:field/2`, `field/3` and `text/1`: read fields of maps a peer
+  supplies (D26), whose text keys and values arrive as `{text, Bin}`. A
+  field is looked up as `{text, Name}`, then as the atom, then as the
+  binary, so maps handed over in process read the same way. The
+  distribution pool reads its tunnel RPC payloads through them.
+- `macula_key_bindings`: bindings of a node's TLS and CONNECT keys to its
+  identity key, and the status statements that keep a binding in force,
+  as the handshake frame design lays them out. Each travels as its signed
+  `tbs` bytes and a signature. A verifier checks the signature over the
+  bytes it received before decoding them strictly, refuses an unknown key
+  or a field of the wrong type or length as `malformed_frame`, and checks
+  validity with 5 minutes of clock tolerance.
+- `macula_frame:encode_bytes/1` and `parse_stream_bytes/1`: frame CBOR
+  bytes with and without the length prefix, exactly as sent and
+  received, for the post-quantum handshake. `decode/1` shares their
+  length-prefix code.
+- `macula_handshake`: the post-quantum connection handshake frames, built
+  as CBOR bytes and checked as received. The client checks the challenge
+  before it signs the proof. The station checks CONNECT, the node_id puzzle
+  under `off`, `log_only` or `enforce` before any signature, and returns
+  the HELLO bytes to send; a refusing HELLO carries one coarse refusal code.
+  A key that would serve a second purpose is refused as `key_purpose_reuse`.
+- `macula_node_keys:carried_key_well_formed/2` and `signature_bytes/1`: the
+  one carried form of a key per profile, and the signature size per profile.
+- `macula_key_bindings:verify_status/5` returns when the statement expires.
+- `macula_quic:peer_leaf/1` and `presented_leaf/1`: the leaf certificate DER
+  of a connection's own TLS handshake. A dialed connection reports the leaf
+  it received, byte for byte, and an accepted connection the leaf it
+  presented.
+- `macula_quic:reload_certificate/3`: a listener loads a new certificate and
+  key from files and presents them to the connections it accepts from then
+  on. Each certificate is a generation of its own, and an accepted
+  connection keeps the leaf of the generation it was accepted with. A reload
+  that cannot read its files, or whose key does not match its certificate,
+  returns an error and keeps the current certificate.
+- `macula_peering` connections run the post-quantum handshake of
+  `macula_handshake` with the node's identity key and its
+  `macula_statement_issuer`. After HELLO each side sends a status frame
+  at every reissue of its statement. A connection closes with
+  `status_expired` once the peer's statement is 5 minutes past its
+  expiry, with `binding_expired` at the peer binding's not_after, and
+  with a check's reason when a status frame fails that check. Close
+  reasons are local: the controlling process hears them in
+  `disconnected`, and the peer does not. A station under `log_only`
+  reports an unsolved puzzle as `_macula.peering.puzzle_unsolved`.
+  In `pq_hybrid` a connection neighbour-signs every control frame it
+  sends and checks every one it reads, for the connection hash and the
+  seq in that direction, and closes on a refusal.
+- `macula_diagnostics:bounded_event/3`: a diagnostics event logged at most
+  once per 10 seconds per event name, node-wide. An event inside that
+  window is counted, and the next line for the name carries the latest
+  properties with `suppressed`, the number held back since the line
+  before; once per window the table's owner, `macula_diagnostics_bound`,
+  logs a count a burst left. Callers update the counts table themselves.
+  `macula_peering` connections log `_macula.peering.closed`,
+  `_macula.peering.handshake_timeout` and
+  `_macula.peering.puzzle_unsolved` through it.
+- `macula_record_uuid:v7_monotonic/1`: the version of a record a node
+  signs. Its rand_a bits count within a millisecond from a random 11-bit
+  seed, and each version is the larger of that fresh value and the last
+  one issued plus one, so the versions a node issues strictly increase,
+  also across a wall-clock step back, and a tombstone built in the same
+  millisecond as its record replaces it. A version is an order, not a
+  time. `macula_record` signs new, refreshed and withdrawing records with
+  it.
+- `macula_peering:peer_identity/1`: the peer's node_id, its identity key
+  as carried, the profile and its capabilities, once the handshake has
+  completed.
+- `macula_handshake` results carry the not_after of the peer's binding,
+  and `macula_frame:read_wire/1` reads a frame from its decoded CBOR value.
+  On an open connection a frame is decoded once and routed by its
+  frame_type (`macula_handshake:open_frame_kind/1` and
+  `read_status_wire/2`): a handshake frame, a frame `macula_frame`
+  refuses and bytes that are not CBOR close it as `malformed_frame`.
+- HyParView frames are bounded: a `peer_sample` holds at most 7 node_ids,
+  a SHUFFLE or FORWARD_JOIN `ttl` and a FORWARD_JOIN `arwl` are at most 8,
+  and a `prwl` is at most its `arwl`. A frame outside these is
+  `malformed_frame`, and the constructors refuse to build one. A neighbour
+  places at most 20 node_ids per minute in the passive view, a token
+  bucket with one back every 3 seconds counting only node_ids new to the
+  view. A FORWARD_JOIN places its new member when its `ttl` equals the
+  receiver's own PRWL. A SHUFFLE_REPLY is merged only while a SHUFFLE sent
+  in the last 30 seconds has no reply yet. `macula_hyparview_proto` returns
+  `{refused, Neighbour, Kind}` for a frame past the allowance and for an
+  unsolicited SHUFFLE_REPLY, and `macula_frame:charged_refusal/1` charges
+  both kinds.
+- A link-carried `macula_stream` that receives a frame of a type that
+  belongs on the control stream rejects its peering connection with
+  `malformed_frame` and ends, in either profile.
+  `macula_frame:control_frame/1` names those types.
+- `macula_frame:verify_publication/3` sizes a refusal for time:
+  `{not_yet_valid, AheadMs}` and `{expired, PastMs}`, the milliseconds
+  past the moment its rule starts refusing. `charged_refusal/1` charges
+  them only beyond 10 minutes.
+- `hecate_plumtree` takes its clocks from the caller: `process/4` with
+  wall-clock and monotonic milliseconds, `publish/3` with the wall clock.
+  A neighbour is on at most 1,024 open missing entries: an IHAVE past that
+  is not recorded, gets no GRAFT and returns `{refused, Neighbour,
+  ihave_allowance}`. `expired_grafts/2` takes a neighbour off an entry
+  whose GRAFT it left unanswered for 10 seconds and returns
+  `graft_unanswered`. A GOSSIP of an id, verified or refused, ends its
+  whole entry at no charge to its announcers, and a refused GOSSIP returns
+  its refusal. `macula_frame:charged_refusal/1` charges `ihave_allowance`,
+  `graft_unanswered` and `wrong_realm`.
+- `macula_client` bounds the links a pool holds and the new peers it dials.
+  With more seeds than `max_seeds` (default 16) a pool does not start, and
+  `connect/2` returns `{error, {too_many_seeds, Given, Max}}`. A fresh
+  direct dial past `max_direct_links` (default 8) is refused with
+  `{error, too_many_direct_links}`. `new_peer_budget` (default 16) is the
+  most new peers per 15 minutes, each counted once by its normalized seed:
+  past it a fresh direct dial is refused with
+  `{error, new_peer_budget_spent}` and a discovered station is left for a
+  later discovery run. The configured seeds never spend it. `status/1`
+  counts refused dials by reason in `refused_dials`, and each reason is
+  logged at most once a minute with its count. Each limit, and station
+  discovery's `max_links`, is an integer from 1 to its cap (64 seeds, 64
+  direct links, 256 new peers, 64 discovered links); any other value, an
+  atom included, does not start the pool, and `connect/2` returns
+  `{error, {invalid_link_limit, Key, Value}}`. A seed's host is compared in
+  canonical form: its ASCII letters lowercased, without the brackets around
+  an IPv6 literal, and an IP literal in one text form, with an IPv4-mapped
+  IPv6 address as its IPv4 address. Other bytes, a trailing dot included,
+  are kept, so two names DNS tells apart are two peers. A direct dial or a
+  discovered station whose seed has no text host, or no port from 1 to
+  65535, is refused with `unusable_seed` and counted, and the pool keeps
+  serving.
+- `macula_frame:stream_bytes/2` signs and encodes a frame built for a
+  dedicated stream: a CALL or STREAM_OPEN, a RESULT or provider ERROR, a
+  station's relay error, or either side's stream frame under its verified
+  STREAM_OPEN. It returns `{ok, StreamBytes}`, or an error with nothing to
+  write. Before signing: `{unknown_build_key, Key}` for a field the frame
+  does not have; `unsignable` for a key that is not the identity key of the
+  sender the receiver verifies, or a stream frame without its verified
+  STREAM_OPEN; `{not_allowed, Type}` for a caller's STREAM_REPLY, or a
+  caller's STREAM_DATA in a server_stream; `{text_too_long, Field}` for a
+  code over 64 bytes, or a provider detail or STREAM_ERROR message over 256
+  bytes; `{invalid_text, Field}` for text that is not a UTF-8 binary;
+  `relay_code_outside_its_set`; and `{unsupported_payload_type, Type, Path}`
+  for a payload, body or reply the wire cannot carry. After encoding:
+  `frame_too_large` for a frame over the 16 MiB cap. A build that leaves out
+  a field its frame requires, has a field of the wrong size, names a stream
+  frame type outside the four, or has a `seq` outside the protocol's range
+  raises `function_clause`, and any other field outside its type, range or
+  set raises too. `written_bytes/1` gives the bytes of a `stream_bytes()`
+  and refuses anything else.
+- `macula_frame:parse_for_relay/2` parses bytes a relay received on a
+  stream: each whole frame that passes the checks of `parse_received/2`
+  comes with a unit holding a copy of exactly the bytes received for it, a
+  frame whose fields its type refuses comes back refused with no unit, and
+  a length header over the cap or a frame that does not decode ends the
+  parse. `macula_peering:relay_on_stream/2` and `async_relay_on_stream/2,3`
+  write only such units, through `macula_frame:relayed_bytes/1`, so a relay
+  writes nothing its reader did not accept.
+
+### Changed
+
+- Content ids are SHA-384 (D24): `<<2, Codec, Hash:48>>`, 50 bytes, with
+  byte 0 as the hash tag. A tag 1 (BLAKE3) id is refused on fetch, in
+  manifests, for chunks and in content announcements. New blocks,
+  manifests and chunks are hashed with SHA-384, a manifest names `sha384`
+  as its only hash algorithm, and `macula_manifest:chunk_mcid/2` replaces
+  `chunk_mcid/3`.
+- The `macula` application starts only with `crypto_profile` set to
+  `pq_pure` or `pq_hybrid` in its environment. A missing value, an
+  unknown value or a list of profiles makes the start return an error.
+  There is no default. The test configuration, `config/test.sys.config`,
+  sets `pq_pure`.
+- `macula_cluster:start_cluster/1` returns
+  `{error, {unknown_strategy, Strategy}}` for a strategy other than `auto`,
+  `gossip` or `static`, and does not start distribution.
+- `macula_peering:connect/1` and `accept/2` take `identity`, a
+  `macula_node_keys` identity key, and `issuer`, the node's statement
+  issuer. A dial's `target` requires `expected_node_id`, the station's
+  node_id, and a station requires `puzzle => #{mode => Mode}`. A
+  connection without them does not start. `connected` and
+  `handshake_complete` carry the peer's node_id. A connection sends
+  frames as their producers built them, adding only the neighbour
+  signature of a control frame in `pq_hybrid`.
+- `macula_hyparview_proto:build_shuffle/2` takes the view and returns it
+  with the SHUFFLE recorded, and the send to a random active neighbour,
+  with a sample of the view. `ctx()` carries `now`, in monotonic
+  milliseconds.
+- A station link's liveness probe is a `_macula.ping` request to the
+  station it is connected to, and the link keeps the probe's request. Only
+  a reply that verifies against that request clears the probe: a RESULT
+  or provider ERROR through `macula_frame:verify_reply/3`, or a relay
+  ERROR reported by that station through
+  `macula_frame:verify_relay_error/4`. The link finds the request a reply
+  answers by the ids it claims, `macula_frame:claimed_reply_ids/1`. A reply
+  for a request the link does not hold, or one that does not verify,
+  clears nothing; the link counts it by reason and logs the count at most
+  once a minute. As before, the connection closes after
+  `liveness_max_misses` unanswered probes, two by default.
+- A station link's calls name their target (D25).
+  `macula_station_link:call/6,7` take `station`, the station the link is
+  connected to, or a provider's node_id, and replace `call/5,6`. The link
+  signs the CALL and keeps the request. A reply completes the call only if
+  it verifies against that request, found by the ids it claims, as for the
+  liveness probe; any other reply is counted and the call stays pending.
+  A call returns:
+  - `{ok, Payload}`;
+  - `{error, Detail}` for a provider's `handler_error`;
+  - `{error, {call_error, Code, Detail}}` for another provider code, with
+    `Code` and `Detail` as binaries and `Detail` `undefined` when absent;
+  - `{error, {call_error, unknown_next_peer, undefined}}` when the station
+    has no link to the target.
+
+  A payload no frame can carry is refused before sending as
+  `{error, {refused, Reason}}`. So is a procedure over 512 bytes or not
+  valid UTF-8, as `macula_frame:text_checked/2` bounds it. The timeout is 1
+  to 600000 milliseconds. Every call ends with one of:
+  - its reply;
+  - its timeout;
+  - `{error, {disconnected, Name}}` when the connection closes, or
+    `{error, {peering_exit, Name}}` when the connection's process exits;
+  - `{error, {link_stopped, Name}}` when the link stops for any other
+    reason, which also answers a call that had not reached the link yet.
+
+  `Name` is the reason's name as `macula_reason_name:text/1` gives it, such
+  as `<<"normal">>`, `<<"shutdown">>` or `<<"crashed">>`, and nothing else of
+  the reason reaches a caller. A reply after the timeout is counted like one
+  for a request the link does not hold. `not_sent/1` is true only for `not_connected`, `noproc`
+  and `{refused, _}`.
+- `macula:call/5` reaches a provider through its verified advertisement
+  (`macula_direct_dial`), and so do station discovery and the
+  distribution pool's tunnel calls. `macula:call_station/7,8` and
+  `macula_client:call_station/7` to `10` take the provider's node_id as
+  `Target`, after the station. `macula_client:call_linked_station/5`
+  replaces `macula_client:call/5` and calls a station the pool is linked
+  to, as the DHT functions do. `macula_direct_dial:call_stream/6` takes
+  `dial_timeout_ms` from 1 to 600000 milliseconds, and
+  `macula_request:start_link/6,7,8` and `start_link_direct/6,7,8` refuse a
+  timeout outside that range where the request starts.
+- A pool pins realm trust when it starts: `macula:connect/2`'s
+  `realm_trust => #{RealmId => RealmKey}`, each realm's public key as
+  carried. The pool refuses to start, before any link, on a realm id that
+  is not 32 bytes or a key not well formed for the node's crypto profile
+  (`{realm_trust, invalid}`), or on a key of the other profile
+  (`{realm_trust, profile_mismatch}`). Direct dial checks an org namespaced
+  advertisement against the key pinned for its realm alone
+  (`macula_client:realm_key/2`). A caller looks up no tombstone, so a
+  delegation its org withdraws is honoured until it expires, at most six
+  hours.
+- A station link's stream sessions use the post-quantum stream frames and
+  name their target. `macula_station_link:call_stream/6` takes `station` or
+  a provider's node_id and replaces `call_stream/5`. The link signs the
+  STREAM_OPEN with its identity key, and the session's stream signs and
+  verifies its own frames under that open. A build the frame refuses
+  returns `{error, {refused, Reason}}`, and an open over
+  `max_stream_open_bytes` returns `{error, {open_too_large, Limit}}`, both
+  before a stream starts. A session's frames reach it through the dedicated
+  stream they arrive on.
+- A provider verifies a STREAM_OPEN, serves only one addressed to its own
+  node_id, and admits it once per caller and request id through the pool's
+  request admission, before its procedure's policy or handler. An open
+  that does not verify, or names another node, closes its stream with
+  nothing written. Any other refusal is a STREAM_ERROR signed under the
+  open it refuses: `request_copy`, the admission refusal's name,
+  `unauthorized`, `not_found`, `mode_mismatch` for an open in a mode other
+  than its procedure's, `too_many_sessions`, `refused` for a second open on
+  one stream, or `unavailable`. A caller's chunk in a `server_stream` is
+  refused as a malformed frame and no longer ends the session. A
+  procedure's policy reads the request's `token`, and its audience check
+  takes the caller's key id.
+- `macula:call_stream/5` resolves the provider through its verified
+  advertisement, as `macula:call/5` does. `macula:call_stream_station/7`
+  and `macula_client:call_stream_station/7` take the provider's node_id as
+  `Target`, after the station, and direct dial passes the provider it
+  resolved.
+- Direct dial refuses the 10.x trust options by name, with
+  `{error, {removed_option, Key}}`, before anything is looked up, dialed,
+  registered or published. `macula_direct_dial:call/6` and `call_stream/6`
+  refuse `verify_cert_chain`, and `realm_trust`, which the pool now pins.
+  `macula_direct_dial:publish_advertisement/5` and the `advertise_direct/7`
+  functions of `macula_response` and `macula_streamer` refuse `cert_chain`.
+  The realm keys a pool pins and `authorization` replace them.
+- A station link delivers the overlay frames D17 leaves unsigned, as
+  `macula_frame:relayed_without_signature/1` names them, from an
+  `overlay_relay` envelope, with the envelope's origin as their sender
+  whatever the inner frame names. A relayed frame of any other type is
+  dropped, and so is a relayed payload that is not exactly one frame; the
+  link carries on. The relayed frames a link drops are counted by kind and
+  logged at most once a minute per kind. The envelope reaches the link only
+  through its own connection, which in `pq_hybrid` checks the station's
+  neighbour signature on it first.
+- A station link logs its `_macula.station_link.disconnected` and
+  `_macula.station_link.peering_exit` diagnostic events at `notice`, so a
+  lost connection shows at OTP's default primary level. Its other
+  diagnostic events stay at `info`. Every station link diagnostic event
+  names a reason only by `macula_reason_name:text/1`.
+- A pool runs one request admission, `macula_request_admission`, for the
+  requests all its links receive, and ends when the admission ends. Its
+  limits come from the `request_admission` pool option, then the `macula`
+  application environment, then the defaults: 256 entries per caller, 1024
+  per link's share, and 256 KiB of stored reply bytes per caller and
+  16 MiB in total. A limit outside its range, a quota per caller above the
+  share, or reply bytes per caller above the total refuses the pool start.
+  A link's share is its normalized seed. `macula_station_link:start_link/1`
+  requires `admission` and `share`.
+
+### Removed
+
+- The `mdns` and `dht` cluster strategies and the discovery code behind
+  them: `macula_cluster_strategy`, `macula_dist_discovery` and
+  `macula_dist_mdns_advertiser`, with the `macula_mdns` dependency and the
+  `optional_applications` entry for `mdns`. The macula application never
+  started this code.
+- `macula_frame:sign_swim_update/2` and `macula_frame:verify_swim_update/1`,
+  with their private helpers and the `macula-v2-swim-update` signing
+  domain. Nothing signed or verified SWIM membership updates. SWIM itself
+  stays: `macula_frame:swim_update/1` and the piggyback updates in SWIM
+  PING and ACK frames are unchanged. An update no longer has an optional
+  `signature` key.
+- The Ed25519 CONNECT and HELLO frames of `macula_peering_conn`, with the
+  `realms`, `verify` and `pin_tls_cert` options.
+- `macula_record_uuid:v7/1`. Record versions come from `v7_monotonic/1`,
+  and `v7/0` stays for ids that need no order.
+- The ADVERTISE and UNADVERTISE frames a station link sent.
+  `macula_station_link:advertise/4,5`, `advertise_stream/5,6`,
+  `unadvertise/3` and `unadvertise_stream/3` register or remove a handler
+  on the link, for the CALLs and STREAM_OPENs its station delivers to it by
+  target, and send nothing, before or after the link connects.
+- `macula_client:call_stream/5`, which opened a stream on the pool's first
+  healthy link with no target. A stream open names its target, and
+  `macula:call_stream/5` resolves it.
+- The certificate-chain form of a provider authorization. The 11.0.0
+  realm issues no X.509 certificates, so a provider is authorized only by
+  the realm-signed org directory and the org-signed procedure delegation.
+  `macula_record:verify_authorization/3` refuses an authorization in any
+  other form as `authorization_form_unsupported`, and
+  `procedure_advertisement/5` builds only the delegation form.
+  `macula_record`'s trust takes only `realm_key`. The
+  `realm_ca` trust key, certificate path validation, and the
+  `no_realm_ca` and `cert_*` refusals are gone.
+
+### Fixed
+
+- The `macula_record:envelope/4` documentation said a per-subject storage
+  key is a BLAKE3 digest. `macula_record:storage_key/1` derives it with
+  SHA-256, like every other derived storage key.
+- `macula_content_transfer:start_get/3` and `start_get_station/5` refuse an
+  MCID that is not the SHA-384 id of a single block or of a manifest with
+  `function_clause`, in the caller, as the module documents for input of
+  another shape. Such an id used to start a transfer whose process then
+  crashed.
+
 ## [Unreleased]
+
+### Added
+
+- `macula_stream:controlling_process/2` hands a stream to another process,
+  which the stream then ends with. Only the stream's owner can hand it over;
+  anyone else gets `{error, not_owner}`. When a stream's session ends, with
+  both sides closed, an abort, or its link lost, its owner gets
+  `{macula_stream, ended, Stream, How}` once, `How` being `closed`,
+  `{error, {Code, Message}}` or `peer_down`. An owner the stream is handed to
+  after that is told at once. `controlling_process` is also one of the stream
+  functions `macula_streamer` takes in `stream_io`.
+- `include/macula_quic_error_codes.hrl` names each QUIC application error
+  code macula sends when it resets or stops a stream, or closes a
+  connection: `QUIC_CODE_CANCELLED` (0), `QUIC_CODE_LINGER_EXPIRED` (1),
+  `QUIC_CODE_REFUSED` (2), `QUIC_CODE_STREAM_PROTOCOL_ERROR` (3) and
+  `QUIC_CODE_REFUSED_BUSY` (4), when the node has no room: for a connection a
+  station closes because it has no handshake slot free, or a relayed stream it
+  resets because the stream's reader does not take data in time. The codes on
+  the wire do not change.
+- `macula_quic:close_connection/3` closes a connection with an application
+  error code and a reason of at most 256 bytes, which the peer reads with
+  `macula_quic:close_reason/1`. A code that does not fit a QUIC
+  variable-length integer is refused with `{error, error_code_out_of_range}`
+  and a longer reason with `{error, reason_too_long}`; the connection stays
+  open. `close_connection/1` still closes with code 0 and the reason
+  `closed`.
+- `macula_quic:close_reason/1` says why a connection closed, or `open` while
+  it is open: `{application_closed, Code, Reason}` for the peer's
+  application close, `locally_closed` when this side closed it, and the
+  transport's own reason otherwise.
+- `macula_peering:async_send_on_stream/3` writes a frame onto a dedicated
+  stream without waiting, so a peer that stops reading cannot hold a process
+  that serves several links. It checks, signs and encodes the frame as
+  `send_on_stream/3` does, and refuses what that refuses, then queues it.
+  With 1 MiB already unwritten on the stream it queues nothing and returns
+  `{error, busy}`, and the caller gets `{quic, send_ready, Stream, undefined}`
+  when it may send again. `async_send_on_stream/4` takes a tag: for a frame it
+  queued, the caller gets exactly one `{quic, send_complete, Stream, Tag}` once
+  the frame's bytes are written, or `{quic, send_incomplete, Stream, {Tag,
+  Reason}}` when the stream is reset, closed or fails first.
+- `macula_quic:async_send/3` is `async_send/2` with such a tag.
+
+### Changed
+
+- `macula_identity:load/1` and `macula_owner_only_file:read/1` accept only
+  a file that belongs to the user the node runs as, besides its mode. A file
+  of another owner returns `{error, {file_owner, #{file => Path, owner =>
+  Uid, required => NodeUid}}}` and is never reported as missing, so a
+  caller that makes a new identity only on `{error, enoent}` makes none. A
+  host without user ids skips the owner check. Before upgrading, give every
+  identity key file, and every other secret macula reads this way, to the
+  user the node runs as.
+- A station's pubsub registry keeps a realm's `hecate_pubsub_server` only
+  while something holds the realm. With the registry's `identity` set, only
+  a SUBSCRIBE starts a server for a realm without one; an UNSUBSCRIBE or
+  EVENT for such a realm gets `{ok, []}` and starts none, and
+  `hecate_pubsub_registry:relay_publish/3` still returns the station-signed
+  EVENT for fan-out to peer stations but starts no process. When an
+  UNSUBSCRIBE or `purge_subscriber/2` takes a realm's last subscription, its
+  server stops and its place frees. A realm registered with `register/3` is
+  pinned and stays, also when its server stops. At most
+  `max_subscribed_realms` realms, a registry start option of 1000 by default,
+  are materialised by SUBSCRIBE at once; a
+  SUBSCRIBE past that gets `{error, too_many_realms}` and starts no server.
+  Pinned realms do not count, with or without a server.
+  `hecate_pubsub_server:relay_event/2` builds the
+  EVENT a station relays for a PUBLISH, without a server.
+- A dedicated stream a peer opens may start with a STREAM_OPEN of at most
+  1 MiB, set with the `max_stream_open_bytes` macula application env. A
+  longer first frame closes the stream as soon as its length arrives, with no
+  STREAM_ERROR. `macula_station_link:call_stream/5`, and through it
+  `macula_client:call_stream/5` and `macula:call_stream/5`, refuse an open
+  whose signed STREAM_OPEN would be longer with
+  `{error, {open_too_large, Limit}}` and send nothing, so the caller learns at
+  once instead of waiting out its deadline. Send bulk data as chunks once the
+  stream is open.
+- A node serves one verified caller at most 16 stream sessions at once, and
+  all callers together at most 1000, set with the
+  `max_served_sessions_per_caller` and `max_served_sessions` macula
+  application env. The cap is kept per caller, not per link, because a link
+  to a station carries every caller that station sends: one busy caller
+  cannot take the places of the others. A STREAM_OPEN past either cap gets a
+  STREAM_ERROR with code `too_many_sessions` and runs no handler. A session's
+  place frees when its stream ends, and the counts hold across a restart of
+  `macula_stream_sessions`, which counts the sessions and the refusals by
+  reason and logs refusals at most once per
+  `served_session_refusal_log_interval_ms` (60000 by default). When the
+  counter does not answer within a second, a STREAM_OPEN gets code
+  `unavailable` instead, and the link carries on.
+- A dedicated stream a peer opens stays open only once it carries a session.
+  A stream whose first frame is not a STREAM_OPEN, whose STREAM_OPEN does not
+  verify, or that brings no whole frame within
+  `dedicated_stream_open_timeout_ms` (10000 by default) closes without a
+  STREAM_ERROR.
+- A dedicated stream carries one session. A STREAM_OPEN on a stream that
+  already carries one, served or opened by this node as a caller, gets a
+  STREAM_ERROR for its own stream id with code `refused`, and the session
+  already on the stream keeps it.
+- A STREAM_OPEN refused with `not_found`, `unauthorized` or
+  `too_many_sessions` closes its dedicated stream once the STREAM_ERROR is
+  written. The link keeps nothing for that stream and takes no more frames
+  from it, including the rest of the read the refused STREAM_OPEN came in.
+- A stream holds at most 16 MiB of memory for chunks no reader has taken. A
+  queued chunk is copied, so it keeps none of the frame it arrived in, and it
+  counts for the memory it takes: its bytes, a decoded term's heap size, and
+  the cell that queues it, so empty chunks count too. A chunk that would take
+  the stream past the bound ends the session: the peer gets a STREAM_ERROR
+  with the new code `resource_exhausted`, and the owner is told. That code
+  says the receiving side had no room for what was sent, and a later session
+  may succeed; `stream_protocol_error` says the peer broke the protocol, and
+  sending the same again fails the same way. A chunk handed
+  straight to a waiting reader counts for nothing. `macula_stream:start_link/1`
+  takes a `max_inbox_bytes` option for another bound, and
+  `macula_stream:info/1` reports `inbox_bytes`.
+- The streams a node serves share a budget for chunks no reader has taken:
+  one caller's streams together keep at most 16 MiB, and all served streams
+  on the node at most 256 MiB, set with the
+  `max_served_inbox_bytes_per_caller` and `max_served_inbox_bytes` macula
+  application env. The caller budget is one stream's own bound, so a caller
+  with many sessions keeps no more unread than one session may. A chunk past
+  a budget ends its session with `resource_exhausted`, as a chunk past the
+  stream's own bound does. A stream charges the budget in its own process and
+  gives the bytes back when a reader takes them or the stream ends.
+  `macula_stream_sessions:inbox_bytes/0` reports what the node's served
+  streams keep, and a refused charge counts as `caller_budget` or
+  `node_budget`.
+- A stream takes chunks only from the side its mode lets send: the server in
+  `server_stream`, the client in `client_stream`, and both in `bidi`. A
+  session whose peer sends a chunk from the side its mode keeps silent now
+  ends with `stream_protocol_error`: the peer gets a STREAM_ERROR with that
+  code, and the owner is told
+  `{macula_stream, ended, Stream, {error, {<<"stream_protocol_error">>, _}}}`.
+  A send the mode does not allow returns `{error, {send_not_allowed, Mode}}`
+  and sends nothing.
+- A served stream is owned by the process that runs its handler, and a
+  stream process ends when its owner ends. So a stream ends when its handler
+  returns or crashes, and a stream served by `macula_streamer` ends with the
+  streamer. A handler that lets another
+  process keep using its stream must now hand the stream over before it
+  returns: `ok = macula_stream:controlling_process(Stream, Pid)`.
+  `macula_streamer` stops when its stream's session ends, even when its
+  module would not stop by itself.
+- `macula_identity:generate/0` returns an identity that passes the station
+  puzzle. `macula_identity:generate/1` does the same unless given
+  `puzzle => false`, which returns a plain key.
+- The S/Kademlia puzzle difficulty that `macula_identity:puzzle_valid/1`
+  applies, and that `macula_identity:generate/0` and `generate/1` grind to
+  when no `difficulty` is given, is the `macula` application env
+  `puzzle_difficulty`, so a `sys.config` entry for `macula` sets it. It stays
+  8 leading zero bits when unset, and a set value must be an integer from 0
+  to 16. A node configured with any other value, a difficulty above 16
+  included, does not boot: the `macula` application refuses to start with
+  `{bad_config, {macula, puzzle_difficulty, Value}}`. The same error is
+  raised when the difficulty is used, for a value set while the node runs.
+  `macula_identity:check_puzzle_difficulty/0` runs that check.
+
+### Fixed
+
+- `macula_quic:reset_stream/2` records the reset before it resets the
+  stream's send side, so a `send/2` or tagged `async_send/3` write it
+  interrupts ends with the reason `reset`.
+- `macula_stream:await_reply/1,2` called after a stream's session ended
+  returns at once how it ended: the peer's abort as
+  `{error, {Code, Message}}`, `{error, peer_closed}` when the peer closed both
+  sides, or `{error, peer_down}` when the peer ended. An ending that follows
+  does not replace it.
+- A `macula_station_link` started without an `identity` generates one whose
+  node id passes `macula_identity:puzzle_valid/1`, as the `macula_client`
+  pool's default identity does.
+- `macula_client:unsubscribe/2` takes a subscription off the wire. When the
+  last local subscriber of a (realm, topic) leaves, the pool sends
+  UNSUBSCRIBE on every station link that carried the SUBSCRIBE, including a
+  link it respawned and replayed the subscription onto.
+  `macula_station_link:unsubscribe_async/2` drops a subscription without
+  waiting for the link.
 
 ## [10.25.0] - 2026-09-14
 

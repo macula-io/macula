@@ -33,7 +33,10 @@ owner_only_file_test_() ->
       fun read_refuses_symlink_to_file_others_can_read/1,
       fun read_refuses_directory/1,
       fun read_reports_missing_file/1,
-      fun read_reports_dangling_symlink/1]}.
+      fun read_reports_dangling_symlink/1,
+      fun read_refuses_file_owned_by_another_user/1,
+      fun read_accepts_file_owned_by_the_node_user/1,
+      fun read_skips_the_owner_check_without_user_ids/1]}.
 
 %%%===================================================================
 %%% write/2
@@ -203,6 +206,42 @@ read_reports_dangling_symlink(Base) ->
         ok = file:make_symlink(filename:join(Base, "absent"), Link),
         ?assertEqual({error, enoent}, macula_owner_only_file:read(Link))
     end}.
+
+read_refuses_file_owned_by_another_user(Base) ->
+    {"read refuses a file only its owner can read when the node runs as another user, naming the owner and the user required", fun() ->
+        Path = write_with_mode(Base, "secret", 8#600),
+        Owner = uid(Path),
+        ?assertEqual({error, {file_owner, #{file => Path, owner => Owner, required => Owner + 1}}},
+                     with_node_user(Owner + 1, fun() -> macula_owner_only_file:read(Path) end))
+    end}.
+
+read_accepts_file_owned_by_the_node_user(Base) ->
+    {"read accepts a file only its owner can read when that owner is the user the node runs as", fun() ->
+        Path = write_with_mode(Base, "secret", 8#600),
+        ?assertEqual({ok, <<"s3cret">>},
+                     with_node_user(uid(Path), fun() -> macula_owner_only_file:read(Path) end))
+    end}.
+
+read_skips_the_owner_check_without_user_ids(Base) ->
+    {"read skips the owner check on a host without user ids", fun() ->
+        Path = write_with_mode(Base, "secret", 8#600),
+        ?assertEqual({ok, <<"s3cret">>},
+                     with_node_user(none, fun() -> macula_owner_only_file:read(Path) end))
+    end}.
+
+uid(Path) ->
+    {ok, #file_info{uid = Uid}} = file:read_file_info(Path),
+    Uid.
+
+%% Fun's value while macula_node_user:effective_uid/0 answers Uid.
+with_node_user(Uid, Fun) ->
+    ok = meck:new(macula_node_user, [non_strict]),
+    try
+        ok = meck:expect(macula_node_user, effective_uid, fun() -> Uid end),
+        Fun()
+    after
+        meck:unload(macula_node_user)
+    end.
 
 %%%===================================================================
 %%% Helpers

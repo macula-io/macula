@@ -1,206 +1,101 @@
-%%% @doc Tests for `macula_record:verify_advertisement_cert_chain/3'
-%%% (Slice 7c Direction B): a managed-realm consumer verifies an
-%%% advertisement's embedded X.509 service-cert chain against the realm
-%%% CA it trusts. A real chain (realm CA -> org CA -> Ed25519 leaf, the
-%%% leaf binding the advertiser key) is minted in-process with OTP
-%%% `public_key' so the test exercises the actual path validation, key
-%%% binding, and org RDN extraction — not a hand-rolled stand-in.
+%% EUnit tests for the removed certificate form of a provider authorization (D25 item 6). In 11.0.0 a provider is
+%% authorized only by the realm-signed org directory and the org-signed procedure delegation: the realm issues no X.509
+%% certificates. An advertisement whose authorization is a certificate chain is refused as
+%% authorization_form_unsupported, even one whose chain leads to a realm CA the caller holds. No builder writes that
+%% form, and nothing in macula validates a certificate path or reads a realm CA.
 -module(macula_record_cert_chain_tests).
 
 -include_lib("eunit/include/eunit.hrl").
 -include_lib("public_key/include/public_key.hrl").
 
 -define(ORG, <<"rgfaber">>).
+-define(PROCEDURE, <<"rgfaber/get_forecast_v1">>).
+-define(DAY, 86400000).
 
-%%%===================================================================
-%%% Tests
-%%%===================================================================
+%% A chain that authorized a provider before the form was removed: realm CA, org CA with O = rgfaber, and a leaf for
+%% the advertiser's key. Its advertisement is refused whether or not the caller still passes the realm CA.
+a_certificate_chain_authorization_is_refused_as_an_unsupported_form_test() ->
+    #{realm_ca := Ca, adv := Adv} = fixture(),
+    ?assertEqual({error, authorization_form_unsupported}, authorize(Adv, #{profile => pq_pure})),
+    ?assertEqual({error, authorization_form_unsupported}, authorize(Adv, #{profile => pq_pure, realm_ca => Ca})).
 
-valid_chain_verifies_test() ->
-    #{realm_ca := RealmCaPem, adv := Adv} = fixture(?ORG, ?ORG),
-    ?assertEqual(ok,
-                 macula_record:verify_advertisement_cert_chain(RealmCaPem, Adv, ?ORG)).
+%% No builder writes the removed form.
+the_builder_refuses_a_certificate_chain_authorization_test() ->
+    ?assertError(function_clause,
+                 macula_record:procedure_advertisement(fill(1), fill(16#11), ?PROCEDURE, fill(16#77),
+                                                       #{authorization => #{certificate_chain => [<<1>>]}})).
 
-%% The running realm signs its CAs with P-256 (secp256r1), not Ed25519.
-%% The leaf still binds the service's Ed25519 key. Confirms the verifier
-%% handles the real mixed-key chain, not just the all-Ed25519 test shape.
-valid_p256_ca_chain_verifies_test() ->
-    #{realm_ca := RealmCaPem, adv := Adv} = fixture_p256(?ORG),
-    ?assertEqual(ok,
-                 macula_record:verify_advertisement_cert_chain(RealmCaPem, Adv, ?ORG)).
+%% Nothing in macula's own code validates a certificate path or reads a realm CA. The scan reads every source file
+%% under src/, found from macula_record's own compile information.
+no_source_validates_a_certificate_path_or_reads_a_realm_ca_test() ->
+    Record = proplists:get_value(source, macula_record:module_info(compile)),
+    Sources = filelib:wildcard(filename:join([filename:dirname(filename:dirname(Record)), "**", "*.erl"])),
+    ?assert(length(Sources) > 50),
+    ?assertEqual([], [{filename:basename(File), Needle} || File <- Sources, {ok, Text} <- [file:read_file(File)],
+                                                         Needle <- [<<"pkix_path_validation">>, <<"realm_ca">>],
+                                                         binary:match(Text, Needle) =/= nomatch]).
 
-wrong_org_dropped_test() ->
-    %% Leaf is issued under org "eve"; the consumer expects "rgfaber".
-    #{realm_ca := RealmCaPem, adv := Adv} = fixture(<<"eve">>, <<"eve">>),
-    ?assertEqual({error, cert_org_mismatch},
-                 macula_record:verify_advertisement_cert_chain(RealmCaPem, Adv, ?ORG)).
+%%------------------------------------------------------------------
+%% Fixtures
+%%------------------------------------------------------------------
 
-self_signed_leaf_dropped_test() ->
-    %% A squatter's chain rooted in its OWN realm CA, not the trusted one.
-    #{adv := Adv} = fixture(?ORG, ?ORG),
-    #{realm_ca := OtherRealmCaPem} = fixture(?ORG, ?ORG),
-    ?assertEqual({error, cert_chain_untrusted},
-                 macula_record:verify_advertisement_cert_chain(OtherRealmCaPem, Adv, ?ORG)).
-
-key_mismatch_dropped_test() ->
-    %% Advertisement signed by the advertiser key, but the embedded leaf
-    %% binds a DIFFERENT key — the cert does not certify this advertiser.
-    #{realm_ca := RealmCaPem, adv := Adv} = fixture_key_mismatch(?ORG),
-    ?assertEqual({error, cert_key_mismatch},
-                 macula_record:verify_advertisement_cert_chain(RealmCaPem, Adv, ?ORG)).
-
-missing_chain_dropped_test() ->
-    %% A validly-signed advertisement with no embedded cert chain.
-    Kp = macula_identity:generate(),
-    Adv = signed_advertisement(Kp, ?ORG, #{}),
-    #{realm_ca := RealmCaPem} = fixture(?ORG, ?ORG),
-    ?assertEqual({error, no_cert_chain},
-                 macula_record:verify_advertisement_cert_chain(RealmCaPem, Adv, ?ORG)).
-
-tampered_advertisement_dropped_test() ->
-    #{realm_ca := RealmCaPem, adv := Adv} = fixture(?ORG, ?ORG),
-    Tampered = Adv#{key => macula_identity:public(macula_identity:generate())},
-    ?assertEqual({error, advertisement_bad_signature},
-                 macula_record:verify_advertisement_cert_chain(RealmCaPem, Tampered, ?ORG)).
-
-%% The embedded cert chain must survive the wire codec: a consumer
-%% resolves advertisements over CBOR, then verifies the chain. If the
-%% cert_chain field did not round-trip, verify would fail with
-%% no_cert_chain even for a legitimate provider.
-cert_chain_survives_wire_roundtrip_test() ->
-    #{realm_ca := RealmCaPem, adv := Adv} = fixture(?ORG, ?ORG),
-    {ok, Decoded} = macula_record:decode(macula_record:encode(Adv)),
-    ?assertEqual(ok,
-                 macula_record:verify_advertisement_cert_chain(RealmCaPem, Decoded, ?ORG)).
-
-%%%===================================================================
-%%% Fixtures
-%%%===================================================================
-
-%% A full valid setup: realm CA -> org CA (O=CertOrg) -> leaf binding the
-%% advertiser key; the advertisement carries [leaf, orgCA] and is signed
-%% by the advertiser keypair. `UriOrg' is the org segment in the
-%% procedure_uri (matches CertOrg in the happy path).
-fixture(CertOrg, UriOrg) ->
-    Kp = macula_identity:generate(),
-    AdvKey = macula_identity:public(Kp),
-    #{realm_ca_pem := RealmCaPem, chain_pem := ChainPem} =
-        issue_chain(AdvKey, CertOrg),
-    Adv = signed_advertisement(Kp, UriOrg, #{cert_chain => ChainPem}),
-    #{realm_ca => RealmCaPem, adv => Adv}.
-
-%% Same, but the leaf binds a fresh key that is NOT the advertiser's.
-fixture_key_mismatch(UriOrg) ->
-    Kp = macula_identity:generate(),
-    OtherKey = macula_identity:public(macula_identity:generate()),
-    #{realm_ca_pem := RealmCaPem, chain_pem := ChainPem} =
-        issue_chain(OtherKey, UriOrg),
-    Adv = signed_advertisement(Kp, UriOrg, #{cert_chain => ChainPem}),
-    #{realm_ca => RealmCaPem, adv => Adv}.
-
-%% Like fixture/2 but the CAs sign with P-256 (the realm's real key type).
-fixture_p256(Org) ->
-    Kp = macula_identity:generate(),
-    AdvKey = macula_identity:public(Kp),
-    #{realm_ca_pem := RealmCaPem, chain_pem := ChainPem} =
-        issue_chain_p256(AdvKey, Org),
-    Adv = signed_advertisement(Kp, Org, #{cert_chain => ChainPem}),
-    #{realm_ca => RealmCaPem, adv => Adv}.
-
-signed_advertisement(Kp, Org, Opts) ->
-    AdvKey  = macula_identity:public(Kp),
-    Station = macula_identity:public(macula_identity:generate()),
-    Uri     = <<"realmhex/", Org/binary, "/get_forecast_v1">>,
-    Rec     = macula_record:procedure_advertisement(AdvKey, Uri, Station, Opts),
-    macula_record:sign(Rec, Kp).
-
-%%%===================================================================
-%%% Minimal in-process X.509 CA (OTP public_key)
-%%%===================================================================
-
-%% Issue realm CA (self-signed) -> org CA -> Ed25519 leaf binding
-%% `LeafPub' with organization `Org'. Returns the trusted realm CA PEM
-%% and the leaf-first [leaf, orgCA] PEM bundle the advertiser embeds.
-issue_chain(LeafPub, Org) ->
+%% A realm CA, an org CA with O = rgfaber, and a leaf for the advertiser's key, in the advertisement as [leaf, org CA].
+fixture() ->
+    {ok, A} = macula_node_keys:generate(identity, pq_pure),
     {RealmPub, RealmPriv} = ca_key(),
-    {OrgPub, OrgPriv}     = ca_key(),
+    {OrgPub, OrgPriv} = ca_key(),
     RealmSubj = subject(<<"io.macula">>, <<"io.macula">>),
-    OrgSubj   = subject(<<"io.macula.", Org/binary>>, Org),
-    LeafSubj  = subject(<<"mri:app:io.macula/", Org/binary, "/svc">>, Org),
-    RealmDer = sign_cert(RealmSubj, ec_spki(RealmPub), RealmSubj, RealmPriv, true),
-    OrgDer   = sign_cert(OrgSubj, ec_spki(OrgPub), RealmSubj, RealmPriv, true),
-    LeafDer  = sign_cert(LeafSubj, ed_spki(LeafPub), OrgSubj, OrgPriv, false),
-    #{realm_ca_pem => pem([RealmDer]),
-      chain_pem    => pem([LeafDer, OrgDer])}.
+    OrgSubj = subject(<<"io.macula.rgfaber">>, ?ORG),
+    RealmDer = cert(RealmSubj, RealmPub#'ML-DSAPublicKey'.key, RealmSubj, RealmPriv, true),
+    OrgDer = cert(OrgSubj, OrgPub#'ML-DSAPublicKey'.key, RealmSubj, RealmPriv, true),
+    LeafDer = cert(subject(<<"svc">>, ?ORG), macula_node_keys:public_key(A), OrgSubj, OrgPriv, false),
+    #{realm_ca => public_key:pem_encode([{'Certificate', RealmDer, not_encrypted}]),
+      adv => advertisement(A, [LeafDer, OrgDer])}.
 
-%% CA keys are Ed25519 too (OTP verifies Ed25519 issuer signatures).
+%% The provider's advertisement with a certificate_chain authorization, put into its payload by hand because no builder
+%% writes that form.
+advertisement(A, Chain) ->
+    Unsigned = macula_record:procedure_advertisement(macula_node_keys:key_id(A), fill(16#11), ?PROCEDURE, fill(16#77),
+                                                     #{ttl_ms => 300_000}),
+    Authorization = #{{text, <<"certificate_chain">>} => Chain},
+    Payload = (macula_record:payload(Unsigned))#{{text, <<"authorization">>} => Authorization},
+    macula_record:sign(Unsigned#{payload := Payload}, A).
+
+%% public_key:generate_key(mldsa87) leaves the seed at <<>>, which public_key's signing then takes for the key; set it
+%% to undefined so the expanded key signs (OTP 28.4.2 to 29.0.6).
 ca_key() ->
-    {Pub, Priv} = crypto:generate_key(eddsa, ed25519),
-    {Pub, #'ECPrivateKey'{version = 1, privateKey = Priv,
-                          parameters = {namedCurve, ?'id-Ed25519'},
-                          publicKey = Pub}}.
+    {Pub, Priv} = public_key:generate_key(mldsa87),
+    {Pub, Priv#'ML-DSAPrivateKey'{seed = undefined}}.
 
-%% P-256 CA (the realm's real CA key type, from key_gen.ex secp256r1).
-issue_chain_p256(LeafPub, Org) ->
-    {RealmPub, RealmPriv} = p256_ca_key(),
-    {OrgPub, OrgPriv}     = p256_ca_key(),
-    RealmSubj = subject(<<"io.macula">>, <<"io.macula">>),
-    OrgSubj   = subject(<<"io.macula.", Org/binary>>, Org),
-    LeafSubj  = subject(<<"mri:app:io.macula/", Org/binary, "/svc">>, Org),
-    RealmDer = sign_cert(RealmSubj, p256_spki(RealmPub), RealmSubj, RealmPriv, true),
-    OrgDer   = sign_cert(OrgSubj, p256_spki(OrgPub), RealmSubj, RealmPriv, true),
-    LeafDer  = sign_cert(LeafSubj, ed_spki(LeafPub), OrgSubj, OrgPriv, false),
-    #{realm_ca_pem => pem([RealmDer]), chain_pem => pem([LeafDer, OrgDer])}.
-
-p256_ca_key() ->
-    {Pub, Priv} = crypto:generate_key(ecdh, secp256r1),
-    {Pub, #'ECPrivateKey'{version = 1, privateKey = Priv,
-                          parameters = {namedCurve, ?'secp256r1'},
-                          publicKey = Pub}}.
-
-p256_spki(Pub) ->
-    #'OTPSubjectPublicKeyInfo'{
-       algorithm = #'PublicKeyAlgorithm'{algorithm = ?'id-ecPublicKey',
-                                         parameters = {namedCurve, ?'secp256r1'}},
-       subjectPublicKey = #'ECPoint'{point = Pub}}.
-
-ed_spki(Pub) ->
-    #'OTPSubjectPublicKeyInfo'{
-       algorithm = #'PublicKeyAlgorithm'{algorithm = ?'id-Ed25519',
-                                         parameters = asn1_NOVALUE},
-       subjectPublicKey = #'ECPoint'{point = Pub}}.
-
-ec_spki(Pub) -> ed_spki(Pub).
-
-subject(CN, O) ->
-    {rdnSequence,
-     [[#'AttributeTypeAndValue'{type = {2, 5, 4, 3}, value = {utf8String, CN}}],
-      [#'AttributeTypeAndValue'{type = {2, 5, 4, 10}, value = {utf8String, O}}]]}.
-
-sign_cert(Subject, Spki, IssuerSubject, IssuerKey, IsCA) ->
-    TBS = #'OTPTBSCertificate'{
+cert(Subject, PublicKey, IssuerSubject, IssuerKey, IsCa) ->
+    Tbs = #'OTPTBSCertificate'{
              version = v3,
              serialNumber = rand:uniform(1 bsl 60),
-             signature = sig_alg(IssuerKey),
+             signature = #'SignatureAlgorithm'{algorithm = ?'id-ml-dsa-87', parameters = asn1_NOVALUE},
              issuer = IssuerSubject,
-             validity = #'Validity'{notBefore = {utcTime, "230101000000Z"},
-                                    notAfter  = {utcTime, "330101000000Z"}},
+             validity = #'Validity'{notBefore = {utcTime, "230101000000Z"}, notAfter = utc_after(365 * ?DAY)},
              subject = Subject,
-             subjectPublicKeyInfo = Spki,
-             extensions = [basic_constraints(IsCA)]},
-    public_key:pkix_sign(TBS, IssuerKey).
+             subjectPublicKeyInfo = #'OTPSubjectPublicKeyInfo'{
+                                       algorithm = #'PublicKeyAlgorithm'{algorithm = ?'id-ml-dsa-87',
+                                                                         parameters = asn1_NOVALUE},
+                                       subjectPublicKey = #'ML-DSAPublicKey'{algorithm = mldsa87, key = PublicKey}},
+             extensions = [#'Extension'{extnID = ?'id-ce-basicConstraints', critical = true,
+                                        extnValue = #'BasicConstraints'{cA = IsCa, pathLenConstraint = asn1_NOVALUE}}]},
+    public_key:pkix_sign(Tbs, IssuerKey).
 
-%% The signature algorithm matching the issuer's key type.
-sig_alg(#'ECPrivateKey'{parameters = {namedCurve, ?'id-Ed25519'}}) ->
-    #'SignatureAlgorithm'{algorithm = ?'id-Ed25519', parameters = asn1_NOVALUE};
-sig_alg(#'ECPrivateKey'{parameters = {namedCurve, ?'secp256r1'}}) ->
-    #'SignatureAlgorithm'{algorithm = ?'ecdsa-with-SHA256',
-                          parameters = asn1_NOVALUE}.
+subject(CommonName, Org) ->
+    {rdnSequence,
+     [[#'AttributeTypeAndValue'{type = {2, 5, 4, 3}, value = {utf8String, CommonName}}],
+      [#'AttributeTypeAndValue'{type = {2, 5, 4, 10}, value = {utf8String, Org}}]]}.
 
-basic_constraints(IsCA) ->
-    #'Extension'{extnID = ?'id-ce-basicConstraints', critical = true,
-                 extnValue = #'BasicConstraints'{cA = IsCA,
-                                                 pathLenConstraint = asn1_NOVALUE}}.
+utc_after(Ms) ->
+    Now = erlang:system_time(millisecond),
+    {{Y, Mo, D}, {H, Mi, S}} = calendar:system_time_to_universal_time(Now + Ms, millisecond),
+    {utcTime, lists:flatten(io_lib:format("~2..0w~2..0w~2..0w~2..0w~2..0w~2..0wZ", [Y rem 100, Mo, D, H, Mi, S]))}.
 
-pem(Ders) ->
-    public_key:pem_encode([{'Certificate', D, not_encrypted} || D <- Ders]).
+authorize(Adv, Trust) ->
+    {ok, Verified} = macula_record:verify(macula_record:encode(Adv), pq_pure),
+    macula_record:verify_authorization(Verified, Trust, erlang:system_time(millisecond)).
+
+fill(Byte) ->
+    binary:copy(<<Byte>>, 32).

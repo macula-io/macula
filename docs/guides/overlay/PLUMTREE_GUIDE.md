@@ -83,12 +83,25 @@ The healing loop, end to end:
 lists:foreach(fun({send, Peer, Frame}) -> send_to(Peer, Frame) end, Actions),
 %% Deliveries == [{MsgId, Payload}] -- your own local copy, handle it here.
 
-handle_info({macula_overlay_frame, _Ref, Frame, #{sender := From}}, State) ->
-    {PT1, Actions, Deliveries} = hecate_plumtree:process(State#state.plumtree, From, Frame),
-    lists:foreach(fun({send, Peer, F}) -> send_to(Peer, F) end, Actions),
-    lists:foreach(fun({MsgId, Payload}) -> deliver_locally(MsgId, Payload) end, Deliveries),
+handle_info({macula_overlay_frame, _Ref, Frame, #{sender := From} = Meta}, State) ->
+    Clocks = #{wall => erlang:system_time(millisecond), monotonic => erlang:monotonic_time(millisecond)},
+    {PT1, Actions, Deliveries} = hecate_plumtree:process(State#state.plumtree, From, Frame, Clocks),
+    lists:foreach(fun({send, Peer, F}) -> send_to(Peer, F);
+                     ({refused, _Peer, Kind}) -> macula_station_link:overlay_frame_refused(State#state.link, Meta, Kind)
+                  end, Actions),
+    lists:foreach(fun({MsgId, Publication}) -> deliver_locally(MsgId, Publication) end, Deliveries),
     {noreply, State#state{plumtree = PT1}};
 ```
+
+A frame a station relays arrives with `via`, the station that relayed it, in
+its `Meta`. A `GOSSIP` goes to the subscriber of the realm its publication
+claims, read without verifying, and `hecate_plumtree:process/4` verifies the
+publication before it delivers anything. So the Plumtree layer is the
+subscriber that acts on plumtree frames, and no other overlay subscriber
+should act on them unverified. Report each refusal with
+`macula_station_link:overlay_frame_refused/3` and the frame's `Meta`: a
+refusal of what a relayed frame carries is counted on the link and never
+charged to the station that relayed it.
 
 `MsgId` is a caller-chosen 16-byte identifier — dedup and delivery tracking
 key off it, so use something collision-resistant (a random token, or a

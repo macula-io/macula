@@ -11,8 +11,9 @@
 %%
 %% == Phase 1 scope (this commit) ==
 %%
-%% State mutations + frame processing only. The publish path builds
-%% the signed EVENT frame and returns the matched LOCAL subscribers,
+%% State mutations + frame processing only. The publish path signs a
+%% PUBLISH with the server's node identity key, builds its EVENT and
+%% returns the matched LOCAL subscribers,
 %% but does NOT fan out across the cluster — that requires the
 %% Plumtree wire layer (`hecate_plumtree') and the DHT topic-discovery
 %% integration which land in subsequent commits.
@@ -38,28 +39,39 @@
     subscribers/2, topics/1, patterns/1, topic_count/1, subscriber_count/1,
     realm/1,
     publish/3, deliver_event/2, process_frame/3,
-    relay_publish/2,
+    relay_publish/2, identity_loaded/1,
     stop/1
 ]).
 
--export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
+-export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, format_status/1]).
 
 -export_type([opts/0]).
 
--type opts() :: #{realm := <<_:256>>, identity := macula_identity:key_pair()}.
+-ifdef(TEST).
+%% A state field's position in the state tuple, by name, for the key redaction tests.
+-export([state_field_index/1]).
+-endif.
+
+%% `identity' returns an identity key in the node's configured crypto profile: the server signs its own PUBLISH frames
+%% with that key, calling it at each publication, and verifies publications under that profile. The server holds the
+%% function, never the key.
+-type opts() :: #{realm := <<_:256>>, identity := fun(() -> macula_node_keys:node_key())}.
 
 -record(state, {
     realm    :: <<_:256>>,
-    identity :: macula_identity:key_pair(),
-    self_id  :: <<_:256>>,
+    identity :: fun(() -> macula_node_keys:node_key()),
+    profile  :: macula_crypto_profile:profile(),
     pubsub   :: hecate_pubsub:state(),
-    next_seq :: non_neg_integer()
+    key_id   :: <<_:256>>
 }).
 
 %%====================================================================
 %% API
 %%====================================================================
 
+%% @doc Start the server for a realm. A server whose `identity' does not return an identity key in the node's
+%% configured crypto profile does not start, so one node never runs two profiles, and one given the key itself in place
+%% of a function that returns it does not start either, with `{error, {identity, not_a_loader}}'.
 -spec start_link(opts()) -> {ok, pid()} | {error, term()}.
 start_link(#{realm := <<_:256>>, identity := _} = Opts) ->
     gen_server:start_link(?MODULE, Opts, []).
@@ -107,8 +119,9 @@ subscriber_count(Pid) ->
 realm(Pid) ->
     gen_server:call(Pid, realm).
 
-%% @doc Build a signed EVENT frame for `Topic'/`Payload' and return it
-%% together with the set of LOCAL subscribers that match. The caller
+%% @doc Sign a PUBLISH for `Topic'/`Payload' with the server's node
+%% identity key, build its EVENT, and return the EVENT together with
+%% the set of LOCAL subscribers that match. The caller
 %% is responsible for handing the frame to the cross-station delivery
 %% layer (Plumtree, future commit) and for delivering to the matched
 %% local subscribers via the application channel.
@@ -117,8 +130,9 @@ realm(Pid) ->
 publish(Pid, Topic, Payload) ->
     gen_server:call(Pid, {publish, Topic, Payload}).
 
-%% @doc Process an inbound EVENT frame received from the wire. Returns
-%% the matched local subscribers; the caller delivers.
+%% @doc Process an inbound EVENT frame received from the wire. Its
+%% publication is verified first; one that does not verify matches no
+%% one. Returns the matched local subscribers; the caller delivers.
 -spec deliver_event(pid(), macula_frame:frame()) -> [<<_:256>>].
 deliver_event(Pid, Frame) ->
     gen_server:call(Pid, {deliver_event, Frame}).
@@ -131,19 +145,18 @@ process_frame(Pid, From, Frame) ->
     gen_server:call(Pid, {process_frame, From, Frame}).
 
 %% @doc Relay an inbound PUBLISH frame from a remote daemon. The
-%% server builds an EVENT frame signed by THIS server's identity
-%% (intermediate hop re-signing — Phase 1 simplification; Phase 2
-%% tightens to publisher-end-to-end auth via UCAN), preserves the
-%% original publisher pubkey + seq inside the EVENT, and returns
-%% the matched local subscribers. The caller (typically the
-%% peer observer) is responsible for sending `EventFrame' on each
-%% subscriber's peering connection.
+%% server verifies its publication once, under the server's profile,
+%% and builds the EVENT from the same publication bytes, so the
+%% publisher's signature goes end to end and no hop re-signs it (D17).
+%% Returns the EVENT and the matched local subscribers. The caller
+%% (typically the peer observer) is responsible for sending
+%% `EventFrame' on each subscriber's peering connection.
 %%
-%% Returns `{error, realm_mismatch}' when the publish frame's realm
-%% does not match this server's realm. The registry routes by realm
-%% so this should never fire in practice — defensive check.
+%% Returns the publication's refusal when it does not verify, and
+%% `{error, realm_mismatch}' when its realm is not this server's (the
+%% registry routes by realm, so that is a defensive check).
 -spec relay_publish(pid(), macula_frame:frame()) ->
-        {macula_frame:frame(), [<<_:256>>]} | {error, realm_mismatch}.
+        {macula_frame:frame(), [<<_:256>>]} | {error, term()}.
 relay_publish(Pid, Frame) ->
     gen_server:call(Pid, {relay_publish, Frame}).
 
@@ -155,22 +168,63 @@ stop(Pid) ->
 %% gen_server callbacks
 %%====================================================================
 
-init(#{realm := Realm, identity := Kp}) ->
+init(#{identity := Load}) when not is_function(Load, 0) ->
+    {error, {identity, not_a_loader}};
+init(#{realm := Realm, identity := Load}) ->
+    started(identity_loaded(Load), Realm, Load).
+
+%% @doc Run an identity loader and check the key it returns, as a pubsub server requires of its identity and a registry
+%% of its default identity. A loader that raises is refused as `{identity, loader_failed}', as a pool's is, and the
+%% error it raised, which can hold the key, goes nowhere. A key that is not an identity key in the node's configured
+%% crypto profile is refused by name. Returns the profile and the key.
+-spec identity_loaded(fun(() -> macula_node_keys:node_key())) ->
+          {ok, macula_crypto_profile:profile(), macula_node_keys:node_key()} | {error, term()}.
+identity_loaded(Load) ->
+    loaded_key(called(Load)).
+
+called(Load) ->
+    try Load() of
+        Key -> {ok, Key}
+    catch
+        _Class:_Reason -> {error, {identity, loader_failed}}
+    end.
+
+loaded_key({ok, Key}) -> checked_key(identity_checked(Key), Key);
+loaded_key({error, _} = Refusal) -> Refusal.
+
+checked_key({ok, Profile}, Key) -> {ok, Profile, Key};
+checked_key({error, _} = Refusal, _Key) -> Refusal.
+
+%% The server's key is an identity key in the node's configured profile, the one the pool reads, so one node never
+%% runs two profiles.
+identity_profile(#{purpose := identity, profile := Profile}, {ok, Profile}) ->
+    {ok, Profile};
+identity_profile(#{purpose := identity, profile := KeyProfile}, {ok, Configured}) ->
+    {error, {identity_profile_mismatch, KeyProfile, Configured}};
+identity_profile(#{purpose := identity}, {error, _} = Refusal) ->
+    Refusal;
+identity_profile(_NotAnIdentityKey, _Configured) ->
+    {error, {identity, not_an_identity_key}}.
+
+%% Whether a key is an identity key in the node's configured crypto profile: the profile, or the refusal by name.
+-spec identity_checked(term()) -> {ok, macula_crypto_profile:profile()} | {error, term()}.
+identity_checked(Key) ->
+    identity_profile(Key, macula_crypto_profile:configured()).
+
+%% A server that holds a checked key installs the key redaction filter, as a pool does, since it can run without the
+%% macula application.
+started({error, _} = Refusal, _Realm, _Load) ->
+    Refusal;
+started({ok, Profile, Key}, Realm, Load) ->
+    ok = macula_node_keys:install_log_redaction(),
     {ok, #state{
         realm    = Realm,
-        identity = Kp,
-        self_id  = macula_identity:public(Kp),
-        pubsub   = hecate_pubsub:new(Realm),
-        %% Seeded from wall-clock µs, never from 0 -- the same convention
-        %% macula_client's publish_seq follows. Subscribers put a
-        %% publisher's stream back in order with macula_pubsub_order,
-        %% which reads a large forward jump as a restart. A counter that
-        %% restarts at 0 instead rewinds below every subscriber's
-        %% watermark, and each fact is then dropped as "past" until the
-        %% counter climbs back over it: a station rollout blinded
-        %% hecate-stations for 10+ hours this way on 2026-09-02, with the
-        %% link, subscriptions and dedup all looking healthy.
-        next_seq = erlang:system_time(microsecond)
+        identity = Load,
+        profile  = Profile,
+        pubsub   = hecate_pubsub:new(Realm, Profile),
+        %% Each publication's seq comes from the node's counter for this
+        %% key, shared with every other publisher signing with it.
+        key_id   = macula_node_keys:key_id(Key)
     }}.
 
 handle_call({subscribe, Topic, Sub}, _From, S) ->
@@ -197,15 +251,14 @@ handle_call(subscriber_count, _From, S) ->
 handle_call(realm, _From, S) ->
     {reply, S#state.realm, S};
 handle_call({publish, Topic, Payload}, _From, S) ->
-    Spec = #{topic           => Topic,
-             realm           => S#state.realm,
-             publisher       => S#state.self_id,
-             seq             => S#state.next_seq,
-             payload         => Payload,
-             published_at_ms => erlang:system_time(millisecond)},
-    Frame   = hecate_pubsub:build_event(S#state.pubsub, Spec, S#state.identity),
-    Matched = hecate_pubsub:deliver_event(S#state.pubsub, Frame),
-    {reply, {Frame, Matched}, S#state{next_seq = S#state.next_seq + 1}};
+    Spec = #{realm        => S#state.realm,
+             topic        => Topic,
+             seq          => macula_publication_seq:next(S#state.key_id),
+             published_at => erlang:system_time(millisecond),
+             payload      => Payload},
+    Event   = hecate_pubsub:build_event(macula_frame:publish(Spec, (S#state.identity)()), plumtree),
+    Matched = hecate_pubsub:subscribers(S#state.pubsub, Topic),
+    {reply, {Event, Matched}, S};
 handle_call({deliver_event, Frame}, _From, S) ->
     {reply, hecate_pubsub:deliver_event(S#state.pubsub, Frame), S};
 handle_call({process_frame, From, Frame}, _From, S) ->
@@ -220,47 +273,28 @@ handle_call(_Request, _From, S) ->
 %% Internals — publish relay
 %%====================================================================
 
-do_relay_publish(#{frame_type := publish, realm := R} = Frame,
-                 #state{realm = R} = S) ->
-    EventFrame = build_relay_event(Frame, S),
-    Matched    = hecate_pubsub:deliver_event(S#state.pubsub, EventFrame),
-    %% [mpong-trace] temporary — diagnose state_broadcast_v1 routing
-    %% (see project_mpong_state_broadcast_bug memory). Remove after fix.
-    case maps:get(topic, Frame, <<>>) of
-        <<"io.macula/beam-campus/hecate/mpong/", Suffix/binary>> ->
-            logger:info("[mpong-trace] do_relay_publish topic=mpong/~s matched=~p",
-                        [Suffix, length(Matched)]);
-        _ -> ok
-    end,
-    {EventFrame, Matched};
+%% A relayed PUBLISH is verified once, under the server's profile, before its EVENT is built from the same
+%% publication bytes.
+do_relay_publish(#{frame_type := publish} = Frame, #state{profile = Profile} = S) ->
+    relayed(macula_frame:verify_publication(Frame, Profile, erlang:system_time(millisecond)), Frame, S);
 do_relay_publish(_Frame, _S) ->
-    {error, realm_mismatch}.
+    {error, malformed_frame}.
 
-build_relay_event(#{topic := T, realm := R, publisher := Pub,
-                    seq := Seq, payload := Pl} = PubFrame,
-                  #state{identity = Id}) ->
-    Spec0 = #{topic         => T,
-              realm         => R,
-              publisher     => Pub,
-              seq           => Seq,
-              payload       => Pl,
-              delivered_via => direct},
-    %% Carry the publisher-end-to-end signature onto the EVENT if the
-    %% inbound PUBLISH had one (pubsub Phase 2: a daemon with
-    %% `pubsub_emit_publisher_sig' enabled attaches it). Consumers and
-    %% relay stations then verify EVENT authenticity against the
-    %% publisher, not the relaying station — so the EVENT can be
-    %% relayed beyond one hop. We still attach our own per-hop
-    %% signature below: pre-4.4.0 stations on a relay path verify
-    %% against the conn NodeId, and that mismatch is still the loop
-    %% kill for EVENTs that carry no `publisher_sig'. `canonical_unsigned/1'
-    %% (macula >= 4.4.0) excludes `publisher_sig', so signing after
-    %% adding it leaves the per-hop signature valid.
-    Spec = case maps:get(publisher_sig, PubFrame, undefined) of
-               <<Sig:64/binary>> -> Spec0#{publisher_sig => Sig};
-               _                 -> Spec0
-           end,
-    macula_frame:sign(macula_frame:event(Spec), Id).
+relayed({ok, #{realm := R, topic := Topic}}, Frame, #state{realm = R} = S) ->
+    Matched = hecate_pubsub:subscribers(S#state.pubsub, Topic),
+    trace_mpong(Topic, Matched),
+    {hecate_pubsub:build_event(Frame, direct), Matched};
+relayed({ok, _AnotherRealm}, _Frame, _S) ->
+    {error, realm_mismatch};
+relayed({error, _} = Refusal, _Frame, _S) ->
+    Refusal.
+
+%% [mpong-trace] temporary: diagnose state_broadcast_v1 routing
+%% (see project_mpong_state_broadcast_bug memory). Remove after fix.
+trace_mpong(<<"io.macula/beam-campus/hecate/mpong/", Suffix/binary>>, Matched) ->
+    logger:info("[mpong-trace] do_relay_publish topic=mpong/~s matched=~p", [Suffix, length(Matched)]);
+trace_mpong(_Topic, _Matched) ->
+    ok.
 
 handle_cast(_Msg, S) ->
     {noreply, S}.
@@ -270,3 +304,17 @@ handle_info(_Info, S) ->
 
 terminate(_Reason, _State) ->
     ok.
+
+%% Status output and crash reports show this process's keys with their private halves redacted.
+format_status(Status) ->
+    macula_node_keys:redacted(Status).
+
+-ifdef(TEST).
+%% The position of a field in the state tuple, read from the record itself, for the key redaction tests that set a
+%% field to the whole state on purpose: a test names the field, so a field added to the record cannot shift it.
+state_field_index(Field) ->
+    field_index(Field, record_info(fields, state), 2).
+
+field_index(Field, [Field | _Rest], Index) -> Index;
+field_index(Field, [_Other | Rest], Index) -> field_index(Field, Rest, Index + 1).
+-endif.

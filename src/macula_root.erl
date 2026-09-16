@@ -35,6 +35,37 @@ init([]) ->
     SupFlags = #{strategy => one_for_one, intensity => 10, period => 5},
 
     ChildSpecs = [
+        %% The seq counter every publication a node signs draws from, one per
+        %% key. First, so it runs before any pool or pubsub server publishes.
+        #{
+            id => macula_publication_seq,
+            start => {macula_publication_seq, start_link, []},
+            restart => permanent,
+            shutdown => 5000,
+            type => worker
+        },
+
+        %% The counts table behind macula_diagnostics:bounded_event/3, which
+        %% callers update themselves. Before any connection logs through it.
+        #{
+            id => macula_diagnostics_bound,
+            start => {macula_diagnostics_bound, start_link, []},
+            restart => permanent,
+            shutdown => 5000,
+            type => worker
+        },
+
+        %% The last record version this node issued, which callers of
+        %% macula_record_uuid:v7_monotonic/1 advance themselves. Before any
+        %% record is signed.
+        #{
+            id => macula_record_uuid,
+            start => {macula_record_uuid, start_link, []},
+            restart => permanent,
+            shutdown => 5000,
+            type => worker
+        },
+
         %% MRI Type Registry (type validation, custom type registration)
         #{
             id => macula_mri_registry,
@@ -77,6 +108,28 @@ init([]) ->
             type => worker
         },
 
+        %% Holds the table of served stream sessions, so the sessions kept
+        %% there outlive a restart of the counter below. Starts first.
+        #{
+            id => macula_stream_sessions_keeper,
+            start => {macula_stream_sessions_keeper, start_link, []},
+            restart => permanent,
+            shutdown => 5000,
+            type => worker
+        },
+
+        %% The node's count of served stream sessions: each station link
+        %% asks it before serving a session, against the caps per verified
+        %% caller and node-wide, and a session's place frees when its stream
+        %% ends.
+        #{
+            id => macula_stream_sessions,
+            start => {macula_stream_sessions, start_link, []},
+            restart => permanent,
+            shutdown => 5000,
+            type => worker
+        },
+
         %% Distribution-over-mesh bridge supervisor.
         %% Started here (under the application supervisor) so it survives
         %% shell crashes and other transient process deaths in user code.
@@ -87,6 +140,18 @@ init([]) ->
             shutdown => infinity,
             type => supervisor,
             modules => [macula_dist_bridge_sup]
+        },
+
+        %% The statement issuers of this node's pools, one for each pool,
+        %% which every connection a pool's links make draws its CONNECT
+        %% material and status statements from. Before peering.
+        #{
+            id => macula_statement_issuer_sup,
+            start => {macula_statement_issuer_sup, start_link, []},
+            restart => permanent,
+            shutdown => infinity,
+            type => supervisor,
+            modules => [macula_statement_issuer_sup]
         },
 
         %% Peering — per-peer connection state machines (CONNECT/HELLO

@@ -287,8 +287,8 @@ table there gives each decision's answer in short and its status.
 ### D10 A stack that cannot do its profile after Stage 0
 
 - **.NET, accepted 2026-09-10 (option a):** .NET is left out of the first post-quantum switch. .NET programs keep
-  working against the live fleet until it is switched off, then stop until msquic supports post-quantum key
-  exchange.
+  working against today's stations until the 11.0.0 deploy replaces them (D14), then stop until msquic supports
+  post-quantum key exchange.
   - Not chosen: patching msquic ourselves (only if a paying customer needs .NET), and our own msquic bindings.
   - Offering a fix upstream is public and needs Raf's explicit yes.
   - Why: no msquic build today can offer ML-KEM ✅ (V6).
@@ -348,12 +348,12 @@ before its wire checks are green.
   unqualified "revoked keys are rejected".
 - **Blocks:** public text.
 
-### D12 Separate TLS key and its binding, on the new fleet only
+### D12 Separate TLS key and its binding
 
 - **Answer:** every station instance has a TLS key used only for the TLS handshake, with a self-signed ML-DSA-87
   certificate. The identity key certifies it with a binding (key model). The station sends the binding in its
-  challenge, and the client checks it against the leaf it verified before signing anything. This applies only on
-  the post-quantum fleet.
+  challenge, and the client checks it against the leaf it verified before signing anything. This applies to every
+  11.0.0 station instance.
 - **Why:**
   - BSI asks for dedicated keys for hybrid signatures ✅, so in the EU profile the ML-DSA-87 key that signs alone
     inside TLS cannot also be part of the hybrid identity.
@@ -378,15 +378,20 @@ before its wire checks are green.
 - **Status:** accepted 2026-09-10.
 - **Blocks:** WP 1.3 and everything after it.
 
-### D14 A second post-quantum fleet
+### D14 How the switch happens
 
-- **Answer:** the post-quantum fleet runs next to the live fleet, with its own station instances, seeds, station
-  directory, DHT and realm deployment (D19), and hostnames distinct from the live fleet. The two fleets cannot
-  reach each other. Each consumer moves over in its stage, and the live fleet is switched off after the last
-  cutover.
-- **Why:** with no classical fallback, switching the live fleet in place would cut off every consumer until its
-  own stage.
-- **Status:** accepted 2026-09-10.
+- **Answer, reconsidered by Raf on 2026-09-16:** back to the 2026-09-10 answer — a second post-quantum fleet next
+  to the live one, with its own station instances, seeds, station directory, DHT, realm deployment and hostnames,
+  each consumer moving over in its stage and the live fleet switched off after the last cutover. The in-place
+  answer is dropped.
+- **Why:** the in-place answer folded every remaining stage into one blocking coordination tail: all consumers,
+  the realm, the directory and every service ready and green on the same day, with no way to ship anything in
+  between. The cost it avoided — new spend, or two station instances per box — is worth paying for a staggable
+  migration, where the SDK and each consumer move to the post-quantum fleet when ready without waiting on any
+  other consumer (Raf, 2026-09-16).
+- **Superseded:** the answer accepted on 2026-09-15 (in place, all consumers at once).
+- **Status:** accepted 2026-09-10; superseded by the in-place answer on 2026-09-15; reconsidered 2026-09-16 back
+  to the 2026-09-10 answer.
 - **Blocks:** Stages 3 to 6.
 
 ### D15 Profile order
@@ -447,32 +452,41 @@ before its wire checks are green.
   acceptor, with a red-first test that a reversed order is refused.
 - **Status:** accepted 2026-09-10.
 
-### D19 Realm on the post-quantum fleet
+### D19 Realm in 11.0.0
 
 - **Answer, revised and accepted by Raf on 2026-09-10:** the realm name stays `io.macula`, so the realm id stays
-  the same, on a separate realm deployment on the post-quantum fleet. `io.macula` runs the EU profile, `pq_hybrid`
-  (D1).
-- **Why:** programs keep the same realm id when they move over. The fleets cannot reach each other.
-- **Consequence:** US-first work (D15) needs its own US-profile realm on the post-quantum fleet. Its name is open
-  for Raf.
-- **Status:** accepted 2026-09-10; revised the same day to give `io.macula` the EU profile.
+  the same. `io.macula` runs the EU profile, `pq_hybrid` (D1). With D14 reconsidered (2026-09-16), the realm
+  deploys as a separate deployment on the second post-quantum fleet again, in its stage, instead of moving in the
+  same deploy.
+- **Why:** programs keep the same realm id when they move over.
+- **Consequence:** US-first work (D15) needs its own US-profile realm. Its name is open for Raf.
+- **Status:** accepted 2026-09-10; revised the same day to give `io.macula` the EU profile, on 2026-09-15 to move
+  the deployment in place (D14), and on 2026-09-16 back to a separate deployment when D14 was reconsidered.
 - **Blocks:** WP 3.1, WP 3.2.
 
 ### D20 Branch and release
 
-- **Answer:** `macula` develops the post-quantum work on the git branch `post-quantum`. `macula-station` and the
-  post-quantum fleet build against that git ref instead of hex during development. Once proven, `macula` 11.0.0
-  goes to hex, and only Raf publishes. Changes for the live fleet stay on `main`, the 10.x line.
-- **Merging:** `post-quantum` takes `main` by merge commits after `main` releases, never by a rebase, because
-  branches hang off it (agreed 2026-09-10).
-- **Status:** accepted 2026-09-10.
+- **Answer, revised on 2026-09-15:** the `post-quantum` branch merges into `main` in one merge commit, and `macula`
+  11.0.0 is developed on `main` from then on. There is no 10.x line and no intermediate release. `macula` 11.0.0 on
+  hex is the release that opens the post-quantum fleet to consumers, and only Raf publishes. The live fleet is
+  switched off after the last consumer's cutover (D14, reconsidered 2026-09-16), so the hex release no longer
+  triggers a same-day fleet change. No repository commits a git or branch
+  dependency on `macula`: development builds against a local checkout, and consumers move to `~> 11.0` from hex
+  only after Raf publishes.
+- **Merging, until that merge:** `post-quantum` took `main` by merge commits, never by a rebase, because branches
+  hung off it (agreed 2026-09-10).
+- **Status:** accepted 2026-09-10; revised on 2026-09-15 to one target, `macula` 11.0.0 on `main` (Raf).
 - **Blocks:** Stage 1, WP 3.2, WP 3.4.
 
 ### D21 The live fleet during the work
 
-- **Answer:** the live fleet is pinned to a released station version that matches exactly what its stations run.
-  If `main` is ahead of the latest `v*` tag, the running image is pinned by digest, or Raf tags current `main`
-  first. No station is downgraded. Owner: Terra.
+- **Answer:** the live fleet, today's 9 stations (cut to 4 on 2026-09-16 when the five Linode nanodes were
+  decommissioned, then to 2 at the 2+2 reprovisioning — live frankfurt+falkenstein, post-quantum nuremberg
+  +helsinki, decided 2026-09-16, `macula-demo` `plans/PLAN_MACULA_11_DEPLOY.md`), is pinned to a released
+  station version that matches exactly what its stations run, `macula-station` 311c0bf, until the last
+  consumer has moved to the post-quantum fleet and the live fleet is switched off (D14, reconsidered
+  2026-09-16). If `main` is ahead of the latest `v*` tag, the running image is pinned by digest, or Raf tags
+  current `main` first. No station is downgraded. Owner: Terra.
 - **Why:** a push to `macula-station` `main` builds and publishes the image the live stations follow ✅, so
   post-quantum work on the station would otherwise reach the live fleet.
 - **Status:** accepted 2026-09-10.
@@ -606,12 +620,16 @@ before its wire checks are green.
      names the provider, or the provider's service certificate chain to the realm CA with the org of the procedure
      name. The authorization travels with the advertisement, so no lookup sits in the check (D13). A caller may also
      pin the org key or the provider's node_id for a procedure.
+     - Revised 2026-09-15: the certificate form is gone. The realm issues no X.509 certificates (design B1), so only
+       the org directory and the delegation authorize a provider, and a verifier refuses any other form as
+       `authorization_form_unsupported`.
   7. **Stations report transport failures only.** A station may sign an ERROR or STREAM_ERROR as reported_by only with
      a relay error code distinct from every provider result, and never a RESULT. A relay error means the outcome is
      unknown, not that the call failed. Providers deduplicate requests on caller and call id.
-  8. **Advertisements expire, and only their provider withdraws them.** Each advertisement carries a signed validity,
-     120 seconds today ✅, and verifiers refuse an expired one, with the clock tolerance of D22. Stations drop expired
-     advertisements from gossip, and honour a withdrawal only under the provider's signature.
+  8. **Advertisements expire, and only their provider withdraws them.** Each advertisement carries a signed validity
+     of at most 300 seconds, renewed at half that or sooner, and verifiers refuse an expired or longer one, with the
+     clock tolerance of D22. Stations drop expired advertisements from gossip, and honour a withdrawal only under the
+     provider's signature.
   9. **Retries.** A retry along another path keeps the call id and the target, so the provider's deduplication
      applies. Switching to another provider is a new, separately signed request, and the caller decides it, because
      the first request may already have run.
@@ -703,7 +721,8 @@ before its wire checks are green.
     not stored, and nothing held is evicted for it; built-in and domain types each have a station total; VALUE
     answers in pages of at most 256 KiB;
   - a slot a station can check through its realm trust list keeps 64 places for checked signers and 16 for everyone
-    else; a station never parses a certificate chain, fetches anything during a STORE, or shows callers which place an
+    else; an advertisement authorized other than by the org directory and delegation pair gets no place, since the
+    certificate-chain form is removed; a station never fetches anything during a STORE or shows callers which place an
     entry holds;
   - each connection has a budget of 32 tokens, refilled at 1 per second, spent only on refusals that every verifier
     reaches from the same bytes and on allowances passed; an empty budget pauses reading from that connection, from

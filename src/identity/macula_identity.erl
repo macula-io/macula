@@ -5,6 +5,15 @@
 %% `SHA-256(pubkey)' having at least N leading zero bits. This raises the
 %% cost of mass identity minting (Sybil defence).
 %%
+%% The difficulty `puzzle_valid/1' applies, and `generate/1' grinds to when
+%% no `difficulty' is given, is the `macula' application's
+%% `puzzle_difficulty' env: 8 leading zero bits when it is unset. A set value
+%% must be an integer from 0 to 16: the decided range tops at 12 bits (8 in
+%% 10.x, 12 in 11.0.0, plan decision D30), and the maximum allows 4 bits above
+%% it. The macula application checks the value when it starts, through
+%% `check_puzzle_difficulty/0', so a node with a bad value does not start;
+%% every use checks it again, for a value set while the node runs.
+%%
 %% See `plans/PLAN_MACULA_V2_PART1_FOUNDATIONS.md' sections 4.1–4.4.
 -module(macula_identity).
 
@@ -20,8 +29,13 @@
     verify/3,
     puzzle_evidence/1,
     puzzle_valid/1,
-    puzzle_valid/2
+    puzzle_valid/2,
+    check_puzzle_difficulty/0
 ]).
+
+%% Public API with no caller inside macula: macula-station and tests call it
+%% for an explicit difficulty or a plain key.
+-ignore_xref([{macula_identity, generate, 1}]).
 
 -export_type([pubkey/0, privkey/0, sig/0, key_pair/0, node_id/0]).
 
@@ -38,27 +52,31 @@
 %% Generation
 %%------------------------------------------------------------------
 
-%% @doc Generate a fresh Ed25519 key pair. Does not grind a puzzle.
+%% @doc Generate a fresh Ed25519 key pair whose node id passes the puzzle
+%% check at the configured difficulty, as a station applies it. Grinding
+%% for it takes milliseconds.
 -spec generate() -> key_pair().
 generate() ->
-    {Pub, Priv} = crypto:generate_key(eddsa, ed25519),
-    #{public => Pub, private => Priv}.
+    generate(#{}).
 
-%% @doc Generate a key pair, optionally grinding until the puzzle is satisfied.
+%% @doc Generate a key pair. It is ground until it satisfies the puzzle,
+%% unless `puzzle' is `false', which gives a plain key for a caller that
+%% needs one, such as a test of the puzzle check itself.
 %%
 %% Opts:
 %% <ul>
-%%   <li>`puzzle' :: boolean() — default false</li>
-%%   <li>`difficulty' :: non_neg_integer() — leading zero bits required</li>
+%%   <li>`puzzle' :: boolean(), default true</li>
+%%   <li>`difficulty' :: non_neg_integer(), the leading zero bits required</li>
 %% </ul>
 -spec generate(#{puzzle => boolean(), difficulty => non_neg_integer(), _ => _}) ->
     key_pair().
-generate(#{puzzle := true} = Opts) ->
+generate(#{puzzle := false}) ->
+    {Pub, Priv} = crypto:generate_key(eddsa, ed25519),
+    #{public => Pub, private => Priv};
+generate(Opts) ->
     Difficulty = maps:get(difficulty, Opts, default_difficulty()),
     {ok, {Pub, Priv}} = macula_crypto_nif:grind_puzzle(Difficulty),
-    #{public => Pub, private => Priv};
-generate(_Opts) ->
-    generate().
+    #{public => Pub, private => Priv}.
 
 %%------------------------------------------------------------------
 %% Persistence — atomic write with 0600 permissions.
@@ -67,10 +85,13 @@ generate(_Opts) ->
 %% @doc Load a key pair from disk.
 %%
 %% The key file is read with macula_owner_only_file:read/1. It must be a
-%% regular file its group and others have no access to, mode 0600 or 0400;
-%% symlinks are followed. Otherwise the error names the file, what was found
-%% and what is required: {file_permissions, #{file, mode, required}} or
-%% {file_type, #{file, type, required}}.
+%% regular file its group and others have no access to, mode 0600 or 0400,
+%% owned by the user the node runs as; symlinks are followed. Otherwise the
+%% error names the file, what was found and what is required:
+%% {file_permissions, #{file, mode, required}}, {file_owner, #{file, owner,
+%% required}} or {file_type, #{file, type, required}}. A key file of another
+%% owner is never reported as missing, so a caller that makes a new identity
+%% only for a missing key file makes none.
 -spec load(file:name_all()) ->
     {ok, key_pair()} | {error, bad_key_file | macula_owner_only_file:refusal() | term()}.
 load(Path) ->
@@ -136,7 +157,8 @@ puzzle_evidence(#{public := Pub}) ->
 puzzle_evidence(Pub) when is_binary(Pub), byte_size(Pub) =:= 32 ->
     crypto:hash(sha256, Pub).
 
-%% @doc Puzzle validity against the application-configured difficulty.
+%% @doc Puzzle validity against the `macula' application's
+%% `puzzle_difficulty' env, 8 leading zero bits when it is unset.
 -spec puzzle_valid(pubkey() | key_pair()) -> boolean().
 puzzle_valid(X) ->
     puzzle_valid(X, default_difficulty()).
@@ -149,9 +171,30 @@ puzzle_valid(X, Difficulty) when is_integer(Difficulty), Difficulty >= 0 ->
 %% Internals
 %%------------------------------------------------------------------
 
+%% @doc Checks the `macula' application's `puzzle_difficulty' env: `ok' when it
+%% is unset or an integer from 0 to 16, and raises
+%% `{bad_config, {macula, puzzle_difficulty, Value}}' otherwise. The macula
+%% application calls it when it starts.
+-spec check_puzzle_difficulty() -> ok.
+check_puzzle_difficulty() ->
+    _ = default_difficulty(),
+    ok.
+
+%% The largest puzzle_difficulty the setting accepts: the decided range tops
+%% at 12 bits (plan decision D30), and this allows 4 bits above it.
+-define(MAX_PUZZLE_DIFFICULTY, 16).
+
 -spec default_difficulty() -> non_neg_integer().
 default_difficulty() ->
-    application:get_env(macula_identity, puzzle_difficulty, ?DEFAULT_PUZZLE_DIFFICULTY).
+    configured_difficulty(application:get_env(macula, puzzle_difficulty)).
+
+configured_difficulty(undefined) ->
+    ?DEFAULT_PUZZLE_DIFFICULTY;
+configured_difficulty({ok, Difficulty})
+  when is_integer(Difficulty), Difficulty >= 0, Difficulty =< ?MAX_PUZZLE_DIFFICULTY ->
+    Difficulty;
+configured_difficulty({ok, Other}) ->
+    erlang:error({bad_config, {macula, puzzle_difficulty, Other}}).
 
 -spec has_leading_zero_bits(binary(), non_neg_integer()) -> boolean().
 has_leading_zero_bits(_Bin, 0) ->

@@ -1,136 +1,132 @@
-%% @doc PKARR-compatible signed records (envelope + node_record + tombstone).
+%% @doc Records in the signed-object format of DESIGN_PQ_SIGNED_FRAMES_AND_RECORDS.md.
 %%
-%% A record is a map carrying:
-%% <ul>
-%%   <li>`type' (uint) — record type tag (`0x01' = node_record, `0x0C' = tombstone)</li>
-%%   <li>`key' (32B) — owning Ed25519 pubkey</li>
-%%   <li>`version' (16B) — UUIDv7</li>
-%%   <li>`created_at' / `expires_at' (ms since epoch)</li>
-%%   <li>`payload' (map) — type-specific</li>
-%%   <li>`signature' (64B) — Ed25519 signature; present after `sign/2'</li>
-%% </ul>
+%% A record is the signed object {key, tbs, signature} under the label MACULA-PQ-RECORD-V1. Its tbs holds type, alg,
+%% version, created_at, expires_at and payload, and subject only on a domain type (tags 0x20 to 0xFF). A constructor
+%% returns an unsigned record. sign/2 takes the signer's key, refuses a key whose purpose does not fit the type, and
+%% adds key, key_id, alg, tbs and signature. verify/2,3 reads a record in the design's order and keeps its tbs bytes,
+%% so encode/1 sends them unchanged.
 %%
-%% On the wire records are CBOR maps with single-letter keys
-%% (`t', `k', `v', `c', `x', `p', `s') per `Part 6 §9'.
-%% Signatures are Ed25519 over `"macula-v2-record\0" ++ canonical_cbor(unsigned)'.
+%% A record is named by the key id of its key: the node_id for node records, procedure advertisements, content
+%% announcements and station endpoints, and the MACULA-KEY-ID-V1 key id for realm, org and foundation records and for
+%% every domain type. A tombstone is named as the type it withdraws. A node record is stored under its node_id, and
+%% every other record under SHA-256 over MACULA-PQ-STORAGE-KEY-V1, a zero byte, the type and the type's fields.
+%%
+%% A procedure advertisement carries its provider authorization inside its payload. verify/2,3 treats it as opaque,
+%% so a station that stores records never parses it; verify_authorization/3 is the caller's check.
 -module(macula_record).
 
--include_lib("public_key/include/public_key.hrl").
-
 -export([
-    %% Constructors
     node_record/3, node_record/4,
     realm_directory/3, realm_directory/4,
     realm_stations/2, realm_stations/3,
-    realm_member_endorsement/2, realm_member_endorsement/3,
+    realm_member_endorsement/2, realm_member_endorsement/3, max_endorsement_window_ms/0,
     org_directory/3, org_directory/4,
     procedure_delegation/2, procedure_delegation/3,
-    procedure_advertisement/3, procedure_advertisement/4,
+    procedure_advertisement/4, procedure_advertisement/5,
     content_announcement/3, content_announcement/4,
-    foundation_seed_list/2, foundation_seed_list/3,
-    foundation_parameter/3, foundation_parameter/4,
-    foundation_realm_trust_list/2, foundation_realm_trust_list/3,
-    foundation_t3_attestation/3, foundation_t3_attestation/4,
-    tombstone/3, tombstone/4,
-
-    %% Station endpoint — every macula-station publishes its own, used
-    %% by direct-dial resolution across RPC/content/streaming.
-    station_endpoint/2, station_endpoint/3,
-
-    %% Generic builder for domain-defined record types (tag 0x20-0xFF).
-    %% Domain code (e.g. realm fact types) supplies its own type tag,
-    %% storage key, and CBOR payload map; SDK only signs + ships.
-    envelope/4,
-
-    %% Sign / verify
-    sign/2, verify/1,
-
-    %% Owner refresh — new version + timestamps, re-sign (Part 3 §11)
-    refresh/2,
-
-    %% Wire codec
-    encode/1, decode/1, decode/2,
-
-    %% Accessors
-    type/1, key/1, version/1, created_at/1, expires_at/1,
-    payload/1, signature/1,
-    %% Generic defensive field accessor for an arbitrary wire-decoded
-    %% payload map (own doc, near its definition, explains why this is
-    %% needed at all rather than a plain `maps:get/2' or atom-keyed
-    %% pattern match). Exported so a caller reading a payload this
-    %% module has no `read_*/1' for -- e.g. an RPC reply body from a
-    %% procedure this SDK doesn't itself define, like
-    %% `hecate_stations.list_stations' -- doesn't have to duplicate this
-    %% exact defensive logic (`macula_client.erl''s station-discovery
-    %% code is the first such caller).
-    payload_field/2,
-    %% The `procedure_advertisement' record-type tag as an exported
-    %% function rather than a cross-module `-define' (Erlang macros
-    %% aren't visible outside their defining module without a shared
-    %% .hrl) -- so a caller needing the raw tag for
-    %% `find_records_by_type/2' (e.g. `macula_client.erl''s station
-    %% discovery) can't drift from this module's own `?TYPE_PROCEDURE_
-    %% ADVERTISEMENT' value by re-declaring it locally.
-    type_procedure_advertisement/0,
-    read_procedure_advertisement/1,
-    read_station_endpoint/1,
-    read_node_record/1,
-    read_tombstone/1,
-    read_org_directory/1,
-    read_procedure_delegation/1,
-    read_content_announcement/1,
-
-    %% Direct-dial dual-trust (Slice 7c, Ed25519 delegation records)
-    verify_delegation_chain/4,
-
-    %% Direct-dial dual-trust (Slice 7c Direction B, X.509 cert chain).
-    %% Managed realms: verify an advertisement's embedded service-cert
-    %% chain to the trusted realm CA. See the plan's "7c publishing —
-    %% Direction B" note.
-    verify_advertisement_cert_chain/3,
-
-    %% DHT storage-key derivation (Part 3 §3.3)
-    storage_key/1,
-    procedure_key/1,
-    station_endpoint_key/1,
-    org_directory_key/2,
-    procedure_delegation_key/2,
-    content_key/1
+    foundation_seed_list/1, foundation_seed_list/2,
+    foundation_parameter/2, foundation_parameter/3,
+    foundation_realm_trust_list/1, foundation_realm_trust_list/2,
+    foundation_t3_attestation/2, foundation_t3_attestation/3,
+    station_endpoint/1, station_endpoint/2,
+    tombstone/2, tombstone/3,
+    envelope/3
 ]).
+-export([sign/2, verify/2, verify/3, signer_entry/3, signer_entry/4, refresh/2, encode/1, node_signed/1,
+         payload_bounded/1, wire_bounded/1,
+         domain_type/1, domain_record_checked/1]).
+-export([type/1, key/1, key_id/1, version/1, created_at/1, expires_at/1, payload/1, signature/1]).
+-export([payload_field/2, type_procedure_advertisement/0]).
+-export([read_node_record/1, read_procedure_advertisement/1, read_station_endpoint/1, read_tombstone/1,
+         read_org_directory/1, read_procedure_delegation/1, read_content_announcement/1]).
+-export([procedure_org/1, verify_authorization/3]).
+-export([storage_key/1, procedure_key/2, content_key/1, station_endpoint_key/1, org_directory_key/2,
+         procedure_delegation_key/2]).
 
--export_type([
-    m_record/0,
-    type_tag/0,
-    version/0,
-    node_record_opts/0,
-    realm_directory_opts/0,
-    realm_station_entry/0,
-    realm_stations_opts/0,
-    realm_member_endorsement_opts/0,
-    procedure_advertisement_opts/0,
-    content_announcement_opts/0,
-    foundation_seed/0,
-    foundation_seed_list_opts/0,
-    foundation_parameter_opts/0,
-    foundation_realm_trust_list_opts/0,
-    foundation_t3_attestation_opts/0,
-    tombstone_opts/0,
-    station_endpoint_opts/0
-]).
+-export_type([m_record/0, type_tag/0, version/0, refusal/0, reason/0, authorization/0, trust/0,
+              authorization_refusal/0, node_record_opts/0, realm_directory_opts/0, realm_station_entry/0,
+              realm_stations_opts/0, realm_member_endorsement_opts/0, procedure_advertisement_opts/0,
+              content_announcement_opts/0, foundation_seed/0, foundation_seed_list_opts/0,
+              foundation_parameter_value/0, foundation_parameter_opts/0, foundation_realm_trust_list_opts/0,
+              foundation_t3_attestation_opts/0, tombstone_opts/0, station_endpoint_opts/0, signer_entry_stats/0]).
 
--type station_endpoint_opts() :: #{
-    host_advertised => [binary()],
-    alpn            => binary(),
-    ttl_ms          => pos_integer()
+-type type_tag() :: 1..16#FF.
+-type version() :: <<_:128>>.
+
+%% An unsigned record holds type, version, created_at, expires_at, payload and, on a domain type, subject. A signed or
+%% verified record also holds key, key_id, alg, tbs and signature.
+-type m_record() :: #{
+    type := type_tag(),
+    version := version(),
+    created_at := non_neg_integer(),
+    expires_at := non_neg_integer(),
+    payload := map(),
+    subject => binary(),
+    key => binary(),
+    key_id => <<_:256>>,
+    alg => binary(),
+    tbs => binary(),
+    signature => binary()
 }.
 
-%% Domain separation prefix for record signatures (Part 6 §10.2).
--define(SIG_DOMAIN, "macula-v2-record\0").
+-type refusal() :: record_too_large | malformed | signature_invalid | alg_mismatch | not_yet_valid | expired
+                 | key_id_mismatch | lifetime_too_long | lifetime_reversed.
+-type reason() :: shutdown | moved | revoked.
+-type authorization() :: #{org_directory := binary(), procedure_delegation := binary()}.
+-type trust() :: #{profile := macula_crypto_profile:profile(), realm_key => binary()}.
+-type authorization_refusal() :: malformed | no_authorization | authorization_not_allowed
+                               | authorization_form_unsupported | no_realm_key | org_directory_invalid
+                               | org_directory_wrong_realm | org_directory_wrong_org | delegation_invalid
+                               | delegation_mismatch | authorization_outlived.
 
-%% Type tag allocation (1 byte):
-%%   0x01-0x1F  reserved for macula infrastructure types (this module)
-%%   0x20-0xFF  domain-defined; callers manage their own registry
-%%              and use envelope/4 to build records.
+-type node_record_opts() :: #{
+    station_id   => <<_:256>>,
+    caps_hint    => binary(),
+    display_name => binary(),
+    ttl_ms       => pos_integer(),
+    hostname     => binary(),
+    endpoint     => binary(),
+    city         => binary(),
+    country      => binary(),
+    lat          => float() | integer(),
+    lng          => float() | integer(),
+    %% `station' for relay identities, `daemon' for client identities.
+    kind         => binary(),
+    %% node_ids of the peer stations this node holds an overlay session with.
+    peers        => [<<_:256>>]
+}.
+-type realm_directory_opts() :: #{policy_url => binary(), ttl_ms => pos_integer()}.
+-type realm_station_entry() :: #{station_id := <<_:256>>, roles := [binary()]}.
+-type realm_stations_opts() :: #{ttl_ms => pos_integer()}.
+-type realm_member_endorsement_opts() :: #{valid_from => pos_integer(), valid_until => pos_integer(),
+                                           ttl_ms => pos_integer()}.
+-type procedure_advertisement_opts() :: #{authorization => map(), ttl_ms => pos_integer()}.
+-type content_announcement_opts() :: #{name => binary(), size => non_neg_integer(), chunk_count => non_neg_integer(),
+                                       ttl_ms => pos_integer()}.
+-type foundation_seed() :: #{node_id := <<_:256>>, addresses := [map()], tier := 3 | 4}.
+-type foundation_seed_list_opts() :: #{valid_from => pos_integer(), valid_until => pos_integer(),
+                                       ttl_ms => pos_integer()}.
+-type foundation_parameter_value() :: integer() | binary() | [integer() | binary()].
+-type foundation_parameter_opts() :: #{valid_from => pos_integer(), valid_until => pos_integer(),
+                                       prior_version => version(), ttl_ms => pos_integer()}.
+-type foundation_realm_trust_list_opts() :: #{realms_revoked => [<<_:256>>], valid_until => pos_integer(),
+                                              ttl_ms => pos_integer()}.
+-type foundation_t3_attestation_opts() :: #{valid_until => pos_integer(), notes => binary(), ttl_ms => pos_integer()}.
+-type tombstone_opts() :: #{detail => binary(), ttl_ms => pos_integer()}.
+-type station_endpoint_opts() :: #{host_advertised => [binary()], alpn => binary(), ttl_ms => pos_integer()}.
+
+-define(LABEL, <<"MACULA-PQ-RECORD-V1">>).
+-define(STORAGE_KEY_LABEL, "MACULA-PQ-STORAGE-KEY-V1").
+-define(MAX_RECORD_BYTES, 256 * 1024).
+%% The longest coordinate text a node record's reader parses: a coordinate needs far fewer bytes.
+-define(MAX_GEO_TEXT_BYTES, 32).
+%% How far from zero a latitude and a longitude reach, both inclusive.
+-define(LAT_BOUND, 90).
+-define(LNG_BOUND, 180).
+-define(CLOCK_TOLERANCE_MS, 5 * 60 * 1000).
+%% A protocol integer in a signed structure stays below 2^53 (the decoding rule).
+-define(MAX_PROTOCOL_INT, 1 bsl 53).
+
 -define(TYPE_NODE_RECORD,                  16#01).
 -define(TYPE_REALM_DIRECTORY,              16#03).
 -define(TYPE_REALM_STATIONS,               16#04).
@@ -142,835 +138,425 @@
 -define(TYPE_FOUNDATION_REALM_TRUST_LIST,  16#0F).
 -define(TYPE_FOUNDATION_T3_ATTESTATION,    16#10).
 -define(TYPE_CONTENT_ANNOUNCEMENT,         16#11).
-%% Direct-dial dual-trust (Slice 7c): the realm→org→server delegation chain.
--define(TYPE_ORG_DIRECTORY,                16#15). %% realm-signed: org-name -> org-key
--define(TYPE_PROCEDURE_DELEGATION,         16#16). %% org-signed: server may serve org
 -define(TYPE_STATION_ENDPOINT,             16#12).
-%% 16#13, 16#14 retired with the macula-net L3 substrate (address_pubkey_map,
-%% hosted_address_map). Do not reassign — an already-deployed station could
-%% still hold a stored record under either tag.
+-define(TYPE_ORG_DIRECTORY,                16#15).
+-define(TYPE_PROCEDURE_DELEGATION,         16#16).
 -define(DOMAIN_TYPE_MIN,                   16#20).
 
-%% Domain separation for derived storage keys (Part 3 §3.3).
--define(STORAGE_DOMAIN_STATION_SET,    <<"station_set">>).
--define(STORAGE_DOMAIN_MEMBER_ENDORSE, <<"member_endorsement">>).
--define(STORAGE_DOMAIN_FOUND_SEED,     <<"foundation_seed_list">>).
--define(STORAGE_DOMAIN_FOUND_PARAM,    <<"foundation_parameter">>).
--define(STORAGE_DOMAIN_FOUND_TRUST,    <<"foundation_realm_trust_list">>).
--define(STORAGE_DOMAIN_FOUND_ATTEST,   <<"foundation_t3_attestation">>).
--define(STORAGE_DOMAIN_ORG_DIRECTORY,    <<"org_directory">>).
--define(STORAGE_DOMAIN_PROC_DELEGATION,  <<"procedure_delegation">>).
--define(STORAGE_DOMAIN_STATION_ENDPOINT, <<"station_endpoint">>).
-
-%% station_endpoint record TTL (Part 4 §11). Mirrors macula_dist_discovery:
-%% short enough to drop stale stations within minutes, long enough that a
-%% one-minute refresh keeps it live.
+%% station_endpoint record TTL (Part 4 §11): short enough to drop stale
+%% stations within minutes, long enough that a one-minute refresh keeps
+%% it live.
 -define(STATION_ENDPOINT_TTL_MS, 5 * 60 * 1000).
-
-%% Default endorsement validity window (30 days).
--define(DEFAULT_ENDORSEMENT_TTL_MS, 30 * 24 * 60 * 60 * 1000).
-
-%% Default record TTL (Part 4 §11): expire 48h after creation.
+%% A realm member endorsement's window, valid_from to valid_until, is at most 30 days, so one endorsement admits its
+%% member for at most that long. A builder given no valid_until takes the whole window.
+-define(MAX_ENDORSEMENT_WINDOW_MS, 30 * 24 * 60 * 60 * 1000).
 -define(DEFAULT_TTL_MS, 48 * 60 * 60 * 1000).
-
--type type_tag() :: 1..16#FF.
--type version()  :: <<_:128>>.
-
--type m_record() :: #{
-    type       := type_tag(),
-    key        := <<_:256>>,
-    version    := version(),
-    created_at := pos_integer(),
-    expires_at := pos_integer(),
-    payload    := map(),
-    signature  => <<_:512>>
-}.
-
--type node_record_opts() :: #{
-    station_id   => macula_identity:pubkey(),
-    caps_hint    => binary(),
-    display_name => binary(),
-    ttl_ms       => pos_integer(),
-    %% Optional self-described location + reach metadata.
-    %% Subscribers (e.g. realm dashboards) read these from the
-    %% record payload to render maps without polling a side-channel.
-    %% All four geo fields travel together — supplying any without
-    %% the others is allowed but generally reduces utility.
-    hostname     => binary(),
-    endpoint     => binary(),
-    city         => binary(),
-    country      => binary(),
-    lat          => float() | integer(),
-    lng          => float() | integer(),
-    %% Actor discriminator — `&lt;&lt;"station"&gt;&gt;' for relay identities,
-    %% `&lt;&lt;"daemon"&gt;&gt;' for client identities. Subscribers route on
-    %% this to render presence events on different mesh channels.
-    kind         => binary(),
-    %% Overlay-peer list: binary pubkeys of peer stations this node
-    %% currently has an active overlay session with (HyParView active
-    %% view + station-link cache). Surfaced so realm dashboards can
-    %% draw relay-to-relay edges without a side-channel topology poll.
-    %% Empty list / `undefined' suppresses the field — older records
-    %% predate this addition and consumers default to no edges.
-    peers        => [macula_identity:pubkey()]
-}.
-
--type realm_directory_opts() :: #{
-    policy_url => binary(),
-    ttl_ms     => pos_integer()
-}.
-
--type realm_station_entry() :: #{
-    station_id := macula_identity:pubkey(),
-    roles      := [binary()]
-}.
-
--type realm_stations_opts() :: #{ttl_ms => pos_integer()}.
-
--type realm_member_endorsement_opts() :: #{
-    valid_from   => pos_integer(),
-    valid_until  => pos_integer(),
-    ttl_ms       => pos_integer()
-}.
-
--type procedure_advertisement_opts() :: #{
-    session_token_hint => binary(),
-    rate_limit_qps     => non_neg_integer(),
-    max_concurrency    => non_neg_integer(),
-    %% Direction B (managed realms): the advertiser's own service-cert
-    %% chain (leaf ++ org CA, PEM), so a verifying consumer can chain it
-    %% to the realm CA offline without a second lookup.
-    cert_chain         => binary(),
-    ttl_ms             => pos_integer()
-}.
-
--type content_announcement_opts() :: #{
-    name        => binary(),
-    size        => non_neg_integer(),
-    chunk_count => non_neg_integer(),
-    ttl_ms      => pos_integer()
-}.
-
--type foundation_seed() :: #{
-    node_id   := macula_identity:pubkey(),
-    addresses := [map()],
-    tier      := 3 | 4
-}.
-
--type foundation_seed_list_opts() :: #{
-    valid_from  => pos_integer(),
-    valid_until => pos_integer(),
-    ttl_ms      => pos_integer()
-}.
-
--type foundation_parameter_value() ::
-        integer() | binary() | [integer() | binary()] | boolean().
-
--type foundation_parameter_opts() :: #{
-    valid_from    => pos_integer(),
-    valid_until   => pos_integer(),
-    prior_version => <<_:128>> | undefined,
-    ttl_ms        => pos_integer()
-}.
-
--type foundation_realm_trust_list_opts() :: #{
-    realms_revoked => [macula_identity:pubkey()],
-    valid_until    => pos_integer(),
-    ttl_ms         => pos_integer()
-}.
-
--type foundation_t3_attestation_opts() :: #{
-    valid_until => pos_integer(),
-    notes       => binary(),
-    ttl_ms      => pos_integer()
-}.
-
--type tombstone_opts() :: #{
-    detail => binary(),
-    ttl_ms => pos_integer()
-}.
+%% The longest a record of a type lives, created_at to expires_at. A node record and a content announcement 48 hours; a
+%% procedure advertisement 5 minutes, renewed at half that or sooner, so a provider that stops is gone within minutes; a
+%% station endpoint 5 minutes; realm stations, an org directory and a procedure delegation 6 hours; a realm member
+%% endorsement 30 days; a domain record 7 days (D28); and any other type 30 days, so no record keeps a key trusted
+%% without end. A tombstone lives at most its withdrawn type's maximum plus twice the clock tolerance.
+-define(NODE_RECORD_MAX_LIFETIME_MS, 48 * 60 * 60 * 1000).
+-define(CONTENT_ANNOUNCEMENT_MAX_LIFETIME_MS, 48 * 60 * 60 * 1000).
+-define(PROCEDURE_ADVERTISEMENT_MAX_LIFETIME_MS, 5 * 60 * 1000).
+-define(REALM_AND_ORG_MAX_LIFETIME_MS, 6 * 60 * 60 * 1000).
+-define(DOMAIN_RECORD_MAX_LIFETIME_MS, 7 * 24 * 60 * 60 * 1000).
+-define(DEFAULT_MAX_LIFETIME_MS, 30 * 24 * 60 * 60 * 1000).
+%% A payload sits in a record's tbs map, and the decoding rule accepts 64 levels, so a payload nests at most 63.
+-define(MAX_PAYLOAD_NESTING, 63).
 
 %%------------------------------------------------------------------
-%% Constructors — node_record (Part 6 §9.2)
+%% Constructors
 %%------------------------------------------------------------------
 
--spec node_record(macula_identity:pubkey(),
-                  [macula_identity:pubkey()],
-                  non_neg_integer()) -> m_record().
+%% @doc A node record about the node NodeId, which signs it.
+-spec node_record(<<_:256>>, [<<_:256>>], non_neg_integer()) -> m_record().
 node_record(NodeId, Realms, Capabilities) ->
     node_record(NodeId, Realms, Capabilities, #{}).
 
--spec node_record(macula_identity:pubkey(),
-                  [macula_identity:pubkey()],
-                  non_neg_integer(),
-                  node_record_opts()) -> m_record().
+-spec node_record(<<_:256>>, [<<_:256>>], non_neg_integer(), node_record_opts()) -> m_record().
 node_record(NodeId, Realms, Capabilities, Opts)
-  when is_binary(NodeId), byte_size(NodeId) =:= 32,
-       is_list(Realms),
-       is_integer(Capabilities), Capabilities >= 0 ->
+  when is_binary(NodeId), byte_size(NodeId) =:= 32, is_list(Realms), is_integer(Capabilities), Capabilities >= 0 ->
     StationId = maps:get(station_id, Opts, NodeId),
-    Payload = node_payload(NodeId, StationId, Realms, Capabilities, Opts),
-    envelope(?TYPE_NODE_RECORD, NodeId, Payload, Opts).
+    unsigned(?TYPE_NODE_RECORD, node_payload(NodeId, StationId, Realms, Capabilities, Opts), Opts).
 
-%%------------------------------------------------------------------
-%% Constructors — realm_directory (Part 6 §9.4)
-%%
-%% A realm's "meta" record — name, admin key, optional policy URL.
-%% Owning key is the RealmId; storage key is also the RealmId.
-%%------------------------------------------------------------------
+%% @doc A realm's directory record, signed by the realm key: its name and the key id of its admin key.
+-spec realm_directory(<<_:256>>, binary(), <<_:256>>) -> m_record().
+realm_directory(RealmId, Name, AdminKeyId) ->
+    realm_directory(RealmId, Name, AdminKeyId, #{}).
 
--spec realm_directory(macula_identity:pubkey(), binary(),
-                      macula_identity:pubkey()) -> m_record().
-realm_directory(RealmId, Name, AdminKey) ->
-    realm_directory(RealmId, Name, AdminKey, #{}).
+-spec realm_directory(<<_:256>>, binary(), <<_:256>>, realm_directory_opts()) -> m_record().
+realm_directory(RealmId, Name, AdminKeyId, Opts)
+  when is_binary(RealmId), byte_size(RealmId) =:= 32, is_binary(Name),
+       is_binary(AdminKeyId), byte_size(AdminKeyId) =:= 32 ->
+    unsigned(?TYPE_REALM_DIRECTORY, realm_directory_payload(RealmId, Name, AdminKeyId, Opts), Opts).
 
--spec realm_directory(macula_identity:pubkey(), binary(),
-                      macula_identity:pubkey(),
-                      realm_directory_opts()) -> m_record().
-realm_directory(RealmId, Name, AdminKey, Opts)
-  when is_binary(RealmId),  byte_size(RealmId)  =:= 32,
-       is_binary(Name),
-       is_binary(AdminKey), byte_size(AdminKey) =:= 32 ->
-    Payload = realm_directory_payload(RealmId, Name, AdminKey, Opts),
-    envelope(?TYPE_REALM_DIRECTORY, RealmId, Payload, Opts).
-
-%%------------------------------------------------------------------
-%% Constructors — realm_stations (Part 6 §9.5)
-%%
-%% Stored at storage key SHA-256("station_set" || RealmId) so a
-%% fresh station can look up all stations serving a realm without
-%% knowing the realm admin's NodeId. Envelope key remains the
-%% RealmId (admin signs the record).
-%%------------------------------------------------------------------
-
--spec realm_stations(macula_identity:pubkey(),
-                     [realm_station_entry()]) -> m_record().
+%% @doc The stations serving a realm, signed by the realm key.
+-spec realm_stations(<<_:256>>, [realm_station_entry()]) -> m_record().
 realm_stations(RealmId, Entries) ->
     realm_stations(RealmId, Entries, #{}).
 
--spec realm_stations(macula_identity:pubkey(),
-                     [realm_station_entry()],
-                     realm_stations_opts()) -> m_record().
-realm_stations(RealmId, Entries, Opts)
-  when is_binary(RealmId), byte_size(RealmId) =:= 32,
-       is_list(Entries) ->
-    Payload = realm_stations_payload(RealmId, Entries),
-    envelope(?TYPE_REALM_STATIONS, RealmId, Payload, Opts).
+-spec realm_stations(<<_:256>>, [realm_station_entry()], realm_stations_opts()) -> m_record().
+realm_stations(RealmId, Entries, Opts) when is_binary(RealmId), byte_size(RealmId) =:= 32, is_list(Entries) ->
+    unsigned(?TYPE_REALM_STATIONS, realm_stations_payload(RealmId, Entries), Opts).
 
-%%------------------------------------------------------------------
-%% Constructors — realm_member_endorsement (Part 6 §9.6)
-%%
-%% Admin-signed statement that `MemberNode' is authorised to act as
-%% a member of the realm. Stored at a derived storage key so a new
-%% station joining the realm can look it up by `{realm, node}' pair
-%% without knowing the record version. Envelope key is the RealmId
-%% (admin signs).
-%%------------------------------------------------------------------
-
--spec realm_member_endorsement(macula_identity:pubkey(),
-                               #{realm      := macula_identity:pubkey(),
-                                 member_node := macula_identity:pubkey(),
-                                 roles       := [binary()]}) -> m_record().
+%% @doc A realm's statement, signed by the realm key, that a node is a member with roles. Its window, valid_from to
+%% valid_until, is at most 30 days and never ends before it starts: a longer one raises a badmatch on
+%% `{error, endorsement_window_too_long}', and a reversed one on `{error, endorsement_window_reversed}'.
+-spec realm_member_endorsement(<<_:256>>, #{realm := <<_:256>>, member_node := <<_:256>>, roles := [binary()]}) ->
+          m_record().
 realm_member_endorsement(RealmId, Spec) ->
     realm_member_endorsement(RealmId, Spec, #{}).
 
--spec realm_member_endorsement(macula_identity:pubkey(),
-                               #{realm       := macula_identity:pubkey(),
-                                 member_node := macula_identity:pubkey(),
-                                 roles       := [binary()]},
+-spec realm_member_endorsement(<<_:256>>, #{realm := <<_:256>>, member_node := <<_:256>>, roles := [binary()]},
                                realm_member_endorsement_opts()) -> m_record().
-realm_member_endorsement(RealmId,
-                         #{realm := RealmId, member_node := Member,
-                           roles := Roles} = _Spec, Opts)
-  when is_binary(RealmId), byte_size(RealmId) =:= 32,
-       is_binary(Member),  byte_size(Member)  =:= 32,
+realm_member_endorsement(RealmId, #{realm := RealmId, member_node := Member, roles := Roles}, Opts)
+  when is_binary(RealmId), byte_size(RealmId) =:= 32, is_binary(Member), byte_size(Member) =:= 32,
        is_list(Roles) ->
-    NowMs = erlang:system_time(millisecond),
-    ValidFrom  = maps:get(valid_from,  Opts, NowMs),
-    ValidUntil = maps:get(valid_until, Opts,
-                          NowMs + ?DEFAULT_ENDORSEMENT_TTL_MS),
-    Payload = realm_member_endorsement_payload(RealmId, Member, Roles,
-                                               ValidFrom, ValidUntil),
-    envelope(?TYPE_REALM_MEMBER_ENDORSEMENT, RealmId, Payload, Opts).
+    Now = erlang:system_time(millisecond),
+    ValidFrom = maps:get(valid_from, Opts, Now),
+    ValidUntil = maps:get(valid_until, Opts, ValidFrom + ?MAX_ENDORSEMENT_WINDOW_MS),
+    ok = endorsement_window(ValidFrom, ValidUntil),
+    unsigned(?TYPE_REALM_MEMBER_ENDORSEMENT,
+             realm_member_endorsement_payload(RealmId, Member, Roles, ValidFrom, ValidUntil), Opts).
 
-%%------------------------------------------------------------------
-%% Constructors — org_directory (direct-dial dual-trust, Slice 7c)
-%%
-%% Realm-signed statement that org `OrgName' (a segment of a
-%% procedure_uri) is owned by `OrgKey'. Storage key
-%% `SHA-256("org_directory" || RealmId || OrgName)' so a consumer can
-%% resolve org name -> org key knowing only its realm. Envelope key is
-%% the RealmId (the realm signs).
-%%------------------------------------------------------------------
+endorsement_window(From, Until) when Until < From -> {error, endorsement_window_reversed};
+endorsement_window(From, Until) when Until - From > ?MAX_ENDORSEMENT_WINDOW_MS -> {error, endorsement_window_too_long};
+endorsement_window(_From, _Until) -> ok.
 
--spec org_directory(macula_identity:pubkey(), binary(),
-                    macula_identity:pubkey()) -> m_record().
-org_directory(RealmId, OrgName, OrgKey) ->
-    org_directory(RealmId, OrgName, OrgKey, #{}).
+%% @doc The longest window a realm member endorsement may have, valid_from to valid_until, in milliseconds: 30 days.
+%% Its builder refuses a longer one, and macula_hyparview_endorsement:verify_endorsement/3 refuses one it receives.
+-spec max_endorsement_window_ms() -> pos_integer().
+max_endorsement_window_ms() ->
+    ?MAX_ENDORSEMENT_WINDOW_MS.
 
--spec org_directory(macula_identity:pubkey(), binary(),
-                    macula_identity:pubkey(), map()) -> m_record().
-org_directory(RealmId, OrgName, OrgKey, Opts)
-  when is_binary(RealmId), byte_size(RealmId) =:= 32,
-       is_binary(OrgName),
-       is_binary(OrgKey),  byte_size(OrgKey)  =:= 32 ->
-    Payload = #{
-        {text, <<"realm">>}    => RealmId,
-        {text, <<"org_name">>} => {text, OrgName},
-        {text, <<"org_key">>}  => OrgKey
-    },
-    envelope(?TYPE_ORG_DIRECTORY, RealmId, Payload, Opts).
+%% @doc A realm's statement, signed by the realm key, that the org OrgName is held by the key with key id OrgKeyId.
+-spec org_directory(<<_:256>>, binary(), <<_:256>>) -> m_record().
+org_directory(RealmId, OrgName, OrgKeyId) ->
+    org_directory(RealmId, OrgName, OrgKeyId, #{}).
 
-%%------------------------------------------------------------------
-%% Constructors — procedure_delegation (direct-dial dual-trust, Slice 7c)
-%%
-%% Org-signed grant that `Advertiser' may serve procedures under the org.
-%% Stored once, shared across all the advertiser's procedures. Storage
-%% key `SHA-256("procedure_delegation" || OrgKey || Advertiser)'.
-%% Envelope key is the OrgKey (the org signs).
-%%------------------------------------------------------------------
+-spec org_directory(<<_:256>>, binary(), <<_:256>>, map()) -> m_record().
+org_directory(RealmId, OrgName, OrgKeyId, Opts)
+  when is_binary(RealmId), byte_size(RealmId) =:= 32, is_binary(OrgName),
+       is_binary(OrgKeyId), byte_size(OrgKeyId) =:= 32 ->
+    Payload = #{{text, <<"realm_id">>} => RealmId,
+                {text, <<"org_name">>} => {text, OrgName},
+                {text, <<"org_key">>} => OrgKeyId},
+    unsigned(?TYPE_ORG_DIRECTORY, Payload, Opts).
 
--spec procedure_delegation(macula_identity:pubkey(),
-                           macula_identity:pubkey()) -> m_record().
-procedure_delegation(OrgKey, Advertiser) ->
-    procedure_delegation(OrgKey, Advertiser, #{}).
+%% @doc An org's grant, signed by its org key, that the node Advertiser may serve procedures under the org.
+-spec procedure_delegation(<<_:256>>, <<_:256>>) -> m_record().
+procedure_delegation(OrgKeyId, Advertiser) ->
+    procedure_delegation(OrgKeyId, Advertiser, #{}).
 
--spec procedure_delegation(macula_identity:pubkey(),
-                           macula_identity:pubkey(), map()) -> m_record().
-procedure_delegation(OrgKey, Advertiser, Opts)
-  when is_binary(OrgKey),     byte_size(OrgKey)     =:= 32,
-       is_binary(Advertiser), byte_size(Advertiser) =:= 32 ->
-    Payload = #{
-        {text, <<"org_key">>}    => OrgKey,
-        {text, <<"advertiser">>} => Advertiser
-    },
-    envelope(?TYPE_PROCEDURE_DELEGATION, OrgKey, Payload, Opts).
+-spec procedure_delegation(<<_:256>>, <<_:256>>, map()) -> m_record().
+procedure_delegation(OrgKeyId, Advertiser, Opts)
+  when is_binary(OrgKeyId), byte_size(OrgKeyId) =:= 32, is_binary(Advertiser), byte_size(Advertiser) =:= 32 ->
+    Payload = #{{text, <<"org_key">>} => OrgKeyId, {text, <<"advertiser">>} => Advertiser},
+    unsigned(?TYPE_PROCEDURE_DELEGATION, Payload, Opts).
 
-%%------------------------------------------------------------------
-%% Constructors — procedure_advertisement (Part 6 §9.7)
-%%
-%% Stored at storage key SHA-256(procedure_uri). Envelope key is
-%% the advertiser's NodeId (advertiser signs the record).
-%%------------------------------------------------------------------
+%% @doc A provider's advertisement of a procedure in a realm, signed by the provider. For a procedure with an org
+%% namespace the authorization option carries the provider authorization: org_directory and procedure_delegation as
+%% the records' wire form, the only authorization form. The builder refuses any other.
+-spec procedure_advertisement(<<_:256>>, <<_:256>>, binary(), <<_:256>>) -> m_record().
+procedure_advertisement(AdvertiserNode, RealmId, Procedure, ServingStation) ->
+    procedure_advertisement(AdvertiserNode, RealmId, Procedure, ServingStation, #{}).
 
--spec procedure_advertisement(macula_identity:pubkey(), binary(),
-                              macula_identity:pubkey()) -> m_record().
-procedure_advertisement(AdvertiserNode, ProcedureUri, ServingStation) ->
-    procedure_advertisement(AdvertiserNode, ProcedureUri, ServingStation, #{}).
+-spec procedure_advertisement(<<_:256>>, <<_:256>>, binary(), <<_:256>>, procedure_advertisement_opts()) ->
+          m_record().
+procedure_advertisement(AdvertiserNode, RealmId, Procedure, ServingStation, Opts)
+  when is_binary(AdvertiserNode), byte_size(AdvertiserNode) =:= 32, is_binary(RealmId), byte_size(RealmId) =:= 32,
+       is_binary(Procedure), is_binary(ServingStation), byte_size(ServingStation) =:= 32, is_map(Opts) ->
+    Payload = #{{text, <<"realm_id">>} => RealmId,
+                {text, <<"procedure">>} => {text, Procedure},
+                {text, <<"advertiser_node">>} => AdvertiserNode,
+                {text, <<"serving_station">>} => ServingStation},
+    unsigned(?TYPE_PROCEDURE_ADVERTISEMENT,
+             with_authorization(Payload, maps:get(authorization, Opts, undefined)), Opts).
 
--spec procedure_advertisement(macula_identity:pubkey(), binary(),
-                              macula_identity:pubkey(),
-                              procedure_advertisement_opts()) -> m_record().
-procedure_advertisement(AdvertiserNode, ProcedureUri, ServingStation, Opts)
-  when is_binary(AdvertiserNode), byte_size(AdvertiserNode) =:= 32,
-       is_binary(ProcedureUri),
-       is_binary(ServingStation), byte_size(ServingStation) =:= 32 ->
-    Payload = procedure_advertisement_payload(AdvertiserNode, ProcedureUri,
-                                              ServingStation, Opts),
-    envelope(?TYPE_PROCEDURE_ADVERTISEMENT, AdvertiserNode, Payload, Opts).
-
-%%------------------------------------------------------------------
-%% Constructors — content_announcement (Part 6 §9.x)
-%%
-%% Signed announcement that `AnnouncerNode' is hosting the content
-%% identified by `MCID' (34-byte Macula Content IDentifier) and
-%% reachable at `Endpoint'. Optional metadata fields carry the
-%% manifest's display name, byte size, and chunk count so locators
-%% can prioritise without fetching the manifest first.
-%%------------------------------------------------------------------
-
--spec content_announcement(macula_identity:pubkey(), binary(), binary()) -> m_record().
+%% @doc A node's announcement, signed by the node, that it shares the content with this tag 2 content id.
+-spec content_announcement(<<_:256>>, <<_:400>>, binary()) -> m_record().
 content_announcement(AnnouncerNode, MCID, Endpoint) ->
     content_announcement(AnnouncerNode, MCID, Endpoint, #{}).
 
--spec content_announcement(macula_identity:pubkey(), binary(), binary(),
-                            content_announcement_opts()) -> m_record().
-content_announcement(AnnouncerNode, MCID, Endpoint, Opts)
-  when is_binary(AnnouncerNode), byte_size(AnnouncerNode) =:= 32,
-       is_binary(MCID), byte_size(MCID) =:= 34,
-       is_binary(Endpoint) ->
-    Payload = content_announcement_payload(AnnouncerNode, MCID, Endpoint, Opts),
-    envelope(?TYPE_CONTENT_ANNOUNCEMENT, AnnouncerNode, Payload, Opts).
+-spec content_announcement(<<_:256>>, <<_:400>>, binary(), content_announcement_opts()) -> m_record().
+content_announcement(AnnouncerNode, <<2, _Codec:8, _Hash:48/binary>> = MCID, Endpoint, Opts)
+  when is_binary(AnnouncerNode), byte_size(AnnouncerNode) =:= 32, is_binary(Endpoint) ->
+    unsigned(?TYPE_CONTENT_ANNOUNCEMENT, content_announcement_payload(AnnouncerNode, MCID, Endpoint, Opts), Opts).
 
-%%------------------------------------------------------------------
-%% Constructors — foundation_seed_list (Part 6 §9.14)
-%%
-%% FROST-Ed25519 threshold-signed. `FoundationKey' is the aggregated
-%% pubkey (32 bytes) — same as any Ed25519 key on the wire. Embedded
-%% in station firmware via `macula_foundation'.
-%%------------------------------------------------------------------
+%% @doc A foundation's seed list, signed by a foundation key.
+-spec foundation_seed_list([foundation_seed()]) -> m_record().
+foundation_seed_list(Seeds) ->
+    foundation_seed_list(Seeds, #{}).
 
--spec foundation_seed_list(macula_identity:pubkey(),
-                           [foundation_seed()]) -> m_record().
-foundation_seed_list(FoundationKey, Seeds) ->
-    foundation_seed_list(FoundationKey, Seeds, #{}).
-
--spec foundation_seed_list(macula_identity:pubkey(),
-                           [foundation_seed()],
-                           foundation_seed_list_opts()) -> m_record().
-foundation_seed_list(FoundationKey, Seeds, Opts)
-  when is_binary(FoundationKey), byte_size(FoundationKey) =:= 32,
-       is_list(Seeds) ->
-    NowMs = erlang:system_time(millisecond),
+-spec foundation_seed_list([foundation_seed()], foundation_seed_list_opts()) -> m_record().
+foundation_seed_list(Seeds, Opts) when is_list(Seeds), is_map(Opts) ->
+    Now = erlang:system_time(millisecond),
     TtlMs = maps:get(ttl_ms, Opts, ?DEFAULT_TTL_MS),
-    ValidFrom  = maps:get(valid_from,  Opts, NowMs),
-    ValidUntil = maps:get(valid_until, Opts, NowMs + TtlMs),
-    Envelope = envelope(?TYPE_FOUNDATION_SEED_LIST, FoundationKey, #{}, Opts),
-    Payload = foundation_seed_list_payload(
-                maps:get(version, Envelope),
-                ValidFrom, ValidUntil, Seeds),
-    Envelope#{payload => Payload}.
+    #{version := Version} = Unsigned = unsigned(?TYPE_FOUNDATION_SEED_LIST, #{}, Opts),
+    Payload = foundation_seed_list_payload(Version, maps:get(valid_from, Opts, Now),
+                                           maps:get(valid_until, Opts, Now + TtlMs), Seeds),
+    Unsigned#{payload := Payload}.
 
-%%------------------------------------------------------------------
-%% Constructors — foundation_parameter (Part 6 §9.15)
-%%------------------------------------------------------------------
+%% @doc A foundation parameter, signed by a foundation key.
+-spec foundation_parameter(binary(), foundation_parameter_value()) -> m_record().
+foundation_parameter(Name, Value) ->
+    foundation_parameter(Name, Value, #{}).
 
--spec foundation_parameter(macula_identity:pubkey(), binary(),
-                           foundation_parameter_value()) -> m_record().
-foundation_parameter(FoundationKey, Name, Value) ->
-    foundation_parameter(FoundationKey, Name, Value, #{}).
-
--spec foundation_parameter(macula_identity:pubkey(), binary(),
-                           foundation_parameter_value(),
-                           foundation_parameter_opts()) -> m_record().
-foundation_parameter(FoundationKey, Name, Value, Opts)
-  when is_binary(FoundationKey), byte_size(FoundationKey) =:= 32,
-       is_binary(Name) ->
-    NowMs = erlang:system_time(millisecond),
+-spec foundation_parameter(binary(), foundation_parameter_value(), foundation_parameter_opts()) -> m_record().
+foundation_parameter(Name, Value, Opts) when is_binary(Name), is_map(Opts) ->
+    Now = erlang:system_time(millisecond),
     TtlMs = maps:get(ttl_ms, Opts, ?DEFAULT_TTL_MS),
-    ValidFrom  = maps:get(valid_from,  Opts, NowMs),
-    ValidUntil = maps:get(valid_until, Opts, NowMs + TtlMs),
-    PriorV     = maps:get(prior_version, Opts, undefined),
-    Envelope = envelope(?TYPE_FOUNDATION_PARAMETER, FoundationKey, #{}, Opts),
-    Payload = foundation_parameter_payload(
-                Name, Value, maps:get(version, Envelope),
-                ValidFrom, ValidUntil, PriorV),
-    Envelope#{payload => Payload}.
+    #{version := Version} = Unsigned = unsigned(?TYPE_FOUNDATION_PARAMETER, #{}, Opts),
+    Payload = foundation_parameter_payload(Name, Value, Version, maps:get(valid_from, Opts, Now),
+                                           maps:get(valid_until, Opts, Now + TtlMs),
+                                           maps:get(prior_version, Opts, undefined)),
+    Unsigned#{payload := Payload}.
 
-%%------------------------------------------------------------------
-%% Constructors — foundation_realm_trust_list (Part 6 §9.16)
-%%------------------------------------------------------------------
+%% @doc A foundation's list of trusted realms, by realm key id, signed by a foundation key.
+-spec foundation_realm_trust_list([<<_:256>>]) -> m_record().
+foundation_realm_trust_list(Trusted) ->
+    foundation_realm_trust_list(Trusted, #{}).
 
--spec foundation_realm_trust_list(macula_identity:pubkey(),
-                                  [macula_identity:pubkey()]) -> m_record().
-foundation_realm_trust_list(FoundationKey, Trusted) ->
-    foundation_realm_trust_list(FoundationKey, Trusted, #{}).
-
--spec foundation_realm_trust_list(macula_identity:pubkey(),
-                                  [macula_identity:pubkey()],
-                                  foundation_realm_trust_list_opts()) ->
-          m_record().
-foundation_realm_trust_list(FoundationKey, Trusted, Opts)
-  when is_binary(FoundationKey), byte_size(FoundationKey) =:= 32,
-       is_list(Trusted) ->
-    NowMs = erlang:system_time(millisecond),
+-spec foundation_realm_trust_list([<<_:256>>], foundation_realm_trust_list_opts()) -> m_record().
+foundation_realm_trust_list(Trusted, Opts) when is_list(Trusted), is_map(Opts) ->
+    Now = erlang:system_time(millisecond),
     TtlMs = maps:get(ttl_ms, Opts, ?DEFAULT_TTL_MS),
-    ValidUntil = maps:get(valid_until, Opts, NowMs + TtlMs),
-    Revoked    = maps:get(realms_revoked, Opts, []),
-    Envelope = envelope(?TYPE_FOUNDATION_REALM_TRUST_LIST, FoundationKey,
-                        #{}, Opts),
-    Payload = foundation_realm_trust_list_payload(
-                Trusted, Revoked, maps:get(version, Envelope), ValidUntil),
-    Envelope#{payload => Payload}.
+    #{version := Version} = Unsigned = unsigned(?TYPE_FOUNDATION_REALM_TRUST_LIST, #{}, Opts),
+    Payload = foundation_realm_trust_list_payload(Trusted, maps:get(realms_revoked, Opts, []), Version,
+                                                  maps:get(valid_until, Opts, Now + TtlMs)),
+    Unsigned#{payload := Payload}.
 
-%%------------------------------------------------------------------
-%% Constructors — foundation_t3_attestation (Part 6 §9.17)
-%%------------------------------------------------------------------
+%% @doc A foundation's tier 3 attestation of a station, signed by a foundation key.
+-spec foundation_t3_attestation(<<_:256>>, pos_integer()) -> m_record().
+foundation_t3_attestation(StationId, AuditDate) ->
+    foundation_t3_attestation(StationId, AuditDate, #{}).
 
--spec foundation_t3_attestation(macula_identity:pubkey(),
-                                macula_identity:pubkey(),
-                                pos_integer()) -> m_record().
-foundation_t3_attestation(FoundationKey, StationId, AuditDate) ->
-    foundation_t3_attestation(FoundationKey, StationId, AuditDate, #{}).
-
--spec foundation_t3_attestation(macula_identity:pubkey(),
-                                macula_identity:pubkey(),
-                                pos_integer(),
-                                foundation_t3_attestation_opts()) ->
-          m_record().
-foundation_t3_attestation(FoundationKey, StationId, AuditDate, Opts)
-  when is_binary(FoundationKey), byte_size(FoundationKey) =:= 32,
-       is_binary(StationId),     byte_size(StationId)     =:= 32,
-       is_integer(AuditDate),    AuditDate > 0 ->
-    NowMs = erlang:system_time(millisecond),
+-spec foundation_t3_attestation(<<_:256>>, pos_integer(), foundation_t3_attestation_opts()) -> m_record().
+foundation_t3_attestation(StationId, AuditDate, Opts)
+  when is_binary(StationId), byte_size(StationId) =:= 32, is_integer(AuditDate), AuditDate > 0, is_map(Opts) ->
+    Now = erlang:system_time(millisecond),
     TtlMs = maps:get(ttl_ms, Opts, ?DEFAULT_TTL_MS),
-    ValidUntil = maps:get(valid_until, Opts, NowMs + TtlMs),
-    Notes      = maps:get(notes, Opts, undefined),
-    Envelope = envelope(?TYPE_FOUNDATION_T3_ATTESTATION, FoundationKey,
-                        #{}, Opts),
-    Payload = foundation_t3_attestation_payload(
-                StationId, AuditDate, ValidUntil, Notes),
-    Envelope#{payload => Payload}.
+    Payload = foundation_t3_attestation_payload(StationId, AuditDate, maps:get(valid_until, Opts, Now + TtlMs),
+                                                maps:get(notes, Opts, undefined)),
+    unsigned(?TYPE_FOUNDATION_T3_ATTESTATION, Payload, Opts).
+
+%% @doc A station's dialable endpoint, signed by the station and stored under its node_id.
+-spec station_endpoint(1..65535) -> m_record().
+station_endpoint(QuicPort) ->
+    station_endpoint(QuicPort, #{}).
+
+-spec station_endpoint(1..65535, station_endpoint_opts()) -> m_record().
+station_endpoint(QuicPort, Opts) when is_integer(QuicPort), QuicPort > 0, QuicPort =< 65535, is_map(Opts) ->
+    Payload0 = #{{text, <<"quic_port">>} => QuicPort},
+    Payload1 = with_host_list(Payload0, maps:get(host_advertised, Opts, undefined)),
+    Payload = with_text(Payload1, <<"alpn">>, maps:get(alpn, Opts, undefined)),
+    unsigned(?TYPE_STATION_ENDPOINT, Payload, maps:merge(#{ttl_ms => ?STATION_ENDPOINT_TTL_MS}, Opts)).
+
+%% @doc A tombstone that withdraws a record: it names the record's type, version and slot fields, takes the record's
+%% slot, and lives until the record has expired plus the clock tolerance, so no replica serves the record again after
+%% the tombstone lapses. Sign it with the key that signed the record.
+-spec tombstone(m_record(), reason()) -> m_record().
+tombstone(Withdrawn, Reason) ->
+    tombstone(Withdrawn, Reason, #{}).
+
+-spec tombstone(m_record(), reason(), tombstone_opts()) -> m_record().
+tombstone(#{type := Type, version := Version, expires_at := WithdrawnExpiry, payload := WithdrawnPayload} = Withdrawn,
+          Reason, Opts)
+  when Type =/= ?TYPE_TOMBSTONE, (Reason =:= shutdown orelse Reason =:= moved orelse Reason =:= revoked),
+       is_map(Opts) ->
+    Base = #{{text, <<"withdrawn_type">>} => Type,
+             {text, <<"withdrawn_version">>} => Version,
+             {text, <<"reason">>} => {text, atom_to_binary(Reason)}},
+    Slot = slot_fields(slot_field_names(Type, maps:get(subject, Withdrawn, undefined)), WithdrawnPayload,
+                       maps:get(subject, Withdrawn, undefined)),
+    Payload = with_text(maps:merge(Base, Slot), <<"detail">>, maps:get(detail, Opts, undefined)),
+    #{created_at := Created} = Unsigned = unsigned(?TYPE_TOMBSTONE, Payload, Opts),
+    Unsigned#{expires_at := max(Created + maps:get(ttl_ms, Opts, ?CLOCK_TOLERANCE_MS),
+                                WithdrawnExpiry + ?CLOCK_TOLERANCE_MS)}.
+
+%% @doc An unsigned record of a domain type (tags 0x20 to 0xFF). The subject_id option names the record's subject, a
+%% non-empty binary: an empty subject would name a slot apart from no subject.
+-spec envelope(type_tag(), map(), map()) -> m_record().
+envelope(Type, Payload, Opts)
+  when is_integer(Type), Type >= ?DOMAIN_TYPE_MIN, Type =< 16#FF, is_map(Payload), is_map(Opts) ->
+    with_subject(unsigned(Type, Payload, Opts), maps:get(subject_id, Opts, undefined)).
 
 %%------------------------------------------------------------------
-%% Constructors — tombstone (Part 6 §9.13)
+%% Signing, verifying and the wire form
 %%------------------------------------------------------------------
 
--spec tombstone(macula_identity:pubkey(), type_tag(), atom()) -> m_record().
-tombstone(SupersededKey, SupersededType, Reason) ->
-    tombstone(SupersededKey, SupersededType, Reason, #{}).
+%% @doc Sign a record with a key whose purpose fits its type. Raises key_purpose_mismatch for a key of another
+%% purpose, key_id_mismatch when the payload names a signer other than this key, {malformed, Type} for a record whose
+%% fields, subject or payload verify/3 would refuse, and record_too_large past 256 KiB. The field and payload checks
+%% are verify/3's own, run before anything is signed, so sign/2 never returns a record verify/3 refuses apart from
+%% the clock.
+-spec sign(m_record(), macula_node_keys:node_key()) -> m_record().
+sign(#{type := Type, payload := Payload} = Record, #{purpose := Purpose, profile := Profile} = Key) ->
+    ok = purpose_fits(lists:member(Purpose, signer_purposes(Type, Payload)), {Type, Purpose}),
+    ok = lifetime_checked(lifetime(Record), Type),
+    Carried = macula_node_keys:public_key(Key),
+    KeyId = key_id_of(signer_kind(Type, Payload), Carried, Profile),
+    ok = signer_matches(named_signer(Type, Payload, KeyId), Type),
+    Fields = tbs_fields(Record),
+    ok = verifiable(read_tbs(Fields#{{text, <<"alg">>} => {text, macula_signed_object:alg(Profile)}}), Type),
+    ok = verifiable(payload_ok(Type, Payload), Type),
+    ok = size_fits(byte_size(macula_record_cbor:encode(Fields)) + byte_size(Carried)
+                   + macula_node_keys:signature_bytes(Profile)),
+    Object = macula_signed_object:sign(?LABEL, Fields, Key),
+    ok = size_fits(byte_size(macula_signed_object:encode(Object))),
+    #{tbs := Tbs, signature := Signature} = Object,
+    Record#{key => Carried, key_id => KeyId, alg => macula_signed_object:alg(Profile), tbs => Tbs,
+            signature => Signature}.
 
--spec tombstone(macula_identity:pubkey(), type_tag(), atom(), tombstone_opts()) ->
-    m_record().
-tombstone(SupersededKey, SupersededType, Reason, Opts)
-  when is_binary(SupersededKey), byte_size(SupersededKey) =:= 32,
-       is_integer(SupersededType), SupersededType > 0,
-       is_atom(Reason) ->
-    NowMs = erlang:system_time(millisecond),
-    Detail = maps:get(detail, Opts, undefined),
-    Payload = tombstone_payload(SupersededKey, SupersededType, NowMs, Reason, Detail),
-    envelope(?TYPE_TOMBSTONE, SupersededKey, Payload, Opts).
+%% @doc Verify a record, given as its wire form or as its {key, tbs, signature} map, under the verifier's profile and
+%% clock. Refusals are returned, never raised.
+-spec verify(binary() | map(), macula_crypto_profile:profile()) -> {ok, m_record()} | {error, refusal()}.
+verify(Signed, Profile) ->
+    verify(Signed, Profile, erlang:system_time(millisecond)).
 
-%%------------------------------------------------------------------
-%% Constructors — station_endpoint
-%%
-%% Advertises a station's QUIC endpoint so resolvers can reach it
-%% after looking up its identity pubkey. Storage key namespaces under
-%% `station_endpoint:' so it doesn't collide with node_record (which
-%% uses the bare pubkey as storage key). Every macula-station publishes
-%% its own automatically; direct-dial resolution (RPC/content/streaming)
-%% resolves a `procedure_advertisement'/`content_announcement''s
-%% `serving_station' to one of these.
-%%------------------------------------------------------------------
+-spec verify(binary() | map(), macula_crypto_profile:profile(), integer()) -> {ok, m_record()} | {error, refusal()}.
+verify(Bytes, _Profile, _Now) when is_binary(Bytes), byte_size(Bytes) > ?MAX_RECORD_BYTES ->
+    {error, record_too_large};
+verify(Bytes, Profile, Now) when is_binary(Bytes) ->
+    decoded_object(macula_signed_object:decode(Bytes), Profile, Now);
+verify(#{key := Key, tbs := Tbs, signature := Signature} = Object, Profile, Now)
+  when map_size(Object) =:= 3, is_binary(Key), is_binary(Tbs), is_binary(Signature) ->
+    sized_object(byte_size(macula_signed_object:encode(Object)), Object, Profile, Now);
+verify(_Other, _Profile, _Now) ->
+    {error, malformed}.
 
--spec station_endpoint(macula_identity:pubkey(),
-                       QuicPort :: 1..65535) -> m_record().
-station_endpoint(StationPubkey, QuicPort) ->
-    station_endpoint(StationPubkey, QuicPort, #{}).
+%% The most entries a slot holds: 64 places for checked signers and 16 for everyone else
+%% (DESIGN_PQ_DHT_SLOTS_AND_BUDGET.md, 2.3).
+-define(SLOT_CAPACITY, 80).
+%% The most entries under the expected key that signer_entry/4 verifies.
+-define(SIGNER_ENTRY_VERIFIES, 4).
 
--spec station_endpoint(macula_identity:pubkey(),
-                       QuicPort :: 1..65535,
-                       station_endpoint_opts()) -> m_record().
-station_endpoint(StationPubkey, QuicPort, Opts)
-  when is_binary(StationPubkey), byte_size(StationPubkey) =:= 32,
-       is_integer(QuicPort), QuicPort > 0, QuicPort =< 65535 ->
-    Payload0 = #{ {text, <<"quic_port">>} => QuicPort },
-    P1 = with_host_list(Payload0, maps:get(host_advertised, Opts, undefined)),
-    P2 = with_text(P1, <<"alpn">>, maps:get(alpn, Opts, undefined)),
-    Opts1 = maps:merge(#{ttl_ms => ?STATION_ENDPOINT_TTL_MS}, Opts),
-    envelope(?TYPE_STATION_ENDPOINT, StationPubkey, P2, Opts1).
+-type signer_entry_stats() :: #{matching := non_neg_integer(), verified := non_neg_integer(),
+                                beyond_capacity := non_neg_integer()}.
 
-with_host_list(Map, undefined) -> Map;
-with_host_list(Map, []) -> Map;
-with_host_list(Map, Hosts) when is_list(Hosts) ->
-    Bins = [H || H <- Hosts, is_binary(H)],
-    case Bins of
-        [] -> Map;
-        _  -> Map#{ {text, <<"host_advertised">>} => Bins }
-    end.
+%% @doc signer_entry/4 at the current time.
+-spec signer_entry([binary() | map()], {key_id | node_id, <<_:256>>}, macula_crypto_profile:profile()) ->
+        {{ok, m_record()} | {error, not_found | refusal()}, signer_entry_stats()}.
+signer_entry(Entries, Expected, Profile) ->
+    signer_entry(Entries, Expected, Profile, erlang:system_time(millisecond)).
 
-%%------------------------------------------------------------------
-%% Sign / verify
-%%------------------------------------------------------------------
+%% @doc The entry one signer holds among the entries a lookup of a slot returns, as wire forms or {key, tbs, signature}
+%% maps. Expected is {key_id, Id} for a key named by its MACULA-KEY-ID-V1 key id, or {node_id, Id} for an identity key.
+%% Every entry is read as far as its carried key, whatever the answer's order or length, and no signature is checked
+%% to select. Only the entries under the expected key are verified: highest claimed version first, stopping at the
+%% first that verifies and names Id as its key_id, and at most 4. So an entry under another key costs no verify, and
+%% forged entries under the expected key cost a bounded few. The outcome is that record, not_found when no entry is
+%% under the key, or the refusal of the last entry verified. The stats count the entries under the key, the entries
+%% verified, and the entries past the 80 a slot holds, which a station that keeps to its slot places never sends.
+-spec signer_entry([binary() | map()], {key_id | node_id, <<_:256>>}, macula_crypto_profile:profile(), integer()) ->
+        {{ok, m_record()} | {error, not_found | refusal()}, signer_entry_stats()}.
+signer_entry(Entries, {Kind, <<_:256>> = Id}, Profile, Now)
+  when is_list(Entries), (Kind =:= key_id orelse Kind =:= node_id), is_integer(Now) ->
+    Matching = by_claimed_version([Object || Entry <- Entries, {ok, Object} <- [entry_object(Entry)],
+                                             carried_id(Kind, Object, Profile) =:= Id]),
+    {Outcome, Verified} = first_verified(lists:sublist(Matching, ?SIGNER_ENTRY_VERIFIES), Id, Profile, Now,
+                                         {{error, not_found}, 0}),
+    {Outcome, #{matching => length(Matching), verified => Verified,
+                beyond_capacity => max(0, length(Entries) - ?SLOT_CAPACITY)}}.
 
--spec sign(m_record(), macula_identity:key_pair() | macula_identity:privkey()) ->
-    m_record().
-sign(Record, Identity) ->
-    Bytes = canonical_unsigned(Record),
-    Sig = macula_identity:sign([?SIG_DOMAIN, Bytes], Identity),
-    Record#{signature => Sig}.
+%% An entry's outer object, decoded as far as its byte strings: nothing inside its tbs is read.
+entry_object(Bytes) when is_binary(Bytes) ->
+    macula_signed_object:decode(Bytes);
+entry_object(#{key := Key, tbs := Tbs, signature := Signature} = Object)
+  when map_size(Object) =:= 3, is_binary(Key), is_binary(Tbs), is_binary(Signature) ->
+    {ok, Object};
+entry_object(_NotAnObject) ->
+    error.
 
--spec verify(m_record()) -> {ok, m_record()} | {error, term()}.
-verify(#{signature := Sig, key := Pub} = Record)
-  when is_binary(Sig), byte_size(Sig) =:= 64,
-       is_binary(Pub), byte_size(Pub) =:= 32 ->
-    Bytes = canonical_unsigned(Record),
-    verify_signature(macula_identity:verify([?SIG_DOMAIN, Bytes], Sig, Pub),
-                     Record);
-verify(_) ->
-    {error, bad_record}.
+carried_id(key_id, #{key := Key}, Profile) -> macula_node_keys:key_id(Key, Profile);
+carried_id(node_id, #{key := Key}, Profile) -> macula_node_keys:node_id(Key, Profile);
+carried_id(_Kind, _HeldObject, _Profile) -> none.
 
-verify_signature(true, Record) ->
-    expiry_check(Record);
-verify_signature(false, _Record) ->
-    {error, signature_invalid}.
+%% Entries under one key, highest claimed version first. The version is read from the tbs without verifying it, and an
+%% entry whose version cannot be read comes last. Entries claiming the same version keep no chosen order, so more than
+%% 4 of them forged ahead of the real entry make the lookup refuse. Only a misbehaving station sends them, since a store
+%% keeps one entry per signer, and such a station could withhold the entry anyway.
+by_claimed_version(Objects) ->
+    Claimed = lists:keysort(1, [{claimed_version(Object), Object} || Object <- Objects]),
+    [Object || {_Version, Object} <- lists:reverse(Claimed)].
 
-%% @doc Rebuild a record with a fresh UUIDv7 version and a new
-%% `created_at' / `expires_at' pair (preserving the original TTL),
-%% then re-sign with `Identity'. Used by the owner's tRepublish
-%% loop (Part 3 §11) to keep a record alive across churn without
-%% changing its type, key, or payload.
-%%
-%% The new signature replaces any prior signature; callers can
-%% safely pass an already-signed record — the prior signature is
-%% stripped before re-signing.
--spec refresh(m_record(),
-              macula_identity:key_pair() | macula_identity:privkey()) ->
-          m_record().
-refresh(Record, Identity) ->
-    NowMs = erlang:system_time(millisecond),
-    TtlMs = maps:get(expires_at, Record) - maps:get(created_at, Record),
-    Fresh = #{
-        type       => maps:get(type, Record),
-        key        => maps:get(key, Record),
-        version    => macula_record_uuid:v7(NowMs),
-        created_at => NowMs,
-        expires_at => NowMs + TtlMs,
-        payload    => maps:get(payload, Record)
-    },
-    sign(Fresh, Identity).
+claimed_version(#{tbs := Tbs}) ->
+    version_claimed(macula_record_cbor:decode_strict(Tbs)).
 
-expiry_check(#{expires_at := X} = Record) ->
-    case erlang:system_time(millisecond) >= X of
-        true  -> {error, expired};
-        false -> {ok, Record}
-    end.
+version_claimed({ok, #{{text, <<"version">>} := <<_:128>> = Version}}) -> Version;
+version_claimed(_Unreadable) -> <<>>.
 
-%%------------------------------------------------------------------
-%% Wire codec
-%%------------------------------------------------------------------
+%% Entries verified in order until one verifies and names Id as its key_id, with the count of entries verified.
+first_verified([], _Id, _Profile, _Now, Last) ->
+    Last;
+first_verified([Object | Rest], Id, Profile, Now, {_Outcome, Verified}) ->
+    entry_verified(verify(Object, Profile, Now), Rest, Id, Profile, Now, Verified + 1).
 
+entry_verified({ok, #{key_id := Id} = Record}, _Rest, Id, _Profile, _Now, Verified) ->
+    {{ok, Record}, Verified};
+entry_verified({ok, _OtherSigner}, Rest, Id, Profile, Now, Verified) ->
+    first_verified(Rest, Id, Profile, Now, {{error, key_id_mismatch}, Verified});
+entry_verified({error, _} = Refusal, Rest, Id, Profile, Now, Verified) ->
+    first_verified(Rest, Id, Profile, Now, {Refusal, Verified}).
+
+%% @doc The record with a new version, created now, with the same lifetime, signed again with Key.
+-spec refresh(m_record(), macula_node_keys:node_key()) -> m_record().
+refresh(#{created_at := Created, expires_at := Expires} = Record, Key) ->
+    Now = erlang:system_time(millisecond),
+    Fresh = maps:with([type, payload, subject], Record),
+    sign(Fresh#{version => macula_record_uuid:v7_monotonic(Now), created_at => Now,
+                expires_at => Now + (Expires - Created)},
+         Key).
+
+%% @doc The wire form of a signed or verified record: its {key, tbs, signature} map, tbs unchanged.
 -spec encode(m_record()) -> binary().
-encode(#{signature := Sig} = Record) when is_binary(Sig), byte_size(Sig) =:= 64 ->
-    macula_cbor_nif:pack_deterministic(to_envelope_map(Record)).
-
-%% @doc Decode a record from its wire bytes. Bytes that are not CBOR are
-%% `{error, bad_record}', and bytes holding more CBOR items than the
-%% element budget of `macula_cbor_nif:unpack_deterministic/1' are
-%% `{error, too_many_elements}'.
--spec decode(binary()) -> {ok, m_record()} | {error, term()}.
-decode(Bin) when is_binary(Bin) ->
-    try macula_cbor_nif:unpack_deterministic(Bin) of
-        Term -> decode_value(Term)
-    catch
-        error:too_many_elements -> {error, too_many_elements};
-        error:<<"cbor: ", _/binary>> -> {error, bad_record}
-    end.
-
-%% @doc Decode a record from its wire bytes within `Left' CBOR items, what a
-%% caller has left of an element budget, and return what is left after it
-%% as `{ok, Record, LeftAfter}'. Bytes that are not CBOR are
-%% `{error, bad_record}', and bytes holding more CBOR items than `Left' are
-%% `{error, too_many_elements}'. `macula_frame' decodes a frame's records
-%% this way, within what the frame left.
--spec decode(binary(), non_neg_integer()) ->
-    {ok, m_record(), non_neg_integer()} | {error, term()}.
-decode(Bin, Left) when is_binary(Bin), is_integer(Left), Left >= 0 ->
-    try macula_cbor_nif:unpack_deterministic(Bin, Left) of
-        {Term, LeftAfter} -> with_left(decode_value(Term), LeftAfter)
-    catch
-        error:too_many_elements -> {error, too_many_elements};
-        error:<<"cbor: ", _/binary>> -> {error, bad_record}
-    end.
-
-with_left({ok, Record}, Left) -> {ok, Record, Left};
-with_left(Error, _Left) -> Error.
-
-decode_value(Map) when is_map(Map) ->
-    G = fun(Key) -> maps:get({text, Key}, Map, undefined) end,
-    parse_envelope(G(<<"t">>), G(<<"k">>), G(<<"v">>), G(<<"c">>),
-                   G(<<"x">>), G(<<"p">>), G(<<"u">>), G(<<"s">>));
-decode_value(_Other) ->
-    {error, bad_record}.
-
-parse_envelope(T, K, V, C, X, P, U, S)
-  when is_integer(T), T > 0,
-       is_binary(K), byte_size(K) =:= 32,
-       is_binary(V), byte_size(V) =:= 16,
-       is_integer(C), C > 0,
-       is_integer(X), X > 0,
-       is_map(P),
-       is_binary(S), byte_size(S) =:= 64 ->
-    Base = #{type => T, key => K, version => V,
-             created_at => C, expires_at => X,
-             payload => P, signature => S},
-    {ok, with_decoded_subject(Base, U)};
-parse_envelope(_, _, _, _, _, _, _, undefined) ->
-    {error, missing_signature};
-parse_envelope(_, _, _, _, _, _, _, _) ->
-    {error, bad_record}.
-
-with_decoded_subject(R, undefined)               -> R;
-with_decoded_subject(R, Sid) when is_binary(Sid) -> R#{subject_id => Sid};
-with_decoded_subject(R, _Other)                  -> R.
+encode(#{key := Key, tbs := Tbs, signature := Signature}) ->
+    macula_signed_object:encode(#{key => Key, tbs => Tbs, signature => Signature}).
 
 %%------------------------------------------------------------------
 %% Accessors
 %%------------------------------------------------------------------
 
-type(#{type := T}) -> T.
-key(#{key := K}) -> K.
-version(#{version := V}) -> V.
-created_at(#{created_at := C}) -> C.
-expires_at(#{expires_at := X}) -> X.
-payload(#{payload := P}) -> P.
+-spec type(m_record()) -> type_tag().
+type(#{type := Type}) -> Type.
 
-%% @doc Read a `procedure_advertisement' record's fields as a typed
-%% map, hiding the payload's wire keying from consumers. Pairs with
-%% the `procedure_advertisement/3,4' constructors.
-%%
-%% Robust to both shapes a record can arrive in: the canonical form
-%% (`{text, <<"k">>}' keys, `{text, V}' text values, as built locally)
-%% AND the wire-decoded form (bare `<<"k">>' keys, bare values, as a
-%% record returned over an RPC like `find_records/2'). Consumers get
-%% the same map either way, so they never touch the CBOR keying.
+-spec key(m_record()) -> binary().
+key(#{key := Key}) -> Key.
+
+-spec key_id(m_record()) -> <<_:256>>.
+key_id(#{key_id := KeyId}) -> KeyId.
+
+-spec version(m_record()) -> version().
+version(#{version := Version}) -> Version.
+
+-spec created_at(m_record()) -> non_neg_integer().
+created_at(#{created_at := Created}) -> Created.
+
+-spec expires_at(m_record()) -> non_neg_integer().
+expires_at(#{expires_at := Expires}) -> Expires.
+
+-spec payload(m_record()) -> map().
+payload(#{payload := Payload}) -> Payload.
+
+-spec signature(m_record()) -> binary().
+signature(#{signature := Signature}) -> Signature.
+
+%% @doc The procedure advertisement type tag, for callers that look records up by type.
 -spec type_procedure_advertisement() -> type_tag().
 type_procedure_advertisement() -> ?TYPE_PROCEDURE_ADVERTISEMENT.
 
--spec read_procedure_advertisement(m_record()) ->
-    #{procedure_uri   := binary(),
-      advertiser_node := macula_identity:pubkey(),
-      serving_station := macula_identity:pubkey(),
-      cert_chain      := binary() | undefined}.
-read_procedure_advertisement(#{type := ?TYPE_PROCEDURE_ADVERTISEMENT,
-                               payload := P}) ->
-    #{procedure_uri   => payload_field(P, <<"procedure_uri">>),
-      advertiser_node => payload_field(P, <<"advertiser_node">>),
-      serving_station => payload_field(P, <<"serving_station">>),
-      cert_chain      => payload_field(P, <<"cert_chain">>)}.
+%% @doc A payload field, read whatever key form it arrived in: `{text, Name}', the binary, or an existing atom. A
+%% text value is returned as its binary.
+-spec payload_field(map(), binary()) -> term().
+payload_field(Payload, Name) ->
+    unwrap_text(first_present([{text, Name}, Name, safe_atom(Name)], Payload)).
 
-%% @doc Read a `content_announcement' record — robust to every key
-%% shape (see `payload_field/2'). `announcer_node' is the host's
-%% pubkey (also the envelope `key' — the announcer signs its own
-%% announcement), `endpoint' the dialable `quic://host:port' to fetch
-%% from, `name' / `size' / `chunk_count' the metadata a resolver uses
-%% to prioritise without fetching the manifest first (unset fields
-%% read back as `undefined').
--spec read_content_announcement(m_record()) ->
-    #{announcer_node := macula_identity:pubkey(),
-      mcid           := <<_:272>>,
-      endpoint       := binary(),
-      name           := binary() | undefined,
-      size           := non_neg_integer() | undefined,
-      chunk_count    := non_neg_integer() | undefined}.
-read_content_announcement(#{type := ?TYPE_CONTENT_ANNOUNCEMENT,
-                            payload := P}) ->
-    #{announcer_node => payload_field(P, <<"announcer_node">>),
-      mcid           => payload_field(P, <<"mcid">>),
-      endpoint       => payload_field(P, <<"endpoint">>),
-      name           => payload_field(P, <<"name">>),
-      size           => payload_field(P, <<"size">>),
-      chunk_count    => payload_field(P, <<"chunk_count">>)}.
+%%------------------------------------------------------------------
+%% Readers
+%%------------------------------------------------------------------
 
-%% A payload field, robust to every key shape a record arrives in:
-%%   - `{text, <<"k">>}' — canonical record CBOR (built locally)
-%%   - `<<"k">>'         — bare binary (some wire-decoded paths)
-%%   - `k' (atom)        — the frame decoder atomises payload keys via
-%%                         `binary_to_existing_atom' when a record is
-%%                         returned inside an RPC result (e.g. the SDK
-%%                         `find_records/2' path).
-payload_field(P, Name) ->
-    unwrap_text(first_present([{text, Name}, Name, safe_atom(Name)], P)).
-
-safe_atom(Name) ->
-    try binary_to_existing_atom(Name, utf8)
-    catch _:_ -> undefined
-    end.
-
-first_present([K | Ks], P) ->
-    case maps:find(K, P) of
-        {ok, V} -> V;
-        error   -> first_present(Ks, P)
-    end;
-first_present([], _P) ->
-    undefined.
-
-unwrap_text({text, B}) -> B;
-%% `macula_frame:from_wire_envelope/1' (the RPC-response decode path
-%% `find_record/2'/`find_records_by_type/2' go through, distinct from a
-%% same-VM-constructed record) collapses a `{text, B}' VALUE into the
-%% atom `B' whenever B already exists in the atom table -- deliberate
-%% and safe there (an undeclared name harmlessly stays `{text, Bin}'),
-%% but this module's callers all expect a binary regardless of which
-%% decode path a record travelled. Hit for real: a station's own
-%% `kind' field is the literal text "station", which is ALREADY an
-%% atom throughout this codebase, so it silently arrived as the atom
-%% `station' instead of `<<"station">>' -- while `city'/`hostname'
-%% values (never pre-declared atoms) came through as binaries from the
-%% very same record, making the bug invisible until a consumer (a
-%% RocksDB indexer, in this case) choked on the one field that
-%% happened to collide. `true'/`false'/`undefined'/`null' are left as
-%% atoms: no current caller of `payload_field/2' reads a boolean field,
-%% and a future one should get the real boolean back, not `<<"true">>';
-%% `null' is `tombstone_payload/5''s own explicit-absence marker for
-%% `detail' (see `read_tombstone/1''s `null_to_undefined/1'), which
-%% must still see the literal atom to recognise it.
-unwrap_text(A) when is_atom(A), A =/= true, A =/= false,
-                    A =/= undefined, A =/= null ->
-    atom_to_binary(A, utf8);
-unwrap_text(V) -> V.
-
-%% @doc The DHT storage key for a procedure by its URI, without a
-%% record in hand: `SHA-256(procedure_uri)', identical to
-%% `storage_key/1' for a `procedure_advertisement' (Part 3 §3.3).
-%% Consumers use this to `find_records/2' before holding any record.
--spec procedure_key(binary()) -> <<_:256>>.
-procedure_key(ProcedureUri) when is_binary(ProcedureUri) ->
-    crypto:hash(sha256, ProcedureUri).
-
-%% @doc The DHT storage key for a content_announcement by its MCID,
-%% without a record in hand: `SHA-256(MCID)', identical to
-%% `storage_key/1' for a `content_announcement' and to
-%% macula-station's independent `macula_content_dht:dht_key/1'.
-%% Consumers use this to `find_records/2' every host announcing an
-%% MCID before holding any record.
--spec content_key(<<_:272>>) -> <<_:256>>.
-content_key(MCID) when is_binary(MCID), byte_size(MCID) =:= 34 ->
-    crypto:hash(sha256, MCID).
-
-%% @doc The DHT storage key for a station's endpoint by its pubkey,
-%% without a record in hand: identical to `storage_key/1' for a
-%% `station_endpoint'. Consumers use this to `find_record/2' a
-%% serving_station's dialable host:port.
--spec station_endpoint_key(macula_identity:pubkey()) -> <<_:256>>.
-station_endpoint_key(Pubkey)
-  when is_binary(Pubkey), byte_size(Pubkey) =:= 32 ->
-    crypto:hash(sha256, <<?STORAGE_DOMAIN_STATION_ENDPOINT/binary,
-                          Pubkey/binary>>).
-
-%% @doc Read a `station_endpoint' record's fields as a typed map,
-%% hiding the payload keying (robust to canonical vs wire-decoded, like
-%% `read_procedure_advertisement/1'). `host_advertised' is a possibly
-%% empty list of host binaries.
--spec read_station_endpoint(m_record()) ->
-    #{quic_port := 1..65535, host_advertised := [binary()]}.
-read_station_endpoint(#{type := ?TYPE_STATION_ENDPOINT, payload := P}) ->
-    #{quic_port       => payload_field(P, <<"quic_port">>),
-      host_advertised => host_list(payload_field(P, <<"host_advertised">>))}.
-
-host_list(undefined)          -> [];
-host_list(L) when is_list(L)  -> [unwrap_text(H) || H <- L];
-host_list(V)                  -> [unwrap_text(V)].
-
-%% @doc Read a `node_record''s fields as a typed map, hiding the payload
-%% keying (robust to canonical vs wire-decoded, like
-%% `read_procedure_advertisement/1'). `station_id' is what Phase 3.5's
-%% peer resolution keys on: the station this node currently advertises
-%% itself as reachable through. `kind' is `undefined' for a record
-%% predating that field (treated as `station' by convention — see
-%% `node_payload/5''s own comment).
-%%
-%% Previously stopped at `kind' even though `node_payload/5' (20 lines
-%% away in this same file) has always written `hostname'/`endpoint'/
-%% `city'/`country'/`lat'/`lng'/`display_name'/`caps_hint'/`peers' too —
-%% every one of those fields was on the wire and unreachable through this
-%% module's public API, since `payload_field/2' (the only thing that
-%% knows how to read either the canonical or wire-decoded key shape) is
-%% not exported. Found while building `hecate-stations', a directory
-%% service that needs exactly these fields.
-%%
-%% `lat'/`lng' come back as `float() | integer() | undefined': `with_geo/3'
-%% stores them as formatted text (floats to 6 decimals, integers with no
-%% decimal point at all), so a plain `binary_to_float/1' would crash on an
-%% integer-valued coordinate — `parse_geo/1' tries float first and falls
-%% back to integer, matching the writer's own two cases exactly.
--spec read_node_record(m_record()) -> #{
-    node_id      := macula_identity:pubkey(),
-    station_id   := macula_identity:pubkey(),
-    realms       := [macula_identity:pubkey()],
-    capabilities := non_neg_integer(),
-    kind         => binary() | undefined,
-    hostname     => binary() | undefined,
-    endpoint     => binary() | undefined,
-    city         => binary() | undefined,
-    country      => binary() | undefined,
-    lat          => float() | integer() | undefined,
-    lng          => float() | integer() | undefined,
-    display_name => binary() | undefined,
-    caps_hint    => binary() | undefined,
-    peers        => [macula_identity:pubkey()] | undefined,
-    version      => binary() | undefined
-}.
+-spec read_node_record(m_record()) -> map().
 read_node_record(#{type := ?TYPE_NODE_RECORD, payload := P}) ->
     #{node_id      => payload_field(P, <<"node_id">>),
       station_id   => payload_field(P, <<"station_id">>),
@@ -981,582 +567,789 @@ read_node_record(#{type := ?TYPE_NODE_RECORD, payload := P}) ->
       endpoint     => payload_field(P, <<"endpoint">>),
       city         => payload_field(P, <<"city">>),
       country      => payload_field(P, <<"country">>),
-      lat          => parse_geo(payload_field(P, <<"lat">>)),
-      lng          => parse_geo(payload_field(P, <<"lng">>)),
+      lat          => parse_geo(maps:get({text, <<"lat">>}, P, undefined), ?LAT_BOUND),
+      lng          => parse_geo(maps:get({text, <<"lng">>}, P, undefined), ?LNG_BOUND),
       display_name => payload_field(P, <<"display_name">>),
       caps_hint    => payload_field(P, <<"caps_hint">>),
       peers        => payload_field(P, <<"peers">>),
-      %% `macula_station_announcer:identity_metadata/1' has stamped this
-      %% onto every station's re-announce heartbeat since before this SDK
-      %% existed -- WRITE-only until now, silently dropped here, so
-      %% nothing downstream (hecate-stations included) could ever read a
-      %% station's own reported build back out.
+      %% Stamped by a station's re-announce heartbeat: the station's own reported build.
       version      => payload_field(P, <<"version">>)}.
 
-parse_geo(undefined) -> undefined;
-parse_geo(Bin) when is_binary(Bin) ->
-    try binary_to_float(Bin)
-    catch error:badarg -> binary_to_integer(Bin)
-    end.
+-spec read_procedure_advertisement(m_record()) -> map().
+read_procedure_advertisement(#{type := ?TYPE_PROCEDURE_ADVERTISEMENT, payload := P}) ->
+    #{realm_id        => payload_field(P, <<"realm_id">>),
+      procedure       => payload_field(P, <<"procedure">>),
+      advertiser_node => payload_field(P, <<"advertiser_node">>),
+      serving_station => payload_field(P, <<"serving_station">>),
+      authorization   => read_authorization(maps:get({text, <<"authorization">>}, P, undefined))}.
 
-%% @doc Read a `tombstone' record's fields as a typed map. Same
-%% payload-keying robustness as `read_node_record/1'. `superseded_key'
-%% is the pubkey of the record this tombstone replaces — and is also
-%% this record's own `key' field, since `tombstone/3,4' stores the
-%% tombstone under the superseded record's storage key (Part 6 §9.13),
-%% overwriting its DHT slot rather than occupying a new one. `detail'
-%% comes back `undefined' rather than the wire's `null': `tombstone/4'
-%% always writes the key, present-but-empty, unlike every other
-%% optional field in this module which is simply omitted.
--spec read_tombstone(m_record()) -> #{
-    superseded_key  := macula_identity:pubkey(),
-    superseded_type := type_tag(),
-    replaced_at     := non_neg_integer(),
-    reason          := binary(),
-    detail          => binary() | undefined
-}.
+-spec read_station_endpoint(m_record()) -> #{quic_port := 1..65535, host_advertised := [binary()]}.
+read_station_endpoint(#{type := ?TYPE_STATION_ENDPOINT, payload := P}) ->
+    #{quic_port       => payload_field(P, <<"quic_port">>),
+      host_advertised => host_list(payload_field(P, <<"host_advertised">>))}.
+
+-spec read_tombstone(m_record()) -> map().
 read_tombstone(#{type := ?TYPE_TOMBSTONE, payload := P}) ->
-    #{superseded_key  => payload_field(P, <<"superseded_key">>),
-      superseded_type => payload_field(P, <<"superseded_type">>),
-      replaced_at     => payload_field(P, <<"replaced_at">>),
-      reason          => payload_field(P, <<"reason">>),
-      detail          => null_to_undefined(payload_field(P, <<"detail">>))}.
+    Base = #{withdrawn_type    => payload_field(P, <<"withdrawn_type">>),
+             withdrawn_version => payload_field(P, <<"withdrawn_version">>),
+             reason            => payload_field(P, <<"reason">>),
+             detail            => payload_field(P, <<"detail">>)},
+    maps:merge(Base, maps:from_list([{Field, payload_field(P, Name)}
+                                     || {Name, Field} <- slot_field_atoms(), maps:is_key({text, Name}, P)])).
 
-null_to_undefined(null) -> undefined;
-null_to_undefined(V)    -> V.
-
-%%------------------------------------------------------------------
-%% Direct-dial dual-trust (Slice 7c) — key derivation, readers, and the
-%% realm -> org -> server delegation-chain verifier.
-%%------------------------------------------------------------------
-
-%% @doc Storage key for an `org_directory' by `(RealmId, OrgName)'.
--spec org_directory_key(macula_identity:pubkey(), binary()) -> <<_:256>>.
-org_directory_key(RealmId, OrgName)
-  when is_binary(RealmId), byte_size(RealmId) =:= 32, is_binary(OrgName) ->
-    crypto:hash(sha256, <<?STORAGE_DOMAIN_ORG_DIRECTORY/binary,
-                          RealmId/binary, OrgName/binary>>).
-
-%% @doc Storage key for a `procedure_delegation' by `(OrgKey, Advertiser)'.
--spec procedure_delegation_key(macula_identity:pubkey(),
-                               macula_identity:pubkey()) -> <<_:256>>.
-procedure_delegation_key(OrgKey, Advertiser)
-  when is_binary(OrgKey), byte_size(OrgKey) =:= 32,
-       is_binary(Advertiser), byte_size(Advertiser) =:= 32 ->
-    crypto:hash(sha256, <<?STORAGE_DOMAIN_PROC_DELEGATION/binary,
-                          OrgKey/binary, Advertiser/binary>>).
-
--spec read_org_directory(m_record()) ->
-    #{realm := macula_identity:pubkey(), org_name := binary(),
-      org_key := macula_identity:pubkey()}.
+-spec read_org_directory(m_record()) -> #{realm_id := <<_:256>>, org_name := binary(), org_key := <<_:256>>}.
 read_org_directory(#{type := ?TYPE_ORG_DIRECTORY, payload := P}) ->
-    #{realm    => payload_field(P, <<"realm">>),
+    #{realm_id => payload_field(P, <<"realm_id">>),
       org_name => payload_field(P, <<"org_name">>),
       org_key  => payload_field(P, <<"org_key">>)}.
 
--spec read_procedure_delegation(m_record()) ->
-    #{org_key := macula_identity:pubkey(),
-      advertiser := macula_identity:pubkey()}.
+-spec read_procedure_delegation(m_record()) -> #{org_key := <<_:256>>, advertiser := <<_:256>>}.
 read_procedure_delegation(#{type := ?TYPE_PROCEDURE_DELEGATION, payload := P}) ->
     #{org_key    => payload_field(P, <<"org_key">>),
       advertiser => payload_field(P, <<"advertiser">>)}.
 
-%% @doc Verify the realm -> org -> server delegation chain for an
-%% advertisement from `Advertiser' in `RealmId': the `org_directory' is
-%% signed by the realm and names the org key, and the `procedure_delegation'
-%% is signed by that org key and grants `Advertiser'. `ok' means the
-%% advertisement is legitimately authorized; any failure is a squat.
--spec verify_delegation_chain(macula_identity:pubkey(), m_record(), m_record(),
-                              macula_identity:pubkey()) ->
-    ok | {error, atom()}.
-verify_delegation_chain(RealmId, OrgDir, Delegation, Advertiser) ->
-    chain_step_org(verify(OrgDir), RealmId, OrgDir, Delegation, Advertiser).
-
-chain_step_org({ok, _}, RealmId, OrgDir, Delegation, Advertiser) ->
-    org_dir_matches(key(OrgDir) =:= RealmId, OrgDir, Delegation, Advertiser);
-chain_step_org(_BadSig, _RealmId, _OrgDir, _Delegation, _Advertiser) ->
-    {error, org_directory_bad_signature}.
-
-org_dir_matches(true, OrgDir, Delegation, Advertiser) ->
-    #{org_key := OrgKey} = read_org_directory(OrgDir),
-    chain_step_delegation(verify(Delegation), OrgKey, Delegation, Advertiser);
-org_dir_matches(false, _OrgDir, _Delegation, _Advertiser) ->
-    {error, org_directory_wrong_realm}.
-
-chain_step_delegation({ok, _}, OrgKey, Delegation, Advertiser) ->
-    delegation_grants(read_procedure_delegation(Delegation),
-                      key(Delegation), OrgKey, Advertiser);
-chain_step_delegation(_BadSig, _OrgKey, _Delegation, _Advertiser) ->
-    {error, delegation_bad_signature}.
-
-delegation_grants(#{org_key := DOrg, advertiser := DAdv}, DelKey,
-                  OrgKey, Advertiser) ->
-    grant_ok(DelKey =:= OrgKey andalso DOrg =:= OrgKey
-             andalso DAdv =:= Advertiser).
-
-grant_ok(true)  -> ok;
-grant_ok(false) -> {error, delegation_mismatch}.
-signature(#{signature := S}) -> S.
+-spec read_content_announcement(m_record()) -> map().
+read_content_announcement(#{type := ?TYPE_CONTENT_ANNOUNCEMENT, payload := P}) ->
+    #{announcer_node => payload_field(P, <<"announcer_node">>),
+      mcid           => payload_field(P, <<"mcid">>),
+      endpoint       => payload_field(P, <<"endpoint">>),
+      name           => payload_field(P, <<"name">>),
+      size           => payload_field(P, <<"size">>),
+      chunk_count    => payload_field(P, <<"chunk_count">>)}.
 
 %%------------------------------------------------------------------
-%% Direct-dial dual-trust (Slice 7c Direction B) — X.509 cert chain.
-%%
-%% Managed realms root trust in the realm CA, not in the (keyless)
-%% realm tag. A provider embeds its own service-cert chain (leaf ++
-%% org CA, PEM) in its `procedure_advertisement'; a verifying consumer
-%% chains it to the realm CA it received at its own issuance. No
-%% publisher records, no live authority — the trust material already
-%% travels with the advertisement.
+%% Provider authorization (D25 item 6)
 %%------------------------------------------------------------------
 
-%% @doc Verify an advertisement's embedded X.509 service-cert chain to a
-%% trusted realm CA. `RealmCaPem' is the realm CA the consumer already
-%% trusts; `Advertisement' is a resolved `procedure_advertisement' whose
-%% payload carries `cert_chain' (leaf ++ org CA, PEM); `ExpectedOrg' is
-%% the `&lt;org&gt;' segment of the procedure_uri. Passes when the
-%% advertisement signature is valid, the leaf binds the advertiser's
-%% Ed25519 key, the leaf chains to the realm CA, and the leaf's
-%% organization (O) RDN equals `ExpectedOrg'. Any failure = drop as a
-%% squat (or as unmanaged/self-signed).
--spec verify_advertisement_cert_chain(binary(), m_record(), binary()) ->
-    ok | {error, atom()}.
-verify_advertisement_cert_chain(RealmCaPem, Advertisement, ExpectedOrg)
-  when is_binary(RealmCaPem), is_map(Advertisement), is_binary(ExpectedOrg) ->
-    cert_chain_step_sig(verify(Advertisement), RealmCaPem, Advertisement,
-                        ExpectedOrg).
+%% @doc A procedure's org namespace: the text before the first "/" of its name, when there is one and it is not "_".
+-spec procedure_org(binary()) -> {org, binary()} | none | {error, malformed}.
+procedure_org(Procedure) when is_binary(Procedure) ->
+    org_of(binary:split(Procedure, <<"/">>)).
 
-cert_chain_step_sig({ok, _}, RealmCaPem, Adv, ExpectedOrg) ->
-    #{cert_chain := ChainPem} = read_procedure_advertisement(Adv),
-    cert_chain_step_decode(decode_cert_chain(ChainPem), RealmCaPem,
-                           key(Adv), ExpectedOrg);
-cert_chain_step_sig(_BadSig, _RealmCaPem, _Adv, _ExpectedOrg) ->
-    {error, advertisement_bad_signature}.
-
-%% ChainDers is leaf-first `[LeafDer, OrgCaDer, ...]' (as embedded).
-cert_chain_step_decode({ok, [LeafDer | _] = ChainDers}, RealmCaPem,
-                       AdvKey, ExpectedOrg) ->
-    cert_chain_step_key(cert_subject_pubkey(LeafDer) =:= {ok, AdvKey},
-                        RealmCaPem, ChainDers, LeafDer, ExpectedOrg);
-cert_chain_step_decode({error, Reason}, _RealmCaPem, _AdvKey, _ExpectedOrg) ->
-    {error, Reason}.
-
-cert_chain_step_key(true, RealmCaPem, ChainDers, LeafDer, ExpectedOrg) ->
-    cert_chain_step_path(validate_path(RealmCaPem, ChainDers), LeafDer,
-                         ExpectedOrg);
-cert_chain_step_key(false, _RealmCaPem, _ChainDers, _LeafDer, _ExpectedOrg) ->
-    {error, cert_key_mismatch}.
-
-cert_chain_step_path(ok, LeafDer, ExpectedOrg) ->
-    cert_chain_step_org(cert_org(LeafDer) =:= {ok, ExpectedOrg});
-cert_chain_step_path({error, _}, _LeafDer, _ExpectedOrg) ->
-    {error, cert_chain_untrusted}.
-
-cert_chain_step_org(true)  -> ok;
-cert_chain_step_org(false) -> {error, cert_org_mismatch}.
-
-%% Decode a PEM bundle (>= 1 cert) into a leaf-first DER list.
-decode_cert_chain(Pem) when is_binary(Pem) ->
-    decode_cert_chain_result(pem_cert_ders(Pem));
-decode_cert_chain(_) ->
-    {error, no_cert_chain}.
-
-decode_cert_chain_result([]) -> {error, cert_chain_undecodable};
-decode_cert_chain_result(Ders) -> {ok, Ders}.
-
-pem_cert_ders(Pem) ->
-    [Der || {'Certificate', Der, not_encrypted} <- public_key:pem_decode(Pem)].
-
-%% Raw 32-byte Ed25519 subject pubkey from a leaf cert DER. The plain
-%% `der_decode' path yields the subjectPublicKey as a bit string whose
-%% content is the raw key (mirrors `macula_tls:derive_node_id/1').
-cert_subject_pubkey(Der) ->
-    #'Certificate'{
-       tbsCertificate = #'TBSCertificate'{
-         subjectPublicKeyInfo = #'SubjectPublicKeyInfo'{
-           subjectPublicKey = Spk}}} = public_key:der_decode('Certificate', Der),
-    cert_pubkey_bytes(Spk).
-
-cert_pubkey_bytes({0, Bin}) when byte_size(Bin) =:= 32 -> {ok, Bin};
-cert_pubkey_bytes(Bin) when is_binary(Bin), byte_size(Bin) =:= 32 -> {ok, Bin};
-cert_pubkey_bytes(_) -> {error, not_ed25519}.
-
-%% Validate leaf -> ... -> realm CA. `pkix_path_validation' wants the
-%% chain ordered from the anchor's direct child down to the leaf, so
-%% reverse the leaf-first embedded order.
-validate_path(RealmCaPem, ChainDers) ->
-    validate_path_anchor(realm_ca_der(RealmCaPem), ChainDers).
-
-validate_path_anchor({ok, AnchorDer}, ChainDers) ->
-    validate_path_result(
-      public_key:pkix_path_validation(AnchorDer, lists:reverse(ChainDers), []));
-validate_path_anchor({error, _} = Error, _ChainDers) ->
-    Error.
-
-validate_path_result({ok, _}) -> ok;
-validate_path_result({error, Reason}) -> {error, {bad_cert, Reason}}.
-
-realm_ca_der(Pem) ->
-    realm_ca_der_result(pem_cert_ders(Pem)).
-
-realm_ca_der_result([Der | _]) -> {ok, Der};
-realm_ca_der_result([])        -> {error, no_realm_ca}.
-
-%% Organization (O) RDN of a leaf cert. OTP decode resolves the RDN
-%% value to a friendly `{utf8String, Bin}' / string shape.
-cert_org(Der) ->
-    #'OTPCertificate'{
-       tbsCertificate = #'OTPTBSCertificate'{
-         subject = Subject}} = public_key:pkix_decode_cert(Der, otp),
-    subject_org(Subject).
-
-subject_org({rdnSequence, RDNs}) ->
-    org_from_rdns(lists:append(RDNs));
-subject_org(_) ->
-    {error, no_subject}.
-
-%% id-at-organizationName = OID {2,5,4,10}.
-org_from_rdns([#'AttributeTypeAndValue'{type = {2, 5, 4, 10}, value = V} | _]) ->
-    {ok, rdn_string(V)};
-org_from_rdns([_ | Rest]) ->
-    org_from_rdns(Rest);
-org_from_rdns([]) ->
-    {error, no_org_rdn}.
-
-rdn_string({utf8String, S})      -> to_bin(S);
-rdn_string({printableString, S}) -> to_bin(S);
-rdn_string(S) when is_binary(S)  -> S;
-rdn_string(S) when is_list(S)    -> list_to_binary(S).
-
-to_bin(B) when is_binary(B) -> B;
-to_bin(L) when is_list(L)   -> unicode:characters_to_binary(L).
+%% @doc The caller's check of a verified advertisement's provider authorization, against the realm key it trusts: the
+%% realm-signed org directory and the org-signed procedure delegation, the only authorization form. A procedure with
+%% an org namespace needs an authorization for that org, a procedure without one carries none, and the advertisement
+%% expires no later than any part of its authorization. An authorization in any other form, a certificate chain
+%% included, is refused as authorization_form_unsupported: 11.0.0 has no certificate form.
+-spec verify_authorization(m_record(), trust(), integer()) -> ok | {error, authorization_refusal()}.
+verify_authorization(#{type := ?TYPE_PROCEDURE_ADVERTISEMENT} = Advertisement, #{profile := _} = Trust, Now) ->
+    #{procedure := Procedure, authorization := Authorization} = read_procedure_advertisement(Advertisement),
+    authorization_for(procedure_org(Procedure), Authorization, Advertisement, Trust, Now).
 
 %%------------------------------------------------------------------
-%% Internals
+%% Storage keys
 %%------------------------------------------------------------------
 
-%% @doc Generic record builder. Used internally by every typed
-%% constructor and exposed publicly for domain-defined record types
-%% in the 0x20-0xFF tag range. Returns an UNSIGNED record map; pair
-%% with `sign/2'.
-%%
-%% The `key' field is always the signer's 32-byte Ed25519 public key
-%% (`verify/1' looks it up there). For facts where one signer
-%% publishes about many subjects (e.g., a realm admin signing many
-%% license records), pass a `subject_id' opt — `storage_key/1'
-%% derives a per-subject 32-byte slot via
-%% `BLAKE3(&lt;&lt;type, key, subject_id&gt;&gt;)'. Without `subject_id' the
-%% storage key is `key' verbatim (one DHT slot per signer).
-%%
-%% Domain code names its own payload fields. Single-letter wire keys
-%% (Part 6 §9) are an envelope-level concern; payloads use whatever
-%% naming makes sense in the domain.
--spec envelope(type_tag(), <<_:256>>, map(), map()) -> m_record().
-envelope(Type, Key, Payload, Opts)
-  when is_integer(Type), Type > 0, Type =< 16#FF,
-       is_binary(Key), byte_size(Key) =:= 32,
-       is_map(Payload), is_map(Opts) ->
-    NowMs = erlang:system_time(millisecond),
-    TtlMs = maps:get(ttl_ms, Opts, ?DEFAULT_TTL_MS),
-    Base = #{
-        type       => Type,
-        key        => Key,
-        version    => macula_record_uuid:v7(NowMs),
-        created_at => NowMs,
-        expires_at => NowMs + TtlMs,
-        payload    => Payload
-    },
-    with_subject(Base, maps:get(subject_id, Opts, undefined)).
+%% @doc The 32-byte DHT storage key of a record. A record stored under its signer needs its key_id, so it must be
+%% signed or verified; a record named by its payload does not.
+-spec storage_key(m_record()) -> <<_:256>>.
+storage_key(#{type := ?TYPE_TOMBSTONE, payload := P} = Record) ->
+    slot(maps:get({text, <<"withdrawn_type">>}, P), P, maps:get({text, <<"subject">>}, P, undefined),
+         maps:get(key_id, Record, undefined));
+storage_key(#{type := Type, payload := P} = Record) ->
+    slot(Type, P, maps:get(subject, Record, undefined), maps:get(key_id, Record, undefined)).
 
-with_subject(Map, undefined)                       -> Map;
-with_subject(Map, Sid) when is_binary(Sid)         -> Map#{subject_id => Sid}.
+%% @doc The storage key of a procedure's advertisements, from the realm id and the procedure name.
+-spec procedure_key(<<_:256>>, binary()) -> <<_:256>>.
+procedure_key(<<_:256>> = RealmId, Procedure) when is_binary(Procedure) ->
+    derived(?TYPE_PROCEDURE_ADVERTISEMENT, [RealmId, {field, Procedure}]).
 
-node_payload(NodeId, StationId, Realms, Caps, Opts) ->
-    Base = #{
-        {text, <<"node_id">>}      => NodeId,
-        {text, <<"station_id">>}   => StationId,
-        {text, <<"realms">>}       => Realms,
-        {text, <<"capabilities">>} => Caps
-    },
-    M1 = with_text(Base,  <<"caps_hint">>,    maps:get(caps_hint,    Opts, undefined)),
-    M2 = with_text(M1,    <<"display_name">>, maps:get(display_name, Opts, undefined)),
-    M3 = with_text(M2,    <<"hostname">>,     maps:get(hostname,     Opts, undefined)),
-    M4 = with_text(M3,    <<"endpoint">>,     maps:get(endpoint,     Opts, undefined)),
-    M5 = with_text(M4,    <<"city">>,         maps:get(city,         Opts, undefined)),
-    M6 = with_text(M5,    <<"country">>,      maps:get(country,      Opts, undefined)),
-    M7 = with_geo(M6,     <<"lat">>,          maps:get(lat,          Opts, undefined)),
-    M8 = with_geo(M7,     <<"lng">>,          maps:get(lng,          Opts, undefined)),
-    %% Overlay peers travel as a CBOR list of 32-byte pubkey binaries.
-    %% Subscribers join the list against `state.stations` to draw
-    %% relay-to-relay edges. Empty list / undefined → field absent.
-    M9 = with_peers(M8,                       maps:get(peers,        Opts, undefined)),
-    %% `kind' is the actor discriminator — `station' for relay
-    %% identities, `daemon' for client identities. Subscribers route
-    %% on this to render presence events on different mesh channels.
-    %% Records without `kind' predate the field and are treated as
-    %% `station' by consumers.
-    with_text(M9,         <<"kind">>,         maps:get(kind,         Opts, undefined)).
+%% @doc The storage key of a content id's announcements.
+-spec content_key(<<_:400>>) -> <<_:256>>.
+content_key(<<2, _Codec:8, _Hash:48/binary>> = MCID) ->
+    derived(?TYPE_CONTENT_ANNOUNCEMENT, [{field, MCID}]).
+
+%% @doc The storage key of a station's endpoint record, from the station's node_id.
+-spec station_endpoint_key(<<_:256>>) -> <<_:256>>.
+station_endpoint_key(<<_:256>> = NodeId) ->
+    derived(?TYPE_STATION_ENDPOINT, [NodeId]).
+
+%% @doc The storage key of an org directory record, from the realm id and the org name.
+-spec org_directory_key(<<_:256>>, binary()) -> <<_:256>>.
+org_directory_key(<<_:256>> = RealmId, OrgName) when is_binary(OrgName) ->
+    derived(?TYPE_ORG_DIRECTORY, [RealmId, {field, OrgName}]).
+
+%% @doc The storage key of a procedure delegation, from the org key id and the advertiser's node_id.
+-spec procedure_delegation_key(<<_:256>>, <<_:256>>) -> <<_:256>>.
+procedure_delegation_key(<<_:256>> = OrgKeyId, <<_:256>> = Advertiser) ->
+    derived(?TYPE_PROCEDURE_DELEGATION, [OrgKeyId, Advertiser]).
+
+%%------------------------------------------------------------------
+%% Internals: signing
+%%------------------------------------------------------------------
+
+unsigned(Type, Payload, Opts) ->
+    Now = erlang:system_time(millisecond),
+    #{type => Type, version => macula_record_uuid:v7_monotonic(Now), created_at => Now,
+      expires_at => Now + maps:get(ttl_ms, Opts, default_ttl(Type)), payload => Payload}.
+
+with_subject(Record, undefined) -> Record;
+with_subject(Record, Subject) when is_binary(Subject), byte_size(Subject) > 0 -> Record#{subject => Subject}.
+
+tbs_fields(#{type := Type, version := Version, created_at := Created, expires_at := Expires, payload := Payload} = R) ->
+    Fields = #{{text, <<"type">>} => Type, {text, <<"version">>} => Version, {text, <<"created_at">>} => Created,
+               {text, <<"expires_at">>} => Expires, {text, <<"payload">>} => Payload},
+    with_tbs_subject(Fields, maps:get(subject, R, undefined)).
+
+with_tbs_subject(Fields, undefined) -> Fields;
+with_tbs_subject(Fields, Subject) -> Fields#{{text, <<"subject">>} => Subject}.
+
+purpose_fits(true, _Detail) -> ok;
+purpose_fits(false, Detail) -> erlang:error({key_purpose_mismatch, Detail}).
+
+lifetime_checked(ok, _Type) -> ok;
+lifetime_checked(Refusal, Type) -> erlang:error({Refusal, Type}).
+
+signer_matches(true, _Type) -> ok;
+signer_matches(false, Type) -> erlang:error({key_id_mismatch, Type}).
+
+%% A record handed to sign/2 passes verify/3's own tbs reader and payload rules, or it is refused before anything is
+%% signed.
+verifiable({ok, _Read}, _Type) -> ok;
+verifiable(true, _Type) -> ok;
+verifiable(_Refused, Type) -> erlang:error({malformed, Type}).
+
+size_fits(Bytes) when Bytes =< ?MAX_RECORD_BYTES -> ok;
+size_fits(Bytes) -> erlang:error({record_too_large, Bytes}).
+
+%% The purposes of the keys that may sign a type. A tombstone is signed like the type it withdraws.
+signer_purposes(?TYPE_TOMBSTONE, #{{text, <<"withdrawn_type">>} := Withdrawn}) ->
+    signer_purposes(Withdrawn, #{});
+signer_purposes(Type, _Payload) when Type =:= ?TYPE_NODE_RECORD; Type =:= ?TYPE_PROCEDURE_ADVERTISEMENT;
+                                     Type =:= ?TYPE_CONTENT_ANNOUNCEMENT; Type =:= ?TYPE_STATION_ENDPOINT ->
+    [identity];
+signer_purposes(Type, _Payload) when Type =:= ?TYPE_REALM_DIRECTORY; Type =:= ?TYPE_REALM_STATIONS;
+                                     Type =:= ?TYPE_REALM_MEMBER_ENDORSEMENT; Type =:= ?TYPE_ORG_DIRECTORY ->
+    [realm];
+signer_purposes(?TYPE_PROCEDURE_DELEGATION, _Payload) ->
+    [org];
+signer_purposes(Type, _Payload) when Type >= ?TYPE_FOUNDATION_SEED_LIST, Type =< ?TYPE_FOUNDATION_T3_ATTESTATION ->
+    [foundation];
+signer_purposes(Type, _Payload) when Type >= ?DOMAIN_TYPE_MIN ->
+    [identity, realm, org, foundation];
+signer_purposes(_Type, _Payload) ->
+    [].
+
+%% Node-signed types are named by the node_id; every other type by the MACULA-KEY-ID-V1 key id.
+signer_kind(?TYPE_TOMBSTONE, #{{text, <<"withdrawn_type">>} := Withdrawn}) ->
+    signer_kind(Withdrawn, #{});
+signer_kind(Type, _Payload) when Type =:= ?TYPE_NODE_RECORD; Type =:= ?TYPE_PROCEDURE_ADVERTISEMENT;
+                                 Type =:= ?TYPE_CONTENT_ANNOUNCEMENT; Type =:= ?TYPE_STATION_ENDPOINT ->
+    node;
+signer_kind(_Type, _Payload) ->
+    other.
+
+key_id_of(node, Carried, Profile) -> macula_node_keys:node_id(Carried, Profile);
+key_id_of(other, Carried, Profile) -> macula_node_keys:key_id(Carried, Profile).
+
+%% Whether the payload field that names the signer, where a type has one, holds the signer's key id.
+named_signer(Type, Payload, KeyId) ->
+    signer_field_holds(signer_field(Type), Payload, KeyId).
+
+signer_field(?TYPE_NODE_RECORD) -> <<"node_id">>;
+signer_field(?TYPE_PROCEDURE_ADVERTISEMENT) -> <<"advertiser_node">>;
+signer_field(?TYPE_CONTENT_ANNOUNCEMENT) -> <<"announcer_node">>;
+signer_field(?TYPE_PROCEDURE_DELEGATION) -> <<"org_key">>;
+signer_field(_Type) -> none.
+
+signer_field_holds(none, _Payload, _KeyId) -> true;
+signer_field_holds(Name, Payload, KeyId) -> maps:get({text, Name}, Payload, undefined) =:= KeyId.
+
+%% @doc Whether a node signs this record about itself: a node record, a procedure advertisement or a content
+%% announcement, whose payload names the signing node. A tombstone is not one: it withdraws a record, and whoever signs
+%% it checks that the record was theirs.
+-spec node_signed(term()) -> boolean().
+node_signed(#{type := Type, payload := Payload}) when is_integer(Type), Type =/= ?TYPE_TOMBSTONE, is_map(Payload) ->
+    names_its_node(Type);
+node_signed(_NotARecord) ->
+    false.
+
+names_its_node(Type) ->
+    signer_kind(Type, #{}) =:= node andalso signer_field(Type) =/= none.
+
+%% The longest a record of Type lives. A tombstone's follows the type it withdraws, plus twice the clock tolerance: the
+%% record it withdraws may be created up to the tolerance ahead, and the tombstone outlives it by the tolerance.
+max_lifetime(?TYPE_NODE_RECORD, _Payload) -> ?NODE_RECORD_MAX_LIFETIME_MS;
+max_lifetime(?TYPE_CONTENT_ANNOUNCEMENT, _Payload) -> ?CONTENT_ANNOUNCEMENT_MAX_LIFETIME_MS;
+max_lifetime(?TYPE_PROCEDURE_ADVERTISEMENT, _Payload) -> ?PROCEDURE_ADVERTISEMENT_MAX_LIFETIME_MS;
+max_lifetime(?TYPE_STATION_ENDPOINT, _Payload) -> ?STATION_ENDPOINT_TTL_MS;
+max_lifetime(Type, _Payload) when Type =:= ?TYPE_REALM_STATIONS; Type =:= ?TYPE_ORG_DIRECTORY;
+                                  Type =:= ?TYPE_PROCEDURE_DELEGATION ->
+    ?REALM_AND_ORG_MAX_LIFETIME_MS;
+max_lifetime(?TYPE_REALM_MEMBER_ENDORSEMENT, _Payload) -> ?MAX_ENDORSEMENT_WINDOW_MS;
+max_lifetime(?TYPE_TOMBSTONE, #{{text, <<"withdrawn_type">>} := Withdrawn}) when Withdrawn =/= ?TYPE_TOMBSTONE ->
+    max_lifetime(Withdrawn, #{}) + 2 * ?CLOCK_TOLERANCE_MS;
+max_lifetime(Type, _Payload) when is_integer(Type), Type >= ?DOMAIN_TYPE_MIN -> ?DOMAIN_RECORD_MAX_LIFETIME_MS;
+max_lifetime(_Type, _Payload) -> ?DEFAULT_MAX_LIFETIME_MS.
+
+%% Whether a record's lifetime, created_at to expires_at, runs forward and fits its type's maximum.
+lifetime(#{type := Type, created_at := Created, expires_at := Expires, payload := Payload}) ->
+    lifetime_within(Expires - Created, max_lifetime(Type, Payload)).
+
+lifetime_within(Lifetime, _Max) when Lifetime =< 0 -> lifetime_reversed;
+lifetime_within(Lifetime, Max) when Lifetime > Max -> lifetime_too_long;
+lifetime_within(_Lifetime, _Max) -> ok.
+
+%% A builder given no ttl takes 48 hours, or its type's maximum when that is shorter.
+default_ttl(Type) ->
+    min(?DEFAULT_TTL_MS, max_lifetime(Type, #{})).
+
+%% @doc Check a payload before anything is encoded: its external size is at most 256 KiB, and it nests at most 63 levels
+%% of maps and lists, which a record's tbs leaves it under the decoder's 64. Returns record_too_large or malformed.
+-spec payload_bounded(term()) -> ok | {error, record_too_large | malformed}.
+payload_bounded(Payload) ->
+    sized_payload(erlang:external_size(Payload) =< ?MAX_RECORD_BYTES, Payload).
+
+sized_payload(false, _Payload) -> {error, record_too_large};
+sized_payload(true, Payload) -> nested_payload(nesting(Payload, 0) =< ?MAX_PAYLOAD_NESTING).
+
+nested_payload(true) -> ok;
+nested_payload(false) -> {error, malformed}.
+
+%% How deep a term nests maps and lists, counted no further than one level past the bound.
+nesting(Map, Depth) when is_map(Map) -> deepest(maps:to_list(Map), Depth + 1, Depth + 1);
+nesting(List, Depth) when is_list(List) -> deepest(List, Depth + 1, Depth + 1);
+nesting({Key, Value}, Depth) -> max(nesting(Key, Depth), nesting(Value, Depth));
+nesting(_Leaf, Depth) -> Depth.
+
+deepest(_Terms, _Level, Deepest) when Deepest > ?MAX_PAYLOAD_NESTING -> Deepest;
+deepest([Term | Terms], Level, Deepest) -> deepest(Terms, Level, max(Deepest, nesting(Term, Level)));
+deepest(_EndOrImproperTail, _Level, Deepest) -> Deepest.
+
+%% @doc Check a record given as its wire form, or as a signed map, before it is decoded or encoded: a wire form is a
+%% binary of at most 256 KiB, and a signed map's key, tbs and signature are binaries of at most 256 KiB together.
+%% Returns record_too_large or malformed.
+-spec wire_bounded(term()) -> ok | {error, record_too_large | malformed}.
+wire_bounded(Bytes) when is_binary(Bytes) ->
+    sized_wire(byte_size(Bytes));
+wire_bounded(#{key := Key, tbs := Tbs, signature := Signature})
+  when is_binary(Key), is_binary(Tbs), is_binary(Signature) ->
+    sized_wire(byte_size(Key) + byte_size(Tbs) + byte_size(Signature));
+wire_bounded(_NotAWireRecord) ->
+    {error, malformed}.
+
+sized_wire(Bytes) when Bytes =< ?MAX_RECORD_BYTES -> ok;
+sized_wire(_Bytes) -> {error, record_too_large}.
+
+%% @doc Whether a record is of a domain type (tags 0x20 to 0xFF): its owner sets its payload rules, and its slot is its
+%% signer's key id, with its subject when it has one.
+-spec domain_type(term()) -> boolean().
+domain_type(#{type := Type}) when is_integer(Type), Type >= ?DOMAIN_TYPE_MIN, Type =< 16#FF -> true;
+domain_type(_Other) -> false.
+
+%% @doc Check an unsigned domain record before a pool signs it as its node: a domain type, a payload map, a subject that
+%% is absent or a non-empty binary, a lifetime that runs forward and fits the type's maximum, never shortened, and a
+%% payload and subject of at most 256 KiB together that nest at most 63 levels. Returns the refusal by name.
+-spec domain_record_checked(term()) ->
+          ok | {error, not_a_domain_type | invalid_subject | lifetime_too_long | lifetime_reversed | record_too_large
+                       | malformed}.
+domain_record_checked(#{type := Type, created_at := Created, expires_at := Expires, payload := Payload} = Record)
+  when is_integer(Type), Type >= ?DOMAIN_TYPE_MIN, Type =< 16#FF, is_integer(Created), is_integer(Expires),
+       is_map(Payload) ->
+    domain_subject_checked(maps:get(subject, Record, none), Record);
+domain_record_checked(#{type := Type}) when is_integer(Type), (Type < ?DOMAIN_TYPE_MIN orelse Type > 16#FF) ->
+    {error, not_a_domain_type};
+domain_record_checked(_NotADomainRecord) ->
+    {error, malformed}.
+
+domain_subject_checked(none, Record) ->
+    domain_lifetime_checked(lifetime(Record), Record);
+domain_subject_checked(Subject, Record) when is_binary(Subject), byte_size(Subject) > 0 ->
+    domain_lifetime_checked(lifetime(Record), Record);
+domain_subject_checked(_NotASubject, _Record) ->
+    {error, invalid_subject}.
+
+domain_lifetime_checked(ok, #{payload := Payload} = Record) ->
+    payload_bounded({Payload, maps:get(subject, Record, <<>>)});
+domain_lifetime_checked(Refusal, _Record) ->
+    {error, Refusal}.
+
+%%------------------------------------------------------------------
+%% Internals: verifying
+%%------------------------------------------------------------------
+
+decoded_object({ok, #{key := _} = Object}, Profile, Now) -> checked_object(Object, Profile, Now);
+decoded_object(_HeldOrMalformed, _Profile, _Now) -> {error, malformed}.
+
+sized_object(Size, _Object, _Profile, _Now) when Size > ?MAX_RECORD_BYTES -> {error, record_too_large};
+sized_object(_Size, Object, Profile, Now) -> checked_object(Object, Profile, Now).
+
+checked_object(#{signature := Signature} = Object, Profile, Now) ->
+    signed_fields(macula_signed_object:verify(?LABEL, Object, Profile), Signature, Profile, Now).
+
+signed_fields({ok, #{key := Key, tbs := Tbs, fields := Fields}}, Signature, Profile, Now) ->
+    read_record(read_tbs(Fields), Key, Tbs, Signature, Profile, Now);
+signed_fields({error, _} = Refused, _Signature, _Profile, _Now) ->
+    Refused.
+
+read_tbs(#{{text, <<"type">>} := Type, {text, <<"alg">>} := {text, Alg}, {text, <<"version">>} := Version,
+           {text, <<"created_at">>} := Created, {text, <<"expires_at">>} := Expires,
+           {text, <<"payload">>} := Payload} = Fields)
+  when is_integer(Type), Type >= 1, Type =< 16#FF, is_binary(Alg), is_binary(Version), byte_size(Version) =:= 16,
+       is_integer(Created), Created >= 0, Created < ?MAX_PROTOCOL_INT, is_integer(Expires), Expires >= 0,
+       Expires < ?MAX_PROTOCOL_INT, is_map(Payload) ->
+    Record = #{type => Type, alg => Alg, version => Version, created_at => Created, expires_at => Expires,
+               payload => Payload},
+    with_read_subject(map_size(Fields), maps:get({text, <<"subject">>}, Fields, undefined), Record);
+read_tbs(_Fields) ->
+    malformed.
+
+with_read_subject(6, undefined, Record) ->
+    {ok, Record};
+with_read_subject(7, Subject, #{type := Type} = Record)
+  when is_binary(Subject), byte_size(Subject) > 0, Type >= ?DOMAIN_TYPE_MIN ->
+    {ok, Record#{subject => Subject}};
+with_read_subject(_Size, _Subject, _Record) ->
+    malformed.
+
+read_record(malformed, _Key, _Tbs, _Signature, _Profile, _Now) ->
+    {error, malformed};
+read_record({ok, Record}, Key, Tbs, Signature, Profile, Now) ->
+    clocked(clock(Record, Now), Record#{key => Key, tbs => Tbs, signature => Signature}, Profile).
+
+clock(#{created_at := Created}, Now) when Created > Now + ?CLOCK_TOLERANCE_MS -> not_yet_valid;
+clock(#{expires_at := Expires}, Now) when Expires + ?CLOCK_TOLERANCE_MS < Now -> expired;
+clock(_Record, _Now) -> ok.
+
+clocked(ok, Record, Profile) ->
+    lived(lifetime(Record), Record, Profile);
+clocked(Refusal, _Record, _Profile) ->
+    {error, Refusal}.
+
+lived(ok, #{type := Type, payload := Payload} = Record, Profile) ->
+    payload_checked(payload_ok(Type, Payload), Record, Profile);
+lived(Refusal, _Record, _Profile) ->
+    {error, Refusal}.
+
+payload_checked(false, _Record, _Profile) ->
+    {error, malformed};
+payload_checked(true, #{type := Type, payload := Payload, key := Key} = Record, Profile) ->
+    KeyId = key_id_of(signer_kind(Type, Payload), Key, Profile),
+    named(named_signer(Type, Payload, KeyId), Record#{key_id => KeyId}).
+
+named(true, Record) -> {ok, Record};
+named(false, _Record) -> {error, key_id_mismatch}.
+
+%% The payload rules of each type: every field a storage key or a signer check reads is present, with its type, and
+%% the payloads the design pins hold exactly their keys. A domain type's owner sets its rules.
+payload_ok(?TYPE_NODE_RECORD, P) -> is_id(field(P, <<"node_id">>));
+payload_ok(?TYPE_REALM_DIRECTORY, P) -> is_id(field(P, <<"realm_id">>));
+payload_ok(?TYPE_REALM_STATIONS, P) -> is_id(field(P, <<"realm_id">>));
+payload_ok(?TYPE_REALM_MEMBER_ENDORSEMENT, P) ->
+    is_id(field(P, <<"realm_id">>)) andalso is_id(field(P, <<"member_node">>));
+payload_ok(?TYPE_PROCEDURE_ADVERTISEMENT, P) -> advertisement_payload_ok(P);
+payload_ok(?TYPE_TOMBSTONE, P) -> tombstone_payload_ok(P);
+payload_ok(?TYPE_FOUNDATION_SEED_LIST, _P) -> true;
+payload_ok(?TYPE_FOUNDATION_PARAMETER, P) -> is_text(field(P, <<"param_name">>));
+payload_ok(?TYPE_FOUNDATION_REALM_TRUST_LIST, _P) -> true;
+payload_ok(?TYPE_FOUNDATION_T3_ATTESTATION, P) -> is_id(field(P, <<"station_id">>));
+payload_ok(?TYPE_CONTENT_ANNOUNCEMENT, P) ->
+    is_id(field(P, <<"announcer_node">>)) andalso is_content_id(field(P, <<"mcid">>));
+payload_ok(?TYPE_STATION_ENDPOINT, _P) -> true;
+payload_ok(?TYPE_ORG_DIRECTORY, P) ->
+    is_id(field(P, <<"realm_id">>)) andalso is_text(field(P, <<"org_name">>)) andalso is_id(field(P, <<"org_key">>));
+payload_ok(?TYPE_PROCEDURE_DELEGATION, P) -> is_id(field(P, <<"org_key">>)) andalso is_id(field(P, <<"advertiser">>));
+payload_ok(Type, _P) when Type >= ?DOMAIN_TYPE_MIN -> true;
+payload_ok(_UnknownType, _P) -> false.
+
+advertisement_payload_ok(#{{text, <<"realm_id">>} := <<_:256>>, {text, <<"procedure">>} := {text, Procedure},
+                           {text, <<"advertiser_node">>} := <<_:256>>, {text, <<"serving_station">>} := <<_:256>>} = P)
+  when is_binary(Procedure) ->
+    advertisement_size_ok(map_size(P), maps:get({text, <<"authorization">>}, P, absent));
+advertisement_payload_ok(_P) ->
+    false.
+
+advertisement_size_ok(4, absent) -> true;
+advertisement_size_ok(5, Authorization) when is_map(Authorization) -> true;
+advertisement_size_ok(_Size, _Authorization) -> false.
+
+tombstone_payload_ok(#{{text, <<"withdrawn_type">>} := Type, {text, <<"withdrawn_version">>} := <<_:128>>,
+                       {text, <<"reason">>} := {text, Reason}} = P) when is_integer(Type), is_binary(Reason) ->
+    Slot = maps:without([{text, <<"withdrawn_type">>}, {text, <<"withdrawn_version">>}, {text, <<"reason">>},
+                         {text, <<"detail">>}], P),
+    lists:member(Reason, [<<"shutdown">>, <<"moved">>, <<"revoked">>])
+        andalso withdrawable(Type)
+        andalso detail_ok(maps:get({text, <<"detail">>}, P, absent))
+        andalso slot_ok(Type, Slot);
+tombstone_payload_ok(_P) ->
+    false.
+
+%% A tombstone withdraws a record type, a tag from 1 to 255: a domain type, or a built-in type some key signs, other
+%% than a tombstone. Any other integer names no record type.
+withdrawable(Type) when Type >= ?DOMAIN_TYPE_MIN, Type =< 16#FF ->
+    true;
+withdrawable(Type) when Type >= 1, Type < ?DOMAIN_TYPE_MIN ->
+    Type =/= ?TYPE_TOMBSTONE andalso signer_purposes(Type, #{}) =/= [];
+withdrawable(_OutsideTheTypeRange) ->
+    false.
+
+detail_ok(absent) -> true;
+detail_ok({text, Detail}) when is_binary(Detail) -> true;
+detail_ok(_Other) -> false.
+
+%% A domain record's subject is a non-empty binary, in the record and in its tombstone's slot fields alike.
+non_empty_subject(Subject) -> is_binary(Subject) andalso byte_size(Subject) > 0.
+
+slot_ok(Type, Slot) when Type >= ?DOMAIN_TYPE_MIN ->
+    map_size(Slot) =:= 0
+        orelse (map_size(Slot) =:= 1 andalso non_empty_subject(maps:get({text, <<"subject">>}, Slot, none)));
+slot_ok(Type, Slot) ->
+    Names = slot_field_names(Type, undefined),
+    lists:sort(maps:keys(Slot)) =:= lists:sort([{text, Name} || Name <- Names])
+        andalso lists:all(fun(Name) -> slot_value_ok(Name, maps:get({text, Name}, Slot)) end, Names).
+
+slot_value_ok(Name, Value) when Name =:= <<"procedure">>; Name =:= <<"param_name">>; Name =:= <<"org_name">> ->
+    is_text(Value);
+slot_value_ok(<<"mcid">>, Value) ->
+    is_content_id(Value);
+slot_value_ok(_IdName, Value) ->
+    is_id(Value).
+
+field(Payload, Name) -> maps:get({text, Name}, Payload, undefined).
+
+is_id(<<_:256>>) -> true;
+is_id(_Other) -> false.
+
+is_text({text, Text}) when is_binary(Text) -> true;
+is_text(_Other) -> false.
+
+is_content_id(<<2, _Codec:8, _Hash:48/binary>>) -> true;
+is_content_id(_Other) -> false.
+
+%%------------------------------------------------------------------
+%% Internals: slots and storage keys
+%%------------------------------------------------------------------
+
+%% The payload fields a type's storage key derives from, other than the signer's key id.
+slot_field_names(?TYPE_REALM_DIRECTORY, _Subject) -> [<<"realm_id">>];
+slot_field_names(?TYPE_REALM_STATIONS, _Subject) -> [<<"realm_id">>];
+slot_field_names(?TYPE_REALM_MEMBER_ENDORSEMENT, _Subject) -> [<<"realm_id">>, <<"member_node">>];
+slot_field_names(?TYPE_PROCEDURE_ADVERTISEMENT, _Subject) -> [<<"realm_id">>, <<"procedure">>];
+slot_field_names(?TYPE_FOUNDATION_PARAMETER, _Subject) -> [<<"param_name">>];
+slot_field_names(?TYPE_FOUNDATION_T3_ATTESTATION, _Subject) -> [<<"station_id">>];
+slot_field_names(?TYPE_CONTENT_ANNOUNCEMENT, _Subject) -> [<<"mcid">>];
+slot_field_names(?TYPE_ORG_DIRECTORY, _Subject) -> [<<"realm_id">>, <<"org_name">>];
+slot_field_names(?TYPE_PROCEDURE_DELEGATION, _Subject) -> [<<"advertiser">>];
+slot_field_names(Type, Subject) when Type >= ?DOMAIN_TYPE_MIN, is_binary(Subject) -> [<<"subject">>];
+slot_field_names(_SignerSlot, _Subject) -> [].
+
+slot_fields(Names, Payload, Subject) ->
+    maps:from_list([{{text, Name}, slot_value(Name, Payload, Subject)} || Name <- Names]).
+
+slot_value(<<"subject">>, _Payload, Subject) -> Subject;
+slot_value(Name, Payload, _Subject) -> maps:get({text, Name}, Payload).
+
+slot_field_atoms() ->
+    [{<<"realm_id">>, realm_id}, {<<"member_node">>, member_node}, {<<"procedure">>, procedure},
+     {<<"param_name">>, param_name}, {<<"station_id">>, station_id}, {<<"mcid">>, mcid},
+     {<<"org_name">>, org_name}, {<<"advertiser">>, advertiser}, {<<"subject">>, subject}].
+
+slot(?TYPE_NODE_RECORD, _P, _Subject, <<_:256>> = KeyId) ->
+    KeyId;
+slot(?TYPE_REALM_DIRECTORY, P, _Subject, _KeyId) ->
+    derived(?TYPE_REALM_DIRECTORY, [field(P, <<"realm_id">>)]);
+slot(?TYPE_REALM_STATIONS, P, _Subject, _KeyId) ->
+    derived(?TYPE_REALM_STATIONS, [field(P, <<"realm_id">>)]);
+slot(?TYPE_REALM_MEMBER_ENDORSEMENT, P, _Subject, _KeyId) ->
+    derived(?TYPE_REALM_MEMBER_ENDORSEMENT, [field(P, <<"realm_id">>), field(P, <<"member_node">>)]);
+slot(?TYPE_PROCEDURE_ADVERTISEMENT, P, _Subject, _KeyId) ->
+    procedure_key(field(P, <<"realm_id">>), text(field(P, <<"procedure">>)));
+slot(?TYPE_FOUNDATION_SEED_LIST, _P, _Subject, <<_:256>> = KeyId) ->
+    derived(?TYPE_FOUNDATION_SEED_LIST, [KeyId]);
+slot(?TYPE_FOUNDATION_PARAMETER, P, _Subject, <<_:256>> = KeyId) ->
+    derived(?TYPE_FOUNDATION_PARAMETER, [KeyId, {field, text(field(P, <<"param_name">>))}]);
+slot(?TYPE_FOUNDATION_REALM_TRUST_LIST, _P, _Subject, <<_:256>> = KeyId) ->
+    derived(?TYPE_FOUNDATION_REALM_TRUST_LIST, [KeyId]);
+slot(?TYPE_FOUNDATION_T3_ATTESTATION, P, _Subject, _KeyId) ->
+    derived(?TYPE_FOUNDATION_T3_ATTESTATION, [field(P, <<"station_id">>)]);
+slot(?TYPE_CONTENT_ANNOUNCEMENT, P, _Subject, _KeyId) ->
+    content_key(field(P, <<"mcid">>));
+slot(?TYPE_STATION_ENDPOINT, _P, _Subject, <<_:256>> = KeyId) ->
+    station_endpoint_key(KeyId);
+slot(?TYPE_ORG_DIRECTORY, P, _Subject, _KeyId) ->
+    org_directory_key(field(P, <<"realm_id">>), text(field(P, <<"org_name">>)));
+slot(?TYPE_PROCEDURE_DELEGATION, P, _Subject, <<_:256>> = KeyId) ->
+    procedure_delegation_key(KeyId, field(P, <<"advertiser">>));
+slot(Type, _P, undefined, <<_:256>> = KeyId) when Type >= ?DOMAIN_TYPE_MIN ->
+    derived(Type, [KeyId]);
+slot(Type, _P, Subject, <<_:256>> = KeyId) when Type >= ?DOMAIN_TYPE_MIN, is_binary(Subject) ->
+    derived(Type, [KeyId, {field, Subject}]).
+
+%% SHA-256 over the storage key label, a zero byte, the type and the fields: a 32-byte id as it is, any other field as
+%% a 4-byte big-endian length and its bytes.
+derived(Type, Fields) ->
+    crypto:hash(sha256, [<<?STORAGE_KEY_LABEL, 0:8, Type:8>> | [field_bytes(Field) || Field <- Fields]]).
+
+field_bytes(<<_:256>> = Id) -> Id;
+field_bytes({field, Bytes}) when is_binary(Bytes) -> <<(byte_size(Bytes)):32, Bytes/binary>>.
+
+text({text, Text}) -> Text.
+
+%%------------------------------------------------------------------
+%% Internals: provider authorization
+%%------------------------------------------------------------------
+
+org_of([_NameWithoutSlash]) -> none;
+org_of([<<>>, _Rest]) -> {error, malformed};
+org_of([<<"_">>, _Rest]) -> none;
+org_of([Org, _Rest]) -> {org, Org}.
+
+%% An authorization holds exactly org_directory and procedure_delegation, both bytes. That pair with a value that is not
+%% bytes, or an authorization that is not a map, is malformed; any other map is a form 11.0.0 does not accept.
+read_authorization(undefined) ->
+    undefined;
+read_authorization(#{{text, <<"org_directory">>} := Directory, {text, <<"procedure_delegation">>} := Delegation} = A)
+  when map_size(A) =:= 2, is_binary(Directory), is_binary(Delegation) ->
+    #{org_directory => Directory, procedure_delegation => Delegation};
+read_authorization(#{{text, <<"org_directory">>} := _, {text, <<"procedure_delegation">>} := _} = A)
+  when map_size(A) =:= 2 ->
+    malformed;
+read_authorization(A) when is_map(A) ->
+    unsupported;
+read_authorization(_NotAMap) ->
+    malformed.
+
+%% The builder writes only the delegation form.
+with_authorization(Payload, undefined) ->
+    Payload;
+with_authorization(Payload, #{org_directory := Directory, procedure_delegation := Delegation} = Authorization)
+  when map_size(Authorization) =:= 2, is_binary(Directory), is_binary(Delegation) ->
+    Payload#{{text, <<"authorization">>} => #{{text, <<"org_directory">>} => Directory,
+                                              {text, <<"procedure_delegation">>} => Delegation}}.
+
+authorization_for({error, malformed}, _Authorization, _Adv, _Trust, _Now) ->
+    {error, malformed};
+authorization_for(none, undefined, _Adv, _Trust, _Now) ->
+    ok;
+authorization_for(none, _Present, _Adv, _Trust, _Now) ->
+    {error, authorization_not_allowed};
+authorization_for({org, _Org}, undefined, _Adv, _Trust, _Now) ->
+    {error, no_authorization};
+authorization_for({org, Org}, #{org_directory := Directory, procedure_delegation := Delegation}, Adv, Trust, Now)
+  when is_binary(Directory), is_binary(Delegation) ->
+    delegation_path(maps:get(realm_key, Trust, undefined), Directory, Delegation, Org, Adv, Trust, Now);
+authorization_for({org, _Org}, unsupported, _Adv, _Trust, _Now) ->
+    {error, authorization_form_unsupported};
+authorization_for({org, _Org}, _Malformed, _Adv, _Trust, _Now) ->
+    {error, malformed}.
+
+delegation_path(undefined, _Directory, _Delegation, _Org, _Adv, _Trust, _Now) ->
+    {error, no_realm_key};
+delegation_path(RealmKey, Directory, Delegation, Org, Adv, #{profile := Profile}, Now) ->
+    org_directory_read(verify(Directory, Profile, Now), RealmKey, Delegation, Org, Adv, Profile, Now).
+
+org_directory_read({ok, #{type := ?TYPE_ORG_DIRECTORY, key := DirectoryKey} = Dir}, RealmKey, Delegation, Org, Adv,
+                   Profile, Now) ->
+    #{realm_id := RealmId, org_name := OrgName, org_key := OrgKeyId} = read_org_directory(Dir),
+    #{realm_id := AdvRealmId} = read_procedure_advertisement(Adv),
+    org_directory_matched(DirectoryKey =:= RealmKey andalso RealmId =:= AdvRealmId, OrgName =:= Org, OrgKeyId, Dir,
+                          Delegation, Adv, Profile, Now);
+org_directory_read(_Refused, _RealmKey, _Delegation, _Org, _Adv, _Profile, _Now) ->
+    {error, org_directory_invalid}.
+
+org_directory_matched(false, _SameOrg, _OrgKeyId, _Dir, _Delegation, _Adv, _Profile, _Now) ->
+    {error, org_directory_wrong_realm};
+org_directory_matched(true, false, _OrgKeyId, _Dir, _Delegation, _Adv, _Profile, _Now) ->
+    {error, org_directory_wrong_org};
+org_directory_matched(true, true, OrgKeyId, Dir, Delegation, Adv, Profile, Now) ->
+    delegation_read(verify(Delegation, Profile, Now), OrgKeyId, Dir, Adv).
+
+delegation_read({ok, #{type := ?TYPE_PROCEDURE_DELEGATION, key_id := DelegationKeyId} = Del}, OrgKeyId, Dir, Adv) ->
+    #{advertiser := Advertiser} = read_procedure_delegation(Del),
+    #{advertiser_node := AdvertiserNode} = read_procedure_advertisement(Adv),
+    delegation_matched(DelegationKeyId =:= OrgKeyId andalso Advertiser =:= AdvertiserNode,
+                       min(expires_at(Dir), expires_at(Del)), Adv);
+delegation_read(_Refused, _OrgKeyId, _Dir, _Adv) ->
+    {error, delegation_invalid}.
+
+delegation_matched(false, _Earliest, _Adv) -> {error, delegation_mismatch};
+delegation_matched(true, Earliest, Adv) -> within(expires_at(Adv) =< Earliest).
+
+within(true) -> ok;
+within(false) -> {error, authorization_outlived}.
+
+%%------------------------------------------------------------------
+%% Internals: payloads
+%%------------------------------------------------------------------
+
+node_payload(NodeId, StationId, Realms, Capabilities, Opts) ->
+    Base = #{{text, <<"node_id">>}      => NodeId,
+             {text, <<"station_id">>}   => StationId,
+             {text, <<"realms">>}       => Realms,
+             {text, <<"capabilities">>} => Capabilities},
+    M1 = with_text(Base, <<"caps_hint">>, maps:get(caps_hint, Opts, undefined)),
+    M2 = with_text(M1, <<"display_name">>, maps:get(display_name, Opts, undefined)),
+    M3 = with_text(M2, <<"hostname">>, maps:get(hostname, Opts, undefined)),
+    M4 = with_text(M3, <<"endpoint">>, maps:get(endpoint, Opts, undefined)),
+    M5 = with_text(M4, <<"city">>, maps:get(city, Opts, undefined)),
+    M6 = with_text(M5, <<"country">>, maps:get(country, Opts, undefined)),
+    M7 = with_geo(M6, <<"lat">>, lat, maps:get(lat, Opts, undefined), ?LAT_BOUND),
+    M8 = with_geo(M7, <<"lng">>, lng, maps:get(lng, Opts, undefined), ?LNG_BOUND),
+    M9 = with_peers(M8, maps:get(peers, Opts, undefined)),
+    with_text(M9, <<"kind">>, maps:get(kind, Opts, undefined)).
 
 with_text(Map, _Key, undefined) -> Map;
-with_text(Map,  Key, Bin) when is_binary(Bin) ->
-    Map#{ {text, Key} => {text, Bin} }.
+with_text(Map, Key, Bin) when is_binary(Bin) -> Map#{{text, Key} => {text, Bin}}.
 
-%% Geo coordinates travel as CBOR text strings — float canonicalisation
-%% is fragile across language implementations, while a fixed-decimals
-%% text rendering is stable. Subscribers parse with `binary_to_float/1'
-%% (or `binary_to_integer/1' if the source was an integer like 0).
-with_geo(Map, _Key, undefined) -> Map;
-with_geo(Map,  Key, V) when is_float(V) ->
-    Map#{ {text, Key} => {text, float_to_binary(V, [{decimals, 6}, compact])} };
-with_geo(Map,  Key, V) when is_integer(V) ->
-    Map#{ {text, Key} => {text, integer_to_binary(V)} }.
+%% Coordinates travel as text: a fixed-decimals rendering is stable across stacks, unlike float encodings. A coordinate
+%% is a number within Bound of zero either way; any other value is refused by name, so the builder writes only text a
+%% reader takes.
+with_geo(Map, _Key, _Field, undefined, _Bound) ->
+    Map;
+with_geo(Map, Key, Field, V, Bound) ->
+    ok = coordinate_checked(is_number(V) andalso abs(V) =< Bound, Field),
+    Map#{{text, Key} => {text, geo_text(V)}}.
 
-%% Overlay peer list. A list of 32-byte pubkey binaries that announce
-%% which other stations this node currently has an active overlay
-%% session with. Empty list / undefined → field absent (subscribers
-%% predating this field default to no edges). Sorted on entry so the
-%% canonical CBOR encoding is deterministic for the same set of peers
-%% regardless of insertion order.
+coordinate_checked(true, _Field) -> ok;
+coordinate_checked(false, Field) -> {error, {invalid_coordinate, Field}}.
+
+geo_text(V) when is_float(V) -> float_to_binary(V, [{decimals, 6}, compact]);
+geo_text(V) when is_integer(V) -> integer_to_binary(V).
+
+%% Sorted, so the same set of peers always encodes the same way.
 with_peers(Map, undefined) -> Map;
-with_peers(Map, [])        -> Map;
 with_peers(Map, Peers) when is_list(Peers) ->
-    Sorted = lists:usort([P || P <- Peers, is_binary(P), byte_size(P) =:= 32]),
-    case Sorted of
-        []     -> Map;
-        Sorted -> Map#{ {text, <<"peers">>} => Sorted }
-    end.
+    sorted_peers(Map, lists:usort([Peer || Peer <- Peers, is_binary(Peer), byte_size(Peer) =:= 32])).
 
-tombstone_payload(SupKey, SupType, ReplacedAt, Reason, Detail) ->
-    Base = #{
-        {text, <<"superseded_key">>}  => SupKey,
-        {text, <<"superseded_type">>} => SupType,
-        {text, <<"replaced_at">>}     => ReplacedAt,
-        {text, <<"reason">>}          => {text, atom_to_binary(Reason, utf8)}
-    },
-    Base#{ {text, <<"detail">>} => detail_value(Detail) }.
+sorted_peers(Map, []) -> Map;
+sorted_peers(Map, Sorted) -> Map#{{text, <<"peers">>} => Sorted}.
 
-detail_value(undefined) -> null;
-detail_value(Bin) when is_binary(Bin) -> {text, Bin}.
+with_host_list(Map, undefined) -> Map;
+with_host_list(Map, Hosts) when is_list(Hosts) ->
+    host_binaries(Map, [Host || Host <- Hosts, is_binary(Host)]).
 
-realm_directory_payload(RealmId, Name, AdminKey, Opts) ->
-    Base = #{
-        {text, <<"realm_id">>}   => RealmId,
-        {text, <<"name">>}       => {text, Name},
-        {text, <<"admin_key">>}  => AdminKey,
-        {text, <<"created_at">>} => erlang:system_time(millisecond)
-    },
+host_binaries(Map, []) -> Map;
+host_binaries(Map, Hosts) -> Map#{{text, <<"host_advertised">>} => Hosts}.
+
+realm_directory_payload(RealmId, Name, AdminKeyId, Opts) ->
+    Base = #{{text, <<"realm_id">>}   => RealmId,
+             {text, <<"name">>}       => {text, Name},
+             {text, <<"admin_key">>}  => AdminKeyId,
+             {text, <<"created_at">>} => erlang:system_time(millisecond)},
     with_text(Base, <<"policy_url">>, maps:get(policy_url, Opts, undefined)).
 
 realm_stations_payload(RealmId, Entries) ->
-    #{
-        {text, <<"realm_id">>} => RealmId,
-        {text, <<"stations">>} => [realm_station_entry(E) || E <- Entries]
-    }.
+    #{{text, <<"realm_id">>} => RealmId,
+      {text, <<"stations">>} => [realm_station_entry(Entry) || Entry <- Entries]}.
 
-realm_station_entry(#{station_id := SId, roles := Roles})
-  when is_binary(SId), byte_size(SId) =:= 32, is_list(Roles) ->
-    #{
-        {text, <<"station_id">>} => SId,
-        {text, <<"roles">>}      => [{text, R} || R <- Roles,
-                                                  is_binary(R)]
-    }.
+realm_station_entry(#{station_id := StationId, roles := Roles})
+  when is_binary(StationId), byte_size(StationId) =:= 32, is_list(Roles) ->
+    #{{text, <<"station_id">>} => StationId,
+      {text, <<"roles">>}      => [{text, Role} || Role <- Roles, is_binary(Role)]}.
 
-realm_member_endorsement_payload(RealmId, Member, Roles,
-                                 ValidFrom, ValidUntil) ->
-    #{
-        {text, <<"realm">>}       => RealmId,
-        {text, <<"member_node">>} => Member,
-        {text, <<"roles">>}       => [{text, R} || R <- Roles,
-                                                    is_binary(R)],
-        {text, <<"valid_from">>}  => ValidFrom,
-        {text, <<"valid_until">>} => ValidUntil
-    }.
-
-procedure_advertisement_payload(AdvertiserNode, ProcedureUri,
-                                ServingStation, Opts) ->
-    Base = #{
-        {text, <<"procedure_uri">>}   => {text, ProcedureUri},
-        {text, <<"advertiser_node">>} => AdvertiserNode,
-        {text, <<"serving_station">>} => ServingStation
-    },
-    M1 = with_text(Base, <<"session_token_hint">>,
-                   maps:get(session_token_hint, Opts, undefined)),
-    M2 = with_uint(M1, <<"rate_limit_qps">>,
-                   maps:get(rate_limit_qps, Opts, undefined)),
-    M3 = with_uint(M2, <<"max_concurrency">>,
-                   maps:get(max_concurrency, Opts, undefined)),
-    with_text(M3, <<"cert_chain">>,
-              maps:get(cert_chain, Opts, undefined)).
+realm_member_endorsement_payload(RealmId, Member, Roles, ValidFrom, ValidUntil) ->
+    #{{text, <<"realm_id">>}    => RealmId,
+      {text, <<"member_node">>} => Member,
+      {text, <<"roles">>}       => [{text, Role} || Role <- Roles, is_binary(Role)],
+      {text, <<"valid_from">>}  => ValidFrom,
+      {text, <<"valid_until">>} => ValidUntil}.
 
 with_uint(Map, _Key, undefined) -> Map;
-with_uint(Map,  Key, N) when is_integer(N), N >= 0 ->
-    Map#{ {text, Key} => N }.
+with_uint(Map, Key, N) when is_integer(N), N >= 0 -> Map#{{text, Key} => N}.
 
 content_announcement_payload(AnnouncerNode, MCID, Endpoint, Opts) ->
-    Base = #{
-        {text, <<"announcer_node">>} => AnnouncerNode,
-        {text, <<"mcid">>}           => MCID,
-        {text, <<"endpoint">>}       => {text, Endpoint}
-    },
-    M1 = with_text(Base, <<"name">>,        maps:get(name, Opts, undefined)),
-    M2 = with_uint(M1,   <<"size">>,        maps:get(size, Opts, undefined)),
-    with_uint(M2,        <<"chunk_count">>, maps:get(chunk_count, Opts, undefined)).
+    Base = #{{text, <<"announcer_node">>} => AnnouncerNode,
+             {text, <<"mcid">>}           => MCID,
+             {text, <<"endpoint">>}       => {text, Endpoint}},
+    M1 = with_text(Base, <<"name">>, maps:get(name, Opts, undefined)),
+    M2 = with_uint(M1, <<"size">>, maps:get(size, Opts, undefined)),
+    with_uint(M2, <<"chunk_count">>, maps:get(chunk_count, Opts, undefined)).
 
 foundation_seed_list_payload(Version, ValidFrom, ValidUntil, Seeds) ->
-    #{
-        {text, <<"version">>}     => Version,
-        {text, <<"valid_from">>}  => ValidFrom,
-        {text, <<"valid_until">>} => ValidUntil,
-        {text, <<"seeds">>}       => [foundation_seed_entry(S) || S <- Seeds]
-    }.
+    #{{text, <<"version">>}     => Version,
+      {text, <<"valid_from">>}  => ValidFrom,
+      {text, <<"valid_until">>} => ValidUntil,
+      {text, <<"seeds">>}       => [foundation_seed_entry(Seed) || Seed <- Seeds]}.
 
-foundation_seed_entry(#{node_id := NodeId, addresses := Addrs, tier := Tier})
-  when is_binary(NodeId), byte_size(NodeId) =:= 32,
-       is_list(Addrs), (Tier =:= 3 orelse Tier =:= 4) ->
-    #{
-        {text, <<"node_id">>}   => NodeId,
-        {text, <<"addresses">>} => [foundation_address(A) || A <- Addrs],
-        {text, <<"tier">>}      => Tier
-    }.
+foundation_seed_entry(#{node_id := NodeId, addresses := Addresses, tier := Tier})
+  when is_binary(NodeId), byte_size(NodeId) =:= 32, is_list(Addresses), (Tier =:= 3 orelse Tier =:= 4) ->
+    #{{text, <<"node_id">>}   => NodeId,
+      {text, <<"addresses">>} => [Address || #{} = Address <- Addresses],
+      {text, <<"tier">>}      => Tier}.
 
-foundation_address(#{} = Addr) ->
-    %% ip_address_rec() per Part 6 §9.18 — tolerated as an opaque map
-    %% of text-keyed fields here; caller is responsible for building it.
-    Addr.
+foundation_parameter_payload(Name, Value, Version, ValidFrom, ValidUntil, PriorVersion) ->
+    Base = #{{text, <<"param_name">>}  => {text, Name},
+             {text, <<"param_value">>} => parameter_value(Value),
+             {text, <<"version">>}     => Version,
+             {text, <<"valid_from">>}  => ValidFrom,
+             {text, <<"valid_until">>} => ValidUntil},
+    with_prior_version(Base, PriorVersion).
 
-foundation_parameter_payload(Name, Value, Version,
-                             ValidFrom, ValidUntil, PriorV) ->
-    Base = #{
-        {text, <<"param_name">>}  => {text, Name},
-        {text, <<"param_value">>} => parameter_value(Value),
-        {text, <<"version">>}     => Version,
-        {text, <<"valid_from">>}  => ValidFrom,
-        {text, <<"valid_until">>} => ValidUntil
-    },
-    Base#{ {text, <<"prior_version">>} => prior_version_value(PriorV) }.
+parameter_value(Value) when is_integer(Value) -> Value;
+parameter_value(Value) when is_binary(Value) -> {text, Value};
+parameter_value(Values) when is_list(Values) -> [parameter_value(Value) || Value <- Values].
 
-parameter_value(V) when is_integer(V); is_boolean(V) -> V;
-parameter_value(V) when is_binary(V) -> {text, V};
-parameter_value(V) when is_list(V)   -> [parameter_value(X) || X <- V].
-
-prior_version_value(undefined) -> null;
-prior_version_value(V) when is_binary(V), byte_size(V) =:= 16 -> V.
+with_prior_version(Map, undefined) -> Map;
+with_prior_version(Map, <<_:128>> = Version) -> Map#{{text, <<"prior_version">>} => Version}.
 
 foundation_realm_trust_list_payload(Trusted, Revoked, Version, ValidUntil) ->
-    #{
-        {text, <<"realms_trusted">>} =>
-            [R || R <- Trusted, is_binary(R), byte_size(R) =:= 32],
-        {text, <<"realms_revoked">>} =>
-            [R || R <- Revoked, is_binary(R), byte_size(R) =:= 32],
-        {text, <<"version">>}     => Version,
-        {text, <<"valid_until">>} => ValidUntil
-    }.
+    #{{text, <<"realms_trusted">>} => [Realm || <<_:256>> = Realm <- Trusted],
+      {text, <<"realms_revoked">>} => [Realm || <<_:256>> = Realm <- Revoked],
+      {text, <<"version">>}        => Version,
+      {text, <<"valid_until">>}    => ValidUntil}.
 
 foundation_t3_attestation_payload(StationId, AuditDate, ValidUntil, Notes) ->
-    Base = #{
-        {text, <<"station_id">>}    => StationId,
-        {text, <<"tier_attested">>} => 3,
-        {text, <<"audit_date">>}    => AuditDate,
-        {text, <<"valid_until">>}   => ValidUntil
-    },
+    Base = #{{text, <<"station_id">>}    => StationId,
+             {text, <<"tier_attested">>} => 3,
+             {text, <<"audit_date">>}    => AuditDate,
+             {text, <<"valid_until">>}   => ValidUntil},
     with_text(Base, <<"notes">>, Notes).
 
 %%------------------------------------------------------------------
-%% DHT storage-key derivation (Part 3 §3.3)
+%% Internals: readers
 %%------------------------------------------------------------------
 
--spec storage_key(m_record()) -> <<_:256>>.
-storage_key(#{type := Type, key := K})
-  when Type =:= ?TYPE_NODE_RECORD;
-       Type =:= ?TYPE_REALM_DIRECTORY;
-       Type =:= ?TYPE_TOMBSTONE ->
-    K;
-storage_key(#{type := ?TYPE_REALM_STATIONS, key := RealmId}) ->
-    crypto:hash(sha256, <<?STORAGE_DOMAIN_STATION_SET/binary, RealmId/binary>>);
-storage_key(#{type := ?TYPE_REALM_MEMBER_ENDORSEMENT,
-              key := RealmId, payload := P}) ->
-    Member = payload_field(P, <<"member_node">>),
-    crypto:hash(sha256, <<?STORAGE_DOMAIN_MEMBER_ENDORSE/binary,
-                          RealmId/binary, Member/binary>>);
-%% content_announcement: keyed by SHA256(MCID), NOT the envelope key
-%% (the announcer's own pubkey) — multiple hosts announcing the SAME
-%% MCID must land in the SAME bag slot so a consumer's find_records
-%% sees every provider, mirroring procedure_advertisement's keying by
-%% SHA256(procedure_uri) rather than by advertiser. Matches
-%% macula-station's independent `macula_content_dht:dht_key/1', which
-%% computes the identical SHA256(MCID) — the two sides must agree since
-%% content_key/1 lets a consumer resolve before holding a record.
-%% Before this clause, this type had NO storage_key/1 match at all
-%% (content_announcement is a built-in type, 0x11 < DOMAIN_TYPE_MIN, so
-%% it never reached the generic domain-type clauses below) — every
-%% `put_record` of a content_announcement raised `function_clause'.
-storage_key(#{type := ?TYPE_CONTENT_ANNOUNCEMENT, payload := P}) ->
-    MCID = payload_field(P, <<"mcid">>),
-    content_key(MCID);
-storage_key(#{type := ?TYPE_ORG_DIRECTORY, key := RealmId, payload := P}) ->
-    OrgName = payload_field(P, <<"org_name">>),
-    org_directory_key(RealmId, OrgName);
-storage_key(#{type := ?TYPE_PROCEDURE_DELEGATION, key := OrgKey,
-              payload := P}) ->
-    Advertiser = payload_field(P, <<"advertiser">>),
-    procedure_delegation_key(OrgKey, Advertiser);
-storage_key(#{type := ?TYPE_PROCEDURE_ADVERTISEMENT, payload := P}) ->
-    Uri = payload_field(P, <<"procedure_uri">>),
-    crypto:hash(sha256, Uri);
-storage_key(#{type := ?TYPE_FOUNDATION_SEED_LIST, key := Fk}) ->
-    crypto:hash(sha256, <<?STORAGE_DOMAIN_FOUND_SEED/binary, Fk/binary>>);
-storage_key(#{type := ?TYPE_FOUNDATION_PARAMETER, key := Fk, payload := P}) ->
-    Name = payload_field(P, <<"param_name">>),
-    crypto:hash(sha256, <<?STORAGE_DOMAIN_FOUND_PARAM/binary,
-                          Fk/binary, Name/binary>>);
-storage_key(#{type := ?TYPE_FOUNDATION_REALM_TRUST_LIST, key := Fk}) ->
-    crypto:hash(sha256, <<?STORAGE_DOMAIN_FOUND_TRUST/binary, Fk/binary>>);
-storage_key(#{type := ?TYPE_FOUNDATION_T3_ATTESTATION, payload := P}) ->
-    Sid = payload_field(P, <<"station_id">>),
-    crypto:hash(sha256, <<?STORAGE_DOMAIN_FOUND_ATTEST/binary, Sid/binary>>);
-%% station_endpoint: keyed by station pubkey under its own domain so
-%% it doesn't collide with node_record (which keys on the same
-%% pubkey).
-storage_key(#{type := ?TYPE_STATION_ENDPOINT, key := StationPubkey}) ->
-    crypto:hash(sha256, <<?STORAGE_DOMAIN_STATION_ENDPOINT/binary,
-                          StationPubkey/binary>>);
-%% Domain-defined types (0x20-0xFF). When the envelope carries a
-%% `subject_id' the storage key is derived from &lt;&lt;type, signer_key,
-%% subject_id&gt;&gt; so one signer can publish many records under
-%% distinct DHT slots. Without `subject_id' the storage key is the
-%% signer's pubkey (one slot per signer).
-storage_key(#{type := T, key := K, subject_id := Sid})
-  when is_integer(T), T >= ?DOMAIN_TYPE_MIN, T =< 16#FF,
-       is_binary(K), byte_size(K) =:= 32,
-       is_binary(Sid) ->
-    crypto:hash(sha256, <<T:8, K/binary, Sid/binary>>);
-storage_key(#{type := T, key := K})
-  when is_integer(T), T >= ?DOMAIN_TYPE_MIN, T =< 16#FF,
-       is_binary(K), byte_size(K) =:= 32 ->
-    K.
+safe_atom(Name) ->
+    try binary_to_existing_atom(Name, utf8)
+    catch _:_ -> undefined
+    end.
 
-%% Build the envelope CBOR map. Includes signature when present.
-to_envelope_map(#{type := T, key := K, version := V,
-                  created_at := C, expires_at := X,
-                  payload := P} = R) ->
-    Base = #{
-        {text, <<"t">>} => T,
-        {text, <<"k">>} => K,
-        {text, <<"v">>} => V,
-        {text, <<"c">>} => C,
-        {text, <<"x">>} => X,
-        {text, <<"p">>} => P
-    },
-    M1 = add_subject(Base, maps:get(subject_id, R, undefined)),
-    add_signature(M1, maps:get(signature, R, undefined)).
+first_present([Key | Keys], Payload) ->
+    present(maps:find(Key, Payload), Keys, Payload);
+first_present([], _Payload) ->
+    undefined.
 
-add_subject(M, undefined) -> M;
-add_subject(M, Sid) when is_binary(Sid) ->
-    M#{ {text, <<"u">>} => Sid }.    %% u = subject_id (Part 6 §9 extension)
+present({ok, Value}, _Keys, _Payload) -> Value;
+present(error, Keys, Payload) -> first_present(Keys, Payload).
 
-add_signature(M, undefined) -> M;
-add_signature(M, Sig) when is_binary(Sig) ->
-    M#{ {text, <<"s">>} => Sig }.
+%% A text value is returned as its binary. An atom value, other than true, false, undefined and null, is returned as
+%% its binary too, because a decode path may have turned a known text value into an existing atom.
+unwrap_text({text, Bin}) -> Bin;
+unwrap_text(Atom) when is_atom(Atom), Atom =/= true, Atom =/= false, Atom =/= undefined, Atom =/= null ->
+    atom_to_binary(Atom, utf8);
+unwrap_text(Value) -> Value.
 
-%% Canonical CBOR of the record minus its signature — what gets signed/verified.
-canonical_unsigned(Record) ->
-    macula_cbor_nif:pack_deterministic(to_envelope_map(maps:without([signature], Record))).
+host_list(undefined) -> [];
+host_list(Hosts) when is_list(Hosts) -> [unwrap_text(Host) || Host <- Hosts];
+host_list(Host) -> [unwrap_text(Host)].
+
+%% A coordinate is text as both builders write it: an optional leading minus, digits, then optionally a dot and
+%% digits, in at most 32 bytes, within Bound of zero either way. Any other value, text or not, reads as no coordinate,
+%% so reading a verified record never raises on a coordinate its signer chose.
+parse_geo({text, Text}, Bound) when is_binary(Text), byte_size(Text) =< ?MAX_GEO_TEXT_BYTES ->
+    within_bound(geo_number(geo_shape(Text), Text), Bound);
+parse_geo(_NotACoordinate, _Bound) ->
+    undefined.
+
+%% The shape of coordinate text: integer or decimal when it is exactly the grammar, and none otherwise.
+geo_shape(<<"-", Unsigned/binary>>) -> unsigned_shape(Unsigned);
+geo_shape(Unsigned) -> unsigned_shape(Unsigned).
+
+unsigned_shape(Text) -> parts_shape(binary:split(Text, <<".">>)).
+
+parts_shape([Whole]) -> shape_if(all_digits(Whole), integer);
+parts_shape([Whole, Fraction]) -> shape_if(all_digits(Whole) andalso all_digits(Fraction), decimal).
+
+shape_if(true, Shape) -> Shape;
+shape_if(false, _Shape) -> none.
+
+all_digits(<<>>) -> false;
+all_digits(Bytes) -> lists:all(fun(Byte) -> Byte >= $0 andalso Byte =< $9 end, binary_to_list(Bytes)).
+
+%% Text of the grammar's shape is exactly what binary_to_integer/1 and binary_to_float/1 take, so neither raises.
+geo_number(integer, Text) -> binary_to_integer(Text);
+geo_number(decimal, Text) -> binary_to_float(Text);
+geo_number(none, _Text) -> undefined.
+
+within_bound(Number, Bound) when is_number(Number), abs(Number) =< Bound -> Number;
+within_bound(_OutOfBoundOrNone, _Bound) -> undefined.

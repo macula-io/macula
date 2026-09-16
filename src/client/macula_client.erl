@@ -37,10 +37,15 @@
 %%
 %% == Dedup ==
 %%
-%% Inbound EVENT frames are keyed by `(Realm, Publisher, Seq)' in an
-%% ETS table owned by the pool. The table is swept every
-%% `dedup_sweep_ms' (default 30s) for entries older than
-%% `dedup_window_ms' (default 60s).
+%% A link verifies each publication before it hands the event to the
+%% pool, and the pool delivers each publication at most once. It keys an
+%% ETS table it owns on the event's `publication_hash', the SHA-384 of
+%% the publication's `tbs', and keeps each entry until the publication's
+%% `expires_at', after which every verifier refuses it. The table is swept
+%% every `dedup_sweep_ms' (default 30s). The pool checks an event only
+%% while a subscription matches it, so a copy that arrives while nothing
+%% is subscribed never hides the publication from a later subscriber, and
+%% it drops an event whose `expires_at' has passed when the check runs.
 %%
 %% == Replay ==
 %%
@@ -52,30 +57,33 @@
 -module(macula_client).
 -behaviour(gen_server).
 
--export([connect/2, close/1, child_spec/3, status/1, links/1]).
+-export([connect/2, close/1, child_spec/3, status/1, links/1, sign_node_record/2, sign_node_record/3, sign_domain_record/2,
+         withdraw_node_record/3, realm_key/2]).
 %% Internal API — called by `macula_pubsub' (and future surfaces).
 -export([publish/5, subscribe/5, unsubscribe/2]).
 %% RPC fan-out (since 3.16.0) — called by the `macula' facade.
--export([call/5, call_station/6, call_station/7, call_station/8,
-         call_station/9,
+-export([call_linked_station/5, call_station/7, call_station/8, call_station/9,
+         call_station/10,
          advertise/4, advertise/5, unadvertise/3]).
 %% Dedicated-stream content transfer (see
 %% PLAN_PER_STREAM_QUIC_ISOLATION.md Phase 2) — called by the
 %% `macula' facade to pin one link for a whole put_content/get_content
-%% transfer instead of letting `call/5' pick per underlying block CALL.
+%% transfer instead of letting `call_linked_station/5' pick per underlying block CALL.
 -export([pick_connected_link/1]).
 %% Direct-dial content transfer — called by the `macula' facade to pin
 %% a link to a SPECIFIC (resolved) station rather than picking from the
 %% pool's existing links.
--export([ensure_content_link/4]).
+-export([ensure_station_link/4]).
 %% Streaming RPC (since 3.17.0) — called by the `macula' facade.
--export([call_stream/5, call_stream_station/6,
+-export([call_stream_station/7,
          advertise_stream/5, advertise_stream/6, unadvertise_stream/3]).
 
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
-         terminate/2, code_change/3]).
+         terminate/2, code_change/3, format_status/1]).
 
 -ifdef(TEST).
+%% The issuer restart delay and backoff, exported for macula_client_pool_keys_tests.
+-export([issuer_restart_delay/2, next_issuer_backoff/1]).
 %% Probe guards — exported so a test can hang a link and prove the pool
 %% survives it. See the note above safe_is_connected/1.
 -export([safe_is_connected/1, safe_peer_node_id/1]).
@@ -85,7 +93,9 @@
 -export([select_publish_targets/2, safe_link_publish/5]).
 %% Station discovery selection math — exported for direct testing, same
 %% rationale as `select_publish_targets/2' above.
--export([ordered_for_selection/2, select_discovery_seeds/3, station_seed/1]).
+-export([ordered_for_selection/2, select_discovery_seeds/3, station_seed/1, seed_peer/1]).
+%% A state field's position in the state tuple, by name, for the key redaction tests.
+-export([state_field_index/1]).
 %% How a pool call moves from one link to the next, over any links and
 %% call -- exported for macula_client_call_first_success_tests.erl, which
 %% replaces no module.
@@ -151,10 +161,14 @@
     seeds              := [seed()],
     healthy_links      := non_neg_integer(),
     failed_links       := non_neg_integer(),
-    self_node_id       := macula_identity:pubkey(),
+    self_node_id       := <<_:256>>,
     subscriptions      := non_neg_integer(),
     replication_factor := pos_integer(),
-    pubsub_gap_skips   := non_neg_integer()
+    pubsub_gap_skips   := non_neg_integer(),
+    refused_dials      := #{too_many_direct_links | new_peer_budget_spent | unusable_seed
+                            | link_start_waits_for_issuer | seed_without_expected_node_id => pos_integer()},
+    issuer_restarts    := non_neg_integer(),
+    issuer_losses      := non_neg_integer()
 }.
 %% Per-link view returned by `links/1'. One entry per configured seed
 %% that currently has a spawned link worker. `node_id' is the peer
@@ -172,10 +186,18 @@
                   port := inet:port_number()}.
 
 -type opts() :: #{
-    %% Shared Ed25519 keypair for every link in the pool. Stations see
-    %% the pool as a single peer (one pubkey across N links).
-    %% Auto-generated when absent.
-    identity           => macula_identity:key_pair(),
+    %% The node identity key that every link in the pool shares: an
+    %% identity key in the node's crypto profile. Stations see the pool
+    %% as a single peer (one node_id across N links). Generated when
+    %% absent, with a node_id that meets the puzzle. Given as the key, or
+    %% as a loader {Module, Function, Args} that returns {ok, Key}, which a
+    %% child spec must use so the spec holds no key. A loader's Args say
+    %% where the key is and never hold it, because a supervisor logs them
+    %% when a start fails.
+    node_identity      => macula_node_keys:node_key() | {module(), atom(), [term()]},
+    %% The function the pool starts its statement issuer with, of the
+    %% shape of macula_statement_issuer_sup:start_issuer/2. For tests.
+    issuer_start       => fun((fun(() -> macula_node_keys:node_key()), pid()) -> {ok, pid()} | {error, term()}),
 
     %% How many of the pool's currently-connected links accept a
     %% single PUBLISH frame. Partial success counts as success
@@ -196,15 +218,16 @@
     %% wallclock can be up to N×timeout for sequential dial fallback.
     connect_timeout_ms => pos_integer(),
 
-    %% Inbound-EVENT dedup window in milliseconds. The pool keys
-    %% inbound events on `(Realm, Publisher, Seq)' so duplicate
-    %% deliveries from multiple subscribed links collapse to one
-    %% emission per consumer. Default 60_000.
-    dedup_window_ms    => non_neg_integer(),
-
-    %% How often the dedup table is swept for entries older than
-    %% `dedup_window_ms'. Default 30_000.
+    %% How often the inbound publication dedup table is swept for
+    %% entries whose publication has expired. Default 30_000.
     dedup_sweep_ms     => pos_integer(),
+
+    %% The realm keys the pool pins, one per realm id: each realm's public
+    %% key as carried, configured per deployment beside the realm id. A call
+    %% trusts an org namespaced advertisement only through the key pinned for
+    %% its realm. The pool does not start unless every id is 32 bytes and
+    %% every key is well formed for the node's crypto profile.
+    realm_trust        => #{<<_:256>> => binary()},
 
     %% Opt-in dynamic station discovery via `hecate_stations.list_stations'
     %% (the mesh's canonical station directory). Absent, or
@@ -236,7 +259,7 @@
         refresh_ms => pos_integer(),
         %% Cap on total concurrent links (bootstrap + discovered) --
         %% counts EVERY entry in `#state.links', including direct-dial
-        %% targets (`call_station'/`ensure_content_link') and a seed
+        %% targets (`call_station'/`ensure_station_link') and a seed
         %% still mid-respawn after a failed dial, not only successfully
         %% connected discovered stations. A large station directory
         %% should not mean dozens of QUIC connections. Default 5.
@@ -266,7 +289,7 @@
         giveup_sweep_ms => pos_integer()
     },
 
-    %% How a one-shot CALL (`call/5') or PUBLISH (`publish/5', within its
+    %% How a one-shot CALL (`call_linked_station/5') or PUBLISH (`publish/5', within its
     %% `replication_factor' slice) picks among currently-connected links.
     %% `first_success' (default, unless `station_discovery' is enabled --
     %% see below): today's behaviour, unchanged -- try links in the order
@@ -278,7 +301,42 @@
     %% and then still only ever call the first one) and `first_success'
     %% otherwise, but either can be set explicitly to override that
     %% pairing.
-    link_selection => first_success | random
+    link_selection => first_success | random,
+
+    %% Most configured seeds a pool starts with. A pool given more does
+    %% not start: `connect/2' returns `{error, {too_many_seeds, Given,
+    %% Max}}'. Every link a pool holds can carry inbound requests, so the
+    %% links it holds at once are bounded: its seeds, `max_links' for
+    %% discovery, and `max_direct_links'. Default 16.
+    max_seeds => pos_integer(),
+
+    %% Most direct-dial links a pool holds at once: links dialed by
+    %% `call_station', `ensure_station_link' or `call_stream_station' to a
+    %% station that is not already a link. A fresh dial past it is refused
+    %% with `{error, too_many_direct_links}'. Default 8.
+    max_direct_links => pos_integer(),
+
+    %% Most new peers a pool links to per 15 minutes, each counted once by
+    %% its normalized seed, for a fresh direct dial and for a discovered
+    %% station alike. A configured seed never spends it. Past it, a fresh
+    %% direct dial is refused with `{error, new_peer_budget_spent}' and a
+    %% discovered station is left for a later discovery run. Default 16.
+    new_peer_budget => pos_integer(),
+
+    %% Limits of the request admission the pool runs for every request its
+    %% links receive (plans/DESIGN_PQ_SIGNED_FRAMES_AND_RECORDS.md,
+    %% Requests): entries per caller (default 256) and per link's share
+    %% (1024), and stored reply bytes per caller (256 KiB) and in total
+    %% (16 MiB). A link's share is its normalized seed. A key not given here
+    %% falls back to the `macula' application environment's
+    %% `request_admission', then to its default. Each is an integer from 1 to
+    %% a cap (65,536; 65,536; 16 MiB; 1 GiB), with the quota per caller no
+    %% larger than the share and the reply bytes per caller no larger than
+    %% the total, or the pool does not start: `{error,
+    %% {invalid_admission_limit, Key, Value}}' or `{error,
+    %% {admission_limit_above, Smaller, Larger}}'.
+    request_admission => #{caller_quota => pos_integer(), share => pos_integer(),
+                           reply_bytes => pos_integer(), reply_bytes_total => pos_integer()}
 }.
 
 %% V1 multi_relay options that have NO V2 equivalent. Callers passing
@@ -318,7 +376,6 @@
 %% replication_factor=1 there was never a "later" link for that to matter;
 %% raising the default makes it matter for everyone.
 -define(DEFAULT_REPLICATION, 2).
--define(DEFAULT_DEDUP_WINDOW_MS, 60_000).
 -define(DEFAULT_DEDUP_SWEEP_MS, 30_000).
 %% How long an `ordered' subscription waits for a missing seq before
 %% skipping the gap (a genuinely lost fact). Bounds head-of-line delay.
@@ -355,10 +412,43 @@
 -define(DEFAULT_DISCOVERY_GIVEUP_MS, 60_000).
 -define(DEFAULT_DISCOVERY_GIVEUP_SWEEP_MS, 5_000).
 
+%% The links a pool holds and dials are bounded: every link can carry
+%% inbound requests, and each peer behind a link holds a share of the
+%% provider's seen requests while they live (`macula_request_admission').
+-define(DEFAULT_MAX_SEEDS, 16).
+-define(DEFAULT_MAX_DIRECT_LINKS, 8).
+-define(DEFAULT_NEW_PEER_BUDGET, 16).
+%% A seen request lives until its deadline plus 5 minutes, and a deadline
+%% lies at most 10 minutes ahead of the provider's clock, so 15 minutes is
+%% the longest one entry lives. The new-peer budget counts over that window.
+-define(NEW_PEER_WINDOW_MS, 15 * 60_000).
+%% A refused dial is counted every time and logged at most once a minute per
+%% reason.
+-define(REFUSAL_REPORT_WINDOW_MS, 60_000).
+%% Each link limit is an integer from 1 to its cap, or the pool does not
+%% start. The caps keep the links a pool holds, and so the shares of a
+%% provider's seen requests, within a fixed bound.
+-define(MAX_SEEDS_CAP, 64).
+-define(MAX_DIRECT_LINKS_CAP, 64).
+-define(NEW_PEER_BUDGET_CAP, 256).
+-define(DISCOVERY_MAX_LINKS_CAP, 64).
+%% The request admission limits a pool starts with unless it is given others
+%% (plans/DESIGN_PQ_SIGNED_FRAMES_AND_RECORDS.md, Requests), and the most each
+%% may be set to. The admission's cap is the share times the pool's link
+%% limits summed, the most distinct shares one entry lifetime can see.
+-define(DEFAULT_ADMISSION_LIMITS, #{caller_quota => 256, share => 1024, reply_bytes => 262144,
+                                    reply_bytes_total => 16777216}).
+-define(ADMISSION_LIMIT_CAPS, #{caller_quota => 65536, share => 65536, reply_bytes => 16777216,
+                                reply_bytes_total => 1073741824}).
+
 -record(link_state, {
     seed          :: seed(),
     pid           :: pid() | undefined,
     mon           :: reference() | undefined,
+    %% `true' for a link a fresh direct dial made (`dial_fresh/3'). It
+    %% counts against `max_direct_links' for its whole life, respawns
+    %% included.
+    direct = false :: boolean(),
     %% The three fields below are meaningless (left at their defaults)
     %% for a bootstrap or direct-dial link -- only
     %% `add_one_discovered_seed/2' ever sets `discovered = true', via
@@ -401,21 +491,13 @@
 
 -record(state, {
     seeds         :: [seed()],
-    identity      :: macula_identity:key_pair(),
+    node_id       :: <<_:256>>,
+    %% The realm keys pinned at start, from the `realm_trust' option: realm id
+    %% to the realm's key as carried.
+    realm_keys = #{} :: #{<<_:256>> => binary()},
     link_opts     :: map(),
     replication   :: pos_integer(),
-    dedup_window  :: non_neg_integer(),
     dedup_sweep   :: pos_integer(),
-    %% Pool-owned monotonic publish sequence. Stamped onto every
-    %% outbound PUBLISH (via `macula_station_link:publish/5') so the
-    %% station-side `(publisher, seq)' dedup stays stable across link
-    %% respawns — the publisher pubkey is the pool's, shared by all
-    %% links, so the seq must be owned by the pool, not the link.
-    %% Seeded from wall-clock µs at init so a pool restart does not
-    %% re-issue seqs that collide with the pre-restart tail still in a
-    %% station's dedup window (see
-    %% macula-station/plans/PLAN_PUBSUB_E2E_SIGNED_EVENTS.md).
-    publish_seq   :: non_neg_integer(),
     %% seed → link_state
     links = #{}   :: #{seed() => #link_state{}},
     %% pool-owned SubRef → sub_spec
@@ -426,6 +508,10 @@
     %% topic's segments: an inbound event is matched against these alone,
     %% not against every topic in the index.
     wildcard_topics = #{} :: #{{<<_:256>>, binary()} => [binary()]},
+    %% link pid → {realm, topic} → the SubRef that link returned for its
+    %% SUBSCRIBE, from a subscribe or from the replay onto a respawned
+    %% link, so an unsubscribe reaches every link that carried it.
+    link_subs = #{} :: #{pid() => #{{<<_:256>>, binary()} => reference()}},
     %% Advertised procedures — pool replays these on link respawn.
     %% {realm, procedure} → handler
     procs = #{}   :: #{{<<_:256>>, binary()} => {handler(), auth_policy()}},
@@ -444,8 +530,35 @@
     %% default). See `#discovery_state{}' and the `station_discovery'
     %% opt.
     discovery        :: #discovery_state{} | undefined,
-    link_selection   :: first_success | random
+    link_selection   :: first_success | random,
+    max_direct_links :: pos_integer(),
+    %% New peers per `?NEW_PEER_WINDOW_MS', by normalized seed. The
+    %% configured seeds are exempt.
+    dial_budget      :: macula_client_peer_budget:t(),
+    refused_dials    :: macula_refusal_report:t(),
+    %% The node identity key, for the next issuer, and the pool's statement
+    %% issuer, `undefined' while a new one waits for its backoff.
+    node_identity    :: macula_node_keys:node_key(),
+    issuer           :: pid() | undefined,
+    issuer_started_at :: integer(),
+    issuer_backoff_ms :: pos_integer(),
+    %% How the pool starts an issuer, how many it has started after its first, and how many issuers it has lost.
+    issuer_start     :: fun((fun(() -> macula_node_keys:node_key()), pid()) -> {ok, pid()} | {error, term()}),
+    issuer_restarts = 0 :: non_neg_integer(),
+    issuer_losses = 0 :: non_neg_integer(),
+    %% Link starts that wait for the next issuer: seed → the start's extra
+    %% options.
+    held_starts = #{} :: #{seed() => map()},
+    %% The request admission in which all the pool's links judge the requests
+    %% they receive.
+    admission :: pid()
 }).
+
+%% The issuer restart backoff doubles from the least to the most, and
+%% starts from the least again once an issuer has run for a minute.
+-define(ISSUER_RESTART_MIN_MS, 100).
+-define(ISSUER_RESTART_MAX_MS, 5_000).
+-define(ISSUER_STABLE_MS, 60_000).
 
 %%====================================================================
 %% Public API
@@ -455,9 +568,21 @@
 %% link handshakes complete asynchronously. Publish/subscribe block
 %% until at least one link is connected (or fail with
 %% `{error, {transient, no_healthy_station}}' on the publish path).
+%% A node with no crypto profile, or a `node_identity' that is not an
+%% identity key in the node's profile, starts no pool: the refusal is
+%% returned and no link is dialed. Nor does a seed that names no node_id
+%% it expects, in the seed or in the `expected_node_id' option: the start
+%% returns `{error, {seeds, expected_node_id_required}}'.
 -spec connect([seed()], opts()) -> {ok, pool()} | {error, term()}.
 connect(Seeds, Opts) when is_list(Seeds), is_map(Opts) ->
-    gen_server:start_link(?MODULE, {Seeds, Opts}, []).
+    gen_server:start_link(?MODULE, {Seeds, identity_wrapped(Opts)}, []).
+
+%% A supplied node identity key travels as a function that returns it, so
+%% the pool's start arguments, and a supervisor's child spec, hold no key.
+identity_wrapped(#{node_identity := Key} = Opts) when is_map(Key) ->
+    Opts#{node_identity := fun() -> Key end};
+identity_wrapped(Opts) ->
+    Opts.
 
 %% @doc Stop the pool. Every subscriber receives a final
 %% `{macula_event_gone, SubRef, pool_closed}' message; every link
@@ -467,8 +592,17 @@ close(Pool) ->
     gen_server:stop(Pool, normal, 5_000).
 
 %% @doc OTP child spec — drop the pool into a caller's supervision
-%% tree. `Id' is the supervisor child id.
+%% tree. `Id' is the supervisor child id. A supervisor keeps the spec for
+%% its child's life, so the spec names how to load the node identity key
+%% and never holds the key: give `node_identity' as a loader
+%% `{Module, Function, Args}' that returns `{ok, Key}'. `Args' say where the
+%% key is, such as a file name, and never hold the key, because a supervisor
+%% that fails to start the pool logs the spec, `Args' included. A key, or a
+%% function that could hold one, given here raises
+%% `{node_identity, loader_required}'.
 -spec child_spec(term(), [seed()], opts()) -> supervisor:child_spec().
+child_spec(_Id, _Seeds, #{node_identity := Given}) when is_map(Given); is_function(Given) ->
+    erlang:error({node_identity, loader_required});
 child_spec(Id, Seeds, Opts) ->
     #{id       => Id,
       start    => {?MODULE, connect, [Seeds, Opts]},
@@ -477,21 +611,25 @@ child_spec(Id, Seeds, Opts) ->
       type     => worker,
       modules  => [?MODULE]}.
 
-%% @doc Issue a CALL frame against the pool. Tries each healthy link
-%% in turn and returns the first non-error reply. Returns
+%% @doc Issue a CALL for a procedure the pool's linked stations serve
+%% themselves, such as `_dht.*': first success across the pool's healthy
+%% links, each CALL targeting the station its link is connected to. It
+%% moves on to the next link only when the CALL never went out on the one
+%% before (`macula_station_link:not_sent/1'). Returns
 %% `{error, no_healthy_station}' when no link has completed its
-%% CONNECT/HELLO handshake.
+%% CONNECT/HELLO handshake. A procedure a provider serves is called through
+%% `macula:call/5', which resolves the provider.
 %%
-%% Realm is per-call (32 bytes). Different realms can share a single
-%% pool with no extra plumbing.
--spec call(pool(), <<_:256>>, binary(), term(), pos_integer()) ->
+%% Realm is per-call (32 bytes). `TimeoutMs' is from 1 ms to ten minutes,
+%% the deadline window a provider accepts.
+-spec call_linked_station(pool(), <<_:256>>, binary(), term(), 1..600_000) ->
     {ok, term()} | {error, term()}.
-call(Pool, Realm, Procedure, Payload, TimeoutMs)
+call_linked_station(Pool, Realm, Procedure, Payload, TimeoutMs)
   when is_pid(Pool),
        is_binary(Realm), byte_size(Realm) =:= 32,
        is_binary(Procedure),
-       is_integer(TimeoutMs), TimeoutMs > 0 ->
-    gen_server:call(Pool, {rpc_call, Realm, Procedure, Payload, TimeoutMs},
+       is_integer(TimeoutMs), TimeoutMs > 0, TimeoutMs =< 600_000 ->
+    gen_server:call(Pool, {linked_station_call, Realm, Procedure, Payload, TimeoutMs},
                     TimeoutMs + 1_000).
 
 %% @doc Pick one currently-connected link and return its pid, without
@@ -499,7 +637,7 @@ call(Pool, Realm, Procedure, Payload, TimeoutMs)
 %% sequence of related calls — a dedicated QUIC stream, opened once
 %% on the returned pid (via the internal station-link module's
 %% content-stream API), only isolates one link's traffic, so every
-%% call in the sequence must go over that same link. `call/5' picks
+%% call in the sequence must go over that same link. `call_linked_station/5' picks
 %% fresh per call (`call_first_success/5') and is the wrong primitive
 %% for that.
 %%
@@ -514,46 +652,47 @@ pick_connected_link(Pool) when is_pid(Pool) ->
 %% a live link to `Station' or dial (and wait up to `TimeoutMs' for the
 %% handshake on) a fresh one, per-call trust-overridable via `LinkOpts'
 %% (`verify' / `expected_node_id' / `pin_tls_cert', mirroring
-%% `call_station/8'). This is direct-dial's content-transfer primitive:
+%% `call_station/9'). This is direct-dial's content-transfer primitive:
 %% the returned pid is pinned for a whole `put_content'/`get_content'
 %% dedicated-stream transfer exactly like `pick_connected_link/1', just
 %% against a caller-resolved station instead of whichever pool link is
 %% already up.
--spec ensure_content_link(pool(), seed(), map(), pos_integer()) ->
+-spec ensure_station_link(pool(), seed(), map(), pos_integer()) ->
     {ok, pid()} | {error, term()}.
-ensure_content_link(Pool, Station, LinkOpts, TimeoutMs)
+ensure_station_link(Pool, Station, LinkOpts, TimeoutMs)
   when is_pid(Pool), is_map(LinkOpts),
        is_integer(TimeoutMs), TimeoutMs > 0 ->
-    gen_server:call(Pool, {ensure_content_link, Station, LinkOpts, TimeoutMs},
+    gen_server:call(Pool, {ensure_station_link, Station, LinkOpts, TimeoutMs},
                     TimeoutMs + 2_000).
 
-%% @doc Issue a CALL to ONE specific station, dialing it directly even
-%% if it is not in the pool's seed set. `Station' is a seed URL (e.g.
-%% `<<"quic://[::1]:4433">>'). The pool ensures a link to it (reusing an
-%% existing one, or dialing and monitoring a new one exactly like a
-%% seed), waits for the handshake within the deadline, and calls through
-%% that link. This is the direct-dial data path: resolve a
-%% serving_station (Slice 2) to its endpoint (Slice 3), then reach it in
-%% one hop here — no mesh relay.
+%% @doc Issue a CALL to `Target', a provider's node_id, at ONE specific
+%% station, dialing it directly even if it is not in the pool's seed set.
+%% `Station' is a seed URL (e.g. `<<"quic://[::1]:4433">>'). The pool
+%% ensures a link to it (reusing an existing one, or dialing and monitoring
+%% a new one exactly like a seed), waits for the handshake within the
+%% deadline, and calls through that link; the station delivers the CALL to
+%% the provider `Target' names. This is the direct-dial data path: resolve a
+%% provider's serving_station to its endpoint, then reach it in one hop
+%% here, with no mesh relay.
 %%
 %% Returns `{error, not_connected}' if the link does not complete its
 %% handshake before the deadline.
--spec call_station(pool(), seed(), <<_:256>>, binary(), term(),
-                   pos_integer()) -> {ok, term()} | {error, term()}.
-call_station(Pool, Station, Realm, Procedure, Payload, TimeoutMs) ->
-    call_station(Pool, Station, Realm, Procedure, Payload, TimeoutMs, <<>>).
+-spec call_station(pool(), seed(), <<_:256>>, <<_:256>>, binary(), term(),
+                   1..600_000) -> {ok, term()} | {error, term()}.
+call_station(Pool, Station, Target, Realm, Procedure, Payload, TimeoutMs) ->
+    call_station(Pool, Station, Target, Realm, Procedure, Payload, TimeoutMs, <<>>).
 
-%% @doc As `call_station/6', presenting a capability token (UCAN) to a
+%% @doc As `call_station/7', presenting a capability token (UCAN) to a
 %% gated provider. Empty token = none. Slice 7b.
--spec call_station(pool(), seed(), <<_:256>>, binary(), term(),
-                   pos_integer(), binary()) -> {ok, term()} | {error, term()}.
-call_station(Pool, Station, Realm, Procedure, Payload, TimeoutMs, UcanToken) ->
-    call_station(Pool, Station, Realm, Procedure, Payload, TimeoutMs,
-                UcanToken, #{}).
+-spec call_station(pool(), seed(), <<_:256>>, <<_:256>>, binary(), term(),
+                   1..600_000, binary()) -> {ok, term()} | {error, term()}.
+call_station(Pool, Station, Target, Realm, Procedure, Payload, TimeoutMs, UcanToken) ->
+    call_station(Pool, Station, Target, Realm, Procedure, Payload, TimeoutMs,
+                 UcanToken, #{}).
 
-%% @doc As `call_station/7', with a per-call TLS trust override for
+%% @doc As `call_station/8', with a per-call TLS trust override for
 %% THIS dial only — `verify' (webpki | none), `expected_node_id' (pin
-%% the station's Ed25519 identity), and/or `pin_tls_cert' (`false' to
+%% the station's node_id), and/or `pin_tls_cert' (`false' to
 %% enforce that pin at the application layer only — see
 %% `macula_peering_conn:connect_opts()' — needed against a station
 %% whose TLS is terminated by a PKI unrelated to its macula identity,
@@ -567,38 +706,41 @@ call_station(Pool, Station, Realm, Procedure, Payload, TimeoutMs, UcanToken) ->
 %% needing to know in advance) the pool's default verification for its
 %% other links. Only applies when a NEW link is dialed for `Station' —
 %% an already-connected link keeps whatever trust it was dialed under.
--spec call_station(pool(), seed(), <<_:256>>, binary(), term(),
-                   pos_integer(), binary(), map()) ->
+-spec call_station(pool(), seed(), <<_:256>>, <<_:256>>, binary(), term(),
+                   1..600_000, binary(), map()) ->
     {ok, term()} | {error, term()}.
-call_station(Pool, Station, Realm, Procedure, Payload, TimeoutMs, UcanToken,
-            LinkOpts) ->
-    call_station(Pool, Station, Realm, Procedure, Payload, TimeoutMs, UcanToken,
+call_station(Pool, Station, Target, Realm, Procedure, Payload, TimeoutMs, UcanToken,
+             LinkOpts) ->
+    call_station(Pool, Station, Target, Realm, Procedure, Payload, TimeoutMs, UcanToken,
                  LinkOpts, TimeoutMs).
 
-%% @doc As `call_station/8', waiting at most `DialTimeoutMs' of `TimeoutMs'
+%% @doc As `call_station/9', waiting at most `DialTimeoutMs' of `TimeoutMs'
 %% for a freshly-dialed link's handshake; the CALL gets whatever remains of
 %% `TimeoutMs'. `{error, not_connected}' then comes back after
 %% `DialTimeoutMs', before any CALL was sent, so a direct-dial caller can
 %% move on to another station within its own deadline.
--spec call_station(pool(), seed(), <<_:256>>, binary(), term(),
-                   pos_integer(), binary(), map(), pos_integer()) ->
+-spec call_station(pool(), seed(), <<_:256>>, <<_:256>>, binary(), term(),
+                   1..600_000, binary(), map(), pos_integer()) ->
     {ok, term()} | {error, term()}.
-call_station(Pool, Station, Realm, Procedure, Payload, TimeoutMs, UcanToken,
-            LinkOpts, DialTimeoutMs)
+call_station(Pool, Station, Target, Realm, Procedure, Payload, TimeoutMs, UcanToken,
+             LinkOpts, DialTimeoutMs)
   when is_pid(Pool),
+       is_binary(Target), byte_size(Target) =:= 32,
        is_binary(Realm), byte_size(Realm) =:= 32,
        is_binary(Procedure),
-       is_integer(TimeoutMs), TimeoutMs > 0,
+       is_integer(TimeoutMs), TimeoutMs > 0, TimeoutMs =< 600_000,
        is_binary(UcanToken),
        is_map(LinkOpts),
        is_integer(DialTimeoutMs), DialTimeoutMs > 0 ->
     gen_server:call(Pool,
-                    {call_station, Station, Realm, Procedure, Payload,
+                    {call_station, Station, Target, Realm, Procedure, Payload,
                      TimeoutMs, DialTimeoutMs, UcanToken, LinkOpts},
                     TimeoutMs + 2_000).
 
-%% @doc Advertise a procedure handler on every healthy link. Stored
-%% in pool state so links respawned later replay the advertisement.
+%% @doc Register a procedure handler on every healthy link. Stored
+%% in pool state so a respawned link registers it again. A caller
+%% reaches this provider only through a `procedure_advertisement'
+%% record that names it; registering the handler publishes none.
 %% Returns `ok' when at least one link accepted the registration.
 %% A handler that answers `{error, Text}' with a binary or a printable
 %% charlist sends that text to its caller, up to 256 bytes of it; any
@@ -631,51 +773,28 @@ unadvertise(Pool, Realm, Procedure)
        is_binary(Procedure) ->
     gen_server:call(Pool, {unadvertise, Realm, Procedure}, 5_000).
 
-%% @doc Open a streaming RPC against the pool. Picks the first
-%% currently-healthy link and opens the stream there; the returned
-%% stream pid is sticky — if the underlying link dies, the stream
-%% errors with `{error, peer_down}' and the caller must re-open.
-%%
-%% Returns `{error, no_healthy_station}' when no link has completed
-%% its CONNECT/HELLO handshake. `Realm' (32 bytes) and `Procedure'
-%% name the remote endpoint. `Args' is the opening payload; `Opts'
-%% accepts `mode' (default `server_stream'), `owner' (default the
-%% calling pid), `deadline_ms', and `ucan_token' (a UCAN presented to a
-%% streaming procedure advertised with an auth policy).
--spec call_stream(pool(), <<_:256>>, binary(), term(), map()) ->
-    {ok, pid()} | {error, term()}.
-call_stream(Pool, Realm, Procedure, Args, Opts)
-  when is_pid(Pool),
-       is_binary(Realm), byte_size(Realm) =:= 32,
-       is_binary(Procedure),
-       is_map(Opts) ->
-    gen_server:call(Pool,
-                    {rpc_call_stream, Realm, Procedure, Args,
-                     Opts#{owner => maps:get(owner, Opts, self())}},
-                    5_000).
-
-%% @doc Open a streaming RPC by DIALING a specific station directly
-%% (direct-dial), instead of routing through an existing pool link.
-%% The streaming analogue of `call_station/7': ensure (reuse or dial) a
-%% link to `Station', await the handshake, then open the stream there.
-%% `Opts' may set `dial_timeout_ms' (default 10_000) for the dial +
-%% handshake, plus any `call_stream' option (e.g. `mode').
-%% `Opts' also carries the per-call TLS trust override for this dial —
-%% `verify', `expected_node_id', `pin_tls_cert' — same as
-%% `call_station/8'; extracted into a separate `LinkOpts' internally so
-%% they reach `ensure_link/3' without also leaking into the eventual
-%% underlying stream-open call's own options.
--spec call_stream_station(pool(), seed(), <<_:256>>, binary(), term(),
+%% @doc Open a streaming RPC to `Target', a provider's node_id, by DIALING
+%% a specific station directly (direct-dial). The streaming analogue of
+%% `call_station/7': ensure (reuse or dial) a link to `Station', await the
+%% handshake, then open the stream there, naming `Target'.
+%% `Opts' may set `dial_timeout_ms' (default 10_000) for the dial and
+%% handshake, plus any stream option (e.g. `mode').
+%% `Opts' also carries the per-call TLS trust override for this dial:
+%% `verify', `expected_node_id', `pin_tls_cert', same as
+%% `call_station/8'. They are kept apart as the dial's own options, so
+%% they reach `ensure_link/3' and not the stream open.
+-spec call_stream_station(pool(), seed(), <<_:256>>, <<_:256>>, binary(), term(),
                           map()) -> {ok, pid()} | {error, term()}.
-call_stream_station(Pool, Station, Realm, Procedure, Args, Opts)
+call_stream_station(Pool, Station, Target, Realm, Procedure, Args, Opts)
   when is_pid(Pool),
+       is_binary(Target), byte_size(Target) =:= 32,
        is_binary(Realm), byte_size(Realm) =:= 32,
        is_binary(Procedure),
        is_map(Opts) ->
     DialTimeout = maps:get(dial_timeout_ms, Opts, 10_000),
     LinkOpts = maps:with([verify, expected_node_id, pin_tls_cert], Opts),
     gen_server:call(Pool,
-                    {call_stream_station, Station, Realm, Procedure, Args,
+                    {call_stream_station, Station, Target, Realm, Procedure, Args,
                      Opts#{owner => maps:get(owner, Opts, self())}, LinkOpts},
                     DialTimeout + 2_000).
 
@@ -733,6 +852,119 @@ unadvertise_stream(Pool, Realm, Procedure)
 status(Pool) when is_pid(Pool) ->
     gen_server:call(Pool, status, 5_000).
 
+%% @doc The realm key the pool pinned for `RealmId' when it started, from its `realm_trust' option, or `none'. Direct
+%% dial checks an org namespaced advertisement's authorization against this key alone.
+-spec realm_key(pool(), <<_:256>>) -> {ok, binary()} | none.
+realm_key(Pool, <<_:256>> = RealmId) when is_pid(Pool) ->
+    gen_server:call(Pool, {realm_key, RealmId}, 5_000).
+
+%% @doc Sign a record this node signs about itself with the pool's node identity key, in the pool's own process, and
+%% return the signed record: the node record, a procedure advertisement or a content announcement that names this node.
+%% The pool stamps it with a new version and created_at, keeping the lifetime it was built with. The key never leaves
+%% the pool, so a caller never holds it. Only the record's type, created_at, expires_at and payload reach the pool. A
+%% record of another type, a tombstone included, is `{error, not_a_node_signed_type}'; one that names another node
+%% `{error, key_id_mismatch}'; one whose lifetime passes its type's maximum or runs backwards
+%% `{error, lifetime_too_long}' or `{error, lifetime_reversed}'; a payload over 256 KiB, refused before the call, or a
+%% signed record that would pass 256 KiB `{error, record_too_large}'; a record with a subject, which no type a node
+%% signs about itself carries, refused before the call, and anything else the pool cannot sign
+%% `{error, malformed_record}'.
+-spec sign_node_record(pool(), macula_record:m_record()) ->
+          {ok, macula_record:m_record()}
+        | {error, not_a_node_signed_type | key_id_mismatch | lifetime_too_long | lifetime_reversed | record_too_large
+                | malformed_record}.
+sign_node_record(Pool, #{type := Type, created_at := Created, expires_at := Expires, payload := Payload} = Record)
+  when is_pid(Pool), is_integer(Type), is_integer(Created), is_integer(Expires), is_map(Payload),
+       not is_map_key(subject, Record) ->
+    pool_signs(macula_record:payload_bounded(Payload), Pool,
+               {sign_node_record, #{type => Type, created_at => Created, expires_at => Expires, payload => Payload}});
+sign_node_record(Pool, _NotARecord) when is_pid(Pool) ->
+    {error, malformed_record}.
+
+%% @doc As `sign_node_record/2', bounded by `Opts' `not_after' (a Unix
+%% millisecond). The pool judges the bound on its own clock: one already
+%% passed is `{error, not_after_passed}'; one before the record's
+%% lifetime runs out ends the record at the bound; one after keeps the
+%% built lifetime. The refusals of `sign_node_record/2' stand under a
+%% bound. `Opts' without `not_after' signs as `sign_node_record/2' does,
+%% and a `not_after' that is not an integer raises `function_clause'
+%% in the caller.
+-spec sign_node_record(pool(), macula_record:m_record(), map()) ->
+          {ok, macula_record:m_record()}
+        | {error, not_a_node_signed_type | key_id_mismatch | lifetime_too_long | lifetime_reversed | record_too_large
+                | malformed_record | not_after_passed}.
+sign_node_record(Pool,
+                 #{type := Type, created_at := Created, expires_at := Expires, payload := Payload} = Record,
+                 #{not_after := NotAfter})
+  when is_pid(Pool), is_integer(Type), is_integer(Created), is_integer(Expires), is_map(Payload),
+       not is_map_key(subject, Record), is_integer(NotAfter) ->
+    pool_signs(macula_record:payload_bounded(Payload), Pool,
+               {sign_node_record_bounded, #{type => Type, created_at => Created, expires_at => Expires,
+                                            payload => Payload, not_after => NotAfter}});
+sign_node_record(Pool, _NotARecord, #{not_after := NotAfter})
+  when is_pid(Pool), is_integer(NotAfter) ->
+    {error, malformed_record};
+sign_node_record(Pool, Record, Opts)
+  when is_pid(Pool), is_map(Opts), not is_map_key(not_after, Opts) ->
+    sign_node_record(Pool, Record).
+
+%% @doc Sign a domain record (tags 0x20 to 0xFF) as this node, with the pool's node identity key, in the pool's own
+%% process, and return the signed record, stored under this node's key id with its subject when it has one. Build it
+%% with `macula_record:envelope/3'. The pool stamps it with a new version and created_at, keeping the lifetime it was
+%% built with. Only the record's type, created_at, expires_at, payload and subject reach the pool, and each of these
+%% is refused before the call: a type outside 0x20 to 0xFF, `{error, not_a_domain_type}'; a subject that is not a
+%% non-empty binary, `{error, invalid_subject}'; a lifetime past the domain maximum of 7 days, or running backwards,
+%% `{error, lifetime_too_long}' or `{error, lifetime_reversed}', never shortened to fit; a payload and subject over
+%% 256 KiB together, `{error, record_too_large}'; and a term that is no domain record, `{error, malformed_record}'. A
+%% signed record that would pass 256 KiB is `{error, record_too_large}' from the pool. Withdraw a domain record with
+%% withdraw_node_record/3.
+-spec sign_domain_record(pool(), macula_record:m_record()) ->
+          {ok, macula_record:m_record()}
+        | {error, not_a_domain_type | invalid_subject | lifetime_too_long | lifetime_reversed | record_too_large
+                | malformed_record}.
+sign_domain_record(Pool, Record) when is_pid(Pool) ->
+    domain_record_sent(macula_record:domain_record_checked(Record), Pool, Record).
+
+%% Only a domain record that passes its checks reaches the pool, and of it only the fields the pool signs from.
+domain_record_sent(ok, Pool, Record) ->
+    Fields = maps:with([type, created_at, expires_at, payload, subject], Record),
+    gen_server:call(Pool, {sign_domain_record, Fields}, 5_000);
+domain_record_sent({error, malformed}, _Pool, _Record) ->
+    {error, malformed_record};
+domain_record_sent({error, _} = Refusal, _Pool, _Record) ->
+    Refusal.
+
+%% @doc Sign a tombstone that withdraws a record this node signed, with the pool's node identity key, in the pool's own
+%% process. The pool first verifies the record, as its wire form or its signed map, under its profile, and withdraws it
+%% only when it is of a type a node signs about itself or a domain type, and it carries the pool's own key, so the
+%% tombstone lands on the record's own slot. A record that does not verify gets its refusal; one of another type
+%% `{error, not_a_node_signed_type}'; another node's
+%% `{error, not_this_nodes_record}'; a wire form over 256 KiB, or a signed map whose key, tbs and signature pass 256 KiB
+%% together, `{error, record_too_large}', refused before the call; and anything else the pool cannot sign, a map whose
+%% key, tbs or signature is not a binary included, `{error, malformed_record}'. Of a signed map, only its key, tbs and
+%% signature reach the pool. The tombstone lives until the record has expired plus the clock tolerance.
+-spec withdraw_node_record(pool(), macula_record:m_record() | binary(), macula_record:reason()) ->
+          {ok, macula_record:m_record()}
+        | {error, not_this_nodes_record | not_a_node_signed_type | lifetime_too_long | lifetime_reversed
+                | record_too_large | malformed_record | macula_record:refusal()}.
+withdraw_node_record(Pool, Withdrawn, Reason)
+  when is_pid(Pool), (Reason =:= shutdown orelse Reason =:= moved orelse Reason =:= revoked) ->
+    pool_withdraws(macula_record:wire_bounded(Withdrawn), Pool, Withdrawn, Reason).
+
+%% A payload past the record bounds never reaches the pool.
+pool_signs(ok, Pool, Request) -> gen_server:call(Pool, Request, 5_000);
+pool_signs({error, record_too_large}, _Pool, _Request) -> {error, record_too_large};
+pool_signs({error, malformed}, _Pool, _Request) -> {error, malformed_record}.
+
+%% A record to withdraw reaches the pool only as a wire form within the record bound, or as a signed map's key, tbs and
+%% signature within it.
+pool_withdraws(ok, Pool, Withdrawn, Reason) ->
+    gen_server:call(Pool, {withdraw_node_record, wire_fields(Withdrawn), Reason}, 5_000);
+pool_withdraws({error, record_too_large}, _Pool, _Withdrawn, _Reason) -> {error, record_too_large};
+pool_withdraws({error, malformed}, _Pool, _Withdrawn, _Reason) -> {error, malformed_record}.
+
+wire_fields(Bytes) when is_binary(Bytes) -> Bytes;
+wire_fields(Record) -> maps:with([key, tbs, signature], Record).
+
 %% @doc Per-link snapshot of the pool — one `link_info()' per
 %% configured seed that currently has a spawned link worker. Unlike
 %% `status/1' (which only aggregates counts), this exposes each link's
@@ -764,6 +996,8 @@ links(Pool) when is_pid(Pool) ->
 %% Returns `{error, {unsupported_payload_type, Type, Path}}' naming the
 %% offending value and where it sits in the term. Floats are the common
 %% case: scale them to integers (micro-units) or send binary strings.
+%% A topic over 512 bytes or not UTF-8 is refused first, as
+%% `{error, {text_too_long, topic}}' or `{error, {invalid_text, topic}}'.
 -spec publish(pool(), <<_:256>>, binary(), term(), map()) ->
     ok | {error, term()}.
 publish(Pool, Realm, Topic, Payload, Opts)
@@ -771,8 +1005,12 @@ publish(Pool, Realm, Topic, Payload, Opts)
        is_binary(Realm), byte_size(Realm) =:= 32,
        is_binary(Topic),
        is_map(Opts) ->
-    publish_checked(macula_frame:check_payload(Payload),
+    publish_checked(publishable(macula_frame:text_checked(topic, Topic), Payload),
                     Pool, Realm, Topic, Payload, Opts).
+
+%% A topic a PUBLISH cannot carry is refused before the payload is looked at.
+publishable(ok, Payload) -> macula_frame:check_payload(Payload);
+publishable({error, _} = Refused, _Payload) -> Refused.
 
 publish_checked(ok, Pool, Realm, Topic, Payload, Opts) ->
     Timeout = maps:get(timeout_ms, Opts, 5_000),
@@ -783,19 +1021,25 @@ publish_checked({error, _} = Rejected, _Pool, _Realm, _Topic, _Payload, _Opts) -
 
 %% @doc Subscribe `Subscriber' to `(Realm, Topic)'. The pool
 %% subscribes every currently-spawned link and dedupes inbound
-%% events before fan-out. Returns `{ok, SubRef}'; `Subscriber'
+%% events before fan-out. Returns `{ok, SubRef}', or the topic's refusal
+%% when a SUBSCRIBE cannot carry it (over 512 bytes, or not UTF-8); `Subscriber'
 %% receives `{macula_event, SubRef, Topic, Payload, Meta}' for each
 %% delivered event and `{macula_event_gone, SubRef, Reason}' once
 %% when the pool closes or the subscriber pid dies.
 -spec subscribe(pool(), <<_:256>>, binary(), pid(), map()) ->
-    {ok, reference()}.
+    {ok, reference()} | {error, {text_too_long | invalid_text, topic}}.
 subscribe(Pool, Realm, Topic, Subscriber, Opts)
   when is_pid(Pool),
        is_binary(Realm), byte_size(Realm) =:= 32,
        is_binary(Topic), is_pid(Subscriber),
        is_map(Opts) ->
-    gen_server:call(Pool, {subscribe, Realm, Topic, Subscriber, Opts},
-                    5_000).
+    subscribed(macula_frame:text_checked(topic, Topic), Pool, Realm, Topic, Subscriber, Opts).
+
+%% A topic a SUBSCRIBE cannot carry is refused before the pool or its links build anything.
+subscribed(ok, Pool, Realm, Topic, Subscriber, Opts) ->
+    gen_server:call(Pool, {subscribe, Realm, Topic, Subscriber, Opts}, 5_000);
+subscribed({error, _} = Refused, _Pool, _Realm, _Topic, _Subscriber, _Opts) ->
+    Refused.
 
 %% @doc Drop a subscription. Idempotent — unknown `SubRef' is a
 %% no-op. The wire-level link subscription persists for the pool's
@@ -812,13 +1056,155 @@ unsubscribe(Pool, SubRef) when is_pid(Pool), is_reference(SubRef) ->
 init({Seeds, Opts}) ->
     process_flag(trap_exit, true),
     warn_legacy_opts(Opts),
-    Identity = resolve_identity(Opts),
+    init_within_realm_trust(realm_trust_refusal(Opts), Seeds, Opts).
+
+%% A realm trust that is not a map of 32-byte realm ids to realm keys well formed for the node's crypto profile does
+%% not start the pool, loads no key and dials nothing: a key that can never equal an org directory's signer would leave
+%% every org namespaced advertisement of its realm untrusted without saying why. A key well formed for the other
+%% profile is refused by its own name.
+init_within_realm_trust(none, Seeds, Opts) ->
+    init_within_link_limits(link_limit_outside_its_range(Opts), Seeds, Opts);
+init_within_realm_trust(Refusal, _Seeds, _Opts) ->
+    {error, Refusal}.
+
+realm_trust_refusal(#{realm_trust := Trust}) when is_map(Trust) ->
+    {ok, Profile} = macula_crypto_profile:configured(),
+    first_outside([Refusal || Id := Key <- Trust,
+                              Refusal <- [realm_key_refusal(Id, Key, Profile)], Refusal =/= none]);
+realm_trust_refusal(#{realm_trust := _NotAMap}) ->
+    {realm_trust, invalid};
+realm_trust_refusal(_NoRealmTrust) ->
+    none.
+
+realm_key_refusal(<<_:256>>, Key, Profile) when is_binary(Key) ->
+    realm_key_formed(macula_node_keys:carried_key_well_formed(Key, Profile), Key, Profile);
+realm_key_refusal(_Id, _Key, _Profile) ->
+    {realm_trust, invalid}.
+
+realm_key_formed(true, _Key, _Profile) ->
+    none;
+realm_key_formed(false, Key, Profile) ->
+    other_profile(lists:any(fun(Candidate) -> macula_node_keys:carried_key_well_formed(Key, Candidate) end,
+                            [Other || Other <- [pq_pure, pq_hybrid], Other =/= Profile])).
+
+other_profile(true)  -> {realm_trust, profile_mismatch};
+other_profile(false) -> {realm_trust, invalid}.
+
+pinned_realm_key({ok, Key}) -> {ok, Key};
+pinned_realm_key(error)     -> none.
+
+%% A link limit that is not an integer from 1 to its cap does not start the
+%% pool, and nothing is dialed: an atom would otherwise sort above every
+%% integer and lift its bound.
+init_within_link_limits(none, Seeds, Opts) ->
+    init_within_admission_limits(admission_limits_refusal(admission_given(Opts)), Seeds, Opts);
+init_within_link_limits({Key, Value}, _Seeds, _Opts) ->
+    {error, {invalid_link_limit, Key, Value}}.
+
+%% Request admission limits outside their ranges, or out of order, do not
+%% start the pool, and nothing is dialed.
+init_within_admission_limits(none, Seeds, Opts) ->
+    init_within_seed_limit(length(Seeds), maps:get(max_seeds, Opts, ?DEFAULT_MAX_SEEDS), Seeds, Opts);
+init_within_admission_limits(Refusal, _Seeds, _Opts) ->
+    {error, Refusal}.
+
+%% The request admission limits a pool is given, key by key: its
+%% `request_admission' option over the `macula' application environment's
+%% `request_admission'. A value that is not a map is refused as a limit of
+%% that name.
+admission_given(Opts) ->
+    maps:merge(given_limits(application:get_env(macula, request_admission, #{})),
+               given_limits(maps:get(request_admission, Opts, #{}))).
+
+given_limits(#{} = Given) -> Given;
+given_limits(NotAMap)     -> #{request_admission => NotAMap}.
+
+%% A given key the admission does not take, or a value that is not an integer
+%% from 1 to its cap, is refused by name. So is a quota per caller above the
+%% share, or stored reply bytes per caller above the total, since the smaller
+%% limit would then never bind.
+admission_limits_refusal(Given) ->
+    admission_range_refusal(first_outside([{Key, Value} || Key := Value <- Given,
+                                                           not admission_limit_in_range(Key, Value)]),
+                            maps:merge(?DEFAULT_ADMISSION_LIMITS, Given)).
+
+admission_range_refusal(none, Limits)          -> admission_order_refusal(Limits);
+admission_range_refusal({Key, Value}, _Limits) -> {invalid_admission_limit, Key, Value}.
+
+admission_order_refusal(#{caller_quota := Quota, share := Share}) when Quota > Share ->
+    {admission_limit_above, caller_quota, share};
+admission_order_refusal(#{reply_bytes := Bytes, reply_bytes_total := Total}) when Bytes > Total ->
+    {admission_limit_above, reply_bytes, reply_bytes_total};
+admission_order_refusal(_InOrder) ->
+    none.
+
+admission_limit_in_range(Key, Value) ->
+    is_map_key(Key, ?ADMISSION_LIMIT_CAPS) andalso in_link_range(Value, maps:get(Key, ?ADMISSION_LIMIT_CAPS)).
+
+%% The limits the pool's admission starts with: the given limits over the
+%% defaults, and a cap of the share times the pool's link limits summed, the
+%% most distinct shares one entry lifetime can see.
+admission_start_limits(Opts) ->
+    #{share := Share} = Limits = maps:merge(?DEFAULT_ADMISSION_LIMITS, admission_given(Opts)),
+    Limits#{cap => Share * lists:sum([Value || {_Key, Value, _Cap} <- link_limits(Opts)])}.
+
+link_limit_outside_its_range(Opts) ->
+    first_outside([{Key, Value} || {Key, Value, Cap} <- link_limits(Opts), not in_link_range(Value, Cap)]).
+
+link_limits(Opts) ->
+    [{max_seeds, maps:get(max_seeds, Opts, ?DEFAULT_MAX_SEEDS), ?MAX_SEEDS_CAP},
+     {max_direct_links, maps:get(max_direct_links, Opts, ?DEFAULT_MAX_DIRECT_LINKS), ?MAX_DIRECT_LINKS_CAP},
+     {new_peer_budget, maps:get(new_peer_budget, Opts, ?DEFAULT_NEW_PEER_BUDGET), ?NEW_PEER_BUDGET_CAP},
+     {max_links, discovery_max_links(maps:get(station_discovery, Opts, #{})), ?DISCOVERY_MAX_LINKS_CAP}].
+
+discovery_max_links(#{} = Discovery) -> maps:get(max_links, Discovery, ?DEFAULT_DISCOVERY_MAX_LINKS);
+discovery_max_links(_NotAMap)        -> ?DEFAULT_DISCOVERY_MAX_LINKS.
+
+in_link_range(Value, Cap) ->
+    is_integer(Value) andalso Value >= 1 andalso Value =< Cap.
+
+first_outside([])            -> none;
+first_outside([Outside | _]) -> Outside.
+
+%% A pool given more seeds than its limit does not start, and dials nothing.
+init_within_seed_limit(Given, Max, Seeds, Opts) when Given =< Max ->
+    init_with_pinned_seeds(lists:all(fun(Seed) -> pinned_seed(Seed, Opts) end, Seeds), Seeds, Opts);
+init_within_seed_limit(Given, Max, _Seeds, _Opts) ->
+    {error, {too_many_seeds, Given, Max}}.
+
+%% A pool given a seed that names no node_id it expects does not start, loads no key and dials nothing: a link would
+%% refuse that seed at every start, and the pool would look ready with nothing it could reach. A seed map's own
+%% expected_node_id stands over the pool's option, as a link reads it.
+init_with_pinned_seeds(true, Seeds, Opts) ->
+    init_with_keys(pool_keys(Opts), Seeds, Opts);
+init_with_pinned_seeds(false, _Seeds, _Opts) ->
+    {error, {seeds, expected_node_id_required}}.
+
+pinned_seed(#{expected_node_id := NodeId}, _Opts) -> node_id_sized(NodeId);
+pinned_seed(_Seed, #{expected_node_id := NodeId}) -> node_id_sized(NodeId);
+pinned_seed(_Seed, _Opts) -> false.
+
+node_id_sized(NodeId) -> is_binary(NodeId) andalso byte_size(NodeId) =:= 32.
+
+%% A pool whose keys cannot be had does not start: `connect/2' returns
+%% the refusal and no link is dialed.
+init_with_keys({error, _} = Refusal, _Seeds, _Opts) ->
+    Refusal;
+init_with_keys({ok, #{node_identity := NodeIdentity, issuer := Issuer, issuer_start := Start} = Keys}, Seeds, Opts) ->
+    {ok, NodeId} = macula_node_keys:node_id(NodeIdentity),
+    _ = erlang:monitor(process, Issuer),
+    %% One request admission for every link. The pool ends when it ends, and
+    %% ends it in terminate.
+    {ok, Admission} = macula_request_admission:start_link(admission_start_limits(Opts)),
+    %% No node identity key in the link options: each link start gets a
+    %% function that returns it, made at that start, so the pool's state
+    %% holds no function over the key that redaction cannot see into.
     LinkOpts = maps:merge(
-        #{
-            identity           => Identity,
+        (maps:without([node_identity, issuer_start], Keys))#{
             capabilities       => maps:get(capabilities, Opts, 0),
             alpn               => maps:get(alpn, Opts, [<<"macula">>]),
-            connect_timeout_ms => maps:get(connect_timeout_ms, Opts, 30_000)
+            connect_timeout_ms => maps:get(connect_timeout_ms, Opts, 30_000),
+            admission          => Admission
         },
         %% TLS policy for the links this pool dials (seeds AND
         %% `call_station' targets): `verify' (webpki | none),
@@ -828,7 +1214,6 @@ init({Seeds, Opts}) ->
         %% `macula_peering_conn:connect_opts()'). Forwarded only when
         %% the caller set them.
         maps:with([verify, expected_node_id, pin_tls_cert], Opts)),
-    DedupWindow = maps:get(dedup_window_ms, Opts, ?DEFAULT_DEDUP_WINDOW_MS),
     DedupSweep  = maps:get(dedup_sweep_ms, Opts, ?DEFAULT_DEDUP_SWEEP_MS),
     Replication = maps:get(replication_factor, Opts, ?DEFAULT_REPLICATION),
     DedupTab    = macula_client_dedup:new(),
@@ -836,14 +1221,22 @@ init({Seeds, Opts}) ->
     OrderMaxBuf  = maps:get(order_max_buffer, Opts, ?DEFAULT_ORDER_MAX_BUFFER),
     Discovery = init_discovery(maps:get(station_discovery, Opts, #{})),
     LinkSelection = maps:get(link_selection, Opts, default_link_selection(Discovery)),
-    State0 = #state{seeds = Seeds, identity = Identity,
+    State0 = #state{seeds = Seeds, node_id = NodeId, realm_keys = maps:get(realm_trust, Opts, #{}),
                     link_opts = LinkOpts, replication = Replication,
-                    dedup_window = DedupWindow, dedup_sweep = DedupSweep,
+                    dedup_sweep = DedupSweep,
                     dedup_tab = DedupTab,
                     order_timeout = OrderTimeout, order_max_buffer = OrderMaxBuf,
                     flush_timer = undefined,
-                    publish_seq = erlang:system_time(microsecond),
-                    discovery = Discovery, link_selection = LinkSelection},
+                    discovery = Discovery, link_selection = LinkSelection,
+                    max_direct_links = maps:get(max_direct_links, Opts, ?DEFAULT_MAX_DIRECT_LINKS),
+                    dial_budget = macula_client_peer_budget:new(
+                                    #{budget => maps:get(new_peer_budget, Opts, ?DEFAULT_NEW_PEER_BUDGET),
+                                      window_ms => ?NEW_PEER_WINDOW_MS,
+                                      exempt => [seed_peer(Seed) || Seed <- Seeds]}),
+                    refused_dials = macula_refusal_report:new(?REFUSAL_REPORT_WINDOW_MS),
+                    node_identity = NodeIdentity, issuer = Issuer, issuer_started_at = now_ms(),
+                    issuer_backoff_ms = ?ISSUER_RESTART_MIN_MS, issuer_start = Start,
+                    admission = Admission},
     State1 = lists:foldl(fun start_link_for_seed/2, State0, Seeds),
     erlang:send_after(DedupSweep, self(), dedup_sweep),
     arm_giveup_sweep(Discovery),
@@ -891,8 +1284,7 @@ cancel_discovery_timer(Timer)     -> erlang:cancel_timer(Timer).
 
 handle_call({publish, Realm, Topic, Payload, _Opts}, From, S) ->
     %% Publish only to links that have completed CONNECT/HELLO. A
-    %% frame sent to a still-handshaking link is dropped on the floor
-    %% — unlike ADVERTISE, which the link replays on connect — so
+    %% frame sent to a still-handshaking link is dropped on the floor, so
     %% selecting the first `replication' *spawned* links could report
     %% `{error, not_connected}' while other links are healthy. RPC and
     %% streams already filter by `is_connected/1'; publish must too.
@@ -905,16 +1297,15 @@ handle_call({publish, Realm, Topic, Payload, _Opts}, From, S) ->
     Targets = ordered_for_selection(connected_link_pids(S), S#state.link_selection),
     Selected = select_publish_targets(Targets, S#state.replication),
     AllTargets = Targets,
-    %% One pool-monotone seq per fact, reused across every replicated
-    %% link so `{publisher, seq}' identifies the fact regardless of
-    %% which station relayed it.
-    Seq = S#state.publish_seq,
+    %% One seq per publication, from the node's counter for the pool's key
+    %% (macula_publication_seq), reused across every replicated link.
+    Seq = macula_publication_seq:next(S#state.node_id),
     _ = spawn(fun() ->
         Results = [safe_link_publish(P, Realm, Topic, Payload, Seq)
                    || P <- Selected],
         gen_server:reply(From, summarize_publish(Results, AllTargets))
     end),
-    {noreply, S#state{publish_seq = Seq + 1}};
+    {noreply, S};
 
 handle_call({subscribe, Realm, Topic, Subscriber, Opts}, _From, S) ->
     SubRef = make_ref(),
@@ -926,8 +1317,7 @@ handle_call({subscribe, Realm, Topic, Subscriber, Opts}, _From, S) ->
     Key = {Realm, Topic},
     AlreadyTracked = maps:is_key(Key, S#state.topic_index),
     NewS = register_sub(SubRef, Spec, S),
-    issue_wire_subs(AlreadyTracked, Realm, Topic, NewS),
-    {reply, {ok, SubRef}, NewS};
+    {reply, {ok, SubRef}, issue_wire_subs(AlreadyTracked, Realm, Topic, NewS)};
 
 handle_call({unsubscribe, SubRef}, _From, S) ->
     {reply, ok, drop_sub(SubRef, S)};
@@ -936,9 +1326,9 @@ handle_call(pick_connected_link, _From, S) ->
     {reply, first_connected_link(ordered_for_selection(connected_link_pids(S),
                                                        S#state.link_selection)), S};
 
-handle_call({rpc_call, Realm, Procedure, Payload, TimeoutMs}, From, S) ->
+handle_call({linked_station_call, Realm, Procedure, Payload, TimeoutMs}, From, S) ->
     %% Worker-spawn so concurrent CALLs don't serialise through the
-    %% pool gen_server. Each per-link `macula_station_link:call/5'
+    %% pool gen_server. Each per-link `macula_station_link:call/6'
     %% is a sync gen_server:call to the link; with the old
     %% `{reply, ..., S}' shape every caller blocked the pool until
     %% the link replied, capping concurrent CALL throughput at 1.
@@ -950,31 +1340,24 @@ handle_call({rpc_call, Realm, Procedure, Payload, TimeoutMs}, From, S) ->
     end),
     {noreply, S};
 
-handle_call({call_station, Station, Realm, Procedure, Payload, TimeoutMs,
+handle_call({call_station, Station, Target, Realm, Procedure, Payload, TimeoutMs,
              DialTimeoutMs, Ucan, LinkOpts}, From, S) ->
     %% Ensure (reuse or dial) a link to the specific station, then hand
     %% the wait-for-handshake + call to a worker so the pool gen_server
-    %% is never blocked (same rationale as rpc_call).
-    {Pid, S1} = ensure_link(Station, LinkOpts, S),
-    _ = spawn(fun() ->
-        Reply = call_when_connected(Pid, Realm, Procedure, Payload,
-                                    TimeoutMs, DialTimeoutMs, Ucan),
-        gen_server:reply(From, Reply)
-    end),
-    {noreply, S1};
+    %% is never blocked (same rationale as a linked station call).
+    on_link(ensure_link(Station, LinkOpts, S), From,
+            fun(Pid) ->
+                call_when_connected(Pid, Target, Realm, Procedure, Payload, TimeoutMs, DialTimeoutMs, Ucan)
+            end);
 
-handle_call({ensure_content_link, Station, LinkOpts, TimeoutMs}, From, S) ->
+handle_call({ensure_station_link, Station, LinkOpts, TimeoutMs}, From, S) ->
     %% Same shape as call_station: ensure the link, wait for its
     %% handshake in a worker so the pool never blocks. Unlike
     %% call_station this hands back the connected pid itself rather
     %% than making a call over it — the caller opens a dedicated
     %% content stream on it directly (see macula:with_content_stream/2).
-    {Pid, S1} = ensure_link(Station, LinkOpts, S),
-    _ = spawn(fun() ->
-        Reply = content_link_when_connected(Pid, TimeoutMs),
-        gen_server:reply(From, Reply)
-    end),
-    {noreply, S1};
+    on_link(ensure_link(Station, LinkOpts, S), From,
+            fun(Pid) -> content_link_when_connected(Pid, TimeoutMs) end);
 
 handle_call({advertise, Realm, Procedure, Handler, Policy}, _From,
             #state{procs = P} = S) ->
@@ -988,31 +1371,15 @@ handle_call({unadvertise, Realm, Procedure}, _From,
     _ = fanout_unadvertise(spawned_link_pids(S), Realm, Procedure),
     {reply, ok, S#state{procs = maps:remove({Realm, Procedure}, P)}};
 
-handle_call({rpc_call_stream, Realm, Procedure, Args, Opts}, From, S) ->
-    %% Worker-spawn for the same reason as `rpc_call' — the harness's
-    %% `many_concurrent_streams' fires N parallel `call_stream/4' from
-    %% separate caller processes; without this each one queued behind
-    %% the pool gen_server.
-    Pids = spawned_link_pids(S),
-    _ = spawn(fun() ->
-        Reply = stream_first_healthy(Pids, Realm, Procedure, Args, Opts),
-        gen_server:reply(From, Reply)
-    end),
-    {noreply, S};
-
-handle_call({call_stream_station, Station, Realm, Procedure, Args, Opts,
+handle_call({call_stream_station, Station, Target, Realm, Procedure, Args, Opts,
              LinkOpts}, From, S) ->
     %% Direct-dial streaming: ensure (reuse or dial) a link to the
     %% specific station, then open the stream there. Same worker-spawn
     %% rationale as call_station — the pool gen_server never blocks on
     %% the dial + handshake. LinkOpts (verify/expected_node_id/
     %% pin_tls_cert) shapes a fresh dial only, same as call_station.
-    {Pid, S1} = ensure_link(Station, LinkOpts, S),
-    _ = spawn(fun() ->
-        Reply = stream_when_connected(Pid, Realm, Procedure, Args, Opts),
-        gen_server:reply(From, Reply)
-    end),
-    {noreply, S1};
+    on_link(ensure_link(Station, LinkOpts, S), From,
+            fun(Pid) -> stream_when_connected(Pid, Target, Realm, Procedure, Args, Opts) end);
 
 handle_call({advertise_stream, Realm, Procedure, Mode, Handler, Policy}, _From,
             #state{stream_procs = SP} = S) ->
@@ -1028,15 +1395,26 @@ handle_call({unadvertise_stream, Realm, Procedure}, _From,
     {reply, ok,
      S#state{stream_procs = maps:remove({Realm, Procedure}, SP)}};
 
+handle_call({realm_key, RealmId}, _From, #state{realm_keys = Keys} = S) ->
+    {reply, pinned_realm_key(maps:find(RealmId, Keys)), S};
+handle_call({sign_node_record, Record}, _From, #state{node_identity = Key} = S) ->
+    {reply, node_record_signed(macula_record:node_signed(Record), Record, Key), S};
+handle_call({sign_node_record_bounded, Record}, _From, #state{node_identity = Key} = S) ->
+    {reply, node_record_signed_bounded(macula_record:node_signed(Record), Record, Key,
+                                       maps:get(not_after, Record)), S};
+handle_call({sign_domain_record, Record}, _From, #state{node_identity = Key} = S) ->
+    {reply, domain_record_signed(macula_record:domain_record_checked(Record), Record, Key), S};
+handle_call({withdraw_node_record, Withdrawn, Reason}, _From, #state{node_identity = Key} = S) ->
+    {reply, tombstone_signed(verified_record(Withdrawn, Key), macula_node_keys:public_key(Key), Reason, Key), S};
 handle_call(status, _From,
             #state{seeds = Seeds, links = Links, subs = Subs,
-                   identity = Identity, replication = Replication} = S) ->
+                   node_id = NodeId, replication = Replication} = S) ->
     {Healthy, Failed} = count_link_health(Seeds, Links),
     Status = #{
         seeds              => Seeds,
         healthy_links      => Healthy,
         failed_links       => Failed,
-        self_node_id       => macula_identity:public(Identity),
+        self_node_id       => NodeId,
         subscriptions      => map_size(Subs),
         %% How many links one publish/5 call fans to (Opts'
         %% `replication_factor', or the pool default) — surfaced so a
@@ -1045,7 +1423,14 @@ handle_call(status, _From,
         replication_factor => Replication,
         %% Per-publisher gaps given up on after the reorder timeout —
         %% the genuine loss rate an `ordered' subscriber could not fill.
-        pubsub_gap_skips   => total_skips(Subs)
+        pubsub_gap_skips   => total_skips(Subs),
+        %% Dials and link starts refused, and discovered stations deferred
+        %% by the budget or refused, by reason.
+        refused_dials      => macula_refusal_report:counts(S#state.refused_dials),
+        %% Issuers the pool started after its first, one for each that ended.
+        issuer_restarts    => S#state.issuer_restarts,
+        %% Issuers the pool lost, whether or not a new one runs yet.
+        issuer_losses      => S#state.issuer_losses
     },
     {reply, {ok, Status}, S};
 
@@ -1066,25 +1451,30 @@ handle_cast({discovered_stations, NewSeeds}, S) ->
 
 handle_cast(_Msg, S) -> {noreply, S}.
 
-handle_info({macula_event, _LinkSubRef, Topic, Payload, Meta}, S) ->
-    Realm     = maps:get(realm, Meta, <<0:256>>),
-    Publisher = maps:get(publisher, Meta),
-    Seq       = maps:get(seq, Meta),
-    on_inbound_event(dedup_check(S#state.dedup_tab, attested(Meta), Realm,
-                                 Publisher, Seq, {Topic, Payload}),
-                     Realm, Topic, Payload, Meta, S);
+handle_info({macula_event, _LinkSubRef, Topic, Payload,
+             #{realm := Realm, publication_hash := Hash,
+               expires_at := ExpiresAt} = Meta}, S) ->
+    {noreply, on_inbound_event(matching_subscriptions(Realm, Topic, S),
+                               Hash, ExpiresAt, Topic, Payload, Meta, S)};
 
-handle_info({macula_event_gone, _LinkSubRef, _Reason}, S) ->
+handle_info({macula_event_gone, LinkSubRef, _Reason}, S) ->
     %% A link torn down its subscription end. Pool will respawn the
     %% link via the DOWN handler and replay subs. Don't propagate to
-    %% local consumers — they see a continuous stream.
-    {noreply, S};
+    %% local consumers — they see a continuous stream. The link's SubRef
+    %% is gone, so unsubscribe no longer sends it.
+    {noreply, forget_link_sub(LinkSubRef, S)};
 
 handle_info({'DOWN', Mon, process, Pid, Reason}, S) ->
     on_down(Mon, Pid, Reason, S);
 
 handle_info({respawn_link, Seed}, S) ->
     {noreply, on_respawn_link(Seed, S)};
+
+%% A restart timer that fires while an issuer runs starts nothing.
+handle_info(restart_issuer, #state{issuer = Issuer} = S) when is_pid(Issuer) ->
+    {noreply, S};
+handle_info(restart_issuer, #state{node_identity = NodeIdentity, issuer_start = Start} = S) ->
+    {noreply, issuer_restarted(Start(fun() -> NodeIdentity end, self()), S)};
 
 handle_info(run_discovery, #state{discovery = undefined} = S) ->
     %% Disabled after being scheduled (should not happen -- discovery
@@ -1096,7 +1486,7 @@ handle_info(run_discovery, #state{discovery = D} = S) ->
     {noreply, schedule_discovery(D#discovery_state.refresh_ms, S)};
 
 handle_info(dedup_sweep, S) ->
-    _ = macula_client_dedup:sweep(S#state.dedup_tab, S#state.dedup_window),
+    _ = macula_client_dedup:sweep(S#state.dedup_tab, erlang:system_time(millisecond)),
     erlang:send_after(S#state.dedup_sweep, self(), dedup_sweep),
     {noreply, S};
 
@@ -1117,6 +1507,11 @@ handle_info(order_flush, S) ->
     S1 = flush_all_subs(S#state{flush_timer = undefined}),
     {noreply, ensure_flush_timer(S1)};
 
+handle_info({'EXIT', Admission, Reason}, #state{admission = Admission} = S) ->
+    %% The pool's request admission ended. A pool that went on would judge
+    %% requests without the ones it has seen, so it stops, and its owner
+    %% starts a fresh one.
+    {stop, {shutdown, {admission_down, Reason}}, S};
 handle_info({'EXIT', _Pid, _Reason}, S) ->
     %% Links are linked to us via gen_server:start_link in
     %% start_link_for_seed (we trap_exit). The DOWN monitor fires
@@ -1126,16 +1521,96 @@ handle_info({'EXIT', _Pid, _Reason}, S) ->
 handle_info(_Other, S) ->
     {noreply, S}.
 
-terminate(_Reason, #state{subs = Subs}) ->
+terminate(_Reason, #state{subs = Subs, admission = Admission}) ->
     %% Notify every subscriber that the pool is gone.
     maps:foreach(
       fun(SubRef, #sub_spec{subscriber = Pid, mon = Mon}) ->
           erlang:demonitor(Mon, [flush]),
           Pid ! {macula_event_gone, SubRef, pool_closed}
       end, Subs),
+    %% The admission is linked to the pool, and a normal exit would not end it.
+    true = exit(Admission, shutdown),
     ok.
 
 code_change(_OldVsn, S, _Extra) -> {ok, S}.
+
+%% The link options hold the node's keys: status output and crash reports show them with their private halves
+%% redacted.
+format_status(Status) -> macula_node_keys:redacted(Status).
+
+%% A record the pool signs is one a node signs about itself. macula_record:refresh/2 stamps it now and signs it, and
+%% sign/2 checks the key's purpose, the lifetime, that the payload names this node, verify/3's field and payload
+%% rules, and the size. A refusal names what failed and carries neither the key nor a stack.
+node_record_signed(false, _Record, _Key) ->
+    {error, not_a_node_signed_type};
+node_record_signed(true, Record, Key) ->
+    signed_here(fun() -> macula_record:refresh(Record, Key) end).
+
+%% The bounded signing: the pool judges the bound on its own clock, refuses one
+%% already passed, and caps the record's expiry at the bound only when the
+%% bound comes before the lifetime it was built with runs out.
+node_record_signed_bounded(false, _Record, _Key, _NotAfter) ->
+    {error, not_a_node_signed_type};
+node_record_signed_bounded(true, Record, Key, NotAfter) ->
+    Now = erlang:system_time(millisecond),
+    bounded_signed(NotAfter =< Now, Now, NotAfter, Record, Key).
+
+bounded_signed(true, _Now, _NotAfter, _Record, _Key) ->
+    {error, not_after_passed};
+bounded_signed(false, Now, NotAfter, #{created_at := Created, expires_at := Expires} = Record, Key) ->
+    Lifetime = Expires - Created,
+    Bounded = bounded_record(NotAfter < Now + Lifetime, NotAfter, Record),
+    node_record_signed(true, Bounded, Key).
+
+bounded_record(true, NotAfter, Record) -> Record#{expires_at => NotAfter};
+bounded_record(false, _NotAfter, Record) -> Record.
+
+%% A domain record the pool signs is signed as this node: macula_record:refresh/2 stamps it now and signs it, and
+%% sign/2 checks the key's purpose, the lifetime and the size. The pool checks the record in its own process as the
+%% caller side does, so a record handed to it directly is refused by name, and the pool never signs one no verifier
+%% accepts.
+domain_record_signed(ok, Record, Key) ->
+    signed_here(fun() -> macula_record:refresh(Record, Key) end);
+domain_record_signed({error, malformed}, _Record, _Key) ->
+    {error, malformed_record};
+domain_record_signed({error, _} = Refusal, _Record, _Key) ->
+    Refusal.
+
+%% A tombstone is signed only for a record that verifies, is of a type a node signs about itself or a domain type, and
+%% carries this pool's own key. The carried key is compared, not a key id: a domain record's key id is the key id of
+%% its key as carried, which differs from the node_id a node record names.
+verified_record(Withdrawn, #{profile := Profile}) ->
+    try macula_record:verify(wire_record(Withdrawn), Profile)
+    catch _:_ -> {error, malformed_record}
+    end.
+
+wire_record(Bytes) when is_binary(Bytes) -> Bytes;
+wire_record(Record) -> macula_record:encode(Record).
+
+tombstone_signed({ok, Verified}, Own, Reason, Key) ->
+    withdrawable(macula_record:node_signed(Verified) orelse macula_record:domain_type(Verified), Verified, Own,
+                 Reason, Key);
+tombstone_signed({error, _} = Refusal, _Own, _Reason, _Key) ->
+    Refusal.
+
+withdrawable(false, _Verified, _NodeId, _Reason, _Key) ->
+    {error, not_a_node_signed_type};
+withdrawable(true, #{key := Own} = Verified, Own, Reason, Key) ->
+    signed_here(fun() -> macula_record:sign(macula_record:tombstone(Verified, Reason), Key) end);
+withdrawable(true, _Verified, _Own, _Reason, _Key) ->
+    {error, not_this_nodes_record}.
+
+signed_here(Sign) ->
+    try Sign() of
+        Signed -> {ok, Signed}
+    catch
+        error:{key_id_mismatch, _Type} -> {error, key_id_mismatch};
+        error:{lifetime_too_long, _Type} -> {error, lifetime_too_long};
+        error:{lifetime_reversed, _Type} -> {error, lifetime_reversed};
+        error:{record_too_large, _Bytes} -> {error, record_too_large};
+        error:{malformed, _Type} -> {error, malformed_record};
+        _:_ -> {error, malformed_record}
+    end.
 
 %%====================================================================
 %% Internals — link lifecycle
@@ -1143,9 +1618,21 @@ code_change(_OldVsn, S, _Extra) -> {ok, S}.
 
 start_link_for_seed(Seed, S) -> start_link_for_seed(Seed, #{}, S).
 
-start_link_for_seed(Seed, ExtraOpts, S) ->
-    LinkOpts = maps:merge(S#state.link_opts, ExtraOpts#{seed => Seed}),
+start_link_for_seed(Seed, ExtraOpts, #state{issuer = undefined} = S) ->
+    held_start(Seed, ExtraOpts, S);
+start_link_for_seed(Seed, ExtraOpts, #state{node_identity = NodeIdentity} = S) ->
+    LinkOpts = maps:merge(S#state.link_opts,
+                          ExtraOpts#{seed => Seed, node_identity => fun() -> NodeIdentity end,
+                                     share => seed_peer(Seed)}),
     after_link_start(macula_station_link:start_link(LinkOpts), Seed, S).
+
+%% While the pool has no issuer, a link start waits for the next one
+%% instead of starting a link that could not connect, and counts as one
+%% refusal.
+held_start(Seed, ExtraOpts, #state{held_starts = Held, links = Links} = S) ->
+    Empty = (prior_link_state(Seed, S))#link_state{seed = Seed, pid = undefined, mon = undefined},
+    count_refused_dial(link_start_waits_for_issuer,
+                       S#state{held_starts = Held#{Seed => ExtraOpts}, links = Links#{Seed => Empty}}).
 
 after_link_start({ok, Pid}, Seed, S) ->
     Mon = erlang:monitor(process, Pid),
@@ -1155,10 +1642,21 @@ after_link_start({ok, Pid}, Seed, S) ->
 after_link_start({error, Reason}, Seed, S) ->
     macula_diagnostics:event(<<"_macula.client.link_start_failed">>,
                              #{seed => Seed, reason => Reason}),
-    erlang:send_after(?LINK_RESPAWN_DELAY_MS, self(), {respawn_link, Seed}),
     Empty = (prior_link_state(Seed, S))#link_state{
         seed = Seed, pid = undefined, mon = undefined},
-    S#state{links = (S#state.links)#{Seed => Empty}}.
+    start_refused(permanent_refusal(Reason), Seed, S#state{links = (S#state.links)#{Seed => Empty}}).
+
+%% A seed that names no expected node_id will never start a link, so it
+%% counts once and is not tried again; any other refusal is tried again
+%% after the respawn delay.
+start_refused({permanent, Kind}, _Seed, S) ->
+    count_refused_dial(Kind, S);
+start_refused(transient, Seed, S) ->
+    erlang:send_after(?LINK_RESPAWN_DELAY_MS, self(), {respawn_link, Seed}),
+    S.
+
+permanent_refusal({seed, expected_node_id_required}) -> {permanent, seed_without_expected_node_id};
+permanent_refusal(_Transient) -> transient.
 
 %% Carries a seed's `discovered'/`ever_connected'/`spawned_at' across
 %% its own respawn (both branches above) instead of resetting them --
@@ -1234,9 +1732,79 @@ reuse_or_dial(Pid, _Station, _ExtraOpts, S) when is_pid(Pid) ->
 reuse_or_dial(undefined, Station, ExtraOpts, S) ->
     dial_fresh(Station, ExtraOpts, S).
 
+%% A fresh direct dial names a seed the pool can dial, and fits the pool's
+%% direct links and its new-peer budget, or is refused with a named error and
+%% dials nothing.
 dial_fresh(Station, ExtraOpts, S) ->
-    S1 = start_link_for_seed(Station, ExtraOpts, S),
+    usable_dial(usable_seed(Station), Station, ExtraOpts, S).
+
+usable_dial(false, _Station, _ExtraOpts, S) ->
+    refused_dial(unusable_seed, S);
+usable_dial(true, Station, ExtraOpts, #state{max_direct_links = Max} = S) ->
+    direct_dial(direct_link_count(S) < Max, Station, ExtraOpts, S).
+
+direct_dial(false, _Station, _ExtraOpts, S) ->
+    refused_dial(too_many_direct_links, S);
+direct_dial(true, Station, ExtraOpts, S) ->
+    budgeted_dial(spend_dial_budget(Station, S), Station, ExtraOpts).
+
+budgeted_dial({spent, S}, _Station, _ExtraOpts) ->
+    refused_dial(new_peer_budget_spent, S);
+budgeted_dial({ok, S}, Station, ExtraOpts) ->
+    S1 = mark_direct(Station, start_link_for_seed(Station, ExtraOpts, S)),
     {link_pid(Station, S1), S1}.
+
+direct_link_count(#state{links = Links}) ->
+    length([Seed || Seed := #link_state{direct = true} <- Links]).
+
+%% `start_link_for_seed/3' always leaves an entry for the seed.
+mark_direct(Station, #state{links = Links} = S) ->
+    S#state{links = maps:update_with(Station, fun(L) -> L#link_state{direct = true} end, Links)}.
+
+%% A link to work on, or a refused dial: the refusal is the reply, and no
+%% worker starts.
+on_link({{error, _} = Refused, S}, _From, _Work) ->
+    {reply, Refused, S};
+on_link({Pid, S}, From, Work) ->
+    _ = spawn(fun() -> gen_server:reply(From, Work(Pid)) end),
+    {noreply, S}.
+
+%% A peer a pool links to, by its normalized seed.
+seed_peer(Seed) ->
+    {seed, normalize_seed(Seed)}.
+
+%% A seed the pool can dial names a text host and a port from 1 to 65535.
+%% Any other seed is refused where it enters the pool, from a direct dial or
+%% from discovery, and counted, instead of starting a link that could never
+%% connect.
+usable_seed(Seed) ->
+    usable_normalized(normalize_seed(Seed)).
+
+usable_normalized(#{host := Host, port := Port})
+  when is_binary(Host), byte_size(Host) > 0, is_integer(Port), Port > 0, Port =< 65535 ->
+    true;
+usable_normalized(_Unusable) ->
+    false.
+
+spend_dial_budget(Station, #state{dial_budget = Budget} = S) ->
+    {Verdict, Spent} = macula_client_peer_budget:spend(Budget, seed_peer(Station),
+                                                       erlang:monotonic_time(millisecond)),
+    {Verdict, S#state{dial_budget = Spent}}.
+
+refused_dial(Reason, S) ->
+    {{error, Reason}, count_refused_dial(Reason, S)}.
+
+%% Counted every time, logged at most once per window per reason with the
+%% count since the last line.
+count_refused_dial(Reason, #state{refused_dials = Report} = S) ->
+    Refused = macula_refusal_report:refused(Report, Reason, erlang:monotonic_time(millisecond)),
+    S#state{refused_dials = logged_refusal(Refused, Reason)}.
+
+logged_refusal({report, Count, Report}, Reason) ->
+    logger:warning("[macula_client] refused ~b dial(s): ~p", [Count, Reason]),
+    Report;
+logged_refusal({quiet, Report}, _Reason) ->
+    Report.
 
 %% Bounded by however many links this pool currently holds — typically
 %% a handful (its configured seeds plus any prior direct-dial targets),
@@ -1271,14 +1839,14 @@ link_pid(Station, #state{links = Links}) ->
 %% never past the call's own deadline), then call over it with whatever
 %% time remains of `TimeoutMs'. A reused, already-connected link calls
 %% immediately.
-call_when_connected(undefined, _Realm, _Proc, _Payload, _TimeoutMs, _DialTimeoutMs,
+call_when_connected(undefined, _Target, _Realm, _Proc, _Payload, _TimeoutMs, _DialTimeoutMs,
                     _Ucan) ->
     {error, not_connected};
-call_when_connected(Pid, Realm, Proc, Payload, TimeoutMs, DialTimeoutMs, Ucan) ->
+call_when_connected(Pid, Target, Realm, Proc, Payload, TimeoutMs, DialTimeoutMs, Ucan) ->
     Now = erlang:monotonic_time(millisecond),
     Deadline = Now + TimeoutMs,
     call_after_connect(await_connected(Pid, Now + min(DialTimeoutMs, TimeoutMs)), Pid,
-                       Realm, Proc, Payload, Deadline, Ucan).
+                       Target, Realm, Proc, Payload, Deadline, Ucan).
 
 await_connected(Pid, Deadline) ->
     connected_or_wait(safe_is_connected(Pid), Pid, Deadline).
@@ -1294,13 +1862,13 @@ wait_or_give_up(true, Pid, Deadline) ->
 wait_or_give_up(false, _Pid, _Deadline) ->
     false.
 
-call_after_connect(true, Pid, Realm, Proc, Payload, Deadline, Ucan) ->
+call_after_connect(true, Pid, Target, Realm, Proc, Payload, Deadline, Ucan) ->
     Remaining = max(100, Deadline - erlang:monotonic_time(millisecond)),
-    macula_station_link:call(Pid, Realm, Proc, Payload, Remaining, Ucan);
-call_after_connect(false, _Pid, _Realm, _Proc, _Payload, _Deadline, _Ucan) ->
+    macula_station_link:call(Pid, Target, Realm, Proc, Payload, Remaining, Ucan);
+call_after_connect(false, _Pid, _Target, _Realm, _Proc, _Payload, _Deadline, _Ucan) ->
     {error, not_connected}.
 
-%% As `call_when_connected/7', but for `ensure_content_link/4': waits
+%% As `call_when_connected/8', but for `ensure_station_link/4': waits
 %% for a freshly-dialed link's handshake, then hands back the pid
 %% itself rather than making a call over it.
 content_link_when_connected(undefined, _TimeoutMs) ->
@@ -1364,31 +1932,121 @@ notify_legacy(Keys) ->
       "and one-link-per-seed. See macula:connect/2 docs.", [Keys]),
     ok.
 
-%% The pool's own identity when the caller doesn't supply one.
-%%
-%% Puzzle-hardened, not `macula_identity:generate()' — this identity is
-%% exactly what every station's `puzzle_enforcement_mode/0' checks on
-%% CONNECT/HELLO, and a caller who didn't think to pass one is the
-%% caller most likely to be surprised by a silent rejection: the
-%% underlying QUIC/TLS connection still reports healthy, and
-%% `subscribe/5' still returns `{ok, _}' locally, because both succeed
-%% before the station ever closes the handshake it rejected. Confirmed
-%% live 2026-08-21: `MaculaRealm.Mesh' connected with `%{}' opts, and its
-%% dashboard sat dark for over an hour — five links reporting healthy,
-%% zero events ever delivered — before the identity itself turned out to
-%% be the reason. Grinding difficulty 8 is sub-millisecond, so a caller
-%% who genuinely wants an unhardened identity still has
-%% `macula_identity:generate()' directly; this only changes the pool's
-%% own default.
-%%
-%% Lazy on purpose: `maps:get/3' evaluates its default argument
-%% unconditionally, which would grind a puzzle on every `connect/2' call
-%% even when the caller DID pass an identity.
-resolve_identity(Opts) ->
-    identity_or_generate(maps:find(identity, Opts)).
+%% The pool's keys, in the node's crypto profile: the node identity key
+%% that every link shares, and the pool's own statement issuer under
+%% macula_statement_issuer_sup, which holds the pool's CONNECT key and
+%% signs each connection's material under a binding by the identity key
+%% (D16). The issuer ends with the pool.
+pool_keys(Opts) ->
+    keys_in_profile(macula_crypto_profile:configured(), Opts).
 
-identity_or_generate({ok, Identity}) -> Identity;
-identity_or_generate(error) -> macula_identity:generate(#{puzzle => true}).
+keys_in_profile({ok, Profile}, Opts) ->
+    keys_with_identity(node_identity(identity_opt(maps:find(node_identity, Opts)), Profile), Profile,
+                       issuer_start(Opts));
+keys_in_profile({error, _} = Refusal, _Opts) ->
+    Refusal.
+
+%% A node identity key comes as a function that returns it, or as a loader {Module, Function, Args} that returns
+%% {ok, Key}, as a child spec names it. A loader that returns anything else refuses the pool, naming no key.
+identity_opt({ok, Identity}) when is_function(Identity, 0) -> {ok, Identity()};
+identity_opt({ok, {Module, Function, Args}}) when is_atom(Module), is_atom(Function), is_list(Args) ->
+    loaded(run_loader(Module, Function, Args));
+identity_opt(NotGiven) -> NotGiven.
+
+%% A loader runs once, at the pool's start. One that raises refuses the pool as one that returns no key does. The try
+%% is what keeps a loader's crash from becoming the pool's crash report, and the refusal carries none of the loader's
+%% error, which can hold the key the loader read. The loader's Args never hold the key, only where it is, because a
+%% supervisor logs them when a start fails (child_spec/3).
+run_loader(Module, Function, Args) ->
+    try apply(Module, Function, Args)
+    catch _Class:_Reason -> loader_raised
+    end.
+
+loaded({ok, #{purpose := identity} = Key}) -> {ok, Key};
+loaded({ok, _NotAnIdentityKey}) ->
+    {error, {node_identity, loader_failed}};
+loaded({error, Reason}) ->
+    {error, {node_identity, loader_refusal(Reason)}};
+loaded(_NoKey) ->
+    {error, {node_identity, loader_failed}}.
+
+%% A loader that returns one of macula_node_keys:load/3's documented
+%% refusals refuses the pool with that reason nested under
+%% loader_failed, so the service that holds the pool can say why. Any
+%% other reason — one that could carry the key the loader read — stays
+%% flat, and only well-formed values nest.
+loader_refusal(Reason) ->
+    case well_formed_loader_refusal(Reason) of
+        true  -> {loader_failed, Reason};
+        false -> loader_failed
+    end.
+
+well_formed_loader_refusal(Reason)
+  when Reason =:= key_file_permissions; Reason =:= bad_key_file;
+       Reason =:= private_key_invalid; Reason =:= public_key_mismatch;
+       Reason =:= round_trip_failed; Reason =:= enoent;
+       Reason =:= eacces; Reason =:= enospc ->
+    true;
+well_formed_loader_refusal({Tag, Value}) ->
+    loader_refusal_value(Tag, Value);
+well_formed_loader_refusal(_Other) ->
+    false.
+
+loader_refusal_value(Tag, Value)
+  when (Tag =:= wrong_profile orelse Tag =:= wrong_purpose orelse
+        Tag =:= unknown_purpose orelse Tag =:= crypto_profile_unknown),
+       is_atom(Value) ->
+    true;
+loader_refusal_value(wrong_algorithms, Value) ->
+    is_list(Value) andalso lists:all(fun erlang:is_atom/1, Value);
+loader_refusal_value(wrong_key_size, {N, M}) ->
+    is_integer(N) andalso N > 0 andalso is_integer(M) andalso M > 0;
+loader_refusal_value(_Tag, _Value) ->
+    false.
+
+%% How the pool starts its statement issuer: macula_statement_issuer_sup:start_issuer/2, unless the issuer_start option
+%% names a function of the same shape, as a test does to refuse a restart.
+issuer_start(#{issuer_start := Start}) when is_function(Start, 2) -> Start;
+issuer_start(_Opts) -> fun macula_statement_issuer_sup:start_issuer/2.
+
+%% The key redaction filter goes in place once the pool holds its key and before anything uses it, so a pool started
+%% without the macula application still keeps private halves out of its tree's crash reports. A loader that fails
+%% installs nothing, and its refusal alone keeps the key out.
+keys_with_identity({ok, NodeIdentity}, Profile, Start) ->
+    ok = macula_node_keys:install_log_redaction(),
+    keys_with_issuer(Start(fun() -> NodeIdentity end, self()), NodeIdentity, Profile, Start);
+keys_with_identity({error, _} = Refusal, _Profile, _Start) ->
+    Refusal.
+
+keys_with_issuer({ok, Issuer}, NodeIdentity, Profile, Start) ->
+    {ok, #{profile => Profile, node_identity => NodeIdentity, issuer => Issuer, issuer_start => Start}};
+keys_with_issuer({error, Reason}, _NodeIdentity, _Profile, _Start) ->
+    {error, {issuer, Reason}}.
+
+%% The pool's node identity key. A supplied key is used as it is, puzzle
+%% solved or not, when it is an identity key in the node's profile; any
+%% other key is refused.
+%%
+%% Without one, the pool generates a key whose node_id meets
+%% `macula_node_keys:puzzle_difficulty/0', not a bare
+%% `macula_node_keys:generate/2' key: stations check the puzzle on the
+%% node_id derived from the identity key in CONNECT, and the caller who
+%% did not think to pass a key is the one most surprised by a refused
+%% handshake behind links that report healthy (seen live 2026-08-21: a
+%% pool started with no options showed five healthy links and delivered
+%% no event for over an hour). `maps:find/2' keeps the puzzle from being
+%% ground when the caller did pass a key.
+node_identity({error, _} = Refusal, _Profile) ->
+    Refusal;
+node_identity(error, Profile) ->
+    macula_node_keys:generate(identity, Profile,
+                              #{puzzle_difficulty => macula_node_keys:puzzle_difficulty()});
+node_identity({ok, #{purpose := identity, profile := Profile} = Key}, Profile) ->
+    {ok, Key};
+node_identity({ok, #{purpose := identity, profile := Other}}, _Profile) ->
+    {error, {node_identity, {wrong_profile, Other}}};
+node_identity({ok, _NotAnIdentityKey}, _Profile) ->
+    {error, {node_identity, not_an_identity_key}}.
 
 %% First-success across the pool's healthy links. Tries each link in
 %% turn; the first non-error reply wins. It moves on to the next link only
@@ -1398,7 +2056,7 @@ identity_or_generate(error) -> macula_identity:generate(#{puzzle => true}).
 %% included, is never sent again, so a provider never runs one call twice.
 call_first_success(Pids, Realm, Proc, Payload, Tmo) ->
     first_success(Pids, fun macula_station_link:is_connected/1,
-                  fun(Pid) -> macula_station_link:call(Pid, Realm, Proc, Payload, Tmo) end).
+                  fun(Pid) -> macula_station_link:call(Pid, station, Realm, Proc, Payload, Tmo) end).
 
 %% `call_first_success/5' over any links: `Connected(Link)' says whether a
 %% link can take the call, and `Call(Link)' makes it there.
@@ -1427,14 +2085,10 @@ next_if_not_sent(false, E, _Rest, _Connected, _Call) ->
 %%
 %% Pre-handshake links MUST receive the call too — `advertise/4' on
 %% the link gen_server updates its local `procedures' map regardless
-%% of connection state, and `drain_pending_advertises/1' replays that
-%% map on the next handshake. Filtering by `is_connected/1' here
-%% leaves the link's map out of sync with the pool's intent: a later
-%% `unadvertise' that *also* gets filtered (still pre-handshake)
-%% never clears the link's map, and the link will silently re-ADVERTISE
-%% the dead procedure when it eventually handshakes — the station
-%% re-registers a stale entry that nothing in the SDK will ever
-%% withdraw.
+%% of connection state, and that map is what dispatches a CALL the
+%% station delivers once the link connects. Filtering by
+%% `is_connected/1' here leaves the link's map out of sync with the
+%% pool's intent.
 fanout_advertise([], _Realm, _Proc, _Handler, _Policy) ->
     {error, no_healthy_station};
 fanout_advertise(Pids, Realm, Proc, Handler, Policy) ->
@@ -1457,18 +2111,14 @@ summarize_advertise(Results) ->
     end.
 
 %% Fan-out unadvertise: best-effort; ignored errors. The local pool
-%% state is dropped regardless so subsequent CALLs surface
-%% `unknown_next_peer' from the station.
+%% state is dropped regardless.
 %%
 %% MUST dispatch to every LIVE link (not just connected ones): the
 %% link gen_server's `unadvertise' handler clears its local
-%% `procedures' map unconditionally, and the wire UNADVERTISE is
-%% best-effort inside `maybe_send_unadvertise' (no-op when
-%% pre-handshake). Filtering by `is_connected/1' here leaks: a
-%% link that was disconnected at unadvertise time keeps the proc in
-%% its local map, and on the next handshake `drain_pending_advertises'
-%% replays a now-dead ADVERTISE — the station re-registers an entry
-%% that the pool already considers withdrawn.
+%% `procedures' map unconditionally. Filtering by `is_connected/1'
+%% here leaks: a link that was disconnected at unadvertise time keeps
+%% the handler in its local map, and once it connects dispatches a CALL
+%% for a procedure the pool already considers withdrawn.
 fanout_unadvertise(Pids, Realm, Proc) ->
     [_ = safe_link_unadvertise(P, Realm, Proc)
      || P <- Pids, is_process_alive(P)],
@@ -1479,48 +2129,20 @@ safe_link_unadvertise(Pid, Realm, Proc) ->
     catch _:_ -> skipped
     end.
 
-%% Sticky-to-link selection for streams. Walk the healthy links in
-%% order; the first one that opens cleanly wins. The returned stream
-%% pid is bound to that link's `{remote_via_link, _, _}' peer; if
-%% the link dies, the stream errors and the caller re-opens.
-%% Per-link `{error, not_connected}' (handshake not done) falls
-%% through; any other error short-circuits and is returned to the
-%% caller, since it likely indicates a real problem (deadline,
-%% protocol mismatch) the next link would also hit.
 %% Direct-dial streaming: wait for the ensured link's handshake, then
-%% open the stream there. Mirrors `call_when_connected' for streams.
-stream_when_connected(undefined, _Realm, _Proc, _Args, _Opts) ->
+%% open the stream there, naming its target. Mirrors `call_when_connected'
+%% for streams.
+stream_when_connected(undefined, _Target, _Realm, _Proc, _Args, _Opts) ->
     {error, not_connected};
-stream_when_connected(Pid, Realm, Proc, Args, Opts) ->
+stream_when_connected(Pid, Target, Realm, Proc, Args, Opts) ->
     DialTimeout = maps:get(dial_timeout_ms, Opts, 10_000),
     Deadline = erlang:monotonic_time(millisecond) + DialTimeout,
-    stream_after_connect(await_connected(Pid, Deadline), Pid, Realm, Proc,
-                         Args, Opts).
+    stream_after_connect(await_connected(Pid, Deadline), Pid, Target, Realm, Proc, Args, Opts).
 
-stream_after_connect(true, Pid, Realm, Proc, Args, Opts) ->
-    macula_station_link:call_stream(Pid, Realm, Proc, Args, Opts);
-stream_after_connect(false, _Pid, _Realm, _Proc, _Args, _Opts) ->
+stream_after_connect(true, Pid, Target, Realm, Proc, Args, Opts) ->
+    macula_station_link:call_stream(Pid, Target, Realm, Proc, Args, Opts);
+stream_after_connect(false, _Pid, _Target, _Realm, _Proc, _Args, _Opts) ->
     {error, not_connected}.
-
-stream_first_healthy([], _Realm, _Proc, _Args, _Opts) ->
-    {error, no_healthy_station};
-stream_first_healthy([Pid | Rest], Realm, Proc, Args, Opts) ->
-    on_stream_link(macula_station_link:is_connected(Pid),
-                   Pid, Rest, Realm, Proc, Args, Opts).
-
-on_stream_link(false, _Pid, Rest, Realm, Proc, Args, Opts) ->
-    stream_first_healthy(Rest, Realm, Proc, Args, Opts);
-on_stream_link(true, Pid, Rest, Realm, Proc, Args, Opts) ->
-    keep_or_next_stream(macula_station_link:call_stream(
-                          Pid, Realm, Proc, Args, Opts),
-                        Rest, Realm, Proc, Args, Opts).
-
-keep_or_next_stream({ok, _Stream} = R, _Rest, _Realm, _Proc, _Args, _Opts) ->
-    R;
-keep_or_next_stream({error, not_connected}, Rest, Realm, Proc, Args, Opts) ->
-    stream_first_healthy(Rest, Realm, Proc, Args, Opts);
-keep_or_next_stream({error, _} = E, _Rest, _Realm, _Proc, _Args, _Opts) ->
-    E.
 
 %% Fan-out streaming advertise across every live link. Same shape
 %% as `fanout_advertise/4' for unary; partial success counts. Same
@@ -1652,10 +2274,10 @@ on_respawn_link(Seed, S) ->
     replay_to_seed(maps:get(Seed, NewS#state.links, undefined), NewS).
 
 replay_to_seed(#link_state{pid = Pid}, S) when is_pid(Pid) ->
-    macula_client_replay:subs_to(Pid, S#state.topic_index),
+    LinkSubRefs = macula_client_replay:subs_to(Pid, S#state.topic_index),
     macula_client_replay:advs_to(Pid, S#state.procs),
     macula_client_replay:stream_advs_to(Pid, S#state.stream_procs),
-    S;
+    S#state{link_subs = (S#state.link_subs)#{Pid => LinkSubRefs}};
 replay_to_seed(_, S) ->
     S.
 
@@ -1668,15 +2290,25 @@ replay_to_seed(_, S) ->
 %% against the same cap). Each added seed is spawned and replayed
 %% exactly like a respawned link (`start_link_for_seed/2' +
 %% `replay_to_seed/2', both pre-existing) -- a discovered station joins
-%% the pool the same way any other link does; SUBSCRIBE/ADVERTISE
-%% fan-out (`spawned_link_pids/1') reaches it automatically from then on.
+%% the pool the same way any other link does; SUBSCRIBE and handler
+%% registration fan-out (`spawned_link_pids/1') reach it from then on.
 add_discovered_seeds(_Stations, #state{discovery = undefined} = S) ->
     %% Discovery was disabled after a worker was already in flight (only
     %% possible if a future caller adds a way to toggle it at runtime --
     %% not exposed today) or this is a stray cast. Ignore.
     S;
-add_discovered_seeds(Stations, #state{discovery = D, links = Links,
-                                      seeds = ConfiguredSeeds} = S) ->
+add_discovered_seeds(Stations, S) ->
+    {Usable, Unusable} = lists:partition(fun usable_station/1, Stations),
+    add_usable_discovered_seeds(Usable, lists:foldl(fun refused_unusable_station/2, S, Unusable)).
+
+%% A discovered station whose seed the pool cannot dial is refused and
+%% counted before selection, so it takes no place in the discovery budget.
+usable_station({Seed, _NodeId}) -> usable_seed(Seed).
+
+refused_unusable_station(_Station, S) -> count_refused_dial(unusable_seed, S).
+
+add_usable_discovered_seeds(Stations, #state{discovery = D, links = Links,
+                                             seeds = ConfiguredSeeds} = S) ->
     %% `ConfiguredSeeds' (the pool's original bootstrap list, fixed for
     %% its whole lifetime) is included alongside `maps:keys(Links)'
     %% because a bootstrap seed's *link* drops out of `Links' for the
@@ -1735,12 +2367,52 @@ is_known_seed(Seed, ExistingNormalized) ->
 %% fails to parse falls back to comparing its own raw term, same as
 %% before this normalization existed -- no worse, never crashes the
 %% pool over a bad seed string.
+%%
+%% On top of it the host is made canonical, so one station is one seed
+%% however it is spelled: a binary with its ASCII letters lowercased and the
+%% brackets around an IPv6 literal dropped, and an IP literal in the one text
+%% form `inet:ntoa/1' gives, with an IPv4 address mapped into IPv6 as that
+%% IPv4 address. Every other byte stays as it is, a trailing dot included:
+%% DNS compares those exactly, so two such names are two peers, never one.
+%% A host that is not text leaves the seed as its own term. Nothing here
+%% raises, whatever a seed holds.
 normalize_seed(Seed) ->
     try macula_station_link:parse_seed(Seed) of
-        #{host := H, port := P} -> #{host => H, port => P}
+        #{host := H, port := P} -> canonical_seed(canonical_host(H), P, Seed)
     catch
         _:_ -> Seed
     end.
+
+canonical_seed({ok, Host}, Port, _Seed) -> #{host => Host, port => Port};
+canonical_seed(not_text, _Port, Seed)   -> Seed.
+
+canonical_host(Host) when is_binary(Host) ->
+    {ok, canonical_text(Host)};
+canonical_host(Host) ->
+    char_list_host(io_lib:char_list(Host), Host).
+
+char_list_host(true, Host)      -> {ok, canonical_text(unicode:characters_to_binary(Host))};
+char_list_host(false, _NotText) -> not_text.
+
+canonical_text(Host) ->
+    Bare = << <<(ascii_lowercase(Byte))>> || <<Byte>> <= unbracketed(Host) >>,
+    ip_literal(inet:parse_address(binary_to_list(Bare)), Bare).
+
+unbracketed(Host) when byte_size(Host) >= 2, binary_part(Host, 0, 1) =:= <<"[">>,
+                       binary_part(Host, byte_size(Host) - 1, 1) =:= <<"]">> ->
+    binary_part(Host, 1, byte_size(Host) - 2);
+unbracketed(Host) ->
+    Host.
+
+ascii_lowercase(Byte) when Byte >= $A, Byte =< $Z -> Byte + ($a - $A);
+ascii_lowercase(Byte)                             -> Byte.
+
+ip_literal({ok, {0, 0, 0, 0, 0, 16#ffff, _, _} = Mapped}, _Bare) ->
+    list_to_binary(inet:ntoa(inet:ipv4_mapped_ipv6_address(Mapped)));
+ip_literal({ok, Address}, _Bare) ->
+    list_to_binary(inet:ntoa(Address));
+ip_literal({error, _NotAnAddress}, Bare) ->
+    Bare.
 
 %% Secondary, identity-based backstop for exactly the case
 %% `select_discovery_seeds/3''s host/port normalization cannot catch:
@@ -1771,6 +2443,13 @@ already_connected_to(NodeId, Links) ->
     find_link_by_node_id(NodeId, Links) =/= undefined.
 
 add_one_discovered_seed(Seed, S) ->
+    discovered_within_budget(spend_dial_budget(Seed, S), Seed).
+
+%% A discovered station past the new-peer budget is left for a later
+%% discovery run, and the deferral is counted like a refused dial.
+discovered_within_budget({spent, S}, _Seed) ->
+    count_refused_dial(new_peer_budget_spent, S);
+discovered_within_budget({ok, S}, Seed) ->
     NewS = mark_discovered(Seed, start_link_for_seed(Seed, S)),
     replay_to_seed(maps:get(Seed, NewS#state.links, undefined), NewS).
 
@@ -1919,8 +2598,8 @@ valid_realm(_NotAValidRealm) ->
     false.
 
 list_stations_with_realm({ok, Realm}, Pool) ->
-    report_discovered(macula_client:call(Pool, Realm, ?LIST_STATIONS_PROCEDURE,
-                                         #{}, ?DISCOVERY_CALL_TIMEOUT_MS),
+    report_discovered(macula:call(Pool, Realm, ?LIST_STATIONS_PROCEDURE,
+                                  #{}, ?DISCOVERY_CALL_TIMEOUT_MS),
                       Pool);
 list_stations_with_realm(error, _Pool) ->
     ok.
@@ -2082,14 +2761,54 @@ unwrap_wire_text(V) -> V.
 %% Internals — DOWN routing (link vs subscriber)
 %%====================================================================
 
+on_down(_Mon, Issuer, Reason, #state{issuer = Issuer} = S) ->
+    {noreply, issuer_down(Reason, S)};
 on_down(Mon, Pid, Reason, S) ->
     on_down_routed(find_link_by_mon(Mon, S), Mon, Pid, Reason, S).
+
+%% The pool's issuer ended, and its links end with it. The pool starts a
+%% new issuer after the backoff, reported, and holds every link start
+%% until that issuer runs.
+issuer_down(Reason, #state{issuer_started_at = StartedAt, issuer_backoff_ms = Backoff} = S) ->
+    Delay = issuer_restart_delay(now_ms() - StartedAt, Backoff),
+    ok = macula_diagnostics:bounded_event(warning, <<"_macula.client.issuer_down">>,
+                                          #{reason => Reason, restart_in_ms => Delay}),
+    erlang:send_after(Delay, self(), restart_issuer),
+    S#state{issuer = undefined, issuer_backoff_ms = next_issuer_backoff(Delay), issuer_losses = S#state.issuer_losses + 1,
+            link_opts = maps:remove(issuer, S#state.link_opts)}.
+
+%% The delay before the pool starts a new issuer: the least once the issuer that ended has run a minute, and the backoff
+%% before that.
+-spec issuer_restart_delay(integer(), pos_integer()) -> pos_integer().
+issuer_restart_delay(RanMs, _Backoff) when RanMs >= ?ISSUER_STABLE_MS -> ?ISSUER_RESTART_MIN_MS;
+issuer_restart_delay(_RanMs, Backoff) -> Backoff.
+
+%% The backoff after a delay: twice the delay, up to the most.
+-spec next_issuer_backoff(pos_integer()) -> pos_integer().
+next_issuer_backoff(Delay) -> min(2 * Delay, ?ISSUER_RESTART_MAX_MS).
+
+%% A new issuer runs: the pool counts it, and the held link starts go ahead with it.
+issuer_restarted({ok, Issuer}, #state{held_starts = Held, issuer_restarts = Restarts} = S) ->
+    _ = erlang:monitor(process, Issuer),
+    S1 = S#state{issuer = Issuer, issuer_started_at = now_ms(), held_starts = #{}, issuer_restarts = Restarts + 1,
+                 link_opts = (S#state.link_opts)#{issuer => Issuer}},
+    maps:fold(fun held_start_resumed/3, S1, Held);
+issuer_restarted({error, Reason}, #state{issuer_backoff_ms = Backoff} = S) ->
+    ok = macula_diagnostics:bounded_event(warning, <<"_macula.client.issuer_start_failed">>,
+                                          #{reason => Reason, restart_in_ms => Backoff}),
+    erlang:send_after(Backoff, self(), restart_issuer),
+    S#state{issuer_backoff_ms = next_issuer_backoff(Backoff)}.
+
+held_start_resumed(Seed, ExtraOpts, S) ->
+    Started = start_link_for_seed(Seed, ExtraOpts, S),
+    replay_to_seed(maps:get(Seed, Started#state.links, undefined), Started).
 
 on_down_routed({ok, Seed}, _Mon, Pid, Reason, S) ->
     macula_diagnostics:event(<<"_macula.client.link_down">>,
                              #{seed => Seed, pid => Pid, reason => Reason}),
     erlang:send_after(?LINK_RESPAWN_DELAY_MS, self(), {respawn_link, Seed}),
-    S1 = S#state{links = maps:remove(Seed, S#state.links)},
+    S1 = S#state{links = maps:remove(Seed, S#state.links),
+                 link_subs = maps:remove(Pid, S#state.link_subs)},
     {noreply, maybe_rediscover_now(S1)};
 on_down_routed(error, Mon, _Pid, _Reason, S) ->
     {noreply, on_subscriber_down(Mon, S)}.
@@ -2159,8 +2878,9 @@ drop_sub_take({#sub_spec{realm = R, topic = T, mon = Mon}, NewSubs},
     NewSet = sets:del_element(SubRef, maps:get(Key, Idx, sets:new())),
     Empty = sets:is_empty(NewSet),
     NewIdx = on_index_after_drop(Empty, Key, NewSet, Idx),
-    S#state{subs = NewSubs, topic_index = NewIdx,
-            wildcard_topics = wildcards_after_drop(Empty, Key, S#state.wildcard_topics)}.
+    unsubscribe_links(Empty, Key,
+                      S#state{subs = NewSubs, topic_index = NewIdx,
+                              wildcard_topics = wildcards_after_drop(Empty, Key, S#state.wildcard_topics)}).
 
 wildcards_after_drop(true,  Key, W) -> maps:remove(Key, W);
 wildcards_after_drop(false, _Key, W) -> W.
@@ -2168,51 +2888,67 @@ wildcards_after_drop(false, _Key, W) -> W.
 on_index_after_drop(true,  Key, _Set, Idx) -> maps:remove(Key, Idx);
 on_index_after_drop(false, Key,  Set, Idx) -> Idx#{Key => Set}.
 
-issue_wire_subs(true, _Realm, _Topic, _S) ->
+issue_wire_subs(true, _Realm, _Topic, S) ->
     %% A sibling consumer already triggered the wire-level subscribe;
     %% the pool fans out to every local SubRef on inbound EVENT.
-    ok;
+    S;
 issue_wire_subs(false, Realm, Topic, S) ->
     PoolPid = self(),
-    [_ = macula_station_link:subscribe(P, Realm, Topic, PoolPid)
-     || P <- spawned_link_pids(S)],
-    ok.
+    Key = {Realm, Topic},
+    lists:foldl(fun(P, Acc) ->
+                        record_link_sub(P, Key, macula_station_link:subscribe(P, Realm, Topic, PoolPid), Acc)
+                end, S, spawned_link_pids(S)).
+
+%% Keeps the SubRef a link returned for Key's SUBSCRIBE, so unsubscribe can
+%% reach that link. A link that did not accept it keeps nothing.
+record_link_sub(LinkPid, Key, {ok, LinkSubRef}, #state{link_subs = LS} = S) ->
+    Keys = maps:get(LinkPid, LS, #{}),
+    S#state{link_subs = LS#{LinkPid => Keys#{Key => LinkSubRef}}};
+record_link_sub(_LinkPid, _Key, _NotAccepted, S) ->
+    S.
+
+%% When the last local subscriber of Key has left, each link that carried
+%% its SUBSCRIBE is told to send UNSUBSCRIBE. The pool does not wait on the
+%% link, and the request reaches the link ahead of any later subscribe the
+%% pool sends it.
+unsubscribe_links(false, _Key, S) ->
+    S;
+unsubscribe_links(true, Key, #state{link_subs = LS} = S) ->
+    S#state{link_subs = maps:map(fun(LinkPid, Keys) -> unsubscribe_link(LinkPid, Key, Keys) end, LS)}.
+
+unsubscribe_link(LinkPid, Key, Keys) ->
+    unsubscribed_link(maps:take(Key, Keys), LinkPid, Keys).
+
+unsubscribed_link({LinkSubRef, Rest}, LinkPid, _Keys) ->
+    ok = macula_station_link:unsubscribe_async(LinkPid, LinkSubRef),
+    Rest;
+unsubscribed_link(error, _LinkPid, Keys) ->
+    Keys.
+
+%% Drops a SubRef a link reported gone, from whichever link held it.
+forget_link_sub(LinkSubRef, #state{link_subs = LS} = S) ->
+    S#state{link_subs = maps:map(fun(_LinkPid, Keys) -> without_link_sub(LinkSubRef, Keys) end, LS)}.
+
+without_link_sub(LinkSubRef, Keys) ->
+    maps:filter(fun(_Key, Ref) -> Ref =/= LinkSubRef end, Keys).
 
 %%====================================================================
 %% Internals — inbound event fan-out
 %%====================================================================
 
-%% Only an event whose publisher signature verified claims its
-%% `(realm, publisher, seq)' key. Any other event is deduplicated on that
-%% triple plus a digest of its topic and payload, in a key space of its
-%% own: identical copies arriving over several links are still delivered
-%% once, and such an event only ever matches an identical copy of itself.
-dedup_check(Tab, true, Realm, Publisher, Seq, _Content) ->
-    macula_client_dedup:check(Tab, Realm, Publisher, Seq);
-dedup_check(Tab, false, Realm, Publisher, Seq, Content) ->
-    Digest = crypto:hash(sha256, term_to_binary(Content, [deterministic])),
-    macula_client_dedup:check_unverified(Tab, Realm, Publisher, Seq, Digest).
+%% The subscriptions an event reaches: those of its own topic and those of
+%% every wildcard pattern it matches (`macula_topic_pattern:matches/2'), as
+%% one set, so the publication is checked once and each subscription gets it
+%% once.
+matching_subscriptions(Realm, Topic, #state{topic_index = Idx, wildcard_topics = Wildcards}) ->
+    Keys = [{Realm, Topic} | matching_wildcards(Realm, Topic, Wildcards)],
+    subscriptions_found([Set || {ok, Set} <- [maps:find(Key, Idx) || Key <- Keys]]).
 
-attested(#{publisher_verified := true}) -> true;
-attested(_Meta)                         -> false.
-
-on_inbound_event(duplicate, _Realm, _Topic, _Payload, _Meta, S) ->
-    {noreply, S};
-on_inbound_event(new, Realm, Topic, Payload, Meta, S) ->
-    {noreply, ensure_flush_timer(fan_to_local(Realm, Topic, Payload, Meta, S))}.
-
-%% An event reaches the subscribers of its own topic and those of every
-%% wildcard pattern it matches (`macula_topic_pattern:matches/2'), each set
-%% once: the event was deduplicated before this single fan-out.
-fan_to_local(Realm, Topic, Payload, Meta, #state{topic_index = Idx} = S) ->
-    Exact = fan_to_set(maps:find({Realm, Topic}, Idx), Topic, Payload, Meta, S),
-    lists:foldl(fun(Key, Acc) ->
-                    fan_to_set(maps:find(Key, Idx), Topic, Payload, Meta, Acc)
-                end,
-                Exact, matching_wildcards(Realm, Topic, S#state.wildcard_topics)).
+subscriptions_found([]) -> error;
+subscriptions_found(Sets) -> {ok, sets:union(Sets)}.
 
 %% The wildcard patterns in `Realm' that `Topic' matches. A topic that is
-%% itself one of them was already delivered by the exact lookup.
+%% itself one of them is found by the exact lookup.
 matching_wildcards(Realm, Topic, Wildcards) ->
     Segments = topic_segments(Topic),
     [Key || {{R, T} = Key, Pattern} <- maps:to_list(Wildcards),
@@ -2222,9 +2958,23 @@ matching_wildcards(Realm, Topic, Wildcards) ->
 topic_segments(Topic) ->
     binary:split(Topic, <<"/">>, [global]).
 
-fan_to_set(error, _Topic, _Payload, _Meta, S) ->
+%% A publication is checked, and so recorded, only while a subscription
+%% matches it: a copy that arrives while nothing is subscribed must not
+%% hide the publication from a later subscriber. The check drops a
+%% publication whose expiry has passed.
+on_inbound_event(error, _Hash, _ExpiresAt, _Topic, _Payload, _Meta, S) ->
     S;
-fan_to_set({ok, Set}, Topic, Payload, Meta, S) ->
+on_inbound_event({ok, Set}, Hash, ExpiresAt, Topic, Payload, Meta, S) ->
+    on_sighting(macula_client_dedup:check(S#state.dedup_tab, Hash, ExpiresAt,
+                                          erlang:system_time(millisecond)),
+                Set, Topic, Payload, Meta, S).
+
+on_sighting(new, Set, Topic, Payload, Meta, S) ->
+    ensure_flush_timer(fan_to_set(Set, Topic, Payload, Meta, S));
+on_sighting(_DuplicateOrExpired, _Set, _Topic, _Payload, _Meta, S) ->
+    S.
+
+fan_to_set(Set, Topic, Payload, Meta, S) ->
     sets:fold(fun(SubRef, Acc) ->
         deliver_one(SubRef, Topic, Payload, Meta, Acc)
     end, S, Set).
@@ -2245,11 +2995,9 @@ deliver_to({ok, #sub_spec{subscriber = Pid, order = Order} = Spec}, SubRef,
     S#state{subs = maps:put(SubRef, Spec#sub_spec{order = Order2},
                             S#state.subs)}.
 
-%% A verified publisher's ordering state is its own. Events whose publisher
-%% signature did not verify, or that carried none, are ordered among
-%% themselves per publisher and never move that state.
-order_key(#{publisher := Pub, publisher_verified := true}) -> Pub;
-order_key(#{publisher := Pub})                              -> {unverified, Pub}.
+%% Every event reaching the pool carries a publication its link verified,
+%% so each publisher's ordering state is its own.
+order_key(#{publisher := Pub}) -> Pub.
 
 send_events(Pid, SubRef, Topic, Events) ->
     _ = [Pid ! {macula_event, SubRef, Topic, P, M} || {P, M} <- Events],
@@ -2334,3 +3082,13 @@ summarize_publish(Results, _Targets) ->
 on_publish_results(true,  _Results)        -> ok;
 on_publish_results(false, [First | _])     -> First;
 on_publish_results(false, [])              -> {error, no_publish_attempts}.
+
+-ifdef(TEST).
+%% The position of a field in the state tuple, read from the record itself, for the key redaction tests that set a
+%% field to the whole state on purpose: a test names the field, so a field added to the record cannot shift it.
+state_field_index(Field) ->
+    field_index(Field, record_info(fields, state), 2).
+
+field_index(Field, [Field | _Rest], Index) -> Index;
+field_index(Field, [_Other | Rest], Index) -> field_index(Field, Rest, Index + 1).
+-endif.

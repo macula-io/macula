@@ -152,14 +152,14 @@ start_link(Module, Pool, Realm, Bytes, Args, Opts) when is_map(Opts) ->
 %% @doc As `start_link/4', but resolves `Station''s own
 %% `station_endpoint' and dials it directly instead of putting through
 %% the pool's existing links. See the "Direct-dial" section above.
--spec start_link_direct(module(), macula:pool(), macula_identity:pubkey(),
+-spec start_link_direct(module(), macula:pool(), <<_:256>>,
                         macula:realm(), binary()) ->
     {ok, pid()} | {error, term()}.
 start_link_direct(Module, Pool, Station, Realm, Bytes) ->
     start_link_direct(Module, Pool, Station, Realm, Bytes, undefined).
 
 %% @doc As `start_link_direct/5', with `Args' passed to `Module:init/1'.
--spec start_link_direct(module(), macula:pool(), macula_identity:pubkey(),
+-spec start_link_direct(module(), macula:pool(), <<_:256>>,
                         macula:realm(), binary(), term()) ->
     {ok, pid()} | {error, term()}.
 start_link_direct(Module, Pool, Station, Realm, Bytes, Args) ->
@@ -348,7 +348,7 @@ outcome_fields(Base, {error, cancelled}) ->
 outcome_fields(Base, {error, Reason}) ->
     Base#{outcome => failed, reason => Reason}.
 
-is_chunked_mcid(<<1, 16#56, _/binary>>) -> true;
+is_chunked_mcid(<<2, 16#56, _/binary>>) -> true;
 is_chunked_mcid(_) -> false.
 
 publish(false, _FactPublish, _, _, _, _) -> ok;

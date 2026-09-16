@@ -30,16 +30,32 @@
 -export([publish/4, publish/5,
          subscribe/4, subscribe/5,
          subscribe_callback/4,
-         unsubscribe/2]).
+         unsubscribe/2,
+         event_meta/2]).
 
--export_type([callback/0]).
+-export_type([callback/0, event_meta/0]).
 
 %% Callback shape accepted by `subscribe_callback/4'. Invoked once
 %% per inbound event in a separate receiver process so a slow
 %% callback does not back-pressure the pool.
 -type callback() :: fun((Topic :: binary(),
                           Payload :: term(),
-                          Meta :: map()) -> any()).
+                          Meta :: event_meta()) -> any()).
+
+%% The delivery context a subscriber receives with each event, taken
+%% from the publication its link verified: its realm, its publisher's
+%% node_id, its seq and published_at, how this copy arrived, and
+%% publication_hash, the SHA-384 of its tbs, with expires_at, on which
+%% the pool delivers each publication once.
+-type event_meta() :: #{
+    realm            := <<_:256>>,
+    publisher        := <<_:256>>,
+    seq              := non_neg_integer(),
+    published_at     := non_neg_integer(),
+    delivered_via    := macula_frame:delivery_channel(),
+    publication_hash := <<_:384>>,
+    expires_at       := non_neg_integer()
+}.
 
 %% @doc Publish to `(Realm, Topic)' on `Pool'. Equivalent to
 %% `publish/5' with empty opts.
@@ -73,7 +89,7 @@ publish(Pool, Realm, Topic, Payload, Opts)
 %% @doc Subscribe `Subscriber' to `(Realm, Topic)' via `Pool'.
 %% Equivalent to `subscribe/5' with empty opts.
 -spec subscribe(macula_client:pool(), <<_:256>>, binary(), pid()) ->
-    {ok, reference()}.
+    {ok, reference()} | {error, {text_too_long | invalid_text, topic}}.
 subscribe(Pool, Realm, Topic, Subscriber) ->
     subscribe(Pool, Realm, Topic, Subscriber, #{}).
 
@@ -81,20 +97,16 @@ subscribe(Pool, Realm, Topic, Subscriber) ->
 %%
 %% Returns `{ok, SubRef}'. `Subscriber' subsequently receives
 %% `{macula_event, SubRef, Topic, Payload, Meta}' for each delivered
-%% event; `Meta' is a map carrying `realm', `publisher',
-%% `publisher_verified', `seq', and `delivered_via'.
-%% `publisher_verified' is `not_signed' (the frame carried no
-%% `publisher_sig'), `true' (present and verified), or `false' (present
-%% but invalid -- only delivered when `pubsub_strict_publisher_sig' is
-%% explicitly `false'; by default such an event is dropped). Stores
-%% receive `{macula_event_gone, SubRef, Reason}' once when the
-%% subscription terminates (pool close, subscriber pid death).
+%% event, where `Meta' is an `event_meta()'. Only a publication that
+%% verified is delivered. `Subscriber' also receives
+%% `{macula_event_gone, SubRef, Reason}' once when the subscription
+%% terminates (pool close, subscriber pid death).
 %%
 %% `Opts' is a forward-compatible map; Phase 1 honors no
 %% subscribe-time options. Future phases (history replay, server-
 %% side filters) will add named keys.
 -spec subscribe(macula_client:pool(), <<_:256>>, binary(), pid(), map()) ->
-    {ok, reference()}.
+    {ok, reference()} | {error, {text_too_long | invalid_text, topic}}.
 subscribe(Pool, Realm, Topic, Subscriber, Opts)
   when is_pid(Pool),
        is_binary(Realm), byte_size(Realm) =:= 32,
@@ -108,6 +120,19 @@ subscribe(Pool, Realm, Topic, Subscriber, Opts)
 -spec unsubscribe(macula_client:pool(), reference()) -> ok.
 unsubscribe(Pool, SubRef) when is_pid(Pool), is_reference(SubRef) ->
     macula_client:unsubscribe(Pool, SubRef).
+
+%% @doc The meta a subscriber receives with an event, built from a
+%% publication that verified and the EVENT's `delivered_via'. A link
+%% calls this for every event it delivers, so the meta has one producer.
+-spec event_meta(macula_frame:verified_publication(),
+                 macula_frame:delivery_channel()) -> event_meta().
+event_meta(#{realm := Realm, publisher := Publisher, seq := Seq,
+             published_at := PublishedAt, publication_hash := Hash,
+             expires_at := ExpiresAt}, DeliveredVia)
+  when DeliveredVia =:= plumtree; DeliveredVia =:= direct ->
+    #{realm => Realm, publisher => Publisher, seq => Seq,
+      published_at => PublishedAt, delivered_via => DeliveredVia,
+      publication_hash => Hash, expires_at => ExpiresAt}.
 
 %% @doc Subscribe with a callback function instead of a receiver pid.
 %% Spawns a small receiver process internally that drives the

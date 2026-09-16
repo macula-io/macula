@@ -26,6 +26,8 @@ rustler::atoms! {
     sent,
     send_ready,
     send_failed,
+    send_complete,
+    send_incomplete,
     busy,
     undefined,
 
@@ -59,6 +61,18 @@ rustler::atoms! {
     stream_finished,
     unknown_error,
     error_code_out_of_range,
+    no_peer_leaf,
+    no_presented_leaf,
+
+    // Why a connection closed, as close_reason/1 reports it
+    open,
+    application_closed,
+    transport_closed,
+    transport_error,
+    locally_closed,
+    timed_out,
+    version_mismatch,
+    cids_exhausted,
 
     // Stat keys
     rtt,

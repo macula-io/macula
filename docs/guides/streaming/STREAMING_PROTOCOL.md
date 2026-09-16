@@ -14,25 +14,29 @@
 
 Two ways to open one, mirroring unary RPC:
 
-- **`call_stream/5`** — opens on the pool's own healthy link; the station routes
-  the STREAM_OPEN to whichever connection advertised the procedure. Good when you
+- **`call_stream/5`**: resolves the procedure's provider through its
+  `procedure_advertisement` and opens the stream at its serving station, naming
+  the provider as the target, exactly as `call/5` does for unary RPC. Good when you
   don't know or care which station serves it.
-- **`call_stream_station/6`** (direct-dial) — dials a *specific* station and opens
-  the stream there in one hop, exactly like `call_station/6` for unary RPC. Use it
-  after resolving a provider's `procedure_advertisement` and `station_endpoint` in
-  the DHT (see the [RPC Guide](../rpc/RPC_GUIDE.md)), so a stream reaches its provider the
-  same way a unary call does.
+- **`call_stream_station/7`** (direct-dial): dials a *specific* station and opens
+  the stream there in one hop, naming a provider's node_id as its target, exactly
+  like `call_station/7` for unary RPC. Use it after resolving a provider's
+  `procedure_advertisement` and `station_endpoint` in the DHT (see the
+  [RPC Guide](../rpc/RPC_GUIDE.md)), so a stream reaches its provider the same way a
+  unary call does.
+
+Every STREAM_OPEN names its target. A provider serves only an open addressed to
+its own node_id; one for another node is dropped, and its stream closes with
+nothing written.
 
 ```erlang
-{ok, Stream} = macula:call_stream_station(Pool, StationUrl, Realm, Procedure,
-                                          Args, #{}).
+{ok, Stream} = macula:call_stream_station(Pool, StationUrl, ProviderNodeId, Realm,
+                                          Procedure, Args, #{}).
 ```
 
-`Opts` may set `dial_timeout_ms` (default 10_000) for the dial + handshake,
+`Opts` may set `dial_timeout_ms` (default 10_000) for the dial and handshake,
 plus the same per-call TLS trust override as `call_station/8`: `verify`,
-`expected_node_id`, `pin_tls_cert` (see the [RPC Guide](../rpc/RPC_GUIDE.md)) — a
-fresh dial from `call_stream_station/6` had no way to set these at all
-before macula 9.8.0.
+`expected_node_id`, `pin_tls_cert` (see the [RPC Guide](../rpc/RPC_GUIDE.md)).
 
 This is what [`macula_streamer`/`macula_stream_sink` wrap](STREAMING_GUIDE.md#supervised-wrappers-macula_streamer-macula_stream_sink) —
 an addressable pid you can monitor and cancel, `streaming.*_v1` mesh facts
@@ -83,6 +87,26 @@ Advertise a streaming procedure with a mode and a `fun(Stream, Args)` handler.
 The handler drives the stream with the same `send` / `recv` primitives, and ends
 it with `set_reply` (a final result) or `abort` (an error).
 
+The handler's process owns the stream, and the stream ends when that process
+ends: when the handler returns or crashes. A handler that lets another process
+keep using the stream hands it over first, and the stream then ends with that
+process:
+
+```erlang
+ok = macula:advertise_stream(
+       Pool, Realm, <<"live.feed">>, server_stream,
+       fun(Stream, _Args) ->
+           Feeder = spawn(fun() -> feed(Stream) end),
+           ok = macula_stream:controlling_process(Stream, Feeder)
+       end),
+```
+
+When a session ends (both sides closed, an abort, or the link lost), the
+stream's owner gets `{macula_stream, ended, Stream, How}` once, with `How`
+being `closed`, `{error, {Code, Message}}` or `peer_down`. An owner the stream
+is handed to after that is told at once. `macula_streamer` takes its stream
+over this way and stops on that message.
+
 The provider verifies each STREAM_OPEN's signature against its `caller` before
 the handler runs; a STREAM_OPEN that does not verify runs no handler.
 `advertise_stream/6` takes an `auth` policy in `Opts`, the same policies as
@@ -132,6 +156,75 @@ Abort with a BOLT#4-style code and message when something goes wrong:
 ```erlang
 macula:abort(Stream, <<"0F">>, <<"source unavailable">>).
 ```
+
+Over the mesh the message is text for people, at most 256 bytes of UTF-8;
+a longer message, or one that is not valid UTF-8, travels empty. An error
+reply from `macula_stream:set_error/2` travels as the same STREAM_ERROR, with
+code `error` and the reason as its message when the reason is a binary or an
+atom.
+
+A stream takes chunks only from the side its mode lets send: the server in
+`server_stream`, the client in `client_stream`, and both in `bidi`. A caller's
+chunk in a `server_stream` is refused as a malformed frame, charged to the
+connection that carried it, and reaches no reader; the session goes on. A send
+the mode does not allow returns `{error, {send_not_allowed, Mode}}` without
+sending anything.
+
+A provider serves at most 16 sessions per verified caller and 1000 on the
+node at once (`max_served_sessions_per_caller` and `max_served_sessions` in
+the macula application env), and one session per dedicated stream.
+
+A provider serves a STREAM_OPEN once per caller and request id. A copy of an
+admitted open gets a STREAM_ERROR with code `request_copy`, and an open the
+node's request admission refuses gets the refusal's name: `not_yet_valid` or
+`expired` for a deadline outside the window it accepts (up to 10 minutes ahead,
+5 minutes past), `request_id_reused`, `caller_quota`, `share_full`,
+`admission_full` or `reply_not_kept`. An open past a session cap gets
+`too_many_sessions`, one its procedure's policy refuses gets `unauthorized`,
+one for a procedure the provider does not advertise gets `not_found`, one in a
+mode other than the one its procedure is advertised in gets `mode_mismatch`,
+and a second STREAM_OPEN on a stream that already carries a session gets
+`refused`. When the node's session counter or its request admission does not
+answer, an open gets `unavailable`, and a later try may be served.
+
+Each refusal is the provider's first frame under the open it refuses, signed
+and verifiable like any other. A refusal on a stream that carries no session
+also closes that stream, so open each session on a new stream.
+
+A stream a peer opens must start with a STREAM_OPEN that verifies and names
+this node as its target, and bring it within 10 seconds
+(`dedicated_stream_open_timeout_ms`). A stream whose first frame is anything
+else, whose STREAM_OPEN does not verify or names another node, or that stays
+silent that long closes without a STREAM_ERROR.
+
+A STREAM_OPEN is at most 1 MiB (`max_stream_open_bytes`). A longer first
+frame closes its stream the same way, and `call_stream` refuses such an open
+before sending anything, with `{error, {open_too_large, Limit}}`. Send bulk
+data as chunks once the stream is open. Each node reads its own setting: a
+provider whose `max_stream_open_bytes` is lower than a caller's closes a
+larger open without an answer, and the caller waits out its deadline, so keep
+the default unless both sides change it.
+
+A stream holds at most 16 MiB of memory for chunks no reader has taken,
+counting each chunk's bytes, a decoded term's heap size and the cell that
+queues it. The streams a provider serves also share a budget for those
+chunks: one caller's streams together at most 16 MiB
+(`max_served_inbox_bytes_per_caller`), and all served streams on the node at
+most 256 MiB (`max_served_inbox_bytes`). A chunk that would take a stream
+past its bound, or a budget past its limit, ends the session with code
+`resource_exhausted`. A reader that takes chunks as they come never meets
+either.
+
+The two codes tell a peer different things. `stream_protocol_error` says it
+broke the protocol, and sending the same again fails the same way.
+`resource_exhausted` says the receiving side had no room for what it sent,
+which a well-behaved sender cannot see coming, and a later session may
+succeed.
+
+A queued chunk is a copy, but a chunk handed straight to a waiting reader can
+still be part of the frame it arrived in. A handler that keeps chunks after
+reading them, in a list, a table or its state, should copy what it keeps
+(`binary:copy/1`), or it keeps whole frames alive.
 
 ---
 

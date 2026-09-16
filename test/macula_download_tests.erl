@@ -16,8 +16,8 @@
 
 -include_lib("eunit/include/eunit.hrl").
 
--define(SINGLE_MCID, <<1, 16#55, 0:256>>).
--define(MANIFEST_MCID, <<1, 16#56, 0:256>>).
+-define(SINGLE_MCID, <<2, 16#55, 0:384>>).
+-define(MANIFEST_MCID, <<2, 16#56, 0:384>>).
 -define(REALM, <<0:256>>).
 
 -behaviour(macula_download).
@@ -49,6 +49,7 @@ download_test_() ->
                   fun cancel_reaches_the_real_content_transfer_not_just_the_local_worker/0,
                   fun direct_dial_resolves_then_fetches_from_the_resolved_provider/0,
                   fun a_malformed_mcid_is_rejected_before_anything_is_spawned/0,
+                  fun a_blake3_mcid_is_rejected_before_anything_is_spawned/0,
                   fun direct_dial_also_rejects_a_malformed_mcid/0,
                   fun functions_of_another_shape_are_refused/0]]}.
 
@@ -79,6 +80,15 @@ a_malformed_mcid_is_rejected_before_anything_is_spawned() ->
     ?assertEqual({error, invalid_mcid}, Result),
     ?assertEqual([], macula_scripted_stream:published()).
 
+%% The post-quantum format has only tag 2, SHA-384 (D24): a BLAKE3 id is
+%% refused at init/1 like any other malformed MCID.
+a_blake3_mcid_is_rejected_before_anything_is_spawned() ->
+    process_flag(trap_exit, true),
+    Result = macula_download:start_link(?MODULE, dummy_pid(), ?REALM,
+                                        <<1, 16#55, 0:256>>, self(), opts(#{})),
+    ?assertEqual({error, invalid_mcid}, Result),
+    ?assertEqual([], macula_scripted_stream:published()).
+
 direct_dial_also_rejects_a_malformed_mcid() ->
     process_flag(trap_exit, true),
     Result = macula_download:start_link_direct(?MODULE, dummy_pid(), ?REALM, <<"not-an-mcid">>,
@@ -89,8 +99,8 @@ direct_dial_also_rejects_a_malformed_mcid() ->
 single_block_get_reports_unchunked() ->
     process_flag(trap_exit, true),
     Bytes = <<"bytes">>,
-    Hash = macula_blake3_nif:hash(Bytes),
-    Mcid = <<1, 16#55, Hash/binary>>,
+    Hash = crypto:hash(sha384, Bytes),
+    Mcid = <<2, 16#55, Hash/binary>>,
     LinkIo = (macula_scripted_link:link_io())#{
                call_on_stream := fun(_, _, _, <<"_content.get_block">>, _, _) -> {ok, Bytes} end},
 
@@ -171,12 +181,12 @@ cancel_reaches_the_real_content_transfer_not_just_the_local_worker() ->
 direct_dial_resolves_then_fetches_from_the_resolved_provider() ->
     process_flag(trap_exit, true),
     Bytes = <<"direct fetch">>,
-    Hash = macula_blake3_nif:hash(Bytes),
-    Mcid = <<1, 16#55, Hash/binary>>,
+    Hash = crypto:hash(sha384, Bytes),
+    Mcid = <<2, 16#55, Hash/binary>>,
     Endpoint = <<"quic://provider.example:4433">>,
     LinkPid = dummy_pid(),
     LinkIo = (macula_scripted_link:link_io())#{
-               ensure_content_link := link_to(Endpoint, LinkPid),
+               ensure_station_link := link_to(Endpoint, LinkPid),
                call_on_stream := fun(_, _, _, <<"_content.get_block">>, _, _) -> {ok, Bytes} end},
 
     {ok, _Pid} = macula_download:start_link_direct(?MODULE, dummy_pid(), ?REALM, Mcid, self(),
@@ -223,7 +233,7 @@ cancel_while_a_direct_transfer_is_handed_over_still_reaches_it() ->
     Stream = make_ref(),
     Endpoint = <<"quic://provider.example:4433">>,
     LinkIo = (open_get_link_io(Self, LinkPid, Stream))#{
-               ensure_content_link := link_to(Endpoint, LinkPid)},
+               ensure_station_link := link_to(Endpoint, LinkPid)},
     Held = fun(Pool, Station, Mcid, TimeoutMs, TransferOpts) ->
                    hold_handover(Self, macula_content_transfer:start_get_station(
                                          Pool, Station, Mcid, TimeoutMs, TransferOpts))
@@ -267,7 +277,7 @@ fetch_from(Endpoint) ->
             Fetch(Endpoint, #{verify => none}, 1_000, 30_000)
     end.
 
-%% An ensure_content_link/4 that dials only Seed, as LinkPid.
+%% An ensure_station_link/4 that dials only Seed, as LinkPid.
 link_to(Seed, LinkPid) ->
     fun(_Pool, Dialed, _LinkOpts, _TimeoutMs) when Dialed =:= Seed -> {ok, LinkPid} end.
 
@@ -288,7 +298,7 @@ wait_msg() ->
 chunk_mcid_map(Manifest, Chunks) ->
     Indices = lists:seq(0, length(Chunks) - 1),
     maps:from_list([begin
-        {ok, ChunkMcid} = macula_manifest:chunk_mcid(Manifest, I, blake3),
+        {ok, ChunkMcid} = macula_manifest:chunk_mcid(Manifest, I),
         {ChunkMcid, C}
     end || {I, C} <- lists:zip(Indices, Chunks)]).
 

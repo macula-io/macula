@@ -24,9 +24,14 @@ Then join the mesh:
 
 ```erlang
 ok = macula:join_mesh(#{
-    relays => [<<"https://relay-a.macula.io:4433">>]
+    relays => [#{host => <<"relay-a.macula.io">>, port => 4433,
+                 expected_node_id => RelayNodeId}]
 }).
 ```
+
+`RelayNodeId` is the relay's 32-byte node_id. Every dial checks it, and a
+relay given without one refuses the join with
+`{error, {relays, expected_node_id_required}}` before any pool starts.
 
 `relay-a` here is illustrative — see the live, current station list at
 [macula.io/stations](https://macula.io/stations) rather than hardcoding a
@@ -73,16 +78,16 @@ simply ignored, there's no validation error for a stray key:
 
 ```erlang
 macula:join_mesh(#{
-    relays   => [<<"https://relay-a.macula.io:4433">>,
-                 <<"https://relay-b.macula.io:4433">>],
-    identity => MyKeyPair                %% optional
+    relays   => [#{host => <<"relay-a.macula.io">>, port => 4433, expected_node_id => RelayANodeId},
+                 #{host => <<"relay-b.macula.io">>, port => 4433, expected_node_id => RelayBNodeId}],
+    node_identity => NodeIdentity        %% optional
 }).
 ```
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `relays` | required | List of relay URLs to connect to (the V2 pool's seeds) |
-| `identity` | auto-generated | `macula_identity:key_pair()` — the pool's shared Ed25519 identity |
+| `relays` | required | The V2 pool's seeds: maps with `host`, `port` and `expected_node_id`, the relay's 32-byte node_id |
+| `node_identity` | generated | `macula_node_keys:node_key()`, the pool's node identity key |
 
 There is no `realm` option — dist tunnel frames travel under the
 protocol-internal all-zeros realm regardless of any user realm. There

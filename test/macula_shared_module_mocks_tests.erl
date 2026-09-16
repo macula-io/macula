@@ -25,7 +25,11 @@
 
 %% Test sources that still replace a watched module, until their module
 %% under test takes its functions from its options.
--define(ALLOWED, ["macula_direct_dial_resolve_tests.erl",
+%% macula_dht_records_tests.erl replaces macula_client until the DHT
+%% contract gives macula's record functions their call seam, as the
+%% tests above took their module's functions from its options.
+-define(ALLOWED, ["macula_dht_records_tests.erl",
+                  "macula_direct_dial_resolve_tests.erl",
                   "macula_link_respawn_replay_tests.erl",
                   "macula_station_link_tests.erl"]).
 

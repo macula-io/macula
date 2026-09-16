@@ -67,8 +67,8 @@ small_put_reports_unchunked() ->
 
     {ok, _Pid} = macula_feeder:start_link(?MODULE, dummy_pid(), ?REALM, Bytes, self(),
                                           opts(#{link_io => LinkIo})),
-    Hash = macula_blake3_nif:hash(Bytes),
-    ExpectedMcid = <<1, ?SINGLE_CODEC, Hash/binary>>,
+    Hash = crypto:hash(sha384, Bytes),
+    ExpectedMcid = <<2, ?SINGLE_CODEC, Hash/binary>>,
     ?assertEqual({fed, {ok, ExpectedMcid}}, wait_msg()),
     Published = macula_scripted_stream:published(),
     ?assertEqual([<<"sharing.put_started_v1">>, <<"sharing.put_completed_v1">>],
@@ -142,15 +142,15 @@ direct_dial_resolves_then_puts_through_the_resolved_station() ->
     DialUrl = <<"quic://station.example:4433">>,
     LinkPid = dummy_pid(),
     LinkIo = (macula_scripted_link:link_io())#{
-               ensure_content_link := link_to(DialUrl, LinkPid),
+               ensure_station_link := link_to(DialUrl, LinkPid),
                call_on_stream := fun(_, _, _, <<"_content.put_block">>, _, _) -> {ok, ok} end},
     Resolve = fun(_Pool, Station0) when Station0 =:= Station -> {ok, DialUrl} end,
 
     Opts = opts(#{link_io => LinkIo, resolve_station_endpoint => Resolve}),
     {ok, _Pid} = macula_feeder:start_link_direct(?MODULE, dummy_pid(), Station, ?REALM, Bytes,
                                                  self(), Opts),
-    Hash = macula_blake3_nif:hash(Bytes),
-    ExpectedMcid = <<1, ?SINGLE_CODEC, Hash/binary>>,
+    Hash = crypto:hash(sha384, Bytes),
+    ExpectedMcid = <<2, ?SINGLE_CODEC, Hash/binary>>,
     ?assertEqual({fed, {ok, ExpectedMcid}}, wait_msg()).
 
 %% Transfer functions without one the feeder calls or of another arity,
@@ -191,7 +191,7 @@ cancel_while_a_direct_transfer_is_handed_over_still_reaches_it() ->
     Station = crypto:strong_rand_bytes(32),
     DialUrl = <<"quic://station.example:4433">>,
     LinkIo = (open_put_link_io(Self, LinkPid, Stream))#{
-               ensure_content_link := link_to(DialUrl, LinkPid)},
+               ensure_station_link := link_to(DialUrl, LinkPid)},
     Held = fun(Pool, Dial, Bytes, TimeoutMs, TransferOpts) ->
                    hold_handover(Self, macula_content_transfer:start_put_station(
                                          Pool, Dial, Bytes, TimeoutMs, TransferOpts))
@@ -228,7 +228,7 @@ default_transfer_io() ->
       await => fun macula_content_transfer:await/1,
       cancel => fun macula_content_transfer:cancel/1}.
 
-%% An ensure_content_link/4 that dials only Seed, as LinkPid.
+%% An ensure_station_link/4 that dials only Seed, as LinkPid.
 link_to(Seed, LinkPid) ->
     fun(_Pool, Dialed, _LinkOpts, _TimeoutMs) when Dialed =:= Seed -> {ok, LinkPid} end.
 

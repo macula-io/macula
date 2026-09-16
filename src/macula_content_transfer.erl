@@ -95,7 +95,7 @@
 %%%
 %%% A transfer picks or dials its link, and opens, calls on, closes and
 %%% aborts its content streams, through six functions:
-%%% `pick_connected_link/1' and `ensure_content_link/4', the
+%%% `pick_connected_link/1' and `ensure_station_link/4', the
 %%% `macula_client' ones by default, and `open_content_stream/1',
 %%% `call_on_stream/6', `close_content_stream/2' and
 %%% `abort_content_stream/4', the `macula_station_link' ones. The start
@@ -124,6 +124,8 @@
 %%% @end
 %%%-------------------------------------------------------------------
 -module(macula_content_transfer).
+
+-include("macula_quic_error_codes.hrl").
 
 -behaviour(gen_server).
 
@@ -165,7 +167,7 @@
 %% The functions a transfer reaches its link with, by key; see "Link I/O"
 %% in the module doc.
 -type link_io() :: #{pick_connected_link => fun((macula:pool()) -> {ok, pid()} | {error, term()}),
-                     ensure_content_link => fun((macula:pool(), macula_client:seed(), map(),
+                     ensure_station_link => fun((macula:pool(), macula_client:seed(), map(),
                                                  pos_integer()) -> {ok, pid()} | {error, term()}),
                      open_content_stream => fun((pid()) -> {ok, reference()} | {error, term()}),
                      call_on_stream => fun((pid(), reference(), binary(), binary(), term(),
@@ -286,9 +288,12 @@ start_put_station(Pool, Station, Bytes, TimeoutMs, Opts)
 start_get(Pool, Mcid) -> start_get(Pool, Mcid, #{}).
 
 %% @doc As `start_get/2'. `Opts' may carry `share_id' and
-%% `stream_count' (see `start_put/3').
+%% `stream_count' (see `start_put/3'). `Mcid' is the SHA-384 id of a
+%% single block or of a manifest; an id of any other shape is refused with
+%% function_clause, in the caller, and no transfer starts.
 -spec start_get(macula:pool(), macula:mcid(), map()) -> {ok, pid()}.
-start_get(Pool, Mcid, Opts) when is_pid(Pool), is_binary(Mcid), is_map(Opts) ->
+start_get(Pool, <<2, Codec, _:48/binary>> = Mcid, Opts)
+  when is_pid(Pool), (Codec =:= 16#55 orelse Codec =:= 16#56), is_map(Opts) ->
     start(get, {pooled, Pool}, Mcid, Opts).
 
 %% @doc As `start_get/2', dialing `Station' directly — the addressable
@@ -298,12 +303,13 @@ start_get(Pool, Mcid, Opts) when is_pid(Pool), is_binary(Mcid), is_map(Opts) ->
 start_get_station(Pool, Station, Mcid, TimeoutMs) ->
     start_get_station(Pool, Station, Mcid, TimeoutMs, #{}).
 
-%% @doc As `start_get_station/4'. `Opts' as `start_put_station/5'.
+%% @doc As `start_get_station/4'. `Opts' as `start_put_station/5'. An
+%% `Mcid' of another shape is refused as by `start_get/3'.
 -spec start_get_station(macula:pool(), macula_client:seed(), macula:mcid(),
                         pos_integer(), map()) -> {ok, pid()}.
-start_get_station(Pool, Station, Mcid, TimeoutMs, Opts)
-  when is_pid(Pool), is_binary(Mcid), is_integer(TimeoutMs), TimeoutMs > 0,
-       is_map(Opts) ->
+start_get_station(Pool, Station, <<2, Codec, _:48/binary>> = Mcid, TimeoutMs, Opts)
+  when is_pid(Pool), (Codec =:= 16#55 orelse Codec =:= 16#56),
+       is_integer(TimeoutMs), TimeoutMs > 0, is_map(Opts) ->
     LinkOpts = maps:with([verify, expected_node_id, pin_tls_cert], Opts),
     start(get, {station, Pool, Station, TimeoutMs, LinkOpts}, Mcid, Opts).
 
@@ -319,9 +325,10 @@ await(Pid) -> await(Pid, infinity).
 -spec await(pid(), timeout()) -> {ok, term()} | {error, term()}.
 await(Pid, Timeout) -> gen_server:call(Pid, await, Timeout).
 
-%% @doc As `cancel/3' with a default code/message.
+%% @doc As `cancel/3', with the cancelled code (0,
+%% `?QUIC_CODE_CANCELLED') and the message `cancelled'.
 -spec cancel(pid()) -> ok.
-cancel(Pid) -> cancel(Pid, 0, <<"cancelled">>).
+cancel(Pid) -> cancel(Pid, ?QUIC_CODE_CANCELLED, <<"cancelled">>).
 
 %% @doc Cancel `Pid''s transfer and reap the process. Resets every
 %% currently-open content stream with `Code' — genuinely peer-visible,
@@ -373,7 +380,7 @@ link_io(Defaults, Given) when is_map(Defaults), is_map(Given) ->
     Given.
 
 link_function(pick_connected_link, Fun) when is_function(Fun, 1) -> ok;
-link_function(ensure_content_link, Fun) when is_function(Fun, 4) -> ok;
+link_function(ensure_station_link, Fun) when is_function(Fun, 4) -> ok;
 link_function(open_content_stream, Fun) when is_function(Fun, 1) -> ok;
 link_function(call_on_stream, Fun) when is_function(Fun, 6) -> ok;
 link_function(close_content_stream, Fun) when is_function(Fun, 2) -> ok;
@@ -404,7 +411,7 @@ transfer_function(cancel, Fun) when is_function(Fun, 1) -> ok.
 
 default_link_io() ->
     #{pick_connected_link => fun macula_client:pick_connected_link/1,
-      ensure_content_link => fun macula_client:ensure_content_link/4,
+      ensure_station_link => fun macula_client:ensure_station_link/4,
       open_content_stream => fun macula_station_link:open_content_stream/1,
       call_on_stream => fun macula_station_link:call_on_stream/6,
       close_content_stream => fun macula_station_link:close_content_stream/2,
@@ -570,7 +577,7 @@ run_if_single_block(false, Parent, #{close_content_stream := Close} = LinkIo, Ki
 
 connect(#{pick_connected_link := PickConnectedLink} = LinkIo, {pooled, Pool}) ->
     open_on_link(LinkIo, PickConnectedLink(Pool));
-connect(#{ensure_content_link := EnsureContentLink} = LinkIo,
+connect(#{ensure_station_link := EnsureContentLink} = LinkIo,
         {station, Pool, Station, TimeoutMs, LinkOpts}) ->
     open_on_link(LinkIo, EnsureContentLink(Pool, Station, LinkOpts, TimeoutMs)).
 
@@ -584,8 +591,8 @@ stream_opened({error, _} = E, _LinkPid) -> E.
 %% @doc Known upfront, no network needed: put by size against the
 %% chunk threshold, get by the MCID's own codec byte.
 is_chunked(put, Bytes) -> byte_size(Bytes) > macula_manifest:default_chunk_size();
-is_chunked(get, <<1, 16#56, _/binary>>) -> true;
-is_chunked(get, <<1, 16#55, _/binary>>) -> false.
+is_chunked(get, <<2, 16#56, _:48/binary>>) -> true;
+is_chunked(get, <<2, 16#55, _:48/binary>>) -> false.
 
 transfer(LinkIo, put, LinkPid, Stream, Bytes) -> put_single_block(LinkIo, LinkPid, Stream, Bytes);
 transfer(LinkIo, get, LinkPid, Stream, Mcid)  -> get_single_block(LinkIo, LinkPid, Stream, Mcid).
@@ -598,8 +605,7 @@ transfer(LinkIo, get, LinkPid, Stream, Mcid)  -> get_single_block(LinkIo, LinkPi
 %%%===================================================================
 
 put_single_block(LinkIo, LinkPid, Stream, Bytes) ->
-    Hash = macula_blake3_nif:hash(Bytes),
-    MCID = <<1, 16#55, Hash/binary>>,
+    MCID = <<2, 16#55, (crypto:hash(sha384, Bytes))/binary>>,
     classify_put_content(put_block(LinkIo, LinkPid, Stream, MCID, Bytes), MCID).
 
 put_block(LinkIo, LinkPid, Stream, MCID, Bytes) ->
@@ -636,8 +642,8 @@ classify_get_content({error, _} = E, _MCID)         -> E.
 %% — see `macula_content_block_hash_tests').
 -spec verify_block_hash(macula:mcid(), binary()) ->
         {ok, binary()} | {error, hash_mismatch | invalid_mcid}.
-verify_block_hash(<<1, 16#55, Hash:32/binary>>, Bin) ->
-    hash_result(macula_blake3_nif:hash(Bin) =:= Hash, Bin);
+verify_block_hash(<<2, 16#55, Hash:48/binary>>, Bin) ->
+    hash_result(crypto:hash(sha384, Bin) =:= Hash, Bin);
 verify_block_hash(_MCID, _Bin) ->
     {error, invalid_mcid}.
 
@@ -744,12 +750,12 @@ maybe_start_lane(#state{kind = Kind, link_io = LinkIo, link_pid = LinkPid,
     Lane#lane{remaining = Rest, in_flight = Item, worker = Worker}.
 
 run_lane_step(Self, LinkIo, put, LinkPid, Stream, Manifest, {Index, Bytes}) ->
-    {ok, ChunkMcid} = macula_manifest:chunk_mcid(Manifest, Index, blake3),
+    {ok, ChunkMcid} = macula_manifest:chunk_mcid(Manifest, Index),
     Put = put_block(LinkIo, LinkPid, Stream, ChunkMcid, Bytes),
     Outcome = put_chunk_outcome(classify_put_content(Put, ChunkMcid)),
     Self ! {lane_step_result, Stream, Outcome};
 run_lane_step(Self, LinkIo, get, LinkPid, Stream, Manifest, Index) ->
-    {ok, ChunkMcid} = macula_manifest:chunk_mcid(Manifest, Index, blake3),
+    {ok, ChunkMcid} = macula_manifest:chunk_mcid(Manifest, Index),
     Outcome = classify_get_content(get_block(LinkIo, LinkPid, Stream, ChunkMcid), ChunkMcid),
     Self ! {lane_step_result, Stream, Outcome}.
 

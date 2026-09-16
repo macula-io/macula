@@ -173,7 +173,7 @@
                                  macula_stream:mode(), fun((pid(), term()) -> ok), map()) ->
                                     ok | {error, term()}).
 -type publish_advertisement() :: fun((macula:pool(), macula:realm(), macula:procedure(),
-                                      macula_identity:key_pair(), map()) ->
+                                      macula_node_keys:node_key(), map()) ->
                                          ok | {error, term()}).
 -type advertise_opts() :: #{advertise_stream => advertise_stream(),
                             publish_advertisement => publish_advertisement(),
@@ -211,11 +211,9 @@ advertise(Pool, Realm, Procedure, Module, Args) ->
 %% auth policy, default `open', see `macula:advertise_stream/6'), and
 %% `reuse_sup' — an
 %% existing supervisor pid (as returned by a prior `advertise/5,6'
-%% call) to re-send the wire `ADVERTISE' frame on without starting a
-%% new factory supervisor. Use this for periodic re-advertise (a
-%% station's registration for a procedure is tied to the connection
-%% that sent it, and does not survive that connection being replaced
-%% — see `advertise_direct/6,7''s own doc) — calling plain
+%% call) to register the handler again with, without starting a new
+%% factory supervisor. Use this for a periodic re-advertise (see
+%% `advertise_direct/6,7''s own doc) — calling plain
 %% `advertise/5,6' on a timer would leak one orphaned supervisor per
 %% tick, since each call otherwise starts a fresh one. The functions a
 %% streamer runs on come from `Opts' too; see "Stream I/O" above.
@@ -248,6 +246,7 @@ functions(Opts) ->
 
 default_stream_io() ->
     #{recv => fun macula:recv/2,
+      controlling_process => fun macula_stream:controlling_process/2,
       send => fun macula_stream:send/3,
       close_send => fun macula_stream:close_send/1,
       close => fun macula_stream:close/1,
@@ -283,9 +282,9 @@ new_sup() ->
 %% @doc As `advertise/5', and additionally publishes a signed
 %% `procedure_advertisement' DHT record naming this pool's connected
 %% station as the server, so `macula_stream_sink:start_link_direct/5,6'
-%% can resolve and dial here directly. `Identity' signs it — reuse the
-%% same one across re-advertises so each one doesn't mint a fresh
-%% advertiser identity.
+%% can resolve and dial here directly. `NodeIdentity' signs it and must be
+%% the node identity key `Pool' was started with: a caller targets that
+%% node_id, and the station knows the pool's connection by it.
 %%
 %% The DHT publish is best-effort: if it fails, the handler is still
 %% advertised and reachable via the ordinary pooled path — direct-dial
@@ -295,41 +294,50 @@ new_sup() ->
 %% retries) has no other way to learn its handler is pooled-only, and
 %% "a later publish succeeds" cannot happen if nothing ever tries again.
 -spec advertise_direct(macula:pool(), macula:realm(), macula:procedure(),
-                       module(), term(), macula_identity:key_pair()) ->
+                       module(), term(), macula_node_keys:node_key()) ->
     {ok, pid()} | {error, term()}.
-advertise_direct(Pool, Realm, Procedure, Module, Args, Identity) ->
-    advertise_direct(Pool, Realm, Procedure, Module, Args, Identity, #{}).
+advertise_direct(Pool, Realm, Procedure, Module, Args, NodeIdentity) ->
+    advertise_direct(Pool, Realm, Procedure, Module, Args, NodeIdentity, #{}).
 
 %% @doc As `advertise_direct/6', with `Opts' forwarded BOTH to
 %% `advertise/6' (so `mode'/`announce'/`reuse_sup' and the functions
 %% apply here too, e.g. `mode => client_stream') and, without the
 %% functions, to the advertisement publish, `publish_advertisement' in
 %% `Opts' or `macula_direct_dial:publish_advertisement/5' (e.g.
-%% `cert_chain => ChainPem', Slice 7c Direction B, managed realms only):
-%% each side reads only the keys it recognizes, so one `Opts' map serves
-%% both.
-%% `reuse_sup' matters here specifically: a station's wire-level
-%% registration for a procedure is tied to whichever connection sent
-%% the `ADVERTISE' frame, and does not survive that connection being
-%% replaced (reconnect, station-side eviction, etc.) — a periodic
+%% `authorization', the provider authorization an org namespaced
+%% procedure needs): each side reads only the keys it recognizes, so one
+%% `Opts' map serves both.
+%% `reuse_sup' matters here specifically: the procedure's DHT record
+%% expires with its TTL, and callers reach the provider only through
+%% that record, so the provider republishes it — a periodic
 %% re-advertise with `reuse_sup => Sup' (the pid this function
-%% returned the first time) re-sends both the wire frame and the DHT
-%% record without leaking a new supervisor per tick.
+%% returned the first time) registers the handler again and
+%% republishes the DHT record without leaking a new supervisor per
+%% tick. `cert_chain', a 10.x option `authorization' replaces, is refused
+%% with `{error, {removed_option, cert_chain}}' before the handler is
+%% registered.
 -spec advertise_direct(macula:pool(), macula:realm(), macula:procedure(),
-                       module(), term(), macula_identity:key_pair(), advertise_opts()) ->
+                       module(), term(), macula_node_keys:node_key(), advertise_opts()) ->
     {ok, pid()} | {error, term()}.
-advertise_direct(Pool, Realm, Procedure, Module, Args, Identity, Opts) ->
+advertise_direct(Pool, Realm, Procedure, Module, Args, NodeIdentity, Opts) ->
+    advertise_direct_unless_removed(macula_direct_dial:removed_option(advertise, Opts), Pool,
+                                    Realm, Procedure, Module, Args, NodeIdentity, Opts).
+
+advertise_direct_unless_removed(none, Pool, Realm, Procedure, Module, Args, NodeIdentity, Opts) ->
     PublishAdvertisement = arity_5(maps:get(publish_advertisement, Opts,
                                             fun macula_direct_dial:publish_advertisement/5)),
     case advertise(Pool, Realm, Procedure, Module, Args, Opts) of
         {ok, Sup} ->
             log_publish_result(
-              PublishAdvertisement(Pool, Realm, Procedure, Identity, without_functions(Opts)),
+              PublishAdvertisement(Pool, Realm, Procedure, NodeIdentity, without_functions(Opts)),
               Procedure),
             {ok, Sup};
         {error, _} = Error ->
             Error
-    end.
+    end;
+advertise_direct_unless_removed(Removed, _Pool, _Realm, _Procedure, _Module, _Args, _NodeIdentity,
+                                _Opts) ->
+    {error, Removed}.
 
 log_publish_result(ok, _Procedure) ->
     ok;
@@ -349,9 +357,16 @@ unadvertise(Pool, Realm, Procedure) ->
 dispatch(Sup, Module, Pool, Realm, Announce, Args, Functions, StreamPid, StreamArgs) ->
     case supervisor:start_child(Sup, [Module, Pool, Realm, Announce, Args,
                                       StreamPid, StreamArgs, Functions]) of
-        {ok, _Pid} -> ok;
+        {ok, Pid} -> hand_stream_to(Functions, StreamPid, Pid);
         {error, _Reason} -> ok
     end.
+
+%% @private The process running this dispatch owns the stream, and the
+%% streamer it started takes the stream over, so the stream ends when the
+%% streamer ends rather than when this dispatch returns.
+hand_stream_to(#{stream_io := #{controlling_process := HandOver}}, StreamPid, StreamerPid) ->
+    _ = HandOver(StreamPid, StreamerPid),
+    ok.
 
 %% @doc Send a chunk out on the stream this streamer owns.
 -spec send(pid(), binary()) -> ok | {error, term()}.
@@ -467,6 +482,13 @@ handle_info({'EXIT', Reader, Reason}, #tstate{reader = Reader} = State)
     {stop, {reader_crashed, Reason}, State};
 handle_info({'EXIT', Stream, Reason}, #tstate{stream = Stream} = State) ->
     {stop, Reason, State};
+%% The stream's session ended (`macula_stream:controlling_process/2'): a
+%% streamer has nothing left to serve, whether or not its module would stop
+%% by itself.
+handle_info({macula_stream, ended, Stream, closed}, #tstate{stream = Stream} = State) ->
+    {stop, normal, State};
+handle_info({macula_stream, ended, Stream, _How}, #tstate{stream = Stream} = State) ->
+    {stop, {shutdown, session_ended}, State};
 handle_info(_Msg, State) ->
     {noreply, State}.
 

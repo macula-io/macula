@@ -3,10 +3,10 @@
 This exists so a station's record store and verification work stay bounded, an authorized signer can always get a place
 in a slot, and an honest relay is never slowed.
 
-By Mars and Mercury, 2026-09-11, from proposal A (Mars), proposal B (Mars and Mercury) and the options note on slot
-admission, with Mercury's co-owner corrections and Jupiter's decisions. It details D28 and the D23 refinement in
-`PLAN_POST_QUANTUM_SECURITY_DECISIONS.md`, for WP 1.2, WP 1.3, WP 1.5, WP 1.6, WP 2.2 and Stage 4. Records and frames
-are in `DESIGN_PQ_SIGNED_FRAMES_AND_RECORDS.md`.
+Owned by Mars. Written by Mars and Mercury, 2026-09-11, from proposal A (Mars), proposal B (Mars and Mercury) and the
+options note on slot admission, with Mercury's corrections and Jupiter's decisions. It details D28 and the D23
+refinement in `PLAN_POST_QUANTUM_SECURITY_DECISIONS.md`, for WP 1.2, WP 1.3, WP 1.5, WP 1.6, WP 2.2 and Stage 4.
+Records and frames are in `DESIGN_PQ_SIGNED_FRAMES_AND_RECORDS.md`.
 
 Prerequisite for part 3: receive-side flow control per stream (section 3.4), which waits for Raf's decision.
 
@@ -152,22 +152,27 @@ applies to the whole slot.
 - A checkable slot keeps up to 64 places for checked signers and up to 16 for everyone else. An unchecked writer never
   takes a checked place, and nothing is evicted.
 - Every other slot keeps 64 places.
-- An advertisement authorized by a certificate chain gets an unchecked place.
+- An advertisement with no authorization, or with any authorization but exactly the org directory and delegation pair,
+  gets no place in any slot. The station refuses its STORE with the refusal `verify_authorization/3` gives every
+  caller for that form: `no_authorization` when it has none, `authorization_form_unsupported` for any other
+  authorization, and `malformed` when the pair holds something other than bytes. It decides from the form alone and
+  decodes nothing inside it.
 - When a trust list change makes a slot checkable, or no longer checkable, held entries stay until they expire, are
   replaced or are withdrawn, and new entries follow the slot's current places. A renewal always replaces its signer's
   held entry and takes the place its signer qualifies for now.
 
 ### 2.5 What a station never does
 
-- Parse a certificate chain.
+- Decode an authorization that is not the org directory and delegation pair, or configure or load a realm CA, a
+  `realm_ca` trust key, or a certificate-chain option for authorization.
 - Show callers whether an entry holds a checked place. VALUE carries the records only, and callers run
   `verify_authorization/3` themselves, because a station's trust list can be stale.
 - Fetch anything while it handles a STORE. The trust list refreshes in the background, and the embedded records ride
   inside the advertisement.
 
-The Procedure advertisements section of `DESIGN_PQ_SIGNED_FRAMES_AND_RECORDS.md` states the rule: "A station that
-stores or forwards an advertisement verifies its embedded org directory and delegation, once per hash, to decide a
-checked place, and never parses a certificate chain or shows that decision to callers."
+The Procedure advertisements section of `DESIGN_PQ_SIGNED_FRAMES_AND_RECORDS.md` defines the advertisement and its
+authorization. This part decides places from it at STORE, verifying the embedded org directory and delegation once
+per hash and never showing callers the decision.
 
 ### 2.6 Cost per STORE
 
@@ -175,11 +180,13 @@ checked place, and never parses a certificate chain or shows that decision to ca
 - An advertisement with an org namespace: two verifications the first time its embedded records' bytes are seen,
   about 0.5 ms (US) or 0.9 ms (EU), and a hash lookup on every renewal after that.
 - One trust list verification per refresh.
+- An advertisement refused by its authorization's form: a check of that form, with no verification.
 
 ### 2.7 What stays open
 
-- Providers authorized by a certificate chain, and content announcements (no authority exists for them, D27): their
-  entries hold unchecked places only. Procedures without an org namespace are refused in 11.0.0 (D25).
+- Content announcements (no authority exists for them, D27): their entries hold unchecked places only. Procedures
+  without an org namespace are refused in 11.0.0 (D25), and so is any authorization but the org directory and
+  delegation pair: the certificate-chain form is removed, since the 11.0.0 realm issues no X.509 certificates.
 - Realms not on a trust list, and stations with no trust list.
 
 ### 2.8 Tests
@@ -190,7 +197,14 @@ checked place, and never parses a certificate chain or shows that decision to ca
 - A realm-signed record signed by one listed realm's key for another listed realm's `realm_id` gets no checked place.
 - Renewals carrying the same embedded record bytes cost no further verification.
 - After a realm is removed from the trust list, its signers get no checked place on the next STORE.
-- An advertisement authorized by a certificate chain gets an unchecked place, and the station never decodes the chain.
+- An advertisement with no authorization is refused at STORE as `no_authorization`, one whose authorization holds a
+  `certificate_chain` or anything but exactly the org directory and delegation pair as
+  `authorization_form_unsupported`, and one whose pair holds something other than bytes as `malformed`. None takes a
+  place in any slot, and each costs its connection 1.
+- An advertisement with such an authorization is never counted as authorized in anything the station serves or
+  relays.
+- No station source file names a realm CA PEM, a `realm_ca` trust key, or a `cert_chain` or `verify_cert_chain`
+  option, and the check asserts that its file pattern matches files.
 - A VALUE for a slot holding checked and unchecked entries carries only the records' bytes, in signer key id order.
 - A station with no trust list keeps 64 places in every slot.
 - A slot that becomes checkable keeps its held unchecked entries, and admits no new unchecked entry until fewer than
@@ -206,10 +220,13 @@ Each connection has one budget. Each of these costs 1:
 
 - An object refusal that every verifier reaches from the same bytes: the signed object's shape, the carried key's
   form, the signature, the decoding of `tbs`, its keys and field types, `alg`, a signer field that differs from the key
-  id, a record over 256 KiB, and a domain record lifetime over 7 days (3.5). Every station verifies an object before it
-  forwards it: a request before routing, a reply against the request's target, a relay error only for a pending
-  request, a stream frame by key and sequence, a publication at every Plumtree node, and a record on STORE. So an honest
-  relay never passes one on.
+  id, a record over 256 KiB, a domain record lifetime over 7 days (3.5), and an advertisement refused by its
+  authorization's form (2.4). A station verifies what it routes, stores and serves: a request
+  before routing, a reply against the request's target, a relay error only for a pending request, a stream frame by key
+  and sequence, and a record on STORE. A Plumtree node verifies a publication before it forwards it. So an honest relay
+  never passes one of those on. The payload of an `overlay_relay` is the exception: a station forwards it unread
+  (D17), so it neither verifies that payload nor is charged for it, and a content refusal of a relayed frame at the
+  receiving node costs the relaying connection nothing.
 - A freshness refusal more than 10 minutes past the moment the object's own freshness rule starts refusing it, on
   either side. A relay whose clock is within 5 minutes of the receiver's cannot have accepted such an object, with
   5 minutes to spare.
@@ -293,8 +310,9 @@ Not counted:
   stay within it. 300,000 EU-profile records, about 2.5 GB, upload over one connection in about 40 minutes. It bounds
   verification from STOREs to about 130 to 140 per second per connection at record size.
 - Domain record lifetime, a format rule in the Records section beside the 256 KiB rule: a domain record's `expires_at`
-  is at most 7 days after its `created_at`, and every verifier refuses a longer one as malformed. With `created_at` at
-  most 5 minutes ahead, no domain record a station accepts expires more than 7 days and 5 minutes after it arrives.
+  is at most 7 days after its `created_at`, and every verifier refuses a longer one as `lifetime_too_long`, as it
+  refuses any record past its type's maximum. With `created_at` at most 5 minutes ahead, no domain record a station
+  accepts expires more than 7 days and 5 minutes after it arrives.
 - Why 7 days: it bounds how long any domain entry holds space in a station's domain total, it matches the binding
   lifetime (D22), and renewal stays affordable for a large signer: re-signing 300,000 records once a week takes about
   26 minutes of one core in the EU profile and 6 minutes in the US profile, plus the upload.
@@ -327,7 +345,7 @@ Not counted:
   cost 1. Replication between two stations at 512 KiB per second never is.
 - An SDK bulk upload of valid records into slots with room is answered `stored` 1 throughout.
 - A domain record whose `expires_at` is exactly 7 days after its `created_at` is accepted; one a millisecond longer is
-  refused as malformed at a station and at a consumer, and costs 1.
+  refused as `lifetime_too_long` at a station and at a consumer, and costs 1.
 - While paused, a peer sending 1 GiB leaves at most N chunks in the receiver's mailbox and its memory within a bound.
 - A pause trips none of the receiver's SWIM or stream idle timers for that peer.
 

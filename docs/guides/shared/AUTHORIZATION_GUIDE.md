@@ -265,25 +265,39 @@ RPC:
 Both stay compatible with fully-open, permissionless discovery: the discovery
 layer is always open, and each endpoint independently chooses what it checks.
 
-### consumer → provider (managed realms): realm-CA cert chain
+### consumer → provider: provider authorization
 
-In a managed realm the trust root is the **realm CA**, and it already reaches
-every member: a service is issued an Ed25519 leaf cert chaining
-`realm CA → org CA → leaf`, and receives the realm CA at issuance. A provider
-**embeds its cert chain** (leaf + org CA) in its `procedure_advertisement`. A
-verifying consumer holds the realm CA and checks a resolved advertisement:
+A procedure with an org namespace, the text before the first `/` of its name,
+is served only by a provider that org authorized, and a caller checks that
+before it calls. The provider's `procedure_advertisement` carries its
+authorization: the realm-signed org directory and the org-signed procedure
+delegation that names the provider, checked against the realm key. It is the
+only form. 11.0.0 has no certificate form, and an advertisement carrying any
+other authorization is refused as `authorization_form_unsupported`. A
+procedure without an org namespace carries none, and an advertisement
+expires no later than any part of its authorization. A provider publishes
+its authorization with `macula_response:advertise_direct/7`'s
+`authorization` option.
 
-1. the advertisement signature is valid for the advertiser key;
-2. the leaf cert binds that same advertiser key;
-3. the leaf chains `leaf → org CA → realm CA` (X.509 path validation);
-4. the leaf's organization matches the `<org>` in the procedure URI.
+A caller's pool pins each realm's key when it starts, as
+`realm_trust => #{RealmId => RealmKey}` in `macula:connect/2`'s options, and
+resolution checks an advertisement only against the key pinned for its realm.
+Without that key, the advertisement is never trusted, so writing an
+advertisement next to the real one does not make a node the server of an org's
+procedure. A realm key never arrives with a request: `realm_trust` on a call
+is refused with `{error, {removed_option, realm_trust}}`, as the 10.x options
+`verify_cert_chain` and `cert_chain` are.
 
-Any failure drops the advertisement as a squat — a squatter cannot obtain a
-realm-CA-issued cert binding their key to someone else's org.
+A caller checks the authorization from the advertisement alone and looks up
+no tombstone. A delegation its org withdraws is honoured until it expires, so
+the caller-side revocation bound is the delegation's maximum lifetime, six
+hours, and it lengthens if that lifetime does.
 
 ```erlang
-%% consumer side (the SDK helper the resolution runs)
-ok = macula_record:verify_advertisement_cert_chain(RealmCaPem, Advertisement, Org).
+%% consumer side (the check resolution runs on each verified advertisement)
+ok = macula_record:verify_authorization(Advertisement,
+                                        #{profile => Profile, realm_key => RealmKey},
+                                        erlang:system_time(millisecond)).
 ```
 
 > Note on the realm tag: the 32-byte realm tag is `SHA-256(realm_name)` — a

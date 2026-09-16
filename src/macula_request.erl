@@ -40,19 +40,16 @@
 %%%
 %%% == Direct-dial ==
 %%%
-%%% `start_link/6,7' routes through the pool's existing links — first
-%%% success across whichever are healthy, the same gossip-propagated
-%%% routing `call/5' always used. `start_link_direct/6,7' is the
-%%% direct-dial counterpart: it resolves the procedure's
-%%% `procedure_advertisement' from the DHT (published by
-%%% `macula_response:advertise_direct/6' on the provider side),
-%%% resolves that record's `serving_station' to a dialable endpoint via
-%%% the station's own `station_endpoint' record (every macula-station
-%%% publishes its own automatically), and calls there in one hop via
-%%% `macula:call_station/6' — instead of depending on advertise-gossip
-%%% having propagated a route between arbitrary stations. Requires the
-%%% provider to have advertised via `advertise_direct/6', not plain
-%%% `advertise/5' — a plain advertise publishes no discoverable record.
+%%% Both starts reach a provider the same way. `macula:call/5' resolves
+%%% the procedure's `procedure_advertisement' from the DHT (published by
+%%% `macula_response:advertise_direct/6' on the provider side), resolves
+%%% that record's `serving_station' to a dialable endpoint via the
+%%% station's own `station_endpoint' record (every macula-station
+%%% publishes its own automatically), and calls the advertised provider
+%%% there in one hop via `macula:call_station/8'. `start_link_direct'
+%%% also hands its options to that resolution. Requires the provider to
+%%% have advertised via `advertise_direct/6', not plain `advertise/5':
+%%% a plain advertise publishes no discoverable record.
 %%% @end
 %%%-------------------------------------------------------------------
 -module(macula_request).
@@ -101,13 +98,13 @@
 %% `Payload', timing out after `TimeoutMs'; `Args' is passed to
 %% `Module:init/1'.
 -spec start_link(module(), macula:pool(), macula:realm(), macula:procedure(),
-                 term(), pos_integer()) -> {ok, pid()} | {error, term()}.
+                 term(), 1..600_000) -> {ok, pid()} | {error, term()}.
 start_link(Module, Pool, Realm, Procedure, Payload, TimeoutMs) ->
     start_link(Module, Pool, Realm, Procedure, Payload, TimeoutMs, undefined).
 
 %% @doc As `start_link/6', with `Args' passed to `Module:init/1'.
 -spec start_link(module(), macula:pool(), macula:realm(), macula:procedure(),
-                 term(), pos_integer(), term()) -> {ok, pid()} | {error, term()}.
+                 term(), 1..600_000, term()) -> {ok, pid()} | {error, term()}.
 start_link(Module, Pool, Realm, Procedure, Payload, TimeoutMs, Args) ->
     start_link(Module, Pool, Realm, Procedure, Payload, TimeoutMs, Args, #{}).
 
@@ -115,9 +112,10 @@ start_link(Module, Pool, Realm, Procedure, Payload, TimeoutMs, Args) ->
 %% the functions the request calls and announces with (see "Call and
 %% publish functions" above).
 -spec start_link(module(), macula:pool(), macula:realm(), macula:procedure(),
-                 term(), pos_integer(), term(), start_opts()) ->
+                 term(), 1..600_000, term(), start_opts()) ->
     {ok, pid()} | {error, term()}.
-start_link(Module, Pool, Realm, Procedure, Payload, TimeoutMs, Args, Opts) when is_map(Opts) ->
+start_link(Module, Pool, Realm, Procedure, Payload, TimeoutMs, Args, Opts)
+  when is_integer(TimeoutMs), TimeoutMs > 0, TimeoutMs =< 600_000, is_map(Opts) ->
     start(arity_5(maps:get(call, Opts, fun macula:call/5)), Opts,
           {Module, Pool, Realm, Procedure, Payload, TimeoutMs, Args}).
 
@@ -125,14 +123,14 @@ start_link(Module, Pool, Realm, Procedure, Payload, TimeoutMs, Args, Opts) when 
 %% directly instead of routing through the pool's existing links. See
 %% the "Direct-dial" section above.
 -spec start_link_direct(module(), macula:pool(), macula:realm(),
-                        macula:procedure(), term(), pos_integer()) ->
+                        macula:procedure(), term(), 1..600_000) ->
     {ok, pid()} | {error, term()}.
 start_link_direct(Module, Pool, Realm, Procedure, Payload, TimeoutMs) ->
     start_link_direct(Module, Pool, Realm, Procedure, Payload, TimeoutMs, undefined).
 
 %% @doc As `start_link_direct/6', with `Args' passed to `Module:init/1'.
 -spec start_link_direct(module(), macula:pool(), macula:realm(),
-                        macula:procedure(), term(), pos_integer(), term()) ->
+                        macula:procedure(), term(), 1..600_000, term()) ->
     {ok, pid()} | {error, term()}.
 start_link_direct(Module, Pool, Realm, Procedure, Payload, TimeoutMs, Args) ->
     start_link_direct(Module, Pool, Realm, Procedure, Payload, TimeoutMs,
@@ -141,14 +139,14 @@ start_link_direct(Module, Pool, Realm, Procedure, Payload, TimeoutMs, Args) ->
 %% @doc As `start_link_direct/7', with options: `direct_call' and
 %% `fact_publish' give the functions the request calls and announces with
 %% (see "Call and publish functions" above), and the other options go to
-%% the call as `macula_direct_dial:call/6' takes them, for example
-%% `verify_cert_chain => {RealmCaPem, Org}' (Slice 7c Direction B, managed
-%% realms only; see `macula_direct_dial''s module doc, "Trust model").
+%% the call as `macula_direct_dial:call/6' takes them. An org namespaced
+%% procedure's authorization is checked against the realm key the pool
+%% pinned (see `macula_direct_dial''s module doc, "Trust model").
 -spec start_link_direct(module(), macula:pool(), macula:realm(),
-                        macula:procedure(), term(), pos_integer(), term(),
+                        macula:procedure(), term(), 1..600_000, term(),
                         direct_opts()) -> {ok, pid()} | {error, term()}.
-start_link_direct(Module, Pool, Realm, Procedure, Payload, TimeoutMs, Args,
-                  Opts) when is_map(Opts) ->
+start_link_direct(Module, Pool, Realm, Procedure, Payload, TimeoutMs, Args, Opts)
+  when is_integer(TimeoutMs), TimeoutMs > 0, TimeoutMs =< 600_000, is_map(Opts) ->
     DirectCall = arity_6(maps:get(direct_call, Opts, fun macula_direct_dial:call/6)),
     DialOpts = maps:without([direct_call, fact_publish], Opts),
     Call = fun(CallPool, CallRealm, CallProcedure, CallPayload, CallTimeoutMs) ->

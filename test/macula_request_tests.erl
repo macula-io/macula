@@ -54,7 +54,8 @@ request_test_() ->
                  fun cancel_before_reply_announces_cancelled/0,
                  fun a_direct_request_calls_with_the_other_options/0,
                  fun without_a_call_function_it_calls_through_macula/0,
-                 fun a_call_option_that_is_not_an_arity_5_fun_is_refused/0]].
+                 fun a_call_option_that_is_not_an_arity_5_fun_is_refused/0,
+                 fun a_timeout_outside_its_bounds_is_refused_where_the_request_starts/0]].
 
 delivers_reply_and_publishes_lifecycle() ->
     process_flag(trap_exit, true),
@@ -93,7 +94,7 @@ a_direct_request_calls_with_the_other_options() ->
                          {ok, #{result => 5}}
                  end,
     Opts = #{direct_call => DirectCall, fact_publish => facts_to(self()),
-             verify_cert_chain => chain},
+             an_option => 1},
     {ok, _Pid} = macula_request:start_link_direct(?MODULE, pool, ?REALM, ?PROCEDURE, #{a => 2},
                                                   5_000, self(), Opts),
     ?assertEqual({reply_seen, {ok, #{result => 5}}}, wait_reply()),
@@ -103,11 +104,12 @@ a_direct_request_calls_with_the_other_options() ->
                  not_called
              end,
     ?assertEqual({direct_call, pool, ?REALM, ?PROCEDURE, #{a => 2}, 5_000,
-                  #{verify_cert_chain => chain}}, Called).
+                  #{an_option => 1}}, Called).
 
-%% Without a call function the request's worker calls macula:call/5,
-%% which passes a pool that is not a process on to macula_client:call/5,
-%% whose guard refuses it, and the worker's crash stops the request.
+%% Without a call function the request's worker calls macula:call/5, which
+%% resolves the procedure through macula_direct_dial and passes a pool that
+%% is not a process on to macula:find_records/3, whose guard refuses it, and
+%% the worker's crash stops the request.
 without_a_call_function_it_calls_through_macula() ->
     process_flag(trap_exit, true),
     {ok, Pid} = macula_request:start_link(?MODULE, pool, ?REALM, ?PROCEDURE, #{}, 5_000, self(),
@@ -117,7 +119,21 @@ without_a_call_function_it_calls_through_macula() ->
              after 5000 ->
                  no_exit
              end,
-    ?assertMatch({worker_crashed, {function_clause, [{macula_client, call, _, _} | _]}}, Reason).
+    ?assertMatch({worker_crashed, {function_clause, [{macula, find_records, _, _} | _]}}, Reason).
+
+%% A request's timeout is a positive number of milliseconds up to ten minutes, the bound its call has; anything else is
+%% refused where the request starts, not in its worker.
+a_timeout_outside_its_bounds_is_refused_where_the_request_starts() ->
+    Facts = facts_to(self()),
+    DirectCall = fun(_Pool, _Realm, _Procedure, _Payload, _TimeoutMs, _Opts) -> {ok, 1} end,
+    [begin
+         ?assertError(function_clause,
+                      macula_request:start_link(?MODULE, pool, ?REALM, ?PROCEDURE, #{}, Timeout, self(),
+                                                #{call => answering({ok, 1}), fact_publish => Facts})),
+         ?assertError(function_clause,
+                      macula_request:start_link_direct(?MODULE, pool, ?REALM, ?PROCEDURE, #{}, Timeout, self(),
+                                                       #{direct_call => DirectCall, fact_publish => Facts}))
+     end || Timeout <- [infinity, 0, 600_001]].
 
 a_call_option_that_is_not_an_arity_5_fun_is_refused() ->
     ?assertError(function_clause,

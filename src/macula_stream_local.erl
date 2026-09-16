@@ -35,6 +35,12 @@
     terminate/2
 ]).
 
+-ifdef(TEST).
+%% The process a local call's handler runs in, spawned before its stream
+%% exists: exported for macula_stream_tests.erl.
+-export([spawn_handler/3]).
+-endif.
+
 -define(SERVER, ?MODULE).
 
 -type handler() :: fun((Stream :: pid(), Args :: term()) -> any()).
@@ -151,32 +157,38 @@ spawn_pair(Procedure, Mode, Handler, Args, Opts) ->
         mode => Mode,
         owner => Caller
     }),
-    HandlerHost = self_host_pid(),
+    %% The handler runs in a dedicated process that owns the server-side
+    %% stream: a crashing handler doesn't take down the caller, the handler
+    %% can block on recv/send without affecting the client, and the stream
+    %% ends when the handler does, unless the handler hands it over first
+    %% (`macula_stream:controlling_process/2').
+    HandlerPid = spawn_handler(Handler, Args, Procedure),
     {ok, ServerPid} = macula_stream:start_link(#{
         id => StreamId,
         role => server,
         mode => Mode,
-        owner => HandlerHost
+        owner => HandlerPid
     }),
     ok = macula_stream:pair(ClientPid, ServerPid),
-    %% Run the handler in a dedicated process so a crashing handler
-    %% doesn't take down the caller, and so the handler can block on
-    %% recv/send without affecting the client.
-    _HandlerPid = spawn_link_handler(Handler, ServerPid, Args, Procedure),
+    HandlerPid ! {serve, ServerPid},
     {ok, ClientPid}.
 
-%% Owner of the server-side stream is a no-op host process; it just
-%% keeps the stream alive while the handler runs in a sibling process.
-%% Using self() would cause the registry gen_server to exit if the
-%% client linked to it; spawn a dedicated host instead.
-self_host_pid() ->
-    spawn(fun host_loop/0).
+%% The handler process runs the handler once its stream is paired, and ends
+%% without running it when the process that opened the call ends first. Once
+%% the handler runs, the opener's end is no concern of it, so no notice of it
+%% is left in the handler's mailbox.
+spawn_handler(Handler, Args, Procedure) ->
+    Opener = self(),
+    spawn(fun() -> serve_when_paired(erlang:monitor(process, Opener), Handler, Args, Procedure) end).
 
-host_loop() ->
-    receive stop -> ok end.
-
-spawn_link_handler(Handler, Stream, Args, Procedure) ->
-    spawn(fun() -> run_handler(Handler, Stream, Args, Procedure) end).
+serve_when_paired(OpenerRef, Handler, Args, Procedure) ->
+    receive
+        {serve, Stream} ->
+            true = erlang:demonitor(OpenerRef, [flush]),
+            run_handler(Handler, Stream, Args, Procedure);
+        {'DOWN', OpenerRef, process, _Opener, _Reason} ->
+            ok
+    end.
 
 %% A handler crash aborts the stream with the crash class as the code
 %% and the reason's name as the message, and none of the crash's

@@ -6,6 +6,7 @@
 //! - SHA-256 hashing
 //! - Base64 encoding/decoding (URL-safe)
 //! - Constant-time secure comparison
+//! - The effective user id, which a key file's owner has to match
 //!
 //! These NIFs provide the cryptographic foundation for UCAN tokens,
 //! DID operations, and content-addressed storage in the Macula mesh.
@@ -455,6 +456,22 @@ fn nif_secure_compare(a: Binary, b: Binary) -> bool {
         result |= x ^ y;
     }
     result == 0
+}
+
+/// The effective user id of this process: the owner of the files it creates,
+/// which a key file's owner has to match.
+#[cfg(unix)]
+#[rustler::nif]
+fn nif_effective_uid() -> u32 {
+    // SAFETY: geteuid takes no arguments, has no preconditions and cannot fail.
+    unsafe { libc::geteuid() }
+}
+
+/// A host without user ids has no effective user id: `none`.
+#[cfg(not(unix))]
+#[rustler::nif]
+fn nif_effective_uid(env: Env) -> NifResult<Atom> {
+    Atom::from_str(env, "none")
 }
 
 rustler::init!("macula_crypto_nif");

@@ -227,6 +227,7 @@ dependencies = [
  "base64",
  "blake3",
  "ed25519-dalek",
+ "libc",
  "rand",
  "rustler",
  "sha2",

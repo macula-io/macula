@@ -25,11 +25,20 @@
 %%%   {quic, send_failed, StreamRef, Reason}
 %%%     A write on the stream failed; later sends return the error.
 %%%     Handle it as a closed stream.
+%%%
+%%% Sent to the process that called async_send/3, once per tagged send
+%%% that returned ok:
+%%%   {quic, send_complete, StreamRef, Tag}
+%%%     All the data queued with Tag is written.
+%%%   {quic, send_incomplete, StreamRef, {Tag, Reason}}
+%%%     The stream was reset or closed, or its writes failed, before
+%%%     that data was written.
 %%% @end
 %%%-------------------------------------------------------------------
 -module(macula_quic).
 
 -include_lib("kernel/include/logger.hrl").
+-include("macula_quic_error_codes.hrl").
 
 -on_load(init/0).
 
@@ -40,6 +49,7 @@
     async_accept/1,
     async_accept/2,
     close_listener/1,
+    reload_certificate/3,
 
     %% Connection
     connect/4,
@@ -54,15 +64,20 @@
     %% Self-signed cert generation (pubkey-anchored)
     generate_self_signed_cert/3,
     close_connection/1,
+    close_connection/3,
+    close_reason/1,
     async_accept_stream/1,
     async_accept_stream/2,
     handshake/1,
     peername/1,
     max_datagram_size/1,
+    peer_leaf/1,
+    presented_leaf/1,
 
     %% Stream
     send/2,
     async_send/2,
+    async_send/3,
     close_stream/1,
     reset_stream/2,
     setopt/3,
@@ -84,6 +99,11 @@
     getstat/2
 ]).
 
+%% Exports with no caller inside macula yet: macula-station closes a
+%% connection with an application error code and reads why one closed.
+-ignore_xref([{macula_quic, close_connection, 3}]).
+-ignore_xref([{macula_quic, close_reason, 1}]).
+
 -export_type([dial/0, stream_opening/0]).
 
 %% A dial started by async_connect/4: its result tag and its handle.
@@ -92,10 +112,6 @@
 %% A stream open started by async_open_stream/1: its result tag and its
 %% handle.
 -opaque stream_opening() :: {macula_quic_stream_opening, reference(), reference()}.
-
-%% The application error code on a stream whose open was cancelled after
-%% the peer allowed it.
--define(OPEN_CANCELLED_CODE, 0).
 
 %% Added to a dial's own timeout before connect/4 gives up waiting.
 -define(DIAL_RESULT_GRACE_MS, 1_000).
@@ -198,6 +214,18 @@ async_accept(Listener, _Opts) ->
 -spec close_listener(reference()) -> ok.
 close_listener(Listener) ->
     nif_close_listener(Listener).
+
+%% @doc Make a new certificate the one a listener presents. `CertFile' and
+%% `KeyFile' are read like the `cert' and `key' options of `listen/3', and
+%% the listener's other settings stay as they are. Connections accepted
+%% after this returns present the new leaf; a connection accepted earlier
+%% keeps the leaf it presented (see `presented_leaf/1'). A file that cannot
+%% be read, holds no certificate or key, or a key that does not match the
+%% certificate returns `{error, Reason}' and keeps the current certificate.
+-spec reload_certificate(reference(), binary() | string(), binary() | string()) ->
+    ok | {error, term()}.
+reload_certificate(Listener, CertFile, KeyFile) ->
+    nif_reload_certificate(Listener, to_binary(CertFile), to_binary(KeyFile)).
 
 %%%===================================================================
 %%% Connection API
@@ -407,17 +435,49 @@ discard_stream_open_result(cancelled, _Tag) ->
 discard_stream_open_result(delivered, Tag) ->
     receive
         {quic, stream_opened, Tag, Stream} ->
-            reset_stream(Stream, ?OPEN_CANCELLED_CODE);
+            reset_stream(Stream, ?QUIC_CODE_CANCELLED);
         {quic, stream_open_failed, Tag, _Reason} ->
             ok
     after 0 ->
         ok
     end.
 
-%% @doc Close a connection.
+%% @doc Close a connection with application error code 0 and the reason
+%% `closed'.
 -spec close_connection(reference()) -> ok.
 close_connection(Conn) ->
     nif_close_connection(Conn).
+
+%% The longest reason close_connection/3 sends.
+-define(MAX_CLOSE_REASON_BYTES, 256).
+%% The largest code a QUIC variable-length integer holds.
+-define(MAX_CLOSE_CODE, (1 bsl 62) - 1).
+
+%% @doc Close a connection with an application error code and a reason, which
+%% the peer reads with `close_reason/1'. `Code' must fit a QUIC
+%% variable-length integer (below 2^62), and `Reason' is at most 256 bytes.
+%% The codes macula sends are named in include/macula_quic_error_codes.hrl.
+-spec close_connection(reference(), non_neg_integer(), binary()) ->
+    ok | {error, error_code_out_of_range | reason_too_long}.
+close_connection(Conn, Code, Reason)
+  when is_integer(Code), Code >= 0, Code =< ?MAX_CLOSE_CODE,
+       byte_size(Reason) =< ?MAX_CLOSE_REASON_BYTES ->
+    nif_close_connection_with_code(Conn, Code, Reason);
+close_connection(_Conn, Code, Reason)
+  when is_integer(Code), Code > ?MAX_CLOSE_CODE, is_binary(Reason) ->
+    {error, error_code_out_of_range};
+close_connection(_Conn, Code, Reason) when is_integer(Code), Code >= 0, is_binary(Reason) ->
+    {error, reason_too_long}.
+
+%% @doc Why a connection closed, or `open' while it is open. A peer's
+%% application close comes back as `{application_closed, Code, Reason}',
+%% with the code and reason the peer passed to `close_connection/3';
+%% `locally_closed' means this side closed it.
+-spec close_reason(reference()) ->
+    open | locally_closed | reset | timed_out | version_mismatch | cids_exhausted
+  | {application_closed | transport_closed | transport_error, non_neg_integer(), binary()}.
+close_reason(Conn) ->
+    nif_close_reason(Conn).
 
 %% @doc Start accepting streams on a connection.
 %% Delivers {quic, new_stream, StreamRef, #{conn => ConnRef}} to the owning process.
@@ -447,6 +507,24 @@ peername(Conn) ->
 -spec max_datagram_size(reference()) -> {ok, pos_integer()} | {error, term()}.
 max_datagram_size(Conn) ->
     nif_max_datagram_size(Conn).
+
+%% @doc The leaf certificate the other side sent in this connection's TLS
+%% handshake, as DER, exactly as received. A dialed connection has the
+%% station's leaf. An accepted connection returns `{error, no_peer_leaf}',
+%% since clients send no certificate.
+-spec peer_leaf(reference()) -> {ok, public_key:der_encoded()} | {error, no_peer_leaf}.
+peer_leaf(Conn) ->
+    nif_peer_leaf(Conn).
+
+%% @doc The leaf certificate this side sent in this connection's TLS
+%% handshake, as DER. An accepted connection has the leaf its listener
+%% presented when it accepted the connection, also after
+%% `reload_certificate/3'. A dialed connection returns
+%% `{error, no_presented_leaf}'.
+-spec presented_leaf(reference()) ->
+    {ok, public_key:der_encoded()} | {error, no_presented_leaf}.
+presented_leaf(Conn) ->
+    nif_presented_leaf(Conn).
 
 %%%===================================================================
 %%% Stream API
@@ -495,13 +573,26 @@ await_sent({error, _} = Error, _Ref) ->
 async_send(Stream, Data) ->
     nif_async_send(Stream, iolist_to_binary(Data)).
 
+%% @doc `async_send/2' for data whose end the calling process hears about.
+%%
+%% Returns as `async_send/2' does, and queues nothing unless it returns `ok'.
+%% For data it queued, the calling process gets exactly one message:
+%% `{quic, send_complete, Stream, Tag}' once all of the data is written, or
+%% `{quic, send_incomplete, Stream, {Tag, Reason}}' when the stream is reset,
+%% closed or fails first, `Reason' being `reset', `closed' or why the write
+%% failed. `Tag' is the caller's own term, copied into that message, so keep
+%% it small.
+-spec async_send(reference(), iodata(), term()) -> ok | {error, term()}.
+async_send(Stream, Data, Tag) ->
+    nif_async_send_tagged(Stream, iolist_to_binary(Data), Tag).
+
 %% @doc Close a stream's sending side gracefully, and return at once.
 %%
 %% Data queued before the close is still written, and then a QUIC FIN ends
 %% the stream: the peer's `RecvStream::read' resolves `{ok, none}'. When that
 %% data cannot be written within the linger bound, the stream is reset with
-%% application error code 1, which means the stream closed and its unwritten
-%% data was dropped after the linger bound. The bound is the macula
+%% application error code 1, `?QUIC_CODE_LINGER_EXPIRED' (see the code table
+%% at `reset_stream/2'), and its unwritten data is dropped. The bound is the macula
 %% application env `quic_close_linger_ms', 30000 by default, read when
 %% `close_stream/1' is called. For an immediate, peer-visible abort see
 %% `reset_stream/2'.
@@ -517,6 +608,17 @@ close_stream(Stream) ->
 %% dropped, and a `send/2' waiting for its write returns `{error, reset}'.
 %% `ErrorCode' must fit a QUIC VarInt (`&lt; 2^62'); out-of-range values
 %% answer `{error, error_code_out_of_range}'.
+%%
+%% The application error codes macula itself sends are defined once, by
+%% name, in `include/macula_quic_error_codes.hrl':
+%% <ul>
+%%   <li>0, `?QUIC_CODE_CANCELLED': the sender cancelled the stream, in a
+%%       content transfer cancel or a stream open cancelled after the peer
+%%       allowed it.</li>
+%%   <li>1, `?QUIC_CODE_LINGER_EXPIRED': a closed stream's queued data could
+%%       not be written within its linger bound.</li>
+%% </ul>
+%% Any other code is the caller's own.
 -spec reset_stream(reference(), non_neg_integer()) -> ok | {error, term()}.
 reset_stream(Stream, ErrorCode)
   when is_reference(Stream), is_integer(ErrorCode), ErrorCode >= 0 ->
@@ -637,6 +739,9 @@ nif_async_accept(_Listener) ->
 nif_close_listener(_Listener) ->
     erlang:nif_error(nif_not_loaded).
 
+nif_reload_certificate(_Listener, _CertFile, _KeyFile) ->
+    erlang:nif_error(nif_not_loaded).
+
 nif_async_connect(_Tag, _Host, _Port, _Alpn, _Verify, _VerifyPubkey,
                   _IdleTimeoutMs, _KeepAliveMs, _TimeoutMs) ->
     erlang:nif_error(nif_not_loaded).
@@ -656,6 +761,12 @@ nif_cancel_open_stream(_Opening) ->
 nif_close_connection(_Conn) ->
     erlang:nif_error(nif_not_loaded).
 
+nif_close_connection_with_code(_Conn, _Code, _Reason) ->
+    erlang:nif_error(nif_not_loaded).
+
+nif_close_reason(_Conn) ->
+    erlang:nif_error(nif_not_loaded).
+
 nif_async_accept_stream(_Conn) ->
     erlang:nif_error(nif_not_loaded).
 
@@ -665,10 +776,19 @@ nif_peername(_Conn) ->
 nif_max_datagram_size(_Conn) ->
     erlang:nif_error(nif_not_loaded).
 
+nif_peer_leaf(_Conn) ->
+    erlang:nif_error(nif_not_loaded).
+
+nif_presented_leaf(_Conn) ->
+    erlang:nif_error(nif_not_loaded).
+
 nif_send(_Stream, _Data, _Ref) ->
     erlang:nif_error(nif_not_loaded).
 
 nif_async_send(_Stream, _Data) ->
+    erlang:nif_error(nif_not_loaded).
+
+nif_async_send_tagged(_Stream, _Data, _Tag) ->
     erlang:nif_error(nif_not_loaded).
 
 nif_close_stream(_Stream, _LingerMs) ->

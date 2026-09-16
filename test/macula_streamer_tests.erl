@@ -49,6 +49,7 @@ streamer_test_() ->
                  fun advertise_direct_forwards_mode_to_advertise_stream/0,
                  fun advertise_forwards_auth_to_advertise_stream/0,
                  fun the_advertisement_publish_gets_the_options_without_the_functions/0,
+                 fun advertise_direct_with_a_removed_trust_option_registers_and_publishes_nothing/0,
                  fun functions_of_another_shape_are_refused_before_anything_is_advertised/0,
                  fun without_functions_a_streamer_advertises_through_the_macula_facade/0,
                  fun reuse_sup_resends_advertise_without_a_new_supervisor/0,
@@ -118,16 +119,27 @@ advertise_forwards_auth_to_advertise_stream() ->
                  [AdvertiseOpts || {_, _, _, AdvertiseOpts} <- Advertised]).
 
 %% advertise_direct/7 publishes its DHT record with the options, such as
-%% cert_chain, and none of the functions; with no policy among them, the
+%% ttl_ms, and none of the functions; with no policy among them, the
 %% advertise function gets no options at all.
 the_advertisement_publish_gets_the_options_without_the_functions() ->
-    Opts = (macula_scripted_stream:options([]))#{cert_chain => <<"chain">>},
+    Opts = (macula_scripted_stream:options([]))#{ttl_ms => 120_000},
     {ok, _} = macula_streamer:advertise_direct(pool, ?REALM, <<"logs.tail_v1">>, ?MODULE, self(),
                                                macula_identity:generate(), Opts),
     ?assertMatch([{_, _, _, AdvertiseOpts}] when map_size(AdvertiseOpts) =:= 0,
                  macula_scripted_stream:advertised()),
     [{_, _, Published}] = macula_scripted_stream:advertisements_published(),
-    ?assertEqual(#{cert_chain => <<"chain">>}, Published).
+    ?assertEqual(#{ttl_ms => 120_000}, Published).
+
+%% cert_chain is gone in 11.0.0. advertise_direct/7 refuses it by name before it
+%% registers the stream handler, so nothing is left registered with no
+%% advertisement to reach it; authorization replaces it.
+advertise_direct_with_a_removed_trust_option_registers_and_publishes_nothing() ->
+    Opts = (macula_scripted_stream:options([]))#{cert_chain => <<"chain">>},
+    ?assertEqual({error, {removed_option, cert_chain}},
+                 macula_streamer:advertise_direct(pool, ?REALM, <<"logs.tail_v1">>, ?MODULE, self(),
+                                                  macula_identity:generate(), Opts)),
+    ?assertEqual({[], []}, {macula_scripted_stream:advertised(),
+                            macula_scripted_stream:advertisements_published()}).
 
 %% A function of another arity, or stream functions without one the
 %% streamer calls, are refused with function_clause, and nothing is
