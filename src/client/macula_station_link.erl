@@ -1224,22 +1224,19 @@ handle_call({call_on_stream, _Stream, _Realm, _Proc, _Payload, _Tmo}, _From,
             #state{peer_node_id = undefined} = S) ->
     {reply, {error, not_connected}, S};
 handle_call({call_on_stream, Stream, Realm, Proc, Payload, Tmo}, From,
-            #state{node_identity = Id, content_pending = CP,
-                   content_stream_bufs = Bufs} = S)
+            #state{node_identity = Id, peer_node_id = Station,
+                   content_pending = CP, content_stream_bufs = Bufs} = S)
         when is_map_key(Stream, Bufs) ->
-    Caller = node_id(Id),
-    DeadlineMs = erlang:system_time(millisecond) + Tmo,
-    Frame = macula_frame:call(#{
-        call_id     => crypto:strong_rand_bytes(16),
-        procedure   => Proc,
-        realm       => Realm,
-        payload     => Payload,
-        deadline_ms => DeadlineMs,
-        caller      => Caller,
-        ucan_token  => <<>>
-    }),
+    CallSpec = #{
+        request_id => crypto:strong_rand_bytes(16),
+        procedure  => Proc,
+        realm      => Realm,
+        target     => Station,
+        deadline   => erlang:system_time(millisecond) + Tmo,
+        payload    => Payload
+    },
     await_content_call_reply(
-      send_on_content_stream(Stream, Frame, Id), Stream, From, Tmo, CP, S);
+      send_on_content_stream(Stream, CallSpec, Id), Stream, From, Tmo, CP, S);
 handle_call({call_on_stream, _Stream, _Realm, _Proc, _Payload, _Tmo}, _From, S) ->
     {reply, {error, invalid_stream}, S};
 
@@ -1898,8 +1895,12 @@ open_content_stream_result({ok, Stream}, Bufs, S) ->
 open_content_stream_result({error, _} = E, _Bufs, S) ->
     {reply, E, S}.
 
-send_on_content_stream(Stream, Frame, Id) ->
-    try macula_peering:send_on_stream(Stream, Frame, Id)
+send_on_content_stream(Stream, CallSpec, Id) ->
+    try
+        case macula_frame:stream_bytes({call, CallSpec}, Id) of
+            {ok, Built} -> macula_peering:send_on_stream(Stream, macula_frame:written_bytes(Built));
+            {error, _} = Refused -> Refused
+        end
     catch C:R -> {error, {C, R}}
     end.
 

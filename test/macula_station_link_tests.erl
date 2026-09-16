@@ -1455,8 +1455,8 @@ setup_link_for_streams() ->
         Test ! {opened_dedicated_stream, Stream},
         {ok, Stream}
     end),
-    meck:expect(macula_peering, send_on_stream, fun(Stream, Frame, _Id) ->
-        Test ! {sent_on_stream, Stream, Frame},
+    meck:expect(macula_peering, send_on_stream, fun(Stream, Bytes) ->
+        Test ! {sent_on_stream, Stream, Bytes},
         ok
     end),
     meck:expect(macula_peering, close_dedicated_stream, fun(Stream) ->
@@ -1514,7 +1514,9 @@ a_content_stream_reply_that_does_not_decode_fails_its_call_test_() ->
                                                             <<"_content.get_block">>, #{}, 2_000)}
              end),
              receive
-                 {sent_on_stream, Stream, #{frame_type := call}} -> ok
+                 {sent_on_stream, Stream, Bytes} ->
+                     ?assertMatch({ok, #{frame_type := call}},
+                                  macula_frame:read_wire(Bytes))
              after 1_000 ->
                  erlang:error(no_content_call_sent)
              end,
@@ -1547,12 +1549,24 @@ a_content_stream_reply_missing_a_required_field_fails_its_call_test_() ->
                                                             <<"_content.get_block">>, #{}, 2_000)}
              end),
              CallId = receive
-                          {sent_on_stream, Stream, #{frame_type := call, call_id := Id}} -> Id
+                          {sent_on_stream, Stream, Bytes} ->
+                              {ok, #{frame_type := call, request_id := Id}} =
+                                  macula_frame:read_wire(Bytes),
+                              Id
                       after 1_000 ->
                           erlang:error(no_content_call_sent)
                       end,
-             Pid ! {quic, macula_frame:encode(#{frame_type => result, call_id => CallId}),
-                    Stream, undefined},
+             {ok, Profile} = macula_crypto_profile:configured(),
+             {ok, PeerKey} = macula_node_keys:generate(identity, Profile),
+             {ok, PeerNodeId} = macula_node_keys:node_id(PeerKey),
+             {ok, Built} = macula_frame:stream_bytes(
+                 {result, #{request => #{request_id => CallId,
+                                         request_hash => crypto:hash(sha384, CallId),
+                                         target => PeerNodeId},
+                            payload => #{}}},
+                 PeerKey),
+             Frame = result_without_payload(macula_frame:written_bytes(Built)),
+             Pid ! {quic, macula_frame:encode(Frame), Stream, undefined},
              receive
                  {content_call, Result} ->
                      ?assertMatch({error, {malformed, {invalid_frame, result, _}}}, Result)
@@ -1579,6 +1593,19 @@ start_connected_link() ->
         setelement(?PEER_NODE_ID_INDEX, S2, PeerNodeId)
     end),
     {Pid, FakePeer, PeerNodeId}.
+
+
+%% Rebuild a signed result frame's wire form with the payload stripped
+%% from its reply's tbs, keeping the original signature: the frame
+%% decodes but fails its shape check, exactly what the
+%% missing-required-field test feeds the link.
+result_without_payload(Bytes) ->
+    {ok, Frame, <<>>} = macula_frame:decode(Bytes),
+    #{reply := #{key := Key, tbs := Tbs, signature := Signature}} = Frame,
+    TbsMap = maps:remove({text, <<"payload">>}, macula_record_cbor:decode(Tbs)),
+    Frame#{reply := #{key => Key,
+                      tbs => macula_record_cbor:encode(TbsMap),
+                      signature => Signature}}.
 
 %%------------------------------------------------------------------
 %% Inbound CALL handlers run off the link process.
