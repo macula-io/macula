@@ -57,7 +57,7 @@
 -module(macula_client).
 -behaviour(gen_server).
 
--export([connect/2, close/1, child_spec/3, status/1, links/1, sign_node_record/2, sign_domain_record/2,
+-export([connect/2, close/1, child_spec/3, status/1, links/1, sign_node_record/2, sign_node_record/3, sign_domain_record/2,
          withdraw_node_record/3, realm_key/2]).
 %% Internal API — called by `macula_pubsub' (and future surfaces).
 -export([publish/5, subscribe/5, unsubscribe/2]).
@@ -880,6 +880,33 @@ sign_node_record(Pool, #{type := Type, created_at := Created, expires_at := Expi
 sign_node_record(Pool, _NotARecord) when is_pid(Pool) ->
     {error, malformed_record}.
 
+%% @doc As `sign_node_record/2', bounded by `Opts' `not_after' (a Unix
+%% millisecond). The pool judges the bound on its own clock: one already
+%% passed is `{error, not_after_passed}'; one before the record's
+%% lifetime runs out ends the record at the bound; one after keeps the
+%% built lifetime. The refusals of `sign_node_record/2' stand under a
+%% bound. `Opts' without `not_after' signs as `sign_node_record/2' does,
+%% and a `not_after' that is not an integer raises `function_clause'
+%% in the caller.
+-spec sign_node_record(pool(), macula_record:m_record(), map()) ->
+          {ok, macula_record:m_record()}
+        | {error, not_a_node_signed_type | key_id_mismatch | lifetime_too_long | lifetime_reversed | record_too_large
+                | malformed_record | not_after_passed}.
+sign_node_record(Pool,
+                 #{type := Type, created_at := Created, expires_at := Expires, payload := Payload} = Record,
+                 #{not_after := NotAfter})
+  when is_pid(Pool), is_integer(Type), is_integer(Created), is_integer(Expires), is_map(Payload),
+       not is_map_key(subject, Record), is_integer(NotAfter) ->
+    pool_signs(macula_record:payload_bounded(Payload), Pool,
+               {sign_node_record_bounded, #{type => Type, created_at => Created, expires_at => Expires,
+                                            payload => Payload, not_after => NotAfter}});
+sign_node_record(Pool, _NotARecord, #{not_after := NotAfter})
+  when is_pid(Pool), is_integer(NotAfter) ->
+    {error, malformed_record};
+sign_node_record(Pool, Record, Opts)
+  when is_pid(Pool), is_map(Opts), not is_map_key(not_after, Opts) ->
+    sign_node_record(Pool, Record).
+
 %% @doc Sign a domain record (tags 0x20 to 0xFF) as this node, with the pool's node identity key, in the pool's own
 %% process, and return the signed record, stored under this node's key id with its subject when it has one. Build it
 %% with `macula_record:envelope/3'. The pool stamps it with a new version and created_at, keeping the lifetime it was
@@ -1372,6 +1399,9 @@ handle_call({realm_key, RealmId}, _From, #state{realm_keys = Keys} = S) ->
     {reply, pinned_realm_key(maps:find(RealmId, Keys)), S};
 handle_call({sign_node_record, Record}, _From, #state{node_identity = Key} = S) ->
     {reply, node_record_signed(macula_record:node_signed(Record), Record, Key), S};
+handle_call({sign_node_record_bounded, Record}, _From, #state{node_identity = Key} = S) ->
+    {reply, node_record_signed_bounded(macula_record:node_signed(Record), Record, Key,
+                                       maps:get(not_after, Record)), S};
 handle_call({sign_domain_record, Record}, _From, #state{node_identity = Key} = S) ->
     {reply, domain_record_signed(macula_record:domain_record_checked(Record), Record, Key), S};
 handle_call({withdraw_node_record, Withdrawn, Reason}, _From, #state{node_identity = Key} = S) ->
@@ -1515,6 +1545,25 @@ node_record_signed(false, _Record, _Key) ->
     {error, not_a_node_signed_type};
 node_record_signed(true, Record, Key) ->
     signed_here(fun() -> macula_record:refresh(Record, Key) end).
+
+%% The bounded signing: the pool judges the bound on its own clock, refuses one
+%% already passed, and caps the record's expiry at the bound only when the
+%% bound comes before the lifetime it was built with runs out.
+node_record_signed_bounded(false, _Record, _Key, _NotAfter) ->
+    {error, not_a_node_signed_type};
+node_record_signed_bounded(true, Record, Key, NotAfter) ->
+    Now = erlang:system_time(millisecond),
+    bounded_signed(NotAfter =< Now, Now, NotAfter, Record, Key).
+
+bounded_signed(true, _Now, _NotAfter, _Record, _Key) ->
+    {error, not_after_passed};
+bounded_signed(false, Now, NotAfter, #{created_at := Created, expires_at := Expires} = Record, Key) ->
+    Lifetime = Expires - Created,
+    Bounded = bounded_record(NotAfter < Now + Lifetime, NotAfter, Record),
+    signed_here(fun() -> macula_record:refresh(Bounded, Key) end).
+
+bounded_record(true, NotAfter, Record) -> Record#{expires_at => NotAfter};
+bounded_record(false, _NotAfter, Record) -> Record.
 
 %% A domain record the pool signs is signed as this node: macula_record:refresh/2 stamps it now and signs it, and
 %% sign/2 checks the key's purpose, the lifetime and the size. The pool checks the record in its own process as the

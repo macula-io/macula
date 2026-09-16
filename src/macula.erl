@@ -57,6 +57,8 @@
          find_records_by_type/2,
          subscribe_records/3,
          unsubscribe_records/2]).
+-export([sign_node_record/2, sign_node_record/3, sign_domain_record/2,
+         withdraw_node_record/3, parse_stations/1]).
 
 %% Content-addressed blob storage. `_content.put_block' /
 %% `_content.get_block' RPCs against the relay's local content
@@ -521,6 +523,58 @@ subscribe_records(Pool, Type, Callback)
 unsubscribe_records(Pool, Ref)
   when is_pid(Pool), is_reference(Ref) ->
     macula_pubsub:unsubscribe(Pool, Ref).
+
+%%%===================================================================
+%%% Signing records this node signs about itself — the pool holds the key
+%%%===================================================================
+
+%% @doc Sign a record this node signs about itself with the pool's node
+%% identity key, in the pool's own process: a node record, a procedure
+%% advertisement or a content announcement that names this node. See
+%% `macula_client:sign_node_record/2' for the record checks and
+%% refusals. `Opts' `not_after' bounds the signed record's expiry: the
+%% pool judges it on its own clock, refuses a bound already passed as
+%% `{error, not_after_passed}', ends the record at the bound when the
+%% bound comes before the record's lifetime runs out, and keeps the
+%% built lifetime otherwise.
+-spec sign_node_record(pool(), m_record()) ->
+    {ok, m_record()} | {error, term()}.
+sign_node_record(Pool, Record) when is_pid(Pool) ->
+    macula_client:sign_node_record(Pool, Record).
+
+-spec sign_node_record(pool(), m_record(), #{not_after := integer()}) ->
+    {ok, m_record()} | {error, term()}.
+sign_node_record(Pool, Record, Opts) when is_pid(Pool), is_map(Opts) ->
+    macula_client:sign_node_record(Pool, Record, Opts).
+
+%% @doc Sign a domain record (tags 0x20 to 0xFF) as this node, with the
+%% pool's node identity key, in the pool's own process. See
+%% `macula_client:sign_domain_record/2'.
+-spec sign_domain_record(pool(), m_record()) ->
+    {ok, m_record()} | {error, term()}.
+sign_domain_record(Pool, Record) when is_pid(Pool) ->
+    macula_client:sign_domain_record(Pool, Record).
+
+%% @doc Withdraw a record this node signed — a node record, a procedure
+%% advertisement, a content announcement or a domain record — with a
+%% tombstone signed by the pool's node identity key, in the pool's own
+%% process. See `macula_client:withdraw_node_record/3'.
+-spec withdraw_node_record(pool(), m_record() | binary(), macula_record:reason()) ->
+    {ok, m_record()} | {error, term()}.
+withdraw_node_record(Pool, Withdrawn, Reason) when is_pid(Pool) ->
+    macula_client:withdraw_node_record(Pool, Withdrawn, Reason).
+
+%% @doc Parse a `MACULA_STATIONS' seed list: comma-separated
+%% `<node id>@<host>:<port>' entries, the node id as 64 lowercase hex
+%% characters, the host a DNS name, an IPv4 address or a bracketed IPv6
+%% address, the port 1 to 65535. Returns the seeds in order, each pinned
+%% to its node id. A refusal names the entry's position and what is
+%% wrong with it, and carries neither the value, nor a node id, nor a
+%% host. See `macula_stations:parse/1'.
+-spec parse_stations(binary()) ->
+    {ok, [macula_stations:seed()]} | {error, term()}.
+parse_stations(Value) when is_binary(Value) ->
+    macula_stations:parse(Value).
 
 record_stored_topic(Type) ->
     iolist_to_binary([<<"_dht.records.">>,
