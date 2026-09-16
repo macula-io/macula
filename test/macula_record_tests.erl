@@ -420,7 +420,8 @@ foundation_records_sign_with_a_foundation_key_test() ->
     Foundation = key(foundation),
     Records = [macula_record:foundation_seed_list([#{node_id => fill(1), addresses => [], tier => 3}], #{}),
                macula_record:foundation_parameter(<<"max_hops">>, 8, #{}),
-               macula_record:foundation_realm_trust_list([fill(2)], #{}),
+               macula_record:foundation_realm_trust_list(
+                 [#{realm_id => fill(16#11), realm_key_id => fill(16#12)}], #{}),
                macula_record:foundation_t3_attestation(fill(3), 1789000000000, #{})],
     [?assertMatch({ok, _}, macula_record:verify(macula_record:encode(macula_record:sign(R, Foundation)), pq_pure))
      || R <- Records].

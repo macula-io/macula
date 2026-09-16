@@ -462,6 +462,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the frame's bytes are written, or `{quic, send_incomplete, Stream, {Tag,
   Reason}}` when the stream is reset, closed or fails first.
 - `macula_quic:async_send/3` is `async_send/2` with such a tag.
+- `macula_record:read_foundation_realm_trust_list/1` reads a verified
+  foundation realm trust list back as a map of realm id to realm key id,
+  and `foundation_realm_trust_list_key/1` derives its storage key from a
+  foundation key id, so a station fetches the list without holding its
+  record (D28).
+- `macula_record:verify_authorization/3` takes a trust's `realm_pairs`, a
+  map of realm id to realm key id, besides a pinned carried `realm_key`:
+  the org directory's signer is then compared by key id against the pair
+  the foundation realm trust list names for the advertisement's realm
+  (D28).
 
 ### Changed
 
@@ -576,6 +586,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `{bad_config, {macula, puzzle_difficulty, Value}}`. The same error is
   raised when the difficulty is used, for a value set while the node runs.
   `macula_identity:check_puzzle_difficulty/0` runs that check.
+- `macula_record:foundation_realm_trust_list/1,2` now takes its entries as
+  `#{realm_id, realm_key_id}` maps, and the record's payload holds exactly
+  `realms_trusted`, an array of those maps, as
+  `DESIGN_PQ_SIGNED_FRAMES_AND_RECORDS.md` pins it: the `realms_revoked`,
+  `version` and `valid_until` fields and the old flat list of realm key ids
+  are gone, and a payload outside the pinned shape verifies as `malformed`.
 
 ### Fixed
 
