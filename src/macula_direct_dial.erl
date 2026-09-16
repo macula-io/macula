@@ -482,9 +482,10 @@ tried({next, Error, Seen}, Rest, Untried, Try, Deadline) ->
 %% One pass over `Procedure''s advertisements.
 advertised_stations(Pool, Realm, Procedure) ->
     Key = macula_record:procedure_key(Realm, Procedure),
+    Trust = fun() -> trust(Pool, Realm, Procedure) end,
     fun(Deadline) ->
-        qualifying_stations(macula:find_records(Pool, Key, lookup_timeout(Deadline)),
-                            fun() -> trust(Pool, Realm, Procedure) end)
+        Records = macula:find_records(Pool, Key, lookup_timeout(Deadline)),
+        qualifying_stations(Records, Trust)
     end.
 
 %% The pool is asked for its realm key only once a lookup has answered with

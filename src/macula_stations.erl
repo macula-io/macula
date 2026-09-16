@@ -62,16 +62,21 @@ seeds_no_dup([#{expected_node_id := Id} = Seed | Rest], N, Ids, Hosts) ->
         {ok, FirstN} ->
             {error, {repeated_node_id, N, FirstN}};
         error ->
-            case maps:find(HostPort, Hosts) of
-                {ok, FirstN} ->
-                    {error, {repeated_host_and_port, N, FirstN}};
-                error ->
-                    case seeds_no_dup(Rest, N + 1, Ids#{Id => N},
-                                      Hosts#{HostPort => N}) of
-                        {ok, Seeds} -> {ok, [Seed | Seeds]};
-                        {error, _} = Dup -> Dup
-                    end
-            end
+            seeds_no_host_dup(Seed, Rest, N, Id, HostPort, Ids, Hosts)
+    end.
+
+seeds_no_host_dup(Seed, Rest, N, Id, HostPort, Ids, Hosts) ->
+    case maps:find(HostPort, Hosts) of
+        {ok, FirstN} ->
+            {error, {repeated_host_and_port, N, FirstN}};
+        error ->
+            seeds_no_dup_result(Seed, Rest, N, Id, HostPort, Ids, Hosts)
+    end.
+
+seeds_no_dup_result(Seed, Rest, N, Id, HostPort, Ids, Hosts) ->
+    case seeds_no_dup(Rest, N + 1, Ids#{Id => N}, Hosts#{HostPort => N}) of
+        {ok, Seeds} -> {ok, [Seed | Seeds]};
+        {error, _} = Dup -> Dup
     end.
 
 %% One entry: `<64 lowercase hex node id>@<host>:<port>'.
@@ -129,13 +134,15 @@ ipv6_checked(NodeId, Host, Port, N) ->
 ipv6_host_checked(NodeId, Host, Port, N) ->
     case binary:match(Host, <<"%">>) of
         nomatch ->
-            case valid_ipv6(Host) of
-                true -> {ok, #{host => Host, port => Port, expected_node_id => NodeId}};
-                false -> {error, {entry, N, host_ipv6}}
-            end;
+            ipv6_host_valid(valid_ipv6(Host), NodeId, Host, Port, N);
         _ ->
             {error, {entry, N, host_ipv6}}
     end.
+
+ipv6_host_valid(true, NodeId, Host, Port, _N) ->
+    {ok, #{host => Host, port => Port, expected_node_id => NodeId}};
+ipv6_host_valid(false, _NodeId, _Host, _Port, N) ->
+    {error, {entry, N, host_ipv6}}.
 
 %% inet:parse_ipv6_address/1 returns {error, einval} or raises on a
 %% malformed address, so the parse is guarded.
@@ -157,15 +164,15 @@ host_and_port_finish(NodeId, Host, Port, N) ->
 port_number(Port) when byte_size(Port) > 0 ->
     case (Port =:= <<"0">> orelse binary:first(Port) =/= $0) andalso digits(Port) of
         true ->
-            case binary_to_integer(Port) of
-                P when P >= 1, P =< 65535 -> {ok, P};
-                _ -> error
-            end;
+            port_in_range(binary_to_integer(Port));
         false ->
             error
     end;
 port_number(_) ->
     error.
+
+port_in_range(P) when P >= 1, P =< 65535 -> {ok, P};
+port_in_range(_OutOfRange) -> error.
 
 digits(<<>>) -> true;
 digits(<<C, _/binary>>) when C < $0; C > $9 -> false;

@@ -1755,13 +1755,7 @@ on_frame(#{frame_type := event} = Frame, S) ->
 %% registered handler. Dispatch to the handler and ship the resulting
 %% RESULT or provider ERROR back over the same peering connection.
 on_frame(#{frame_type := call} = Frame, S) ->
-    V = macula_frame:verify_request(Frame, S#state.profile),
-    C = erlang:get(served_debug_count),
-    C1 = case element(1, V) of ok -> (case C of undefined -> 0; N -> N end) + 1; _ -> case C of undefined -> 0; N -> N end end,
-    erlang:put(served_debug_count, C1),
-
-    io:format("T=~p ONFRAME ~p count=~p~n", [erlang:monotonic_time(microsecond), element(1, V), C1]),
-    on_inbound_call(V, Frame, S);
+    on_inbound_call(macula_frame:verify_request(Frame, S#state.profile), Frame, S);
 %% STREAM_OPEN / STREAM_DATA / STREAM_END / STREAM_ERROR / STREAM_REPLY
 %% no longer arrive here — every streaming session travels on its
 %% own dedicated QUIC stream (see PLAN_PER_STREAM_QUIC_ISOLATION.md
@@ -1894,18 +1888,21 @@ open_content_stream_result({error, _} = E, _Bufs, S) ->
     {reply, E, S}.
 
 send_on_content_stream(Stream, CallSpec, Id) ->
-    try
-        case macula_frame:stream_bytes({call, CallSpec}, Id) of
-            {ok, Built} ->
-                Bytes = macula_frame:written_bytes(Built),
-                case macula_peering:send_on_stream(Stream, Bytes) of
-                    ok -> {ok, content_request(CallSpec, Id)};
-                    {error, _} = E -> E
-                end;
-            {error, _} = Refused -> Refused
-        end
+    try content_call_sent(Stream, CallSpec, Id)
     catch C:R -> {error, {C, R}}
     end.
+
+content_call_sent(Stream, CallSpec, Id) ->
+    case macula_frame:stream_bytes({call, CallSpec}, Id) of
+        {ok, Built} ->
+            Bytes = macula_frame:written_bytes(Built),
+            content_call_written(macula_peering:send_on_stream(Stream, Bytes),
+                                 CallSpec, Id);
+        {error, _} = Refused -> Refused
+    end.
+
+content_call_written(ok, CallSpec, Id) -> {ok, content_request(CallSpec, Id)};
+content_call_written({error, _} = E, _CallSpec, _Id) -> E.
 
 %% The request data a content reply verifies against: the id, the hash
 %% of the request's signed tbs, and the target the reply must report.
@@ -1942,16 +1939,17 @@ dispatch_content_frame(_Frame, _Stream, S) ->
 verify_content_reply(Frame, Stream, #state{content_pending = CP, profile = Profile} = S) ->
     case maps:find(Stream, CP) of
         {ok, {_From, _TRef, Request}} ->
-            case macula_frame:verify_reply(Frame, Request, Profile) of
-                {ok, Fields} ->
-                    deliver_content_reply(Stream, content_reply_result(Fields), S);
-                {error, Refusal} ->
-                    teardown_content_stream_state(Stream, {error, Refusal},
-                                                  fun macula_quic:close_stream/1, S)
-            end;
+            content_reply_verified(macula_frame:verify_reply(Frame, Request, Profile),
+                                   Stream, S);
         error ->
             S
     end.
+
+content_reply_verified({ok, Fields}, Stream, S) ->
+    deliver_content_reply(Stream, content_reply_result(Fields), S);
+content_reply_verified({error, Refusal}, Stream, S) ->
+    teardown_content_stream_state(Stream, {error, Refusal},
+                                  fun macula_quic:close_stream/1, S).
 
 content_reply_result(#{frame_type := result, payload := Payload}) ->
     {ok, Payload};
@@ -2588,13 +2586,7 @@ handle_inbound_call({ok, #{request_id := _CallId, procedure := Proc, realm := Re
     Found   = maps:find({Realm, Proc}, Procs),
     PayloadWithCaller = with_caller(Payload, maps:get(caller, Request, undefined)),
     _ = spawn(fun() ->
-            Reply = try authorized_reply(Verdict, Found, Request,
-                                         PayloadWithCaller, Id)
-                    catch
-                        error:Reason ->
-                            macula_frame:provider_error(
-                              #{request => Request, code => fault_code(Reason)}, Id)
-                    end,
+            Reply = inbound_reply(Verdict, Found, Request, PayloadWithCaller, Id),
             sent_or_faulted(macula_peering:send_frame(Pid, Reply),
                             Pid, Request, Id)
         end),
@@ -2624,6 +2616,16 @@ with_caller(Payload, Caller) when is_map(Payload), Caller =/= undefined ->
     Payload#{caller => Caller};
 with_caller(Payload, _Caller) ->
     Payload.
+
+%% The handler's reply, or a provider error when the reply frame
+%% refused to build: the unsendable handler result's fault code.
+inbound_reply(Verdict, Found, Request, Payload, Key) ->
+    try authorized_reply(Verdict, Found, Request, Payload, Key)
+    catch
+        error:Reason ->
+            macula_frame:provider_error(#{request => Request,
+                                          code => fault_code(Reason)}, Key)
+    end.
 
 authorized_reply(ok, Found, Request, Payload, Key) ->
     build_inbound_call_reply(Found, Request, Payload, Key);
