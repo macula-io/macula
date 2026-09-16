@@ -63,7 +63,7 @@ a_signed_control_frame_verifies_with_its_connection_and_seq(#{key := Key} = Keys
     ?assertEqual(Ping, Opened).
 
 a_signed_store_ack_keeps_its_boolean(#{key := Key} = Keys) ->
-    StoreAck = wire(macula_frame:store_ack(#{key => <<7:256>>, stored => false})),
+    StoreAck = wire(macula_frame:store_ack(#{key => <<7:256>>, signer => <<1:256>>, record_version => <<2:128>>, stored => false})),
     Signed = wire(macula_frame:sign_neighbour(StoreAck, Key, at(Keys, 0))),
     ?assertEqual({ok, StoreAck}, macula_frame:verify_neighbour(Signed, opts(Keys, 0))).
 

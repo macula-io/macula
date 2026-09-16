@@ -399,19 +399,24 @@ store_rejects_bad_record_test() ->
 
 store_ack_positive_test() ->
     Key = crypto:strong_rand_bytes(32),
-    F = macula_frame:store_ack(#{key => Key, stored => true}),
+    F = macula_frame:store_ack(#{key => Key, signer => crypto:strong_rand_bytes(32),
+                                 record_version => crypto:strong_rand_bytes(16), stored => true}),
     ?assertEqual(store_ack, macula_frame:frame_type(F)),
     ?assertEqual(true, maps:get(stored, F)),
     ?assertNot(maps:is_key(reason, F)).
 
 store_ack_refusal_carries_no_reason_test() ->
-    F = macula_frame:store_ack(#{key => crypto:strong_rand_bytes(32), stored => false}),
+    F = macula_frame:store_ack(#{key => crypto:strong_rand_bytes(32),
+                                 signer => crypto:strong_rand_bytes(32),
+                                 record_version => crypto:strong_rand_bytes(16), stored => false}),
     ?assertEqual(false, maps:get(stored, F)),
     ?assertNot(maps:is_key(reason, F)).
 
 store_ack_refuses_a_reason_test() ->
     ?assertError(function_clause,
                  macula_frame:store_ack(#{key    => crypto:strong_rand_bytes(32),
+                                          signer => crypto:strong_rand_bytes(32),
+                                          record_version => crypto:strong_rand_bytes(16),
                                           stored => false,
                                           reason => quota})).
 
