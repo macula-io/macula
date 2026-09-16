@@ -16,8 +16,6 @@
 %%% macula sets no distribution cookie, and reads or writes no cookie file. A
 %%% node's cookie is its release's own configuration: `-setcookie', or the
 %%% owner-only `.erlang.cookie' that OTP's auth reads in the node's HOME and
-%%% creates there when it is missing. `get_cookie/0' returns a distributed
-%%% node's cookie, and `set_cookie/1' changes it for the running node only.
 %%%
 %%% == Node Monitoring ==
 %%%
@@ -45,14 +43,6 @@
     is_distributed/0
 ]).
 
-%% API - Cookie Management
--export([
-    get_cookie/0,
-    set_cookie/1
-]).
-
--deprecated([{get_cookie, 0, "call erlang:get_cookie/0 instead; removed in 11.0.0"},
-             {set_cookie, 1, "call erlang:set_cookie/1 instead; removed in 11.0.0"}]).
 
 %% API - Node Monitoring
 -export([
@@ -102,43 +92,6 @@ ensure_distributed() ->
 is_distributed() ->
     node() =/= nonode@nohost.
 
-%%%===================================================================
-%%% API - Cookie Management
-%%%===================================================================
-
-%% @doc The cookie of this node, which must be distributed.
-%%
-%% Returns what `erlang:get_cookie/0' returns, and raises `not_distributed' on
-%% a node that is not distributed. macula sets no cookie and reads no cookie
-%% file: a distributed node's cookie is its release's own configuration,
-%% `-setcookie' or the owner-only `.erlang.cookie' that OTP's auth reads in
-%% the node's HOME. Deprecated: call `erlang:get_cookie/0'. Removed in 11.0.0.
-%%
-%% Examples:
-%% ```
-%% Cookie = macula_cluster:get_cookie().
-%% '''
--spec get_cookie() -> atom().
-get_cookie() ->
-    own_cookie(erlang:is_alive()).
-
-%% @doc Set the cookie of this node, which must be distributed.
-%%
-%% Only the running node's cookie changes, and `not_distributed' is raised on
-%% a node that is not distributed. No file is written, so a node that starts
-%% again has its release's cookie. Deprecated: call `erlang:set_cookie/1'.
-%% Removed in 11.0.0.
-%%
-%% Examples:
-%% ```
-%% ok = macula_cluster:set_cookie(my_secret_cookie).
-%% ok = macula_cluster:set_cookie(&lt;&lt;"my_secret_cookie"&gt;&gt;).
-%% '''
--spec set_cookie(atom() | binary()) -> ok.
-set_cookie(Cookie) when is_binary(Cookie) ->
-    set_cookie(binary_to_atom(Cookie, utf8));
-set_cookie(Cookie) when is_atom(Cookie) ->
-    node_cookie_set(erlang:is_alive(), Cookie).
 
 %%%===================================================================
 %%% API - Node Monitoring
@@ -212,15 +165,6 @@ start_distribution() ->
 %%%===================================================================
 %%% Internal Functions - The Node's Cookie
 %%%===================================================================
-
-own_cookie(true) -> erlang:get_cookie();
-own_cookie(false) -> erlang:error(not_distributed).
-
-node_cookie_set(true, Cookie) ->
-    true = erlang:set_cookie(node(), Cookie),
-    ok;
-node_cookie_set(false, _Cookie) ->
-    erlang:error(not_distributed).
 
 %%%===================================================================
 %%% API - Auto-Clustering

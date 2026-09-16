@@ -33,13 +33,11 @@
          get_cookie_on_a_node_that_is_not_distributed/1,
          get_cookie_returns_the_nodes_own_cookie/1,
          set_cookie_with_atom/1,
-         set_cookie_with_binary/1,
          set_cookie_on_a_node_that_is_not_distributed/1,
          distributed_node_keeps_its_cookie_and_its_cookie_file/1,
          nothing_is_written_without_a_home/1,
          macula_ensure_distributed_delegates/1,
-         macula_get_cookie_delegates/1,
-         macula_set_cookie_delegates/1]).
+         macula_has_no_cookie_functions/1]).
 
 %%%===================================================================
 %%% Distribution Tests
@@ -62,25 +60,22 @@ cookie_in_peer_test_() ->
       in_peer(ensure_distributed_returns_ok_or_error,
               "ensure_distributed/0 returns ok or an error"),
       in_peer(get_cookie_on_a_node_that_is_not_distributed,
-              "get_cookie/0 on a node that is not distributed raises not_distributed and writes nothing"),
+              "erlang:get_cookie/0 on a node that is not distributed answers nocookie and writes nothing"),
       in_peer(get_cookie_returns_the_nodes_own_cookie,
-              "get_cookie/0 returns the distributed node's own cookie, whatever else is configured"),
+              "erlang:get_cookie/0 returns the distributed node's own cookie, whatever else is configured"),
       in_peer(set_cookie_with_atom,
-              "set_cookie/1 takes an atom"),
-      in_peer(set_cookie_with_binary,
-              "set_cookie/1 takes a binary"),
+              "erlang:set_cookie/2 takes an atom"),
       in_peer(set_cookie_on_a_node_that_is_not_distributed,
-              "set_cookie/1 on a node that is not distributed raises not_distributed and writes nothing"),
+              "erlang:set_cookie/2 on a node that is not distributed is refused and writes nothing"),
       in_peer(distributed_node_keeps_its_cookie_and_its_cookie_file,
               "a distributed node keeps the cookie it read from an owner-only file, and the file"),
       in_peer_without_home(nothing_is_written_without_a_home,
                            "without a HOME, no cookie is written anywhere"),
       in_peer(macula_ensure_distributed_delegates,
               "macula:ensure_distributed/0 delegates to macula_cluster"),
-      in_peer(macula_get_cookie_delegates,
-              "macula:get_cookie/0 delegates to macula_cluster"),
-      in_peer(macula_set_cookie_delegates,
-              "macula:set_cookie/1 delegates to macula_cluster")]}.
+      in_peer(macula_has_no_cookie_functions,
+              "macula has no get_cookie/0 or set_cookie/1 in 11.0.0")
+]}.
 
 %%%===================================================================
 %%% Strategy Selection Tests
@@ -118,19 +113,18 @@ ensure_distributed_returns_ok_or_error(Home) ->
     cookie_is_the_files(Result, Home).
 
 get_cookie_on_a_node_that_is_not_distributed(Home) ->
-    ?assertError(not_distributed, macula_cluster:get_cookie()),
+    ?assertEqual(nocookie, erlang:get_cookie()),
     ?assertEqual({ok, []}, file:list_dir(Home)).
 
 %% The cookie OTP's auth gives the node when distribution starts, and the one
-%% the node is set to later, is what get_cookie/0 returns. A cookie in the
-%% application env or the environment plays no part.
+%% the node is set to later, is what erlang:get_cookie/0 returns. A cookie in
+%% the application env or the environment plays no part.
 get_cookie_returns_the_nodes_own_cookie(_Home) ->
     ok = start_distribution_without_epmd(),
     ok = application:set_env(macula, cookie, app_env_cookie_for_test),
     true = os:putenv("MACULA_COOKIE", "env_cookie_for_test"),
-    ?assertEqual(erlang:get_cookie(), macula_cluster:get_cookie()),
     true = erlang:set_cookie(node(), node_own_cookie_for_test),
-    ?assertEqual(node_own_cookie_for_test, macula_cluster:get_cookie()).
+    ?assertEqual(node_own_cookie_for_test, erlang:get_cookie()).
 
 %% The node's cookie changes; the cookie file OTP's auth created does not.
 set_cookie_with_atom(Home) ->
@@ -138,19 +132,14 @@ set_cookie_with_atom(Home) ->
     Path = filename:join(Home, ".erlang.cookie"),
     {ok, Content} = file:read_file(Path),
     FileBefore = file_identity(Path),
-    ?assertEqual(ok, macula_cluster:set_cookie(test_cookie_atom_12345)),
+    true = erlang:set_cookie(node(), test_cookie_atom_12345),
     ?assertEqual(test_cookie_atom_12345, erlang:get_cookie()),
     ?assertEqual(FileBefore, file_identity(Path)),
     ?assertEqual({ok, Content}, file:read_file(Path)),
     ?assertEqual({ok, [".erlang.cookie"]}, file:list_dir(Home)).
 
-set_cookie_with_binary(_Home) ->
-    ok = start_distribution_without_epmd(),
-    ?assertEqual(ok, macula_cluster:set_cookie(<<"test_cookie_binary_67890">>)),
-    ?assertEqual(test_cookie_binary_67890, erlang:get_cookie()).
-
 set_cookie_on_a_node_that_is_not_distributed(Home) ->
-    ?assertError(not_distributed, macula_cluster:set_cookie(test_cookie_not_distributed)),
+    ?assertError(badarg, erlang:set_cookie(node(), test_cookie_not_distributed)),
     ?assertEqual({ok, []}, file:list_dir(Home)).
 
 %% A node deployed with an owner-only, read-only $HOME/.erlang.cookie and no
@@ -168,21 +157,18 @@ distributed_node_keeps_its_cookie_and_its_cookie_file(Home) ->
     ok = application:set_env(macula, cookie, app_env_cookie_for_test),
     true = os:putenv("MACULA_COOKIE", "env_cookie_for_test"),
     ?assertEqual(ok, macula_cluster:ensure_distributed()),
-    ?assertEqual(cookie_from_owner_only_file, macula_cluster:get_cookie()),
     ?assertEqual(cookie_from_owner_only_file, erlang:get_cookie()),
-    ?assertEqual(ok, macula_cluster:set_cookie(another_cookie_for_test)),
+    true = erlang:set_cookie(node(), another_cookie_for_test),
     ?assertEqual(FileBefore, file_identity(Path)),
     ?assertEqual({ok, [".erlang.cookie"]}, file:list_dir(Home)),
     ?assertEqual({ok, <<"cookie_from_owner_only_file">>}, file:read_file(Path)).
 
-%% Without a HOME and without XDG_CONFIG_HOME, get_cookie/0, set_cookie/1 and
-%% ensure_distributed/0 write no cookie anywhere: not in /tmp, where an old
-%% fallback put one, and not in the test's own directory.
+%% Without a HOME and without XDG_CONFIG_HOME, ensure_distributed/0 writes no
+%% cookie anywhere: not in /tmp, where an old fallback put one, and not in
+%% the test's own directory.
 nothing_is_written_without_a_home(Dir) ->
     ?assertEqual(false, os:getenv("HOME")),
     Before = file:read_link_info(?TMP_COOKIE),
-    ?assertError(not_distributed, macula_cluster:get_cookie()),
-    ?assertError(not_distributed, macula_cluster:set_cookie(cookie_without_home)),
     _ = macula_cluster:ensure_distributed(),
     ?assertEqual(Before, file:read_link_info(?TMP_COOKIE)),
     ?assertEqual({ok, []}, file:list_dir(Dir)).
@@ -193,17 +179,10 @@ macula_ensure_distributed_delegates(_Home) ->
     Result = macula:ensure_distributed(),
     ?assert(Result =:= ok orelse element(1, Result) =:= error).
 
-macula_get_cookie_delegates(_Home) ->
+macula_has_no_cookie_functions(_Home) ->
     {module, macula} = code:ensure_loaded(macula),
-    ?assert(erlang:function_exported(macula, get_cookie, 0)),
-    ?assertError(not_distributed, macula:get_cookie()).
-
-macula_set_cookie_delegates(_Home) ->
-    {module, macula} = code:ensure_loaded(macula),
-    ?assert(erlang:function_exported(macula, set_cookie, 1)),
-    ok = start_distribution_without_epmd(),
-    ?assertEqual(ok, macula:set_cookie(delegation_test_cookie)),
-    ?assertEqual(delegation_test_cookie, erlang:get_cookie()).
+    ?assertNot(erlang:function_exported(macula, get_cookie, 0)),
+    ?assertNot(erlang:function_exported(macula, set_cookie, 1)).
 
 %%%===================================================================
 %%% Node Monitoring Tests

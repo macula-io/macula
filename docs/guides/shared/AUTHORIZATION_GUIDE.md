@@ -62,24 +62,6 @@ did:macula:io.macula.rgfaber
 | **Self-sovereign** | Controlled by owner's Ed25519 keypair |
 | **Human-readable** | Hierarchical namespace format |
 | **Cryptographically verifiable** | Ownership proven via signature |
-
-#### DID ⇄ Common Name conversion
-
-Certificates carry a common name (CN) rather than a DID directly; `macula_cert`
-converts between the two by reversing the dot-separated segments:
-
-```erlang
-CN = macula_cert:did_to_cn(<<"did:macula:io.example.org.app.node01">>).
-%% Result: <<"node01.app.org.example.io">>
-
-DID = macula_cert:cn_to_did(<<"node01.app.org.example.io">>).
-%% Result: <<"did:macula:io.example.org.app.node01">>
-```
-
-**Further Reading:**
-- [W3C DID Core 1.0](https://www.w3.org/TR/did-core/)
-- [DID Method Registry](https://w3c.github.io/did-spec-registries/)
-
 ---
 
 ### User Controlled Authorization Networks (UCANs)
@@ -120,134 +102,17 @@ false          = macula_ucan_nif:is_expired(Token).
 
 ---
 
-## Self-Sovereign Certificates
+## Certificates removed in 11.0.0
 
-Macula uses Ed25519-based certificates anchored to DIDs, enabling identity without external certificate authorities. `macula_cert` and `macula_trust_store` implement this; both are real, standalone modules — nothing in the connect/publish/call path invokes them automatically, you call them directly.
+The 10.x certificate form is gone: macula 11.0.0 issues no X.509
+certificates (design B1), so `macula_cert` and `macula_cert_system` are
+removed, and a provider authorization is only the realm-signed org
+directory and the org-signed procedure delegation, carried inside the
+provider's `procedure_advertisement` (see
+[consumer → provider](#consumer--provider-provider-authorization) below).
+`macula_trust_store` remains as a standalone module, for nodes that keep a
+local trust registry of their own.
 
-### Certificate Hierarchy
-
-```
-Realm Certificate (self-signed)
-did:macula:io.customer.org
-     |
-     +-- Instance Certificate (signed by realm)
-     |   did:macula:io.customer.org.app1.node01
-     |
-     +-- Instance Certificate (signed by realm)
-     |   did:macula:io.customer.org.app1.node02
-     |
-     +-- Instance Certificate (signed by realm)
-         did:macula:io.customer.org.app2.node01
-```
-
-### Certificate structure
-
-`#macula_cert{}` (`include/macula_cert.hrl`) is a flat record; `to_map/1`
-produces the same fields as a map, not a nested `subject`/`issuer` shape:
-
-```erlang
-#{
-    version     => 1,
-    serial      => <<...>>,          %% 16 random bytes
-    subject_did => <<"did:macula:io.customer.org.app.node01">>,
-    subject_cn  => <<"node01.app.org.customer.io">>,
-    issuer_did  => <<"did:macula:io.customer.org">>,
-    issuer_cn   => <<"org.customer.io">>,
-    not_before  => 1704067200,
-    not_after   => 1735689600,
-    public_key  => <<...>>,          %% Ed25519 (32 bytes)
-    signature   => <<...>>,          %% Ed25519 (64 bytes)
-    extensions  => #{}               %% reserved for future use
-}
-```
-
-### Certificate API
-
-#### Generate keypair
-
-```erlang
-{PubKey, PrivKey} = macula_cert:generate_keypair().
-%% PubKey: 32 bytes, PrivKey: 64 bytes (seed + public key)
-```
-
-#### Create a realm certificate (self-signed)
-
-```erlang
-RealmDID = <<"did:macula:io.example.org">>,
-{PubKey, PrivKey} = macula_cert:generate_keypair(),
-
-{ok, RealmCert} = macula_cert:generate_realm_cert(RealmDID, PubKey, PrivKey).
-
-%% Or with custom validity (days)
-{ok, RealmCert} = macula_cert:generate_realm_cert(RealmDID, PubKey, PrivKey, 365).
-```
-
-#### Create an instance certificate (signed by the realm)
-
-```erlang
-InstanceDID = <<"did:macula:io.example.org.app.node01">>,
-{InstancePubKey, _} = macula_cert:generate_keypair(),
-
-{ok, InstanceCert} = macula_cert:generate_instance_cert(
-    InstanceDID, InstancePubKey, RealmCert, RealmPrivKey
-).
-
-%% Or with custom validity (days)
-{ok, InstanceCert} = macula_cert:generate_instance_cert(
-    InstanceDID, InstancePubKey, RealmCert, RealmPrivKey, 90
-).
-```
-
-#### Verify certificates
-
-```erlang
-ok   = macula_cert:verify_self_signed(RealmCert),
-ok   = macula_cert:verify_cert(InstanceCert, RealmCert),
-true = macula_cert:is_valid_now(InstanceCert).
-```
-
-#### Encode/decode
-
-```erlang
-Binary     = macula_cert:encode(Cert),      %% bare binary(), not {ok, _}
-{ok, Cert} = macula_cert:decode(Binary),
-Map        = macula_cert:to_map(Cert),      %% bare map(), not {ok, _}
-{ok, Cert} = macula_cert:from_map(Map).
-```
-
-### Trust store
-
-```erlang
-{ok, _Pid} = macula_trust_store:start_link().
-
-%% Add a trusted realm
-ok = macula_trust_store:add_trusted_realm(RealmDID, RealmCert).
-
-%% Verify an instance cert chains back to a trusted realm
-ok = macula_trust_store:verify_instance_cert(InstanceCert).
-
-%% Query the trust store
-true          = macula_trust_store:is_trusted(RealmDID),
-{ok, RealmCert} = macula_trust_store:get_realm_cert(RealmDID),
-TrustedRealms = macula_trust_store:list_trusted().
-```
-
-### Certificate security considerations
-
-- Private keys should never leave the generating node
-- Instance certificates should have shorter validity (30-90 days)
-- Realm certificates can have longer validity (1-5 years)
-- Implement your own renewal before expiration — nothing in the SDK does this for you
-
-| Aspect | Self-Sovereign | Traditional PKI |
-|--------|----------------|-----------------|
-| Trust root | Realm certificate | External CA |
-| Issuance | Instant, local | Requires CA interaction |
-| Cost | Free | Often paid |
-| Privacy | No third party | CA sees all certs |
-| Interop | Macula ecosystem | Web browsers, etc. |
-
----
 
 ## Direct-Dial Dual-Trust
 

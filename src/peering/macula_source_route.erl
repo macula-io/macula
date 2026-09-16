@@ -41,10 +41,6 @@
 %% plans/PLAN_PHASE_4_BREAKDOWN.md Session 4.2.
 -module(macula_source_route).
 
--deprecated([
-    {version, 1, "removed in 11.0.0"}
-]).
-
 -export([
     new/2, new/3,
     encode/1,
@@ -52,7 +48,6 @@
     verify/1,
     advance/1,
     deadline/1,
-    version/1,
     total_hops/1,
     current_hop/1,
     hops/1,
@@ -210,10 +205,6 @@ advance(_) ->
 %%=====================================================================
 %% Accessors
 %%=====================================================================
-
-%% @deprecated Removed in 11.0.0.
--spec version(header())     -> non_neg_integer().
-version(#{version := V})    -> V.
 
 -spec total_hops(header())  -> pos_integer().
 total_hops(#{total_hops := T}) -> T.

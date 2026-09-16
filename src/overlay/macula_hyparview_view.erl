@@ -33,10 +33,6 @@
 %% plans/PLAN_PHASE_5_BREAKDOWN.md Session 5.1.
 -module(macula_hyparview_view).
 
--deprecated([
-    {contains, 2, "removed in 11.0.0"}
-]).
-
 -export([
     new/1, new/2,
     self_id/1,
@@ -48,7 +44,6 @@
     passive_size/1,
     is_active/2,
     is_passive/2,
-    contains/2,
     add_active/2,
     add_passive/2,
     remove_active/2,
@@ -144,10 +139,6 @@ passive_size(#{passive := P}) -> sets:size(P).
 is_active(Peer, #{active := A}) -> sets:is_element(Peer, A).
 
 is_passive(Peer, #{passive := P}) -> sets:is_element(Peer, P).
-
-%% @deprecated Removed in 11.0.0.
-contains(Peer, V) ->
-    is_active(Peer, V) orelse is_passive(Peer, V).
 
 counts(#{active := A, passive := P}) ->
     #{active => sets:size(A), passive => sets:size(P)}.

@@ -946,28 +946,32 @@ Every node should upgrade to this release.
 - `macula_direct_dial:resolve_content_provider/2` resolves through the same
   candidate loop, within 10 s, and is deprecated: it is removed in 11.0.0,
   and `fetch_content/4` replaces it.
-- Removed in 11.0.0: the `macula_console` and `macula_cert_system` modules
-  (start `macula_trust_store` directly); `macula_mri:index_descendants/3`,
-  `index_insert/4`, `index_remove/3`, `index_size/1` and `is_valid/1`;
-  `macula_names:local_node_id/0`; `macula_source_route:version/1`;
-  `macula_quic:accept_stream/3`, `async_shutdown_connection/3` and
-  `handoff_stream/3`; `macula_crypto_nif:blake3_streaming/1` and
-  `blake3_verify/2`; `hecate_or_set:tombstones/1`;
-  `macula_hyparview_view:contains/2`.
-- No longer exported from 11.0.0: `macula_mri:parent_type/1`,
-  `macula_mri_registry:list_custom_types/0` and
-  `macula_dist_relay_protocol:decode/1`.
-- `macula_cluster:get_cookie/0` and `set_cookie/1`, and `macula:get_cookie/0`
-  and `macula:set_cookie/1`, are deprecated and removed in 11.0.0: call
+
+### Removed
+
+- The `macula_console`, `macula_cert_system`, `macula_cert` and
+  `macula_trust_store` modules, the certificate trust store with them, and
+  `include/macula_cert.hrl`. 11.0.0 has no certificate form (design B1):
+  a provider authorization is only the realm-signed org directory and the
+  org-signed procedure delegation. The `AUTHORIZATION_GUIDE`'s certificate
+  sections are replaced with a removal note.
+- `macula_mri:index_descendants/3`, `index_insert/4`, `index_remove/3`,
+  `index_size/1` and `is_valid/1`; `macula_names:local_node_id/0`;
+  `macula_source_route:version/1`; `macula_quic:accept_stream/3`,
+  `async_shutdown_connection/3` and `handoff_stream/3`;
+  `macula_crypto_nif:blake3_streaming/1` and `blake3_verify/2`;
+  `hecate_or_set:tombstones/1`; `macula_hyparview_view:contains/2`;
+  `macula_cluster:get_cookie/0` and `set_cookie/1`, and
+  `macula:get_cookie/0` and `macula:set_cookie/1` with them: call
   `erlang:get_cookie/0` and `erlang:set_cookie/1`. bc-gitops's
   `bc_gitops_cluster` calls the `macula` functions when macula is loaded,
   so with this release its `get_cookie/0`, which
   `bc_gitops_vm_spawner:spawn_vm/4` calls, raises `not_distributed` on a
   node that is not distributed. Upgrade bc-gitops to a release that no
   longer calls them before upgrading macula.
-
-### Removed
-
+- No longer exported: `macula_mri:parent_type/1`,
+  `macula_mri_registry:list_custom_types/0` and
+  `macula_dist_relay_protocol:decode/1`.
 - The precompiled QUIC NIF download: `priv/fetch-nif.sh`,
   `scripts/fetch-nif.sh`, the `build-nif.yml` workflow that uploaded the
   `libmacula_quic` release assets, and `MACULA_FORCE_SOURCE_BUILD`, which
