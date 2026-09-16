@@ -826,6 +826,13 @@ Every node should upgrade to this release.
   `{realm_member_required, RealmDid, RequiredCan}` does. A token whose
   audience is another identity is refused with `unauthorized`. Mint
   `ucan_required` tokens for the caller that will present them.
+- `macula_cluster` sets no distribution cookie and reads or writes no
+  cookie file. `ensure_distributed/0` starts distribution without setting a
+  cookie, so a node has its release's cookie: `-setcookie`, or the
+  owner-only `.erlang.cookie` OTP reads in the node's `HOME` and creates
+  when it is missing. `get_cookie/0` and `set_cookie/1`, and `macula`'s
+  functions of the same name with them, return and set the running node's
+  own cookie as `erlang:get_cookie/0` and `erlang:set_cookie/1` do, and
 - `macula_identity:load/1` accepts only a key file its group and others
   have no access to, mode 0600 or 0400, following symlinks. Another mode
   returns `{error, {file_permissions, #{file => Path, mode => <<"0644">>,
@@ -942,6 +949,14 @@ Every node should upgrade to this release.
 - No longer exported from 11.0.0: `macula_mri:parent_type/1`,
   `macula_mri_registry:list_custom_types/0` and
   `macula_dist_relay_protocol:decode/1`.
+- `macula_cluster:get_cookie/0` and `set_cookie/1`, and `macula:get_cookie/0`
+  and `macula:set_cookie/1`, are deprecated and removed in 11.0.0: call
+  `erlang:get_cookie/0` and `erlang:set_cookie/1`. bc-gitops's
+  `bc_gitops_cluster` calls the `macula` functions when macula is loaded,
+  so with this release its `get_cookie/0`, which
+  `bc_gitops_vm_spawner:spawn_vm/4` calls, raises `not_distributed` on a
+  node that is not distributed. Upgrade bc-gitops to a release that no
+  longer calls them before upgrading macula.
 
 ### Removed
 
@@ -952,11 +967,24 @@ Every node should upgrade to this release.
   so those versions still download them.
 - `Dockerfile`, `Dockerfile.gateway` and `.dockerignore`. They built for
   the earlier quicer transport, without the Rust NIFs, and could not
-  build this repository.
+  build this repository. `entrypoint.sh`, which that image ran, goes too.
 - The NIF stubs of `macula_cbor_nif`, `macula_crypto_nif`, `macula_did_nif`,
   `macula_mri_nif` and `macula_ucan_nif` that only their own module calls
   are no longer exported; the wrapper functions of each module are the API.
   The stubs other modules call stay exported.
+- The cookie sources `macula_cluster` resolved and the cookie file it
+  kept: the `cookie` application env, the `MACULA_COOKIE`,
+  `RELEASE_COOKIE` and `ERLANG_COOKIE` environment variables, reading
+  `~/.erlang.cookie`, and generating and saving a cookie there when that
+  file was missing, with `resolve_cookie/0`, `read_cookie_file/0` and
+  `cookie_file_path/0`. A node that set its cookie through one of them
+  gets it from its release instead: the owner-only `.erlang.cookie` in
+  its `HOME`, or `-setcookie`. Upgrade advice: a cluster whose nodes set
+  their cookie through the `cookie` application env or `MACULA_COOKIE`,
+  `RELEASE_COOKIE` or `ERLANG_COOKIE` does not re-form after the upgrade
+  until every node has the same cookie from its release. Until then the
+  nodes refuse each other; nothing falls back to another source.
+
 
 ### Fixed
 

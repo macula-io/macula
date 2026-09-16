@@ -13,11 +13,11 @@
 %%%
 %%% == Cookie Management ==
 %%%
-%%% Cookies are resolved in this priority order:
-%%% 1. Application env: `{macula, [{cookie, CookieValue}]}'
-%%% 2. Environment variable: `MACULA_COOKIE' or `RELEASE_COOKIE'
-%%% 3. User's ~/.erlang.cookie file
-%%% 4. Auto-generated (persisted to ~/.erlang.cookie)
+%%% macula sets no distribution cookie, and reads or writes no cookie file. A
+%%% node's cookie is its release's own configuration: `-setcookie', or the
+%%% owner-only `.erlang.cookie' that OTP's auth reads in the node's HOME and
+%%% creates there when it is missing. `get_cookie/0' returns a distributed
+%%% node's cookie, and `set_cookie/1' changes it for the running node only.
 %%%
 %%% == Node Monitoring ==
 %%%
@@ -51,6 +51,9 @@
     set_cookie/1
 ]).
 
+-deprecated([{get_cookie, 0, "call erlang:get_cookie/0 instead; removed in 11.0.0"},
+             {set_cookie, 1, "call erlang:set_cookie/1 instead; removed in 11.0.0"}]).
+
 %% API - Node Monitoring
 -export([
     monitor_nodes/0,
@@ -69,13 +72,6 @@
     stop_cluster/0,
     nodes/0,
     is_clustered/0
-]).
-
-%% Internal exports for testing
--export([
-    resolve_cookie/0,
-    read_cookie_file/0,
-    cookie_file_path/0
 ]).
 
 %%%===================================================================
@@ -110,16 +106,13 @@ is_distributed() ->
 %%% API - Cookie Management
 %%%===================================================================
 
-%% @doc Get the Erlang cookie for the cluster.
+%% @doc The cookie of this node, which must be distributed.
 %%
-%% Resolves the cookie from various sources in priority order.
-%% If no cookie is found, generates and persists a new one.
-%%
-%% Resolution Order:
-%% 1. Application env: `{macula, [{cookie, CookieValue}]}'
-%% 2. Environment variable: `MACULA_COOKIE' or `RELEASE_COOKIE'
-%% 3. User's ~/.erlang.cookie file
-%% 4. Auto-generated (persisted to ~/.erlang.cookie)
+%% Returns what `erlang:get_cookie/0' returns, and raises `not_distributed' on
+%% a node that is not distributed. macula sets no cookie and reads no cookie
+%% file: a distributed node's cookie is its release's own configuration,
+%% `-setcookie' or the owner-only `.erlang.cookie' that OTP's auth reads in
+%% the node's HOME. Deprecated: call `erlang:get_cookie/0'. Removed in 11.0.0.
 %%
 %% Examples:
 %% ```
@@ -127,20 +120,14 @@ is_distributed() ->
 %% '''
 -spec get_cookie() -> atom().
 get_cookie() ->
-    case resolve_cookie() of
-        {ok, Cookie} ->
-            Cookie;
-        {error, not_found} ->
-            %% Generate and persist a new cookie
-            NewCookie = generate_cookie(),
-            ok = persist_cookie(NewCookie),
-            NewCookie
-    end.
+    own_cookie(erlang:is_alive()).
 
-%% @doc Set the Erlang cookie for this node and persist it.
+%% @doc Set the cookie of this node, which must be distributed.
 %%
-%% Sets the cookie for the current node and attempts to persist
-%% it to ~/.erlang.cookie for future sessions.
+%% Only the running node's cookie changes, and `not_distributed' is raised on
+%% a node that is not distributed. No file is written, so a node that starts
+%% again has its release's cookie. Deprecated: call `erlang:set_cookie/1'.
+%% Removed in 11.0.0.
 %%
 %% Examples:
 %% ```
@@ -151,9 +138,7 @@ get_cookie() ->
 set_cookie(Cookie) when is_binary(Cookie) ->
     set_cookie(binary_to_atom(Cookie, utf8));
 set_cookie(Cookie) when is_atom(Cookie) ->
-    true = erlang:set_cookie(node(), Cookie),
-    _ = persist_cookie(Cookie),
-    ok.
+    node_cookie_set(erlang:is_alive(), Cookie).
 
 %%%===================================================================
 %%% API - Node Monitoring
@@ -205,6 +190,9 @@ get_hostname() ->
 %%% Internal Functions - Distribution
 %%%===================================================================
 
+%% Distribution starts without a cookie from macula: OTP's auth gives the node
+%% its release's cookie, `-setcookie' or the owner-only `.erlang.cookie' in
+%% the node's HOME, and creates that file when it is missing.
 -spec start_distribution() -> ok | {error, term()}.
 start_distribution() ->
     Hostname = get_hostname(),
@@ -213,9 +201,6 @@ start_distribution() ->
     case net_kernel:start([NodeName, shortnames]) of
         {ok, _Pid} ->
             ?LOG_INFO("[macula_cluster] Started distribution as ~p", [NodeName]),
-            %% Set the cookie
-            Cookie = get_cookie(),
-            true = erlang:set_cookie(node(), Cookie),
             ok;
         {error, {already_started, _Pid}} ->
             ok;
@@ -225,103 +210,17 @@ start_distribution() ->
     end.
 
 %%%===================================================================
-%%% Internal Functions - Cookie Resolution
+%%% Internal Functions - The Node's Cookie
 %%%===================================================================
 
-%% @doc Resolve the cookie from various sources.
--spec resolve_cookie() -> {ok, atom()} | {error, not_found}.
-resolve_cookie() ->
-    Sources = [
-        fun get_cookie_from_app_env/0,
-        fun get_cookie_from_env_var/0,
-        fun read_cookie_file/0
-    ],
-    try_sources(Sources).
+own_cookie(true) -> erlang:get_cookie();
+own_cookie(false) -> erlang:error(not_distributed).
 
--spec try_sources([fun(() -> {ok, atom()} | {error, term()})]) ->
-    {ok, atom()} | {error, not_found}.
-try_sources([]) ->
-    {error, not_found};
-try_sources([Source | Rest]) ->
-    case Source() of
-        {ok, Cookie} -> {ok, Cookie};
-        {error, _} -> try_sources(Rest)
-    end.
-
--spec get_cookie_from_app_env() -> {ok, atom()} | {error, not_found}.
-get_cookie_from_app_env() ->
-    case application:get_env(macula, cookie) of
-        {ok, Cookie} when is_atom(Cookie) ->
-            {ok, Cookie};
-        {ok, Cookie} when is_binary(Cookie) ->
-            {ok, binary_to_atom(Cookie, utf8)};
-        {ok, Cookie} when is_list(Cookie) ->
-            {ok, list_to_atom(Cookie)};
-        _ ->
-            {error, not_found}
-    end.
-
--spec get_cookie_from_env_var() -> {ok, atom()} | {error, not_found}.
-get_cookie_from_env_var() ->
-    EnvVars = ["MACULA_COOKIE", "RELEASE_COOKIE", "ERLANG_COOKIE"],
-    get_first_env_var(EnvVars).
-
--spec get_first_env_var([string()]) -> {ok, atom()} | {error, not_found}.
-get_first_env_var([]) ->
-    {error, not_found};
-get_first_env_var([Var | Rest]) ->
-    case os:getenv(Var) of
-        false -> get_first_env_var(Rest);
-        "" -> get_first_env_var(Rest);
-        Value -> {ok, list_to_atom(Value)}
-    end.
-
-%% @doc Read cookie from ~/.erlang.cookie file.
--spec read_cookie_file() -> {ok, atom()} | {error, term()}.
-read_cookie_file() ->
-    CookieFile = cookie_file_path(),
-    cookie_from_file(file:read_file(CookieFile)).
-
-cookie_from_file({ok, Content}) ->
-    cookie_value(string:trim(binary_to_list(Content)));
-cookie_from_file({error, Reason}) ->
-    {error, {cookie_file_read_failed, Reason}}.
-
-cookie_value("") -> {error, empty_cookie};
-cookie_value(Cookie) -> {ok, list_to_atom(Cookie)}.
-
-%% @doc Get the path to the cookie file.
--spec cookie_file_path() -> file:filename().
-cookie_file_path() ->
-    case os:getenv("HOME") of
-        false -> "/tmp/.erlang.cookie";
-        Home -> filename:join(Home, ".erlang.cookie")
-    end.
-
-%%%===================================================================
-%%% Internal Functions - Cookie Generation
-%%%===================================================================
-
--spec generate_cookie() -> atom().
-generate_cookie() ->
-    %% Generate a random 20-character cookie
-    Bytes = crypto:strong_rand_bytes(15),
-    Hex = binary:encode_hex(Bytes),
-    binary_to_atom(Hex, utf8).
-
--spec persist_cookie(atom()) -> ok | {error, term()}.
-persist_cookie(Cookie) ->
-    CookieFile = cookie_file_path(),
-    CookieStr = atom_to_list(Cookie) ++ "\n",
-    case file:write_file(CookieFile, CookieStr) of
-        ok ->
-            %% Set restrictive permissions (owner read/write only)
-            _ = file:change_mode(CookieFile, 8#600),
-            ok;
-        {error, Reason} ->
-            ?LOG_WARNING("[macula_cluster] Failed to persist cookie: ~p", [Reason]),
-            {error, {cookie_persist_failed, Reason}}
-    end.
+node_cookie_set(true, Cookie) ->
+    true = erlang:set_cookie(node(), Cookie),
+    ok;
+node_cookie_set(false, _Cookie) ->
+    erlang:error(not_distributed).
 
 %%%===================================================================
 %%% API - Auto-Clustering
