@@ -4,7 +4,7 @@
 %%%
 %%% Each function is made in the test process and sends that process
 %%% {link_call, Name, Args} when it is called. pick_connected_link/1 and
-%%% ensure_content_link/4 answer with the test process as the link,
+%%% ensure_station_link/4 answer with the test process as the link,
 %%% open_content_stream/1 with a fresh reference each time,
 %%% call_on_stream/6 with {ok, ok}, and the close and abort functions with
 %%% ok, for a test to give other ones where it needs them. calls/0 returns,
@@ -27,8 +27,8 @@ link_io() ->
                                      ok = Record(pick_connected_link, [Pool]),
                                      {ok, Test}
                              end,
-      ensure_content_link => fun(Pool, Station, LinkOpts, TimeoutMs) ->
-                                     ok = Record(ensure_content_link,
+      ensure_station_link => fun(Pool, Station, LinkOpts, TimeoutMs) ->
+                                     ok = Record(ensure_station_link,
                                                  [Pool, Station, LinkOpts, TimeoutMs]),
                                      {ok, Test}
                              end,

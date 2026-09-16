@@ -142,7 +142,7 @@ direct_dial_resolves_then_puts_through_the_resolved_station() ->
     DialUrl = <<"quic://station.example:4433">>,
     LinkPid = dummy_pid(),
     LinkIo = (macula_scripted_link:link_io())#{
-               ensure_content_link := link_to(DialUrl, LinkPid),
+               ensure_station_link := link_to(DialUrl, LinkPid),
                call_on_stream := fun(_, _, _, <<"_content.put_block">>, _, _) -> {ok, ok} end},
     Resolve = fun(_Pool, Station0) when Station0 =:= Station -> {ok, DialUrl} end,
 
@@ -191,7 +191,7 @@ cancel_while_a_direct_transfer_is_handed_over_still_reaches_it() ->
     Station = crypto:strong_rand_bytes(32),
     DialUrl = <<"quic://station.example:4433">>,
     LinkIo = (open_put_link_io(Self, LinkPid, Stream))#{
-               ensure_content_link := link_to(DialUrl, LinkPid)},
+               ensure_station_link := link_to(DialUrl, LinkPid)},
     Held = fun(Pool, Dial, Bytes, TimeoutMs, TransferOpts) ->
                    hold_handover(Self, macula_content_transfer:start_put_station(
                                          Pool, Dial, Bytes, TimeoutMs, TransferOpts))
@@ -228,7 +228,7 @@ default_transfer_io() ->
       await => fun macula_content_transfer:await/1,
       cancel => fun macula_content_transfer:cancel/1}.
 
-%% An ensure_content_link/4 that dials only Seed, as LinkPid.
+%% An ensure_station_link/4 that dials only Seed, as LinkPid.
 link_to(Seed, LinkPid) ->
     fun(_Pool, Dialed, _LinkOpts, _TimeoutMs) when Dialed =:= Seed -> {ok, LinkPid} end.
 

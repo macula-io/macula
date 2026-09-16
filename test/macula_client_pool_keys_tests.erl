@@ -280,7 +280,7 @@ a_pool_signs_only_records_about_itself_test_() ->
                   Before = erlang:system_time(millisecond),
                   Signed = macula_client:sign_node_record(Pool, Old),
                   Replies = [{Name, macula_client:sign_node_record(Pool, Unsigned)} || {Name, Unsigned} <- Refused],
-                  {ok, Own} = macula_client:sign_node_record(Pool, Advertisement(NodeId)),
+                  {ok, Own} = macula:sign_node_record(Pool, Advertisement(NodeId)),
                   <<First, Rest/binary>> = maps:get(signature, Own),
                   Tampered = Own#{signature := <<(First bxor 1), Rest/binary>>},
                   {ok, Tombstone} = Withdrawn = macula_client:withdraw_node_record(Pool, Own, shutdown),
@@ -401,7 +401,7 @@ a_domain_record_is_refused_before_the_call_test_() ->
         {ok, Pool} = macula_client:connect([], #{node_identity => Key}),
         ok = sys:suspend(Pool),
         Replies = try
-                      [macula_client:sign_domain_record(Pool, macula_record:node_record(NodeId, [], 0)),
+                      [macula:sign_domain_record(Pool, macula_record:node_record(NodeId, [], 0)),
                        macula_client:sign_domain_record(Pool, Domain#{subject => not_a_binary}),
                        macula_client:sign_domain_record(Pool, Domain#{subject => <<>>}),
                        macula_client:sign_domain_record(Pool, Domain#{expires_at := Created + 7 * Day + 1}),
