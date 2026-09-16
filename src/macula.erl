@@ -398,6 +398,13 @@ unadvertise(Pool, Realm, Procedure) ->
 put_record(Pool, #{key := _, tbs := _, signature := _} = Signed) when is_pid(Pool) ->
     put_record(Pool, macula_record:encode(Signed));
 put_record(Pool, Wire) when is_pid(Pool), is_binary(Wire) ->
+    %% Record bytes paced per pool, so a bulk writer stays under the
+    %% station's STORE allowance (D28, 3.5) instead of running into stored 0.
+    %% One bucket per pool is conservative for a pool of several links: its
+    %% calls fan out one link at a time, and the per-link pacer in
+    %% macula_station_link:put_record/3 paces a caller that writes straight
+    %% through a link.
+    ok = macula_store_pacer:await(Pool, byte_size(Wire)),
     classify_put(macula_client:call_linked_station(Pool, ?DHT_REALM,
                                     ?DHT_PUT_RECORD_PROC,
                                     Wire, ?DHT_RECORD_TIMEOUT_MS)).

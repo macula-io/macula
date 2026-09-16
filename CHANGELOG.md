@@ -481,6 +481,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `record_version`, not `version`: the base frame header already carries a
   `version` field.
 
+- `macula_store_pacer` paces record bytes on the DHT put paths, so a node
+  that writes many records stays under a station's STORE byte allowance
+  (D28, 3.5) instead of running into `stored` 0: a caller-side bucket of
+  16 MiB per connection, refilled at 1 MiB per second, waited out in the
+  calling process. `macula_station_link:put_record/2,3` and
+  `macula:put_record/2` pace through it; one bucket per pool is
+  conservative for a pool of several links, since its calls fan out one
+  link at a time.
+
 ### Changed
 
 - `macula_identity:load/1` and `macula_owner_only_file:read/1` accept only
