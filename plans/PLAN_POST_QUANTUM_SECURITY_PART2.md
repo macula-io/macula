@@ -128,7 +128,8 @@ change, the done criterion and the effort. The US profile goes first; the EU par
     profile (D4), signing as Macula's composite `ML-DSA-87-PS384` (D7);
   - CONNECT keys and TLS keys, their bindings and their status (D22); key storage per D6, with a round trip on
     load and rotation every 5 days;
-  - node_id per D5, through one identity function that every comparison uses; the puzzle works on node_id, and
+  - node_id per D5, through one identity function that every comparison uses; the puzzle works on node_id at 12
+    leading zero bits, a constant (D30), and the 10.x `puzzle_difficulty` setting of the `macula` application goes;
     identity key generation regenerates only the ML-DSA-87 half of a pq_hybrid key;
   - record `key` and `signature`, and frame signature fields, become algorithm-tagged and variable-length; records
     carry the signer's full public key or keys (D13);
@@ -492,8 +493,11 @@ change, the done criterion and the effort. The US profile goes first; the EU par
   - `macula-station` builds against a local checkout of `macula` during development and moves to `macula` `~> 11.0`
     from hex once Raf publishes (D20);
   - every fleet node runs chrony with NTS against at least two independent servers (D22); which servers is open;
+
   - station instances start with puzzle enforcement in `log_only`; `enforce` follows in WP 4.5.
 - **Red first:** the Stage 2 smoke check against the 11.0.0 station instances fails before they start.
+  - station instances start with puzzle enforcement in `log_only`; `enforce` follows in WP 4.5 (D30).
+- **Red first:** the Stage 2 smoke check against the new fleet fails before provisioning.
 - **Done:** every station instance is reachable in its profile under the node_ids in its seeds.
 - **Effort:** 3 to 5 days, plus configuration generation ⚠.
 
@@ -539,6 +543,7 @@ change, the done criterion and the effort. The US profile goes first; the EU par
 - **Done:** green against the 11.0.0 relay.
 - **Effort:** ⚠.
 
+
 ### WP 3.5 Demonstration video plan
 
 - [ ] A plan for a video that shows the 11.0.0 mesh at work, with its shot list and the claim each shot makes.
@@ -547,6 +552,23 @@ change, the done criterion and the effort. The US profile goes first; the EU par
 - **Files:**
   - `plans/PLAN_PQ_DEMO_VIDEO.md` in `macula-architecture`, which is private (new); it moves to `macula` only after
     Stage 6 is green and its wording has passed the D11 check
+- **Change:**
+  - the plan proposed in pull request 11 of `macula`, which Raf closed, is written again;
+  - it takes Saturnus's corrections from the D11 check, and his two proposed D11 sentences go to Raf as plan
+    decisions;
+  - every claim in it names the WP 2.2 or WP 4.5 check that is its evidence;
+  - the video, its footage and any sentence about it are published only after Stage 6 is green, and every public
+    sentence passes the D11 check first.
+- **Done:** the plan passes Saturnus's D11 check, and Raf has decided the two sentences.
+- **Effort:** 1 day.
+
+### WP 3.5 Demonstration video plan
+
+- [ ] A plan for a video that shows the post-quantum fleet at work, with its shot list and the claim each shot makes.
+- **Owner:** Mercury.
+- **Waiting on:** WP 3.2.
+- **Files:**
+  - `plans/PLAN_PQ_DEMO_VIDEO.md` (new)
 - **Change:**
   - the plan proposed in pull request 11 of `macula`, which Raf closed, is written again;
   - it takes Saturnus's corrections from the D11 check, and his two proposed D11 sentences go to Raf as plan
@@ -856,8 +878,8 @@ Every stack also meets these, each red first:
   - the group, signature scheme and cipher suite checked two independent ways that agree;
   - the connection handshake checked, and a classical-only client and X25519MLKEM768 refused;
   - the cross-stack leaf-hash vector through each stack's real handshake and accessor;
-  - once every stack generates puzzle-valid identity keys, the fleet switches puzzle enforcement from `log_only`
-    to `enforce`, and every cell passes again under `enforce`.
+  - once every stack generates puzzle-valid identity keys (D30), the fleet switches puzzle enforcement from
+    `log_only` to `enforce`, and every cell passes again under `enforce`.
 - **Done:** every cell green for its profile, with captures stored as CI artifacts. This is the evidence for any
   public claim about that stack.
 - **Effort:** 2 to 3 days, together with WP 2.2.
@@ -868,7 +890,10 @@ Every stack also meets these, each red first:
 
 ### WP 5.1 Tools
 
+
 - [ ] The tools run against the post-quantum fleet's 11.0.0 stations (D14, reconsidered 2026-09-16).
+- **Owners:** Venus (`macula-cli`, `macula-mcp`), Mars (`lazymesh`).
+- [ ] The tools run against the new fleet.
 - **Owners:** Venus (`macula-cli`, `macula-mcp`), Mars (`lazymesh`).
 - **Waiting on:** WP 4.2, WP 3.2; a tool that joins `io.macula` also waits on their EU parts (D19).
 - **Change:**
@@ -921,8 +946,13 @@ Every stack also meets these, each red first:
   - every hecate service procedure moves under the org namespace `hecate`, with a procedure delegation per service
     signed by the `hecate` org key of WP 3.1; SDK examples, `macula-mcp` and `macula-e2e` callers move with the
     rename (D25);
+
   - no hecate service advertises a name without an org namespace; the names to rename are listed with their owners
     (open item);
+  - no hecate service advertises a name without an org namespace. The bare names found in use start the list:
+    `rag_search`, `rag_contribute`, `reach_web`, `graph_learn`, `graph_ask_links`, `graph_ask_entity`,
+    `hecate-nvidia-pair.chat`, `hecate-llm.stream_chat` and the tube procedures (Pluto's first pass, 2026-09-14; the
+    full list is an open item);
   - services that share content keep it and serve it themselves (D27);
   - a node that holds private keys runs with Erlang crash dumps disabled (`ERL_CRASH_DUMP_BYTES=0`), or written only
     to a private location readable by its own user.
@@ -1030,9 +1060,14 @@ core cutover advertises a procedure without an org or node namespace.
 - `rebar.config`
 - `Dockerfile`
 
+
 ### `macula-architecture` (WP 3.5)
 
 - `plans/PLAN_PQ_DEMO_VIDEO.md` (new), until Stage 6 is green
+
+### `macula` plans (WP 3.5)
+
+- `plans/PLAN_PQ_DEMO_VIDEO.md` (new)
 
 ### `macula-rust` (WP 4.1)
 
@@ -1086,6 +1121,7 @@ core cutover advertises a procedure without an org or node namespace.
 - `src/hecate_om_ownership_proof.erl`
 - Containerfiles and CI images (V11)
 
+
 ---
 
 ## 11.0.0 removals
@@ -1108,6 +1144,49 @@ move first. An owner who deprecates something adds its entry here; some entries 
 - `macula_direct_dial:resolve_content_provider/2`.
   - Replacement: `macula_direct_dial:fetch_content/4`.
   - Moves first: its caller in `macula-internal/macula-e2e` (`macula_e2e_duel`, Terra, WP 2.1).
+- The `dht` and `mdns` clustering strategy values, with `macula_cluster_strategy`, `macula_dist_discovery` and
+  `macula_dist_mdns_advertiser` (Neptune).
+  - Replacement: the `gossip` strategy on a LAN, or `static` with a node list.
+  - Moves first: nothing.
+  - Noted in the [Clustering Guide](../docs/guides/CLUSTERING_GUIDE.md), in the READMEs of
+    [`macula_cluster_system`](../src/macula_cluster_system/README.md) and
+    [`macula_dist_system`](../src/macula_dist_system/README.md), and in `macula_dist_discovery`.
+- `mdns` in the `optional_applications` of `src/macula.app.src`, which names no installed application.
+  - Replacement: none. Moves first: nothing.
+- The modules `macula_console` and `macula_cert_system` (Mercury).
+  - Replacement: start `macula_trust_store` directly. Moves first: nothing; no caller in the workspace on
+    2026-09-14.
+- `macula_mri:index_descendants/3`, `index_insert/4`, `index_remove/3`, `index_size/1` and `is_valid/1`;
+  `macula_names:local_node_id/0`; `macula_source_route:version/1`; `macula_quic:accept_stream/3`,
+  `async_shutdown_connection/3` and `handoff_stream/3`; `macula_crypto_nif:blake3_streaming/1` and
+  `blake3_verify/2`; `hecate_or_set:tombstones/1`; `macula_hyparview_view:contains/2` (Mercury).
+  - Replacement: none. Moves first: nothing; no caller in the workspace on 2026-09-14.
+- Exports that end while their modules keep the functions: `macula_mri:parent_type/1`,
+  `macula_mri_registry:list_custom_types/0` and `macula_dist_relay_protocol:decode/1` (Mercury).
+  - Replacement: none outside their modules. Moves first: nothing; no caller in the workspace on 2026-09-14.
+
+---
+
+## 11.0.0 removals
+
+What `macula` 11.0.0 removes, in one place. Each entry names what is deprecated, what replaces it, and what must
+move first. An owner who deprecates something adds its entry here; some entries belong to changes that are not on
+`main` yet. The `[11.0.0]` Removed section of the post-quantum CHANGELOG records each removal when it is made.
+
+- `macula_frame:parse_stream/1` (Neptune).
+  - Replacement: `macula_frame:parse_received/1`, which returns `{ok, Items, Tail}` or
+    `{malformed, ItemsBefore, Reason}`.
+  - Moves first: its two callers in `macula-station`, in the station's release B (Mars). The `-deprecated`
+    attribute follows in the next `macula` minor, because the station's xref checks deprecated calls; until then
+    the deprecation is in the documentation and the CHANGELOG only.
+- `macula:get_cookie/0`, `macula:set_cookie/1`, `macula_cluster:get_cookie/0` and `macula_cluster:set_cookie/1`
+  (Pluto).
+  - Replacement: `erlang:get_cookie/0` and `erlang:set_cookie/1` on a distributed node, whose cookie comes from its
+    owner-only cookie file or its release.
+  - Moves first: `bc-gitops` (`bc_gitops_cluster` and `bc_gitops_vm_spawner`).
+- `macula_direct_dial:resolve_content_provider/2`.
+  - Replacement: `macula_direct_dial:fetch_content/4`.
+  - Moves first: nothing.
 - The `dht` and `mdns` clustering strategy values, with `macula_cluster_strategy`, `macula_dist_discovery` and
   `macula_dist_mdns_advertiser` (Neptune).
   - Replacement: the `gossip` strategy on a LAN, or `static` with a node list.

@@ -166,6 +166,8 @@ Notes on the table:
 - The OTP 28.1 runs use OpenSSL 3.6.4, one core and a 512-byte message, over 200 to 300 signatures and 300 to 2,000
   verifications.
 - RSA key generation, median of 8 runs: 95 ms at 3072 bits (41 to 250 ms) and 445 ms at 4096 bits (69 to 915 ms).
+- Identity key generation with the node_id, OTP 28.4.2, one core: ML-DSA-87 with the D5 node_id takes 0.28 ms (mean
+  of 200). A puzzle of n bits takes 2^n generations on average: 1.1 s at 12 bits and 18 s at 16 bits (D30).
 - SWIM sends about one signature per second per station ✅: a signed PING every 2 s by default, plus ACKs.
 
 Ceilings from signing and verifying alone, per core, estimated from the table:
@@ -237,6 +239,7 @@ Ceilings from signing and verifying alone, per core, estimated from the table:
 | V17 | Identifier hashes under CNSA 2.0 | Saturnus | answered; D5 pending Raf | 0.5 day |
 | V18 | Revocation under BSI and ANSSI | Saturnus | answered; D22 pending Raf | 0.5 day |
 | V19 | TLS 1.3 in OTP `ssl` with the profile groups | Mercury | done | 0.5 day |
+| V20 | Node_id puzzle cost on the slowest client device | unassigned | open | 0.5 day |
 
 #### V2 OpenSSL in the runtime images
 
@@ -473,4 +476,15 @@ Ceilings from signing and verifying alone, per core, estimated from the table:
   dialing side offering only `x25519` was refused. OTP's chain check refuses a self-signed ML-DSA-87 leaf, so the
   dialing side checks the leaf itself with a `verify_fun`, as the key model's client check does. The key came from
   OpenSSL, since OTP's generated ML-DSA-87 keys need the seed workaround to sign.
+- **Effort:** 0.5 day.
+
+#### V20 Node_id puzzle cost on the slowest client device
+
+- **What to verify:** on the slowest device a supported client stack runs on, such as a phone or a small ARM board,
+  how long each stack takes to generate a `pq_pure` and a `pq_hybrid` identity whose node_id (D5) has 12 leading zero
+  bits (D30), with a `pq_hybrid` key regenerating only its ML-DSA-87 half.
+- **Result so far:** on one core of this machine, 1.1 s on average for ML-DSA-87 ✅; no client device has been
+  measured ⚠.
+- **Done when:** the mean and the 95th percentile are recorded for each stack on that device. If 12 bits is too slow
+  there, the value goes back to Raf (D30).
 - **Effort:** 0.5 day.

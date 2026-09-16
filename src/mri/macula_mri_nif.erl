@@ -72,22 +72,6 @@
 ]).
 
 %% NIF stubs
--export([
-    nif_parse_mri/1,
-    nif_validate_realm_format/1,
-    nif_validate_segment_chars/1,
-    nif_is_builtin_type/1,
-    nif_join_path_segments/1,
-    nif_format_mri/3,
-    nif_find_children/3,
-    nif_find_descendants/3,
-    nif_build_path_index/1,
-    nif_index_find_children/3,
-    nif_index_find_descendants/3,
-    nif_index_insert/4,
-    nif_index_remove/3,
-    nif_index_size/1
-]).
 
 -on_load(init/0).
 

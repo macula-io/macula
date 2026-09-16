@@ -26,8 +26,6 @@
     sign/2,
     verify/3,
     blake3/1,
-    blake3_streaming/1,
-    blake3_verify/2,
     blake3_hex/1,
     sha256/1,
     sha256_base64/1,
@@ -39,19 +37,10 @@
 
 %% NIF stubs
 -export([
-    nif_generate_keypair/0,
-    nif_grind_puzzle/1,
-    nif_sign/2,
-    nif_verify/3,
     nif_blake3/1,
     nif_blake3_streaming/1,
     nif_blake3_verify/2,
     nif_blake3_hex/1,
-    nif_sha256/1,
-    nif_sha256_base64/1,
-    nif_base64_encode/1,
-    nif_base64_decode/1,
-    nif_secure_compare/2,
     nif_effective_uid/0
 ]).
 
@@ -155,23 +144,6 @@ blake3(Data) ->
     case is_nif_loaded() of
         true -> nif_blake3(Data);
         false -> erlang_blake3(Data)
-    end.
-
-%% @doc Compute BLAKE3 hash of multiple chunks (streaming).
-%% Returns 32-byte hash binary.
--spec blake3_streaming(Chunks :: [binary()]) -> Hash :: binary().
-blake3_streaming(Chunks) ->
-    case is_nif_loaded() of
-        true -> nif_blake3_streaming(Chunks);
-        false -> erlang_blake3(iolist_to_binary(Chunks))
-    end.
-
-%% @doc Verify data matches expected BLAKE3 hash.
--spec blake3_verify(Data :: binary(), ExpectedHash :: binary()) -> boolean().
-blake3_verify(Data, ExpectedHash) ->
-    case is_nif_loaded() of
-        true -> nif_blake3_verify(Data, ExpectedHash);
-        false -> erlang_blake3(Data) =:= ExpectedHash
     end.
 
 %% @doc Compute BLAKE3 hash and return as hex string.

@@ -86,8 +86,7 @@
 ]).
 
 %% Cluster (LAN)
--export([ensure_distributed/0, get_cookie/0, set_cookie/1,
-         monitor_nodes/0, unmonitor_nodes/0]).
+-export([ensure_distributed/0, monitor_nodes/0, unmonitor_nodes/0]).
 
 %% Mesh Distribution
 -export([join_mesh/1, join_dist_relay/1, dist_relay_client/0]).
@@ -399,6 +398,13 @@ unadvertise(Pool, Realm, Procedure) ->
 put_record(Pool, #{key := _, tbs := _, signature := _} = Signed) when is_pid(Pool) ->
     put_record(Pool, macula_record:encode(Signed));
 put_record(Pool, Wire) when is_pid(Pool), is_binary(Wire) ->
+    %% Record bytes paced per pool, so a bulk writer stays under the
+    %% station's STORE allowance (D28, 3.5) instead of running into stored 0.
+    %% One bucket per pool is conservative for a pool of several links: its
+    %% calls fan out one link at a time, and the per-link pacer in
+    %% macula_station_link:put_record/3 paces a caller that writes straight
+    %% through a link.
+    ok = macula_store_pacer:await(Pool, byte_size(Wire)),
     classify_put(macula_client:call_linked_station(Pool, ?DHT_REALM,
                                     ?DHT_PUT_RECORD_PROC,
                                     Wire, ?DHT_RECORD_TIMEOUT_MS)).
@@ -995,14 +1001,6 @@ abort(Stream, Code, Message)
 %% @doc Ensure this node is running in distributed mode.
 -spec ensure_distributed() -> ok | {error, term()}.
 ensure_distributed() -> macula_cluster:ensure_distributed().
-
-%% @doc Get the Erlang cluster cookie.
--spec get_cookie() -> atom().
-get_cookie() -> macula_cluster:get_cookie().
-
-%% @doc Set the Erlang cluster cookie.
--spec set_cookie(atom() | binary()) -> ok.
-set_cookie(Cookie) -> macula_cluster:set_cookie(Cookie).
 
 %% @doc Subscribe to node up/down events.
 -spec monitor_nodes() -> ok.

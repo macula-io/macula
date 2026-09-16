@@ -81,19 +81,19 @@ a_goodbye_reason_is_text_of_at_most_256_bytes_test() ->
     ?assertError(function_clause, macula_frame:goodbye(TooLong, undefined)).
 
 a_store_ack_carries_no_reason_test() ->
-    Refused = macula_frame:store_ack(#{key => fill(3), stored => false}),
+    Refused = macula_frame:store_ack(#{key => fill(3), signer => fill(1), record_version => version16(), stored => false}),
     ?assertNot(maps:is_key(reason, roundtrip(Refused))),
     ?assertEqual({error, bad_frame}, decode_map(Refused#{reason => quota})).
 
 an_envelope_boolean_travels_as_0_or_1_test() ->
-    Stored = macula_frame:store_ack(#{key => fill(3), stored => true}),
+    Stored = macula_frame:store_ack(#{key => fill(3), signer => fill(1), record_version => version16(), stored => true}),
     <<_Length:32, Bytes/binary>> = macula_frame:encode(Stored),
     ?assertMatch({ok, #{{text, <<"stored">>} := 1}}, macula_record_cbor:decode_strict(Bytes)),
     ?assertEqual(true, maps:get(stored, roundtrip(Stored))),
-    ?assertEqual(false, maps:get(stored, roundtrip(macula_frame:store_ack(#{key => fill(3), stored => false})))).
+    ?assertEqual(false, maps:get(stored, roundtrip(macula_frame:store_ack(#{key => fill(3), signer => fill(1), record_version => version16(), stored => false})))).
 
 an_envelope_boolean_other_than_0_or_1_is_refused_test() ->
-    Stored = macula_frame:store_ack(#{key => fill(3), stored => true}),
+    Stored = macula_frame:store_ack(#{key => fill(3), signer => fill(1), record_version => version16(), stored => true}),
     [?assertEqual({error, bad_frame}, decode_map(Stored#{stored => Value})) || Value <- [{text, <<"true">>}, 2]].
 
 %%------------------------------------------------------------------
@@ -202,3 +202,6 @@ nested(N) -> [nested(N - 1)].
 
 fill(Byte) ->
     binary:copy(<<Byte>>, 32).
+
+version16() ->
+    binary:copy(<<9>>, 16).

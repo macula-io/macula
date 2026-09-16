@@ -654,6 +654,9 @@ put_record(Pid, Record) ->
 
 -spec put_record(pid(), map(), pos_integer()) -> ok | {error, term()}.
 put_record(Pid, Record, TimeoutMs) when is_pid(Pid), is_map(Record) ->
+    %% Record bytes paced per connection, so a bulk writer stays under the
+    %% station's STORE allowance (D28, 3.5) instead of running into stored 0.
+    ok = macula_store_pacer:await(Pid, byte_size(macula_record:encode(Record))),
     classify_put(call(Pid, station, ?DHT_REALM,<<"_dht.put_record">>,
                       Record, TimeoutMs)).
 

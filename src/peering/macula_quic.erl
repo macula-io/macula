@@ -87,13 +87,10 @@
     close/1,
 
     %% Dist compat (stream accept with opts, stream open with opts)
-    accept_stream/3,
     open_stream/2,
-    handoff_stream/3,
 
     %% Shutdown (maps to close with flags)
     async_shutdown_stream/3,
-    async_shutdown_connection/3,
 
     %% Stats
     getstat/2
@@ -667,11 +664,6 @@ close_as(Ref, [CloseFn | Rest]) ->
 async_shutdown_stream(Stream, _Flag, Code) ->
     reset_stream(Stream, Code).
 
-%% @doc Async shutdown connection.
--spec async_shutdown_connection(reference(), integer(), integer()) -> ok.
-async_shutdown_connection(Conn, _Flag, _Code) ->
-    nif_close_connection(Conn).
-
 %% @doc Get connection stats. NOT IMPLEMENTED — answers
 %% `{error, not_implemented}'.
 %%
@@ -709,20 +701,10 @@ getstat(_Conn, _Stats) ->
 %%% Dist Compat API
 %%%===================================================================
 
-%% @doc Accept stream with options and timeout (for macula_dist).
--spec accept_stream(reference(), map(), timeout()) -> {ok, reference()} | {error, term()}.
-accept_stream(Conn, _Opts, _Timeout) ->
-    async_accept_stream(Conn).
-
 %% @doc Open stream with options map (for macula_dist).
 -spec open_stream(reference(), map()) -> {ok, reference()} | {error, term()}.
 open_stream(Conn, _Opts) ->
     open_stream(Conn).
-
-%% @doc Hand off a stream to another process (for macula_dist).
--spec handoff_stream(reference(), pid(), map()) -> ok | {error, term()}.
-handoff_stream(Stream, NewOwner, _Opts) ->
-    controlling_process(Stream, NewOwner).
 
 %%%===================================================================
 %%% NIF Stubs

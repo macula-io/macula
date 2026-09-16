@@ -20,7 +20,7 @@
 
 -include_lib("kernel/include/logger.hrl").
 
--export([encode/1, decode/1, decode_buffer/1]).
+-export([encode/1, decode_buffer/1]).
 
 -type identify_msg() :: #{type := identify, node_name := binary()}.
 -type identified_msg() :: #{type := identified, status := ok}.

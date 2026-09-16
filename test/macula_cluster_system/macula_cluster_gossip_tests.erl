@@ -10,6 +10,9 @@
 
 -include_lib("eunit/include/eunit.hrl").
 
+%% 32 bytes: gossip needs a shared secret of at least that.
+-define(SECRET, <<"0123456789abcdef0123456789abcdef">>).
+
 %%%===================================================================
 %%% Test Generators
 %%%===================================================================
@@ -38,7 +41,6 @@ config_test_() ->
 
 payload_test_() ->
     [
-        {"payload without secret", fun payload_without_secret/0},
         {"payload with secret includes HMAC", fun payload_with_secret/0}
     ].
 
@@ -74,7 +76,7 @@ cleanup(_) ->
 %%%===================================================================
 
 start_link_default() ->
-    {ok, Pid} = macula_cluster_gossip:start_link(),
+    {ok, Pid} = macula_cluster_gossip:start_link(#{secret => ?SECRET}),
     ?assert(is_pid(Pid)),
     ?assert(is_process_alive(Pid)),
     macula_cluster_gossip:stop().
@@ -84,33 +86,34 @@ start_link_custom() ->
         multicast_addr => {239, 1, 1, 1},
         port => 9999,
         broadcast_interval => 2000,
-        multicast_ttl => 2
+        multicast_ttl => 2,
+        secret => ?SECRET
     },
     {ok, Pid} = macula_cluster_gossip:start_link(Opts),
     ?assert(is_pid(Pid)),
     macula_cluster_gossip:stop().
 
 stop_terminates() ->
-    {ok, Pid} = macula_cluster_gossip:start_link(),
+    {ok, Pid} = macula_cluster_gossip:start_link(#{secret => ?SECRET}),
     ?assert(is_process_alive(Pid)),
     ok = macula_cluster_gossip:stop(),
     timer:sleep(50),
     ?assertNot(is_process_alive(Pid)).
 
 get_discovered_initial() ->
-    {ok, _Pid} = macula_cluster_gossip:start_link(),
+    {ok, _Pid} = macula_cluster_gossip:start_link(#{secret => ?SECRET}),
     Discovered = macula_cluster_gossip:get_discovered(),
     ?assertEqual([], Discovered),
     macula_cluster_gossip:stop().
 
 get_connected_initial() ->
-    {ok, _Pid} = macula_cluster_gossip:start_link(),
+    {ok, _Pid} = macula_cluster_gossip:start_link(#{secret => ?SECRET}),
     Connected = macula_cluster_gossip:get_connected(),
     ?assertEqual([], Connected),
     macula_cluster_gossip:stop().
 
 broadcast_now_works() ->
-    {ok, _Pid} = macula_cluster_gossip:start_link(),
+    {ok, _Pid} = macula_cluster_gossip:start_link(#{secret => ?SECRET}),
     %% Should not crash
     ok = macula_cluster_gossip:broadcast_now(),
     macula_cluster_gossip:stop().
@@ -121,33 +124,33 @@ broadcast_now_works() ->
 
 default_multicast_addr() ->
     %% Default should be {230, 1, 1, 251}
-    {ok, Pid} = macula_cluster_gossip:start_link(),
+    {ok, Pid} = macula_cluster_gossip:start_link(#{secret => ?SECRET}),
     ?assert(is_pid(Pid)),
     macula_cluster_gossip:stop().
 
 default_port() ->
     %% Default should be 45892
-    {ok, Pid} = macula_cluster_gossip:start_link(),
+    {ok, Pid} = macula_cluster_gossip:start_link(#{secret => ?SECRET}),
     ?assert(is_pid(Pid)),
     macula_cluster_gossip:stop().
 
 env_gossip_addr() ->
     os:putenv("MACULA_GOSSIP_ADDR", "239.0.0.1"),
-    {ok, Pid} = macula_cluster_gossip:start_link(),
+    {ok, Pid} = macula_cluster_gossip:start_link(#{secret => ?SECRET}),
     ?assert(is_pid(Pid)),
     macula_cluster_gossip:stop(),
     os:unsetenv("MACULA_GOSSIP_ADDR").
 
 env_gossip_port() ->
     os:putenv("MACULA_GOSSIP_PORT", "12345"),
-    {ok, Pid} = macula_cluster_gossip:start_link(),
+    {ok, Pid} = macula_cluster_gossip:start_link(#{secret => ?SECRET}),
     ?assert(is_pid(Pid)),
     macula_cluster_gossip:stop(),
     os:unsetenv("MACULA_GOSSIP_PORT").
 
 env_gossip_secret() ->
-    os:putenv("MACULA_GOSSIP_SECRET", "my-test-secret"),
-    {ok, Pid} = macula_cluster_gossip:start_link(),
+    os:putenv("MACULA_GOSSIP_SECRET", binary_to_list(?SECRET)),
+    {ok, Pid} = macula_cluster_gossip:start_link(#{}),
     ?assert(is_pid(Pid)),
     macula_cluster_gossip:stop(),
     os:unsetenv("MACULA_GOSSIP_SECRET").
@@ -155,12 +158,6 @@ env_gossip_secret() ->
 %%%===================================================================
 %%% Payload Tests
 %%%===================================================================
-
-payload_without_secret() ->
-    %% Verify payload format
-    NodeName = <<"test@localhost">>,
-    Payload = build_test_payload(NodeName, undefined),
-    ?assertEqual(<<"MACULA_GOSSIP:test@localhost">>, Payload).
 
 payload_with_secret() ->
     %% Verify payload with HMAC
@@ -174,8 +171,6 @@ payload_with_secret() ->
     ?assertEqual(64, byte_size(HexHMAC)).
 
 %% Helper to build payload (mirrors internal function)
-build_test_payload(NodeName, undefined) ->
-    <<"MACULA_GOSSIP:", NodeName/binary>>;
 build_test_payload(NodeName, Secret) ->
     Data = <<"MACULA_GOSSIP:", NodeName/binary>>,
     HMAC = crypto:mac(hmac, sha256, Secret, Data),
@@ -186,13 +181,13 @@ build_test_payload(NodeName, Secret) ->
 %%%===================================================================
 
 api_get_discovered() ->
-    {ok, _Pid} = macula_cluster_gossip:start_link(),
+    {ok, _Pid} = macula_cluster_gossip:start_link(#{secret => ?SECRET}),
     Result = macula_cluster_gossip:get_discovered(),
     ?assert(is_list(Result)),
     macula_cluster_gossip:stop().
 
 api_get_connected() ->
-    {ok, _Pid} = macula_cluster_gossip:start_link(),
+    {ok, _Pid} = macula_cluster_gossip:start_link(#{secret => ?SECRET}),
     Result = macula_cluster_gossip:get_connected(),
     ?assert(is_list(Result)),
     macula_cluster_gossip:stop().

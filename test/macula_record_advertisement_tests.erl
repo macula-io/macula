@@ -125,6 +125,25 @@ the_delegation_form_needs_the_realm_key_test() ->
                  macula_record:verify_authorization(verified(Adv), #{profile => pq_pure}, now_ms())).
 
 %%------------------------------------------------------------------
+%% verify_authorization/3 over the foundation realm trust list's pairs (D28): the trust carries realm id to realm
+%% key id instead of one carried key, and the org directory's signer is compared by key id.
+%%------------------------------------------------------------------
+
+a_delegation_authorized_by_the_trust_lists_pairs_test() ->
+    #{adv := Adv, realm := Realm} = delegation_bundle(<<"acme/get_forecast_v1">>, #{}),
+    ?assertEqual(ok, authorize_by_pairs(Adv, Realm)).
+
+the_pairs_refuse_an_org_directory_from_another_realm_key_test() ->
+    #{adv := Adv, realm := Realm} = delegation_bundle(<<"acme/get_forecast_v1">>, #{dir_signer => key(realm)}),
+    ?assertEqual({error, org_directory_wrong_realm}, authorize_by_pairs(Adv, Realm)).
+
+the_pairs_refuse_a_realm_they_do_not_list_test() ->
+    #{adv := Adv} = delegation_bundle(<<"acme/get_forecast_v1">>, #{}),
+    ?assertEqual({error, no_realm_key},
+                 macula_record:verify_authorization(verified(Adv),
+                                                    #{profile => pq_pure, realm_pairs => #{}}, now_ms())).
+
+%%------------------------------------------------------------------
 %% verify_authorization/3: presence follows the org namespace
 %%------------------------------------------------------------------
 
@@ -194,6 +213,12 @@ authorize(Adv, Realm) ->
 authorize(Adv, Realm, Now) ->
     macula_record:verify_authorization(verified(Adv),
                                        #{profile => pq_pure, realm_key => macula_node_keys:public_key(Realm)}, Now).
+
+authorize_by_pairs(Adv, Realm) ->
+    macula_record:verify_authorization(verified(Adv),
+                                       #{profile => pq_pure,
+                                         realm_pairs => #{realm_id() => macula_node_keys:key_id(Realm)}},
+                                       now_ms()).
 
 verified(Record) ->
     {ok, V} = verify(Record),

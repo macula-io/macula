@@ -15,13 +15,13 @@
 -module(macula_mri).
 
 %% Parsing and Formatting
--export([parse/1, format/1, validate/1, is_valid/1]).
+-export([parse/1, format/1, validate/1]).
 
 %% Accessors
 -export([type/1, realm/1, path/1, path_string/1]).
 
 %% Hierarchy
--export([parent/1, parent_type/1, ancestors/1, is_ancestor/2, depth/1]).
+-export([parent/1, ancestors/1, is_ancestor/2, depth/1]).
 
 %% Construction
 -export([new/1, new/3]).
@@ -35,8 +35,7 @@
 -export([derive_topic/2, derive_procedure/2, to_topic_prefix/1]).
 
 %% Trie index operations (NIF-accelerated, O(d) queries)
--export([build_index/1, index_children/3, index_descendants/3]).
--export([index_insert/4, index_remove/3, index_size/1]).
+-export([build_index/1, index_children/3]).
 
 %% Types
 -export_type([mri/0, mri_map/0, mri_type/0, realm/0, path_segment/0]).
@@ -94,11 +93,6 @@ validate(#{type := _, realm := _, path := _} = Parsed) ->
     validate_parsed(Parsed);
 validate(_) ->
     {error, invalid_input}.
-
-%% @doc Check if an MRI is valid.
--spec is_valid(mri() | mri_map()) -> boolean().
-is_valid(MRI) ->
-    validate(MRI) =:= ok.
 
 %%===================================================================
 %% Accessors
@@ -571,25 +565,3 @@ build_index(MRIs) ->
     {ok, [mri()]} | {error, term()}.
 index_children(Index, Realm, Path) ->
     macula_mri_nif:index_find_children(Index, Realm, Path).
-
-%% @doc Find all descendants of a parent using a trie index.
-%% O(d+m) complexity where d is path depth and m is descendant count.
--spec index_descendants(term(), realm(), [path_segment()]) ->
-    {ok, [mri()]} | {error, term()}.
-index_descendants(Index, Realm, Path) ->
-    macula_mri_nif:index_find_descendants(Index, Realm, Path).
-
-%% @doc Insert a single MRI into an existing trie index.
--spec index_insert(term(), realm(), [path_segment()], mri()) -> ok | {error, term()}.
-index_insert(Index, Realm, Path, MRI) ->
-    macula_mri_nif:index_insert(Index, Realm, Path, MRI).
-
-%% @doc Remove a single MRI from an existing trie index.
--spec index_remove(term(), realm(), [path_segment()]) -> ok | {error, term()}.
-index_remove(Index, Realm, Path) ->
-    macula_mri_nif:index_remove(Index, Realm, Path).
-
-%% @doc Get the number of MRIs in a trie index.
--spec index_size(term()) -> {ok, non_neg_integer()}.
-index_size(Index) ->
-    macula_mri_nif:index_size(Index).

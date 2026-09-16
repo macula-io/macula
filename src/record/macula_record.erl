@@ -38,16 +38,18 @@
 -export([type/1, key/1, key_id/1, version/1, created_at/1, expires_at/1, payload/1, signature/1]).
 -export([payload_field/2, type_procedure_advertisement/0]).
 -export([read_node_record/1, read_procedure_advertisement/1, read_station_endpoint/1, read_tombstone/1,
-         read_org_directory/1, read_procedure_delegation/1, read_content_announcement/1]).
+         read_org_directory/1, read_procedure_delegation/1, read_content_announcement/1,
+         read_foundation_realm_trust_list/1]).
 -export([procedure_org/1, verify_authorization/3]).
 -export([storage_key/1, procedure_key/2, content_key/1, station_endpoint_key/1, org_directory_key/2,
-         procedure_delegation_key/2]).
+         procedure_delegation_key/2, foundation_realm_trust_list_key/1]).
 
 -export_type([m_record/0, type_tag/0, version/0, refusal/0, reason/0, authorization/0, trust/0,
               authorization_refusal/0, node_record_opts/0, realm_directory_opts/0, realm_station_entry/0,
               realm_stations_opts/0, realm_member_endorsement_opts/0, procedure_advertisement_opts/0,
               content_announcement_opts/0, foundation_seed/0, foundation_seed_list_opts/0,
-              foundation_parameter_value/0, foundation_parameter_opts/0, foundation_realm_trust_list_opts/0,
+              foundation_parameter_value/0, foundation_parameter_opts/0, foundation_realm_trust_list_entry/0,
+              foundation_realm_trust_list_opts/0,
               foundation_t3_attestation_opts/0, tombstone_opts/0, station_endpoint_opts/0, signer_entry_stats/0]).
 
 -type type_tag() :: 1..16#FF.
@@ -73,7 +75,12 @@
                  | key_id_mismatch | lifetime_too_long | lifetime_reversed.
 -type reason() :: shutdown | moved | revoked.
 -type authorization() :: #{org_directory := binary(), procedure_delegation := binary()}.
--type trust() :: #{profile := macula_crypto_profile:profile(), realm_key => binary()}.
+%% The realm trust a provider authorization is checked against: the caller's crypto profile, and either the carried
+%% realm key it pins for one realm, or the foundation realm trust list's pairs of realm id to realm key id, for the
+%% advertisement's realm.
+-type trust() :: #{profile := macula_crypto_profile:profile(),
+                   realm_key => binary(),
+                   realm_pairs => #{<<_:256>> => <<_:256>>}}.
 -type authorization_refusal() :: malformed | no_authorization | authorization_not_allowed
                                | authorization_form_unsupported | no_realm_key | org_directory_invalid
                                | org_directory_wrong_realm | org_directory_wrong_org | delegation_invalid
@@ -109,8 +116,10 @@
 -type foundation_parameter_value() :: integer() | binary() | [integer() | binary()].
 -type foundation_parameter_opts() :: #{valid_from => pos_integer(), valid_until => pos_integer(),
                                        prior_version => version(), ttl_ms => pos_integer()}.
--type foundation_realm_trust_list_opts() :: #{realms_revoked => [<<_:256>>], valid_until => pos_integer(),
-                                              ttl_ms => pos_integer()}.
+%% One entry of a foundation realm trust list: a realm id paired with the realm key id that signs the realm's
+%% records (DESIGN_PQ_SIGNED_FRAMES_AND_RECORDS.md, Foundation realm trust list).
+-type foundation_realm_trust_list_entry() :: #{realm_id := <<_:256>>, realm_key_id := <<_:256>>}.
+-type foundation_realm_trust_list_opts() :: #{ttl_ms => pos_integer()}.
 -type foundation_t3_attestation_opts() :: #{valid_until => pos_integer(), notes => binary(), ttl_ms => pos_integer()}.
 -type tombstone_opts() :: #{detail => binary(), ttl_ms => pos_integer()}.
 -type station_endpoint_opts() :: #{host_advertised => [binary()], alpn => binary(), ttl_ms => pos_integer()}.
@@ -313,19 +322,22 @@ foundation_parameter(Name, Value, Opts) when is_binary(Name), is_map(Opts) ->
                                            maps:get(prior_version, Opts, undefined)),
     Unsigned#{payload := Payload}.
 
-%% @doc A foundation's list of trusted realms, by realm key id, signed by a foundation key.
--spec foundation_realm_trust_list([<<_:256>>]) -> m_record().
+%% @doc A foundation's list of trusted realms: each entry pairs a realm id with the realm key id that signs the
+%% realm's records, signed by a foundation key. Its payload holds exactly `realms_trusted' (D28).
+-spec foundation_realm_trust_list([foundation_realm_trust_list_entry()]) -> m_record().
 foundation_realm_trust_list(Trusted) ->
     foundation_realm_trust_list(Trusted, #{}).
 
--spec foundation_realm_trust_list([<<_:256>>], foundation_realm_trust_list_opts()) -> m_record().
+-spec foundation_realm_trust_list([foundation_realm_trust_list_entry()],
+                                  foundation_realm_trust_list_opts()) -> m_record().
 foundation_realm_trust_list(Trusted, Opts) when is_list(Trusted), is_map(Opts) ->
-    Now = erlang:system_time(millisecond),
-    TtlMs = maps:get(ttl_ms, Opts, ?DEFAULT_TTL_MS),
-    #{version := Version} = Unsigned = unsigned(?TYPE_FOUNDATION_REALM_TRUST_LIST, #{}, Opts),
-    Payload = foundation_realm_trust_list_payload(Trusted, maps:get(realms_revoked, Opts, []), Version,
-                                                  maps:get(valid_until, Opts, Now + TtlMs)),
-    Unsigned#{payload := Payload}.
+    Payload = #{{text, <<"realms_trusted">>} => [trust_list_entry(Entry) || Entry <- Trusted]},
+    unsigned(?TYPE_FOUNDATION_REALM_TRUST_LIST, Payload, Opts).
+
+trust_list_entry(#{realm_id := RealmId, realm_key_id := RealmKeyId} = Entry)
+  when map_size(Entry) =:= 2, is_binary(RealmId), byte_size(RealmId) =:= 32,
+       is_binary(RealmKeyId), byte_size(RealmKeyId) =:= 32 ->
+    #{{text, <<"realm_id">>} => RealmId, {text, <<"realm_key_id">>} => RealmKeyId}.
 
 %% @doc A foundation's tier 3 attestation of a station, signed by a foundation key.
 -spec foundation_t3_attestation(<<_:256>>, pos_integer()) -> m_record().
@@ -617,6 +629,14 @@ read_content_announcement(#{type := ?TYPE_CONTENT_ANNOUNCEMENT, payload := P}) -
       size           => payload_field(P, <<"size">>),
       chunk_count    => payload_field(P, <<"chunk_count">>)}.
 
+%% @doc The trusted realms of a foundation realm trust list, as realm id to realm key id (D28).
+-spec read_foundation_realm_trust_list(m_record()) -> #{<<_:256>> => <<_:256>>}.
+read_foundation_realm_trust_list(#{type := ?TYPE_FOUNDATION_REALM_TRUST_LIST, payload := P}) ->
+    maps:from_list(
+      [{RealmId, RealmKeyId}
+       || #{{text, <<"realm_id">>} := RealmId, {text, <<"realm_key_id">>} := RealmKeyId}
+              <- maps:get({text, <<"realms_trusted">>}, P)]).
+
 %%------------------------------------------------------------------
 %% Provider authorization (D25 item 6)
 %%------------------------------------------------------------------
@@ -626,11 +646,13 @@ read_content_announcement(#{type := ?TYPE_CONTENT_ANNOUNCEMENT, payload := P}) -
 procedure_org(Procedure) when is_binary(Procedure) ->
     org_of(binary:split(Procedure, <<"/">>)).
 
-%% @doc The caller's check of a verified advertisement's provider authorization, against the realm key it trusts: the
-%% realm-signed org directory and the org-signed procedure delegation, the only authorization form. A procedure with
-%% an org namespace needs an authorization for that org, a procedure without one carries none, and the advertisement
-%% expires no later than any part of its authorization. An authorization in any other form, a certificate chain
-%% included, is refused as authorization_form_unsupported: 11.0.0 has no certificate form.
+%% @doc The caller's check of a verified advertisement's provider authorization, against the realm trust it holds:
+%% the realm-signed org directory and the org-signed procedure delegation, the only authorization form. The realm
+%% key is the carried realm key the caller pins, or the realm key id the foundation realm trust list's pairs name
+%% for the advertisement's realm_id (D28). A procedure with an org namespace needs an authorization for that org,
+%% a procedure without one carries none, and the advertisement expires no later than any part of its
+%% authorization. An authorization in any other form, a certificate chain included, is refused as
+%% authorization_form_unsupported: 11.0.0 has no certificate form.
 -spec verify_authorization(m_record(), trust(), integer()) -> ok | {error, authorization_refusal()}.
 verify_authorization(#{type := ?TYPE_PROCEDURE_ADVERTISEMENT} = Advertisement, #{profile := _} = Trust, Now) ->
     #{procedure := Procedure, authorization := Authorization} = read_procedure_advertisement(Advertisement),
@@ -673,6 +695,12 @@ org_directory_key(<<_:256>> = RealmId, OrgName) when is_binary(OrgName) ->
 -spec procedure_delegation_key(<<_:256>>, <<_:256>>) -> <<_:256>>.
 procedure_delegation_key(<<_:256>> = OrgKeyId, <<_:256>> = Advertiser) ->
     derived(?TYPE_PROCEDURE_DELEGATION, [OrgKeyId, Advertiser]).
+
+%% @doc The storage key of a foundation's realm trust list, from the foundation key id. The station computes it
+%% to fetch the list without holding its record.
+-spec foundation_realm_trust_list_key(<<_:256>>) -> <<_:256>>.
+foundation_realm_trust_list_key(<<_:256>> = FoundationKeyId) ->
+    derived(?TYPE_FOUNDATION_REALM_TRUST_LIST, [FoundationKeyId]).
 
 %%------------------------------------------------------------------
 %% Internals: signing
@@ -941,7 +969,7 @@ payload_ok(?TYPE_PROCEDURE_ADVERTISEMENT, P) -> advertisement_payload_ok(P);
 payload_ok(?TYPE_TOMBSTONE, P) -> tombstone_payload_ok(P);
 payload_ok(?TYPE_FOUNDATION_SEED_LIST, _P) -> true;
 payload_ok(?TYPE_FOUNDATION_PARAMETER, P) -> is_text(field(P, <<"param_name">>));
-payload_ok(?TYPE_FOUNDATION_REALM_TRUST_LIST, _P) -> true;
+payload_ok(?TYPE_FOUNDATION_REALM_TRUST_LIST, P) -> trust_list_payload_ok(P);
 payload_ok(?TYPE_FOUNDATION_T3_ATTESTATION, P) -> is_id(field(P, <<"station_id">>));
 payload_ok(?TYPE_CONTENT_ANNOUNCEMENT, P) ->
     is_id(field(P, <<"announcer_node">>)) andalso is_content_id(field(P, <<"mcid">>));
@@ -962,6 +990,21 @@ advertisement_payload_ok(_P) ->
 advertisement_size_ok(4, absent) -> true;
 advertisement_size_ok(5, Authorization) when is_map(Authorization) -> true;
 advertisement_size_ok(_Size, _Authorization) -> false.
+
+%% The foundation realm trust list payload holds exactly realms_trusted, an array of maps, each with exactly a
+%% 32-byte realm_id and a 32-byte realm_key_id (DESIGN_PQ_SIGNED_FRAMES_AND_RECORDS.md, D28).
+trust_list_payload_ok(#{{text, <<"realms_trusted">>} := Trusted} = P)
+  when map_size(P) =:= 1, is_list(Trusted) ->
+    lists:all(fun trust_list_entry_ok/1, Trusted);
+trust_list_payload_ok(_P) ->
+    false.
+
+trust_list_entry_ok(#{{text, <<"realm_id">>} := RealmId, {text, <<"realm_key_id">>} := RealmKeyId} = E)
+  when map_size(E) =:= 2, is_binary(RealmId), byte_size(RealmId) =:= 32,
+       is_binary(RealmKeyId), byte_size(RealmKeyId) =:= 32 ->
+    true;
+trust_list_entry_ok(_Entry) ->
+    false.
 
 tombstone_payload_ok(#{{text, <<"withdrawn_type">>} := Type, {text, <<"withdrawn_version">>} := <<_:128>>,
                        {text, <<"reason">>} := {text, Reason}} = P) when is_integer(Type), is_binary(Reason) ->
@@ -1127,25 +1170,45 @@ authorization_for({org, _Org}, undefined, _Adv, _Trust, _Now) ->
     {error, no_authorization};
 authorization_for({org, Org}, #{org_directory := Directory, procedure_delegation := Delegation}, Adv, Trust, Now)
   when is_binary(Directory), is_binary(Delegation) ->
-    delegation_path(maps:get(realm_key, Trust, undefined), Directory, Delegation, Org, Adv, Trust, Now);
+    #{realm_id := RealmId} = read_procedure_advertisement(Adv),
+    delegation_path(realm_trust_key(RealmId, Trust), Directory, Delegation, Org, Adv, Trust, Now);
 authorization_for({org, _Org}, unsupported, _Adv, _Trust, _Now) ->
     {error, authorization_form_unsupported};
 authorization_for({org, _Org}, _Malformed, _Adv, _Trust, _Now) ->
     {error, malformed}.
 
-delegation_path(undefined, _Directory, _Delegation, _Org, _Adv, _Trust, _Now) ->
-    {error, no_realm_key};
-delegation_path(RealmKey, Directory, Delegation, Org, Adv, #{profile := Profile}, Now) ->
-    org_directory_read(verify(Directory, Profile, Now), RealmKey, Delegation, Org, Adv, Profile, Now).
+%% The realm key the trust holds for the advertisement's realm: a pinned carried key when the caller pins one, the
+%% realm key id the foundation realm trust list's pairs name, or none. The carried key is compared as carried; the
+%% pair is a key id and is compared as the org directory's signer key id (D28).
+realm_trust_key(_RealmId, #{realm_key := RealmKey}) when is_binary(RealmKey) ->
+    {carried, RealmKey};
+realm_trust_key(RealmId, #{realm_pairs := Pairs}) ->
+    case maps:find(RealmId, Pairs) of
+        {ok, RealmKeyId} -> {key_id, RealmKeyId};
+        error            -> none
+    end;
+realm_trust_key(_RealmId, _Trust) ->
+    none.
 
-org_directory_read({ok, #{type := ?TYPE_ORG_DIRECTORY, key := DirectoryKey} = Dir}, RealmKey, Delegation, Org, Adv,
-                   Profile, Now) ->
+delegation_path(none, _Directory, _Delegation, _Org, _Adv, _Trust, _Now) ->
+    {error, no_realm_key};
+delegation_path(Expected, Directory, Delegation, Org, Adv, #{profile := Profile}, Now) ->
+    org_directory_read(verify(Directory, Profile, Now), Expected, Delegation, Org, Adv, Profile, Now).
+
+org_directory_read({ok, #{type := ?TYPE_ORG_DIRECTORY, key := DirectoryKey, key_id := DirectoryKeyId} = Dir},
+                   Expected, Delegation, Org, Adv, Profile, Now) ->
     #{realm_id := RealmId, org_name := OrgName, org_key := OrgKeyId} = read_org_directory(Dir),
     #{realm_id := AdvRealmId} = read_procedure_advertisement(Adv),
-    org_directory_matched(DirectoryKey =:= RealmKey andalso RealmId =:= AdvRealmId, OrgName =:= Org, OrgKeyId, Dir,
-                          Delegation, Adv, Profile, Now);
-org_directory_read(_Refused, _RealmKey, _Delegation, _Org, _Adv, _Profile, _Now) ->
+    org_directory_matched(directory_signer_matches(Expected, DirectoryKey, DirectoryKeyId)
+                              andalso RealmId =:= AdvRealmId,
+                          OrgName =:= Org, OrgKeyId, Dir, Delegation, Adv, Profile, Now);
+org_directory_read(_Refused, _Expected, _Delegation, _Org, _Adv, _Profile, _Now) ->
     {error, org_directory_invalid}.
+
+directory_signer_matches({carried, RealmKey}, DirectoryKey, _DirectoryKeyId) ->
+    DirectoryKey =:= RealmKey;
+directory_signer_matches({key_id, RealmKeyId}, _DirectoryKey, DirectoryKeyId) ->
+    DirectoryKeyId =:= RealmKeyId.
 
 org_directory_matched(false, _SameOrg, _OrgKeyId, _Dir, _Delegation, _Adv, _Profile, _Now) ->
     {error, org_directory_wrong_realm};
@@ -1281,12 +1344,6 @@ parameter_value(Values) when is_list(Values) -> [parameter_value(Value) || Value
 
 with_prior_version(Map, undefined) -> Map;
 with_prior_version(Map, <<_:128>> = Version) -> Map#{{text, <<"prior_version">>} => Version}.
-
-foundation_realm_trust_list_payload(Trusted, Revoked, Version, ValidUntil) ->
-    #{{text, <<"realms_trusted">>} => [Realm || <<_:256>> = Realm <- Trusted],
-      {text, <<"realms_revoked">>} => [Realm || <<_:256>> = Realm <- Revoked],
-      {text, <<"version">>}        => Version,
-      {text, <<"valid_until">>}    => ValidUntil}.
 
 foundation_t3_attestation_payload(StationId, AuditDate, ValidUntil, Notes) ->
     Base = #{{text, <<"station_id">>}    => StationId,

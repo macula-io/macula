@@ -228,6 +228,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   write only such units, through `macula_frame:relayed_bytes/1`, so a relay
   writes nothing its reader did not accept.
 
+- `macula_stream:controlling_process/2` hands a stream to another process,
+  which the stream then ends with. Only the stream's owner can hand it over;
+  anyone else gets `{error, not_owner}`. When a stream's session ends, with
+  both sides closed, an abort, or its link lost, its owner gets
+  `{macula_stream, ended, Stream, How}` once, `How` being `closed`,
+  `{error, {Code, Message}}` or `peer_down`. An owner the stream is handed to
+  after that is told at once. `controlling_process` is also one of the stream
+  functions `macula_streamer` takes in `stream_io`.
+- `include/macula_quic_error_codes.hrl` names each QUIC application error
+  code macula sends when it resets or stops a stream, or closes a
+  connection: `QUIC_CODE_CANCELLED` (0), `QUIC_CODE_LINGER_EXPIRED` (1),
+  `QUIC_CODE_REFUSED` (2), `QUIC_CODE_STREAM_PROTOCOL_ERROR` (3) and
+  `QUIC_CODE_REFUSED_BUSY` (4), when the node has no room: for a connection a
+  station closes because it has no handshake slot free, or a relayed stream it
+  resets because the stream's reader does not take data in time. The codes on
+  the wire do not change.
+- `macula_quic:close_connection/3` closes a connection with an application
+  error code and a reason of at most 256 bytes, which the peer reads with
+  `macula_quic:close_reason/1`. A code that does not fit a QUIC
+  variable-length integer is refused with `{error, error_code_out_of_range}`
+  and a longer reason with `{error, reason_too_long}`; the connection stays
+  open. `close_connection/1` still closes with code 0 and the reason
+  `closed`.
+- `macula_quic:close_reason/1` says why a connection closed, or `open` while
+  it is open: `{application_closed, Code, Reason}` for the peer's
+  application close, `locally_closed` when this side closed it, and the
+  transport's own reason otherwise.
+- `macula_peering:async_send_on_stream/3` writes a frame onto a dedicated
+  stream without waiting, so a peer that stops reading cannot hold a process
+  that serves several links. It checks, signs and encodes the frame as
+  `send_on_stream/3` does, and refuses what that refuses, then queues it.
+  With 1 MiB already unwritten on the stream it queues nothing and returns
+  `{error, busy}`, and the caller gets `{quic, send_ready, Stream, undefined}`
+  when it may send again. `async_send_on_stream/4` takes a tag: for a frame it
+  queued, the caller gets exactly one `{quic, send_complete, Stream, Tag}` once
+  the frame's bytes are written, or `{quic, send_incomplete, Stream, {Tag,
+  Reason}}` when the stream is reset, closed or fails first.
+- `macula_quic:async_send/3` is `async_send/2` with such a tag.
+
 ### Changed
 
 - Content ids are SHA-384 (D24): `<<2, Codec, Hash:48>>`, 50 bytes, with
@@ -374,97 +413,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   A link's share is its normalized seed. `macula_station_link:start_link/1`
   requires `admission` and `share`.
 
-### Removed
-
-- The `mdns` and `dht` cluster strategies and the discovery code behind
-  them: `macula_cluster_strategy`, `macula_dist_discovery` and
-  `macula_dist_mdns_advertiser`, with the `macula_mdns` dependency and the
-  `optional_applications` entry for `mdns`. The macula application never
-  started this code.
-- `macula_frame:sign_swim_update/2` and `macula_frame:verify_swim_update/1`,
-  with their private helpers and the `macula-v2-swim-update` signing
-  domain. Nothing signed or verified SWIM membership updates. SWIM itself
-  stays: `macula_frame:swim_update/1` and the piggyback updates in SWIM
-  PING and ACK frames are unchanged. An update no longer has an optional
-  `signature` key.
-- The Ed25519 CONNECT and HELLO frames of `macula_peering_conn`, with the
-  `realms`, `verify` and `pin_tls_cert` options.
-- `macula_record_uuid:v7/1`. Record versions come from `v7_monotonic/1`,
-  and `v7/0` stays for ids that need no order.
-- The ADVERTISE and UNADVERTISE frames a station link sent.
-  `macula_station_link:advertise/4,5`, `advertise_stream/5,6`,
-  `unadvertise/3` and `unadvertise_stream/3` register or remove a handler
-  on the link, for the CALLs and STREAM_OPENs its station delivers to it by
-  target, and send nothing, before or after the link connects.
-- `macula_client:call_stream/5`, which opened a stream on the pool's first
-  healthy link with no target. A stream open names its target, and
-  `macula:call_stream/5` resolves it.
-- The certificate-chain form of a provider authorization. The 11.0.0
-  realm issues no X.509 certificates, so a provider is authorized only by
-  the realm-signed org directory and the org-signed procedure delegation.
-  `macula_record:verify_authorization/3` refuses an authorization in any
-  other form as `authorization_form_unsupported`, and
-  `procedure_advertisement/5` builds only the delegation form.
-  `macula_record`'s trust takes only `realm_key`. The
-  `realm_ca` trust key, certificate path validation, and the
-  `no_realm_ca` and `cert_*` refusals are gone.
-
-### Fixed
-
-- The `macula_record:envelope/4` documentation said a per-subject storage
-  key is a BLAKE3 digest. `macula_record:storage_key/1` derives it with
-  SHA-256, like every other derived storage key.
-- `macula_content_transfer:start_get/3` and `start_get_station/5` refuse an
-  MCID that is not the SHA-384 id of a single block or of a manifest with
-  `function_clause`, in the caller, as the module documents for input of
-  another shape. Such an id used to start a transfer whose process then
-  crashed.
-
-## [Unreleased]
-
-### Added
-
-- `macula_stream:controlling_process/2` hands a stream to another process,
-  which the stream then ends with. Only the stream's owner can hand it over;
-  anyone else gets `{error, not_owner}`. When a stream's session ends, with
-  both sides closed, an abort, or its link lost, its owner gets
-  `{macula_stream, ended, Stream, How}` once, `How` being `closed`,
-  `{error, {Code, Message}}` or `peer_down`. An owner the stream is handed to
-  after that is told at once. `controlling_process` is also one of the stream
-  functions `macula_streamer` takes in `stream_io`.
-- `include/macula_quic_error_codes.hrl` names each QUIC application error
-  code macula sends when it resets or stops a stream, or closes a
-  connection: `QUIC_CODE_CANCELLED` (0), `QUIC_CODE_LINGER_EXPIRED` (1),
-  `QUIC_CODE_REFUSED` (2), `QUIC_CODE_STREAM_PROTOCOL_ERROR` (3) and
-  `QUIC_CODE_REFUSED_BUSY` (4), when the node has no room: for a connection a
-  station closes because it has no handshake slot free, or a relayed stream it
-  resets because the stream's reader does not take data in time. The codes on
-  the wire do not change.
-- `macula_quic:close_connection/3` closes a connection with an application
-  error code and a reason of at most 256 bytes, which the peer reads with
-  `macula_quic:close_reason/1`. A code that does not fit a QUIC
-  variable-length integer is refused with `{error, error_code_out_of_range}`
-  and a longer reason with `{error, reason_too_long}`; the connection stays
-  open. `close_connection/1` still closes with code 0 and the reason
-  `closed`.
-- `macula_quic:close_reason/1` says why a connection closed, or `open` while
-  it is open: `{application_closed, Code, Reason}` for the peer's
-  application close, `locally_closed` when this side closed it, and the
-  transport's own reason otherwise.
-- `macula_peering:async_send_on_stream/3` writes a frame onto a dedicated
-  stream without waiting, so a peer that stops reading cannot hold a process
-  that serves several links. It checks, signs and encodes the frame as
-  `send_on_stream/3` does, and refuses what that refuses, then queues it.
-  With 1 MiB already unwritten on the stream it queues nothing and returns
-  `{error, busy}`, and the caller gets `{quic, send_ready, Stream, undefined}`
-  when it may send again. `async_send_on_stream/4` takes a tag: for a frame it
-  queued, the caller gets exactly one `{quic, send_complete, Stream, Tag}` once
-  the frame's bytes are written, or `{quic, send_incomplete, Stream, {Tag,
-  Reason}}` when the stream is reset, closed or fails first.
-- `macula_quic:async_send/3` is `async_send/2` with such a tag.
-
-### Changed
-
 - `macula_identity:load/1` and `macula_owner_only_file:read/1` accept only
   a file that belongs to the user the node runs as, besides its mode. A file
   of another owner returns `{error, {file_owner, #{file => Path, owner =>
@@ -577,7 +525,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   raised when the difficulty is used, for a value set while the node runs.
   `macula_identity:check_puzzle_difficulty/0` runs that check.
 
+### Removed
+
+- The `mdns` and `dht` cluster strategies and the discovery code behind
+  them: `macula_cluster_strategy`, `macula_dist_discovery` and
+  `macula_dist_mdns_advertiser`, with the `macula_mdns` dependency and the
+  `optional_applications` entry for `mdns`. The macula application never
+  started this code.
+- `macula_frame:sign_swim_update/2` and `macula_frame:verify_swim_update/1`,
+  with their private helpers and the `macula-v2-swim-update` signing
+  domain. Nothing signed or verified SWIM membership updates. SWIM itself
+  stays: `macula_frame:swim_update/1` and the piggyback updates in SWIM
+  PING and ACK frames are unchanged. An update no longer has an optional
+  `signature` key.
+- The Ed25519 CONNECT and HELLO frames of `macula_peering_conn`, with the
+  `realms`, `verify` and `pin_tls_cert` options.
+- `macula_record_uuid:v7/1`. Record versions come from `v7_monotonic/1`,
+  and `v7/0` stays for ids that need no order.
+- The ADVERTISE and UNADVERTISE frames a station link sent.
+  `macula_station_link:advertise/4,5`, `advertise_stream/5,6`,
+  `unadvertise/3` and `unadvertise_stream/3` register or remove a handler
+  on the link, for the CALLs and STREAM_OPENs its station delivers to it by
+  target, and send nothing, before or after the link connects.
+- `macula_client:call_stream/5`, which opened a stream on the pool's first
+  healthy link with no target. A stream open names its target, and
+  `macula:call_stream/5` resolves it.
+- The certificate-chain form of a provider authorization. The 11.0.0
+  realm issues no X.509 certificates, so a provider is authorized only by
+  the realm-signed org directory and the org-signed procedure delegation.
+  `macula_record:verify_authorization/3` refuses an authorization in any
+  other form as `authorization_form_unsupported`, and
+  `procedure_advertisement/5` builds only the delegation form.
+  `macula_record`'s trust takes only `realm_key`. The
+  `realm_ca` trust key, certificate path validation, and the
+  `no_realm_ca` and `cert_*` refusals are gone.
+
 ### Fixed
+
+- The `macula_record:envelope/4` documentation said a per-subject storage
+  key is a BLAKE3 digest. `macula_record:storage_key/1` derives it with
+  SHA-256, like every other derived storage key.
+- `macula_content_transfer:start_get/3` and `start_get_station/5` refuse an
+  MCID that is not the SHA-384 id of a single block or of a manifest with
+  `function_clause`, in the caller, as the module documents for input of
+  another shape. Such an id used to start a transfer whose process then
+  crashed.
+
 
 - `macula_quic:reset_stream/2` records the reset before it resets the
   stream's send side, so a `send/2` or tagged `async_send/3` write it
@@ -596,6 +589,105 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   link it respawned and replayed the subscription onto.
   `macula_station_link:unsubscribe_async/2` drops a subscription without
   waiting for the link.
+## [11.1.0] - 2026-09-16
+
+### Added
+
+- `macula_record:read_foundation_realm_trust_list/1` reads a verified
+  foundation realm trust list back as a map of realm id to realm key id,
+  and `foundation_realm_trust_list_key/1` derives its storage key from a
+  foundation key id, so a station fetches the list without holding its
+  record (D28).
+- `macula_record:verify_authorization/3` takes a trust's `realm_pairs`, a
+  map of realm id to realm key id, besides a pinned carried `realm_key`:
+  the org directory's signer is then compared by key id against the pair
+  the foundation realm trust list names for the advertisement's realm
+  (D28).
+- `macula_quic:stop_stream/2` stops a stream's receive side with a QUIC
+  STOP_SENDING frame carrying an application error code. The peer's
+  writes on the stream then fail with `{error, {stopped, Code}}`, its
+  owner gets `{quic, send_failed, Stream, {stopped, Code}}`, and none of
+  its later data reaches the stopped side, whose send side stays open.
+- Gossip discovery requires a shared secret of at least 32 bytes.
+  `macula_cluster_gossip:start_link/1` takes it as the `secret` option or
+  in `MACULA_GOSSIP_SECRET`, and otherwise returns `secret_required` or
+  `secret_too_short`; `macula_cluster:start_cluster/0,1` returns that as
+  `{error, {gossip_strategy_failed, Reason}}` when it would start gossip.
+- `macula_direct_dial` reads `dial_io` from the options of `call/6`,
+  `call_stream/6` and `publish_advertisement/5`, and of the new
+  `get_content/4`, `fetch_content/5`, `put_content/5` and
+  `resolve_station_endpoint/4`: the DHT lookups, dials and transfers a
+  call runs on, each function at the arity its key takes. A given
+  `dial_io` has every function the call runs on and may carry the others;
+  any other is refused with `function_clause` in the caller. Without one,
+  the `macula` and `macula_content_transfer` functions are the defaults,
+  so no caller changes.
+
+### Changed
+
+- `macula_record:foundation_realm_trust_list/1,2` now takes its entries as
+  `#{realm_id, realm_key_id}` maps, and the record's payload holds exactly
+  `realms_trusted`, an array of those maps, as
+  `DESIGN_PQ_SIGNED_FRAMES_AND_RECORDS.md` pins it: the `realms_revoked`,
+  `version` and `valid_until` fields and the old flat list of realm key ids
+  are gone, and a payload outside the pinned shape verifies as `malformed`.
+- `macula_cluster` sets no distribution cookie and reads or writes no
+  cookie file. `ensure_distributed/0` starts distribution without setting a
+  cookie, so a node has its release's cookie: `-setcookie`, or the
+  owner-only `.erlang.cookie` OTP reads in the node's `HOME` and creates
+  when it is missing.
+- DHT frames carry the D28 paging and acknowledgement fields: STORE_ACK
+  gains `signer` (the record's key id) and `record_version` (the record's
+  version), FIND_VALUE an optional `after` (a signer key id, to page a
+  slot), and VALUE an optional `next` (the last entry's signer key id,
+  present only when more follow). The wire names the STORE_ACK version
+  `record_version`, not `version`: the base frame header already carries a
+  `version` field.
+- `macula_store_pacer` paces record bytes on the DHT put paths, so a node
+  that writes many records stays under a station's STORE byte allowance
+  (D28, 3.5) instead of running into `stored` 0: a caller-side bucket of
+  16 MiB per connection, refilled at 1 MiB per second, waited out in the
+  calling process. `macula_station_link:put_record/2,3` and
+  `macula:put_record/2` pace through it; one bucket per pool is
+  conservative for a pool of several links, since its calls fan out one
+  link at a time.
+
+### Removed
+
+- The `macula_console`, `macula_cert_system`, `macula_cert` and
+  `macula_trust_store` modules, the certificate trust store with them, and
+  `include/macula_cert.hrl`. 11.0.0 has no certificate form (design B1):
+  a provider authorization is only the realm-signed org directory and the
+  org-signed procedure delegation. The `AUTHORIZATION_GUIDE`'s certificate
+  sections are replaced with a removal note.
+- `macula_mri:index_descendants/3`, `index_insert/4`, `index_remove/3`,
+  `index_size/1` and `is_valid/1`; `macula_names:local_node_id/0`;
+  `macula_source_route:version/1`; `macula_quic:accept_stream/3`,
+  `async_shutdown_connection/3` and `handoff_stream/3`;
+  `macula_crypto_nif:blake3_streaming/1` and `blake3_verify/2`;
+  `hecate_or_set:tombstones/1`; `macula_hyparview_view:contains/2`;
+  `macula_cluster:get_cookie/0` and `set_cookie/1`, and
+  `macula:get_cookie/0` and `macula:set_cookie/1` with them: call
+  `erlang:get_cookie/0` and `erlang:set_cookie/1`. bc-gitops's
+  `bc_gitops_cluster` calls the `macula` functions when macula is loaded,
+  so with this release its `get_cookie/0`, which
+  `bc_gitops_vm_spawner:spawn_vm/4` calls, raises `not_distributed` on a
+  node that is not distributed. Upgrade bc-gitops to a release that no
+  longer calls them before upgrading macula.
+- The cookie sources `macula_cluster` resolved and the cookie file it
+  kept: the `cookie` application env, the `MACULA_COOKIE`,
+  `RELEASE_COOKIE` and `ERLANG_COOKIE` environment variables, reading
+  `~/.erlang.cookie`, and generating and saving a cookie there when that
+  file was missing, with `resolve_cookie/0`, `read_cookie_file/0` and
+  `cookie_file_path/0`, and `entrypoint.sh`.
+- No longer exported: `macula_mri:parent_type/1`,
+  `macula_mri_registry:list_custom_types/0` and
+  `macula_dist_relay_protocol:decode/1`.
+- The NIF stubs of `macula_cbor_nif`, `macula_crypto_nif`, `macula_did_nif`,
+  `macula_mri_nif` and `macula_ucan_nif` that only their own module calls
+  are no longer exported; the wrapper functions of each module are the API.
+  The stubs other modules call stay exported.
+
 
 ## [10.25.0] - 2026-09-14
 

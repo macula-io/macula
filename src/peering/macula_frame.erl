@@ -359,18 +359,30 @@
 
 -type find_value_spec()    :: #{
     key    := id256(),
-    origin := id256()
+    origin := id256(),
+    %% A signer key id: entries at or before it are returned as already
+    %% seen, so a consumer pages a slot (D28, 1.5).
+    'after' => id256()
 }.
 
 -type value_spec()         :: #{
     key     := id256(),
-    records := [binary()]
+    records := [binary()],
+    %% The signer key id of the page's last entry, present only when more
+    %% entries follow (D28, 1.5).
+    next   => id256()
 }.
 
 -type store_spec()         :: #{record := binary()}.
 
 -type store_ack_spec()     :: #{
     key    := id256(),
+    %% The key id of the record's key and the version of the record in the
+    %% STORE, so concurrent STOREs of different signers into one slot each
+    %% get their own answer (D28, 1.4). `record_version' on the wire: the
+    %% base frame header already carries a `version' field.
+    signer := id256(),
+    record_version := <<_:128>>,
     stored := boolean()
 }.
 
@@ -887,17 +899,17 @@ nodes(#{key := K, nodes := Ns})
     (base(nodes, 0))#{key => K, nodes => Validated}.
 
 -spec find_value(find_value_spec()) -> frame().
-find_value(#{key := K, origin := O})
+find_value(#{key := K, origin := O} = Spec)
   when is_binary(K), byte_size(K) =:= 32,
        is_binary(O), byte_size(O) =:= 32 ->
-    (base(find_value, 0))#{key => K, origin => O}.
+    with_optional((base(find_value, 0))#{key => K, origin => O}, 'after', Spec).
 
 -spec value(value_spec()) -> frame().
-value(#{key := K, records := Rs})
+value(#{key := K, records := Rs} = Spec)
   when is_binary(K), byte_size(K) =:= 32,
        is_list(Rs) ->
     lists:foreach(fun validate_record_bytes/1, Rs),
-    (base(value, 0))#{key => K, records => Rs}.
+    with_optional((base(value, 0))#{key => K, records => Rs}, next, Spec).
 
 -spec store(store_spec()) -> frame().
 store(#{record := R}) when is_binary(R) ->
@@ -905,10 +917,12 @@ store(#{record := R}) when is_binary(R) ->
 
 %% A STORE_ACK carries no reason: nothing reads one, so a spec that brings one is refused.
 -spec store_ack(store_ack_spec()) -> frame().
-store_ack(#{key := K, stored := Stored} = Spec)
+store_ack(#{key := K, signer := Signer, record_version := Version, stored := Stored} = Spec)
   when is_binary(K), byte_size(K) =:= 32,
+       is_binary(Signer), byte_size(Signer) =:= 32,
+       is_binary(Version), byte_size(Version) =:= 16,
        is_boolean(Stored), not is_map_key(reason, Spec) ->
-    (base(store_ack, 0))#{key => K, stored => Stored}.
+    (base(store_ack, 0))#{key => K, signer => Signer, record_version => Version, stored => Stored}.
 
 %%------------------------------------------------------------------
 %% station_ref — validated payload for NODES responses
@@ -1279,6 +1293,14 @@ relay_error_table(Type) ->
 
 request_names(#{request_id := RequestId, request_hash := RequestHash}) ->
     {RequestId, RequestHash}.
+
+%% An optional spec field, added to the built frame only when the spec
+%% carries it, so a frame never travels with an undefined field.
+with_optional(Frame, Key, Spec) ->
+    case maps:find(Key, Spec) of
+        {ok, Value} -> Frame#{Key => Value};
+        error       -> Frame
+    end.
 
 optional_text(Name, Spec, Fields) ->
     text_field(maps:find(Name, Spec), Name, Fields).
@@ -2545,13 +2567,13 @@ received_rules(find_node) ->
 received_rules(nodes) ->
     base_rules([{key, key}, {nodes, {list_of, station_ref_rule()}}]);
 received_rules(find_value) ->
-    base_rules([{key, key}, {origin, key}]);
+    base_rules([{key, key}, {origin, key}], [{'after', {optional, key}}]);
 received_rules(value) ->
-    base_rules([{key, key}, {records, {list_of, binary}}]);
+    base_rules([{key, key}, {records, {list_of, binary}}], [{next, {optional, key}}]);
 received_rules(store) ->
     base_rules([{record, binary}]);
 received_rules(store_ack) ->
-    base_rules([{key, key}, {stored, boolean}]);
+    base_rules([{key, key}, {signer, key}, {record_version, id16}, {stored, boolean}]);
 received_rules(Type) when Type =:= call; Type =:= stream_open ->
     signed_rules([{request, object}], [], [{source_route, {optional, binary}}, {retry_budget, {optional, non_neg}}]);
 received_rules(result) ->
@@ -3188,7 +3210,8 @@ field_table(find_value) ->
       <<"source_route">> => {source_route, value},
       <<"signature">> => {signature, value},
       <<"key">> => {key, value},
-      <<"origin">> => {origin, {bytes, 32}}};
+      <<"origin">> => {origin, {bytes, 32}},
+      <<"after">> => {'after', bytes}};
 field_table(value) ->
     #{<<"version">> => {version, value},
       <<"neighbour">> => {neighbour, held_object},
@@ -3201,7 +3224,8 @@ field_table(value) ->
       <<"source_route">> => {source_route, value},
       <<"signature">> => {signature, value},
       <<"key">> => {key, value},
-      <<"records">> => {records, value}};
+      <<"records">> => {records, value},
+      <<"next">> => {next, bytes}};
 field_table(store) ->
     #{<<"version">> => {version, value},
       <<"neighbour">> => {neighbour, held_object},
@@ -3226,6 +3250,8 @@ field_table(store_ack) ->
       <<"source_route">> => {source_route, value},
       <<"signature">> => {signature, value},
       <<"key">> => {key, value},
+      <<"signer">> => {signer, value},
+      <<"record_version">> => {record_version, value},
       <<"stored">> => {stored, boolean}};
 field_table(call) ->
     #{<<"version">> => {version, value},

@@ -47,12 +47,13 @@ Replacement by version keeps one entry per signer key id.
 
 ### 1.4 STORE_ACK
 
-- Fields: `key`; `signer` (bytes, 32: the key id of the record's `key`); `version` (bytes, 16: the version of the
-  record in the STORE); `stored`.
+- Fields: `key`; `signer` (bytes, 32: the key id of the record's `key`); `record_version` (bytes, 16: the version
+  of the record in the STORE); `stored`. The wire field is `record_version`, not `version`: the base frame header
+  already carries a `version` field (the protocol version), and one CBOR map cannot hold two.
 - `stored` is 1 when the station holds this version or a later one from that signer in that slot, and 0 otherwise.
   No reason is sent.
-- The sender matches an acknowledgement on `key`, `signer` and `version`, so concurrent STOREs of different signers'
-  records into one slot on one connection each get their own answer.
+- The sender matches an acknowledgement on `key`, `signer` and `record_version`, so concurrent STOREs of
+  different signers' records into one slot on one connection each get their own answer.
 - A STORE whose record bytes equal a held entry's bytes is answered from that entry without verifying again.
 
 ### 1.5 VALUE paging
@@ -184,9 +185,12 @@ per hash and never showing callers the decision.
 
 ### 2.7 What stays open
 
+
 - Content announcements (no authority exists for them, D27): their entries hold unchecked places only. Procedures
   without an org namespace are refused in 11.0.0 (D25), and so is any authorization but the org directory and
   delegation pair: the certificate-chain form is removed, since the 11.0.0 realm issues no X.509 certificates.
+- Providers authorized by a certificate chain, and content announcements (no authority exists for them, D27): their
+  entries hold unchecked places only. Procedures without an org namespace are refused in 11.0.0 (D25).
 - Realms not on a trust list, and stations with no trust list.
 
 ### 2.8 Tests

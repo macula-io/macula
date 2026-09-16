@@ -35,15 +35,8 @@
 -export([pack/1, unpack/1, pack_deterministic/1, unpack_deterministic/1,
          unpack_deterministic/2, element_budget/0, is_nif_loaded/0]).
 
-%% NIF stubs
--export([nif_pack/1, nif_unpack/1,
-         nif_pack_deterministic/1, nif_unpack_deterministic/1,
-         nif_unpack_deterministic_within/2, nif_element_budget/0]).
-
-%% NIF stubs that the NIF replaces at load; exported like the other stubs and
-%% called only from this module.
--ignore_xref([{macula_cbor_nif, nif_unpack_deterministic_within, 2}]).
--ignore_xref([{macula_cbor_nif, nif_element_budget, 0}]).
+%% NIF stubs that the NIF replaces at load, called only from this module,
+%% so none is exported.
 
 -on_load(init/0).
 

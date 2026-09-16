@@ -249,10 +249,15 @@ The payload of a procedure advertisement, type tag 0x06, holds exactly these key
   is not bytes as `malformed`.
 - **Org namespace.** A procedure's org namespace is the text before the first `/` of its name, when there is one and
   it is not `_`. A name with no `/`, or whose first segment is `_`, has none, and a name that starts with `/` is
+
   malformed. Capability grants use the same definition (D7).
 - Every procedure has an org namespace (D25). A verifier refuses an advertisement for a procedure without one, and
   one that carries no `authorization`.
 - The org directory's `org_name` equals the org namespace byte for byte.
+  malformed. Capability grants use the same definition (D7).
+- Every procedure has an org namespace (D25). A verifier refuses an advertisement for a procedure without one, and
+  one that carries no `authorization`.
+- The org directory's `org_name`, or the O of the leaf certificate, equals the org namespace byte for byte.
 - The provider's signature covers `authorization`. The caller, and a serving station that gates a CALL, check each
   embedded record's own signature and validity (D25 item 6).
 - They also refuse an advertisement that expires later than the earliest expiry in its authorization, an embedded

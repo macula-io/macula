@@ -17,7 +17,7 @@
 -export([start_link/0, start_link/1]).
 -export([is_valid_type/1, is_valid_type/2]).
 -export([register_type/2, unregister_type/1]).
--export([get_type_schema/1, list_types/0, list_custom_types/0]).
+-export([get_type_schema/1, list_types/0]).
 -export([path_schema/1, validate_path_for_type/2]).
 
 %% gen_server callbacks

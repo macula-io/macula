@@ -48,7 +48,6 @@
     verify/1,
     advance/1,
     deadline/1,
-    version/1,
     total_hops/1,
     current_hop/1,
     hops/1,
@@ -206,9 +205,6 @@ advance(_) ->
 %%=====================================================================
 %% Accessors
 %%=====================================================================
-
--spec version(header())     -> non_neg_integer().
-version(#{version := V})    -> V.
 
 -spec total_hops(header())  -> pos_integer().
 total_hops(#{total_hops := T}) -> T.
