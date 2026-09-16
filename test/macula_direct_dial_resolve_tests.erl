@@ -136,7 +136,66 @@ resolve_test_() ->
       {timeout, 30, fun a_call_passing_realm_trust_is_refused_before_any_lookup/0},
       {timeout, 30, fun a_stream_passing_realm_trust_is_refused_before_any_lookup/0},
       {timeout, 30, fun an_advertisement_with_a_removed_trust_option_is_not_published/0},
-      {timeout, 30, fun a_stream_dial_timeout_outside_its_bounds_is_refused_in_the_caller/0}]}.
+      {timeout, 30, fun a_stream_dial_timeout_outside_its_bounds_is_refused_in_the_caller/0},
+      {timeout, 30, fun a_dial_io_with_an_unknown_function_is_refused_in_the_caller/0},
+      {timeout, 30, fun a_dial_io_function_of_the_wrong_arity_is_refused_in_the_caller/0},
+      {timeout, 30, fun a_dial_io_without_a_function_the_call_uses_is_refused_in_the_caller/0}]}.
+
+%%%===================================================================
+%%% Dial I/O
+%%%===================================================================
+
+%% A dial_io carrying a function direct dial does not take is refused, in the
+%% caller, before anything is looked up.
+a_dial_io_with_an_unknown_function_is_refused_in_the_caller() ->
+    Io = (dial_io())#{publish => fun(_Pool, _Realm, _Topic, _Payload) -> ok end},
+    ?assertError(function_clause,
+                 macula_direct_dial:call(self(), ?REALM, ?PROC, <<"hi">>, 1000,
+                                         #{dial_io => Io})),
+    ?assertEqual(0, lookups(procedure_key())).
+
+%% A function at another arity than its key takes is refused, in the caller,
+%% before anything is looked up. The wrong arity is on a function this call
+%% does not run, so the lookup it does run would be counted.
+a_dial_io_function_of_the_wrong_arity_is_refused_in_the_caller() ->
+    S = station(<<"s.test">>),
+    set_endpoint_replies(S, [not_found]),
+    Io = (dial_io())#{cancel => fun(_Transfer, _TimeoutMs) -> ok end},
+    ?assertError(function_clause,
+                 macula_direct_dial:resolve_station_endpoint(self(), maps:get(id, S), 1000,
+                                                             #{dial_io => Io})),
+    ?assertEqual(0, endpoint_lookups(S)).
+
+%% A dial_io without a function the call runs on is refused, in the caller,
+%% before the pool is asked for its links.
+a_dial_io_without_a_function_the_call_uses_is_refused_in_the_caller() ->
+    Links = fun(_Pool) -> _ = visit(links), {ok, []} end,
+    Io = maps:remove(put_record, (dial_io())#{links => Links}),
+    ?assertError(function_clause,
+                 macula_direct_dial:publish_advertisement(self(), ?REALM, ?PROC,
+                                                          node_key(identity),
+                                                          #{dial_io => Io})),
+    ?assertEqual([], visits()).
+
+%% The DHT, the dials and the transfers direct dial runs on here: fakes that
+%% count on the same ETS state as the meck ones.
+dial_io() ->
+    #{links => fun(_Pool) -> {ok, []} end,
+      put_record => fun(_Pool, _Record) -> ok end,
+      find_records => fun(_Pool, Key, TimeoutMs) -> find_records(Key, TimeoutMs) end,
+      find_record => fun(_Pool, Key, TimeoutMs) -> find_record(Key, TimeoutMs) end,
+      call_station =>
+          fun(_Pool, DialUrl, _Provider, _Realm, _Proc, _Payload, _TimeoutMs, _Opts) ->
+                  visit(DialUrl)
+          end,
+      call_stream_station =>
+          fun(_Pool, DialUrl, _Provider, _Realm, _Proc, _Args, _Opts) -> visit(DialUrl) end,
+      put_content_station =>
+          fun(_Pool, DialUrl, _Bytes, _TimeoutMs, _Opts) -> visit(DialUrl) end,
+      start_get_station =>
+          fun(_Pool, Endpoint, _Mcid, _TimeoutMs, _Opts) -> {ok, {fake_transfer, Endpoint}} end,
+      await => fun({fake_transfer, Endpoint}, _Timeout) -> visit(Endpoint) end,
+      cancel => fun(_Transfer) -> ok end}.
 
 %%%===================================================================
 %%% Calls
