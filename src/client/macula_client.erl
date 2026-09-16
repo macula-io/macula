@@ -1560,7 +1560,7 @@ bounded_signed(true, _Now, _NotAfter, _Record, _Key) ->
 bounded_signed(false, Now, NotAfter, #{created_at := Created, expires_at := Expires} = Record, Key) ->
     Lifetime = Expires - Created,
     Bounded = bounded_record(NotAfter < Now + Lifetime, NotAfter, Record),
-    signed_here(fun() -> macula_record:refresh(Bounded, Key) end).
+    node_record_signed(true, Bounded, Key).
 
 bounded_record(true, NotAfter, Record) -> Record#{expires_at => NotAfter};
 bounded_record(false, _NotAfter, Record) -> Record.
@@ -1962,8 +1962,47 @@ run_loader(Module, Function, Args) ->
     catch _Class:_Reason -> loader_raised
     end.
 
-loaded({ok, Key}) -> {ok, Key};
-loaded(_NoKey) -> {error, {node_identity, loader_failed}}.
+loaded({ok, #{purpose := identity} = Key}) -> {ok, Key};
+loaded({ok, _NotAnIdentityKey}) ->
+    {error, {node_identity, loader_failed}};
+loaded({error, Reason}) ->
+    {error, {node_identity, loader_refusal(Reason)}};
+loaded(_NoKey) ->
+    {error, {node_identity, loader_failed}}.
+
+%% A loader that returns one of macula_node_keys:load/3's documented
+%% refusals refuses the pool with that reason nested under
+%% loader_failed, so the service that holds the pool can say why. Any
+%% other reason — one that could carry the key the loader read — stays
+%% flat, and only well-formed values nest.
+loader_refusal(Reason) ->
+    case well_formed_loader_refusal(Reason) of
+        true  -> {loader_failed, Reason};
+        false -> loader_failed
+    end.
+
+well_formed_loader_refusal(Reason)
+  when Reason =:= key_file_permissions; Reason =:= bad_key_file;
+       Reason =:= private_key_invalid; Reason =:= public_key_mismatch;
+       Reason =:= round_trip_failed; Reason =:= enoent;
+       Reason =:= eacces; Reason =:= enospc ->
+    true;
+well_formed_loader_refusal({Tag, Value}) ->
+    loader_refusal_value(Tag, Value);
+well_formed_loader_refusal(_Other) ->
+    false.
+
+loader_refusal_value(Tag, Value)
+  when (Tag =:= wrong_profile orelse Tag =:= wrong_purpose orelse
+        Tag =:= unknown_purpose orelse Tag =:= crypto_profile_unknown),
+       is_atom(Value) ->
+    true;
+loader_refusal_value(wrong_algorithms, Value) ->
+    is_list(Value) andalso lists:all(fun erlang:is_atom/1, Value);
+loader_refusal_value(wrong_key_size, {N, M}) ->
+    is_integer(N) andalso N > 0 andalso is_integer(M) andalso M > 0;
+loader_refusal_value(_Tag, _Value) ->
+    false.
 
 %% How the pool starts its statement issuer: macula_statement_issuer_sup:start_issuer/2, unless the issuer_start option
 %% names a function of the same shape, as a test does to refuse a restart.

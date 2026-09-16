@@ -2499,6 +2499,22 @@ hex_prefix(B) when is_binary(B) ->
 hex_prefix(_) ->
     <<"?">>.
 
+%% The publication's hash, for the pool's dedup: the verified
+%% publication carries it; a claimed one (lenient mode) recomputes it
+%% from the tbs the signature covers.
+publication_hash_of(#{publication_hash := Hash}, _Frame) ->
+    Hash;
+publication_hash_of(_Fields, #{publication := #{tbs := Tbs}}) ->
+    crypto:hash(sha384, Tbs).
+
+%% The last moment a verifier accepts the publication: its published_at
+%% plus ttl (10 minutes without one) plus 5 minutes, as verify says.
+publication_expiry(#{expires_at := Expiry}) ->
+    Expiry;
+publication_expiry(#{published_at := PublishedAt} = Fields) ->
+    Ttl = maps:get(ttl_ms, Fields, 600_000),
+    PublishedAt + Ttl + 300_000.
+
 %% Fan an EVENT out to every subscriber for its (realm, topic). The
 %% fields come from the verified (or claimed) publication; the frame
 %% contributes only `delivered_via'. `PublisherVerified' is
@@ -2520,7 +2536,9 @@ deliver_event_to({ok, Set}, Fields, Frame, PublisherVerified,
              publisher          => maps:get(publisher, Fields),
              publisher_verified => PublisherVerified,
              seq                => maps:get(seq, Fields),
-             delivered_via      => maps:get(delivered_via, Frame, direct)},
+             delivered_via      => maps:get(delivered_via, Frame, direct),
+             publication_hash   => publication_hash_of(Fields, Frame),
+             expires_at         => publication_expiry(Fields)},
     sets:fold(fun(SubRef, _) ->
         deliver_event_one(SubRef, Topic, Payload, Meta, Subs)
     end, ok, Set).

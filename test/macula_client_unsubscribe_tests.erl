@@ -181,16 +181,15 @@ next_unsubscribe(Tag) ->
 %% as {event, SubRef}, or none.
 event_through(Link) ->
     Peer = element(?PEER_PID_INDEX, sys:get_state(Link)),
+    {ok, Profile} = macula_crypto_profile:configured(),
+    {ok, Key} = macula_node_keys:generate(identity, Profile),
+    #{publication := Publication} = macula_frame:publish(
+        #{realm => ?REALM, topic => ?TOPIC, seq => 1,
+          published_at => erlang:system_time(millisecond), payload => #{probe => true}}, Key),
     Link ! {macula_peering, frame, Peer,
-            #{frame_type    => event,
-              topic         => ?TOPIC,
-              realm         => ?REALM,
-              publisher     => macula_identity:public(macula_identity:generate()),
-              seq           => 1,
-              payload       => #{probe => true},
-              delivered_via => direct}},
+            macula_frame:event(#{publication => Publication, delivered_via => direct})},
     receive
-        {macula_event, SubRef, ?TOPIC, #{probe := true}, _Meta} -> {event, SubRef}
+        {macula_event, SubRef, ?TOPIC, _Payload, _Meta} -> {event, SubRef}
     after ?FRAME_MS ->
         none
     end.
