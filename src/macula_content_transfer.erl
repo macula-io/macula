@@ -95,7 +95,7 @@
 %%%
 %%% A transfer picks or dials its link, and opens, calls on, closes and
 %%% aborts its content streams, through six functions:
-%%% `pick_connected_link/1' and `ensure_content_link/4', the
+%%% `pick_connected_link/1' and `ensure_station_link/4', the
 %%% `macula_client' ones by default, and `open_content_stream/1',
 %%% `call_on_stream/6', `close_content_stream/2' and
 %%% `abort_content_stream/4', the `macula_station_link' ones. The start
@@ -167,7 +167,7 @@
 %% The functions a transfer reaches its link with, by key; see "Link I/O"
 %% in the module doc.
 -type link_io() :: #{pick_connected_link => fun((macula:pool()) -> {ok, pid()} | {error, term()}),
-                     ensure_content_link => fun((macula:pool(), macula_client:seed(), map(),
+                     ensure_station_link => fun((macula:pool(), macula_client:seed(), map(),
                                                  pos_integer()) -> {ok, pid()} | {error, term()}),
                      open_content_stream => fun((pid()) -> {ok, reference()} | {error, term()}),
                      call_on_stream => fun((pid(), reference(), binary(), binary(), term(),
@@ -380,7 +380,7 @@ link_io(Defaults, Given) when is_map(Defaults), is_map(Given) ->
     Given.
 
 link_function(pick_connected_link, Fun) when is_function(Fun, 1) -> ok;
-link_function(ensure_content_link, Fun) when is_function(Fun, 4) -> ok;
+link_function(ensure_station_link, Fun) when is_function(Fun, 4) -> ok;
 link_function(open_content_stream, Fun) when is_function(Fun, 1) -> ok;
 link_function(call_on_stream, Fun) when is_function(Fun, 6) -> ok;
 link_function(close_content_stream, Fun) when is_function(Fun, 2) -> ok;
@@ -411,7 +411,7 @@ transfer_function(cancel, Fun) when is_function(Fun, 1) -> ok.
 
 default_link_io() ->
     #{pick_connected_link => fun macula_client:pick_connected_link/1,
-      ensure_content_link => fun macula_client:ensure_content_link/4,
+      ensure_station_link => fun macula_client:ensure_station_link/4,
       open_content_stream => fun macula_station_link:open_content_stream/1,
       call_on_stream => fun macula_station_link:call_on_stream/6,
       close_content_stream => fun macula_station_link:close_content_stream/2,
@@ -577,7 +577,7 @@ run_if_single_block(false, Parent, #{close_content_stream := Close} = LinkIo, Ki
 
 connect(#{pick_connected_link := PickConnectedLink} = LinkIo, {pooled, Pool}) ->
     open_on_link(LinkIo, PickConnectedLink(Pool));
-connect(#{ensure_content_link := EnsureContentLink} = LinkIo,
+connect(#{ensure_station_link := EnsureContentLink} = LinkIo,
         {station, Pool, Station, TimeoutMs, LinkOpts}) ->
     open_on_link(LinkIo, EnsureContentLink(Pool, Station, LinkOpts, TimeoutMs)).
 

@@ -73,7 +73,7 @@
 %% Direct-dial content transfer — called by the `macula' facade to pin
 %% a link to a SPECIFIC (resolved) station rather than picking from the
 %% pool's existing links.
--export([ensure_content_link/4]).
+-export([ensure_station_link/4]).
 %% Streaming RPC (since 3.17.0) — called by the `macula' facade.
 -export([call_stream_station/7,
          advertise_stream/5, advertise_stream/6, unadvertise_stream/3]).
@@ -259,7 +259,7 @@
         refresh_ms => pos_integer(),
         %% Cap on total concurrent links (bootstrap + discovered) --
         %% counts EVERY entry in `#state.links', including direct-dial
-        %% targets (`call_station'/`ensure_content_link') and a seed
+        %% targets (`call_station'/`ensure_station_link') and a seed
         %% still mid-respawn after a failed dial, not only successfully
         %% connected discovered stations. A large station directory
         %% should not mean dozens of QUIC connections. Default 5.
@@ -311,7 +311,7 @@
     max_seeds => pos_integer(),
 
     %% Most direct-dial links a pool holds at once: links dialed by
-    %% `call_station', `ensure_content_link' or `call_stream_station' to a
+    %% `call_station', `ensure_station_link' or `call_stream_station' to a
     %% station that is not already a link. A fresh dial past it is refused
     %% with `{error, too_many_direct_links}'. Default 8.
     max_direct_links => pos_integer(),
@@ -657,12 +657,12 @@ pick_connected_link(Pool) when is_pid(Pool) ->
 %% dedicated-stream transfer exactly like `pick_connected_link/1', just
 %% against a caller-resolved station instead of whichever pool link is
 %% already up.
--spec ensure_content_link(pool(), seed(), map(), pos_integer()) ->
+-spec ensure_station_link(pool(), seed(), map(), pos_integer()) ->
     {ok, pid()} | {error, term()}.
-ensure_content_link(Pool, Station, LinkOpts, TimeoutMs)
+ensure_station_link(Pool, Station, LinkOpts, TimeoutMs)
   when is_pid(Pool), is_map(LinkOpts),
        is_integer(TimeoutMs), TimeoutMs > 0 ->
-    gen_server:call(Pool, {ensure_content_link, Station, LinkOpts, TimeoutMs},
+    gen_server:call(Pool, {ensure_station_link, Station, LinkOpts, TimeoutMs},
                     TimeoutMs + 2_000).
 
 %% @doc Issue a CALL to `Target', a provider's node_id, at ONE specific
@@ -1350,7 +1350,7 @@ handle_call({call_station, Station, Target, Realm, Procedure, Payload, TimeoutMs
                 call_when_connected(Pid, Target, Realm, Procedure, Payload, TimeoutMs, DialTimeoutMs, Ucan)
             end);
 
-handle_call({ensure_content_link, Station, LinkOpts, TimeoutMs}, From, S) ->
+handle_call({ensure_station_link, Station, LinkOpts, TimeoutMs}, From, S) ->
     %% Same shape as call_station: ensure the link, wait for its
     %% handshake in a worker so the pool never blocks. Unlike
     %% call_station this hands back the connected pid itself rather
@@ -1868,7 +1868,7 @@ call_after_connect(true, Pid, Target, Realm, Proc, Payload, Deadline, Ucan) ->
 call_after_connect(false, _Pid, _Target, _Realm, _Proc, _Payload, _Deadline, _Ucan) ->
     {error, not_connected}.
 
-%% As `call_when_connected/8', but for `ensure_content_link/4': waits
+%% As `call_when_connected/8', but for `ensure_station_link/4': waits
 %% for a freshly-dialed link's handshake, then hands back the pid
 %% itself rather than making a call over it.
 content_link_when_connected(undefined, _TimeoutMs) ->
