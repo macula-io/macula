@@ -1710,36 +1710,14 @@ await_call_reply({error, Reason}, _RequestId, _Request, _From, _Tmo, _Pending, S
                          #state{}) -> ok | {error, term()}.
 send_publish_frame(Realm, Topic, Payload, Seq,
                    #state{peer_pid = Pid, node_identity = Id}) ->
-    Pub = node_id(Id),
-    Frame0 = macula_frame:publish(#{
-        topic           => Topic,
-        realm           => Realm,
-        publisher       => Pub,
-        seq             => Seq,
-        payload         => Payload,
-        published_at_ms => erlang:system_time(millisecond)
-    }),
-    Frame = maybe_add_publisher_sig(Frame0, Id),
+    Frame = macula_frame:publish(#{
+        realm        => Realm,
+        topic        => Topic,
+        seq          => Seq,
+        published_at => erlang:system_time(millisecond),
+        payload      => Payload
+    }, Id),
     macula_peering:send_frame(Pid, Frame).
-
-%% Attach the publisher-end-to-end signature to an outbound PUBLISH.
-%% Default flipped to `true' in 4.6.0 (was `false' since 4.4.0 when
-%% the field was introduced). Flipping enables multi-hop pubsub: the
-%% receiving station verifies against `publisher' via
-%% `macula_frame:verify_publisher/1' so the frame stays valid across
-%% any relay path, and the (publisher, seq) dedup cache on each
-%% station kills loops. See `macula_station_event_dedup' in the
-%% station repo for the dedup side. Wire-compat: the field has been
-%% carried verbatim through relay hops since macula 4.4.0; stations
-%% on >= 4.4.0 strip it from their canonical-signing bytes so adding
-%% it does not break the per-hop relay signature. Operators can
-%% override per-app via `application:set_env(macula,
-%% pubsub_emit_publisher_sig, false)` if a regression surfaces.
-maybe_add_publisher_sig(Frame, Identity) ->
-    case application:get_env(macula, pubsub_emit_publisher_sig, true) of
-        true  -> macula_frame:sign_publisher(Frame, Identity);
-        _     -> Frame
-    end.
 
 after_connect_request({ok, Pid}, S) ->
     link(Pid),
@@ -1765,12 +1743,15 @@ on_frame(#{frame_type := Type, reply := _} = Frame, S) when Type =:= result; Typ
     on_claimed_reply(macula_frame:claimed_reply_ids(Frame), Frame, S);
 on_frame(#{frame_type := error, relay_error := _} = Frame, S) ->
     on_claimed_reply(macula_frame:claimed_reply_ids(Frame), Frame, S);
-%% EVENT — pubsub delivery. Fan out to every subscriber whose
-%% (realm, topic) matches. Stations may push EVENTs without a prior
-%% SUBSCRIBE on this connection (e.g. wildcard / catalog channels);
-%% silently drop those.
-on_frame(#{frame_type := event, topic := Topic, realm := Realm} = Frame, S) ->
-    on_inbound_event(check_publisher_sig(Frame), Realm, Topic, Frame, S);
+%% EVENT — pubsub delivery. The publication the EVENT carries is
+%% verified before fan-out, and its verified fields name the
+%% (realm, topic) the event is delivered to. Stations may push EVENTs
+%% without a prior SUBSCRIBE on this connection (e.g. wildcard /
+%% catalog channels); silently drop those.
+on_frame(#{frame_type := event} = Frame, S) ->
+    on_inbound_event(macula_frame:verify_publication(Frame, S#state.profile,
+                                                      erlang:system_time(millisecond)),
+                     Frame, S);
 %% Inbound CALL — a CALL the station delivered to this link, for a
 %% (realm, procedure) with a registered handler. Once the CALL's signature verifies against its
 %% own `caller' (`on_inbound_call/3'), dispatch to the registered handler
@@ -2454,45 +2435,32 @@ fan_overlay_frame({ok, {_Realm, Subscriber, _Mon}}, SubRef, Frame, Meta) ->
     Subscriber ! {macula_overlay_frame, SubRef, Frame, Meta},
     ok.
 
-%% Pubsub Phase 2 — verify the publisher-end-to-end signature on an
-%% inbound EVENT if it carries one (a relay propagates `publisher_sig'
-%% when the original publisher had `pubsub_emit_publisher_sig'
-%% enabled). No `publisher_sig' on the frame → nothing to check
-%% (feature off everywhere, or a legacy relay).
-check_publisher_sig(#{publisher_sig := _} = Frame) ->
-    macula_frame:verify_publisher(Frame);
-check_publisher_sig(_Frame) ->
-    ok.
-
-%% `ok'           — no publisher_sig present → deliver as before.
-%% `{ok, _}'      — publisher_sig verified → deliver.
-%% `{error, Why}' — publisher_sig present but invalid: always warn, and
-%%                  drop unless `pubsub_strict_publisher_sig' is
-%%                  explicitly `false', which delivers it with
-%%                  `publisher_verified => false'.
-%%
-%% The verification OUTCOME itself used to stop here: `deliver_event/4'
-%% got only `Frame', so a subscriber could see `publisher' but never
-%% learn whether its signature checked out — indistinguishable from
-%% "never signed" for anyone downstream trying to weight a fact's
-%% confidence by provenance quality. `not_signed' / `true' / `false'
-%% now rides through to `Meta' as `publisher_verified' precisely so
-%% that distinction survives to the subscriber.
-on_inbound_event(ok, Realm, Topic, Frame, S) ->
-    deliver_event(Realm, Topic, Frame, not_signed, S);
-on_inbound_event({ok, _Verified}, Realm, Topic, Frame, S) ->
-    deliver_event(Realm, Topic, Frame, true, S);
-on_inbound_event({error, Why}, Realm, Topic, Frame, S) ->
-    logger:warning("[macula_pubsub] inbound EVENT publisher_sig invalid (~p)"
-                   " realm=~s topic=~s", [Why, hex_prefix(Realm), Topic]),
-    on_invalid_publisher_sig(
+%% Pubsub — verify the publication an EVENT carries, under the link's
+%% profile, before anything is delivered. A publication that verifies
+%% delivers with `publisher_verified => true'. One that does not is
+%% dropped (the strict default), or, when
+%% `pubsub_strict_publisher_sig' is explicitly `false', delivered with
+%% `publisher_verified => false', its fields read from the publication
+%% without trusting the signature. An EVENT without a publication has
+%% no fields to deliver and is dropped either way.
+on_inbound_event({ok, Verified}, Frame, S) ->
+    deliver_event(Verified, Frame, true, S);
+on_inbound_event({error, Why}, Frame, S) ->
+    logger:warning("[macula_pubsub] inbound EVENT publication invalid (~p)",
+                   [Why]),
+    on_invalid_publication(
       application:get_env(macula, pubsub_strict_publisher_sig, true),
-      Realm, Topic, Frame, S).
+      Frame, S).
 
-on_invalid_publisher_sig(true, _Realm, _Topic, _Frame, S) ->
+on_invalid_publication(true, _Frame, S) ->
     S;
-on_invalid_publisher_sig(_Lenient, Realm, Topic, Frame, S) ->
-    deliver_event(Realm, Topic, Frame, false, S).
+on_invalid_publication(_Lenient, Frame, S) ->
+    on_claimed_publication(macula_frame:claimed_publication(Frame), Frame, S).
+
+on_claimed_publication({ok, Fields}, Frame, S) ->
+    deliver_event(Fields, Frame, false, S);
+on_claimed_publication({error, _}, _Frame, S) ->
+    S.
 
 hex_prefix(B) when is_binary(B), byte_size(B) >= 4 ->
     binary:encode_hex(binary:part(B, 0, 4));
@@ -2501,25 +2469,27 @@ hex_prefix(B) when is_binary(B) ->
 hex_prefix(_) ->
     <<"?">>.
 
-%% Fan an EVENT frame out to every subscriber for that (realm, topic).
-%% `PublisherVerified' is `on_inbound_event/5''s already-computed
-%% signature-check outcome (`not_signed' | `true' | `false') — see its
-%% own doc for why this must ride through rather than be recomputed or
-%% dropped.
-deliver_event(Realm, Topic, Frame, PublisherVerified, #state{topic_index = Idx} = S) ->
-    deliver_event_to(maps:find({Realm, Topic}, Idx), Realm, Topic, Frame,
+%% Fan an EVENT out to every subscriber for its (realm, topic). The
+%% fields come from the verified (or claimed) publication; the frame
+%% contributes only `delivered_via'. `PublisherVerified' is
+%% `on_inbound_event/3''s already-computed outcome (`true' | `false').
+deliver_event(Fields, Frame, PublisherVerified, #state{topic_index = Idx} = S) ->
+    Realm = maps:get(realm, Fields),
+    Topic = maps:get(topic, Fields),
+    deliver_event_to(maps:find({Realm, Topic}, Idx), Fields, Frame,
                       PublisherVerified, S),
     S.
 
-deliver_event_to(error, _Realm, _Topic, _Frame, _PublisherVerified, _S) ->
+deliver_event_to(error, _Fields, _Frame, _PublisherVerified, _S) ->
     ok;
-deliver_event_to({ok, Set}, Realm, Topic, Frame, PublisherVerified,
+deliver_event_to({ok, Set}, Fields, Frame, PublisherVerified,
                  #state{subscriptions = Subs}) ->
-    Payload = maps:get(payload, Frame),
-    Meta = #{realm              => Realm,
-             publisher          => maps:get(publisher, Frame),
+    Topic = maps:get(topic, Fields),
+    Payload = maps:get(payload, Fields),
+    Meta = #{realm              => maps:get(realm, Fields),
+             publisher          => maps:get(publisher, Fields),
              publisher_verified => PublisherVerified,
-             seq                => maps:get(seq, Frame),
+             seq                => maps:get(seq, Fields),
              delivered_via      => maps:get(delivered_via, Frame, direct)},
     sets:fold(fun(SubRef, _) ->
         deliver_event_one(SubRef, Topic, Payload, Meta, Subs)

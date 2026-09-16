@@ -162,21 +162,14 @@ event_frame_delivered_to_subscriber_test_() ->
              {'$gen_cast', {send_frame, #{frame_type := subscribe}}} -> ok
          after 1_000 -> erlang:error(no_subscribe_frame)
          end,
-         PublisherKey = macula_identity:public(macula_identity:generate()),
-         Pid ! {macula_peering, frame, FakePeer, #{
-             frame_type    => event,
-             topic         => Topic,
-             realm         => ?REALM,
-             publisher     => PublisherKey,
-             seq           => 42,
-             payload       => #{hello => <<"world">>},
-             delivered_via => direct
-         }},
+         {Event, PublisherKey} = signed_event(?REALM, Topic, 42,
+                                              #{hello => <<"world">>}),
+         Pid ! {macula_peering, frame, FakePeer, Event},
          receive
              {macula_event, R, T, P, Meta} ->
                  ?assertEqual(SubRef, R),
                  ?assertEqual(Topic, T),
-                 ?assertEqual(#{hello => <<"world">>}, P),
+                 ?assertEqual(#{{text, <<"hello">>} => <<"world">>}, P),
                  ?assertEqual(?REALM, maps:get(realm, Meta)),
                  ?assertEqual(PublisherKey, maps:get(publisher, Meta)),
                  ?assertEqual(42, maps:get(seq, Meta))
@@ -185,6 +178,18 @@ event_frame_delivered_to_subscriber_test_() ->
          macula_station_link:stop(Pid),
          ok
      end}.
+
+%% A signed EVENT for (Realm, Topic) with Payload, plus the key id its
+%% publication names as the publisher.
+signed_event(Realm, Topic, Seq, Payload) ->
+    {ok, Profile} = macula_crypto_profile:configured(),
+    {ok, Key} = macula_node_keys:generate(identity, Profile),
+    #{publication := Publication} = macula_frame:publish(
+        #{realm => Realm, topic => Topic, seq => Seq,
+          published_at => erlang:system_time(millisecond), payload => Payload},
+        Key),
+    {macula_frame:event(#{publication => Publication, delivered_via => direct}),
+     macula_node_keys:key_id(Key)}.
 
 %%------------------------------------------------------------------
 %% Inbound EVENT with publisher_sig — verified; lenient vs strict
@@ -196,12 +201,14 @@ event_publisher_sig_verify_test_() ->
      fun() ->
          {ok, _} = application:ensure_all_started(macula),
          application:unset_env(macula, pubsub_strict_publisher_sig),
+         {ok, Profile} = macula_crypto_profile:configured(),
+         {ok, PubKey} = macula_node_keys:generate(identity, Profile),
          {ok, Pid} = macula_station_link:start_link(with_link_keys(#{
              seed     => #{host => <<"127.0.0.1">>, port => 1},
              connect_timeout_ms => 2000
          })),
          FakePeer = self(),
-         PeerNodeId = macula_identity:public(macula_identity:generate()),
+         {ok, PeerNodeId} = macula_node_keys:node_id(PubKey),
          _ = sys:replace_state(Pid, fun(S) ->
              S2 = setelement(?PEER_PID_INDEX, S, FakePeer),
              setelement(?PEER_NODE_ID_INDEX, S2, PeerNodeId)
@@ -211,50 +218,46 @@ event_publisher_sig_verify_test_() ->
          receive {'$gen_cast', {send_frame, #{frame_type := subscribe}}} -> ok
          after 1_000 -> erlang:error(no_subscribe_frame) end,
 
-         PubKp = macula_identity:generate(),
          MkEvent = fun(Seq, Payload) ->
-             macula_frame:event(#{
-                 topic => Topic, realm => ?REALM,
-                 publisher => macula_identity:public(PubKp),
-                 seq => Seq, payload => Payload, delivered_via => direct})
+             #{publication := Publication} = macula_frame:publish(
+                 #{realm => ?REALM, topic => Topic, seq => Seq,
+                   published_at => erlang:system_time(millisecond), payload => Payload},
+                 PubKey),
+             macula_frame:event(#{publication => Publication, delivered_via => direct})
          end,
 
-         %% 0. No publisher_sig at all → delivered, Meta says `not_signed'
-         %% (distinct from an unverifiable/invalid signature -- a
-         %% subscriber weighting confidence by provenance needs to tell
-         %% "never signed" apart from "signed but wrong").
-         Pid ! {macula_peering, frame, FakePeer, MkEvent(0, ok0)},
-         receive {macula_event, SubRef, Topic, ok0, Meta0} ->
-             ?assertEqual(not_signed, maps:get(publisher_verified, Meta0))
-         after 2_000 -> erlang:error(unsigned_event_not_delivered) end,
 
-         %% 1. Valid publisher_sig → delivered, Meta says `true'.
-         Pid ! {macula_peering, frame, FakePeer,
-                macula_frame:sign_publisher(MkEvent(1, ok1), PubKp)},
-         receive {macula_event, SubRef, Topic, ok1, Meta1} ->
+         %% 0. An EVENT without a publication has no fields to deliver
+         %% and is dropped, strict or lenient: there is no unsigned
+         %% publication on the wire any more.
+         Pid ! {macula_peering, frame, FakePeer, #{frame_type => event, delivered_via => direct}},
+         receive {macula_event, SubRef, _, _, _} ->
+             erlang:error(unsigned_event_was_delivered)
+         after 800 -> ok end,
+
+         %% 1. A publication that verifies → delivered, Meta says `true'.
+         Pid ! {macula_peering, frame, FakePeer, MkEvent(1, ok1)},
+         receive {macula_event, SubRef, Topic, {text, <<"ok1">>}, Meta1} ->
              ?assertEqual(true, maps:get(publisher_verified, Meta1))
          after 2_000 -> erlang:error(valid_sig_event_not_delivered) end,
 
-         %% 2. Tampered publisher_sig with the setting left at its
+         %% 2. A tampered publication with the setting left at its
          %% default → NOT delivered. Strict is the default: a signature
-         %% that is present but does not check out is dropped, while an
-         %% absent one (step 0) is still delivered as `not_signed'.
-         Bad = (macula_frame:sign_publisher(MkEvent(2, ok2), PubKp))#{
-                 payload => tampered},
+         %% that is present but does not check out is dropped.
+         Bad = tampered_publication(MkEvent(2, ok2), tampered),
          Pid ! {macula_peering, frame, FakePeer, Bad},
-         receive {macula_event, SubRef, Topic, tampered, _} ->
+         receive {macula_event, SubRef, Topic, {text, <<"tampered">>}, _} ->
              erlang:error(default_bad_sig_event_was_delivered)
          after 800 -> ok end,
 
-         %% 3. Tampered publisher_sig with lenient mode explicitly
-         %% opted into → delivered, but Meta says `false', never `true'
-         %% -- a subscriber must still be able to tell "signed, but the
+         %% 3. Tampered with lenient mode explicitly opted into →
+         %% delivered, but Meta says `false', never `true' -- a
+         %% subscriber must still be able to tell "signed, but the
          %% signature didn't check out" apart from a trustworthy fact.
          application:set_env(macula, pubsub_strict_publisher_sig, false),
-         Bad3 = (macula_frame:sign_publisher(MkEvent(3, ok3), PubKp))#{
-                  payload => tampered3},
+         Bad3 = tampered_publication(MkEvent(3, ok3), tampered3),
          Pid ! {macula_peering, frame, FakePeer, Bad3},
-         receive {macula_event, SubRef, Topic, tampered3, Meta3} ->
+         receive {macula_event, SubRef, Topic, {text, <<"tampered3">>}, Meta3} ->
              ?assertEqual(false, maps:get(publisher_verified, Meta3))
          after 2_000 -> erlang:error(lenient_bad_sig_event_not_delivered) end,
          application:unset_env(macula, pubsub_strict_publisher_sig),
@@ -262,6 +265,17 @@ event_publisher_sig_verify_test_() ->
          macula_station_link:stop(Pid),
          ok
      end}.
+
+%% Rebuild an EVENT's publication with the payload swapped in its tbs
+%% but the ORIGINAL signature kept: the publication then fails to
+%% verify, exactly like a wire tamper.
+tampered_publication(#{publication := #{key := Key, tbs := Tbs, signature := Signature}} = Event,
+                     Payload) ->
+    Fields0 = macula_record_cbor:decode(Tbs),
+    Fields = Fields0#{{text, <<"payload">>} => Payload},
+    Event#{publication := #{key => Key,
+                            tbs => macula_record_cbor:encode(Fields),
+                            signature => Signature}}.
 
 %%------------------------------------------------------------------
 %% EVENT for a different realm is NOT delivered (realm-scoped index)
@@ -299,16 +313,14 @@ event_in_other_realm_not_delivered_test_() ->
              {'$gen_cast', {send_frame, #{frame_type := subscribe}}} -> ok
          after 1_000 -> erlang:error(no_subscribe_frame)
          end,
-         PublisherKey = macula_identity:public(macula_identity:generate()),
-         Pid ! {macula_peering, frame, FakePeer, #{
-             frame_type    => event,
-             topic         => Topic,
-             realm         => RealmB,
-             publisher     => PublisherKey,
-             seq           => 1,
-             payload       => wrong_realm,
-             delivered_via => direct
-         }},
+         {ok, Profile} = macula_crypto_profile:configured(),
+         {ok, PublisherKey} = macula_node_keys:generate(identity, Profile),
+         #{publication := Publication} = macula_frame:publish(
+             #{realm => RealmB, topic => Topic, seq => 1,
+               published_at => erlang:system_time(millisecond), payload => wrong_realm},
+             PublisherKey),
+         Pid ! {macula_peering, frame, FakePeer,
+                macula_frame:event(#{publication => Publication, delivered_via => direct})},
          receive
              {macula_event, _, _, wrong_realm, _} ->
                  erlang:error(event_in_wrong_realm_delivered)
@@ -331,7 +343,9 @@ publish_sends_frame_and_increments_seq_test_() ->
              connect_timeout_ms => 2000
          })),
          FakePeer = self(),
-         PeerNodeId = macula_identity:public(macula_identity:generate()),
+         {ok, Profile} = macula_crypto_profile:configured(),
+         {ok, PeerKey} = macula_node_keys:generate(identity, Profile),
+         {ok, PeerNodeId} = macula_node_keys:node_id(PeerKey),
          %% publish/4 requires full handshake (peer_node_id set). The
          %% connected info message races against attempt_connect setting
          %% peer_pid to a real worker; bypass by force-injecting both
@@ -348,20 +362,29 @@ publish_sends_frame_and_increments_seq_test_() ->
              {'$gen_cast', {send_frame, #{frame_type := publish} = F}} -> F
          after 1_000 -> erlang:error(no_publish_frame_1)
          end,
-         ?assertEqual(Topic, maps:get(topic, Frame1)),
-         ?assertEqual(?REALM, maps:get(realm, Frame1)),
-         ?assertEqual(0, maps:get(seq, Frame1)),
-         ?assertEqual(#{temp => 20}, maps:get(payload, Frame1)),
+         Verified1 = verified_publish(Frame1),
+         ?assertEqual(Topic, maps:get(topic, Verified1)),
+         ?assertEqual(?REALM, maps:get(realm, Verified1)),
+         ?assertEqual(0, maps:get(seq, Verified1)),
+         ?assertEqual(#{{text, <<"temp">>} => 20}, maps:get(payload, Verified1)),
          ok = macula_station_link:publish(Pid, ?REALM, Topic,
                                            #{temp => 21}),
          Frame2 = receive
              {'$gen_cast', {send_frame, #{frame_type := publish} = F2}} -> F2
          after 1_000 -> erlang:error(no_publish_frame_2)
          end,
-         ?assertEqual(1, maps:get(seq, Frame2)),
+         ?assertEqual(1, maps:get(seq, verified_publish(Frame2))),
          macula_station_link:stop(Pid),
          ok
      end}.
+
+%% A PUBLISH frame's fields are read from its verified publication —
+%% the fields live inside the signed object, not on the frame.
+verified_publish(Frame) ->
+    {ok, Profile} = macula_crypto_profile:configured(),
+    {ok, Verified} = macula_frame:verify_publication(Frame, Profile,
+                                                     erlang:system_time(millisecond)),
+    Verified.
 
 %%------------------------------------------------------------------
 %% publish/5 stamps the caller's seq verbatim and leaves the per-link
@@ -378,7 +401,9 @@ publish5_uses_caller_seq_test_() ->
              connect_timeout_ms => 2000
          })),
          FakePeer = self(),
-         PeerNodeId = macula_identity:public(macula_identity:generate()),
+         {ok, Profile} = macula_crypto_profile:configured(),
+         {ok, PeerKey} = macula_node_keys:generate(identity, Profile),
+         {ok, PeerNodeId} = macula_node_keys:node_id(PeerKey),
          _ = sys:replace_state(Pid, fun(S) ->
              S2 = setelement(?PEER_PID_INDEX, S, FakePeer),
              setelement(?PEER_NODE_ID_INDEX, S2, PeerNodeId)
@@ -389,13 +414,13 @@ publish5_uses_caller_seq_test_() ->
              {'$gen_cast', {send_frame, #{frame_type := publish} = A}} -> A
          after 1_000 -> erlang:error(no_publish_frame_1)
          end,
-         ?assertEqual(4242, maps:get(seq, F1)),
+         ?assertEqual(4242, maps:get(seq, verified_publish(F1))),
          ok = macula_station_link:publish(Pid, ?REALM, Topic, #{n => 2}, 4243),
          F2 = receive
              {'$gen_cast', {send_frame, #{frame_type := publish} = B}} -> B
          after 1_000 -> erlang:error(no_publish_frame_2)
          end,
-         ?assertEqual(4243, maps:get(seq, F2)),
+         ?assertEqual(4243, maps:get(seq, verified_publish(F2))),
          %% publish/5 must NOT advance the per-link counter: a later
          %% pool-less publish/4 still starts from 0.
          ok = macula_station_link:publish(Pid, ?REALM, Topic, #{n => 3}),
@@ -403,7 +428,7 @@ publish5_uses_caller_seq_test_() ->
              {'$gen_cast', {send_frame, #{frame_type := publish} = C}} -> C
          after 1_000 -> erlang:error(no_publish_frame_3)
          end,
-         ?assertEqual(0, maps:get(seq, F3)),
+         ?assertEqual(0, maps:get(seq, verified_publish(F3))),
          macula_station_link:stop(Pid),
          ok
      end}.
@@ -486,16 +511,8 @@ unsubscribe_sends_frame_and_clears_test_() ->
          after 1_000 ->
              erlang:error(no_unsubscribe_frame)
          end,
-         PublisherKey = macula_identity:public(macula_identity:generate()),
-         Pid ! {macula_peering, frame, FakePeer, #{
-             frame_type    => event,
-             topic         => Topic,
-             realm         => ?REALM,
-             publisher     => PublisherKey,
-             seq           => 1,
-             payload       => post_unsubscribe,
-             delivered_via => direct
-         }},
+         {Event, _PublisherKey} = signed_event(?REALM, Topic, 1, post_unsubscribe),
+         Pid ! {macula_peering, frame, FakePeer, Event},
          receive
              {macula_event, _, _, post_unsubscribe, _} ->
                  erlang:error(event_after_unsubscribe)

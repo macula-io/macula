@@ -49,6 +49,7 @@
     %% Constructors — CALL (Part 6 §5)
     call/2, result/2, provider_error/2, relay_error/2,
     verify_request/2, verify_reply/3, verify_relay_error/4, claimed_reply_ids/1, claimed_publication_realm/1,
+    claimed_publication/1,
 
     %% Constructors — HyParView (Part 3 §7.1)
     hyparview_join/1, hyparview_forward_join/1, hyparview_neighbor/1,
@@ -1242,6 +1243,27 @@ claimed_realm(true, #{key := Key, tbs := Tbs, signature := Signature} = Object)
     realm_claimed(claimed_fields(macula_record_cbor:decode_strict(Tbs), publication_table()));
 claimed_realm(_OnlyFields, _Object) ->
     {error, no_realm}.
+
+%% @doc The fields a PUBLISH, EVENT or GOSSIP's publication names, read without verifying its signature: the same
+%% frame-field and signed-object shape checks, the same strict tbs decode and the same field table
+%% verify_publication/3 applies, so the fields come back in the verified shape or not at all. For a lenient
+%% subscriber that wants the fact even when its signature does not check out. Anything else is no_publication.
+-spec claimed_publication(frame()) -> {ok, map()} | {error, no_publication}.
+claimed_publication(#{frame_type := Type,
+                      publication := #{key := Key, tbs := Tbs, signature := Signature} = Object} = Frame)
+  when (Type =:= publish orelse Type =:= event orelse Type =:= plumtree_gossip),
+       map_size(Object) =:= 3, is_binary(Key), is_binary(Tbs), is_binary(Signature) ->
+    publication_claimed(only_fields(Frame, publication_frame_fields(Type)), Tbs);
+claimed_publication(_Frame) ->
+    {error, no_publication}.
+
+publication_claimed(true, Tbs) ->
+    claimed_publication_fields(claimed_fields(macula_record_cbor:decode_strict(Tbs), publication_table()));
+publication_claimed(false, _Tbs) ->
+    {error, no_publication}.
+
+claimed_publication_fields({ok, Fields}) -> {ok, Fields};
+claimed_publication_fields(error) -> {error, no_publication}.
 
 realm_claimed({ok, #{realm := Realm}}) -> {ok, Realm};
 realm_claimed(_NoRealm) -> {error, no_realm}.
