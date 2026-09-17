@@ -43,9 +43,10 @@ subs_to(LinkPid, TopicIndex) when is_pid(LinkPid), is_map(TopicIndex) ->
                          macula_client:auth_policy()}}) -> ok.
 advs_to(LinkPid, Procs) when is_pid(LinkPid), is_map(Procs) ->
     maps:foreach(
-      fun({Realm, Procedure}, {Handler, Policy}) ->
+      fun({Realm, Procedure}, {Handler, Policy, EncodedAd}) ->
           _ = macula_station_link:advertise(LinkPid, Realm,
-                                             Procedure, Handler, Policy)
+                                             Procedure, Handler, Policy,
+                                             EncodedAd)
       end, Procs),
     ok.
 
@@ -65,9 +66,10 @@ advs_to(LinkPid, Procs) when is_pid(LinkPid), is_map(Procs) ->
 stream_advs_to(LinkPid, StreamProcs)
   when is_pid(LinkPid), is_map(StreamProcs) ->
     maps:foreach(
-      fun({Realm, Procedure}, {Mode, Handler, Policy}) ->
+      fun({Realm, Procedure}, {Mode, Handler, Policy, EncodedAd}) ->
           _ = macula_station_link:advertise_stream(LinkPid, Realm,
                                                     Procedure, Mode,
-                                                    Handler, Policy)
+                                                    Handler, Policy,
+                                                    EncodedAd)
       end, StreamProcs),
     ok.

@@ -576,8 +576,11 @@ facade_v2_rpc_delegates_test() ->
     {ok, _} = application:ensure_all_started(macula),
     {ok, Pool} = macula_client:connect([], #{}),
     Handler = fun(_) -> {ok, ack} end,
-    %% V2 advertise/5 (Pool, Realm, Procedure, Handler, Opts)
-    ?assertEqual({error, no_healthy_station},
+    %% V2 advertise/5 (Pool, Realm, Procedure, Handler, Opts) — the
+    %% provider-authorization resolution refuses a procedure without
+    %% an org namespace before the pool fan-out is even asked (the
+    %% no-seeds fan-out refusal stays covered by the pool-level test).
+    ?assertEqual({error, {provider_authorization, no_org_namespace}},
                  macula:advertise(Pool, ?REALM, <<"x.v1">>, Handler, #{})),
     %% V2 unadvertise/3
     ?assertEqual(ok, macula:unadvertise(Pool, ?REALM, <<"x.v1">>)),

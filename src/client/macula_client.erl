@@ -64,7 +64,9 @@
 %% RPC fan-out (since 3.16.0) — called by the `macula' facade.
 -export([call_linked_station/5, call_station/7, call_station/8, call_station/9,
          call_station/10,
-         advertise/4, advertise/5, unadvertise/3]).
+         advertise/4, advertise/5, advertise/6, unadvertise/3,
+         advertise_stream/5, advertise_stream/6, advertise_stream/7,
+         unadvertise_stream/3]).
 %% Dedicated-stream content transfer (see
 %% PLAN_PER_STREAM_QUIC_ISOLATION.md Phase 2) — called by the
 %% `macula' facade to pin one link for a whole put_content/get_content
@@ -75,8 +77,7 @@
 %% pool's existing links.
 -export([ensure_station_link/4]).
 %% Streaming RPC (since 3.17.0) — called by the `macula' facade.
--export([call_stream_station/7,
-         advertise_stream/5, advertise_stream/6, unadvertise_stream/3]).
+-export([call_stream_station/7]).
 
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          terminate/2, code_change/3, format_status/1]).
@@ -761,7 +762,24 @@ advertise(Pool, Realm, Procedure, Handler, Policy)
        is_binary(Procedure),
        (is_function(Handler, 1) orelse
         (is_tuple(Handler) andalso tuple_size(Handler) =:= 2)) ->
-    gen_server:call(Pool, {advertise, Realm, Procedure, Handler, Policy},
+    advertise(Pool, Realm, Procedure, Handler, Policy, undefined).
+
+%% @doc As `advertise/5', with the pool-signed provider advertisement
+%% (`EncodedAd', the resolved D25 authorization included) fanned out to
+%% every link as an ADVERTISE frame. The facade resolves the
+%% authorization before calling here; a `undefined' `EncodedAd'
+%% registers the handler locally and sends no frame (legacy behaviour).
+-spec advertise(pool(), <<_:256>>, binary(), handler(), auth_policy(),
+                binary() | undefined) -> ok | {error, term()}.
+advertise(Pool, Realm, Procedure, Handler, Policy, EncodedAd)
+  when is_pid(Pool),
+       is_binary(Realm), byte_size(Realm) =:= 32,
+       is_binary(Procedure),
+       (is_function(Handler, 1) orelse
+        (is_tuple(Handler) andalso tuple_size(Handler) =:= 2)),
+       (is_binary(EncodedAd) orelse EncodedAd =:= undefined) ->
+    gen_server:call(Pool, {advertise, Realm, Procedure, Handler, Policy,
+                           EncodedAd},
                     5_000).
 
 %% @doc Drop a previously-advertised procedure on every healthy link
@@ -823,8 +841,29 @@ advertise_stream(Pool, Realm, Procedure, Mode, Handler, Policy)
        (Mode =:= server_stream orelse Mode =:= client_stream
         orelse Mode =:= bidi),
        is_function(Handler, 2) ->
+    advertise_stream(Pool, Realm, Procedure, Mode, Handler, Policy,
+                     undefined).
+
+%% @doc As `advertise_stream/6', with the pool-signed provider
+%% advertisement (`EncodedAd', the resolved D25 authorization included)
+%% fanned out to every link as an ADVERTISE frame. `undefined'
+%% registers the handler locally and sends no frame (legacy behaviour).
+-spec advertise_stream(pool(), <<_:256>>, binary(),
+                       macula_frame:stream_mode(),
+                       stream_handler(), auth_policy(),
+                       binary() | undefined) ->
+    ok | {error, term()}.
+advertise_stream(Pool, Realm, Procedure, Mode, Handler, Policy, EncodedAd)
+  when is_pid(Pool),
+       is_binary(Realm), byte_size(Realm) =:= 32,
+       is_binary(Procedure),
+       (Mode =:= server_stream orelse Mode =:= client_stream
+        orelse Mode =:= bidi),
+       is_function(Handler, 2),
+       (is_binary(EncodedAd) orelse EncodedAd =:= undefined) ->
     gen_server:call(Pool,
-                    {advertise_stream, Realm, Procedure, Mode, Handler, Policy},
+                    {advertise_stream, Realm, Procedure, Mode, Handler,
+                     Policy, EncodedAd},
                     5_000).
 
 %% @doc Drop a streaming procedure on every healthy link and remove
@@ -1362,13 +1401,26 @@ handle_call({ensure_station_link, Station, LinkOpts, TimeoutMs}, From, S) ->
 handle_call({advertise, Realm, Procedure, Handler, Policy}, _From,
             #state{procs = P} = S) ->
     Pids = spawned_link_pids(S),
-    Reply = fanout_advertise(Pids, Realm, Procedure, Handler, Policy),
+    Reply = fanout_advertise(Pids, Realm, Procedure, Handler, Policy,
+                             undefined),
     {reply, Reply,
-     S#state{procs = P#{{Realm, Procedure} => {Handler, Policy}}}};
+     S#state{procs = P#{{Realm, Procedure} =>
+                        {Handler, Policy, undefined}}}};
+handle_call({advertise, Realm, Procedure, Handler, Policy, EncodedAd}, _From,
+            #state{procs = P} = S) ->
+    Pids = spawned_link_pids(S),
+    Reply = fanout_advertise(Pids, Realm, Procedure, Handler, Policy,
+                             EncodedAd),
+    {reply, Reply,
+     S#state{procs = P#{{Realm, Procedure} =>
+                        {Handler, Policy, EncodedAd}}}};
 
 handle_call({unadvertise, Realm, Procedure}, _From,
-            #state{procs = P} = S) ->
-    _ = fanout_unadvertise(spawned_link_pids(S), Realm, Procedure),
+            #state{procs = P, node_identity = Key} = S) ->
+    Withdrawal = withdrawal_for(maps:find({Realm, Procedure}, P),
+                                Realm, Procedure, Key),
+    _ = fanout_unadvertise(spawned_link_pids(S), Realm, Procedure,
+                           Withdrawal),
     {reply, ok, S#state{procs = maps:remove({Realm, Procedure}, P)}};
 
 handle_call({call_stream_station, Station, Target, Realm, Procedure, Args, Opts,
@@ -1385,13 +1437,25 @@ handle_call({advertise_stream, Realm, Procedure, Mode, Handler, Policy}, _From,
             #state{stream_procs = SP} = S) ->
     Pids = spawned_link_pids(S),
     Reply = fanout_advertise_stream(Pids, Realm, Procedure, Mode, Handler,
-                                    Policy),
+                                    Policy, undefined),
     {reply, Reply,
-     S#state{stream_procs = SP#{{Realm, Procedure} => {Mode, Handler, Policy}}}};
+     S#state{stream_procs = SP#{{Realm, Procedure} =>
+                                {Mode, Handler, Policy, undefined}}}};
+handle_call({advertise_stream, Realm, Procedure, Mode, Handler, Policy,
+             EncodedAd}, _From, #state{stream_procs = SP} = S) ->
+    Pids = spawned_link_pids(S),
+    Reply = fanout_advertise_stream(Pids, Realm, Procedure, Mode, Handler,
+                                    Policy, EncodedAd),
+    {reply, Reply,
+     S#state{stream_procs = SP#{{Realm, Procedure} =>
+                                {Mode, Handler, Policy, EncodedAd}}}};
 
 handle_call({unadvertise_stream, Realm, Procedure}, _From,
-            #state{stream_procs = SP} = S) ->
-    _ = fanout_unadvertise_stream(spawned_link_pids(S), Realm, Procedure),
+            #state{stream_procs = SP, node_identity = Key} = S) ->
+    Withdrawal = withdrawal_for(maps:find({Realm, Procedure}, SP),
+                                Realm, Procedure, Key),
+    _ = fanout_unadvertise_stream(spawned_link_pids(S), Realm, Procedure,
+                                  Withdrawal),
     {reply, ok,
      S#state{stream_procs = maps:remove({Realm, Procedure}, SP)}};
 
@@ -2089,15 +2153,16 @@ next_if_not_sent(false, E, _Rest, _Connected, _Call) ->
 %% station delivers once the link connects. Filtering by
 %% `is_connected/1' here leaves the link's map out of sync with the
 %% pool's intent.
-fanout_advertise([], _Realm, _Proc, _Handler, _Policy) ->
+fanout_advertise([], _Realm, _Proc, _Handler, _Policy, _EncodedAd) ->
     {error, no_healthy_station};
-fanout_advertise(Pids, Realm, Proc, Handler, Policy) ->
-    Results = [safe_link_advertise(P, Realm, Proc, Handler, Policy)
+fanout_advertise(Pids, Realm, Proc, Handler, Policy, EncodedAd) ->
+    Results = [safe_link_advertise(P, Realm, Proc, Handler, Policy, EncodedAd)
                || P <- Pids, is_process_alive(P)],
     summarize_advertise([R || R <- Results, R =/= skipped]).
 
-safe_link_advertise(Pid, Realm, Proc, Handler, Policy) ->
-    try macula_station_link:advertise(Pid, Realm, Proc, Handler, Policy)
+safe_link_advertise(Pid, Realm, Proc, Handler, Policy, EncodedAd) ->
+    try macula_station_link:advertise(Pid, Realm, Proc, Handler, Policy,
+                                      EncodedAd)
     catch _:_ -> skipped
     end.
 
@@ -2119,13 +2184,13 @@ summarize_advertise(Results) ->
 %% here leaks: a link that was disconnected at unadvertise time keeps
 %% the handler in its local map, and once it connects dispatches a CALL
 %% for a procedure the pool already considers withdrawn.
-fanout_unadvertise(Pids, Realm, Proc) ->
-    [_ = safe_link_unadvertise(P, Realm, Proc)
+fanout_unadvertise(Pids, Realm, Proc, Withdrawal) ->
+    [_ = safe_link_unadvertise(P, Realm, Proc, Withdrawal)
      || P <- Pids, is_process_alive(P)],
     ok.
 
-safe_link_unadvertise(Pid, Realm, Proc) ->
-    try macula_station_link:unadvertise(Pid, Realm, Proc)
+safe_link_unadvertise(Pid, Realm, Proc, Withdrawal) ->
+    try macula_station_link:unadvertise(Pid, Realm, Proc, Withdrawal)
     catch _:_ -> skipped
     end.
 
@@ -2148,27 +2213,70 @@ stream_after_connect(false, _Pid, _Target, _Realm, _Proc, _Args, _Opts) ->
 %% as `fanout_advertise/4' for unary; partial success counts. Same
 %% rationale for dispatching to pre-handshake links — see the
 %% comment on `fanout_advertise/4'.
-fanout_advertise_stream([], _Realm, _Proc, _Mode, _Handler, _Policy) ->
+fanout_advertise_stream([], _Realm, _Proc, _Mode, _Handler, _Policy, _EncodedAd) ->
     {error, no_healthy_station};
-fanout_advertise_stream(Pids, Realm, Proc, Mode, Handler, Policy) ->
-    Results = [safe_link_advertise_stream(P, Realm, Proc, Mode, Handler, Policy)
+fanout_advertise_stream(Pids, Realm, Proc, Mode, Handler, Policy, EncodedAd) ->
+    Results = [safe_link_advertise_stream(P, Realm, Proc, Mode, Handler,
+                                          Policy, EncodedAd)
                || P <- Pids, is_process_alive(P)],
     summarize_advertise([R || R <- Results, R =/= skipped]).
 
-safe_link_advertise_stream(Pid, Realm, Proc, Mode, Handler, Policy) ->
+safe_link_advertise_stream(Pid, Realm, Proc, Mode, Handler, Policy, EncodedAd) ->
     try macula_station_link:advertise_stream(Pid, Realm, Proc, Mode, Handler,
-                                             Policy)
+                                             Policy, EncodedAd)
     catch _:_ -> skipped
     end.
 
-fanout_unadvertise_stream(Pids, Realm, Proc) ->
-    [_ = safe_link_unadvertise_stream(P, Realm, Proc)
+fanout_unadvertise_stream(Pids, Realm, Proc, Withdrawal) ->
+    [_ = safe_link_unadvertise_stream(P, Realm, Proc, Withdrawal)
      || P <- Pids, is_process_alive(P)],
     ok.
 
-safe_link_unadvertise_stream(Pid, Realm, Proc) ->
-    try macula_station_link:unadvertise_stream(Pid, Realm, Proc)
+safe_link_unadvertise_stream(Pid, Realm, Proc, Withdrawal) ->
+    try macula_station_link:unadvertise_stream(Pid, Realm, Proc, Withdrawal)
     catch _:_ -> skipped
+    end.
+
+%% The withdrawal for an unadvertise: a tombstone over a FRESH
+%% advertisement of the same (realm, procedure) — fresh so its version
+%% is later than the registered one — signed by the provider (the
+%% pool's own node identity). Built from the stored advertisement's
+%% own authorization, decoded back from the wire form. `undefined' for
+%% a legacy local-only register, which sent no advertisement to
+%% withdraw.
+withdrawal_for(error, _Realm, _Proc, _Key) ->
+    undefined;
+withdrawal_for({ok, {_HandlerOrMode, _Policy, undefined}}, _Realm, _Proc,
+               _Key) ->
+    undefined;
+withdrawal_for({ok, {_HandlerOrMode, _Policy, EncodedAd}}, Realm, Proc, Key)
+  when is_binary(EncodedAd) ->
+    #{profile := Profile} = Key,
+    case macula_record:verify(EncodedAd, Profile) of
+        {ok, Ad} ->
+            Read = macula_record:read_procedure_advertisement(Ad),
+            Authorization = maps:get(authorization, Read),
+            NodeId = maps:get(advertiser_node, Read),
+            Unsigned = macula_record:procedure_advertisement(
+                         NodeId, Realm, Proc, NodeId,
+                         #{authorization => Authorization}),
+            %% The pool's own custody paths: sign the fresh ad the way
+            %% sign_node_record does, then withdraw it the way
+            %% withdraw_node_record does.
+            case node_record_signed(macula_record:node_signed(Unsigned),
+                                    Unsigned, Key) of
+                {ok, Signed} ->
+                    case tombstone_signed({ok, Signed},
+                                          macula_node_keys:public_key(Key),
+                                          shutdown, Key) of
+                        {ok, Tombstone} -> macula_record:encode(Tombstone);
+                        {error, _}      -> undefined
+                    end;
+                {error, _} ->
+                    undefined
+            end;
+        {error, _} ->
+            undefined
     end.
 
 %% Count `(healthy, failed)' links across configured seeds. A seed is

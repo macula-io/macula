@@ -1,6 +1,8 @@
-%% EUnit tests for advertising on `macula_station_link'. A link only registers a procedure's handler, unary or streaming,
-%% so it can dispatch a CALL or STREAM_OPEN that its station delivers to it by target; it sends no ADVERTISE or
-%% UNADVERTISE frame, before or after connecting.
+%% EUnit tests for advertising on `macula_station_link'. A link registers a procedure's handler, unary or streaming,
+%% so it can dispatch a CALL or STREAM_OPEN that its station delivers to it; given the pool-signed provider
+%% advertisement (the resolved D25 authorization) it sends the ADVERTISE frame at once when connected, drains a
+%% register that arrived before the handshake on `connected', and sends the UNADVERTISE withdrawal on unadvertise.
+%% Without the advertisement bytes (a legacy pool-level register) it sends nothing, before or after connecting.
 %%
 %% The test process stands in for the peering connection, and each test runs in a process of its own, so no frame an
 %% earlier test's link sent is read as this test's.
@@ -10,59 +12,115 @@
 
 -define(REALM, <<7:256>>).
 -define(PROCEDURE, <<"acme.count_v1">>).
+-define(ENCODED_AD, <<1, 2, 3>>).
 
 %% The link's state fields these tests read or set, looked up by name in the state record.
 -define(PEER_PID_INDEX, macula_station_link:state_field_index(peer_pid)).
 -define(PEER_NODE_ID_INDEX, macula_station_link:state_field_index(peer_node_id)).
 
-%% Advertising on a connected link registers the handler and sends nothing.
-advertising_registers_the_handler_and_sends_no_frame_test_() ->
+%% A connected link with a resolved advertisement sends the ADVERTISE
+%% frame carrying its bytes.
+advertising_with_a_resolved_advertisement_sends_the_advertise_frame_test_() ->
     {spawn, {timeout, 5,
      fun() ->
          Pid = start_connected_link(),
-         ok = macula_station_link:advertise(Pid, ?REALM, ?PROCEDURE, fun unary_handler/1),
+         ok = macula_station_link:advertise(Pid, ?REALM, ?PROCEDURE,
+                                            fun unary_handler/1, open,
+                                            ?ENCODED_AD),
+         ?assertMatch({sent, #{frame_type := advertise,
+                               advertisement := ?ENCODED_AD}},
+                      sent_frame_within(200)),
+         ?assert(maps:is_key({?REALM, ?PROCEDURE}, registered(procedures, Pid))),
+         macula_station_link:stop(Pid)
+     end}}.
+
+%% A legacy register without the resolved advertisement sends nothing.
+advertising_without_a_resolved_advertisement_sends_no_frame_test_() ->
+    {spawn, {timeout, 5,
+     fun() ->
+         Pid = start_connected_link(),
+         ok = macula_station_link:advertise(Pid, ?REALM, ?PROCEDURE,
+                                            fun unary_handler/1),
          ?assertEqual(none, sent_frame_within(200)),
          ?assert(maps:is_key({?REALM, ?PROCEDURE}, registered(procedures, Pid))),
          macula_station_link:stop(Pid)
      end}}.
 
-%% A handler advertised before the link connects stays registered, and connecting sends nothing for it.
-an_advertisement_made_before_connect_sends_no_frame_on_connect_test_() ->
+%% An advertisement registered before the handshake is drained onto the
+%% wire once `connected' fires.
+an_advertisement_made_before_connect_is_sent_on_connect_test_() ->
     {spawn, {timeout, 5,
      fun() ->
          Pid = start_link_with_peer(),
-         ok = macula_station_link:advertise(Pid, ?REALM, ?PROCEDURE, fun unary_handler/1),
+         ok = macula_station_link:advertise(Pid, ?REALM, ?PROCEDURE,
+                                            fun unary_handler/1, open,
+                                            ?ENCODED_AD),
+         ?assertEqual(none, sent_frame_within(200)),
          Pid ! {macula_peering, connected, self(), <<9:256>>},
          %% The link has handled the connected message before its mailbox is read.
          ?assertEqual(<<9:256>>, element(?PEER_NODE_ID_INDEX, sys:get_state(Pid))),
-         ?assertEqual(none, sent_frame_within(300)),
+         ?assertMatch({sent, #{frame_type := advertise,
+                               advertisement := ?ENCODED_AD}},
+                      sent_frame_within(300)),
          ?assert(maps:is_key({?REALM, ?PROCEDURE}, registered(procedures, Pid))),
          macula_station_link:stop(Pid)
      end}}.
 
-%% Unadvertising removes the handler and sends nothing.
-unadvertising_unregisters_the_handler_and_sends_no_frame_test_() ->
+%% Unadvertising with a withdrawal sends the UNADVERTISE frame and
+%% drops the stored advertisement.
+unadvertising_with_a_withdrawal_sends_the_unadvertise_frame_test_() ->
     {spawn, {timeout, 5,
      fun() ->
          Pid = start_connected_link(),
-         ok = macula_station_link:advertise(Pid, ?REALM, ?PROCEDURE, fun unary_handler/1),
+         ok = macula_station_link:advertise(Pid, ?REALM, ?PROCEDURE,
+                                            fun unary_handler/1, open,
+                                            ?ENCODED_AD),
+         _ = sent_frame_within(200),
+         ok = macula_station_link:unadvertise(Pid, ?REALM, ?PROCEDURE,
+                                              <<4, 5, 6>>),
+         ?assertMatch({sent, #{frame_type := unadvertise,
+                               withdrawal := <<4, 5, 6>>}},
+                      sent_frame_within(200)),
+         ?assertNot(maps:is_key({?REALM, ?PROCEDURE}, registered(procedures, Pid))),
+         macula_station_link:stop(Pid)
+     end}}.
+
+%% Unadvertising without a withdrawal sends nothing.
+unadvertising_without_a_withdrawal_sends_no_frame_test_() ->
+    {spawn, {timeout, 5,
+     fun() ->
+         Pid = start_connected_link(),
+         ok = macula_station_link:advertise(Pid, ?REALM, ?PROCEDURE,
+                                            fun unary_handler/1, open,
+                                            ?ENCODED_AD),
+         _ = sent_frame_within(200),
          ok = macula_station_link:unadvertise(Pid, ?REALM, ?PROCEDURE),
          ?assertEqual(none, sent_frame_within(200)),
          ?assertNot(maps:is_key({?REALM, ?PROCEDURE}, registered(procedures, Pid))),
          macula_station_link:stop(Pid)
      end}}.
 
-%% A streaming handler is registered and removed the same way, with nothing sent either time.
-a_stream_advertisement_registers_and_unregisters_with_no_frame_test_() ->
+%% A streaming advertisement shares the same wire behaviour: the frame
+%% does not distinguish streaming from unary procedures.
+a_stream_advertisement_sends_the_same_advertise_frame_test_() ->
     {spawn, {timeout, 5,
      fun() ->
          Pid = start_connected_link(),
-         ok = macula_station_link:advertise_stream(Pid, ?REALM, ?PROCEDURE, bidi, fun stream_handler/2),
-         ?assertEqual(none, sent_frame_within(200)),
-         ?assertMatch(#{{?REALM, ?PROCEDURE} := {bidi, _}}, registered(stream_procedures, Pid)),
-         ok = macula_station_link:unadvertise_stream(Pid, ?REALM, ?PROCEDURE),
-         ?assertEqual(none, sent_frame_within(200)),
-         ?assertNot(maps:is_key({?REALM, ?PROCEDURE}, registered(stream_procedures, Pid))),
+         ok = macula_station_link:advertise_stream(Pid, ?REALM, ?PROCEDURE,
+                                                   bidi, fun stream_handler/2,
+                                                   open, ?ENCODED_AD),
+         ?assertMatch({sent, #{frame_type := advertise,
+                               advertisement := ?ENCODED_AD}},
+                      sent_frame_within(200)),
+         ?assertMatch(#{{?REALM, ?PROCEDURE} := {bidi, _}},
+                      registered(stream_procedures, Pid)),
+         ok = macula_station_link:unadvertise_stream(Pid, ?REALM, ?PROCEDURE,
+                                                     <<7, 8, 9>>),
+         ?assertMatch({sent, #{frame_type := unadvertise,
+                               withdrawal := <<7, 8, 9>>}},
+                      sent_frame_within(200)),
+         ?assertNot(maps:is_key({?REALM, ?PROCEDURE},
+                                registered(stream_procedures, Pid))),
          macula_station_link:stop(Pid)
      end}}.
 

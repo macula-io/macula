@@ -302,27 +302,32 @@ call_station(Pool, Station, Target, Realm, Procedure, Payload, TimeoutMs, Opts) 
     macula_client:call_station(Pool, Station, Target, Realm, Procedure, Payload,
                                TimeoutMs, Ucan, LinkOpts, DialTimeoutMs).
 
-%% @doc Register a procedure handler on a V2 pool. Fans out to every
-%% healthy link and stores in pool state for replay on link respawn.
-%% A caller reaches this provider only through a
-%% `procedure_advertisement' record that names it; registering the
-%% handler publishes none.
-%% A handler that answers `{error, Text}' with a binary or a printable
-%% charlist sends that text to its caller, up to 256 bytes of it; any
-%% other error reason reaches the caller as its name only. See
-%% `macula_client:advertise/4'.
+%% @doc Register a procedure handler on a V2 pool and advertise it:
+%% the pool resolves its own D25 provider authorization — the
+%% realm-signed `org_directory' and the org-signed
+%% `procedure_delegation' that names the pool's node id, both fetched
+%% from the DHT — signs the advertisement, and sends it as an
+%% ADVERTISE frame to every link (replayed on link respawn). The
+%% procedure must carry an org namespace, and the pool must run a
+%% provisioned identity whose delegation the org has published, and
+%% pin the realm's key (`realm_trust' at connect); a missing piece
+%% fails fast with `{error, {provider_authorization, _}}'.
+%%
+%% `Opts' `auth' sets the procedure's policy: `open' (default, serve
+%% any identified caller), `{ucan_required, Issuer}' (gated to one
+%% known identity, Slice 7b), or `{realm_member_required, RealmDid,
+%% RequiredCan}' (gated to realm membership at a specific tier) -- see
+%% `macula_client:auth_policy()' for the full set.
 -spec advertise(pool(), realm(), procedure(),
                 macula_client:handler(), map()) ->
     ok | {error, term()}.
 advertise(Pool, Realm, Procedure, Handler, Opts)
   when is_pid(Pool), is_binary(Realm), byte_size(Realm) =:= 32 ->
-    %% `auth' opt sets the procedure's policy: `open' (default, serve any
-    %% identified caller), `{ucan_required, Issuer}' (gated to one known
-    %% identity, Slice 7b), or `{realm_member_required, RealmDid,
-    %% RequiredCan}' (gated to realm membership at a specific tier) -- see
-    %% `macula_client:auth_policy()' for the full set.
     Policy = maps:get(auth, Opts, open),
-    macula_client:advertise(Pool, Realm, Procedure, Handler, Policy).
+    advertise_authorized(Pool, Realm, Procedure, fun(EncodedAd) ->
+        macula_client:advertise(Pool, Realm, Procedure, Handler, Policy,
+                                EncodedAd)
+    end).
 
 %% @doc Stop advertising a procedure on a V2 pool.
 -spec unadvertise(pool(), realm(), procedure()) -> ok.
@@ -913,7 +918,7 @@ advertise_stream(Pool, Realm, Procedure, Mode, Handler)
        (Mode =:= server_stream orelse Mode =:= client_stream
         orelse Mode =:= bidi),
        is_function(Handler, 2) ->
-    macula_client:advertise_stream(Pool, Realm, Procedure, Mode, Handler).
+    advertise_stream(Pool, Realm, Procedure, Mode, Handler, #{}).
 
 %% @doc As `advertise_stream/5', with `Opts'. `auth' sets the streaming
 %% procedure's policy, the same set `advertise/5' takes: `open' (default),
@@ -929,8 +934,90 @@ advertise_stream(Pool, Realm, Procedure, Mode, Handler, Opts)
        (Mode =:= server_stream orelse Mode =:= client_stream
         orelse Mode =:= bidi),
        is_function(Handler, 2), is_map(Opts) ->
-    macula_client:advertise_stream(Pool, Realm, Procedure, Mode, Handler,
-                                   maps:get(auth, Opts, open)).
+    Policy = maps:get(auth, Opts, open),
+    advertise_authorized(Pool, Realm, Procedure, fun(EncodedAd) ->
+        macula_client:advertise_stream(Pool, Realm, Procedure, Mode, Handler,
+                                       Policy, EncodedAd)
+    end).
+
+%% The provider-authorization resolution behind `advertise' and
+%% `advertise_stream': the pool's own D25 chain, fetched from the DHT,
+%% signed and verified before a single frame goes out. Any missing
+%% piece fails fast under `provider_authorization'.
+advertise_authorized(Pool, Realm, Procedure, Fun) ->
+    case macula_record:procedure_org(Procedure) of
+        none ->
+            {error, {provider_authorization, no_org_namespace}};
+        {error, malformed} ->
+            {error, {provider_authorization, malformed_procedure}};
+        {org, Org} ->
+            case status(Pool) of
+                {ok, #{self_node_id := NodeId}} ->
+                    resolve_org_directory(Pool, Realm, Org, Procedure,
+                                          NodeId, Fun);
+                {error, _} = E ->
+                    E
+            end
+    end.
+
+resolve_org_directory(Pool, Realm, Org, Procedure, NodeId, Fun) ->
+    case find_record(Pool, macula_record:org_directory_key(Realm, Org)) of
+        {ok, OrgDir} ->
+            #{org_key := OrgKeyId} =
+                macula_record:read_org_directory(OrgDir),
+            resolve_delegation(Pool, Realm, Procedure, OrgDir, OrgKeyId,
+                               NodeId, Fun);
+        {error, not_found} ->
+            {error, {provider_authorization, {org_directory, not_found}}};
+        {error, _} = E ->
+            {error, {provider_authorization, E}}
+    end.
+
+resolve_delegation(Pool, Realm, Procedure, OrgDir, OrgKeyId, NodeId, Fun) ->
+    case find_record(Pool,
+                     macula_record:procedure_delegation_key(OrgKeyId, NodeId)) of
+        {ok, Deleg} ->
+            sign_provider_advertisement(Pool, Realm, Procedure, OrgDir, Deleg,
+                                        NodeId, Fun);
+        {error, not_found} ->
+            {error, {provider_authorization,
+                     {procedure_delegation, not_found}}};
+        {error, _} = E ->
+            {error, {provider_authorization, E}}
+    end.
+
+sign_provider_advertisement(Pool, Realm, Procedure, OrgDir, Deleg, NodeId,
+                            Fun) ->
+    Authorization = #{org_directory        => macula_record:encode(OrgDir),
+                      procedure_delegation => macula_record:encode(Deleg)},
+    Unsigned = macula_record:procedure_advertisement(
+                 NodeId, Realm, Procedure, NodeId,
+                 #{authorization => Authorization}),
+    case sign_node_record(Pool, Unsigned) of
+        {ok, Signed} ->
+            trusted_provider_advertisement(Pool, Realm, Signed, Fun);
+        {error, _} = E ->
+            {error, {provider_authorization, E}}
+    end.
+
+%% The advertisement goes out only after its authorization verifies
+%% against the realm key this pool pins — a chain the pool cannot
+%% check never reaches a station.
+trusted_provider_advertisement(Pool, Realm, Signed, Fun) ->
+    case macula_client:realm_key(Pool, Realm) of
+        {ok, RealmKey} ->
+            {ok, Profile} = macula_crypto_profile:configured(),
+            Trust = #{profile => Profile, realm_key => RealmKey},
+            case macula_record:verify_authorization(
+                   Signed, Trust, erlang:system_time(millisecond)) of
+                ok ->
+                    Fun(macula_record:encode(Signed));
+                {error, _} = E ->
+                    {error, {provider_authorization, E}}
+            end;
+        none ->
+            {error, {provider_authorization, no_realm_key}}
+    end.
 
 %% @doc Stop advertising a LOCAL streaming procedure.
 -spec unadvertise_stream(procedure()) -> ok.

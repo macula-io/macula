@@ -105,7 +105,9 @@
     unsubscribe_async/2,
     advertise/4,
     advertise/5,
+    advertise/6,
     unadvertise/3,
+    unadvertise/4,
     %% Overlay-protocol frame transport (HyParView, Plumtree, and any
     %% future frame type the built-in call/event handling doesn't
     %% recognise) — not for general RPC/pubsub use, see the moduledoc
@@ -119,7 +121,9 @@
     call_stream/6,
     advertise_stream/5,
     advertise_stream/6,
+    advertise_stream/7,
     unadvertise_stream/3,
+    unadvertise_stream/4,
     send_stream_bytes/4,
     is_connected/1,
     not_sent/1,
@@ -330,6 +334,15 @@
     %% the link refuses with BOLT#4 `unauthorized'. Direct-dial dual-trust
     %% (Slice 7b).
     policies   = #{} :: #{{<<_:256>>, binary()} => macula_client:auth_policy()},
+    %% The signed advertisement wire form per advertised procedure —
+    %% the ADVERTISE frame's payload, sent on register (when the link
+    %% is connected), replayed on handshake completion for registers
+    %% that arrived before connect, and withdrawn via UNADVERTISE on
+    %% unadvertise. One space for RPC and streaming procedures: the
+    %% frame does not distinguish them. Absent for a legacy local-only
+    %% register (the pool-level advertise without a resolved
+    %% authorization), which sends no frame at all.
+    advertisements = #{} :: #{{<<_:256>>, binary()} => binary()},
     %% Advertised streaming procedures. Same wire shape as `procedures'
     %% (one `advertise' frame per entry replayed on reconnect); the
     %% stored value carries the declared mode (`server_stream' /
@@ -814,6 +827,22 @@ advertise(Pid, Realm, Procedure, Handler,
        is_binary(RequiredCan), RequiredCan =/= <<>> ->
     gen_server:call(Pid, {advertise, Realm, Procedure, Handler, Policy}, 5_000).
 
+%% @doc As `advertise/5', sending the resolved provider advertisement
+%% as an ADVERTISE frame. `EncodedAd' is the pool-signed advertisement's
+%% wire form; the link stores it (for the unadvertise withdrawal and the
+%% handshake drain) and sends it at once when connected.
+-spec advertise(pid(), <<_:256>>, binary(), handler(),
+                macula_client:auth_policy(), binary()) -> ok.
+advertise(Pid, Realm, Procedure, Handler, Policy, EncodedAd)
+  when is_pid(Pid),
+       is_binary(Realm), byte_size(Realm) =:= 32,
+       is_binary(Procedure),
+       (is_function(Handler, 1) orelse
+        (is_tuple(Handler) andalso tuple_size(Handler) =:= 2)),
+       is_binary(EncodedAd) ->
+    gen_server:call(Pid, {advertise, Realm, Procedure, Handler, Policy,
+                          EncodedAd}, 5_000).
+
 %% @doc Drop a previously-advertised procedure's handler from this link.
 %% Sends nothing. Idempotent: unknown `(Realm, Procedure)' is a no-op.
 -spec unadvertise(pid(), <<_:256>>, binary()) -> ok | {error, term()}.
@@ -822,6 +851,17 @@ unadvertise(Pid, Realm, Procedure)
        is_binary(Realm), byte_size(Realm) =:= 32,
        is_binary(Procedure) ->
     gen_server:call(Pid, {unadvertise, Realm, Procedure}, 5_000).
+
+%% @doc As `unadvertise/3', sending the provider's withdrawal as an
+%% UNADVERTISE frame when the link is connected.
+-spec unadvertise(pid(), <<_:256>>, binary(), binary()) -> ok | {error, term()}.
+unadvertise(Pid, Realm, Procedure, EncodedWithdrawal)
+  when is_pid(Pid),
+       is_binary(Realm), byte_size(Realm) =:= 32,
+       is_binary(Procedure),
+       is_binary(EncodedWithdrawal) ->
+    gen_server:call(Pid, {unadvertise, Realm, Procedure, EncodedWithdrawal},
+                    5_000).
 
 %% @doc Subscribe to overlay-protocol frames for `Realm' — any frame
 %% type the built-in call/event/result/error handling above doesn't
@@ -1046,6 +1086,26 @@ advertise_stream(Pid, Realm, Procedure, Mode, Handler, Policy)
                     {stream_advertise, Realm, Procedure, Mode, Handler, Policy},
                     5_000).
 
+%% @doc As `advertise_stream/6', sending the resolved provider
+%% advertisement as an ADVERTISE frame (the frame does not distinguish
+%% streaming from RPC procedures).
+-spec advertise_stream(pid(), <<_:256>>, binary(),
+                       macula_frame:stream_mode(), stream_handler(),
+                       macula_client:auth_policy(), binary()) -> ok.
+advertise_stream(Pid, Realm, Procedure, Mode, Handler, Policy, EncodedAd)
+  when is_pid(Pid),
+       is_binary(Realm), byte_size(Realm) =:= 32,
+       is_binary(Procedure),
+       (Mode =:= server_stream orelse Mode =:= client_stream
+        orelse Mode =:= bidi),
+       is_function(Handler, 2),
+       is_binary(EncodedAd) ->
+    ok = valid_policy(Policy),
+    gen_server:call(Pid,
+                    {stream_advertise, Realm, Procedure, Mode, Handler,
+                     Policy, EncodedAd},
+                    5_000).
+
 %% One clause per valid `macula_client:auth_policy()' shape and no
 %% catch-all, so a malformed policy raises `function_clause' in the caller.
 valid_policy(open) -> ok;
@@ -1062,6 +1122,19 @@ unadvertise_stream(Pid, Realm, Procedure)
        is_binary(Procedure) ->
     gen_server:call(Pid,
                     {stream_unadvertise, Realm, Procedure},
+                    5_000).
+
+%% @doc As `unadvertise_stream/3', sending the provider's withdrawal as
+%% an UNADVERTISE frame when the link is connected.
+-spec unadvertise_stream(pid(), <<_:256>>, binary(), binary()) ->
+    ok | {error, term()}.
+unadvertise_stream(Pid, Realm, Procedure, EncodedWithdrawal)
+  when is_pid(Pid),
+       is_binary(Realm), byte_size(Realm) =:= 32,
+       is_binary(Procedure),
+       is_binary(EncodedWithdrawal) ->
+    gen_server:call(Pid,
+                    {stream_unadvertise, Realm, Procedure, EncodedWithdrawal},
                     5_000).
 
 %% @doc Write the bytes of one frame a paired `macula_stream' built,
@@ -1300,16 +1373,37 @@ handle_call({subscribe, Realm, Topic, Subscriber}, _From,
 handle_call({unsubscribe, SubRef}, _From, S) ->
     {reply, ok, on_unsubscribe(SubRef, S)};
 
-%% Advertising registers the handler on the link and sends nothing.
+%% Advertising registers the handler on the link. With a resolved
+%% authorization the encoded advertisement goes out as an ADVERTISE
+%% frame (a control frame the peering layer neighbour-signs) — at once
+%% when the link is connected, or drained on handshake completion; the
+%% frame is stored either way for the unadvertise withdrawal.
 handle_call({advertise, Realm, Proc, Handler, Policy}, _From,
             #state{procedures = P, policies = Pols} = S) ->
+    %% Legacy pool-level call without a resolved authorization:
+    %% register the handler locally and send nothing.
     {reply, ok, S#state{procedures = P#{{Realm, Proc} => Handler},
                         policies   = set_policy({Realm, Proc}, Policy, Pols)}};
+handle_call({advertise, Realm, Proc, Handler, Policy, EncodedAd}, _From,
+            #state{procedures = P, policies = Pols} = S) ->
+    S1 = S#state{procedures     = P#{{Realm, Proc} => Handler},
+                 policies       = set_policy({Realm, Proc}, Policy, Pols),
+                 advertisements = store_advertisement({Realm, Proc}, EncodedAd, S)},
+    maybe_send_advertise(Realm, Proc, EncodedAd, S1),
+    {reply, ok, S1};
 
 handle_call({unadvertise, Realm, Proc}, _From,
+            #state{procedures = P, policies = Pols, advertisements = Ads} = S) ->
+    {reply, ok, S#state{procedures     = maps:remove({Realm, Proc}, P),
+                        policies       = maps:remove({Realm, Proc}, Pols),
+                        advertisements = maps:remove({Realm, Proc}, Ads)}};
+handle_call({unadvertise, Realm, Proc, EncodedWithdrawal}, _From,
             #state{procedures = P, policies = Pols} = S) ->
-    {reply, ok, S#state{procedures = maps:remove({Realm, Proc}, P),
-                        policies   = maps:remove({Realm, Proc}, Pols)}};
+    maybe_send_unadvertise(Realm, Proc, EncodedWithdrawal, S),
+    {reply, ok, S#state{procedures     = maps:remove({Realm, Proc}, P),
+                        policies       = maps:remove({Realm, Proc}, Pols),
+                        advertisements = maps:remove({Realm, Proc},
+                                                     S#state.advertisements)}};
 
 %%-- Overlay-protocol frame transport --------------------------------
 
@@ -1367,11 +1461,26 @@ handle_call({stream_advertise, Realm, Proc, Mode, Handler, Policy}, _From,
             #state{stream_procedures = SP, stream_policies = SPols} = S) ->
     {reply, ok, S#state{stream_procedures = SP#{{Realm, Proc} => {Mode, Handler}},
                         stream_policies   = set_policy({Realm, Proc}, Policy, SPols)}};
+handle_call({stream_advertise, Realm, Proc, Mode, Handler, Policy, EncodedAd}, _From,
+            #state{stream_procedures = SP, stream_policies = SPols} = S) ->
+    S1 = S#state{stream_procedures = SP#{{Realm, Proc} => {Mode, Handler}},
+                 stream_policies   = set_policy({Realm, Proc}, Policy, SPols),
+                 advertisements    = store_advertisement({Realm, Proc}, EncodedAd, S)},
+    maybe_send_advertise(Realm, Proc, EncodedAd, S1),
+    {reply, ok, S1};
 
 handle_call({stream_unadvertise, Realm, Proc}, _From,
-            #state{stream_procedures = SP, stream_policies = SPols} = S) ->
+            #state{stream_procedures = SP, stream_policies = SPols, advertisements = Ads} = S) ->
     {reply, ok, S#state{stream_procedures = maps:remove({Realm, Proc}, SP),
-                        stream_policies   = maps:remove({Realm, Proc}, SPols)}};
+                        stream_policies   = maps:remove({Realm, Proc}, SPols),
+                        advertisements    = maps:remove({Realm, Proc}, Ads)}};
+handle_call({stream_unadvertise, Realm, Proc, EncodedWithdrawal}, _From,
+            #state{stream_procedures = SP, stream_policies = SPols} = S) ->
+    maybe_send_unadvertise(Realm, Proc, EncodedWithdrawal, S),
+    {reply, ok, S#state{stream_procedures = maps:remove({Realm, Proc}, SP),
+                        stream_policies   = maps:remove({Realm, Proc}, SPols),
+                        advertisements    = maps:remove({Realm, Proc},
+                                                        S#state.advertisements)}};
 
 handle_call(_Req, _From, S) ->
     {reply, {error, unknown_call}, S}.
@@ -1426,6 +1535,7 @@ handle_info({macula_peering, connected, Pid, PeerNodeId},
                                  liveness_misses = 0,
                                  liveness_outstanding = undefined}),
     drain_pending_subscribes(NewS),
+    drain_pending_advertisements(NewS),
     {noreply, NewS};
 
 handle_info({macula_peering, frame, Pid, Frame},
@@ -2254,6 +2364,45 @@ maybe_send_subscribe(Realm, Topic, #state{peer_pid = Pid, node_identity = Id}) -
                                       realm      => Realm,
                                       subscriber => SubKey}),
     try macula_peering:send_frame(Pid, Frame) catch _:_ -> ok end,
+    ok.
+
+%% Store the advertisement bytes under its (realm, procedure); a
+%% `undefined' registration sends nothing and stores nothing.
+store_advertisement(_Key, undefined, S) ->
+    S#state.advertisements;
+store_advertisement(Key, EncodedAd, S) ->
+    (S#state.advertisements)#{Key => EncodedAd}.
+
+%% Send the ADVERTISE frame at once when the link is connected; a
+%% register that arrived before the handshake sits in `advertisements'
+%% until `drain_pending_advertisements/1' runs on `connected'.
+maybe_send_advertise(_Realm, _Proc, undefined, _S) ->
+    ok;
+maybe_send_advertise(_Realm, _Proc, _EncodedAd, #state{peer_pid = undefined}) ->
+    ok;
+maybe_send_advertise(_Realm, _Proc, _EncodedAd, #state{peer_node_id = undefined}) ->
+    ok;
+maybe_send_advertise(_Realm, _Proc, EncodedAd, #state{peer_pid = Pid}) ->
+    Frame = macula_frame:advertise(#{advertisement => EncodedAd}),
+    try macula_peering:send_frame(Pid, Frame) catch _:_ -> ok end,
+    ok.
+
+maybe_send_unadvertise(_Realm, _Proc, undefined, _S) ->
+    ok;
+maybe_send_unadvertise(_Realm, _Proc, _Withdrawal, #state{peer_pid = undefined}) ->
+    ok;
+maybe_send_unadvertise(_Realm, _Proc, _Withdrawal, #state{peer_node_id = undefined}) ->
+    ok;
+maybe_send_unadvertise(_Realm, _Proc, Withdrawal, #state{peer_pid = Pid}) ->
+    Frame = macula_frame:unadvertise(#{withdrawal => Withdrawal}),
+    try macula_peering:send_frame(Pid, Frame) catch _:_ -> ok end,
+    ok.
+
+%% On handshake completion, send an ADVERTISE frame for every stored
+%% advertisement registered before connect.
+drain_pending_advertisements(#state{advertisements = Ads} = S) ->
+    [maybe_send_advertise(R, P, EncodedAd, S)
+     || {{R, P}, EncodedAd} <- maps:to_list(Ads)],
     ok.
 
 %% On handshake completion, send a SUBSCRIBE frame for every stored
