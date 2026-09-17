@@ -409,9 +409,12 @@ put_record(Pool, Wire) when is_pid(Pool), is_binary(Wire) ->
                                     ?DHT_PUT_RECORD_PROC,
                                     Wire, ?DHT_RECORD_TIMEOUT_MS)).
 
-classify_put({ok, ok})       -> ok;
-classify_put({ok, Reply})    -> {error, {unexpected_reply, Reply}};
-classify_put({error, _} = E) -> E.
+classify_put({ok, ok})                    -> ok;
+%% The reply's atom crossed the wire as text and decoded back to the
+%% codec's {text, _} marker (D26 makes no atom on the wire).
+classify_put({ok, {text, <<"ok">>}})      -> ok;
+classify_put({ok, Reply})                 -> {error, {unexpected_reply, Reply}};
+classify_put({error, _} = E)              -> E.
 
 %% @doc Fetch a record from the mesh DHT by its
 %% `macula_record:storage_key/1'.
@@ -438,9 +441,12 @@ find_record(Pool, Key, TimeoutMs)
 
 classify_find({ok, Wire}) when is_binary(Wire) ->
     with_profile(fun(Profile) -> macula_record:verify(Wire, Profile) end);
-classify_find({ok, not_found})     -> {error, not_found};
-classify_find({ok, Reply})         -> {error, {unexpected_reply, Reply}};
-classify_find({error, _} = E)      -> E.
+classify_find({ok, not_found})                -> {error, not_found};
+%% The reply's atom crossed the wire as text and decoded back to the
+%% codec's {text, _} marker (D26 makes no atom on the wire).
+classify_find({ok, {text, <<"not_found">>}}) -> {error, not_found};
+classify_find({ok, Reply})                    -> {error, {unexpected_reply, Reply}};
+classify_find({error, _} = E)                 -> E.
 
 %% @doc Fetch EVERY record stored at `Key' — the full multi-value
 %% set, e.g. every `procedure_advertisement' under one procedure's

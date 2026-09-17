@@ -20,6 +20,8 @@ cases(Keys) ->
                  fun a_wire_form_is_put_as_it_is/1,
                  fun a_found_record_is_returned_verified/1,
                  fun a_found_record_that_does_not_verify_returns_its_refusal/1,
+                 fun a_not_found_reply_answers_not_found_in_both_forms/1,
+                 fun an_ok_reply_answers_ok_in_both_forms/1,
                  fun found_records_that_do_not_verify_are_dropped/1,
                  fun records_found_by_type_that_do_not_verify_are_dropped/1,
                  fun a_subscription_delivers_only_verified_records/1,
@@ -53,6 +55,22 @@ a_found_record_is_returned_verified(#{key := Key} = Keys) ->
 a_found_record_that_does_not_verify_returns_its_refusal(Keys) ->
     replying({ok, tampered(node_record(Keys))}),
     ?assertEqual({error, signature_invalid}, macula:find_record(self(), ?KEY)).
+
+%% The station's not_found answer crosses the wire as text and decodes
+%% back to the codec's {text, _} marker; the facade reads both forms.
+a_not_found_reply_answers_not_found_in_both_forms(_Keys) ->
+    replying({ok, not_found}),
+    ?assertEqual({error, not_found}, macula:find_record(self(), ?KEY)),
+    replying({ok, {text, <<"not_found">>}}),
+    ?assertEqual({error, not_found}, macula:find_record(self(), ?KEY)).
+
+%% The station's ok answer crosses the wire as text and decodes back to
+%% the codec's {text, _} marker; the facade reads both forms.
+an_ok_reply_answers_ok_in_both_forms(Keys) ->
+    replying({ok, ok}),
+    ?assertEqual(ok, macula:put_record(self(), macula_record:encode(node_record(Keys)))),
+    replying({ok, {text, <<"ok">>}}),
+    ?assertEqual(ok, macula:put_record(self(), macula_record:encode(node_record(Keys)))).
 
 found_records_that_do_not_verify_are_dropped(#{key := Key} = Keys) ->
     KeyId = macula_node_keys:key_id(Key),
