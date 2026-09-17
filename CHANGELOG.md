@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [11.3.1] - 2026-09-17
+
+### Fixed
+
+- `macula_node_keys:sign/2` signs the ML-DSA-87 half with its private
+  key as `{expandedkey, Binary}` — the form both supported OTPs accept.
+  OTP 28 refuses the bare expanded-key binary (`MLDSA key not 2-tuple`)
+  and OTP 29 refuses the `{Pub, Priv}` pair, so a key generated on
+  either OTP now signs on both. Keys already on disk are unchanged:
+  the stored private half was always the expanded-key binary.
+
 ## [11.3.0] - 2026-09-17
 
 ### Added

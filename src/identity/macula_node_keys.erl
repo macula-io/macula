@@ -195,16 +195,18 @@ public_key(#{components := Components}) ->
     << <<Public/binary>> || #{public := Public} <- Components >>.
 
 %% @doc Sign a message: ML-DSA-87 alone for a one-component key, Macula's composite ML-DSA-87-PS384 for a hybrid key.
+%% The ML-DSA private half travels as `{expandedkey, Binary}': the form every supported OTP accepts for
+%% `crypto:sign/5' (OTP 28 refuses the bare expanded-key binary, OTP 29 refuses the {Pub, Priv} pair).
 -spec sign(iodata(), node_key()) -> binary().
 sign(Message, #{components := [#{algorithm := mldsa87, private := Private}]}) ->
-    crypto:sign(mldsa87, none, Message, Private);
+    crypto:sign(mldsa87, none, Message, {expandedkey, Private});
 sign(Message, #{profile := Profile,
                 components := [#{algorithm := mldsa87, private := MlDsaPrivate},
                                #{algorithm := rsa_pss, private := RsaPrivate}]}) ->
     Representative = composite_representative(Message),
     {ok, #{digest := Digest} = Params} = composite_rsa_params(Profile),
     {ok, RsaKey} = decode_rsa_private(RsaPrivate),
-    MlDsaSignature = crypto:sign(mldsa87, none, Representative, MlDsaPrivate),
+    MlDsaSignature = crypto:sign(mldsa87, none, Representative, {expandedkey, MlDsaPrivate}),
     RsaSignature = crypto:sign(rsa, Digest, Representative, rsa_private_list(RsaKey), pss_options(Params)),
     <<MlDsaSignature/binary, RsaSignature/binary>>.
 
