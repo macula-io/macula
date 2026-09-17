@@ -129,7 +129,23 @@
     %% mailbox wait time at the recipient. Defaults to false; recipients
     %% MUST keep the legacy 4-/5-tuple match clause to remain compatible
     %% with peers that have not opted in (cross-version rollout window).
-    timing_enabled  => boolean()
+    timing_enabled  => boolean(),
+    %% App-level liveness probe: this conn sends a `_macula.ping' CALL
+    %% on the all-zero realm to the peer every `liveness_interval_ms'
+    %% and accepts ANY verified reply — a RESULT, a provider ERROR or
+    %% the peer's own relay ERROR — naming the probe's request_id as
+    %% proof of life. `liveness_max_misses' unanswered probes in a row
+    %% close the connection as `peer_liveness_lost'. Unset
+    %% `liveness_interval_ms' (the default) disables the probe: a link
+    %% that already probes at the application layer (the SDK pool
+    %% link's own `_macula.ping') opts out; stations opt in on both
+    %% their listener-accepted and outbound conns, so a peer VM that
+    %% dies outright (the dead-but-healthy class — keep-alives defeat
+    %% the QUIC idle timer for its full 300s) is reaped within
+    %% interval × max_misses. A CALL is understood by every released
+    %% peer, so a mixed-version fleet answers the probe safely.
+    liveness_interval_ms => pos_integer(),
+    liveness_max_misses  => pos_integer()
 }.
 
 -record(data, {
@@ -189,7 +205,14 @@
     %% Refused objects reported on this connection, by kind, and how
     %% many of them were charged (D28).
     refusals = #{}    :: #{atom() => pos_integer()},
-    charged = 0       :: non_neg_integer()
+    charged = 0       :: non_neg_integer(),
+    %% App-level liveness probe state (see the opts doc). The
+    %% outstanding probe's request_id + the request as a verifier
+    %% reads it, and the consecutive unanswered-probe count.
+    liveness_interval_ms :: undefined | pos_integer(),
+    liveness_max_misses  = 2 :: pos_integer(),
+    liveness_outstanding :: undefined | {<<_:128>>, macula_frame:verified_request()},
+    liveness_misses      = 0 :: non_neg_integer()
 }).
 
 -define(DRAIN_TIMEOUT_MS, 5_000).
@@ -205,6 +228,13 @@
 %% protocol (e.g. V1 frames against a V2 station) — without this the
 %% sup accumulates stuck workers indefinitely. See PLAN_FLYING_RESTART.
 -define(HANDSHAKE_TIMEOUT_MS, 30_000).
+
+%% App-level liveness probe: the procedure the peer answers (or
+%% answers `unknown_next_peer' for — either signed reply is proof of
+%% life) and the realm it is probed on, mirroring the SDK pool link's
+%% own probe (`macula_station_link').
+-define(LIVENESS_PROCEDURE, <<"_macula.ping">>).
+-define(LIVENESS_REALM, <<0:256>>).
 %% The largest frame the handshake reads, 64 KiB. The post-quantum opener,
 %% challenge, CONNECT and HELLO stay under 20 KB. A length header above it
 %% ends the connection as soon as the header arrives, before the frame's
@@ -261,7 +291,9 @@ started({ok, Identity, Profile}, ok, #{role := Role} = Opts) ->
         puzzle           = maps:get(mode, maps:get(puzzle, Opts, #{}), undefined),
         clock            = maps:get(clock, Opts, fun wall_clock_ms/0),
         quic_conn        = maps:get(quic_conn, Opts, undefined),
-        buf              = <<>>
+        buf              = <<>>,
+        liveness_interval_ms = maps:get(liveness_interval_ms, Opts, undefined),
+        liveness_max_misses  = maps:get(liveness_max_misses, Opts, 2)
     },
     {ok, initial_state(Role), Data};
 started({error, Refusal}, _RoleReady, _Opts) ->
@@ -715,7 +747,21 @@ notify_handshake_complete(#data{accept_owner = Pid, peer_node_id = NodeId})
 %%------------------------------------------------------------------
 
 connected(enter, _Old, Data) ->
+    {keep_state, Data, liveness_tick_actions(Data)};
+connected(state_timeout, liveness_tick, #data{liveness_interval_ms = undefined} = Data) ->
     {keep_state, Data};
+connected(state_timeout, liveness_tick, #data{liveness_outstanding = undefined} = Data) ->
+    {keep_state, send_liveness_probe(Data), [liveness_tick_action(Data)]};
+connected(state_timeout, liveness_tick,
+          #data{liveness_outstanding = _Probe, liveness_misses = Misses,
+                liveness_max_misses = Max} = Data) ->
+    case Misses + 1 >= Max of
+        true ->
+            closed(peer_liveness_lost, Data#data{liveness_misses = Misses + 1});
+        false ->
+            {keep_state, send_liveness_probe(Data#data{liveness_misses = Misses + 1}),
+             [liveness_tick_action(Data)]}
+    end;
 connected(info, {quic, Bin, Stream, _Flags},
           #data{quic_stream = Stream, buf = Buf} = Data) when is_binary(Bin) ->
     open_frames(macula_frame:parse_stream_bytes(<<Buf/binary, Bin/binary>>), Data);
@@ -926,7 +972,7 @@ status_read({error, Reason}, _Rest, Data, _Actions) ->
 %% refused one closes the connection with the refusal.
 neighbour_read({ok, Opened}, Frame, Rest, Data, Actions) ->
     ok = route_frame(Opened, Data),
-    open_frame(Rest, received(Frame, Data), Actions);
+    open_frame(Rest, received(Frame, maybe_liveness_reply(Opened, Data)), Actions);
 neighbour_read({error, Reason}, _Frame, _Rest, Data, _Actions) ->
     closed(Reason, Data).
 
@@ -1101,6 +1147,80 @@ send_application_frames([Frame], Data) ->
 send_application_frames(Frames, #data{quic_stream = Stream} = Data) ->
     {Encoded, Signed} = lists:foldl(fun encode_next/2, {[], Data}, Frames),
     {macula_quic:send(Stream, lists:reverse(Encoded)), Signed}.
+
+%%------------------------------------------------------------------
+%% App-level liveness probe
+%%------------------------------------------------------------------
+
+%% The `connected' state's `state_timeout' action, armed only when the
+%% probe is enabled. Re-armed after every tick.
+liveness_tick_actions(#data{liveness_interval_ms = undefined}) ->
+    [];
+liveness_tick_actions(Data) ->
+    [liveness_tick_action(Data)].
+
+liveness_tick_action(#data{liveness_interval_ms = Ms}) ->
+    {state_timeout, Ms, liveness_tick}.
+
+%% Send a `_macula.ping' CALL to the peer and hold the request a
+%% verified reply must name. The peer answers any verified CALL — a
+%% station answers an unknown procedure with a signed
+%% `unknown_next_peer' relay error, a pool link with a provider error —
+%% so any verified reply proves the peer's application layer is alive,
+%% which the transport's keep-alive ACKs cannot.
+send_liveness_probe(#data{identity = Kp, profile = Profile,
+                          peer_node_id = Peer,
+                          liveness_interval_ms = Ms} = Data) ->
+    RequestId = crypto:strong_rand_bytes(16),
+    Probe = macula_frame:call(#{
+        request_id => RequestId,
+        realm      => ?LIVENESS_REALM,
+        procedure  => ?LIVENESS_PROCEDURE,
+        target     => Peer,
+        deadline   => now_ms(Data) + Ms,
+        payload    => #{}}, Kp),
+    {ok, Request} = macula_frame:verify_request(Probe, Profile),
+    ProbeData = Data#data{liveness_outstanding = {RequestId, Request}},
+    {_Sent, Data1} = send_application_frames([Probe], ProbeData),
+    Data1.
+
+%% A frame naming the outstanding probe's request_id: verified against
+%% the request, it proves the peer is alive and clears the probe
+%% (fresh probe on the next tick); anything else leaves the probe
+%% outstanding, so the tick counts the miss. The frame is still routed
+%% to the controlling pid as any other frame would be.
+maybe_liveness_reply(Frame, #data{liveness_outstanding = {RequestId, Request},
+                                  profile = Profile,
+                                  peer_node_id = Station} = Data) ->
+    case macula_frame:claimed_reply_ids(Frame) of
+        {ok, #{request_id := RequestId, request_hash := _}} ->
+            liveness_reply_verdict(reply_kind(Frame), Frame,
+                                   Request, Profile, Station, Data);
+        _Other ->
+            Data
+    end;
+maybe_liveness_reply(_Frame, Data) ->
+    Data.
+
+reply_kind(#{frame_type := result}) -> result;
+reply_kind(#{frame_type := error, relay_error := _}) -> relay_error;
+reply_kind(#{frame_type := error, reply := _}) -> error;
+reply_kind(_Frame) -> not_a_reply.
+
+liveness_reply_verdict(result, Frame, Request, Profile, _Station, Data) ->
+    cleared(macula_frame:verify_reply(Frame, Request, Profile), Data);
+liveness_reply_verdict(relay_error, Frame, Request, Profile, Station, Data) ->
+    cleared(macula_frame:verify_relay_error(Frame, Request, Profile, Station),
+            Data);
+liveness_reply_verdict(error, Frame, Request, Profile, _Station, Data) ->
+    cleared(macula_frame:verify_reply(Frame, Request, Profile), Data);
+liveness_reply_verdict(not_a_reply, _Frame, _Request, _Profile, _Station, Data) ->
+    Data.
+
+cleared({ok, _Verified}, Data) ->
+    Data#data{liveness_outstanding = undefined, liveness_misses = 0};
+cleared({error, _Refusal}, Data) ->
+    Data.
 
 encode_next(Frame, {Encoded, Data}) ->
     kept(encode_or_drop(Frame, Data), Encoded).

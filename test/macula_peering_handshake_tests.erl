@@ -136,7 +136,13 @@ handshake_test_() ->
            {"a frame of a type this node does not know closes with malformed_frame",
             {timeout, 30, fun() -> a_frame_of_a_type_this_node_does_not_know_closes_with_malformed_frame(Ctx) end}},
            {"a STORE whose record bytes are not CBOR reaches its recipient and the connection serves on",
-            {timeout, 30, fun() -> a_store_whose_record_is_not_cbor_reaches_its_recipient_and_the_connection_serves_on(Ctx) end}}]
+            {timeout, 30, fun() -> a_store_whose_record_is_not_cbor_reaches_its_recipient_and_the_connection_serves_on(Ctx) end}},
+           {"liveness probe enabled: a peer that never answers is reaped as peer_liveness_lost",
+            {timeout, 30, fun() -> liveness_probe_reaps_an_unanswering_peer(Ctx) end}},
+           {"liveness probe answered by the peer keeps the connection open",
+            {timeout, 30, fun() -> answered_liveness_probe_keeps_the_connection_open(Ctx) end}},
+           {"liveness is opt-in: a conn without the opts sends no probe",
+            {timeout, 30, fun() -> liveness_is_opt_in(Ctx) end}}]
       end}}.
 
 %%====================================================================
@@ -669,10 +675,13 @@ connect(#{client_key := ClientKey, client_issuer := ClientIssuer, station_key :=
         Options) ->
     Target = #{host => <<"127.0.0.1">>, port => Port, timeout_ms => 5_000,
                expected_node_id => maps:get(expected, Options, node_id(StationKey))},
-    {ok, Client} = macula_peering:connect(#{identity => ClientKey, issuer => ClientIssuer,
-                                            capabilities => ?CLIENT_CAPABILITIES, controlling_pid => self(),
-                                            clock => fixed(maps:get(client_clock, Options, ?T0 + ?MINUTE)),
-                                            target => Target}),
+    {ok, Client} = macula_peering:connect(
+                     maps:merge(maps:with([liveness_interval_ms,
+                                           liveness_max_misses], Options),
+                                #{identity => ClientKey, issuer => ClientIssuer,
+                                  capabilities => ?CLIENT_CAPABILITIES, controlling_pid => self(),
+                                  clock => fixed(maps:get(client_clock, Options, ?T0 + ?MINUTE)),
+                                  target => Target})),
     {Client, accept_one(station_opts(World, Options))}.
 
 station_opts(#{station_key := StationKey, station_issuer := StationIssuer}, Options) ->
@@ -1077,6 +1086,75 @@ a_store_whose_record_is_not_cbor_reaches_its_recipient_and_the_connection_serves
         ?assertEqual([wire(Store), wire(Ping)], [frame_from(Station), frame_from(Station)]),
         ?assertEqual(open, still_open(Station, 500))
     end).
+
+%%====================================================================
+%% App-level liveness probe (conn-level dead-peer detection)
+%%====================================================================
+
+liveness_probe_reaps_an_unanswering_peer(Ctx) ->
+    World = world(Ctx, #{}),
+    {Client, Station} = connect(World, #{mode => off,
+                                         liveness_interval_ms => 200,
+                                         liveness_max_misses => 2}),
+    _ = {await(Client, connected), await(Station, connected)},
+    %% The station conn never answers (its controller is this test,
+    %% which stays silent) — the client must reap it after two
+    %% unanswered probes.
+    ?assertEqual(peer_liveness_lost, ended(Client)),
+    cleanup_pair(Client, Station, World).
+
+answered_liveness_probe_keeps_the_connection_open(Ctx) ->
+    #{station_key := StationKey} = World = world(Ctx, #{}),
+    {Client, Station} = connect(World, #{mode => off,
+                                         liveness_interval_ms => 200,
+                                         liveness_max_misses => 2}),
+    _ = {await(Client, connected), await(Station, connected)},
+    %% Answer every probe the peer receives, as a station would: any
+    %% verified reply naming the probe's request_id is proof of life.
+    %% Eight answered probes mean eight ticks passed with the reply
+    %% clearing each one; the final check's window is under two tick
+    %% intervals, so at most one unanswered probe can accumulate (never
+    %% the two a reaping takes).
+    ok = answer_probes(Station, StationKey, pq_pure, 8),
+    ?assertEqual(open, still_open(Client, 300)),
+    cleanup_pair(Client, Station, World).
+
+liveness_is_opt_in(Ctx) ->
+    World = world(Ctx, #{}),
+    {Client, Station} = connect(World, #{mode => off}),
+    _ = {await(Client, connected), await(Station, connected)},
+    ?assertEqual(open, still_open(Client, 1_000)),
+    receive
+        {macula_peering, frame, Station, Frame} ->
+            erlang:error({unexpected_probe, Frame})
+    after 1_000 ->
+        ok
+    end,
+    cleanup_pair(Client, Station, World).
+
+%% Answer the first `N' `_macula.ping' CALLs the peer conn delivers to
+%% this controller with a RESULT signed by the peer's own identity,
+%% exactly the shape a station's unknown-procedure refusal takes.
+answer_probes(_Conn, _Kp, _Profile, 0) ->
+    ok;
+answer_probes(Conn, Kp, Profile, N) ->
+    receive
+        {macula_peering, frame, Conn,
+         #{frame_type := call, request := _} = Call} ->
+            {ok, Request} = macula_frame:verify_request(Call, Profile),
+            answer_probe(maps:get(procedure, Request), Request, Conn, Kp,
+                         Profile, N)
+    after 2_000 ->
+        erlang:error(no_probe_received)
+    end.
+
+answer_probe(<<"_macula.ping">>, Request, Conn, Kp, Profile, N) ->
+    Result = macula_frame:result(#{request => Request,
+                                   payload => #{ok => 1}}, Kp),
+    ok = macula_peering:send_frame(Conn, Result),
+    answer_probes(Conn, Kp, Profile, N - 1);
+answer_probe(_OtherProc, _Request, Conn, Kp, Profile, N) ->
+    answer_probes(Conn, Kp, Profile, N).
 
 %% Runs Scenario with a station connection accepted from a raw QUIC peer
 %% that has not sent an opener, and that peer's open stream.

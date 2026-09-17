@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- Conn-level dead-peer detection in `macula_peering_conn`: a
+  connection started with `liveness_interval_ms` probes the peer with
+  a `_macula.ping` CALL on the all-zero realm every interval and
+  accepts ANY verified reply naming the probe's request_id as proof of
+  life; `liveness_max_misses` unanswered probes in a row close the
+  connection as `peer_liveness_lost`. Opt-in: a link that already
+  probes at the application layer (the SDK pool link) leaves it unset.
+  This reaps the dead-but-healthy connection class — a peer VM that
+  dies outright keeps answering keep-alive ACKs at the transport
+  level, so the QUIC idle timer never fires — within interval ×
+  misses. A CALL is understood by every released peer, so a
+  mixed-version fleet answers the probe safely.
+
 ## [11.2.0] - 2026-09-17
 
 ### Added
