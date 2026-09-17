@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [11.2.0] - 2026-09-17
+
+### Added
+
+- Pool provider advertise: `macula:advertise/5` and `advertise_stream/6`
+  resolve the pool's own D25 provider authorization — the realm-signed
+  `org_directory` and the org-signed `procedure_delegation` naming the
+  pool's node id, both fetched from the DHT — sign the advertisement,
+  verify it against the realm key the pool pins at connect
+  (`realm_trust`), and send ADVERTISE frames to every link (drained on
+  handshake, replayed on link respawn). `unadvertise/3` sends the
+  UNADVERTISE withdrawal through the custody-safe pool signing paths.
+  A missing piece of the chain fails fast as
+  `{error, {provider_authorization, _}}`: no org namespace, a missing
+  chain record, or an unpinned realm key. Provider pools run a
+  provisioned puzzle-solved identity plus `realm_trust` at connect.
+
+### Fixed
+
+- `macula:put_record/2` and `macula:find_record/2` classify the DHT
+  handlers' atom replies in their wire form — `{text, <<"ok">>}` and
+  `{text, <<"not_found">>}` — so a put's acknowledgement and a find's
+  miss no longer surface as an unexpected reply (D26 makes no atom on
+  the wire).
+
 ## [11.0.0] - 2026-09-16
 
 ### Added
