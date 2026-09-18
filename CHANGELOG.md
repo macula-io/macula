@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [11.4.0] - 2026-09-18
+
+### Added
+
+- `macula:provider_authorization/3,4` — the pool's own D25 provider
+  authorization (the realm-signed `org_directory` and the org-signed
+  `procedure_delegation` naming the pool's node id, fetched from the DHT
+  and verified against the realm key the pool pins), as the
+  `authorization` opt `macula_direct_dial:publish_advertisement/5` and
+  `macula_response:advertise_direct/6,7` embed in the direct-dial record.
+  `advertise/5` resolved this chain for the wire frame only; a caller
+  that publishes the record itself needs it explicitly, since the
+  station refuses an org-namespaced record without one
+  (`no_authorization`).
+- The provider-advertisement resolution now reads its DHT calls from a
+  `provider_io/0` seam (per-call overridable in `advertise/5` and
+  `provider_authorization/4`'s `Opts`, the same discipline as
+  `macula_direct_dial:dial_io/0`), and `advertise/5`'s `Opts` accepts an
+  `advertise` fan-out override.
+
 ## [11.3.1] - 2026-09-17
 
 ### Fixed

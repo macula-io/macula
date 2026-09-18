@@ -44,6 +44,10 @@
          call_station/8,
          advertise/5,
          unadvertise/3]).
+%% The pool's own D25 provider authorization, resolved from the DHT and
+%% verified against the realm key the pool pins — the `authorization'
+%% opt a direct-dial record publish needs.
+-export([provider_authorization/3, provider_authorization/4]).
 
 %% Signed DHT records — realm-agnostic infrastructure procedures
 %% (`_dht.put_record', `_dht.find_record', `_dht.find_records_by_type',
@@ -101,7 +105,7 @@
 -endif.
 
 %% Types
--export_type([pool/0, realm/0,
+-export_type([pool/0, realm/0, provider_io/0,
               topic/0, procedure/0,
               stream/0, stream_mode/0, stream_handler/0,
               m_record/0, record_type/0, record_key/0,
@@ -111,6 +115,18 @@
 -type realm()  :: <<_:256>>.            %% 32-byte realm tag.
 -type topic() :: binary().
 -type procedure() :: binary().
+
+%% The I/O a provider-advertisement resolution runs on, overrideable per
+%% call in `advertise/5''s and `provider_authorization/4''s `Opts' (the
+%% same seam discipline as `macula_direct_dial:dial_io/0'): each entry
+%% defaults to the facade's own function. Tests inject stubs here rather
+%% than replacing a module other processes call.
+-type provider_io() :: #{
+    status           => fun((pool()) -> {ok, macula_client:status()} | {error, term()}),
+    find_record      => fun((pool(), record_key()) -> {ok, m_record()} | {error, term()}),
+    sign_node_record => fun((pool(), m_record()) -> {ok, m_record()} | {error, term()}),
+    realm_key        => fun((pool(), realm()) -> {ok, binary()} | none)
+}.
 
 -type stream() :: pid().
 -type stream_mode() :: server_stream | client_stream | bidi.
@@ -317,16 +333,19 @@ call_station(Pool, Station, Target, Realm, Procedure, Payload, TimeoutMs, Opts) 
 %% any identified caller), `{ucan_required, Issuer}' (gated to one
 %% known identity, Slice 7b), or `{realm_member_required, RealmDid,
 %% RequiredCan}' (gated to realm membership at a specific tier) -- see
-%% `macula_client:auth_policy()' for the full set.
+%% `macula_client:auth_policy()' for the full set. `Opts' may also
+%% carry `advertise', an arity-6 override for the pool fan-out (see
+%% `macula_response:advertise_opts()'), and the `provider_io/0' seam
+%% entries the resolution reads its DHT calls from.
 -spec advertise(pool(), realm(), procedure(),
                 macula_client:handler(), map()) ->
     ok | {error, term()}.
 advertise(Pool, Realm, Procedure, Handler, Opts)
   when is_pid(Pool), is_binary(Realm), byte_size(Realm) =:= 32 ->
     Policy = maps:get(auth, Opts, open),
-    advertise_authorized(Pool, Realm, Procedure, fun(EncodedAd) ->
-        macula_client:advertise(Pool, Realm, Procedure, Handler, Policy,
-                                EncodedAd)
+    Advertise = maps:get(advertise, Opts, fun macula_client:advertise/6),
+    advertise_authorized(Pool, Realm, Procedure, Opts, fun(EncodedAd) ->
+        Advertise(Pool, Realm, Procedure, Handler, Policy, EncodedAd)
     end).
 
 %% @doc Stop advertising a procedure on a V2 pool.
@@ -935,7 +954,7 @@ advertise_stream(Pool, Realm, Procedure, Mode, Handler, Opts)
         orelse Mode =:= bidi),
        is_function(Handler, 2), is_map(Opts) ->
     Policy = maps:get(auth, Opts, open),
-    advertise_authorized(Pool, Realm, Procedure, fun(EncodedAd) ->
+    advertise_authorized(Pool, Realm, Procedure, Opts, fun(EncodedAd) ->
         macula_client:advertise_stream(Pool, Realm, Procedure, Mode, Handler,
                                        Policy, EncodedAd)
     end).
@@ -944,28 +963,88 @@ advertise_stream(Pool, Realm, Procedure, Mode, Handler, Opts)
 %% `advertise_stream': the pool's own D25 chain, fetched from the DHT,
 %% signed and verified before a single frame goes out. Any missing
 %% piece fails fast under `provider_authorization'.
-advertise_authorized(Pool, Realm, Procedure, Fun) ->
+advertise_authorized(Pool, Realm, Procedure, Opts, Fun) ->
+    signed_provider_advertisement(Pool, Realm, Procedure, provider_io(Opts),
+                                  fun(Signed) ->
+                                      Fun(macula_record:encode(Signed))
+                                  end).
+
+%% @doc Resolve this pool's own D25 provider authorization for an
+%% org-namespaced `Procedure' under `Realm' — the realm-signed
+%% `org_directory' and the org-signed `procedure_delegation' naming the
+%% pool's node id, both fetched from the DHT and verified against the
+%% realm key the pool pinned for `Realm' at connect — as the
+%% `authorization' opt `macula_direct_dial:publish_advertisement/5'
+%% and `macula_response:advertise_direct/6,7' take: a map of the two
+%% records' encoded wire forms. `advertise/5' resolves this same chain
+%% itself for the wire frame; a caller that publishes the direct-dial
+%% record needs it explicitly, since the station refuses an
+%% org-namespaced record without one (`no_authorization').
+%%
+%% Fails fast with `{error, {provider_authorization, _}}' when the
+%% procedure has no org namespace, a chain piece is missing from the
+%% DHT, the pool pinned no key for `Realm', or the chain does not
+%% verify against that key — the same failures `advertise/5' reports.
+-spec provider_authorization(pool(), realm(), procedure()) ->
+    {ok, #{org_directory := binary(), procedure_delegation := binary()}} |
+    {error, term()}.
+provider_authorization(Pool, Realm, Procedure) ->
+    provider_authorization(Pool, Realm, Procedure, #{}).
+
+%% @doc As `provider_authorization/3', reading the resolution's DHT
+%% calls from the `provider_io/0' seam entries in `Opts' (defaults to
+%% the facade's own functions) — the seam `advertise/5' accepts too.
+-spec provider_authorization(pool(), realm(), procedure(), provider_io()) ->
+    {ok, #{org_directory := binary(), procedure_delegation := binary()}} |
+    {error, term()}.
+provider_authorization(Pool, Realm, Procedure, Opts) ->
+    case signed_provider_advertisement(Pool, Realm, Procedure,
+                                       provider_io(Opts),
+                                       fun authorization_of/1) of
+        {error, _} = E -> E;
+        Authorization -> {ok, Authorization}
+    end.
+
+provider_io(Opts) ->
+    #{status           => maps:get(status, Opts, fun status/1),
+      find_record      => maps:get(find_record, Opts, fun find_record/2),
+      sign_node_record => maps:get(sign_node_record, Opts,
+                                   fun sign_node_record/2),
+      realm_key        => maps:get(realm_key, Opts,
+                                   fun macula_client:realm_key/2)}.
+
+authorization_of(Signed) ->
+    #{authorization := Authorization} =
+        macula_record:read_procedure_advertisement(Signed),
+    Authorization.
+
+%% The pool's own D25 chain, resolved from the DHT, signed and verified
+%% against the realm key the pool pins, passed to `Fun' as the signed
+%% advertisement. Any missing piece fails fast under
+%% `provider_authorization'.
+signed_provider_advertisement(Pool, Realm, Procedure, Io, Fun) ->
     case macula_record:procedure_org(Procedure) of
         none ->
             {error, {provider_authorization, no_org_namespace}};
         {error, malformed} ->
             {error, {provider_authorization, malformed_procedure}};
         {org, Org} ->
-            case status(Pool) of
+            case (maps:get(status, Io))(Pool) of
                 {ok, #{self_node_id := NodeId}} ->
-                    resolve_org_directory(Pool, Realm, Org, Procedure,
+                    resolve_org_directory(Io, Pool, Realm, Org, Procedure,
                                           NodeId, Fun);
                 {error, _} = E ->
                     E
             end
     end.
 
-resolve_org_directory(Pool, Realm, Org, Procedure, NodeId, Fun) ->
-    case find_record(Pool, macula_record:org_directory_key(Realm, Org)) of
+resolve_org_directory(Io, Pool, Realm, Org, Procedure, NodeId, Fun) ->
+    Find = maps:get(find_record, Io),
+    case Find(Pool, macula_record:org_directory_key(Realm, Org)) of
         {ok, OrgDir} ->
             #{org_key := OrgKeyId} =
                 macula_record:read_org_directory(OrgDir),
-            resolve_delegation(Pool, Realm, Procedure, OrgDir, OrgKeyId,
+            resolve_delegation(Io, Pool, Realm, Procedure, OrgDir, OrgKeyId,
                                NodeId, Fun);
         {error, not_found} ->
             {error, {provider_authorization, {org_directory, not_found}}};
@@ -973,12 +1052,13 @@ resolve_org_directory(Pool, Realm, Org, Procedure, NodeId, Fun) ->
             {error, {provider_authorization, E}}
     end.
 
-resolve_delegation(Pool, Realm, Procedure, OrgDir, OrgKeyId, NodeId, Fun) ->
-    case find_record(Pool,
-                     macula_record:procedure_delegation_key(OrgKeyId, NodeId)) of
+resolve_delegation(Io, Pool, Realm, Procedure, OrgDir, OrgKeyId, NodeId,
+                   Fun) ->
+    Find = maps:get(find_record, Io),
+    case Find(Pool, macula_record:procedure_delegation_key(OrgKeyId, NodeId)) of
         {ok, Deleg} ->
-            sign_provider_advertisement(Pool, Realm, Procedure, OrgDir, Deleg,
-                                        NodeId, Fun);
+            sign_provider_advertisement(Io, Pool, Realm, Procedure, OrgDir,
+                                        Deleg, NodeId, Fun);
         {error, not_found} ->
             {error, {provider_authorization,
                      {procedure_delegation, not_found}}};
@@ -986,16 +1066,16 @@ resolve_delegation(Pool, Realm, Procedure, OrgDir, OrgKeyId, NodeId, Fun) ->
             {error, {provider_authorization, E}}
     end.
 
-sign_provider_advertisement(Pool, Realm, Procedure, OrgDir, Deleg, NodeId,
-                            Fun) ->
+sign_provider_advertisement(Io, Pool, Realm, Procedure, OrgDir, Deleg,
+                            NodeId, Fun) ->
     Authorization = #{org_directory        => macula_record:encode(OrgDir),
                       procedure_delegation => macula_record:encode(Deleg)},
     Unsigned = macula_record:procedure_advertisement(
                  NodeId, Realm, Procedure, NodeId,
                  #{authorization => Authorization}),
-    case sign_node_record(Pool, Unsigned) of
+    case (maps:get(sign_node_record, Io))(Pool, Unsigned) of
         {ok, Signed} ->
-            trusted_provider_advertisement(Pool, Realm, Signed, Fun);
+            trusted_provider_advertisement(Io, Pool, Realm, Signed, Fun);
         {error, _} = E ->
             {error, {provider_authorization, E}}
     end.
@@ -1003,15 +1083,15 @@ sign_provider_advertisement(Pool, Realm, Procedure, OrgDir, Deleg, NodeId,
 %% The advertisement goes out only after its authorization verifies
 %% against the realm key this pool pins — a chain the pool cannot
 %% check never reaches a station.
-trusted_provider_advertisement(Pool, Realm, Signed, Fun) ->
-    case macula_client:realm_key(Pool, Realm) of
+trusted_provider_advertisement(Io, Pool, Realm, Signed, Fun) ->
+    case (maps:get(realm_key, Io))(Pool, Realm) of
         {ok, RealmKey} ->
             {ok, Profile} = macula_crypto_profile:configured(),
             Trust = #{profile => Profile, realm_key => RealmKey},
             case macula_record:verify_authorization(
                    Signed, Trust, erlang:system_time(millisecond)) of
                 ok ->
-                    Fun(macula_record:encode(Signed));
+                    Fun(Signed);
                 {error, _} = E ->
                     {error, {provider_authorization, E}}
             end;

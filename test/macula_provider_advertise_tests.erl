@@ -7,10 +7,11 @@
 %% fast with `{error, {provider_authorization, _}}', and nothing is
 %% sent.
 %%
-%% The facade's collaborators are stubbed with meck at the
-%% `macula_client' boundary (the facade's own local calls bypass a
-%% meck on `macula'); the records are real: signed with realm, org and
-%% identity keys in the node's profile.
+%% The resolution's DHT calls and the fan-out itself are injected as
+%% the seam entries `advertise/5''s `Opts' takes (`provider_io/0' plus
+%% the `advertise' override) — no module is replaced, which is what
+%% macula_shared_module_mocks_tests enforces. The records are real:
+%% signed with realm, org and identity keys in the node's profile.
 -module(macula_provider_advertise_tests).
 
 -include_lib("eunit/include/eunit.hrl").
@@ -35,20 +36,12 @@ cases(Keys) ->
 %%------------------------------------------------------------------
 
 a_complete_chain_advertises_the_signed_wire_form(
-  #{node := NodeId, key := Key, realm_key := RealmPub} = Keys) ->
-    {OrgDir, Deleg} = published_chain(Keys),
-    stub_find(Keys, OrgDir, Deleg),
-    stub_status(NodeId),
-    stub_realm_key({ok, RealmPub}),
-    %% The facade's signer: sign with the pool's own identity key, as
-    %% the pool would.
-    ok = meck:expect(macula_client, sign_node_record,
-                     fun(_Pool, Unsigned) ->
-                         {ok, macula_record:sign(Unsigned, Key)}
-                     end),
+  #{node := NodeId, realm_key := RealmPub} = Keys) ->
     Handler = fun(_Payload) -> {ok, counted} end,
-    ?assertEqual(ok, macula:advertise(self(), ?REALM, ?PROC, Handler, #{})),
-    Ad = advertise_sent(?REALM, ?PROC),
+    with_opts(Keys, #{}, Handler, fun(Opts) ->
+        ?assertEqual(ok, macula:advertise(self(), ?REALM, ?PROC, Handler, Opts))
+    end),
+    Ad = advertise_sent(),
     %% The sent advertisement decodes, names the pool's node, and its
     %% authorization verifies against the pinned realm key.
     {ok, Profile} = macula_crypto_profile:configured(),
@@ -65,63 +58,110 @@ a_complete_chain_advertises_the_signed_wire_form(
 %% Refusals — nothing is sent under any of them
 %%------------------------------------------------------------------
 
-a_procedure_without_an_org_namespace_is_refused(_Keys) ->
-    Before = advertise_count(),
-    ?assertEqual({error, {provider_authorization, no_org_namespace}},
-                 macula:advertise(self(), ?REALM, <<"_dht.nothing">>,
-                                  fun(_P) -> {ok, counted} end, #{})),
-    ?assertEqual(Before, advertise_count()),
-    ok.
+a_procedure_without_an_org_namespace_is_refused(Keys) ->
+    Handler = fun(_P) -> {ok, counted} end,
+    with_opts(Keys, #{}, Handler, fun(Opts) ->
+        ?assertEqual({error, {provider_authorization, no_org_namespace}},
+                     macula:advertise(self(), ?REALM, <<"_dht.nothing">>,
+                                      Handler, Opts))
+    end),
+    ?assertEqual(not_sent, advertise_sent()).
 
 a_missing_org_directory_is_refused(Keys) ->
-    stub_find_missing(Keys, org_directory),
-    stub_status(maps:get(node, Keys)),
-    stub_realm_key({ok, maps:get(realm_key, Keys)}),
-    ok = meck:expect(macula_client, sign_node_record,
-                     fun(_Pool, Unsigned) ->
-                         {ok, macula_record:sign(Unsigned, maps:get(key, Keys))}
-                     end),
-    Before = advertise_count(),
-    ?assertEqual({error, {provider_authorization, {org_directory, not_found}}},
-                 macula:advertise(self(), ?REALM, ?PROC,
-                                  fun(_P) -> {ok, counted} end, #{})),
-    ?assertEqual(Before, advertise_count()),
-    ok.
+    Handler = fun(_P) -> {ok, counted} end,
+    with_opts(Keys, #{find_record => find_stub(Keys, org_directory)},
+              Handler, fun(Opts) ->
+        ?assertEqual({error, {provider_authorization, {org_directory, not_found}}},
+                     macula:advertise(self(), ?REALM, ?PROC, Handler, Opts))
+    end),
+    ?assertEqual(not_sent, advertise_sent()).
 
 a_missing_delegation_is_refused(Keys) ->
-    stub_find_missing(Keys, procedure_delegation),
-    stub_status(maps:get(node, Keys)),
-    stub_realm_key({ok, maps:get(realm_key, Keys)}),
-    ok = meck:expect(macula_client, sign_node_record,
-                     fun(_Pool, Unsigned) ->
-                         {ok, macula_record:sign(Unsigned, maps:get(key, Keys))}
-                     end),
-    Before = advertise_count(),
-    ?assertEqual({error, {provider_authorization,
-                          {procedure_delegation, not_found}}},
-                 macula:advertise(self(), ?REALM, ?PROC,
-                                  fun(_P) -> {ok, counted} end, #{})),
-    ?assertEqual(Before, advertise_count()),
-    ok.
+    Handler = fun(_P) -> {ok, counted} end,
+    with_opts(Keys, #{find_record => find_stub(Keys, procedure_delegation)},
+              Handler, fun(Opts) ->
+        ?assertEqual({error, {provider_authorization,
+                              {procedure_delegation, not_found}}},
+                     macula:advertise(self(), ?REALM, ?PROC, Handler, Opts))
+    end),
+    ?assertEqual(not_sent, advertise_sent()).
 
 an_unpinned_realm_key_is_refused(Keys) ->
-    {OrgDir, Deleg} = published_chain(Keys),
-    stub_find(Keys, OrgDir, Deleg),
-    stub_status(maps:get(node, Keys)),
-    stub_realm_key(none),
-    ok = meck:expect(macula_client, sign_node_record,
-                     fun(_Pool, Unsigned) ->
-                         {ok, macula_record:sign(Unsigned, maps:get(key, Keys))}
-                     end),
-    Before = advertise_count(),
-    ?assertEqual({error, {provider_authorization, no_realm_key}},
-                 macula:advertise(self(), ?REALM, ?PROC,
-                                  fun(_P) -> {ok, counted} end, #{})),
-    ?assertEqual(Before, advertise_count()),
-    ok.
+    Handler = fun(_P) -> {ok, counted} end,
+    with_opts(Keys, #{realm_key => fun(_Pool, _Realm) -> none end},
+              Handler, fun(Opts) ->
+        ?assertEqual({error, {provider_authorization, no_realm_key}},
+                     macula:advertise(self(), ?REALM, ?PROC, Handler, Opts))
+    end),
+    ?assertEqual(not_sent, advertise_sent()).
 
 %%------------------------------------------------------------------
-%% Helpers
+%% The seam
+%%------------------------------------------------------------------
+
+%% The `Opts' the tests hand `advertise/5': the provider_io entries the
+%% resolution reads its DHT calls from, plus the `advertise' fan-out
+%% override recording the sent wire form, each overridable per case.
+with_opts(Keys, Overrides, _Handler, Fun) ->
+    Self = self(),
+    Base = #{status => fun(_Pool) ->
+                           {ok, #{self_node_id => maps:get(node, Keys)}}
+                       end,
+             find_record => find_stub(Keys, none),
+             sign_node_record => fun(_Pool, Unsigned) ->
+                                     {ok, macula_record:sign(
+                                            Unsigned, maps:get(key, Keys))}
+                                 end,
+             realm_key => fun(_Pool, _Realm) ->
+                              {ok, maps:get(realm_key, Keys)}
+                          end,
+             advertise => fun(_Pool, _Realm, _Proc, _Hand, _Policy,
+                              EncodedAd) ->
+                              Self ! {advertised, EncodedAd},
+                              ok
+                          end},
+    Fun(maps:merge(Base, Overrides)).
+
+%% The DHT lookups underneath the facade's find_record: the verified
+%% record (the facade's own find_record/2 contract), or a not_found for
+%% a missing piece (or anything else).
+find_stub(Keys, Missing) ->
+    {OrgDir, Deleg} = published_chain(Keys),
+    OrgDirKey = maps:get(org_dir_key, Keys),
+    DelegKey  = maps:get(deleg_key, Keys),
+    fun(_Pool, Key) ->
+        find_reply(Key, OrgDirKey, DelegKey, Missing, OrgDir, Deleg)
+    end.
+
+find_reply(OrgDirKey, OrgDirKey, _DelegKey, org_directory, _OrgDir, _Deleg) ->
+    {error, not_found};
+find_reply(DelegKey, _OrgDirKey, DelegKey, procedure_delegation, _OrgDir,
+           _Deleg) ->
+    {error, not_found};
+find_reply(OrgDirKey, OrgDirKey, _DelegKey, _Missing, OrgDir, _Deleg) ->
+    verified(OrgDir);
+find_reply(DelegKey, _OrgDirKey, DelegKey, _Missing, _OrgDir, Deleg) ->
+    verified(Deleg);
+find_reply(_Key, _OrgDirKey, _DelegKey, _Missing, _OrgDir, _Deleg) ->
+    {error, not_found}.
+
+%% The facade's find_record/2 returns records already verified under
+%% the node's profile — the seam stub answers in the same shape.
+verified(Record) ->
+    {ok, Profile} = macula_crypto_profile:configured(),
+    macula_record:verify(macula_record:encode(Record), Profile).
+
+%% The encoded advertisement the facade handed to the pool fan-out, or
+%% not_sent.
+advertise_sent() ->
+    receive
+        {advertised, Ad} -> Ad
+    after 100 ->
+        not_sent
+    end.
+
+%%------------------------------------------------------------------
+%% Setup and records
 %%------------------------------------------------------------------
 
 start() ->
@@ -132,13 +172,6 @@ start() ->
     {ok, RealmKey} = macula_node_keys:generate(realm, Profile),
     {ok, OrgKey} = macula_node_keys:generate(org, Profile),
     OrgKeyId = macula_node_keys:key_id(OrgKey),
-    ok = meck:new(macula_client, [passthrough, non_strict]),
-    %% The fan-out itself: accept the call and record it (the links'
-    %% behaviour is covered by macula_station_link_advertise_tests).
-    ok = meck:expect(macula_client, advertise,
-                     fun(_Pool, _Realm, _Proc, _Handler, _Policy, _EncodedAd) ->
-                         ok
-                     end),
     #{profile => Profile, key => Key, node => NodeId,
       realm_key => macula_node_keys:public_key(RealmKey),
       realm_kp => RealmKey, org_key => OrgKey,
@@ -147,7 +180,7 @@ start() ->
       deleg_key => macula_record:procedure_delegation_key(OrgKeyId, NodeId)}.
 
 stop(_Keys) ->
-    meck:unload(macula_client).
+    ok.
 
 case_name(Case) ->
     {name, Name} = erlang:fun_info(Case, name),
@@ -162,67 +195,3 @@ published_chain(#{node := NodeId, realm_kp := RealmKp, org_key := OrgKey,
     Deleg = macula_record:sign(
               macula_record:procedure_delegation(OrgKeyId, NodeId), OrgKey),
     {OrgDir, Deleg}.
-
-%% The DHT lookups underneath the facade's find_record: the pool RPC
-%% answers the record's wire form, or a not_found for a missing piece.
-stub_find(Keys, OrgDir, Deleg) ->
-    ok = meck:expect(macula_client, call_linked_station,
-                     fun(_Pool, _Realm, _Proc, #{key := Key}, _TimeoutMs) ->
-                         find_reply(Keys, Key, OrgDir, Deleg)
-                     end),
-    ok.
-
-find_reply(#{org_dir_key := OrgDirKey}, OrgDirKey, OrgDir, _Deleg) ->
-    {ok, macula_record:encode(OrgDir)};
-find_reply(#{deleg_key := DelegKey}, DelegKey, _OrgDir, Deleg) ->
-    {ok, macula_record:encode(Deleg)};
-find_reply(Keys, Key, _OrgDir, _Deleg) ->
-    io:format("FINDREPLY-FALLBACK key=~p mapkeys=~p~n",
-              [Key, maps:keys(Keys)]),
-    {ok, not_found}.
-
-%% The find stub with one chain record missing: the other still
-%% resolves normally, the missing one answers not_found.
-stub_find_missing(Keys, Which) ->
-    {OrgDir, Deleg} = published_chain(Keys),
-    OrgDirKey = maps:get(org_dir_key, Keys),
-    DelegKey  = maps:get(deleg_key, Keys),
-    ok = meck:expect(macula_client, call_linked_station,
-                     fun(_Pool, _Realm, _Proc, #{key := Key}, _TimeoutMs) ->
-                         case {Which, Key} of
-                             {org_directory, OrgDirKey} ->
-                                 {ok, not_found};
-                             {procedure_delegation, DelegKey} ->
-                                 {ok, not_found};
-                             _Other ->
-                                 find_reply(Keys, Key, OrgDir, Deleg)
-                         end
-                     end),
-    ok.
-
-stub_status(NodeId) ->
-    ok = meck:expect(macula_client, status, fun(_Pool) ->
-        {ok, #{self_node_id => NodeId}}
-    end).
-
-stub_realm_key(Reply) ->
-    ok = meck:expect(macula_client, realm_key,
-                     fun(_Pool, _Realm) -> Reply end).
-
-%% The encoded advertisement the facade handed to the pool fan-out, or
-%% not_sent.
-advertise_sent(_Realm, _Proc) ->
-    case [EncodedAd || {_, {macula_client, advertise,
-                            [_Pool, _Realm0, _Proc0, _Handler, _Policy,
-                             EncodedAd]}, _}
-                       <- meck:history(macula_client)] of
-        [Ad | _] -> Ad;
-        []       -> not_sent
-    end.
-
-advertise_count() ->
-    length([1 || {_, {macula_client, advertise, _}, _}
-                     <- meck:history(macula_client)]).
-
-%% Placeholder for the find stub's unexpected-key branch; never read.
--define(PLACEHOLDER, placeholder).
