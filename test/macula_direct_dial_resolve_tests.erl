@@ -132,6 +132,8 @@ resolve_test_() ->
       {timeout, 30, fun put_content_asks_again_past_an_expired_endpoint_record/0},
       {timeout, 30, fun put_content_reports_an_expired_endpoint_record_at_its_deadline/0},
       {timeout, 30, fun resolve_station_endpoint_tells_an_expired_record_from_an_absent_one/0},
+      {timeout, 30, fun put_content_ends_the_lookup_at_a_lifetime_refusal/0},
+      {timeout, 30, fun put_content_ends_the_lookup_at_a_reversed_lifetime/0},
       {timeout, 30, fun put_content_ends_the_lookup_at_an_endpoint_record_that_does_not_verify/0},
       {timeout, 30, fun a_call_with_a_removed_trust_option_is_refused_before_any_lookup/0},
       {timeout, 30, fun a_stream_with_a_removed_trust_option_is_refused_before_any_lookup/0},
@@ -774,6 +776,24 @@ resolve_station_endpoint_tells_an_expired_record_from_an_absent_one() ->
     set_endpoint_replies(Absent, [not_found]),
     ?assertEqual({error, station_endpoint_expired}, resolve_endpoint(Expired, 1000)),
     ?assertEqual({error, station_endpoint_not_found}, resolve_endpoint(Absent, 1000)).
+
+%% A lifetime refusal is permanent: the record's own created_at and
+%% expires_at are outside what its type allows, and asking the same station
+%% again cannot change that. It ends the lookup rather than being retried to
+%% the deadline like a transport failure.
+put_content_ends_the_lookup_at_a_lifetime_refusal() ->
+    S = station(<<"s.test">>),
+    set_endpoint_replies(S, [{error, lifetime_too_long}, endpoint_record(S)]),
+    ?assertEqual({error, {unresolved, lifetime_too_long}}, put_at_station(S, 1000)),
+    ?assertEqual(1, endpoint_lookups(S)),
+    ?assertEqual([], visits()).
+
+put_content_ends_the_lookup_at_a_reversed_lifetime() ->
+    S = station(<<"s.test">>),
+    set_endpoint_replies(S, [{error, lifetime_reversed}, endpoint_record(S)]),
+    ?assertEqual({error, {unresolved, lifetime_reversed}}, put_at_station(S, 1000)),
+    ?assertEqual(1, endpoint_lookups(S)),
+    ?assertEqual([], visits()).
 
 %% A record the facade refuses for any other reason is a record that does not
 %% verify, and ends the lookup with that reason.

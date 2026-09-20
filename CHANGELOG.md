@@ -34,6 +34,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   atoms. The absent case is unchanged, and an expired record is still asked
   about again until the deadline, as before.
 
+- A `lifetime_too_long` or `lifetime_reversed` refusal on a station endpoint
+  record now ends the lookup instead of being retried to the deadline. Both
+  are properties of the record itself, so asking the same station again
+  returns the same refusal; they were missing from the refusal macro, fell
+  through to the lookup-failure clause, and were treated as a transient
+  transport fault. A caller spent its whole resolve budget re-asking a
+  question whose answer could not change, and in the meantime a later
+  candidate could be dialled off a record that had already been refused.
+
 - A peering dial now uses the `verify` its target carries. `connect_opts()`
   accepted the key, `macula_station_link`'s `opts()` documented it and
   `macula_client`/`macula`/`macula_content_transfer` all forwarded it, but

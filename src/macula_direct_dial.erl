@@ -192,11 +192,17 @@
 -define(TYPE_STATION_ENDPOINT, 16#12).
 %% A refusal `macula:find_record/3' returns for a record that did not verify
 %% under the node's crypto profile (`macula_record:verify/2'), other than
-%% `expired'.
+%% `expired'. EVERY other member of `macula_record:refusal()' belongs here:
+%% each one is a property of the record itself, so asking the same station
+%% again returns the same refusal. One left out falls through to the lookup
+%% failure clause and is retried to the deadline as though it were a
+%% transport fault, which costs the caller its whole budget on an answer that
+%% cannot change. Keep this in step with that type.
 -define(RECORD_REFUSAL(Reason),
         (Reason =:= record_too_large orelse Reason =:= malformed orelse
          Reason =:= signature_invalid orelse Reason =:= alg_mismatch orelse
-         Reason =:= not_yet_valid orelse Reason =:= key_id_mismatch)).
+         Reason =:= not_yet_valid orelse Reason =:= key_id_mismatch orelse
+         Reason =:= lifetime_too_long orelse Reason =:= lifetime_reversed)).
 %% Options a call or an advertisement no longer reads. `verify_cert_chain'
 %% turned a trust check on in 10.x, and the realm keys a pool pins replace it;
 %% `realm_trust' on a call is gone because a realm key never arrives with a
