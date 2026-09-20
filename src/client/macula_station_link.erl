@@ -173,8 +173,12 @@
     %%   `expected_node_id' — the station's node_id, which the
     %%       handshake checks (D16); required, and a link without one
     %%       refuses to start;
-    %%   `verify' — `webpki' (default) or `none' (dev/self-signed
-    %%       only; logs a warning per dial).
+    %%   `verify' — `none' (the default) or `webpki'. A station's leaf
+    %%       is self-signed or issued by an unrelated PKI, so a station
+    %%       dial verifies no chain and the handshake names the peer
+    %%       instead; an unverified dial logs a warning per dial.
+    %%       `webpki' is for a dial to something whose chain is worth
+    %%       checking, and the dial verifies against the built-in roots.
     seed     := url() | #{host := binary() | string(),
                           port := inet:port_number(),
                           _    => _},

@@ -28,9 +28,12 @@
 -export_type([opts/0, connect_opts/0]).
 
 -ifdef(TEST).
-%% Exports for unit tests: pure helpers that are otherwise private.
+%% Exports for unit tests: private helpers that are otherwise unreachable.
+%% `start_dial/1' is here so a test can watch one real dial decide what it
+%% verifies, without standing up a whole connection to do it.
 -export([
-    resolve_recipient/1
+    resolve_recipient/1,
+    start_dial/1
 ]).
 -endif.
 
@@ -44,6 +47,12 @@
     %% `{peer_identity_mismatch, #{expected, derived}}' when the station's
     %% challenge derives to another node_id.
     expected_node_id := <<_:256>>,
+    %% TLS chain policy for the dial: `none' (the default) or `webpki'.
+    %% A station dial wants `none' — its leaf is self-signed or issued by
+    %% an unrelated PKI, and the handshake above is what names the peer.
+    %% A caller dialing something with a chain worth checking sets
+    %% `webpki' and the dial verifies against the built-in roots.
+    verify           => none | webpki,
     _                => _
 }.
 
@@ -1301,8 +1310,22 @@ close_quic(#data{quic_conn = Conn}) ->
 %% The station is named by the handshake: its challenge must derive to
 %% the node_id dialed, over the leaf this dial received.
 start_dial(#{host := Host, port := Port} = Target) ->
-    Alpn = maps:get(alpn, Target, [<<"macula">>]),
-    macula_quic:async_connect(Host, Port, [{alpn, Alpn}, {verify, none}], dial_timeout(Target)).
+    macula_quic:async_connect(Host, Port, dial_opts(Target), dial_timeout(Target)).
+
+%% The TLS policy for one dial, from the target the caller built.
+%%
+%% `verify' is the caller's and is passed through, not overridden. A
+%% target that names none dials unverified, because that is what a
+%% station dial needs: a station's leaf is self-signed or issued by an
+%% unrelated PKI, and what binds the connection to the node_id dialed is
+%% the signed handshake in this module, not the certificate chain. A
+%% caller that does have a chain worth checking sets `verify => webpki'
+%% on the target and the dial verifies against the built-in roots.
+%% Whatever this builder decides is what TLS sees: nothing downstream
+%% overrides it, which is the whole point of the key being here.
+dial_opts(Target) ->
+    [{alpn, maps:get(alpn, Target, [<<"macula">>])},
+     {verify, maps:get(verify, Target, none)}].
 
 dial_timeout(Target) ->
     maps:get(timeout_ms, Target, 30_000).

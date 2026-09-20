@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### Fixed
+
+- A peering dial now uses the `verify` its target carries. `connect_opts()`
+  accepted the key, `macula_station_link`'s `opts()` documented it and
+  `macula_client`/`macula`/`macula_content_transfer` all forwarded it, but
+  the dial builder passed the literal `{verify, none}` and discarded it, so
+  a caller asking for `webpki` got an unverified dial and no error. The
+  default stays `none`, which is what a station dial needs: a station's leaf
+  is self-signed or issued by an unrelated PKI, and the signed handshake,
+  not the chain, binds the connection to the node_id dialed.
+
+  Callers that already pass `verify => webpki` get chain verification from
+  this release on, where before it was silently ignored. A dial to a
+  self-signed or hostname-mismatched peer that used to succeed will now be
+  refused with `invalid peer certificate`. Pass `verify => none` explicitly
+  to keep the previous behaviour.
+
 ## [11.4.0] - 2026-09-18
 
 ### Added
