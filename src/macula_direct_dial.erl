@@ -488,9 +488,13 @@ resolve_station_endpoint(Pool, Station) ->
 %% `Station' and asking again past an absent, expired or malformed record,
 %% or a failed lookup, until `TimeoutMs' has passed — the same discipline
 %% `call/6' applies once it has a procedure's `serving_station'. The error
-%% is, in this order, `station_endpoint_not_found' (or the malformed record's
-%% reason) when a lookup answered, a failed lookup's own reason, or
-%% `timeout'.
+%% is, in this order, the latest answered lookup's own reason
+%% (`station_endpoint_not_found' for no record at all,
+%% `station_endpoint_expired' for one refused as stale, or the malformed
+%% record's reason), a failed lookup's own reason, or `timeout'. An absent
+%% record and an expired one are reported apart: the first says the station
+%% published no endpoint, the second that it published one and the caller's
+%% own clock check refused it.
 -spec resolve_station_endpoint(macula:pool(), <<_:256>>, pos_integer()) ->
     {ok, binary()} | {error, term()}.
 resolve_station_endpoint(Pool, Station, TimeoutMs) ->
@@ -743,7 +747,7 @@ attempt({found, {ok, {Station, DialUrl}}, EndpointVersion}, Key, Version, Share,
 attempt({found, {error, expired}, EndpointVersion}, Key, Version, _Share, Seen,
         _Work) ->
     failed(Key, Version, EndpointVersion,
-           {error, {unresolved, station_endpoint_not_found}}, Seen);
+           {error, {unresolved, station_endpoint_expired}}, Seen);
 attempt({found, {error, _} = Error, EndpointVersion}, Key, Version, _Share, Seen,
         _Work) ->
     failed(Key, Version, EndpointVersion, Error, Seen);
@@ -831,7 +835,7 @@ endpoint_recorded({failed, _}, {failed, _} = Failed, true) -> Failed;
 endpoint_recorded(Best, {failed, _}, true) -> Best.
 
 lookup_error({found, {error, expired}, _Version}) ->
-    {error, {unresolved, station_endpoint_not_found}};
+    {error, {unresolved, station_endpoint_expired}};
 lookup_error({found, {error, _} = Error, _Version}) -> Error;
 lookup_error({absent, Error}) -> Error;
 lookup_error({failed, Error}) -> Error.

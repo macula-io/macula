@@ -130,6 +130,8 @@ resolve_test_() ->
       {timeout, 30, fun put_content_asks_again_past_a_malformed_endpoint_record/0},
       {timeout, 30, fun put_content_reports_a_malformed_endpoint_record_at_its_deadline/0},
       {timeout, 30, fun put_content_asks_again_past_an_expired_endpoint_record/0},
+      {timeout, 30, fun put_content_reports_an_expired_endpoint_record_at_its_deadline/0},
+      {timeout, 30, fun resolve_station_endpoint_tells_an_expired_record_from_an_absent_one/0},
       {timeout, 30, fun put_content_ends_the_lookup_at_an_endpoint_record_that_does_not_verify/0},
       {timeout, 30, fun a_call_with_a_removed_trust_option_is_refused_before_any_lookup/0},
       {timeout, 30, fun a_stream_with_a_removed_trust_option_is_refused_before_any_lookup/0},
@@ -751,6 +753,28 @@ put_content_asks_again_past_an_expired_endpoint_record() ->
     set_answer(dial_url(S), {ok, <<"mcid">>}),
     ?assertEqual({ok, <<"mcid">>}, put_at_station(S, 2000)).
 
+%% An endpoint record that stays expired to the deadline is reported AS
+%% expired, not as an absent one. The two mean different things to an
+%% operator: absent is "this station never published an endpoint", expired is
+%% "this station published one and our own clock check refused it as stale".
+%% It is asked about again throughout, as an absent record is.
+put_content_reports_an_expired_endpoint_record_at_its_deadline() ->
+    S = station(<<"s.test">>),
+    set_endpoint_replies(S, [{error, expired}]),
+    ?assertEqual({error, {unresolved, station_endpoint_expired}}, put_at_station(S, 1000)),
+    ?assert(endpoint_lookups(S) > 1).
+
+%% The two conditions reach the public facade as two different atoms. This is
+%% the surface an operator reads, and reading "not found" for a record the
+%% station served is what sends them looking in the wrong place.
+resolve_station_endpoint_tells_an_expired_record_from_an_absent_one() ->
+    Expired = station(<<"expired.test">>),
+    Absent = station(<<"absent.test">>),
+    set_endpoint_replies(Expired, [{error, expired}]),
+    set_endpoint_replies(Absent, [not_found]),
+    ?assertEqual({error, station_endpoint_expired}, resolve_endpoint(Expired, 1000)),
+    ?assertEqual({error, station_endpoint_not_found}, resolve_endpoint(Absent, 1000)).
+
 %% A record the facade refuses for any other reason is a record that does not
 %% verify, and ends the lookup with that reason.
 put_content_ends_the_lookup_at_an_endpoint_record_that_does_not_verify() ->
@@ -762,6 +786,9 @@ put_content_ends_the_lookup_at_an_endpoint_record_that_does_not_verify() ->
 
 put_at_station(#{id := Id}, TimeoutMs) ->
     macula_direct_dial:put_content(self(), Id, <<"bytes">>, TimeoutMs).
+
+resolve_endpoint(#{id := Id}, TimeoutMs) ->
+    macula_direct_dial:resolve_station_endpoint(self(), Id, TimeoutMs).
 
 %% macula_download callbacks: hand the outcome back to the test process.
 init(Parent) -> {ok, Parent}.

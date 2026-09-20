@@ -11,6 +11,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A station endpoint that resolves to an EXPIRED record now reports
+  `station_endpoint_expired`, not `station_endpoint_not_found`. Both the
+  per-candidate path and the final reporting path mapped an expired record
+  onto the not-found atom, so a caller could not tell "this station never
+  published an endpoint" from "this station served one and our own clock
+  check refused it as stale". Those are different faults with different
+  fixes, and the second one reads as the first.
+
+  This matters more than a wording change because the window is narrow. A
+  `station_endpoint` record carries a five minute TTL and `macula_record`
+  allows a further five minutes of clock tolerance, so a record verifies for
+  ten minutes from creation and is refused as stale after that. A fleet whose
+  endpoint republish is slower than that window, or a caller whose clock
+  drifts, sees a steady stream of "not found" for records the station is
+  serving correctly.
+
+  `resolve_station_endpoint/2,3` returns the bare `station_endpoint_expired`;
+  `call/5,6` and the content calls return
+  `{unresolved, station_endpoint_expired}`. A caller matching on
+  `station_endpoint_not_found` to mean "stale or absent" must now match both
+  atoms. The absent case is unchanged, and an expired record is still asked
+  about again until the deadline, as before.
+
 - A peering dial now uses the `verify` its target carries. `connect_opts()`
   accepted the key, `macula_station_link`'s `opts()` documented it and
   `macula_client`/`macula`/`macula_content_transfer` all forwarded it, but
