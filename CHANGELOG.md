@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `macula_stream_sessions:sessions/1` — the number of served sessions one
+  caller holds now, the count `max_served_sessions_per_caller` is decided on.
+  `sessions/0` already reported the node's total; this reports one caller's,
+  which is the quantity the per-caller cap is about and the one a caller-scoped
+  observation needs.
+
 ### Fixed
 
 - A direct-dial link now keeps its trust options across a respawn. A direct

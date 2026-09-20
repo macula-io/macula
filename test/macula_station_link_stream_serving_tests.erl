@@ -180,7 +180,6 @@ a_stream_open_past_the_callers_session_cap_is_refused() ->
         Procedure = <<"foo.capped">>,
         ok = macula_station_link:advertise_stream(Link, ?REALM, Procedure, server_stream, telling_how_it_ended(self())),
         [Caller, Other] = [key(), key()],
-        Base = macula_stream_sessions:sessions(),
         #{quic := FirstQuic, frame := FirstOpen} = served(World, Caller, Procedure),
         #{quic := SecondQuic, frame := SecondOpen} = opened_by_peer(World, Caller, Procedure, #{}),
         {ok, Refusal} = written_within(SecondQuic, ?EVENT_MS),
@@ -189,7 +188,13 @@ a_stream_open_past_the_callers_session_cap_is_refused() ->
         ?assertMatch(#{}, served(World, Other, Procedure)),
         on_stream(Link, FirstQuic, caller_stream_end(Caller, FirstOpen)),
         ?assertEqual({ended, closed}, how_it_ended(?EVENT_MS)),
-        ?assertEqual(Base + 1, sessions_back_to(Base + 1, ?EVENT_MS)),
+        %% The place is given back to THIS caller, and the other caller's
+        %% session is untouched. Counted per caller, not as a share of the
+        %% node's total: that total is global to the VM, so a session another
+        %% test left behind and drains during this window would move it under
+        %% the test's feet.
+        ?assertEqual(0, caller_sessions_back_to(macula_node_keys:key_id(Caller), 0, ?EVENT_MS)),
+        ?assertEqual(1, macula_stream_sessions:sessions(macula_node_keys:key_id(Other))),
         ?assertMatch(#{}, served(World, Caller, Procedure)),
         stop(Link)
     end).
@@ -387,14 +392,17 @@ restart_the_counter_after(Ref) ->
     end,
     supervisor:restart_child(macula_root, macula_stream_sessions).
 
-sessions_back_to(Base, Ms) ->
-    session_count_back_to(macula_stream_sessions:sessions(), Base, Ms).
+%% A session ends when its stream process does, which this test observes
+%% rather than drives, so the count is waited on. Per caller, so nothing
+%% another test leaves behind can be mistaken for this one's.
+caller_sessions_back_to(Caller, Want, Ms) ->
+    caller_count_back_to(macula_stream_sessions:sessions(Caller), Caller, Want, Ms).
 
-session_count_back_to(Base, Base, _Ms) -> Base;
-session_count_back_to(Count, _Base, Ms) when Ms =< 0 -> Count;
-session_count_back_to(_Count, Base, Ms) ->
+caller_count_back_to(Want, _Caller, Want, _Ms) -> Want;
+caller_count_back_to(Count, _Caller, _Want, Ms) when Ms =< 0 -> Count;
+caller_count_back_to(_Count, Caller, Want, Ms) ->
     timer:sleep(20),
-    sessions_back_to(Base, Ms - 20).
+    caller_sessions_back_to(Caller, Want, Ms - 20).
 
 %% A dedicated stream the peer opens with a verified STREAM_OPEN from Caller for Procedure, addressed to the link's
 %% node: the stream and the open frame as sent.

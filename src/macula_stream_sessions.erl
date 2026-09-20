@@ -56,7 +56,7 @@
 
 -behaviour(gen_server).
 
--export([start_link/0, new_table/0, admit/2, sessions/0,
+-export([start_link/0, new_table/0, admit/2, sessions/0, sessions/1,
          charge/2, release/2, inbox_bytes/0, refusals/0]).
 %% Reads of the node's counts that nothing inside macula calls yet; the tests
 %% read them.
@@ -131,6 +131,13 @@ admit(Caller, Stream) when is_binary(Caller), is_pid(Stream) ->
 sessions() ->
     gen_server:call(?SERVER, sessions).
 
+%% @doc The number of served sessions `Caller' holds now: the count
+%% `max_served_sessions_per_caller' is decided on, for one caller rather
+%% than the node. A caller that holds none has no row and counts 0.
+-spec sessions(binary()) -> non_neg_integer().
+sessions(Caller) when is_binary(Caller) ->
+    gen_server:call(?SERVER, {sessions, Caller}).
+
 %% @doc Charge `Bytes' that `Stream' keeps unread to its caller and the node,
 %% or refuse when that would take either past its budget, or when `Stream' is
 %% not an admitted session. Called in the stream's own process.
@@ -166,6 +173,8 @@ handle_call({admit, Caller, Stream}, _From, S) ->
     on_admission(admission(ets:member(?TABLE, {stream, Stream}), Caller), Caller, Stream, S);
 handle_call(sessions, _From, S) ->
     {reply, count(sessions), S};
+handle_call({sessions, Caller}, _From, S) ->
+    {reply, count({caller, Caller}), S};
 handle_call(refusals, _From, S) ->
     {reply, maps:from_list(refusal_counts(ets:match_object(?TABLE, {{refused, '_'}, '_'}))), S}.
 
