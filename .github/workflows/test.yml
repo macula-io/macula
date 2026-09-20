@@ -31,12 +31,17 @@ permissions:
   contents: read
 
 env:
-  # Kept equal to the erlang pin in .tool-versions, which
-  # scripts/is_erlang_the_pinned_version.sh asserts below rather than
-  # assuming. Another major is drift: OTP 29's edoc chunks already made a
-  # published build differ from a 28.4.2 one once.
+  # Must equal the erlang pin in .tool-versions AND the OTP the container
+  # ships. scripts/is_erlang_the_pinned_version.sh asserts the second against
+  # the first below rather than assuming it; this copy exists to key the PLT
+  # cache.
   OTP_VERSION: '28.4.2'
-  REBAR3_VERSION: '3.27.0'
+  # The container runs as root with HOME=/root, but a GitHub container job
+  # overrides HOME to /github/home. rustup would then install under a home
+  # that is not root's, leaving dangling symlinks and `cargo: not found` once
+  # rebar's cargo pre_hook runs in a subprocess. Pin both homes explicitly.
+  CARGO_HOME: /root/.cargo
+  RUSTUP_HOME: /root/.rustup
 
 concurrency:
   group: test-${{ github.ref }}
@@ -48,30 +53,54 @@ jobs:
     # A GitHub-hosted public runner, deliberately. macula is a public
     # repository and this costs nothing there. Do NOT put `self-hosted` here:
     # the Default runner group is closed to public repositories on purpose,
-    # and that property is load-bearing.
+    # and a self-hosted runner reachable from a public repo would let a fork's
+    # pull request run arbitrary code on a machine holding real credentials.
+    # That property is load-bearing.
     runs-on: ubuntu-latest
+
+    # WHY A CONTAINER, since a job in one on a public runner looks like
+    # something to simplify away: a STOCK GitHub runner's libcrypto has NO
+    # ML-DSA. The first run of this workflow died 180 times on
+    # `crypto:generate_key(mldsa87, [])` with
+    # `{badarg,{"evp.c",259},"Bad key type"}`, taking out every test that
+    # needs a node identity, which for a post-quantum SDK is most of them.
+    # ML-DSA arrived in OpenSSL 3.5. This image carries OpenSSL 3.5.7 and
+    # OTP 28.4.2, and generating an ML-DSA-87 key in it was measured rather
+    # than read off a supports list. The runner underneath is still an
+    # ordinary public one, so nothing about the security property above
+    # changes; the cost is an image pull.
+    #
+    # The image also supplies rebar3 3.27.0, so this job does NOT run
+    # erlef/setup-beam. Installing another OTP over the image's would link
+    # crypto against a different libcrypto and could quietly put back the
+    # exact failure the container is here to fix.
+    container: ghcr.io/macula-io/macula-ci-otp:latest
+
     timeout-minutes: 60
 
     steps:
       - name: Check out the commit under test
         uses: actions/checkout@v4
 
-      - name: Set up Erlang/OTP and rebar3
-        uses: erlef/setup-beam@v1
-        with:
-          otp-version: ${{ env.OTP_VERSION }}
-          rebar3-version: ${{ env.REBAR3_VERSION }}
-          version-type: strict
-
       # Every NIF crate builds from source (priv/build-nifs.sh, run by
-      # rebar.config's compile pre_hook). macula_cbor_nif has no prebuilt
-      # artifact at all, so a runner without Rust does not fall back, it
-      # fails. Worse, a build that silently lacks NIFs runs the pure-Erlang
-      # crypto path, whose generate_keypair and sign disagree on key format,
-      # which reads as unrelated test failures rather than a missing
+      # rebar.config's compile pre_hook), and macula_cbor_nif has no prebuilt
+      # artifact at all, so a toolchain-less run does not fall back, it fails.
+      # Worse, a build that silently lacks NIFs runs the pure-Erlang crypto
+      # path, which reads as unrelated test failures rather than as a missing
       # toolchain.
+      #
+      # The image carries cc, cmake, git, curl and perl but no Rust. The
+      # symlinks matter: rebar's cargo pre_hook runs in a subprocess whose
+      # PATH does not include $CARGO_HOME/bin.
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        run: |
+          export HOME=/root
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+            | sh -s -- -y --profile minimal --default-toolchain stable
+          ln -sf "$CARGO_HOME/bin/cargo" /usr/local/bin/cargo
+          ln -sf "$CARGO_HOME/bin/rustc" /usr/local/bin/rustc
+          cargo --version
+          rustc --version
 
       # The download cache only. Deliberately NOT native/*/target and
       # NOT priv/*.so: build-nifs.sh skips a crate whose .so is newer than
@@ -82,8 +111,8 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            ~/.cargo/registry
-            ~/.cargo/git
+            /root/.cargo/registry
+            /root/.cargo/git
           key: cargo-${{ runner.os }}-${{ hashFiles('native/*/Cargo.lock') }}
           restore-keys: cargo-${{ runner.os }}-
 
@@ -96,14 +125,36 @@ jobs:
           path: |
             _build/default/*_plt
             _build/default/*_plt.hash
-            ~/.cache/rebar3
+            /root/.cache/rebar3
           key: plt-${{ runner.os }}-otp${{ env.OTP_VERSION }}-${{ hashFiles('rebar.config', 'rebar.lock') }}
           restore-keys: plt-${{ runner.os }}-otp${{ env.OTP_VERSION }}-
 
-      # setup-beam is told the version; this asserts what actually landed on
-      # PATH, against .tool-versions, so the two cannot drift apart silently.
+      # Asserts the OTP the container actually ships against .tool-versions,
+      # so the image and the pin cannot drift apart unnoticed.
       - name: Check the Erlang on PATH is the pinned one
         run: bash scripts/is_erlang_the_pinned_version.sh
+
+      # WHAT THIS IS FOR, because it looks redundant next to the suite that
+      # follows: it asserts the reason this job runs in a container at all,
+      # before the suite rather than 180 failures into it.
+      #
+      # This check exists because we learned the hard way. The first run of
+      # this workflow produced 180 failures across 53 test modules, all of
+      # them reading as unrelated test breakage, and the real cause was one
+      # missing algorithm in the runner's libcrypto. Diagnosing that took an
+      # evening. A libcrypto without ML-DSA now fails HERE instead, in one
+      # line that names the cause, before a single test runs.
+      #
+      # If you are tidying this workflow: deleting this step does not make
+      # the suite any greener, it only makes the next libcrypto change cost
+      # what this one cost.
+      - name: Check this Erlang can do ML-DSA-87
+        run: |
+          erl -noshell -eval '
+            {Pub, _Priv} = crypto:generate_key(mldsa87, []),
+            io:format("ML-DSA-87 ok, public key ~p bytes, on ~p~n",
+                      [byte_size(Pub), crypto:info_lib()]),
+            halt().'
 
       - name: Compile, which builds the NIFs
         run: rebar3 compile 2>&1 | tee build.log
