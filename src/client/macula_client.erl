@@ -53,7 +53,9 @@
 %% schedules a respawn after ?LINK_RESPAWN_DELAY_MS (1s). On respawn,
 %% the pool re-issues every currently-tracked (Realm, Topic)
 %% subscription against the new link via the internal
-%% macula_client_replay helper.
+%% macula_client_replay helper, and starts the link with the options it
+%% was started with before (`#link_state.extra_opts'), which is what
+%% keeps a direct dial's `expected_node_id' across a bounce.
 -module(macula_client).
 -behaviour(gen_server).
 
@@ -463,7 +465,7 @@
     ever_connected = false :: boolean(),
     %% When this link entry was created (`erlang:monotonic_time
     %% (millisecond)'). Preserved across a respawn of the SAME seed
-    %% (`after_link_start/3') rather than reset, so a discovered link
+    %% (`after_link_start/4') rather than reset, so a discovered link
     %% that keeps dying and respawning without ever once connecting
     %% doesn't get an ever-renewing grace period.
     spawned_at     :: integer() | undefined
@@ -550,6 +552,22 @@
     %% Link starts that wait for the next issuer: seed → the start's extra
     %% options.
     held_starts = #{} :: #{seed() => map()},
+    %% How each link was started beyond the pool's own options: seed → the
+    %% start's extra options (`dial_fresh/3''s `ExtraOpts'). A respawn
+    %% starts the link the same way, because a DIRECT DIAL's trust options
+    %% live here and not in its seed: `macula:call_station/8' names the
+    %% station as a URL binary and passes `expected_node_id' as an option,
+    %% which `macula_station_link:add_tls_opts/2' folds into the seed at
+    %% start. A respawn without them is refused
+    %% (`seed_without_expected_node_id'), which loses the route rather than
+    %% dialling anything unpinned. A configured seed MAP carries its own pin
+    %% and does not depend on this.
+    %%
+    %% Kept at the pool rather than in `#link_state{}' because
+    %% `on_down_routed/5' REMOVES the link entry, a whole
+    %% ?LINK_RESPAWN_DELAY_MS before the respawn would read it back.
+    %% Dropped only when a seed goes for good (`give_up_on/4').
+    dial_extra_opts = #{} :: #{seed() => map()},
     %% The request admission in which all the pool's links judge the requests
     %% they receive.
     admission :: pid()
@@ -1688,7 +1706,12 @@ start_link_for_seed(Seed, ExtraOpts, #state{node_identity = NodeIdentity} = S) -
     LinkOpts = maps:merge(S#state.link_opts,
                           ExtraOpts#{seed => Seed, node_identity => fun() -> NodeIdentity end,
                                      share => seed_peer(Seed)}),
-    after_link_start(macula_station_link:start_link(LinkOpts), Seed, S).
+    after_link_start(macula_station_link:start_link(LinkOpts), Seed,
+                     remember_dial_opts(Seed, ExtraOpts, S)).
+
+%% Keep how this link was started, so its respawn can start it the same way.
+remember_dial_opts(Seed, ExtraOpts, #state{dial_extra_opts = Opts} = S) ->
+    S#state{dial_extra_opts = Opts#{Seed => ExtraOpts}}.
 
 %% While the pool has no issuer, a link start waits for the next one
 %% instead of starting a link that could not connect, and counts as one
@@ -2377,9 +2400,16 @@ seed_host(Url) when is_list(Url) ->
 seed_host(_) ->
     undefined.
 
+%% A respawn restarts the link the way it was started, options included:
+%% a direct dial's `expected_node_id' lives in those options rather than in
+%% a URL-binary seed, and starting without it is refused by the link
+%% (`seed_without_expected_node_id'), which loses the route rather than
+%% dialling anything unpinned.
 on_respawn_link(Seed, S) ->
-    NewS = start_link_for_seed(Seed, S),
+    NewS = start_link_for_seed(Seed, dial_opts_for(Seed, S), S),
     replay_to_seed(maps:get(Seed, NewS#state.links, undefined), NewS).
+
+dial_opts_for(Seed, #state{dial_extra_opts = Opts}) -> maps:get(Seed, Opts, #{}).
 
 replay_to_seed(#link_state{pid = Pid}, S) when is_pid(Pid) ->
     LinkSubRefs = macula_client_replay:subs_to(Pid, S#state.topic_index),
@@ -2619,12 +2649,14 @@ judge_unconnected_link(false, _Seed, _LinkState, _Now, _GiveupAfterMs, S) ->
 set_ever_connected(Seed, LinkState, #state{links = Links} = S) ->
     S#state{links = Links#{Seed => LinkState#link_state{ever_connected = true}}}.
 
-give_up_on(Seed, Pid, Mon, #state{links = Links} = S) ->
+%% This seed is done, not bouncing, so how it was started goes with it.
+give_up_on(Seed, Pid, Mon, #state{links = Links, dial_extra_opts = Opts} = S) ->
     macula_diagnostics:event(<<"_macula.client.discovery_link_given_up">>,
                              #{seed => Seed}),
     is_reference(Mon) andalso erlang:demonitor(Mon, [flush]),
     macula_station_link:stop(Pid),
-    S#state{links = maps:remove(Seed, Links)}.
+    S#state{links = maps:remove(Seed, Links),
+            dial_extra_opts = maps:remove(Seed, Opts)}.
 
 %% Runs in a spawned worker (never the pool gen_server — the DHT lookup
 %% + `list_stations' call are ordinary blocking RPCs with real network

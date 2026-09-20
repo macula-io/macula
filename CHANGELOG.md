@@ -11,6 +11,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A direct-dial link now keeps its trust options across a respawn. A direct
+  dial names its station as a URL binary and passes `expected_node_id` as an
+  option (`macula:call_station/8`), and the link folds that option into the
+  seed at start. The pool kept those options nowhere, so when a link bounced,
+  the respawn a second later restarted the seed without them, the link found
+  no pin, and its start was refused with
+  `{seed, expected_node_id_required}`, counted as
+  `seed_without_expected_node_id`.
+
+  Nothing unpinned was ever dialled: the refusal is the trust model working.
+  What was lost is the route to that station, until something dialled it
+  again. A pool whose seeds are configured MAPS was never affected, because a
+  seed map carries its own pin; only a direct-dial URL target was, and only
+  after a bounce, which is to say exactly when the fleet is already
+  disturbed.
+
 - A station endpoint that resolves to an EXPIRED record now reports
   `station_endpoint_expired`, not `station_endpoint_not_found`. Both the
   per-candidate path and the final reporting path mapped an expired record
