@@ -1,0 +1,127 @@
+name: Test
+
+# Runs the suite on every push and pull request: eunit, xref and dialyzer.
+#
+# publish-hex.yml opens by saying "Tests gate the release commit on main, not
+# the publish". Until this workflow existed nothing ran the suite on a change,
+# so that sentence described an intention rather than a fact. This makes it
+# true for the first half. It deliberately does NOT gate the publish: that is
+# a separate decision, and 11.x is mid-flight.
+#
+# A red run here is information, not an inconvenience. Nothing in this file
+# may be weakened to produce a green: no continue-on-error, no suite dropped,
+# no failure matched away. If the suite finds something, the suite found
+# something.
+
+on:
+  push:
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'plans/**'
+      - 'LICENSE'
+  pull_request:
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'plans/**'
+      - 'LICENSE'
+
+permissions:
+  contents: read
+
+env:
+  # Kept equal to the erlang pin in .tool-versions, which
+  # scripts/is_erlang_the_pinned_version.sh asserts below rather than
+  # assuming. Another major is drift: OTP 29's edoc chunks already made a
+  # published build differ from a 28.4.2 one once.
+  OTP_VERSION: '28.4.2'
+  REBAR3_VERSION: '3.27.0'
+
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: eunit, xref and dialyzer
+    # A GitHub-hosted public runner, deliberately. macula is a public
+    # repository and this costs nothing there. Do NOT put `self-hosted` here:
+    # the Default runner group is closed to public repositories on purpose,
+    # and that property is load-bearing.
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Check out the commit under test
+        uses: actions/checkout@v4
+
+      - name: Set up Erlang/OTP and rebar3
+        uses: erlef/setup-beam@v1
+        with:
+          otp-version: ${{ env.OTP_VERSION }}
+          rebar3-version: ${{ env.REBAR3_VERSION }}
+          version-type: strict
+
+      # Every NIF crate builds from source (priv/build-nifs.sh, run by
+      # rebar.config's compile pre_hook). macula_cbor_nif has no prebuilt
+      # artifact at all, so a runner without Rust does not fall back, it
+      # fails. Worse, a build that silently lacks NIFs runs the pure-Erlang
+      # crypto path, whose generate_keypair and sign disagree on key format,
+      # which reads as unrelated test failures rather than a missing
+      # toolchain.
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      # The download cache only. Deliberately NOT native/*/target and
+      # NOT priv/*.so: build-nifs.sh skips a crate whose .so is newer than
+      # its sources, so a restored binary can outrank the tree it is supposed
+      # to have been built from. That trap has already shipped a NIF that
+      # did not match its source once.
+      - name: Cache the cargo download registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-${{ runner.os }}-${{ hashFiles('native/*/Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-
+
+      # rebar.config sets plt_location local and base_plt_location global, so
+      # the PLT lands in both places. Without this every run pays the full
+      # PLT build, not just the first.
+      - name: Cache the dialyzer PLT
+        uses: actions/cache@v4
+        with:
+          path: |
+            _build/default/*_plt
+            _build/default/*_plt.hash
+            ~/.cache/rebar3
+          key: plt-${{ runner.os }}-otp${{ env.OTP_VERSION }}-${{ hashFiles('rebar.config', 'rebar.lock') }}
+          restore-keys: plt-${{ runner.os }}-otp${{ env.OTP_VERSION }}-
+
+      # setup-beam is told the version; this asserts what actually landed on
+      # PATH, against .tool-versions, so the two cannot drift apart silently.
+      - name: Check the Erlang on PATH is the pinned one
+        run: bash scripts/is_erlang_the_pinned_version.sh
+
+      - name: Compile, which builds the NIFs
+        run: rebar3 compile 2>&1 | tee build.log
+
+      # Asserts the shape of success rather than the absence of an error: the
+      # QUIC NIF must actually load from what this build produced. A build
+      # whose NIFs are missing otherwise reaches eunit and fails there, in
+      # tests that have nothing to do with the cause.
+      - name: Check the QUIC NIF loads from this build
+        run: bash scripts/is_quic_nif_built_from_this_tree.sh _build/default/lib build.log
+
+      # Known to be flaky under load. If this goes red intermittently, that is
+      # reported as "flaky, N of M runs", not silenced here.
+      - name: eunit
+        run: rebar3 eunit
+
+      - name: xref
+        run: rebar3 xref
+
+      - name: dialyzer
+        run: rebar3 dialyzer
