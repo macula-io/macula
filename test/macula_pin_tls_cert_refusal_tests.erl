@@ -235,3 +235,36 @@ fleet_value_survives_the_gate_test() ->
                    expected_node_id => ?NODE, pin_tls_cert => false},
     ?assertMatch({ok, _Seed, _Key, _Profile, _Issuer},
                  macula_station_link:seed_checked(FleetShape, key, profile, self())).
+
+%%------------------------------------------------------------------
+%% The gate's ordinary path: a seed with NO trust keys at all
+%%------------------------------------------------------------------
+
+%% ⚠ This is the highest-risk clause on the branch. The `pin_tls_cert'
+%% refusal is now the FIRST clause of `macula_station_link:seed_checked/4',
+%% a function EVERY seed map in the SDK passes through. If it is wrong it
+%% is wrong for every link the SDK starts, not only for a caller who passes
+%% the option.
+%%
+%% The rest of the suite exercises this path constantly, but that is
+%% coverage of a system that happens to route through the clause, not
+%% coverage OF the clause: nothing there would localise a fault to it, and
+%% nothing asserts the seed comes back unaltered.
+%%
+%% Three properties, each of which a plausible mistake in that clause
+%% breaks:
+%%   1. a seed naming no trust keys is ACCEPTED (a clause matching too
+%%      broadly refuses every link in the SDK);
+%%   2. the seed comes back BYTE-IDENTICAL (a clause that normalises or
+%%      strips a key would silently drop a pin);
+%%   3. the pre-existing `expected_node_id_required' refusal still fires
+%%      (a new first clause can shadow the one below it).
+plain_seed_passes_the_gate_unaltered_test() ->
+    Seed = #{host => <<"127.0.0.1">>, port => 4433, expected_node_id => ?NODE},
+    ?assertEqual({ok, Seed, a_key, a_profile, self()},
+                 macula_station_link:seed_checked(Seed, a_key, a_profile, self())).
+
+seed_without_a_pin_is_still_refused_by_the_clause_below_test() ->
+    ?assertEqual({error, {seed, expected_node_id_required}},
+                 macula_station_link:seed_checked(#{host => <<"127.0.0.1">>, port => 4433},
+                                                  a_key, a_profile, self())).
