@@ -15,6 +15,18 @@ name: Test
 
 on:
   push:
+    # Branches only. Without this, `push` matches TAG refs too, and every
+    # release tag ran a second full job on a tree that had just gone green
+    # on main minutes earlier.
+    #
+    # The trade, since it is arguable: that duplicate WAS a check of the
+    # exact tagged commit, and publish-hex.yml's own verify job does not run
+    # the suite, only the package build, the NIF load and a publish dry run.
+    # So a tag no longer has the suite run against it directly. What it has
+    # instead is the guarantee that the tag points at a commit on main that
+    # did, which is what a release tag is for. Restore tag matching here if
+    # that stops being true.
+    branches: ['**']
     paths-ignore:
       - '**.md'
       - 'docs/**'
