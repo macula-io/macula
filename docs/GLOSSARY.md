@@ -96,7 +96,7 @@ An encrypted Erlang distribution channel between two nodes routed through the re
 UDP multicast-based node discovery on `230.1.1.251:45892`. Nodes periodically announce themselves; peers join the cluster automatically. Optional HMAC authentication via shared secret.
 
 ### Cookie
-Erlang distribution cookie. In Macula, also used as the AES-256-GCM key for tunnel encryption. Managed via `macula:get_cookie/0` and `macula:set_cookie/1`.
+Erlang distribution cookie. In Macula, also used as the AES-256-GCM key for tunnel encryption. Managed with Erlang's own `erlang:get_cookie()` and `erlang:set_cookie/1`; the SDK wrappers were removed in 11.0.0.
 
 ---
 

@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [11.5.0] - 2026-09-21
+
+A minor rather than a patch: `station_endpoint_expired` is a new error a caller
+can receive, which is a behaviour change. See "Migrating" below.
+
+Two of these were live defects in running deployments, not tidy-ups: a dial that
+discarded the verification its caller asked for, and a pinned route that
+silently stopped existing after a link bounce.
+
+This is also the first release whose test suite, cross reference analysis and
+success typing ran in continuous integration rather than only on a maintainer's
+machine.
+
 ### Added
 
 - `macula_stream_sessions:sessions/1` — the number of served sessions one
@@ -28,12 +41,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `{seed, expected_node_id_required}`, counted as
   `seed_without_expected_node_id`.
 
-  Nothing unpinned was ever dialled: the refusal is the trust model working.
-  What was lost is the route to that station, until something dialled it
-  again. A pool whose seeds are configured MAPS was never affected, because a
-  seed map carries its own pin; only a direct-dial URL target was, and only
-  after a bounce, which is to say exactly when the fleet is already
-  disturbed.
+  Nothing unpinned was ever dialled: the refusal is the trust model working,
+  and it is counted by name. What was lost is the route to that station, until
+  something dialled it again. A pool whose seeds are configured MAPS was never
+  affected, because a seed map carries its own pin; only a direct-dial URL
+  target was, and only after a bounce, which is to say exactly when the network
+  is already disturbed and a route quietly ceasing to exist is least welcome.
+
+  Observed in a running deployment during a restart: a link went down and its
+  replacement refused its own seed one second later.
 
 - A station endpoint that resolves to an EXPIRED record now reports
   `station_endpoint_expired`, not `station_endpoint_not_found`. Both the
@@ -64,8 +80,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   returns the same refusal; they were missing from the refusal macro, fell
   through to the lookup-failure clause, and were treated as a transient
   transport fault. A caller spent its whole resolve budget re-asking a
-  question whose answer could not change, and in the meantime a later
-  candidate could be dialled off a record that had already been refused.
+  question whose answer could not change.
+
+  The cost was not only the wasted budget. Because the lookup carried on, a
+  later reply could resolve and be dialled past a refusal that should have
+  stopped the resolve outright.
 
 - A peering dial now uses the `verify` its target carries. `connect_opts()`
   accepted the key, `macula_station_link`'s `opts()` documented it and
@@ -81,6 +100,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   self-signed or hostname-mismatched peer that used to succeed will now be
   refused with `invalid peer certificate`. Pass `verify => none` explicitly
   to keep the previous behaviour.
+
+  This was observed in a running deployment: seed maps configured with
+  `verify => webpki`, and the next line in the node's own log reading
+  `UNVERIFIED dial ({verify, none})`.
+
+### Migrating
+
+**`station_endpoint_expired` is a new error atom.** It is the only reason this
+release is a minor rather than a patch.
+
+Before 11.5.0, an endpoint record that was found but refused as stale was
+reported as `station_endpoint_not_found`, the same atom as "no such record".
+Those are now distinct:
+
+| Condition | Before | From 11.5.0 |
+|---|---|---|
+| No endpoint record at all | `station_endpoint_not_found` | `station_endpoint_not_found` |
+| Record served, refused as stale | `station_endpoint_not_found` | `station_endpoint_expired` |
+
+**Who needs to change anything:** only code that matches
+`station_endpoint_not_found` and means by it "stale or absent". That match now
+misses the expired case. Match both atoms, or match the `{unresolved, _}` shape
+with a catch-all.
+
+`resolve_station_endpoint/2,3` returns the bare atom; `call/5,6` and the content
+calls return it wrapped as `{unresolved, station_endpoint_expired}`.
+
+Nothing else changes: the absent case is untouched, and an expired record is
+still asked about again until the deadline exactly as before. A caller that
+already treats every `{unresolved, _}` as "could not resolve" needs no change
+at all.
 
 ## [11.4.0] - 2026-09-18
 

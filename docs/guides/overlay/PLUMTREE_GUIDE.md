@@ -99,7 +99,7 @@ claims, read without verifying, and `hecate_plumtree:process/4` verifies the
 publication before it delivers anything. So the Plumtree layer is the
 subscriber that acts on plumtree frames, and no other overlay subscriber
 should act on them unverified. Report each refusal with
-`macula_station_link:overlay_frame_refused/3` and the frame's `Meta`: a
+macula_station_link:overlay_frame_refused/3 and the frame's `Meta`: a
 refusal of what a relayed frame carries is counted on the link and never
 charged to the station that relayed it.
 

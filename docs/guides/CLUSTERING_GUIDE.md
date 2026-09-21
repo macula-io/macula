@@ -172,22 +172,19 @@ macula sets no distribution cookie, and reads or writes no cookie file. A node's
 
 Keep the cookie out of environment variables and command lines: `/proc/<pid>/environ`, `ps` and `docker inspect` show them.
 
-### `macula:get_cookie/0`
+### Cookies
 
-Returns the running node's cookie, as `erlang:get_cookie/0` does, and raises `not_distributed` on a node that is not distributed. Deprecated, and removed in 11.0.0: call `erlang:get_cookie/0`.
-
-```erlang
-Cookie = macula:get_cookie().
-```
-
-### `macula:set_cookie/1`
-
-Sets the cookie of the running node, and raises `not_distributed` on a node that is not distributed. It writes no file, so a restarted node has its cookie file's cookie again. Deprecated, and removed in 11.0.0: call `erlang:set_cookie/1`.
+The SDK's own cookie helpers, macula:get_cookie/0 and macula:set_cookie/1, were
+removed in 11.0.0. They wrapped Erlang's own and added nothing but a
+`not_distributed` error. Call Erlang directly:
 
 ```erlang
-ok = macula:set_cookie(my_secret_cookie).
-ok = macula:set_cookie(<<"my_secret_cookie">>).
+Cookie = erlang:get_cookie().
+ok = erlang:set_cookie(my_secret_cookie).
 ```
+
+Note that setting a cookie writes no file, so a restarted node reads its cookie
+file's cookie again.
 
 ---
 

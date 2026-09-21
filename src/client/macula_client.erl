@@ -634,7 +634,7 @@ child_spec(Id, Seeds, Opts) ->
 %% themselves, such as `_dht.*': first success across the pool's healthy
 %% links, each CALL targeting the station its link is connected to. It
 %% moves on to the next link only when the CALL never went out on the one
-%% before (`macula_station_link:not_sent/1'). Returns
+%% before (macula_station_link:not_sent/1). Returns
 %% `{error, no_healthy_station}' when no link has completed its
 %% CONNECT/HELLO handshake. A procedure a provider serves is called through
 %% `macula:call/5', which resolves the provider.
