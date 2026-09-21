@@ -119,13 +119,19 @@ jobs:
       # rebar.config sets plt_location local and base_plt_location global, so
       # the PLT lands in both places. Without this every run pays the full
       # PLT build, not just the first.
+      #
+      # The global one goes under $HOME, and a container job sets
+      # HOME=/github/home rather than root's /root. Caching /root/.cache
+      # matched nothing. The local PLT under _build covers the common case
+      # on its own, so this only bites on a cache miss, when rebar.config or
+      # rebar.lock changes the key.
       - name: Cache the dialyzer PLT
         uses: actions/cache@v4
         with:
           path: |
             _build/default/*_plt
             _build/default/*_plt.hash
-            /root/.cache/rebar3
+            /github/home/.cache/rebar3
           key: plt-${{ runner.os }}-otp${{ env.OTP_VERSION }}-${{ hashFiles('rebar.config', 'rebar.lock') }}
           restore-keys: plt-${{ runner.os }}-otp${{ env.OTP_VERSION }}-
 
