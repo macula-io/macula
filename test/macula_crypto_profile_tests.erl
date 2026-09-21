@@ -89,9 +89,32 @@ every_post_quantum_algorithm_is_at_level_5_test() ->
          ?assert(lists:member(maps:get(key_exchange_group, D),
                               [mlkem1024, secp384r1_mlkem1024])),
          ?assertEqual(mldsa87, maps:get(tls_signature_scheme, D)),
-         ?assertEqual(tls_aes_256_gcm_sha384, maps:get(tls_cipher_suite, D)),
          [?assertEqual(mldsa87, hd(maps:get(K, D)))
-          || K <- [identity_signature, connect_proof_signature, status_signature]]
+          || K <- [identity_signature, connect_proof_signature]]
+     end
+     || P <- macula_crypto_profile:profiles()].
+
+%% The mechanism that keeps the profile honest, rather than a note saying
+%% it should be.
+%%
+%% Every field a profile declares must be read by something, so that a
+%% profile cannot drift back into describing behaviour nobody implements.
+%% `key_exchange_group' is the one deliberate exception: it declares the
+%% target the EU profile aims at, nothing negotiates it, and it carries
+%% that warning in `definition()'. Adding a field here without a reader,
+%% or removing that warning, should turn this red.
+%%
+%% Five fields failed this test before it existed: `tls_cipher_suite',
+%% `status_signature', `binding_digest', `content_id_digest' and
+%% `node_id_digest'.
+definition_declares_only_what_is_read_test() ->
+    Read = [profile, tls_signature_scheme, identity_signature,
+            connect_proof_signature],
+    DeclaredButInert = [key_exchange_group],
+    [begin
+         {ok, D} = macula_crypto_profile:definition(P),
+         ?assertEqual(lists:sort(Read ++ DeclaredButInert),
+                      lists:sort(maps:keys(D)))
      end
      || P <- macula_crypto_profile:profiles()].
 
@@ -99,7 +122,7 @@ us_profile_is_post_quantum_only_test() ->
     {ok, D} = macula_crypto_profile:definition(pq_pure),
     ?assertEqual(mlkem1024, maps:get(key_exchange_group, D)),
     [?assertEqual([mldsa87], maps:get(K, D))
-     || K <- [identity_signature, connect_proof_signature, status_signature]].
+     || K <- [identity_signature, connect_proof_signature]].
 
 eu_signatures_pair_mldsa87_with_a_bsi_classical_algorithm_test() ->
     {ok, D} = macula_crypto_profile:definition(pq_hybrid),
@@ -108,7 +131,7 @@ eu_signatures_pair_mldsa87_with_a_bsi_classical_algorithm_test() ->
          [mldsa87, {Classical, _Params}] = maps:get(K, D),
          ?assert(lists:member(Classical, ?BSI_TABLE_5_3))
      end
-     || K <- [identity_signature, connect_proof_signature, status_signature]].
+     || K <- [identity_signature, connect_proof_signature]].
 
 eu_classical_half_is_rsa_pss_4096_with_sha384_test() ->
     {ok, #{identity_signature := [mldsa87, {rsa_pss, Params}]}} =
@@ -117,15 +140,6 @@ eu_classical_half_is_rsa_pss_4096_with_sha384_test() ->
                    digest => sha384, mgf1_digest => sha384, salt_bytes => 48},
                  Params).
 
-digests_follow_the_decisions_test() ->
-    [begin
-         {ok, D} = macula_crypto_profile:definition(P),
-         ?assertEqual(sha384, maps:get(binding_digest, D)),
-         ?assertEqual(sha384, maps:get(content_id_digest, D)),
-         ?assertEqual(sha256, maps:get(node_id_digest, D))
-     end
-     || P <- macula_crypto_profile:profiles()].
-
 %%------------------------------------------------------------------
 %% Helpers
 %%------------------------------------------------------------------
@@ -133,11 +147,9 @@ digests_follow_the_decisions_test() ->
 algorithm_names(Profile) ->
     {ok, D} = macula_crypto_profile:definition(Profile),
     Signatures = lists:append([maps:get(K, D) || K <- [identity_signature,
-                                                       connect_proof_signature,
-                                                       status_signature]]),
+                                                       connect_proof_signature]]),
     [maps:get(key_exchange_group, D),
-     maps:get(tls_signature_scheme, D),
-     maps:get(tls_cipher_suite, D)
+     maps:get(tls_signature_scheme, D)
      | [signature_name(S) || S <- Signatures]].
 
 signature_name({Name, _Params}) -> Name;
