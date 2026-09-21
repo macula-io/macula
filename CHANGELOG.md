@@ -12,7 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **`pin_tls_cert => true` is now REFUSED**, with
-  `{error, {pin_tls_cert, no_pin_primitive_for_mldsa87_identity}}`. It is
+  `{error, {refused, {pin_tls_cert, no_pin_primitive_for_mldsa87_identity}}}`. It is
   refused from `macula:connect/2`, `call_station/8`, `call_stream_station/7`,
   `put_content_station/5` and `get_content_station/5`, and whether the key
   arrives in the options map, in a seed map or in a station map.
@@ -32,6 +32,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   identity: `macula_quic`'s `verify_pubkey` extracts an Ed25519 SPKI at exactly
   32 bytes, station identity is ML-DSA-87, and a node_id is a SHA-256 hash
   rather than a key. See macula#15.
+
+- **A pinned seed is refused PERMANENTLY, not transiently.** The seed-gate
+  refusal fell to `permanent_refusal/1`'s transient catch-all, so a pool given
+  a seed carrying `pin_tls_cert => true` scheduled a respawn every second,
+  refused the same seed again, and looped forever on a link that can never
+  start: uncounted, absent from `status/1`, and visible to a caller only as
+  `{error, not_connected}`. It is now `{permanent, pin_tls_cert_refused}` and
+  counted in `status/1`'s `refused_dials`.
 
 - **`macula_client:child_spec/3` now starts `{macula, connect, ...}`**, not
   `{macula_client, connect, ...}`. The supervised start is the path the facade

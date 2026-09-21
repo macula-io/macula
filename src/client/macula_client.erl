@@ -173,7 +173,8 @@
     replication_factor := pos_integer(),
     pubsub_gap_skips   := non_neg_integer(),
     refused_dials      := #{too_many_direct_links | new_peer_budget_spent | unusable_seed
-                            | link_start_waits_for_issuer | seed_without_expected_node_id => pos_integer()},
+                            | link_start_waits_for_issuer | seed_without_expected_node_id
+                            | pin_tls_cert_refused => pos_integer()},
     issuer_restarts    := non_neg_integer(),
     issuer_losses      := non_neg_integer()
 }.
@@ -731,7 +732,7 @@ call_station(Pool, Station, Target, Realm, Procedure, Payload, TimeoutMs, UcanTo
 %% the station's node_id). `pin_tls_cert => true' is REFUSED, see
 %% `macula:call_station/8'. (`false' to
 %% enforce that pin at the application layer only — see
-%% `macula_peering_conn:connect_opts()' — needed against a station
+%% `false' and an absent key pass and change nothing — needed against a station
 %% whose TLS is terminated by a PKI unrelated to its macula identity,
 %% e.g. production behind Let's Encrypt) in `LinkOpts'. The pool's own
 %% `connect/2'-time `verify'/`expected_node_id' are fixed at connect
@@ -1751,9 +1752,14 @@ after_link_start({error, Reason}, Seed, S) ->
         seed = Seed, pid = undefined, mon = undefined},
     start_refused(permanent_refusal(Reason), Seed, S#state{links = (S#state.links)#{Seed => Empty}}).
 
-%% A seed that names no expected node_id will never start a link, so it
-%% counts once and is not tried again; any other refusal is tried again
-%% after the respawn delay.
+%% A seed that can never start a link counts once and is not tried again;
+%% any other refusal is tried again after the respawn delay.
+%%
+%% ⚠ A refusal that is deterministic in the SEED must be permanent. Left to
+%% the transient catch-all it schedules a respawn every
+%% ?LINK_RESPAWN_DELAY_MS, the gate refuses the same seed again, and the
+%% pool loops forever on a link that cannot start, uncounted and invisible
+%% to `status/1'.
 start_refused({permanent, Kind}, _Seed, S) ->
     count_refused_dial(Kind, S);
 start_refused(transient, Seed, S) ->
@@ -1761,6 +1767,7 @@ start_refused(transient, Seed, S) ->
     S.
 
 permanent_refusal({seed, expected_node_id_required}) -> {permanent, seed_without_expected_node_id};
+permanent_refusal({seed, {pin_tls_cert, _Reason}}) -> {permanent, pin_tls_cert_refused};
 permanent_refusal(_Transient) -> transient.
 
 %% Carries a seed's `discovered'/`ever_connected'/`spawned_at' across
@@ -2850,8 +2857,8 @@ station_seed(_) ->
 %% Pinned trust: `expected_node_id' set to the row's own `node_id',
 %% no TLS certificate pin is possible for a bare
 %% IP to validate against WebPKI-style -- trust is enforced entirely at
-%% the application layer, via the HELLO frame's Ed25519-signed
-%% `node_id', exactly the mode `macula_peering_conn:connect_opts()'
+%% the application layer, via the handshake's signed
+%% `node_id', exactly the mode the peering layer
 %% documents for "TLS terminated by a PKI unrelated to its macula
 %% identity". Requires a `node_id' to pin against -- without one there
 %% is nothing safe to authenticate a bare IP with, so it is skipped

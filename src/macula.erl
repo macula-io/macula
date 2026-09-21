@@ -166,6 +166,18 @@
 %%   <li>`alpn' — QUIC ALPN list (default `[<<"macula">>]').</li>
 %%   <li>`connect_timeout_ms' — per-link CONNECT/HELLO deadline (default 30_000).</li>
 %%   <li>`dedup_sweep_ms': how often the inbound publication dedup table is swept.</li>
+%%   <li>`verify' — TLS chain policy for every link this pool dials:
+%%       `none' (the default) or `webpki'. A station's leaf is self-signed
+%%       or issued by an unrelated PKI, and the signed handshake, not the
+%%       chain, binds a connection to the node_id dialled.</li>
+%%   <li>`expected_node_id' — the station node_id the handshake must
+%%       prove, for every link this pool dials.</li>
+%%   <li>`pin_tls_cert' — ⚠ `true' is REFUSED, here and on every seed in
+%%       `Seeds', with
+%%       `{error, {refused, {pin_tls_cert, no_pin_primitive_for_mldsa87_identity}}}'.
+%%       No pin primitive can express an ML-DSA-87 identity, so the option
+%%       could never be honoured; it pinned nothing at any value. `false'
+%%       and an absent key pass and change nothing. See macula#15.</li>
 %% </ul>
 %%
 %% Legacy opts silently dropped (with a one-shot `logger:notice'):
@@ -178,7 +190,7 @@
 -spec connect([macula_client:seed()], macula_client:opts()) ->
     {ok, pool()} | {error, term()}.
 connect(Seeds, Opts) when is_list(Seeds), is_map(Opts) ->
-    refused(pin_tls_cert_checked(Seeds, Opts),
+    refused(seeds_checked(Seeds, Opts),
             fun() -> macula_client:connect(Seeds, Opts) end).
 
 %% @doc Stop a V2 pool. Every subscriber receives a final
@@ -299,8 +311,9 @@ call(Pool, Realm, Procedure, Payload, TimeoutMs) ->
 -spec call_station(pool(), macula_client:seed(), <<_:256>>, realm(), procedure(),
                    term(), 1..600_000) -> {ok, term()} | {error, term()}.
 call_station(Pool, Station, Target, Realm, Procedure, Payload, TimeoutMs) ->
-    macula_client:call_station(Pool, Station, Target, Realm, Procedure, Payload,
-                               TimeoutMs).
+    refused(pin_tls_cert_checked(Station),
+            fun() -> macula_client:call_station(Pool, Station, Target, Realm,
+                                                Procedure, Payload, TimeoutMs) end).
 
 %% @doc As `call_station/7', presenting a capability token to a gated
 %% provider via `Opts' (`#{ucan_token => Token}'). Empty/absent = none.
@@ -309,14 +322,14 @@ call_station(Pool, Station, Target, Realm, Procedure, Payload, TimeoutMs) ->
 %% `macula_client:call_station/9'), and may set `dial_timeout_ms', how
 %% much of `TimeoutMs' the wait for a fresh link's handshake may take
 %% (default: all of it). `pin_tls_cert => true' is REFUSED with
-%% `{error, {pin_tls_cert, no_pin_primitive_for_mldsa87_identity}}':
+%% `{error, {refused, {pin_tls_cert, no_pin_primitive_for_mldsa87_identity}}}':
 %% no pin primitive can express an ML-DSA-87 identity (macula#15).
 %% `false' and absence pass.
 -spec call_station(pool(), macula_client:seed(), <<_:256>>, realm(), procedure(),
                    term(), 1..600_000, map()) ->
     {ok, term()} | {error, term()}.
 call_station(Pool, Station, Target, Realm, Procedure, Payload, TimeoutMs, Opts) ->
-    refused(pin_tls_cert_checked(Station, Opts),
+    refused(target_checked(Station, Opts),
             fun() -> do_call_station(Pool, Station, Target, Realm, Procedure,
                                      Payload, TimeoutMs, Opts) end).
 
@@ -697,14 +710,14 @@ put_content_station(Pool, Station, Bytes, TimeoutMs) ->
 %% @doc As `put_content_station/4', with a per-call TLS trust override
 %% for this dial — `verify', `expected_node_id' (see `call_station/8').
 %% `pin_tls_cert => true' is REFUSED with
-%% `{error, {pin_tls_cert, no_pin_primitive_for_mldsa87_identity}}':
+%% `{error, {refused, {pin_tls_cert, no_pin_primitive_for_mldsa87_identity}}}':
 %% no pin primitive can express an ML-DSA-87 identity (macula#15).
 %% `false' and absence pass.
 -spec put_content_station(pool(), macula_client:seed(), binary(),
                           pos_integer(), map()) ->
     {ok, mcid()} | {error, term()}.
 put_content_station(Pool, Station, Bytes, TimeoutMs, Opts) ->
-    refused(pin_tls_cert_checked(Station, Opts),
+    refused(target_checked(Station, Opts),
             fun() -> do_put_content_station(Pool, Station, Bytes, TimeoutMs, Opts) end).
 
 do_put_content_station(Pool, Station, Bytes, TimeoutMs, Opts) ->
@@ -762,7 +775,7 @@ get_content_station(Pool, Station, MCID, TimeoutMs) ->
 %% @doc As `get_content_station/4', with a per-call TLS trust override
 %% for this dial — `verify', `expected_node_id' (see `call_station/8').
 %% `pin_tls_cert => true' is REFUSED with
-%% `{error, {pin_tls_cert, no_pin_primitive_for_mldsa87_identity}}':
+%% `{error, {refused, {pin_tls_cert, no_pin_primitive_for_mldsa87_identity}}}':
 %% no pin primitive can express an ML-DSA-87 identity (macula#15).
 %% `false' and absence pass.
 %% See `get_content/2' on why a malformed `MCID' is rejected here
@@ -772,7 +785,7 @@ get_content_station(Pool, Station, MCID, TimeoutMs) ->
     {ok, binary()} | {error, not_found | invalid_mcid | term()}.
 get_content_station(Pool, Station, <<2, Codec, _:48/binary>> = MCID, TimeoutMs, Opts)
   when Codec =:= 16#55 orelse Codec =:= 16#56 ->
-    refused(pin_tls_cert_checked(Station, Opts),
+    refused(target_checked(Station, Opts),
             fun() -> do_get_content_station(Pool, Station, MCID, TimeoutMs, Opts) end);
 get_content_station(_Pool, _Station, _MCID, _TimeoutMs, _Opts) ->
     {error, invalid_mcid}.
@@ -914,7 +927,7 @@ call_stream_station(Pool, Station, Target, Realm, Procedure, Args, Opts)
   when is_pid(Pool), is_binary(Target), byte_size(Target) =:= 32,
        is_binary(Realm), byte_size(Realm) =:= 32,
        is_binary(Procedure), is_map(Opts) ->
-    refused(pin_tls_cert_checked(Station, Opts),
+    refused(target_checked(Station, Opts),
             fun() -> macula_client:call_stream_station(
                        Pool, Station, Target, Realm, Procedure, Args, Opts) end).
 
@@ -1241,7 +1254,16 @@ joined({error, _} = Refusal) ->
 %% The seeds and options of the pool a join starts: the relays, when every one names the node_id it expects, and the
 %% node identity key when one is given.
 join_pool_args(#{relays := Relays} = Opts) ->
-    pinned_relays(lists:all(fun pinned_relay/1, Relays), Relays, maps:with([node_identity], Opts)).
+    joinable(seeds_checked(Relays, Opts), Relays, Opts).
+
+%% A relay carrying `pin_tls_cert => true' is refused here rather than at
+%% link start, so a join reports it instead of leaving a pool respawning a
+%% seed that can never start.
+joinable(ok, Relays, Opts) ->
+    pinned_relays(lists:all(fun pinned_relay/1, Relays), Relays,
+                  maps:with([node_identity], Opts));
+joinable({error, _} = Refusal, _Relays, _Opts) ->
+    Refusal.
 
 pinned_relays(true, Relays, PoolOpts) -> {ok, Relays, PoolOpts};
 pinned_relays(false, _Relays, _PoolOpts) -> {error, {relays, expected_node_id_required}}.
@@ -1379,9 +1401,15 @@ found(error, Keys, Map, Default) -> first_found(Keys, Map, Default).
 %% `pin_tls_cert' is refused, not accepted and ignored
 %%------------------------------------------------------------------
 
-%% Every public entry point that takes a per-dial TLS trust map runs this
-%% before it does anything else. `pin_tls_cert => true' is refused;
-%% `false' and absence pass through.
+%% Every public entry point that takes a seed, a station or a per-dial TLS
+%% trust map runs this before it does anything else: `connect/2',
+%% `call_station/7,8', `call_stream_station/7', `put_content_station/5',
+%% `get_content_station/5' and `join_mesh/1'. `pin_tls_cert => true' is
+%% refused; `false' and absence pass through.
+%%
+%% ⚠ An earlier version of this comment said "every public entry point",
+%% and `call_station/7' and `join_mesh/1' were not among them. The list is
+%% written out now so the claim can be checked against it.
 %%
 %% WHY IT CANNOT BE HONOURED, so the next reader does not re-litigate it.
 %% The option had a reader, `macula_peering_conn:dial_trust_opts/1', until
@@ -1410,22 +1438,47 @@ found(error, Keys, Map, Default) -> first_found(Keys, Map, Default).
 %% station maps are where the option historically lived, so checking only
 %% `Opts' advertises a check that does not happen on the path a reader of
 %% our own CHANGELOG would take.
--spec pin_tls_cert_checked(term()) -> ok | {error, {pin_tls_cert, atom()}}.
+%%
+%% The refusal is wrapped in `refused' because nothing is sent and every
+%% candidate refuses it identically, which is `request' scope in the dial
+%% taxonomy. Left bare it would fall to a catch-all and be classified
+%% `provider', meaning "may have reached a provider", which is the wrong
+%% scope for a refusal that sent nothing.
+%%
+%% ⚠ MAPS ONLY. A seed may be a charlist (`seed()' includes `string()'),
+%% so an `is_list' clause here would walk `"quic://..."' character by
+%% character and be correct only by accident, every integer falling to the
+%% catch-all. The list is mapped over by `seeds_checked/2', which knows it
+%% has a list OF seeds rather than a seed that happens to be a list.
+-spec pin_tls_cert_checked(map() | macula_client:seed()) ->
+        ok | {error, {refused, {pin_tls_cert, atom()}}}.
 pin_tls_cert_checked(#{pin_tls_cert := true}) ->
-    {error, {pin_tls_cert, no_pin_primitive_for_mldsa87_identity}};
-pin_tls_cert_checked(List) when is_list(List) ->
-    first_refusal([pin_tls_cert_checked(E) || E <- List]);
-pin_tls_cert_checked(_Other) ->
+    {error, {refused, {pin_tls_cert, no_pin_primitive_for_mldsa87_identity}}};
+pin_tls_cert_checked(_NotAPinnedMap) ->
     ok.
 
-%% Both a seed/station and an option map, in the argument order the public
-%% functions take them.
-pin_tls_cert_checked(Target, Opts) ->
-    first_refusal([pin_tls_cert_checked(Target), pin_tls_cert_checked(Opts)]).
+%% `connect/2' and `join_mesh/1': a LIST of seeds, plus the option map.
+-spec seeds_checked([macula_client:seed()], map()) ->
+        ok | {error, {refused, {pin_tls_cert, atom()}}}.
+seeds_checked(Seeds, Opts) when is_list(Seeds) ->
+    first_error([pin_tls_cert_checked(S) || S <- Seeds] ++
+                  [pin_tls_cert_checked(Opts)]).
 
-first_refusal([{error, _} = Refusal | _Rest]) -> Refusal;
-first_refusal([ok | Rest]) -> first_refusal(Rest);
-first_refusal([]) -> ok.
+%% One station or seed, plus the option map, in the order the public
+%% functions receive them.
+-spec target_checked(macula_client:seed(), map()) ->
+        ok | {error, {refused, {pin_tls_cert, atom()}}}.
+target_checked(Target, Opts) ->
+    first_error([pin_tls_cert_checked(Target), pin_tls_cert_checked(Opts)]).
+
+%% Named `first_error' and not `first_refusal': `macula_station_link' has a
+%% `first_refusal/1' of its own with a different shape (it folds `none' and
+%% a refusal term, not `ok' and an `{error, _}'). Two functions of the same
+%% name meaning different things in one module family is the small version
+%% of a contract in two places.
+first_error([{error, _} = Refusal | _Rest]) -> Refusal;
+first_error([ok | Rest]) -> first_error(Rest);
+first_error([]) -> ok.
 
 %% Run the call, or return the refusal that stopped it.
 refused(ok, Call) -> Call();

@@ -38,7 +38,7 @@ nothing written.
 plus the same per-call TLS trust override as `call_station/8`: `verify` and
 `expected_node_id` (see the [RPC Guide](../rpc/RPC_GUIDE.md)).
 `pin_tls_cert => true` is REFUSED with
-`{error, {pin_tls_cert, no_pin_primitive_for_mldsa87_identity}}`; `false` and an absent key
+`{error, {refused, {pin_tls_cert, no_pin_primitive_for_mldsa87_identity}}}`; `false` and an absent key
 pass. See [macula#15](https://github.com/macula-io/macula/issues/15).
 
 This is what [`macula_streamer`/`macula_stream_sink` wrap](STREAMING_GUIDE.md#supervised-wrappers-macula_streamer-macula_stream_sink) —

@@ -18,8 +18,8 @@
 %%
 %% ⚠ `key_exchange_group' IS A TARGET AND NOT A DESCRIPTION OF THE WIRE.
 %% Neither profile's group is negotiated by anything this node runs. See
-%% `key_exchange_group' in `definition()' below for what is actually
-%% negotiated and why the field is kept anyway. Read a profile NAME as
+%% `definition/1' for what is actually negotiated and why the field is
+%% kept anyway. Read a profile NAME as
 %% naming the policy the profile serves, never as a statement about the
 %% key exchange a connection got.
 %%

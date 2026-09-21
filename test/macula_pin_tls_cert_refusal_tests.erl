@@ -30,10 +30,14 @@
 %%% asserted nothing and no test guarded it, which is the same defect the
 %%% refusal itself exists to fix.
 %%%
-%%% What IS true, and what `fleet_value_survives_the_gate_test' guards: the
-%%% fleet's value must keep working wherever a check is placed. A refusal
-%%% keyed on the KEY'S PRESENCE rather than on `true' is the move that would
-%%% break every station dial, and that test goes red if anyone makes it.
+%%% What IS true, and what `station_target_shape_reaches_hello_test' guards:
+%%% macula-station's exact dial target, `pin_tls_cert => false' and
+%%% `verify => none' included, must complete a handshake through
+%%% `macula_peering:connect/1'. A refusal added in the peering layer and
+%%% keyed on the KEY'S PRESENCE would break every station dial, and that
+%%% test goes red if anyone makes it. `seed_checked/4' is an SDK gate the
+%%% fleet never reaches, so a test there guards SDK callers and nothing
+%%% about the fleet.
 %%% The facade and the seed gate are the right homes for a different reason:
 %%% macula-station reaches neither, calling `macula_peering:connect/1'
 %%% directly, so a check in either cannot touch the fleet by construction.
@@ -43,7 +47,13 @@
 
 -include_lib("eunit/include/eunit.hrl").
 
--define(REFUSAL, {error, {pin_tls_cert, no_pin_primitive_for_mldsa87_identity}}).
+%% Wrapped in `refused' on purpose: nothing is sent and every candidate
+%% refuses it identically, which is `request' scope in the dial taxonomy.
+%% Bare, it would fall to a catch-all and be classified `provider', meaning
+%% "may have reached a provider", which is wrong for a refusal that sent
+%% nothing.
+-define(REFUSAL, {error, {refused, {pin_tls_cert, no_pin_primitive_for_mldsa87_identity}}}).
+-define(SEED_REFUSAL, {error, {seed, {pin_tls_cert, no_pin_primitive_for_mldsa87_identity}}}).
 -define(NODE, <<7:256>>).
 -define(REALM, <<0:256>>).
 -define(SEED, <<"quic://127.0.0.1:4433">>).
@@ -211,26 +221,82 @@ seed_map_test_() ->
       %% and the fleet does NOT: macula-station calls
       %% `macula_peering:connect/1' and never builds a station_link.
       {"seed_checked/4 refuses the seed itself, as the backstop under the facade",
-       ?_assertEqual({error, {seed, {pin_tls_cert, no_pin_primitive_for_mldsa87_identity}}},
-                     macula_station_link:seed_checked(?PINNED_SEED, key, profile, self()))}]}.
+       ?_assertEqual(?SEED_REFUSAL,
+                     macula_station_link:seed_checked(?PINNED_SEED, key, profile, self()))},
+      %% R2: `call_station/7' takes no option map, so it was not covered by
+      %% the `Opts'-shaped checks and a pinned STATION rode straight past.
+      {"call_station/7, which takes no option map, still refuses a pinned station",
+       fun() ->
+           {ok, Pool} = macula:connect([], #{}),
+           try ?assertEqual(?REFUSAL,
+                            macula:call_station(Pool, ?PINNED_SEED, ?NODE, ?REALM,
+                                                <<"x.y">>, #{}, 300))
+           after ok = macula:close(Pool)
+           end
+       end},
+      {"join_mesh/1 refuses a pinned relay",
+       ?_assertEqual(?REFUSAL, macula:join_mesh(#{relays => [?PINNED_SEED]}))}]}.
+
+%%------------------------------------------------------------------
+%% The backstop refusal must be PERMANENT, not transient
+%%------------------------------------------------------------------
+
+%% ⚠ This is the defect the seed gate INTRODUCED. `permanent_refusal/1`
+%% had one permanent clause and a transient catch-all, so the new refusal
+%% fell through, `start_refused(transient, ...)` scheduled a respawn every
+%% second, the gate refused the same seed again, and the pool looped
+%% forever on a link that can never start: uncounted, absent from
+%% `status/1', and reported to a caller only as `not_connected'.
+%%
+%% Exercised through `macula_client:connect/2', deliberately. The facade
+%% refuses this seed outright, so the only way to reach the gate with it
+%% is the path that bypasses the facade, which is exactly the path that
+%% would have looped in production.
+backstop_refusal_is_permanent_and_counted_test() ->
+    {ok, _} = application:ensure_all_started(macula),
+    {ok, Pool} = macula_client:connect([?PINNED_SEED], #{}),
+    try
+        %% Longer than ?LINK_RESPAWN_DELAY_MS (1s): if the refusal were
+        %% transient there would be repeated start attempts in this window.
+        timer:sleep(1500),
+        {ok, #{refused_dials := Refused}} = macula_client:status(Pool),
+        ?assertEqual(1, maps:get(pin_tls_cert_refused, Refused, 0))
+    after ok = macula_client:close(Pool)
+    end.
 
 %% The supervised start is the path the facade's own documentation tells
 %% production callers to use, and it pointed at `macula_client:connect/2',
 %% so it bypassed the facade and every check on it.
-child_spec_start_goes_through_the_facade_test() ->
-    ?assertMatch(#{start := {macula, connect, [[], #{}]}},
-                 macula:child_spec(a_pool, [], #{})).
+%%
+%% ⚠ Asserted on BEHAVIOUR, not on the spec's shape. An earlier version
+%% matched `#{start := {macula, connect, _}}', which passes against a
+%% facade that checks nothing: it pins the data and proves nothing about
+%% what happens when the supervisor runs it. The legitimate start is
+%% already covered by `macula_client_pool_keys_tests'.
+child_spec_with_a_pinned_seed_fails_to_start_test() ->
+    {ok, _} = application:ensure_all_started(macula),
+    Spec = macula:child_spec(a_pinned_pool, [?PINNED_SEED], #{}),
+    process_flag(trap_exit, true),
+    Result = supervisor:start_link(macula_test_one_for_one, [Spec]),
+    process_flag(trap_exit, false),
+    ?assertMatch({error, {shutdown, {failed_to_start_child, a_pinned_pool,
+                                     {refused, {pin_tls_cert, _}}}}},
+                 Result).
 
 %%------------------------------------------------------------------
 %% The fleet's value survives the gate
 %%------------------------------------------------------------------
 
-%% macula-station's `do_dial/1' builds its target with
-%% `pin_tls_cert => false' on every dial. Any refusal anywhere must let
-%% that through. This goes red the moment a check is keyed on the key's
-%% presence instead of on `true', which is the change that would take the
-%% fleet down.
-fleet_value_survives_the_gate_test() ->
+%% ⚠ NAMED FOR WHAT IT COVERS. This exercises `seed_checked/4', which is
+%% an SDK gate the FLEET NEVER REACHES: macula-station calls
+%% `macula_peering:connect/1' directly. A presence-keyed refusal here
+%% breaks SDK callers, not the fleet, so this test says nothing about the
+%% fleet and an earlier name and comment claimed that it did.
+%%
+%% The fleet's guarantee is `station_target_shape_reaches_hello_test'
+%% below, which drives macula-station's exact target through a real
+%% handshake.
+sdk_seed_with_false_passes_seed_checked_test() ->
     FleetShape = #{host => <<"127.0.0.1">>, port => 4433,
                    expected_node_id => ?NODE, pin_tls_cert => false},
     ?assertMatch({ok, _Seed, _Key, _Profile, _Issuer},
@@ -268,3 +334,49 @@ seed_without_a_pin_is_still_refused_by_the_clause_below_test() ->
     ?assertEqual({error, {seed, expected_node_id_required}},
                  macula_station_link:seed_checked(#{host => <<"127.0.0.1">>, port => 4433},
                                                   a_key, a_profile, self())).
+
+%%------------------------------------------------------------------
+%% The fleet's guarantee, through a real handshake
+%%------------------------------------------------------------------
+
+%% ⚠ THIS IS THE TEST THE PLACEMENT CLAIM NEEDS, and the third attempt at
+%% it. Round one asked for it by name; round two found that the stand-in
+%% called `seed_checked/4', which the fleet never reaches, so it could not
+%% detect the change it claimed to guard against.
+%%
+%% macula-station's `do_dial/1' builds exactly this target and hands it to
+%% `macula_peering:connect/1', never touching `macula_station_link'. So
+%% this drives that target through the loopback pair and asserts the
+%% handshake completes. A refusal added anywhere in the peering layer and
+%% keyed on `pin_tls_cert' being PRESENT rather than on `true' would take
+%% every station-to-station dial on the fleet down, and would turn this
+%% red.
+station_target_shape_reaches_hello_test_() ->
+    {setup,
+     fun macula_peering_handshake_tests:setup/0,
+     fun macula_peering_handshake_tests:cleanup/1,
+     fun(Ctx) ->
+         [{"macula-station's exact dial target completes a handshake",
+           {timeout, 30, fun() -> station_target_reaches_hello(Ctx) end}}]
+     end}.
+
+station_target_reaches_hello(Ctx) ->
+    World = macula_peering_handshake_tests:world(Ctx, #{}),
+    %% The shape `macula_station_outbound_link:do_dial/1' builds, via
+    %% `maybe_verify/2': the trust keys the fleet carries on every dial.
+    StationShape = #{pin_tls_cert => false, verify => none},
+    {ClientPid, ServerPid} =
+        macula_peering_handshake_tests:connect(
+          World, #{mode => off, accept_owner => self(),
+                   target_extra => StationShape}),
+    expect_connected(ClientPid),
+    expect_connected(ServerPid),
+    [catch macula_peering:close(P, test_cleanup) || P <- [ClientPid, ServerPid]],
+    macula_peering_handshake_tests:forget_world(World).
+
+expect_connected(Pid) ->
+    receive
+        {macula_peering, connected, Pid, _PeerNodeId} -> ok
+    after 5_000 ->
+        erlang:error({no_connected_notification, Pid})
+    end.

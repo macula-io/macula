@@ -96,7 +96,7 @@ direct-dial wraps](RPC_GUIDE.md#direct-dial-start_link_direct-advertise_direct).
 ```
 
 > **`pin_tls_cert => true` is REFUSED.** It returns
-> `{error, {pin_tls_cert, no_pin_primitive_for_mldsa87_identity}}`, from `connect/2`,
+> `{error, {refused, {pin_tls_cert, no_pin_primitive_for_mldsa87_identity}}}`, from `connect/2`,
 > `call_station/8`, `call_stream_station/7`, `put_content_station/5` and
 > `get_content_station/5`, and whether you put it in the options map or in a
 > seed or station map. `false` and an absent key pass through and change

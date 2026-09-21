@@ -23,6 +23,12 @@
 %%%-------------------------------------------------------------------
 -module(macula_peering_handshake_tests).
 
+%% The loopback pair, reused by `macula_pin_tls_cert_refusal_tests' to drive
+%% macula-station's exact dial target through a real handshake. Exported
+%% rather than duplicated: a second copy of this setup would drift.
+-export([setup/0, cleanup/1, world/2, connect/2, forget_world/1]).
+-export([start_listener/1, stop_listener/1]).
+
 -include_lib("eunit/include/eunit.hrl").
 
 -export([log/2]).
@@ -673,8 +679,13 @@ world(#{der := Der} = Ctx, Options) ->
 %% still, a minute after T0 unless the test says otherwise.
 connect(#{client_key := ClientKey, client_issuer := ClientIssuer, station_key := StationKey, port := Port} = World,
         Options) ->
-    Target = #{host => <<"127.0.0.1">>, port => Port, timeout_ms => 5_000,
-               expected_node_id => maps:get(expected, Options, node_id(StationKey))},
+    %% `target_extra' lets another test module drive a target of its own
+    %% shape through a real handshake. Additive and empty by default, so
+    %% every test in this module is unaffected.
+    Target = maps:merge(
+               #{host => <<"127.0.0.1">>, port => Port, timeout_ms => 5_000,
+                 expected_node_id => maps:get(expected, Options, node_id(StationKey))},
+               maps:get(target_extra, Options, #{})),
     {ok, Client} = macula_peering:connect(
                      maps:merge(maps:with([liveness_interval_ms,
                                            liveness_max_misses], Options),
