@@ -12,14 +12,24 @@ crate-type = ["cdylib"]
 [dependencies]
 rustler = "0.34"
 quinn = "0.11"
-rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"] }
+# aws-lc-rs, NOT ring: ring's provider offers X25519, secp256r1 and
+# secp384r1 and NO post-quantum key exchange group at all, so a handshake
+# over it is recordable today and decryptable by a quantum adversary later.
+# aws-lc-rs carries ML-KEM and the hybrids. See config::pq_provider.
+#
+# It is NOT post-quantum SIGNATURES: this provider's SUPPORTED_SIG_ALGS is
+# ECDSA, Ed25519 and RSA, the same classical set as ring, and rustls-webpki
+# has no ML-DSA. The swap buys key exchange and nothing else.
+rustls = { version = "0.23", default-features = false, features = ["aws-lc-rs", "logging", "std", "tls12"] }
 rustls-pemfile = "2"
 webpki-roots = "1.0"
 tokio = { version = "1", features = ["full"] }
 socket2 = { version = "0.5", features = ["all"] }
 bytes = "1"
 # Self-signed Ed25519 cert generation for pubkey-anchored QUIC.
-rcgen = { version = "0.14", default-features = false, features = ["pem", "ring"] }
+# Same provider as rustls above, so one crypto backend is linked rather
+# than two. rcgen spells the feature with underscores.
+rcgen = { version = "0.14", default-features = false, features = ["pem", "aws_lc_rs"] }
 # rcgen exposes its `not_before`/`not_after` as `time::OffsetDateTime`.
 time = "0.3"
 # Extract Ed25519 SPKI pubkey from leaf cert for pubkey-pin

@@ -60,14 +60,7 @@ pub fn build_server_config(
         .cloned()
         .ok_or_else(|| format!("no certificate found in {}", certfile))?;
 
-    let builder = rustls::ServerConfig::builder();
-    check_key_matches_leaf(&certs, &key, builder.crypto_provider())?;
-    let mut server_crypto = builder
-        .with_no_client_auth()
-        .with_single_cert(certs, key)
-        .map_err(|e| format!("TLS config error: {}", e))?;
-
-    server_crypto.alpn_protocols = settings.alpn.iter().map(|s| s.as_bytes().to_vec()).collect();
+    let server_crypto = server_tls_config(certs, key, &settings.alpn)?;
 
     let mut transport = TransportConfig::default();
     transport.max_idle_timeout(Some(
@@ -87,6 +80,96 @@ pub fn build_server_config(
     config.transport_config(Arc::new(transport));
 
     Ok((config, leaf))
+}
+
+/// The crypto provider every configuration here is built from, with the key
+/// exchange groups it may negotiate NAMED RATHER THAN DEFAULTED.
+///
+/// ⚠ THE DEFAULT LIST IS NOT GOOD ENOUGH AND THAT IS THE POINT OF THIS
+/// FUNCTION. `aws_lc_rs::DEFAULT_KX_GROUPS` is four groups of which exactly
+/// one is post-quantum, `X25519MLKEM768`, and it is offered alongside three
+/// classical ones, so a peer that prefers classical gets classical and the
+/// handshake is recordable today and decryptable later. Taking the default
+/// would leave that outcome available.
+///
+/// The order is the preference order. `SECP256R1MLKEM768` leads because it is
+/// the hybrid on BSI TR-02102-2's list; X25519 appears nowhere in TR-02102-2,
+/// so `X25519MLKEM768` carries no European hook even though it is what most
+/// of the internet is deploying. It is second because most of the internet
+/// deploying it is exactly what makes it interoperable.
+///
+/// Every group here is post-quantum. Nothing classical is offered, so no
+/// negotiation can land on one: a peer with no post-quantum group in common
+/// fails to connect rather than quietly agreeing on X25519. That is
+/// deliberate and it is the property `macula_quic_pq_kx_tests` asserts from
+/// the other side, by showing a classical-only peer CANNOT connect.
+pub fn pq_provider() -> CryptoProvider {
+    CryptoProvider {
+        kx_groups: vec![
+            rustls::crypto::aws_lc_rs::kx_group::SECP256R1MLKEM768,
+            rustls::crypto::aws_lc_rs::kx_group::X25519MLKEM768,
+            rustls::crypto::aws_lc_rs::kx_group::MLKEM1024,
+            rustls::crypto::aws_lc_rs::kx_group::MLKEM768,
+        ],
+        ..rustls::crypto::aws_lc_rs::default_provider()
+    }
+}
+
+/// The rustls half of a listener's configuration, before Quinn wraps it.
+///
+/// Split out from `build_server_config` so that a test drives the
+/// configuration this NIF actually serves with, rather than a second copy of
+/// it built the same way. WHICH KEY EXCHANGE GROUPS A HANDSHAKE MAY NEGOTIATE
+/// IS DECIDED HERE, by the crypto provider the builder defaults to, and a test
+/// that built its own configuration would be asserting about its own copy.
+pub fn server_tls_config(
+    certs: Vec<CertificateDer<'static>>,
+    key: PrivateKeyDer<'static>,
+    alpn: &[String],
+) -> Result<rustls::ServerConfig, String> {
+    let builder = rustls::ServerConfig::builder_with_provider(Arc::new(pq_provider()))
+        .with_safe_default_protocol_versions()
+        .map_err(|e| format!("TLS versions: {}", e))?;
+    check_key_matches_leaf(&certs, &key, builder.crypto_provider())?;
+    let mut crypto = builder
+        .with_no_client_auth()
+        .with_single_cert(certs, key)
+        .map_err(|e| format!("TLS config error: {}", e))?;
+    crypto.alpn_protocols = alpn.iter().map(|s| s.as_bytes().to_vec()).collect();
+    Ok(crypto)
+}
+
+/// The rustls half of a dial's configuration, before Quinn wraps it. See
+/// `server_tls_config` for why this is a seam rather than inlined.
+pub fn client_tls_config(
+    alpn: &[String],
+    verify: bool,
+    pinned_pubkey: Option<Vec<u8>>,
+) -> rustls::ClientConfig {
+    let builder = || {
+        rustls::ClientConfig::builder_with_provider(Arc::new(pq_provider()))
+            .with_safe_default_protocol_versions()
+            .expect("the provider supports the default protocol versions")
+    };
+    let mut crypto = if let Some(pk) = pinned_pubkey {
+        builder()
+            .dangerous()
+            .with_custom_certificate_verifier(Arc::new(cert::PubkeyPinVerifier::new(pk)))
+            .with_no_client_auth()
+    } else if verify {
+        let mut roots = rustls::RootCertStore::empty();
+        roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+        builder()
+            .with_root_certificates(roots)
+            .with_no_client_auth()
+    } else {
+        builder()
+            .dangerous()
+            .with_custom_certificate_verifier(Arc::new(SkipServerVerification::new()))
+            .with_no_client_auth()
+    };
+    crypto.alpn_protocols = alpn.iter().map(|s| s.as_bytes().to_vec()).collect();
+    crypto
 }
 
 /// Refuses a private key whose public key is not the leaf certificate's,
@@ -141,26 +224,7 @@ pub fn build_client_config(
     idle_timeout_ms: u64,
     keep_alive_ms: u64,
 ) -> Result<ClientConfig, String> {
-    let client_crypto = if let Some(pk) = pinned_pubkey {
-        rustls::ClientConfig::builder()
-            .dangerous()
-            .with_custom_certificate_verifier(Arc::new(cert::PubkeyPinVerifier::new(pk)))
-            .with_no_client_auth()
-    } else if verify {
-        let mut roots = rustls::RootCertStore::empty();
-        roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-        rustls::ClientConfig::builder()
-            .with_root_certificates(roots)
-            .with_no_client_auth()
-    } else {
-        rustls::ClientConfig::builder()
-            .dangerous()
-            .with_custom_certificate_verifier(Arc::new(SkipServerVerification::new()))
-            .with_no_client_auth()
-    };
-
-    let mut crypto = client_crypto;
-    crypto.alpn_protocols = alpn.iter().map(|s| s.as_bytes().to_vec()).collect();
+    let crypto = client_tls_config(alpn, verify, pinned_pubkey);
 
     let mut transport = TransportConfig::default();
     transport.max_idle_timeout(Some(
@@ -237,7 +301,7 @@ struct SkipServerVerification(Arc<rustls::crypto::CryptoProvider>);
 
 impl SkipServerVerification {
     fn new() -> Self {
-        Self(Arc::new(rustls::crypto::ring::default_provider()))
+        Self(Arc::new(pq_provider()))
     }
 }
 
@@ -273,5 +337,209 @@ impl rustls::client::danger::ServerCertVerifier for SkipServerVerification {
 
     fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
         self.0.signature_verification_algorithms.supported_schemes()
+    }
+}
+
+// ── Tests ──────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rustls::pki_types::ServerName;
+    use rustls::{ClientConnection, Connection, NamedGroup, ServerConnection};
+
+    /// The key exchange groups whose shared secret a quantum computer cannot
+    /// recover from the wire: the ML-KEM groups and the hybrids that carry
+    /// one. Named rather than derived from the code point, so a future
+    /// classical group numbered above the ML-KEM block cannot quietly count
+    /// as post-quantum.
+    fn is_post_quantum(group: NamedGroup) -> bool {
+        matches!(
+            group,
+            NamedGroup::MLKEM512
+                | NamedGroup::MLKEM768
+                | NamedGroup::MLKEM1024
+                | NamedGroup::secp256r1MLKEM768
+                | NamedGroup::X25519MLKEM768
+        )
+    }
+
+    /// THE DELIVERABLE. Two endpoints, a real TLS 1.3 handshake, and an
+    /// assertion on WHICH KEY EXCHANGE GROUP THEY AGREED ON.
+    ///
+    /// ⚠ It deliberately does NOT assert that the handshake succeeded. A
+    /// handshake succeeding is the adjacent object: it succeeds just as
+    /// happily over X25519, which is exactly the state this change exists to
+    /// leave. The negotiated group is the artefact.
+    ///
+    /// The configurations are the NIF's own (`server_tls_config`,
+    /// `client_tls_config`), not copies built the same way here, so what is
+    /// asserted is what this NIF will serve and dial with.
+    ///
+    /// ⛔ DO NOT TRY TO MOVE THIS ASSERTION ONTO A REAL QUIC CONNECTION. It
+    /// is the obvious improvement and it cannot be done with our
+    /// dependencies. `rustls` has `CommonState::negotiated_key_exchange_group`
+    /// (0.23.43), but `quinn_proto::crypto::rustls::TlsSession` keeps its
+    /// rustls connection in a PRIVATE field and its `crypto::Session`
+    /// implementation surfaces only the ALPN protocol and the server name
+    /// through `handshake_data()`. No live QUIC connection in this stack can
+    /// be asked what it negotiated.
+    ///
+    /// So this proves THE SDK'S TLS CONFIGURATION negotiates a post-quantum
+    /// group. It does not prove a QUIC connection did. The Erlang side proves
+    /// that differently and without needing the value: offer post-quantum
+    /// groups only, and show a classical-only peer CANNOT connect, so a
+    /// connection that does come up cannot have landed on a classical group.
+    /// See `macula_quic_pq_kx_tests`.
+    #[test]
+    fn negotiated_key_exchange_group_is_post_quantum() {
+        let group = negotiated_group();
+        assert!(
+            is_post_quantum(group),
+            "negotiated key exchange group is {:?}, which is classical: a \
+             recorded handshake stays decryptable by a quantum adversary",
+            group
+        );
+    }
+
+    /// WHICH post-quantum group, not merely that it is one.
+    ///
+    /// The preference order in `pq_provider` is a decision and not an
+    /// accident: `SECP256R1MLKEM768` leads because it is the hybrid on BSI
+    /// TR-02102-2's list, and X25519 appears nowhere in TR-02102-2. Pinning
+    /// the negotiated value here makes that decision something a change has
+    /// to face rather than something a reordering can quietly undo.
+    ///
+    /// If the order is changed deliberately, change this with it and say why.
+    #[test]
+    fn negotiated_key_exchange_group_is_the_one_we_lead_with() {
+        assert_eq!(negotiated_group(), NamedGroup::secp256r1MLKEM768);
+    }
+
+    /// THE NEGATIVE CONTROL, and without it the two tests above are worth
+    /// much less than they look.
+    ///
+    /// They show a post-quantum group being negotiated. They do NOT show that
+    /// the group list is doing any work: if `kx_groups` were inert and the
+    /// provider were quietly falling back to its defaults, a handshake would
+    /// still come up, and with `X25519MLKEM768` in the default list it might
+    /// still come up post-quantum. An inert setting that produces the right
+    /// answer by luck is the defect that hides longest.
+    ///
+    /// So: a client offering only our post-quantum groups, against a server
+    /// offering only classical ones, MUST FAIL TO AGREE. It can only fail if
+    /// both lists are genuinely in force.
+    #[test]
+    fn a_classical_only_peer_cannot_agree_with_us() {
+        let alpn = vec!["macula".to_string()];
+        let classical = CryptoProvider {
+            kx_groups: vec![
+                rustls::crypto::aws_lc_rs::kx_group::X25519,
+                rustls::crypto::aws_lc_rs::kx_group::SECP256R1,
+                rustls::crypto::aws_lc_rs::kx_group::SECP384R1,
+            ],
+            ..rustls::crypto::aws_lc_rs::default_provider()
+        };
+
+        let (certs, key) = test_identity();
+        let server_cfg = rustls::ServerConfig::builder_with_provider(Arc::new(classical))
+            .with_safe_default_protocol_versions()
+            .expect("versions")
+            .with_no_client_auth()
+            .with_single_cert(certs, key)
+            .expect("server config");
+        let mut server_cfg = server_cfg;
+        server_cfg.alpn_protocols = vec![b"macula".to_vec()];
+
+        let outcome = handshake(client_tls_config(&alpn, false, None), server_cfg);
+        assert!(
+            outcome.is_err(),
+            "a classical-only server agreed with us, so our key exchange group              list is not in force: the post-quantum group the other tests see              is luck, not policy"
+        );
+    }
+
+    /// Runs one handshake between the NIF's own server and client
+    /// configurations and returns the group they agreed on.
+    fn negotiated_group() -> NamedGroup {
+        let alpn = vec!["macula".to_string()];
+        let (certs, key) = test_identity();
+        let server_cfg = server_tls_config(certs, key, &alpn).expect("server config");
+        handshake(client_tls_config(&alpn, false, None), server_cfg)
+            .expect("the NIF's own configurations agree with each other")
+    }
+
+    /// A self-signed Ed25519 identity, made by the NIF's own generator so the
+    /// certificate under test is the kind it really issues.
+    fn test_identity() -> (Vec<CertificateDer<'static>>, PrivateKeyDer<'static>) {
+        let (cert_pem, key_pem) =
+            cert::generate_self_signed(&[7u8; 32], &[9u8; 32], &["localhost".to_string()])
+                .expect("self-signed cert");
+        let certs = rustls_pemfile::certs(&mut cert_pem.as_bytes())
+            .collect::<Result<Vec<_>, _>>()
+            .expect("read certs");
+        let key = rustls_pemfile::private_key(&mut key_pem.as_bytes())
+            .expect("read key")
+            .expect("a private key");
+        (certs, key)
+    }
+
+    /// One real handshake, returning the group the two sides agreed on or the
+    /// reason they could not. A failure to AGREE is a result here, not an
+    /// error: it is what the negative control asserts.
+    fn handshake(
+        client_cfg: rustls::ClientConfig,
+        server_cfg: rustls::ServerConfig,
+    ) -> Result<NamedGroup, String> {
+        let mut client = Connection::Client(
+            ClientConnection::new(
+                Arc::new(client_cfg),
+                ServerName::try_from("localhost").unwrap(),
+            )
+            .map_err(|e| format!("client connection: {}", e))?,
+        );
+        let mut server = Connection::Server(
+            ServerConnection::new(Arc::new(server_cfg))
+                .map_err(|e| format!("server connection: {}", e))?,
+        );
+
+        // Twenty flights is far more than TLS 1.3 needs and bounds a
+        // handshake that stops progressing.
+        for _ in 0..20 {
+            let client_moved = pump(&mut client, &mut server)?;
+            let server_moved = pump(&mut server, &mut client)?;
+            if client_moved + server_moved == 0 && !client.is_handshaking() {
+                break;
+            }
+        }
+
+        if client.is_handshaking() {
+            return Err("handshake never completed".to_string());
+        }
+        client
+            .negotiated_key_exchange_group()
+            .map(|g| g.name())
+            .ok_or_else(|| "completed with no key exchange group".to_string())
+    }
+
+    /// Moves whatever `from` wants to write into `to`, and returns how many
+    /// bytes crossed, so the caller can tell a stalled handshake from a
+    /// finished one.
+    fn pump(from: &mut Connection, to: &mut Connection) -> Result<usize, String> {
+        let mut buf = Vec::new();
+        while from.wants_write() {
+            from.write_tls(&mut buf)
+                .map_err(|e| format!("write_tls: {}", e))?;
+        }
+        if buf.is_empty() {
+            return Ok(0);
+        }
+        let mut cursor = std::io::Cursor::new(&buf[..]);
+        while (cursor.position() as usize) < buf.len() {
+            to.read_tls(&mut cursor)
+                .map_err(|e| format!("read_tls: {}", e))?;
+            to.process_new_packets()
+                .map_err(|e| format!("process_new_packets: {}", e))?;
+        }
+        Ok(buf.len())
     }
 }

@@ -146,7 +146,7 @@ impl PubkeyPinVerifier {
     pub fn new(pinned_pubkey: Vec<u8>) -> Self {
         Self {
             pinned: pinned_pubkey,
-            crypto: Arc::new(rustls::crypto::ring::default_provider()),
+            crypto: Arc::new(crate::config::pq_provider()),
         }
     }
 }
