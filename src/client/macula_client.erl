@@ -90,6 +90,10 @@
 %% Probe guards — exported so a test can hang a link and prove the pool
 %% survives it. See the note above safe_is_connected/1.
 -export([safe_is_connected/1, safe_peer_node_id/1]).
+%% The connect wait, exported so a test can prove the instrument on it emits
+%% ONE event per wait rather than one per 50 ms poll. That property lives in
+%% which function the recursion runs through and is invisible on inspection.
+-export([await_connected/2]).
 %% The pure selection math behind publish/5's replication fan-out, and
 %% the per-link crash guard its fan-out worker uses — exported for
 %% macula_client_tests.erl only, see their own docs.
@@ -1935,7 +1939,44 @@ call_when_connected(Pid, Target, Realm, Proc, Payload, TimeoutMs, DialTimeoutMs,
     call_after_connect(await_connected(Pid, Now + min(DialTimeoutMs, TimeoutMs)), Pid,
                        Target, Realm, Proc, Payload, Deadline, Ucan).
 
+%% INSTRUMENT. Every connect wait reports HOW it ended, HOW LONG it took and
+%% WHOSE link it was, on both outcomes, with no threshold.
+%%
+%% ⚠ Deliberately agnostic. It does not look for a wait of any particular
+%% length, because a threshold encodes the hypothesis it is meant to test and
+%% a wait that is never recorded cannot refute anything. Reading the
+%% distribution is the caller's job; producing it honestly is this one's.
+%%
+%% It exists because a stall was observed INSIDE a single resolve step rather
+%% than across a retry (120 calls, three runs, every one exactly four route
+%% steps and exactly one `find_records'), so the thing to see is a step that
+%% waits and then succeeds. `elapsed_ms' on a `connected' outcome is that
+%% measurement; the same field on a `deadline' outcome is the give-up time.
+%%
+%% `node_id' is the handshake peer and is `undefined' when the wait ended at
+%% the deadline, because a link that never connected has no peer identity.
+%% `link' is carried so a timed-out wait can still be told from another.
+%%
+%% The recursion runs through `poll_connected/2`, NOT back through here, so
+%% one wait emits one event rather than one per 50 ms poll.
 await_connected(Pid, Deadline) ->
+    Started = erlang:monotonic_time(millisecond),
+    Outcome = poll_connected(Pid, Deadline),
+    report_connect_wait(Outcome, Pid, erlang:monotonic_time(millisecond) - Started),
+    Outcome.
+
+report_connect_wait(Outcome, Pid, ElapsedMs) ->
+    macula_diagnostics:event(<<"_macula.client.connect_wait_ended">>,
+                             #{reason => connect_wait_reason(Outcome),
+                               elapsed_ms => ElapsedMs,
+                               node_id => link_node_id(Pid, Outcome),
+                               link => Pid}),
+    ok.
+
+connect_wait_reason(true)  -> connected;
+connect_wait_reason(false) -> deadline.
+
+poll_connected(Pid, Deadline) ->
     connected_or_wait(safe_is_connected(Pid), Pid, Deadline).
 
 connected_or_wait(true, _Pid, _Deadline) ->
@@ -1945,7 +1986,7 @@ connected_or_wait(false, Pid, Deadline) ->
 
 wait_or_give_up(true, Pid, Deadline) ->
     timer:sleep(50),
-    await_connected(Pid, Deadline);
+    poll_connected(Pid, Deadline);
 wait_or_give_up(false, _Pid, _Deadline) ->
     false.
 
