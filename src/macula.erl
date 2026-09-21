@@ -178,7 +178,8 @@
 -spec connect([macula_client:seed()], macula_client:opts()) ->
     {ok, pool()} | {error, term()}.
 connect(Seeds, Opts) when is_list(Seeds), is_map(Opts) ->
-    macula_client:connect(Seeds, Opts).
+    refused(pin_tls_cert_checked(Opts),
+            fun() -> macula_client:connect(Seeds, Opts) end).
 
 %% @doc Stop a V2 pool. Every subscriber receives a final
 %% `{macula_event_gone, SubRef, pool_closed}' message.
@@ -304,16 +305,22 @@ call_station(Pool, Station, Target, Realm, Procedure, Payload, TimeoutMs) ->
 %% @doc As `call_station/7', presenting a capability token to a gated
 %% provider via `Opts' (`#{ucan_token => Token}'). Empty/absent = none.
 %% Slice 7b dual-trust. `Opts' also carries the per-call TLS trust
-%% override for this dial: `verify', `expected_node_id', and
-%% `pin_tls_cert' (see `macula_client:call_station/9'), and may set
-%% `dial_timeout_ms', how much of `TimeoutMs' the wait for a fresh link's
-%% handshake may take (default: all of it).
+%% override for this dial: `verify' and `expected_node_id' (see
+%% `macula_client:call_station/9'), and may set `dial_timeout_ms', how
+%% much of `TimeoutMs' the wait for a fresh link's handshake may take
+%% (default: all of it). `pin_tls_cert => true' is REFUSED, see
+%% `pin_tls_cert_checked/1'.
 -spec call_station(pool(), macula_client:seed(), <<_:256>>, realm(), procedure(),
                    term(), 1..600_000, map()) ->
     {ok, term()} | {error, term()}.
 call_station(Pool, Station, Target, Realm, Procedure, Payload, TimeoutMs, Opts) ->
+    refused(pin_tls_cert_checked(Opts),
+            fun() -> do_call_station(Pool, Station, Target, Realm, Procedure,
+                                     Payload, TimeoutMs, Opts) end).
+
+do_call_station(Pool, Station, Target, Realm, Procedure, Payload, TimeoutMs, Opts) ->
     Ucan = maps:get(ucan_token, Opts, <<>>),
-    LinkOpts = maps:with([verify, expected_node_id, pin_tls_cert], Opts),
+    LinkOpts = maps:with([verify, expected_node_id], Opts),
     DialTimeoutMs = maps:get(dial_timeout_ms, Opts, TimeoutMs),
     macula_client:call_station(Pool, Station, Target, Realm, Procedure, Payload,
                                TimeoutMs, Ucan, LinkOpts, DialTimeoutMs).
@@ -686,12 +693,16 @@ put_content_station(Pool, Station, Bytes, TimeoutMs) ->
     put_content_station(Pool, Station, Bytes, TimeoutMs, #{}).
 
 %% @doc As `put_content_station/4', with a per-call TLS trust override
-%% for this dial — `verify', `expected_node_id', `pin_tls_cert' (see
-%% `call_station/8').
+%% for this dial — `verify', `expected_node_id' (see `call_station/8').
+%% `pin_tls_cert => true' is REFUSED, see `pin_tls_cert_checked/1'.
 -spec put_content_station(pool(), macula_client:seed(), binary(),
                           pos_integer(), map()) ->
     {ok, mcid()} | {error, term()}.
 put_content_station(Pool, Station, Bytes, TimeoutMs, Opts) ->
+    refused(pin_tls_cert_checked(Opts),
+            fun() -> do_put_content_station(Pool, Station, Bytes, TimeoutMs, Opts) end).
+
+do_put_content_station(Pool, Station, Bytes, TimeoutMs, Opts) ->
     {ok, Pid} = macula_content_transfer:start_put_station(
                   Pool, Station, Bytes, TimeoutMs, Opts),
     Result = macula_content_transfer:await(Pid),
@@ -744,8 +755,8 @@ get_content_station(Pool, Station, MCID, TimeoutMs) ->
     get_content_station(Pool, Station, MCID, TimeoutMs, #{}).
 
 %% @doc As `get_content_station/4', with a per-call TLS trust override
-%% for this dial — `verify', `expected_node_id', `pin_tls_cert' (see
-%% `call_station/8').
+%% for this dial — `verify', `expected_node_id' (see `call_station/8').
+%% `pin_tls_cert => true' is REFUSED, see `pin_tls_cert_checked/1'.
 %% See `get_content/2' on why a malformed `MCID' is rejected here
 %% rather than reaching `macula_content_transfer'.
 -spec get_content_station(pool(), macula_client:seed(), mcid(),
@@ -753,13 +764,17 @@ get_content_station(Pool, Station, MCID, TimeoutMs) ->
     {ok, binary()} | {error, not_found | invalid_mcid | term()}.
 get_content_station(Pool, Station, <<2, Codec, _:48/binary>> = MCID, TimeoutMs, Opts)
   when Codec =:= 16#55 orelse Codec =:= 16#56 ->
+    refused(pin_tls_cert_checked(Opts),
+            fun() -> do_get_content_station(Pool, Station, MCID, TimeoutMs, Opts) end);
+get_content_station(_Pool, _Station, _MCID, _TimeoutMs, _Opts) ->
+    {error, invalid_mcid}.
+
+do_get_content_station(Pool, Station, MCID, TimeoutMs, Opts) ->
     {ok, Pid} = macula_content_transfer:start_get_station(
                   Pool, Station, MCID, TimeoutMs, Opts),
     Result = macula_content_transfer:await(Pid),
     macula_content_transfer:cancel(Pid),
-    Result;
-get_content_station(_Pool, _Station, _MCID, _TimeoutMs, _Opts) ->
-    {error, invalid_mcid}.
+    Result.
 
 %% @doc Resolve every host currently announcing an MCID: hosts that
 %% stored a chunked put (`_content.put_manifest') and got
@@ -883,7 +898,7 @@ call_stream(Pool, Realm, Procedure, Args, Opts)
 %% to reach a stream provider in one hop, exactly as a unary caller does.
 %% `Opts' may set `dial_timeout_ms' (default 10_000) and a `mode'.
 %% `Opts' also carries the per-call TLS trust override for this dial:
-%% `verify', `expected_node_id', `pin_tls_cert' (see
+%% `verify', `expected_node_id' (`pin_tls_cert => true' is REFUSED) (see
 %% `macula_client:call_station/8').
 -spec call_stream_station(pool(), macula_client:seed(), <<_:256>>, realm(), procedure(),
                           term(), map()) -> {ok, stream()} | {error, term()}.
@@ -891,8 +906,9 @@ call_stream_station(Pool, Station, Target, Realm, Procedure, Args, Opts)
   when is_pid(Pool), is_binary(Target), byte_size(Target) =:= 32,
        is_binary(Realm), byte_size(Realm) =:= 32,
        is_binary(Procedure), is_map(Opts) ->
-    macula_client:call_stream_station(Pool, Station, Target, Realm, Procedure, Args,
-                                      Opts).
+    refused(pin_tls_cert_checked(Opts),
+            fun() -> macula_client:call_stream_station(
+                       Pool, Station, Target, Realm, Procedure, Args, Opts) end).
 
 %% @doc Open a LOCAL in-process client-stream or bidi call. Used
 %% for unit tests and same-BEAM dispatch via `macula_stream_local'.
@@ -1350,3 +1366,44 @@ first_found([Key | Keys], Map, Default) -> found(maps:find(Key, Map), Keys, Map,
 
 found({ok, Value}, _Keys, _Map, _Default) -> Value;
 found(error, Keys, Map, Default) -> first_found(Keys, Map, Default).
+
+%%------------------------------------------------------------------
+%% `pin_tls_cert' is refused, not accepted and ignored
+%%------------------------------------------------------------------
+
+%% Every public entry point that takes a per-dial TLS trust map runs this
+%% before it does anything else. `pin_tls_cert => true' is refused;
+%% `false' and absence pass through.
+%%
+%% WHY IT CANNOT BE HONOURED, so the next reader does not re-litigate it.
+%% The option had a reader, `macula_peering_conn:dial_trust_opts/1', until
+%% 11.0.0 removed it with the Ed25519 CONNECT and HELLO frames. It mapped
+%% `expected_node_id' onto `{verify_pubkey, NodeId}', which worked while a
+%% node_id WAS an Ed25519 public key. A node_id is now a SHA-256 hash over
+%% the identity key (`macula_node_keys:node_id/2'), so there is no SPKI in
+%% the value left to pin. And the only pin primitive that exists,
+%% `macula_quic''s `verify_pubkey', extracts a leaf SPKI only when the
+%% algorithm is Ed25519 at exactly 32 bytes (`cert::ed25519_pubkey_from_cert'
+%% in the QUIC NIF). Station identity is ML-DSA-87. The primitive cannot
+%% express the identity it would be pinning.
+%%
+%% So the choice is between accepting a value that does nothing and saying
+%% so. An inert security option is worse than an absent one, because a
+%% reader takes it for a check that is happening: that is macula#15, and it
+%% reached hexdocs as a documented default of `true' that was never true.
+%%
+%% `false' keeps working, deliberately. It is the honest value, it is what
+%% every caller passes today (macula-station's outbound links among them),
+%% and refusing it would break a live caller for asking for the safe thing.
+%%
+%% What names the peer instead is the signed CONNECT/HELLO handshake,
+%% checked against `expected_node_id', which is mandatory on a client dial.
+-spec pin_tls_cert_checked(map()) -> ok | {error, {pin_tls_cert, atom()}}.
+pin_tls_cert_checked(#{pin_tls_cert := true}) ->
+    {error, {pin_tls_cert, no_pin_primitive_for_mldsa87_identity}};
+pin_tls_cert_checked(_Opts) ->
+    ok.
+
+%% Run the call, or return the refusal that stopped it.
+refused(ok, Call) -> Call();
+refused({error, _} = Refusal, _Call) -> Refusal.

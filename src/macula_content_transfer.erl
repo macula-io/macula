@@ -272,14 +272,15 @@ start_put_station(Pool, Station, Bytes, TimeoutMs) ->
 
 %% @doc As `start_put_station/4'. `Opts' may carry `share_id',
 %% `stream_count' (see `start_put/3') plus a per-call TLS trust
-%% override for this dial — `verify', `expected_node_id',
-%% `pin_tls_cert' (see `macula:put_content_station/5').
+%% override for this dial — `verify', `expected_node_id' (see
+%% `macula:put_content_station/5'). `pin_tls_cert' is read by nothing
+%% and `macula' refuses it set to `true'; see macula#15.
 -spec start_put_station(macula:pool(), macula_client:seed(), binary(),
                         pos_integer(), map()) -> {ok, pid()}.
 start_put_station(Pool, Station, Bytes, TimeoutMs, Opts)
   when is_pid(Pool), is_binary(Bytes), is_integer(TimeoutMs), TimeoutMs > 0,
        is_map(Opts) ->
-    LinkOpts = maps:with([verify, expected_node_id, pin_tls_cert], Opts),
+    LinkOpts = maps:with([verify, expected_node_id], Opts),
     start(put, {station, Pool, Station, TimeoutMs, LinkOpts}, Bytes, Opts).
 
 %% @doc Start an addressable get through the pool's own connected
@@ -310,7 +311,7 @@ start_get_station(Pool, Station, Mcid, TimeoutMs) ->
 start_get_station(Pool, Station, <<2, Codec, _:48/binary>> = Mcid, TimeoutMs, Opts)
   when is_pid(Pool), (Codec =:= 16#55 orelse Codec =:= 16#56),
        is_integer(TimeoutMs), TimeoutMs > 0, is_map(Opts) ->
-    LinkOpts = maps:with([verify, expected_node_id, pin_tls_cert], Opts),
+    LinkOpts = maps:with([verify, expected_node_id], Opts),
     start(get, {station, Pool, Station, TimeoutMs, LinkOpts}, Mcid, Opts).
 
 %% @doc Block for the transfer's outcome: `{ok, Mcid}' (put),

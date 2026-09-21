@@ -968,18 +968,18 @@ station_seed_toronto_real_row_shape_currently_uses_webpki_test() ->
 
 %% No `hostname' on record (seen live: at least one real fleet entry,
 %% deliberately DNS-less) but `host_advertised' + `node_id' both
-%% present: falls back to a Pinned-trust seed against the bare IP --
-%% `pin_tls_cert => false' since there is no CA-issued cert for a raw
-%% IP to validate, trust enforced entirely at the app layer via
-%% `expected_node_id'. Live-verified against the real station this
+%% present: falls back to a Pinned-trust seed against the bare IP. The
+%% TLS certificate is not pinned, because there is no CA-issued cert for
+%% a raw IP to validate; trust is enforced entirely at the app layer via
+%% `expected_node_id'. The seed carried a `pin_tls_cert => false' key
+%% until macula#15: nothing read it. Live-verified against the real station this
 %% models (both a genuinely self-signed station and, separately, an
 %% ordinary Let's-Encrypt-backed one dialled the same way).
 station_seed_with_no_hostname_falls_back_to_pinned_ip_test() ->
     Station = #{host_advertised => [<<"2600:3c04::2000:f0ff:feb9:e155">>],
                quic_port => 4433, node_id => <<1:256>>},
     ?assertEqual({true, {#{host => <<"2600:3c04::2000:f0ff:feb9:e155">>,
-                          port => 4433, expected_node_id => <<1:256>>,
-                          pin_tls_cert => false},
+                          port => 4433, expected_node_id => <<1:256>>},
                         <<1:256>>}},
                  macula_client:station_seed(Station)).
 
@@ -1015,8 +1015,7 @@ station_seed_with_empty_hostname_falls_back_to_pinned_ip_test() ->
                host_advertised => [<<"2600:3c04::2000:f0ff:feb9:e155">>],
                quic_port => 4433, node_id => <<1:256>>},
     ?assertEqual({true, {#{host => <<"2600:3c04::2000:f0ff:feb9:e155">>,
-                          port => 4433, expected_node_id => <<1:256>>,
-                          pin_tls_cert => false},
+                          port => 4433, expected_node_id => <<1:256>>},
                         <<1:256>>}},
                  macula_client:station_seed(Station)).
 

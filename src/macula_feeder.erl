@@ -255,7 +255,7 @@ direct_worker_run(#{transfer_io := TransferIo, transfer_opts := TransferOpts,
     case ResolveStationEndpoint(Pool, Station) of
         {ok, DialUrl} ->
             Opts = TransferOpts#{share_id => ShareId, expected_node_id => Station,
-                                 pin_tls_cert => false, verify => none},
+                                 verify => none},
             run_transfer(Parent, TransferIo, station_put(TransferIo, Pool, DialUrl, Bytes, Opts));
         {error, Reason} ->
             Parent ! {feed_result, {error, {unresolved, Reason}}}

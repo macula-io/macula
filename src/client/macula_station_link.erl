@@ -3009,13 +3009,19 @@ detail_or_none(error) -> undefined.
 %% Helpers
 %%-------------------------------------------------------------------
 
-%% Fold TLS-policy opts (`verify' / `expected_node_id' / `pin_tls_cert')
-%% from the link opts into the seed map, so they reach the peering
-%% target at connect.
+%% Fold TLS-policy opts (`verify' / `expected_node_id') from the link
+%% opts into the seed map, so they reach the peering target at connect.
+%%
+%% `pin_tls_cert' is NOT folded, and is not a key this link understands.
+%% It was read by `macula_peering_conn:dial_trust_opts/1' until 11.0.0
+%% removed that function; nothing has read it since. `macula' refuses
+%% `pin_tls_cert => true' at its public entry points
+%% (`macula:pin_tls_cert_checked/1') rather than accept a value that
+%% does nothing. See macula#15.
 %% The trust keys a seed map names stand, and the link's options fill only the ones it leaves out, so a pool-wide
 %% expected_node_id never replaces a seed's own pin.
 add_tls_opts(Seed, Opts) ->
-    maps:merge(maps:with([verify, expected_node_id, pin_tls_cert], Opts), Seed).
+    maps:merge(maps:with([verify, expected_node_id], Opts), Seed).
 
 parse_seed(#{host := _, port := _} = Map) ->
     Map;

@@ -59,9 +59,10 @@
 %%% were told to reach, not that whoever told us so was authorized to).
 %%% (2) The resolved `station_endpoint' must be signed by the station
 %%% itself (`station_signed_endpoint/2'). The actual QUIC dial
-%%% trusts NEITHER the TLS certificate (`pin_tls_cert => false' — a
-%%% production station's TLS is terminated by an unrelated PKI, e.g.
-%%% Let's Encrypt, so pinning the cert key can never succeed) NOR
+%%% trusts NEITHER the TLS certificate (it is not pinned, and there is
+%%% no option that would pin it: a production station's TLS is
+%%% terminated by an unrelated PKI, e.g. Let's Encrypt, so pinning the
+%%% cert key can never succeed) NOR
 %%% nothing (`verify => none' alone would trust whoever answers): trust
 %%% is enforced at the application layer instead, via the
 %%% cryptographically signed CONNECT/HELLO handshake
@@ -941,7 +942,7 @@ await_transfer(Await, Transfer, RemainingMs) ->
 %% The trust override for a dial pinned to the identity a signed DHT record
 %% resolved — see the module doc's "Trust model".
 pinned(Node) ->
-    #{expected_node_id => Node, pin_tls_cert => false, verify => none}.
+    #{expected_node_id => Node, verify => none}.
 
 deadline(TimeoutMs) -> erlang:monotonic_time(millisecond) + TimeoutMs.
 

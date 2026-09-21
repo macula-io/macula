@@ -2908,7 +2908,7 @@ pinned_seed_from_host_advertised(_NotAList, _Port, _NodeId) ->
 %% (live-verified with an unbracketed IPv6 `host' value).
 ip_pinned_seed(Ip, Port, NodeId) when is_binary(Ip), byte_size(Ip) > 0 ->
     {true, {#{host => Ip, port => Port,
-             expected_node_id => NodeId, pin_tls_cert => false}, NodeId}};
+             expected_node_id => NodeId}, NodeId}};
 ip_pinned_seed(_Ip, _Port, _NodeId) ->
     false.
 
