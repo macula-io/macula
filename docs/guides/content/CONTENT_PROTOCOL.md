@@ -210,7 +210,6 @@ host deliberately), dial an announced host **directly** with
     macula:find_content_providers(Pool, MCID),
 {ok, Bytes} = macula:get_content_station(Pool, Url, MCID, 30_000,
                                          #{expected_node_id => Node,
-                                           pin_tls_cert => false,
                                            verify => none}).
 ```
 
@@ -223,11 +222,13 @@ replicated," not "doesn't exist":
 {ok, Bytes} = macula_direct_dial:get_content(Pool, MCID, 30_000).
 ```
 
-`pin_tls_cert => false` matters against a real production station: its TLS
-is terminated by an unrelated PKI (Let's Encrypt), so pinning the cert's own
-key can never succeed there — trust instead rests on the application-layer
-CONNECT/HELLO handshake (see the [RPC Guide](../rpc/RPC_GUIDE.md) for the full
-mechanism). Unlike RPC, content direct-dial has **no cert-chain-equivalent
+The TLS certificate is not pinned on this dial, and no option pins it. Against
+a real production station its TLS is terminated by an unrelated PKI (Let's
+Encrypt), so pinning the cert's own key could never succeed there. Trust rests
+on the application-layer CONNECT/HELLO handshake (see the
+[RPC Guide](../rpc/RPC_GUIDE.md) for the full mechanism). The `pin_tls_cert`
+option this guide previously passed here is read by nothing; see
+[macula#15](https://github.com/macula-io/macula/issues/15). Unlike RPC, content direct-dial has **no cert-chain-equivalent
 opt-in**: content is content-addressed and independently re-hashed
 client-side regardless of which peer serves it, so a rogue or unauthorized
 announcer can at most refuse to serve or waste a dial — never make a caller

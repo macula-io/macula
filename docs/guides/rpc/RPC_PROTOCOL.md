@@ -90,10 +90,25 @@ direct-dial wraps](RPC_GUIDE.md#direct-dial-start_link_direct-advertise_direct).
 -spec call_station(pool(), seed(), node_id(), realm(), procedure(), term(), timeout_ms(), opts()) ->
     {ok, term()} | {error, term()}.
 %% opts: #{ucan_token => Token,
-%%         verify => webpki | none,     %% TLS trust for a fresh dial
-%%         expected_node_id => NodeId,  %% the station's node_id
-%%         pin_tls_cert => boolean()}   %% also pin the TLS cert itself (default true)
+%%         verify => webpki | none,     %% TLS chain policy for a fresh dial
+%%                                      %% (default none, see below)
+%%         expected_node_id => NodeId}  %% the station's node_id, required
 ```
+
+> **`pin_tls_cert` is accepted and does nothing.** It rides in the same option
+> map and is read by no code on any dial path. There is no default, no value of
+> it changes anything, and no certificate is pinned on any dial. An earlier
+> revision of this guide stated a default of `true`. That was wrong, and it was
+> wrong in the direction that matters: a reader took it for a check that was
+> happening. The only pin mechanism that exists, `macula_quic`'s `verify_pubkey`,
+> extracts an Ed25519 SPKI and therefore cannot express an ML-DSA-87 station
+> identity, and no caller in the SDK sets it. Tracked as
+> [macula#15](https://github.com/macula-io/macula/issues/15).
+>
+> What names the peer on a station dial is the signed CONNECT/HELLO handshake,
+> checked against `expected_node_id`, which is required. `verify` defaults to
+> `none` because a station's leaf is self-signed or issued by an unrelated PKI,
+> so the chain is not what binds the connection to the node_id dialled.
 
 `call_station/7` dials a specific station URL directly, reusing an existing
 link or opening and monitoring a new one, waiting for the handshake, then
@@ -139,12 +154,12 @@ observability, an SDK for another language)? This is the sequence
    station's own `station_endpoint` record, verified, and its signer
    checked to be exactly the station it claims (not just anyone).
 3. Dial the resolved `quic://[Host]:Port` (note the brackets — required for
-   the IPv6 hosts most stations advertise) with the TLS certificate itself
-   **unpinned** (`pin_tls_cert => false`): a production station's TLS is
-   terminated by an unrelated PKI (Let's Encrypt), so pinning the cert's
-   own key can never succeed there. Trust instead rests on the
-   application-layer CONNECT/HELLO handshake, which proves the peer holds
-   the identity key of the exact node_id step 2 resolved.
+   the IPv6 hosts most stations advertise). The TLS certificate is **not**
+   pinned on this dial, and there is no option that would pin it: a
+   production station's TLS is terminated by an unrelated PKI (Let's
+   Encrypt), so pinning the cert's own key could never succeed there. Trust
+   rests on the application-layer CONNECT/HELLO handshake, which proves the
+   peer holds the identity key of the exact node_id step 2 resolved.
 4. Call the provider through that station, with its node_id as the target.
    The station delivers the CALL to that provider's connection, and only a
    reply the provider signed completes the call.
@@ -171,7 +186,7 @@ StationUrl = <<"quic://[", Host/binary, "]:", (integer_to_binary(Port))/binary>>
 
 {ok, Result} = macula:call_station(Pool, StationUrl, Provider, Realm, Procedure, Payload,
                                    5_000, #{expected_node_id => Station,
-                                            pin_tls_cert => false, verify => none}).
+                                            verify => none}).
 ```
 
 For an org namespaced procedure, add the realm trust you hold to the map

@@ -35,8 +35,10 @@ nothing written.
 ```
 
 `Opts` may set `dial_timeout_ms` (default 10_000) for the dial and handshake,
-plus the same per-call TLS trust override as `call_station/8`: `verify`,
-`expected_node_id`, `pin_tls_cert` (see the [RPC Guide](../rpc/RPC_GUIDE.md)).
+plus the same per-call TLS trust override as `call_station/8`: `verify` and
+`expected_node_id` (see the [RPC Guide](../rpc/RPC_GUIDE.md)). The option map
+also accepts `pin_tls_cert`, which is read by nothing; see
+[macula#15](https://github.com/macula-io/macula/issues/15).
 
 This is what [`macula_streamer`/`macula_stream_sink` wrap](STREAMING_GUIDE.md#supervised-wrappers-macula_streamer-macula_stream_sink) —
 an addressable pid you can monitor and cancel, `streaming.*_v1` mesh facts
