@@ -1323,6 +1323,23 @@ start_dial(#{host := Host, port := Port} = Target) ->
 %% on the target and the dial verifies against the built-in roots.
 %% Whatever this builder decides is what TLS sees: nothing downstream
 %% overrides it, which is the whole point of the key being here.
+%%
+%% ⚠ AND THE DEFAULT IS DEPENDED ON. Changing it to `webpki' is a
+%% BREAKING CHANGE for pinned dialers, though it reads as a tightening.
+%% macula-realm sets `verify' nowhere: it has two pinned seeds, no
+%% station discovery to find others, and the station names it pins sit
+%% two labels under a wildcard certificate that covers one. The chain
+%% check would fail on both seeds at once and it would not recover.
+%% (Realm configuration as reported by the session that traced it, not
+%% verified from this repository.)
+%%
+%% `macula_quic:connect/3' defaults the same option to `webpki', which
+%% is right THERE: a general TLS client should be secure by default. The
+%% two defaults differ deliberately. Do not reconcile them.
+%%
+%% Reachable only from 11.5.0; before that this builder passed a literal
+%% `{verify, none}' and discarded what the target carried, so nothing
+%% could depend on it.
 dial_opts(Target) ->
     [{alpn, maps:get(alpn, Target, [<<"macula">>])},
      {verify, maps:get(verify, Target, none)}].
