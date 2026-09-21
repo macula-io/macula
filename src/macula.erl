@@ -178,7 +178,7 @@
 -spec connect([macula_client:seed()], macula_client:opts()) ->
     {ok, pool()} | {error, term()}.
 connect(Seeds, Opts) when is_list(Seeds), is_map(Opts) ->
-    refused(pin_tls_cert_checked(Opts),
+    refused(pin_tls_cert_checked(Seeds, Opts),
             fun() -> macula_client:connect(Seeds, Opts) end).
 
 %% @doc Stop a V2 pool. Every subscriber receives a final
@@ -314,7 +314,7 @@ call_station(Pool, Station, Target, Realm, Procedure, Payload, TimeoutMs) ->
                    term(), 1..600_000, map()) ->
     {ok, term()} | {error, term()}.
 call_station(Pool, Station, Target, Realm, Procedure, Payload, TimeoutMs, Opts) ->
-    refused(pin_tls_cert_checked(Opts),
+    refused(pin_tls_cert_checked(Station, Opts),
             fun() -> do_call_station(Pool, Station, Target, Realm, Procedure,
                                      Payload, TimeoutMs, Opts) end).
 
@@ -699,7 +699,7 @@ put_content_station(Pool, Station, Bytes, TimeoutMs) ->
                           pos_integer(), map()) ->
     {ok, mcid()} | {error, term()}.
 put_content_station(Pool, Station, Bytes, TimeoutMs, Opts) ->
-    refused(pin_tls_cert_checked(Opts),
+    refused(pin_tls_cert_checked(Station, Opts),
             fun() -> do_put_content_station(Pool, Station, Bytes, TimeoutMs, Opts) end).
 
 do_put_content_station(Pool, Station, Bytes, TimeoutMs, Opts) ->
@@ -764,7 +764,7 @@ get_content_station(Pool, Station, MCID, TimeoutMs) ->
     {ok, binary()} | {error, not_found | invalid_mcid | term()}.
 get_content_station(Pool, Station, <<2, Codec, _:48/binary>> = MCID, TimeoutMs, Opts)
   when Codec =:= 16#55 orelse Codec =:= 16#56 ->
-    refused(pin_tls_cert_checked(Opts),
+    refused(pin_tls_cert_checked(Station, Opts),
             fun() -> do_get_content_station(Pool, Station, MCID, TimeoutMs, Opts) end);
 get_content_station(_Pool, _Station, _MCID, _TimeoutMs, _Opts) ->
     {error, invalid_mcid}.
@@ -906,7 +906,7 @@ call_stream_station(Pool, Station, Target, Realm, Procedure, Args, Opts)
   when is_pid(Pool), is_binary(Target), byte_size(Target) =:= 32,
        is_binary(Realm), byte_size(Realm) =:= 32,
        is_binary(Procedure), is_map(Opts) ->
-    refused(pin_tls_cert_checked(Opts),
+    refused(pin_tls_cert_checked(Station, Opts),
             fun() -> macula_client:call_stream_station(
                        Pool, Station, Target, Realm, Procedure, Args, Opts) end).
 
@@ -1398,11 +1398,26 @@ found(error, Keys, Map, Default) -> first_found(Keys, Map, Default).
 %%
 %% What names the peer instead is the signed CONNECT/HELLO handshake,
 %% checked against `expected_node_id', which is mandatory on a client dial.
--spec pin_tls_cert_checked(map()) -> ok | {error, {pin_tls_cert, atom()}}.
+%% ⚠ EVERY map a caller can put the key in, not just `Opts'. The seed and
+%% station maps are where the option historically lived, so checking only
+%% `Opts' advertises a check that does not happen on the path a reader of
+%% our own CHANGELOG would take.
+-spec pin_tls_cert_checked(term()) -> ok | {error, {pin_tls_cert, atom()}}.
 pin_tls_cert_checked(#{pin_tls_cert := true}) ->
     {error, {pin_tls_cert, no_pin_primitive_for_mldsa87_identity}};
-pin_tls_cert_checked(_Opts) ->
+pin_tls_cert_checked(List) when is_list(List) ->
+    first_refusal([pin_tls_cert_checked(E) || E <- List]);
+pin_tls_cert_checked(_Other) ->
     ok.
+
+%% Both a seed/station and an option map, in the argument order the public
+%% functions take them.
+pin_tls_cert_checked(Target, Opts) ->
+    first_refusal([pin_tls_cert_checked(Target), pin_tls_cert_checked(Opts)]).
+
+first_refusal([{error, _} = Refusal | _Rest]) -> Refusal;
+first_refusal([ok | Rest]) -> first_refusal(Rest);
+first_refusal([]) -> ok.
 
 %% Run the call, or return the refusal that stopped it.
 refused(ok, Call) -> Call();

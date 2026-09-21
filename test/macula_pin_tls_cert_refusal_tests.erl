@@ -150,3 +150,58 @@ unchanged() ->
               ?assertNot(maps:is_key(pin_tls_cert, Seed))
           end}
      end].
+
+%%------------------------------------------------------------------
+%% The option's HISTORICAL home is the seed/station map, not `Opts'
+%%------------------------------------------------------------------
+
+%% ⚠ These exist because the first version of this refusal inspected only
+%% `Opts', and the seed map is where the option actually lived: the
+%% CHANGELOG on hexdocs calls it a connect/link opt and macula-station
+%% carries it in exactly that map. A reader who learned it from our own
+%% documentation puts it on the seed, gets `{ok, Pool}', and has been told
+%% a check happened that did not. That is worse than shipping nothing,
+%% which is the argument the refusal was justified with.
+%%
+%% `macula_station_link:parse_seed/1' returns a map seed UNFILTERED and
+%% `seed_checked/4' looked only at `expected_node_id', so the key rode
+%% through into the peering target, where `connect_opts()' ends in
+%% `_ => _' and nothing noticed.
+-define(PINNED_SEED, #{host => <<"127.0.0.1">>, port => 4433,
+                       expected_node_id => ?NODE, pin_tls_cert => true}).
+
+seed_map_test_() ->
+    {setup,
+     fun() -> {ok, _} = application:ensure_all_started(macula), ok end,
+     fun(_) -> ok end,
+     [{"a map SEED carrying a requested pin is refused by connect/2",
+       ?_assertEqual(?REFUSAL, macula:connect([?PINNED_SEED], #{}))},
+      {"a map seed carrying `false' still connects",
+       fun() ->
+           Seed = maps:put(pin_tls_cert, false, ?PINNED_SEED),
+           {ok, Pool} = macula:connect([Seed], #{}),
+           ?assert(is_process_alive(Pool)),
+           ok = macula:close(Pool)
+       end},
+      {"a map STATION carrying a requested pin is refused by call_station/8",
+       fun() ->
+           {ok, Pool} = macula:connect([], #{}),
+           try ?assertEqual(?REFUSAL,
+                            macula:call_station(Pool, ?PINNED_SEED, ?NODE, ?REALM,
+                                                <<"x.y">>, #{}, 300, #{}))
+           after ok = macula:close(Pool)
+           end
+       end},
+      %% `seed_checked/4' is the choke point every seed map passes through,
+      %% and the fleet does NOT: macula-station calls
+      %% `macula_peering:connect/1' and never builds a station_link.
+      {"seed_checked/4 refuses the seed itself, as the backstop under the facade",
+       ?_assertEqual({error, {seed, {pin_tls_cert, no_pin_primitive_for_mldsa87_identity}}},
+                     macula_station_link:seed_checked(?PINNED_SEED, key, profile, self()))}]}.
+
+%% The supervised start is the path the facade's own documentation tells
+%% production callers to use, and it pointed at `macula_client:connect/2',
+%% so it bypassed the facade and every check on it.
+child_spec_start_goes_through_the_facade_test() ->
+    ?assertMatch(#{start := {macula, connect, [[], #{}]}},
+                 macula:child_spec(a_pool, [], #{})).

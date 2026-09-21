@@ -628,7 +628,11 @@ child_spec(_Id, _Seeds, #{node_identity := Given}) when is_map(Given); is_functi
     erlang:error({node_identity, loader_required});
 child_spec(Id, Seeds, Opts) ->
     #{id       => Id,
-      start    => {?MODULE, connect, [Seeds, Opts]},
+      %% ⚠ `macula:connect/2', NOT `?MODULE:connect/2'. This is the path
+      %% the facade's own documentation tells production callers to use,
+      %% so a check that lives on the facade must be on it. Pointing this
+      %% at `?MODULE' bypassed every one of them. See macula#15.
+      start    => {macula, connect, [Seeds, Opts]},
       restart  => permanent,
       shutdown => 5_000,
       type     => worker,

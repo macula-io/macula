@@ -147,6 +147,9 @@
 
 -ifdef(TEST).
 -export([with_client_stream/3]).
+%% The seed gate, exported so a test can assert the refusal directly rather
+%% than infer it from a link that failed to start.
+-export([seed_checked/4]).
 -endif.
 
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -1221,6 +1224,22 @@ identity_checked(#{purpose := identity, profile := Profile} = Key, Issuer, Opts)
 identity_checked(_NotAnIdentityKey, _Issuer, _Opts) ->
     {error, {node_identity, not_an_identity_key}}.
 
+%% ⚠ `pin_tls_cert' is refused HERE and not only at the `macula' facade,
+%% because the seed map is where the option historically lived: the
+%% CHANGELOG describes it as a connect/link opt and macula-station carries
+%% it in exactly that map. `parse_seed/1' returns a map seed unfiltered and
+%% this function used to check only `expected_node_id', so the key rode
+%% through into the peering target, whose `connect_opts()' ends in `_ => _'
+%% and noticed nothing. A caller who put it on the seed got `{ok, Pool}'
+%% and had been told a check happened that did not.
+%%
+%% Every seed map passes through here, and the FLEET DOES NOT:
+%% macula-station calls `macula_peering:connect/1' directly and never
+%% builds a station link, so its `pin_tls_cert => false' target is
+%% untouched. See `macula:pin_tls_cert_checked/1' for why `true' cannot be
+%% honoured, and macula#15.
+seed_checked(#{pin_tls_cert := true}, _Key, _Profile, _Issuer) ->
+    {error, {seed, {pin_tls_cert, no_pin_primitive_for_mldsa87_identity}}};
 seed_checked(#{expected_node_id := <<_:256>>} = Seed, Key, Profile, Issuer) ->
     {ok, Seed, Key, Profile, Issuer};
 seed_checked(_Seed, _Key, _Profile, _Issuer) ->
