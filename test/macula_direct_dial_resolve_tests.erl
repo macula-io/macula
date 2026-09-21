@@ -409,16 +409,25 @@ call_remembers_the_station_that_answered() ->
 %% now. It is the minimum of the three freshness surfaces by an invariant
 %% macula_record enforces (see reusable_for/2), so it is read off the record
 %% rather than re-derived.
+%%
+%% ⚠ THE ADVERTISEMENT IS BUILT WITH A DELIBERATELY NON-DEFAULT LIFETIME, and
+%% that is the whole strength of this test. A procedure_advertisement's
+%% default ttl is its type maximum, five minutes, so an earlier version of
+%% this case using a default advertisement could not tell "read off the
+%% record" from "hard-coded 300000": a mutation replacing reusable_for/2 with
+%% that constant left it GREEN. A lifetime no constant would guess is what
+%% makes the assertion mean what its name says.
 call_remembers_for_the_advertisements_own_remaining_lifetime() ->
     A = station(<<"a.test">>),
-    #{expires_at := ExpiresAt} = Advertisement = advertisement(A),
+    #{expires_at := ExpiresAt} = Advertisement = advertisement_living(A, 37_000),
     set_replies(procedure_key(), [[Advertisement]]),
     set_endpoint(A, endpoint_record(A)),
     set_answer(dial_url(A), {ok, <<"from a">>}),
     ?assertEqual({ok, <<"from a">>}, call(3000)),
     {_Candidate, TtlMs} = remembered(?PROC),
     Remaining = ExpiresAt - erlang:system_time(millisecond),
-    ?assert(abs(Remaining - TtlMs) < 5_000).
+    ?assert(abs(Remaining - TtlMs) < 2_000),
+    ?assert(TtlMs > 30_000 andalso TtlMs =< 37_000).
 
 %% A CALL that went out and came back an error proves a route to the station,
 %% not that the station still serves the procedure. A station answering
@@ -1174,6 +1183,16 @@ procedure_key() -> macula_record:procedure_key(?REALM, ?PROC).
 org_procedure_key() -> macula_record:procedure_key(?REALM, ?ORG_PROC).
 
 advertisement(Station) -> advertisement(Station, ?PROC).
+
+%% An advertisement for ?PROC with a lifetime of its own rather than the
+%% type's default, so a test can tell a lifetime READ from the record apart
+%% from one that happens to equal the default.
+advertisement_living(#{id := StationId}, TtlMs) ->
+    Provider = node_key(identity),
+    verified(macula_record:sign(
+               macula_record:procedure_advertisement(macula_node_keys:key_id(Provider), ?REALM,
+                                                     ?PROC, StationId, #{ttl_ms => TtlMs}),
+               Provider)).
 
 %% A signed procedure_advertisement for Procedure from a fresh provider naming
 %% Station.
