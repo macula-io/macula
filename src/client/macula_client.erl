@@ -78,6 +78,9 @@
 %% a link to a SPECIFIC (resolved) station rather than picking from the
 %% pool's existing links.
 -export([ensure_station_link/4]).
+%% Direct-dial resolution head start — called by `macula_direct_dial' to
+%% remember which station last answered a procedure, and to get it back.
+-export([resolved_candidate/3, remember_resolved/5]).
 %% Streaming RPC (since 3.17.0) — called by the `macula' facade.
 -export([call_stream_station/7]).
 
@@ -94,6 +97,14 @@
 %% ONE event per wait rather than one per 50 ms poll. That property lives in
 %% which function the recursion runs through and is invisible on inspection.
 -export([await_connected/2]).
+%% The two decisions behind `resolved_candidate/3' and `remember_resolved/5',
+%% exported so a test can drive them with explicit clock readings. Both are
+%% about TIME and about a LIVE LINK, and neither property can be shown by
+%% inspection: that an entry's life is measured in elapsed monotonic
+%% milliseconds rather than against a wall clock is visible only by moving
+%% the reading, and that a remembered station is dropped the moment its link
+%% goes is visible only by taking the link away.
+-export([still_usable/3, remembered/5]).
 %% The pure selection math behind publish/5's replication fan-out, and
 %% the per-link crash guard its fan-out worker uses — exported for
 %% macula_client_tests.erl only, see their own docs.
@@ -584,7 +595,23 @@
     dial_extra_opts = #{} :: #{seed() => map()},
     %% The request admission in which all the pool's links judge the requests
     %% they receive.
-    admission :: pid()
+    admission :: pid(),
+    %% The station that last answered a procedure here, so direct dial can
+    %% try it before asking the DHT again: {realm, procedure} -> the
+    %% candidate and the monotonic millisecond it stops being usable.
+    %%
+    %% MONOTONIC, not a wall-clock expiry. The horizon is derived once from
+    %% the advertisement's own expires_at at the moment it verified, and
+    %% from then on only elapsed time is read, so a wall clock that steps
+    %% between remembering and reading cannot lengthen or shorten an entry.
+    %%
+    %% An entry is a head start, never an answer: `resolved_candidate/3'
+    %% hands one back only while the pool still holds a LIVE link to that
+    %% station, and direct dial falls through to the DHT whenever it does
+    %% not. Expired entries are dropped as new ones arrive, so the map
+    %% holds about one entry per procedure this pool actually calls.
+    resolved = #{} :: #{{<<_:256>>, binary()} =>
+                        #{candidate := map(), until_mono := integer()}}
 }).
 
 %% The issuer restart backoff doubles from the least to the most, and
@@ -933,6 +960,42 @@ status(Pool) when is_pid(Pool) ->
 -spec realm_key(pool(), <<_:256>>) -> {ok, binary()} | none.
 realm_key(Pool, <<_:256>> = RealmId) when is_pid(Pool) ->
     gen_server:call(Pool, {realm_key, RealmId}, 5_000).
+
+%% @doc The station that last answered `Procedure' in `RealmId' from this
+%% pool, as a direct-dial candidate plus the seed the pool's own live link
+%% to that station is keyed by, or `none'.
+%%
+%% A HEAD START, NEVER AN ANSWER. It is handed back only while three things
+%% hold together: an entry was remembered, its horizon has not elapsed, and
+%% the pool STILL HOLDS A LIVE LINK to that station. The live link is the
+%% evidence: a link either exists or it does not, so unlike a signed
+%% endpoint record up to five minutes old it cannot be stale. Direct dial
+%% resolves through the DHT exactly as before whenever this answers `none',
+%% and also whenever the candidate it returns fails.
+%%
+%% ⚠ THE LINK IS MATCHED BY NODE ID, NOT BY NAME. `find_seed_by_node_id/2'
+%% asks each live link who its handshake peer is, so the identity a
+%% direct-dial `expected_node_id' pin would have checked has already been
+%% checked here, before the seed is named. Naming the link afterwards by the
+%% key the pool itself holds it under is what makes `ensure_link/3' match it
+%% on its first lookup instead of dialling; the name is how the call REACHES
+%% the link, and the node id is what makes it the RIGHT one.
+-spec resolved_candidate(pool(), <<_:256>>, binary()) ->
+    {ok, map(), seed()} | none.
+resolved_candidate(Pool, <<_:256>> = RealmId, Procedure)
+  when is_pid(Pool), is_binary(Procedure) ->
+    gen_server:call(Pool, {resolved_candidate, RealmId, Procedure}, 5_000).
+
+%% @doc Remember `Candidate' as the station that answered `Procedure' in
+%% `RealmId', usable for `TtlMs' more milliseconds.
+%%
+%% A cast, because remembering must not cost the call that earned it any
+%% latency, and because losing one is only a lost head start.
+-spec remember_resolved(pool(), <<_:256>>, binary(), map(), non_neg_integer()) -> ok.
+remember_resolved(Pool, <<_:256>> = RealmId, Procedure, Candidate, TtlMs)
+  when is_pid(Pool), is_binary(Procedure), is_map(Candidate),
+       is_integer(TtlMs), TtlMs >= 0 ->
+    gen_server:cast(Pool, {remember_resolved, RealmId, Procedure, Candidate, TtlMs}).
 
 %% @doc Sign a record this node signs about itself with the pool's node identity key, in the pool's own process, and
 %% return the signed record: the node record, a procedure advertisement or a content announcement that names this node.
@@ -1498,6 +1561,10 @@ handle_call({unadvertise_stream, Realm, Procedure}, _From,
 
 handle_call({realm_key, RealmId}, _From, #state{realm_keys = Keys} = S) ->
     {reply, pinned_realm_key(maps:find(RealmId, Keys)), S};
+handle_call({resolved_candidate, RealmId, Procedure}, _From,
+            #state{resolved = Resolved, links = Links} = S) ->
+    {reply, still_usable(maps:find({RealmId, Procedure}, Resolved),
+                         erlang:monotonic_time(millisecond), live_links(Links)), S};
 handle_call({sign_node_record, Record}, _From, #state{node_identity = Key} = S) ->
     {reply, node_record_signed(macula_record:node_signed(Record), Record, Key), S};
 handle_call({sign_node_record_bounded, Record}, _From, #state{node_identity = Key} = S) ->
@@ -1547,6 +1614,11 @@ handle_call(_Req, _From, S) ->
 %% only knows the seeds/links at spawn time, so all of that has to
 %% happen here, against the pool's actual current state, not a stale
 %% snapshot). See `add_discovered_seeds/2'.
+handle_cast({remember_resolved, RealmId, Procedure, Candidate, TtlMs},
+            #state{resolved = Resolved} = S) ->
+    Now = erlang:monotonic_time(millisecond),
+    {noreply, S#state{resolved = remembered({RealmId, Procedure}, Candidate,
+                                            Now + TtlMs, Now, Resolved)}};
 handle_cast({discovered_stations, NewSeeds}, S) ->
     {noreply, add_discovered_seeds(NewSeeds, S)};
 
@@ -1937,21 +2009,63 @@ logged_refusal({quiet, Report}, _Reason) ->
 %% here at all (see `ensure_link/3''s own doc for why every subsequent
 %% call to the same resolved URL skips this entirely).
 find_link_by_node_id(NodeId, Links) ->
-    first_matching_pid(
-      [Pid || #link_state{pid = Pid} <- maps:values(Links), is_pid(Pid)],
-      NodeId).
+    link_pid_of(first_matching_link(live_links(Links), NodeId)).
 
-first_matching_pid([], _NodeId) ->
+%% The pool's links that have a process, as {seed, pid}: the shape both
+%% lookups below work on, and the shape a test can build without the pool.
+
+%% The SEED a live link to `NodeId' is keyed by, for a caller that needs to
+%% NAME that link rather than hold it: `macula:call_station/8' takes a seed,
+%% and `ensure_link/3' matches the pool's own key before anything else, so
+%% handing back the key the pool already uses reaches the live link on its
+%% first lookup and dials nothing.
+find_seed_by_node_id(NodeId, LiveLinks) ->
+    link_seed_of(first_matching_link(LiveLinks, NodeId)).
+
+link_pid_of({_Seed, Pid}) -> Pid;
+link_pid_of(undefined)    -> undefined.
+
+link_seed_of({Seed, _Pid}) -> {ok, Seed};
+link_seed_of(undefined)    -> none.
+
+live_links(Links) ->
+    [{Seed, Pid} || Seed := #link_state{pid = Pid} <- Links, is_pid(Pid)].
+
+first_matching_link([], _NodeId) ->
     undefined;
-first_matching_pid([Pid | Rest], NodeId) ->
+first_matching_link([{_Seed, Pid} = Link | Rest], NodeId) ->
     %% safe_peer_node_id/1 (below, pre-existing) already absorbs a dead
     %% or wedged link's gen_server:call exit -- exactly the "one bad
     %% link must not crash this whole reuse scan" concern this function
     %% would otherwise need its own try/catch for.
-    keep_or_next(safe_peer_node_id(Pid), Pid, Rest, NodeId).
+    keep_or_next(safe_peer_node_id(Pid), Link, Rest, NodeId).
 
-keep_or_next(NodeId, Pid, _Rest, NodeId) when NodeId =/= undefined -> Pid;
-keep_or_next(_Other, _Pid, Rest, NodeId) -> first_matching_pid(Rest, NodeId).
+keep_or_next(NodeId, Link, _Rest, NodeId) when NodeId =/= undefined -> Link;
+keep_or_next(_Other, _Link, Rest, NodeId) -> first_matching_link(Rest, NodeId).
+
+%% A remembered candidate is handed back only while its horizon has not
+%% elapsed AND the pool still holds a live link to the station it names.
+%% Both together are what make it a head start rather than a guess: the
+%% horizon bounds how stale the ADVERTISEMENT may be, and the live link is
+%% direct evidence about the STATION that no stored record can give.
+still_usable({ok, #{candidate := Candidate, until_mono := Until}}, Now, LiveLinks)
+  when Now < Until ->
+    usable_with_seed(find_seed_by_node_id(maps:get(station, Candidate), LiveLinks),
+                     Candidate);
+still_usable(_MissingOrElapsed, _Now, _LiveLinks) ->
+    none.
+
+usable_with_seed({ok, Seed}, Candidate) -> {ok, Candidate, Seed};
+usable_with_seed(none, _Candidate)      -> none.
+
+%% Entries whose horizon has elapsed are dropped as a new one arrives, so
+%% the map tracks the procedures this pool currently calls instead of every
+%% procedure it has ever called. Nothing else prunes it, and nothing else
+%% needs to: a pool that stops calling a procedure stops writing here too,
+%% and the entries it leaves behind are one small map each.
+remembered(Key, Candidate, UntilMono, Now, Resolved) ->
+    Live = maps:filter(fun(_K, #{until_mono := U}) -> Now < U end, Resolved),
+    Live#{Key => #{candidate => Candidate, until_mono => UntilMono}}.
 
 link_pid(Station, #state{links = Links}) ->
     case maps:find(Station, Links) of

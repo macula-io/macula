@@ -42,6 +42,15 @@ setup() ->
     meck:new(macula_content_transfer, [passthrough]),
     %% A pool pins no realm key unless a test pins one (pin_realm_key/2).
     meck:expect(macula_client, realm_key, fun(_Pool, _Realm) -> none end),
+    %% No head start unless a test plants one (remember_station/3), and what
+    %% the code remembers is recorded rather than dropped (remembered/1).
+    meck:expect(macula_client, resolved_candidate,
+                fun(_Pool, Realm, Procedure) -> planted_head_start(Realm, Procedure) end),
+    meck:expect(macula_client, remember_resolved,
+                fun(_Pool, Realm, Procedure, Candidate, TtlMs) ->
+                        ets:insert(?STATE, {{remembered, Realm, Procedure}, Candidate, TtlMs}),
+                        ok
+                end),
     meck:expect(macula, find_records, fun(_Pool, Key) -> find_records(Key) end),
     meck:expect(macula, find_records,
                 fun(_Pool, Key, TimeoutMs) -> find_records(Key, TimeoutMs) end),
@@ -88,6 +97,17 @@ resolve_test_() ->
       {timeout, 30, fun call_stops_at_a_request_the_wire_cannot_carry/0},
       {timeout, 30, fun call_timeout_bounds_resolution/0},
       {timeout, 30, fun call_timeout_bounds_the_endpoint_lookup/0},
+      {timeout, 30, fun call_answers_from_a_remembered_station_without_asking_the_dht/0},
+      {timeout, 30,
+       fun call_falls_through_to_the_dht_when_the_remembered_station_does_not_connect/0},
+      {timeout, 30, fun call_tries_a_remembered_station_again_when_the_dht_names_it/0},
+      {timeout, 30, fun call_with_a_dead_head_start_and_no_advertisement_ends_at_its_deadline/0},
+      {timeout, 30,
+       fun call_stream_answers_from_a_remembered_station_without_asking_the_dht/0},
+      {timeout, 30, fun call_remembers_the_station_that_answered/0},
+      {timeout, 30, fun call_remembers_for_the_advertisements_own_remaining_lifetime/0},
+      {timeout, 30, fun call_does_not_remember_a_station_whose_call_failed/0},
+      {timeout, 30, fun call_does_not_remember_a_head_start_that_answered/0},
       {timeout, 30, fun call_stream_tries_the_next_station_when_a_dial_fails/0},
       {timeout, 30, fun call_stream_never_opens_the_stream_twice/0},
       {timeout, 30, fun call_stream_names_the_provider_its_advertisement_names/0},
@@ -201,7 +221,12 @@ dial_io() ->
       start_get_station =>
           fun(_Pool, Endpoint, _Mcid, _TimeoutMs, _Opts) -> {ok, {fake_transfer, Endpoint}} end,
       await => fun({fake_transfer, Endpoint}, _Timeout) -> visit(Endpoint) end,
-      cancel => fun(_Transfer) -> ok end}.
+      cancel => fun(_Transfer) -> ok end,
+      %% No head start by default: every existing case here measures what
+      %% resolution does when it has to ask the DHT, and a remembered
+      %% candidate would skip the lookups they count.
+      resolved_candidate => fun(_Pool, _Realm, _Proc) -> none end,
+      remember_resolved => fun(_Pool, _Realm, _Proc, _Candidate, _TtlMs) -> ok end}.
 
 %%%===================================================================
 %%% Calls
@@ -294,6 +319,128 @@ call_timeout_bounds_the_endpoint_lookup() ->
     {Elapsed, Result} = timed(fun() -> call(300) end),
     ?assertMatch({error, {unresolved, _}}, Result),
     ?assert(Elapsed < 1000).
+
+%%%===================================================================
+%%% Head start
+%%%===================================================================
+
+%% The whole point: a remembered station is called with NO DHT lookup at all,
+%% neither the advertisement's nor the station's endpoint. Nothing is planted
+%% for either key here, so a call that reached the DHT could not have
+%% answered.
+call_answers_from_a_remembered_station_without_asking_the_dht() ->
+    A = station(<<"a.test">>),
+    remember_station(?PROC, A, provider_id()),
+    set_answer(dial_url(A), {ok, <<"from a">>}),
+    ?assertEqual({ok, <<"from a">>}, call(3000)),
+    ?assertEqual([dial_url(A)], visits()),
+    ?assertEqual(0, lookups(procedure_key())),
+    ?assertEqual(0, endpoint_lookups(A)).
+
+%% A HEAD START, NEVER A SUBSTITUTE. A remembered station whose link is gone
+%% is passed over exactly as a DHT-resolved one is, and resolution carries on
+%% into the DHT, which answers. This is the property the whole shape rests on:
+%% the cache may not turn a call that would have succeeded into a failure.
+call_falls_through_to_the_dht_when_the_remembered_station_does_not_connect() ->
+    A = station(<<"a.test">>), B = station(<<"b.test">>),
+    remember_station(?PROC, A, provider_id()),
+    set_answer(dial_url(A), {error, not_connected}),
+    set_replies(procedure_key(), [[advertisement(B)]]),
+    set_endpoint(B, endpoint_record(B)),
+    set_answer(dial_url(B), {ok, <<"from b">>}),
+    ?assertEqual({ok, <<"from b">>}, call(3000)),
+    ?assertEqual([dial_url(A), dial_url(B)], visits()),
+    ?assertEqual(1, lookups(procedure_key())).
+
+%% The head start is one candidate among the rest, not a separate mechanism:
+%% when it fails and the DHT names the SAME station, that station is tried
+%% again rather than suppressed as already-failed. A head start does no
+%% endpoint lookup, so the first real endpoint record it sees is a change.
+call_tries_a_remembered_station_again_when_the_dht_names_it() ->
+    A = station(<<"a.test">>),
+    Advertisement = advertisement(A),
+    #{key_id := Provider} = Advertisement,
+    remember_station(?PROC, A, Provider),
+    set_replies(procedure_key(), [[Advertisement]]),
+    set_endpoint(A, endpoint_record(A)),
+    set_answers(dial_url(A), [{error, not_connected}, {ok, <<"from a">>}]),
+    ?assertEqual({ok, <<"from a">>}, call(3000)),
+    ?assertEqual([dial_url(A), dial_url(A)], visits()).
+
+%% A remembered station that never connects and a DHT that never answers must
+%% still end at the deadline rather than looping on the head start.
+call_with_a_dead_head_start_and_no_advertisement_ends_at_its_deadline() ->
+    A = station(<<"a.test">>),
+    remember_station(?PROC, A, provider_id()),
+    set_answer(dial_url(A), {error, not_connected}),
+    {Elapsed, Result} = timed(fun() -> call(300) end),
+    ?assertMatch({error, _}, Result),
+    ?assert(Elapsed < 1000).
+
+%% A stream resolves through the same machinery, so it gets the same head
+%% start. An advertisement does not distinguish RPC from streaming.
+call_stream_answers_from_a_remembered_station_without_asking_the_dht() ->
+    A = station(<<"a.test">>),
+    remember_station(?PROC, A, provider_id()),
+    set_answer(dial_url(A), {ok, fake_stream}),
+    ?assertEqual({ok, fake_stream}, call_stream(3000)),
+    ?assertEqual(0, lookups(procedure_key())).
+
+%%%===================================================================
+%%% Remembering
+%%%===================================================================
+
+%% A DHT-resolved call that ANSWERED is remembered, as the candidate without
+%% the bookkeeping the loop carried, and with a lifetime to hold it for.
+call_remembers_the_station_that_answered() ->
+    A = station(<<"a.test">>),
+    Advertisement = advertisement(A),
+    #{key_id := Provider, version := Version} = Advertisement,
+    set_replies(procedure_key(), [[Advertisement]]),
+    set_endpoint(A, endpoint_record(A)),
+    set_answer(dial_url(A), {ok, <<"from a">>}),
+    ?assertEqual({ok, <<"from a">>}, call(3000)),
+    {Candidate, TtlMs} = remembered(?PROC),
+    ?assertEqual(#{provider => Provider, version => Version,
+                   station => maps:get(id, A)}, Candidate),
+    ?assert(TtlMs > 0).
+
+%% The lifetime is the advertisement's OWN remaining lifetime, relative to
+%% now. It is the minimum of the three freshness surfaces by an invariant
+%% macula_record enforces (see reusable_for/2), so it is read off the record
+%% rather than re-derived.
+call_remembers_for_the_advertisements_own_remaining_lifetime() ->
+    A = station(<<"a.test">>),
+    #{expires_at := ExpiresAt} = Advertisement = advertisement(A),
+    set_replies(procedure_key(), [[Advertisement]]),
+    set_endpoint(A, endpoint_record(A)),
+    set_answer(dial_url(A), {ok, <<"from a">>}),
+    ?assertEqual({ok, <<"from a">>}, call(3000)),
+    {_Candidate, TtlMs} = remembered(?PROC),
+    Remaining = ExpiresAt - erlang:system_time(millisecond),
+    ?assert(abs(Remaining - TtlMs) < 5_000).
+
+%% A CALL that went out and came back an error proves a route to the station,
+%% not that the station still serves the procedure. A station answering
+%% unknown_next_peer is precisely the one not to try first next time.
+call_does_not_remember_a_station_whose_call_failed() ->
+    A = station(<<"a.test">>),
+    set_replies(procedure_key(), [[advertisement(A)]]),
+    set_endpoint(A, endpoint_record(A)),
+    set_answer(dial_url(A), {error, {call_error, unknown_next_peer, undefined}}),
+    ?assertMatch({error, _}, call(3000)),
+    ?assertEqual(none, remembered(?PROC)).
+
+%% A HEAD START THAT ANSWERS DOES NOT REFRESH ITS OWN HORIZON. Answering is
+%% no fresh evidence about the advertisement, and refreshing on a hit would
+%% let one remembered station live for as long as it kept answering while the
+%% DHT was never asked again.
+call_does_not_remember_a_head_start_that_answered() ->
+    A = station(<<"a.test">>),
+    remember_station(?PROC, A, provider_id()),
+    set_answer(dial_url(A), {ok, <<"from a">>}),
+    ?assertEqual({ok, <<"from a">>}, call(3000)),
+    ?assertEqual(none, remembered(?PROC)).
 
 %%%===================================================================
 %%% Streams
@@ -929,10 +1076,19 @@ endpoint_found([]) -> {error, not_found}.
 visit(Target) ->
     [{visits, Seen}] = ets:lookup(?STATE, visits),
     ets:insert(?STATE, {visits, Seen ++ [Target]}),
-    answer(ets:lookup(?STATE, {answer, Target})).
+    answer(ets:lookup(?STATE, {answer, Target}), Target).
 
-answer([{_, Answer}]) -> Answer;
-answer([]) -> {error, not_connected}.
+%% A sequence answers each dial in turn and then keeps answering its last,
+%% for a case that needs the SAME target to answer differently the second
+%% time it is dialled.
+answer([{_, {sequence, [Next | Rest]}}], Target) ->
+    ets:insert(?STATE, {{answer, Target}, sequence_or_last(Rest, Next)}),
+    Next;
+answer([{_, Answer}], _Target) -> Answer;
+answer([], _Target) -> {error, not_connected}.
+
+sequence_or_last([], Last)     -> Last;
+sequence_or_last(Rest, _Last)  -> {sequence, Rest}.
 
 visits() ->
     [{visits, Seen}] = ets:lookup(?STATE, visits),
@@ -951,6 +1107,33 @@ set_endpoint(Station, Record) -> ets:insert(?STATE, {endpoint_entry(Station), Re
 endpoint_entry(#{id := Id}) -> {endpoint, macula_record:station_endpoint_key(Id)}.
 
 set_answer(Target, Answer) -> ets:insert(?STATE, {{answer, Target}, Answer}).
+
+set_answers(Target, [_ | _] = Answers) ->
+    ets:insert(?STATE, {{answer, Target}, {sequence, Answers}}).
+
+%% A provider node id for a planted head start. The head-start path reads no
+%% record, so nothing verifies this: it only has to be a node id.
+provider_id() -> <<16#5A:256>>.
+
+%% Plant the head start the pool would hand back: the candidate it remembered
+%% and the seed its own live link to that station is keyed by.
+remember_station(Procedure, #{id := Id} = Station, Provider) ->
+    ets:insert(?STATE, {{head_start, ?REALM, Procedure},
+                        #{provider => Provider, version => <<9:128>>, station => Id},
+                        dial_url(Station)}).
+
+planted_head_start(Realm, Procedure) ->
+    planted(ets:lookup(?STATE, {head_start, Realm, Procedure})).
+
+planted([{_Key, Candidate, Seed}]) -> {ok, Candidate, Seed};
+planted([])                        -> none.
+
+%% What the code remembered for a procedure, as {Candidate, TtlMs}, or none.
+remembered(Procedure) ->
+    recalled(ets:lookup(?STATE, {remembered, ?REALM, Procedure})).
+
+recalled([{_Key, Candidate, TtlMs}]) -> {Candidate, TtlMs};
+recalled([])                         -> none.
 
 %%%===================================================================
 %%% Helpers: keys and records

@@ -108,8 +108,15 @@ a_direct_request_calls_with_the_other_options() ->
 
 %% Without a call function the request's worker calls macula:call/5, which
 %% resolves the procedure through macula_direct_dial and passes a pool that
-%% is not a process on to macula:find_records/3, whose guard refuses it, and
-%% the worker's crash stops the request.
+%% is not a process on to the first function whose guard wants a pid. The
+%% worker's crash is the property under test; the function that refuses is
+%% named to keep the assertion precise.
+%%
+%% ⚠ That function is `macula_client:resolved_candidate/3' and NOT
+%% `macula:find_records/3', because resolution now asks the pool for its head
+%% start before it asks the DHT anything (`macula_direct_dial:head_start/3').
+%% This test is what surfaced that the call order had changed; if it names a
+%% third function one day, check the order before changing the name.
 without_a_call_function_it_calls_through_macula() ->
     process_flag(trap_exit, true),
     {ok, Pid} = macula_request:start_link(?MODULE, pool, ?REALM, ?PROCEDURE, #{}, 5_000, self(),
@@ -119,7 +126,9 @@ without_a_call_function_it_calls_through_macula() ->
              after 5000 ->
                  no_exit
              end,
-    ?assertMatch({worker_crashed, {function_clause, [{macula, find_records, _, _} | _]}}, Reason).
+    ?assertMatch({worker_crashed,
+                  {function_clause, [{macula_client, resolved_candidate, _, _} | _]}},
+                 Reason).
 
 %% A request's timeout is a positive number of milliseconds up to ten minutes, the bound its call has; anything else is
 %% refused where the request starts, not in its worker.

@@ -22,6 +22,28 @@
 %%%
 %%% == Resolution ==
 %%%
+%%% A call starts from a HEAD START when it can. The pool remembers the
+%%% station that last answered a procedure, and hands it back as a candidate
+%%% to try before the DHT is asked at all, but only while two things hold:
+%%% the advertisement it was built from has not reached the end of the
+%%% lifetime it was remembered with, and the pool STILL HOLDS A LIVE LINK to
+%%% that station. The live link is what makes this safe to do without a
+%%% `station_endpoint' lookup: a link either exists or it does not, so it
+%%% cannot be stale the way a signed record up to five minutes old can.
+%%%
+%%% It is a head start and never a substitute. The remembered candidate goes
+%%% through the same trust-independent machinery as any other, gets the same
+%%% share of the same deadline, and when it fails resolution carries on into
+%%% the DHT passes exactly as it would have without one. Nothing is skipped
+%%% except a lookup. What it cannot cover is an advertisement SUPERSEDED by
+%%% one naming a different station while the remembered one is still inside
+%%% its own lifetime: the call then goes out to a station that no longer
+%%% serves the procedure and its answer is returned, where an uncached call
+%%% would have found the new station. That window is bounded by the
+%%% remembered lifetime and nothing else, deliberately, because a CALL that
+%%% has already gone out must not be sent again somewhere else (see
+%%% `macula_station_link:not_sent/1').
+%%%
 %%% Every advertisement that passes trust filtering is a candidate, in the
 %%% order the DHT returns them. A candidate whose `station_endpoint' can't
 %%% be resolved, or whose link doesn't connect (`{error, not_connected}'
@@ -169,7 +191,13 @@
                                                macula:mcid(), pos_integer(), map()) ->
                                                   {ok, pid()}),
                      await => fun((pid(), timeout()) -> {ok, term()} | {error, term()}),
-                     cancel => fun((pid()) -> ok)}.
+                     cancel => fun((pid()) -> ok),
+                     resolved_candidate => fun((macula:pool(), macula:realm(),
+                                                macula:procedure()) ->
+                                                   {ok, map(), macula_client:seed()} | none),
+                     remember_resolved => fun((macula:pool(), macula:realm(),
+                                               macula:procedure(), map(),
+                                               non_neg_integer()) -> ok)}.
 
 -export_type([dial_io/0]).
 
@@ -240,9 +268,11 @@ call(Pool, Realm, Procedure, Payload, TimeoutMs, Opts)
                         Opts).
 
 call_unless_removed(none, Pool, Realm, Procedure, Payload, TimeoutMs, Opts) ->
-    Dial = dial(Pool, [find_records, find_record, call_station], Opts),
+    Dial = dial(Pool, [find_records, find_record, call_station, resolved_candidate,
+                       remember_resolved], Opts),
     Deadline = deadline(TimeoutMs),
-    each_candidate(advertised_stations(Dial, Realm, Procedure),
+    each_candidate(head_start(Dial, Realm, Procedure),
+                   advertised_stations(Dial, Realm, Procedure),
                    station_try(Dial, call_work(Dial, Realm, Procedure, Payload, Deadline)),
                    Deadline);
 call_unless_removed(Removed, _Pool, _Realm, _Procedure, _Payload, _TimeoutMs, _Opts) ->
@@ -273,9 +303,11 @@ call_stream(Pool, Realm, Procedure, Args, StreamOpts, Opts)
                                StreamOpts, Opts).
 
 call_stream_unless_removed(none, Pool, Realm, Procedure, Args, StreamOpts, Opts) ->
-    Dial = dial(Pool, [find_records, find_record, call_stream_station], Opts),
+    Dial = dial(Pool, [find_records, find_record, call_stream_station, resolved_candidate,
+                       remember_resolved], Opts),
     Deadline = deadline(maps:get(dial_timeout_ms, StreamOpts, ?DEFAULT_DIAL_TIMEOUT_MS)),
-    each_candidate(advertised_stations(Dial, Realm, Procedure),
+    each_candidate(head_start(Dial, Realm, Procedure),
+                   advertised_stations(Dial, Realm, Procedure),
                    station_try(Dial, stream_work(Dial, Realm, Procedure, Args, StreamOpts)),
                    Deadline);
 call_stream_unless_removed(Removed, _Pool, _Realm, _Procedure, _Args, _StreamOpts, _Opts) ->
@@ -549,7 +581,9 @@ dial_function(call_stream_station, Fun) when is_function(Fun, 7) -> ok;
 dial_function(put_content_station, Fun) when is_function(Fun, 5) -> ok;
 dial_function(start_get_station, Fun) when is_function(Fun, 5) -> ok;
 dial_function(await, Fun) when is_function(Fun, 2) -> ok;
-dial_function(cancel, Fun) when is_function(Fun, 1) -> ok.
+dial_function(cancel, Fun) when is_function(Fun, 1) -> ok;
+dial_function(resolved_candidate, Fun) when is_function(Fun, 3) -> ok;
+dial_function(remember_resolved, Fun) when is_function(Fun, 5) -> ok.
 
 given_key(Key, Given) when is_map_key(Key, Given) -> ok.
 
@@ -564,7 +598,9 @@ default_dial_io() ->
       put_content_station => fun macula:put_content_station/5,
       start_get_station => fun macula_content_transfer:start_get_station/5,
       await => fun macula_content_transfer:await/2,
-      cancel => fun macula_content_transfer:cancel/1}.
+      cancel => fun macula_content_transfer:cancel/1,
+      resolved_candidate => fun macula_client:resolved_candidate/3,
+      remember_resolved => fun macula_client:remember_resolved/5}.
 
 %% Works through candidates until one settles the request or `Deadline'
 %% passes. `Find(Deadline)' returns one pass's `{ok, Candidates}',
@@ -577,7 +613,44 @@ default_dial_io() ->
 %% most recent candidate failure, why the latest answered lookup found nothing
 %% qualifying, the latest failed lookup's error, or a timeout.
 each_candidate(Find, Try, Deadline) ->
-    pass(Find, Try, Deadline, #{}, ?RETRY_MS, {timeout, {error, {unresolved, timeout}}}).
+    each_candidate([], Find, Try, Deadline).
+
+%% As `each_candidate/3', trying `HeadStart' before the DHT is asked at all.
+%%
+%% A HEAD START, NEVER A SUBSTITUTE. Its candidates go through the SAME
+%% `Try', the SAME `share/2' and the SAME `Deadline' as any other, they
+%% record what they failed on in the SAME `Seen', and when none of them
+%% settles the request the DHT passes run exactly as they do without one.
+%% What it removes is a lookup, not a check.
+%%
+%% There is no pause before the first DHT pass, unlike between two DHT
+%% passes: a pass waits because asking the same DHT again immediately
+%% teaches nothing, and the head start never asked it.
+each_candidate(HeadStart, Find, Try, Deadline) ->
+    first_pass(HeadStart, Find, Try, Deadline, #{},
+               {timeout, {error, {unresolved, timeout}}}).
+
+first_pass([], Find, Try, Deadline, Seen, Last) ->
+    pass(Find, Try, Deadline, Seen, ?RETRY_MS, Last);
+first_pass(HeadStart, Find, Try, Deadline, Seen, Last) ->
+    after_head_start(candidates({ok, HeadStart}, Try, Deadline, Seen, Last),
+                     Find, Try, Deadline).
+
+after_head_start({done, Result}, _Find, _Try, _Deadline) ->
+    Result;
+after_head_start({next, Last, Seen}, Find, Try, Deadline) ->
+    pass(Find, Try, Deadline, Seen, ?RETRY_MS, Last).
+
+%% The station that last answered `Procedure' in `Realm' from this pool, as
+%% a one-candidate head start, or none. The pool hands one back only while
+%% it still holds a LIVE LINK to that station, so the candidate carries the
+%% seed that link is keyed by (`dial') and needs no `station_endpoint'
+%% lookup: see `macula_client:resolved_candidate/3' and `reach/5'.
+head_start(#{pool := Pool, resolved_candidate := Resolved}, Realm, Procedure) ->
+    remembered_candidate(Resolved(Pool, Realm, Procedure)).
+
+remembered_candidate({ok, Candidate, Seed}) -> [Candidate#{dial => Seed}];
+remembered_candidate(none)                  -> [].
 
 pass(Find, Try, Deadline, Seen, Delay, Last) ->
     pass_in_time(remaining(Deadline) > 0, Find, Try, Deadline, Seen, Delay, Last).
@@ -640,7 +713,8 @@ advertised_stations(#{pool := Pool, find_records := FindRecords}, Realm, Procedu
 qualifying_stations({ok, []}, _Trust) ->
     {answered, {error, {unresolved, procedure_not_advertised}}};
 qualifying_stations({ok, Recs}, Trust) ->
-    candidates_or(trusted_stations(Recs, Trust()), no_trusted_advertisement);
+    candidates_or(trusted_stations(Recs, Trust(), erlang:system_time(millisecond)),
+                  no_trusted_advertisement);
 qualifying_stations({error, Reason}, _Trust) ->
     {failed, {error, {unresolved, Reason}}}.
 
@@ -650,11 +724,40 @@ candidates_or(Candidates, _Reason) -> {ok, Candidates}.
 %% Every advertisement that passes the trust check, in the order given, as a
 %% candidate: the node_id of the provider that signed it, its record's
 %% version, and the station it names.
-trusted_stations(Recs, Trust) ->
-    [#{provider => KeyId, version => Version, station => Station}
+trusted_stations(Recs, Trust, Now) ->
+    [#{provider => KeyId, version => Version, station => Station,
+       ttl_ms => reusable_for(Rec, Now)}
      || #{key_id := KeyId, version := Version} = Rec <- Recs,
         advertisement_trusted(Rec, Trust),
         Station <- serving_station(Rec)].
+
+%% How long a candidate built from `Rec' may be tried as a head start before
+%% the DHT is asked about it again, as a DURATION from `Now'.
+%%
+%% RELATIVE ON PURPOSE. An absolute expiry has to be compared later against
+%% a clock that may have stepped in between, and a client whose clock is a
+%% minute out eats a fifth of a five-minute bound for nothing. A duration is
+%% handed to the pool, which anchors it once against its own MONOTONIC clock
+%% and never reads a wall clock again, so only elapsed time can end it.
+%%
+%% ⚠ THE SURFACES ARE THREE AND THE ADVERTISEMENT'S IS THE MINIMUM OF THEM,
+%% BY AN INVARIANT THE RECORD MODULE ENFORCES. An advertisement stands on
+%% its own lifetime, its org directory's and its procedure delegation's.
+%% `macula_record:delegation_read/4' already computes
+%% `min(expires_at(Dir), expires_at(Del))', and the advertisement is REFUSED
+%% with `authorization_outlived' unless its own `expires_at' is at or before
+%% that minimum. Only an advertisement that passed `verify_authorization/3'
+%% becomes a candidate at all (`advertisement_trusted/2'), and a procedure
+%% with no org namespace has no directory or delegation to outlive, so for
+%% every record that reaches here the advertisement's own expiry IS the
+%% minimum of the three. Reading the other two would mean decoding and
+%% verifying two further ML-DSA-signed records per candidate, on the very
+%% path this head start exists to shorten, to re-derive a number that is
+%% already in hand. `macula_record_advertisement_tests' pins the invariant
+%% this relies on; if that test goes, this has to compute the minimum
+%% itself.
+reusable_for(#{expires_at := ExpiresAt}, Now) ->
+    max(0, ExpiresAt - Now).
 
 serving_station(Rec) ->
     try macula_record:read_procedure_advertisement(Rec) of
@@ -694,21 +797,29 @@ for_procedure(_OtherProcedure, _Rec, _Realm, _Procedure, _Trust) ->
 %% Sends the CALL to one resolved station. `not_connected' means the link
 %% never came up within the candidate's share, so nothing was sent and the
 %% next candidate may be tried; any other outcome means the CALL went out.
-call_work(#{pool := Pool, call_station := CallStation}, Realm, Procedure, Payload,
-          Deadline) ->
-    fun(Provider, Station, DialUrl, Share) ->
-        sent_or_not(CallStation(Pool, DialUrl, Provider, Realm, Procedure, Payload,
-                                budget(Deadline),
-                                (pinned(Station))#{dial_timeout_ms => budget(Share)}))
+call_work(#{pool := Pool, call_station := CallStation, remember_resolved := Remember},
+          Realm, Procedure, Payload, Deadline) ->
+    fun(#{provider := Provider} = Candidate) ->
+        fun(Station, DialUrl, Share) ->
+            sent_or_not(
+              settled(CallStation(Pool, DialUrl, Provider, Realm, Procedure, Payload,
+                                  budget(Deadline),
+                                  (pinned(Station))#{dial_timeout_ms => budget(Share)}),
+                      Remember, Pool, Realm, Procedure, Candidate))
+        end
     end.
 
 %% Opens the stream at one resolved station, on the same terms as `call_work/5'.
-stream_work(#{pool := Pool, call_stream_station := CallStreamStation}, Realm, Procedure,
-            Args, StreamOpts) ->
-    fun(Provider, Station, DialUrl, Share) ->
-        sent_or_not(CallStreamStation(Pool, DialUrl, Provider, Realm, Procedure, Args,
-                                      maps:merge(StreamOpts, (pinned(Station))#{
-                                          dial_timeout_ms => budget(Share)})))
+stream_work(#{pool := Pool, call_stream_station := CallStreamStation,
+              remember_resolved := Remember}, Realm, Procedure, Args, StreamOpts) ->
+    fun(#{provider := Provider} = Candidate) ->
+        fun(Station, DialUrl, Share) ->
+            sent_or_not(
+              settled(CallStreamStation(Pool, DialUrl, Provider, Realm, Procedure, Args,
+                                        maps:merge(StreamOpts, (pinned(Station))#{
+                                            dial_timeout_ms => budget(Share)})),
+                      Remember, Pool, Realm, Procedure, Candidate))
+        end
     end.
 
 %% Whether a candidate's outcome settles the request or leaves the next one
@@ -732,13 +843,72 @@ settled_or_next(candidate, NotSent) -> {not_sent, NotSent};
 settled_or_next(Settled, Failed) when Settled =:= request; Settled =:= provider ->
     {sent, Failed}.
 
+%% What one candidate's outcome settles beyond the result itself: it is
+%% REPORTED, so a measurement can tell a call that started from a remembered
+%% station apart from one that asked the DHT, and it is REMEMBERED when a
+%% DHT-resolved candidate answered.
+settled(Result, Remember, Pool, Realm, Procedure, Candidate) ->
+    report_candidate(candidate_source(Candidate), outcome(Result), Candidate),
+    remembering(Result, Remember, Pool, Realm, Procedure, Candidate).
+
+candidate_source(#{dial := _Seed}) -> head_start;
+candidate_source(_Resolved)        -> dht.
+
+outcome({ok, _Answered})  -> answered;
+outcome(_NotAnswered)     -> not_answered.
+
+%% Agnostic by construction: every outcome of every candidate, no threshold.
+%% Reading the split of head starts to DHT resolutions is the measurement's
+%% job; producing it honestly is this one's.
+report_candidate(Source, Outcome, #{provider := Provider, station := Station}) ->
+    macula_diagnostics:event(<<"_macula.direct_dial.candidate_tried">>,
+                             #{source => Source, outcome => Outcome,
+                               provider => Provider, station => Station}).
+
+%% Remembers the candidate that ANSWERED, and only a DHT-resolved one.
+%%
+%% Answered, because a CALL that went out and came back an error proves a
+%% route to the station but not that the station still serves the procedure:
+%% a station answering `unknown_next_peer' is precisely the one not to try
+%% first next time.
+%%
+%% DHT-resolved, because only a candidate the DHT just produced carries a
+%% `ttl_ms', and that is deliberate. A head start that answers is no fresh
+%% evidence about the ADVERTISEMENT, so refreshing the horizon on a hit
+%% would let one remembered station live for as long as it kept answering
+%% and the DHT would never be asked again.
+remembering({ok, _} = Answered, Remember, Pool, Realm, Procedure,
+            #{ttl_ms := TtlMs} = Candidate) ->
+    _ = Remember(Pool, Realm, Procedure, maps:without([ttl_ms], Candidate), TtlMs),
+    Answered;
+remembering(Result, _Remember, _Pool, _Realm, _Procedure, _Candidate) ->
+    Result.
+
 station_try(Dial, Work) ->
-    fun(Candidate, Share, Seen) -> reach(Dial, Candidate, Share, Seen, Work) end.
+    fun(Candidate, Share, Seen) -> reach(Dial, Candidate, Share, Seen, Work(Candidate)) end.
 
 %% Resolves a candidate's station endpoint within `Share' and hands it to
 %% `Work', unless the candidate already failed on the same advertisement:
 %% then one lookup tells whether its endpoint record has changed, and only a
 %% change is worth another dial. A lookup that itself fails teaches nothing.
+%%
+%% A HEAD-START candidate (`dial') skips the lookup entirely. It carries the
+%% seed the pool's own LIVE link to that station is keyed by, and a live
+%% link is better evidence about a station than a signed record up to five
+%% minutes old: a link either exists or it does not, so it cannot be stale.
+%% The pool checks that the link is still live at the moment it hands the
+%% candidate back (`macula_client:resolved_candidate/3'), and `ensure_link/3'
+%% matches that seed before anything else, so the CALL reaches the link the
+%% pool already holds and dials nothing.
+%%
+%% Its endpoint version is `none', which is the truth -- no endpoint record
+%% was read -- and it also keeps a head-start failure from suppressing the
+%% full attempt the first DHT pass makes on the same provider, since
+%% `unless_unchanged/7' then sees a real version where it recorded `none'
+%% and reads it as changed.
+reach(_Dial, #{dial := Seed, provider := Key, version := Version, station := Station},
+      Share, Seen, Work) ->
+    attempt({found, {ok, {Station, Seed}}, none}, Key, Version, Share, Seen, Work);
 reach(Dial, #{provider := Key, version := Version, station := Station}, Share, Seen,
       Work) ->
     reach_known(maps:find(Key, Seen), Dial, Key, Version, Station, Share, Seen, Work).
@@ -768,7 +938,7 @@ endpoint_version({absent, _Error}) -> none.
 
 attempt({found, {ok, {Station, DialUrl}}, EndpointVersion}, Key, Version, Share, Seen,
         Work) ->
-    worked(Work(Key, Station, DialUrl, Share), Key, Version, EndpointVersion, Seen);
+    worked(Work(Station, DialUrl, Share), Key, Version, EndpointVersion, Seen);
 attempt({found, {error, expired}, EndpointVersion}, Key, Version, _Share, Seen,
         _Work) ->
     failed(Key, Version, EndpointVersion,

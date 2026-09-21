@@ -127,6 +127,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   subject is a record lookup rather than a call, and merging them would be
   over-generalising.
 
+- **Direct dial starts from the station that last answered, when it can.** A
+  pool remembers the station that answered a procedure and hands it back as a
+  candidate to try before the DHT is asked at all, so a warm call no longer
+  re-pays a `find_records` for the advertisement and a `find_record` for the
+  station's endpoint that it paid on its previous call. Measured against the
+  live fleet before the change, those two lookups were about 120 ms of a
+  289 ms median warm call, and every one of 40 calls over one established
+  link paid them again.
+
+  It is a head start and never a substitute. The remembered candidate goes
+  through the same candidate loop, the same share of the same deadline and
+  the same trust machinery as any other, and when it fails resolution carries
+  on into the DHT passes exactly as it would have without one. Nothing is
+  skipped except a lookup.
+
+  Two things have to hold together for one to be used, and the second is the
+  interesting one. The advertisement it was built from must still be inside
+  the lifetime it was remembered with, and **the pool must still hold a live
+  link to that station**. The live link is what makes skipping the
+  `station_endpoint` lookup honest rather than optimistic: the lookup exists
+  to produce an address to dial, and a link the pool is holding right now is
+  better evidence about a station than a signed record up to five minutes
+  old, because a link either exists or it does not and so cannot be stale.
+  With no live link the pool offers nothing and resolution runs as before.
+
+  The lifetime is the advertisement's own remaining lifetime, taken as a
+  **duration** and anchored once against the pool's monotonic clock. An
+  absolute expiry would have to be compared later against a wall clock that
+  may have stepped in between; a duration cannot be lengthened or shortened
+  that way, and a client whose clock is a minute out no longer loses a fifth
+  of a five-minute bound to nothing. An advertisement's own expiry is the
+  minimum of the three surfaces it stands on, because `macula_record` refuses
+  one that outlives its org directory or its procedure delegation with
+  `authorization_outlived`.
+
+  **What it cannot cover**, stated because the bound is the only control on
+  it: an advertisement SUPERSEDED by one naming a different station, while
+  the remembered one is still inside its own lifetime. The call then goes out
+  to a station that no longer serves the procedure and its answer is
+  returned, where an uncached call would have found the new station. It is
+  bounded by the remembered lifetime and by nothing else, deliberately,
+  because a CALL that has already gone out must not be sent again somewhere
+  else — see `macula_station_link:not_sent/1`, which rules that a station's
+  `unknown_next_peer` may follow a CALL that reached its provider.
+
+  A station is remembered only when its CALL was ANSWERED, and only when the
+  DHT resolved it. A call that went out and came back an error proves a route
+  to the station but not that the station still serves the procedure, and a
+  head start that answers is no fresh evidence about the advertisement, so
+  answering never refreshes a horizon.
+
+  Every candidate reports which of the two it was and how it ended, as
+  `_macula.direct_dial.candidate_tried` with `source` (`head_start` or `dht`)
+  and `outcome`. Agnostic by construction and with no threshold, so a
+  measurement can separate the two without the code having decided in advance
+  what it expects to find.
+
 ## [11.5.0] - 2026-09-21
 
 A minor rather than a patch: `station_endpoint_expired` is a new error a caller
