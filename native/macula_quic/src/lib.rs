@@ -40,6 +40,7 @@ rustler::init!(
         connection::nif_controlling_process_conn,
         connection::nif_peername,
         connection::nif_max_datagram_size,
+        connection::nif_lost_packets,
         connection::nif_peer_leaf,
         connection::nif_presented_leaf,
         // Stream

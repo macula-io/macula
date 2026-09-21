@@ -554,6 +554,40 @@ fn nif_max_datagram_size<'a>(
     Ok((atoms::ok(), mtu).encode(env))
 }
 
+/// NIF: lost_packets(ConnRef) -> {ok, Count} | {error, already_closed}
+///
+/// Packets this connection's congestion controller has declared lost,
+/// from `quinn::Connection::stats().path.lost_packets`.
+///
+/// CUMULATIVE for the life of the connection and monotonically
+/// non-decreasing. It never resets, so a caller wanting a rate reads it
+/// twice and subtracts; reading it once tells you nothing about when the
+/// losses happened. A connection that is replaced starts a new count,
+/// so deltas are only meaningful within one ConnRef.
+///
+/// This exists to make a question answerable, not to answer it: a call
+/// that stalls either coincides with a rise here or it does not, and
+/// both outcomes are informative.
+///
+/// ⚠ NOT a general stats API, and deliberately not routed through
+/// `macula_quic:getstat/2`. That function refuses with `not_implemented`
+/// on purpose — see its comment — because a counter that always reads
+/// zero makes "nothing is moving" indistinguishable from "nobody
+/// implemented the counter". Surfacing ONE real field here does not
+/// compromise that; filling the rest of `getstat/2`'s shape with zeros
+/// would.
+#[rustler::nif]
+fn nif_lost_packets<'a>(
+    env: Env<'a>,
+    conn: ResourceArc<ConnectionResource>,
+) -> NifResult<Term<'a>> {
+    if conn.closed.load(Ordering::Relaxed) {
+        return Ok((atoms::error(), atoms::already_closed()).encode(env));
+    }
+    let stats = conn.connection.stats();
+    Ok((atoms::ok(), stats.path.lost_packets).encode(env))
+}
+
 /// NIF: peer_leaf(ConnRef) -> {ok, Der} | {error, no_peer_leaf}
 ///
 /// The leaf certificate the other side sent in this connection's TLS

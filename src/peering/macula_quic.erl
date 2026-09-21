@@ -71,6 +71,7 @@
     handshake/1,
     peername/1,
     max_datagram_size/1,
+    lost_packets/1,
     peer_leaf/1,
     presented_leaf/1,
 
@@ -505,6 +506,28 @@ peername(Conn) ->
 max_datagram_size(Conn) ->
     nif_max_datagram_size(Conn).
 
+%% @doc Packets this connection's congestion controller has declared lost.
+%%
+%% CUMULATIVE for the life of the connection and monotonically
+%% non-decreasing. It never resets. A caller wanting a rate reads it twice
+%% and subtracts; a single reading says nothing about WHEN the losses
+%% happened. A replaced connection starts a new count, so a delta is only
+%% meaningful within one `Conn' reference.
+%%
+%% This makes a question answerable rather than answering one: an operation
+%% that stalls either coincides with a rise here or it does not, and both
+%% outcomes are informative.
+%%
+%% ⚠ This is ONE field, not a stats API, and deliberately NOT routed through
+%% `getstat/2'. That function refuses with `not_implemented' on purpose (see
+%% its comment): a counter that always reads zero makes "nothing is moving"
+%% indistinguishable from "nobody implemented the counter". Surfacing one
+%% real field here does not compromise that; filling the rest of
+%% `getstat/2''s shape with zeros would.
+-spec lost_packets(reference()) -> {ok, non_neg_integer()} | {error, term()}.
+lost_packets(Conn) ->
+    nif_lost_packets(Conn).
+
 %% @doc The leaf certificate the other side sent in this connection's TLS
 %% handshake, as DER, exactly as received. A dialed connection has the
 %% station's leaf. An accepted connection returns `{error, no_peer_leaf}',
@@ -756,6 +779,9 @@ nif_peername(_Conn) ->
     erlang:nif_error(nif_not_loaded).
 
 nif_max_datagram_size(_Conn) ->
+    erlang:nif_error(nif_not_loaded).
+
+nif_lost_packets(_Conn) ->
     erlang:nif_error(nif_not_loaded).
 
 nif_peer_leaf(_Conn) ->
