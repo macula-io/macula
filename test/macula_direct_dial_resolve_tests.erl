@@ -101,6 +101,8 @@ resolve_test_() ->
       {timeout, 30,
        fun call_falls_through_to_the_dht_when_the_remembered_station_does_not_connect/0},
       {timeout, 30, fun call_tries_a_remembered_station_again_when_the_dht_names_it/0},
+      {timeout, 30,
+       fun call_falls_through_to_the_dht_when_the_remembered_station_is_over_the_dial_budget/0},
       {timeout, 30, fun call_with_a_dead_head_start_and_no_advertisement_ends_at_its_deadline/0},
       {timeout, 30,
        fun call_stream_answers_from_a_remembered_station_without_asking_the_dht/0},
@@ -366,6 +368,29 @@ call_tries_a_remembered_station_again_when_the_dht_names_it() ->
     set_answers(dial_url(A), [{error, not_connected}, {ok, <<"from a">>}]),
     ?assertEqual({ok, <<"from a">>}, call(3000)),
     ?assertEqual([dial_url(A), dial_url(A)], visits()).
+
+%% THE INTERACTION THAT MAKES THESE TWO CHANGES ONE SHIP, not two.
+%%
+%% A head start is a candidate that may be a whole lifetime out of date, so it
+%% is the candidate most likely to name a station this pool can no longer
+%% reach: dead, or simply past the pool's own direct-link cap or new-peer
+%% budget. A pool refuses such a dial before any worker starts, with nothing
+%% sent.
+%%
+%% Before the failure-scope taxonomy that refusal ENDED RESOLUTION with every
+%% DHT candidate untried, so a stale head start would have turned a call that
+%% succeeds today into one that fails, and it would have done so exactly when
+%% the pool was under pressure. The head start is safe to add only because a
+%% dial refusal is candidate scoped and falls through.
+call_falls_through_to_the_dht_when_the_remembered_station_is_over_the_dial_budget() ->
+    A = station(<<"a.test">>), B = station(<<"b.test">>),
+    remember_station(?PROC, A, provider_id()),
+    set_answer(dial_url(A), {error, {dial_refused, new_peer_budget_spent}}),
+    set_replies(procedure_key(), [[advertisement(B)]]),
+    set_endpoint(B, endpoint_record(B)),
+    set_answer(dial_url(B), {ok, <<"from b">>}),
+    ?assertEqual({ok, <<"from b">>}, call(3000)),
+    ?assertEqual([dial_url(A), dial_url(B)], visits()).
 
 %% A remembered station that never connects and a DHT that never answers must
 %% still end at the deadline rather than looping on the head start.
