@@ -83,6 +83,70 @@ call_station_with_expected_node_id_and_no_match_falls_through_to_dial_test() ->
     ok = macula_client:close(Pool),
     ok.
 
+%% THE MATCHING HALF OF THE CASE ABOVE, AND THE INVARIANT DIRECT DIAL'S HEAD
+%% START STANDS ON: a second call to the SAME station under a DIFFERENT name
+%% reuses the link the pool already holds rather than dialling a fresh one.
+%%
+%% Until now nothing asserted it. `macula_station_call_station_SUITE''s own
+%% comment says "a second call reuses the link" and then checks only that the
+%% second call answered, which a second fresh dial satisfies equally well. A
+%% claim that lives in a comment is worse than an untested behaviour, because
+%% a reader takes a comment as description and nobody looks again.
+%%
+%% It matters here specifically. `macula_direct_dial''s head start hands back
+%% a remembered station together with the seed the pool's own live link is
+%% keyed by, and skips the `station_endpoint' lookup PRECISELY BECAUSE that
+%% link will be reused rather than re-dialled. If reuse ever stopped
+%% happening, every call would dial afresh and the head start's own tests
+%% would stay green.
+%%
+%% The cap of ONE direct link is what makes reuse observable without a live
+%% station: a fresh dial would be refused with `too_many_direct_links' and
+%% counted in the pool's status, while a reuse is neither. The link is made to
+%% look connected with `sys:replace_state/2' over
+%% `macula_station_link:state_field_index/1', the same instrument
+%% `macula_key_redaction_tests' uses, because the reuse scan asks each link
+%% who its handshake peer is and an unconnected link has no answer.
+a_second_call_to_the_same_station_under_another_name_reuses_its_link_test() ->
+    {ok, _} = application:ensure_all_started(macula),
+    Station = <<9:256>>,
+    {ok, Pool} = macula_client:connect([], #{max_direct_links => 1}),
+    ?assertEqual({error, not_connected}, call_pinned(Pool, reuse_seed(1), Station)),
+    ok = pretend_connected(Pool, Station),
+
+    %% Same station, a name the pool has never seen. A literal-key miss.
+    Second = call_pinned(Pool, reuse_seed(2), Station),
+
+    ?assertNotEqual({error, too_many_direct_links}, Second),
+    {ok, #{refused_dials := Refused}} = macula_client:status(Pool),
+    ?assertEqual(#{}, Refused),
+    ?assertEqual(1, length(element(2, macula_client:links(Pool)))),
+    ok = macula_client:close(Pool).
+
+%% Two seeds that spell different stations to the pool's `links' map.
+reuse_seed(Port) -> #{host => <<"127.0.0.1">>, port => Port}.
+
+call_pinned(Pool, Seed, Station) ->
+    macula_client:call_station(Pool, Seed, <<2:256>>, ?REALM, <<"x.y">>, #{}, 200, <<>>,
+                               #{expected_node_id => Station, verify => none,
+                                 pin_tls_cert => false},
+                               100).
+
+%% Make the pool's one link answer `peer_node_id' with `Station', which is
+%% what the reuse scan matches on. The peer pid is this process: nothing is
+%% sent to it in this test, it only has to be a pid so `is_connected/1' is
+%% true.
+pretend_connected(Pool, Station) ->
+    {ok, [#{pid := Link}]} = macula_client:links(Pool),
+    Field = fun macula_station_link:state_field_index/1,
+    _ = sys:replace_state(Link,
+                          fun(S) ->
+                              setelement(Field(peer_node_id),
+                                         setelement(Field(peer_pid), S, self()),
+                                         Station)
+                          end),
+    ok.
+
 %%------------------------------------------------------------------
 %% subscribe/5 + unsubscribe/2 bookkeeping
 %%------------------------------------------------------------------
