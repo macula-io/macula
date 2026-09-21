@@ -308,8 +308,10 @@ call_station(Pool, Station, Target, Realm, Procedure, Payload, TimeoutMs) ->
 %% override for this dial: `verify' and `expected_node_id' (see
 %% `macula_client:call_station/9'), and may set `dial_timeout_ms', how
 %% much of `TimeoutMs' the wait for a fresh link's handshake may take
-%% (default: all of it). `pin_tls_cert => true' is REFUSED, see
-%% `pin_tls_cert_checked/1'.
+%% (default: all of it). `pin_tls_cert => true' is REFUSED with
+%% `{error, {pin_tls_cert, no_pin_primitive_for_mldsa87_identity}}':
+%% no pin primitive can express an ML-DSA-87 identity (macula#15).
+%% `false' and absence pass.
 -spec call_station(pool(), macula_client:seed(), <<_:256>>, realm(), procedure(),
                    term(), 1..600_000, map()) ->
     {ok, term()} | {error, term()}.
@@ -694,7 +696,10 @@ put_content_station(Pool, Station, Bytes, TimeoutMs) ->
 
 %% @doc As `put_content_station/4', with a per-call TLS trust override
 %% for this dial — `verify', `expected_node_id' (see `call_station/8').
-%% `pin_tls_cert => true' is REFUSED, see `pin_tls_cert_checked/1'.
+%% `pin_tls_cert => true' is REFUSED with
+%% `{error, {pin_tls_cert, no_pin_primitive_for_mldsa87_identity}}':
+%% no pin primitive can express an ML-DSA-87 identity (macula#15).
+%% `false' and absence pass.
 -spec put_content_station(pool(), macula_client:seed(), binary(),
                           pos_integer(), map()) ->
     {ok, mcid()} | {error, term()}.
@@ -756,7 +761,10 @@ get_content_station(Pool, Station, MCID, TimeoutMs) ->
 
 %% @doc As `get_content_station/4', with a per-call TLS trust override
 %% for this dial — `verify', `expected_node_id' (see `call_station/8').
-%% `pin_tls_cert => true' is REFUSED, see `pin_tls_cert_checked/1'.
+%% `pin_tls_cert => true' is REFUSED with
+%% `{error, {pin_tls_cert, no_pin_primitive_for_mldsa87_identity}}':
+%% no pin primitive can express an ML-DSA-87 identity (macula#15).
+%% `false' and absence pass.
 %% See `get_content/2' on why a malformed `MCID' is rejected here
 %% rather than reaching `macula_content_transfer'.
 -spec get_content_station(pool(), macula_client:seed(), mcid(),
@@ -898,7 +906,7 @@ call_stream(Pool, Realm, Procedure, Args, Opts)
 %% to reach a stream provider in one hop, exactly as a unary caller does.
 %% `Opts' may set `dial_timeout_ms' (default 10_000) and a `mode'.
 %% `Opts' also carries the per-call TLS trust override for this dial:
-%% `verify', `expected_node_id' (`pin_tls_cert => true' is REFUSED) (see
+%% `verify', `expected_node_id' (`pin_tls_cert => true' is REFUSED, macula#15) (see
 %% `macula_client:call_station/8').
 -spec call_stream_station(pool(), macula_client:seed(), <<_:256>>, realm(), procedure(),
                           term(), map()) -> {ok, stream()} | {error, term()}.

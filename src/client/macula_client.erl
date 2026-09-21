@@ -343,7 +343,16 @@
     %% {invalid_admission_limit, Key, Value}}' or `{error,
     %% {admission_limit_above, Smaller, Larger}}'.
     request_admission => #{caller_quota => pos_integer(), share => pos_integer(),
-                           reply_bytes => pos_integer(), reply_bytes_total => pos_integer()}
+                           reply_bytes => pos_integer(), reply_bytes_total => pos_integer()},
+
+    %% TLS policy forwarded to every link this pool dials. `init/1' reads
+    %% both and this closed map declared neither, so a caller passing them
+    %% got no type error and no help either way.
+    verify             => none | webpki,
+    expected_node_id   => <<_:256>>
+    %% ⚠ `pin_tls_cert' is DELIBERATELY NOT DECLARED. It is refused at
+    %% runtime (`macula:connect/2'), and leaving it out of this closed map
+    %% means a typed caller hears it from dialyzer as well. See macula#15.
 }.
 
 %% V1 multi_relay options that have NO V2 equivalent. Callers passing
@@ -678,7 +687,7 @@ pick_connected_link(Pool) when is_pid(Pool) ->
 %% @doc As `pick_connected_link/1', but for a SPECIFIC station — reuse
 %% a live link to `Station' or dial (and wait up to `TimeoutMs' for the
 %% handshake on) a fresh one, per-call trust-overridable via `LinkOpts'
-%% (`verify' / `expected_node_id' / `pin_tls_cert', mirroring
+%% (`verify' / `expected_node_id', mirroring
 %% `call_station/9'). This is direct-dial's content-transfer primitive:
 %% the returned pid is pinned for a whole `put_content'/`get_content'
 %% dedicated-stream transfer exactly like `pick_connected_link/1', just
@@ -719,7 +728,8 @@ call_station(Pool, Station, Target, Realm, Procedure, Payload, TimeoutMs, UcanTo
 
 %% @doc As `call_station/8', with a per-call TLS trust override for
 %% THIS dial only — `verify' (webpki | none), `expected_node_id' (pin
-%% the station's node_id), and/or `pin_tls_cert' (`false' to
+%% the station's node_id). `pin_tls_cert => true' is REFUSED, see
+%% `macula:call_station/8'. (`false' to
 %% enforce that pin at the application layer only — see
 %% `macula_peering_conn:connect_opts()' — needed against a station
 %% whose TLS is terminated by a PKI unrelated to its macula identity,
@@ -824,7 +834,7 @@ unadvertise(Pool, Realm, Procedure)
 %% `Opts' may set `dial_timeout_ms' (default 10_000) for the dial and
 %% handshake, plus any stream option (e.g. `mode').
 %% `Opts' also carries the per-call TLS trust override for this dial:
-%% `verify', `expected_node_id', `pin_tls_cert', same as
+%% `verify', `expected_node_id', same as
 %% `call_station/8'. They are kept apart as the dial's own options, so
 %% they reach `ensure_link/3' and not the stream open.
 -spec call_stream_station(pool(), seed(), <<_:256>>, <<_:256>>, binary(), term(),
@@ -836,7 +846,7 @@ call_stream_station(Pool, Station, Target, Realm, Procedure, Args, Opts)
        is_binary(Procedure),
        is_map(Opts) ->
     DialTimeout = maps:get(dial_timeout_ms, Opts, 10_000),
-    LinkOpts = maps:with([verify, expected_node_id, pin_tls_cert], Opts),
+    LinkOpts = maps:with([verify, expected_node_id], Opts),
     gen_server:call(Pool,
                     {call_stream_station, Station, Target, Realm, Procedure, Args,
                      Opts#{owner => maps:get(owner, Opts, self())}, LinkOpts},
@@ -1272,13 +1282,13 @@ init_with_keys({ok, #{node_identity := NodeIdentity, issuer := Issuer, issuer_st
             admission          => Admission
         },
         %% TLS policy for the links this pool dials (seeds AND
-        %% `call_station' targets): `verify' (webpki | none),
-        %% `expected_node_id' (pin the station's Ed25519 identity), and
-        %% `pin_tls_cert' (whether that pin also applies at the TLS
-        %% layer, vs. application-layer-only — see
-        %% `macula_peering_conn:connect_opts()'). Forwarded only when
-        %% the caller set them.
-        maps:with([verify, expected_node_id, pin_tls_cert], Opts)),
+        %% `call_station' targets): `verify' (webpki | none) and
+        %% `expected_node_id', the station node_id the handshake must
+        %% prove. Forwarded only when the caller set them.
+        %%
+        %% `pin_tls_cert' is NOT among them. It never pinned anything and
+        %% `true' is now refused; see macula#15.
+        maps:with([verify, expected_node_id], Opts)),
     DedupSweep  = maps:get(dedup_sweep_ms, Opts, ?DEFAULT_DEDUP_SWEEP_MS),
     Replication = maps:get(replication_factor, Opts, ?DEFAULT_REPLICATION),
     DedupTab    = macula_client_dedup:new(),
@@ -1455,7 +1465,7 @@ handle_call({call_stream_station, Station, Target, Realm, Procedure, Args, Opts,
     %% specific station, then open the stream there. Same worker-spawn
     %% rationale as call_station — the pool gen_server never blocks on
     %% the dial + handshake. LinkOpts (verify/expected_node_id/
-    %% pin_tls_cert) shapes a fresh dial only, same as call_station.
+    %% expected_node_id) shapes a fresh dial only, same as call_station.
     on_link(ensure_link(Station, LinkOpts, S), From,
             fun(Pid) -> stream_when_connected(Pid, Target, Realm, Procedure, Args, Opts) end);
 
@@ -2838,7 +2848,7 @@ station_seed(_) ->
 %% `host_advertised' (a bare IP literal -- checked live, every entry in
 %% this fleet is a raw IPv6 address, never a DNS name) dialled under
 %% Pinned trust: `expected_node_id' set to the row's own `node_id',
-%% `pin_tls_cert => false' since there is no CA-issued cert for a bare
+%% no TLS certificate pin is possible for a bare
 %% IP to validate against WebPKI-style -- trust is enforced entirely at
 %% the application layer, via the HELLO frame's Ed25519-signed
 %% `node_id', exactly the mode `macula_peering_conn:connect_opts()'

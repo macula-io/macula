@@ -1236,8 +1236,8 @@ identity_checked(_NotAnIdentityKey, _Issuer, _Opts) ->
 %% Every seed map passes through here, and the FLEET DOES NOT:
 %% macula-station calls `macula_peering:connect/1' directly and never
 %% builds a station link, so its `pin_tls_cert => false' target is
-%% untouched. See `macula:pin_tls_cert_checked/1' for why `true' cannot be
-%% honoured, and macula#15.
+%% untouched. `true' cannot be honoured because no pin primitive can
+%% express an ML-DSA-87 identity; see macula#15.
 seed_checked(#{pin_tls_cert := true}, _Key, _Profile, _Issuer) ->
     {error, {seed, {pin_tls_cert, no_pin_primitive_for_mldsa87_identity}}};
 seed_checked(#{expected_node_id := <<_:256>>} = Seed, Key, Profile, Issuer) ->
@@ -3033,10 +3033,10 @@ detail_or_none(error) -> undefined.
 %%
 %% `pin_tls_cert' is NOT folded, and is not a key this link understands.
 %% It was read by `macula_peering_conn:dial_trust_opts/1' until 11.0.0
-%% removed that function; nothing has read it since. `macula' refuses
-%% `pin_tls_cert => true' at its public entry points
-%% (`macula:pin_tls_cert_checked/1') rather than accept a value that
-%% does nothing. See macula#15.
+%% removed that function; nothing has read it since. `macula:connect/2'
+%% and the other public entry points refuse `pin_tls_cert => true' rather
+%% than accept a value that does nothing, and `seed_checked/4' above
+%% refuses it on the seed map. See macula#15.
 %% The trust keys a seed map names stand, and the link's options fill only the ones it leaves out, so a pool-wide
 %% expected_node_id never replaces a seed's own pin.
 add_tls_opts(Seed, Opts) ->

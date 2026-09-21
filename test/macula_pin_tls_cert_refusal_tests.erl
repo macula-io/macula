@@ -17,11 +17,26 @@
 %%% on a missing application. A test that goes red by crashing has not
 %%% shown it is connected to the behaviour it claims to protect.
 %%%
-%%% Placement matters and is asserted here on purpose. The refusal is at
-%%% the `macula' facade, NOT in `macula_peering_conn'. macula-station's
-%%% outbound links call `macula_peering:connect/1' directly with a target
-%%% carrying `pin_tls_cert => false'; a refusal in the peering target
-%%% would fail every station-to-station dial on the fleet.
+%%% PLACEMENT. The refusal lives in two places, `macula' (the facade, for a
+%%% synchronous error to the caller) and `macula_station_link:seed_checked/4'
+%%% (the gate every seed map passes through). It is NOT in
+%%% `macula_peering_conn'.
+%%%
+%%% ⚠ An earlier version of this comment said a refusal in the peering
+%%% target "would fail every station-to-station dial on the fleet". THAT WAS
+%%% WRONG, and wrong in the flattering direction. macula-station passes
+%%% `pin_tls_cert => false' and this refusal matches only `true', so moving
+%%% it into the peering layer would not break the fleet at all. The claim
+%%% asserted nothing and no test guarded it, which is the same defect the
+%%% refusal itself exists to fix.
+%%%
+%%% What IS true, and what `fleet_value_survives_the_gate_test' guards: the
+%%% fleet's value must keep working wherever a check is placed. A refusal
+%%% keyed on the KEY'S PRESENCE rather than on `true' is the move that would
+%%% break every station dial, and that test goes red if anyone makes it.
+%%% The facade and the seed gate are the right homes for a different reason:
+%%% macula-station reaches neither, calling `macula_peering:connect/1'
+%%% directly, so a check in either cannot touch the fleet by construction.
 %%% @end
 %%%-------------------------------------------------------------------
 -module(macula_pin_tls_cert_refusal_tests).
@@ -205,3 +220,18 @@ seed_map_test_() ->
 child_spec_start_goes_through_the_facade_test() ->
     ?assertMatch(#{start := {macula, connect, [[], #{}]}},
                  macula:child_spec(a_pool, [], #{})).
+
+%%------------------------------------------------------------------
+%% The fleet's value survives the gate
+%%------------------------------------------------------------------
+
+%% macula-station's `do_dial/1' builds its target with
+%% `pin_tls_cert => false' on every dial. Any refusal anywhere must let
+%% that through. This goes red the moment a check is keyed on the key's
+%% presence instead of on `true', which is the change that would take the
+%% fleet down.
+fleet_value_survives_the_gate_test() ->
+    FleetShape = #{host => <<"127.0.0.1">>, port => 4433,
+                   expected_node_id => ?NODE, pin_tls_cert => false},
+    ?assertMatch({ok, _Seed, _Key, _Profile, _Issuer},
+                 macula_station_link:seed_checked(FleetShape, key, profile, self())).

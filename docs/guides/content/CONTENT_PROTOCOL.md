@@ -227,8 +227,10 @@ a real production station its TLS is terminated by an unrelated PKI (Let's
 Encrypt), so pinning the cert's own key could never succeed there. Trust rests
 on the application-layer CONNECT/HELLO handshake (see the
 [RPC Guide](../rpc/RPC_GUIDE.md) for the full mechanism). The `pin_tls_cert`
-option this guide previously passed here is read by nothing; see
-[macula#15](https://github.com/macula-io/macula/issues/15). Unlike RPC, content direct-dial has **no cert-chain-equivalent
+option this guide previously passed here never pinned anything, and
+`pin_tls_cert => true` is now REFUSED with
+`{error, {pin_tls_cert, no_pin_primitive_for_mldsa87_identity}}`; `false` and an absent key
+pass. See [macula#15](https://github.com/macula-io/macula/issues/15). Unlike RPC, content direct-dial has **no cert-chain-equivalent
 opt-in**: content is content-addressed and independently re-hashed
 client-side regardless of which peer serves it, so a rogue or unauthorized
 announcer can at most refuse to serve or waste a dial — never make a caller

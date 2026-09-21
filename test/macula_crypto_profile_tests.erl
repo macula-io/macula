@@ -21,8 +21,11 @@
 profiles_are_us_and_eu_test() ->
     ?assertEqual([pq_pure, pq_hybrid], macula_crypto_profile:profiles()).
 
+%% The definition no longer echoes the profile back: a caller already has
+%% it, since it is the argument.
 every_profile_has_a_definition_test() ->
-    [?assertMatch({ok, #{profile := P}}, macula_crypto_profile:definition(P))
+    [?assertMatch({ok, #{tls_signature_scheme := mldsa87}},
+                  macula_crypto_profile:definition(P))
      || P <- macula_crypto_profile:profiles()].
 
 unknown_profile_has_no_definition_test() ->
@@ -94,22 +97,22 @@ every_post_quantum_algorithm_is_at_level_5_test() ->
      end
      || P <- macula_crypto_profile:profiles()].
 
-%% The mechanism that keeps the profile honest, rather than a note saying
-%% it should be.
+%% ⚠ THIS IS A KEY-SET PIN, NOT A READER CHECK. It cannot tell whether a
+%% field is read; the `Read' list below is maintained by hand and was
+%% WRONG when it was first written (it listed `profile', which nothing
+%% reads out of the definition map). Named for what it does, so nobody
+%% takes a green run as proof that every field has a consumer.
 %%
-%% Every field a profile declares must be read by something, so that a
-%% profile cannot drift back into describing behaviour nobody implements.
-%% `key_exchange_group' is the one deliberate exception: it declares the
-%% target the EU profile aims at, nothing negotiates it, and it carries
-%% that warning in `definition()'. Adding a field here without a reader,
-%% or removing that warning, should turn this red.
+%% What it does buy: the key set cannot change without someone editing this
+%% list, so a field cannot be added back without a deliberate act.
+%% `key_exchange_group' is the one field kept without a reader, by ruling,
+%% and it carries that warning in `definition()'.
 %%
-%% Five fields failed this test before it existed: `tls_cipher_suite',
-%% `status_signature', `binding_digest', `content_id_digest' and
-%% `node_id_digest'.
-definition_declares_only_what_is_read_test() ->
-    Read = [profile, tls_signature_scheme, identity_signature,
-            connect_proof_signature],
+%% Six fields failed this before it existed: `tls_cipher_suite',
+%% `status_signature', `binding_digest', `content_id_digest',
+%% `node_id_digest' and `profile'.
+definition_key_set_is_pinned_test() ->
+    Read = [tls_signature_scheme, identity_signature, connect_proof_signature],
     DeclaredButInert = [key_exchange_group],
     [begin
          {ok, D} = macula_crypto_profile:definition(P),

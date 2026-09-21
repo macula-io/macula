@@ -9,6 +9,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`pin_tls_cert => true` is now REFUSED**, with
+  `{error, {pin_tls_cert, no_pin_primitive_for_mldsa87_identity}}`. It is
+  refused from `macula:connect/2`, `call_station/8`, `call_stream_station/7`,
+  `put_content_station/5` and `get_content_station/5`, and whether the key
+  arrives in the options map, in a seed map or in a station map.
+  `macula_station_link` refuses it on the seed itself with
+  `{seed, {pin_tls_cert, no_pin_primitive_for_mldsa87_identity}}`.
+
+  **`false` and an absent key are unaffected**, deliberately: `false` is what
+  every caller passes today, macula-station's outbound links among them, and
+  refusing it would break a live caller for asking for the safe thing.
+  macula-station is not affected either way, because it calls
+  `macula_peering:connect/1` directly and never builds a station link.
+
+  The option had a reader until 11.0.0 removed it with the Ed25519 CONNECT and
+  HELLO frames, and none since. No certificate was pinned on any dial at any
+  value, while the published RPC guide documented a default of `true`. It is
+  refused rather than implemented because no pin primitive can express our
+  identity: `macula_quic`'s `verify_pubkey` extracts an Ed25519 SPKI at exactly
+  32 bytes, station identity is ML-DSA-87, and a node_id is a SHA-256 hash
+  rather than a key. See macula#15.
+
+- **`macula_client:child_spec/3` now starts `{macula, connect, ...}`**, not
+  `{macula_client, connect, ...}`. The supervised start is the path the facade
+  documents for production callers, and it bypassed every check on the facade.
+
+- **A crypto profile declares only fields something reads**, bar one that is
+  marked. Removed from `macula_crypto_profile:definition/1`, because nothing
+  anywhere read them: `tls_cipher_suite`, `status_signature`, `binding_digest`,
+  `content_id_digest`, `node_id_digest` and `profile`. Each named a value the
+  code hardcodes at its use site, so the profile could disagree with the node
+  and nothing would notice. A caller already holds the profile, since it is the
+  argument to `definition/1`.
+
+  **`key_exchange_group` is kept and is a DECLARED TARGET, not a description of
+  the wire.** What is actually negotiated is X25519, SECP256R1 and SECP384R1,
+  all classical: the QUIC NIF selects rustls on its `ring` feature and
+  configures no group list, and the ring provider implements no ML-KEM. Neither
+  declared group is reachable by configuration today. `mlkem1024` exists in the
+  aws-lc-rs provider, which the NIF does not link. `secp384r1_mlkem1024` exists
+  in no rustls under either provider, because BSI TR-02102-2 intends to
+  recommend SecP384r1MLKEM1024 once the RFC is adopted and until then nobody has
+  implemented it. Post-quantum SIGNATURES are real; key exchange is classical.
+  See macula#13.
+
+- `macula_client:opts()` declares `verify` and `expected_node_id`, which
+  `init/1` reads and the closed map did not declare. `pin_tls_cert` is
+  deliberately left undeclared, so a typed caller hears it from dialyzer as well
+  as at runtime.
+
+
 ## [11.5.0] - 2026-09-21
 
 A minor rather than a patch: `station_endpoint_expired` is a new error a caller

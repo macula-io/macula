@@ -45,7 +45,6 @@
 }.
 -type signature_algorithm() :: mldsa87 | {rsa_pss, rsa_pss_params()}.
 -type definition() :: #{
-    profile                 := profile(),
     %% ⚠ DECLARED TARGET. NOT NEGOTIATED. NOT NEGOTIABLE TODAY.
     %%
     %% Nothing reads this field. What a connection actually negotiates is
@@ -102,12 +101,34 @@ profiles() ->
 %% @doc The algorithms of a profile. A signature is a list of
 %% algorithms: ML-DSA-87 first, then the classical half of a hybrid
 %% signature when the profile has one.
+%%
+%% == What is actually negotiated ==
+%%
+%% `key_exchange_group' IS A DECLARED TARGET AND NOT A DESCRIPTION OF THE
+%% WIRE. Nothing reads it. What a connection negotiates is whatever the
+%% QUIC NIF's TLS provider defaults to, and the NIF selects rustls on its
+%% `ring' feature and configures no group list, so the offered groups are
+%% X25519, SECP256R1 and SECP384R1. All classical. The ring provider
+%% implements no ML-KEM.
+%%
+%% Neither declared group is reachable by configuration today.
+%% `mlkem1024' exists in rustls's aws-lc-rs provider, which this NIF does
+%% not link. `secp384r1_mlkem1024' exists in no rustls under either
+%% provider: BSI TR-02102-2 INTENDS TO RECOMMEND SecP384r1MLKEM1024 once
+%% the corresponding RFC is adopted, and until then nobody has
+%% implemented it.
+%%
+%% So a profile NAME names the policy the profile serves. It is never a
+%% statement about the key exchange a connection got. Post-quantum
+%% SIGNATURES are real; key exchange is classical.
+%%
+%% This makes no claim either way about the signature half of the map.
 -spec definition(term()) ->
         {ok, definition()} | {error, {crypto_profile_unknown, term()}}.
 definition(pq_pure) ->
-    {ok, profile_definition(pq_pure, mlkem1024, [mldsa87])};
+    {ok, profile_definition(mlkem1024, [mldsa87])};
 definition(pq_hybrid) ->
-    {ok, profile_definition(pq_hybrid, secp384r1_mlkem1024, [mldsa87, ?RSA_PSS_4096])};
+    {ok, profile_definition(secp384r1_mlkem1024, [mldsa87, ?RSA_PSS_4096])};
 definition(Other) ->
     {error, {crypto_profile_unknown, Other}}.
 
@@ -137,15 +158,17 @@ configured() ->
 %% Every field here is read by something, except `key_exchange_group',
 %% which is kept on purpose and carries its own warning in `definition()'.
 %%
-%% Five fields were removed because nothing had ever read them:
+%% Six fields were removed because nothing had ever read them:
 %% `tls_cipher_suite', `status_signature', `binding_digest',
-%% `content_id_digest' and `node_id_digest'. Each stated a value that the
-%% code hardcodes at its use site, so the profile could disagree with the
-%% node and nothing would notice. `definition_declares_only_what_is_read_test'
-%% is what keeps that true.
-profile_definition(Profile, Group, Signature) ->
-    #{profile                 => Profile,
-      key_exchange_group      => Group,
+%% `content_id_digest', `node_id_digest' and `profile' itself. Each stated a
+%% value that the code hardcodes at its use site, so the profile could
+%% disagree with the node and nothing would notice. `profile' went last: a
+%% caller already has the profile in hand, since it is the argument to
+%% `definition/1'. `definition_key_set_is_pinned_test' is what keeps this
+%% true, and it is a KEY-SET PIN rather than a reader check: the list of
+%% readers is maintained by hand.
+profile_definition(Group, Signature) ->
+    #{key_exchange_group      => Group,
       tls_signature_scheme    => mldsa87,
       identity_signature      => Signature,
       connect_proof_signature => Signature}.

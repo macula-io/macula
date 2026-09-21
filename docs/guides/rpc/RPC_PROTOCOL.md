@@ -95,14 +95,21 @@ direct-dial wraps](RPC_GUIDE.md#direct-dial-start_link_direct-advertise_direct).
 %%         expected_node_id => NodeId}  %% the station's node_id, required
 ```
 
-> **`pin_tls_cert` is accepted and does nothing.** It rides in the same option
-> map and is read by no code on any dial path. There is no default, no value of
-> it changes anything, and no certificate is pinned on any dial. An earlier
-> revision of this guide stated a default of `true`. That was wrong, and it was
-> wrong in the direction that matters: a reader took it for a check that was
-> happening. The only pin mechanism that exists, `macula_quic`'s `verify_pubkey`,
-> extracts an Ed25519 SPKI and therefore cannot express an ML-DSA-87 station
-> identity, and no caller in the SDK sets it. Tracked as
+> **`pin_tls_cert => true` is REFUSED.** It returns
+> `{error, {pin_tls_cert, no_pin_primitive_for_mldsa87_identity}}`, from `connect/2`,
+> `call_station/8`, `call_stream_station/7`, `put_content_station/5` and
+> `get_content_station/5`, and whether you put it in the options map or in a
+> seed or station map. `false` and an absent key pass through and change
+> nothing.
+>
+> It is refused rather than honoured because no pin primitive can express our
+> identity: the only one that exists, `macula_quic`'s `verify_pubkey`, extracts
+> an Ed25519 SPKI at exactly 32 bytes, and a station identity is ML-DSA-87. A
+> node_id is a SHA-256 hash, not a key, so there is nothing in it to pin either.
+>
+> An earlier revision of this guide stated a default of `true`. There was never
+> a default and never a reader, and a reader took that sentence for a check that
+> was happening. Tracked as
 > [macula#15](https://github.com/macula-io/macula/issues/15).
 >
 > What names the peer on a station dial is the signed CONNECT/HELLO handshake,
