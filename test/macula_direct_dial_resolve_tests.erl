@@ -84,6 +84,8 @@ resolve_test_() ->
       {timeout, 30, fun call_retries_when_no_advertisement_qualifies/0},
       {timeout, 30, fun call_tries_the_next_station_when_a_dial_fails/0},
       {timeout, 30, fun call_never_sends_the_request_twice/0},
+      {timeout, 30, fun call_tries_the_next_station_when_a_dial_is_refused/0},
+      {timeout, 30, fun call_stops_at_a_request_the_wire_cannot_carry/0},
       {timeout, 30, fun call_timeout_bounds_resolution/0},
       {timeout, 30, fun call_timeout_bounds_the_endpoint_lookup/0},
       {timeout, 30, fun call_stream_tries_the_next_station_when_a_dial_fails/0},
@@ -235,6 +237,38 @@ call_tries_the_next_station_when_a_dial_fails() ->
     set_answer(dial_url(B), {ok, <<"from b">>}),
     ?assertEqual({ok, <<"from b">>}, call(3000)),
     ?assertEqual([dial_url(A), dial_url(B)], visits()).
+
+%% A DIAL THIS POOL REFUSED SENT NOTHING, SO THE NEXT CANDIDATE IS TRIED.
+%%
+%% `macula_client:refused_dial/2' answers before any worker starts: the pool is
+%% at its direct-link cap, has spent its new-peer budget, or cannot dial that
+%% seed at all. Nothing was built, let alone sent. And the refusal is about
+%% THIS candidate rather than about the request, because another candidate may
+%% need no new link at all -- the pool may already hold a live one to it.
+call_tries_the_next_station_when_a_dial_is_refused() ->
+    A = station(<<"a.test">>), B = station(<<"b.test">>),
+    set_replies(procedure_key(), [[advertisement(A), advertisement(B)]]),
+    set_endpoint(A, endpoint_record(A)),
+    set_endpoint(B, endpoint_record(B)),
+    set_answer(dial_url(A), {error, {dial_refused, too_many_direct_links}}),
+    set_answer(dial_url(B), {ok, <<"from b">>}),
+    ?assertEqual({ok, <<"from b">>}, call(3000)),
+    ?assertEqual([dial_url(A), dial_url(B)], visits()).
+
+%% THE OTHER HALF, AND THE ONE THAT KEEPS THE FIRST FROM BEING A LICENCE TO
+%% RETRY EVERYTHING. A payload the wire cannot carry is refused identically by
+%% every station, so resolution must stop at the first rather than spend its
+%% deadline collecting the same answer.
+call_stops_at_a_request_the_wire_cannot_carry() ->
+    A = station(<<"a.test">>), B = station(<<"b.test">>),
+    TooBig = {error, {refused, {unsupported_payload_type, payload_too_large, []}}},
+    set_replies(procedure_key(), [[advertisement(A), advertisement(B)]]),
+    set_endpoint(A, endpoint_record(A)),
+    set_endpoint(B, endpoint_record(B)),
+    set_answer(dial_url(A), TooBig),
+    set_answer(dial_url(B), {ok, <<"never reached">>}),
+    ?assertEqual(TooBig, call(3000)),
+    ?assertEqual([dial_url(A)], visits()).
 
 %% Once the CALL has gone out, its outcome stands: no other station receives it.
 call_never_sends_the_request_twice() ->

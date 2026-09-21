@@ -1903,8 +1903,20 @@ spend_dial_budget(Station, #state{dial_budget = Budget} = S) ->
                                                        erlang:monotonic_time(millisecond)),
     {Verdict, S#state{dial_budget = Spent}}.
 
+%% A dial this pool would not make: its direct-link cap, its new-peer budget,
+%% or a seed it cannot dial at all. Nothing is built and nothing is sent.
+%%
+%% ⚠ THE WRAPPER CARRIES THE SCOPE, and that is the point of it rather than
+%% decoration. `{dial_refused, _}' is `candidate' scoped to
+%% `macula_station_link:failure_scope/1': another candidate may need NO NEW
+%% LINK AT ALL, because the pool may already hold a live one to it, so a
+%% caller working through candidates should try the next. Returned bare, these
+%% reasons fell into that function's catch-all and read as `provider', which
+%% ended resolution with candidates untried (macula#20). The COUNT stays keyed
+%% on the bare reason: `status/1''s `refused_dials' is a tally of why dials
+%% were refused, not of what a caller saw.
 refused_dial(Reason, S) ->
-    {{error, Reason}, count_refused_dial(Reason, S)}.
+    {{error, {dial_refused, Reason}}, count_refused_dial(Reason, S)}.
 
 %% Counted every time, logged at most once per window per reason with the
 %% count since the last line.
@@ -2198,11 +2210,15 @@ node_identity({ok, _NotAnIdentityKey}, _Profile) ->
     {error, {node_identity, not_an_identity_key}}.
 
 %% First-success across the pool's healthy links. Tries each link in
-%% turn; the first non-error reply wins. It moves on to the next link only
-%% when the link reports that the CALL never went out
-%% (`macula_station_link:not_sent/1'), so a link that isn't connected does
-%% not block the call. A CALL that may have reached its provider, a timeout
-%% included, is never sent again, so a provider never runs one call twice.
+%% turn; the first non-error reply wins. Which errors it walks past is
+%% `macula_station_link:failure_scope/1''s judgement and not a second copy of
+%% it here: only a `candidate' scoped failure moves to the next link, so a link
+%% that isn't connected does not block the call. A CALL that may have reached
+%% its provider, a timeout included, is never sent again, so a provider never
+%% runs one call twice. AND A `request' SCOPED FAILURE STOPS AT THE FIRST LINK:
+%% a payload the wire cannot carry is refused identically by every link in the
+%% pool, so walking the rest burns the caller's deadline to collect the same
+%% answer it already has.
 call_first_success(Pids, Realm, Proc, Payload, Tmo) ->
     first_success(Pids, fun macula_station_link:is_connected/1,
                   fun(Pid) -> macula_station_link:call(Pid, station, Realm, Proc, Payload, Tmo) end).
@@ -2222,11 +2238,12 @@ next_or_first(true, Link, Rest, Connected, Call) ->
 answer_or_next({ok, _} = R, _Rest, _Connected, _Call) -> R;
 answer_or_next({error, _} = E, [], _Connected, _Call) -> E;
 answer_or_next({error, _} = E, Rest, Connected, Call) ->
-    next_if_not_sent(macula_station_link:not_sent(E), E, Rest, Connected, Call).
+    next_in_scope(macula_station_link:failure_scope(E), E, Rest, Connected, Call).
 
-next_if_not_sent(true, _E, Rest, Connected, Call) ->
+next_in_scope(candidate, _E, Rest, Connected, Call) ->
     first_success(Rest, Connected, Call);
-next_if_not_sent(false, E, _Rest, _Connected, _Call) ->
+next_in_scope(Settled, E, _Rest, _Connected, _Call)
+  when Settled =:= request; Settled =:= provider ->
     E.
 
 %% Fan-out advertise: register on every live link. Returns ok if at

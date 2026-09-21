@@ -711,8 +711,26 @@ stream_work(#{pool := Pool, call_stream_station := CallStreamStation}, Realm, Pr
                                           dial_timeout_ms => budget(Share)})))
     end.
 
-sent_or_not({error, not_connected} = NotSent) -> {not_sent, NotSent};
-sent_or_not(Sent) -> {sent, Sent}.
+%% Whether a candidate's outcome settles the request or leaves the next one
+%% worth trying. The judgement is `macula_station_link:failure_scope/1''s and
+%% is NOT repeated here: this used to be a second, narrower copy of it,
+%% recognising only `not_connected', and the two disagreed on five error
+%% shapes, so a pool at its link cap or with its new-peer budget spent ended
+%% resolution with every remaining candidate untried (macula#20).
+%%
+%% `candidate' is the only scope worth another station. `request' stops
+%% because every candidate refuses it identically and walking on would spend
+%% the caller's deadline collecting the same answer. `provider' stops because
+%% the CALL may have reached one, and a call that has gone out must never be
+%% sent somewhere else.
+sent_or_not({error, _} = Failed) ->
+    settled_or_next(macula_station_link:failure_scope(Failed), Failed);
+sent_or_not(Sent) ->
+    {sent, Sent}.
+
+settled_or_next(candidate, NotSent) -> {not_sent, NotSent};
+settled_or_next(Settled, Failed) when Settled =:= request; Settled =:= provider ->
+    {sent, Failed}.
 
 station_try(Dial, Work) ->
     fun(Candidate, Share, Seen) -> reach(Dial, Candidate, Share, Seen, Work) end.

@@ -128,13 +128,24 @@ provider behind it to call.
 
 A pool bounds the links it dials this way. A call to a station that is not
 already a link is refused, before anything is dialed, with
-`{error, too_many_direct_links}` while the pool holds `max_direct_links` of
-them (default 8), and with `{error, new_peer_budget_spent}` once it has
-linked to `new_peer_budget` new peers in the last 15 minutes (default 16).
-Your configured seeds never count against either. Try another station you
-already hold a link to, or retry later. A station URL or map with no text
-host, or no port from 1 to 65535, is refused with `{error, unusable_seed}`.
-Every refusal is counted in `macula_client:status/1` under `refused_dials`.
+`{error, {dial_refused, too_many_direct_links}}` while the pool holds
+`max_direct_links` of them (default 8), and with
+`{error, {dial_refused, new_peer_budget_spent}}` once it has linked to
+`new_peer_budget` new peers in the last 15 minutes (default 16). Your
+configured seeds never count against either. Try another station you already
+hold a link to, or retry later. A station URL or map with no text host, or no
+port from 1 to 65535, is refused with
+`{error, {dial_refused, unusable_seed}}`. Every refusal is counted in
+`macula_client:status/1` under `refused_dials`, keyed on the bare reason:
+that tally counts why dials were refused, not what a caller saw.
+
+The `dial_refused` wrapper is what tells a caller working through several
+candidates that **nothing was sent and another station is worth trying**.
+Another candidate may need no new link at all, because your pool may already
+hold a live one to it, so these refusals do not repeat identically the way a
+refusal of the request itself does. `macula_station_link:failure_scope/1`
+reads that distinction off the shape rather than off a list of reason atoms
+it would have to keep in step.
 
 **Most applications don't need this.** Knowing a procedure's URL up front is
 the exception — normally you know the *procedure*, not which station serves

@@ -103,11 +103,11 @@ provider_text_that_spells_a_not_sent_reason_is_still_delivered_test_() ->
          [begin
               Coded = provider_error_answer(Pid, Profile, Provider, ProviderKey, #{code => Text, detail => Text}),
               ?assertEqual({error, {call_error, Text, Text}}, Coded),
-              ?assertNot(macula_station_link:not_sent(Coded)),
+              ?assertEqual(provider, macula_station_link:failure_scope(Coded)),
               Detailed = provider_error_answer(Pid, Profile, Provider, ProviderKey,
                                                #{code => <<"handler_error">>, detail => Text}),
               ?assertEqual({error, Text}, Detailed),
-              ?assertNot(macula_station_link:not_sent(Detailed))
+              ?assertEqual(provider, macula_station_link:failure_scope(Detailed))
           end || Text <- [<<"not_connected">>, <<"noproc">>, <<"refused">>, <<"unknown_next_peer">>, <<"timeout">>]],
          macula_station_link:stop(Pid)
      end}}.
@@ -124,7 +124,7 @@ a_relay_error_from_the_station_is_final_test_() ->
                                                StationKey)),
          Answer = answer(Ref),
          ?assertEqual({error, {call_error, unknown_next_peer, undefined}}, Answer),
-         ?assertNot(macula_station_link:not_sent(Answer)),
+         ?assertEqual(provider, macula_station_link:failure_scope(Answer)),
          macula_station_link:stop(Pid)
      end}}.
 
@@ -152,7 +152,7 @@ an_unsendable_payload_is_refused_and_not_sent_test_() ->
          {Pid, _StationKey, _Profile} = start_link_to_station(),
          Refused = macula_station_link:call(Pid, station, ?REALM, ?PROCEDURE, #{pid => self()}, 1_000),
          ?assertMatch({error, {refused, _}}, Refused),
-         ?assert(macula_station_link:not_sent(Refused)),
+         ?assertEqual(request, macula_station_link:failure_scope(Refused)),
          ?assertEqual(none, sent_frame_within(100)),
          macula_station_link:stop(Pid)
      end}}.
@@ -164,7 +164,7 @@ a_station_call_on_an_unconnected_link_is_refused_before_building_test_() ->
          Pid = start_link_with_peer(),
          Refused = macula_station_link:call(Pid, station, ?REALM, ?PROCEDURE, #{}, 1_000),
          ?assertEqual({error, not_connected}, Refused),
-         ?assert(macula_station_link:not_sent(Refused)),
+         ?assertEqual(candidate, macula_station_link:failure_scope(Refused)),
          ?assertEqual(none, sent_frame_within(100)),
          macula_station_link:stop(Pid)
      end}}.
@@ -221,7 +221,7 @@ a_procedure_that_is_not_utf8_text_is_refused_and_the_link_keeps_serving_test_() 
          Request = sent_request(Profile),
          Refused = macula_station_link:call(Pid, station, ?REALM, <<16#ff, 16#fe>>, #{}, 1_000),
          ?assertEqual({error, {refused, {invalid_text, procedure}}}, Refused),
-         ?assert(macula_station_link:not_sent(Refused)),
+         ?assertEqual(request, macula_station_link:failure_scope(Refused)),
          ?assertEqual(none, sent_frame_within(100)),
          deliver(Pid, macula_frame:result(#{request => Request, payload => <<"still served">>}, ProviderKey)),
          ?assertEqual({ok, <<"still served">>}, answer(Ref)),
@@ -238,7 +238,7 @@ a_procedure_past_its_length_bound_is_refused_and_the_link_keeps_serving_test_() 
          Request = sent_request(Profile),
          Refused = macula_station_link:call(Pid, station, ?REALM, binary:copy(<<"a">>, 513), #{}, 1_000),
          ?assertEqual({error, {refused, {text_too_long, procedure}}}, Refused),
-         ?assert(macula_station_link:not_sent(Refused)),
+         ?assertEqual(request, macula_station_link:failure_scope(Refused)),
          ?assertEqual(none, sent_frame_within(100)),
          deliver(Pid, macula_frame:result(#{request => Request, payload => <<"still served">>}, ProviderKey)),
          ?assertEqual({ok, <<"still served">>}, answer(Ref)),
@@ -258,7 +258,7 @@ stopping_the_issuer_answers_every_pending_caller_test_() ->
          true = exit(Issuer, kill),
          Answer = answer(Ref),
          ?assertEqual({error, {link_stopped, <<"shutdown">>}}, Answer),
-         ?assertNot(macula_station_link:not_sent(Answer)),
+         ?assertEqual(provider, macula_station_link:failure_scope(Answer)),
          ?assertEqual({shutdown, {issuer_down, killed}},
                       receive {'EXIT', Pid, Reason} -> Reason after 1_000 -> no_exit end)
      end}}.
@@ -290,7 +290,7 @@ a_call_waiting_for_a_stopping_link_gets_a_final_error_test_() ->
          ok = macula_station_link:stop(Pid),
          Answer = answer(Ref),
          ?assertEqual({error, {link_stopped, <<"normal">>}}, Answer),
-         ?assertNot(macula_station_link:not_sent(Answer))
+         ?assertEqual(provider, macula_station_link:failure_scope(Answer))
      end}}.
 
 %% A link stopped while a call is pending answers that call with a final error before it ends.
@@ -370,7 +370,8 @@ closing_the_link_answers_every_pending_caller_test_() ->
          Pid ! {macula_peering, disconnected, self(), peer_closed},
          Answers = [answer(Ref) || Ref <- Refs],
          ?assertEqual([{error, {disconnected, <<"peer_closed">>}}, {error, {disconnected, <<"peer_closed">>}}], Answers),
-         ?assertEqual([false, false], [macula_station_link:not_sent(Answer) || Answer <- Answers])
+         ?assertEqual([provider, provider],
+                      [macula_station_link:failure_scope(Answer) || Answer <- Answers])
      end}}.
 
 %%------------------------------------------------------------------

@@ -70,6 +70,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   as at runtime.
 
 
+- **One place now decides what a call failure means for trying the same
+  request somewhere else, and it decides two questions instead of one.**
+  `macula_station_link:failure_scope/1` replaces `not_sent/1` and answers
+  `candidate`, `request` or `provider`:
+
+  - `candidate` — nothing went out and what failed is this link or this
+    station, so another may well work.
+  - `request` — nothing went out and what failed is the request itself, so
+    every candidate refuses it identically and asking one more is waste.
+  - `provider` — it may have reached a provider, so it must never be sent
+    elsewhere.
+
+  "Did anything go out" is `provider` against the other two; "request or
+  candidate" is `request` against `candidate`.
+
+  **Why it was two places.** `not_sent/1` arrived in `f47a71f3` and
+  `macula_direct_dial:sent_or_not/1` in `f48ef05d`, its ancestor, on the same
+  day. The later commit fixed this class one layer up, named the judgement,
+  documented it and tested it, and nothing went back to point direct dial at
+  it. The older copy recognised one error shape where the newer recognised
+  four, and they disagreed on five. Issue #20.
+
+  **What was broken by the disagreement.** A pool at its `max_direct_links`,
+  or with its new-peer budget spent, or handed a seed it cannot dial, replies
+  before any worker starts and with nothing sent. Direct dial read those as
+  calls that had gone out, returned them to the caller, and left every
+  remaining candidate untried — the fall-through failing in exactly the
+  degraded case it exists for. And in the other direction, a pool call whose
+  payload the wire cannot carry was retried on every link in the pool, each
+  refusing it identically, spending the caller's deadline to collect the
+  answer it already had.
+
+- **A refused dial now says so in its shape: `{error, {dial_refused, Reason}}`.**
+  `macula:call_station/8` returned `{error, unusable_seed}`,
+  `{error, too_many_direct_links}` and `{error, new_peer_budget_spent}` bare,
+  which fell into `failure_scope/1`'s catch-all and read as `provider`. The
+  wrapper carries the scope so no caller keeps a list of reasons in step with
+  the classifier — a list that must be kept in sync is how the two copies
+  above drifted in the first place. `status/1`'s `refused_dials` tally stays
+  keyed on the bare reason: it counts why dials were refused, not what a
+  caller saw.
+
+  ⚠ **Migrating:** a caller matching those three atoms must now match
+  `{error, {dial_refused, Atom}}`.
+
+- **`{error, {open_too_large, Limit}}` from `macula_station_link:call_stream/6`
+  is classified as `request`.** It is returned having sent nothing and started
+  no stream, but being unwrapped it fell into the old catch-all, so the SDK
+  reported that a stream may have gone out when the code path guaranteed
+  nothing did. Direct dial's eventual outcome was right for the wrong reason,
+  which is worse than being wrong, because the next caller to ask that
+  question got the opposite of the truth with nothing to warn them.
+
+  `?RECORD_REFUSAL` in `macula_direct_dial` is deliberately not folded in: its
+  subject is a record lookup rather than a call, and merging them would be
+  over-generalising.
+
 ## [11.5.0] - 2026-09-21
 
 A minor rather than a patch: `station_endpoint_expired` is a new error a caller

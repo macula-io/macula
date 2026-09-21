@@ -61,21 +61,21 @@ a_link_limit_outside_its_range_does_not_start_the_pool() ->
 a_fresh_direct_dial_past_the_direct_link_limit_is_refused() ->
     {ok, Pool} = macula_client:connect([], #{max_direct_links => 1}),
     ?assertEqual({error, not_connected}, call_station(Pool, seed(1))),
-    ?assertEqual({error, too_many_direct_links}, call_station(Pool, seed(2))),
+    ?assertEqual({error, {dial_refused, too_many_direct_links}}, call_station(Pool, seed(2))),
     ?assertEqual({error, not_connected}, call_station(Pool, seed(1))),
     ok = macula_client:close(Pool).
 
 a_fresh_direct_dial_past_the_new_peer_budget_is_refused() ->
     {ok, Pool} = macula_client:connect([], #{new_peer_budget => 1}),
     ?assertEqual({error, not_connected}, call_station(Pool, seed(1))),
-    ?assertEqual({error, new_peer_budget_spent}, call_station(Pool, seed(2))),
+    ?assertEqual({error, {dial_refused, new_peer_budget_spent}}, call_station(Pool, seed(2))),
     ok = macula_client:close(Pool).
 
 %% The pool's configured seeds sit outside the budget: a pool with two of them still has its one new peer to dial.
 configured_seeds_never_spend_the_new_peer_budget() ->
     {ok, Pool} = macula_client:connect([seed(1), seed(2)], #{new_peer_budget => 1}),
     ?assertEqual({error, not_connected}, call_station(Pool, seed(3))),
-    ?assertEqual({error, new_peer_budget_spent}, call_station(Pool, seed(4))),
+    ?assertEqual({error, {dial_refused, new_peer_budget_spent}}, call_station(Pool, seed(4))),
     ok = macula_client:close(Pool).
 
 %% Discovered stations past the budget are not linked now, and the deferral is counted like a refused dial; a later
@@ -91,8 +91,8 @@ discovery_past_the_new_peer_budget_defers_its_additions() ->
 refused_dials_are_counted_in_the_pool_status() ->
     {ok, Pool} = macula_client:connect([], #{max_direct_links => 1}),
     {error, not_connected} = call_station(Pool, seed(1)),
-    {error, too_many_direct_links} = call_station(Pool, seed(2)),
-    {error, too_many_direct_links} = call_station(Pool, seed(3)),
+    {error, {dial_refused, too_many_direct_links}} = call_station(Pool, seed(2)),
+    {error, {dial_refused, too_many_direct_links}} = call_station(Pool, seed(3)),
     {ok, #{refused_dials := Refused}} = macula_client:status(Pool),
     ?assertEqual(#{too_many_direct_links => 2}, Refused),
     ok = macula_client:close(Pool).
@@ -101,8 +101,8 @@ refused_dials_are_counted_in_the_pool_status() ->
 %% and starts no link.
 a_direct_dial_to_a_seed_the_pool_cannot_dial_is_refused() ->
     {ok, Pool} = macula_client:connect([], #{}),
-    ?assertEqual({error, unusable_seed}, call_station(Pool, #{host => {not_a, host}, port => 4433})),
-    ?assertEqual({error, unusable_seed}, call_station(Pool, #{host => <<"127.0.0.1">>, port => 0})),
+    ?assertEqual({error, {dial_refused, unusable_seed}}, call_station(Pool, #{host => {not_a, host}, port => 4433})),
+    ?assertEqual({error, {dial_refused, unusable_seed}}, call_station(Pool, #{host => <<"127.0.0.1">>, port => 0})),
     {ok, #{refused_dials := Refused}} = macula_client:status(Pool),
     ?assertEqual({#{unusable_seed => 2}, {ok, []}}, {Refused, macula_client:links(Pool)}),
     ok = macula_client:close(Pool).

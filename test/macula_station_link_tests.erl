@@ -58,20 +58,53 @@ seed_map_test() ->
     ok.
 
 %%------------------------------------------------------------------
-%% A CALL that never went out is reported as not sent
+%% What a call error says about trying the same request elsewhere
 %%------------------------------------------------------------------
 
-%% Only an error from before the CALL went out lets a pool try another link.
-not_sent_is_true_only_for_errors_before_the_call_went_out_test() ->
-    ?assert(macula_station_link:not_sent({error, not_connected})),
-    ?assert(macula_station_link:not_sent({error, noproc})),
-    ?assert(macula_station_link:not_sent({error, {refused, {unsupported_payload_type, pid, []}}})),
-    ?assertNot(macula_station_link:not_sent({error, timeout})),
-    ?assertNot(macula_station_link:not_sent({error, {disconnected, closed}})),
-    ?assertNot(macula_station_link:not_sent({error, gone})),
-    ?assertNot(macula_station_link:not_sent({error, {call_error, unknown_next_peer, undefined}})),
-    ?assertNot(macula_station_link:not_sent({error, {call_error, <<"overloaded">>, undefined}})),
-    ?assertNot(macula_station_link:not_sent({error, <<"not_connected">>})).
+%% `candidate': nothing went out and what failed is THIS link or THIS station,
+%% so another may well work.
+a_failure_of_this_link_or_this_station_is_candidate_scoped_test() ->
+    ?assertEqual(candidate, macula_station_link:failure_scope({error, not_connected})),
+    ?assertEqual(candidate, macula_station_link:failure_scope({error, noproc})),
+    ?assertEqual(candidate,
+                 macula_station_link:failure_scope({error, {dial_refused, unusable_seed}})),
+    ?assertEqual(candidate,
+                 macula_station_link:failure_scope({error, {dial_refused, too_many_direct_links}})),
+    ?assertEqual(candidate,
+                 macula_station_link:failure_scope({error, {dial_refused, new_peer_budget_spent}})).
+
+%% `request': nothing went out and what failed is the REQUEST, so every
+%% candidate refuses it identically and there is nothing to gain by asking one
+%% more. Both shapes are checked, since the scope has to hold for every reason
+%% that reaches it and not merely for the one that is easiest to name.
+a_failure_of_the_request_itself_is_request_scoped_test() ->
+    ?assertEqual(request,
+                 macula_station_link:failure_scope(
+                   {error, {refused, {unsupported_payload_type, payload_too_large, []}}})),
+    ?assertEqual(request,
+                 macula_station_link:failure_scope({error, {refused, {text_too_long, procedure}}})),
+    ?assertEqual(request,
+                 macula_station_link:failure_scope({error, {open_too_large, 1048576}})).
+
+%% `provider': it MAY have reached one, so it must never be sent elsewhere. A
+%% timeout and a station's `unknown_next_peer' are here deliberately: neither
+%% tells the caller whether a provider ran the call.
+%%
+%% The last two matter for a different reason. The function matches only terms
+%% the link and the pool build, and a provider's code and detail are binaries,
+%% so a provider that names itself `not_connected' in text cannot talk its way
+%% into being retried.
+a_failure_that_may_have_reached_a_provider_is_provider_scoped_test() ->
+    ?assertEqual(provider, macula_station_link:failure_scope({error, timeout})),
+    ?assertEqual(provider, macula_station_link:failure_scope({error, {disconnected, closed}})),
+    ?assertEqual(provider, macula_station_link:failure_scope({error, gone})),
+    ?assertEqual(provider,
+                 macula_station_link:failure_scope(
+                   {error, {call_error, unknown_next_peer, undefined}})),
+    ?assertEqual(provider,
+                 macula_station_link:failure_scope(
+                   {error, {call_error, <<"overloaded">>, undefined}})),
+    ?assertEqual(provider, macula_station_link:failure_scope({error, <<"not_connected">>})).
 
 %% Start options with the keys a link starts with: a node identity key in
 %% the node's profile, an issuer of its own for that key, owned by the

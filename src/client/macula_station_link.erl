@@ -86,9 +86,15 @@
 %%   <tr><td>(payload, or procedure text over 512 bytes or not UTF-8, refused before sending)</td><td>`{error, {refused, Reason}}', not sent</td></tr>
 %% </table>
 %%
-%% `not_sent/1' says whether an error means the CALL never went out.
+%% `failure_scope/1' says what a call error means for trying the same request
+%% somewhere else.
 -module(macula_station_link).
 -behaviour(gen_server).
+
+%% What a call error says about trying the same request somewhere else. See
+%% `failure_scope/1'.
+-type failure_scope() :: candidate | request | provider.
+-export_type([failure_scope/0]).
 
 -export([
     start_link/1,
@@ -126,7 +132,7 @@
     unadvertise_stream/4,
     send_stream_bytes/4,
     is_connected/1,
-    not_sent/1,
+    failure_scope/1,
     peer_node_id/1,
     %% Dedicated-stream content transfer (PLAN_PER_STREAM_QUIC_ISOLATION.md
     %% Phase 2). Not for general RPC use — see the moduledoc on
@@ -505,7 +511,7 @@ stop(Pid) ->
 %% a binary or `undefined'; `{error, {call_error, unknown_next_peer,
 %% undefined}}' when the station reports it holds no connection to the
 %% target; or `{error, Reason}' for a call refused, timed out or lost with
-%% the connection (see `not_sent/1').
+%% the connection (see `failure_scope/1').
 -spec call(pid(), station | <<_:256>>, <<_:256>>, binary(), term(), 1..600_000) ->
     {ok, term()} | {error, term()}.
 call(Pid, Target, Realm, Procedure, Payload, TimeoutMs) ->
@@ -544,18 +550,55 @@ call(Pid, Target, Realm, Procedure, Payload, TimeoutMs, Token)
         exit:{Reason, {gen_server, call, _}} -> {error, {link_stopped, macula_reason_name:text(Reason)}}
     end.
 
-%% @doc Whether an error from `call/6,7' means the CALL never went out, so
-%% the call can be tried on another link without a provider running it
-%% twice: the link was not connected yet, there was no link process, or
-%% the link refused the call before sending it. Any other error, a timeout
-%% or a station's `unknown_next_peer' included, may follow a CALL that
-%% reached its provider. It matches only terms the link builds; a
-%% provider's code or detail is a binary and never matches.
--spec not_sent({error, term()}) -> boolean().
-not_sent({error, not_connected}) -> true;
-not_sent({error, noproc}) -> true;
-not_sent({error, {refused, _Reason}}) -> true;
-not_sent({error, _Reason}) -> false.
+%% @doc What an error from `call/6,7' or `call_stream/6' says about trying the
+%% SAME request somewhere else. Two questions are being asked at once and
+%% three answers settle both:
+%%
+%% <ul>
+%%   <li>`candidate' — nothing went out, and what failed is THIS link or THIS
+%%       station: it was not connected yet, there was no link process, or the
+%%       pool refused to dial it. Another candidate may well work, so a caller
+%%       working through candidates should try the next one.</li>
+%%   <li>`request' — nothing went out, and what failed is the REQUEST ITSELF.
+%%       Every candidate refuses it identically, so trying more is guaranteed
+%%       waste: it burns the caller's deadline and hands back the error it
+%%       already had. A caller should stop at the first.</li>
+%%   <li>`provider' — it MAY have reached a provider. Stop, and never send it
+%%       elsewhere, or a provider runs one call twice. A timeout and a station's
+%%       `unknown_next_peer' both belong here: neither tells the caller whether
+%%       a provider ran the call.</li>
+%% </ul>
+%%
+%% "Did anything go out" is `provider' against the other two. "Request or
+%% candidate" is `request' against `candidate'. ONE function answers both,
+%% deliberately: this used to be a boolean here and a second, narrower copy of
+%% the same judgement in `macula_direct_dial:sent_or_not/1', and the two
+%% drifted apart on five error shapes (macula#20). A judgement kept in two
+%% places is kept in two places wrongly.
+%%
+%% WHY `{refused, _}' IS `request' AND `{dial_refused, _}' IS `candidate',
+%% since the two read alike and are opposites here. Every producer of
+%% `{refused, _}' on the call path bottoms out in something that cannot differ
+%% between links: `macula_frame:text_checked/2' on `?MAX_PROCEDURE_BYTES' and
+%% `macula_frame:check_payload/1' on `?MAX_FRAME_BYTES', both compile-time
+%% constants; `macula_frame:verify_request/2' on the profile, which
+%% `macula_client:start_link_for_seed/3' gives every link of a pool alike; and
+%% `macula_peering:send_frame/2', whose only failure is `check_frame/1', which
+%% is `check_payload/1' again. `{dial_refused, _}' is the opposite: the pool is
+%% at its direct-link cap, has spent its new-peer budget, or cannot dial that
+%% seed. Another candidate may need NO NEW LINK AT ALL, because the pool may
+%% already hold a live one to it. The wrapper carries the scope so no caller
+%% has to keep a list of reasons in step with this one.
+%%
+%% It matches only terms the link and the pool build; a provider's code or
+%% detail is a binary and never matches.
+-spec failure_scope({error, term()}) -> failure_scope().
+failure_scope({error, not_connected})       -> candidate;
+failure_scope({error, noproc})              -> candidate;
+failure_scope({error, {dial_refused, _}})   -> candidate;
+failure_scope({error, {refused, _Reason}})  -> request;
+failure_scope({error, {open_too_large, _}}) -> request;
+failure_scope({error, _Reason})             -> provider.
 
 %% @doc Open a dedicated QUIC stream for a sequence of related unary
 %% CALLs — content transfer's one purpose so far (see
