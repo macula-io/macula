@@ -209,6 +209,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A provider went dark before its authorization expired.**
+  `macula:advertise/5` builds a procedure advertisement with its type's own
+  5-minute lifetime, which knows nothing about the org directory and
+  delegation it carries, and signed it unbounded. Both verifiers refuse an
+  advertisement that ends after the earlier of those two expiries,
+  `macula_record:verify_authorization/3` here and macula-station's at
+  admission, so in the last 5 minutes of every authorization window a
+  provider signed advertisements its own pool then refused with
+  `{provider_authorization, {error, authorization_outlived}}`, and stopped
+  advertising early. The advertisement is now signed under that earlier
+  expiry as its bound, so it ends with its authorization rather than after
+  it. The seam entry `sign_node_record` in `advertise/5`'s and
+  `provider_authorization/4`'s options takes the bounded arity: a caller
+  that overrides it passes a `fun/3` now.
+
 - **A record signed under a `not_after` bound outlived the bound by its own
   age.** `macula_client:sign_node_record/3` wrote the bound into the record as
   `expires_at` and then refreshed it, and a refresh keeps a record's LIFETIME:

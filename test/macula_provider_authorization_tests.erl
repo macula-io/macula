@@ -142,9 +142,11 @@ with_io(K, Overrides, Fun) ->
                            {ok, #{self_node_id => maps:get(node_id, K)}}
                        end,
              find_record => find_stub(K, none),
-             sign_node_record => fun(_Pool, Unsigned) ->
-                                     {ok, macula_record:sign(
-                                            Unsigned, maps:get(id_key, K))}
+             %% As the pool's own bounded signing does it: one clock
+             %% read stamps the record and ends it at the bound.
+             sign_node_record => fun(_Pool, Unsigned, #{not_after := NotAfter}) ->
+                                     macula_record:refresh(
+                                       Unsigned, maps:get(id_key, K), NotAfter)
                                  end,
              realm_key => fun(_Pool, _Realm) ->
                               {ok, macula_node_keys:public_key(

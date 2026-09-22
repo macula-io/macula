@@ -16,6 +16,8 @@
 
 -include_lib("eunit/include/eunit.hrl").
 
+-define(MINUTE, 60 * 1000).
+-define(HOUR, 60 * ?MINUTE).
 -define(REALM, <<7:256>>).
 -define(ORG, <<"acme">>).
 -define(PROC, <<"acme/count_v1">>).
@@ -29,7 +31,9 @@ cases(Keys) ->
                  fun a_procedure_without_an_org_namespace_is_refused/1,
                  fun a_missing_org_directory_is_refused/1,
                  fun a_missing_delegation_is_refused/1,
-                 fun an_unpinned_realm_key_is_refused/1]].
+                 fun an_unpinned_realm_key_is_refused/1,
+                 fun a_delegation_ending_first_caps_the_advertisement/1,
+                 fun an_org_directory_ending_first_caps_the_advertisement/1]].
 
 %%------------------------------------------------------------------
 %% Happy path
@@ -52,6 +56,48 @@ a_complete_chain_advertises_the_signed_wire_form(
     ?assertEqual(ok,
                  macula_record:verify_authorization(
                    Decoded, #{profile => Profile, realm_key => RealmPub},
+                   erlang:system_time(millisecond))).
+
+%%------------------------------------------------------------------
+%% The advertisement never outlives what authorizes it
+%%
+%% An advertisement is built with its type's own lifetime, 5 minutes,
+%% which knows nothing about the chain it carries. Both verifiers
+%% refuse one that outlives its authorization: macula_record's
+%% delegation_matched/3 and, at admission, macula-station's. So in the
+%% last 5 minutes of a delegation or an org directory the provider
+%% signs an advertisement its own pool then refuses, and goes dark
+%% before its authorization actually expires. The advertisement is
+%% capped at the earlier of the two, which is what `not_after' is for.
+%%
+%% Two cases, one per side of the `min': a cap taken from whichever
+%% record happens to be read first passes one and fails the other.
+%%------------------------------------------------------------------
+
+a_delegation_ending_first_caps_the_advertisement(Keys) ->
+    capped_at(Keys, ?HOUR, 2 * ?MINUTE).
+
+an_org_directory_ending_first_caps_the_advertisement(Keys) ->
+    capped_at(Keys, 2 * ?MINUTE, ?HOUR).
+
+%% The chain is published with these lifetimes, the advertisement is
+%% sent, and it ends at the earlier of the two, not 5 minutes from now.
+capped_at(Keys, DirTtl, DelTtl) ->
+    Handler = fun(_P) -> {ok, counted} end,
+    {Stub, Earliest} = short_chain_stub(Keys, DirTtl, DelTtl),
+    with_opts(Keys, #{find_record => Stub}, Handler, fun(Opts) ->
+        ?assertEqual(ok, macula:advertise(self(), ?REALM, ?PROC, Handler, Opts))
+    end),
+    Ad = advertise_sent(),
+    {ok, Profile} = macula_crypto_profile:configured(),
+    {ok, Decoded} = macula_record:verify(Ad, Profile),
+    ?assertEqual(Earliest, macula_record:expires_at(Decoded)),
+    %% And the consequence that matters: the pool's own check of the
+    %% chain, the one that refuses an advertisement outliving it.
+    ?assertEqual(ok,
+                 macula_record:verify_authorization(
+                   Decoded, #{profile => Profile,
+                              realm_key => maps:get(realm_key, Keys)},
                    erlang:system_time(millisecond))).
 
 %%------------------------------------------------------------------
@@ -108,9 +154,11 @@ with_opts(Keys, Overrides, _Handler, Fun) ->
                            {ok, #{self_node_id => maps:get(node, Keys)}}
                        end,
              find_record => find_stub(Keys, none),
-             sign_node_record => fun(_Pool, Unsigned) ->
-                                     {ok, macula_record:sign(
-                                            Unsigned, maps:get(key, Keys))}
+             %% As the pool's own bounded signing does it: one clock
+             %% read stamps the record and ends it at the bound.
+             sign_node_record => fun(_Pool, Unsigned, #{not_after := NotAfter}) ->
+                                     macula_record:refresh(
+                                       Unsigned, maps:get(key, Keys), NotAfter)
                                  end,
              realm_key => fun(_Pool, _Realm) ->
                               {ok, maps:get(realm_key, Keys)}
@@ -144,6 +192,23 @@ find_reply(DelegKey, _OrgDirKey, DelegKey, _Missing, _OrgDir, Deleg) ->
     verified(Deleg);
 find_reply(_Key, _OrgDirKey, _DelegKey, _Missing, _OrgDir, _Deleg) ->
     {error, not_found}.
+
+%% A find_record stub over a chain published with the given lifetimes,
+%% and the earlier of the two expiries the advertisement must not pass.
+short_chain_stub(#{node := NodeId, realm_kp := RealmKp, org_key := OrgKey,
+                   org_key_id := OrgKeyId} = Keys, DirTtl, DelTtl) ->
+    OrgDir = macula_record:sign(
+               macula_record:org_directory(?REALM, ?ORG, OrgKeyId,
+                                           #{ttl_ms => DirTtl}), RealmKp),
+    Deleg = macula_record:sign(
+              macula_record:procedure_delegation(OrgKeyId, NodeId,
+                                                 #{ttl_ms => DelTtl}), OrgKey),
+    OrgDirKey = maps:get(org_dir_key, Keys),
+    DelegKey = maps:get(deleg_key, Keys),
+    {fun(_Pool, Key) ->
+         find_reply(Key, OrgDirKey, DelegKey, none, OrgDir, Deleg)
+     end,
+     min(macula_record:expires_at(OrgDir), macula_record:expires_at(Deleg))}.
 
 %% The facade's find_record/2 returns records already verified under
 %% the node's profile — the seam stub answers in the same shape.

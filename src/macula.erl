@@ -124,7 +124,8 @@
 -type provider_io() :: #{
     status           => fun((pool()) -> {ok, macula_client:status()} | {error, term()}),
     find_record      => fun((pool(), record_key()) -> {ok, m_record()} | {error, term()}),
-    sign_node_record => fun((pool(), m_record()) -> {ok, m_record()} | {error, term()}),
+    sign_node_record => fun((pool(), m_record(), #{not_after := integer()}) ->
+                                {ok, m_record()} | {error, term()}),
     realm_key        => fun((pool(), realm()) -> {ok, binary()} | none)
 }.
 
@@ -1042,7 +1043,7 @@ provider_io(Opts) ->
     #{status           => maps:get(status, Opts, fun status/1),
       find_record      => maps:get(find_record, Opts, fun find_record/2),
       sign_node_record => maps:get(sign_node_record, Opts,
-                                   fun sign_node_record/2),
+                                   fun sign_node_record/3),
       realm_key        => maps:get(realm_key, Opts,
                                    fun macula_client:realm_key/2)}.
 
@@ -1099,6 +1100,15 @@ resolve_delegation(Io, Pool, Realm, Procedure, OrgDir, OrgKeyId, NodeId,
             {error, {provider_authorization, E}}
     end.
 
+%% The advertisement is signed under a bound: it must not outlive what
+%% authorizes it. An advertisement is built with its type's own
+%% lifetime, which knows nothing about the chain it carries, and both
+%% verifiers refuse one that ends after the earlier of the org
+%% directory's and the delegation's expiry —
+%% `macula_record:delegation_matched/3' here, and macula-station's at
+%% admission. Without the bound a provider spends the last stretch of
+%% every authorization window signing advertisements its own pool
+%% refuses, and goes dark before its delegation expires.
 sign_provider_advertisement(Io, Pool, Realm, Procedure, OrgDir, Deleg,
                             NodeId, Fun) ->
     Authorization = #{org_directory        => macula_record:encode(OrgDir),
@@ -1106,7 +1116,10 @@ sign_provider_advertisement(Io, Pool, Realm, Procedure, OrgDir, Deleg,
     Unsigned = macula_record:procedure_advertisement(
                  NodeId, Realm, Procedure, NodeId,
                  #{authorization => Authorization}),
-    case (maps:get(sign_node_record, Io))(Pool, Unsigned) of
+    NotAfter = min(macula_record:expires_at(OrgDir),
+                   macula_record:expires_at(Deleg)),
+    case (maps:get(sign_node_record, Io))(Pool, Unsigned,
+                                          #{not_after => NotAfter}) of
         {ok, Signed} ->
             trusted_provider_advertisement(Io, Pool, Realm, Signed, Fun);
         {error, _} = E ->
