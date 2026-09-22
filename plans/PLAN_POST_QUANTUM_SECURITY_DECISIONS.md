@@ -147,15 +147,19 @@ table there gives each decision's answer in short and its status.
 
 - **Answer, accepted by Raf on 2026-09-10, revised the same day for ML-DSA key storage:**
   - **per node:** the identity key or pair, the CONNECT key or pair, and on station instances the TLS key, with
-    each ML-DSA-87 private key stored in its 4,896-byte expanded form next to its public key;
+    each new ML-DSA-87 private key stored as its 32-byte seed next to its public key; a key already stored in its
+    4,896-byte expanded form still loads and signs, so no node_id changes;
   - **each key serves exactly one purpose** (key model);
-  - **on load, the public key of each ML-DSA-87 key is derived from the expanded key and must equal the stored
-    public key, and then every key is checked with a sign-and-verify round trip by the whole key, so a hybrid key
-    signs only its composite;**
+  - **on load, the public key of each ML-DSA-87 key is derived from its seed, or from its expanded form, and must
+    equal the stored public key, and then every key is checked with a sign-and-verify round trip by the whole key,
+    so a hybrid key signs only its composite;**
   - **TLS and CONNECT keys and their bindings rotate every 5 days** (D22);
   - D29 extends the TLS key beyond station instances: a node that accepts distribution tunnels also holds one.
-- **Why:** OTP generates ML-DSA-87 keys only in expanded form and cannot derive a public key from a seed, but derives
-  it from the expanded key with `generate_key(mldsa87, [], K)` (OTP 28.4.2 and 29.0.6) ✅; BSI asks for hybrid key
+- **Amended and accepted by Raf on 2026-09-22:** new ML-DSA-87 keys are stored as the 32-byte seed, not the
+  expanded form, now that `macula-mldsa` signs every ML-DSA signature (D7, same date).
+- **Why:** RFC 9964's `AKP` key stores the seed as `priv`, and Go 1.27 loads ML-DSA keys from the seed only, so seed
+  key files cross Go and the BEAM ✅. `macula-mldsa` expands a seed, which OTP cannot, and signs from either form,
+  so existing expanded keys keep their node_ids and no D25 grant is re-issued ✅. BSI asks for hybrid key
   material dedicated to hybrid signatures ✅; the ECCG list requires different key pairs for message
   signatures and authentication ✅; ANSSI PA-079 section 6.3 and BSI TR-03116-4 ask for separate keys per
   purpose ✅.
@@ -163,12 +167,24 @@ table there gives each decision's answer in short and its status.
 
 ### D7 Key encoding in UCANs and DIDs
 
-- **Answer, accepted by Raf on 2026-09-10 with two checks:** **Use published names and constructions where they
-  exist, and Macula's own names only where none exists. UCAN and DID signing and verification move into
-  `macula_identity`; the NIFs keep only the encoding. `aud` names the audience by node_id.**
+- **Answer, accepted by Raf on 2026-09-10 with two checks, amended 2026-09-22:** **Use published names and
+  constructions where they exist, and Macula's own names only where none exists. Every ML-DSA signature in the
+  stack, UCAN and DID included, is made and checked by `macula-mldsa` (the `macula-pqc` workspace); the NIFs sign
+  with it. `aud` names the audience by node_id.**
+- **Amended and accepted by Raf on 2026-09-22,** three decisions:
+  - **One ML-DSA everywhere:** `macula-mldsa`, verified byte-exact against NIST's ACVP vectors, signs and verifies
+    ML-DSA in every Rust NIF and SDK, so private keys enter Rust. This replaces the rule, accepted on 2026-09-10,
+    that UCAN and DID signing move into `macula_identity` on OTP `crypto` so that private keys never enter Rust.
+    RSA-PSS, which `macula-mldsa` does not provide, stays on OTP.
+  - **The EU hybrid is the standard LAMPS composite**, `id-MLDSA87-RSA4096-PSS-SHA512`, replacing Macula's own
+    composite (see Check 1).
+  - **New keys are stored as seeds** (D6, same date).
+  - **Why:** OTP signs ML-DSA without a context string, which is the only reason Macula needed its own composite,
+    and it cannot expand a seed; `macula-mldsa` does both. One implementation on every stack also means one set of
+    vectors, one timing harness and one wiping test stand behind every ML-DSA signature.
 - **Why:**
   - Every verifier is Macula's own code, and membership UCANs use a raw hex key as `aud` ⚠ (V12).
-  - OTP signs and verifies both halves; with signing in Erlang, private keys never enter Rust.
+  - `macula-mldsa` makes and checks every ML-DSA signature, on every stack (amendment of 2026-09-22).
   - Respect two existing rules: no `did:macula:` prefix, and no self-rooted identity without realm endorsement.
   - With `did:key` in both `iss` and `aud`, a minimal post-quantum UCAN is about 16 KB in the US profile and
     18.5 KB in the EU profile; naming `aud` by node_id brings that to about 11 and 13 KB (check 2).
@@ -194,22 +210,22 @@ table there gives each decision's answer in short and its status.
     of 256 bits of collision and second-preimage strength for ML-DSA-87 ✅. Whether BSI and ANSSI would assess
     the design as hybrid stays open (D4) ⚠.
   - **Not buildable in OTP as specified:** OTP 28.4.2 and 29.0.6 sign ML-DSA without options, so without a context
-    string ✅, and D7 keeps private keys out of Rust.
-  - **Accepted by Raf on 2026-09-10:** every EU hybrid signature that D4 names is Macula's own composite on the
-    LAMPS structure: the same M', the same RSA-PSS parameters from D4, concatenated keys and signatures, valid only
-    if both verify, with ML-DSA-87 signing M' under an empty context. It has no LAMPS name or identifier; its `alg`
-    is `ML-DSA-87-PS384`, after the JOSE composite draft's pattern (`ML-DSA-87-ES384`) and JOSE's `PS384`. EU keys
-    in `did:key` use Macula's own key type until a multicodec exists ⚠.
-  - **Constants** (set in WP 1.3, 2026-09-10): Prefix is the 32 ASCII bytes `CompositeAlgorithmSignatures2025`, as
-    in LAMPS; Label is the 22 ASCII bytes `MACULA-ML-DSA-87-PS384`; ctx is empty for every Macula object, so
-    len(ctx) is the single byte 0, and each object keeps its own domain label inside M; PH is SHA-512. RSA-PSS signs
+    string ✅. `macula-mldsa` takes one.
+  - **Accepted by Raf on 2026-09-22, replacing Macula's own composite of 2026-09-10:** every EU hybrid signature
+    that D4 names is `id-MLDSA87-RSA4096-PSS-SHA512` as the LAMPS draft defines it: ML-DSA-87 signs M' with the
+    draft's label for that algorithm as its context string, RSA-PSS signs M' on OTP with D4's parameters, and keys
+    and signatures are concatenated, valid only if both verify. It is proven against the draft's own test vectors
+    before any node signs with it. Its JOSE `alg` stays `ML-DSA-87-PS384`, after the JOSE composite draft's pattern
+    (`ML-DSA-87-ES384`) and JOSE's `PS384`, while JOSE has no name for an ML-DSA and RSA composite. EU keys in
+    `did:key` use Macula's own key type until a multicodec exists ⚠.
+  - **Constants** (set in WP 1.3, 2026-09-10; the label amended 2026-09-22): Prefix is the 32 ASCII bytes
+    `CompositeAlgorithmSignatures2025`, as in LAMPS; Label is the draft's label for
+    `id-MLDSA87-RSA4096-PSS-SHA512`, taken from the draft and confirmed by its test vectors, and ML-DSA-87 signs
+    with it as its context string; ctx is empty for every Macula object, so len(ctx) is the single byte 0, and each
+    object keeps its own domain label inside M; PH is SHA-512. RSA-PSS signs
     M' with SHA-384, MGF1 with SHA-384, a 48-byte salt and public exponent 65537. The signature is the 4,627-byte
     ML-DSA-87 signature followed by the 512-byte RSA-PSS signature, and the public key is the 2,592-byte ML-DSA-87
     key followed by the 526-byte DER `RSAPublicKey`, both without length prefixes.
-  - **Upstream and switch:** Macula tracks erlang/otp #11589 (OTP-20368), the OTP team's own change that adds an
-    ML-DSA context string to `crypto:sign/5` and `verify/6` ✅. Macula contributes no code to it; Raf may comment
-    on it in his own words. If OTP ships it before `macula` 11.0.0, Macula switches to
-    `id-MLDSA87-RSA4096-PSS-SHA512`.
 - **Check 2, audience by node_id** (2026-09-10):
   - `iss` keeps the full key, which verifies the token (D13); `aud` carries the audience's node_id.
   - **Refined and accepted by Raf on 2026-09-10:** a token is presented by the node its `aud` names, inside a
@@ -325,7 +341,8 @@ before its wire checks are green.
   - that ML-DSA-87 alone is acceptable in Europe;
   - that Ed25519 is part of the EU profile;
   - that Macula's hybrid signature is the LAMPS composite or `id-MLDSA87-RSA4096-PSS-SHA512`: it is Macula's own
-    composite, `ML-DSA-87-PS384` (D7).
+    composite, `ML-DSA-87-PS384` (D7). D7 adopts the LAMPS composite on 2026-09-22; this rule is revisited only once
+    that construction passes the draft's test vectors and ships, and Saturnus reads any new wording.
 - **US, when true:** "algorithms aligned with CNSA 2.0 (ML-KEM-1024, ML-DSA-87, AES-256, SHA-384)". Never imply
   deployability in National Security Systems, which also needs NIAP or NSA validation ⚠ (V14). Preconditions: V13
   and V14 closed.

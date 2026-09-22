@@ -124,8 +124,9 @@ change, the done criterion and the effort. The US profile goes first; the EU par
   - `src/auth/macula_ucan_nif.erl` and `src/identity/macula_did_nif.erl` (signing moves into `macula_identity`)
   - `rebar.config` (OTP floor)
 - **Change:**
-  - identity keys per profile through OTP `crypto`: ML-DSA-87 in the US profile, the hybrid pair in the EU
-    profile (D4), signing as Macula's composite `ML-DSA-87-PS384` (D7);
+  - identity keys per profile: ML-DSA-87 through `macula-mldsa` in the US profile, the hybrid pair in the EU
+    profile (D4), signing as the LAMPS composite `id-MLDSA87-RSA4096-PSS-SHA512` with its RSA-PSS half on OTP
+    `crypto` (D7, amended 2026-09-22);
   - CONNECT keys and TLS keys, their bindings and their status (D22); key storage per D6, with a round trip on
     load and rotation every 5 days;
   - node_id per D5, through one identity function that every comparison uses; the puzzle works on node_id at 12
@@ -209,10 +210,11 @@ change, the done criterion and the effort. The US profile goes first; the EU par
   - `native/macula_did_nif/Cargo.toml`
   - `native/macula_did_nif/src/lib.rs`
 - **Change:**
-  - the NIFs build the signing input and parse tokens and documents; `macula_identity` signs and verifies, so
-    private keys never enter Rust;
+  - the NIFs build the signing input, parse tokens and documents, and sign and verify ML-DSA with `macula-mldsa`
+    (D7, amended 2026-09-22); the EU composite's RSA-PSS half is signed and verified on OTP;
   - `alg` and key encoding per D7: `ML-DSA-87` and `AKP` from RFC 9964 with the `mldsa-87-pub` multicodec in the US
-    profile; the composite with Macula's own `alg` `ML-DSA-87-PS384` and key type in the EU profile;
+    profile; the LAMPS composite `id-MLDSA87-RSA4096-PSS-SHA512`, under the `alg` `ML-DSA-87-PS384`, with Macula's
+    own key type in the EU profile;
   - `aud` names the audience by node_id; a proof's `aud` is matched against the node_id derived from the outer
     token's `iss` key, and the string form of that audience is set here without a `did:macula:` prefix (D7);
   - UCAN parent ids are SHA-384, and verifiers reject any other hash (D24);
@@ -440,8 +442,10 @@ change, the done criterion and the effort. The US profile goes first; the EU par
   - `Dockerfile.prod` (Debian 13 slim builder and runner, D8)
 - **Change:**
   - Realm CA and Org CA sign with ML-DSA-87 in the US profile;
-  - in the EU profile each credential carries Macula's composite signature `ML-DSA-87-PS384`, valid only if both
-    halves verify (D4, D7); it has no X.509 identifier, so how a credential carries it is set here ⚠;
+  - in the EU profile each credential carries the LAMPS composite signature `id-MLDSA87-RSA4096-PSS-SHA512`,
+    valid only if both halves verify (D4, D7 as amended 2026-09-22); how a credential carries it is set here ⚠;
+  - D7's amendment of 2026-09-22 puts every ML-DSA signature on `macula-mldsa`; how the realm's X.509 signing,
+    through OTP `public_key` today, moves onto it is not yet decided ⚠;
   - OTP 28.1.1 `public_key` signs and validates ML-DSA X.509 ✅, and OTP signs and verifies brainpool ECDSA ✅ and
     RSA-PSS ✅;
   - leaf issuance, ownership proofs and membership checks take post-quantum keys, carried in full (D13);
