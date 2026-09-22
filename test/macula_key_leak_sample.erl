@@ -1,7 +1,8 @@
 %%% @doc The forms a node key's private halves can leak in, for tests that look for them in what a node logs or shows.
 %%%
-%%% Each private half is sampled at two secret slices, bytes its public key does not hold. For ML-DSA-87 those are the
-%%% eight bytes at 32, inside K and inside the window a depth-limited print shows, and its last 24 bytes. For RSA they
+%%% Each private half is sampled at two secret slices, bytes its public key does not hold. For an ML-DSA-87 seed those
+%%% are its first eight bytes, inside the window a depth-limited print shows, and its last 24. For an ML-DSA-87 key in
+%%% the expanded form they are the eight bytes at 32, inside K and inside that window, and its last 24 bytes. For RSA they
 %%% are eight bytes from the middle of the private exponent and the last 24 bytes of its DER. Each slice comes raw, as
 %%% lowercase and uppercase hex, as the comma-led byte list a formatter prints, and as Base64 of six bytes at each of
 %%% three alignments, standard and URL-safe. An RSA half also comes as the first 32 digits of its private exponent in
@@ -12,7 +13,7 @@
 
 -export([forms/1, found/2]).
 
-%% Where the ML-DSA-87 slice starts, and how long each inner slice is.
+%% Where the slice of an expanded ML-DSA-87 key starts (a seed's starts at 0), and how long each inner slice is.
 -define(SECRET_AT, 32).
 -define(SECRET_BYTES, 8).
 %% How many of a private half's last bytes the tail slice takes.
@@ -39,6 +40,8 @@ component_forms(#{public := Public} = Component) ->
     [] = [Slice || Slice <- Slices, binary:match(Public, Slice) =/= nomatch],
     lists:append([slice_forms(Slice) || Slice <- Slices]) ++ decimal_forms(Component).
 
+secret_slices(#{algorithm := mldsa87, private := <<_:32/binary>> = Seed}) ->
+    [binary:part(Seed, 0, ?SECRET_BYTES), tail(Seed)];
 secret_slices(#{algorithm := mldsa87, private := Private}) ->
     [binary:part(Private, ?SECRET_AT, ?SECRET_BYTES), tail(Private)];
 secret_slices(#{algorithm := rsa_pss, private := Der}) ->

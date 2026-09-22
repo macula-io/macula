@@ -12,7 +12,8 @@
 %% ML-DSA-87 signs, verifies and derives public keys through macula-mldsa, in macula_crypto_nif (D7, as amended on
 %% 2026-09-22); RSA-PSS stays on OTP crypto.
 %%
-%% An ML-DSA-87 component stores its 4,896-byte expanded private key and its public key. An RSA-PSS component
+%% An ML-DSA-87 component stores its public key and its private key as the 32-byte seed (D6); a key generated before
+%% D6's amendment keeps the 4,896-byte expanded form OTP made, which loads and signs as before. An RSA-PSS component
 %% stores a DER-encoded RSAPrivateKey and RSAPublicKey. On load, every public key is derived again from its
 %% private key and must equal the stored one, and every component passes a sign-and-verify round trip. A key file
 %% its group or others can read is refused.
@@ -348,8 +349,8 @@ generated_key({error, _} = Error, _Purpose, _Profile) ->
     Error.
 
 generate_component(mldsa87) ->
-    {Public, Private} = crypto:generate_key(mldsa87, []),
-    #{algorithm => mldsa87, public => Public, private => Private};
+    {ok, {Public, Seed}} = macula_crypto_nif:mldsa_generate(mldsa87),
+    #{algorithm => mldsa87, public => Public, private => Seed};
 generate_component({rsa_pss, #{modulus_bits := Bits, public_exponent := Exponent}}) ->
     {[E, N], PrivateList} = crypto:generate_key(rsa, {Bits, Exponent}),
     #{algorithm => rsa_pss, public => rsa_public_der(E, N), private => rsa_private_der(PrivateList)}.
@@ -397,8 +398,12 @@ rsa_key_verifies(false, _RsaPublic, _Signature, _Representative, _Digest, _Optio
 
 %% ML-DSA-87 under the empty context, as both the pure signature and the composite's ML-DSA half use it.
 mldsa87_signature(Private, Message) ->
-    {ok, Signature} = macula_crypto_nif:mldsa_sign(mldsa87, {expanded, Private}, Message, <<>>),
+    {ok, Signature} = macula_crypto_nif:mldsa_sign(mldsa87, mldsa87_private(Private), Message, <<>>),
     Signature.
+
+%% A private key stored as its seed, or in the expanded form of a key generated before D6's amendment.
+mldsa87_private(<<_:32/binary>> = Seed) -> {seed, Seed};
+mldsa87_private(Expanded) -> {expanded, Expanded}.
 
 mldsa87_verifies(Public, Message, Signature) ->
     macula_crypto_nif:mldsa_verify(mldsa87, Public, Message, Signature, <<>>).
@@ -445,10 +450,10 @@ check_component(#{algorithm := mldsa87, public := Public, private := Private}, m
 check_component(#{algorithm := rsa_pss, public := Public, private := Private}, {rsa_pss, Params}) ->
     rsa_public_matches(decode_rsa_private(Private), Public, Params).
 
-%% macula-mldsa derives the public key from rho, s1 and s2, and refuses an expanded key whose tr does not hash that
-%% public key or whose t0 is not the low bits of t.
+%% macula-mldsa derives the public key from a seed, or from rho, s1 and s2 of an expanded key, whose tr must hash
+%% that public key and whose t0 must be the low bits of t. A private key of any other size is refused.
 derive_mldsa87_public(Private) ->
-    derived_mldsa87_public(macula_crypto_nif:mldsa_public_key(mldsa87, {expanded, Private})).
+    derived_mldsa87_public(macula_crypto_nif:mldsa_public_key(mldsa87, mldsa87_private(Private))).
 
 derived_mldsa87_public({ok, Public}) -> {ok, Public};
 derived_mldsa87_public({error, _Reason}) -> {error, private_key_invalid}.

@@ -24,12 +24,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **`macula_node_keys` signs, verifies and derives ML-DSA-87 public keys
-  through `macula-mldsa`**, not OTP `crypto` (D7, as amended). Nothing
-  changes on the wire or on disk: key files, signatures and node_ids are as
-  before, and a signature from either side verifies on the other. RSA-PSS,
-  the EU composite's second half, stays on OTP. Key generation is still
-  OTP's until keys are stored as seeds (D6).
+- **`macula_node_keys` generates, signs, verifies and derives ML-DSA-87
+  keys through `macula-mldsa`**, not OTP `crypto` (D7, as amended).
+  Signatures and node_ids are as before, and a signature from either side
+  verifies on the other. RSA-PSS, the EU composite's second half, stays on
+  OTP.
+
+- **New ML-DSA-87 private keys are stored as their 32-byte seed** (D6, as
+  amended), not the 4,896-byte expanded form. A key file that holds the
+  expanded form loads and signs as before, and keeps its node_id. A key
+  file written by this version does not load on 12.0.0-alpha.1 or earlier,
+  which accept only the expanded form.
 
 ## [12.0.0-alpha.1] - 2026-09-22
 

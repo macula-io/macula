@@ -11,12 +11,14 @@
 %% Generation
 %%------------------------------------------------------------------
 
+%% A new ML-DSA-87 private key is stored as its 32-byte seed (D6), and its public key is the one the seed derives.
 us_identity_key_is_one_mldsa87_pair_test() ->
     {ok, Key} = macula_node_keys:generate(identity, pq_pure),
     ?assertMatch(#{purpose := identity, profile := pq_pure,
                    components := [#{algorithm := mldsa87}]}, Key),
-    [#{public := Public, private := Private}] = maps:get(components, Key),
-    ?assertEqual({2592, 4896}, {byte_size(Public), byte_size(Private)}).
+    [#{public := Public, private := Seed}] = maps:get(components, Key),
+    ?assertEqual({2592, 32}, {byte_size(Public), byte_size(Seed)}),
+    ?assertEqual({ok, Public}, macula_crypto_nif:mldsa_public_key(mldsa87, {seed, Seed})).
 
 us_connect_key_is_one_mldsa87_pair_test() ->
     {ok, Key} = macula_node_keys:generate(connect, pq_pure),
@@ -31,7 +33,8 @@ eu_identity_and_connect_keys_pair_mldsa87_with_rsa_pss_test_() ->
     {timeout, ?EU_TIMEOUT, fun() ->
         [begin
              {ok, Key} = macula_node_keys:generate(Purpose, pq_hybrid),
-             ?assertMatch(#{components := [#{algorithm := mldsa87}, #{algorithm := rsa_pss}]}, Key)
+             ?assertMatch(#{components := [#{algorithm := mldsa87, private := <<_:32/binary>>},
+                                           #{algorithm := rsa_pss}]}, Key)
          end
          || Purpose <- [identity, connect]]
     end}.
@@ -71,6 +74,16 @@ key_file_its_group_or_others_can_read_is_refused_test_() ->
 key_file_readable_by_its_owner_only_loads_test_() ->
     [?_assertMatch({ok, #{purpose := identity}}, load_with_mode(Mode)) || Mode <- [8#0600, 8#0400]].
 
+%% A key stored before D6's amendment holds the 4,896-byte expanded form OTP generates. It still loads and signs, and
+%% keeps its node_id.
+key_stored_in_the_expanded_form_still_loads_and_signs_test() ->
+    Key = expanded_identity_key(),
+    ?assertEqual({ok, Key}, save_and_load(Key, identity, pq_pure)),
+    [#{public := Public}] = maps:get(components, Key),
+    ?assertEqual({ok, macula_node_keys:node_id(Public, pq_pure)}, macula_node_keys:node_id(Key)),
+    Signature = macula_node_keys:sign(<<"message">>, Key),
+    ?assert(macula_node_keys:verify(<<"message">>, Signature, Public, pq_pure)).
+
 missing_file_returns_enoent_test() ->
     ?assertEqual({error, enoent},
                  macula_node_keys:load("/nonexistent/xyz/identity.key", identity, pq_pure)).
@@ -95,20 +108,25 @@ stored_rsa_public_key_that_differs_from_the_derived_one_is_refused_test_() ->
         ?assertEqual({error, public_key_mismatch}, save_and_load(Tampered, identity, pq_hybrid))
     end}.
 
+%% A seed derives a different public key once a byte of it changes.
+corrupted_mldsa87_seed_is_refused_test() ->
+    {ok, Key} = macula_node_keys:generate(identity, pq_pure),
+    ?assertEqual({error, public_key_mismatch}, load_with_private_byte_flipped(Key, 7)).
+
 %% An expanded ML-DSA-87 private key is rho, K and tr (bytes 0 to 127), then s1, s2 and t0 (t0 from byte 1,568). The
 %% public key derives from rho, s1 and s2 alone, so a corrupted tr or t0 leaves it unchanged: the key is refused
 %% because tr must hash the public key and t0 must be the low bits of t, and neither holds.
 corrupted_mldsa87_tr_is_refused_test() ->
-    ?assertEqual({error, private_key_invalid}, load_with_private_byte_flipped(64)).
+    ?assertEqual({error, private_key_invalid}, load_with_private_byte_flipped(expanded_identity_key(), 64)).
 
 corrupted_mldsa87_t0_is_refused_test() ->
-    ?assertEqual({error, private_key_invalid}, load_with_private_byte_flipped(2000)).
+    ?assertEqual({error, private_key_invalid}, load_with_private_byte_flipped(expanded_identity_key(), 2000)).
 
-truncated_mldsa87_private_key_is_refused_test() ->
-    {ok, Key} = macula_node_keys:generate(identity, pq_pure),
-    [Component = #{private := <<Short:4000/binary, _/binary>>}] = maps:get(components, Key),
-    Truncated = Key#{components := [Component#{private := Short}]},
-    ?assertEqual({error, private_key_invalid}, save_and_load(Truncated, identity, pq_pure)).
+%% A private key is a 32-byte seed or a 4,896-byte expanded key, and nothing else.
+truncated_mldsa87_private_key_is_refused_test_() ->
+    {ok, SeedKey} = macula_node_keys:generate(identity, pq_pure),
+    [?_assertEqual({error, private_key_invalid}, load_with_private_truncated(Key, Bytes))
+     || {Key, Bytes} <- [{SeedKey, 31}, {expanded_identity_key(), 4000}, {expanded_identity_key(), 33}]].
 
 key_saved_for_another_purpose_is_refused_test() ->
     {ok, Key} = macula_node_keys:generate(connect, pq_pure),
@@ -172,10 +190,19 @@ load_with_mode(Mode) ->
         macula_node_keys:load(Path, identity, pq_pure)
     end).
 
-load_with_private_byte_flipped(Offset) ->
-    {ok, Key} = macula_node_keys:generate(identity, pq_pure),
+%% A pq_pure identity key in the expanded form OTP generates, as keys were stored before D6's amendment.
+expanded_identity_key() ->
+    {Public, Expanded} = crypto:generate_key(mldsa87, []),
+    #{purpose => identity, profile => pq_pure,
+      components => [#{algorithm => mldsa87, public => Public, private => Expanded}]}.
+
+load_with_private_byte_flipped(Key, Offset) ->
     [Component = #{private := Private}] = maps:get(components, Key),
     save_and_load(Key#{components := [Component#{private := flip_byte(Private, Offset)}]}, identity, pq_pure).
+
+load_with_private_truncated(Key, Bytes) ->
+    [Component = #{private := <<Short:Bytes/binary, _/binary>>}] = maps:get(components, Key),
+    save_and_load(Key#{components := [Component#{private := Short}]}, identity, pq_pure).
 
 flip_byte(Bin, Offset) ->
     <<Head:Offset/binary, Byte, Tail/binary>> = Bin,
