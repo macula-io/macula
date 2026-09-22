@@ -216,7 +216,8 @@ change, the done criterion and the effort. The US profile goes first; the EU par
   header and payload as received, then the issuer (by node_id for `ucan_required`, by key id for
   `realm_member_required`), `aud` as the caller's node_id, `exp` (required) and `nbf`, and the capability of a
   membership policy. The station link authorizes CALL and STREAM_OPEN through it. Still to build: delegation chains
-  through `prf`, with narrowing, issuer scope and org keys through the org directory, and SHA-384 parent ids.
+  through `prf`, with narrowing, issuer scope and org keys through the org directory, and SHA-384 parent ids,
+  carried in CALL's and STREAM_OPEN's `proofs` (D7, chain transport).
 - **Change:**
   - `macula_did_nif` and its crate are removed (Raf, 2026-09-22): nothing called it in macula, macula-station,
     macula-realm, mcl-om or mcl-echo, and D7 retires the `did:macula:` names it built;
@@ -656,6 +657,9 @@ Every stack also meets these, each red first:
   - `macula-rust-ffi/Cargo.toml` and `macula-rust-ffi/src/lib.rs`
   - the other files that use Ed25519 (13 in total ✅)
 - **Change:**
+  - CALL and STREAM_OPEN carry a delegation chain's proof tokens in `proofs`, an unordered, caller-signed set of
+    JWTs found by the SHA-384 content id each child's `prf` names; an unreferenced proof is `malformed_frame`, and
+    a request without delegation carries no `proofs` (D7, chain transport, 2026-09-22);
   - the transport of WP 1.2: the aws-lc-rs features of V4, the profile's group, AES-256, one verification mode, no
     resumption, and the leaf through `peer_identity`;
   - `src/content.rs` makes and checks blocks and chunks with SHA-384; `Mcid` takes the 50-byte form with tag 2 only,
@@ -730,6 +734,9 @@ Every stack also meets these, each red first:
 - **Files in `macula-ts`:** `cabi` and the prebuild toolchain.
 - **Files in `macula-php`:** the FFI definitions and the build toolchain.
 - **Change:**
+  - CALL and STREAM_OPEN carry a delegation chain's proof tokens in `proofs`, an unordered, caller-signed set of
+    JWTs found by the SHA-384 content id each child's `prf` names; an unreferenced proof is `malformed_frame`, and
+    a request without delegation carries no `proofs` (D7, chain transport, 2026-09-22);
   - `go.mod` moves from `go 1.26.0` to `go 1.27`, because Go 1.26 has no ML-DSA ✅ and Go 1.27 has ML-KEM-1024,
     SecP384r1MLKEM1024 and ML-DSA-87 ✅;
   - `CurvePreferences` from the profile, no classical group ever offered, and the AES-256 suite;
@@ -827,6 +834,9 @@ Every stack also meets these, each red first:
   - the aioquic change (per D10)
   - `tests/test_pq_handshake.py` (new)
 - **Change:**
+  - CALL and STREAM_OPEN carry a delegation chain's proof tokens in `proofs`, an unordered, caller-signed set of
+    JWTs found by the SHA-384 content id each child's `prf` names; an unreferenced proof is `malformed_frame`, and
+    a request without delegation carries no `proofs` (D7, chain transport, 2026-09-22);
   - the aioquic change, client side only, in `tls.py`, as proven in V7:
     - the profile's offered groups and signature algorithms;
     - ML-KEM-1024 and SecP384r1MLKEM1024 key exchange in the client hello and its handler, with the ECDH secret
@@ -902,6 +912,8 @@ Every stack also meets these, each red first:
   - event dedup keys on the SHA-384 of a publication's `tbs` bytes as received, runs only on publications that
     verified, and keeps each hash until the publication's `expires_at`;
   - `SupervisedPubSub` and `RpcFacts` follow the seq rule of the signed frames design;
+  - CALL and STREAM_OPEN carry a delegation chain's proof tokens in `proofs`, as WP 4.1 to 4.3 do (D7, chain
+    transport, 2026-09-22);
   - Linux CI on an image with OpenSSL 3.5 or newer, and a `windows-latest` runner for the Schannel result.
 - **Files:**
   - `src/Macula/Macula.csproj`

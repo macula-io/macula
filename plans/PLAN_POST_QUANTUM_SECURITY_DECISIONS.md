@@ -244,6 +244,13 @@ table there gives each decision's answer in short and its status.
     name that says it does not authorize.
   - Membership tokens from the realm are presented only inside a CALL, so this rule needs no exception (Neptune,
     2026-09-10).
+  - **How a chain travels, decided by the Supervisor on 2026-09-22** (a wire detail inside decisions Raf has made):
+    CALL and STREAM_OPEN carry a chain's proof tokens in a separate field `proofs`, inside the part the caller
+    signs, next to `token`. `proofs` is an unordered set of JWTs: each proof is found by the SHA-384 content id a
+    child's `prf` names (D24), never by position. Every proof must be referenced from the chain, so an unreferenced
+    one is `malformed_frame`; the decoding rule bounds the count and the total bytes, with vectors in
+    `test/vectors/decoding_rule_v1.json`. A request without delegation carries no `proofs` field, byte-identical
+    to one without the rule.
 
   - **Amended and accepted by Raf on 2026-09-14,** two rules for the capability check of step 4:
     - **Narrowing along a chain.** Every token in a chain names the same realm. A realm grant covers realm, org and
