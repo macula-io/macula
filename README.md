@@ -21,7 +21,7 @@
 > **12.0.0-alpha.1, a pre-release: post-quantum KEY EXCHANGE, not
 > post-quantum authentication.** Every QUIC link negotiates
 > `SecP384r1MLKEM1024`, then `SecP256r1MLKEM768`, and nothing classical,
-> from the [`macula-pq`](https://crates.io/crates/macula-pq) crate.
+> from the [`macula-pqc`](https://crates.io/crates/macula-pqc) crate.
 > Authentication is not post-quantum yet: the certificate a listener
 > presents is classically signed, `macula_tls` generates RSA certificates,
 > and the ML-DSA pin primitive is not built. 12.0.0 is reserved for that.

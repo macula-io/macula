@@ -47,7 +47,7 @@
 -type definition() :: #{
     %% ⚠ DECLARED TARGET. NOT READ BY ANYTHING.
     %%
-    %% What a connection negotiates is decided by the `macula-pq' crate,
+    %% What a connection negotiates is decided by the `macula-pqc' crate,
     %% which every TLS configuration in `native/macula_quic' is built from,
     %% whatever the node's profile: SecP384r1MLKEM1024, then
     %% SecP256r1MLKEM768, nothing classical. Two nodes on this version
@@ -101,7 +101,7 @@ profiles() ->
 %%
 %% `key_exchange_group' IS A DECLARED TARGET AND NOT A DESCRIPTION OF THE
 %% WIRE. Nothing reads it. The QUIC NIF takes every TLS configuration from
-%% the `macula-pq' crate, whatever the node's profile, and offers
+%% the `macula-pqc' crate, whatever the node's profile, and offers
 %% SecP384r1MLKEM1024 then SecP256r1MLKEM768 and nothing classical, so two
 %% nodes on this version negotiate SecP384r1MLKEM1024.
 %%

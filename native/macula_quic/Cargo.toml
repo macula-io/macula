@@ -12,7 +12,7 @@ crate-type = ["cdylib"]
 [dependencies]
 rustler = "0.34"
 quinn = "0.11"
-# The key exchange comes from macula-pq, and nowhere else: every TLS
+# The key exchange comes from macula-pqc, and nowhere else: every TLS
 # configuration here starts from its client_builder()/server_builder(),
 # which offer SecP384r1MLKEM1024 then SecP256r1MLKEM768 and nothing
 # classical. So rustls selects no crypto provider of its own in this
@@ -21,7 +21,7 @@ quinn = "0.11"
 # It is NOT post-quantum SIGNATURES: the provider's signature algorithms are
 # ECDSA, Ed25519 and RSA, and rustls-webpki has no ML-DSA. This is
 # post-quantum key exchange and nothing else.
-macula-pq = "0.1"
+macula-pqc = "0.1"
 rustls = { version = "0.23", default-features = false, features = ["logging", "std", "tls12"] }
 rustls-pemfile = "2"
 webpki-roots = "1.0"
@@ -40,7 +40,7 @@ x509-parser = "0.18"
 
 [dev-dependencies]
 # The tests build the peers this NIF must refuse or still agree with: a
-# classical-only one, and one on the list deployed before macula-pq. Those
+# classical-only one, and one on the list deployed before macula-pqc. Those
 # come from aws-lc-rs's own groups.
 rustls = { version = "0.23", default-features = false, features = ["aws-lc-rs"] }
 

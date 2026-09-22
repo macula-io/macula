@@ -34,9 +34,9 @@ is never selected by a `~>` requirement on 11.x or earlier: depend on
 
 - **QUIC links now negotiate POST-QUANTUM KEY EXCHANGE, and nothing else.**
   The QUIC NIF builds every TLS configuration from
-  [`macula-pq`](https://crates.io/crates/macula-pq) 0.1, the published crate:
+  [`macula-pqc`](https://crates.io/crates/macula-pqc) 0.1, the published crate:
   `SecP384r1MLKEM1024` first, then `SecP256r1MLKEM768`, and no classical
-  group. Its ML-KEM is `macula-pq`'s own, verified against NIST's ACVP
+  group. Its ML-KEM is `macula-pqc`'s own, verified against NIST's ACVP
   vectors; the elliptic-curve half is `aws-lc-rs`. Two nodes on this version
   negotiate `SecP384r1MLKEM1024`, the group the `pq_hybrid` profile declares.
   A peer offering only classical groups cannot connect, whether it dials or

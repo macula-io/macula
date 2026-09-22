@@ -89,16 +89,16 @@ pub fn build_server_config(
 /// it built the same way.
 ///
 /// WHICH KEY EXCHANGE GROUPS A HANDSHAKE MAY NEGOTIATE IS DECIDED BY
-/// `macula-pq`, not here: its builder arrives with the groups and TLS 1.3
+/// `macula-pqc`, not here: its builder arrives with the groups and TLS 1.3
 /// already fixed, and keeps its provider where nothing here can edit it. See
-/// the conditions on that list in `macula-pq`'s documentation, and the tests
+/// the conditions on that list in `macula-pqc`'s documentation, and the tests
 /// below, which assert what this NIF actually offers.
 pub fn server_tls_config(
     certs: Vec<CertificateDer<'static>>,
     key: PrivateKeyDer<'static>,
     alpn: &[String],
 ) -> Result<rustls::ServerConfig, String> {
-    let builder = macula_pq::server_builder();
+    let builder = macula_pqc::server_builder();
     check_key_matches_leaf(&certs, &key, builder.crypto_provider())?;
     let mut crypto = builder
         .with_no_client_auth()
@@ -115,7 +115,7 @@ pub fn client_tls_config(
     verify: bool,
     pinned_pubkey: Option<Vec<u8>>,
 ) -> rustls::ClientConfig {
-    let builder = macula_pq::client_builder();
+    let builder = macula_pqc::client_builder();
     // The verifiers check handshake signatures with the same provider the
     // connection runs on, read from the builder rather than built again.
     let provider = builder.crypto_provider().clone();
@@ -328,11 +328,11 @@ mod tests {
     }
 
     /// `SecP384r1MLKEM1024`, code point `0x11ED`. rustls has no variant for
-    /// it and no rustls provider ships it: only `macula-pq` does.
+    /// it and no rustls provider ships it: only `macula-pqc` does.
     const SECP384R1MLKEM1024: NamedGroup = NamedGroup::Unknown(0x11ED);
 
-    /// Exactly `macula-pq`'s two groups, in its order.
-    fn macula_pq_groups() -> Vec<NamedGroup> {
+    /// Exactly `macula-pqc`'s two groups, in its order.
+    fn macula_pqc_groups() -> Vec<NamedGroup> {
         vec![SECP384R1MLKEM1024, NamedGroup::secp256r1MLKEM768]
     }
 
@@ -341,17 +341,17 @@ mod tests {
     }
 
     /// EVERY configuration this NIF builds takes its groups from
-    /// `macula-pq`: the listener's, and the dialler's in all three trust
+    /// `macula-pqc`: the listener's, and the dialler's in all three trust
     /// modes. A trust mode that built its own provider would be the one
     /// path a classical group could come back through.
     #[test]
-    fn every_configuration_offers_exactly_macula_pqs_groups() {
+    fn every_configuration_offers_exactly_macula_pqcs_groups() {
         let alpn = vec!["macula".to_string()];
         let (certs, key) = test_identity();
         let server = server_tls_config(certs, key, &alpn).expect("server config");
         assert_eq!(
             offered(server.crypto_provider()),
-            macula_pq_groups(),
+            macula_pqc_groups(),
             "listener"
         );
         for (mode, client) in [
@@ -364,7 +364,7 @@ mod tests {
         ] {
             assert_eq!(
                 offered(client.crypto_provider()),
-                macula_pq_groups(),
+                macula_pqc_groups(),
                 "dialler, {mode}"
             );
         }
@@ -410,13 +410,13 @@ mod tests {
 
     /// WHICH post-quantum group, not merely that it is one.
     ///
-    /// The preference order is `macula-pq`'s, and a decision rather than an
+    /// The preference order is `macula-pqc`'s, and a decision rather than an
     /// accident: `SecP384r1MLKEM1024` leads because it is the group the
     /// `pq_hybrid` profile declares, so two peers on this NIF negotiate it.
     /// Pinning the negotiated value here makes that decision something a
     /// change has to face rather than something a reordering can quietly
     /// undo. No other rustls provider has this group, so negotiating it also
-    /// shows the handshake ran on `macula-pq`'s key exchange.
+    /// shows the handshake ran on `macula-pqc`'s key exchange.
     ///
     /// If the order is changed deliberately, change this with it and say why.
     #[test]
@@ -425,12 +425,12 @@ mod tests {
     }
 
     /// `aws-lc-rs`'s post-quantum groups, as this NIF offered them at macula
-    /// `c91e0214`, before it moved onto `macula-pq`. That list was never
+    /// `c91e0214`, before it moved onto `macula-pqc`. That list was never
     /// released: 11.5.0 and earlier negotiate classical groups and cannot
     /// connect to this NIF at all, which the negative control below models.
     ///
     /// A peer on it has no `SecP384r1MLKEM1024`, so the two must agree on
-    /// `SecP256r1MLKEM768`, in both roles: `macula-pq`'s ML-KEM against
+    /// `SecP256r1MLKEM768`, in both roles: `macula-pqc`'s ML-KEM against
     /// `aws-lc-rs`'s, through this NIF's own configurations. A DIFFERENTIAL
     /// CHECK, green before the move and after.
     fn aws_lc_rs_post_quantum_list() -> CryptoProvider {

@@ -25,20 +25,20 @@
 %%%       it to have landed on.</li>
 %%% </ol>
 %%%
-%%% <b>THE LIST BELONGS TO `macula-pq'</b>, the crate on crates.io that every
+%%% <b>THE LIST BELONGS TO `macula-pqc'</b>, the crate on crates.io that every
 %%% TLS configuration in `native/macula_quic' is built from:
 %%% `SecP384r1MLKEM1024', then `SecP256r1MLKEM768', and nothing classical.
 %%% Two endpoints here negotiate `SecP384r1MLKEM1024'; the Rust test
 %%% `negotiated_key_exchange_group_is_the_one_we_lead_with' proves it, since
-%%% this file cannot see the group. A `macula-pq' version that changed the
+%%% this file cannot see the group. A `macula-pqc' version that changed the
 %%% list would reach this NIF through `Cargo.lock', so
-%%% `every_configuration_offers_exactly_macula_pqs_groups' pins the exact
+%%% `every_configuration_offers_exactly_macula_pqcs_groups' pins the exact
 %%% list and fails first.
 %%%
 %%% ⚠ THE SPLIT IS CONDITIONAL ON THE GROUP LIST STAYING STRICT. It works
 %%% because `macula_quic' offers NOTHING classical, so "the handshake
 %%% completed" leaves only post-quantum groups it could have completed on.
-%%% <b>If a classical fallback group is ever added, in `macula-pq' or here,
+%%% <b>If a classical fallback group is ever added, in `macula-pqc' or here,
 %%% that deduction dies and this file stops proving anything</b>: a completed
 %%% handshake would once again be consistent with X25519. Adding a fallback
 %%% therefore obliges you to add the negative control HERE, in Erlang,
