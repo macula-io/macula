@@ -14,6 +14,7 @@ Plans, designs and research for the `macula` SDK. The master index of every Macu
 | [DESIGN_PQ_HANDSHAKE_FRAMES.md][frames] | Handshake frames, bindings and status statements, byte for byte | Agreed |
 | [DESIGN_PQ_SIGNED_FRAMES_AND_RECORDS.md][signed] | Signed records and frames after the handshake | Agreed |
 | [DESIGN_PQ_DHT_SLOTS_AND_BUDGET.md][slots] | DHT slot bounds, slot admission and the verification budget | Agreed |
+| [CHECKLIST_MACULA_12_RELEASE.md][rel12] | The things that happen once, at the 12.0.0 cutover | Active |
 | [PLAN_11_ORG_NAMESPACE_MIGRATION.md][orgns] | What every provider changes before the namespace flip | Active |
 | [PLAN_RESOURCE_LEAK_HARDENING.md][leaks] | Resource and memory leak survey of the macula core | Survey complete |
 
@@ -39,6 +40,7 @@ Plans, designs and research for the `macula` SDK. The master index of every Macu
 [frames]: DESIGN_PQ_HANDSHAKE_FRAMES.md
 [signed]: DESIGN_PQ_SIGNED_FRAMES_AND_RECORDS.md
 [slots]: DESIGN_PQ_DHT_SLOTS_AND_BUDGET.md
+[rel12]: CHECKLIST_MACULA_12_RELEASE.md
 [orgns]: PLAN_11_ORG_NAMESPACE_MIGRATION.md
 [explore]: EXPLORATION_POST_QUANTUM.md
 [stations]: RESEARCH_SDK_STATION_SELECTION_SURVEY.md
