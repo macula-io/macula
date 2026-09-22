@@ -274,7 +274,7 @@ default_transfer_io() ->
 %% resolved.
 fetch_from(Endpoint) ->
     fun(_Pool, _Mcid, _TimeoutMs, Fetch) ->
-            Fetch(Endpoint, #{verify => none}, 1_000, 30_000)
+            Fetch(Endpoint, #{}, 1_000, 30_000)
     end.
 
 %% An ensure_station_link/4 that dials only Seed, as LinkPid.

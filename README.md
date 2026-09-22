@@ -18,13 +18,21 @@
 
 ---
 
-> **12.0.0-alpha.1, a pre-release: post-quantum KEY EXCHANGE, not
-> post-quantum authentication.** Every QUIC link negotiates
+> **12.0.0-alpha.1, a pre-release: post-quantum key exchange AND
+> post-quantum signatures.** Every QUIC link negotiates
 > `SecP384r1MLKEM1024`, then `SecP256r1MLKEM768`, and nothing classical,
-> from the [`macula-pqc`](https://crates.io/crates/macula-pqc) crate.
-> Authentication is not post-quantum yet: the certificate a listener
-> presents is classically signed, `macula_tls` generates RSA certificates,
-> and the ML-DSA pin primitive is not built. 12.0.0 is reserved for that.
+> from the [`macula-pqc`](https://crates.io/crates/macula-pqc) crate. Every
+> signature is ML-DSA-87 on
+> [`macula-mldsa`](https://crates.io/crates/macula-mldsa): node keys, UCAN
+> tokens, and the self-signed certificate a listener presents, which a dial
+> verifies and nothing classical can replace. A station dial is bound end to
+> end: the station's identity key signs a binding over its TLS key, the
+> client checks it against the certificate that handshake received, and the
+> CONNECT proof covers the same certificate.
+>
+> ⚠ **Erlang distribution over QUIC is the exception**: those dials run no
+> connection handshake yet, so they verify that the peer holds its
+> certificate's key and nothing about who it is.
 >
 > **Breaking on the wire:** a node on 11.5.0 or earlier cannot connect to
 > this version, in either direction. See [CHANGELOG.md](CHANGELOG.md).
@@ -69,7 +77,8 @@ Kademlia DHT. Your service or daemon connects **outbound** to one or more
 stations: no open ports, NAT-friendly, no VPN. It provides:
 
 - **RPC (request/response)** — discover a provider in the DHT, then **dial its
-  serving station directly** (one hop), with optional realm-CA trust verification.
+  serving station directly** (one hop), with the provider's authorization
+  checked against the realm-signed org directory.
 - **Pub/Sub** — topic-based event fan-out across stations, with per-publisher
   ordered delivery.
 - **Content** — content-addressed sharing and live streaming (MCID).
@@ -193,7 +202,7 @@ Moving them to the profile's algorithm is one of the steps left before
 
 | Guide | Description |
 |-------|-------------|
-| [Connecting](docs/guides/shared/CONNECTING_GUIDE.md) | Pools, seeds, TLS policy, reconnection |
+| [Connecting](docs/guides/shared/CONNECTING_GUIDE.md) | Pools, seeds, expected identities, reconnection |
 | [PubSub Guide](docs/guides/pubsub/PUBSUB_GUIDE.md) | Fan-out + per-publisher delivery ordering |
 | [PubSub Protocol](docs/guides/pubsub/PUBSUB_PROTOCOL.md) | Raw `subscribe`/`publish` primitives |
 | [Topic Naming](docs/guides/shared/TOPIC_NAMING_GUIDE.md) | Event-type topics, IDs in payloads |

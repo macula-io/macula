@@ -36,10 +36,8 @@ dedicated_stream_open_test_() ->
 
 setup() ->
     {ok, _} = application:ensure_all_started(macula),
-    {Pub, Priv} = crypto:generate_key(eddsa, ed25519),
     {ok, {CertPem, KeyPem}} =
-        macula_quic:generate_self_signed_cert(
-            iolist_to_binary(Pub), iolist_to_binary(Priv), [<<"localhost">>, <<"127.0.0.1">>]),
+        macula_quic:generate_self_signed_cert(macula_test_identity:tls_seed(), [<<"localhost">>, <<"127.0.0.1">>]),
     Dir = macula_test_tmp:dir("macula-peering-stream-open"),
     Cert = filename:join(Dir, "listener.crt"),
     Key = filename:join(Dir, "listener.key"),

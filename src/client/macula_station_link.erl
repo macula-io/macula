@@ -177,17 +177,13 @@
 -type opts() :: #{
     %% Endpoint to dial. Either a URL (https://host:port) or a
     %% pre-parsed #{host, port} map. The map form may carry the
-    %% `macula_peering_conn:connect_opts()' trust keys, forwarded
+    %% `macula_peering_conn:connect_opts()' trust key, forwarded
     %% verbatim into the dial target:
     %%   `expected_node_id' — the station's node_id, which the
     %%       handshake checks (D16); required, and a link without one
-    %%       refuses to start;
-    %%   `verify' — `none' (the default) or `webpki'. A station's leaf
-    %%       is self-signed or issued by an unrelated PKI, so a station
-    %%       dial verifies no chain and the handshake names the peer
-    %%       instead; an unverified dial logs a warning per dial.
-    %%       `webpki' is for a dial to something whose chain is worth
-    %%       checking, and the dial verifies against the built-in roots.
+    %%       refuses to start.
+    %% The dial itself trusts the station in one way only: its handshake
+    %% signature under its ML-DSA-87 certificate's key (`macula_quic').
     seed     := url() | #{host := binary() | string(),
                           port := inet:port_number(),
                           _    => _},
@@ -1279,9 +1275,14 @@ identity_checked(_NotAnIdentityKey, _Issuer, _Opts) ->
 %% macula-station calls `macula_peering:connect/1' directly and never
 %% builds a station link, so its `pin_tls_cert => false' target is
 %% untouched. `true' cannot be honoured because no pin primitive can
-%% express an ML-DSA-87 identity; see macula#15.
+%% express an ML-DSA-87 identity; see macula#15. `verify' is refused here
+%% for the same reason, in any value: there is one verification mode
+%% (`macula:trust_options_checked/1'). `macula_peering_conn' refuses it on
+%% a dial target too, which is the path the fleet does take.
 seed_checked(#{pin_tls_cert := true}, _Key, _Profile, _Issuer) ->
     {error, {seed, {pin_tls_cert, no_pin_primitive_for_mldsa87_identity}}};
+seed_checked(#{verify := _}, _Key, _Profile, _Issuer) ->
+    {error, {seed, {verify, one_verification_mode}}};
 seed_checked(#{expected_node_id := <<_:256>>} = Seed, Key, Profile, Issuer) ->
     {ok, Seed, Key, Profile, Issuer};
 seed_checked(_Seed, _Key, _Profile, _Issuer) ->
@@ -2999,16 +3000,16 @@ detail_or_none(error) -> undefined.
 %% Fold TLS-policy opts (`verify' / `expected_node_id') from the link
 %% opts into the seed map, so they reach the peering target at connect.
 %%
-%% `pin_tls_cert' is NOT folded, and is not a key this link understands.
-%% It was read by `macula_peering_conn:dial_trust_opts/1' until 11.0.0
-%% removed that function; nothing has read it since. `macula:connect/2'
-%% and the other public entry points refuse `pin_tls_cert => true' rather
-%% than accept a value that does nothing, and `seed_checked/4' above
-%% refuses it on the seed map. See macula#15.
+%% `pin_tls_cert' and `verify' are NOT folded, and are not keys this link
+%% understands. `pin_tls_cert' was read by
+%% `macula_peering_conn:dial_trust_opts/1' until 11.0.0 removed that
+%% function; `verify' chose a TLS mode until 12.0.0 left one. `macula:connect/2'
+%% and the other public entry points refuse both rather than accept a
+%% value that does nothing. See macula#15.
 %% The trust keys a seed map names stand, and the link's options fill only the ones it leaves out, so a pool-wide
 %% expected_node_id never replaces a seed's own pin.
 add_tls_opts(Seed, Opts) ->
-    maps:merge(maps:with([verify, expected_node_id], Opts), Seed).
+    maps:merge(maps:with([expected_node_id], Opts), Seed).
 
 parse_seed(#{host := _, port := _} = Map) ->
     Map;

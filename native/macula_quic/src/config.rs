@@ -7,8 +7,6 @@ use std::net::{IpAddr, SocketAddr, UdpSocket};
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::cert;
-
 /// What a listener was started with, apart from its certificate, so that a
 /// certificate reload builds the next server configuration the same way.
 pub struct ServerSettings {
@@ -88,11 +86,12 @@ pub fn build_server_config(
 /// configuration this NIF actually serves with, rather than a second copy of
 /// it built the same way.
 ///
-/// WHICH KEY EXCHANGE GROUPS A HANDSHAKE MAY NEGOTIATE IS DECIDED BY
-/// `macula-pqc`, not here: its builder arrives with the groups and TLS 1.3
-/// already fixed, and keeps its provider where nothing here can edit it. See
-/// the conditions on that list in `macula-pqc`'s documentation, and the tests
-/// below, which assert what this NIF actually offers.
+/// WHICH KEY EXCHANGE GROUPS AND SIGNATURES A HANDSHAKE MAY USE IS DECIDED BY
+/// `macula-pqc`, not here: its builder arrives with the groups, ML-DSA-87 and
+/// TLS 1.3 already fixed, and keeps its provider where nothing here can edit
+/// it. So the certificate and key must be ML-DSA-87, as `cert.rs` makes them.
+/// See the conditions on those lists in `macula-pqc`'s documentation, and the
+/// tests below, which assert what this NIF actually offers.
 pub fn server_tls_config(
     certs: Vec<CertificateDer<'static>>,
     key: PrivateKeyDer<'static>,
@@ -110,30 +109,20 @@ pub fn server_tls_config(
 
 /// The rustls half of a dial's configuration, before Quinn wraps it. See
 /// `server_tls_config` for why this is a seam rather than inlined.
-pub fn client_tls_config(
-    alpn: &[String],
-    verify: bool,
-    pinned_pubkey: Option<Vec<u8>>,
-) -> rustls::ClientConfig {
-    let builder = macula_pqc::client_builder();
-    // The verifiers check handshake signatures with the same provider the
-    // connection runs on, read from the builder rather than built again.
-    let provider = builder.crypto_provider().clone();
-    let mut crypto = if let Some(pk) = pinned_pubkey {
-        builder
-            .dangerous()
-            .with_custom_certificate_verifier(Arc::new(cert::PubkeyPinVerifier::new(pk, provider)))
-            .with_no_client_auth()
-    } else if verify {
-        let mut roots = rustls::RootCertStore::empty();
-        roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-        builder.with_root_certificates(roots).with_no_client_auth()
-    } else {
-        builder
-            .dangerous()
-            .with_custom_certificate_verifier(Arc::new(SkipServerVerification(provider)))
-            .with_no_client_auth()
-    };
+///
+/// ONE VERIFICATION MODE (plan decisions D12 and D16): the station presents
+/// one self-signed ML-DSA-87 certificate, and the dial checks the station's
+/// TLS 1.3 handshake signature under that certificate's key, with
+/// `macula-pqc`'s `KeyPossessionVerifier`. That proves the station holds the
+/// key and nothing more. Who the station is, is proved by the connection
+/// handshake, which checks the station identity's binding over this key
+/// against the leaf this connection received (`nif_peer_leaf`). There is no
+/// certificate authority to consult: none issues ML-DSA certificates.
+pub fn client_tls_config(alpn: &[String]) -> rustls::ClientConfig {
+    let mut crypto = macula_pqc::client_builder()
+        .dangerous()
+        .with_custom_certificate_verifier(Arc::new(macula_pqc::KeyPossessionVerifier::new()))
+        .with_no_client_auth();
     crypto.alpn_protocols = alpn.iter().map(|s| s.as_bytes().to_vec()).collect();
     crypto
 }
@@ -172,25 +161,14 @@ fn apply_flow_control(
     Ok(())
 }
 
-/// Build a Quinn ClientConfig.
-///
-/// Three trust modes:
-///   - `pinned_pubkey = Some(pk)` — pubkey-anchored (sovereign overlay
-///     path). Validates the leaf cert's Ed25519 SubjectPublicKeyInfo
-///     against `pk`. No CA chain. See PLAN_SOVEREIGN_OVERLAY_PHASE1
-///     §4.4.
-///   - `pinned_pubkey = None`, `verify = true` — webpki + system CAs
-///     (existing public-IP path with Let's Encrypt-anchored certs).
-///   - `pinned_pubkey = None`, `verify = false` — skip all verification
-///     (development/test only).
+/// Build a Quinn ClientConfig, verifying the station as `client_tls_config`
+/// describes.
 pub fn build_client_config(
     alpn: &[String],
-    verify: bool,
-    pinned_pubkey: Option<Vec<u8>>,
     idle_timeout_ms: u64,
     keep_alive_ms: u64,
 ) -> Result<ClientConfig, String> {
-    let crypto = client_tls_config(alpn, verify, pinned_pubkey);
+    let crypto = client_tls_config(alpn);
 
     let mut transport = TransportConfig::default();
     transport.max_idle_timeout(Some(
@@ -260,55 +238,16 @@ fn load_key(path: &str) -> Result<PrivateKeyDer<'static>, String> {
         .ok_or_else(|| format!("no private key found in {}", path))
 }
 
-// ── Development mode: skip TLS verification ────────────────────
-
-/// Accepts any server certificate, and states the signature schemes of the
-/// provider it is given.
-#[derive(Debug)]
-struct SkipServerVerification(Arc<rustls::crypto::CryptoProvider>);
-
-impl rustls::client::danger::ServerCertVerifier for SkipServerVerification {
-    fn verify_server_cert(
-        &self,
-        _end_entity: &CertificateDer<'_>,
-        _intermediates: &[CertificateDer<'_>],
-        _server_name: &rustls::pki_types::ServerName<'_>,
-        _ocsp_response: &[u8],
-        _now: rustls::pki_types::UnixTime,
-    ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
-        Ok(rustls::client::danger::ServerCertVerified::assertion())
-    }
-
-    fn verify_tls12_signature(
-        &self,
-        _message: &[u8],
-        _cert: &CertificateDer<'_>,
-        _dss: &rustls::DigitallySignedStruct,
-    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
-        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
-    }
-
-    fn verify_tls13_signature(
-        &self,
-        _message: &[u8],
-        _cert: &CertificateDer<'_>,
-        _dss: &rustls::DigitallySignedStruct,
-    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
-        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
-    }
-
-    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
-        self.0.signature_verification_algorithms.supported_schemes()
-    }
-}
-
 // ── Tests ──────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use rustls::pki_types::ServerName;
-    use rustls::{ClientConnection, Connection, NamedGroup, ServerConnection};
+    use rustls::sign::SingleCertAndKey;
+    use rustls::{ClientConnection, Connection, NamedGroup, ServerConnection, SignatureScheme};
+
+    use crate::cert;
 
     /// The key exchange groups whose shared secret a quantum computer cannot
     /// recover from the wire: the ML-KEM groups and the hybrids that carry
@@ -340,32 +279,42 @@ mod tests {
         provider.kx_groups.iter().map(|g| g.name()).collect()
     }
 
+    /// `macula-pqc`'s provider, read back from one of its builders: the only
+    /// way to hold it outside that crate. The peers below take its signature
+    /// verification and key loading, so what differs from ours is only what
+    /// each test changes.
+    fn facade_provider() -> CryptoProvider {
+        (**macula_pqc::server_builder().crypto_provider()).clone()
+    }
+
     /// EVERY configuration this NIF builds takes its groups from
-    /// `macula-pqc`: the listener's, and the dialler's in all three trust
-    /// modes. A trust mode that built its own provider would be the one
-    /// path a classical group could come back through.
+    /// `macula-pqc`: the listener's and the dialler's. A configuration that
+    /// built its own provider would be the one path a classical group could
+    /// come back through.
     #[test]
     fn every_configuration_offers_exactly_macula_pqcs_groups() {
         let alpn = vec!["macula".to_string()];
         let (certs, key) = test_identity();
         let server = server_tls_config(certs, key, &alpn).expect("server config");
-        assert_eq!(
-            offered(server.crypto_provider()),
-            macula_pqc_groups(),
-            "listener"
-        );
-        for (mode, client) in [
-            (
-                "pinned key",
-                client_tls_config(&alpn, false, Some(vec![7u8; 32])),
-            ),
-            ("webpki roots", client_tls_config(&alpn, true, None)),
-            ("no verification", client_tls_config(&alpn, false, None)),
-        ] {
+        let client = client_tls_config(&alpn);
+        assert_eq!(offered(server.crypto_provider()), macula_pqc_groups(), "listener");
+        assert_eq!(offered(client.crypto_provider()), macula_pqc_groups(), "dialler");
+    }
+
+    /// And every configuration signs and verifies ML-DSA-87 alone, the
+    /// listener's handshake signature and the dialler's check of it. A
+    /// classical scheme here would be a classical signature on the wire.
+    #[test]
+    fn every_configuration_verifies_ml_dsa_87_alone() {
+        let alpn = vec!["macula".to_string()];
+        let (certs, key) = test_identity();
+        let server = server_tls_config(certs, key, &alpn).expect("server config");
+        let client = client_tls_config(&alpn);
+        for (side, provider) in [("listener", server.crypto_provider()), ("dialler", client.crypto_provider())] {
             assert_eq!(
-                offered(client.crypto_provider()),
-                macula_pqc_groups(),
-                "dialler, {mode}"
+                provider.signature_verification_algorithms.supported_schemes(),
+                vec![SignatureScheme::ML_DSA_87],
+                "{side}"
             );
         }
     }
@@ -432,7 +381,8 @@ mod tests {
     /// A peer on it has no `SecP384r1MLKEM1024`, so the two must agree on
     /// `SecP256r1MLKEM768`, in both roles: `macula-pqc`'s ML-KEM against
     /// `aws-lc-rs`'s, through this NIF's own configurations. A DIFFERENTIAL
-    /// CHECK, green before the move and after.
+    /// CHECK, green before the move and after. The peer signs and verifies
+    /// as we do, so the groups are the only difference.
     fn aws_lc_rs_post_quantum_list() -> CryptoProvider {
         CryptoProvider {
             kx_groups: vec![
@@ -441,7 +391,7 @@ mod tests {
                 rustls::crypto::aws_lc_rs::kx_group::MLKEM1024,
                 rustls::crypto::aws_lc_rs::kx_group::MLKEM768,
             ],
-            ..rustls::crypto::aws_lc_rs::default_provider()
+            ..facade_provider()
         }
     }
 
@@ -450,39 +400,17 @@ mod tests {
         let alpn = vec!["macula".to_string()];
         let (certs, key) = test_identity();
 
-        let mut their_server = rustls::ServerConfig::builder_with_provider(Arc::new(aws_lc_rs_post_quantum_list()))
-            .with_safe_default_protocol_versions()
-            .expect("versions")
-            .with_no_client_auth()
-            .with_single_cert(certs.clone(), key.clone_key())
-            .expect("server config");
-        their_server.alpn_protocols = vec![b"macula".to_vec()];
-        let we_dial = handshake(client_tls_config(&alpn, false, None), their_server);
-
-        let mut their_client = rustls::ClientConfig::builder_with_provider(Arc::new(aws_lc_rs_post_quantum_list()))
-            .with_safe_default_protocol_versions()
-            .expect("versions")
-            .dangerous()
-            .with_custom_certificate_verifier(Arc::new(SkipServerVerification(Arc::new(
-                aws_lc_rs_post_quantum_list(),
-            ))))
-            .with_no_client_auth();
-        their_client.alpn_protocols = vec![b"macula".to_vec()];
+        let we_dial = handshake(
+            client_tls_config(&alpn),
+            peer_server(aws_lc_rs_post_quantum_list(), certs.clone(), key.clone_key()),
+        );
         let they_dial = handshake(
-            their_client,
+            peer_client(aws_lc_rs_post_quantum_list()),
             server_tls_config(certs, key, &alpn).expect("ours"),
         );
 
-        assert_eq!(
-            we_dial,
-            Ok(NamedGroup::secp256r1MLKEM768),
-            "we dial an aws-lc-rs peer"
-        );
-        assert_eq!(
-            they_dial,
-            Ok(NamedGroup::secp256r1MLKEM768),
-            "an aws-lc-rs peer dials us"
-        );
+        assert_eq!(we_dial, Ok(NamedGroup::secp256r1MLKEM768), "we dial an aws-lc-rs peer");
+        assert_eq!(they_dial, Ok(NamedGroup::secp256r1MLKEM768), "an aws-lc-rs peer dials us");
     }
 
     /// THE NEGATIVE CONTROL, and without it the two tests above are worth
@@ -507,34 +435,14 @@ mod tests {
                 rustls::crypto::aws_lc_rs::kx_group::SECP256R1,
                 rustls::crypto::aws_lc_rs::kx_group::SECP384R1,
             ],
-            ..rustls::crypto::aws_lc_rs::default_provider()
+            ..facade_provider()
         };
-
-        // We dial a classical-only listener.
         let (certs, key) = test_identity();
-        let mut server_cfg = rustls::ServerConfig::builder_with_provider(Arc::new(classical()))
-            .with_safe_default_protocol_versions()
-            .expect("versions")
-            .with_no_client_auth()
-            .with_single_cert(certs.clone(), key.clone_key())
-            .expect("server config");
-        server_cfg.alpn_protocols = vec![b"macula".to_vec()];
-        let we_dial = handshake(client_tls_config(&alpn, false, None), server_cfg);
-
-        // A classical-only dialler reaches our listener.
-        let mut client_cfg = rustls::ClientConfig::builder_with_provider(Arc::new(classical()))
-            .with_safe_default_protocol_versions()
-            .expect("versions")
-            .dangerous()
-            .with_custom_certificate_verifier(Arc::new(SkipServerVerification(Arc::new(
-                classical(),
-            ))))
-            .with_no_client_auth();
-        client_cfg.alpn_protocols = vec![b"macula".to_vec()];
-        let they_dial = handshake(
-            client_cfg,
-            server_tls_config(certs, key, &alpn).expect("ours"),
+        let we_dial = handshake(
+            client_tls_config(&alpn),
+            peer_server(classical(), certs.clone(), key.clone_key()),
         );
+        let they_dial = handshake(peer_client(classical()), server_tls_config(certs, key, &alpn).expect("ours"));
 
         assert!(
             we_dial.is_err(),
@@ -549,34 +457,119 @@ mod tests {
         );
     }
 
+    /// ⛔ THE DIALLER'S NEGATIVE CONTROL. The dial trusts no certificate
+    /// authority, so the station's handshake signature under its
+    /// certificate's key is the one thing TLS proves for it. A station
+    /// presenting one ML-DSA-87 certificate and signing with another
+    /// ML-DSA-87 key must fail: a dialler that let that through would pass
+    /// every other test in this file. The positive twin, the same harness
+    /// with the certificate's own key, completes.
+    #[test]
+    fn the_dialler_refuses_a_station_that_cannot_sign_for_its_certificate() {
+        let alpn = vec!["macula".to_string()];
+        let (certs, key) = test_identity();
+        let (_other_certs, other_key) = cert::generate_self_signed(&[3u8; 32], &["localhost".to_string()])
+            .expect("another identity");
+        let wrong_key = handshake(client_tls_config(&alpn), presenting(certs.clone(), other_key.into()));
+        assert!(
+            wrong_key.is_err(),
+            "a station signing with a key other than its certificate's was accepted: {wrong_key:?}"
+        );
+        assert_eq!(
+            handshake(client_tls_config(&alpn), presenting(certs, key)),
+            Ok(SECP384R1MLKEM1024)
+        );
+    }
+
+    /// A station with a classical certificate, as every 11.x station has, is
+    /// refused: it cannot sign anything this dialler verifies.
+    #[test]
+    fn the_dialler_refuses_a_classical_station() {
+        let alpn = vec!["macula".to_string()];
+        let key = rcgen::KeyPair::generate().expect("ECDSA key");
+        let certificate = rcgen::CertificateParams::new(vec!["localhost".to_string()])
+            .expect("names")
+            .self_signed(&key)
+            .expect("ECDSA certificate");
+        let classical_station = rustls::ServerConfig::builder_with_provider(Arc::new(
+            rustls::crypto::aws_lc_rs::default_provider(),
+        ))
+        .with_safe_default_protocol_versions()
+        .expect("versions")
+        .with_no_client_auth()
+        .with_single_cert(
+            vec![certificate.der().clone()],
+            rustls::pki_types::PrivatePkcs8KeyDer::from(key.serialize_der()).into(),
+        )
+        .expect("classical station");
+        let agreed = handshake(client_tls_config(&alpn), classical_station);
+        assert!(agreed.is_err(), "a station with an ECDSA certificate was accepted: {agreed:?}");
+    }
+
     /// Runs one handshake between the NIF's own server and client
     /// configurations and returns the group they agreed on.
     fn negotiated_group() -> NamedGroup {
         let alpn = vec!["macula".to_string()];
         let (certs, key) = test_identity();
         let server_cfg = server_tls_config(certs, key, &alpn).expect("server config");
-        handshake(client_tls_config(&alpn, false, None), server_cfg)
+        handshake(client_tls_config(&alpn), server_cfg)
             .expect("the NIF's own configurations agree with each other")
     }
 
-    /// A self-signed Ed25519 identity, made by the NIF's own generator so the
+    /// A station identity, made by the NIF's own generator so the
     /// certificate under test is the kind it really issues.
     fn test_identity() -> (Vec<CertificateDer<'static>>, PrivateKeyDer<'static>) {
-        let (cert_pem, key_pem) =
-            cert::generate_self_signed(&[7u8; 32], &[9u8; 32], &["localhost".to_string()])
-                .expect("self-signed cert");
-        let certs = rustls_pemfile::certs(&mut cert_pem.as_bytes())
-            .collect::<Result<Vec<_>, _>>()
-            .expect("read certs");
-        let key = rustls_pemfile::private_key(&mut key_pem.as_bytes())
-            .expect("read key")
-            .expect("a private key");
-        (certs, key)
+        let (certificate, key) =
+            cert::generate_self_signed(&[9u8; 32], &["localhost".to_string()]).expect("self-signed cert");
+        (vec![certificate], key.into())
+    }
+
+    /// A server on another provider, presenting `certs`.
+    fn peer_server(
+        provider: CryptoProvider,
+        certs: Vec<CertificateDer<'static>>,
+        key: PrivateKeyDer<'static>,
+    ) -> rustls::ServerConfig {
+        let mut config = rustls::ServerConfig::builder_with_provider(Arc::new(provider))
+            .with_safe_default_protocol_versions()
+            .expect("versions")
+            .with_no_client_auth()
+            .with_single_cert(certs, key)
+            .expect("server config");
+        config.alpn_protocols = vec![b"macula".to_vec()];
+        config
+    }
+
+    /// A client on another provider, trusting a station as ours does.
+    fn peer_client(provider: CryptoProvider) -> rustls::ClientConfig {
+        let mut config = rustls::ClientConfig::builder_with_provider(Arc::new(provider))
+            .with_safe_default_protocol_versions()
+            .expect("versions")
+            .dangerous()
+            .with_custom_certificate_verifier(Arc::new(macula_pqc::KeyPossessionVerifier::new()))
+            .with_no_client_auth();
+        config.alpn_protocols = vec![b"macula".to_vec()];
+        config
+    }
+
+    /// A station on `macula-pqc`'s builder presenting `certs` and signing
+    /// with `key`, whatever the two are: a resolver skips the check
+    /// `with_single_cert` makes that the key is the certificate's.
+    fn presenting(certs: Vec<CertificateDer<'static>>, key: PrivateKeyDer<'static>) -> rustls::ServerConfig {
+        let signing_key = facade_provider()
+            .key_provider
+            .load_private_key(key)
+            .expect("an ML-DSA-87 key");
+        let mut config = macula_pqc::server_builder()
+            .with_no_client_auth()
+            .with_cert_resolver(Arc::new(SingleCertAndKey::from(CertifiedKey::new(certs, signing_key))));
+        config.alpn_protocols = vec![b"macula".to_vec()];
+        config
     }
 
     /// One real handshake, returning the group the two sides agreed on or the
     /// reason they could not. A failure to AGREE is a result here, not an
-    /// error: it is what the negative control asserts.
+    /// error: it is what the negative controls assert.
     fn handshake(
         client_cfg: rustls::ClientConfig,
         server_cfg: rustls::ServerConfig,

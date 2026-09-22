@@ -47,16 +47,29 @@ Resolving a specific provider's station from a signed DHT record (`procedure_adv
 ## Identity
 
 ### DID (Decentralized Identifier)
-W3C-standard identifier for entities. Macula uses `did:macula:` method with hierarchical names (e.g., `did:macula:io.macula.acme`). Each level is controlled by its parent.
+W3C-standard identifier for entities. A UCAN token names its issuer as a
+`did:key`, the multicodec of its ML-DSA-87 public key in base58btc
+(`macula_ucan`). The hierarchical `did:macula:` method is retired (plan
+decision D7), and nothing builds or parses one.
 
 ### UCAN (User Controlled Authorization Network)
 Capability token based on JWT. Contains issuer, audience, capabilities, and optional proof chain. Used for delegated authorization without a central authority.
 
-### Ed25519
-Elliptic curve signature scheme used for all Macula cryptographic operations: node identity, UCAN signing, DID verification.
+### ML-DSA-87
+The post-quantum signature scheme (FIPS 204) every Macula signature uses: node
+identity, CONNECT proofs, UCAN tokens, records and the TLS certificate a
+listener presents. In the `pq_hybrid` profile it is paired with RSA-PSS in the
+IETF LAMPS composite `id-MLDSA87-RSA4096-PSS-SHA512`. Ed25519 signs nothing in
+Macula any more.
+
+### SHA-384
+The hash behind content addressing: an MCID is tag 2 and a 48-byte SHA-384
+digest, and an id of any other shape is refused (plan decision D24).
 
 ### BLAKE3
-Fast cryptographic hash function used for content addressing (MCID). 32-byte output, ~20x faster than SHA-256 via Rust NIF.
+Fast cryptographic hash, ~20x SHA-256 through the Rust NIF
+(`macula_blake3_nif`), with an Erlang fallback. No module in macula calls it
+today, and it is not what addresses content: that is SHA-384 above.
 
 ---
 

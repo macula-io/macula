@@ -127,8 +127,8 @@ pub struct DialResource(PendingResult);
 /// last reference, as when the owning process exits, cancels the open.
 pub struct StreamOpenResource(PendingResult);
 
-/// NIF: async_connect(Tag, Host, Port, Alpn, Verify, VerifyPubkey,
-///                    IdleTimeoutMs, KeepAliveMs, TimeoutMs)
+/// NIF: async_connect(Tag, Host, Port, Alpn, IdleTimeoutMs, KeepAliveMs,
+///                    TimeoutMs)
 ///   -> {ok, DialRef} | {error, Reason}
 ///
 /// Starts a dial on the QUIC runtime and returns at once. The calling
@@ -136,14 +136,10 @@ pub struct StreamOpenResource(PendingResult);
 /// `{quic, connect_failed, Tag, Reason}`. One deadline covers resolution,
 /// endpoint acquisition and the handshake.
 ///
-/// `verify_pubkey` is a 32-byte Ed25519 pubkey to pin against the
-/// leaf cert's SubjectPublicKeyInfo. An empty binary disables
-/// pinning and falls back to `verify` semantics (system-CA or skip).
-///
-/// `verify_pubkey` is `Binary<'a>` rather than `Vec<u8>` because
-/// rustler's `Vec<u8>` decoder requires a list term and rejects
-/// Erlang binaries (which is how every caller passes pubkeys).
-/// See cert.rs:nif_generate_self_signed_cert for the same pattern.
+/// The station is verified in the one way there is
+/// (`config::client_tls_config`): its handshake signature under the key of
+/// the ML-DSA-87 certificate it presents. Who it is, the caller checks
+/// against that certificate afterwards (`nif_peer_leaf`).
 #[rustler::nif]
 fn nif_async_connect<'a>(
     env: Env<'a>,
@@ -151,23 +147,14 @@ fn nif_async_connect<'a>(
     host: String,
     port: u32,
     alpn: Vec<String>,
-    verify: bool,
-    verify_pubkey: Binary<'a>,
     idle_timeout_ms: u64,
     keep_alive_ms: u64,
     timeout_ms: u64,
 ) -> NifResult<Term<'a>> {
     let owner = env.pid();
 
-    let pinned = if verify_pubkey.is_empty() {
-        None
-    } else {
-        Some(verify_pubkey.as_slice().to_vec())
-    };
-
-    let client_config =
-        config::build_client_config(&alpn, verify, pinned, idle_timeout_ms, keep_alive_ms)
-            .map_err(|e| rustler::Error::Term(Box::new(e)))?;
+    let client_config = config::build_client_config(&alpn, idle_timeout_ms, keep_alive_ms)
+        .map_err(|e| rustler::Error::Term(Box::new(e)))?;
 
     let reply_env = OwnedEnv::new();
     let saved_tag = reply_env.save(tag);

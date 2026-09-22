@@ -8,6 +8,7 @@
 
 -include_lib("eunit/include/eunit.hrl").
 -include_lib("kernel/include/net_address.hrl").
+-include_lib("kernel/include/file.hrl").
 
 %%%===================================================================
 %%% Tests - Node Name Parsing
@@ -162,3 +163,44 @@ extract_frame_partial_timeout_test() ->
     ?assertEqual(<<0, 5, "hel">>, erlang:get({macula_dist_recv_buf, Stream})),
     %% Clean up proc dict.
     erlang:erase({macula_dist_recv_buf, Stream}).
+
+%%====================================================================
+%% The direct-mode QUIC listener and its certificate
+%%====================================================================
+
+%% A direct-mode listener whose certificate directory is empty makes its
+%% own certificate, self-signed ML-DSA-87 on a new TLS key (D12, D29), and
+%% a QUIC dial to it completes. A dial trusts only an ML-DSA-87 certificate,
+%% so the completed dial is what shows the certificate's kind.
+direct_listener_makes_its_certificate_and_takes_a_dial_test_() ->
+    {timeout, 60,
+     fun() ->
+         Dir = macula_test_tmp:dir("macula-dist-listener"),
+         Port = free_udp_port(),
+         ok = application:set_env(kernel, macula_dist_cert_dir, Dir),
+         ok = application:set_env(kernel, macula_dist_port, Port),
+         try
+             {ok, {Listener, _Address, 1}} = macula_dist:listen(macula_dist_listener_test),
+             ?assert(filelib:is_regular(filename:join(Dir, "cert.pem"))),
+             ?assert(filelib:is_regular(filename:join(Dir, "key.pem"))),
+             {ok, #file_info{mode = Mode}} = file:read_file_info(filename:join(Dir, "key.pem")),
+             ?assertEqual(8#600, Mode band 8#777),
+             ok = macula_quic:async_accept(Listener),
+             {ok, Conn} = macula_quic:connect("127.0.0.1", Port, [{alpn, ["macula-dist"]}], 10_000),
+             receive {quic, new_conn, Accepted, _Info} -> ok = macula_quic:close_connection(Accepted)
+             after 10_000 -> ?assert(false)
+             end,
+             ok = macula_quic:close_connection(Conn),
+             ok = macula_quic:close_listener(Listener)
+         after
+             ok = application:unset_env(kernel, macula_dist_cert_dir),
+             ok = application:unset_env(kernel, macula_dist_port),
+             ok = file:del_dir_r(Dir)
+         end
+     end}.
+
+free_udp_port() ->
+    {ok, Socket} = gen_udp:open(0, [binary, {ip, {127, 0, 0, 1}}]),
+    {ok, Port} = inet:port(Socket),
+    ok = gen_udp:close(Socket),
+    Port.

@@ -206,7 +206,7 @@ stale_connection_event() ->
                                              fun(Dir) -> relay_listener(Dir, Port) end),
     ok = macula_quic:async_accept(Listener),
     {ok, _ClientConn} = macula_quic:connect(<<"127.0.0.1">>, Port,
-                                            [{alpn, [?RELAY_ALPN]} | macula_tls:quic_client_opts()],
+                                            [{alpn, [?RELAY_ALPN]}],
                                             5_000),
     Event = receive
                 {quic, new_conn, _Conn, _Info} = NewConn -> NewConn
@@ -220,9 +220,8 @@ stale_connection_event() ->
 %% A listener on `Port' with the relay's ALPN, whose self-signed certificate
 %% and key live in `Dir' while listen reads them.
 relay_listener(Dir, Port) ->
-    {Pub, Priv} = ephemeral_keypair(),
     {ok, {CertPem, KeyPem}} =
-        macula_quic:generate_self_signed_cert(Pub, Priv, [<<"localhost">>, <<"127.0.0.1">>]),
+        macula_quic:generate_self_signed_cert(macula_test_identity:tls_seed(), [<<"localhost">>, <<"127.0.0.1">>]),
     Cert = filename:join(Dir, "relay.crt"),
     Key = filename:join(Dir, "relay.key"),
     ok = file:write_file(Cert, CertPem),
@@ -259,9 +258,6 @@ restore_os_env(Name, Value) -> os:putenv(Name, Value).
 restore_app_env(Key, undefined)   -> application:unset_env(macula, Key);
 restore_app_env(Key, {ok, Value}) -> application:set_env(macula, Key, Value).
 
-ephemeral_keypair() ->
-    {Pub, Priv} = crypto:generate_key(eddsa, ed25519),
-    {iolist_to_binary(Pub), iolist_to_binary(Priv)}.
 
 pick_free_port() ->
     {ok, S} = gen_udp:open(0, [binary, {ip, {127,0,0,1}}]),

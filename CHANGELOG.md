@@ -83,8 +83,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from the `macula` section of every `sys.config`.** The check is
   `macula_node_keys:check_puzzle_difficulty/0`.
 
+- **A QUIC listener presents a self-signed ML-DSA-87 certificate, and a dial
+  verifies one way only** (D12, D16). `macula_quic:generate_self_signed_cert/2`
+  takes the 32-byte seed of a TLS key, a node key of purpose `tls`, and returns
+  that certificate and its PKCS#8 key, both PEM, made by `macula-pqc` 0.2 and
+  signed with `macula-mldsa`. It replaces `generate_self_signed_cert/3`, which
+  took an Ed25519 keypair. A dial checks the listener's TLS 1.3 handshake
+  signature under the key of the one certificate it presents, with
+  `macula-pqc`'s `KeyPossessionVerifier`: no certificate authority, no name and
+  no chain, since none issues ML-DSA certificates. That proves the listener
+  holds the key, and the signed CONNECT/HELLO handshake, checked against
+  `expected_node_id`, is what names the peer.
+
+  **A classical certificate no longer works in either role**: a listener given
+  one fails to start, and a dial to a listener presenting one fails.
+
+  A station dial is bound end to end, as it was before: the station's
+  challenge carries its identity key's binding over its TLS key, the client
+  checks it against the certificate THIS handshake received, and the CONNECT
+  proof covers the same certificate (`macula_handshake`).
+
+  ⚠ **The two Erlang distribution dials are the exception, and they are
+  weaker than in 11.x.** `macula_dist` and `macula_dist_relay_client` speak
+  distribution over the `macula-dist` and `macula-dist-relay` ALPNs, which run
+  no connection handshake, so nothing binds the key they verified to a
+  node_id. Until this version they verified a webpki chain against the dialled
+  host by default, through `macula_tls`; a webpki chain is no longer possible
+  at all, since no authority issues ML-DSA certificates. Distribution's cookie
+  handshake proves a shared secret and can be relayed by a peer in the middle.
+  The end-to-end tunnel that closes this is the plan's WP 1.5 and D29.
+
 ### Removed
 
+- **The `verify` and `verify_pubkey` dial options**, and the webpki, key-pin
+  and no-verification modes they chose. `macula_quic:connect/4` and
+  `async_connect/4` refuse a dial carrying either, with
+  `{error, {verify_option_removed, Name}}`; `macula:connect/2`,
+  `call_station/8`, `call_stream_station/7`, `put_content_station/5` and
+  `get_content_station/5` refuse `verify` in any value, in the options map or
+  in a seed or station map, with
+  `{error, {refused, {verify, one_verification_mode}}}`; and a peering dial
+  target carrying it does not start, with
+  `{error, {target, {verify, one_verification_mode}}}`. An option that chose
+  among modes that no longer exist is refused rather than accepted and
+  ignored, which is macula#15's lesson. `pin_tls_cert => false` still passes.
+- **`macula_tls`**, the TLS mode module: `quic_client_opts/0,1`,
+  `quic_client_opts_with_hostname/1`, `quic_server_opts/0,1`,
+  `get_tls_mode/0`, `is_production_mode/0`, `hostname_verify_fun/3`,
+  `ensure_cert_exists/2`, `generate_self_signed_cert/1`, `derive_node_id/1`
+  and `get_cert_paths/0`. It chose between the removed dial modes, generated
+  RSA certificates through `openssl`, and derived a node_id from a
+  certificate's key, which a node_id has not been since 11.0.0. Nothing in
+  macula used the rest. `MACULA_TLS_MODE`, `MACULA_TLS_CERTFILE`,
+  `MACULA_TLS_KEYFILE` and `MACULA_TLS_CACERTFILE`, and the `tls_mode`,
+  `tls_certfile`, `tls_keyfile`, `tls_cacertfile`, `cert_path`, `key_path`,
+  `cert_key_bits` and `cert_validity_days` app env keys, are read by nothing
+  now.
 - **`macula_identity`, the Ed25519 identity of 10.x**: `generate/0,1`,
   `load/1`, `save/2`, `public/1`, `private/1`, `node_id/1`, `sign/2`,
   `verify/3`, `puzzle_evidence/1`, `puzzle_valid/1,2` and
@@ -108,6 +162,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   documents for hierarchical `did:macula:` names, signed with Ed25519. D7
   retires the `did:macula:` prefix, and nothing called it: not macula,
   macula-station, macula-realm, mcl-om or mcl-echo.
+
+### Fixed
+
+- **A direct-mode distribution listener could not load any certificate.**
+  `macula_dist` passed `certfile` and `keyfile` to `macula_quic:listen/3`,
+  which reads `cert` and `key`, so it always tried to open a file named
+  "undefined" and the listener failed to start. It now passes the right keys,
+  and makes its certificate as everything else does: self-signed ML-DSA-87 on
+  a fresh TLS key, with the key file its owner's alone (D12, D29). A
+  certificate directory that already holds the RSA pair the old code wrote
+  (generation ran even though the listener then failed) must be cleared: the
+  key loader refuses that pair.
 
 ## [12.0.0-alpha.1] - 2026-09-22
 

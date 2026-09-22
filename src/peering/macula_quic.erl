@@ -61,8 +61,8 @@
     cancel_open_stream/1,
     stream_open_tag/1,
 
-    %% Self-signed cert generation (pubkey-anchored)
-    generate_self_signed_cert/3,
+    %% A station's certificate, on its TLS key
+    generate_self_signed_cert/2,
     close_connection/1,
     close_connection/3,
     close_reason/1,
@@ -230,20 +230,20 @@ reload_certificate(Listener, CertFile, KeyFile) ->
 %%%===================================================================
 
 %% @doc Connect to a remote QUIC server. `Host' is a hostname or
-%% IP-string; validation depends on `verify' / `verify_pubkey' opts.
+%% IP-string.
 %%
-%% Trust modes (most to least authenticated):
-%% <ul>
-%%   <li>`{verify_pubkey, Pin}' — pin the leaf cert's Ed25519 SPKI to
-%%       `Pin' (32 bytes). No CA chain. Overrides `verify'.</li>
-%%   <li>`{verify, webpki}' — webpki roots + hostname check
-%%       (Let's Encrypt-anchored station certs). THE DEFAULT since
-%%       5.0.0; before that the default was `none'.</li>
-%%   <li>`{verify, none}' — skip all server-cert verification.
-%%       Development / self-signed labs only; a network MITM can
-%%       impersonate the peer. Must now be opted into explicitly,
-%%       and every such dial logs a warning.</li>
-%% </ul>
+%% There is one way the server is verified (plan decisions D12 and D16): it
+%% presents one self-signed ML-DSA-87 certificate, and its TLS 1.3 handshake
+%% signature must verify under that certificate's key. That proves the
+%% server holds the key and nothing more: no certificate authority issues
+%% ML-DSA certificates, and none is consulted. Who the server is, the caller
+%% proves by checking the server identity's binding over that key against
+%% `peer_leaf/1', as the connection handshake does.
+%%
+%% The `verify' and `verify_pubkey' options are gone with the modes they
+%% chose, and a dial given either is refused with
+%% `{error, {verify_option_removed, Name}}' rather than run with a check the
+%% caller did not ask for.
 %%
 %% The calling process waits for the result, and the dial ends if that
 %% process exits while it waits. Use `async_connect/4' to wait elsewhere.
@@ -283,24 +283,32 @@ dial_tag({macula_quic_dial, Tag, _Dial}) ->
     Tag.
 
 start_dial(Tag, Host, Port, Opts, Timeout) ->
+    start_dial(removed_verify_option(Opts), Tag, Host, Port, Opts, Timeout).
+
+start_dial(none, Tag, Host, Port, Opts, Timeout) ->
     HostBin = to_binary(Host),
     Alpn = [to_binary(A) || A <- proplists:get_value(alpn, Opts, ["macula"])],
-    %% Secure by default: webpki verification unless the caller
-    %% explicitly opts out with `{verify, none}' or pins a pubkey.
-    Verify = proplists:get_value(verify, Opts, webpki) =/= none,
-    %% `verify_pubkey' is a 32-byte Ed25519 pubkey to pin against the
-    %% leaf cert SPKI. Empty binary disables pinning. Sovereign
-    %% overlay path uses this to validate by pubkey alone (no CA).
-    VerifyPubkey = proplists:get_value(verify_pubkey, Opts, <<>>),
-    warn_if_unverified(Verify, VerifyPubkey, HostBin, Port),
     %% Mirror the listener defaults: 300s idle + 15s keep-alive.
     %% See the listen/3 doc above for why the previous 60s/20s pair
     %% killed long-lived realm-side station_link clients.
     IdleTimeoutMs = proplists:get_value(idle_timeout_ms, Opts, 300_000),
     KeepAliveMs = proplists:get_value(keep_alive_interval_ms, Opts, 15_000),
-    dial_started(nif_async_connect(Tag, HostBin, Port, Alpn, Verify, VerifyPubkey,
+    dial_started(nif_async_connect(Tag, HostBin, Port, Alpn,
                                    IdleTimeoutMs, KeepAliveMs, Timeout),
-                 Tag).
+                 Tag);
+start_dial(Name, _Tag, _Host, _Port, _Opts, _Timeout) ->
+    {error, {verify_option_removed, Name}}.
+
+%% A caller still passing `verify' or `verify_pubkey' asked for a check that
+%% no longer exists. Ignoring the option would run the dial with a check the
+%% caller did not ask for and let it believe its own ran: refused instead.
+removed_verify_option(Opts) ->
+    removed_verify_option(proplists:is_defined(verify, Opts),
+                          proplists:is_defined(verify_pubkey, Opts)).
+
+removed_verify_option(true, _) -> verify;
+removed_verify_option(false, true) -> verify_pubkey;
+removed_verify_option(false, false) -> none.
 
 dial_started({ok, Dial}, Tag) ->
     {ok, {macula_quic_dial, Tag, Dial}};
@@ -336,38 +344,32 @@ discard_dial_result(delivered, Tag) ->
         ok
     end.
 
-%% An unverified dial (no webpki, no pubkey pin) accepts any server
-%% certificate — a network MITM can impersonate the peer. Legitimate
-%% only for development and self-signed lab setups, so make every
-%% occurrence visible in the logs.
-warn_if_unverified(false, <<>>, Host, Port) ->
-    ?LOG_WARNING("[macula_quic] UNVERIFIED dial to ~s:~p — TLS server "
-                 "verification disabled ({verify, none}); vulnerable to "
-                 "MITM. Use webpki or verify_pubkey outside development.",
-                 [Host, Port]);
-warn_if_unverified(_, _, _, _) ->
-    ok.
-
 %%%===================================================================
 %%% Self-signed cert generation
 %%%===================================================================
 
-%% @doc Generate a self-signed X.509 cert from an Ed25519 keypair.
-%% Returns `{ok, {CertPem, KeyPem}}' as PEM-encoded binaries
-%% suitable for handing to `macula_quic:listen/3' via `cert' / `key'
-%% opts (after writing to disk). The cert wraps the identity's
-%% macula pubkey; no CA chain required. Used by station listeners
-%% running pubkey-anchored peering.
--spec generate_self_signed_cert(Pubkey :: binary(),
-                                Privkey :: binary(),
-                                Sans :: [binary() | string()]) ->
+%% @doc A station's certificate: self-signed ML-DSA-87 on its TLS key
+%% (plan decision D12), from the key's 32-byte seed, naming `Sans'. The TLS
+%% key is ML-DSA-87 in both crypto profiles and is used for nothing but the
+%% TLS handshake: a node key of purpose `tls', or for a distribution
+%% listener a seed from `macula_crypto_nif:mldsa_generate/1'. A SAN that
+%% parses as an IP address is an IP address SAN, any other a DNS name.
+%% Returns the certificate and the key, PKCS#8 in RFC 9881's seed form,
+%% both PEM-encoded for `listen/3''s `cert' and `key' files. The
+%% certificate is made in the NIF by macula-pqc, which signs it with
+%% macula-mldsa.
+-spec generate_self_signed_cert(Seed :: <<_:256>>, Sans :: [binary() | string()]) ->
     {ok, {CertPem :: binary(), KeyPem :: binary()}} | {error, term()}.
-generate_self_signed_cert(Pubkey, Privkey, Sans)
-        when is_binary(Pubkey), byte_size(Pubkey) =:= 32,
-             is_binary(Privkey), byte_size(Privkey) =:= 32 ->
+generate_self_signed_cert(<<_:32/binary>> = Seed, Sans) ->
     SansCsv = iolist_to_binary(
                   lists:join(<<",">>, [to_binary(S) || S <- Sans])),
-    nif_generate_self_signed_cert(Pubkey, Privkey, SansCsv).
+    pem_encoded(nif_generate_self_signed_cert(Seed, SansCsv)).
+
+pem_encoded({ok, {CertDer, KeyDer}}) ->
+    {ok, {public_key:pem_encode([{'Certificate', CertDer, not_encrypted}]),
+          public_key:pem_encode([{'PrivateKeyInfo', KeyDer, not_encrypted}])}};
+pem_encoded({error, _} = Error) ->
+    Error.
 
 %% @doc Open a new bidirectional stream, owned by the calling process.
 %%
@@ -747,14 +749,14 @@ nif_close_listener(_Listener) ->
 nif_reload_certificate(_Listener, _CertFile, _KeyFile) ->
     erlang:nif_error(nif_not_loaded).
 
-nif_async_connect(_Tag, _Host, _Port, _Alpn, _Verify, _VerifyPubkey,
+nif_async_connect(_Tag, _Host, _Port, _Alpn,
                   _IdleTimeoutMs, _KeepAliveMs, _TimeoutMs) ->
     erlang:nif_error(nif_not_loaded).
 
 nif_cancel_connect(_Dial) ->
     erlang:nif_error(nif_not_loaded).
 
-nif_generate_self_signed_cert(_Pubkey, _Privkey, _Sans) ->
+nif_generate_self_signed_cert(_Seed, _Sans) ->
     erlang:nif_error(nif_not_loaded).
 
 nif_async_open_stream(_Conn, _Tag) ->

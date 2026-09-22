@@ -262,8 +262,8 @@ mode_from_env(_) -> direct.
 start_quic_listener(Port) ->
     {CertFile, KeyFile} = get_tls_certs(),
     ListenerOpts = [
-        {certfile, CertFile},
-        {keyfile, KeyFile},
+        {cert, CertFile},
+        {key, KeyFile},
         {alpn, [?ALPN]},
         {idle_timeout_ms, 60000},
         {peer_bidi_stream_count, 100},
@@ -375,16 +375,20 @@ handle_connect_result({error, Reason}, _Kernel, Node, _Type, _MyNode, _Timer) ->
     ?LOG_WARNING("[dist] Connection to ~p failed: ~p", [Node, Reason]),
     dist_util:shutdown(?MODULE, ?LINE, {connect_failed, Reason}).
 
+%% ⚠ THIS DIAL NAMES NOBODY. It checks that the listener holds the key of the
+%% ML-DSA-87 certificate it presents (`macula_quic:connect/4') and stops
+%% there: the `macula-dist' ALPN runs no connection handshake, so no binding
+%% ties that key to a node_id. Erlang distribution's own cookie handshake
+%% proves knowledge of a shared secret, which a peer in the middle can relay
+%% while reading everything that follows.
+%%
+%% It is a step DOWN from what this dial did until 12.0.0, a webpki chain
+%% check against the dialled host by default, and it is not fixable here: no
+%% authority issues ML-DSA certificates. The fix is the tunnel of WP 1.5 and
+%% D29, which runs the connection handshake end to end inside the tunnel and
+%% gives the dial an expected node_id.
 connect_quic(Host, Port) ->
-    {CertFile, KeyFile} = get_tls_certs(),
-    TlsOpts = macula_tls:quic_client_opts(),
-    BaseOpts = [
-        {alpn, [?ALPN]},
-        {certfile, CertFile},
-        {keyfile, KeyFile},
-        {idle_timeout_ms, 60000}
-    ],
-    ConnOpts = merge_dist_opts(BaseOpts, TlsOpts),
+    ConnOpts = [{alpn, [?ALPN]}, {idle_timeout_ms, 60000}],
     connect_quic_result(macula_quic:connect(Host, Port, ConnOpts, ?CONNECT_TIMEOUT)).
 
 connect_quic_result({ok, Conn}) ->
@@ -791,12 +795,6 @@ quic_getopts({_Conn, _Stream}, _Opts) ->
 %%% Utility Functions
 %%%===================================================================
 
-merge_dist_opts(BaseOpts, TlsOpts) ->
-    lists:foldl(
-        fun({Key, Value}, Acc) ->
-            lists:keystore(Key, 1, Acc, {Key, Value})
-        end, BaseOpts, TlsOpts).
-
 get_dist_port(NodeName) when is_atom(NodeName) ->
     get_dist_port(atom_to_list(NodeName));
 get_dist_port(NodeName) when is_list(NodeName) ->
@@ -821,16 +819,17 @@ get_tls_certs() ->
         false -> generate_self_signed_cert(CertDir, CertFile, KeyFile)
     end.
 
+%% The listener's certificate when its directory holds none: self-signed
+%% ML-DSA-87 on a new TLS key (D12, D29), the only kind a dial accepts. The
+%% key file is its owner's alone.
 generate_self_signed_cert(_CertDir, CertFile, KeyFile) ->
     ok = filelib:ensure_dir(CertFile),
-    Cmd = io_lib:format(
-        "openssl req -x509 -newkey rsa:2048 -keyout ~s -out ~s "
-        "-days 365 -nodes -subj '/CN=macula-dist' 2>/dev/null",
-        [KeyFile, CertFile]),
-    case os:cmd(lists:flatten(Cmd)) of
-        "" -> ok;
-        Error -> ?LOG_ERROR("[dist] Cert generation failed: ~s", [Error])
-    end,
+    {ok, {_Public, Seed}} = macula_crypto_nif:mldsa_generate(mldsa87),
+    {ok, {CertPem, KeyPem}} = macula_quic:generate_self_signed_cert(Seed, [<<"macula-dist">>]),
+    ok = file:write_file(KeyFile, <<>>),
+    ok = file:change_mode(KeyFile, 8#600),
+    ok = file:write_file(KeyFile, KeyPem),
+    ok = file:write_file(CertFile, CertPem),
     {CertFile, KeyFile}.
 
 make_address(NodeName, Port) when is_atom(NodeName) ->

@@ -96,14 +96,22 @@ pool's `connect/2` options (see the [Connecting Guide](shared/CONNECTING_GUIDE.m
 for the real option set) — QUIC's TLS 1.3 is mandatory and not
 independently togglable from the SDK side.
 
-The dist relay client and direct dist dials check the relay's TLS
-certificate against the QUIC library's built-in webpki roots and the host
-they dial. A relay with a self-signed certificate is refused unless the
-node sets development mode explicitly: `MACULA_TLS_MODE=development` (or
-`dev`), or the `tls_mode` app env set to `development`. A CA file set
-through `MACULA_TLS_CACERTFILE` or `tls_cacertfile` is not supported: it
-makes `macula_tls:quic_client_opts/0,1` raise
-`{tls_config_error, {cacertfile_not_supported, Path}}`.
+The dist relay client and direct dist dials check that the peer holds the
+key of the self-signed ML-DSA-87 certificate it presents. No certificate
+authority is consulted, because none issues ML-DSA certificates, and there
+is no option to ask for another check. A direct dist listener makes its own
+certificate the same way, on a fresh TLS key, when its certificate directory
+holds none.
+
+> ⚠ **These two dials name nobody, and that is weaker than 11.x.** Until
+> 12.0.0 they verified a webpki chain against the dialled host by default.
+> They now verify key possession alone: the `macula-dist` and
+> `macula-dist-relay` ALPNs run no macula connection handshake, so no
+> binding ties the key they saw to a node_id, and Erlang distribution's
+> cookie handshake can be relayed by a peer in the middle that then reads
+> the traffic. A station dial on the `macula` ALPN is not affected: its
+> handshake binds the certificate to the station's identity. The fix for
+> distribution is the end-to-end tunnel of the plan's WP 1.5 and D29.
 
 ## Dedicated Dist Relay
 

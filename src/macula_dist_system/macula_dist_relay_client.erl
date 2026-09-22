@@ -318,9 +318,15 @@ terminate(_Reason, _State) ->
 %% Connect + identify
 %%====================================================================
 
+%% ⚠ THIS DIAL NAMES NOBODY: it checks that the relay holds the key of the
+%% ML-DSA-87 certificate it presents and stops there, because the
+%% `macula-dist-relay' ALPN runs no connection handshake. Until WP 1.5's
+%% tunnel and D29, anything that can answer the relay's address is accepted,
+%% and the tunnel carries distribution traffic with no framing or
+%% application-level encryption of its own. Until 12.0.0 this dial verified
+%% a webpki chain by default; see `macula_dist:connect_quic/2'.
 start_connect({ok, Host, Port}, State) ->
-    TlsOpts = macula_tls:quic_client_opts(),
-    ConnOpts = [{alpn, [?RELAY_ALPN]}, {idle_timeout_ms, 60_000} | TlsOpts],
+    ConnOpts = [{alpn, [?RELAY_ALPN]}, {idle_timeout_ms, 60_000}],
     handle_connect(macula_quic:connect(Host, Port, ConnOpts, 10_000), State);
 start_connect({error, Reason}, _State) ->
     {stop, {bad_relay_url, Reason}}.

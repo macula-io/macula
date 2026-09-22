@@ -199,10 +199,8 @@ relay_listener() ->
 %% A relay listener on `Port' whose certificate and key live in `Dir' while
 %% listen reads them.
 listener_in(Dir, Port) ->
-    {Pub, Priv} = crypto:generate_key(eddsa, ed25519),
     {ok, {CertPem, KeyPem}} =
-        macula_quic:generate_self_signed_cert(
-            iolist_to_binary(Pub), iolist_to_binary(Priv), [<<"localhost">>, <<"127.0.0.1">>]),
+        macula_quic:generate_self_signed_cert(macula_test_identity:tls_seed(), [<<"localhost">>, <<"127.0.0.1">>]),
     Cert = filename:join(Dir, "relay.crt"),
     Key = filename:join(Dir, "relay.key"),
     ok = file:write_file(Cert, CertPem),

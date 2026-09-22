@@ -203,10 +203,8 @@ start_relay() ->
     end.
 
 relay(Test) ->
-    {Pub, Priv} = crypto:generate_key(eddsa, ed25519),
     {ok, {CertPem, KeyPem}} =
-        macula_quic:generate_self_signed_cert(
-            iolist_to_binary(Pub), iolist_to_binary(Priv),
+        macula_quic:generate_self_signed_cert(macula_test_identity:tls_seed(),
             [<<"localhost">>, <<"127.0.0.1">>]),
     Port = free_udp_port(),
     {ok, Listener} = macula_test_tmp:with_dir("macula-dist-controller-backpressure",

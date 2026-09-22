@@ -50,8 +50,8 @@ rules() ->
           "|signature::(ED25519|ECDSA_|RSA_))"},
      {rust_ed25519_oid, "an Ed25519 key recognised or wrapped by its OID",
       rs, "(\"1\\.3\\.101\\.112\"|0x2b, 0x65, 0x70)"},
-     {rust_provider_verify, "TLS signatures checked with the crypto provider's algorithms, all classical",
-      rs, "\\.signature_verification_algorithms\\b"},
+     {rust_unchecked_handshake, "a TLS handshake signature accepted without being checked",
+      rs, "HandshakeSignatureValid::assertion\\(\\)"},
      {rust_wire_constant, "the EdDSA alg or the Ed25519 DID key type on the wire",
       rs, "\"(EdDSA|Ed25519VerificationKey2020)\""}].
 
@@ -63,9 +63,7 @@ allowed() ->
 
 %% {File, Rule, How many uses, The work item that removes them}.
 known() ->
-    [{"native/macula_quic/src/cert.rs", rust_ed25519_oid, 2, "D12 TLS leaf"},
-     {"native/macula_quic/src/cert.rs", rust_provider_verify, 2, "D12 TLS leaf"},
-     {"native/macula_quic/src/config.rs", rust_provider_verify, 1, "D12 TLS leaf"}].
+    [].
 
 no_classical_signing_beyond_the_known_list_test_() ->
     {timeout, 60,
@@ -122,7 +120,7 @@ the_scanner_sees_each_rule_test() ->
                  cargo_dalek => "ed25519-dalek = \"3.0\"",
                  rust_classical_alg => "let a = &rcgen::PKCS_ED25519;",
                  rust_ed25519_oid => "if oid != \"1.3.101.112\" {",
-                 rust_provider_verify => "provider.signature_verification_algorithms",
+                 rust_unchecked_handshake => "Ok(HandshakeSignatureValid::assertion())",
                  rust_wire_constant => "alg: \"EdDSA\".to_string(),"},
     [?assertMatch({Id, [_]}, {Id, matching_rules(Kind, strip(Kind, maps:get(Id, Examples)))})
      || {Id, _, Kind, _} <- rules()],

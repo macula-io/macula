@@ -90,32 +90,33 @@ direct-dial wraps](RPC_GUIDE.md#direct-dial-start_link_direct-advertise_direct).
 -spec call_station(pool(), seed(), node_id(), realm(), procedure(), term(), timeout_ms(), opts()) ->
     {ok, term()} | {error, term()}.
 %% opts: #{ucan_token => Token,
-%%         verify => webpki | none,     %% TLS chain policy for a fresh dial
-%%                                      %% (default none, see below)
 %%         expected_node_id => NodeId}  %% the station's node_id, required
 ```
 
-> **`pin_tls_cert => true` is REFUSED.** It returns
-> `{error, {refused, {pin_tls_cert, no_pin_primitive_for_mldsa87_identity}}}`, from `connect/2`,
+> **`pin_tls_cert => true` and `verify` are REFUSED.** They return
+> `{error, {refused, {pin_tls_cert, no_pin_primitive_for_mldsa87_identity}}}` and
+> `{error, {refused, {verify, one_verification_mode}}}`, from `connect/2`,
 > `call_station/8`, `call_stream_station/7`, `put_content_station/5` and
-> `get_content_station/5`, and whether you put it in the options map or in a
-> seed or station map. `false` and an absent key pass through and change
-> nothing.
+> `get_content_station/5`, and whether you put them in the options map or in a
+> seed or station map. `pin_tls_cert => false` and an absent key pass through
+> and change nothing.
 >
-> It is refused rather than honoured because no pin primitive can express our
-> identity: the only one that exists, `macula_quic`'s `verify_pubkey`, extracts
-> an Ed25519 SPKI at exactly 32 bytes, and a station identity is ML-DSA-87. A
-> node_id is a SHA-256 hash, not a key, so there is nothing in it to pin either.
+> There is ONE verification mode, and it is not the caller's to pick: a station
+> presents a self-signed ML-DSA-87 certificate on its TLS key, and the dial
+> checks the station's TLS 1.3 handshake signature under that certificate's key.
+> `verify` chose between a webpki chain check, which no ML-DSA certificate can
+> pass because no authority issues one, and no check at all, which the transport
+> no longer offers. `pin_tls_cert` pinned an Ed25519 key, and a station identity
+> is ML-DSA-87, while a node_id is a SHA-256 hash rather than a key.
 >
-> An earlier revision of this guide stated a default of `true`. There was never
-> a default and never a reader, and a reader took that sentence for a check that
-> was happening. Tracked as
+> An earlier revision of this guide stated a `pin_tls_cert` default of `true`.
+> There was never a default and never a reader, and a reader took that sentence
+> for a check that was happening. Tracked as
 > [macula#15](https://github.com/macula-io/macula/issues/15).
 >
 > What names the peer on a station dial is the signed CONNECT/HELLO handshake,
-> checked against `expected_node_id`, which is required. `verify` defaults to
-> `none` because a station's leaf is self-signed or issued by an unrelated PKI,
-> so the chain is not what binds the connection to the node_id dialled.
+> checked against `expected_node_id`, which is required. TLS proves only that
+> the station holds the key in the certificate it presented.
 
 `call_station/7` dials a specific station URL directly, reusing an existing
 link or opening and monitoring a new one, waiting for the handshake, then
@@ -203,8 +204,7 @@ Trusted = fun(#{type := Type} = Record) ->
 StationUrl = <<"quic://[", Host/binary, "]:", (integer_to_binary(Port))/binary>>,
 
 {ok, Result} = macula:call_station(Pool, StationUrl, Provider, Realm, Procedure, Payload,
-                                   5_000, #{expected_node_id => Station,
-                                            verify => none}).
+                                   5_000, #{expected_node_id => Station}).
 ```
 
 For an org namespaced procedure, add the realm trust you hold to the map

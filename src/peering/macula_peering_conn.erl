@@ -47,12 +47,9 @@
     %% `{peer_identity_mismatch, #{expected, derived}}' when the station's
     %% challenge derives to another node_id.
     expected_node_id := <<_:256>>,
-    %% TLS chain policy for the dial: `none' (the default) or `webpki'.
-    %% A station dial wants `none' — its leaf is self-signed or issued by
-    %% an unrelated PKI, and the handshake above is what names the peer.
-    %% A caller dialing something with a chain worth checking sets
-    %% `webpki' and the dial verifies against the built-in roots.
-    verify           => none | webpki,
+    %% ⚠ `verify' is refused: a dial trusts the station in one way only,
+    %% its handshake signature under its ML-DSA-87 certificate's key
+    %% (`macula_quic:connect/4'), and the handshake above names the peer.
     _                => _
 }.
 
@@ -276,6 +273,7 @@ init(#{role := Role, identity := Identity, issuer := Issuer, controlling_pid := 
 identity_key(#{purpose := identity, profile := Profile} = Identity) -> {ok, Identity, Profile};
 identity_key(_NotAnIdentityKey) -> {error, {identity, not_an_identity_key}}.
 
+role_ready(client, #{target := #{verify := _}}) -> {error, {target, {verify, one_verification_mode}}};
 role_ready(client, #{target := #{expected_node_id := <<_:256>>}}) -> ok;
 role_ready(client, _Opts) -> {error, {target, expected_node_id_required}};
 role_ready(server, #{puzzle := #{mode := Mode}}) when Mode =:= off; Mode =:= log_only; Mode =:= enforce -> ok;
@@ -1312,37 +1310,12 @@ close_quic(#data{quic_conn = Conn}) ->
 start_dial(#{host := Host, port := Port} = Target) ->
     macula_quic:async_connect(Host, Port, dial_opts(Target), dial_timeout(Target)).
 
-%% The TLS policy for one dial, from the target the caller built.
-%%
-%% `verify' is the caller's and is passed through, not overridden. A
-%% target that names none dials unverified, because that is what a
-%% station dial needs: a station's leaf is self-signed or issued by an
-%% unrelated PKI, and what binds the connection to the node_id dialed is
-%% the signed handshake in this module, not the certificate chain. A
-%% caller that does have a chain worth checking sets `verify => webpki'
-%% on the target and the dial verifies against the built-in roots.
-%% Whatever this builder decides is what TLS sees: nothing downstream
-%% overrides it, which is the whole point of the key being here.
-%%
-%% ⚠ AND THE DEFAULT IS DEPENDED ON. Changing it to `webpki' is a
-%% BREAKING CHANGE for pinned dialers, though it reads as a tightening.
-%% macula-realm sets `verify' nowhere: it has two pinned seeds, no
-%% station discovery to find others, and the station names it pins sit
-%% two labels under a wildcard certificate that covers one. The chain
-%% check would fail on both seeds at once and it would not recover.
-%% (Realm configuration as reported by the session that traced it, not
-%% verified from this repository.)
-%%
-%% `macula_quic:connect/3' defaults the same option to `webpki', which
-%% is right THERE: a general TLS client should be secure by default. The
-%% two defaults differ deliberately. Do not reconcile them.
-%%
-%% Reachable only from 11.5.0; before that this builder passed a literal
-%% `{verify, none}' and discarded what the target carried, so nothing
-%% could depend on it.
+%% The QUIC options for one dial, from the target the caller built. There
+%% is no TLS policy to choose: `macula_quic' trusts the station by its
+%% handshake signature under its certificate's key, and the handshake in
+%% this module binds the connection to the node_id dialed.
 dial_opts(Target) ->
-    [{alpn, maps:get(alpn, Target, [<<"macula">>])},
-     {verify, maps:get(verify, Target, none)}].
+    [{alpn, maps:get(alpn, Target, [<<"macula">>])}].
 
 dial_timeout(Target) ->
     maps:get(timeout_ms, Target, 30_000).

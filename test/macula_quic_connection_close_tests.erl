@@ -48,9 +48,8 @@ close_test_() ->
 %%%===================================================================
 
 setup() ->
-    {Pub, Priv} = ephemeral_keypair(),
     {ok, {CertPem, KeyPem}} =
-        macula_quic:generate_self_signed_cert(Pub, Priv, [<<"localhost">>, <<"127.0.0.1">>]),
+        macula_quic:generate_self_signed_cert(macula_test_identity:tls_seed(), [<<"localhost">>, <<"127.0.0.1">>]),
     Dir  = macula_test_tmp:dir("macula-quic-connection-close"),
     Cert = filename:join(Dir, "listener.crt"),
     Key  = filename:join(Dir, "listener.key"),
@@ -171,8 +170,7 @@ setup_loopback_pair(#{cert := Cert, key := Key}) ->
                                          {keep_alive_interval_ms, 5000}]),
     ok = macula_quic:async_accept(Listener),
     {ok, ClientConn} = macula_quic:connect(<<"127.0.0.1">>, Port,
-                                            [{verify, none},
-                                             {alpn, [<<"macula-net">>]},
+                                            [{alpn, [<<"macula-net">>]},
                                              {idle_timeout_ms, 30000},
                                              {keep_alive_interval_ms, 5000}],
                                             ?EVENT_MS),
@@ -201,6 +199,3 @@ drain_quic_messages() ->
     after 0 -> ok
     end.
 
-ephemeral_keypair() ->
-    {Pub, Priv} = crypto:generate_key(eddsa, ed25519),
-    {iolist_to_binary(Pub), iolist_to_binary(Priv)}.

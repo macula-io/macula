@@ -81,12 +81,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "base64"
-version = "0.23.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ac07cdecf99051d9a5238b80f35af32cdeba5b336e55d957b318b50137e18da5"
-
-[[package]]
 name = "bit-vec"
 version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -452,18 +446,29 @@ checksum = "112b39cec0b298b6c1999fee3e31427f74f676e4cb9879ed1a121b43661a4154"
 
 [[package]]
 name = "macula-keccak"
-version = "0.1.1"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "06f5282ae53efb0b3b43704c87fdd6b9ef946bc38246ace83778b08586aabe0b"
+checksum = "41f02855604bfbf713c17b8a6b810b2ec383aba24a9372b4d2d81756c5741306"
 dependencies = [
  "zeroize",
 ]
 
 [[package]]
-name = "macula-mlkem"
-version = "0.1.1"
+name = "macula-mldsa"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7cfddc14e82bfa7abe14af8ad68ce2ee45bfb10812a23599342d5613cdec0246"
+checksum = "ae0e3b7f9786c967ecf126a95020efa00867536ff2f4bb5e160856bb8600ea0f"
+dependencies = [
+ "getrandom 0.4.3",
+ "macula-keccak",
+ "zeroize",
+]
+
+[[package]]
+name = "macula-mlkem"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "67ba0a522c08c6cb6c66c397777f2ee026f9392a889d2b00c2c05d71e2409eed"
 dependencies = [
  "getrandom 0.4.3",
  "macula-keccak",
@@ -472,19 +477,21 @@ dependencies = [
 
 [[package]]
 name = "macula-pqc"
-version = "0.1.1"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "34540aa9761bab663f80e2e34251f98e4b9f869bb0580be147f0645f165acaf4"
+checksum = "0b0be81c08c35d9aa1bf53caab2be96219c15497abcc483b156a23330ebebe0a"
 dependencies = [
+ "macula-mldsa",
  "macula-pqc-kx",
+ "rcgen",
  "rustls",
 ]
 
 [[package]]
 name = "macula-pqc-kx"
-version = "0.1.1"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "56449d785cb938569ab880b4c6b8f956f2b5f694fbc345b3b075038ae9a7593e"
+checksum = "0eaacd7d3c538693f69975deed55252c846c0e2d6b69655271ea811fe045c638"
 dependencies = [
  "macula-mlkem",
  "rustls",
@@ -502,10 +509,7 @@ dependencies = [
  "rustls",
  "rustls-pemfile",
  "socket2 0.5.10",
- "time",
  "tokio",
- "webpki-roots",
- "x509-parser",
 ]
 
 [[package]]
@@ -617,16 +621,6 @@ dependencies = [
  "redox_syscall",
  "smallvec",
  "windows-link",
-]
-
-[[package]]
-name = "pem"
-version = "4.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d354a98a3d1251555de99e8fdd8afda05573c31b82f59063a7b0a29b5527f120"
-dependencies = [
- "base64",
- "serde_core",
 ]
 
 [[package]]
@@ -768,7 +762,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8774e05a7d0de114588e6a28fe7e71694b82614ed569d86d8b389dfbc98b8ad8"
 dependencies = [
  "aws-lc-rs",
- "pem",
  "rustls-pki-types",
  "time",
  "x509-parser",
@@ -1391,15 +1384,6 @@ name = "webpki-root-certs"
 version = "1.0.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b96554aa2acc8ccdb7e1c9a58a7a68dd5d13bccc69cd124cb09406db612a1c9b"
-dependencies = [
- "rustls-pki-types",
-]
-
-[[package]]
-name = "webpki-roots"
-version = "1.0.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7dcd9d09a39985f5344844e66b0c530a33843579125f23e21e9f0f220850f22a"
 dependencies = [
  "rustls-pki-types",
 ]

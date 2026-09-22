@@ -104,19 +104,19 @@ cleanup(#{dir := Dir}) ->
 %% The handshake completes between two endpoints that offer post-quantum
 %% groups and nothing else, so the shared secret behind this connection is
 %% not recoverable from a recording of it by a quantum adversary.
-endpoints_handshake_offering_only_pq_groups(#{pub := Pub} = Identity) ->
+endpoints_handshake_offering_only_pq_groups(#{der := Der} = Identity) ->
     {Listener, Port} = listen(Identity),
-    {ok, Client} = dial(Port, Identity),
+    {ok, Client} = dial(Port),
     Server = accepted(),
     %% Both sides finished the handshake, and each holds the leaf the other
     %% presented: a connection that had not got past key exchange has
-    %% neither. The client's pin is the server's Ed25519 key, so the leaf it
-    %% reports is the one this identity issued and not any leaf at all.
+    %% neither. The leaf is compared with the certificate this identity
+    %% issued, byte for byte, so it is that one and not any leaf at all.
     ?assertMatch({ok, _}, macula_quic:handshake(Client)),
     {ok, ClientSeesLeaf} = macula_quic:peer_leaf(Client),
     {ok, ServerPresentedLeaf} = macula_quic:presented_leaf(Server),
     ?assertEqual(ClientSeesLeaf, ServerPresentedLeaf),
-    ?assertEqual(Pub, leaf_pubkey(ClientSeesLeaf)),
+    ?assertEqual(Der, ClientSeesLeaf),
     close([Client, Server], Listener).
 
 %% And it carries data, not only a handshake. A key exchange that agrees and
@@ -124,7 +124,7 @@ endpoints_handshake_offering_only_pq_groups(#{pub := Pub} = Identity) ->
 %% handshake; bytes arriving is what shows the agreed secret is usable.
 a_stream_carries_bytes_over_the_pq_connection(Identity) ->
     {Listener, Port} = listen(Identity),
-    {ok, Client} = dial(Port, Identity),
+    {ok, Client} = dial(Port),
     Server = accepted(),
     ok = macula_quic:async_accept_stream(Server),
     {ok, ClientStream} = macula_quic:open_stream(Client),
@@ -139,16 +139,14 @@ a_stream_carries_bytes_over_the_pq_connection(Identity) ->
 %%%===================================================================
 
 identity(Dir) ->
-    {Pub, Priv} = crypto:generate_key(eddsa, ed25519),
-    PubBin = iolist_to_binary(Pub),
     {ok, {CertPem, KeyPem}} =
-        macula_quic:generate_self_signed_cert(
-            PubBin, iolist_to_binary(Priv), [<<"localhost">>, <<"127.0.0.1">>]),
+        macula_quic:generate_self_signed_cert(macula_test_identity:tls_seed(), [<<"localhost">>, <<"127.0.0.1">>]),
     Cert = filename:join(Dir, "pq.crt"),
     Key = filename:join(Dir, "pq.key"),
     ok = file:write_file(Cert, CertPem),
     ok = file:write_file(Key, KeyPem),
-    #{dir => Dir, pub => PubBin, cert => Cert, key => Key}.
+    [{'Certificate', Der, not_encrypted}] = public_key:pem_decode(CertPem),
+    #{dir => Dir, der => Der, cert => Cert, key => Key}.
 
 listen(#{cert := Cert, key := Key}) ->
     Port = pick_free_port(),
@@ -160,9 +158,9 @@ listen(#{cert := Cert, key := Key}) ->
     ok = macula_quic:async_accept(Listener),
     {Listener, Port}.
 
-dial(Port, #{pub := Pub}) ->
+dial(Port) ->
     macula_quic:connect(<<"127.0.0.1">>, Port,
-                        [{verify_pubkey, Pub}, {alpn, [<<"macula">>]}], 5000).
+                        [{alpn, [<<"macula">>]}], 5000).
 
 accepted() ->
     receive
@@ -185,16 +183,6 @@ read_bytes(Stream, TimeoutMs) ->
     after TimeoutMs ->
         error(no_bytes)
     end.
-
-%% The Ed25519 SubjectPublicKeyInfo of a leaf, so a test can say WHICH
-%% identity answered rather than that some certificate came back.
-%% ⚠ An Ed25519 key comes back from the OTP decoder wrapped as an
-%% `#'ECPoint'{}', not as the raw 32 bytes, so the unwrap is not optional.
-leaf_pubkey(Der) ->
-    #'OTPCertificate'{tbsCertificate = Tbs} = public_key:pkix_decode_cert(Der, otp),
-    #'OTPTBSCertificate'{subjectPublicKeyInfo = Spki} = Tbs,
-    #'OTPSubjectPublicKeyInfo'{subjectPublicKey = #'ECPoint'{point = Key}} = Spki,
-    Key.
 
 close(Connections, Listener) ->
     lists:foreach(fun macula_quic:close_connection/1, Connections),

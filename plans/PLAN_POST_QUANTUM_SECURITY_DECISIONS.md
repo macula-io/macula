@@ -389,6 +389,17 @@ before its wire checks are green.
   - TLS stays identical in both profiles.
   - Public certificate authorities do not issue ML-DSA certificates ⚠.
 - **Status:** accepted 2026-09-10.
+- **Built in `macula` on 2026-09-22 (Venus):** a listener presents a self-signed ML-DSA-87 certificate made from
+  its TLS key's seed (`macula_quic:generate_self_signed_cert/2`, through `macula-pqc` 0.2), and a dial verifies the
+  listener's TLS 1.3 handshake signature under that certificate's key and nothing else (`macula-pqc`'s
+  `KeyPossessionVerifier`). A classical certificate fails in either role. The identity key's binding over the TLS
+  key travels in the station's challenge and the client checks it against the leaf THIS TLS handshake received
+  (`macula_handshake:station_binding/1` against `macula_quic:peer_leaf/1`, since 2026-09-11), and the CONNECT proof
+  covers that leaf, so a station dial is bound end to end.
+- ⚠ **Except the two distribution dials**, which speak Erlang distribution over the `macula-dist` and
+  `macula-dist-relay` ALPNs and never run the connection handshake. They verified a webpki chain by default until
+  2026-09-22 and now verify key possession alone, which names nobody: an interim REGRESSION for that path, closed
+  by WP 1.5's tunnels and D29. Nothing else on the mesh uses those ALPNs.
 - **Blocks:** WP 1.2, WP 1.3, WP 1.5, WP 1.6.
 
 ### D13 Where a verifier gets a signer's full public key

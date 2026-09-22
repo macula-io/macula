@@ -31,11 +31,14 @@
 %%% refusal itself exists to fix.
 %%%
 %%% What IS true, and what `station_target_shape_reaches_hello_test' guards:
-%%% macula-station's exact dial target, `pin_tls_cert => false' and
-%%% `verify => none' included, must complete a handshake through
-%%% `macula_peering:connect/1'. A refusal added in the peering layer and
-%%% keyed on the KEY'S PRESENCE would break every station dial, and that
-%%% test goes red if anyone makes it. `seed_checked/4' is an SDK gate the
+%%% a station's dial target on 12, `pin_tls_cert => false' included, must
+%%% complete a handshake through `macula_peering:connect/1'. A refusal of
+%%% `pin_tls_cert' added in the peering layer and keyed on the KEY'S
+%%% PRESENCE would break every station dial, and that test goes red if
+%%% anyone makes it. `verify', which macula-station's 11.x target also
+%%% carries, IS refused by the peering layer from 12.0.0: it chose a TLS
+%%% mode, and there is one (plan WP 1.6 lists it among the station's
+%%% changes for 12). `seed_checked/4' is an SDK gate the
 %%% fleet never reaches, so a test there guards SDK callers and nothing
 %%% about the fleet.
 %%% The facade and the seed gate are the right homes for a different reason:
@@ -362,9 +365,9 @@ station_target_shape_reaches_hello_test_() ->
 
 station_target_reaches_hello(Ctx) ->
     World = macula_peering_handshake_tests:world(Ctx, #{}),
-    %% The shape `macula_station_outbound_link:do_dial/1' builds, via
-    %% `maybe_verify/2': the trust keys the fleet carries on every dial.
-    StationShape = #{pin_tls_cert => false, verify => none},
+    %% The shape `macula_station_outbound_link:do_dial/1' builds, less the
+    %% `verify' key its `maybe_verify/2' adds on 11.x and 12 refuses.
+    StationShape = #{pin_tls_cert => false},
     {ClientPid, ServerPid} =
         macula_peering_handshake_tests:connect(
           World, #{mode => off, accept_owner => self(),

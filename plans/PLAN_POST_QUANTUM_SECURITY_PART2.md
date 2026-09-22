@@ -52,6 +52,15 @@ change, the done criterion and the effort. The US profile goes first; the EU par
     negotiated group and signature scheme)
   - `src/peering/macula_quic.erl`
   - `.github/workflows/publish-hex.yml` (build toolchain per V4; the NIFs build from source in its jobs)
+- **Built (2026-09-22, Venus):** the certificate and the verification mode. `cert.rs` makes the station's
+  self-signed ML-DSA-87 certificate from its TLS key's 32-byte seed through `macula-pqc` 0.2's
+  `self_signed_certificate`, and `macula_quic:generate_self_signed_cert/2` takes that seed in place of the
+  Ed25519 pair. `config.rs` has ONE client verification mode, `macula-pqc`'s `KeyPossessionVerifier`: the
+  station's handshake signature under the key of the one ML-DSA-87 certificate it presents. The webpki, key-pin
+  and no-verification modes are gone with the `verify` and `verify_pubkey` options, rustls is built without
+  `tls12`, and `rcgen`, `x509-parser`, `webpki-roots` and `time` are no longer dependencies of the NIF. The
+  no-classical ratchet's last entries are struck. What remains below: the negotiated group and scheme exports,
+  the recorders, session tickets off, accept-side failure reporting, and receive-side flow control (D28).
 - **Change:**
   - switch the features from `ring` to aws-lc-rs per V4 (rustls 0.23.44 or later without `tls12`, rcgen and
     rustls-webpki), limited to the profile's group: ML-KEM-1024, or the custom SecP384r1MLKEM1024 group per D3;
@@ -275,6 +284,19 @@ change, the done criterion and the effort. The US profile goes first; the EU par
     `macula_dist_relay_protocol.erl`, and the pool path in `macula_dist_pool.erl` and `macula_dist_bridge.erl`, all
     in `src/macula_dist_system/`.
 - **Waiting on:** WP 1.2, WP 1.3.
+- **Built (2026-09-22, Venus):** the dial options, the part that carried a TLS trust choice. `verify` is gone
+  from every dial path in `macula`: `macula_peering_conn`'s dial options and `connect_opts()`,
+  `macula_station_link`'s seed keys, `macula_client`'s pool and per-call options, `macula_content_transfer`,
+  `macula_direct_dial`, `macula_feeder` and the distribution dials. It is refused where a caller can still name
+  it: the facade (`{refused, {verify, one_verification_mode}}`), a station link's seed, a peering dial target,
+  and `macula_quic` itself (`{verify_option_removed, Name}`). `macula_tls` is deleted with the modes it chose.
+  What remains below: the handshake frames and checks, `expected_node_id` made mandatory, status statements,
+  and the distribution tunnels. ⚠ **The distribution tunnels are now the urgent one:** the `macula-dist` and
+  `macula-dist-relay` dials verified a webpki chain against the dialled host by default until 2026-09-22 and now
+  verify key possession alone, which names nobody, because those ALPNs run no connection handshake. A webpki
+  chain cannot come back (no authority issues ML-DSA certificates), so the tunnel of this WP and D29 is what
+  closes it. Recorded in `macula_dist:connect_quic/2`, `macula_dist_relay_client:start_connect/2`, the CHANGELOG
+  and `DIST_OVER_MESH_GUIDE.md`.
 - **Change:**
   - the handshake order and checks of the key model: opener, challenge, the client's checks, CONNECT, the
     station's checks, HELLO;
@@ -341,7 +363,19 @@ change, the done criterion and the effort. The US profile goes first; the EU par
   - frame checks take the signer's key from the connection or from the object (D13);
   - one profile per station instance (D2);
   - the station certificate is self-signed ML-DSA-87 on the TLS key, from the listener's self-signed certificate
-    source, which configuration selects;
+    source, which configuration selects. ⚠ Two calls change with macula 12 (Venus, 2026-09-22):
+    `macula_station_listener`'s self-signed branch calls `macula_quic:generate_self_signed_cert/3` with an
+    Ed25519 keypair and must call `/2` with its TLS key's 32-byte seed; and `macula_station_outbound_link`'s
+    `maybe_verify/2` puts `verify => none` on every dial target, which a peering dial now refuses with
+    `{target, {verify, one_verification_mode}}`, so it goes;
+  - ⚠ **and the fleet's listener config shape stops working.** `macula_station_config:finalise/1` REQUIRES
+    `certfile` and `keyfile`, `macula_transport:listen/1` hands them to `macula_quic:listen/3`, and the fleet
+    image points them at a wildcard Let's Encrypt certificate: the key loader takes an ML-DSA-87 PKCS#8 key and
+    nothing else, so every station instance fails to start on macula 12 until its leaf comes from its own TLS
+    key's seed. This is the required-keys path, not the `self_signed_pubkey` branch above;
+  - ⚠ the station's own tests: 10 CT suites pass `verify => none` to `macula:call_station`, and
+    `macula_station_shutdown_connections_tests` and `macula_station_listener_admission_tests` pass
+    `{verify, none}` to `macula_quic:connect`; all are refused from 12;
   - bootstrap `outbound_peers` carry a node_id, kept by `decode_outbound_peer/1`; peers learned later are dialled
     with the node_id they were learned under;
   - the DHT dialer puts `expected_node_id` in its dial target and leaves the only comparison to the handshake; it
@@ -574,7 +608,11 @@ change, the done criterion and the effort. The US profile goes first; the EU par
 - **Change:**
   - the relay builds against `macula` 11.0.0 and uses its connection handshake and dials
     (WP 1.5), with one profile per instance, as station instances do (D2);
-  - the relay client in `macula` dials with an expected identity, like every other dial (WP 1.5).
+  - the relay client in `macula` dials with an expected identity, like every other dial (WP 1.5);
+  - ⚠ `macula_dist_relay_listener.erl:51` calls `macula_tls:quic_server_opts/0`, and `macula_tls` is deleted in
+    macula 12 (Venus, 2026-09-22). The relay's listener takes its certificate and key paths directly, and makes
+    them as `macula_dist` does when they are missing: self-signed ML-DSA-87 on a fresh TLS key through
+    `macula_quic:generate_self_signed_cert/2`.
 - **Red first:** two BEAM nodes reach each other through the 11.0.0 relay in each profile, a node that
   offers only classical algorithms is refused, and the relay sees no distribution plaintext (D29).
 - **Done:** green against the 11.0.0 relay.
@@ -989,6 +1027,13 @@ Every stack also meets these, each red first:
   - `hecate-services/hecate-om` `src/hecate_om_ownership_proof.erl`
   - the Containerfiles and CI images of the hecate service repositories (V11)
 - **Change:**
+  - ⚠ **the pool options and call options stop working on macula 12** (Venus, 2026-09-22). The repositories this
+    WP calls `hecate-om` and the hecate services are `macula-services/mcl-om` and `mcl-echo` now.
+    `mcl_om_identity:base_pool_opts/0` merges `verify => verify_mode()`, read from `MCL_OM_VERIFY`, into the map
+    it gives `macula:connect/2`, which refuses `verify` in any value, so no pool starts; and
+    `mcl_om_capabilities` puts `verify => none` in every `macula:call_station/8`. `mcl_echo_call` and
+    `mcl_echo_withdraw` pass `verify => none` through `macula_client`, refused there too. Delete the option and
+    the environment variable that feeds it;
   - ownership proofs carry and verify post-quantum keys in full (D13);
   - builder and runtime images on OTP 28 with OpenSSL 3.5.0 or newer at build time; the hecate images still on
     OTP 27 move to OTP 28 here (D8);

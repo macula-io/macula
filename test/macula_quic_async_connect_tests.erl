@@ -18,7 +18,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 -define(HOST, <<"127.0.0.1">>).
--define(OPTS, [{verify_pubkey, <<0:256>>}, {alpn, [<<"macula">>]}]).
+-define(OPTS, [{alpn, [<<"macula">>]}]).
 
 %%%===================================================================
 %%% connect/4
@@ -148,9 +148,9 @@ cancel_after_a_connected_dial_leaves_no_result_test_() ->
           ?_test(cancel_after_a_connected_dial_leaves_no_result(Listener))
       end}}.
 
-cancel_after_a_connected_dial_leaves_no_result(#{port := Port, pubkey := Pub}) ->
+cancel_after_a_connected_dial_leaves_no_result(#{port := Port}) ->
     {ok, Dial} = macula_quic:async_connect(
-                   ?HOST, Port, [{verify_pubkey, Pub}, {alpn, [<<"macula">>]}], 5_000),
+                   ?HOST, Port, [{alpn, [<<"macula">>]}], 5_000),
     Tag = macula_quic:dial_tag(Dial),
     ok = result_in_mailbox(Tag, 5_000),
     ok = macula_quic:cancel_connect(Dial),
@@ -256,18 +256,16 @@ count_datagrams(Sock, Deadline, N, Stop) ->
         N
     end.
 
-%% A loopback QUIC listener with a self-signed certificate for a fresh key,
-%% so a dial can pin that key and connect.
+%% A loopback QUIC listener with a self-signed ML-DSA-87 certificate for a
+%% fresh TLS key, which a dial accepts.
 start_listener() ->
-    {Pub, Priv} = crypto:generate_key(eddsa, ed25519),
-    {ok, {CertPem, KeyPem}} = macula_quic:generate_self_signed_cert(
-                                iolist_to_binary(Pub), iolist_to_binary(Priv),
+    {ok, {CertPem, KeyPem}} = macula_quic:generate_self_signed_cert(macula_test_identity:tls_seed(),
                                 [<<"localhost">>, <<"127.0.0.1">>]),
     Port = free_udp_port(),
     {ok, Listener} = macula_test_tmp:with_dir("macula-quic-async-connect",
                                               fun(Dir) -> listen(Dir, Port, CertPem, KeyPem) end),
     ok = macula_quic:async_accept(Listener),
-    #{listener => Listener, port => Port, pubkey => iolist_to_binary(Pub)}.
+    #{listener => Listener, port => Port}.
 
 %% The listener reads its certificate and key files when it starts listening, so they last only that long.
 listen(Dir, Port, CertPem, KeyPem) ->

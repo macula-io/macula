@@ -76,7 +76,6 @@ call_station_with_expected_node_id_and_no_match_falls_through_to_dial_test() ->
     Result = macula_client:call_station(Pool, ?SEED1, <<2:256>>, ?REALM, <<"x.y">>,
                                         #{}, 300, <<>>,
                                         #{expected_node_id => SomeNodeId,
-                                          verify => none,
                                           pin_tls_cert => false}),
     ?assertEqual({error, not_connected}, Result),
     ?assert(is_process_alive(Pool)),
@@ -128,8 +127,7 @@ reuse_seed(Port) -> #{host => <<"127.0.0.1">>, port => Port}.
 
 call_pinned(Pool, Seed, Station) ->
     macula_client:call_station(Pool, Seed, <<2:256>>, ?REALM, <<"x.y">>, #{}, 200, <<>>,
-                               #{expected_node_id => Station, verify => none,
-                                 pin_tls_cert => false},
+                               #{expected_node_id => Station, pin_tls_cert => false},
                                100).
 
 %% Make the pool's one link answer `peer_node_id' with `Station', which is

@@ -71,11 +71,11 @@ close_listener_while_clients_connect() ->
 %% one from an earlier round can only add to the count.
 late_new_conns() ->
     Port = free_udp_port(),
-    {PubBin, {ok, Listener}} = macula_test_tmp:with_dir("macula-quic-owner-barrier",
+    {ok, Listener} = macula_test_tmp:with_dir("macula-quic-owner-barrier",
                                                         fun(Dir) -> listener_in(Dir, Port) end),
     ok = macula_quic:async_accept(Listener),
     Scenario = self(),
-    _ = [spawn(fun() -> Scenario ! {dialled, dial(Port, PubBin)} end)
+    _ = [spawn(fun() -> Scenario ! {dialled, dial(Port)} end)
          || _ <- lists:seq(1, ?CLIENTS)],
     ok = new_conns(?CLOSE_AFTER),
     ok = macula_quic:close_listener(Listener),
@@ -201,17 +201,17 @@ new_conns_until(Deadline, Count) ->
         Count
     end.
 
-dial(Port, PubBin) ->
-    macula_quic:connect(<<"127.0.0.1">>, Port, [{verify_pubkey, PubBin}, {alpn, [?ALPN]}], 5_000).
+dial(Port) ->
+    macula_quic:connect(<<"127.0.0.1">>, Port, [{alpn, [?ALPN]}], 5_000).
 
 %% A listener, a client connection to it, and one stream the client opened
 %% and the listener side accepted, not yet active.
 pair() ->
     Port = free_udp_port(),
-    {PubBin, {ok, Listener}} = macula_test_tmp:with_dir("macula-quic-owner-barrier",
+    {ok, Listener} = macula_test_tmp:with_dir("macula-quic-owner-barrier",
                                                         fun(Dir) -> listener_in(Dir, Port) end),
     ok = macula_quic:async_accept(Listener),
-    {ok, ClientConn} = dial(Port, PubBin),
+    {ok, ClientConn} = dial(Port),
     ServerConn = receive {quic, new_conn, C, _Info} -> C after ?EVENT_TIMEOUT_MS -> error(no_server_connection) end,
     ok = macula_quic:async_accept_stream(ServerConn),
     {ok, ClientStream} = macula_quic:open_stream(ClientConn),
@@ -221,22 +221,20 @@ pair() ->
     #{listener => Listener, client_conn => ClientConn, server_conn => ServerConn,
       client_stream => ClientStream, server_stream => ServerStream}.
 
-%% A listener on Port, and the public key a client pins. The listener reads
+%% A listener on Port. The listener reads
 %% its certificate and key files when it starts listening.
 listener_in(Dir, Port) ->
-    {PubBin, Cert, Key} = identity_files(Dir),
-    {PubBin, macula_quic:listen(<<"127.0.0.1">>, Port, [{cert, Cert}, {key, Key}, {alpn, [?ALPN]}])}.
+    {Cert, Key} = identity_files(Dir),
+    macula_quic:listen(<<"127.0.0.1">>, Port, [{cert, Cert}, {key, Key}, {alpn, [?ALPN]}]).
 
 identity_files(Dir) ->
-    {Pub, Priv} = crypto:generate_key(eddsa, ed25519),
-    PubBin = iolist_to_binary(Pub),
     {ok, {CertPem, KeyPem}} =
-        macula_quic:generate_self_signed_cert(PubBin, iolist_to_binary(Priv), [<<"127.0.0.1">>]),
+        macula_quic:generate_self_signed_cert(macula_test_identity:tls_seed(), [<<"127.0.0.1">>]),
     Cert = filename:join(Dir, "listener.crt"),
     Key = filename:join(Dir, "listener.key"),
     ok = file:write_file(Cert, CertPem),
     ok = file:write_file(Key, KeyPem),
-    {PubBin, Cert, Key}.
+    {Cert, Key}.
 
 %% Returns Result with the pair's handles referenced until now.
 kept(#{listener := _, client_conn := _, server_conn := _, server_stream := _}, Result) ->

@@ -209,8 +209,7 @@ host deliberately), dial an announced host **directly** with
 {ok, [#{announcer_node := Node, endpoint := Url} | _]} =
     macula:find_content_providers(Pool, MCID),
 {ok, Bytes} = macula:get_content_station(Pool, Url, MCID, 30_000,
-                                         #{expected_node_id => Node,
-                                           verify => none}).
+                                         #{expected_node_id => Node}).
 ```
 
 Or resolve and fetch in one call with `macula_direct_dial:get_content/3`,

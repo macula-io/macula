@@ -374,11 +374,11 @@ with_pair(Fun) ->
 
 pair() ->
     Port = free_udp_port(),
-    {PubBin, {ok, Listener}} = macula_test_tmp:with_dir("macula-async-send-on-stream",
+    {ok, Listener} = macula_test_tmp:with_dir("macula-async-send-on-stream",
                                                         fun(Dir) -> windowed_listener(Dir, Port) end),
     ok = macula_quic:async_accept(Listener),
     {ok, ClientConn} = macula_quic:connect(<<"127.0.0.1">>, Port,
-                                            [{verify_pubkey, PubBin}, {alpn, [<<"macula">>]}],
+                                            [{alpn, [<<"macula">>]}],
                                             ?EVENT_MS),
     ServerConn = receive {quic, new_conn, C, _Info} -> C after ?EVENT_MS -> error(no_server_connection) end,
     ok = macula_quic:async_accept_stream(ServerConn),
@@ -389,18 +389,16 @@ pair() ->
       client_stream => ClientStream, server_stream => ServerStream}.
 
 windowed_listener(Dir, Port) ->
-    {Pub, Priv} = crypto:generate_key(eddsa, ed25519),
-    PubBin = iolist_to_binary(Pub),
     {ok, {CertPem, KeyPem}} =
-        macula_quic:generate_self_signed_cert(PubBin, iolist_to_binary(Priv), [<<"127.0.0.1">>]),
+        macula_quic:generate_self_signed_cert(macula_test_identity:tls_seed(), [<<"127.0.0.1">>]),
     Cert = filename:join(Dir, "listener.crt"),
     Key = filename:join(Dir, "listener.key"),
     ok = file:write_file(Cert, CertPem),
     ok = file:write_file(Key, KeyPem),
-    {PubBin, macula_quic:listen(<<"127.0.0.1">>, Port,
+    macula_quic:listen(<<"127.0.0.1">>, Port,
                                 [{cert, Cert}, {key, Key}, {alpn, [<<"macula">>]},
                                  {stream_receive_window, ?WINDOW},
-                                 {receive_window, 4 * ?WINDOW}])}.
+                                 {receive_window, 4 * ?WINDOW}]).
 
 stop_pair(#{listener := Listener, client_conn := ClientConn, server_conn := ServerConn}) ->
     _ = (catch macula_quic:close_connection(ClientConn)),

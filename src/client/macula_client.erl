@@ -352,14 +352,12 @@
     request_admission => #{caller_quota => pos_integer(), share => pos_integer(),
                            reply_bytes => pos_integer(), reply_bytes_total => pos_integer()},
 
-    %% TLS policy forwarded to every link this pool dials. `init/1' reads
-    %% both and this closed map declared neither, so a caller passing them
-    %% got no type error and no help either way.
-    verify             => none | webpki,
+    %% The station node_id every link this pool dials must prove.
     expected_node_id   => <<_:256>>
-    %% ⚠ `pin_tls_cert' is DELIBERATELY NOT DECLARED. It is refused at
-    %% runtime (`macula:connect/2'), and leaving it out of this closed map
-    %% means a typed caller hears it from dialyzer as well. See macula#15.
+    %% ⚠ `pin_tls_cert' and `verify' are DELIBERATELY NOT DECLARED. Both
+    %% are refused at runtime (`macula:connect/2'), and leaving them out of
+    %% this closed map means a typed caller hears it from dialyzer as well.
+    %% See macula#15 and `macula:trust_options_checked/1'.
 }.
 
 %% V1 multi_relay options that have NO V2 equivalent. Callers passing
@@ -627,7 +625,10 @@
 %% identity key in the node's profile, starts no pool: the refusal is
 %% returned and no link is dialed. Nor does a seed that names no node_id
 %% it expects, in the seed or in the `expected_node_id' option: the start
-%% returns `{error, {seeds, expected_node_id_required}}'.
+%% returns `{error, {seeds, expected_node_id_required}}'. A `verify' key, in
+%% the options or on a seed, returns `{error, {seeds, {verify,
+%% one_verification_mode}}}': there is one verification mode and it is not
+%% the caller's to pick.
 -spec connect([seed()], opts()) -> {ok, pool()} | {error, term()}.
 connect(Seeds, Opts) when is_list(Seeds), is_map(Opts) ->
     gen_server:start_link(?MODULE, {Seeds, identity_wrapped(Opts)}, []).
@@ -709,9 +710,8 @@ pick_connected_link(Pool) when is_pid(Pool) ->
 
 %% @doc As `pick_connected_link/1', but for a SPECIFIC station — reuse
 %% a live link to `Station' or dial (and wait up to `TimeoutMs' for the
-%% handshake on) a fresh one, per-call trust-overridable via `LinkOpts'
-%% (`verify' / `expected_node_id', mirroring
-%% `call_station/9'). This is direct-dial's content-transfer primitive:
+%% handshake on) a fresh one, naming the station it must prove through
+%% `LinkOpts' (`expected_node_id', mirroring `call_station/9'). This is direct-dial's content-transfer primitive:
 %% the returned pid is pinned for a whole `put_content'/`get_content'
 %% dedicated-stream transfer exactly like `pick_connected_link/1', just
 %% against a caller-resolved station instead of whichever pool link is
@@ -749,23 +749,17 @@ call_station(Pool, Station, Target, Realm, Procedure, Payload, TimeoutMs, UcanTo
     call_station(Pool, Station, Target, Realm, Procedure, Payload, TimeoutMs,
                  UcanToken, #{}).
 
-%% @doc As `call_station/8', with a per-call TLS trust override for
-%% THIS dial only — `verify' (webpki | none), `expected_node_id' (pin
-%% the station's node_id). `pin_tls_cert => true' is REFUSED, see
-%% `macula:call_station/8'. (`false' to
-%% enforce that pin at the application layer only — see
-%% `false' and an absent key pass and change nothing — needed against a station
-%% whose TLS is terminated by a PKI unrelated to its macula identity,
-%% e.g. production behind Let's Encrypt) in `LinkOpts'. The pool's own
-%% `connect/2'-time `verify'/`expected_node_id' are fixed at connect
-%% time and apply uniformly to every link the pool dials (seeds and
-%% every `call_station' target alike) — unworkable for direct-dial,
-%% whose whole point is reaching a station not known until resolved at
-%% call time. This lets a direct-dial caller pin trust to the specific
-%% pubkey a signed DHT record just resolved, without weakening (or
-%% needing to know in advance) the pool's default verification for its
-%% other links. Only applies when a NEW link is dialed for `Station' —
-%% an already-connected link keeps whatever trust it was dialed under.
+%% @doc As `call_station/8', naming in `LinkOpts' the station THIS dial
+%% must prove: `expected_node_id'. `pin_tls_cert => true' and `verify' are
+%% REFUSED, see `macula:call_station/8'. The pool's own `connect/2'-time
+%% `expected_node_id' is fixed at connect time and applies to every link
+%% the pool dials (seeds and every `call_station' target alike),
+%% unworkable for direct-dial, whose whole point is reaching a station not
+%% known until resolved at call time. This lets a direct-dial caller name
+%% the node_id a signed DHT record just resolved, without changing the
+%% pool's expectation for its other links. Only applies when a NEW link is
+%% dialed for `Station': an already-connected link keeps the identity it
+%% proved.
 -spec call_station(pool(), seed(), <<_:256>>, <<_:256>>, binary(), term(),
                    1..600_000, binary(), map()) ->
     {ok, term()} | {error, term()}.
@@ -856,10 +850,9 @@ unadvertise(Pool, Realm, Procedure)
 %% handshake, then open the stream there, naming `Target'.
 %% `Opts' may set `dial_timeout_ms' (default 10_000) for the dial and
 %% handshake, plus any stream option (e.g. `mode').
-%% `Opts' also carries the per-call TLS trust override for this dial:
-%% `verify', `expected_node_id', same as
-%% `call_station/8'. They are kept apart as the dial's own options, so
-%% they reach `ensure_link/3' and not the stream open.
+%% `Opts' also names the station this dial must prove, `expected_node_id',
+%% as `call_station/8' does. It is kept apart as the dial's own option, so
+%% it reaches `ensure_link/3' and not the stream open.
 -spec call_stream_station(pool(), seed(), <<_:256>>, <<_:256>>, binary(), term(),
                           map()) -> {ok, pid()} | {error, term()}.
 call_stream_station(Pool, Station, Target, Realm, Procedure, Args, Opts)
@@ -869,7 +862,7 @@ call_stream_station(Pool, Station, Target, Realm, Procedure, Args, Opts)
        is_binary(Procedure),
        is_map(Opts) ->
     DialTimeout = maps:get(dial_timeout_ms, Opts, 10_000),
-    LinkOpts = maps:with([verify, expected_node_id], Opts),
+    LinkOpts = maps:with([expected_node_id], Opts),
     gen_server:call(Pool,
                     {call_stream_station, Station, Target, Realm, Procedure, Args,
                      Opts#{owner => maps:get(owner, Opts, self())}, LinkOpts},
@@ -1302,9 +1295,22 @@ first_outside([Outside | _]) -> Outside.
 
 %% A pool given more seeds than its limit does not start, and dials nothing.
 init_within_seed_limit(Given, Max, Seeds, Opts) when Given =< Max ->
-    init_with_pinned_seeds(lists:all(fun(Seed) -> pinned_seed(Seed, Opts) end, Seeds), Seeds, Opts);
+    init_without_verify(names_verify(Seeds, Opts), Seeds, Opts);
 init_within_seed_limit(Given, Max, _Seeds, _Opts) ->
     {error, {too_many_seeds, Given, Max}}.
+
+%% A pool asked for a TLS verification mode does not start. There is one
+%% (`macula_quic:connect/4'), so a `verify' key names a check that cannot
+%% run, in the options or on any seed. `macula:connect/2' refuses it before
+%% this, and this is what a caller of `macula_client:connect/2' directly, as
+%% the services do, hears instead of silence.
+init_without_verify(false, Seeds, Opts) ->
+    init_with_pinned_seeds(lists:all(fun(Seed) -> pinned_seed(Seed, Opts) end, Seeds), Seeds, Opts);
+init_without_verify(true, _Seeds, _Opts) ->
+    {error, {seeds, {verify, one_verification_mode}}}.
+
+names_verify(Seeds, Opts) ->
+    lists:any(fun(Map) -> is_map(Map) andalso is_map_key(verify, Map) end, [Opts | Seeds]).
 
 %% A pool given a seed that names no node_id it expects does not start, loads no key and dials nothing: a link would
 %% refuse that seed at every start, and the pool would look ready with nothing it could reach. A seed map's own
@@ -1340,14 +1346,13 @@ init_with_keys({ok, #{node_identity := NodeIdentity, issuer := Issuer, issuer_st
             connect_timeout_ms => maps:get(connect_timeout_ms, Opts, 30_000),
             admission          => Admission
         },
-        %% TLS policy for the links this pool dials (seeds AND
-        %% `call_station' targets): `verify' (webpki | none) and
-        %% `expected_node_id', the station node_id the handshake must
-        %% prove. Forwarded only when the caller set them.
+        %% For the links this pool dials (seeds AND `call_station'
+        %% targets): `expected_node_id', the station node_id the
+        %% handshake must prove. Forwarded only when the caller set it.
         %%
-        %% `pin_tls_cert' is NOT among them. It never pinned anything and
-        %% `true' is now refused; see macula#15.
-        maps:with([verify, expected_node_id], Opts)),
+        %% `pin_tls_cert' and `verify' are NOT among them: both are
+        %% refused; see `macula:trust_options_checked/1'.
+        maps:with([expected_node_id], Opts)),
     DedupSweep  = maps:get(dedup_sweep_ms, Opts, ?DEFAULT_DEDUP_SWEEP_MS),
     Replication = maps:get(replication_factor, Opts, ?DEFAULT_REPLICATION),
     DedupTab    = macula_client_dedup:new(),
@@ -1523,8 +1528,8 @@ handle_call({call_stream_station, Station, Target, Realm, Procedure, Args, Opts,
     %% Direct-dial streaming: ensure (reuse or dial) a link to the
     %% specific station, then open the stream there. Same worker-spawn
     %% rationale as call_station — the pool gen_server never blocks on
-    %% the dial + handshake. LinkOpts (verify/expected_node_id/
-    %% expected_node_id) shapes a fresh dial only, same as call_station.
+    %% the dial + handshake. LinkOpts (expected_node_id) shapes a fresh
+    %% dial only, same as call_station.
     on_link(ensure_link(Station, LinkOpts, S), From,
             fun(Pid) -> stream_when_connected(Pid, Target, Realm, Procedure, Args, Opts) end);
 
@@ -1884,8 +1889,8 @@ spawned_link_pids(#state{links = Links}) ->
 %%
 %% Deliberately does NOT do this for a caller with no `expected_node_id'
 %% (the pool's own seed-connect path never sets one — see
-%% `call_station/8''s own doc: "The pool's own connect/2-time verify/
-%% expected_node_id are fixed at connect time"): scanning every link for
+%% `call_station/9''s own doc: "The pool's own `connect/2'-time
+%% `expected_node_id' is fixed at connect time"): scanning every link for
 %% a plain seed dial would add cost to the common path for no benefit,
 %% since a seed's `Station' string IS already its own canonical `Links'
 %% key. This only ever runs on a direct-dial literal-key miss, which any
@@ -3031,12 +3036,10 @@ station_seed(_) ->
 seed_from_fields(Hostname, _HostAdvertised, Port, NodeId)
   when is_binary(Hostname), byte_size(Hostname) > 0, is_integer(Port) ->
     {true, {seed_url(unwrap_wire_text(Hostname), Port), NodeId}};
-%% `NodeId' must be exactly 32 bytes (a real Ed25519 pubkey) or there is
-%% nothing valid to pin -- `dial_trust_opts/1' would reject a
-%% wrong-length key anyway (falls through to a plain, unauthenticated
-%% `verify' with no pin), so failing closed here instead means a
-%% malformed row never burns a `max_links' slot until `giveup_after_ms'
-%% only to fail downstream the same way.
+%% `NodeId' must be exactly 32 bytes, a node_id, or there is no identity
+%% for the dial to expect, and the handshake would refuse it downstream.
+%% Failing closed here instead means a malformed row never burns a
+%% `max_links' slot until `giveup_after_ms' only to fail the same way.
 seed_from_fields(_Hostname, HostAdvertised, Port, NodeId)
   when is_integer(Port), is_binary(NodeId), byte_size(NodeId) =:= 32 ->
     pinned_seed_from_host_advertised(HostAdvertised, Port, NodeId);

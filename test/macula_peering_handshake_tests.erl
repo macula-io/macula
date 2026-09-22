@@ -80,7 +80,7 @@ handshake_test_() ->
             fun() -> close_sends_a_goodbye_the_peer_reads(Ctx) end},
            {"a dial to another node_id closes with peer_identity_mismatch",
             {timeout, 30, fun() -> a_dial_to_another_node_id_closes_with_peer_identity_mismatch(Ctx) end}},
-           {"a connection without what its role needs does not start",
+           {"a connection without what its role needs, or with a TLS verification mode, does not start",
             {timeout, 30, fun() -> a_connection_without_what_its_role_needs_does_not_start(Ctx) end}},
            {"a first frame other than an opener closes with unexpected_frame",
             {timeout, 30, fun() -> a_first_frame_other_than_an_opener_closes_with_unexpected_frame(Ctx) end}},
@@ -164,10 +164,8 @@ handshake_test_() ->
 %% test that asserts on them.
 setup() ->
     {ok, _} = application:ensure_all_started(macula),
-    {Pub, Priv} = ephemeral_keypair(),
     {ok, {CertPem, KeyPem}} =
-        macula_quic:generate_self_signed_cert(
-            Pub, Priv, [<<"localhost">>, <<"127.0.0.1">>]),
+        macula_quic:generate_self_signed_cert(macula_test_identity:tls_seed(), [<<"localhost">>, <<"127.0.0.1">>]),
     Dir  = macula_test_tmp:dir("macula-peering-handshake"),
     Cert = filename:join(Dir, "listener.crt"),
     Key  = filename:join(Dir, "listener.key"),
@@ -509,9 +507,6 @@ drain_quic_messages() ->
     after 0 -> ok
     end.
 
-ephemeral_keypair() ->
-    {Pub, Priv} = crypto:generate_key(eddsa, ed25519),
-    {iolist_to_binary(Pub), iolist_to_binary(Priv)}.
 
 pick_free_port() ->
     {ok, S} = gen_udp:open(0, [binary, {ip, {127,0,0,1}}]),
@@ -572,11 +567,17 @@ a_connection_without_what_its_role_needs_does_not_start(_Ctx) ->
     ?assertEqual({error, {identity, not_an_identity_key}},
                  macula_peering:connect(Client#{identity := ConnectKey,
                                                 target := Target#{expected_node_id => <<0:256>>}})),
-    ?assertEqual({error, {puzzle, mode_required}}, macula_peering_conn_sup:start_conn(Station)).
+    ?assertEqual({error, {puzzle, mode_required}}, macula_peering_conn_sup:start_conn(Station)),
+    %% A dial target naming a TLS verification mode asks for a check that no
+    %% longer exists: there is one mode, and it is not the caller's to pick.
+    [?assertEqual({error, {target, {verify, one_verification_mode}}},
+                  macula_peering:connect(Client#{target := Target#{expected_node_id => <<0:256>>,
+                                                                   verify => Mode}}))
+     || Mode <- [none, webpki]].
 
 a_first_frame_other_than_an_opener_closes_with_unexpected_frame(Ctx) ->
     #{port := Port} = World = world(Ctx, #{}),
-    {ok, Raw} = macula_quic:connect(<<"127.0.0.1">>, Port, [{verify, none}, {alpn, [<<"macula">>]}], 5_000),
+    {ok, Raw} = macula_quic:connect(<<"127.0.0.1">>, Port, [{alpn, [<<"macula">>]}], 5_000),
     Station = accept_one(station_opts(World, #{mode => off})),
     {ok, Stream} = macula_quic:open_stream(Raw),
     NotAnOpener = macula_handshake:status(#{tbs => <<"a tbs">>, signature => <<"a signature">>}),
@@ -1171,7 +1172,7 @@ answer_probe(_OtherProc, _Request, Conn, Kp, Profile, N) ->
 %% that has not sent an opener, and that peer's open stream.
 with_raw_peer(Ctx, Scenario) ->
     #{port := Port} = World = world(Ctx, #{}),
-    {ok, Raw} = macula_quic:connect(<<"127.0.0.1">>, Port, [{verify, none}, {alpn, [<<"macula">>]}], 5_000),
+    {ok, Raw} = macula_quic:connect(<<"127.0.0.1">>, Port, [{alpn, [<<"macula">>]}], 5_000),
     Station = accept_one(station_opts(World, #{mode => off})),
     {ok, Stream} = macula_quic:open_stream(Raw),
     try

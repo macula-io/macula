@@ -80,16 +80,13 @@
 %%% below would still pass (it only proves we reached the station we
 %%% were told to reach, not that whoever told us so was authorized to).
 %%% (2) The resolved `station_endpoint' must be signed by the station
-%%% itself (`station_signed_endpoint/2'). The actual QUIC dial
-%%% trusts NEITHER the TLS certificate (it is not pinned, and there is
-%%% no option that would pin it: a production station's TLS is
-%%% terminated by an unrelated PKI, e.g. Let's Encrypt, so pinning the
-%%% cert key can never succeed) NOR
-%%% nothing (`verify => none' alone would trust whoever answers): trust
-%%% is enforced at the application layer instead, via the
-%%% cryptographically signed CONNECT/HELLO handshake
-%%% (the peer identity binding in `macula_peering_conn') checked against the
-%%% exact node_id the signed DHT chain above resolved.
+%%% itself (`station_signed_endpoint/2'). The actual QUIC dial proves
+%%% only that the station holds the key of the self-signed ML-DSA-87
+%%% certificate it presents (`macula_quic:connect/4'), which says nothing
+%%% of who it is: that is enforced at the application layer, via the
+%%% cryptographically signed CONNECT/HELLO handshake (the peer identity
+%%% binding in `macula_peering_conn') checked against the exact node_id
+%%% the signed DHT chain above resolved.
 %%%
 %%% An authorization verifies against the realm key the pool pinned for the
 %%% call's realm when it started (`macula:connect/2''s
@@ -1127,10 +1124,10 @@ await_transfer(Await, Transfer, RemainingMs) ->
     catch exit:{timeout, _} -> {error, timeout}
     end.
 
-%% The trust override for a dial pinned to the identity a signed DHT record
-%% resolved — see the module doc's "Trust model".
+%% The identity a dial must prove: the one a signed DHT record resolved.
+%% See the module doc's "Trust model".
 pinned(Node) ->
-    #{expected_node_id => Node, verify => none}.
+    #{expected_node_id => Node}.
 
 deadline(TimeoutMs) -> erlang:monotonic_time(millisecond) + TimeoutMs.
 

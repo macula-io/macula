@@ -52,17 +52,14 @@ cleanup(#{dir := Dir}) ->
     ok.
 
 identity(Dir, Name) ->
-    {Pub, Priv} = crypto:generate_key(eddsa, ed25519),
-    PubBin = iolist_to_binary(Pub),
     {ok, {CertPem, KeyPem}} =
-        macula_quic:generate_self_signed_cert(
-            PubBin, iolist_to_binary(Priv), [<<"localhost">>, <<"127.0.0.1">>]),
+        macula_quic:generate_self_signed_cert(macula_test_identity:tls_seed(), [<<"localhost">>, <<"127.0.0.1">>]),
     Cert = filename:join(Dir, Name ++ ".crt"),
     Key = filename:join(Dir, Name ++ ".key"),
     ok = file:write_file(Cert, CertPem),
     ok = file:write_file(Key, KeyPem),
     [{'Certificate', Der, not_encrypted}] = public_key:pem_decode(CertPem),
-    #{pub => PubBin, cert => Cert, key => Key, der => Der}.
+    #{cert => Cert, key => Key, der => Der}.
 
 %%%===================================================================
 %%% Test bodies
@@ -70,31 +67,29 @@ identity(Dir, Name) ->
 
 dialed_and_accepted_report_the_same_leaf(#{a := #{der := DerA} = A}) ->
     {Listener, Port} = listen(A),
-    {ok, Client} = dial(Port, A),
+    {ok, Client} = dial(Port),
     Server = accepted(),
     ?assertEqual({ok, DerA}, macula_quic:peer_leaf(Client)),
     ?assertEqual({ok, DerA}, macula_quic:presented_leaf(Server)),
     close([Client, Server], Listener).
 
 reload_leaves_each_connection_its_own_leaf(#{a := #{der := DerA} = A,
-                                             b := #{der := DerB, cert := CertB, key := KeyB} = B}) ->
+                                             b := #{der := DerB, cert := CertB, key := KeyB}}) ->
     {Listener, Port} = listen(A),
-    {ok, ClientA} = dial(Port, A),
+    {ok, ClientA} = dial(Port),
     ServerA = accepted(),
     ?assertEqual(ok, macula_quic:reload_certificate(Listener, CertB, KeyB)),
-    {ok, ClientB} = dial(Port, B),
+    {ok, ClientB} = dial(Port),
     ServerB = accepted(),
     ?assertEqual({ok, DerA}, macula_quic:presented_leaf(ServerA)),
     ?assertEqual({ok, DerB}, macula_quic:presented_leaf(ServerB)),
     ?assertEqual({ok, DerA}, macula_quic:peer_leaf(ClientA)),
     ?assertEqual({ok, DerB}, macula_quic:peer_leaf(ClientB)),
-    %% A dial that pins A's key now fails: the listener presents B.
-    ?assertMatch({error, _}, dial(Port, A)),
     close([ClientA, ServerA, ClientB, ServerB], Listener).
 
 each_side_reports_only_its_own_leaf(#{a := A}) ->
     {Listener, Port} = listen(A),
-    {ok, Client} = dial(Port, A),
+    {ok, Client} = dial(Port),
     Server = accepted(),
     ?assertEqual({error, no_presented_leaf}, macula_quic:presented_leaf(Client)),
     ?assertEqual({error, no_peer_leaf}, macula_quic:peer_leaf(Server)),
@@ -118,8 +113,8 @@ mismatched_reload_keeps_current_certificate(#{a := #{key := KeyA} = A,
 
 %% A new connection completes its handshake, and both of its ends report
 %% Identity's leaf. Closes the listener afterwards.
-assert_new_connection_presents(Listener, Port, #{der := Der} = Identity) ->
-    {ok, Client} = dial(Port, Identity),
+assert_new_connection_presents(Listener, Port, #{der := Der}) ->
+    {ok, Client} = dial(Port),
     Server = accepted(),
     ?assertEqual({ok, Der}, macula_quic:presented_leaf(Server)),
     ?assertEqual({ok, Der}, macula_quic:peer_leaf(Client)),
@@ -135,10 +130,10 @@ listen(#{cert := Cert, key := Key}) ->
     ok = macula_quic:async_accept(Listener),
     {Listener, Port}.
 
-%% Dials the listener, pinning the key of the identity it should present.
-dial(Port, #{pub := Pub}) ->
+%% Dials the listener, which proves only that it holds its certificate's key.
+dial(Port) ->
     macula_quic:connect(<<"127.0.0.1">>, Port,
-                        [{verify_pubkey, Pub}, {alpn, [<<"macula">>]}], 5000).
+                        [{alpn, [<<"macula">>]}], 5000).
 
 accepted() ->
     receive
