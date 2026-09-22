@@ -57,7 +57,19 @@ env:
   RUSTUP_HOME: /root/.rustup
 
 concurrency:
-  group: test-${{ github.ref }}
+  # On a BRANCH a newer push should cancel the older run: nobody is waiting on
+  # the answer for a commit that has been superseded.
+  #
+  # On MAIN it must not, and this used to. During a busy stretch every run on
+  # main was cancelled by the next push, so no run on main completed and there
+  # was NO COMMIT ON MAIN WE COULD CALL GREEN, which is the one thing
+  # trunk-based development rests on. Observed: two consecutive runs on main
+  # cancelled at 4.9 and 7.6 minutes.
+  #
+  # Keying the group on the sha for main gives every commit there its own
+  # group, so nothing cancels it and every commit on main gets an answer.
+  # Branch behaviour is unchanged.
+  group: test-${{ github.ref }}-${{ github.ref == 'refs/heads/main' && github.sha || 'ref' }}
   cancel-in-progress: true
 
 jobs:
