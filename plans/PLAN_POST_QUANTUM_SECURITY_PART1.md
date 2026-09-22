@@ -255,8 +255,9 @@ Ceilings from signing and verifying alone, per core, estimated from the table:
     spartan, stations, tube and turn-credentials, on Alpine 3.22 or 3.23 with OpenSSL 3.5.8 (crypto-5.8.3), and
     hecate-whiteboard on Debian 13.5 with OpenSSL 3.5.7 (crypto-5.7);
   - OTP 27 on OpenSSL 3.5.8, needing only OTP 28 (10): the hecate services archive, grid, llm, news, sentinel and
-    warden, hecate-daemon, hecate-stub and macula-dist-relay (crypto-5.5.3.2), and macula-e2e, which moves to
-    `erlang:28-alpine`;
+    warden, hecate-daemon and hecate-stub (crypto-5.5.3.2), and macula-e2e, which moves to `erlang:28-alpine`.
+    **`macula-dist-relay` is no longer in this list: it is parked on `macula ~> 11.x` and is not a 12 consumer**
+    (Raf, 2026-09-23), so its base image is not this plan's business;
   - Debian 12 with OpenSSL 3.0, needing a new base (4): macula-station and macula-realm (crypto-5.7), and
     macula-portal and macula-relay (crypto-5.5.1), which D8 leaves out of scope;
   - not BEAM (2): zot and hanko.

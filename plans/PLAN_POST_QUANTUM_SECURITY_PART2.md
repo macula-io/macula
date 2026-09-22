@@ -322,12 +322,29 @@ change, the done criterion and the effort. The US profile goes first; the EU par
   a macula QUIC stream look like a socket to OTP's `ssl`. The handshake is the peering one, unchanged; only the
   leaf differs, coming from the session inside the tunnel. A station's puzzle mode is required on the accepting
   side with no default, as `macula_peering_conn` requires it.
-  ⚠ **Neither carrier calls it yet, so `MACULA_DIST_UNIDENTIFIED_PEER` is still what those dials need.** It goes
-  when the relay and pool paths call this, which needs `macula_node_keys:node_identity/1` (Raf, 2026-09-22: one
-  identity key per node, stored on disk, used by pools and by the tunnel; Mercurius owns the loader).
-  ⚠ **The grind moves onto the distribution path.** When the identity file is missing and the node boots
-  distributed, `macula_dist:listen/1` runs before the application starts, so the puzzle is ground there. About a
-  second at difficulty 12, once per node, delaying the node becoming distributed.
+  ⛔ **`macula-dist-relay` is parked on `macula ~> 11.x` and is not a 12 consumer** (Raf, 2026-09-23). It consumes
+  `macula_tls:quic_server_opts/0`, which 12 deletes, so it does not build against 12 and is not being ported.
+  ⛔ **"The Macula BEAM stack" is the Erlang and Elixir artefacts only**: macula and its NIFs, `macula-station`,
+  `macula-realm`, `mcl-om` and `mcl-echo`. It has never meant running Erlang distribution over the mesh.
+  ⛔ **PARKED, and the setting stays. Raf, 2026-09-23: "I doubt that distributed Erlang over-mesh will ever get
+  beyond the PoC/Novelty stage".** Neither carrier calls the tunnel, and neither will until someone picks this up,
+  so `MACULA_DIST_UNIDENTIFIED_PEER=accept` remains the gate on distribution over QUIC. That gate is honest as it
+  stands: those dials refuse to start unless an operator accepts an unidentified peer, and the limit is written in
+  the code, the dist guide and the CHANGELOG. The tunnel exists, is tested, and is called by nothing.
+  **The one open question, decided, for whoever picks it up.** A dial has to name the node_id it expects, and
+  Erlang distribution addresses a peer by NAME: `macula_dist:setup/5` and `request_tunnel/2` get `other@host` and
+  nothing else, and nothing in macula maps a name to a node_id. The answer is a map in application config,
+  `dist_peers`, of node name to node_id, with a dial to a node that has no entry refused when it starts, which is
+  this WP's own rule applied literally. ⛔ **Resolving the node_id from the mesh instead cannot work: it needs a
+  pool and the DHT, and neither exists when `macula_dist:listen/1` runs, which is before the application starts.**
+  And it is why the expected node_id matters at all: a carrier can terminate the session with a valid certificate
+  of its own and open a second one onward, forwarding Erlang's cookie challenge between the two, since that
+  challenge is not bound to the channel it travels on. A tunnel without an expected node_id proves only that
+  SOMEONE holds a well-formed identity, not that it is the node that was dialled.
+  ⚠ **When it is picked up, the grind moves onto the distribution path.** The node identity
+  (`macula_node_keys:node_identity/1`, Raf 2026-09-22) is loaded or ground on first use; when the file is missing
+  and the node boots distributed, `macula_dist:listen/1` runs before the application starts, so the puzzle is
+  ground there. About a second at difficulty 12, once per node, delaying the node becoming distributed.
   Also fixed on the carrier while building it: the relay's control channel took a 32-bit frame length with no cap,
   so a 4 GiB length was a reader that waits and holds everything arriving meanwhile until the node dies; and a
   frame that failed to decode was skipped rather than ending the connection, which takes the middle of something

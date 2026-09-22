@@ -21,10 +21,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   inside the tunnel rather than from the QUIC connection. `macula_dist_tunnel_socket`
   makes a macula QUIC stream look like a socket to OTP's `ssl`, which is what
   lets a session run over a carrier that forwards bytes.
-  **Neither carrier calls this yet**, so nothing changes for a running node:
-  the relay and pool paths still refuse to start without
-  `MACULA_DIST_UNIDENTIFIED_PEER=accept`, and that setting goes when they do
-  call it.
+  **Neither carrier calls this, and the wiring is parked** (Raf, 2026-09-23:
+  distribution over the mesh is a novelty rather than a product), so nothing
+  changes for a running node: the relay and pool paths still refuse to start
+  without `MACULA_DIST_UNIDENTIFIED_PEER=accept`, which remains the gate.
   Measured before it was built, and it is what removes D29's fallback: OTP
   28.4.2's `ssl` completes a TLS 1.3 handshake with the certificate and key
   `macula_quic:generate_self_signed_cert/2` returns, ML-DSA-87 with the private

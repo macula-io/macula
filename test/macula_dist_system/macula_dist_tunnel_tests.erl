@@ -24,6 +24,8 @@ tunnel_test_() ->
       [{"both ends of a tunnel name each other", fun both_ends_name_each_other/0},
        {"a dial for another node_id is refused, and nothing is carried",
         fun a_dial_for_another_node_id_is_refused/0},
+       {"a real node that is not the one dialled is refused",
+        fun a_real_but_different_node_is_refused/0},
        {"the tunnel carries bytes, and only inside its session",
         fun the_tunnel_carries_bytes/0}]}}.
 
@@ -40,6 +42,14 @@ both_ends_name_each_other() ->
 %% to another node_id is refused before any distribution byte crosses.
 a_dial_for_another_node_id_is_refused() ->
     Refusal = with_tunnel(#{expected => <<7:256>>}, fun(Outcome) -> Outcome end),
+    ?assertMatch(#{dialled := {error, {peer_identity_mismatch, _}}}, Refusal).
+
+%% The threat the expected node_id exists for, rather than a shape check on a made-up one. The node at the far end
+%% here is a REAL macula node with a real identity key and a valid certificate: everything it presents verifies.
+%% It is simply not the node that was asked for, which is what something in the middle looks like when it
+%% terminates the session with a certificate of its own and opens a second one onward.
+a_real_but_different_node_is_refused() ->
+    Refusal = with_tunnel(#{expected => the_dialling_node}, fun(Outcome) -> Outcome end),
     ?assertMatch(#{dialled := {error, {peer_identity_mismatch, _}}}, Refusal).
 
 the_tunnel_carries_bytes() ->
@@ -87,7 +97,8 @@ world(#{cert := CertFile}) ->
 %% one cannot be driven to completion before the other starts.
 tunnel(#{client_stream := ClientStream, server_stream := ServerStream, cert := Cert, key := Key},
        #{profile := Profile, station_key := StationKey, client_key := ClientKey,
-         station_issuer := StationIssuer, client_issuer := ClientIssuer, station_node_id := StationNodeId},
+         station_issuer := StationIssuer, client_issuer := ClientIssuer,
+         station_node_id := StationNodeId, client_node_id := ClientNodeId},
        Options) ->
     Parent = self(),
     Accepting = spawn_link(fun() ->
@@ -103,7 +114,8 @@ tunnel(#{client_stream := ClientStream, server_stream := ServerStream, cert := C
     end),
     Dialled = macula_dist_tunnel:dial(ClientStream,
                                       #{profile => Profile, identity => ClientKey, issuer => ClientIssuer,
-                                        expected_node_id => maps:get(expected, Options, StationNodeId),
+                                        expected_node_id => expected(maps:get(expected, Options, the_station),
+                                                                     StationNodeId, ClientNodeId),
                                         timeout_ms => ?EVENT_MS}),
     Accepted = receive {accepted, A} -> A after ?EVENT_MS -> error(no_accept_result) end,
     #{dialled => unwrapped(Dialled), accepted => unwrapped(Accepted), accepting => Accepting}.
@@ -111,6 +123,12 @@ tunnel(#{client_stream := ClientStream, server_stream := ServerStream, cert := C
 %% A tunnel's session belongs to the process that made it, so the accepting process stays until the test is done.
 hold() ->
     receive done -> ok after ?EVENT_MS * 4 -> ok end.
+
+%% The node_id a case dials for: the one actually at the far end, the dialling node's own (a real node_id of a real
+%% node, just not this one), or bytes a case supplies itself.
+expected(the_station, StationNodeId, _ClientNodeId) -> StationNodeId;
+expected(the_dialling_node, _StationNodeId, ClientNodeId) -> ClientNodeId;
+expected(<<NodeId:32/binary>>, _StationNodeId, _ClientNodeId) -> NodeId.
 
 unwrapped({ok, Tunnel}) -> Tunnel;
 unwrapped({error, _} = Refusal) -> Refusal.

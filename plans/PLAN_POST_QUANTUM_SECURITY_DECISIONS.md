@@ -354,8 +354,10 @@ table there gives each decision's answer in short and its status.
     so only one thing changes at a time; the e2e harness image may stay on Alpine;
   - **`macula-portal`, `macula-relay`, `hecate-daemon` and `hecate-stub` are not upgraded:** they are out of scope
     and to be retired, which is Raf's call and not planned here;
-  - **`macula-dist-relay`** carries Erlang distribution over QUIC, so it moves in Stage 3 with the station and realm
-    (WP 3.4);
+  - ⛔ **`macula-dist-relay` does not move. Raf, 2026-09-23: "park it, pin it to 11.x".** It consumes
+    `macula_tls:quic_server_opts/0`, which 12 deletes, so it does not build against 12 and is not being ported. It
+    stays on `macula ~> 11.x` and is not a 12 consumer. Distribution over the mesh is a novelty rather than a
+    product, so the port would buy nothing;
   - **the hecate images on OTP 27** move to OTP 28 in WP 6.1.
 - **Why:** ML-DSA in OTP needs OTP 28 or newer ✅, compiled against OpenSSL headers 3.5.0 or newer: OTP 28.1,
   28.4.2 and 29.0.6 enable ML-DSA and ML-KEM only under that compile-time check ✅ (V3). OTP's `crypto.so` is
