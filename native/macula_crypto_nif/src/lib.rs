@@ -3,19 +3,15 @@
 //! This module provides high-performance implementations of:
 //! - ML-DSA (FIPS 204) key generation, signing, and verification, on
 //!   `macula-mldsa`
-//! - Ed25519 key generation, signing, and verification
 //! - BLAKE3 hashing (primary algorithm for content-addressed storage)
 //! - SHA-256 hashing
 //! - Base64 encoding/decoding (URL-safe)
 //! - Constant-time secure comparison
 //! - The effective user id, which a key file's owner has to match
 //!
-//! These NIFs provide the cryptographic foundation for UCAN tokens,
-//! DID operations, and content-addressed storage in the Macula mesh.
+//! ML-DSA signs every node key signature, UCAN tokens included; the
+//! hashes serve content-addressed storage in the Macula mesh.
 
-use ed25519_dalek::{Signature, SigningKey, VerifyingKey, Signer, Verifier};
-use rand::rand_core::UnwrapErr;
-use rand::rngs::SysRng;
 use rustler::{Atom, Binary, Env, NifResult, OwnedBinary};
 use sha2::{Digest, Sha256};
 
@@ -23,10 +19,6 @@ mod atoms {
     rustler::atoms! {
         ok,
         error,
-        invalid_signature,
-        invalid_public_key,
-        invalid_private_key,
-        invalid_key_length,
         mldsa44,
         mldsa65,
         mldsa87,
@@ -37,125 +29,6 @@ mod atoms {
         context_too_long,
         randomness_unavailable,
     }
-}
-
-/// Generate a new Ed25519 keypair.
-///
-/// Returns:
-/// - `{ok, {PublicKey, PrivateKey}}` where both are 32-byte binaries
-///   Note: PrivateKey is the seed (32 bytes), not the full secret key (64 bytes)
-#[rustler::nif]
-fn nif_generate_keypair<'a>(env: Env<'a>) -> NifResult<(Atom, (Binary<'a>, Binary<'a>))> {
-    // `rand` 0.9 made `OsRng` fallible-only (an OS entropy syscall can
-    // fail); `rand` 0.10 renamed it `SysRng`. `UnwrapErr` restores the
-    // old panic-on-failure semantics `SigningKey::generate`'s infallible
-    // `CryptoRng` bound needs -- the exact pattern ed25519-dalek 3.0's
-    // own docs use for this call.
-    let mut csprng = UnwrapErr(SysRng);
-    let signing_key = SigningKey::generate(&mut csprng);
-    let verifying_key = signing_key.verifying_key();
-
-    // Get the 32-byte seed (private key)
-    let private_key_bytes = signing_key.to_bytes();
-    let public_key_bytes = verifying_key.to_bytes();
-
-    // Create output binaries
-    let mut pub_out = OwnedBinary::new(32).ok_or(rustler::Error::Term(Box::new(
-        "Failed to allocate binary for public key",
-    )))?;
-    pub_out.as_mut_slice().copy_from_slice(&public_key_bytes);
-
-    let mut priv_out = OwnedBinary::new(32).ok_or(rustler::Error::Term(Box::new(
-        "Failed to allocate binary for private key",
-    )))?;
-    priv_out.as_mut_slice().copy_from_slice(&private_key_bytes);
-
-    Ok((atoms::ok(), (pub_out.release(env), priv_out.release(env))))
-}
-
-/// Sign a message with an Ed25519 private key.
-///
-/// Arguments:
-/// - message: The message to sign (binary)
-/// - private_key: The 32-byte Ed25519 private key seed (binary)
-///
-/// Returns:
-/// - `{ok, Signature}` where Signature is a 64-byte binary
-/// - `{error, invalid_private_key}` if the key is invalid
-#[rustler::nif]
-fn nif_sign<'a>(env: Env<'a>, message: Binary, private_key: Binary) -> NifResult<(Atom, Binary<'a>)> {
-    // Validate key length
-    if private_key.len() != 32 {
-        let empty = OwnedBinary::new(0).ok_or(rustler::Error::Term(Box::new(
-            "Failed to allocate binary",
-        )))?;
-        return Ok((atoms::invalid_private_key(), empty.release(env)));
-    }
-
-    // Parse private key
-    let key_bytes: [u8; 32] = match private_key.as_slice().try_into() {
-        Ok(bytes) => bytes,
-        Err(_) => {
-            let empty = OwnedBinary::new(0).ok_or(rustler::Error::Term(Box::new(
-                "Failed to allocate binary",
-            )))?;
-            return Ok((atoms::invalid_private_key(), empty.release(env)));
-        }
-    };
-
-    let signing_key = SigningKey::from_bytes(&key_bytes);
-    let signature = signing_key.sign(message.as_slice());
-
-    // Create output binary
-    let mut sig_out = OwnedBinary::new(64).ok_or(rustler::Error::Term(Box::new(
-        "Failed to allocate binary for signature",
-    )))?;
-    sig_out.as_mut_slice().copy_from_slice(&signature.to_bytes());
-
-    Ok((atoms::ok(), sig_out.release(env)))
-}
-
-/// Verify an Ed25519 signature.
-///
-/// Arguments:
-/// - message: The message that was signed (binary)
-/// - signature: The 64-byte Ed25519 signature (binary)
-/// - public_key: The 32-byte Ed25519 public key (binary)
-///
-/// Returns:
-/// - `true` if signature is valid
-/// - `false` if signature is invalid
-#[rustler::nif]
-fn nif_verify(message: Binary, signature: Binary, public_key: Binary) -> bool {
-    // Validate input lengths
-    if signature.len() != 64 {
-        return false;
-    }
-    if public_key.len() != 32 {
-        return false;
-    }
-
-    // Parse public key
-    let pk_bytes: [u8; 32] = match public_key.as_slice().try_into() {
-        Ok(bytes) => bytes,
-        Err(_) => return false,
-    };
-
-    let verifying_key = match VerifyingKey::from_bytes(&pk_bytes) {
-        Ok(key) => key,
-        Err(_) => return false,
-    };
-
-    // Parse signature
-    let sig_bytes: [u8; 64] = match signature.as_slice().try_into() {
-        Ok(bytes) => bytes,
-        Err(_) => return false,
-    };
-
-    let sig = Signature::from_bytes(&sig_bytes);
-
-    // Verify signature
-    verifying_key.verify(message.as_slice(), &sig).is_ok()
 }
 
 /// Compute SHA-256 hash of data.

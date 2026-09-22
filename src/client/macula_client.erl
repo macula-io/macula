@@ -124,22 +124,20 @@
               stream_handler/0, auth_policy/0]).
 
 %% Per-procedure auth policy for `advertise'. `open' (default) serves any
-%% identified caller; `{ucan_required, Issuer}' gates the procedure on one
-%% known issuer: a valid token signed by `Issuer' whose audience is the
-%% calling identity itself, so a token minted for anyone else is refused.
-%% Direct-dial dual-trust (Slice 7b).
+%% identified caller. `{ucan_required, IssuerNodeId}' gates the procedure
+%% on one known node: a valid token (macula_ucan) issued by the node with
+%% that node_id whose audience is the calling node itself, so a token minted
+%% for anyone else is refused.
 %%
-%% `{realm_member_required, RealmDid, RequiredCan}' gates on membership in
-%% a realm instead: a valid token signed by `RealmDid' (a realm's own DID --
-%% NOT the 32-byte `RealmId' routing/scoping hash used in `-realm' flags
-%% and DHT scoping elsewhere; a realm's DID is a real Ed25519 keypair it
-%% holds, the two are unrelated values) whose audience is the calling
-%% identity itself, carrying the capability `RequiredCan'.
+%% `{realm_member_required, RealmKeyId, RequiredCan}' gates on membership in
+%% a realm instead: a valid token issued by the realm's key, named by its
+%% key id (NOT the 32-byte realm id used in `-realm' flags and DHT scoping;
+%% the two are unrelated values), whose audience is the calling node itself,
+%% carrying the capability `RequiredCan'.
 %%
-%% Both policies bind the audience the same way. `macula_ucan_nif:verify/2'
-%% never checks `aud', so `authorize_policy/2' in `macula_station_link'
-%% compares it with the wire-authenticated caller for both. A token names
-%% its audience as that identity's public key, hex-encoded in lowercase.
+%% Both policies bind the audience the same way: macula_ucan:authorize/3
+%% compares a token's `aud', the audience's node_id in lowercase hex, with
+%% the wire-authenticated caller.
 %%
 %% `RequiredCan' is mandatory, not optional-with-a-default: a realm mints
 %% membership UCANs at more than one tier from the SAME signing key --
@@ -155,10 +153,7 @@
 %% purpose: a caller must name the tier it actually requires (typically
 %% the realm's citizen/human-confirmed capability string) rather than
 %% inherit a guess that might be wrong for its threat model.
--type auth_policy() :: open
-                      | {ucan_required, macula_ucan_nif:issuer_key()}
-                      | {realm_member_required, macula_ucan_nif:issuer_key(),
-                         binary()}.
+-type auth_policy() :: open | macula_ucan:policy().
 
 -type pool() :: pid().
 
@@ -816,8 +811,8 @@ advertise(Pool, Realm, Procedure, Handler) ->
     advertise(Pool, Realm, Procedure, Handler, open).
 
 %% @doc Advertise with an auth policy -- see `auth_policy()' above for
-%% the full set (`open' | `{ucan_required, Issuer}' |
-%% `{realm_member_required, RealmDid, RequiredCan}').
+%% the full set (`open' | `{ucan_required, IssuerNodeId}' |
+%% `{realm_member_required, RealmKeyId, RequiredCan}').
 -spec advertise(pool(), <<_:256>>, binary(), handler(), auth_policy()) ->
     ok | {error, term()}.
 advertise(Pool, Realm, Procedure, Handler, Policy)

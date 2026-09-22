@@ -1,20 +1,13 @@
 %% @doc Cryptographic operations for Macula mesh.
 %%
-%% This module provides Ed25519 key generation, signing, and verification,
-%% BLAKE3 and SHA-256 hashing, and base64 encoding. It uses Rust NIFs when
-%% available, falling back to pure Erlang implementations otherwise.
+%% This module provides ML-DSA signatures, BLAKE3 and SHA-256 hashing,
+%% base64 encoding and constant-time comparison, in a Rust NIF.
 %%
 %% == NIF vs Erlang ==
 %%
-%% The Rust NIFs provide significant performance improvements:
-%% - Key generation: ~10x faster
-%% - Signing: ~5x faster
-%% - Verification: ~8x faster
-%% - BLAKE3: ~20x faster
-%% - SHA-256: ~3x faster
-%%
-%% The pure Erlang fallbacks ensure the module works even when NIFs
-%% cannot be loaded (e.g., different architecture, missing Rust toolchain).
+%% Hashing, encoding and comparison fall back to pure Erlang when the NIF
+%% cannot be loaded; the Rust NIF is faster (BLAKE3 about 20x, SHA-256
+%% about 3x). ML-DSA has no fallback, below.
 %%
 %% == ML-DSA ==
 %%
@@ -31,9 +24,6 @@
 
 %% API
 -export([
-    generate_keypair/0,
-    sign/2,
-    verify/3,
     blake3/1,
     blake3_hex/1,
     sha256/1,
@@ -106,38 +96,6 @@ priv_dir_from_module(_) ->
 -spec is_nif_loaded() -> boolean().
 is_nif_loaded() ->
     persistent_term:get(?NIF_LOADED_KEY, false).
-
-%% @doc Generate a new Ed25519 keypair.
-%% Returns `{ok, {PublicKey, PrivateKey}}' where both are 32-byte binaries.
--spec generate_keypair() -> {ok, {PubKey :: binary(), PrivKey :: binary()}}.
-generate_keypair() ->
-    case is_nif_loaded() of
-        true -> nif_generate_keypair();
-        false -> erlang_generate_keypair()
-    end.
-
-%% @doc Sign a message with an Ed25519 private key.
-%% Returns `{ok, Signature}' where Signature is a 64-byte binary,
-%% or `{error, invalid_private_key}'.
--spec sign(Message :: binary(), PrivateKey :: binary()) ->
-    {ok, Signature :: binary()} | {error, invalid_private_key}.
-sign(Message, PrivateKey) ->
-    case is_nif_loaded() of
-        true -> sign_result(nif_sign(Message, PrivateKey));
-        false -> erlang_sign(Message, PrivateKey)
-    end.
-
-sign_result({ok, Sig}) -> {ok, Sig};
-sign_result({invalid_private_key, _}) -> {error, invalid_private_key}.
-
-%% @doc Verify an Ed25519 signature.
-%% Returns `true' if valid, `false' otherwise.
--spec verify(Message :: binary(), Signature :: binary(), PublicKey :: binary()) -> boolean().
-verify(Message, Signature, PublicKey) ->
-    case is_nif_loaded() of
-        true -> nif_verify(Message, Signature, PublicKey);
-        false -> erlang_verify(Message, Signature, PublicKey)
-    end.
 
 %% @doc Compute BLAKE3 hash.
 %% Returns 32-byte hash binary.
@@ -237,15 +195,6 @@ mldsa_verify(Set, PublicKey, Message, Signature, Context) ->
 %% NIF Stubs (replaced when NIF loads)
 %%====================================================================
 
-nif_generate_keypair() ->
-    erlang:nif_error(nif_not_loaded).
-
-nif_sign(_Message, _PrivateKey) ->
-    erlang:nif_error(nif_not_loaded).
-
-nif_verify(_Message, _Signature, _PublicKey) ->
-    erlang:nif_error(nif_not_loaded).
-
 nif_blake3(_Data) ->
     erlang:nif_error(nif_not_loaded).
 
@@ -294,40 +243,6 @@ nif_effective_uid() ->
 %%====================================================================
 %% Pure Erlang Fallbacks
 %%====================================================================
-
-%% @private Generate keypair using Erlang crypto
-erlang_generate_keypair() ->
-    {PubKey, PrivKey} = crypto:generate_key(eddsa, ed25519),
-    %% PrivKey from crypto is 64 bytes (seed + public), we want just the 32-byte seed
-    <<Seed:32/binary, _/binary>> = PrivKey,
-    {ok, {PubKey, Seed}}.
-
-%% @private Sign using Erlang crypto
-erlang_sign(Message, PrivateKey) when byte_size(PrivateKey) =:= 32 ->
-    %% Erlang crypto expects 64-byte private key for eddsa
-    %% We reconstruct it from seed
-    try
-        %% Generate the full key from seed to get the public key portion
-        {PubKey, _} = crypto:generate_key(eddsa, ed25519, PrivateKey),
-        FullPrivKey = <<PrivateKey/binary, PubKey/binary>>,
-        Signature = crypto:sign(eddsa, none, Message, [FullPrivKey, ed25519]),
-        {ok, Signature}
-    catch
-        _:_ -> {error, invalid_private_key}
-    end;
-erlang_sign(_Message, _PrivateKey) ->
-    {error, invalid_private_key}.
-
-%% @private Verify using Erlang crypto
-erlang_verify(Message, Signature, PublicKey) when byte_size(Signature) =:= 64,
-                                                   byte_size(PublicKey) =:= 32 ->
-    try
-        crypto:verify(eddsa, none, Message, Signature, [PublicKey, ed25519])
-    catch
-        _:_ -> false
-    end;
-erlang_verify(_Message, _Signature, _PublicKey) ->
-    false.
 
 %% @private SHA-256 using Erlang crypto
 erlang_sha256(Data) ->

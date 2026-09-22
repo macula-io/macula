@@ -57,6 +57,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   12.0.0-alpha.1 or earlier does not verify on this version, and the reverse.
   Keys and key files are unchanged, and `pq_pure` is unaffected.
 
+- **UCAN tokens are post-quantum: `macula_ucan` replaces `macula_ucan_nif`**
+  (D7). `macula_ucan:create/4` signs a token with a node key: the header's
+  `alg` is `ML-DSA-87` in `pq_pure` and `ML-DSA-87-PS384`, the LAMPS
+  composite, in `pq_hybrid`; `iss` is a `did:key` for the issuer's key
+  (multicodec `mldsa-87-pub`, 0x1212, or Macula's own 0x300087 for the
+  composite); `aud` is the audience's node_id in lowercase hex; `exp` is
+  required. `macula_ucan:authorize/3` checks a token for a verified caller
+  under a policy, verifying the signature over the header and payload exactly
+  as received. The station link authorizes CALL and STREAM_OPEN through it.
+
+  **Breaking:** a policy names its issuer by id, not by key.
+  `{ucan_required, IssuerNodeId}` takes the issuing node's node_id, and
+  `{realm_member_required, RealmKeyId, RequiredCan}` the key id of the realm's
+  key. An EdDSA token is refused. Delegation chains through `prf` are not
+  followed yet: a token is authorized only when its own issuer is the one the
+  policy names.
+
 - **The macula application refuses to start when `puzzle_difficulty` is
   set**, with `{bad_config, {macula, puzzle_difficulty, {not_a_setting,
   Value}}}`, whatever the value. The difficulty is
@@ -82,6 +99,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   signed object (D13) or, in `pq_hybrid`, as a neighbour signature (D17).
 - **`macula_crypto_nif:grind_puzzle/1`**, which ground Ed25519 keys for
   `macula_identity`. `macula_node_keys:generate/3` grinds identity keys.
+- **`macula_ucan_nif` and its Rust crate**, the Ed25519 UCAN tokens,
+  replaced by `macula_ucan` (above).
+- **`macula_crypto_nif:generate_keypair/0`, `sign/2` and `verify/3`**, its
+  Ed25519, which only `macula_ucan_nif` used. With them go its Erlang
+  fallbacks and the crate's `ed25519-dalek` and `rand`.
 - **`macula_did_nif` and its Rust crate**, which built and parsed DID
   documents for hierarchical `did:macula:` names, signed with Ed25519. D7
   retires the `did:macula:` prefix, and nothing called it: not macula,

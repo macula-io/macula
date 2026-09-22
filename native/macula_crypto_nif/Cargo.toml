@@ -13,15 +13,9 @@ crate-type = ["cdylib"]
 # Rustler for Erlang NIF bindings
 rustler = "0.34"
 
-# Ed25519 signatures
-ed25519-dalek = { version = "3.0", features = ["rand_core"] }
-
 # ML-DSA (FIPS 204): every ML-DSA signature in the stack, per D7 as amended
 # on 2026-09-22. NIST-verified; agrees with OTP's crypto on OTP-made keys.
 macula-mldsa = "0.1"
-
-# Random number generation for key generation
-rand = "0.10"
 
 # SHA-256 hashing
 sha2 = "0.11"

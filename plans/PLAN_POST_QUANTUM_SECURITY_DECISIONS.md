@@ -169,8 +169,10 @@ table there gives each decision's answer in short and its status.
 
 - **Answer, accepted by Raf on 2026-09-10 with two checks, amended 2026-09-22:** **Use published names and
   constructions where they exist, and Macula's own names only where none exists. Every ML-DSA signature in the
-  stack, UCAN and DID included, is made and checked by `macula-mldsa` (the `macula-pqc` workspace); the NIFs sign
-  with it. `aud` names the audience by node_id.**
+  stack, UCAN included, is made and checked by `macula-mldsa` (the `macula-pqc` workspace). In `macula` it runs in
+  `macula_crypto_nif`, and `macula_ucan` builds and parses tokens in Erlang and signs and verifies them through
+  `macula_node_keys`, which also makes the composite's RSA-PSS half on OTP (built 2026-09-22; the Rust UCAN and DID
+  NIFs are removed). `aud` names the audience by node_id.**
 - **Amended and accepted by Raf on 2026-09-22,** three decisions:
   - **One ML-DSA everywhere:** `macula-mldsa`, verified byte-exact against NIST's ACVP vectors, signs and verifies
     ML-DSA in every Rust NIF and SDK, so private keys enter Rust. This replaces the rule, accepted on 2026-09-10,
@@ -253,20 +255,8 @@ table there gives each decision's answer in short and its status.
     - A grant's org is the org namespace of the procedure name, as `DESIGN_PQ_SIGNED_FRAMES_AND_RECORDS.md` defines
       it for provider authorization, so the caller check and the provider check agree on who owns a name. `macula`
       10.x uses the same definition (Jupiter, 2026-09-14).
-    - **Why:** each token grants only within what it was given, and an org key only within its own org, so authority
-      follows the chain and the org directory.
-  - **Amended and accepted by Raf on 2026-09-14,** two rules for the capability check of step 4:
-    - **Narrowing along a chain.** Every token in a chain names the same realm. A realm grant covers realm, org and
-      procedure grants in that realm, an org grant covers that org and its procedures, and a procedure grant covers
-      only that procedure. Each token's capability is covered by a capability of the token it proves from, and
-      `can` is equal at every step.
-    - **Issuer scope.** An org key, authorized through the realm-signed org directory (D25 item 6), grants only org
-      or procedure capabilities inside its own org. Only the realm key grants a realm capability.
-    - A grant's org is the org namespace of the procedure name, as `DESIGN_PQ_SIGNED_FRAMES_AND_RECORDS.md` defines
-      it for provider authorization, so the caller check and the provider check agree on who owns a name. `macula`
-      10.x uses the same definition (Jupiter, 2026-09-14).
     - **Why:** without narrowing, a delegate could grant more than it was given; without issuer scope, a key trusted
-      for one org could grant a whole realm.
+      for one org could grant a whole realm. With both, authority follows the chain and the org directory.
   - This is sound under D24's rules for node ids. Using a delegation needs a key that derives to the named
     node_id, a second preimage at the high end of SHA-256's 201 to 256 bits (D5). A collision only gives one party
     two keys for one node_id, and so a delegation it already holds; no issuer delegates to a node_id because of a

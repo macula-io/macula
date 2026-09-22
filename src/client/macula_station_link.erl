@@ -342,10 +342,9 @@
     %% shipped back over the same peering connection.
     procedures = #{} :: #{{<<_:256>>, binary()} => handler()},
     %% Per-procedure auth policy. Absent = `open' (serve any identified
-    %% caller). `{ucan_required, Issuer}' gates the procedure: an inbound
-    %% CALL must carry a `ucan_token' that verifies against `Issuer', else
-    %% the link refuses with BOLT#4 `unauthorized'. Direct-dial dual-trust
-    %% (Slice 7b).
+    %% caller). A gated procedure needs an inbound CALL's `token' to pass
+    %% macula_ucan:authorize/3 for the verified caller, else the link
+    %% refuses with BOLT#4 `unauthorized'.
     policies   = #{} :: #{{<<_:256>>, binary()} => macula_client:auth_policy()},
     %% The signed advertisement wire form per advertised procedure —
     %% the ADVERTISE frame's payload, sent on register (when the link
@@ -838,15 +837,15 @@ advertise(Pid, Realm, Procedure, Handler) ->
     advertise(Pid, Realm, Procedure, Handler, open).
 
 %% @doc Advertise with an auth policy -- see `macula_client:auth_policy()'
-%% for the full set (`open' | `{ucan_required, Issuer}' |
-%% `{realm_member_required, RealmDid, RequiredCan}').
+%% for the full set (`open' | `{ucan_required, IssuerNodeId}' |
+%% `{realm_member_required, RealmKeyId, RequiredCan}').
 %%
 %% `Policy''s own shape is validated HERE, at the call boundary, one
-%% clause per valid shape with no catch-all: a malformed `Issuer'/
-%% `RealmDid' (wrong type, wrong byte size) raises `function_clause' in
+%% clause per valid shape with no catch-all: a malformed issuer id
+%% (wrong type, wrong byte size) raises `function_clause' in
 %% the CALLING process before ever reaching this link's gen_server loop,
 %% rather than being accepted now and only crashing later -- inside the
-%% loop, on the first inbound CALL that exercises `authorize_policy/2' --
+%% loop, on the first inbound CALL that exercises `authorize_policy/3' --
 %% which would fault every OTHER procedure multiplexed on the same link,
 %% not just this one (Fable review, 2026-09-05).
 -spec advertise(pid(), <<_:256>>, binary(), handler(),
@@ -867,13 +866,13 @@ advertise(Pid, Realm, Procedure, Handler, {ucan_required, Issuer} = Policy)
        is_binary(Issuer), byte_size(Issuer) =:= 32 ->
     gen_server:call(Pid, {advertise, Realm, Procedure, Handler, Policy}, 5_000);
 advertise(Pid, Realm, Procedure, Handler,
-          {realm_member_required, RealmDid, RequiredCan} = Policy)
+          {realm_member_required, RealmKeyId, RequiredCan} = Policy)
   when is_pid(Pid),
        is_binary(Realm), byte_size(Realm) =:= 32,
        is_binary(Procedure),
        (is_function(Handler, 1) orelse
         (is_tuple(Handler) andalso tuple_size(Handler) =:= 2)),
-       is_binary(RealmDid), byte_size(RealmDid) =:= 32,
+       is_binary(RealmKeyId), byte_size(RealmKeyId) =:= 32,
        is_binary(RequiredCan), RequiredCan =/= <<>> ->
     gen_server:call(Pid, {advertise, Realm, Procedure, Handler, Policy}, 5_000).
 
@@ -2796,11 +2795,11 @@ fan_event({ok, {_R, _T, Subscriber, _Mon}}, SubRef, Topic, Payload, Meta) ->
 handle_inbound_call({ok, #{request_id := _CallId, procedure := Proc, realm := Realm,
                             payload := Payload} = Request},
                     #state{procedures = Procs, policies = Pols, node_identity = Id,
-                           peer_pid = Pid}) when is_pid(Pid) ->
+                           peer_pid = Pid, profile = Profile}) when is_pid(Pid) ->
     %% Gate first (Slice 7b): an `open' procedure serves any identified
     %% caller; a gated one requires a valid `token', else refuse
     %% with BOLT#4 `unauthorized' instead of invoking the handler.
-    Verdict = authorize({Realm, Proc}, Request, Pols),
+    Verdict = authorize({Realm, Proc}, Request, Pols, Profile),
     Found   = maps:find({Realm, Proc}, Procs),
     PayloadWithCaller = with_caller(Payload, maps:get(caller, Request, undefined)),
     _ = spawn(fun() ->
@@ -2851,98 +2850,24 @@ authorized_reply(unauthorized, _Found, Request, _Payload, Key) ->
     macula_frame:provider_error(#{request => Request, code => <<"unauthorized">>},
                                 Key).
 
-authorize(Key, Frame, Pols) ->
-    authorize_policy(maps:get(Key, Pols, open), Frame).
+authorize(Key, Frame, Pols, Profile) ->
+    authorize_policy(maps:get(Key, Pols, open), Frame, Profile).
 
-authorize_policy(open, _Frame) ->
+%% A gated procedure serves a request whose token macula_ucan:authorize/3 accepts for the request's verified caller:
+%% the token verifies over its bytes as received, its issuer is the one the policy names, its audience is the caller,
+%% it is inside its validity window and, for realm_member_required, it grants the policy's can. The caller is the key id
+%% of the key the request's signature verified under, which for an identity key is its node_id, so by the time this
+%% runs it is the identity that signed the request (D7 check 2).
+authorize_policy(open, _Frame, _Profile) ->
     ok;
-authorize_policy({ucan_required, Issuer}, Frame) ->
-    check_ucan(maps:get(token, Frame, <<>>), Issuer,
-               maps:get(caller, Frame, undefined));
-authorize_policy({realm_member_required, RealmDid, RequiredCan}, Frame) ->
-    check_realm_membership(maps:get(token, Frame, <<>>), RealmDid,
-                            maps:get(caller, Frame, undefined), RequiredCan).
-
-%% `macula_ucan_nif:verify/2' checks signature + `exp' + `nbf' only. It does
-%% NOT check `aud' (see that function's own doc): a verified token proves
-%% its issuer granted it to SOMEONE, not that it belongs to whoever is
-%% presenting it now. Both gated policies therefore also require the
-%% token's audience to be the caller, through `audience_is_caller/2'.
-%% Without that, any token a caller obtained a copy of -- not necessarily
-%% its own -- would authorize as if it were the caller it was minted for.
-%% `Caller' is the verified request's `caller', the key id of the key its
-%% signature verified under, so by the time these checks run `Caller' is the
-%% identity that signed the request. The token is the request's `token'.
-check_ucan(Token, Issuer, Caller)
-  when is_binary(Token), Token =/= <<>>, is_binary(Caller) ->
-    ucan_verdict(macula_ucan_nif:verify(Token, Issuer), Caller);
-check_ucan(_Token, _Issuer, _Caller) ->
+authorize_policy(Policy, #{token := Token, caller := <<_:256>> = Caller}, Profile) when is_binary(Token) ->
+    token_verdict(macula_ucan:authorize(Token, Policy, #{caller => Caller, profile => Profile,
+                                                         now => erlang:system_time(second)}));
+authorize_policy(_Policy, _Frame, _Profile) ->
     unauthorized.
 
-ucan_verdict({ok, Payload}, Caller) ->
-    audience_verdict(audience_is_caller(Payload, Caller));
-ucan_verdict(_Error, _Caller) ->
-    unauthorized.
-
-audience_verdict(true)  -> ok;
-audience_verdict(false) -> unauthorized.
-
-%% `RealmDid' is a realm's own DID (a real Ed25519 keypair the realm
-%% holds), never the 32-byte `RealmId' routing/scoping hash used in
-%% `-realm' flags and DHT scoping elsewhere -- the two are unrelated
-%% values, and nobody could verify a signature against a hash. A service
-%% already has its realm's DID with no new plumbing: it reads `iss' off
-%% its own realm-issued service credential (`macula_ucan_nif:get_issuer/1'
-%% on whatever `hecate_om:service_cert/0' or equivalent already returns).
-%%
-%% A verified token signed by `RealmDid' is a genuine grant from this
-%% realm; its audience is bound to the caller exactly as for
-%% `ucan_required' (see `check_ucan/3').
-%%
-%% Signature and audience are still not enough on their own: a realm
-%% mints membership UCANs at more than one tier from the same key (see
-%% `auth_policy()' in `macula_client' for why), so `RequiredCan' is
-%% checked against the verified token's own `cap' list too -- a device
-%% that self-enrolled at a weaker tier presents a token that is entirely
-%% genuine and entirely correctly-audienced, and must still be refused if
-%% it doesn't carry the capability this procedure actually requires.
-check_realm_membership(Token, RealmDid, Caller, RequiredCan)
-  when is_binary(Token), Token =/= <<>>, is_binary(Caller) ->
-    membership_verdict(macula_ucan_nif:verify(Token, RealmDid), Caller,
-                        RequiredCan);
-check_realm_membership(_Token, _RealmDid, _Caller, _RequiredCan) ->
-    unauthorized.
-
-membership_verdict({ok, Payload}, Caller, RequiredCan) ->
-    grant_verdict(audience_is_caller(Payload, Caller),
-                  has_required_capability(maps:get(<<"cap">>, Payload, []),
-                                           RequiredCan));
-membership_verdict(_Result, _Caller, _RequiredCan) ->
-    unauthorized.
-
-%% The one audience check both gated policies share. A token names its
-%% audience as the caller's key id, hex-encoded in lowercase; `Caller' is
-%% that key id, so hex-encoding it the same way makes the two directly
-%% comparable. A token without a binary `aud' has no audience to match.
-audience_is_caller(#{<<"aud">> := Aud}, Caller) when is_binary(Aud) ->
-    Aud =:= binary:encode_hex(Caller, lowercase);
-audience_is_caller(_Payload, _Caller) ->
-    false.
-
-grant_verdict(true, true) -> ok;
-grant_verdict(_AudienceOk, _CapabilityOk) -> unauthorized.
-
-%% A membership UCAN's `cap' list entries are `#{<<"with">> := _,
-%% <<"can">> := _}' maps (macula-realm's own minting shape, decoded
-%% straight off the verified JWT payload). Only `can' is checked here --
-%% this policy gates on TIER (which admission path minted the token), not
-%% on any particular MRI scope, so `with' is left alone.
-has_required_capability(Caps, RequiredCan) when is_list(Caps) ->
-    lists:any(fun(#{<<"can">> := Can}) -> Can =:= RequiredCan;
-                 (_Other) -> false
-              end, Caps);
-has_required_capability(_Caps, _RequiredCan) ->
-    false.
+token_verdict({ok, _Claims}) -> ok;
+token_verdict({error, _Refusal}) -> unauthorized.
 
 %% `open' is the default, so store it as absence to keep the map small.
 set_policy(Key, open, Pols)   -> maps:remove(Key, Pols);
@@ -3419,8 +3344,9 @@ close_sessionless_stream(Stream, #state{stream_bufs = Bufs} = S) ->
 %% already on the stream keeps it, and the stream stays open for that session.
 on_stream_open_on(true, Open, Stream, S) ->
     refuse_open(Stream, Open, <<"refused">>, <<"this stream already carries a session">>, S);
-on_stream_open_on(false, #{realm := Realm, procedure := Proc} = Open, Stream, #state{stream_policies = SPols} = S) ->
-    on_stream_open_verdict(authorize({Realm, Proc}, Open, SPols), Open, Stream, S).
+on_stream_open_on(false, #{realm := Realm, procedure := Proc} = Open, Stream,
+                  #state{stream_policies = SPols, profile = Profile} = S) ->
+    on_stream_open_verdict(authorize({Realm, Proc}, Open, SPols, Profile), Open, Stream, S).
 
 carries_a_session(Stream, #state{client_streams = CS, server_streams = SS}) ->
     lists:any(fun({_Pid, _Mon, On}) -> On =:= Stream end, maps:values(CS) ++ maps:values(SS)).

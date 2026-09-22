@@ -352,8 +352,8 @@ do_call_station(Pool, Station, Target, Realm, Procedure, Payload, TimeoutMs, Opt
 %% fails fast with `{error, {provider_authorization, _}}'.
 %%
 %% `Opts' `auth' sets the procedure's policy: `open' (default, serve
-%% any identified caller), `{ucan_required, Issuer}' (gated to one
-%% known identity, Slice 7b), or `{realm_member_required, RealmDid,
+%% any identified caller), `{ucan_required, IssuerNodeId}' (gated to
+%% tokens from one known node), or `{realm_member_required, RealmKeyId,
 %% RequiredCan}' (gated to realm membership at a specific tier) -- see
 %% `macula_client:auth_policy()' for the full set. `Opts' may also
 %% carry `advertise', an arity-6 override for the pool fan-out (see
@@ -978,7 +978,7 @@ advertise_stream(Pool, Realm, Procedure, Mode, Handler)
 
 %% @doc As `advertise_stream/5', with `Opts'. `auth' sets the streaming
 %% procedure's policy, the same set `advertise/5' takes: `open' (default),
-%% `{ucan_required, Issuer}' or `{realm_member_required, RealmDid,
+%% `{ucan_required, IssuerNodeId}' or `{realm_member_required, RealmKeyId,
 %% RequiredCan}'. A consumer presents its token with `call_stream/5''s
 %% `ucan_token' opt.
 -spec advertise_stream(pool(), realm(), procedure(),

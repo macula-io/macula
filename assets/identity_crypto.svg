@@ -20,7 +20,7 @@
   <rect x="20" y="62" width="660" height="170" rx="12" fill="url(#rustGrad)" stroke="#a371f7" stroke-width="0.5" opacity="0.6">
     <animate attributeName="opacity" values="0.6;0.3;0.6" dur="5s" repeatCount="indefinite"/>
   </rect>
-  <text x="660" y="80" text-anchor="end" fill="#a371f7" font-family="monospace" font-size="9" opacity="0.6">native/ Rust NIFs</text>
+  <text x="660" y="80" text-anchor="end" fill="#a371f7" font-family="monospace" font-size="9" opacity="0.6">ML-DSA: macula_crypto_nif (Rust)</text>
 
   <!-- Node keys -->
   <rect x="60" y="90" width="260" height="126" rx="8" fill="#21262d" stroke="#58a6ff" stroke-width="1.2"/>
@@ -31,14 +31,19 @@
   <text x="72" y="182" fill="#6e7681" font-family="system-ui, sans-serif" font-size="10">sign/2 verify/4</text>
   <text x="72" y="197" fill="#6e7681" font-family="system-ui, sans-serif" font-size="10">save/2 load/3 (seeds)</text>
 
+  <!-- Arrow node keys to UCAN -->
+  <line x1="320" y1="153" x2="372" y2="153" stroke="#f97316" stroke-width="1.5"/>
+  <polygon points="370,149 378,153 370,157" fill="#f97316"/>
+  <text x="350" y="143" text-anchor="middle" fill="#f97316" font-family="system-ui, sans-serif" font-size="9">signs</text>
+
   <!-- UCAN -->
   <rect x="380" y="90" width="260" height="126" rx="8" fill="#21262d" stroke="#f97316" stroke-width="1.2"/>
   <text x="510" y="112" text-anchor="middle" fill="#f97316" font-family="system-ui, sans-serif" font-size="13" font-weight="bold">UCAN Tokens</text>
-  <text x="510" y="130" text-anchor="middle" fill="#c9d1d9" font-family="monospace" font-size="10">macula_ucan_nif</text>
-  <text x="392" y="152" fill="#6e7681" font-family="system-ui, sans-serif" font-size="10">create/4,5</text>
-  <text x="392" y="167" fill="#6e7681" font-family="system-ui, sans-serif" font-size="10">verify/2 decode/1</text>
-  <text x="392" y="182" fill="#6e7681" font-family="system-ui, sans-serif" font-size="10">get_capabilities/1</text>
-  <text x="392" y="197" fill="#6e7681" font-family="system-ui, sans-serif" font-size="10">still Ed25519</text>
+  <text x="510" y="130" text-anchor="middle" fill="#c9d1d9" font-family="monospace" font-size="10">macula_ucan</text>
+  <text x="392" y="152" fill="#6e7681" font-family="system-ui, sans-serif" font-size="10">create/4 authorize/3</text>
+  <text x="392" y="167" fill="#6e7681" font-family="system-ui, sans-serif" font-size="10">alg ML-DSA-87 (-PS384 in EU)</text>
+  <text x="392" y="182" fill="#6e7681" font-family="system-ui, sans-serif" font-size="10">iss: did:key of the issuer's key</text>
+  <text x="392" y="197" fill="#6e7681" font-family="system-ui, sans-serif" font-size="10">aud: the audience's node_id</text>
 
   <!-- Bottom note -->
   <text x="350" y="256" text-anchor="middle" fill="#8b949e" font-family="system-ui, sans-serif" font-size="10">A node_id is SHA-256 over its identity key. A realm's key endorses its members.</text>

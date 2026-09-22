@@ -63,15 +63,7 @@ allowed() ->
 
 %% {File, Rule, How many uses, The work item that removes them}.
 known() ->
-    [{"src/identity/macula_crypto_nif.erl", erl_keygen_classical, 2, "WP 1.3 residual"},
-     {"src/identity/macula_crypto_nif.erl", erl_crypto_classical, 2, "WP 1.3 residual"},
-     {"native/macula_crypto_nif/src/lib.rs", rust_dalek, 1, "WP 1.3 residual"},
-     {"native/macula_crypto_nif/Cargo.toml", cargo_dalek, 1, "WP 1.3 residual"},
-     {"src/auth/macula_ucan_nif.erl", erl_wire_constant, 1, "WP 1.4"},
-     {"native/macula_ucan_nif/src/lib.rs", rust_dalek, 1, "WP 1.4"},
-     {"native/macula_ucan_nif/src/lib.rs", rust_wire_constant, 1, "WP 1.4"},
-     {"native/macula_ucan_nif/Cargo.toml", cargo_dalek, 1, "WP 1.4"},
-     {"native/macula_quic/src/cert.rs", rust_ed25519_oid, 2, "D12 TLS leaf"},
+    [{"native/macula_quic/src/cert.rs", rust_ed25519_oid, 2, "D12 TLS leaf"},
      {"native/macula_quic/src/cert.rs", rust_provider_verify, 2, "D12 TLS leaf"},
      {"native/macula_quic/src/config.rs", rust_provider_verify, 1, "D12 TLS leaf"}].
 

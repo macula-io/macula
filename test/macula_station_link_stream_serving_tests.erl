@@ -112,8 +112,8 @@ a_stream_procedures_policy_is_enforced_before_its_handler() ->
     #{link := Link} = World = linked(),
     Test = self(),
     Procedure = <<"foo.gated">>,
-    RealmIdentity = ucan_issuer(),
-    Policy = {realm_member_required, maps:get(public, RealmIdentity), <<"member/email-verified">>},
+    {ok, RealmIdentity} = macula_node_keys:generate(realm, pq_pure),
+    Policy = {realm_member_required, macula_node_keys:key_id(RealmIdentity), <<"member/email-verified">>},
     ok = macula_station_link:advertise_stream(Link, ?REALM, Procedure, server_stream,
                                               fun(_Stream, Args) -> Test ! {handler_ran, macula:field(tag, Args)}, ok end,
                                               Policy),
@@ -135,10 +135,11 @@ a_stream_procedures_ucan_policy_binds_its_token_to_the_caller() ->
     #{link := Link} = World = linked(),
     Test = self(),
     Procedure = <<"foo.issuer_gated">>,
-    Issuer = ucan_issuer(),
+    Issuer = macula_test_identity:key(),
+    {ok, IssuerNodeId} = macula_node_keys:node_id(Issuer),
     ok = macula_station_link:advertise_stream(Link, ?REALM, Procedure, server_stream,
                                               fun(_Stream, Args) -> Test ! {handler_ran, macula:field(tag, Args)}, ok end,
-                                              {ucan_required, maps:get(public, Issuer)}),
+                                              {ucan_required, IssuerNodeId}),
     [ForSomeoneTag, OwnTag] = [1, 2],
     Caller = key(),
     ForSomeone = mint_ucan(Issuer, macula_node_keys:key_id(key()), <<"call">>),
@@ -369,14 +370,10 @@ with_env(Key, Value, Fun) ->
 restore_env(Key, undefined) -> application:unset_env(macula, Key);
 restore_env(Key, {ok, Value}) -> application:set_env(macula, Key, Value).
 
-%% A UCAN the issuer identity grants an audience for one ability, valid for an hour.
-mint_ucan(IssuerIdentity, Audience, Can) ->
-    {ok, Token} = macula_ucan_nif:create(binary:encode_hex(maps:get(public, IssuerIdentity), lowercase),
-                                         binary:encode_hex(Audience, lowercase),
-                                         [#{with => <<"mri:realm:test">>, can => Can}],
-                                         maps:get(private, IssuerIdentity),
-                                         #{exp => erlang:system_time(second) + 3_600}),
-    Token.
+%% A UCAN the issuer's key grants an audience, by node_id, for one ability, valid for an hour.
+mint_ucan(IssuerKey, Audience, Can) ->
+    macula_ucan:create(IssuerKey, Audience, [#{with => <<"mri:realm:test">>, can => Can}],
+                       #{exp => erlang:system_time(second) + 3_600}).
 
 %% Restarts the session counter once this test process ends or three seconds have passed, whichever comes first, so a
 %% case cut off with the counter stopped does not leave it stopped for the cases after it.
@@ -481,8 +478,3 @@ written_within(Stream, Ms) ->
 
 closed_within(Stream, Ms) ->
     receive {closed, Stream} -> closed after Ms -> open end.
-
-%% A UCAN issuer's key pair: tokens are signed with Ed25519 until they carry the profile's algorithm (WP 1.4).
-ucan_issuer() ->
-    {Public, Private} = crypto:generate_key(eddsa, ed25519),
-    #{public => Public, private => Private}.

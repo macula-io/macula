@@ -1541,48 +1541,39 @@ inbound_calls_are_served_concurrently_test_() ->
      end}.
 
 %%------------------------------------------------------------------
-%% {realm_member_required, RealmDid, RequiredCan} -- gates a procedure on
+%% {realm_member_required, RealmKeyId, RequiredCan} -- gates a procedure on
 %% membership in a realm AT A SPECIFIC TIER (any valid token signed by
-%% the realm's own DID, audience-bound to the calling identity, carrying
-%% the required capability) rather than one exact known identity. See
-%% `macula_client:auth_policy()' and `authorize_policy/2' for the full
-%% design reasoning, including why the tier check is mandatory.
+%% the realm's key, audience-bound to the calling node, carrying the
+%% required capability) rather than one exact known node. See
+%% `macula_client:auth_policy()' and macula_ucan for the full design
+%% reasoning, including why the tier check is mandatory.
 %%------------------------------------------------------------------
 
-%% Mints a real membership-shaped token: `RealmIdentity' signs it (the
-%% realm's own keypair), naming `MemberPub' (hex-encoded, matching
-%% macula-realm's own `RealmUcanIssuer.mint_membership/2' convention) as
-%% audience, and carrying `Can' as its one capability (default the
-%% citizen/human-confirmed tier -- see `mint_membership_ucan/4' for a
-%% caller-chosen tier, used by the device-tier-bypass test below).
-%% `ExpOverride' lets a test set `exp' explicitly (e.g. already-expired);
-%% omitted keys keep the default (valid for an hour).
-%% A UCAN issuer's key pair: tokens are signed with Ed25519 until they carry the profile's algorithm (WP 1.4).
-ucan_issuer() ->
-    {Public, Private} = crypto:generate_key(eddsa, ed25519),
-    #{public => Public, private => Private}.
+%% Mints a real membership-shaped token: `RealmKey' signs it (the realm's
+%% own key), naming `Member' (a node_id) as audience, and carrying `Can'
+%% as its one capability (default the citizen/human-confirmed tier -- see
+%% `mint_membership_ucan/4' for a caller-chosen tier, used by the
+%% device-tier-bypass test below). `ExpOverride' lets a test set `exp'
+%% explicitly (e.g. already-expired); omitted keys keep the default (valid
+%% for an hour).
+realm_key() ->
+    {ok, Key} = macula_node_keys:generate(realm, pq_pure),
+    Key.
 
-mint_membership_ucan(RealmIdentity, MemberPub, ExpOverride) ->
-    mint_membership_ucan(RealmIdentity, MemberPub, ExpOverride,
-                         <<"member/email-verified">>).
+mint_membership_ucan(RealmKey, Member, ExpOverride) ->
+    mint_membership_ucan(RealmKey, Member, ExpOverride, <<"member/email-verified">>).
 
-mint_membership_ucan(RealmIdentity, MemberPub, ExpOverride, Can) ->
-    IssuerDid = binary:encode_hex(maps:get(public, RealmIdentity), lowercase),
-    AudienceDid = binary:encode_hex(MemberPub, lowercase),
-    Cap = #{with => <<"mri:realm:test">>, can => Can},
+mint_membership_ucan(IssuerKey, Member, ExpOverride, Can) ->
     Opts = maps:merge(#{exp => erlang:system_time(second) + 3_600}, ExpOverride),
-    {ok, Token} = macula_ucan_nif:create(IssuerDid, AudienceDid, [Cap],
-                                        maps:get(private, RealmIdentity), Opts),
-    Token.
+    macula_ucan:create(IssuerKey, Member, [#{with => <<"mri:realm:test">>, can => Can}], Opts).
 
 realm_member_required_test_() ->
     {timeout, 15,
      fun() ->
          UnauthorizedCode = <<"unauthorized">>,
-         RealmIdentity = ucan_issuer(),
-         RealmDid = maps:get(public, RealmIdentity),
+         RealmIdentity = realm_key(),
          Handler = fun(_Payload) -> {ok, #{admitted => true}} end,
-         Policy = {realm_member_required, RealmDid, <<"member/email-verified">>},
+         Policy = {realm_member_required, macula_node_keys:key_id(RealmIdentity), <<"member/email-verified">>},
          {Pid, CallerKp} = inbound_call_fixture([{<<"realm.only">>, Handler}], Policy),
          Caller = macula_node_keys:key_id(CallerKp),
 
@@ -1622,7 +1613,7 @@ realm_member_required_test_() ->
          %% Token signed by a DIFFERENT key than the declared realm --
          %% a plausible-looking membership token that simply isn't from
          %% this realm at all.
-         OtherRealmIdentity = ucan_issuer(),
+         OtherRealmIdentity = realm_key(),
          WrongIssuerToken = mint_membership_ucan(OtherRealmIdentity, Caller, #{}),
          WrongIssuerId = crypto:strong_rand_bytes(16),
          WrongIssuerFrame = inject_call_with_ucan(Pid, self(), CallerKp, WrongIssuerId, <<"realm.only">>, WrongIssuerToken),
@@ -1670,9 +1661,10 @@ ucan_required_binds_the_token_audience_to_the_caller_test_() ->
     {timeout, 15,
      fun() ->
          UnauthorizedCode = <<"unauthorized">>,
-         IssuerIdentity = ucan_issuer(),
+         IssuerIdentity = macula_test_identity:key(),
          Handler = fun(_Payload) -> {ok, #{served => true}} end,
-         Policy = {ucan_required, maps:get(public, IssuerIdentity)},
+         {ok, IssuerNodeId} = macula_node_keys:node_id(IssuerIdentity),
+         Policy = {ucan_required, IssuerNodeId},
          {Pid, CallerKp} = inbound_call_fixture([{<<"issuer.only">>, Handler}], Policy),
          Caller = macula_node_keys:key_id(CallerKp),
 
@@ -1693,7 +1685,7 @@ ucan_required_binds_the_token_audience_to_the_caller_test_() ->
 
          WrongIssuerId = crypto:strong_rand_bytes(16),
          WrongIssuerFrame = inject_call_with_ucan(Pid, self(), CallerKp, WrongIssuerId, <<"issuer.only">>,
-                                                  mint_ucan(ucan_issuer(), Caller, #{})),
+                                                  mint_ucan(macula_test_identity:key(), Caller, #{})),
          ?assertMatch({error, #{code := UnauthorizedCode}}, await_result(WrongIssuerFrame, 2_000)),
 
          ExpiredId = crypto:strong_rand_bytes(16),

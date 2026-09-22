@@ -121,7 +121,7 @@ change, the done criterion and the effort. The US profile goes first; the EU par
   - `src/macula.erl`
   - `src/macula_cert_system/macula_cert.erl`
   - `src/macula_foundation.erl`
-  - `src/auth/macula_ucan_nif.erl` (WP 1.4)
+  - `src/auth/macula_ucan.erl` (WP 1.4)
   - `rebar.config` (OTP floor)
 - **Change:**
   - identity keys per profile: ML-DSA-87 through `macula-mldsa` in the US profile, the hybrid pair in the EU
@@ -210,18 +210,25 @@ change, the done criterion and the effort. The US profile goes first; the EU par
 - **Owner:** Venus.
 - **Waiting on:** WP 1.3.
 - **Files:**
-  - `native/macula_ucan_nif/Cargo.toml`
-  - `native/macula_ucan_nif/src/lib.rs`
+  - `src/auth/macula_ucan.erl`, which replaces `macula_ucan_nif` and its crate
+  - `src/client/macula_station_link.erl`
+- **Built (2026-09-22):** single tokens. `macula_ucan:create/4` signs with a node key; `authorize/3` verifies over the
+  header and payload as received, then the issuer (by node_id for `ucan_required`, by key id for
+  `realm_member_required`), `aud` as the caller's node_id, `exp` (required) and `nbf`, and the capability of a
+  membership policy. The station link authorizes CALL and STREAM_OPEN through it. Still to build: delegation chains
+  through `prf`, with narrowing, issuer scope and org keys through the org directory, and SHA-384 parent ids.
 - **Change:**
   - `macula_did_nif` and its crate are removed (Raf, 2026-09-22): nothing called it in macula, macula-station,
     macula-realm, mcl-om or mcl-echo, and D7 retires the `did:macula:` names it built;
-  - the NIFs build the signing input, parse tokens and documents, and sign and verify ML-DSA with `macula-mldsa`
-    (D7, amended 2026-09-22); the EU composite's RSA-PSS half is signed and verified on OTP;
+  - `macula_ucan` builds the signing input and parses tokens in Erlang, and signs and verifies through
+    `macula_node_keys`, so ML-DSA is `macula-mldsa` in `macula_crypto_nif` and the EU composite's RSA-PSS half is
+    OTP's (D7, amended 2026-09-22);
   - `alg` and key encoding per D7: `ML-DSA-87` and `AKP` from RFC 9964 with the `mldsa-87-pub` multicodec in the US
     profile; the LAMPS composite `id-MLDSA87-RSA4096-PSS-SHA512`, under the `alg` `ML-DSA-87-PS384`, with Macula's
-    own key type in the EU profile;
+    own key type in the EU profile, the private-use multicodec 0x300087, in `iss`'s `did:key`;
   - `aud` names the audience by node_id; a proof's `aud` is matched against the node_id derived from the outer
-    token's `iss` key, and the string form of that audience is set here without a `did:macula:` prefix (D7);
+    token's `iss` key, and the string form of that audience is the node_id in lowercase hex, with no `did:macula:`
+    prefix (D7);
   - UCAN parent ids are SHA-384, and verifiers reject any other hash (D24);
   - a provider authorizes a CALL or STREAM_OPEN per D7 check 2, before any handler runs: the frame signature
     against the caller key, the signed target against its own node_id, the token's `aud` against the node_id of
@@ -246,7 +253,7 @@ change, the done criterion and the effort. The US profile goes first; the EU par
     capability (D7);
   - every policy refuses a procedure name without an org namespace (D25);
   - `ed25519-dalek` removed.
-- **Red first:** `test/macula_ucan_nif_tests.erl`: a post-quantum token round-trips; an EdDSA token is rejected. For a
+- **Red first:** `test/macula_ucan_tests.erl`: a post-quantum token round-trips; an EdDSA token is rejected. For a
   call and for a stream, a request is refused when its target is another node, its token's `aud` is not the node_id of
   the verified caller, a proof's `aud` is not the node_id of the next token's `iss` key, the chain does not root at
   the required issuer, a token has no `exp` or no capability for the procedure and realm, or the request is past its
@@ -370,7 +377,9 @@ change, the done criterion and the effort. The US profile goes first; the EU par
   `macula_identity:generate/0` and `public/1`, and must make them with the node-key API instead
   (`macula_node_keys:generate/2` and `node_id/1`): `macula_station_outbound_links_sup_tests`,
   `macula_station_outbound_identity_SUITE`, `macula_station_overlay_relay_SUITE` (which also signs frames),
-  `macula_station_handshake_timing_measurement` and `macula_swim_stale_conn_tests`. The station's `sys.config`,
+  `macula_station_handshake_timing_measurement` and `macula_swim_stale_conn_tests`. `macula_station_gated_call_SUITE`
+  mints UCANs with `macula_ucan_nif`, which `macula` 12 replaces with `macula_ucan:create/4` over a node key; a
+  policy names its issuer by node_id or realm key id. The station's `sys.config`,
   `test.sys.config`, `ct.sys.config`, `macula_station_test_cluster` and `fleet_SUITE` set `puzzle_difficulty`, which
   `macula` 12 refuses at start.
 - **Done:** green; the station builds against a local checkout of `macula` 11.0.0 (D20).
@@ -466,7 +475,9 @@ change, the done criterion and the effort. The US profile goes first; the EU par
   - an org directory entry for every publisher, so that every procedure carries a provider authorization; a
     publisher whose procedures have no org namespace today moves under one first (D25);
   - `issue_membership_ucan` names the device by node_id in `aud` (D7), in the same change as every checker
-    (WP 1.4, WP 4.2);
+    (WP 1.4, WP 4.2): `MaculaRealm.Identity.RealmUcanIssuer` mints with `:macula_ucan.create/4` and the realm key,
+    in place of `:macula_ucan_nif.create/5`, which `macula` 12 no longer has; a service names the realm's issuer by
+    that key's key id (`realm_member_required`). This starts only after `macula` 12 lands (Raf's order);
   - the realm carries its profile (D1);
   - the `io.macula` realm deployment in the EU profile, as a separate deployment on the post-quantum fleet
     (D14, D19), and a
@@ -1049,7 +1060,7 @@ core cutover advertises a procedure without an org or node namespace.
   - `native/macula_crypto_nif`
   - `rebar.config`
 - WP 1.4:
-  - `native/macula_ucan_nif`
+  - `src/auth/macula_ucan.erl`
 - WP 1.5:
   - `src/peering/macula_peering_conn.erl`
   - `src/client/macula_station_link.erl`

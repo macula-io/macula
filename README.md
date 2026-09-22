@@ -75,7 +75,7 @@ stations: no open ports, NAT-friendly, no VPN. It provides:
 - **Content** — content-addressed sharing and live streaming (MCID).
 - **DHT records** — signed, TTL'd records (advertisements, endpoints, more).
 - **Erlang distribution over mesh** — `net_adm:ping` across firewalls, no VPN.
-- **Identity** — ML-DSA-87 node keys (with an RSA-PSS half under `pq_hybrid`), UCAN tokens (NIF-accelerated).
+- **Identity** — ML-DSA-87 node keys (with an RSA-PSS half under `pq_hybrid`), and UCAN tokens they sign.
 - **MRI** — typed, hierarchical resource identifiers.
 - **Zero-config LAN clustering** — UDP-multicast gossip.
 
@@ -181,7 +181,9 @@ ok   = macula_node_keys:save("identity.key", Key),
 Hash = macula_blake3_nif:hash(<<"hello">>).
 ```
 
-UCAN capability tokens are still signed with Ed25519.
+UCAN capability tokens (`macula_ucan`) are signed by node keys too, with
+the profile's `alg`; a token names its issuer by `did:key` and its audience by
+node_id (see the [Authorization guide](docs/guides/shared/AUTHORIZATION_GUIDE.md)).
 Moving them to the profile's algorithm is one of the steps left before
 12.0.0.
 
@@ -206,7 +208,7 @@ Moving them to the profile's algorithm is one of the steps left before
 | [Plumtree Guide](docs/guides/overlay/PLUMTREE_GUIDE.md) | Epidemic broadcast trees, realm PubSub, OR-Set CRDT |
 | [Distribution Over Mesh](docs/guides/DIST_OVER_MESH_GUIDE.md) | Erlang dist through the mesh |
 | [Clustering](docs/guides/CLUSTERING_GUIDE.md) | LAN gossip clustering |
-| [Authorization](docs/guides/shared/AUTHORIZATION_GUIDE.md) | DID / UCAN / cert-chain trust |
+| [Authorization](docs/guides/shared/AUTHORIZATION_GUIDE.md) | Node keys, UCAN, provider authorization |
 | [MRI Guide](docs/guides/shared/MRI_GUIDE.md) | Resource identifiers |
 | [Development](docs/guides/DEVELOPMENT.md) | Building and testing |
 | [Glossary](docs/GLOSSARY.md) | Terminology |

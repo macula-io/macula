@@ -49,12 +49,12 @@ macula/
 │   ├── record/                  # Signed DHT records (macula_record), CBOR codec
 │   ├── content/                 # Content chunking/manifests (macula_manifest)
 │   ├── mri/                     # Resource identifiers — parse, hierarchy, trie index
-│   ├── identity/, auth/         # Node keys (ML-DSA-87; RSA-PSS half in pq_hybrid), UCAN tokens
+│   ├── identity/, auth/         # Node keys (ML-DSA-87; RSA-PSS half in pq_hybrid), UCAN tokens (macula_ucan)
 │   ├── macula_cert_system/      # Self-sovereign certs, trust store
 │   ├── macula_dist_system/      # Erlang distribution over relay mesh (3 transports)
 │   └── macula_cluster_system/   # LAN clustering (gossip/static/libcluster) — separate from dist
-├── native/                       # Rust NIF crates (macula_quic, macula_crypto_nif, macula_ucan_nif,
-│                                 # macula_mri_nif, macula_cbor_nif)
+├── native/                       # Rust NIF crates (macula_quic, macula_crypto_nif, macula_mri_nif,
+│                                 # macula_cbor_nif)
 ├── test/                         # EUnit tests, one file per module under test
 ├── include/                      # Header files (.hrl)
 ├── docs/                         # SDK guides
@@ -153,8 +153,7 @@ The SDK includes Rust NIFs for performance-critical operations. They build from 
 | NIF Crate | Provides |
 |-----------|----------|
 | `native/macula_quic/` | Quinn QUIC transport |
-| `native/macula_crypto_nif/` | ML-DSA ([`macula-mldsa`](https://crates.io/crates/macula-mldsa)), Ed25519, BLAKE3, SHA-256 |
-| `native/macula_ucan_nif/` | UCAN token create/verify |
+| `native/macula_crypto_nif/` | ML-DSA ([`macula-mldsa`](https://crates.io/crates/macula-mldsa)), BLAKE3, SHA-256 |
 | `native/macula_mri_nif/` | MRI parsing, trie index |
 | `native/macula_cbor_nif/` | CBOR encode/decode |
 
