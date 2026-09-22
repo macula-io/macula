@@ -35,6 +35,13 @@
     resolve_recipient/1,
     start_dial/1
 ]).
+%% The position of a field in the data tuple, read from the record itself, so
+%% a test can inspect one by NAME. `quic_stream' is the control stream, and
+%% which stream that is cannot be seen from outside the connection: a test
+%% that it is not replaced mid-handshake has nowhere else to look. Naming the
+%% field means a field added to the record cannot shift the test onto another
+%% one. Same seam `macula_station_link:state_field_index/1' already provides.
+-export([state_field_index/1]).
 -endif.
 
 -type connect_opts() :: #{
@@ -449,7 +456,14 @@ handshaking(enter, _Old, #data{role = client, quic_conn = Conn} = Data) ->
 handshaking(enter, _Old, #data{role = server, quic_conn = Conn} = Data) ->
     ok = macula_quic:async_accept_stream(Conn),
     {keep_state, Data#data{expect = opener}, [handshake_state_timeout()]};
-handshaking(info, {quic, new_stream, Stream, _Info}, Data) ->
+%% THE CONTROL STREAM IS THE ONE THE CLIENT OPENED, and this is the only
+%% clause that may ever set it. Both halves of the guard are load-bearing and
+%% neither alone is enough: the role check alone would still let a SECOND
+%% inbound stream replace the first on a server, and the `undefined' check
+%% alone would still let a client adopt one if a later change left
+%% `quic_stream' unset on entry (macula#23).
+handshaking(info, {quic, new_stream, Stream, _Info},
+            #data{role = server, quic_stream = undefined} = Data) ->
     %% Take ownership of the stream so subsequent `{quic, Bin, ...}'
     %% events route to us. The Quinn NIF stamps the stream's owner at
     %% creation time using whatever owns the conn AT THAT MOMENT —
@@ -463,6 +477,31 @@ handshaking(info, {quic, new_stream, Stream, _Info}, Data) ->
     _ = macula_quic:controlling_process(Stream, self()),
     ok = macula_quic:setopt(Stream, active, true),
     {keep_state, Data#data{quic_stream = Stream}};
+%% ANY OTHER inbound stream during the handshake is closed, not adopted: a
+%% client's, which already holds the stream it opened itself, and a second
+%% one on a server. Before this clause existed the adopting one above matched
+%% every inbound stream, so the peer's stream became the control stream, the
+%% peer's bytes were read as handshake frames, the frame check refused them,
+%% and THE CONNECTION DIED — a peer could end any handshake by opening a
+%% stream and writing one byte into it.
+%%
+%% Closed rather than merely ignored, because a stream nobody will ever read
+%% is one the peer may keep writing into. Ownership is taken first so the
+%% close is ours to make and no `{quic, ...}' event for it is left routing to
+%% the listener.
+%%
+%% ⚠ The client accepts inbound streams during the handshake ON PURPOSE (see
+%% `handshaking(enter, ...)'): a dedicated stream opened by the far side must
+%% not sit unaccepted. Accepting one is right; adopting it as the CONTROL
+%% stream was the defect. A peer wanting a dedicated stream opens it once the
+%% handshake is done, where `connected(info, {quic, new_stream, ...})' hands
+%% it to the controlling process.
+handshaking(info, {quic, new_stream, Stream, _Info}, Data) ->
+    _ = macula_quic:controlling_process(Stream, self()),
+    _ = macula_quic:close_stream(Stream),
+    macula_diagnostics:event(<<"_macula.peering.handshake_stream_refused">>,
+                             #{role => Data#data.role, conn => self()}),
+    {keep_state, Data};
 %% A station that refused CONNECT reads nothing more while its refused
 %% HELLO reaches the client, and closes with its refusal once the client
 %% closes or the linger ends.
@@ -1480,3 +1519,11 @@ safe_event(Bin) when is_binary(Bin), byte_size(Bin) > 64 ->
     {truncated, byte_size(Bin)};
 safe_event(Other) ->
     Other.
+
+-ifdef(TEST).
+state_field_index(Field) ->
+    field_index(Field, record_info(fields, data), 2).
+
+field_index(Field, [Field | _Rest], Index) -> Index;
+field_index(Field, [_Other | Rest], Index) -> field_index(Field, Rest, Index + 1).
+-endif.
