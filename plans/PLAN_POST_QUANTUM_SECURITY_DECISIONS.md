@@ -874,8 +874,13 @@ before its wire checks are green.
     and the pool path that carries the data as pubsub messages through stations.
 - **Why:** it keeps one purpose per key (D6) and the key model unchanged, reuses the handshake WP 1.5 specifies,
   and takes per-direction keys, replay detection and rekeying from TLS 1.3.
-- **Fallback:** if OTP's TLS 1.3 cannot run the profile's group and certificate (V19), a tunnel key certified by
-  the identity key, to be decided again.
+- ✅ **The fallback is not needed, measured 2026-09-23 (Venus).** V19 showed OTP 28.4.2 completing a TLS 1.3
+  handshake with an ML-DSA-87 certificate, but on a key made by OpenSSL, and OTP's own generated ML-DSA keys cannot
+  sign. The open question was macula's own key. OTP signs a CertificateVerify with **the certificate and key
+  `macula_quic:generate_self_signed_cert/2` returns**, the private key in RFC 9881's seed form, and carries data
+  both ways. Not measured there: the negotiated group, which V19 covered; the dialling side accepts the leaf
+  through a `verify_fun`, which is what the key model's client check does anyway, since nothing issues an
+  ML-DSA-87 certificate for a chain to end at. Nothing is built toward the fallback.
 - **Blocks:** WP 1.5 (distribution tunnels), WP 3.4.
 
 ### D30 Node_id puzzle difficulty

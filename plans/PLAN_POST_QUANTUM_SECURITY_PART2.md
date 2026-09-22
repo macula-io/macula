@@ -316,6 +316,22 @@ change, the done criterion and the effort. The US profile goes first; the EU par
   and `DIST_OVER_MESH_GUIDE.md`. Raf's answer (2026-09-22) is REFUSE UNLESS SWITCHED ON: distribution over QUIC
   does not start in `direct` or `dist_relay` mode without `MACULA_DIST_UNIDENTIFIED_PEER=accept`, and this WP
   removes that setting when the tunnel gives those connections an identity.
+- **Built (2026-09-23, Venus): the tunnel itself, and the carrier under it.** `macula_dist_tunnel` holds a TLS 1.3
+  session between the two nodes inside the tunnel and runs `macula_handshake` end to end inside it, the accepting
+  node in the station role, the dialling node giving the peer's expected node_id. `macula_dist_tunnel_socket` makes
+  a macula QUIC stream look like a socket to OTP's `ssl`. The handshake is the peering one, unchanged; only the
+  leaf differs, coming from the session inside the tunnel. A station's puzzle mode is required on the accepting
+  side with no default, as `macula_peering_conn` requires it.
+  ⚠ **Neither carrier calls it yet, so `MACULA_DIST_UNIDENTIFIED_PEER` is still what those dials need.** It goes
+  when the relay and pool paths call this, which needs `macula_node_keys:node_identity/1` (Raf, 2026-09-22: one
+  identity key per node, stored on disk, used by pools and by the tunnel; Mercurius owns the loader).
+  ⚠ **The grind moves onto the distribution path.** When the identity file is missing and the node boots
+  distributed, `macula_dist:listen/1` runs before the application starts, so the puzzle is ground there. About a
+  second at difficulty 12, once per node, delaying the node becoming distributed.
+  Also fixed on the carrier while building it: the relay's control channel took a 32-bit frame length with no cap,
+  so a 4 GiB length was a reader that waits and holds everything arriving meanwhile until the node dies; and a
+  frame that failed to decode was skipped rather than ending the connection, which takes the middle of something
+  else for the next frame's length.
 - **Change:**
   - the handshake order and checks of the key model: opener, challenge, the client's checks, CONNECT, the
     station's checks, HELLO;

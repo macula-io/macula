@@ -11,6 +11,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A distribution tunnel names its peer** (D29, WP 1.5). `macula_dist_tunnel`
+  holds a TLS 1.3 session between the two nodes inside the tunnel and runs the
+  connection handshake end to end inside it: the accepting node in the station
+  role with its TLS key, certificate and TLS-key binding, the dialling node
+  sending CONNECT with its CONNECT key against the node_id it meant to reach.
+  The handshake is `macula_handshake`, unchanged and shared with the peering
+  connections; the only difference is that the leaf comes from the session
+  inside the tunnel rather than from the QUIC connection. `macula_dist_tunnel_socket`
+  makes a macula QUIC stream look like a socket to OTP's `ssl`, which is what
+  lets a session run over a carrier that forwards bytes.
+  **Neither carrier calls this yet**, so nothing changes for a running node:
+  the relay and pool paths still refuse to start without
+  `MACULA_DIST_UNIDENTIFIED_PEER=accept`, and that setting goes when they do
+  call it.
+  Measured before it was built, and it is what removes D29's fallback: OTP
+  28.4.2's `ssl` completes a TLS 1.3 handshake with the certificate and key
+  `macula_quic:generate_self_signed_cert/2` returns, ML-DSA-87 with the private
+  key in RFC 9881's seed form, and signs the CertificateVerify with it.
+
 - **`macula_crypto_nif` makes and checks ML-DSA signatures on
   [`macula-mldsa`](https://crates.io/crates/macula-mldsa)**, the FIPS 204
   implementation in `macula-pqc`, verified against NIST's ACVP vectors:
@@ -208,6 +227,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   macula-station, macula-realm, mcl-om or mcl-echo.
 
 ### Fixed
+
+- **The relay's control channel read a frame length with no cap, and skipped a
+  frame it could not decode.** A 32-bit length was taken as a promise about
+  bytes that had not arrived: a length of 4 GiB, from the relay or anything
+  able to write on that stream, is a reader that waits and holds everything
+  arriving meanwhile until the node dies, and nothing bounded it. A frame that
+  failed to decode was skipped with a warning and reading carried on, so the
+  next bytes read as a length were the middle of something else and one bad
+  frame became an endless run of them on a connection that looked alive. Both
+  now end the connection, as a closed control stream already does. The cap is
+  65,536 bytes, the same the handshake's reader uses, judged on the header
+  alone. `macula_dist_relay_protocol:decode_buffer/1` answers
+  `{ok, Messages, Rest}` or `{error, Reason}`, and `max_frame_bytes/0` is
+  exported.
 
 - **A provider went dark before its authorization expired.**
   `macula:advertise/5` builds a procedure advertisement with its type's own

@@ -479,6 +479,11 @@ Ceilings from signing and verifying alone, per core, estimated from the table:
   dialing side offering only `x25519` was refused. OTP's chain check refuses a self-signed ML-DSA-87 leaf, so the
   dialing side checks the leaf itself with a `verify_fun`, as the key model's client check does. The key came from
   OpenSSL, since OTP's generated ML-DSA-87 keys need the seed workaround to sign.
+- **Extended, 2026-09-23 ✅ (Venus):** the same handshake on **macula's own certificate and key**, as
+  `macula_quic:generate_self_signed_cert/2` returns them: ML-DSA-87, the private key PKCS#8 in RFC 9881's SEED
+  form, 32 bytes. OTP signs the CertificateVerify with it, `TLS_AES_256_GCM_SHA384`, data both ways over loopback.
+  This is the part D29's tunnel stands on, since the result above was on an OpenSSL-made key and OTP's own
+  generated ML-DSA keys cannot sign. Not measured in this run: the negotiated group, covered by the result above.
 - **Effort:** 0.5 day.
 
 #### V20 Node_id puzzle cost on the slowest client device
