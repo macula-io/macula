@@ -621,9 +621,10 @@ change, the done criterion and the effort. The US profile goes first; the EU par
     from hex once Raf publishes (D20);
   - every fleet node runs chrony with NTS against at least two independent servers (D22); which servers is open;
 
-  - station instances start with puzzle enforcement in `log_only`; `enforce` follows in WP 4.5.
+  - station instances run puzzle enforcement in `enforce`, which is where the fleet already is (Terra, 2026-09-23,
+    all six); WP 4.5 owns the raise from difficulty 8 to 12, not the switch (D30).
 - **Red first:** the Stage 2 smoke check against the 11.0.0 station instances fails before they start.
-  - station instances start with puzzle enforcement in `log_only`; `enforce` follows in WP 4.5 (D30).
+  - station instances run puzzle enforcement in `enforce`, as the fleet already does (D30).
 - **Red first:** the Stage 2 smoke check against the new fleet fails before provisioning.
 - **Done:** every station instance is reachable in its profile under the node_ids in its seeds.
 - **Effort:** 3 to 5 days, plus configuration generation ⚠.

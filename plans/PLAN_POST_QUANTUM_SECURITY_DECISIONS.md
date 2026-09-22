@@ -890,24 +890,40 @@ before its wire checks are green.
 - **Question:** how many leading zero bits must a node_id's puzzle evidence have in `macula` 11.0.0, and what changes
   in 10.x?
 - **Answer, decided by Raf on 2026-09-12:**
-  - in 11.0.0, one difficulty for the whole fleet: 12 leading zero bits on the node_id (D5), a constant in every stack
-    as D5's constants are, not a setting and not a `foundation_parameter` record;
+  - one difficulty for the whole fleet, a constant in every stack as D5's constants are, not a setting and not a
+    `foundation_parameter` record;
+  - ⚠ **that constant is 8, and the tree is what says so**: `-define(PUZZLE_DIFFICULTY, 8)` in `macula_node_keys`,
+    returned by `puzzle_difficulty/0`, and the station test harness pins the same 8 on a station's node before
+    macula starts. **8 is the cutover value.** The raise to 12 is pending and its condition is V20: measured on the
+    slowest device Raf supports, not on this machine. This decision read 12 until 2026-09-23, which the cutover
+    value overtook.
   - identity key generation grinds to it once per identity; the TLS and CONNECT keys that rotate are not part of the
     node_id (D5), so rotation grinds nothing;
-  - the rollout is the plan's own: station instances start in `log_only`, and the fleet switches to `enforce` in
-    WP 4.5;
+  - ⚠ **the rollout has already happened, ahead of WP 4.5: all six fleet stations run `puzzle_enforcement =
+    enforce`**, confirmed ON DISK per station (Terra, 2026-09-23: the bind-mount source from `docker inspect`, then
+    the file, and sha256 against the repo's copy; all six match, so nothing else in those configs has drifted
+    either). It is a key in each station's `config.json`, not an environment variable, and
+    `macula_station_config` defaults it to `off` when absent, so **a test harness that inherits that default
+    measures a path the fleet does not use**.
+    ⚠ Reading a station's config on a box: the six deploy from FOUR differently named directories, which is in no
+    repo, so take the path from `docker inspect`'s bind-mount source rather than guessing it. Frankfurt deploys
+    from `macula-portal-compose`, not `macula-realm-compose`, and both repos carry a same-named compose file and a
+    same-named station config.
+  - the raise from 8 to 12 is what WP 4.5 still owns, not the switch to `enforce`;
   - D30 applies to 11.0.0; node_ids made under 10.x do not change.
 - **Why:**
   - the puzzle adds a fixed cost to each identity; slot admission (D28) decides which signers take places in the DHT;
   - on one core of this machine (OTP 28.4.2, OpenSSL 3.6.4), ML-DSA-87 key generation with the D5 node_id takes about
-    0.28 ms, so 12 bits takes about 1.1 s per identity on average and 16 bits about 18 s ✅ (PART1);
+    0.28 ms, so 12 bits takes about 1.1 s per identity on average and 16 bits about 18 s ✅ (PART1); at the cutover's
+    8 bits that is about 72 ms, derived from the same 0.28 ms rather than measured separately;
   - one constant keeps `puzzle_invalid` something a client can check for itself (`DESIGN_PQ_HANDSHAKE_FRAMES.md`);
   - a `foundation_parameter` record would depend on live foundation keys, which D28 still waits on;
   - raising the difficulty in 10.x would invalidate most existing node_ids, and with them pinned seeds, DHT records
     and UCANs (D14).
 - **Waiting on:** V20, before 12 is final. If generation at 12 bits is too slow on the slowest supported client
   device, the value goes back to Raf.
-- **Blocks:** WP 4.5 (`enforce`).
+- **Blocks:** WP 4.5, which owns the raise from 8 to 12. It does not own the switch to `enforce`: the fleet is
+  already there.
 
 ### D31 Invite-only: membership checked at CONNECT, off by default
 
