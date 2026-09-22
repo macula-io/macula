@@ -10,7 +10,7 @@ specifies the frames of D16 and the status statements of D22 in `PLAN_POST_QUANT
 
 - The codec: `<<Length:32/big, Cbor/binary>>`, where `Cbor` is one deterministic CBOR map (RFC 8949 section 4.2.1)
   with text keys.
-- The post-quantum format is `version` 3. A frame with another version closes the handshake with
+- The post-quantum format is `version` 4. A frame with another version closes the handshake with
   `unsupported_version`.
 - Sizes below are given as US / EU.
 - **Signed structures travel as received bytes.** Each one is a CBOR map `{tbs: bstr, signature: bstr}`, where `tbs`
@@ -123,7 +123,7 @@ The first frame on the control stream the client opens, in its first flight afte
 
 | Key | Content |
 |---|---|
-| `version`, `frame_type` | 3, `opener` |
+| `version`, `frame_type` | 4, `opener` |
 
 Nothing else, and nothing that relates to identity. It is the station's cue to send the challenge on the same stream.
 
@@ -131,7 +131,7 @@ Nothing else, and nothing that relates to identity. It is the station's cue to s
 
 | Key | Type | Content |
 |---|---|---|
-| `version`, `frame_type` | | 3, `challenge` |
+| `version`, `frame_type` | | 4, `challenge` |
 | `nonce` | bytes, 32 | from a CSPRNG, fresh for this connection |
 | `profile` | text | `pq_pure` or `pq_hybrid`; used only to name a refusal |
 | `identity_key` | bytes | the station's identity key, carried form |
@@ -194,7 +194,7 @@ About 19.3 KB / 21.8 KB.
 
 | Key | Type | Content |
 |---|---|---|
-| `version`, `frame_type` | | 3, `hello` |
+| `version`, `frame_type` | | 4, `hello` |
 | `accepted` | unsigned | 1 or 0 |
 | `refusal_code` | text | only when `accepted` is 0, see below |
 | `capabilities` | unsigned | the station's capability bits |
@@ -204,7 +204,7 @@ of HELLO: both sides already derived the node_ids.
 
 ### `status`, either side on an open connection (D22)
 
-`version` 3, `frame_type` `status`, and `statement`, a `{tbs, signature}` status statement. Sent at every reissue.
+`version` 4, `frame_type` `status`, and `statement`, a `{tbs, signature}` status statement. Sent at every reissue.
 Each side keeps the peer's current expiry and a timer at expiry plus 5 minutes.
 A status frame travels only on the control stream. It is not in the neighbour signature table of D17
 (`DESIGN_PQ_SIGNED_FRAMES_AND_RECORDS.md`), so it carries no neighbour signature in either profile and does not
@@ -249,7 +249,7 @@ so a peer that has not proven its identity cannot learn which check failed:
 
 | Refusal code | When |
 |---|---|
-| `unsupported_version` | the client's frames are not version 3 |
+| `unsupported_version` | the client's frames are not version 4 |
 | `puzzle_invalid` | the client's derived node_id does not meet the puzzle, which the client can check itself |
 | `not_accepted` | every other failed check on CONNECT |
 
