@@ -113,6 +113,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   handshake proves a shared secret and can be relayed by a peer in the middle.
   The end-to-end tunnel that closes this is the plan's WP 1.5 and D29.
 
+  **So distribution over QUIC refuses to start unless its operator accepts
+  that**: `macula_dist:listen/1` in `direct` and `dist_relay` mode, and
+  `macula:join_dist_relay/1`, return
+  `{error, {unidentified_peer_not_accepted, #{limit := _, accept_with := _}}}`
+  unless `MACULA_DIST_UNIDENTIFIED_PEER=accept` is set, exactly that value.
+  `MACULA_DIST_MODE=relay`, which carries distribution over the station mesh,
+  is not gated: that handshake names its peer. The setting goes when the
+  tunnel lands.
+
 ### Removed
 
 - **The `verify` and `verify_pubkey` dial options**, and the webpki, key-pin

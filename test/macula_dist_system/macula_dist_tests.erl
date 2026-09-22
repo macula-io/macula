@@ -168,10 +168,49 @@ extract_frame_partial_timeout_test() ->
 %% The direct-mode QUIC listener and its certificate
 %%====================================================================
 
-%% A direct-mode listener whose certificate directory is empty makes its
-%% own certificate, self-signed ML-DSA-87 on a new TLS key (D12, D29), and
-%% a QUIC dial to it completes. A dial trusts only an ML-DSA-87 certificate,
-%% so the completed dial is what shows the certificate's kind.
+%% ⛔ Distribution over QUIC carries no identity yet: those ALPNs run no
+%% connection handshake, so a connection verifies only that the peer holds
+%% the key of the certificate it presents (D12, WP 1.5). A node refuses to
+%% carry it at all unless its operator accepts that, and the refusal names
+%% the limit and the setting.
+dist_over_quic_refuses_an_unidentified_peer_unless_accepted_test_() ->
+    {timeout, 60,
+     fun() ->
+         Dir = macula_test_tmp:dir("macula-dist-unaccepted"),
+         Port = free_udp_port(),
+         ok = application:set_env(kernel, macula_dist_cert_dir, Dir),
+         ok = application:set_env(kernel, macula_dist_port, Port),
+         true = os:unsetenv("MACULA_DIST_UNIDENTIFIED_PEER"),
+         try
+             ?assertMatch({error, {unidentified_peer_not_accepted,
+                                   #{limit := <<_/binary>>,
+                                     accept_with := <<"MACULA_DIST_UNIDENTIFIED_PEER=accept">>}}},
+                          macula_dist:listen(macula_dist_unaccepted_test)),
+             ?assertEqual(false, filelib:is_regular(filename:join(Dir, "cert.pem"))),
+             %% Joining a dist relay refuses for the same reason, on the path
+             %% an operator takes: its dial is where the limit bites.
+             {ok, _} = application:ensure_all_started(macula),
+             ?assertMatch({error, {unidentified_peer_not_accepted, _}},
+                          macula:join_dist_relay(#{url => <<"quic://127.0.0.1:1">>})),
+             %% Only the exact value accepts; a truthy-looking one does not.
+             [begin
+                  true = os:putenv("MACULA_DIST_UNIDENTIFIED_PEER", Value),
+                  ?assertMatch({error, {unidentified_peer_not_accepted, _}},
+                               macula_dist:listen(macula_dist_unaccepted_test))
+              end || Value <- ["true", "yes", "1", "accept_all", ""]]
+         after
+             true = os:unsetenv("MACULA_DIST_UNIDENTIFIED_PEER"),
+             ok = application:unset_env(kernel, macula_dist_cert_dir),
+             ok = application:unset_env(kernel, macula_dist_port),
+             ok = file:del_dir_r(Dir)
+         end
+     end}.
+
+%% With the setting accepted, a direct-mode listener whose certificate
+%% directory is empty makes its own certificate, self-signed ML-DSA-87 on a
+%% new TLS key (D12, D29), and a QUIC dial to it completes. A dial trusts
+%% only an ML-DSA-87 certificate, so the completed dial is what shows the
+%% certificate's kind.
 direct_listener_makes_its_certificate_and_takes_a_dial_test_() ->
     {timeout, 60,
      fun() ->
@@ -179,6 +218,7 @@ direct_listener_makes_its_certificate_and_takes_a_dial_test_() ->
          Port = free_udp_port(),
          ok = application:set_env(kernel, macula_dist_cert_dir, Dir),
          ok = application:set_env(kernel, macula_dist_port, Port),
+         true = os:putenv("MACULA_DIST_UNIDENTIFIED_PEER", "accept"),
          try
              {ok, {Listener, _Address, 1}} = macula_dist:listen(macula_dist_listener_test),
              ?assert(filelib:is_regular(filename:join(Dir, "cert.pem"))),
@@ -193,6 +233,7 @@ direct_listener_makes_its_certificate_and_takes_a_dial_test_() ->
              ok = macula_quic:close_connection(Conn),
              ok = macula_quic:close_listener(Listener)
          after
+             true = os:unsetenv("MACULA_DIST_UNIDENTIFIED_PEER"),
              ok = application:unset_env(kernel, macula_dist_cert_dir),
              ok = application:unset_env(kernel, macula_dist_port),
              ok = file:del_dir_r(Dir)

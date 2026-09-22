@@ -112,6 +112,17 @@ holds none.
 > the traffic. A station dial on the `macula` ALPN is not affected: its
 > handshake binds the certificate to the station's identity. The fix for
 > distribution is the end-to-end tunnel of the plan's WP 1.5 and D29.
+>
+> **So a node refuses to carry distribution over QUIC at all** —
+> `macula_dist:listen/1` in `direct` and `dist_relay` mode, and
+> `macula:join_dist_relay/1` — **unless its operator sets
+> `MACULA_DIST_UNIDENTIFIED_PEER=accept`**, exactly that value. Setting it
+> means: I accept that a peer on these connections is verified only by
+> possession of its certificate's key, and that anything able to answer the
+> address I dial, or to reach the port I listen on, passes that check. The
+> refusal names the limit and this setting. `MACULA_DIST_MODE=relay`, which
+> carries distribution over the station mesh, is not gated: that handshake
+> names its peer.
 
 ## Dedicated Dist Relay
 

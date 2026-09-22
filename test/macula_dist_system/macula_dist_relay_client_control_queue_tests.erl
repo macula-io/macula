@@ -45,9 +45,12 @@ client_keeps_serving_and_sends_in_order() ->
 %%%===================================================================
 
 control_frames_while_the_relay_stops_reading() ->
-    os:putenv("MACULA_TLS_MODE", "development"),
     {Listener, Port} = relay_listener(),
     ok = macula_quic:async_accept(Listener),
+    %% Distribution over QUIC carries no identity yet, so a node refuses it
+    %% unless its operator accepts that; these tests are about what the client
+    %% does once it runs (see macula_dist_tests for the refusal itself).
+    true = os:putenv("MACULA_DIST_UNIDENTIFIED_PEER", "accept"),
     {ok, Client} = macula_dist_relay_client:start_link(relay_url(Port), <<"queue@127.0.0.1">>),
     Conn = receive_event(new_conn),
     ok = macula_quic:async_accept_stream(Conn),

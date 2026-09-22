@@ -44,20 +44,20 @@ join_dist_relay_without_app_test_() ->
        fun without_app_returns_error/0}]}.
 
 setup() ->
-    Saved = #{env_tls_mode  => os:getenv("MACULA_TLS_MODE"),
-              env_dist_mode => os:getenv("MACULA_DIST_MODE"),
-              app_tls_mode  => application:get_env(macula, tls_mode),
-              was_running   => macula_running()},
+    Saved = #{env_unidentified => os:getenv("MACULA_DIST_UNIDENTIFIED_PEER"),
+              env_dist_mode    => os:getenv("MACULA_DIST_MODE"),
+              was_running      => macula_running()},
     {ok, _} = application:ensure_all_started(macula),
-    %% The loopback relay presents a self-signed certificate.
-    os:putenv("MACULA_TLS_MODE", "development"),
+    %% Distribution over QUIC has no identity of its own yet, so a node
+    %% refuses it unless its operator accepts that; these tests are about
+    %% joining a relay once it is accepted.
+    os:putenv("MACULA_DIST_UNIDENTIFIED_PEER", "accept"),
     Saved.
 
 cleanup(Saved) ->
     _ = supervisor:terminate_child(macula_root, ?CLIENT),
-    restore_os_env("MACULA_TLS_MODE", maps:get(env_tls_mode, Saved)),
+    restore_os_env("MACULA_DIST_UNIDENTIFIED_PEER", maps:get(env_unidentified, Saved)),
     restore_os_env("MACULA_DIST_MODE", maps:get(env_dist_mode, Saved)),
-    restore_app_env(tls_mode, maps:get(app_tls_mode, Saved)),
     stop_macula_unless(maps:get(was_running, Saved)),
     ok.
 
@@ -255,8 +255,6 @@ stop_macula_unless(false) ->
 restore_os_env(Name, false) -> os:unsetenv(Name);
 restore_os_env(Name, Value) -> os:putenv(Name, Value).
 
-restore_app_env(Key, undefined)   -> application:unset_env(macula, Key);
-restore_app_env(Key, {ok, Value}) -> application:set_env(macula, Key, Value).
 
 
 pick_free_port() ->

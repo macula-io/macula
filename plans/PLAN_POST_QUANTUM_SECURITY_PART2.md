@@ -296,7 +296,9 @@ change, the done criterion and the effort. The US profile goes first; the EU par
   verify key possession alone, which names nobody, because those ALPNs run no connection handshake. A webpki
   chain cannot come back (no authority issues ML-DSA certificates), so the tunnel of this WP and D29 is what
   closes it. Recorded in `macula_dist:connect_quic/2`, `macula_dist_relay_client:start_connect/2`, the CHANGELOG
-  and `DIST_OVER_MESH_GUIDE.md`.
+  and `DIST_OVER_MESH_GUIDE.md`. Raf's answer (2026-09-22) is REFUSE UNLESS SWITCHED ON: distribution over QUIC
+  does not start in `direct` or `dist_relay` mode without `MACULA_DIST_UNIDENTIFIED_PEER=accept`, and this WP
+  removes that setting when the tunnel gives those connections an identity.
 - **Change:**
   - the handshake order and checks of the key model: opener, challenge, the client's checks, CONNECT, the
     station's checks, HELLO;

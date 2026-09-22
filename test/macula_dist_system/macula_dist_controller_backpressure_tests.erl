@@ -354,8 +354,10 @@ start_node(Prefix) ->
         connection => standard_io,
         args => ["-proto_dist", "macula", "-start_epmd", "false", "-setcookie", ?COOKIE,
                  "-macula", "crypto_profile", atom_to_list(Profile), "-pa" | code:get_path()],
+        %% The peer carries distribution over QUIC, which has no identity of
+        %% its own yet, so its operator, this test, accepts that limit.
         env => [{"MACULA_DIST_MODE", "dist_relay"},
-                {"MACULA_TLS_MODE", "development"}]}),
+                {"MACULA_DIST_UNIDENTIFIED_PEER", "accept"}]}),
     #{peer => Peer, node => Node,
       os_pid => peer:call(Peer, os, getpid, [], ?EVENT_TIMEOUT_MS)}.
 

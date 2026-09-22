@@ -193,10 +193,17 @@ status(Client) ->
 %% gen_server callbacks
 %%====================================================================
 
+%% ⛔ The relay dial carries no identity: see `macula_dist:listen/1'. The
+%% client does not start unless its operator accepted that limit.
 init({RelayUrl, NodeName, _Opts}) ->
+    init_if_accepted(macula_dist:unidentified_peer_accepted(), RelayUrl, NodeName).
+
+init_if_accepted(true, RelayUrl, NodeName) ->
     process_flag(trap_exit, true),
     State0 = #state{node_name = NodeName},
-    start_connect(parse_url(RelayUrl), State0).
+    start_connect(parse_url(RelayUrl), State0);
+init_if_accepted(false, _RelayUrl, _NodeName) ->
+    {stop, macula_dist:unidentified_peer_refusal()}.
 
 handle_call({request_tunnel, _Target}, _From, #state{identified = false} = State) ->
     {reply, {error, not_identified}, State};

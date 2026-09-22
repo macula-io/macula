@@ -400,6 +400,10 @@ before its wire checks are green.
   `macula-dist-relay` ALPNs and never run the connection handshake. They verified a webpki chain by default until
   2026-09-22 and now verify key possession alone, which names nobody: an interim REGRESSION for that path, closed
   by WP 1.5's tunnels and D29. Nothing else on the mesh uses those ALPNs.
+- **Raf, 2026-09-22: refuse unless switched on.** A node refuses to carry distribution over QUIC in `direct` or
+  `dist_relay` mode unless `MACULA_DIST_UNIDENTIFIED_PEER=accept` is set, exactly that value, and the refusal
+  names the limit and the setting (`macula_dist:listen/1`, `macula:join_dist_relay/1`). `relay` mode, over the
+  station mesh, is not gated. The setting goes when the tunnel lands.
 - **Blocks:** WP 1.2, WP 1.3, WP 1.5, WP 1.6.
 
 ### D13 Where a verifier gets a signer's full public key

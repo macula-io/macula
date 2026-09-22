@@ -1319,10 +1319,21 @@ start_dist_relay_client(_Root, Url, NodeName) ->
             os:putenv("MACULA_DIST_MODE", "dist_relay"),
             ?LOG_INFO("[macula] dist_relay_client already running, mode set"),
             ok;
-        {error, Reason} = Err ->
-            ?LOG_ERROR("[macula] Failed to join dist relay: ~p", [Reason]),
-            Err
+        {error, Reason} ->
+            Refusal = child_start_refusal(Reason),
+            ?LOG_ERROR("[macula] Failed to join dist relay: ~p", [Refusal]),
+            {error, Refusal}
     end.
+
+%% `supervisor:start_child/2' wraps a child's own refusal with the child
+%% spec that failed to start. A caller of `join_dist_relay/1' wants the
+%% refusal, not the spec it already gave us: the client refuses when its
+%% operator has not accepted an unidentified peer
+%% (`macula_dist:unidentified_peer_refusal/0'), and that term says so.
+child_start_refusal({Refusal, Child}) when is_tuple(Child), element(1, Child) =:= child ->
+    Refusal;
+child_start_refusal(Reason) ->
+    Reason.
 
 %% @doc The dist relay client that `join_dist_relay/1' started, if it
 %% is running.

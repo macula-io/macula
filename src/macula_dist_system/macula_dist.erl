@@ -51,7 +51,9 @@
 -export([
     is_node_name/1,
     splitname/1,
-    address/0
+    address/0,
+    unidentified_peer_accepted/0,
+    unidentified_peer_refusal/0
 ]).
 
 %% Internal exports (used by spawn_link)
@@ -73,6 +75,10 @@
 -endif.
 
 -define(FAMILY, inet).
+-define(UNIDENTIFIED_PEER_REFUSAL,
+        {unidentified_peer_not_accepted,
+         #{limit => unidentified_peer_limit(),
+           accept_with => <<"MACULA_DIST_UNIDENTIFIED_PEER=accept">>}}).
 -define(DRIVER, macula_dist).
 -define(DEFAULT_PORT, 4433).
 -define(ALPN, "macula-dist").
@@ -96,7 +102,46 @@ childspecs() ->
 %% - `direct' (default): raw QUIC listener on the dist port
 -spec listen(atom()) -> {ok, {term(), #net_address{}, 1..3}} | {error, term()}.
 listen(NodeName) ->
-    do_listen(dist_mode(), NodeName).
+    listen_if_accepted(unidentified_peer_accepted(), dist_mode(), NodeName).
+
+%% ⛔ DISTRIBUTION OVER QUIC CARRIES NO IDENTITY YET, so a node does not
+%% carry it unless its operator says so. The `macula-dist' and
+%% `macula-dist-relay' ALPNs run no connection handshake: a connection
+%% verifies that the peer holds the key of the certificate it presents and
+%% nothing more, nothing binds that key to a node_id, and distribution's
+%% cookie handshake can be relayed by a peer in the middle. Until 12.0.0
+%% these dials verified a webpki chain against the dialled host by default,
+%% which no ML-DSA certificate can pass, since no authority issues one. The
+%% end-to-end tunnel of the plan's WP 1.5 and D29 is what restores an
+%% identity; until then `MACULA_DIST_UNIDENTIFIED_PEER=accept' is the
+%% operator saying the limit is understood.
+%%
+%% The `relay' mode is not gated: it carries distribution over the station
+%% mesh, whose handshake does name its peer.
+listen_if_accepted(true, Mode, NodeName) ->
+    do_listen(Mode, NodeName);
+listen_if_accepted(false, relay, NodeName) ->
+    do_listen(relay, NodeName);
+listen_if_accepted(false, Mode, _NodeName) ->
+    ?LOG_ERROR("[dist] ~p mode refused: ~s", [Mode, unidentified_peer_limit()]),
+    {error, ?UNIDENTIFIED_PEER_REFUSAL}.
+
+%% @doc Whether this node's operator accepts a distribution connection whose
+%% peer is verified only by possession of its certificate's key. Exactly
+%% `accept' does; nothing else.
+-spec unidentified_peer_accepted() -> boolean().
+unidentified_peer_accepted() ->
+    os:getenv("MACULA_DIST_UNIDENTIFIED_PEER") =:= "accept".
+
+%% @doc The refusal a distribution start returns when its operator has not
+%% accepted that limit: it names the limit and the setting that accepts it.
+-spec unidentified_peer_refusal() -> {unidentified_peer_not_accepted, map()}.
+unidentified_peer_refusal() ->
+    ?UNIDENTIFIED_PEER_REFUSAL.
+
+unidentified_peer_limit() ->
+    <<"a distribution connection over QUIC verifies only that the peer holds its certificate's key; "
+      "nothing binds that key to a node_id, and the cookie handshake can be relayed">>.
 
 do_listen(relay, NodeName) ->
     ?LOG_INFO("[dist] Relay mode (pub/sub bridge) — no QUIC listener"),
