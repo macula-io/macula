@@ -224,9 +224,16 @@ change, the done criterion and the effort. The US profile goes first; the EU par
 - **Built (2026-09-22):** single tokens. `macula_ucan:create/4` signs with a node key; `authorize/3` verifies over the
   header and payload as received, then the issuer (by node_id for `ucan_required`, by key id for
   `realm_member_required`), `aud` as the caller's node_id, `exp` (required) and `nbf`, and the capability of a
-  membership policy. The station link authorizes CALL and STREAM_OPEN through it. Still to build: delegation chains
-  through `prf`, with narrowing, issuer scope and org keys through the org directory, and SHA-384 parent ids,
-  carried in CALL's and STREAM_OPEN's `proofs` (D7, chain transport).
+  membership policy. The station link authorizes CALL and STREAM_OPEN through it.
+- **Built (2026-09-22), the chain in `macula_ucan`:** `proof_id/1` is the lowercase hex of the SHA-384 of a token's
+  bytes as they travel; `covers/2` is D7's narrowing matrix over the MRI grant forms; and `authorize/3` walks a
+  token's `prf` to its root through the context's proofs, checking each link's own signature and window, a parent's
+  audience against the node_id of the child's issuer key, `can` equal and each capability covered at every step,
+  the root being the issuer the policy names, a grant's realm name hashing to the request's realm id, and every
+  proof that travelled being used. Issuer scope needs no rule of its own inside a chain: a key's authority is what
+  it was granted. **Still to build: the `proofs` field of CALL and STREAM_OPEN with the decoding rule's bound on
+  its count and total bytes and their vectors, and the station link passing the request's realm, procedure and
+  proofs into `authorize/3`.**
 - **Change:**
   - `macula_did_nif` and its crate are removed (Raf, 2026-09-22): nothing called it in macula, macula-station,
     macula-realm, mcl-om or mcl-echo, and D7 retires the `did:macula:` names it built;
@@ -512,6 +519,10 @@ change, the done criterion and the effort. The US profile goes first; the EU par
   - an org directory entry for every publisher, so that every procedure carries a provider authorization; a
     publisher whose procedures have no org namespace today moves under one first (D25);
   - `issue_membership_ucan` names the device by node_id in `aud` (D7), in the same change as every checker
+    ⚠ **and the realm mints a realm id as SHA-256 over its normalised realm name** (D7, 2026-09-22), in place of
+    the id its read model stores today (`MaculaRealm.Mesh.ProviderAuthorization.own_realm_id/0`): a realm's id is
+    no longer free to choose, a rename is a new realm, and every capability check depends on it. Saturnus, after
+    macula 12 lands
     (WP 1.4, WP 4.2): `MaculaRealm.Identity.RealmUcanIssuer` mints with `:macula_ucan.create/4` and the realm key,
     in place of `:macula_ucan_nif.create/5`, which `macula` 12 no longer has; a service names the realm's issuer by
     that key's key id (`realm_member_required`). This starts only after `macula` 12 lands (Raf's order);

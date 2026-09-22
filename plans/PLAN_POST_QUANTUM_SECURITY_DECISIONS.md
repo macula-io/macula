@@ -252,6 +252,58 @@ table there gives each decision's answer in short and its status.
     `test/vectors/decoding_rule_v1.json`. A request without delegation carries no `proofs` field, byte-identical
     to one without the rule.
 
+  - **What a `prf` entry holds, and what a capability names, decided by the Supervisor on 2026-09-22** (wire
+    details inside the decisions above; five SDK work packages copy them):
+    - A `prf` entry is the **lowercase hex of the SHA-384 of the parent token's compact JWT bytes exactly as they
+      travel**, the three base64url parts and their dots, never a re-encoded token. Hex, because `aud` is already
+      a node_id in lowercase hex, so one convention covers both, and 96 characters against base64url's 64 is
+      nothing on a token of 11 to 16 KB. A token names at most one parent: a chain, not a graph.
+    - A capability's `with` is an MRI: a realm grant is `mri:realm:<realm>`, an org grant
+      `mri:org:<realm>/<org>`, and a procedure grant `mri:proc:<realm>/<procedure>`, where `<procedure>` is the
+      full procedure name and its org is the text before its first `/`
+      (`DESIGN_PQ_SIGNED_FRAMES_AND_RECORDS.md`, computed by `macula_record:procedure_org/1`). Anything else in
+      `with` is refused.
+    - **A REALM ID IS SHA-256 OVER ITS NORMALISED REALM NAME, and a grant names the realm by that name**
+      (decided by the Supervisor on 2026-09-22, from three options Venus put). A verifier hashes the grant's name
+      and compares it with the request's 32-byte realm id, so a grant is checked against a request with nothing
+      looked up, which is what D13 asks of every check, and the readable name the MRI exists for is kept. The
+      realm service mints ids this way from 12.0.0 (WP 3.1): a realm's id is no longer free to choose, and a
+      rename is a new realm. 12 is a fresh fleet (D14), so no id migrates. Until now `macula_realm:id/1` in the
+      SDK and the realm service's stored id were two different things under one name.
+    - **The normalised form of a realm name**, load-bearing because the id is a hash of exactly those bytes: at
+      least one segment; segments separated by single `.`; each segment non-empty and made of `a-z`, `0-9`, `-`
+      or `_`. No uppercase, no leading or trailing `.`, no empty segment. A verifier compares bytes and never
+      folds case: `io.example` and `IO.Example` are two realms, and only the first is a name at all.
+      `macula_realm:validate/1` accepts uppercase, by its own tests, so the token check states its own form: a
+      grant outside it is refused as `realm_name_not_canonical`, and a grant whose name does not hash to the
+      request's realm id is refused as `wrong_realm`.
+    - **The all-zero realm is the unnamed realm: no name hashes to it, so no capability can name it and no
+      delegated grant covers a request in it.** A gated procedure lives in a named realm; the all-zero realm
+      stays what it is today, the default of an ungated call. Vectors: a grant whose name hashes to the
+      request's realm id, one that does not, one differing only by case, and one against an all-zero request
+      realm.
+    - **The narrowing matrix**, one row per case, each with a vector. A grant covers a request when the row says
+      yes, and a child's grant is accepted only when the parent's grant covers it by the same table:
+
+      | Grant in `with` | Request or child grant | Covered |
+      |---|---|---|
+      | `mri:realm:R` | anything in realm `R` | yes |
+      | `mri:realm:R` | anything in another realm | no, `wrong_realm` |
+      | `mri:org:R/O` | `mri:proc:R/O/p`, any procedure whose org is `O` | yes |
+      | `mri:org:R/O` | `mri:proc:R/X/p`, a procedure of another org | no, `grants_more_than_proof` |
+      | `mri:org:R/O` | `mri:realm:R` | no, `grants_more_than_proof` |
+      | `mri:org:R/O` | `mri:org:R/O` | yes |
+      | `mri:proc:R/O/p` | the same procedure name, same realm | yes |
+      | `mri:proc:R/O/p` | another procedure name | no, `grants_more_than_proof` |
+      | `mri:proc:R/O/p` | the same name in another realm | no, `wrong_realm` |
+      | any | a procedure name with no org namespace | no, `procedure_without_org` |
+
+      `can` is equal at every step (`can_changed` otherwise), and every token in a chain names the same realm.
+      Issuer scope needs no separate rule inside a chain: a key's authority is what it was granted, so an org
+      key cannot issue a realm grant or reach another org, both by the table. Only the chain's root grants
+      freely, and the root must be the issuer the policy names (`not_the_issuer`), which for a membership policy
+      is the realm key.
+
   - **Amended and accepted by Raf on 2026-09-14,** two rules for the capability check of step 4:
     - **Narrowing along a chain.** Every token in a chain names the same realm. A realm grant covers realm, org and
       procedure grants in that realm, an org grant covers that org and its procedures, and a procedure grant covers
