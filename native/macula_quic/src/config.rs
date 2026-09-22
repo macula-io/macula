@@ -82,54 +82,23 @@ pub fn build_server_config(
     Ok((config, leaf))
 }
 
-/// The crypto provider every configuration here is built from, with the key
-/// exchange groups it may negotiate NAMED RATHER THAN DEFAULTED.
-///
-/// ⚠ THE DEFAULT LIST IS NOT GOOD ENOUGH AND THAT IS THE POINT OF THIS
-/// FUNCTION. `aws_lc_rs::DEFAULT_KX_GROUPS` is four groups of which exactly
-/// one is post-quantum, `X25519MLKEM768`, and it is offered alongside three
-/// classical ones, so a peer that prefers classical gets classical and the
-/// handshake is recordable today and decryptable later. Taking the default
-/// would leave that outcome available.
-///
-/// The order is the preference order. `SECP256R1MLKEM768` leads because it is
-/// the hybrid on BSI TR-02102-2's list; X25519 appears nowhere in TR-02102-2,
-/// so `X25519MLKEM768` carries no European hook even though it is what most
-/// of the internet is deploying. It is second because most of the internet
-/// deploying it is exactly what makes it interoperable.
-///
-/// Every group here is post-quantum. Nothing classical is offered, so no
-/// negotiation can land on one: a peer with no post-quantum group in common
-/// fails to connect rather than quietly agreeing on X25519. That is
-/// deliberate and it is the property `macula_quic_pq_kx_tests` asserts from
-/// the other side, by showing a classical-only peer CANNOT connect.
-pub fn pq_provider() -> CryptoProvider {
-    CryptoProvider {
-        kx_groups: vec![
-            rustls::crypto::aws_lc_rs::kx_group::SECP256R1MLKEM768,
-            rustls::crypto::aws_lc_rs::kx_group::X25519MLKEM768,
-            rustls::crypto::aws_lc_rs::kx_group::MLKEM1024,
-            rustls::crypto::aws_lc_rs::kx_group::MLKEM768,
-        ],
-        ..rustls::crypto::aws_lc_rs::default_provider()
-    }
-}
-
 /// The rustls half of a listener's configuration, before Quinn wraps it.
 ///
 /// Split out from `build_server_config` so that a test drives the
 /// configuration this NIF actually serves with, rather than a second copy of
-/// it built the same way. WHICH KEY EXCHANGE GROUPS A HANDSHAKE MAY NEGOTIATE
-/// IS DECIDED HERE, by the crypto provider the builder defaults to, and a test
-/// that built its own configuration would be asserting about its own copy.
+/// it built the same way.
+///
+/// WHICH KEY EXCHANGE GROUPS A HANDSHAKE MAY NEGOTIATE IS DECIDED BY
+/// `macula-pq`, not here: its builder arrives with the groups and TLS 1.3
+/// already fixed, and keeps its provider where nothing here can edit it. See
+/// the conditions on that list in `macula-pq`'s documentation, and the tests
+/// below, which assert what this NIF actually offers.
 pub fn server_tls_config(
     certs: Vec<CertificateDer<'static>>,
     key: PrivateKeyDer<'static>,
     alpn: &[String],
 ) -> Result<rustls::ServerConfig, String> {
-    let builder = rustls::ServerConfig::builder_with_provider(Arc::new(pq_provider()))
-        .with_safe_default_protocol_versions()
-        .map_err(|e| format!("TLS versions: {}", e))?;
+    let builder = macula_pq::server_builder();
     check_key_matches_leaf(&certs, &key, builder.crypto_provider())?;
     let mut crypto = builder
         .with_no_client_auth()
@@ -146,26 +115,23 @@ pub fn client_tls_config(
     verify: bool,
     pinned_pubkey: Option<Vec<u8>>,
 ) -> rustls::ClientConfig {
-    let builder = || {
-        rustls::ClientConfig::builder_with_provider(Arc::new(pq_provider()))
-            .with_safe_default_protocol_versions()
-            .expect("the provider supports the default protocol versions")
-    };
+    let builder = macula_pq::client_builder();
+    // The verifiers check handshake signatures with the same provider the
+    // connection runs on, read from the builder rather than built again.
+    let provider = builder.crypto_provider().clone();
     let mut crypto = if let Some(pk) = pinned_pubkey {
-        builder()
+        builder
             .dangerous()
-            .with_custom_certificate_verifier(Arc::new(cert::PubkeyPinVerifier::new(pk)))
+            .with_custom_certificate_verifier(Arc::new(cert::PubkeyPinVerifier::new(pk, provider)))
             .with_no_client_auth()
     } else if verify {
         let mut roots = rustls::RootCertStore::empty();
         roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-        builder()
-            .with_root_certificates(roots)
-            .with_no_client_auth()
+        builder.with_root_certificates(roots).with_no_client_auth()
     } else {
-        builder()
+        builder
             .dangerous()
-            .with_custom_certificate_verifier(Arc::new(SkipServerVerification::new()))
+            .with_custom_certificate_verifier(Arc::new(SkipServerVerification(provider)))
             .with_no_client_auth()
     };
     crypto.alpn_protocols = alpn.iter().map(|s| s.as_bytes().to_vec()).collect();
@@ -296,14 +262,10 @@ fn load_key(path: &str) -> Result<PrivateKeyDer<'static>, String> {
 
 // ── Development mode: skip TLS verification ────────────────────
 
+/// Accepts any server certificate, and states the signature schemes of the
+/// provider it is given.
 #[derive(Debug)]
 struct SkipServerVerification(Arc<rustls::crypto::CryptoProvider>);
-
-impl SkipServerVerification {
-    fn new() -> Self {
-        Self(Arc::new(pq_provider()))
-    }
-}
 
 impl rustls::client::danger::ServerCertVerifier for SkipServerVerification {
     fn verify_server_cert(
@@ -354,14 +316,58 @@ mod tests {
     /// classical group numbered above the ML-KEM block cannot quietly count
     /// as post-quantum.
     fn is_post_quantum(group: NamedGroup) -> bool {
-        matches!(
-            group,
-            NamedGroup::MLKEM512
-                | NamedGroup::MLKEM768
-                | NamedGroup::MLKEM1024
-                | NamedGroup::secp256r1MLKEM768
-                | NamedGroup::X25519MLKEM768
-        )
+        group == SECP384R1MLKEM1024
+            || matches!(
+                group,
+                NamedGroup::MLKEM512
+                    | NamedGroup::MLKEM768
+                    | NamedGroup::MLKEM1024
+                    | NamedGroup::secp256r1MLKEM768
+                    | NamedGroup::X25519MLKEM768
+            )
+    }
+
+    /// `SecP384r1MLKEM1024`, code point `0x11ED`. rustls has no variant for
+    /// it and no rustls provider ships it: only `macula-pq` does.
+    const SECP384R1MLKEM1024: NamedGroup = NamedGroup::Unknown(0x11ED);
+
+    /// Exactly `macula-pq`'s two groups, in its order.
+    fn macula_pq_groups() -> Vec<NamedGroup> {
+        vec![SECP384R1MLKEM1024, NamedGroup::secp256r1MLKEM768]
+    }
+
+    fn offered(provider: &CryptoProvider) -> Vec<NamedGroup> {
+        provider.kx_groups.iter().map(|g| g.name()).collect()
+    }
+
+    /// EVERY configuration this NIF builds takes its groups from
+    /// `macula-pq`: the listener's, and the dialler's in all three trust
+    /// modes. A trust mode that built its own provider would be the one
+    /// path a classical group could come back through.
+    #[test]
+    fn every_configuration_offers_exactly_macula_pqs_groups() {
+        let alpn = vec!["macula".to_string()];
+        let (certs, key) = test_identity();
+        let server = server_tls_config(certs, key, &alpn).expect("server config");
+        assert_eq!(
+            offered(server.crypto_provider()),
+            macula_pq_groups(),
+            "listener"
+        );
+        for (mode, client) in [
+            (
+                "pinned key",
+                client_tls_config(&alpn, false, Some(vec![7u8; 32])),
+            ),
+            ("webpki roots", client_tls_config(&alpn, true, None)),
+            ("no verification", client_tls_config(&alpn, false, None)),
+        ] {
+            assert_eq!(
+                offered(client.crypto_provider()),
+                macula_pq_groups(),
+                "dialler, {mode}"
+            );
+        }
     }
 
     /// THE DELIVERABLE. Two endpoints, a real TLS 1.3 handshake, and an
@@ -404,16 +410,79 @@ mod tests {
 
     /// WHICH post-quantum group, not merely that it is one.
     ///
-    /// The preference order in `pq_provider` is a decision and not an
-    /// accident: `SECP256R1MLKEM768` leads because it is the hybrid on BSI
-    /// TR-02102-2's list, and X25519 appears nowhere in TR-02102-2. Pinning
-    /// the negotiated value here makes that decision something a change has
-    /// to face rather than something a reordering can quietly undo.
+    /// The preference order is `macula-pq`'s, and a decision rather than an
+    /// accident: `SecP384r1MLKEM1024` leads because it is the group the
+    /// `pq_hybrid` profile declares, so two peers on this NIF negotiate it.
+    /// Pinning the negotiated value here makes that decision something a
+    /// change has to face rather than something a reordering can quietly
+    /// undo. No other rustls provider has this group, so negotiating it also
+    /// shows the handshake ran on `macula-pq`'s key exchange.
     ///
     /// If the order is changed deliberately, change this with it and say why.
     #[test]
     fn negotiated_key_exchange_group_is_the_one_we_lead_with() {
-        assert_eq!(negotiated_group(), NamedGroup::secp256r1MLKEM768);
+        assert_eq!(negotiated_group(), SECP384R1MLKEM1024);
+    }
+
+    /// `aws-lc-rs`'s post-quantum groups, as this NIF offered them at macula
+    /// `c91e0214`, before it moved onto `macula-pq`. That list was never
+    /// released: 11.5.0 and earlier negotiate classical groups and cannot
+    /// connect to this NIF at all, which the negative control below models.
+    ///
+    /// A peer on it has no `SecP384r1MLKEM1024`, so the two must agree on
+    /// `SecP256r1MLKEM768`, in both roles: `macula-pq`'s ML-KEM against
+    /// `aws-lc-rs`'s, through this NIF's own configurations. A DIFFERENTIAL
+    /// CHECK, green before the move and after.
+    fn aws_lc_rs_post_quantum_list() -> CryptoProvider {
+        CryptoProvider {
+            kx_groups: vec![
+                rustls::crypto::aws_lc_rs::kx_group::SECP256R1MLKEM768,
+                rustls::crypto::aws_lc_rs::kx_group::X25519MLKEM768,
+                rustls::crypto::aws_lc_rs::kx_group::MLKEM1024,
+                rustls::crypto::aws_lc_rs::kx_group::MLKEM768,
+            ],
+            ..rustls::crypto::aws_lc_rs::default_provider()
+        }
+    }
+
+    #[test]
+    fn a_peer_on_aws_lc_rs_post_quantum_groups_agrees_on_secp256r1mlkem768() {
+        let alpn = vec!["macula".to_string()];
+        let (certs, key) = test_identity();
+
+        let mut their_server = rustls::ServerConfig::builder_with_provider(Arc::new(aws_lc_rs_post_quantum_list()))
+            .with_safe_default_protocol_versions()
+            .expect("versions")
+            .with_no_client_auth()
+            .with_single_cert(certs.clone(), key.clone_key())
+            .expect("server config");
+        their_server.alpn_protocols = vec![b"macula".to_vec()];
+        let we_dial = handshake(client_tls_config(&alpn, false, None), their_server);
+
+        let mut their_client = rustls::ClientConfig::builder_with_provider(Arc::new(aws_lc_rs_post_quantum_list()))
+            .with_safe_default_protocol_versions()
+            .expect("versions")
+            .dangerous()
+            .with_custom_certificate_verifier(Arc::new(SkipServerVerification(Arc::new(
+                aws_lc_rs_post_quantum_list(),
+            ))))
+            .with_no_client_auth();
+        their_client.alpn_protocols = vec![b"macula".to_vec()];
+        let they_dial = handshake(
+            their_client,
+            server_tls_config(certs, key, &alpn).expect("ours"),
+        );
+
+        assert_eq!(
+            we_dial,
+            Ok(NamedGroup::secp256r1MLKEM768),
+            "we dial an aws-lc-rs peer"
+        );
+        assert_eq!(
+            they_dial,
+            Ok(NamedGroup::secp256r1MLKEM768),
+            "an aws-lc-rs peer dials us"
+        );
     }
 
     /// THE NEGATIVE CONTROL, and without it the two tests above are worth
@@ -432,7 +501,7 @@ mod tests {
     #[test]
     fn a_classical_only_peer_cannot_agree_with_us() {
         let alpn = vec!["macula".to_string()];
-        let classical = CryptoProvider {
+        let classical = || CryptoProvider {
             kx_groups: vec![
                 rustls::crypto::aws_lc_rs::kx_group::X25519,
                 rustls::crypto::aws_lc_rs::kx_group::SECP256R1,
@@ -441,20 +510,42 @@ mod tests {
             ..rustls::crypto::aws_lc_rs::default_provider()
         };
 
+        // We dial a classical-only listener.
         let (certs, key) = test_identity();
-        let server_cfg = rustls::ServerConfig::builder_with_provider(Arc::new(classical))
+        let mut server_cfg = rustls::ServerConfig::builder_with_provider(Arc::new(classical()))
             .with_safe_default_protocol_versions()
             .expect("versions")
             .with_no_client_auth()
-            .with_single_cert(certs, key)
+            .with_single_cert(certs.clone(), key.clone_key())
             .expect("server config");
-        let mut server_cfg = server_cfg;
         server_cfg.alpn_protocols = vec![b"macula".to_vec()];
+        let we_dial = handshake(client_tls_config(&alpn, false, None), server_cfg);
 
-        let outcome = handshake(client_tls_config(&alpn, false, None), server_cfg);
+        // A classical-only dialler reaches our listener.
+        let mut client_cfg = rustls::ClientConfig::builder_with_provider(Arc::new(classical()))
+            .with_safe_default_protocol_versions()
+            .expect("versions")
+            .dangerous()
+            .with_custom_certificate_verifier(Arc::new(SkipServerVerification(Arc::new(
+                classical(),
+            ))))
+            .with_no_client_auth();
+        client_cfg.alpn_protocols = vec![b"macula".to_vec()];
+        let they_dial = handshake(
+            client_cfg,
+            server_tls_config(certs, key, &alpn).expect("ours"),
+        );
+
         assert!(
-            outcome.is_err(),
-            "a classical-only server agreed with us, so our key exchange group              list is not in force: the post-quantum group the other tests see              is luck, not policy"
+            we_dial.is_err(),
+            "a classical-only server agreed with us, so our key exchange group \
+             list is not in force: the post-quantum group the other tests see \
+             is luck, not policy"
+        );
+        assert!(
+            they_dial.is_err(),
+            "a classical-only client agreed with our listener, so its key \
+             exchange group list is not in force"
         );
     }
 

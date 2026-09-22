@@ -143,10 +143,12 @@ pub struct PubkeyPinVerifier {
 }
 
 impl PubkeyPinVerifier {
-    pub fn new(pinned_pubkey: Vec<u8>) -> Self {
+    /// `crypto` is the provider the connection runs on, whose signature
+    /// algorithms verify the handshake: `macula-pq`'s, read from the builder.
+    pub fn new(pinned_pubkey: Vec<u8>, crypto: Arc<rustls::crypto::CryptoProvider>) -> Self {
         Self {
             pinned: pinned_pubkey,
-            crypto: Arc::new(crate::config::pq_provider()),
+            crypto,
         }
     }
 }

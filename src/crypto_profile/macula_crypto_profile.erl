@@ -17,9 +17,9 @@
 %% </ul>
 %%
 %% ⚠ `key_exchange_group' IS A TARGET AND NOT A DESCRIPTION OF THE WIRE.
-%% Neither profile's group is negotiated by anything this node runs. See
-%% `definition/1' for what is actually negotiated and why the field is
-%% kept anyway. Read a profile NAME as
+%% Nothing reads it: the QUIC NIF offers the same key exchange groups
+%% whatever a node's profile. See `definition/1' for what is actually
+%% negotiated and why the field is kept anyway. Read a profile NAME as
 %% naming the policy the profile serves, never as a statement about the
 %% key exchange a connection got.
 %%
@@ -45,25 +45,20 @@
 }.
 -type signature_algorithm() :: mldsa87 | {rsa_pss, rsa_pss_params()}.
 -type definition() :: #{
-    %% ⚠ DECLARED TARGET. NOT NEGOTIATED. NOT NEGOTIABLE TODAY.
+    %% ⚠ DECLARED TARGET. NOT READ BY ANYTHING.
     %%
-    %% Nothing reads this field. What a connection actually negotiates is
-    %% whatever the QUIC NIF's TLS provider defaults to: the NIF selects
-    %% rustls on its `ring' feature and configures no group list at all
-    %% (`native/macula_quic/Cargo.toml', and the provider calls in
-    %% `config.rs' and `cert.rs'), so the offered groups are X25519,
-    %% SECP256R1 and SECP384R1. All classical. The ring provider
-    %% implements no ML-KEM.
+    %% What a connection negotiates is decided by the `macula-pq' crate,
+    %% which every TLS configuration in `native/macula_quic' is built from,
+    %% whatever the node's profile: SecP384r1MLKEM1024, then
+    %% SecP256r1MLKEM768, nothing classical. Two nodes on this version
+    %% negotiate SecP384r1MLKEM1024, which is `pq_hybrid''s declared group,
+    %% because every node offers it and not because this field asked.
+    %% `mlkem1024', `pq_pure''s declared group, is never negotiated: no pure
+    %% ML-KEM group is offered. (BSI TR-02102-2 INTENDS TO RECOMMEND
+    %% SecP384r1MLKEM1024 once the corresponding RFC is adopted. Say
+    %% "intends to recommend". BSI does not recommend it yet.)
     %%
-    %% Neither declared group is reachable by configuration. `mlkem1024'
-    %% exists in rustls's aws-lc-rs provider, which we do not link.
-    %% `secp384r1_mlkem1024' exists in NO rustls we hold, under either
-    %% provider: BSI TR-02102-2 INTENDS TO RECOMMEND SecP384r1MLKEM1024
-    %% once the corresponding RFC is adopted, and until that happens
-    %% nobody has implemented it. (Say "intends to recommend". BSI does
-    %% not recommend it yet.)
-    %%
-    %% The field is kept, deliberately, as the target the EU profile is
+    %% The field is kept, deliberately, as the target each profile is
     %% aiming at. Keeping a declared-but-inert field is exactly the defect
     %% macula#15 exists to punish, so it is kept ONLY with this said next
     %% to it, and honouring it is tracked as work rather than assumed.
@@ -105,22 +100,19 @@ profiles() ->
 %% == What is actually negotiated ==
 %%
 %% `key_exchange_group' IS A DECLARED TARGET AND NOT A DESCRIPTION OF THE
-%% WIRE. Nothing reads it. What a connection negotiates is whatever the
-%% QUIC NIF's TLS provider defaults to, and the NIF selects rustls on its
-%% `ring' feature and configures no group list, so the offered groups are
-%% X25519, SECP256R1 and SECP384R1. All classical. The ring provider
-%% implements no ML-KEM.
+%% WIRE. Nothing reads it. The QUIC NIF takes every TLS configuration from
+%% the `macula-pq' crate, whatever the node's profile, and offers
+%% SecP384r1MLKEM1024 then SecP256r1MLKEM768 and nothing classical, so two
+%% nodes on this version negotiate SecP384r1MLKEM1024.
 %%
-%% Neither declared group is reachable by configuration today.
-%% `mlkem1024' exists in rustls's aws-lc-rs provider, which this NIF does
-%% not link. `secp384r1_mlkem1024' exists in no rustls under either
-%% provider: BSI TR-02102-2 INTENDS TO RECOMMEND SecP384r1MLKEM1024 once
-%% the corresponding RFC is adopted, and until then nobody has
-%% implemented it.
+%% The declared group of `pq_hybrid', `secp384r1_mlkem1024', is therefore
+%% the one negotiated, but because every node offers it, not because the
+%% profile asked for it. The declared group of `pq_pure', `mlkem1024', is
+%% never negotiated: no pure ML-KEM group is offered.
 %%
 %% So a profile NAME names the policy the profile serves. It is never a
-%% statement about the key exchange a connection got. Post-quantum
-%% SIGNATURES are real; key exchange is classical.
+%% statement about the key exchange a connection got. Key exchange is
+%% post-quantum on every link; the profile does not choose the group.
 %%
 %% This makes no claim either way about the signature half of the map.
 -spec definition(term()) ->

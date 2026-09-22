@@ -15,10 +15,9 @@
 %%% <ol>
 %%%   <li><b>The group list is in force</b>, proved in
 %%%       `native/macula_quic/src/config.rs' by a NEGATIVE CONTROL: a peer
-%%%       offering only classical groups CANNOT agree with us. It can only
-%%%       fail to agree if both lists are genuinely being applied. Give that
-%%%       "classical" peer one post-quantum group and the test goes red, so
-%%%       the assertion is connected rather than incidentally true.</li>
+%%%       offering only classical groups CANNOT agree with us, whether it
+%%%       dials us or we dial it. It can only fail to agree if our list is
+%%%       genuinely being applied.</li>
 %%%   <li><b>Real endpoints connect under it</b>, which is this file. Since
 %%%       `macula_quic' offers post-quantum groups and nothing else, and the
 %%%       offering is proved real by (1), a handshake that completes here
@@ -26,16 +25,26 @@
 %%%       it to have landed on.</li>
 %%% </ol>
 %%%
+%%% <b>THE LIST BELONGS TO `macula-pq'</b>, the crate on crates.io that every
+%%% TLS configuration in `native/macula_quic' is built from:
+%%% `SecP384r1MLKEM1024', then `SecP256r1MLKEM768', and nothing classical.
+%%% Two endpoints here negotiate `SecP384r1MLKEM1024'; the Rust test
+%%% `negotiated_key_exchange_group_is_the_one_we_lead_with' proves it, since
+%%% this file cannot see the group. A `macula-pq' version that changed the
+%%% list would reach this NIF through `Cargo.lock', so
+%%% `every_configuration_offers_exactly_macula_pqs_groups' pins the exact
+%%% list and fails first.
+%%%
 %%% ⚠ THE SPLIT IS CONDITIONAL ON THE GROUP LIST STAYING STRICT. It works
 %%% because `macula_quic' offers NOTHING classical, so "the handshake
 %%% completed" leaves only post-quantum groups it could have completed on.
-%%% <b>If anyone adds a classical fallback group, that deduction dies and this
-%%% file stops proving anything</b>: a completed handshake would once again be
-%%% consistent with X25519. Adding a fallback therefore obliges you to add the
-%%% negative control HERE, in Erlang, against a classical-only peer, which
-%%% needs a per-endpoint key exchange group option on the NIF. That option was
-%%% deliberately not added for a test alone. If you are adding the fallback,
-%%% it is now part of the work.
+%%% <b>If a classical fallback group is ever added, in `macula-pq' or here,
+%%% that deduction dies and this file stops proving anything</b>: a completed
+%%% handshake would once again be consistent with X25519. Adding a fallback
+%%% therefore obliges you to add the negative control HERE, in Erlang,
+%%% against a classical-only peer, which needs a per-endpoint key exchange
+%%% group option on the NIF. That option was deliberately not added for a
+%%% test alone. If you are adding the fallback, it is now part of the work.
 %%%
 %%% ⛔ IT HAS TO BE SPLIT THAT WAY, and not because anyone preferred it.
 %%% `quinn' does not surface the negotiated group: `rustls' has

@@ -12,15 +12,17 @@ crate-type = ["cdylib"]
 [dependencies]
 rustler = "0.34"
 quinn = "0.11"
-# aws-lc-rs, NOT ring: ring's provider offers X25519, secp256r1 and
-# secp384r1 and NO post-quantum key exchange group at all, so a handshake
-# over it is recordable today and decryptable by a quantum adversary later.
-# aws-lc-rs carries ML-KEM and the hybrids. See config::pq_provider.
+# The key exchange comes from macula-pq, and nowhere else: every TLS
+# configuration here starts from its client_builder()/server_builder(),
+# which offer SecP384r1MLKEM1024 then SecP256r1MLKEM768 and nothing
+# classical. So rustls selects no crypto provider of its own in this
+# manifest. The published crate, not a git or path dependency.
 #
-# It is NOT post-quantum SIGNATURES: this provider's SUPPORTED_SIG_ALGS is
-# ECDSA, Ed25519 and RSA, the same classical set as ring, and rustls-webpki
-# has no ML-DSA. The swap buys key exchange and nothing else.
-rustls = { version = "0.23", default-features = false, features = ["aws-lc-rs", "logging", "std", "tls12"] }
+# It is NOT post-quantum SIGNATURES: the provider's signature algorithms are
+# ECDSA, Ed25519 and RSA, and rustls-webpki has no ML-DSA. This is
+# post-quantum key exchange and nothing else.
+macula-pq = "0.1"
+rustls = { version = "0.23", default-features = false, features = ["logging", "std", "tls12"] }
 rustls-pemfile = "2"
 webpki-roots = "1.0"
 tokio = { version = "1", features = ["full"] }
@@ -35,6 +37,12 @@ time = "0.3"
 # Extract Ed25519 SPKI pubkey from leaf cert for pubkey-pin
 # verification.
 x509-parser = "0.18"
+
+[dev-dependencies]
+# The tests build the peers this NIF must refuse or still agree with: a
+# classical-only one, and one on the list deployed before macula-pq. Those
+# come from aws-lc-rs's own groups.
+rustls = { version = "0.23", default-features = false, features = ["aws-lc-rs"] }
 
 [profile.release]
 lto = true

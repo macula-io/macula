@@ -11,6 +11,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **QUIC links now negotiate POST-QUANTUM KEY EXCHANGE, and nothing else.**
+  The QUIC NIF builds every TLS configuration from
+  [`macula-pq`](https://crates.io/crates/macula-pq) 0.1, the published crate:
+  `SecP384r1MLKEM1024` first, then `SecP256r1MLKEM768`, and no classical
+  group. Its ML-KEM is `macula-pq`'s own, verified against NIST's ACVP
+  vectors; the elliptic-curve half is `aws-lc-rs`. Two nodes on this version
+  negotiate `SecP384r1MLKEM1024`, the group the `pq_hybrid` profile declares.
+  A peer offering only classical groups cannot connect, whether it dials or
+  is dialled; `native/macula_quic` tests both, and the negotiated group.
+
+  **Breaking on the wire: a node on 11.5.0 or earlier cannot connect to this
+  version, in either direction.** 11.5.0 negotiates rustls's `ring` defaults,
+  X25519, P-256 and P-384, all classical, and this version offers none of
+  them. Upgrade every node together.
+
+  Key exchange only. The certificates in the TLS handshake are still signed
+  classically: `rustls-webpki` has no ML-DSA.
+
 - **`pin_tls_cert => true` is now REFUSED**, with
   `{error, {refused, {pin_tls_cert, no_pin_primitive_for_mldsa87_identity}}}`. It is
   refused from `macula:connect/2`, `call_station/8`, `call_stream_station/7`,
@@ -54,14 +72,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   argument to `definition/1`.
 
   **`key_exchange_group` is kept and is a DECLARED TARGET, not a description of
-  the wire.** What is actually negotiated is X25519, SECP256R1 and SECP384R1,
-  all classical: the QUIC NIF selects rustls on its `ring` feature and
-  configures no group list, and the ring provider implements no ML-KEM. Neither
-  declared group is reachable by configuration today. `mlkem1024` exists in the
-  aws-lc-rs provider, which the NIF does not link. `secp384r1_mlkem1024` exists
-  in no rustls under either provider, because BSI TR-02102-2 intends to
-  recommend SecP384r1MLKEM1024 once the RFC is adopted and until then nobody has
-  implemented it. Post-quantum SIGNATURES are real; key exchange is classical.
+  the wire.** Nothing reads it: the QUIC NIF offers the same groups whatever a
+  node's profile (see the entry above). So `pq_hybrid`'s declared
+  `secp384r1_mlkem1024` is the group negotiated, because every node offers it,
+  while `pq_pure`'s `mlkem1024` never is: no pure ML-KEM group is offered.
   See macula#13.
 
 - `macula_client:opts()` declares `verify` and `expected_node_id`, which
