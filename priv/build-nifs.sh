@@ -29,8 +29,7 @@ mkdir -p "${PRIV_DIR}"
 # REQUIRED="true" (macula_quic, macula_crypto_nif and macula_cbor_nif, see
 # below) makes a missing cargo or a failed build a hard error (exit 1)
 # instead of a warning. Every OTHER caller here has a real Erlang fallback
-# (macula_ucan_nif, macula_did_nif, macula_mri_nif all document one in their
-# own moduledoc) and stays soft-skip on purpose: a consumer without a Rust
+# (macula_ucan_nif and macula_mri_nif document one in their own moduledoc) and stays soft-skip on purpose: a consumer without a Rust
 # toolchain still gets a working, if slower, build.
 # ============================================================
 build_nif() {
@@ -109,7 +108,6 @@ build_nif "macula_crypto_nif" "true"
 #    real Erlang fallback)
 # ============================================================
 build_nif "macula_ucan_nif"
-build_nif "macula_did_nif"
 build_nif "macula_mri_nif"
 
 # ============================================================

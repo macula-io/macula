@@ -82,6 +82,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   signed object (D13) or, in `pq_hybrid`, as a neighbour signature (D17).
 - **`macula_crypto_nif:grind_puzzle/1`**, which ground Ed25519 keys for
   `macula_identity`. `macula_node_keys:generate/3` grinds identity keys.
+- **`macula_did_nif` and its Rust crate**, which built and parsed DID
+  documents for hierarchical `did:macula:` names, signed with Ed25519. D7
+  retires the `did:macula:` prefix, and nothing called it: not macula,
+  macula-station, macula-realm, mcl-om or mcl-echo.
 
 ## [12.0.0-alpha.1] - 2026-09-22
 

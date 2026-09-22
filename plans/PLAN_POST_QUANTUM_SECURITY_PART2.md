@@ -121,7 +121,7 @@ change, the done criterion and the effort. The US profile goes first; the EU par
   - `src/macula.erl`
   - `src/macula_cert_system/macula_cert.erl`
   - `src/macula_foundation.erl`
-  - `src/auth/macula_ucan_nif.erl` and `src/identity/macula_did_nif.erl` (signing moves into `macula_identity`)
+  - `src/auth/macula_ucan_nif.erl` (WP 1.4)
   - `rebar.config` (OTP floor)
 - **Change:**
   - identity keys per profile: ML-DSA-87 through `macula-mldsa` in the US profile, the hybrid pair in the EU
@@ -206,15 +206,15 @@ change, the done criterion and the effort. The US profile goes first; the EU par
 
 ### WP 1.4 UCAN and DID encoding
 
-- [ ] UCANs and DIDs carry the profile's algorithm.
-- **Owner:** Neptune.
+- [ ] UCANs carry the profile's algorithm, and name their issuer by `did:key` (D7).
+- **Owner:** Venus.
 - **Waiting on:** WP 1.3.
 - **Files:**
   - `native/macula_ucan_nif/Cargo.toml`
   - `native/macula_ucan_nif/src/lib.rs`
-  - `native/macula_did_nif/Cargo.toml`
-  - `native/macula_did_nif/src/lib.rs`
 - **Change:**
+  - `macula_did_nif` and its crate are removed (Raf, 2026-09-22): nothing called it in macula, macula-station,
+    macula-realm, mcl-om or mcl-echo, and D7 retires the `did:macula:` names it built;
   - the NIFs build the signing input, parse tokens and documents, and sign and verify ML-DSA with `macula-mldsa`
     (D7, amended 2026-09-22); the EU composite's RSA-PSS half is signed and verified on OTP;
   - `alg` and key encoding per D7: `ML-DSA-87` and `AKP` from RFC 9964 with the `mldsa-87-pub` multicodec in the US
@@ -246,14 +246,13 @@ change, the done criterion and the effort. The US profile goes first; the EU par
     capability (D7);
   - every policy refuses a procedure name without an org namespace (D25);
   - `ed25519-dalek` removed.
-- **Red first:** `test/macula_ucan_nif_tests.erl` and `test/macula_did_nif_tests.erl`: a post-quantum token and
-  DID round-trip; an EdDSA token is rejected. For a call and for a stream, a request is refused when its target is
-  another node, its token's `aud` is not the node_id of the verified caller, a proof's `aud` is not the node_id of
-  the next token's `iss` key, the chain does not root at the required issuer, a token has no `exp` or no capability
-  for the procedure and realm, or the request is past its signed deadline plus the D22 tolerance; a repeated
-  (caller, call id) within that window is refused as a duplicate. A request is also refused when a token grants
-  more than the token it proves from, a chain changes realm or `can`, an org key grants outside its own org or
-  grants a realm, or the procedure name has no org namespace.
+- **Red first:** `test/macula_ucan_nif_tests.erl`: a post-quantum token round-trips; an EdDSA token is rejected. For a
+  call and for a stream, a request is refused when its target is another node, its token's `aud` is not the node_id of
+  the verified caller, a proof's `aud` is not the node_id of the next token's `iss` key, the chain does not root at
+  the required issuer, a token has no `exp` or no capability for the procedure and realm, or the request is past its
+  signed deadline plus the D22 tolerance; a repeated (caller, call id) within that window is refused as a duplicate. A
+  request is also refused when a token grants more than the token it proves from, a chain changes realm or `can`, an
+  org key grants outside its own org or grants a realm, or the procedure name has no org namespace.
 - **Done:** green.
 - **Effort:** 2 to 3 days, plus the token checks ⚠.
 
@@ -1051,7 +1050,6 @@ core cutover advertises a procedure without an org or node namespace.
   - `rebar.config`
 - WP 1.4:
   - `native/macula_ucan_nif`
-  - `native/macula_did_nif`
 - WP 1.5:
   - `src/peering/macula_peering_conn.erl`
   - `src/client/macula_station_link.erl`

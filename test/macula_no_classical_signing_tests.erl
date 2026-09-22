@@ -71,10 +71,6 @@ known() ->
      {"native/macula_ucan_nif/src/lib.rs", rust_dalek, 1, "WP 1.4"},
      {"native/macula_ucan_nif/src/lib.rs", rust_wire_constant, 1, "WP 1.4"},
      {"native/macula_ucan_nif/Cargo.toml", cargo_dalek, 1, "WP 1.4"},
-     {"src/identity/macula_did_nif.erl", erl_wire_constant, 1, "WP 1.4"},
-     {"native/macula_did_nif/src/lib.rs", rust_dalek, 1, "WP 1.4"},
-     {"native/macula_did_nif/src/lib.rs", rust_wire_constant, 1, "WP 1.4"},
-     {"native/macula_did_nif/Cargo.toml", cargo_dalek, 1, "WP 1.4"},
      {"native/macula_quic/src/cert.rs", rust_ed25519_oid, 2, "D12 TLS leaf"},
      {"native/macula_quic/src/cert.rs", rust_provider_verify, 2, "D12 TLS leaf"},
      {"native/macula_quic/src/config.rs", rust_provider_verify, 1, "D12 TLS leaf"}].

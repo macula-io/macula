@@ -75,7 +75,7 @@ stations: no open ports, NAT-friendly, no VPN. It provides:
 - **Content** — content-addressed sharing and live streaming (MCID).
 - **DHT records** — signed, TTL'd records (advertisements, endpoints, more).
 - **Erlang distribution over mesh** — `net_adm:ping` across firewalls, no VPN.
-- **Identity** — ML-DSA-87 node keys (with an RSA-PSS half under `pq_hybrid`), UCAN tokens, DID documents (NIF-accelerated).
+- **Identity** — ML-DSA-87 node keys (with an RSA-PSS half under `pq_hybrid`), UCAN tokens (NIF-accelerated).
 - **MRI** — typed, hierarchical resource identifiers.
 - **Zero-config LAN clustering** — UDP-multicast gossip.
 
@@ -181,7 +181,7 @@ ok   = macula_node_keys:save("identity.key", Key),
 Hash = macula_blake3_nif:hash(<<"hello">>).
 ```
 
-UCAN capability tokens and DID documents are still signed with Ed25519.
+UCAN capability tokens are still signed with Ed25519.
 Moving them to the profile's algorithm is one of the steps left before
 12.0.0.
 

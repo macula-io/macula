@@ -49,12 +49,12 @@ macula/
 │   ├── record/                  # Signed DHT records (macula_record), CBOR codec
 │   ├── content/                 # Content chunking/manifests (macula_manifest)
 │   ├── mri/                     # Resource identifiers — parse, hierarchy, trie index
-│   ├── identity/, auth/         # Ed25519 keys, UCAN tokens (Rust NIFs + Erlang fallback)
+│   ├── identity/, auth/         # Node keys (ML-DSA-87; RSA-PSS half in pq_hybrid), UCAN tokens
 │   ├── macula_cert_system/      # Self-sovereign certs, trust store
 │   ├── macula_dist_system/      # Erlang distribution over relay mesh (3 transports)
 │   └── macula_cluster_system/   # LAN clustering (gossip/static/libcluster) — separate from dist
 ├── native/                       # Rust NIF crates (macula_quic, macula_crypto_nif, macula_ucan_nif,
-│                                 # macula_did_nif, macula_mri_nif, macula_cbor_nif)
+│                                 # macula_mri_nif, macula_cbor_nif)
 ├── test/                         # EUnit tests, one file per module under test
 ├── include/                      # Header files (.hrl)
 ├── docs/                         # SDK guides
@@ -148,14 +148,13 @@ Generated docs appear in `doc/` directory. Open `doc/index.html` in a browser.
 
 ## Rust NIFs
 
-The SDK includes Rust NIFs for performance-critical operations. They build from this repository's `native/` sources via `priv/build-nifs.sh` during `rebar3 compile`, so a Rust toolchain (`cargo`) is required. `macula_quic` and `macula_cbor_nif` have no Erlang fallback, and the build stops without them; the other crates fall back to pure Erlang when Rust is not available. After a build, `scripts/is_quic_nif_built_from_this_tree.sh` confirms that `macula_quic` loads from it.
+The SDK includes Rust NIFs for performance-critical operations. They build from this repository's `native/` sources via `priv/build-nifs.sh` during `rebar3 compile`, so a Rust toolchain (`cargo`) is required. `macula_quic`, `macula_crypto_nif` (its ML-DSA) and `macula_cbor_nif` have no Erlang fallback, and the build stops without them; the other crates fall back to pure Erlang when Rust is not available. After a build, `scripts/is_quic_nif_built_from_this_tree.sh` confirms that `macula_quic` loads from it.
 
 | NIF Crate | Provides |
 |-----------|----------|
 | `native/macula_quic/` | Quinn QUIC transport |
-| `native/macula_crypto_nif/` | Ed25519, BLAKE3, SHA-256 |
+| `native/macula_crypto_nif/` | ML-DSA ([`macula-mldsa`](https://crates.io/crates/macula-mldsa)), Ed25519, BLAKE3, SHA-256 |
 | `native/macula_ucan_nif/` | UCAN token create/verify |
-| `native/macula_did_nif/` | DID document operations |
 | `native/macula_mri_nif/` | MRI parsing, trie index |
 | `native/macula_cbor_nif/` | CBOR encode/decode |
 
