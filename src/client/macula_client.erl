@@ -1719,24 +1719,28 @@ node_record_signed(false, _Record, _Key) ->
 node_record_signed(true, Record, Key) ->
     signed_here(fun() -> macula_record:refresh(Record, Key) end).
 
-%% The bounded signing: the pool judges the bound on its own clock, refuses one
-%% already passed, and caps the record's expiry at the bound only when the
-%% bound comes before the lifetime it was built with runs out.
+%% The bounded signing: `macula_record:refresh/3' stamps the record and ends it
+%% at the bound in one step, on one clock read, so the time this call takes
+%% cannot carry the record past the bound. It refuses a bound already passed,
+%% by name, on the same clock read.
+%%
+%% ⚠ This used to write the bound into the record as `expires_at' and then
+%% refresh it. Refresh keeps a record's LIFETIME, so the bound was re-anchored
+%% to a second, later clock read and the record ended at the bound plus its own
+%% age at signing time (Mars, 2026-09-22).
 node_record_signed_bounded(false, _Record, _Key, _NotAfter) ->
     {error, not_a_node_signed_type};
 node_record_signed_bounded(true, Record, Key, NotAfter) ->
-    Now = erlang:system_time(millisecond),
-    bounded_signed(NotAfter =< Now, Now, NotAfter, Record, Key).
+    bounded_signed(fun() -> macula_record:refresh(Record, Key, NotAfter) end).
 
-bounded_signed(true, _Now, _NotAfter, _Record, _Key) ->
-    {error, not_after_passed};
-bounded_signed(false, Now, NotAfter, #{created_at := Created, expires_at := Expires} = Record, Key) ->
-    Lifetime = Expires - Created,
-    Bounded = bounded_record(NotAfter < Now + Lifetime, NotAfter, Record),
-    node_record_signed(true, Bounded, Key).
+bounded_signed(Sign) ->
+    unwrapped(signed_here(Sign)).
 
-bounded_record(true, NotAfter, Record) -> Record#{expires_at => NotAfter};
-bounded_record(false, _NotAfter, Record) -> Record.
+%% refresh/3 answers `{ok, Record}' or `{error, not_after_passed}', and
+%% `signed_here/1' wraps whatever it returns in another `{ok, _}'.
+unwrapped({ok, {ok, Signed}})  -> {ok, Signed};
+unwrapped({ok, {error, _} = Refusal}) -> Refusal;
+unwrapped({error, _} = Refusal) -> Refusal.
 
 %% A domain record the pool signs is signed as this node: macula_record:refresh/2 stamps it now and signs it, and
 %% sign/2 checks the key's purpose, the lifetime and the size. The pool checks the record in its own process as the

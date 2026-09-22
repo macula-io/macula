@@ -32,7 +32,7 @@
     tombstone/2, tombstone/3,
     envelope/3
 ]).
--export([sign/2, verify/2, verify/3, signer_entry/3, signer_entry/4, refresh/2, encode/1, node_signed/1,
+-export([sign/2, verify/2, verify/3, signer_entry/3, signer_entry/4, refresh/2, refresh/3, encode/1, node_signed/1,
          payload_bounded/1, wire_bounded/1,
          domain_type/1, domain_record_checked/1]).
 -export([type/1, key/1, key_id/1, version/1, created_at/1, expires_at/1, payload/1, signature/1]).
@@ -514,12 +514,36 @@ entry_verified({error, _} = Refusal, Rest, Id, Profile, Now, Verified) ->
 
 %% @doc The record with a new version, created now, with the same lifetime, signed again with Key.
 -spec refresh(m_record(), macula_node_keys:node_key()) -> m_record().
-refresh(#{created_at := Created, expires_at := Expires} = Record, Key) ->
-    Now = erlang:system_time(millisecond),
+refresh(Record, Key) ->
+    refreshed(Record, Key, erlang:system_time(millisecond), no_bound).
+
+%% @doc The same, ending the record at NotAfter when that comes before its lifetime runs out: an ABSOLUTE time in
+%% milliseconds, to cap a record against something else, such as a delegation's own expiry. A bound at or before
+%% the clock this signs on returns `{error, not_after_passed}' and signs nothing.
+%%
+%% ⚠ ONE CLOCK READ DECIDES BOTH ENDS, and that is the point. Writing the bound into a record and refreshing it
+%% afterwards does not work: refresh keeps a record's LIFETIME, so a bound written as `expires_at' is re-anchored
+%% to the later clock read and the record ends at the bound plus its own age at signing time. That was the defect
+%% here until 2026-09-22, and the gap it opened is not bounded by anything: it is however long the record sat
+%% unsigned.
+-spec refresh(m_record(), macula_node_keys:node_key(), non_neg_integer()) ->
+        {ok, m_record()} | {error, not_after_passed}.
+refresh(Record, Key, NotAfter) when is_integer(NotAfter) ->
+    bounded_refresh(erlang:system_time(millisecond), Record, Key, NotAfter).
+
+bounded_refresh(Now, _Record, _Key, NotAfter) when NotAfter =< Now ->
+    {error, not_after_passed};
+bounded_refresh(Now, Record, Key, NotAfter) ->
+    {ok, refreshed(Record, Key, Now, NotAfter)}.
+
+refreshed(#{created_at := Created, expires_at := Expires} = Record, Key, Now, Bound) ->
     Fresh = maps:with([type, payload, subject], Record),
     sign(Fresh#{version => macula_record_uuid:v7_monotonic(Now), created_at => Now,
-                expires_at => Now + (Expires - Created)},
+                expires_at => ends_at(Now + (Expires - Created), Bound)},
          Key).
+
+ends_at(Expires, no_bound) -> Expires;
+ends_at(Expires, NotAfter) -> min(Expires, NotAfter).
 
 %% @doc The wire form of a signed or verified record: its {key, tbs, signature} map, tbs unchanged.
 -spec encode(m_record()) -> binary().

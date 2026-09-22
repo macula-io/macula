@@ -209,6 +209,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A record signed under a `not_after` bound outlived the bound by its own
+  age.** `macula_client:sign_node_record/3` wrote the bound into the record as
+  `expires_at` and then refreshed it, and a refresh keeps a record's LIFETIME:
+  the bound was re-anchored to a second, later clock read, and the record ended
+  at the bound plus however long it had sat unsigned. Signed straight after
+  building, that was a millisecond; built a minute before it is signed, a
+  minute, and nothing bounded the gap. `macula_record:refresh/3` now stamps the
+  record and ends it on ONE clock read, at the earlier of the record's own
+  expiry and the bound, and refuses a bound at or before that read with
+  `{error, not_after_passed}` rather than signing a record whose expiry
+  precedes its own start. A caller capping a record against a delegation's
+  expiry got a record the delegation no longer covers; anything already signed
+  that way stands and expires on its own.
+
 - **A direct-mode distribution listener could not load any certificate.**
   `macula_dist` passed `certfile` and `keyfile` to `macula_quic:listen/3`,
   which reads `cert` and `key`, so it always tried to open a file named

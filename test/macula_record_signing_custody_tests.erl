@@ -1,9 +1,9 @@
 %% EUnit test for record signing custody. Within the macula application, a record a node signs about itself is signed
 %% only in its pool's process, with the node identity key the pool holds: macula_record:sign/2 is called only by
-%% macula_record:refresh/2 and the pool's tombstone signing, and refresh/2 only by the pool's node record signing. The
-%% calls are read with xref from the application's compiled modules, so a new caller fails this test until it signs
-%% through the pool or is named here with its reason. One level down, only macula_record and macula_frame call
-%% macula_signed_object's signing functions.
+%% macula_record:refreshed/4, which both refresh/2 and refresh/3 stamp through, and the pool's tombstone signing; the
+%% two refresh doors are called only by the pool's record signing. The calls are read with xref from the application's
+%% compiled modules, so a new caller fails this test until it signs through the pool or is named here with its reason.
+%% One level down, only macula_record and macula_frame call macula_signed_object's signing functions.
 -module(macula_record_signing_custody_tests).
 
 -include_lib("eunit/include/eunit.hrl").
@@ -15,10 +15,13 @@
 only_the_pool_signs_records_test_() ->
     {timeout, 60, fun() ->
         ?assertEqual(#{{macula_record, sign, 2} => lists:sort([{macula_client, withdrawable, 5},
-                                                              {macula_record, refresh, 2} | ?UNTIL_P2]),
+                                                              {macula_record, refreshed, 4} | ?UNTIL_P2]),
                        {macula_record, refresh, 2} => [{macula_client, domain_record_signed, 3},
-                                                       {macula_client, node_record_signed, 3}]},
-                     callers([{macula_record, sign, 2}, {macula_record, refresh, 2}]))
+                                                       {macula_client, node_record_signed, 3}],
+                       {macula_record, refresh, 3} => [{macula_client, node_record_signed_bounded, 4}]},
+                     callers([{macula_record, sign, 2},
+                              {macula_record, refresh, 2},
+                              {macula_record, refresh, 3}]))
     end}.
 
 %% One level down, a module could sign under the record label by calling macula_signed_object directly, past
