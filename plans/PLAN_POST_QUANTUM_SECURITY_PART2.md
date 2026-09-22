@@ -231,9 +231,12 @@ change, the done criterion and the effort. The US profile goes first; the EU par
   audience against the node_id of the child's issuer key, `can` equal and each capability covered at every step,
   the root being the issuer the policy names, a grant's realm name hashing to the request's realm id, and every
   proof that travelled being used. Issuer scope needs no rule of its own inside a chain: a key's authority is what
-  it was granted. **Still to build: the `proofs` field of CALL and STREAM_OPEN with the decoding rule's bound on
-  its count and total bytes and their vectors, and the station link passing the request's realm, procedure and
-  proofs into `authorize/3`.**
+  it was granted. CALL and STREAM_OPEN carry the chain in `proofs`, inside the part the caller signs, bounded where
+  their fields are read at 8 proofs, 256 KiB together, each a byte string and none repeated, with vectors in
+  `test/vectors/decoding_rule_v1.json` under `"via": "request_fields"`; the station link hands the request's realm,
+  procedure and proofs to `authorize/3` and answers `malformed_frame`, not `unauthorized`, for a proof no token in
+  the chain names. **U2 is done.** What WP 1.4 still owes is not chain work: the signed deadline with D22's
+  tolerance, (caller, call id) deduplication and the nonce store for tokens used outside a signed request.
 - **Change:**
   - `macula_did_nif` and its crate are removed (Raf, 2026-09-22): nothing called it in macula, macula-station,
     macula-realm, mcl-om or mcl-echo, and D7 retires the `did:macula:` names it built;

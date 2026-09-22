@@ -2849,25 +2849,40 @@ authorized_reply(ok, Found, Request, Payload, Key) ->
     build_inbound_call_reply(Found, Request, Payload, Key);
 authorized_reply(unauthorized, _Found, Request, _Payload, Key) ->
     macula_frame:provider_error(#{request => Request, code => <<"unauthorized">>},
+                                Key);
+authorized_reply(malformed_frame, _Found, Request, _Payload, Key) ->
+    macula_frame:provider_error(#{request => Request, code => <<"malformed_frame">>},
                                 Key).
 
 authorize(Key, Frame, Pols, Profile) ->
     authorize_policy(maps:get(Key, Pols, open), Frame, Profile).
 
 %% A gated procedure serves a request whose token macula_ucan:authorize/3 accepts for the request's verified caller:
-%% the token verifies over its bytes as received, its issuer is the one the policy names, its audience is the caller,
-%% it is inside its validity window and, for realm_member_required, it grants the policy's can. The caller is the key id
-%% of the key the request's signature verified under, which for an identity key is its node_id, so by the time this
-%% runs it is the identity that signed the request (D7 check 2).
+%% the token verifies over its bytes as received, its audience is the caller, it is inside its validity window, it
+%% grants a capability for THIS request's realm and procedure, and its chain of proofs runs up to the issuer the
+%% policy names. The caller is the key id of the key the request's signature verified under, which for an identity
+%% key is its node_id, so by the time this runs it is the identity that signed the request (D7 check 2).
+%%
+%% The request's proofs travel in its signed part and are found by content id, so they are keyed by
+%% macula_ucan:proof_id/1 here. A proof no token in the chain names is a malformed request rather than an
+%% unauthorized one: what is wrong is what the caller sent, not the authority it claims (D7, chain transport).
 authorize_policy(open, _Frame, _Profile) ->
     ok;
-authorize_policy(Policy, #{token := Token, caller := <<_:256>> = Caller}, Profile) when is_binary(Token) ->
-    token_verdict(macula_ucan:authorize(Token, Policy, #{caller => Caller, profile => Profile,
-                                                         now => erlang:system_time(second)}));
+authorize_policy(Policy, #{token := Token, caller := <<_:256>> = Caller, realm := Realm, procedure := Procedure}
+                 = Frame, Profile) when is_binary(Token) ->
+    token_verdict(macula_ucan:authorize(Token, Policy,
+                                        #{caller => Caller, profile => Profile,
+                                          now => erlang:system_time(second),
+                                          realm => Realm, procedure => Procedure,
+                                          proofs => proofs_by_id(maps:get(proofs, Frame, []))}));
 authorize_policy(_Policy, _Frame, _Profile) ->
     unauthorized.
 
+proofs_by_id(Proofs) ->
+    maps:from_list([{macula_ucan:proof_id(Proof), Proof} || Proof <- Proofs]).
+
 token_verdict({ok, _Claims}) -> ok;
+token_verdict({error, unreferenced_proof}) -> malformed_frame;
 token_verdict({error, _Refusal}) -> unauthorized.
 
 %% `open' is the default, so store it as absence to keep the map small.
@@ -3358,7 +3373,9 @@ carries_a_session(Stream, #state{client_streams = CS, server_streams = SS}) ->
 on_stream_open_verdict(ok, Open, Stream, S) ->
     handle_inbound_stream_open(Open, Stream, S);
 on_stream_open_verdict(unauthorized, Open, Stream, S) ->
-    refuse_open(Stream, Open, <<"unauthorized">>, <<"not authorized for this procedure">>, S).
+    refuse_open(Stream, Open, <<"unauthorized">>, <<"not authorized for this procedure">>, S);
+on_stream_open_verdict(malformed_frame, Open, Stream, S) ->
+    refuse_open(Stream, Open, <<"malformed_frame">>, <<"a proof no token in the chain names">>, S).
 
 %% A procedure this link does not advertise is refused `not_found'. The open's
 %% signed mode binds both sides' verifiers, so an open in a mode other than the

@@ -26,6 +26,14 @@ verification budget per connection are in `DESIGN_PQ_DHT_SLOTS_AND_BUDGET.md` (D
   - in a signed structure, an unknown key, a field of the wrong type or length, a protocol integer at or above 2^53,
     or a record `type` above 255.
 - A frame over 16 MiB is refused as `frame_too_large`.
+
+**A request's `proofs` is bounded where its fields are read**: at most 8 proofs, at most 256 KiB of them together,
+each a byte string, and none repeated, since the set is read by content id, so a repeat says nothing and only adds
+bytes. A request outside the bound is `malformed_frame`, refused before anything walks the chain. Eight is deeper
+than any chain D7's own size table describes, and 256 KiB holds eight of the largest, an EU token of about 16.5 KB,
+with room to spare. The vectors for the count, the repeat and the entry type are in
+`test/vectors/decoding_rule_v1.json` under `"via": "request_fields"`; the total-bytes bound has none there, because
+one would be half a megabyte of hex, so each stack tests that bound itself.
 - A decoder accepts definite lengths in any width, map keys in any order, and floats (half, single or double) as
   values inside application payloads. No protocol field is a float, so a float there is refused by that field's
   type. The shortest form and the key order are the signer's duty.
@@ -454,6 +462,7 @@ apply. `request` is `{key, tbs, signature}` under `MACULA-PQ-REQUEST-V1`, and `k
 | `payload` | any | the arguments |
 | `mode` | text | STREAM_OPEN only: `server_stream`, `client_stream` or `bidi` |
 | `token` | bytes | optional: a capability token (WP 1.4) |
+| `proofs` | array of bytes | optional: the proof tokens of that token's delegation chain, an unordered set found by content id, never by position (D7, chain transport) |
 
 - **A caller** that cannot reach its chosen provider before its request is sent, whether the station endpoint does
   not resolve or the dial fails, tries the next authorized advertisement for that procedure, and retries resolution

@@ -15,9 +15,15 @@
 
 -include_lib("eunit/include/eunit.hrl").
 
-%% Realm-per-call: tests use the all-zeros realm tag (DHT-internal /
-%% realm-agnostic) for every call/subscribe/publish.
--define(REALM, <<0:256>>).
+%% Realm-per-call: tests use the realm named "test" for every call, subscribe and publish. A realm id is SHA-256
+%% over its name (D7), so a capability naming `mri:realm:test' is a capability in THIS realm, which is what a gated
+%% procedure's check compares. The all-zero realm has no name, so no delegated grant could cover it.
+-define(REALM_NAME, <<"test">>).
+-define(REALM, crypto:hash(sha256, ?REALM_NAME)).
+%% A gated procedure carries an org namespace, the text before its first slash (D25): without one no policy
+%% authorizes it.
+-define(GATED_PROCEDURE, <<"acme/realm.only">>).
+-define(ISSUER_PROCEDURE, <<"acme/issuer.only">>).
 
 %% Data a reason carries that must stay on this node.
 -define(MARKER, <<"marker-3f9c-stays-on-this-node">>).
@@ -1574,7 +1580,7 @@ realm_member_required_test_() ->
          RealmIdentity = realm_key(),
          Handler = fun(_Payload) -> {ok, #{admitted => true}} end,
          Policy = {realm_member_required, macula_node_keys:key_id(RealmIdentity), <<"member/email-verified">>},
-         {Pid, CallerKp} = inbound_call_fixture([{<<"realm.only">>, Handler}], Policy),
+         {Pid, CallerKp} = inbound_call_fixture([{?GATED_PROCEDURE, Handler}], Policy),
          Caller = macula_node_keys:key_id(CallerKp),
 
          %% A genuine member: token signed by the realm, audience is
@@ -1582,7 +1588,7 @@ realm_member_required_test_() ->
          %% the tier this procedure actually requires.
          GoodToken = mint_membership_ucan(RealmIdentity, Caller, #{}),
          GoodId = crypto:strong_rand_bytes(16),
-         GoodFrame = inject_call_with_ucan(Pid, self(), CallerKp, GoodId, <<"realm.only">>, GoodToken),
+         GoodFrame = inject_call_with_ucan(Pid, self(), CallerKp, GoodId, ?GATED_PROCEDURE, GoodToken),
          ?assertMatch({ok, #{{text, <<"admitted">>} := {text, <<"true">>}}}, await_result(GoodFrame, 2_000)),
 
          %% THE FABLE-FOUND GAP: a token that is entirely genuine --
@@ -1600,14 +1606,14 @@ realm_member_required_test_() ->
          DeviceTierToken = mint_membership_ucan(RealmIdentity, Caller, #{},
                                                 <<"member/device-verified">>),
          DeviceTierId = crypto:strong_rand_bytes(16),
-         DeviceTierFrame = inject_call_with_ucan(Pid, self(), CallerKp, DeviceTierId, <<"realm.only">>,
+         DeviceTierFrame = inject_call_with_ucan(Pid, self(), CallerKp, DeviceTierId, ?GATED_PROCEDURE,
                                                  DeviceTierToken),
          ?assertMatch({error, #{code := UnauthorizedCode}},
                       await_result(DeviceTierFrame, 2_000)),
 
          %% No token at all.
          NoTokenId = crypto:strong_rand_bytes(16),
-         NoTokenFrame = inject_call(Pid, self(), CallerKp, NoTokenId, <<"realm.only">>),
+         NoTokenFrame = inject_call(Pid, self(), CallerKp, NoTokenId, ?GATED_PROCEDURE),
          ?assertMatch({error, #{code := UnauthorizedCode}}, await_result(NoTokenFrame, 2_000)),
 
          %% Token signed by a DIFFERENT key than the declared realm --
@@ -1616,7 +1622,7 @@ realm_member_required_test_() ->
          OtherRealmIdentity = realm_key(),
          WrongIssuerToken = mint_membership_ucan(OtherRealmIdentity, Caller, #{}),
          WrongIssuerId = crypto:strong_rand_bytes(16),
-         WrongIssuerFrame = inject_call_with_ucan(Pid, self(), CallerKp, WrongIssuerId, <<"realm.only">>, WrongIssuerToken),
+         WrongIssuerFrame = inject_call_with_ucan(Pid, self(), CallerKp, WrongIssuerId, ?GATED_PROCEDURE, WrongIssuerToken),
          ?assertMatch({error, #{code := UnauthorizedCode}}, await_result(WrongIssuerFrame, 2_000)),
 
          %% Expired: genuinely signed by the realm, for this exact
@@ -1624,7 +1630,7 @@ realm_member_required_test_() ->
          ExpiredToken = mint_membership_ucan(RealmIdentity, Caller,
                                              #{exp => erlang:system_time(second) - 60}),
          ExpiredId = crypto:strong_rand_bytes(16),
-         ExpiredFrame = inject_call_with_ucan(Pid, self(), CallerKp, ExpiredId, <<"realm.only">>, ExpiredToken),
+         ExpiredFrame = inject_call_with_ucan(Pid, self(), CallerKp, ExpiredId, ?GATED_PROCEDURE, ExpiredToken),
          ?assertMatch({error, #{code := UnauthorizedCode}}, await_result(ExpiredFrame, 2_000)),
 
          %% THE REPLAY CASE: a token that is completely genuine --
@@ -1637,7 +1643,7 @@ realm_member_required_test_() ->
          RightfulOwner = macula_test_identity:node_id(),
          StolenToken = mint_membership_ucan(RealmIdentity, RightfulOwner, #{}),
          StolenId = crypto:strong_rand_bytes(16),
-         StolenFrame = inject_call_with_ucan(Pid, self(), CallerKp, StolenId, <<"realm.only">>, StolenToken),
+         StolenFrame = inject_call_with_ucan(Pid, self(), CallerKp, StolenId, ?GATED_PROCEDURE, StolenToken),
          ?assertMatch({error, #{code := UnauthorizedCode}}, await_result(StolenFrame, 2_000)),
 
          macula_station_link:stop(Pid),
@@ -1654,6 +1660,55 @@ realm_member_required_test_() ->
 mint_ucan(IssuerIdentity, AudiencePub, ExpOverride) ->
     mint_membership_ucan(IssuerIdentity, AudiencePub, ExpOverride, <<"call">>).
 
+%% A caller may present a capability it was delegated: its own token, and the tokens between it and the issuer the
+%% policy trusts, in the request's `proofs'. The link hands the request's realm, procedure and proofs to
+%% macula_ucan:authorize/3, which walks the chain (D7, WP 1.4 U2).
+a_delegated_call_is_served_and_an_unreferenced_proof_is_malformed_test_() ->
+    {timeout, 15,
+     fun() ->
+         RealmIdentity = realm_key(),
+         {ok, OrgKey} = macula_node_keys:generate(org, pq_pure),
+         OrgId = macula_node_keys:node_id(macula_node_keys:public_key(OrgKey), pq_pure),
+         Handler = fun(_Payload) -> {ok, #{delegated => true}} end,
+         Policy = {realm_member_required, macula_node_keys:key_id(RealmIdentity), <<"call">>},
+         {Pid, CallerKp} = inbound_call_fixture([{?GATED_PROCEDURE, Handler}], Policy),
+         Caller = macula_node_keys:key_id(CallerKp),
+
+         %% The realm delegates its org to the org key, which delegates this one procedure to the caller.
+         Proof = macula_ucan:create(RealmIdentity, OrgId,
+                                    [#{with => <<"mri:org:test/acme">>, can => <<"call">>}],
+                                    #{exp => erlang:system_time(second) + 3_600}),
+         Token = macula_ucan:create(OrgKey, Caller,
+                                    [#{with => <<"mri:proc:test/", (?GATED_PROCEDURE)/binary>>, can => <<"call">>}],
+                                    #{exp => erlang:system_time(second) + 3_600,
+                                      prf => [macula_ucan:proof_id(Proof)]}),
+
+         Served = inject_call_with_chain(Pid, self(), CallerKp, crypto:strong_rand_bytes(16), Token, [Proof]),
+         ?assertMatch({ok, #{{text, <<"delegated">>} := {text, <<"true">>}}}, await_result(Served, 2_000)),
+
+         %% A proof nothing in the chain names is the caller sending what no check reads: malformed_frame, not
+         %% unauthorized, since the request itself is wrong rather than the authority it claims (D7).
+         Extra = macula_ucan:create(RealmIdentity, Caller, [#{with => <<"mri:realm:test">>, can => <<"call">>}],
+                                    #{exp => erlang:system_time(second) + 3_600}),
+         Unreferenced = inject_call_with_chain(Pid, self(), CallerKp, crypto:strong_rand_bytes(16), Token,
+                                               [Proof, Extra]),
+         MalformedCode = <<"malformed_frame">>,
+         ?assertMatch({error, #{code := MalformedCode}}, await_result(Unreferenced, 2_000)),
+
+         macula_station_link:stop(Pid),
+         ok
+     end}.
+
+%% A CALL carrying a delegated token and the proofs that back it.
+inject_call_with_chain(Pid, FakePeer, CallerKey, CallId, Token, Proofs) ->
+    Frame = macula_frame:call(
+              #{request_id => CallId, realm => ?REALM, procedure => ?GATED_PROCEDURE,
+                target => link_node_id(Pid),
+                deadline => erlang:system_time(millisecond) + 5_000,
+                payload => #{}, token => Token, proofs => Proofs}, CallerKey),
+    Pid ! {macula_peering, frame, FakePeer, Frame},
+    Frame.
+
 %% `{ucan_required, Issuer}' serves a CALL only when its token is signed by
 %% `Issuer', unexpired, and minted for the identity that signed this CALL. A
 %% genuine token minted for anyone else is refused, like no token at all.
@@ -1665,31 +1720,31 @@ ucan_required_binds_the_token_audience_to_the_caller_test_() ->
          Handler = fun(_Payload) -> {ok, #{served => true}} end,
          {ok, IssuerNodeId} = macula_node_keys:node_id(IssuerIdentity),
          Policy = {ucan_required, IssuerNodeId},
-         {Pid, CallerKp} = inbound_call_fixture([{<<"issuer.only">>, Handler}], Policy),
+         {Pid, CallerKp} = inbound_call_fixture([{?ISSUER_PROCEDURE, Handler}], Policy),
          Caller = macula_node_keys:key_id(CallerKp),
 
          OwnId = crypto:strong_rand_bytes(16),
-         OwnFrame = inject_call_with_ucan(Pid, self(), CallerKp, OwnId, <<"issuer.only">>,
+         OwnFrame = inject_call_with_ucan(Pid, self(), CallerKp, OwnId, ?ISSUER_PROCEDURE,
                                           mint_ucan(IssuerIdentity, Caller, #{})),
          ?assertMatch({ok, #{{text, <<"served">>} := {text, <<"true">>}}}, await_result(OwnFrame, 2_000)),
 
          Someone = macula_test_identity:node_id(),
          ForSomeoneId = crypto:strong_rand_bytes(16),
-         ForSomeoneFrame = inject_call_with_ucan(Pid, self(), CallerKp, ForSomeoneId, <<"issuer.only">>,
+         ForSomeoneFrame = inject_call_with_ucan(Pid, self(), CallerKp, ForSomeoneId, ?ISSUER_PROCEDURE,
                                                  mint_ucan(IssuerIdentity, Someone, #{})),
          ?assertMatch({error, #{code := UnauthorizedCode}}, await_result(ForSomeoneFrame, 2_000)),
 
          NoTokenId = crypto:strong_rand_bytes(16),
-         NoTokenFrame = inject_call(Pid, self(), CallerKp, NoTokenId, <<"issuer.only">>),
+         NoTokenFrame = inject_call(Pid, self(), CallerKp, NoTokenId, ?ISSUER_PROCEDURE),
          ?assertMatch({error, #{code := UnauthorizedCode}}, await_result(NoTokenFrame, 2_000)),
 
          WrongIssuerId = crypto:strong_rand_bytes(16),
-         WrongIssuerFrame = inject_call_with_ucan(Pid, self(), CallerKp, WrongIssuerId, <<"issuer.only">>,
+         WrongIssuerFrame = inject_call_with_ucan(Pid, self(), CallerKp, WrongIssuerId, ?ISSUER_PROCEDURE,
                                                   mint_ucan(macula_test_identity:key(), Caller, #{})),
          ?assertMatch({error, #{code := UnauthorizedCode}}, await_result(WrongIssuerFrame, 2_000)),
 
          ExpiredId = crypto:strong_rand_bytes(16),
-         ExpiredFrame = inject_call_with_ucan(Pid, self(), CallerKp, ExpiredId, <<"issuer.only">>,
+         ExpiredFrame = inject_call_with_ucan(Pid, self(), CallerKp, ExpiredId, ?ISSUER_PROCEDURE,
                                               mint_ucan(IssuerIdentity, Caller,
                                                         #{exp => erlang:system_time(second) - 60})),
          ?assertMatch({error, #{code := UnauthorizedCode}}, await_result(ExpiredFrame, 2_000)),

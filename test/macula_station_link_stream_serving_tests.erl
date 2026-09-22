@@ -12,7 +12,9 @@
 %% macula_upload and macula_streamer callbacks, for the upload and streamer cases.
 -export([init/1, handle_uploaded/2, handle_open/2]).
 
--define(REALM, <<9:256>>).
+%% A realm id is SHA-256 over its name (D7), so a capability naming `mri:realm:test' is one in THIS realm.
+-define(REALM_NAME, <<"test">>).
+-define(REALM, crypto:hash(sha256, ?REALM_NAME)).
 -define(PEER_PID_INDEX, macula_station_link:state_field_index(peer_pid)).
 -define(PEER_NODE_ID_INDEX, macula_station_link:state_field_index(peer_node_id)).
 -define(MARKER, <<"a term of the crash that must not reach the caller">>).
@@ -111,7 +113,7 @@ a_served_session_past_its_inbox_budget_sends_its_stream_error() ->
 a_stream_procedures_policy_is_enforced_before_its_handler() ->
     #{link := Link} = World = linked(),
     Test = self(),
-    Procedure = <<"foo.gated">>,
+    Procedure = <<"acme/foo.gated">>,
     {ok, RealmIdentity} = macula_node_keys:generate(realm, pq_pure),
     Policy = {realm_member_required, macula_node_keys:key_id(RealmIdentity), <<"member/email-verified">>},
     ok = macula_station_link:advertise_stream(Link, ?REALM, Procedure, server_stream,
@@ -134,7 +136,7 @@ a_stream_procedures_policy_is_enforced_before_its_handler() ->
 a_stream_procedures_ucan_policy_binds_its_token_to_the_caller() ->
     #{link := Link} = World = linked(),
     Test = self(),
-    Procedure = <<"foo.issuer_gated">>,
+    Procedure = <<"acme/foo.issuer_gated">>,
     Issuer = macula_test_identity:key(),
     {ok, IssuerNodeId} = macula_node_keys:node_id(Issuer),
     ok = macula_station_link:advertise_stream(Link, ?REALM, Procedure, server_stream,
@@ -157,7 +159,7 @@ a_stream_procedures_ucan_policy_binds_its_token_to_the_caller() ->
 %% STREAM_ERROR unauthorized on its own stream, and starts no receiver for it.
 an_upload_advertised_with_a_policy_refuses_a_caller_without_a_token() ->
     #{link := Link} = World = linked(),
-    Procedure = <<"bulk.gated_ingest">>,
+    Procedure = <<"acme/bulk.gated_ingest">>,
     Policy = {realm_member_required, macula_test_identity:node_id(), <<"member/email-verified">>},
     AdvertiseOnLink = fun(_Pool, Realm, Proc, Mode, Handler, Opts) ->
                           Auth = maps:get(auth, Opts, open),

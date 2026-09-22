@@ -125,8 +125,10 @@
 -ignore_xref([{macula_frame, parse_stream, 1}]).
 
 -ifdef(TEST).
-%% The field table and the received rules of each frame type, so a test can hold them to each other.
--export([field_table/1, received_rules/1]).
+%% The field table and the received rules of each frame type, so a test can hold them to each other, and the
+%% request reader, so the shared decoding rule vectors can be run against the rules a request's fields are read
+%% under (test/vectors/decoding_rule_v1.json, entries with "via": "request_fields").
+-export([field_table/1, received_rules/1, request_fields/2]).
 -endif.
 
 -export_type([
@@ -192,6 +194,11 @@
 %% A procedure name and a topic are kept per pending request, subscription and advertisement, so each is bounded, and
 %% 512 bytes is well above any name in use.
 -define(MAX_PROCEDURE_BYTES, 512).
+%% A delegation chain's proofs (D7, chain transport). Eight tokens is deeper than any chain the plan's own size
+%% table describes, and 256 KiB holds eight of the largest, an EU token of about 16.5 KB, with room to spare. A
+%% request outside the bound is malformed_frame: the reader stops before the cost, not after it.
+-define(MAX_PROOFS, 8).
+-define(MAX_PROOFS_BYTES, 256 * 1024).
 -define(MAX_TOPIC_BYTES, 512).
 %% A NODES entry lists at most 4 addresses, one per observation today with room for IPv4 and IPv6 beside a host name,
 %% and a host is a DNS name of at most 253 bytes or a literal address.
@@ -646,7 +653,7 @@
                       | {provider_stream | caller_stream, stream_spec(), verified_request() | undefined}.
 
 %% The fields a CALL build may name; a STREAM_OPEN build also names its mode.
--define(REQUEST_BUILD_KEYS, [request_id, realm, procedure, target, deadline, payload, token, source_route,
+-define(REQUEST_BUILD_KEYS, [request_id, realm, procedure, target, deadline, payload, token, proofs, source_route,
                              retry_budget]).
 
 %% The signed and encoded bytes of a frame built here, tagged so that only what stream_bytes/2 returns is written on a
@@ -1029,16 +1036,21 @@ request(Type, #{request_id := RequestId, realm := Realm, procedure := Procedure,
        is_integer(Deadline), Deadline >= 0, Deadline < ?MAX_PROTOCOL_INT ->
     ok = bounded_text(procedure, Procedure, ?MAX_PROCEDURE_BYTES),
     ok = check_payload(Payload),
-    Fields = optional_token(Spec, maps:merge(maps:with([mode], Spec),
+    Fields = optional_proofs(Spec, optional_token(Spec, maps:merge(maps:with([mode], Spec),
                                              #{frame_type => Type, caller => macula_node_keys:key_id(Key),
                                                request_id => RequestId, realm => Realm, procedure => {text, Procedure},
-                                               target => Target, deadline => Deadline, payload => Payload})),
+                                               target => Target, deadline => Deadline, payload => Payload}))),
     routed(#{version => ?PROTOCOL_VERSION, frame_type => Type,
              request => macula_signed_object:sign(?REQUEST_LABEL, to_wire(Fields), Key)},
            maps:with([source_route, retry_budget], Spec)).
 
 optional_token(#{token := Token}, Fields) when is_binary(Token) -> Fields#{token => Token};
 optional_token(Spec, Fields) when not is_map_key(token, Spec) -> Fields.
+
+%% The proof tokens of a delegation chain, when the caller has one. A request without delegation names no `proofs'
+%% at all, so its bytes are those of a request built before the field existed (D7, chain transport).
+optional_proofs(#{proofs := [_ | _] = Proofs}, Fields) -> Fields#{proofs => Proofs};
+optional_proofs(_Spec, Fields) -> Fields.
 
 %% @doc Verify a received CALL or STREAM_OPEN under the connection's profile: the request's signature and fields, and
 %% caller as the key id of its key. A station checks this before it routes, a provider before its own checks.
@@ -1071,6 +1083,14 @@ request_checked(true, false, _Read, _Key, _Tbs) ->
 request_checked(true, true, Read, Key, Tbs) ->
     {ok, (maps:remove(alg, Read))#{key => Key, request_hash => crypto:hash(sha384, Tbs)}}.
 
+-ifdef(TEST).
+%% The fields of a request as its table reads them, without its signature: what a vector of the decoding rule holds.
+request_fields(Type, Wire) when is_map(Wire) ->
+    read_fields(maps:to_list(Wire), request_table(Type), #{});
+request_fields(_Type, _NotAMap) ->
+    error.
+-endif.
+
 request_table(Type) ->
     #{<<"frame_type">> => {frame_type, {enum, [Type]}},
       <<"alg">> => {alg, value},
@@ -1082,7 +1102,8 @@ request_table(Type) ->
       <<"deadline">> => {deadline, uint},
       <<"payload">> => {payload, value},
       <<"mode">> => {mode, {enum, [server_stream, client_stream, bidi]}},
-      <<"token">> => {token, bytes}}.
+      <<"token">> => {token, bytes},
+      <<"proofs">> => {proofs, {bytes_set, ?MAX_PROOFS, ?MAX_PROOFS_BYTES}}}.
 
 %% @doc Sign a RESULT for a verified request with the provider's identity key.
 -spec result(#{request := verified_request(), payload := term(), source_route_reverse => binary()},
@@ -3512,6 +3533,27 @@ field_read(undefined, _Value, _Rest, _Table, _Frame) ->
 field_value({ok, Read}, Field, Rest, Table, Frame) -> read_fields(Rest, Table, Frame#{Field => Read});
 field_value(error, _Field, _Rest, _Table, _Frame) -> error.
 
+%% An unordered set of byte strings, bounded in count and in total bytes (D7, chain transport). Every entry is a
+%% binary, and no entry repeats: the set is read by content id, so a repeat says nothing and only adds bytes.
+bytes_set(Entries, MaxCount, MaxBytes) when length(Entries) =< MaxCount ->
+    sized_set(lists:all(fun is_binary/1, Entries), Entries, MaxBytes);
+bytes_set(_Entries, _MaxCount, _MaxBytes) ->
+    error.
+
+sized_set(true, Entries, MaxBytes) ->
+    distinct_set(lists:sum([byte_size(E) || E <- Entries]) =< MaxBytes, Entries);
+sized_set(false, _Entries, _MaxBytes) ->
+    error.
+
+distinct_set(true, Entries) ->
+    set_read(length(lists:usort(Entries)) =:= length(Entries), Entries);
+distinct_set(false, _Entries) ->
+    error.
+
+set_read(true, Entries) -> {ok, Entries};
+set_read(false, _Entries) -> error.
+
+read_value({bytes_set, MaxCount, MaxBytes}, Entries) when is_list(Entries) -> bytes_set(Entries, MaxCount, MaxBytes);
 read_value(value, Value) -> {ok, peer_value(Value)};
 read_value(frame_type, {text, Name}) -> frame_type_named(Name);
 read_value({enum, Atoms}, {text, Name}) -> enum_value(Name, Atoms);

@@ -925,6 +925,59 @@ float_payload_round_trips_exactly_test() ->
      end || F <- [52.34, -1234.5, 0.0, 1.0e300, 1.0e-300, 3.141592653589793]].
 
 
+%%------------------------------------------------------------------
+%% A delegation chain's proofs (D7, chain transport)
+%%------------------------------------------------------------------
+
+%% A request carries the proof tokens of a delegation chain in `proofs', inside the part the caller signs, and they
+%% come back as they were sent.
+proofs_travel_in_the_signed_part_of_a_request_test() ->
+    Proofs = [<<"proof.one">>, <<"proof.two">>],
+    ?assertEqual({ok, Proofs}, request_proofs(Proofs)).
+
+%% A request without delegation carries no `proofs' at all, byte-identical to one built before the field existed.
+a_request_without_proofs_carries_no_field_test() ->
+    Without = macula_frame:encode(request(#{})),
+    Empty = macula_frame:encode(request(#{proofs => []})),
+    {ok, Decoded, <<>>} = macula_frame:decode(Without),
+    {ok, Read} = macula_frame:verify_request(Decoded, pq_pure),
+    ?assertEqual(false, is_map_key(proofs, Read)),
+    ?assertNotEqual(Without, Empty).
+
+%% The decoding rule bounds a chain: at most 8 proofs, at most 256 KiB of them together, each a binary, and no
+%% repeat, since the set is read by content id. A request outside the bound is malformed_frame, not a large check.
+proofs_are_bounded_in_count_and_bytes_test() ->
+    ?assertEqual({error, malformed_frame}, request_proofs([<<N:64>> || N <- lists:seq(1, 9)])),
+    ?assertEqual({error, malformed_frame}, request_proofs([sized_proof(N, 33 * 1024) || N <- lists:seq(1, 8)])),
+    ?assertEqual({error, malformed_frame}, request_proofs([<<"same">>, <<"same">>])),
+    ?assertEqual({error, malformed_frame}, request_proofs([<<"a binary">>, 7])).
+
+%% At the bound, a request still travels.
+proofs_at_the_bound_travel_test() ->
+    Eight = [<<N:64>> || N <- lists:seq(1, 8)],
+    ?assertEqual({ok, Eight}, request_proofs(Eight)),
+    Large = [sized_proof(N, 32 * 1024) || N <- lists:seq(1, 8)],
+    ?assertEqual({ok, Large}, request_proofs(Large)).
+
+%% One proof of Size bytes, distinct from its siblings: the set refuses a repeat, so a bound test must vary them.
+sized_proof(N, Size) ->
+    <<N, (binary:copy(<<"p">>, Size - 1))/binary>>.
+
+%% A CALL built with these proofs, encoded, decoded and verified: what the provider reads, or its refusal.
+request_proofs(Proofs) ->
+    {ok, Decoded, <<>>} = macula_frame:decode(macula_frame:encode(request(#{proofs => Proofs}))),
+    read_proofs(macula_frame:verify_request(Decoded, pq_pure)).
+
+read_proofs({ok, #{proofs := Read}}) -> {ok, Read};
+read_proofs({ok, _NoProofs}) -> {ok, none};
+read_proofs({error, _} = Refusal) -> Refusal.
+
+request(Extra) ->
+    macula_frame:call(maps:merge(#{request_id => <<1:128>>, realm => <<1:256>>, procedure => <<"acme/p">>,
+                                   target => <<2:256>>, deadline => 1, payload => #{}},
+                                 Extra),
+                      request_key()).
+
 %% A payload travels in the tbs of a signed CALL. The request builder consults check_payload/1, so a payload the
 %% checker rejects cannot be sent at all; the generated soundness test below guards the unsafe direction.
 decode_request_payload(Term) ->

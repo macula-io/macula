@@ -24,6 +24,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A caller may present a capability it was delegated, and a provider follows
+  the chain** (D7, WP 1.4). `macula_ucan:authorize/3` takes the request's realm
+  id, its procedure and the proofs that travelled with it, and walks the
+  token's `prf` to its root: each link's own signature over its bytes as
+  received and its validity window, a parent's audience against the node_id of
+  the child's issuer key, `can` equal at every step, each capability covered by
+  one the parent granted, the root the issuer the policy names, and every proof
+  used exactly once. A token names at most one parent.
+  `macula_ucan:proof_id/1` is the id a `prf` entry holds, the lowercase hex of
+  the SHA-384 of a token's bytes as they travel; `macula_ucan:covers/2` is the
+  narrowing matrix over the MRI grant forms `mri:realm:R`, `mri:org:R/O` and
+  `mri:proc:R/P`.
+- **A capability names the realm it is for, and a realm id is SHA-256 over its
+  normalised realm name**, so a grant is checked against a request with nothing
+  looked up. A realm name is lowercase and compared byte for byte, and the
+  all-zero realm has no name, so no delegated grant covers a request in it.
+  A gated procedure carries an org namespace, the text before its first `/`.
+- **CALL and STREAM_OPEN carry a chain's proofs in `proofs`**, inside the part
+  the caller signs: at most 8, at most 256 KiB together, each a byte string and
+  none repeated. A request outside that is `malformed_frame`, and so is one
+  carrying a proof no token in the chain names. A request without delegation
+  carries no `proofs` field and is byte-identical to one built before the field
+  existed. The vectors are in `test/vectors/decoding_rule_v1.json`, whose
+  entries now name how they are read in `via`.
+
 - **`macula_node_keys` generates, signs, verifies and derives ML-DSA-87
   keys through `macula-mldsa`**, not OTP `crypto` (D7, as amended).
   Signatures and node_ids are as before, and a signature from either side
