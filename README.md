@@ -18,6 +18,17 @@
 
 ---
 
+> **12.0.0-alpha.1, a pre-release: post-quantum KEY EXCHANGE, not
+> post-quantum authentication.** Every QUIC link negotiates
+> `SecP384r1MLKEM1024`, then `SecP256r1MLKEM768`, and nothing classical,
+> from the [`macula-pq`](https://crates.io/crates/macula-pq) crate.
+> Authentication is not post-quantum yet: the certificate a listener
+> presents is classically signed, `macula_tls` generates RSA certificates,
+> and the ML-DSA pin primitive is not built. 12.0.0 is reserved for that.
+>
+> **Breaking on the wire:** a node on 11.5.0 or earlier cannot connect to
+> this version, in either direction. See [CHANGELOG.md](CHANGELOG.md).
+
 > **Since 10.5.0**: every supervised primitive pair is complete and
 > symmetric, each wrapping its raw SDK primitive as an OTP behaviour with a
 > `simple_one_for_one` factory supervisor, mesh-visible protocol facts
@@ -38,14 +49,13 @@
 >   push a file at a specific, already-known recipient (rather than into
 >   content-addressed storage for someone to discover and pull later), with
 >   the same chunk/hash/verify integrity guarantees, over `client_stream`.
-> - **NEW: overlay (HyParView + Plumtree)** — realm-scoped bounded partial
+> - **Overlay (HyParView + Plumtree)** — realm-scoped bounded partial
 >   views and epidemic broadcast trees, absorbed from the standalone
 >   `macula-hyparview`/`macula-plumtree` packages. No supervised wrapper yet
 >   — see the [HyParView](docs/guides/overlay/HYPARVIEW_GUIDE.md) and
 >   [Plumtree](docs/guides/overlay/PLUMTREE_GUIDE.md) guides.
 >
-> All additive since 9.2.0, no breaking changes. See
-> [CHANGELOG.md](CHANGELOG.md) for the full version-by-version history.
+> See [CHANGELOG.md](CHANGELOG.md) for the full version-by-version history.
 
 ## What is Macula?
 
@@ -65,7 +75,7 @@ stations: no open ports, NAT-friendly, no VPN. It provides:
 - **Content** — content-addressed sharing and live streaming (MCID).
 - **DHT records** — signed, TTL'd records (advertisements, endpoints, more).
 - **Erlang distribution over mesh** — `net_adm:ping` across firewalls, no VPN.
-- **Identity** — Ed25519 keypairs, UCAN tokens, DID documents (NIF-accelerated).
+- **Identity** — ML-DSA-87 node keys (with an RSA-PSS half under `pq_hybrid`), UCAN tokens, DID documents (NIF-accelerated).
 - **MRI** — typed, hierarchical resource identifiers.
 - **Zero-config LAN clustering** — UDP-multicast gossip.
 
@@ -80,16 +90,20 @@ the client you build against.
 Add to `rebar.config`:
 
 ```erlang
-{deps, [{macula, "~> 10.5"}]}.
+{deps, [{macula, "12.0.0-alpha.1"}]}.
 ```
 
 Or in Elixir `mix.exs`:
 
 ```elixir
 defp deps do
-  [{:macula, "~> 10.5"}]
+  [{:macula, "12.0.0-alpha.1"}]
 end
 ```
+
+12.0.0-alpha.1 is a pre-release, so it is named exactly: no `~>`
+requirement on an earlier version selects it. The latest stable release is
+11.5.0 (`~> 11.5`), which cannot connect to it.
 
 <p align="center">
   <img src="assets/connect_flow.svg" alt="SDK Connect Flow" width="100%">

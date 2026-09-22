@@ -9,6 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [12.0.0-alpha.1] - 2026-09-22
+
+**A pre-release: post-quantum KEY EXCHANGE, not post-quantum
+authentication.** Every QUIC link now negotiates `SecP384r1MLKEM1024` or
+`SecP256r1MLKEM768` and nothing classical (first entry below).
+Authentication is not post-quantum yet, and 12.0.0 is reserved for when it
+is:
+
+- The certificate a QUIC listener presents is classically signed, since
+  `rustls-webpki` has no ML-DSA, and `macula_key_bindings:tls_binding/4`
+  binds that classical leaf.
+- `macula_tls` and `macula_dist` generate RSA-2048 certificates through
+  `openssl`.
+- The ML-DSA pin primitive is not built, so `pin_tls_cert => true` is
+  refused (see below).
+
+**Breaking on the wire: a node on 11.5.0 or earlier cannot connect to this
+version, in either direction.** Upgrade every node together. A pre-release
+is never selected by a `~>` requirement on 11.x or earlier: depend on
+`12.0.0-alpha.1` by name.
+
 ### Changed
 
 - **QUIC links now negotiate POST-QUANTUM KEY EXCHANGE, and nothing else.**

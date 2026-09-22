@@ -41,11 +41,15 @@ CURRENT="$(sed -n 's/.*{vsn, "\([^"]*\)".*/\1/p' "${APP_SRC}")"
 echo "  ${CURRENT} -> ${NEW_VERSION}"
 
 sed -i "s/{vsn, \"${CURRENT}\"}/{vsn, \"${NEW_VERSION}\"}/" "${APP_SRC}"
-sed -i "s/^\*\*Current Version\*\*: v[0-9][0-9.]*/**Current Version**: v${NEW_VERSION}/" "${CLAUDE_MD}"
+# The version pattern takes a whole semver string, pre-release suffix
+# included (12.0.0-alpha.1). One that stopped at "-" left the old suffix
+# behind and read back a truncated version, so a bump from 12.0.0-alpha.2 to
+# 12.0.0 left CLAUDE.md saying alpha.2 and still reported success.
+sed -i "s/^\*\*Current Version\*\*: v[0-9][0-9A-Za-z.+-]*/**Current Version**: v${NEW_VERSION}/" "${CLAUDE_MD}"
 
 # Confirm rather than assume: a sed that matched nothing exits 0.
 WROTE_APP="$(sed -n 's/.*{vsn, "\([^"]*\)".*/\1/p' "${APP_SRC}")"
-WROTE_MD="$(sed -n 's/^\*\*Current Version\*\*: v\([0-9][0-9.]*\).*/\1/p' "${CLAUDE_MD}")"
+WROTE_MD="$(sed -n 's/^\*\*Current Version\*\*: v\([0-9][0-9A-Za-z.+-]*\).*/\1/p' "${CLAUDE_MD}")"
 
 FAILED=0
 [ "${WROTE_APP}" = "${NEW_VERSION}" ] || { echo "  FAILED to set ${APP_SRC} (reads ${WROTE_APP:-nothing})"; FAILED=1; }
