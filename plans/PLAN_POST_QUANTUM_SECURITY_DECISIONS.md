@@ -908,7 +908,14 @@ before its wire checks are green.
   turned on and off without breaking the wire?
 - **Answer, decided by Raf on 2026-09-22:**
   - A station may require the connecting node to present a realm membership endorsement in CONNECT. It is checked in
-    the station's CONNECT check, before HELLO, beside the puzzle check (WP 1.3).
+    the station's CONNECT check, before HELLO.
+  - ⛔ **Order inside the CONNECT check, and it is load-bearing: the endorsement is checked AFTER the CONNECT proof
+    verifies, never beside the puzzle check.** The puzzle check runs deliberately before any signature, as a cheap
+    filter. The endorsement cannot: `verify_endorsement/3` binds `member_node` to the client's node_id, and only the
+    proof establishes that the connecting node holds that node_id. Checked earlier it would be matching a claim
+    against a name nothing has proved, and would admit anyone who copied a member's endorsement. So: puzzle (cheap,
+    pre-signature), then the CONNECT proof, then the endorsement. Caught by Venus on 2026-09-22 against an earlier
+    wording of this decision that said "beside the puzzle check".
   - **`invite_only` is a station setting with the same three values the puzzle check already uses:** `off`,
     `log_only`, `enforce`. `enforce` refuses with `not_invited`; `log_only` admits and reports; `off` does not look
     at the field.
