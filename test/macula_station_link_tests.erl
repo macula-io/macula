@@ -132,7 +132,7 @@ subscribe_sends_frame_test_() ->
              connect_timeout_ms => 2000
          })),
          FakePeer = self(),
-         PeerNodeId = macula_identity:public(macula_identity:generate()),
+         PeerNodeId = macula_test_identity:node_id(),
          %% Force-inject both peer_pid (7) and peer_node_id (8) so the
          %% link skips the racy `{macula_peering, connected, _, _}'
          %% info-message dance — that handler is gated on
@@ -174,7 +174,7 @@ event_frame_delivered_to_subscriber_test_() ->
              connect_timeout_ms => 2000
          })),
          FakePeer = self(),
-         PeerNodeId = macula_identity:public(macula_identity:generate()),
+         PeerNodeId = macula_test_identity:node_id(),
          %% Force-inject both peer_pid (7) and peer_node_id (8) so the
          %% link skips the racy `{macula_peering, connected, _, _}'
          %% info-message dance — that handler is gated on
@@ -323,7 +323,7 @@ event_in_other_realm_not_delivered_test_() ->
              connect_timeout_ms => 2000
          })),
          FakePeer = self(),
-         PeerNodeId = macula_identity:public(macula_identity:generate()),
+         PeerNodeId = macula_test_identity:node_id(),
          %% Force-inject both peer_pid (7) and peer_node_id (8) so the
          %% link skips the racy `{macula_peering, connected, _, _}'
          %% info-message dance — that handler is gated on
@@ -513,7 +513,7 @@ unsubscribe_sends_frame_and_clears_test_() ->
              connect_timeout_ms => 2000
          })),
          FakePeer = self(),
-         PeerNodeId = macula_identity:public(macula_identity:generate()),
+         PeerNodeId = macula_test_identity:node_id(),
          %% Force-inject both peer_pid (7) and peer_node_id (8) so the
          %% link skips the racy `{macula_peering, connected, _, _}'
          %% info-message dance — that handler is gated on
@@ -568,7 +568,7 @@ subscriber_down_drops_subscription_test_() ->
              connect_timeout_ms => 2000
          })),
          FakePeer = self(),
-         PeerNodeId = macula_identity:public(macula_identity:generate()),
+         PeerNodeId = macula_test_identity:node_id(),
          %% Force-inject both peer_pid (7) and peer_node_id (8) so the
          %% link skips the racy `{macula_peering, connected, _, _}'
          %% info-message dance — that handler is gated on
@@ -621,7 +621,7 @@ disconnect_notifies_subscribers_test_() ->
              connect_timeout_ms => 2000
          })),
          FakePeer = self(),
-         PeerNodeId = macula_identity:public(macula_identity:generate()),
+         PeerNodeId = macula_test_identity:node_id(),
          %% Force-inject both peer_pid (7) and peer_node_id (8) so the
          %% link skips the racy `{macula_peering, connected, _, _}'
          %% info-message dance — that handler is gated on
@@ -666,13 +666,13 @@ overlay_subscribe_delivers_matching_realm_test_() ->
              connect_timeout_ms => 2000
          })),
          FakePeer = self(),
-         PeerNodeId = macula_identity:public(macula_identity:generate()),
+         PeerNodeId = macula_test_identity:node_id(),
          _ = sys:replace_state(Pid, fun(S) ->
              S2 = setelement(?PEER_PID_INDEX, S, FakePeer),
              setelement(?PEER_NODE_ID_INDEX, S2, PeerNodeId)
          end),
          {ok, SubRef} = macula_station_link:overlay_subscribe(Pid, ?REALM, self()),
-         Joiner = macula_identity:public(macula_identity:generate()),
+         Joiner = macula_test_identity:node_id(),
          Frame = macula_frame:hyparview_join(#{realm => ?REALM, new_member => Joiner}),
          Pid ! {macula_peering, frame, FakePeer, Frame},
          receive
@@ -695,14 +695,14 @@ overlay_frame_in_other_realm_not_delivered_test_() ->
              connect_timeout_ms => 2000
          })),
          FakePeer = self(),
-         PeerNodeId = macula_identity:public(macula_identity:generate()),
+         PeerNodeId = macula_test_identity:node_id(),
          _ = sys:replace_state(Pid, fun(S) ->
              S2 = setelement(?PEER_PID_INDEX, S, FakePeer),
              setelement(?PEER_NODE_ID_INDEX, S2, PeerNodeId)
          end),
          {ok, _SubRef} = macula_station_link:overlay_subscribe(Pid, ?REALM, self()),
          OtherRealm = crypto:strong_rand_bytes(32),
-         Joiner = macula_identity:public(macula_identity:generate()),
+         Joiner = macula_test_identity:node_id(),
          Frame = macula_frame:hyparview_join(#{realm => OtherRealm, new_member => Joiner}),
          Pid ! {macula_peering, frame, FakePeer, Frame},
          receive
@@ -722,12 +722,12 @@ send_overlay_frame_sends_on_wire_test_() ->
              connect_timeout_ms => 2000
          })),
          FakePeer = self(),
-         PeerNodeId = macula_identity:public(macula_identity:generate()),
+         PeerNodeId = macula_test_identity:node_id(),
          _ = sys:replace_state(Pid, fun(S) ->
              S2 = setelement(?PEER_PID_INDEX, S, FakePeer),
              setelement(?PEER_NODE_ID_INDEX, S2, PeerNodeId)
          end),
-         Joiner = macula_identity:public(macula_identity:generate()),
+         Joiner = macula_test_identity:node_id(),
          Frame = macula_frame:hyparview_join(#{realm => ?REALM, new_member => Joiner}),
          ?assertEqual(ok, macula_station_link:send_overlay_frame(Pid, Frame)),
          %% Other background traffic (e.g. a DHT call) may cast a
@@ -759,12 +759,12 @@ send_overlay_frame_3_wraps_target_in_relay_envelope_test_() ->
              connect_timeout_ms => 2000
          })),
          FakePeer = self(),
-         PeerNodeId = macula_identity:public(macula_identity:generate()),
+         PeerNodeId = macula_test_identity:node_id(),
          _ = sys:replace_state(Pid, fun(S) ->
              S2 = setelement(?PEER_PID_INDEX, S, FakePeer),
              setelement(?PEER_NODE_ID_INDEX, S2, PeerNodeId)
          end),
-         Target = macula_identity:public(macula_identity:generate()),
+         Target = macula_test_identity:node_id(),
          Frame = macula_frame:hyparview_disconnect(#{realm => ?REALM}),
          ?assertEqual(ok, macula_station_link:send_overlay_frame(Pid, Target, Frame)),
          Envelope = receive_relay_envelope(Target, 10),
@@ -805,19 +805,16 @@ overlay_relay_delivers_with_envelope_origin_as_sender_test_() ->
              connect_timeout_ms => 2000
          })),
          FakePeer = self(),
-         StationNodeId = macula_identity:public(macula_identity:generate()),
+         StationNodeId = macula_test_identity:node_id(),
          _ = sys:replace_state(Pid, fun(S) ->
              S2 = setelement(?PEER_PID_INDEX, S, FakePeer),
              setelement(?PEER_NODE_ID_INDEX, S2, StationNodeId)
          end),
          {ok, SubRef} = macula_station_link:overlay_subscribe(Pid, ?REALM, self()),
-         OriginKp = macula_identity:generate(),
-         Origin = macula_identity:public(OriginKp),
+         Origin = macula_test_identity:node_id(),
          ?assertNotEqual(Origin, StationNodeId),
-         Joiner = macula_identity:public(macula_identity:generate()),
-         Inner = macula_frame:sign(
-                   macula_frame:hyparview_join(#{realm => ?REALM, new_member => Joiner}),
-                   OriginKp),
+         Joiner = macula_test_identity:node_id(),
+         Inner = macula_frame:hyparview_join(#{realm => ?REALM, new_member => Joiner}),
          Envelope = macula_frame:overlay_relay(#{
              peer    => Origin,
              payload => macula_frame:encode(Inner)
@@ -842,7 +839,7 @@ start_connected_link() ->
         connect_timeout_ms => 2000
     })),
     FakePeer = self(),
-    PeerNodeId = macula_identity:public(macula_identity:generate()),
+    PeerNodeId = macula_test_identity:node_id(),
     _ = sys:replace_state(Pid, fun(S) ->
         S2 = setelement(?PEER_PID_INDEX, S, FakePeer),
         setelement(?PEER_NODE_ID_INDEX, S2, PeerNodeId)
@@ -851,8 +848,7 @@ start_connected_link() ->
 
 %% The inner frame of an `overlay_relay' envelope is taken as it is: the
 %% station already authenticated the envelope's origin, so the link
-%% verifies nothing itself — the frame's own signature field rides
-%% through untouched, for the consuming overlay layer to check. The
+%% verifies nothing itself and delivers each inner frame as sent. The
 %% envelope's origin goes out as Meta.sender, the station as Meta.via.
 overlay_relay_inner_frame_is_taken_as_sent_test_() ->
     {timeout, 5,
@@ -860,8 +856,7 @@ overlay_relay_inner_frame_is_taken_as_sent_test_() ->
          {ok, _} = application:ensure_all_started(macula),
          {Pid, FakePeer, StationNodeId} = start_connected_link(),
          {ok, SubRef} = macula_station_link:overlay_subscribe(Pid, ?REALM, self()),
-         OriginKp = macula_identity:generate(),
-         Origin = macula_identity:public(OriginKp),
+         Origin = macula_test_identity:node_id(),
          Relay = fun(Inner) ->
                      Pid ! {macula_peering, frame, FakePeer,
                             macula_frame:overlay_relay(#{
@@ -871,17 +866,12 @@ overlay_relay_inner_frame_is_taken_as_sent_test_() ->
          Join = fun() ->
                     macula_frame:hyparview_join(#{
                         realm      => ?REALM,
-                        new_member => macula_identity:public(macula_identity:generate())})
+                        new_member => macula_test_identity:node_id()})
                 end,
-         %% Each frame is delivered as sent, whatever its signature says:
-         %% one signed by some other key, one unsigned, one signed by the
-         %% envelope's origin. The link verifies none of them.
-         SignedByOther = macula_frame:sign(Join(), macula_identity:generate()),
-         Unsigned = Join(),
-         SignedByOrigin = macula_frame:sign(Join(), OriginKp),
-         [Relay(Frame) || Frame <- [SignedByOther, Unsigned, SignedByOrigin]],
-         collect_relayed(SubRef, [SignedByOther, Unsigned, SignedByOrigin],
-                         #{sender => Origin, via => StationNodeId}),
+         %% Each frame is delivered as sent, in order.
+         Frames = [Join(), Join(), Join()],
+         [Relay(Frame) || Frame <- Frames],
+         collect_relayed(SubRef, Frames, #{sender => Origin, via => StationNodeId}),
          macula_station_link:stop(Pid),
          ok
      end}.
@@ -918,7 +908,7 @@ send_overlay_frame_not_connected_returns_error_test_() ->
          _ = sys:replace_state(Pid, fun(S) ->
              setelement(?PEER_PID_INDEX, S, undefined)
          end),
-         Joiner = macula_identity:public(macula_identity:generate()),
+         Joiner = macula_test_identity:node_id(),
          Frame = macula_frame:hyparview_join(#{realm => ?REALM, new_member => Joiner}),
          ?assertEqual({error, not_connected},
                       macula_station_link:send_overlay_frame(Pid, Frame)),
@@ -935,7 +925,7 @@ overlay_subscriber_down_drops_subscription_test_() ->
              connect_timeout_ms => 2000
          })),
          FakePeer = self(),
-         PeerNodeId = macula_identity:public(macula_identity:generate()),
+         PeerNodeId = macula_test_identity:node_id(),
          _ = sys:replace_state(Pid, fun(S) ->
              S2 = setelement(?PEER_PID_INDEX, S, FakePeer),
              setelement(?PEER_NODE_ID_INDEX, S2, PeerNodeId)
@@ -957,7 +947,7 @@ overlay_subscriber_down_drops_subscription_test_() ->
          %% Give the link's own monitor a moment to process the DOWN
          %% before asserting the subscription is gone.
          timer:sleep(100),
-         Joiner = macula_identity:public(macula_identity:generate()),
+         Joiner = macula_test_identity:node_id(),
          Frame = macula_frame:hyparview_join(#{realm => ?REALM, new_member => Joiner}),
          Pid ! {macula_peering, frame, FakePeer, Frame},
          receive
@@ -977,7 +967,7 @@ disconnect_notifies_overlay_subscribers_test_() ->
              connect_timeout_ms => 2000
          })),
          FakePeer = self(),
-         PeerNodeId = macula_identity:public(macula_identity:generate()),
+         PeerNodeId = macula_test_identity:node_id(),
          _ = sys:replace_state(Pid, fun(S) ->
              S2 = setelement(?PEER_PID_INDEX, S, FakePeer),
              setelement(?PEER_NODE_ID_INDEX, S2, PeerNodeId)
@@ -1028,7 +1018,7 @@ setup_link_for_streams() ->
         connect_timeout_ms => 2000
     })),
     FakePeer = self(),
-    PeerNodeId = macula_identity:public(macula_identity:generate()),
+    PeerNodeId = macula_test_identity:node_id(),
     _ = sys:replace_state(Pid, fun(S) ->
         S2 = setelement(?PEER_PID_INDEX,     S, FakePeer),
         setelement(?PEER_NODE_ID_INDEX, S2, PeerNodeId)
@@ -1182,7 +1172,7 @@ subscribe_before_connect_drains_on_connected_test_() ->
          after 200 -> ok
          end,
          FakePeer = self(),
-         PeerNodeId = macula_identity:public(macula_identity:generate()),
+         PeerNodeId = macula_test_identity:node_id(),
          _ = sys:replace_state(Pid, fun(S) ->
              setelement(?PEER_PID_INDEX, S, FakePeer)
          end),
@@ -1237,7 +1227,7 @@ subscribe_during_handshake_not_sent_early_test_() ->
          end,
          %% Handshake now genuinely completes -- drain must still deliver
          %% the frame that was correctly withheld above.
-         PeerNodeId = macula_identity:public(macula_identity:generate()),
+         PeerNodeId = macula_test_identity:node_id(),
          Pid ! {macula_peering, connected, FakePeer, PeerNodeId},
          receive
              {'$gen_cast', {send_frame, #{frame_type := subscribe,
@@ -1567,25 +1557,30 @@ inbound_calls_are_served_concurrently_test_() ->
 %% caller-chosen tier, used by the device-tier-bypass test below).
 %% `ExpOverride' lets a test set `exp' explicitly (e.g. already-expired);
 %% omitted keys keep the default (valid for an hour).
+%% A UCAN issuer's key pair: tokens are signed with Ed25519 until they carry the profile's algorithm (WP 1.4).
+ucan_issuer() ->
+    {Public, Private} = crypto:generate_key(eddsa, ed25519),
+    #{public => Public, private => Private}.
+
 mint_membership_ucan(RealmIdentity, MemberPub, ExpOverride) ->
     mint_membership_ucan(RealmIdentity, MemberPub, ExpOverride,
                          <<"member/email-verified">>).
 
 mint_membership_ucan(RealmIdentity, MemberPub, ExpOverride, Can) ->
-    IssuerDid = binary:encode_hex(macula_identity:public(RealmIdentity), lowercase),
+    IssuerDid = binary:encode_hex(maps:get(public, RealmIdentity), lowercase),
     AudienceDid = binary:encode_hex(MemberPub, lowercase),
     Cap = #{with => <<"mri:realm:test">>, can => Can},
     Opts = maps:merge(#{exp => erlang:system_time(second) + 3_600}, ExpOverride),
     {ok, Token} = macula_ucan_nif:create(IssuerDid, AudienceDid, [Cap],
-                                        macula_identity:private(RealmIdentity), Opts),
+                                        maps:get(private, RealmIdentity), Opts),
     Token.
 
 realm_member_required_test_() ->
     {timeout, 15,
      fun() ->
          UnauthorizedCode = <<"unauthorized">>,
-         RealmIdentity = macula_identity:generate(),
-         RealmDid = macula_identity:public(RealmIdentity),
+         RealmIdentity = ucan_issuer(),
+         RealmDid = maps:get(public, RealmIdentity),
          Handler = fun(_Payload) -> {ok, #{admitted => true}} end,
          Policy = {realm_member_required, RealmDid, <<"member/email-verified">>},
          {Pid, CallerKp} = inbound_call_fixture([{<<"realm.only">>, Handler}], Policy),
@@ -1627,7 +1622,7 @@ realm_member_required_test_() ->
          %% Token signed by a DIFFERENT key than the declared realm --
          %% a plausible-looking membership token that simply isn't from
          %% this realm at all.
-         OtherRealmIdentity = macula_identity:generate(),
+         OtherRealmIdentity = ucan_issuer(),
          WrongIssuerToken = mint_membership_ucan(OtherRealmIdentity, Caller, #{}),
          WrongIssuerId = crypto:strong_rand_bytes(16),
          WrongIssuerFrame = inject_call_with_ucan(Pid, self(), CallerKp, WrongIssuerId, <<"realm.only">>, WrongIssuerToken),
@@ -1648,7 +1643,7 @@ realm_member_required_test_() ->
          %% it as their own: its audience is bound to `Caller', the
          %% wire-authenticated identity making THIS call, the same check
          %% `ucan_required' applies (see its own test below).
-         RightfulOwner = macula_identity:public(macula_identity:generate()),
+         RightfulOwner = macula_test_identity:node_id(),
          StolenToken = mint_membership_ucan(RealmIdentity, RightfulOwner, #{}),
          StolenId = crypto:strong_rand_bytes(16),
          StolenFrame = inject_call_with_ucan(Pid, self(), CallerKp, StolenId, <<"realm.only">>, StolenToken),
@@ -1675,9 +1670,9 @@ ucan_required_binds_the_token_audience_to_the_caller_test_() ->
     {timeout, 15,
      fun() ->
          UnauthorizedCode = <<"unauthorized">>,
-         IssuerIdentity = macula_identity:generate(),
+         IssuerIdentity = ucan_issuer(),
          Handler = fun(_Payload) -> {ok, #{served => true}} end,
-         Policy = {ucan_required, macula_identity:public(IssuerIdentity)},
+         Policy = {ucan_required, maps:get(public, IssuerIdentity)},
          {Pid, CallerKp} = inbound_call_fixture([{<<"issuer.only">>, Handler}], Policy),
          Caller = macula_node_keys:key_id(CallerKp),
 
@@ -1686,7 +1681,7 @@ ucan_required_binds_the_token_audience_to_the_caller_test_() ->
                                           mint_ucan(IssuerIdentity, Caller, #{})),
          ?assertMatch({ok, #{{text, <<"served">>} := {text, <<"true">>}}}, await_result(OwnFrame, 2_000)),
 
-         Someone = macula_identity:public(macula_identity:generate()),
+         Someone = macula_test_identity:node_id(),
          ForSomeoneId = crypto:strong_rand_bytes(16),
          ForSomeoneFrame = inject_call_with_ucan(Pid, self(), CallerKp, ForSomeoneId, <<"issuer.only">>,
                                                  mint_ucan(IssuerIdentity, Someone, #{})),
@@ -1698,7 +1693,7 @@ ucan_required_binds_the_token_audience_to_the_caller_test_() ->
 
          WrongIssuerId = crypto:strong_rand_bytes(16),
          WrongIssuerFrame = inject_call_with_ucan(Pid, self(), CallerKp, WrongIssuerId, <<"issuer.only">>,
-                                                  mint_ucan(macula_identity:generate(), Caller, #{})),
+                                                  mint_ucan(ucan_issuer(), Caller, #{})),
          ?assertMatch({error, #{code := UnauthorizedCode}}, await_result(WrongIssuerFrame, 2_000)),
 
          ExpiredId = crypto:strong_rand_bytes(16),

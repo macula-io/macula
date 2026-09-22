@@ -22,8 +22,8 @@ end_per_suite(_Cfg) -> ok.
 %%---------------------------------------------------------------------
 
 realm_join_admits_new_member(_Cfg) ->
-    AdminKp = macula_identity:generate(),
-    Realm   = macula_identity:public(AdminKp),
+    {ok, AdminKp} = macula_node_keys:generate(realm, pq_pure),
+    Realm   = macula_node_keys:key_id(AdminKp),
     Net = hyparview_fleet_helper:start_fleet([seed, joiner], [Realm], #{}),
     try
         End = hyparview_fleet_helper:endorse(Net, AdminKp, Realm, joiner),
@@ -36,9 +36,9 @@ realm_join_admits_new_member(_Cfg) ->
     end.
 
 realm_join_rejects_bogus_endorsement(_Cfg) ->
-    RealAdmin = macula_identity:generate(),
-    Realm     = macula_identity:public(RealAdmin),
-    Impostor  = macula_identity:generate(),
+    {ok, RealAdmin} = macula_node_keys:generate(realm, pq_pure),
+    Realm     = macula_node_keys:key_id(RealAdmin),
+    {ok, Impostor}  = macula_node_keys:generate(realm, pq_pure),
     Net = hyparview_fleet_helper:start_fleet([seed, joiner], [Realm], #{}),
     try
         %% Build endorsement but sign with the impostor — verify must fail.

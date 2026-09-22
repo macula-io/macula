@@ -107,9 +107,9 @@ malformed_input_is_refused_without_raising_test_() ->
      ?_assertNot(macula_node_keys:verify(<<"m">>, <<"sig">>, <<"key">>, rsa_only))].
 
 ed25519_signature_is_refused_test() ->
-    Ed25519 = macula_identity:generate(),
-    Signature = macula_identity:sign(<<"m">>, Ed25519),
-    ?assertNot(macula_node_keys:verify(<<"m">>, Signature, macula_identity:public(Ed25519), pq_pure)).
+    {Public, Private} = crypto:generate_key(eddsa, ed25519),
+    Signature = crypto:sign(eddsa, none, <<"m">>, [Private, ed25519]),
+    ?assertNot(macula_node_keys:verify(<<"m">>, Signature, Public, pq_pure)).
 
 %%------------------------------------------------------------------
 %% The draft's own vector (draft-ietf-lamps-pq-composite-sigs), written by scripts/fetch-lamps-composite-vector.sh

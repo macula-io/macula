@@ -96,7 +96,7 @@ wait_until_dead(Pid, true) -> timer:sleep(1), wait_until_dead(Pid, erlang:is_pro
 %% directly would have been served as `server_stream' instead, with no
 %% error anywhere to say so.
 advertise_direct_forwards_mode_to_advertise_stream() ->
-    Identity = macula_identity:generate(),
+    Identity = macula_test_identity:key(),
     Opts = (macula_scripted_stream:options([]))#{mode => client_stream},
     {ok, _Sup} = macula_streamer:advertise_direct(pool, ?REALM, <<"bulk.ingest">>, ?MODULE,
                                                   self(), Identity, Opts),
@@ -113,7 +113,7 @@ advertise_forwards_auth_to_advertise_stream() ->
     Opts = (macula_scripted_stream:options([]))#{auth => Policy},
     {ok, _} = macula_streamer:advertise(pool, ?REALM, <<"logs.gated">>, ?MODULE, self(), Opts),
     {ok, _} = macula_streamer:advertise_direct(pool, ?REALM, <<"logs.gated">>, ?MODULE, self(),
-                                               macula_identity:generate(), Opts),
+                                               macula_test_identity:key(), Opts),
     Advertised = macula_scripted_stream:advertised(),
     ?assertEqual([#{auth => Policy}, #{auth => Policy}],
                  [AdvertiseOpts || {_, _, _, AdvertiseOpts} <- Advertised]).
@@ -124,7 +124,7 @@ advertise_forwards_auth_to_advertise_stream() ->
 the_advertisement_publish_gets_the_options_without_the_functions() ->
     Opts = (macula_scripted_stream:options([]))#{ttl_ms => 120_000},
     {ok, _} = macula_streamer:advertise_direct(pool, ?REALM, <<"logs.tail_v1">>, ?MODULE, self(),
-                                               macula_identity:generate(), Opts),
+                                               macula_test_identity:key(), Opts),
     ?assertMatch([{_, _, _, AdvertiseOpts}] when map_size(AdvertiseOpts) =:= 0,
                  macula_scripted_stream:advertised()),
     [{_, _, Published}] = macula_scripted_stream:advertisements_published(),
@@ -137,7 +137,7 @@ advertise_direct_with_a_removed_trust_option_registers_and_publishes_nothing() -
     Opts = (macula_scripted_stream:options([]))#{cert_chain => <<"chain">>},
     ?assertEqual({error, {removed_option, cert_chain}},
                  macula_streamer:advertise_direct(pool, ?REALM, <<"logs.tail_v1">>, ?MODULE, self(),
-                                                  macula_identity:generate(), Opts)),
+                                                  macula_test_identity:key(), Opts)),
     ?assertEqual({[], []}, {macula_scripted_stream:advertised(),
                             macula_scripted_stream:advertisements_published()}).
 
@@ -159,7 +159,7 @@ functions_of_another_shape_are_refused_before_anything_is_advertised() ->
     ?assertError(function_clause, Advertise(Opts#{stream_io := maps:remove(set_error, StreamIo)})),
     ?assertError(function_clause,
                  macula_streamer:advertise_direct(pool, ?REALM, <<"p">>, ?MODULE, self(),
-                                                  macula_identity:generate(),
+                                                  macula_test_identity:key(),
                                                   Opts#{publish_advertisement := Four})),
     ?assertEqual([], macula_scripted_stream:advertised()).
 

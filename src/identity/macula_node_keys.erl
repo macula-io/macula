@@ -64,6 +64,7 @@
     key_id/2,
     puzzle_solved/2,
     puzzle_difficulty/0,
+    check_puzzle_difficulty/0,
     carried_key_well_formed/2,
     signature_bytes/1
 ]).
@@ -72,10 +73,12 @@
 -export([puzzle_candidate/1]).
 -endif.
 
--export_type([purpose/0, algorithm/0, component/0, node_key/0, refusal/0]).
+-export_type([purpose/0, algorithm/0, component/0, node_key/0, node_id/0, refusal/0]).
 
 -type purpose()   :: identity | connect | tls | realm | org | foundation.
 -type algorithm() :: mldsa87 | rsa_pss.
+%% A node_id (D5): SHA-256 over the node_id label, the profile and the identity key as carried.
+-type node_id()   :: <<_:256>>.
 -type component() :: #{algorithm := algorithm(), public := binary(), private := binary()}.
 -type node_key()  :: #{purpose    := purpose(),
                        profile    := macula_crypto_profile:profile(),
@@ -242,7 +245,7 @@ composite_verified(_LengthHolds, _Message, _Signature, _Public) ->
 %%------------------------------------------------------------------
 
 %% @doc The node_id of an identity key (D5).
--spec node_id(node_key()) -> {ok, <<_:256>>} | {error, not_an_identity_key}.
+-spec node_id(node_key()) -> {ok, node_id()} | {error, not_an_identity_key}.
 node_id(#{purpose := identity, profile := Profile} = Key) ->
     {ok, node_id(public_key(Key), Profile)};
 node_id(#{purpose := _OtherPurpose}) ->
@@ -250,7 +253,7 @@ node_id(#{purpose := _OtherPurpose}) ->
 
 %% @doc The node_id derived from an identity key as carried, under a profile (D5). A node_id earns no trust on its
 %% own: a verifier relies on it only after a signature by the same carried key has verified.
--spec node_id(binary(), macula_crypto_profile:profile()) -> <<_:256>>.
+-spec node_id(binary(), macula_crypto_profile:profile()) -> node_id().
 node_id(IdentityKey, Profile)
   when is_binary(IdentityKey), (Profile =:= pq_pure orelse Profile =:= pq_hybrid) ->
     Name = atom_to_binary(Profile),
@@ -273,7 +276,7 @@ key_id(Key, Profile) when is_binary(Key), (Profile =:= pq_pure orelse Profile =:
     crypto:hash(sha256, <<?KEY_ID_LABEL, 0:8, (byte_size(Name)):8, Name/binary, Key/binary>>).
 
 %% @doc Whether a node_id meets a puzzle difficulty: its first Difficulty bits are zero.
--spec puzzle_solved(<<_:256>>, 0..256) -> boolean().
+-spec puzzle_solved(node_id(), 0..256) -> boolean().
 puzzle_solved(<<_:256>> = NodeId, Difficulty) when is_integer(Difficulty), Difficulty >= 0, Difficulty =< 256 ->
     <<Prefix:Difficulty, _/bitstring>> = NodeId,
     Prefix =:= 0.
@@ -283,6 +286,17 @@ puzzle_solved(<<_:256>> = NodeId, Difficulty) when is_integer(Difficulty), Diffi
 -spec puzzle_difficulty() -> 0..256.
 puzzle_difficulty() ->
     ?PUZZLE_DIFFICULTY.
+
+%% @doc ok when the macula application has no puzzle_difficulty setting; raises
+%% {bad_config, {macula, puzzle_difficulty, {not_a_setting, Value}}} when it has one, whatever the value. The difficulty
+%% is puzzle_difficulty/0, one constant for the fleet (D30), so a node that sets it would believe it chose a difficulty
+%% that nothing reads. The macula application calls this when it starts.
+-spec check_puzzle_difficulty() -> ok.
+check_puzzle_difficulty() ->
+    no_puzzle_difficulty_setting(application:get_env(macula, puzzle_difficulty)).
+
+no_puzzle_difficulty_setting(undefined) -> ok;
+no_puzzle_difficulty_setting({ok, Value}) -> erlang:error({bad_config, {macula, puzzle_difficulty, {not_a_setting, Value}}}).
 
 %% @doc Whether bytes are a key in its one carried form for a profile (D13): the 2,592-byte ML-DSA-87 key, followed
 %% in pq_hybrid by a DER RSAPublicKey that encodes back to the same bytes, with the profile's modulus size and

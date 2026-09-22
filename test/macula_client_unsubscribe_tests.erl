@@ -137,7 +137,7 @@ plant_fake_peer(Link) ->
     Test = self(),
     Tag = make_ref(),
     Peer = spawn(fun() -> relay_frames(Test, Tag) end),
-    PeerNodeId = macula_identity:public(macula_identity:generate()),
+    PeerNodeId = macula_test_identity:node_id(),
     _ = sys:replace_state(Link, fun(S) ->
             WithPeer = setelement(?PEER_PID_INDEX, S, Peer),
             setelement(?PEER_NODE_ID_INDEX, WithPeer, PeerNodeId)

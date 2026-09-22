@@ -35,8 +35,8 @@
 -record(station, {
     name   :: atom(),
     pid    :: pid(),
-    kp     :: macula_identity:key_pair(),
-    pubkey :: macula_identity:pubkey()
+    kp     :: macula_node_keys:node_key(),
+    pubkey :: macula_node_keys:node_id()
 }).
 
 %%=====================================================================
@@ -58,8 +58,8 @@ stop_fleet(#{router := Router, stations := Stations}) ->
     ok.
 
 build_station(Name, Realms, Router) ->
-    Kp = macula_identity:generate(),
-    Pub = macula_identity:public(Kp),
+    Kp = macula_test_identity:key(),
+    {ok, Pub} = macula_node_keys:node_id(Kp),
     Pid = spawn(fun() ->
         station_loop(init_state(Name, Kp, Pub, Realms, Router))
     end),

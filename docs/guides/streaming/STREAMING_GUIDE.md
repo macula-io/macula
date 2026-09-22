@@ -165,7 +165,7 @@ Provider — `advertise_direct/6,7` does everything `advertise/5,6` does, and
 additionally publishes the discoverable record:
 
 ```erlang
-Identity = macula_identity:generate(),
+{ok, Identity} = macula_node_keys:generate(identity, pq_pure),
 {ok, _Sup} = macula_streamer:advertise_direct(Pool, Realm, <<"logs.tail">>,
                                               log_tailer_provider, self(),
                                               Identity).

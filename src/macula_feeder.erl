@@ -111,7 +111,7 @@
 -export_type([start_opts/0]).
 
 -type start_opts() :: #{transfer_io => macula_content_transfer:transfer_io(),
-                        resolve_station_endpoint => fun((macula:pool(), macula_identity:pubkey()) ->
+                        resolve_station_endpoint => fun((macula:pool(), macula_node_keys:node_id()) ->
                                                                 {ok, binary()} | {error, term()}),
                         fact_publish => macula_lifetime_announcer:publish(),
                         link_io => macula_content_transfer:link_io()}.
@@ -167,7 +167,7 @@ start_link_direct(Module, Pool, Station, Realm, Bytes, Args) ->
 
 %% @doc As `start_link_direct/6', with start options (see "Transfer I/O"
 %% above).
--spec start_link_direct(module(), macula:pool(), macula_identity:pubkey(),
+-spec start_link_direct(module(), macula:pool(), macula_node_keys:node_id(),
                         macula:realm(), binary(), term(), start_opts()) ->
     {ok, pid()} | {error, term()}.
 start_link_direct(Module, Pool, Station, Realm, Bytes, Args, Opts) when is_map(Opts) ->

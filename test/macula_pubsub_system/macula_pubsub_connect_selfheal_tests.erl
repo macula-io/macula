@@ -123,7 +123,7 @@ connect_watchdog_does_not_recycle_connected_link_test_() ->
              connect_watchdog_ms => 200
          })),
          FakePeer   = self(),
-         PeerNodeId = macula_identity:public(macula_identity:generate()),
+         PeerNodeId = macula_test_identity:node_id(),
          _ = sys:replace_state(Pid, fun(S) ->
              setelement(?PEER_PID_INDEX, S, FakePeer)
          end),

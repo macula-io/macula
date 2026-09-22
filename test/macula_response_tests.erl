@@ -118,7 +118,7 @@ advertise_direct_forwards_opts_to_advertise() ->
                            end,
     Opts = (functions(Test))#{announce => false, publish_advertisement => PublishAdvertisement},
     {ok, _Sup} = macula_response:advertise_direct(pool, ?REALM, ?PROCEDURE, ?MODULE, [],
-                                                  macula_identity:generate(), Opts),
+                                                  macula_test_identity:key(), Opts),
     {_Handler, Advertised} = next_advertised(),
     ?assertEqual(#{announce => false}, Advertised),
     Published = receive
@@ -140,7 +140,7 @@ advertise_direct_with_a_removed_trust_option_registers_and_publishes_nothing() -
     Opts = (functions(Test))#{publish_advertisement => PublishAdvertisement, cert_chain => <<"pem">>},
     ?assertEqual({error, {removed_option, cert_chain}},
                  macula_response:advertise_direct(pool, ?REALM, ?PROCEDURE, ?MODULE, [],
-                                                  macula_identity:generate(), Opts)),
+                                                  macula_test_identity:key(), Opts)),
     ?assertEqual(none, receive {advertised, _, _} -> advertised; published -> published after 0 -> none end).
 
 replies_and_publishes_lifecycle() ->

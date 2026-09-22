@@ -26,8 +26,8 @@
 -record(station, {
     name   :: atom(),
     pid    :: pid(),
-    kp     :: macula_identity:key_pair(),
-    pubkey :: macula_identity:pubkey()
+    kp     :: macula_node_keys:node_key(),
+    pubkey :: macula_node_keys:node_id()
 }).
 
 %%=====================================================================
@@ -51,8 +51,8 @@ stop_fleet(#{router := Router, stations := Stations}) ->
     ok.
 
 build_station(Name, Realms, Router) ->
-    Kp = macula_identity:generate(),
-    Pub = macula_identity:public(Kp),
+    Kp = macula_test_identity:key(),
+    {ok, Pub} = macula_node_keys:node_id(Kp),
     Pid = spawn(fun() ->
         station_loop(init_state(Name, Kp, Pub, Realms, Router))
     end),
@@ -121,15 +121,12 @@ station_loop(State) ->
 %%---------------------------------------------------------------------
 
 control({send_join, Realm, SeedPub, Endorsement}, State) ->
-    JKp  = maps:get(kp, State),
     JPub = maps:get(pubkey, State),
-    Frame0 = macula_frame:hyparview_join(
-               #{realm => Realm, new_member => JPub}),
     %% Test-only side channel for the endorsement so the seed can
     %% verify it — production wire format carries it in the JOIN
     %% frame's own `record' field (see `macula_hyparview_endorsement:
     %% build_join/4').
-    Frame = macula_frame:sign(Frame0, JKp),
+    Frame = macula_frame:hyparview_join(#{realm => Realm, new_member => JPub}),
     Env   = #{frame => Frame, endorsement => Endorsement,
               realm => Realm, joiner => JPub},
     route(State, SeedPub, {join_envelope, Env}),
@@ -170,9 +167,8 @@ admit_joiner(_Frame, Realm, Joiner, State) ->
     State1 = update_realm(State, Realm, fun(#{view := V} = RS) ->
         RS#{view := macula_hyparview_view:add_active(V, Joiner)}
     end),
-    Reply = macula_frame:sign(macula_frame:hyparview_neighbor(
+    Reply = macula_frame:hyparview_neighbor(
                                 #{realm => Realm, priority => high}),
-                              maps:get(kp, State1)),
     route(State1, Joiner, Reply),
     State1.
 

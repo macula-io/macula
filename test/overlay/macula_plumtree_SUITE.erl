@@ -22,8 +22,8 @@ end_per_suite(_Cfg) -> ok.
 %%---------------------------------------------------------------------
 
 plumtree_delivers_to_all_subscribers(_Cfg) ->
-    AdminKp = macula_identity:generate(),
-    Realm   = macula_identity:public(AdminKp),
+    {ok, AdminKp} = macula_node_keys:generate(realm, pq_pure),
+    Realm   = macula_node_keys:key_id(AdminKp),
     Net = plumtree_fleet_helper:start_fleet([a, b, c, d, e], [Realm], #{}),
     try
         %% Chain topology: a — b — c — d — e. Every message must
@@ -54,8 +54,8 @@ plumtree_delivers_to_all_subscribers(_Cfg) ->
 %%---------------------------------------------------------------------
 
 cross_realm_isolation(_Cfg) ->
-    AdminR1 = macula_identity:generate(), R1 = macula_identity:public(AdminR1),
-    AdminR2 = macula_identity:generate(), R2 = macula_identity:public(AdminR2),
+    {ok, AdminR1} = macula_node_keys:generate(realm, pq_pure), R1 = macula_node_keys:key_id(AdminR1),
+    {ok, AdminR2} = macula_node_keys:generate(realm, pq_pure), R2 = macula_node_keys:key_id(AdminR2),
     %% Both realms share the same fleet identities; wiring is per-realm.
     Net = plumtree_fleet_helper:start_fleet([a, b, c], [R1, R2], #{}),
     try

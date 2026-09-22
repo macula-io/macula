@@ -52,8 +52,66 @@ no_options_generate_as_generate_2_test() ->
                  macula_node_keys:generate(identity, pq_pure, #{})).
 
 %%------------------------------------------------------------------
+%% The difficulty is a constant, not a setting (D30)
+%%------------------------------------------------------------------
+
+%% puzzle_difficulty/0 is what every node grinds to and every station checks. The macula application's
+%% puzzle_difficulty setting of 10.x would be read by nothing, so a node that sets it, to any value, is refused rather
+%% than left believing it chose its difficulty.
+no_puzzle_difficulty_setting_passes_the_check_test() ->
+    ?assertEqual(undefined, application:get_env(macula, puzzle_difficulty)),
+    ?assertEqual(ok, macula_node_keys:check_puzzle_difficulty()).
+
+a_puzzle_difficulty_setting_is_refused_test_() ->
+    [?_assertError({bad_config, {macula, puzzle_difficulty, {not_a_setting, Value}}},
+                   with_puzzle_difficulty(Value, fun macula_node_keys:check_puzzle_difficulty/0))
+     || Value <- [macula_node_keys:puzzle_difficulty(), 12, <<"12">>]].
+
+%% The macula application checks it when it starts, on a fresh peer node; without the setting the peer starts macula,
+%% which shows that it can.
+application_start_refuses_a_puzzle_difficulty_setting_test_() ->
+    {timeout, 200,
+     [{"without the setting the macula application starts",
+       {timeout, 90, fun() -> ?assertMatch({ok, _}, start_macula_with(#{})) end}},
+      {"with the setting the macula application does not start",
+       {timeout, 90, fun() ->
+           Started = start_macula_with(#{puzzle_difficulty => 8}),
+           ?assert(names(Started, {bad_config, {macula, puzzle_difficulty, {not_a_setting, 8}}}))
+       end}}]}.
+
+%%------------------------------------------------------------------
 %% Helpers
 %%------------------------------------------------------------------
+
+with_puzzle_difficulty(Value, Fun) ->
+    ok = application:set_env(macula, puzzle_difficulty, Value),
+    try
+        Fun()
+    after
+        application:unset_env(macula, puzzle_difficulty)
+    end.
+
+%% Starts macula on a fresh peer node with Env set in the macula application, and returns what
+%% application:ensure_all_started/1 returned there.
+start_macula_with(Env) ->
+    Paths = lists:append([["-pa", P] || P <- code:get_path()]),
+    {ok, Profile} = macula_crypto_profile:configured(),
+    {ok, Peer, _Node} = peer:start_link(#{connection => standard_io, args => Paths}),
+    try
+        ok = peer:call(Peer, application, load, [macula]),
+        %% A peer reads no test sys.config, and macula refuses to start without a profile: give it this VM's.
+        ok = peer:call(Peer, application, set_env, [macula, crypto_profile, Profile]),
+        [ok = peer:call(Peer, application, set_env, [macula, Key, Value]) || Key := Value <- Env],
+        peer:call(Peer, application, ensure_all_started, [macula], 60_000)
+    after
+        peer:stop(Peer)
+    end.
+
+%% Whether Wanted appears anywhere inside Term.
+names(Wanted, Wanted) -> true;
+names(Tuple, Wanted) when is_tuple(Tuple) -> names(tuple_to_list(Tuple), Wanted);
+names([Head | Tail], Wanted) -> names(Head, Wanted) orelse names(Tail, Wanted);
+names(_Other, _Wanted) -> false.
 
 assert_puzzle_key(Profile, Difficulty) ->
     {ok, Key} = macula_node_keys:generate(identity, Profile, #{puzzle_difficulty => Difficulty}),

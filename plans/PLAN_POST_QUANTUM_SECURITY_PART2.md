@@ -366,6 +366,14 @@ change, the done criterion and the effort. The US profile goes first; the EU par
   - every dial, including a redundancy dial, refuses an endpoint whose identity differs from the chosen node_id,
     and the DHT dialer returns its error reply;
   - the station handshake tests of WP 1.5 pass against a station instance.
+- **Tests to migrate when the station moves onto `macula` 12:** `macula` 12 has no `macula_identity`, no
+  `macula_frame:sign/2` or `verify/2`, and no `puzzle_difficulty` setting (D30). These make peer ids with
+  `macula_identity:generate/0` and `public/1`, and must make them with the node-key API instead
+  (`macula_node_keys:generate/2` and `node_id/1`): `macula_station_outbound_links_sup_tests`,
+  `macula_station_outbound_identity_SUITE`, `macula_station_overlay_relay_SUITE` (which also signs frames),
+  `macula_station_handshake_timing_measurement` and `macula_swim_stale_conn_tests`. The station's `sys.config`,
+  `test.sys.config`, `ct.sys.config`, `macula_station_test_cluster` and `fleet_SUITE` set `puzzle_difficulty`, which
+  `macula` 12 refuses at start.
 - **Done:** green; the station builds against a local checkout of `macula` 11.0.0 (D20).
 - **Effort:** 11 to 22 days:
   - node_id and key types: 4 to 6 days;

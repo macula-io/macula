@@ -1,4 +1,4 @@
-%% EUnit tests for hecate_frame.
+%% EUnit tests for macula_frame.
 -module(macula_frame_tests).
 
 -include_lib("eunit/include/eunit.hrl").
@@ -30,68 +30,30 @@ goodbye_with_detail_test() ->
     ?assertEqual(<<"shutting down">>, maps:get(detail, F)).
 
 %%------------------------------------------------------------------
-%% Sign / verify
-%%------------------------------------------------------------------
-
-sign_attaches_64_byte_signature_test() ->
-    Kp = macula_identity:generate(),
-    F = macula_frame:sign(build_connect(Kp), Kp),
-    ?assertEqual(64, byte_size(macula_frame:signature(F))).
-
-verify_signed_connect_with_node_id_pubkey_test() ->
-    Kp = macula_identity:generate(),
-    F = macula_frame:sign(build_connect(Kp), Kp),
-    Pub = macula_identity:public(Kp),
-    ?assertMatch({ok, _}, macula_frame:verify(F, Pub)).
-
-verify_rejects_tampered_frame_test() ->
-    Kp = macula_identity:generate(),
-    F = macula_frame:sign(build_connect(Kp), Kp),
-    Tampered = F#{capabilities => 999},
-    ?assertEqual({error, signature_invalid},
-                 macula_frame:verify(Tampered, macula_identity:public(Kp))).
-
-verify_rejects_wrong_pubkey_test() ->
-    Kp1 = macula_identity:generate(),
-    Kp2 = macula_identity:generate(),
-    F = macula_frame:sign(build_connect(Kp1), Kp1),
-    ?assertEqual({error, signature_invalid},
-                 macula_frame:verify(F, macula_identity:public(Kp2))).
-
-verify_rejects_unsigned_frame_test() ->
-    F = build_connect(),
-    Pub = crypto:strong_rand_bytes(32),
-    ?assertEqual({error, bad_frame}, macula_frame:verify(F, Pub)).
-
-%%------------------------------------------------------------------
 %% Wire codec — single-frame round-trip
 %%------------------------------------------------------------------
 
 encode_prepends_4_byte_length_test() ->
-    Kp = macula_identity:generate(),
-    F = macula_frame:sign(build_connect(Kp), Kp),
+    F = build_connect(),
     Wire = macula_frame:encode(F),
     <<Len:32/big, Body/binary>> = Wire,
     ?assertEqual(byte_size(Body), Len).
 
 encode_decode_roundtrip_connect_test() ->
-    Kp = macula_identity:generate(),
-    F = macula_frame:sign(build_connect(Kp), Kp),
+    F = build_connect(),
     {ok, Decoded, <<>>} = macula_frame:decode(macula_frame:encode(F)),
-    ?assertEqual(F, Decoded),
-    ?assertMatch({ok, _}, macula_frame:verify(Decoded, macula_identity:public(Kp))).
+    ?assertEqual(F, Decoded).
 
 encode_decode_roundtrip_hello_test() ->
-    Kp = macula_identity:generate(),
-    F = macula_frame:sign(build_hello(Kp), Kp),
+    F = build_hello(),
     {ok, Decoded, <<>>} = macula_frame:decode(macula_frame:encode(F)),
-    ?assertMatch({ok, _}, macula_frame:verify(Decoded, macula_identity:public(Kp))).
+    ?assertEqual(F, Decoded).
 
+%% A GOODBYE's reason is text on the wire and comes back as text, so the decoded frame is compared by its bytes.
 encode_decode_roundtrip_goodbye_test() ->
-    Kp = macula_identity:generate(),
-    F = macula_frame:sign(macula_frame:goodbye(draining, <<"bye">>), Kp),
+    F = macula_frame:goodbye(draining, <<"bye">>),
     {ok, Decoded, <<>>} = macula_frame:decode(macula_frame:encode(F)),
-    ?assertMatch({ok, _}, macula_frame:verify(Decoded, macula_identity:public(Kp))).
+    ?assertEqual(macula_frame:encode(F), macula_frame:encode(Decoded)).
 
 %%------------------------------------------------------------------
 %% Wire codec — partial / streaming
@@ -102,8 +64,7 @@ decode_returns_more_for_short_length_prefix_test() ->
     ?assertEqual({more, 1}, macula_frame:decode(<<1, 2, 3>>)).
 
 decode_returns_more_for_short_body_test() ->
-    Kp = macula_identity:generate(),
-    F = macula_frame:sign(build_connect(Kp), Kp),
+    F = build_connect(),
     Wire = macula_frame:encode(F),
     %% Truncate to 10 bytes (4-byte len + 6 bytes of body).
     Short = binary:part(Wire, 0, 10),
@@ -123,9 +84,8 @@ decode_rejects_garbage_body_test() ->
 %%------------------------------------------------------------------
 
 parse_received_drains_multiple_frames_test() ->
-    Kp = macula_identity:generate(),
-    F1 = macula_frame:sign(build_connect(Kp), Kp),
-    F2 = macula_frame:sign(build_hello(Kp), Kp),
+    F1 = build_connect(),
+    F2 = build_hello(),
     Buf = <<(macula_frame:encode(F1))/binary, (macula_frame:encode(F2))/binary>>,
     {ok, Frames, <<>>} = macula_frame:parse_received(Buf),
     ?assertEqual(2, length(Frames)),
@@ -134,11 +94,10 @@ parse_received_drains_multiple_frames_test() ->
     ?assertEqual(hello, macula_frame:frame_type(D2)).
 
 parse_received_returns_unconsumed_tail_test() ->
-    Kp = macula_identity:generate(),
-    F1 = macula_frame:sign(build_connect(Kp), Kp),
+    F1 = build_connect(),
     Wire1 = macula_frame:encode(F1),
     %% Append a partial second frame: first 6 bytes of length+body.
-    F2 = macula_frame:sign(build_hello(Kp), Kp),
+    F2 = build_hello(),
     Wire2Partial = binary:part(macula_frame:encode(F2), 0, 6),
     Buf = <<Wire1/binary, Wire2Partial/binary>>,
     {ok, Frames, Rest} = macula_frame:parse_received(Buf),
@@ -150,8 +109,7 @@ parse_received_returns_unconsumed_tail_test() ->
 %%------------------------------------------------------------------
 
 encode_is_deterministic_test() ->
-    Kp = macula_identity:generate(),
-    F = macula_frame:sign(build_connect(Kp), Kp),
+    F = build_connect(),
     ?assertEqual(macula_frame:encode(F), macula_frame:encode(F)).
 
 %%------------------------------------------------------------------
@@ -159,26 +117,20 @@ encode_is_deterministic_test() ->
 %%------------------------------------------------------------------
 
 build_connect() ->
-    build_connect(macula_identity:generate()).
-
-build_connect(Kp) ->
-    Pub = macula_identity:public(Kp),
+    NodeId = macula_test_identity:node_id(),
     macula_frame:connect(#{
-        node_id          => Pub,
-        station_id       => Pub,
+        node_id          => NodeId,
+        station_id       => NodeId,
         realms           => [crypto:strong_rand_bytes(32)],
         capabilities     => 16#FF,
-        puzzle_evidence  => macula_identity:puzzle_evidence(Pub)
+        puzzle_evidence  => crypto:hash(sha256, NodeId)
     }).
 
 build_hello() ->
-    build_hello(macula_identity:generate()).
-
-build_hello(Kp) ->
-    Pub = macula_identity:public(Kp),
+    NodeId = macula_test_identity:node_id(),
     macula_frame:hello(#{
-        node_id                 => Pub,
-        station_id              => Pub,
+        node_id                 => NodeId,
+        station_id              => NodeId,
         realms                  => [crypto:strong_rand_bytes(32)],
         capabilities            => 16#FF,
         accepted                => true,
@@ -190,9 +142,8 @@ build_hello(Kp) ->
 %%------------------------------------------------------------------
 
 swim_ping_has_expected_shape_test() ->
-    Kp = macula_identity:generate(),
-    Pub = macula_identity:public(Kp),
-    U   = observed_update(Pub, alive, Kp),
+    Pub = macula_test_identity:node_id(),
+    U   = observed_update(Pub, alive, Pub),
     F = macula_frame:swim_ping(#{round => 3, incarnation => 7, piggyback => [U]}),
     ?assertEqual(swim_ping, macula_frame:frame_type(F)),
     ?assertEqual(3, maps:get(round, F)),
@@ -200,8 +151,7 @@ swim_ping_has_expected_shape_test() ->
     ?assertMatch([#{by := Pub, state := alive}], maps:get(piggyback, F)).
 
 swim_ack_carries_responder_test() ->
-    Kp = macula_identity:generate(),
-    Pub = macula_identity:public(Kp),
+    Pub = macula_test_identity:node_id(),
     F = macula_frame:swim_ack(#{
         round => 3, responder => Pub, incarnation => 7, piggyback => []
     }),
@@ -221,35 +171,23 @@ swim_suspect_and_confirm_share_shape_test() ->
     ?assertEqual(Target, maps:get(target, C)),
     ?assertEqual(5, maps:get(ttl, S)).
 
-swim_ping_sign_verify_roundtrip_test() ->
-    Kp = macula_identity:generate(),
-    F = macula_frame:sign(
-        macula_frame:swim_ping(#{round => 1, incarnation => 0, piggyback => []}),
-        Kp),
-    ?assertMatch({ok, _},
-                 macula_frame:verify(F, macula_identity:public(Kp))).
 
 swim_ping_wire_roundtrip_test() ->
-    Kp = macula_identity:generate(),
-    F = macula_frame:sign(
-        macula_frame:swim_ping(#{round => 42, incarnation => 1, piggyback => []}),
-        Kp),
+    F = macula_frame:swim_ping(#{round => 42, incarnation => 1, piggyback => []}),
     {ok, Decoded, <<>>} = macula_frame:decode(macula_frame:encode(F)),
-    ?assertEqual(F, Decoded),
-    ?assertMatch({ok, _},
-                 macula_frame:verify(Decoded, macula_identity:public(Kp))).
+    ?assertEqual(F, Decoded).
 
 %%------------------------------------------------------------------
 %% Helpers
 %%------------------------------------------------------------------
 
-observed_update(Target, State, Kp) ->
+observed_update(Target, State, By) ->
     macula_frame:swim_update(#{
         target      => Target,
         state       => State,
         incarnation => 0,
         observed_at => erlang:system_time(millisecond),
-        by          => macula_identity:public(Kp)
+        by          => By
     }).
 
 %%------------------------------------------------------------------
@@ -280,15 +218,10 @@ ping_pong_share_nonce_in_roundtrip_test() ->
     Pong  = macula_frame:pong(#{nonce => Nonce}),
     ?assertEqual(maps:get(nonce, Ping), maps:get(nonce, Pong)).
 
-ping_sign_verify_wire_roundtrip_test() ->
-    Kp = macula_identity:generate(),
-    F  = macula_frame:sign(
-           macula_frame:ping(#{nonce => crypto:strong_rand_bytes(16)}),
-           Kp),
+ping_wire_roundtrip_test() ->
+    F  = macula_frame:ping(#{nonce => crypto:strong_rand_bytes(16)}),
     {ok, Decoded, <<>>} = macula_frame:decode(macula_frame:encode(F)),
-    ?assertEqual(F, Decoded),
-    ?assertMatch({ok, _}, macula_frame:verify(Decoded,
-                                              macula_identity:public(Kp))).
+    ?assertEqual(F, Decoded).
 
 %% -- FIND_NODE / NODES --------------------------------------------
 
@@ -330,22 +263,15 @@ nodes_validates_each_station_ref_test() ->
                                       nodes => [Bad]})).
 
 find_node_nodes_wire_roundtrip_test() ->
-    Kp = macula_identity:generate(),
-    Req = macula_frame:sign(
-           macula_frame:find_node(#{key    => crypto:strong_rand_bytes(32),
+    Req = macula_frame:find_node(#{key    => crypto:strong_rand_bytes(32),
                                     origin => crypto:strong_rand_bytes(32),
                                     depth  => 1}),
-           Kp),
     {ok, D, <<>>} = macula_frame:decode(macula_frame:encode(Req)),
     ?assertEqual(Req, D),
-    Resp = macula_frame:sign(
-             macula_frame:nodes(#{key => crypto:strong_rand_bytes(32),
+    Resp = macula_frame:nodes(#{key => crypto:strong_rand_bytes(32),
                                   nodes => [sample_station_ref()]}),
-             Kp),
     {ok, D2, <<>>} = macula_frame:decode(macula_frame:encode(Resp)),
-    ?assertEqual(Resp, D2),
-    ?assertMatch({ok, _},
-                 macula_frame:verify(D2, macula_identity:public(Kp))).
+    ?assertEqual(Resp, D2).
 
 %% -- FIND_VALUE / VALUE -------------------------------------------
 
@@ -371,17 +297,12 @@ value_rejects_malformed_record_test() ->
                                       records => [BadRec]})).
 
 find_value_value_wire_roundtrip_test() ->
-    Kp  = macula_identity:generate(),
-    Req = macula_frame:sign(
-            macula_frame:find_value(#{key    => crypto:strong_rand_bytes(32),
+    Req = macula_frame:find_value(#{key    => crypto:strong_rand_bytes(32),
                                       origin => crypto:strong_rand_bytes(32)}),
-            Kp),
     {ok, D, <<>>} = macula_frame:decode(macula_frame:encode(Req)),
     ?assertEqual(Req, D),
-    Rsp = macula_frame:sign(
-            macula_frame:value(#{key => crypto:strong_rand_bytes(32),
+    Rsp = macula_frame:value(#{key => crypto:strong_rand_bytes(32),
                                  records => [sample_record()]}),
-            Kp),
     {ok, D2, <<>>} = macula_frame:decode(macula_frame:encode(Rsp)),
     ?assertEqual(Rsp, D2).
 
@@ -421,12 +342,9 @@ store_ack_refuses_a_reason_test() ->
                                           reason => quota})).
 
 store_wire_roundtrip_test() ->
-    Kp = macula_identity:generate(),
-    F  = macula_frame:sign(macula_frame:store(#{record => sample_record()}), Kp),
+    F  = macula_frame:store(#{record => sample_record()}),
     {ok, D, <<>>} = macula_frame:decode(macula_frame:encode(F)),
-    ?assertEqual(F, D),
-    ?assertMatch({ok, _},
-                 macula_frame:verify(D, macula_identity:public(Kp))).
+    ?assertEqual(F, D).
 
 %% -- No REPLICATE / REPLICATE_ACK ---------------------------------
 
@@ -592,24 +510,20 @@ hyparview_shuffle_reply_carries_sample_test() ->
     ?assertEqual(hyparview_shuffle_reply, macula_frame:frame_type(F)),
     ?assertEqual(Sample, maps:get(peer_sample, F)).
 
-%% -- sign + wire roundtrip cover all 6 frame types --
+%% -- the wire roundtrip covers all 6 frame types --
 
-hyparview_join_sign_verify_wire_roundtrip_test() ->
-    Kp = macula_identity:generate(),
-    F = macula_frame:sign(macula_frame:hyparview_join(#{
+hyparview_join_wire_roundtrip_test() ->
+    F = macula_frame:hyparview_join(#{
             realm => crypto:strong_rand_bytes(32),
-            new_member => crypto:strong_rand_bytes(32)}), Kp),
+            new_member => crypto:strong_rand_bytes(32)}),
     {ok, D, <<>>} = macula_frame:decode(macula_frame:encode(F)),
-    ?assertEqual(F, D),
-    ?assertMatch({ok, _},
-                 macula_frame:verify(D, macula_identity:public(Kp))).
+    ?assertEqual(F, D).
 
 hyparview_forward_join_wire_roundtrip_test() ->
-    Kp = macula_identity:generate(),
-    F = macula_frame:sign(macula_frame:hyparview_forward_join(#{
+    F = macula_frame:hyparview_forward_join(#{
             realm => crypto:strong_rand_bytes(32),
             new_member => crypto:strong_rand_bytes(32),
-            ttl => 6, arwl => 6, prwl => 3}), Kp),
+            ttl => 6, arwl => 6, prwl => 3}),
     {ok, D, <<>>} = macula_frame:decode(macula_frame:encode(F)),
     ?assertEqual(F, D).
 
@@ -621,10 +535,9 @@ hyparview_join_carries_endorsement_through_wire_roundtrip_test() ->
     RealmId = crypto:strong_rand_bytes(32),
     Member  = crypto:strong_rand_bytes(32),
     Endorsement = endorsement(RealmId, Member),
-    LinkKp = macula_identity:generate(),
-    F = macula_frame:sign(macula_frame:hyparview_join(#{
+    F = macula_frame:hyparview_join(#{
             realm => RealmId, new_member => Member,
-            record => Endorsement}), LinkKp),
+            record => Endorsement}),
     ?assertEqual(Endorsement, maps:get(record, F)),
     {ok, D, <<>>} = macula_frame:decode(macula_frame:encode(F)),
     ?assertEqual(F, D),
@@ -652,35 +565,31 @@ hyparview_neighbor_carries_endorsement_through_wire_roundtrip_test() ->
     ?assertEqual(Endorsement, maps:get(record, D)).
 
 hyparview_neighbor_wire_roundtrip_test() ->
-    Kp = macula_identity:generate(),
-    F = macula_frame:sign(macula_frame:hyparview_neighbor(#{
+    F = macula_frame:hyparview_neighbor(#{
             realm => crypto:strong_rand_bytes(32),
-            priority => low}), Kp),
+            priority => low}),
     {ok, D, <<>>} = macula_frame:decode(macula_frame:encode(F)),
     ?assertEqual(F, D).
 
 hyparview_shuffle_wire_roundtrip_test() ->
-    Kp = macula_identity:generate(),
     Sample = [crypto:strong_rand_bytes(32) || _ <- lists:seq(1, 3)],
-    F = macula_frame:sign(macula_frame:hyparview_shuffle(#{
+    F = macula_frame:hyparview_shuffle(#{
             realm => crypto:strong_rand_bytes(32),
             origin => crypto:strong_rand_bytes(32),
-            ttl => 4, peer_sample => Sample}), Kp),
+            ttl => 4, peer_sample => Sample}),
     {ok, D, <<>>} = macula_frame:decode(macula_frame:encode(F)),
     ?assertEqual(F, D).
 
 hyparview_shuffle_reply_wire_roundtrip_test() ->
-    Kp = macula_identity:generate(),
-    F = macula_frame:sign(macula_frame:hyparview_shuffle_reply(#{
+    F = macula_frame:hyparview_shuffle_reply(#{
             realm => crypto:strong_rand_bytes(32),
-            peer_sample => [crypto:strong_rand_bytes(32)]}), Kp),
+            peer_sample => [crypto:strong_rand_bytes(32)]}),
     {ok, D, <<>>} = macula_frame:decode(macula_frame:encode(F)),
     ?assertEqual(F, D).
 
 hyparview_disconnect_wire_roundtrip_test() ->
-    Kp = macula_identity:generate(),
-    F = macula_frame:sign(macula_frame:hyparview_disconnect(#{
-            realm => crypto:strong_rand_bytes(32)}), Kp),
+    F = macula_frame:hyparview_disconnect(#{
+            realm => crypto:strong_rand_bytes(32)}),
     {ok, D, <<>>} = macula_frame:decode(macula_frame:encode(F)),
     ?assertEqual(F, D).
 
@@ -689,21 +598,19 @@ hyparview_disconnect_wire_roundtrip_test() ->
 %%------------------------------------------------------------------
 
 plumtree_ihave_round_trip_test() ->
-    Kp = macula_identity:generate(),
-    F = macula_frame:sign(macula_frame:plumtree_ihave(#{
+    F = macula_frame:plumtree_ihave(#{
             realm  => crypto:strong_rand_bytes(32),
             msg_id => crypto:strong_rand_bytes(48),
-            round  => 1}), Kp),
+            round  => 1}),
     {ok, D, <<>>} = macula_frame:decode(macula_frame:encode(F)),
     ?assertEqual(F, D),
     ?assertEqual(plumtree_ihave, macula_frame:frame_type(D)).
 
 plumtree_graft_round_trip_test() ->
-    Kp = macula_identity:generate(),
-    F = macula_frame:sign(macula_frame:plumtree_graft(#{
+    F = macula_frame:plumtree_graft(#{
             realm  => crypto:strong_rand_bytes(32),
             msg_id => crypto:strong_rand_bytes(48),
-            round  => 2}), Kp),
+            round  => 2}),
     {ok, D, <<>>} = macula_frame:decode(macula_frame:encode(F)),
     ?assertEqual(F, D).
 
@@ -729,15 +636,13 @@ overlay_relay_carries_peer_and_payload_test() ->
     ?assertEqual(Inner, maps:get(payload, F)).
 
 overlay_relay_wire_roundtrip_preserves_wrapped_frame_bytes_test() ->
-    Kp = macula_identity:generate(),
     Peer = crypto:strong_rand_bytes(32),
-    Inner = macula_frame:encode(macula_frame:sign(macula_frame:hyparview_disconnect(
-                #{realm => crypto:strong_rand_bytes(32)}), Kp)),
-    F = macula_frame:sign(macula_frame:overlay_relay(
-            #{peer => Peer, payload => Inner}), Kp),
+    Inner = macula_frame:encode(macula_frame:hyparview_disconnect(
+                #{realm => crypto:strong_rand_bytes(32)})),
+    F = macula_frame:overlay_relay(
+            #{peer => Peer, payload => Inner}),
     {ok, D, <<>>} = macula_frame:decode(macula_frame:encode(F)),
     ?assertEqual(F, D),
-    ?assertMatch({ok, _}, macula_frame:verify(D, macula_identity:public(Kp))),
     %% The wrapped bytes decode back to the exact original inner frame.
     {ok, InnerDecoded, <<>>} = macula_frame:decode(maps:get(payload, D)),
     {ok, InnerExpected, <<>>} = macula_frame:decode(Inner),
@@ -780,11 +685,10 @@ event_refuses_an_unknown_or_dht_delivery_channel_test() ->
      || Via <- [carrier_pigeon, dht]].
 
 subscribe_wire_roundtrip_test() ->
-    Kp = macula_identity:generate(),
-    F = macula_frame:sign(macula_frame:subscribe(#{
+    F = macula_frame:subscribe(#{
             topic      => <<"t">>,
             realm      => crypto:strong_rand_bytes(32),
-            subscriber => macula_identity:public(Kp)}), Kp),
+            subscriber => macula_test_identity:node_id()}),
     {ok, D, <<>>} = macula_frame:decode(macula_frame:encode(F)),
     ?assertEqual(F, D).
 
@@ -875,26 +779,21 @@ cancel_rejects_short_mcid_in_list_test() ->
                  macula_frame:cancel(#{blocks => [mcid(), <<"short">>]})).
 
 want_wire_roundtrip_test() ->
-    Kp = macula_identity:generate(),
-    F = macula_frame:sign(macula_frame:want(#{
-            blocks => [#{mcid => mcid(), priority => 99}]}), Kp),
+    F = macula_frame:want(#{
+            blocks => [#{mcid => mcid(), priority => 99}]}),
     {ok, D, <<>>} = macula_frame:decode(macula_frame:encode(F)),
-    ?assertEqual(F, D),
-    ?assertMatch({ok, _},
-                 macula_frame:verify(D, macula_identity:public(Kp))).
+    ?assertEqual(F, D).
 
 block_wire_roundtrip_test() ->
-    Kp = macula_identity:generate(),
-    F = macula_frame:sign(macula_frame:block(#{
-            mcid => mcid(), payload => <<"chunk-bytes">>}), Kp),
+    F = macula_frame:block(#{
+            mcid => mcid(), payload => <<"chunk-bytes">>}),
     {ok, D, <<>>} = macula_frame:decode(macula_frame:encode(F)),
     ?assertEqual(F, D).
 
 manifest_res_wire_roundtrip_test() ->
-    Kp = macula_identity:generate(),
-    F = macula_frame:sign(macula_frame:manifest_res(#{
+    F = macula_frame:manifest_res(#{
             mcid     => mcid(),
-            manifest => #{name => <<"x">>, size => 42}}), Kp),
+            manifest => #{name => <<"x">>, size => 42}}),
     {ok, D, <<>>} = macula_frame:decode(macula_frame:encode(F)),
     ?assertEqual(F#{manifest := #{{text, <<"name">>} => <<"x">>, {text, <<"size">>} => 42}}, D).
 

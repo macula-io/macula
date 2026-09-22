@@ -189,7 +189,7 @@ receive_chunk(Chunk, State) ->
     Next.
 
 direct_dial_forwards_client_stream_mode() ->
-    Identity = macula_identity:generate(),
+    Identity = macula_test_identity:key(),
     {ok, _Sup} = macula_upload:advertise_direct(pool, <<0:256>>, <<"bulk.ingest">>, ?MODULE, self(),
                                                 Identity, macula_scripted_stream:options([])),
     ?assertMatch([{<<"bulk.ingest">>, client_stream, _, _}], macula_scripted_stream:advertised()),

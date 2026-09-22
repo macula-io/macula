@@ -156,8 +156,8 @@
 %% the realm's citizen/human-confirmed capability string) rather than
 %% inherit a guess that might be wrong for its threat model.
 -type auth_policy() :: open
-                      | {ucan_required, macula_identity:pubkey()}
-                      | {realm_member_required, macula_identity:pubkey(),
+                      | {ucan_required, macula_ucan_nif:issuer_key()}
+                      | {realm_member_required, macula_ucan_nif:issuer_key(),
                          binary()}.
 
 -type pool() :: pid().
@@ -198,7 +198,7 @@
     host      := binary() | undefined,
     pid       := pid(),
     connected := boolean(),
-    node_id   := macula_identity:pubkey() | undefined
+    node_id   := macula_node_keys:node_id() | undefined
 }.
 -type seed() :: binary() | string()
               | #{host := binary() | string(),

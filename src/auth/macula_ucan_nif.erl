@@ -56,6 +56,8 @@
 %%====================================================================
 
 -type did() :: binary().
+%% The 32-byte Ed25519 public key a token's issuer signs with, until tokens carry the profile's algorithm (WP 1.4).
+-type issuer_key() :: <<_:256>>.
 -type capability() :: #{with := binary(), can := binary()}.
 -type ucan_opts() :: #{
     exp => non_neg_integer(),
@@ -65,7 +67,7 @@
     prf => [binary()]
 }.
 
--export_type([did/0, capability/0, ucan_opts/0]).
+-export_type([did/0, issuer_key/0, capability/0, ucan_opts/0]).
 
 %%====================================================================
 %% Init

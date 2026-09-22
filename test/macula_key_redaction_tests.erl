@@ -28,7 +28,7 @@ a_hybrid_key_loses_both_private_halves_test_() ->
     {timeout, ?EU_TIMEOUT, ?_test(assert_key_redacted(identity, pq_hybrid))}.
 
 a_key_pair_loses_its_private_half_test() ->
-    Pair = macula_identity:generate(),
+    Pair = key_pair(),
     ?assertEqual(Pair#{private := redacted}, macula_node_keys:redacted(Pair)).
 
 keys_in_tuples_lists_and_maps_are_redacted_at_any_depth_test() ->
@@ -123,7 +123,7 @@ other_events_pass_unchanged_test_() ->
 
 every_process_that_holds_a_key_redacts_it_in_each_part_of_its_status_test_() ->
     Key = key(),
-    Pair = macula_identity:generate(),
+    Pair = key_pair(),
     Privates = [maps:get(private, Pair) | privates(Key)],
     Held = {state, #{node_identity => Key, connect_key => Key}, Pair},
     ServerStatus = #{state => Held, message => {call, Key}, reason => {bad_return, [Pair]}, log => [{in, Key}]},
@@ -550,6 +550,11 @@ profile() ->
 key() ->
     {ok, Key} = macula_node_keys:generate(identity, profile()),
     Key.
+
+%% A bare key pair, as a process can hold one outside a node key: an ML-DSA-87 public key and its seed.
+key_pair() ->
+    {ok, {Public, Seed}} = macula_crypto_nif:mldsa_generate(mldsa87),
+    #{public => Public, private => Seed}.
 
 %% A key map that no clause of macula_node_keys:sign/2 takes.
 unsignable(#{components := [Component | _]} = Key) ->

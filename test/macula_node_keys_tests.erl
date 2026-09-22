@@ -144,9 +144,12 @@ key_whose_algorithms_do_not_match_its_purpose_and_profile_is_refused_test_() ->
                      save_and_load(Relabelled, identity, pq_pure))
     end}.
 
+%% The Ed25519 key file of 10.x: its magic, then the public key and the private key, 32 bytes each.
 ed25519_key_file_is_refused_test() ->
     with_tmp_path("identity.key", fun(Path) ->
-        ok = macula_identity:save(Path, macula_identity:generate()),
+        {Public, Private} = crypto:generate_key(eddsa, ed25519),
+        ok = file:write_file(Path, <<"macula-v2-key", 0, Public/binary, Private/binary>>),
+        ok = file:change_mode(Path, 8#0600),
         ?assertEqual({error, bad_key_file}, macula_node_keys:load(Path, identity, pq_pure))
     end).
 

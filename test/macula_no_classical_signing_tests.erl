@@ -63,9 +63,7 @@ allowed() ->
 
 %% {File, Rule, How many uses, The work item that removes them}.
 known() ->
-    [{"src/identity/macula_identity.erl", erl_keygen_classical, 1, "WP 1.3 residual"},
-     {"src/identity/macula_identity.erl", erl_crypto_classical, 2, "WP 1.3 residual"},
-     {"src/identity/macula_crypto_nif.erl", erl_keygen_classical, 2, "WP 1.3 residual"},
+    [{"src/identity/macula_crypto_nif.erl", erl_keygen_classical, 2, "WP 1.3 residual"},
      {"src/identity/macula_crypto_nif.erl", erl_crypto_classical, 2, "WP 1.3 residual"},
      {"native/macula_crypto_nif/src/lib.rs", rust_dalek, 1, "WP 1.3 residual"},
      {"native/macula_crypto_nif/Cargo.toml", cargo_dalek, 1, "WP 1.3 residual"},

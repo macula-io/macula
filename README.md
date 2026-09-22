@@ -163,26 +163,27 @@ ok = macula:advertise(Pool, Realm, Procedure,
   <img src="assets/identity_crypto.svg" alt="Identity and Crypto Stack" width="100%">
 </p>
 
-Rust NIFs with pure-Erlang fallbacks:
+A node holds one key per purpose in its crypto profile. In `pq_pure` a key
+is ML-DSA-87; in `pq_hybrid` an identity key pairs ML-DSA-87 with RSA-PSS and
+signs the IETF LAMPS composite `id-MLDSA87-RSA4096-PSS-SHA512`. ML-DSA is
+[`macula-mldsa`](https://crates.io/crates/macula-mldsa), verified against
+NIST's ACVP vectors, in a Rust NIF with no Erlang fallback, and new keys are
+stored as their 32-byte seed. The node_id is SHA-256 over the identity key.
 
 ```erlang
-%% Ed25519 keypair (a #{public := _, private := _} map)
-KP  = macula_identity:generate(),
-Sig = macula_identity:sign(<<"hello">>, KP),
-true = macula_identity:verify(<<"hello">>, Sig, macula_identity:public(KP)),
+{ok, Key}    = macula_node_keys:generate(identity, pq_pure),
+{ok, NodeId} = macula_node_keys:node_id(Key),
+Sig  = macula_node_keys:sign(<<"hello">>, Key),
+true = macula_node_keys:verify(<<"hello">>, Sig, macula_node_keys:public_key(Key), pq_pure),
+ok   = macula_node_keys:save("identity.key", Key),
 
 %% BLAKE3 hashing
-Hash = macula_blake3_nif:hash(<<"hello">>),
-
-%% UCAN capability tokens — Issuer/Audience are DIDs (binaries), not raw keys
-Issuer   = <<"did:macula:io.example.myapp">>,
-Audience = <<"did:macula:io.example.otherapp">>,
-Caps     = [#{with => <<"mri:sensor:io.example.myapp/kitchen">>,
-              can  => <<"read">>}],
-{ok, Token}   = macula_ucan_nif:create(Issuer, Audience, Caps,
-                                       macula_identity:private(KP)),
-{ok, Payload} = macula_ucan_nif:verify(Token, macula_identity:public(KP)).
+Hash = macula_blake3_nif:hash(<<"hello">>).
 ```
+
+UCAN capability tokens and DID documents are still signed with Ed25519.
+Moving them to the profile's algorithm is one of the steps left before
+12.0.0.
 
 ---
 

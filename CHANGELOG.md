@@ -52,6 +52,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   12.0.0-alpha.1 or earlier does not verify on this version, and the reverse.
   Keys and key files are unchanged, and `pq_pure` is unaffected.
 
+- **The macula application refuses to start when `puzzle_difficulty` is
+  set**, with `{bad_config, {macula, puzzle_difficulty, {not_a_setting,
+  Value}}}`, whatever the value. The difficulty is
+  `macula_node_keys:puzzle_difficulty/0`, one constant for the fleet (D30),
+  and after the removals below nothing reads the setting, so a node that set
+  it would believe it chose a difficulty. **Delete `{puzzle_difficulty, _}`
+  from the `macula` section of every `sys.config`.** The check is
+  `macula_node_keys:check_puzzle_difficulty/0`.
+
+### Removed
+
+- **`macula_identity`, the Ed25519 identity of 10.x**: `generate/0,1`,
+  `load/1`, `save/2`, `public/1`, `private/1`, `node_id/1`, `sign/2`,
+  `verify/3`, `puzzle_evidence/1`, `puzzle_valid/1,2` and
+  `check_puzzle_difficulty/0`. A node's keys, node_id and puzzle are
+  `macula_node_keys`. Its `pubkey()` type is replaced by
+  `macula_node_keys:node_id()` where a value is a node_id, and by
+  `macula_ucan_nif:issuer_key()` for a UCAN policy's issuer, which is still an
+  Ed25519 key.
+- **`macula_frame:sign/2`, `verify/2` and `signature/1`**, the Ed25519 frame
+  signature, and the optional `signature` field of the frame header. Nothing
+  signed a frame this way: a frame that needs a signature carries it in a
+  signed object (D13) or, in `pq_hybrid`, as a neighbour signature (D17).
+- **`macula_crypto_nif:grind_puzzle/1`**, which ground Ed25519 keys for
+  `macula_identity`. `macula_node_keys:generate/3` grinds identity keys.
+
 ## [12.0.0-alpha.1] - 2026-09-22
 
 **A pre-release: post-quantum KEY EXCHANGE, not post-quantum

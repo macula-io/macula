@@ -59,7 +59,7 @@ formula — `active_cap = max(5, ceil(log2(N)))`, capped at 15 — holds for
 realms up to tens of thousands of members without needing per-realm tuning.
 
 ```erlang
-Self = macula_identity:public(MyIdentity),
+{ok, Self} = macula_node_keys:node_id(MyIdentityKey),
 View0 = macula_hyparview_view:new(Self),                    %% defaults
 View1 = macula_hyparview_view:new(Self, #{active_cap => 8}), %% custom
 
@@ -110,12 +110,13 @@ dialing first if you're not already connected to it.
 ## Realm-gated admission
 
 Without gating, any node that can reach a realm member can JOIN its
-overlay. `ctx()`'s optional `realm_admin_pubkey` field turns that on: every
-JOIN, FORWARD_JOIN, and NEIGHBOR then requires a `realm_member_endorsement`
-record (`macula_record:realm_member_endorsement/2,3`) — an admin-signed
-statement of the form `{realm, member_node, roles, valid_from,
-valid_until}` — signed by that exact key, naming that exact `(realm,
-member)` pair, currently inside its validity window. A missing or invalid
+overlay. `ctx()`'s optional `realm_key_id` field, with `profile`, turns that
+on: every JOIN, FORWARD_JOIN, and NEIGHBOR then requires a
+`realm_member_endorsement` record (`macula_record:realm_member_endorsement/2,3`)
+— a statement of the form `{realm, member_node, roles, valid_from,
+valid_until}` — signed by the realm key with that key id, verified under that
+profile, naming that exact `(realm, member)` pair, currently inside its
+validity window. A missing or invalid
 endorsement is dropped silently: no ack, no forward, the view is unchanged.
 Trust is **never** assumed transitively — a FORWARD_JOIN carries the
 original JOIN's endorsement all the way through the relay chain, and every
@@ -127,32 +128,31 @@ Minting an endorsement (done by whoever administers the realm — see
 example):
 
 ```erlang
-Realm  = macula_identity:public(AdminIdentity),   %% the admin's own pubkey doubles as the realm id
-Member = macula_identity:public(CandidateIdentity),
+%% RealmKey is the realm's key (macula_node_keys:generate(realm, Profile)),
+%% Realm the realm's 32-byte id, Member the candidate's node_id.
 Unsigned = macula_record:realm_member_endorsement(
              Realm, #{realm => Realm, member_node => Member, roles => [<<"station">>]}),
-Endorsement = macula_record:sign(Unsigned, AdminIdentity).
+Endorsement = macula_record:encode(macula_record:sign(Unsigned, RealmKey)).
 ```
 
 Joining with it:
 
 ```erlang
-Ctx = #{self_id => Member, realm => Realm, identity => CandidateIdentity},
-JoinFrame0 = macula_hyparview_proto:build_join(Ctx),
-JoinFrame  = JoinFrame0#{record => Endorsement}.
+JoinFrame = macula_hyparview_endorsement:build_join(Realm, Member, Endorsement).
 ```
 
 And gating admission on the receiving side:
 
 ```erlang
-GatedCtx = Ctx#{realm_admin_pubkey => Realm,
+GatedCtx = Ctx#{realm_key_id => macula_node_keys:key_id(RealmKey),
+                profile => Profile,
                 %% Required so THIS peer's own NEIGHBOR acks carry proof of
                 %% its own membership — a gated receiver drops a NEIGHBOR
                 %% with no endorsement attached, same as it would a JOIN.
                 self_endorsement => MyOwnEndorsement}.
 ```
 
-Without `realm_admin_pubkey` in `ctx()`, admission is unconditional — the
+Without `realm_key_id` in `ctx()`, admission is unconditional — the
 opt-in default, useful for a dev-only or single-operator realm where minting
 endorsements isn't worth the overhead yet.
 

@@ -112,8 +112,8 @@ a_stream_procedures_policy_is_enforced_before_its_handler() ->
     #{link := Link} = World = linked(),
     Test = self(),
     Procedure = <<"foo.gated">>,
-    RealmIdentity = macula_identity:generate(),
-    Policy = {realm_member_required, macula_identity:public(RealmIdentity), <<"member/email-verified">>},
+    RealmIdentity = ucan_issuer(),
+    Policy = {realm_member_required, maps:get(public, RealmIdentity), <<"member/email-verified">>},
     ok = macula_station_link:advertise_stream(Link, ?REALM, Procedure, server_stream,
                                               fun(_Stream, Args) -> Test ! {handler_ran, macula:field(tag, Args)}, ok end,
                                               Policy),
@@ -135,10 +135,10 @@ a_stream_procedures_ucan_policy_binds_its_token_to_the_caller() ->
     #{link := Link} = World = linked(),
     Test = self(),
     Procedure = <<"foo.issuer_gated">>,
-    Issuer = macula_identity:generate(),
+    Issuer = ucan_issuer(),
     ok = macula_station_link:advertise_stream(Link, ?REALM, Procedure, server_stream,
                                               fun(_Stream, Args) -> Test ! {handler_ran, macula:field(tag, Args)}, ok end,
-                                              {ucan_required, macula_identity:public(Issuer)}),
+                                              {ucan_required, maps:get(public, Issuer)}),
     [ForSomeoneTag, OwnTag] = [1, 2],
     Caller = key(),
     ForSomeone = mint_ucan(Issuer, macula_node_keys:key_id(key()), <<"call">>),
@@ -157,7 +157,7 @@ a_stream_procedures_ucan_policy_binds_its_token_to_the_caller() ->
 an_upload_advertised_with_a_policy_refuses_a_caller_without_a_token() ->
     #{link := Link} = World = linked(),
     Procedure = <<"bulk.gated_ingest">>,
-    Policy = {realm_member_required, macula_identity:public(macula_identity:generate()), <<"member/email-verified">>},
+    Policy = {realm_member_required, macula_test_identity:node_id(), <<"member/email-verified">>},
     AdvertiseOnLink = fun(_Pool, Realm, Proc, Mode, Handler, Opts) ->
                           Auth = maps:get(auth, Opts, open),
                           macula_station_link:advertise_stream(Link, Realm, Proc, Mode, Handler, Auth)
@@ -371,10 +371,10 @@ restore_env(Key, {ok, Value}) -> application:set_env(macula, Key, Value).
 
 %% A UCAN the issuer identity grants an audience for one ability, valid for an hour.
 mint_ucan(IssuerIdentity, Audience, Can) ->
-    {ok, Token} = macula_ucan_nif:create(binary:encode_hex(macula_identity:public(IssuerIdentity), lowercase),
+    {ok, Token} = macula_ucan_nif:create(binary:encode_hex(maps:get(public, IssuerIdentity), lowercase),
                                          binary:encode_hex(Audience, lowercase),
                                          [#{with => <<"mri:realm:test">>, can => Can}],
-                                         macula_identity:private(IssuerIdentity),
+                                         maps:get(private, IssuerIdentity),
                                          #{exp => erlang:system_time(second) + 3_600}),
     Token.
 
@@ -481,3 +481,8 @@ written_within(Stream, Ms) ->
 
 closed_within(Stream, Ms) ->
     receive {closed, Stream} -> closed after Ms -> open end.
+
+%% A UCAN issuer's key pair: tokens are signed with Ed25519 until they carry the profile's algorithm (WP 1.4).
+ucan_issuer() ->
+    {Public, Private} = crypto:generate_key(eddsa, ed25519),
+    #{public => Public, private => Private}.

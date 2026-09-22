@@ -406,7 +406,7 @@ refused_open(not_found, #{link := Link} = World, Caller) ->
     {Stream, Open};
 refused_open(unauthorized, #{link := Link} = World, Caller) ->
     Procedure = <<"foo.gated_closed">>,
-    Policy = {realm_member_required, macula_identity:public(macula_identity:generate()), <<"member/email-verified">>},
+    Policy = {realm_member_required, macula_test_identity:node_id(), <<"member/email-verified">>},
     ok = macula_station_link:advertise_stream(Link, ?REALM, Procedure, server_stream, fun(_Stream, _Args) -> ok end,
                                               Policy),
     Stream = make_ref(),

@@ -6,7 +6,9 @@
 %% </pre>
 %% where `Cbor' is the RFC 8949 §4.2.1 deterministic encoding of a single
 %% map. The map carries the common header fields (`Part 6 §3') plus
-%% type-specific fields and an Ed25519 signature.
+%% type-specific fields. A frame that needs a signature carries it in a signed
+%% object with the signer's key (D13), or, for a control frame in pq_hybrid, a
+%% neighbour signature (D17).
 %%
 %% PLAN_WIRE_CBOR.md migrated this codec from BERT to CBOR so
 %% hecate-station and the macula 3.x SDK share a wire format. Frame
@@ -89,8 +91,8 @@
     %% Neighbour signatures on control frames in pq_hybrid (D17)
     control_frame/1, neighbour_signed/2, sign_neighbour/3, verify_neighbour/2,
 
-    %% Sign / verify frame
-    sign/2, verify/2, relayed_without_signature/1,
+    %% Overlay frames a station relays as they are
+    relayed_without_signature/1,
 
     %% Wire codec — single frame
     encode/1, decode/1,
@@ -112,7 +114,7 @@
     parse_stream/1,
 
     %% Accessors
-    frame_type/1, frame_id/1, version/1, signature/1, sent_at_ms/1
+    frame_type/1, frame_id/1, version/1, sent_at_ms/1
 ]).
 
 %% Exports with no caller inside macula, kept on purpose:
@@ -167,7 +169,6 @@
     manifest_req_spec/0, manifest_res_spec/0, cancel_spec/0
 ]).
 
--define(SIG_DOMAIN,        "macula-v2-frame\0").
 -define(PROTOCOL_VERSION,   2).
 %% A HyParView SHUFFLE or FORWARD_JOIN ttl and a FORWARD_JOIN arwl are at most 8, and a peer_sample holds at
 %% most 7 node_ids (DESIGN_PQ_SIGNED_FRAMES_AND_RECORDS.md, DHT and HyParView fields).
@@ -248,9 +249,9 @@
 -type item() :: frame() | {invalid_frame, frame_type() | unknown, atom()}.
 
 -type connect_spec() :: #{
-    node_id          := macula_identity:pubkey(),
-    station_id       := macula_identity:pubkey(),
-    realms           := [macula_identity:pubkey()],
+    node_id          := macula_node_keys:node_id(),
+    station_id       := macula_node_keys:node_id(),
+    realms           := [macula:realm()],
     capabilities     := non_neg_integer(),
     puzzle_evidence  := <<_:256>>,
     addresses        => [map()],
@@ -259,9 +260,9 @@
 }.
 
 -type hello_spec() :: #{
-    node_id                 := macula_identity:pubkey(),
-    station_id              := macula_identity:pubkey(),
-    realms                  := [macula_identity:pubkey()],
+    node_id                 := macula_node_keys:node_id(),
+    station_id              := macula_node_keys:node_id(),
+    realms                  := [macula:realm()],
     capabilities            := non_neg_integer(),
     accepted                := boolean(),
     negotiated_capabilities := non_neg_integer(),
@@ -2086,7 +2087,7 @@ sign_neighbour(#{frame_type := Type} = Frame, #{profile := Profile} = Key, #{con
     neighbour_signature(neighbour_signed(Profile, Type), Frame, Key, Connection, Seq).
 
 neighbour_signature(true, #{version := Version, frame_type := Type} = Frame, Key, Connection, Seq) ->
-    Fields = wire_form(maps:without([version, signature], Frame)),
+    Fields = wire_form(maps:without([version], Frame)),
     Tbs = Fields#{{text, <<"connection">>} => Connection, {text, <<"seq">>} => Seq},
     #{version => Version, frame_type => Type, neighbour => macula_signed_object:sign_held(?NEIGHBOUR_LABEL, Tbs, Key)}.
 
@@ -2121,7 +2122,7 @@ neighbour_opened({error, _MalformedOrAlgMismatch}, _Frame, _Opts) ->
 %% A neighbour tbs holds the frame type's own fields, without version, the per-hop signature and neighbour itself, and
 %% adds alg, connection and seq.
 neighbour_tbs_table(Type) ->
-    (maps:without([<<"version">>, <<"signature">>, <<"neighbour">>], field_table(Type)))#{
+    (maps:without([<<"version">>, <<"neighbour">>], field_table(Type)))#{
         <<"alg">> => {alg, value}, <<"connection">> => {connection, value}, <<"seq">> => {seq, value}}.
 
 neighbour_frame({ok, #{frame_type := Type, connection := Connection, seq := Seq} = Read}, Version, Type,
@@ -2136,31 +2137,6 @@ opened_shape(Opened) ->
 
 opened(ok, Opened) -> {ok, Opened};
 opened({error, _Invalid}, _Opened) -> {error, malformed_frame}.
-
-%%------------------------------------------------------------------
-%% Sign / verify
-%%------------------------------------------------------------------
-
--spec sign(frame(), macula_identity:key_pair() | macula_identity:privkey()) ->
-    frame().
-sign(Frame, Identity) ->
-    Bytes = canonical_unsigned(Frame),
-    Sig = macula_identity:sign([?SIG_DOMAIN, Bytes], Identity),
-    Frame#{signature => Sig}.
-
--spec verify(frame(), macula_identity:pubkey()) ->
-    {ok, frame()} | {error, term()}.
-verify(#{signature := Sig} = Frame, Pub)
-  when is_binary(Sig), byte_size(Sig) =:= 64,
-       is_binary(Pub), byte_size(Pub) =:= 32 ->
-    Bytes = canonical_unsigned(Frame),
-    verify_result(macula_identity:verify([?SIG_DOMAIN, Bytes], Sig, Pub),
-                  Frame);
-verify(_Frame, _Pub) ->
-    {error, bad_frame}.
-
-verify_result(true,  Frame) -> {ok, Frame};
-verify_result(false, _Frame) -> {error, signature_invalid}.
 
 %%------------------------------------------------------------------
 %% Wire codec — CBOR (RFC 8949 §4.2.1 deterministic, Part 6 §3)
@@ -2636,8 +2612,7 @@ received_rules(cancel) ->
 received_rules(_Unknown) ->
     unknown_type.
 
-%% A frame base/2 builds: its own fields, and the header base/2 writes and sign/2 adds, each optional unless the
-%% type requires it.
+%% A frame base/2 builds: its own fields, and the header base/2 writes, each optional unless the type requires it.
 base_rules(Required) ->
     base_rules(Required, []).
 
@@ -2648,8 +2623,7 @@ base_rules(Required, Optional) ->
 
 base_header() ->
     [{frame_id, {optional, id16}}, {sent_at_ms, {optional, non_neg}}, {capabilities, {optional, non_neg}},
-     {realm, {optional, key}}, {call_id, {optional, id16}}, {source_route, {optional, binary}},
-     {signature, {optional, binary}}].
+     {realm, {optional, key}}, {call_id, {optional, id16}}, {source_route, {optional, binary}}].
 
 %% A frame that carries its fields in signed objects: version and frame_type beside those objects, and its routing
 %% fields.
@@ -2701,7 +2675,6 @@ frame_type(#{frame_type := T}) -> T.
 frame_id(#{frame_id := Id}) -> Id.
 version(#{version := V}) -> V.
 sent_at_ms(#{sent_at_ms := T}) -> T.
-signature(#{signature := S}) -> S.
 
 %%------------------------------------------------------------------
 %% Internals
@@ -2718,10 +2691,6 @@ base(FrameType, Caps) ->
         call_id      => undefined,
         source_route => undefined
     }.
-
-canonical_unsigned(Frame) ->
-    Unsigned = maps:without([signature], Frame),
-    macula_cbor_nif:pack_deterministic(wire_form(Unsigned)).
 
 %%------------------------------------------------------------------
 %% Atom <-> wire-binary translation
@@ -3034,7 +3003,6 @@ field_table(connect) ->
       <<"realm">> => {realm, value},
       <<"call_id">> => {call_id, value},
       <<"source_route">> => {source_route, value},
-      <<"signature">> => {signature, value},
       <<"node_id">> => {node_id, value},
       <<"station_id">> => {station_id, value},
       <<"realms">> => {realms, value},
@@ -3051,7 +3019,6 @@ field_table(hello) ->
       <<"realm">> => {realm, value},
       <<"call_id">> => {call_id, value},
       <<"source_route">> => {source_route, value},
-      <<"signature">> => {signature, value},
       <<"node_id">> => {node_id, value},
       <<"station_id">> => {station_id, value},
       <<"realms">> => {realms, value},
@@ -3070,7 +3037,6 @@ field_table(goodbye) ->
       <<"realm">> => {realm, value},
       <<"call_id">> => {call_id, value},
       <<"source_route">> => {source_route, value},
-      <<"signature">> => {signature, value},
       <<"reason">> => {reason, {bounded_text, ?MAX_GOODBYE_REASON_BYTES}},
       <<"detail">> => {detail, value}};
 field_table(swim_ping) ->
@@ -3083,7 +3049,6 @@ field_table(swim_ping) ->
       <<"realm">> => {realm, value},
       <<"call_id">> => {call_id, value},
       <<"source_route">> => {source_route, value},
-      <<"signature">> => {signature, value},
       <<"round">> => {round, uint},
       <<"incarnation">> => {incarnation, uint},
       <<"piggyback">> => {piggyback, {list_of, #{<<"target">> => {target, {bytes, 32}},
@@ -3101,7 +3066,6 @@ field_table(swim_ack) ->
       <<"realm">> => {realm, value},
       <<"call_id">> => {call_id, value},
       <<"source_route">> => {source_route, value},
-      <<"signature">> => {signature, value},
       <<"round">> => {round, uint},
       <<"responder">> => {responder, {bytes, 32}},
       <<"incarnation">> => {incarnation, uint},
@@ -3120,7 +3084,6 @@ field_table(swim_suspect) ->
       <<"realm">> => {realm, value},
       <<"call_id">> => {call_id, value},
       <<"source_route">> => {source_route, value},
-      <<"signature">> => {signature, value},
       <<"target">> => {target, {bytes, 32}},
       <<"target_incarnation">> => {target_incarnation, uint},
       <<"suspected_by">> => {suspected_by, {bytes, 32}},
@@ -3135,7 +3098,6 @@ field_table(swim_confirm) ->
       <<"realm">> => {realm, value},
       <<"call_id">> => {call_id, value},
       <<"source_route">> => {source_route, value},
-      <<"signature">> => {signature, value},
       <<"target">> => {target, {bytes, 32}},
       <<"target_incarnation">> => {target_incarnation, uint},
       <<"suspected_by">> => {suspected_by, {bytes, 32}},
@@ -3150,7 +3112,6 @@ field_table(ping) ->
       <<"realm">> => {realm, value},
       <<"call_id">> => {call_id, value},
       <<"source_route">> => {source_route, value},
-      <<"signature">> => {signature, value},
       <<"nonce">> => {nonce, value}};
 field_table(pong) ->
     #{<<"version">> => {version, value},
@@ -3162,7 +3123,6 @@ field_table(pong) ->
       <<"realm">> => {realm, value},
       <<"call_id">> => {call_id, value},
       <<"source_route">> => {source_route, value},
-      <<"signature">> => {signature, value},
       <<"nonce">> => {nonce, value}};
 field_table(find_node) ->
     #{<<"version">> => {version, value},
@@ -3174,7 +3134,6 @@ field_table(find_node) ->
       <<"realm">> => {realm, value},
       <<"call_id">> => {call_id, value},
       <<"source_route">> => {source_route, value},
-      <<"signature">> => {signature, value},
       <<"key">> => {key, value},
       <<"origin">> => {origin, {bytes, 32}},
       <<"depth">> => {depth, uint}};
@@ -3188,7 +3147,6 @@ field_table(nodes) ->
       <<"realm">> => {realm, value},
       <<"call_id">> => {call_id, value},
       <<"source_route">> => {source_route, value},
-      <<"signature">> => {signature, value},
       <<"key">> => {key, value},
       <<"nodes">> => {nodes, {list_of, #{<<"node_id">> => {node_id, {bytes, 32}},
           <<"station_id">> => {station_id, {bytes, 32}},
@@ -3208,7 +3166,6 @@ field_table(find_value) ->
       <<"realm">> => {realm, value},
       <<"call_id">> => {call_id, value},
       <<"source_route">> => {source_route, value},
-      <<"signature">> => {signature, value},
       <<"key">> => {key, value},
       <<"origin">> => {origin, {bytes, 32}},
       <<"after">> => {'after', bytes}};
@@ -3222,7 +3179,6 @@ field_table(value) ->
       <<"realm">> => {realm, value},
       <<"call_id">> => {call_id, value},
       <<"source_route">> => {source_route, value},
-      <<"signature">> => {signature, value},
       <<"key">> => {key, value},
       <<"records">> => {records, value},
       <<"next">> => {next, bytes}};
@@ -3236,7 +3192,6 @@ field_table(store) ->
       <<"realm">> => {realm, value},
       <<"call_id">> => {call_id, value},
       <<"source_route">> => {source_route, value},
-      <<"signature">> => {signature, value},
       <<"record">> => {record, value}};
 field_table(store_ack) ->
     #{<<"version">> => {version, value},
@@ -3248,7 +3203,6 @@ field_table(store_ack) ->
       <<"realm">> => {realm, value},
       <<"call_id">> => {call_id, value},
       <<"source_route">> => {source_route, value},
-      <<"signature">> => {signature, value},
       <<"key">> => {key, value},
       <<"signer">> => {signer, value},
       <<"record_version">> => {record_version, value},
@@ -3281,7 +3235,6 @@ field_table(hyparview_join) ->
       <<"realm">> => {realm, value},
       <<"call_id">> => {call_id, value},
       <<"source_route">> => {source_route, value},
-      <<"signature">> => {signature, value},
       <<"new_member">> => {new_member, {bytes, 32}},
       <<"record">> => {record, value}};
 field_table(hyparview_forward_join) ->
@@ -3294,7 +3247,6 @@ field_table(hyparview_forward_join) ->
       <<"realm">> => {realm, value},
       <<"call_id">> => {call_id, value},
       <<"source_route">> => {source_route, value},
-      <<"signature">> => {signature, value},
       <<"new_member">> => {new_member, {bytes, 32}},
       <<"ttl">> => {ttl, {uint_max, ?HYPARVIEW_MAX_WALK}},
       <<"arwl">> => {arwl, {uint_max, ?HYPARVIEW_MAX_WALK}},
@@ -3310,7 +3262,6 @@ field_table(hyparview_neighbor) ->
       <<"realm">> => {realm, value},
       <<"call_id">> => {call_id, value},
       <<"source_route">> => {source_route, value},
-      <<"signature">> => {signature, value},
       <<"priority">> => {priority, {enum, [high, low]}},
       <<"record">> => {record, value}};
 field_table(hyparview_disconnect) ->
@@ -3322,8 +3273,7 @@ field_table(hyparview_disconnect) ->
       <<"capabilities">> => {capabilities, uint},
       <<"realm">> => {realm, value},
       <<"call_id">> => {call_id, value},
-      <<"source_route">> => {source_route, value},
-      <<"signature">> => {signature, value}};
+      <<"source_route">> => {source_route, value}};
 field_table(hyparview_shuffle) ->
     #{<<"version">> => {version, value},
       <<"neighbour">> => {neighbour, held_object},
@@ -3334,7 +3284,6 @@ field_table(hyparview_shuffle) ->
       <<"realm">> => {realm, value},
       <<"call_id">> => {call_id, value},
       <<"source_route">> => {source_route, value},
-      <<"signature">> => {signature, value},
       <<"origin">> => {origin, {bytes, 32}},
       <<"ttl">> => {ttl, {uint_max, ?HYPARVIEW_MAX_WALK}},
       <<"peer_sample">> => {peer_sample, {list_of_bytes, 32, ?HYPARVIEW_MAX_SAMPLE}}};
@@ -3348,7 +3297,6 @@ field_table(hyparview_shuffle_reply) ->
       <<"realm">> => {realm, value},
       <<"call_id">> => {call_id, value},
       <<"source_route">> => {source_route, value},
-      <<"signature">> => {signature, value},
       <<"peer_sample">> => {peer_sample, {list_of_bytes, 32, ?HYPARVIEW_MAX_SAMPLE}}};
 field_table(plumtree_gossip) ->
     #{<<"version">> => {version, value},
@@ -3365,7 +3313,6 @@ field_table(plumtree_ihave) ->
       <<"realm">> => {realm, value},
       <<"call_id">> => {call_id, value},
       <<"source_route">> => {source_route, value},
-      <<"signature">> => {signature, value},
       <<"msg_id">> => {msg_id, {bytes, 48}},
       <<"round">> => {round, uint}};
 field_table(plumtree_graft) ->
@@ -3378,7 +3325,6 @@ field_table(plumtree_graft) ->
       <<"realm">> => {realm, value},
       <<"call_id">> => {call_id, value},
       <<"source_route">> => {source_route, value},
-      <<"signature">> => {signature, value},
       <<"msg_id">> => {msg_id, {bytes, 48}},
       <<"round">> => {round, uint}};
 field_table(plumtree_prune) ->
@@ -3390,8 +3336,7 @@ field_table(plumtree_prune) ->
       <<"capabilities">> => {capabilities, uint},
       <<"realm">> => {realm, value},
       <<"call_id">> => {call_id, value},
-      <<"source_route">> => {source_route, value},
-      <<"signature">> => {signature, value}};
+      <<"source_route">> => {source_route, value}};
 field_table(overlay_relay) ->
     #{<<"version">> => {version, value},
       <<"neighbour">> => {neighbour, held_object},
@@ -3402,7 +3347,6 @@ field_table(overlay_relay) ->
       <<"realm">> => {realm, value},
       <<"call_id">> => {call_id, value},
       <<"source_route">> => {source_route, value},
-      <<"signature">> => {signature, value},
       <<"peer">> => {peer, {bytes, 32}},
       <<"payload">> => {payload, value}};
 field_table(publish) ->
@@ -3419,7 +3363,6 @@ field_table(subscribe) ->
       <<"realm">> => {realm, value},
       <<"call_id">> => {call_id, value},
       <<"source_route">> => {source_route, value},
-      <<"signature">> => {signature, value},
       <<"topic">> => {topic, value},
       <<"subscriber">> => {subscriber, {bytes, 32}},
       <<"options">> => {options, value}};
@@ -3433,7 +3376,6 @@ field_table(unsubscribe) ->
       <<"realm">> => {realm, value},
       <<"call_id">> => {call_id, value},
       <<"source_route">> => {source_route, value},
-      <<"signature">> => {signature, value},
       <<"topic">> => {topic, value},
       <<"subscriber">> => {subscriber, {bytes, 32}}};
 field_table(event) ->
@@ -3451,7 +3393,6 @@ field_table(advertise) ->
       <<"realm">> => {realm, value},
       <<"call_id">> => {call_id, value},
       <<"source_route">> => {source_route, value},
-      <<"signature">> => {signature, value},
       <<"advertisement">> => {advertisement, bytes}};
 field_table(unadvertise) ->
     #{<<"version">> => {version, value},
@@ -3463,7 +3404,6 @@ field_table(unadvertise) ->
       <<"realm">> => {realm, value},
       <<"call_id">> => {call_id, value},
       <<"source_route">> => {source_route, value},
-      <<"signature">> => {signature, value},
       <<"withdrawal">> => {withdrawal, bytes}};
 field_table(stream_open) ->
     #{<<"version">> => {version, value},
@@ -3501,7 +3441,6 @@ field_table(want) ->
       <<"realm">> => {realm, value},
       <<"call_id">> => {call_id, value},
       <<"source_route">> => {source_route, value},
-      <<"signature">> => {signature, value},
       <<"blocks">> => {blocks, {list_of, #{<<"mcid">> => {mcid, value},
           <<"priority">> => {priority, value}}}}};
 field_table(have) ->
@@ -3513,7 +3452,6 @@ field_table(have) ->
       <<"realm">> => {realm, value},
       <<"call_id">> => {call_id, value},
       <<"source_route">> => {source_route, value},
-      <<"signature">> => {signature, value},
       <<"blocks">> => {blocks, {list_of, #{<<"mcid">> => {mcid, value},
           <<"size">> => {size, value}}}}};
 field_table(block) ->
@@ -3525,7 +3463,6 @@ field_table(block) ->
       <<"realm">> => {realm, value},
       <<"call_id">> => {call_id, value},
       <<"source_route">> => {source_route, value},
-      <<"signature">> => {signature, value},
       <<"mcid">> => {mcid, value},
       <<"payload">> => {payload, value}};
 field_table(manifest_req) ->
@@ -3537,7 +3474,6 @@ field_table(manifest_req) ->
       <<"realm">> => {realm, value},
       <<"call_id">> => {call_id, value},
       <<"source_route">> => {source_route, value},
-      <<"signature">> => {signature, value},
       <<"mcid">> => {mcid, value}};
 field_table(manifest_res) ->
     #{<<"version">> => {version, value},
@@ -3548,7 +3484,6 @@ field_table(manifest_res) ->
       <<"realm">> => {realm, value},
       <<"call_id">> => {call_id, value},
       <<"source_route">> => {source_route, value},
-      <<"signature">> => {signature, value},
       <<"mcid">> => {mcid, value},
       <<"manifest">> => {manifest, manifest}};
 field_table(cancel) ->
@@ -3560,7 +3495,6 @@ field_table(cancel) ->
       <<"realm">> => {realm, value},
       <<"call_id">> => {call_id, value},
       <<"source_route">> => {source_route, value},
-      <<"signature">> => {signature, value},
       <<"blocks">> => {blocks, value}}.
 
 read_fields([{{text, Name}, Value} | Rest], Table, Frame) ->

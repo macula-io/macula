@@ -23,7 +23,7 @@ stop(_State) ->
 %% internal functions
 
 start_with_profile({ok, _Profile}) ->
-    ok = macula_identity:check_puzzle_difficulty(),
+    ok = macula_node_keys:check_puzzle_difficulty(),
     ok = macula_diagnostics:install_domain_filter(),
     ok = macula_node_keys:install_log_redaction(),
     macula_root:start_link();

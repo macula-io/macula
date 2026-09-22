@@ -210,18 +210,17 @@ chunks(Bin, Size) ->
     <<Chunk:Size/binary, Rest/binary>> = Bin,
     [Chunk | chunks(Rest, Size)].
 
-%% A signed frame on the wire.
+%% A frame on the wire.
 wire(Type) ->
-    Kp = macula_identity:generate(),
-    macula_frame:encode(macula_frame:sign(frame(Type, macula_identity:public(Kp)), Kp)).
+    macula_frame:encode(frame(Type, macula_test_identity:node_id())).
 
-frame(connect, Pub) ->
+frame(connect, NodeId) ->
     macula_frame:connect(#{
-        node_id         => Pub,
-        station_id      => Pub,
+        node_id         => NodeId,
+        station_id      => NodeId,
         realms          => [crypto:strong_rand_bytes(32)],
         capabilities    => 0,
-        puzzle_evidence => macula_identity:puzzle_evidence(Pub)
+        puzzle_evidence => crypto:hash(sha256, NodeId)
     });
 frame(connect_without_puzzle_evidence, Pub) ->
     maps:remove(puzzle_evidence, frame(connect, Pub));
