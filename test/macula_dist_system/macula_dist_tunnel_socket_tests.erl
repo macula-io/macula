@@ -136,11 +136,11 @@ with_session(Fun) ->
 
 %% The accepting side takes the station role, with the TLS key and certificate a station presents (D29); the dialing
 %% side checks the leaf itself, since nothing issues an ML-DSA-87 certificate for a chain to end at.
-session(#{client_stream := ClientStream, server_stream := ServerStream, dir := Dir}) ->
+session(#{client_stream := ClientStream, server_stream := ServerStream, cert := Cert, key := Key}) ->
     {ok, ClientSocket} = macula_dist_tunnel_socket:own(ClientStream),
     {ok, ServerSocket} = macula_dist_tunnel_socket:own(ServerStream),
     Parent = self(),
-    Accepting = spawn_link(fun() -> accept_session(ServerSocket, Dir, Parent) end),
+    Accepting = spawn_link(fun() -> accept_session(ServerSocket, {Cert, Key}, Parent) end),
     ok = macula_dist_tunnel_socket:controlling_process(ServerSocket, Accepting),
     Accepting ! go,
     {ok, Client} = ssl:connect(ClientSocket, client_opts(), ?EVENT_MS),
@@ -148,16 +148,16 @@ session(#{client_stream := ClientStream, server_stream := ServerStream, dir := D
     #{client => Client, server => Server, accepting => Accepting}.
 
 %% An ssl socket closes when its owner exits, so the accepting process stays until the test is done with it.
-accept_session(Socket, Dir, Parent) ->
+accept_session(Socket, Files, Parent) ->
     receive go -> ok after ?EVENT_MS -> error(no_go) end,
-    {ok, Server} = ssl:handshake(Socket, server_opts(Dir), ?EVENT_MS),
+    {ok, Server} = ssl:handshake(Socket, server_opts(Files), ?EVENT_MS),
     ok = ssl:controlling_process(Server, Parent),
     Parent ! {accepted, Server},
     receive done -> ok after ?EVENT_MS * 6 -> ok end.
 
-server_opts(Dir) ->
+server_opts({Cert, Key}) ->
     [binary, {active, false}, {versions, ['tlsv1.3']}, {cb_info, ?CB_INFO},
-     {certfile, filename:join(Dir, "tunnel.crt")}, {keyfile, filename:join(Dir, "tunnel.key")}].
+     {certfile, Cert}, {keyfile, Key}].
 
 client_opts() ->
     [binary, {active, false}, {versions, ['tlsv1.3']}, {cb_info, ?CB_INFO},
@@ -175,53 +175,11 @@ leaf_seen(_Cert, valid, State) -> {valid, State};
 leaf_seen(_Cert, valid_peer, State) -> {valid, State}.
 
 %%%===================================================================
-%%% The loopback pair, as macula_peering_send_on_stream_tests makes it
+%%% The loopback pair
 %%%===================================================================
 
 pair() ->
-    Port = free_udp_port(),
-    Dir = tmp_dir(),
-    {ok, Listener} = listener(Dir, Port),
-    ok = macula_quic:async_accept(Listener),
-    {ok, ClientConn} = macula_quic:connect(<<"127.0.0.1">>, Port, [{alpn, [<<"macula-dist-relay">>]}], ?EVENT_MS),
-    ServerConn = receive {quic, new_conn, C, _Info} -> C after ?EVENT_MS -> error(no_server_connection) end,
-    ok = macula_quic:async_accept_stream(ServerConn),
-    {ok, ClientStream} = macula_quic:open_stream(ClientConn),
-    ok = macula_quic:send(ClientStream, <<"open">>),
-    ServerStream = receive {quic, new_stream, S, _Props} -> S after ?EVENT_MS -> error(no_server_stream) end,
-    ok = read_opener(ServerStream),
-    #{listener => Listener, client_conn => ClientConn, server_conn => ServerConn,
-      client_stream => ClientStream, server_stream => ServerStream, dir => Dir}.
+    macula_test_quic_pair:open("macula-tunnel-socket").
 
-%% The pair is opened with a byte, so the accepting side sees the stream at all. It is read off before the session
-%% starts, or TLS would find it at the head of its first record.
-read_opener(Stream) ->
-    ok = macula_quic:setopt(Stream, active, true),
-    receive {quic, <<"open">>, Stream, _Flags} -> ok after ?EVENT_MS -> error(no_opener) end.
-
-listener(Dir, Port) ->
-    {ok, {CertPem, KeyPem}} =
-        macula_quic:generate_self_signed_cert(macula_test_identity:tls_seed(), [<<"127.0.0.1">>]),
-    Cert = filename:join(Dir, "tunnel.crt"),
-    Key = filename:join(Dir, "tunnel.key"),
-    ok = file:write_file(Cert, CertPem),
-    ok = file:write_file(Key, KeyPem),
-    macula_quic:listen(<<"127.0.0.1">>, Port,
-                       [{cert, Cert}, {key, Key}, {alpn, [<<"macula-dist-relay">>]}]).
-
-stop_pair(#{listener := Listener, client_conn := ClientConn, dir := Dir}) ->
-    _ = macula_quic:close_connection(ClientConn),
-    _ = macula_quic:close(Listener),
-    _ = file:del_dir_r(Dir),
-    ok.
-
-%% The directory outlives the listener here, unlike with_dir/2's shape: the accepting side reads the same
-%% certificate again when its TLS session starts.
-tmp_dir() ->
-    macula_test_tmp:dir("macula-tunnel-socket").
-
-free_udp_port() ->
-    {ok, Socket} = gen_udp:open(0, [{ip, {127, 0, 0, 1}}]),
-    {ok, Port} = inet:port(Socket),
-    ok = gen_udp:close(Socket),
-    Port.
+stop_pair(Pair) ->
+    macula_test_quic_pair:close(Pair).
