@@ -200,10 +200,10 @@ receive_event(Event) ->
 control_messages(Control, Buffer, Count) ->
     collect_messages(Control, macula_dist_relay_protocol:decode_buffer(Buffer), Count, []).
 
-collect_messages(_Control, {Messages, Rest}, Count, Acc)
+collect_messages(_Control, {ok, Messages, Rest}, Count, Acc)
   when length(Messages) + length(Acc) >= Count ->
     {lists:reverse(Acc, Messages), Rest};
-collect_messages(Control, {Messages, Rest}, Count, Acc) ->
+collect_messages(Control, {ok, Messages, Rest}, Count, Acc) ->
     receive
         {quic, Data, Control, _Flags} when is_binary(Data) ->
             collect_messages(Control,

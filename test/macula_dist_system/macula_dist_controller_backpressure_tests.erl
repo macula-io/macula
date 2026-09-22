@@ -259,8 +259,8 @@ control_message(Control, Buffer) ->
         exit({relay_missed_control_message, Control})
     end.
 
-first_message({[Message | _], _Rest}, _Control) -> Message;
-first_message({[], Rest}, Control) -> control_message(Control, Rest).
+first_message({ok, [Message | _], _Rest}, _Control) -> Message;
+first_message({ok, [], Rest}, Control) -> control_message(Control, Rest).
 
 %% The first tunnel request on any control stream, as {Source, Target}.
 tunnel_request(Nodes) ->
@@ -268,7 +268,7 @@ tunnel_request(Nodes) ->
                       #{}, Nodes),
     receive
         {quic, Data, Control, _Flags} when is_binary(Data), is_map_key(Control, Names) ->
-            {[#{type := tunnel_request, target := Target}], _} =
+            {ok, [#{type := tunnel_request, target := Target}], _} =
                 macula_dist_relay_protocol:decode_buffer(Data),
             {maps:get(Control, Names), Target}
     after ?EVENT_TIMEOUT_MS ->

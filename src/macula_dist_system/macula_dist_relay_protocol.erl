@@ -1,7 +1,7 @@
 %%%-------------------------------------------------------------------
 %%% @doc Control protocol encoder/decoder for dist relay.
 %%%
-%%% Stream 0 carries MessagePack-framed control messages. Each frame:
+%%% Stream 0 carries CBOR control messages. Each frame:
 %%%
 %%%   +----------+---------+
 %%%   | Len (4B) | MsgPack |
@@ -14,13 +14,25 @@
 %%%   tunnel_request  → tunnel_ok | tunnel_error
 %%%   tunnel_close    → (no reply)
 %%%   tunnel_notify   → (relay → target, informs of incoming tunnel)
+%%%
+%%% ⚠ A reader refuses rather than carries on, on both counts, because what is at the far end of this channel is a
+%%% relay: a forwarder, and not a thing to be trusted with the reader's memory or with where frames begin.
+%%%
+%%% A LENGTH IS A PROMISE ABOUT BYTES THAT HAVE NOT ARRIVED. Without a cap, a length of 4 GiB is a reader that
+%%% waits, holding everything that arrives meanwhile, and grows until the node dies. A control frame here carries
+%%% at most a node name.
+%%%
+%%% A FRAME THAT DOES NOT DECODE MEANS THE TWO ENDS NO LONGER AGREE WHERE FRAMES BEGIN. Skipping it and reading on
+%%% takes the middle of something else for a length, so one bad frame becomes an endless run of them while the
+%%% channel looks alive. The connection ends instead.
 %%% @end
 %%%-------------------------------------------------------------------
 -module(macula_dist_relay_protocol).
 
--include_lib("kernel/include/logger.hrl").
+-export([encode/1, decode_buffer/1, max_frame_bytes/0]).
 
--export([encode/1, decode_buffer/1]).
+%% The largest control frame a reader accepts, as the handshake's own reader uses on a peering connection.
+-define(MAX_FRAME_BYTES, 65_536).
 
 -type identify_msg() :: #{type := identify, node_name := binary()}.
 -type identified_msg() :: #{type := identified, status := ok}.
@@ -58,11 +70,17 @@ decode(PayloadBin) ->
         {error, Reason} -> {error, {cbor_decode, Reason}}
     end.
 
-%% @doc Extract zero or more complete frames from a buffer.
-%% Returns {Messages, Remaining} where Remaining is the leftover bytes.
--spec decode_buffer(binary()) -> {[control_msg()], binary()}.
+%% @doc Extract zero or more complete frames from a buffer. `{ok, Messages, Remaining}' where Remaining is what is
+%% left of a frame that has not all arrived, or `{error, Reason}', which ends the connection: a frame too large to
+%% be one of ours, or one whose bytes do not decode to a frame this protocol knows.
+-spec decode_buffer(binary()) -> {ok, [control_msg()], binary()} | {error, term()}.
 decode_buffer(Buffer) ->
     decode_buffer(Buffer, []).
+
+%% @doc The largest control frame a reader accepts.
+-spec max_frame_bytes() -> pos_integer().
+max_frame_bytes() ->
+    ?MAX_FRAME_BYTES.
 
 %%====================================================================
 %% Internal — encode
@@ -108,15 +126,17 @@ decode_map(Other) ->
 %% Internal — buffer
 %%====================================================================
 
+%% Judged on the header alone, so the bytes a too-large frame promises are never waited for.
+decode_buffer(<<Len:32/big-unsigned, _Rest/binary>>, _Acc) when Len > ?MAX_FRAME_BYTES ->
+    {error, frame_too_large};
 decode_buffer(<<Len:32/big-unsigned, Rest/binary>>, Acc)
   when byte_size(Rest) >= Len ->
     <<PayloadBin:Len/binary, Remaining/binary>> = Rest,
-    case decode(PayloadBin) of
-        {ok, Msg} ->
-            decode_buffer(Remaining, [Msg | Acc]);
-        {error, Reason} ->
-            ?LOG_WARNING("[protocol] Skipping malformed frame: ~p", [Reason]),
-            decode_buffer(Remaining, Acc)
-    end;
+    decoded(decode(PayloadBin), Remaining, Acc);
 decode_buffer(Buffer, Acc) ->
-    {lists:reverse(Acc), Buffer}.
+    {ok, lists:reverse(Acc), Buffer}.
+
+decoded({ok, Msg}, Remaining, Acc) ->
+    decode_buffer(Remaining, [Msg | Acc]);
+decoded({error, Reason}, _Remaining, _Acc) ->
+    {error, Reason}.

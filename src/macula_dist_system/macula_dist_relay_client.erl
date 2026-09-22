@@ -242,10 +242,7 @@ handle_info({quic, new_stream, Stream, _Props}, #state{conn = Conn} = State) ->
 handle_info({quic, Data, Stream, _Flags},
             #state{control = Stream, recv_buf = Buf} = State)
   when is_binary(Data) ->
-    NewBuf = <<Buf/binary, Data/binary>>,
-    {Msgs, Remaining} = macula_dist_relay_protocol:decode_buffer(NewBuf),
-    State2 = lists:foldl(fun handle_control_msg/2, State, Msgs),
-    {noreply, State2#state{recv_buf = Remaining}};
+    control_bytes(macula_dist_relay_protocol:decode_buffer(<<Buf/binary, Data/binary>>), State);
 
 %% The control stream ending means the relay is gone. The QUIC NIF reports
 %% a lost connection as a failed read on the connection's streams
@@ -741,6 +738,15 @@ handle_closure(Ref, _Closed, State) ->
 
 %% No reconnect: the client ends, and `macula:join_dist_relay/1' starts a
 %% new one. Callers learn of it by monitoring `macula:dist_relay_client/0'.
+%% A control frame too large to be one of ours, or bytes that do not decode to a frame, end the connection. Reading
+%% on would mean taking the middle of something else for the next frame's length, and the relay is whatever is at
+%% the far end of this stream, not a thing to keep reading on faith.
+control_bytes({ok, Msgs, Remaining}, State) ->
+    Read = lists:foldl(fun handle_control_msg/2, State, Msgs),
+    {noreply, Read#state{recv_buf = Remaining}};
+control_bytes({error, Reason}, State) ->
+    relay_lost({control_frame, Reason}, State).
+
 relay_lost(Why, State) ->
     ?LOG_WARNING("[dist_relay_client] Relay control stream ended: ~p", [Why]),
     {stop, {relay_closed, Why}, State}.
