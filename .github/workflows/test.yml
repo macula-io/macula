@@ -62,7 +62,21 @@ concurrency:
 
 jobs:
   test:
-    name: eunit, common_test, xref and dialyzer
+    name: ${{ matrix.check }}
+
+    # The four checks used to run one after another in a single job, so the
+    # wall clock was their sum and eunit (by far the longest) delayed the
+    # three short ones. They share every setup step above, so a matrix runs
+    # them in parallel without duplicating the container, the toolchain or
+    # the caches.
+    #
+    # fail-fast is OFF deliberately: the serial job reported every check's
+    # result, and cancelling the others on the first red would report less
+    # than it used to.
+    strategy:
+      fail-fast: false
+      matrix:
+        check: [eunit, ct, xref, dialyzer]
     # A GitHub-hosted public runner, deliberately. macula is a public
     # repository and this costs nothing there. Do NOT put `self-hosted` here:
     # the Default runner group is closed to public repositories on purpose,
@@ -188,6 +202,7 @@ jobs:
       # Known to be flaky under load. If this goes red intermittently, that is
       # reported as "flaky, N of M runs", not silenced here.
       - name: eunit
+        if: matrix.check == 'eunit'
         run: rebar3 eunit
 
       # The fleet suites in test/overlay: realm-gated HyParView admission and
@@ -197,12 +212,13 @@ jobs:
       # needs something CI does not have belongs outside test/, not skipped.
       - name: common_test
         id: common_test
+        if: matrix.check == 'ct'
         run: rebar3 ct
 
       # A failed common_test run leaves its reasons in HTML logs, not on the
       # console, so they are kept for a week.
       - name: Keep the common_test logs of a failed run
-        if: failure() && steps.common_test.outcome == 'failure'
+        if: failure() && matrix.check == 'ct' && steps.common_test.outcome == 'failure'
         uses: actions/upload-artifact@v4
         with:
           name: common-test-logs
@@ -210,7 +226,9 @@ jobs:
           retention-days: 7
 
       - name: xref
+        if: matrix.check == 'xref'
         run: rebar3 xref
 
       - name: dialyzer
+        if: matrix.check == 'dialyzer'
         run: rebar3 dialyzer

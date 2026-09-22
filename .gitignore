@@ -24,7 +24,7 @@ doc/
 
 # Erlang runtime data (test artifacts)
 nonode@nohost/
-# cover_enabled is true, so every eunit run drops <app>.<pid>.coverdata here
+# scripts/run_coverage.sh (rebar3 eunit --cover) drops <app>.<pid>.coverdata here
 *.coverdata
 
 # Lock files (rebuilt from deps)
