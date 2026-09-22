@@ -33,7 +33,8 @@ cases(Keys) ->
                  fun a_missing_delegation_is_refused/1,
                  fun an_unpinned_realm_key_is_refused/1,
                  fun a_delegation_ending_first_caps_the_advertisement/1,
-                 fun an_org_directory_ending_first_caps_the_advertisement/1]].
+                 fun an_org_directory_ending_first_caps_the_advertisement/1,
+                 fun a_republished_chain_restores_the_full_lifetime/1]].
 
 %%------------------------------------------------------------------
 %% Happy path
@@ -99,6 +100,38 @@ capped_at(Keys, DirTtl, DelTtl) ->
                    Decoded, #{profile => Profile,
                               realm_key => maps:get(realm_key, Keys)},
                    erlang:system_time(millisecond))).
+
+%% The cap follows the chain, so a provider that was advertising in
+%% short bursts near its authorization's end goes back to its full
+%% lifetime as soon as the org republishes. Without this, a cap taken
+%% once and held would keep a recovered provider on short
+%% advertisements for as long as the pool lived.
+a_republished_chain_restores_the_full_lifetime(Keys) ->
+    Handler = fun(_P) -> {ok, counted} end,
+    {Ending, _Earliest} = short_chain_stub(Keys, ?HOUR, 2 * ?MINUTE),
+    {Republished, _Fresh} = short_chain_stub(Keys, 6 * ?HOUR, 6 * ?HOUR),
+    with_opts(Keys, #{find_record => Ending}, Handler, fun(Opts) ->
+        ?assertEqual(ok, macula:advertise(self(), ?REALM, ?PROC, Handler, Opts))
+    end),
+    Near = expires_at_of(advertise_sent()),
+    with_opts(Keys, #{find_record => Republished}, Handler, fun(Opts) ->
+        ?assertEqual(ok, macula:advertise(self(), ?REALM, ?PROC, Handler, Opts))
+    end),
+    After = expires_at_of(advertise_sent()),
+    %% The second is no longer held down by the chain that was ending:
+    %% it runs the advertisement's own lifetime, which is longer than
+    %% the 2 minutes the first was capped to.
+    ?assert(After > Near),
+    Left = After - erlang:system_time(millisecond),
+    ?assert(Left > 4 * ?MINUTE),
+    %% And no longer: the chain being long does not stretch the
+    %% advertisement past its own 5-minute lifetime.
+    ?assert(Left =< 5 * ?MINUTE).
+
+expires_at_of(Ad) ->
+    {ok, Profile} = macula_crypto_profile:configured(),
+    {ok, Decoded} = macula_record:verify(Ad, Profile),
+    macula_record:expires_at(Decoded).
 
 %%------------------------------------------------------------------
 %% Refusals — nothing is sent under any of them
