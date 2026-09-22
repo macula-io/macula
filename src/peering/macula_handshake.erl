@@ -58,11 +58,18 @@
                      status_expires_at := non_neg_integer(), binding_not_after := non_neg_integer()}.
 -type client() :: #{node_id := <<_:256>>, identity_key := binary(), connect_key := binary(),
                     connect_binding := envelope(), capabilities := non_neg_integer(),
+                    member_endorsement := binary(),
                     status_expires_at := non_neg_integer(), binding_not_after := non_neg_integer(),
                     puzzle := solved | unsolved | not_checked}.
 -type peer() :: #{profile := profile(), identity_key := binary(), binding := envelope(), now := integer()}.
 
--define(VERSION, 3).
+%% 4, not 3, because D31's `member_endorsement' changes the CONNECT key set and
+%% `frame_type/3' matches key sets EXACTLY. Without the bump an older peer
+%% answers `malformed_frame', which reads as corruption and sends someone
+%% hunting a codec bug; version 3 already did that to every published client
+%% once. `unsupported_version' says the true thing and tells an operator what
+%% to do. D31: "the wire breaks once, in 12.0.0, not twice."
+-define(VERSION, 4).
 -define(NONCE_BYTES, 32).
 %% A protocol integer in a signed structure stays below 2^53 (the decoding rule).
 -define(MAX_PROTOCOL_INT, 1 bsl 53).
@@ -71,8 +78,14 @@
 -define(OPENER_KEYS, [<<"frame_type">>, <<"version">>]).
 -define(CHALLENGE_KEYS, [<<"frame_type">>, <<"identity_key">>, <<"nonce">>, <<"profile">>, <<"tls_binding">>,
                          <<"tls_status">>, <<"version">>]).
+%% ⚠ `member_endorsement' is ALWAYS present, empty when the node has none, so a
+%% peer cannot tell from the wire whether this node holds an endorsement nor
+%% whether the station asks for one (D31). One layout, not two: a second layout
+%% without the key would make its absence observable, which is the property
+%% always carrying it exists to remove.
 -define(CONNECT_KEYS, [<<"capabilities">>, <<"connect_binding">>, <<"connect_key">>, <<"connect_status">>,
-                       <<"frame_type">>, <<"identity_key">>, <<"proof">>, <<"version">>]).
+                       <<"frame_type">>, <<"identity_key">>, <<"member_endorsement">>, <<"proof">>,
+                       <<"version">>]).
 -define(HELLO_ACCEPTED_KEYS, [<<"accepted">>, <<"capabilities">>, <<"frame_type">>, <<"version">>]).
 -define(HELLO_REFUSED_KEYS, [<<"accepted">>, <<"capabilities">>, <<"frame_type">>, <<"refusal_code">>,
                              <<"version">>]).
@@ -163,8 +176,14 @@ station_status(#{fields := #{<<"identity_key">> := Key, <<"tls_binding">> := Bin
 connect_frame(#{bytes := ChallengeBytes, fields := Fields, station_node_id := StationNodeId,
                 status_expires_at := ExpiresAt, binding_not_after := NotAfter,
                 session := #{profile := Profile, leaf := Leaf, identity_key := IdentityKey, connect_key := ConnectKey,
-                             connect_binding := Binding, connect_status := Status, capabilities := Capabilities}}) ->
+                             connect_binding := Binding, connect_status := Status,
+                             capabilities := Capabilities} = Session}) ->
     #{<<"nonce">> := Nonce, <<"identity_key">> := StationKey, <<"tls_binding">> := TlsBinding} = Fields,
+    %% Empty when the session carries none, so the field is on the wire either
+    %% way. NOT covered by the proof below: `proof_message/5' signs a
+    %% fixed-length concatenation ending in the hash of the CHALLENGE frame,
+    %% never of this one, which is what let WP 1.5 ship before D31.
+    Endorsement = maps:get(member_endorsement, Session, <<>>),
     ClientNodeId = macula_node_keys:node_id(IdentityKey, Profile),
     Proof = macula_node_keys:sign(proof_message(Nonce, StationNodeId, ClientNodeId, Leaf, ChallengeBytes), ConnectKey),
     Connect = frame(<<"connect">>, #{<<"identity_key">> => IdentityKey,
@@ -172,6 +191,7 @@ connect_frame(#{bytes := ChallengeBytes, fields := Fields, station_node_id := St
                                      <<"connect_binding">> => envelope_value(Binding),
                                      <<"connect_status">> => envelope_value(Status),
                                      <<"proof">> => Proof,
+                                     <<"member_endorsement">> => Endorsement,
                                      <<"capabilities">> => Capabilities}),
     {ok, Connect, #{node_id => StationNodeId, identity_key => StationKey, tls_binding => TlsBinding,
                     status_expires_at => ExpiresAt, binding_not_after => NotAfter}}.
@@ -262,6 +282,12 @@ client(#{fields := Fields, client_node_id := NodeId, puzzle := Puzzle, status_ex
       connect_key => maps:get(<<"connect_key">>, Fields),
       connect_binding => maps:get(<<"connect_binding">>, Fields),
       capabilities => maps:get(<<"capabilities">>, Fields),
+      %% Handed over, never checked here. Whether a station REQUIRES one is
+      %% D31's `invite_only' setting and belongs to the station's CONNECT
+      %% check, after the proof has established this node_id: the verifier
+      %% binds `member_node' to it, so checked any earlier it would be matching
+      %% a claim against a name nothing has proved.
+      member_endorsement => maps:get(<<"member_endorsement">>, Fields),
       status_expires_at => ExpiresAt,
       binding_not_after => NotAfter,
       puzzle => Puzzle}.
@@ -402,6 +428,12 @@ field_value(<<"tls_status">>, Envelope) -> envelope(Envelope);
 field_value(<<"connect_binding">>, Envelope) -> envelope(Envelope);
 field_value(<<"connect_status">>, Envelope) -> envelope(Envelope);
 field_value(<<"statement">>, Envelope) -> envelope(Envelope);
+%% Bytes, and an EMPTY one is valid and ordinary: a node with no endorsement
+%% still carries the field so its absence cannot be observed (D31). The SDK
+%% does not parse the record here -- whether it is a well-formed
+%% `realm_member_endorsement' is for the station's check, which runs after the
+%% proof establishes this node_id.
+field_value(<<"member_endorsement">>, Endorsement) -> bytes(Endorsement);
 field_value(<<"capabilities">>, Capabilities)
   when is_integer(Capabilities), Capabilities >= 0, Capabilities < ?MAX_PROTOCOL_INT ->
     {ok, Capabilities};

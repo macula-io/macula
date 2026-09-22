@@ -44,7 +44,8 @@ handshake_cases(#{profile := Profile, station_public := StationPublic, client_pu
      ?_assertEqual(?NOW + ?DAY, maps:get(binding_not_after, Client)),
      ?_assertEqual({ok, #{capabilities => ?STATION_CAPABILITIES}}, macula_handshake:read_hello(Hello)),
      ?_assertEqual([<<"capabilities">>, <<"connect_binding">>, <<"connect_key">>, <<"connect_status">>,
-                    <<"frame_type">>, <<"identity_key">>, <<"proof">>, <<"version">>], frame_keys(Connect)),
+                    <<"frame_type">>, <<"identity_key">>, <<"member_endorsement">>, <<"proof">>,
+                    <<"version">>], frame_keys(Connect)),
      %% Every challenge carries a fresh nonce.
      ?_assertNotEqual(Challenge, macula_handshake:challenge(station_material(World)))].
 
@@ -192,7 +193,7 @@ puzzle_cases(#{profile := Profile, client_public := ClientPublic} = World) ->
 %%------------------------------------------------------------------
 
 hello_cases() ->
-    Base = #{{text, <<"version">>} => 3, {text, <<"frame_type">>} => {text, <<"hello">>},
+    Base = #{{text, <<"version">>} => 4, {text, <<"frame_type">>} => {text, <<"hello">>},
              {text, <<"capabilities">>} => 7},
     Hello = fun(Fields) -> macula_record_cbor:encode(maps:merge(Base, Fields)) end,
     Refused = fun(Code) -> #{{text, <<"accepted">>} => 0, {text, <<"refusal_code">>} => {text, Code}} end,

@@ -146,13 +146,26 @@ its profile from its own configuration, never from this unsigned field.
 
 | Key | Type | Content |
 |---|---|---|
-| `version`, `frame_type` | | 3, `connect` |
+| `version`, `frame_type` | | 4, `connect` |
 | `identity_key` | bytes | the client's identity key, carried form |
 | `connect_key` | bytes | the client's CONNECT key, carried form |
 | `connect_binding` | map | `{tbs, signature}` for that CONNECT key |
 | `connect_status` | map | `{tbs, signature}` status statement for that binding |
 | `proof` | bytes, 4,627 / 5,139 | by the CONNECT key, see below |
 | `capabilities` | unsigned | the client's capability bits; the station stores them for its peer observer |
+| `member_endorsement` | bytes | the client's signed `realm_member_endorsement` (D31), **empty when it has none** |
+
+**`member_endorsement` is always present**, empty when the node holds none, so changing a station's
+`invite_only` setting never changes the wire and a peer cannot probe for it. It is **not** covered by the proof
+below: an endorsement swapped into a signed CONNECT still verifies, and that is safe because the endorsement binds
+`member_node` to the node_id the proof establishes, so one copied from another member is useless without that
+member's CONNECT key. This is also why the station's check runs after the proof rather than beside the puzzle check
+— before the proof there is no established node_id to bind against (D31).
+
+A CONNECT carrying a real endorsement measures 27,178 bytes in `pq_pure` and 30,822 in `pq_hybrid`, against the
+65,536-byte handshake frame cap that `macula_dist_tunnel` and `macula_peering_conn` both enforce. About 47 % of the
+cap in the worst case; `macula_handshake_member_endorsement_tests` guards it so the next field added here trips a
+test rather than a tunnel.
 
 The proof signs this fixed-length concatenation, not a CBOR map:
 
