@@ -14,9 +14,16 @@ that step.
 - [ ] **The classical-signing ratchet's exception list is empty.** `test/macula_no_classical_signing_tests.erl`,
       `known()` returns `[]`. It does today; confirm it at the tag, because the list is what a late fix is
       tempted to grow.
-- [ ] **The wire negotiates a post-quantum key exchange group.** Not "the groups are configured": the negotiated
-      group on a real handshake is one of `macula-pqc`'s two. `native/macula_quic/src/config.rs` holds the check;
-      the fact to record is the group a live handshake settled on.
+- [ ] **The wire negotiates a post-quantum key exchange group**, which is already proved and needs confirming
+      rather than building. ⛔ **Do not try to ask a live QUIC connection what it negotiated.** `quinn` does not
+      surface it: `rustls` has the accessor, but `quinn_proto`'s session holds its rustls connection in a private
+      field. `macula_quic_pq_kx_tests` says so at length, and chasing it is a day someone can lose.
+      The proof is split on purpose: the Rust test `negotiated_key_exchange_group_is_the_one_we_lead_with` in
+      `native/macula_quic/src/config.rs` reads the negotiated group directly, and the Erlang side deduces it from
+      a completed handshake plus an offer list holding nothing classical.
+      ⚠ **So confirm the condition, not the conclusion:** that `macula-pqc`'s list is still exactly its two groups
+      with no classical fallback. The moment a fallback is added, a completed handshake is consistent with X25519
+      again and the Erlang half stops proving anything.
 - [ ] **Invite-only is present and OFF.** D31: the field always travels, the setting defaults to `off`, and a
       station with no setting is open.
 - [ ] **The wire version is settled, and the fleet rolls together.** D31's `member_endorsement` forces a version
