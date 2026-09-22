@@ -25,8 +25,9 @@ rebar3 get-deps
 # Compile
 rebar3 compile
 
-# Run tests
+# Run tests: the unit tests, then the fleet suites in test/overlay
 rebar3 eunit
+rebar3 ct
 ```
 
 ## Coding Standards
@@ -52,7 +53,8 @@ rebar3 eunit
 
 - Write tests first (TDD approach)
 - Tests go in `test/` mirroring `src/` structure
-- Use EUnit for unit tests
+- Use EUnit for unit tests, and common_test for a suite that runs several
+  processes as a fleet (`test/overlay/`); CI runs both
 - Clean up test fixtures properly (see `ensure_stopped/0` pattern)
 
 ## Submitting Changes

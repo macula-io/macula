@@ -1,6 +1,7 @@
 name: Test
 
-# Runs the suite on every push and pull request: eunit, xref and dialyzer.
+# Runs the suite on every push and pull request: eunit, common_test, xref and
+# dialyzer.
 #
 # publish-hex.yml opens by saying "Tests gate the release commit on main, not
 # the publish". Until this workflow existed nothing ran the suite on a change,
@@ -61,7 +62,7 @@ concurrency:
 
 jobs:
   test:
-    name: eunit, xref and dialyzer
+    name: eunit, common_test, xref and dialyzer
     # A GitHub-hosted public runner, deliberately. macula is a public
     # repository and this costs nothing there. Do NOT put `self-hosted` here:
     # the Default runner group is closed to public repositories on purpose,
@@ -188,6 +189,25 @@ jobs:
       # reported as "flaky, N of M runs", not silenced here.
       - name: eunit
         run: rebar3 eunit
+
+      # The fleet suites in test/overlay: realm-gated HyParView admission and
+      # Plumtree gossip, across in-VM stations, over the frame codec. Until
+      # this step nothing ran common_test, and both suites failed from 11.x on
+      # without anyone seeing it. Every suite under test/ runs here; one that
+      # needs something CI does not have belongs outside test/, not skipped.
+      - name: common_test
+        id: common_test
+        run: rebar3 ct
+
+      # A failed common_test run leaves its reasons in HTML logs, not on the
+      # console, so they are kept for a week.
+      - name: Keep the common_test logs of a failed run
+        if: failure() && steps.common_test.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: common-test-logs
+          path: _build/test/logs
+          retention-days: 7
 
       - name: xref
         run: rebar3 xref
