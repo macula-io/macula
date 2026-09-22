@@ -7,11 +7,16 @@
 
 -define(MIB, 1024 * 1024).
 
+%% stats/1 refills the bucket for the time since await/2 took the record, at 1 MiB a second, so the bound allows for the
+%% milliseconds measured around both calls, on the pacer's clock. Read back within the same millisecond, the bucket is
+%% at most the record short of full.
 a_record_within_the_bucket_never_sleeps_test() ->
     Conn = make_ref(),
+    Before = erlang:system_time(millisecond),
     ?assertEqual(ok, macula_store_pacer:await(Conn, 1000)),
     #{bucket := Bucket} = macula_store_pacer:stats(Conn),
-    ?assert(Bucket =< 16 * ?MIB - 1000).
+    Elapsed = erlang:system_time(millisecond) - Before,
+    ?assert(Bucket =< 16 * ?MIB - 1000 + (?MIB * Elapsed) div 1000).
 
 the_bucket_refills_over_time_test() ->
     Conn = make_ref(),
