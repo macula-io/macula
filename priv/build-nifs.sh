@@ -26,12 +26,12 @@ mkdir -p "${PRIV_DIR}"
 # ============================================================
 # Helper: build a Rust NIF crate from source
 #
-# REQUIRED="true" (macula_quic and macula_cbor_nif, see below) makes a
-# missing cargo or a failed build a hard error (exit 1) instead of a
-# warning. Every OTHER caller here has a real Erlang fallback
-# (macula_crypto_nif, macula_ucan_nif, macula_did_nif, macula_mri_nif all
-# document one in their own moduledoc) and stays soft-skip on purpose: a
-# consumer without a Rust toolchain still gets a working, if slower, build.
+# REQUIRED="true" (macula_quic, macula_crypto_nif and macula_cbor_nif, see
+# below) makes a missing cargo or a failed build a hard error (exit 1)
+# instead of a warning. Every OTHER caller here has a real Erlang fallback
+# (macula_ucan_nif, macula_did_nif, macula_mri_nif all document one in their
+# own moduledoc) and stays soft-skip on purpose: a consumer without a Rust
+# toolchain still gets a working, if slower, build.
 # ============================================================
 build_nif() {
     local CRATE_NAME="$1"
@@ -97,16 +97,23 @@ build_nif() {
 build_nif "macula_quic" "true"
 
 # ============================================================
-# 2. Crypto, Identity, and MRI NIFs (build from source, soft-skip --
-#    all have a real Erlang fallback)
+# 2. Crypto NIF (build from source, REQUIRED -- every ML-DSA signature a
+#    node makes or checks is macula-mldsa in this NIF, and ML-DSA has no
+#    Erlang fallback (macula_crypto_nif's moduledoc). Skipped, it would give
+#    a build that compiles clean and whose node keys cannot sign.
 # ============================================================
-build_nif "macula_crypto_nif"
+build_nif "macula_crypto_nif" "true"
+
+# ============================================================
+# 3. Identity and MRI NIFs (build from source, soft-skip -- all have a
+#    real Erlang fallback)
+# ============================================================
 build_nif "macula_ucan_nif"
 build_nif "macula_did_nif"
 build_nif "macula_mri_nif"
 
 # ============================================================
-# 3. CBOR NIF (build from source, REQUIRED -- macula_cbor_nif.erl's
+# 4. CBOR NIF (build from source, REQUIRED -- macula_cbor_nif.erl's
 #    own moduledoc: "There is NO Erlang fallback ... Failing fast at
 #    NIF-load time is the right behavior." A soft-skip here produced
 #    exactly the opposite: a clean build that fails every caller at

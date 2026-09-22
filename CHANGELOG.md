@@ -30,6 +30,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   verifies on the other. RSA-PSS, the EU composite's second half, stays on
   OTP.
 
+- **Building macula without a Rust toolchain now fails at
+  `macula_crypto_nif`** instead of skipping it with a warning. Its ML-DSA
+  has no Erlang fallback, so the skipped build compiled clean and gave node
+  keys that could not sign.
+
 - **New ML-DSA-87 private keys are stored as their 32-byte seed** (D6, as
   amended), not the 4,896-byte expanded form. A key file that holds the
   expanded form loads and signs as before, and keeps its node_id. A key
