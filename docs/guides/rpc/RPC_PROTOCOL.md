@@ -143,7 +143,7 @@ The `dial_refused` wrapper is what tells a caller working through several
 candidates that **nothing was sent and another station is worth trying**.
 Another candidate may need no new link at all, because your pool may already
 hold a live one to it, so these refusals do not repeat identically the way a
-refusal of the request itself does. `macula_station_link:failure_scope/1`
+refusal of the request itself does. The pool's internal `failure_scope/1`
 reads that distinction off the shape rather than off a list of reason atoms
 it would have to keep in step.
 
