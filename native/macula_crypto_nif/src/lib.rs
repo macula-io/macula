@@ -1,6 +1,8 @@
 //! Macula Cryptographic NIF operations.
 //!
 //! This module provides high-performance implementations of:
+//! - ML-DSA (FIPS 204) key generation, signing, and verification, on
+//!   `macula-mldsa`
 //! - Ed25519 key generation, signing, and verification
 //! - BLAKE3 hashing (primary algorithm for content-addressed storage)
 //! - SHA-256 hashing
@@ -25,6 +27,15 @@ mod atoms {
         invalid_public_key,
         invalid_private_key,
         invalid_key_length,
+        mldsa44,
+        mldsa65,
+        mldsa87,
+        seed,
+        expanded,
+        wrong_length,
+        inconsistent_private_key,
+        context_too_long,
+        randomness_unavailable,
     }
 }
 
@@ -472,6 +483,123 @@ fn nif_effective_uid() -> u32 {
 #[rustler::nif]
 fn nif_effective_uid(env: Env) -> NifResult<Atom> {
     Atom::from_str(env, "none")
+}
+
+// ---------------------------------------------------------------------
+// ML-DSA (FIPS 204), on macula-mldsa
+// ---------------------------------------------------------------------
+//
+// D7, as amended on 2026-09-22: every ML-DSA signature in the stack is made
+// and checked by macula-mldsa. The sets take OTP's names, and a private key
+// arrives as `{seed, S}` (the 32-byte seed D6 stores) or `{expanded, K}`
+// (the form OTP generates). Signing is hedged: macula-mldsa draws its
+// randomness from the OS. Signing, key generation and derivation run on a
+// dirty CPU scheduler: the signing loop repeats a data-dependent number of
+// times.
+
+use macula_mldsa::{ParameterSet, PrivateKey, Zeroizing, ML_DSA_44, ML_DSA_65, ML_DSA_87};
+use rustler::{Encoder, Term};
+
+fn mldsa_set(set: Atom) -> NifResult<ParameterSet> {
+    if set == atoms::mldsa44() {
+        Ok(ML_DSA_44)
+    } else if set == atoms::mldsa65() {
+        Ok(ML_DSA_65)
+    } else if set == atoms::mldsa87() {
+        Ok(ML_DSA_87)
+    } else {
+        Err(rustler::Error::BadArg)
+    }
+}
+
+/// The private key in the form `form` names. An unknown form is badarg; a
+/// seed that is not 32 bytes is `wrong_length`, as macula-mldsa answers for
+/// an expanded key of the wrong size.
+fn mldsa_key<'k>(form: Atom, key: &'k [u8], seed: &'k mut [u8; 32]) -> NifResult<Result<PrivateKey<'k>, Atom>> {
+    if form == atoms::expanded() {
+        return Ok(Ok(PrivateKey::Expanded(key)));
+    }
+    if form != atoms::seed() {
+        return Err(rustler::Error::BadArg);
+    }
+    if key.len() != 32 {
+        return Ok(Err(atoms::wrong_length()));
+    }
+    seed.copy_from_slice(key);
+    Ok(Ok(PrivateKey::Seed(seed)))
+}
+
+fn mldsa_error(e: macula_mldsa::Error) -> Atom {
+    match e {
+        macula_mldsa::Error::WrongLength => atoms::wrong_length(),
+        macula_mldsa::Error::InconsistentPrivateKey => atoms::inconsistent_private_key(),
+        macula_mldsa::Error::ContextTooLong => atoms::context_too_long(),
+        macula_mldsa::Error::RandomnessUnavailable => atoms::randomness_unavailable(),
+    }
+}
+
+fn mldsa_binary<'a>(env: Env<'a>, bytes: &[u8]) -> NifResult<Binary<'a>> {
+    let mut out = OwnedBinary::new(bytes.len()).ok_or(rustler::Error::Term(Box::new(
+        "Failed to allocate binary",
+    )))?;
+    out.as_mut_slice().copy_from_slice(bytes);
+    Ok(out.release(env))
+}
+
+/// A new key kept as its seed (D6): `{ok, {PublicKey, Seed}}`.
+#[rustler::nif(schedule = "DirtyCpu")]
+fn nif_mldsa_generate(env: Env<'_>, set: Atom) -> NifResult<Term<'_>> {
+    match macula_mldsa::key_gen_seed(mldsa_set(set)?) {
+        Ok((pk, seed)) => Ok((atoms::ok(), (mldsa_binary(env, &pk)?, mldsa_binary(env, &*seed)?)).encode(env)),
+        Err(e) => Ok((atoms::error(), mldsa_error(e)).encode(env)),
+    }
+}
+
+/// `{ok, PublicKey}` of a private key in either form, or `{error, Reason}`.
+#[rustler::nif(schedule = "DirtyCpu")]
+fn nif_mldsa_public_key<'a>(env: Env<'a>, set: Atom, form: Atom, key: Binary) -> NifResult<Term<'a>> {
+    let p = mldsa_set(set)?;
+    let mut seed = Zeroizing::new([0u8; 32]);
+    let sk = match mldsa_key(form, key.as_slice(), &mut seed)? {
+        Ok(sk) => sk,
+        Err(reason) => return Ok((atoms::error(), reason).encode(env)),
+    };
+    match macula_mldsa::public_key(p, sk) {
+        Ok(pk) => Ok((atoms::ok(), mldsa_binary(env, &pk)?).encode(env)),
+        Err(e) => Ok((atoms::error(), mldsa_error(e)).encode(env)),
+    }
+}
+
+/// `{ok, Signature}` over `message` under `context`, hedged, or
+/// `{error, Reason}`.
+#[rustler::nif(schedule = "DirtyCpu")]
+fn nif_mldsa_sign<'a>(
+    env: Env<'a>,
+    set: Atom,
+    form: Atom,
+    key: Binary,
+    message: Binary,
+    context: Binary,
+) -> NifResult<Term<'a>> {
+    let p = mldsa_set(set)?;
+    let mut seed = Zeroizing::new([0u8; 32]);
+    let sk = match mldsa_key(form, key.as_slice(), &mut seed)? {
+        Ok(sk) => sk,
+        Err(reason) => return Ok((atoms::error(), reason).encode(env)),
+    };
+    match macula_mldsa::sign(p, sk, message.as_slice(), context.as_slice()) {
+        Ok(sig) => Ok((atoms::ok(), mldsa_binary(env, &sig)?).encode(env)),
+        Err(e) => Ok((atoms::error(), mldsa_error(e)).encode(env)),
+    }
+}
+
+/// Whether `signature` is valid over `message` under `context`: false for
+/// anything the standard rejects, a context over 255 bytes included.
+#[rustler::nif(schedule = "DirtyCpu")]
+fn nif_mldsa_verify(set: Atom, public_key: Binary, message: Binary, signature: Binary, context: Binary) -> NifResult<bool> {
+    let p = mldsa_set(set)?;
+    Ok(macula_mldsa::verify(p, public_key.as_slice(), message.as_slice(), signature.as_slice(), context.as_slice())
+        == Ok(true))
 }
 
 rustler::init!("macula_crypto_nif");

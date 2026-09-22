@@ -9,6 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`macula_crypto_nif` makes and checks ML-DSA signatures on
+  [`macula-mldsa`](https://crates.io/crates/macula-mldsa)**, the FIPS 204
+  implementation in `macula-pqc`, verified against NIST's ACVP vectors:
+  `mldsa_generate/1`, `mldsa_public_key/2`, `mldsa_sign/4` and
+  `mldsa_verify/5`, for ML-DSA-44, -65 and -87 under OTP's set names. A
+  private key is `{seed, Seed}` or `{expanded, Key}`, the form OTP
+  generates. Signing is hedged, with randomness from the OS, and takes a
+  FIPS 204 context string. There is no fallback to OTP: without the NIF
+  these raise. Tested against OTP both ways, on OTP-made expanded keys and
+  on seeds.
+
+### Changed
+
+- **`macula_node_keys` signs, verifies and derives ML-DSA-87 public keys
+  through `macula-mldsa`**, not OTP `crypto` (D7, as amended). Nothing
+  changes on the wire or on disk: key files, signatures and node_ids are as
+  before, and a signature from either side verifies on the other. RSA-PSS,
+  the EU composite's second half, stays on OTP. Key generation is still
+  OTP's until keys are stored as seeds (D6).
+
 ## [12.0.0-alpha.1] - 2026-09-22
 
 **A pre-release: post-quantum KEY EXCHANGE, not post-quantum

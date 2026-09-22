@@ -95,14 +95,14 @@ stored_rsa_public_key_that_differs_from_the_derived_one_is_refused_test_() ->
         ?assertEqual({error, public_key_mismatch}, save_and_load(Tampered, identity, pq_hybrid))
     end}.
 
-corrupted_mldsa87_private_key_is_refused_test() ->
-    {ok, Key} = macula_node_keys:generate(identity, pq_pure),
-    [Component = #{private := Private}] = maps:get(components, Key),
-    %% Byte 64 lies in tr, the hash of the public key inside the expanded key: the public key can still derive, so
-    %% either the import or the sign-and-verify round trip has to catch it.
-    Corrupted = Key#{components := [Component#{private := flip_byte(Private, 64)}]},
-    {error, Reason} = save_and_load(Corrupted, identity, pq_pure),
-    ?assert(lists:member(Reason, [private_key_invalid, round_trip_failed, public_key_mismatch])).
+%% An expanded ML-DSA-87 private key is rho, K and tr (bytes 0 to 127), then s1, s2 and t0 (t0 from byte 1,568). The
+%% public key derives from rho, s1 and s2 alone, so a corrupted tr or t0 leaves it unchanged: the key is refused
+%% because tr must hash the public key and t0 must be the low bits of t, and neither holds.
+corrupted_mldsa87_tr_is_refused_test() ->
+    ?assertEqual({error, private_key_invalid}, load_with_private_byte_flipped(64)).
+
+corrupted_mldsa87_t0_is_refused_test() ->
+    ?assertEqual({error, private_key_invalid}, load_with_private_byte_flipped(2000)).
 
 truncated_mldsa87_private_key_is_refused_test() ->
     {ok, Key} = macula_node_keys:generate(identity, pq_pure),
@@ -171,6 +171,11 @@ load_with_mode(Mode) ->
         ok = file:change_mode(Path, Mode),
         macula_node_keys:load(Path, identity, pq_pure)
     end).
+
+load_with_private_byte_flipped(Offset) ->
+    {ok, Key} = macula_node_keys:generate(identity, pq_pure),
+    [Component = #{private := Private}] = maps:get(components, Key),
+    save_and_load(Key#{components := [Component#{private := flip_byte(Private, Offset)}]}, identity, pq_pure).
 
 flip_byte(Bin, Offset) ->
     <<Head:Offset/binary, Byte, Tail/binary>> = Bin,

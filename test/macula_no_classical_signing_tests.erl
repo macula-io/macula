@@ -5,6 +5,8 @@
 %% 2026-09-22, puts every ML-DSA signature on `macula-mldsa'; the only
 %% classical signing left is RSA-PSS as the EU composite's second half,
 %% which stays on OTP `crypto' in `macula_node_keys', and nowhere else.
+%% The same amendment makes an ML-DSA signature through OTP `crypto' a use
+%% to remove as well: rule erl_crypto_mldsa.
 %%
 %% The rule is USE, not the word. Comments are stripped before matching,
 %% so a sentence about Ed25519 is not a hit; each rule names a call, a
@@ -33,6 +35,8 @@ rules() ->
       erl, "crypto:generate_key\\(\\s*(eddsa|dss)\\b"},
      {erl_keygen_rsa, "OTP crypto generating an RSA key",
       erl, "crypto:generate_key\\(\\s*rsa\\b"},
+     {erl_crypto_mldsa, "OTP crypto making, checking or generating an ML-DSA key (D7: macula-mldsa does)",
+      erl, "crypto:(sign|verify|generate_key)\\(\\s*mldsa"},
      {erl_public_key, "public_key signing or verifying (classical X.509 today)",
       erl, "public_key:(sign|verify)\\("},
      {erl_wire_constant, "the EdDSA alg or the Ed25519 DID key type on the wire",
@@ -61,6 +65,7 @@ allowed() ->
 known() ->
     [{"src/identity/macula_identity.erl", erl_keygen_classical, 1, "WP 1.3 residual"},
      {"src/identity/macula_identity.erl", erl_crypto_classical, 2, "WP 1.3 residual"},
+     {"src/identity/macula_node_keys.erl", erl_crypto_mldsa, 1, "WP 1.3 residual"},
      {"src/identity/macula_crypto_nif.erl", erl_keygen_classical, 2, "WP 1.3 residual"},
      {"src/identity/macula_crypto_nif.erl", erl_crypto_classical, 2, "WP 1.3 residual"},
      {"native/macula_crypto_nif/src/lib.rs", rust_dalek, 1, "WP 1.3 residual"},
@@ -84,7 +89,7 @@ no_classical_signing_beyond_the_known_list_test_() ->
          Known = lists:sort([{File, Id, N} || {File, Id, N, _} <- known()]),
          %% Printed in full: eunit shortens a long list in its assertion
          %% message, and the difference is what to do next.
-         [io:format(user, "classical signing not in known/0: ~s ~s x~b~n", [F, what(Id), N])
+         [io:format(user, "use not in known/0: ~s ~s x~b~n", [F, what(Id), N])
           || {F, Id, N} <- Found -- Known],
          [io:format(user, "known/0 entry no longer matches, strike or correct it: ~s ~s x~b~n",
                     [F, what(Id), N])
@@ -125,6 +130,7 @@ the_scanner_sees_each_rule_test() ->
                  erl_crypto_rsa => "crypto:verify(rsa, sha384, M, S, K)",
                  erl_keygen_classical => "crypto:generate_key(eddsa, ed25519)",
                  erl_keygen_rsa => "crypto:generate_key(rsa, {4096, 65537})",
+                 erl_crypto_mldsa => "crypto:sign(mldsa87, none, M, {expandedkey, K})",
                  erl_public_key => "public_key:sign(Msg, sha256, Key)",
                  erl_wire_constant => "#{<<\"alg\">> => <<\"EdDSA\">>}",
                  rust_dalek => "use ed25519_dalek::SigningKey;",

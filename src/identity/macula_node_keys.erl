@@ -9,6 +9,9 @@
 %% A realm, an org and a foundation each hold a key of that purpose, which signs their records with the identity
 %% key's algorithms.
 %%
+%% ML-DSA-87 signs, verifies and derives public keys through macula-mldsa, in macula_crypto_nif (D7, as amended on
+%% 2026-09-22); RSA-PSS stays on OTP crypto.
+%%
 %% An ML-DSA-87 component stores its 4,896-byte expanded private key and its public key. An RSA-PSS component
 %% stores a DER-encoded RSAPrivateKey and RSAPublicKey. On load, every public key is derived again from its
 %% private key and must equal the stored one, and every component passes a sign-and-verify round trip. A key file
@@ -87,7 +90,6 @@
                    | round_trip_failed.
 
 -define(KEY_FILE_MAGIC, "macula-node-key-v1\0").
--define(MLDSA87_EXPANDED_BYTES, 4896).
 -define(MLDSA87_PUBLIC_BYTES, 2592).
 -define(MLDSA87_SIGNATURE_BYTES, 4627).
 -define(COMPOSITE_PREFIX, "CompositeAlgorithmSignatures2025").
@@ -195,18 +197,16 @@ public_key(#{components := Components}) ->
     << <<Public/binary>> || #{public := Public} <- Components >>.
 
 %% @doc Sign a message: ML-DSA-87 alone for a one-component key, Macula's composite ML-DSA-87-PS384 for a hybrid key.
-%% The ML-DSA private half travels as `{expandedkey, Binary}': the form every supported OTP accepts for
-%% `crypto:sign/5' (OTP 28 refuses the bare expanded-key binary, OTP 29 refuses the {Pub, Priv} pair).
 -spec sign(iodata(), node_key()) -> binary().
 sign(Message, #{components := [#{algorithm := mldsa87, private := Private}]}) ->
-    crypto:sign(mldsa87, none, Message, {expandedkey, Private});
+    mldsa87_signature(Private, iolist_to_binary(Message));
 sign(Message, #{profile := Profile,
                 components := [#{algorithm := mldsa87, private := MlDsaPrivate},
                                #{algorithm := rsa_pss, private := RsaPrivate}]}) ->
     Representative = composite_representative(Message),
     {ok, #{digest := Digest} = Params} = composite_rsa_params(Profile),
     {ok, RsaKey} = decode_rsa_private(RsaPrivate),
-    MlDsaSignature = crypto:sign(mldsa87, none, Representative, {expandedkey, MlDsaPrivate}),
+    MlDsaSignature = mldsa87_signature(MlDsaPrivate, Representative),
     RsaSignature = crypto:sign(rsa, Digest, Representative, rsa_private_list(RsaKey), pss_options(Params)),
     <<MlDsaSignature/binary, RsaSignature/binary>>.
 
@@ -216,7 +216,7 @@ sign(Message, #{profile := Profile,
 -spec verify(iodata(), binary(), binary(), term()) -> boolean().
 verify(Message, Signature, Public, pq_pure)
   when byte_size(Signature) =:= ?MLDSA87_SIGNATURE_BYTES, byte_size(Public) =:= ?MLDSA87_PUBLIC_BYTES ->
-    verified_call(fun() -> crypto:verify(mldsa87, none, Message, Signature, Public) end);
+    verified_call(fun() -> mldsa87_verifies(Public, iolist_to_binary(Message), Signature) end);
 verify(Message, Signature, Public, pq_hybrid) when is_binary(Signature), is_binary(Public) ->
     composite_verified(byte_size(Signature) =:= signature_bytes(pq_hybrid), Message, Signature, Public);
 verify(_Message, _Signature, _Public, _Profile) ->
@@ -227,9 +227,7 @@ verify(_Message, _Signature, _Public, _Profile) ->
 composite_verified(true, Message, <<MlDsaSignature:?MLDSA87_SIGNATURE_BYTES/binary, RsaSignature/binary>>,
                    <<MlDsaPublic:?MLDSA87_PUBLIC_BYTES/binary, RsaPublicDer/binary>>) ->
     Representative = composite_representative(Message),
-    MlDsaValid = verified_call(fun() ->
-        crypto:verify(mldsa87, none, Representative, MlDsaSignature, MlDsaPublic)
-    end),
+    MlDsaValid = mldsa87_verifies(MlDsaPublic, Representative, MlDsaSignature),
     rsa_half_verifies(MlDsaValid, decode_rsa_public(RsaPublicDer), RsaSignature, Representative,
                       composite_rsa_params(pq_hybrid));
 composite_verified(_LengthHolds, _Message, _Signature, _Public) ->
@@ -397,6 +395,14 @@ rsa_key_verifies(true, RsaPublic, Signature, Representative, Digest, Options) ->
 rsa_key_verifies(false, _RsaPublic, _Signature, _Representative, _Digest, _Options) ->
     false.
 
+%% ML-DSA-87 under the empty context, as both the pure signature and the composite's ML-DSA half use it.
+mldsa87_signature(Private, Message) ->
+    {ok, Signature} = macula_crypto_nif:mldsa_sign(mldsa87, {expanded, Private}, Message, <<>>),
+    Signature.
+
+mldsa87_verifies(Public, Message, Signature) ->
+    macula_crypto_nif:mldsa_verify(mldsa87, Public, Message, Signature, <<>>).
+
 verified_call(Verify) ->
     try Verify() of
         Result -> Result =:= true
@@ -439,14 +445,13 @@ check_component(#{algorithm := mldsa87, public := Public, private := Private}, m
 check_component(#{algorithm := rsa_pss, public := Public, private := Private}, {rsa_pss, Params}) ->
     rsa_public_matches(decode_rsa_private(Private), Public, Params).
 
-derive_mldsa87_public(Private) when byte_size(Private) =:= ?MLDSA87_EXPANDED_BYTES ->
-    try crypto:generate_key(mldsa87, [], Private) of
-        {Public, _} -> {ok, Public}
-    catch
-        error:_ -> {error, private_key_invalid}
-    end;
-derive_mldsa87_public(_Private) ->
-    {error, private_key_invalid}.
+%% macula-mldsa derives the public key from rho, s1 and s2, and refuses an expanded key whose tr does not hash that
+%% public key or whose t0 is not the low bits of t.
+derive_mldsa87_public(Private) ->
+    derived_mldsa87_public(macula_crypto_nif:mldsa_public_key(mldsa87, {expanded, Private})).
+
+derived_mldsa87_public({ok, Public}) -> {ok, Public};
+derived_mldsa87_public({error, _Reason}) -> {error, private_key_invalid}.
 
 mldsa87_public_matches({ok, Public}, Public) ->
     ok;

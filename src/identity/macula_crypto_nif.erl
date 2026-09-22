@@ -16,6 +16,16 @@
 %% The pure Erlang fallbacks ensure the module works even when NIFs
 %% cannot be loaded (e.g., different architecture, missing Rust toolchain).
 %%
+%% == ML-DSA ==
+%%
+%% ML-DSA (FIPS 204) signatures are made and checked by `macula-mldsa'
+%% (D7), and have no Erlang fallback: without the NIF they raise. Sets
+%% take OTP's names (mldsa44, mldsa65, mldsa87). A private key is
+%% `{seed, Seed}', the 32-byte seed new keys are stored as (D6), or
+%% `{expanded, Key}', the form OTP generates. Signing is hedged, with
+%% randomness from the OS, and takes a FIPS 204 context string of at
+%% most 255 bytes.
+%%
 %% @author rgfaber
 -module(macula_crypto_nif).
 
@@ -32,8 +42,17 @@
     base64_encode/1,
     base64_decode/1,
     secure_compare/2,
-    is_nif_loaded/0
+    is_nif_loaded/0,
+    mldsa_generate/1,
+    mldsa_public_key/2,
+    mldsa_sign/4,
+    mldsa_verify/5
 ]).
+
+-export_type([mldsa_set/0, mldsa_private_key/0]).
+
+-type mldsa_set() :: mldsa44 | mldsa65 | mldsa87.
+-type mldsa_private_key() :: {seed, <<_:256>>} | {expanded, binary()}.
 
 %% NIF stubs
 -export([
@@ -202,6 +221,35 @@ secure_compare(A, B) ->
         false -> erlang_secure_compare(A, B)
     end.
 
+%% @doc A new ML-DSA key, kept as its 32-byte seed.
+-spec mldsa_generate(mldsa_set()) ->
+    {ok, {PublicKey :: binary(), Seed :: <<_:256>>}} | {error, randomness_unavailable}.
+mldsa_generate(Set) ->
+    nif_mldsa_generate(Set).
+
+%% @doc The public key of an ML-DSA private key in either form. An
+%% expanded key whose parts disagree is `inconsistent_private_key'.
+-spec mldsa_public_key(mldsa_set(), mldsa_private_key()) ->
+    {ok, PublicKey :: binary()} | {error, wrong_length | inconsistent_private_key}.
+mldsa_public_key(Set, {Form, Key}) ->
+    nif_mldsa_public_key(Set, Form, Key).
+
+%% @doc A hedged ML-DSA signature over `Message' under the context
+%% string `Context'.
+-spec mldsa_sign(mldsa_set(), mldsa_private_key(), Message :: binary(), Context :: binary()) ->
+    {ok, Signature :: binary()}
+    | {error, wrong_length | context_too_long | randomness_unavailable}.
+mldsa_sign(Set, {Form, Key}, Message, Context) ->
+    nif_mldsa_sign(Set, Form, Key, Message, Context).
+
+%% @doc Whether `Signature' is a valid ML-DSA signature over `Message'
+%% under `Context'. False for anything FIPS 204 rejects, a context over
+%% 255 bytes included.
+-spec mldsa_verify(mldsa_set(), PublicKey :: binary(), Message :: binary(),
+                   Signature :: binary(), Context :: binary()) -> boolean().
+mldsa_verify(Set, PublicKey, Message, Signature, Context) ->
+    nif_mldsa_verify(Set, PublicKey, Message, Signature, Context).
+
 %%====================================================================
 %% NIF Stubs (replaced when NIF loads)
 %%====================================================================
@@ -243,6 +291,18 @@ nif_base64_decode(_Encoded) ->
     erlang:nif_error(nif_not_loaded).
 
 nif_secure_compare(_A, _B) ->
+    erlang:nif_error(nif_not_loaded).
+
+nif_mldsa_generate(_Set) ->
+    erlang:nif_error(nif_not_loaded).
+
+nif_mldsa_public_key(_Set, _Form, _Key) ->
+    erlang:nif_error(nif_not_loaded).
+
+nif_mldsa_sign(_Set, _Form, _Key, _Message, _Context) ->
+    erlang:nif_error(nif_not_loaded).
+
+nif_mldsa_verify(_Set, _PublicKey, _Message, _Signature, _Context) ->
     erlang:nif_error(nif_not_loaded).
 
 %% The effective user id, or none on a host without user ids. No Erlang

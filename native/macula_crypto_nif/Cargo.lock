@@ -221,6 +221,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3eaf3ede3fee6db1a4c2ee091bf8a8b4dccdc6d17f656fb07896ee72867612f2"
 
 [[package]]
+name = "macula-keccak"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bc478620c9cef6b8c654c0933ed5f66aeebae08b2629dbcc8db6dde653f79423"
+dependencies = [
+ "zeroize",
+]
+
+[[package]]
+name = "macula-mldsa"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "24b195825bdae22656a679893bc58d4003a0e0054c75c3f4da4cfb130bbf493c"
+dependencies = [
+ "getrandom",
+ "macula-keccak",
+ "zeroize",
+]
+
+[[package]]
 name = "macula_crypto_nif"
 version = "0.1.0"
 dependencies = [
@@ -228,6 +248,7 @@ dependencies = [
  "blake3",
  "ed25519-dalek",
  "libc",
+ "macula-mldsa",
  "rand",
  "rustler",
  "sha2",

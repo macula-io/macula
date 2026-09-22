@@ -195,7 +195,10 @@ change, the done criterion and the effort. The US profile goes first; the EU par
   - `test/macula_crypto_nif_tests.erl`, `test/macula_record_cert_chain_tests.erl`;
   - the decoding rule vectors run against `macula_record_cbor:decode_strict/1`, one test per entry.
 
-  Add `test/macula_no_classical_signing_tests.erl`, which fails while `eddsa` or `ed25519` appears in `src/`.
+  Add `test/macula_no_classical_signing_tests.erl`, a ratchet over `src/` and `native/`: it fails on a classical
+  signature made or checked, or an ML-DSA one through OTP `crypto` (D7, amended), that its known list does not
+  hold. Each entry names the work item that removes it, a fix strikes its own entry, and while any is left only a
+  pre-release `vsn` passes.
 - **Done:** all green; the no-classical test guards against regressions.
 - **Effort:** 12 to 16 days, plus handshake frames, bindings and status ⚠.
 
