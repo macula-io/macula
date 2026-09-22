@@ -235,8 +235,15 @@ change, the done criterion and the effort. The US profile goes first; the EU par
   their fields are read at 8 proofs, 256 KiB together, each a byte string and none repeated, with vectors in
   `test/vectors/decoding_rule_v1.json` under `"via": "request_fields"`; the station link hands the request's realm,
   procedure and proofs to `authorize/3` and answers `malformed_frame`, not `unauthorized`, for a proof no token in
-  the chain names. **U2 is done.** What WP 1.4 still owes is not chain work: the signed deadline with D22's
-  tolerance, (caller, call id) deduplication and the nonce store for tokens used outside a signed request.
+  the chain names. **U2 is done.**
+- **Built (2026-09-22), the request window:** a CALL goes through the pool's request admission before any policy or
+  handler, as a STREAM_OPEN already did (`macula_station_link:on_call_admission/3`). Its signed deadline must lie
+  inside the provider's clock minus D22's five minutes of tolerance and plus ten minutes, and (caller, request_id)
+  runs once: a copy with the same request hash gets the stored reply, one arriving while the work runs is refused
+  `request_copy`, and one with another hash `request_id_reused`. **So there is no nonce store for CALL or
+  STREAM_OPEN, and none is needed: the signed deadline and this window are what stop a replay (D7). A nonce store
+  would be needed only for a token used outside a signed request, and macula uses none that way.** **WP 1.4 is
+  closed.**
 - **Change:**
   - `macula_did_nif` and its crate are removed (Raf, 2026-09-22): nothing called it in macula, macula-station,
     macula-realm, mcl-om or mcl-echo, and D7 retires the `did:macula:` names it built;

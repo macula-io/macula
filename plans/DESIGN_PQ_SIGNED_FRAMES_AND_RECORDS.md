@@ -483,9 +483,11 @@ apply. `request` is `{key, tbs, signature}` under `MACULA-PQ-REQUEST-V1`, and `k
   6. the token's `aud` against `caller`;
   7. the token's chain, the costliest check, last.
 - It keeps (`caller`, `request_id`) until `deadline` plus 5 minutes. A copy with the same request hash gets the stored
-  signed reply, or the reply once the work finishes, along the path the copy came from. A copy with another request
-  hash is refused. A provider bounds the stored reply bytes per caller; a reply beyond the bound is not kept, and a
-  copy of its request is then refused.
+  signed reply along the path the copy came from; a copy that arrives while the work is still running is refused
+  `request_copy`, and the caller may ask again once the first attempt has answered or its deadline has passed. A copy
+  with another request hash is refused `request_id_reused`: a retry resends the same signed bytes, so a different hash
+  is a different request under a held id. A provider bounds the stored reply bytes per caller; a reply beyond the
+  bound is not kept, and a copy of its request is then refused.
 - **Decision: request admission limits.** A pool runs one admission for the requests all its links receive. Its entries
   are bounded by a quota per caller, a limit per share and a cap on the set, and its stored replies by bytes per caller
   and in total. A full bound refuses a request and never evicts an entry. A share is one incoming connection's place:

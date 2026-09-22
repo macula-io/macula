@@ -1403,6 +1403,71 @@ flush_mailbox() ->
 %% Start a link with a fake peer patched in and register `Handlers'
 %% (a list of {Procedure, Fun}) on it. Returns
 %% the link and the fake peer's key pair, which the tests sign CALLs with.
+%%------------------------------------------------------------------
+%% A request's deadline and its one run (D7 check 2, D22's tolerance)
+%%------------------------------------------------------------------
+
+%% A provider judges a CALL by its signed deadline before it runs anything: a deadline further past than D22's five
+%% minutes of clock tolerance is refused, and so is one more than ten minutes ahead, which would hold a request id
+%% for longer than the window it is kept for.
+a_call_outside_the_deadline_window_is_refused_test_() ->
+    {timeout, 15,
+     fun() ->
+         Handler = fun(_Payload) -> {ok, #{served => true}} end,
+         {Pid, CallerKp} = inbound_call_fixture([{<<"p">>, Handler}]),
+         Now = erlang:system_time(millisecond),
+         Expired = <<"expired">>,
+         NotYetValid = <<"not_yet_valid">>,
+         ?assertMatch({error, #{code := Expired}},
+                      await_result(inject_call_with_deadline(Pid, CallerKp, Now - 6 * 60_000), 2_000)),
+         ?assertMatch({error, #{code := NotYetValid}},
+                      await_result(inject_call_with_deadline(Pid, CallerKp, Now + 11 * 60_000), 2_000)),
+         %% Inside the window, on either side of now, the call is served.
+         ?assertMatch({ok, _}, await_result(inject_call_with_deadline(Pid, CallerKp, Now - 60_000), 2_000)),
+         ?assertMatch({ok, _}, await_result(inject_call_with_deadline(Pid, CallerKp, Now + 60_000), 2_000)),
+         macula_station_link:stop(Pid),
+         ok
+     end}.
+
+%% A provider runs a request once. A copy of a CALL that has already been answered gets the reply it stored, so a
+%% caller that retries a request whose reply was lost is answered rather than served twice; a different request
+%% under a request id already held is refused. There is no nonce store for CALL and STREAM_OPEN: the signed
+%% deadline and this window are what stop a replay (D7).
+a_repeated_call_gets_its_stored_reply_and_a_reused_id_is_refused_test_() ->
+    {timeout, 15,
+     fun() ->
+         Self = self(),
+         Handler = fun(_Payload) -> Self ! ran, {ok, #{served => true}} end,
+         {Pid, CallerKp} = inbound_call_fixture([{<<"p">>, Handler}]),
+         CallId = crypto:strong_rand_bytes(16),
+
+         First = inject_call(Pid, self(), CallerKp, CallId, <<"p">>),
+         ?assertMatch({ok, #{{text, <<"served">>} := {text, <<"true">>}}}, await_result(First, 2_000)),
+         ?assertEqual(ran, receive ran -> ran after 2_000 -> none end),
+
+         %% The same request again, THE SAME BYTES as a retry sends: the stored reply, and the handler does not run
+         %% a second time. A rebuilt frame would carry another deadline, so another request hash, which is a
+         %% different request under a held id and is refused below.
+         Pid ! {macula_peering, frame, self(), First},
+         ?assertMatch({ok, #{{text, <<"served">>} := {text, <<"true">>}}}, await_result(First, 2_000)),
+         ?assertEqual(none, receive ran -> ran after 500 -> none end),
+
+         %% Another request under the same id is not that request: refused, not served.
+         Reused = <<"request_id_reused">>,
+         Other = inject_call_with_payload(Pid, self(), CallerKp, CallId, <<"p">>, #{other => 1}),
+         ?assertMatch({error, #{code := Reused}}, await_result(Other, 2_000)),
+         macula_station_link:stop(Pid),
+         ok
+     end}.
+
+%% A CALL with a deadline of the test's choosing.
+inject_call_with_deadline(Pid, CallerKey, Deadline) ->
+    Frame = macula_frame:call(
+              #{request_id => crypto:strong_rand_bytes(16), realm => ?REALM, procedure => <<"p">>,
+                target => link_node_id(Pid), deadline => Deadline, payload => #{}}, CallerKey),
+    Pid ! {macula_peering, frame, self(), Frame},
+    Frame.
+
 inbound_call_fixture(Handlers) ->
     inbound_call_fixture(Handlers, open).
 

@@ -24,6 +24,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A provider judges a CALL's deadline and runs it once**, as it already did a
+  STREAM_OPEN (D7 check 2, D22's tolerance). The signed deadline must lie
+  inside the provider's clock minus 5 minutes and plus 10 minutes, and
+  (`caller`, `request_id`) is held until the deadline plus 5 minutes: a copy
+  with the same request hash gets the stored reply rather than running the
+  handler twice, a copy arriving while the work runs is refused
+  `request_copy`, and a different request under a held id is refused
+  `request_id_reused`. There is no nonce store for CALL or STREAM_OPEN, and
+  none is needed: the signed deadline and that window are what stop a replay.
+
 - **A caller may present a capability it was delegated, and a provider follows
   the chain** (D7, WP 1.4). `macula_ucan:authorize/3` takes the request's realm
   id, its procedure and the proofs that travelled with it, and walks the

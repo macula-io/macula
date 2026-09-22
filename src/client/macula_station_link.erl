@@ -2793,10 +2793,22 @@ fan_event({ok, {_R, _T, Subscriber, _Mon}}, SubRef, Topic, Payload, Meta) ->
 %% an unknown `(realm, procedure)' (no handler registered on this
 %% link) maps to `unknown_next_peer'
 %% (0x01) — same taxonomy as `hecate_handler_dispatch'.
-handle_inbound_call({ok, #{request_id := _CallId, procedure := Proc, realm := Realm,
-                            payload := Payload} = Request},
-                    #state{procedures = Procs, policies = Pols, node_identity = Id,
-                           peer_pid = Pid, profile = Profile}) when is_pid(Pid) ->
+handle_inbound_call({ok, Request}, #state{admission = Admission, share = Share} = S) ->
+    on_call_admission(admitted(Admission, Request, Share), Request, S);
+handle_inbound_call(_VerifiedRequest, _State) ->
+    ok.
+
+%% The pool's admission judges a CALL before any policy or handler, as it does a STREAM_OPEN: the signed deadline
+%% inside its window (D22's five minutes of tolerance past it, ten minutes ahead of it), and (caller, request_id)
+%% run once. So there is no nonce store for a CALL: the deadline and this window are what stop a replay (D7).
+%%
+%% A copy of a request already answered gets the stored reply, so a caller whose reply was lost is answered rather
+%% than served twice. A copy while the work is still running is refused `request_copy', as a copied STREAM_OPEN is:
+%% the caller may ask again once its first attempt has finished or its deadline has passed.
+on_call_admission(new, Request, #state{procedures = Procs, policies = Pols, node_identity = Id,
+                                       peer_pid = Pid, profile = Profile,
+                                       admission = Admission} = _S) when is_pid(Pid) ->
+    #{procedure := Proc, realm := Realm, payload := Payload} = Request,
     %% Gate first (Slice 7b): an `open' procedure serves any identified
     %% caller; a gated one requires a valid `token', else refuse
     %% with BOLT#4 `unauthorized' instead of invoking the handler.
@@ -2805,12 +2817,38 @@ handle_inbound_call({ok, #{request_id := _CallId, procedure := Proc, realm := Re
     PayloadWithCaller = with_caller(Payload, maps:get(caller, Request, undefined)),
     _ = spawn(fun() ->
             Reply = inbound_reply(Verdict, Found, Request, PayloadWithCaller, Id),
+            _ = stored_reply(Admission, Request, Reply),
             sent_or_faulted(macula_peering:send_frame(Pid, Reply),
                             Pid, Request, Id)
         end),
     ok;
-handle_inbound_call(_VerifiedRequest, _State) ->
+on_call_admission({copy, {reply, Reply}}, Request, #state{peer_pid = Pid, node_identity = Id}) when is_pid(Pid) ->
+    sent_or_faulted(macula_peering:send_frame(Pid, Reply), Pid, Request, Id),
+    ok;
+on_call_admission({copy, pending}, Request, S) ->
+    call_refused(<<"request_copy">>, Request, S);
+on_call_admission({refused, Refusal}, Request, S) ->
+    call_refused(admission_code(Refusal), Request, S);
+on_call_admission(_Verdict, _Request, _S) ->
     ok.
+
+call_refused(Code, Request, #state{peer_pid = Pid, node_identity = Id}) when is_pid(Pid) ->
+    Reply = macula_frame:provider_error(#{request => Request, code => Code}, Id),
+    sent_or_faulted(macula_peering:send_frame(Pid, Reply), Pid, Request, Id),
+    ok;
+call_refused(_Code, _Request, _S) ->
+    ok.
+
+%% The reply a copy of this request receives. A reply past the admission's byte bounds is not kept, and a copy of
+%% its request is refused rather than served again.
+stored_reply(Admission, Request, Reply) ->
+    try macula_request_admission:store_reply(Admission, Request, Reply, reply_bytes(Reply),
+                                             erlang:system_time(millisecond))
+    catch exit:_NotAnswered -> gone
+    end.
+
+reply_bytes(Reply) ->
+    byte_size(macula_frame:encode(Reply)).
 
 %% The CALL frame carries `caller' (a required, wire-authenticated field,
 %% see `macula_frame''s CALL spec) but no application handler ever saw
