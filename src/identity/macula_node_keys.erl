@@ -21,11 +21,13 @@
 %% A process that holds keys shows them through redacted/1, and the primary logger filter redacted_log_event/2, which
 %% install_log_redaction/0 puts in place, keeps their private halves out of crash and diagnostics reports.
 %%
-%% A key with one component signs with ML-DSA-87 alone. A hybrid key signs with Macula's composite
-%% ML-DSA-87-PS384: both halves sign M' = Prefix || Label || len(ctx) || ctx || SHA-512(M), with an empty ctx and
-%% ML-DSA-87 under an empty context; the signature is the ML-DSA-87 signature followed by the RSA-PSS signature, and
-%% the carried public key is the ML-DSA-87 key followed by the DER RSAPublicKey. It is valid only if both halves
-%% verify.
+%% A key with one component signs with ML-DSA-87 alone, under an empty context. A hybrid key signs with the IETF LAMPS
+%% composite id-MLDSA87-RSA4096-PSS-SHA512 (draft-ietf-lamps-pq-composite-sigs): both halves sign
+%% M' = Prefix || Label || len(ctx) || ctx || SHA-512(M), with the label COMPSIG-MLDSA87-RSA4096-PSS-SHA512 and an
+%% empty ctx, ML-DSA-87 with the label as its context string and RSA-PSS with SHA-384, MGF1 with SHA-384 and a
+%% 48-byte salt. The signature is the ML-DSA-87 signature followed by the RSA-PSS signature, and the carried public
+%% key is the ML-DSA-87 key followed by the DER RSAPublicKey. It is valid only if both halves verify. JOSE has no
+%% name for it, so it travels under the alg ML-DSA-87-PS384 (D7).
 %%
 %% An identity key has a node_id: SHA-256 over the label MACULA-NODE-ID-V1, a zero byte, the length and ASCII name
 %% of the profile, and the identity key as carried, and that node_id is its key id. Every other key has no
@@ -94,7 +96,7 @@
 -define(MLDSA87_PUBLIC_BYTES, 2592).
 -define(MLDSA87_SIGNATURE_BYTES, 4627).
 -define(COMPOSITE_PREFIX, "CompositeAlgorithmSignatures2025").
--define(COMPOSITE_LABEL, "MACULA-ML-DSA-87-PS384").
+-define(COMPOSITE_LABEL, "COMPSIG-MLDSA87-RSA4096-PSS-SHA512").
 -define(NODE_ID_LABEL, "MACULA-NODE-ID-V1").
 -define(KEY_ID_LABEL, "MACULA-KEY-ID-V1").
 -define(PUZZLE_DIFFICULTY, 8).
@@ -197,17 +199,18 @@ filter_added({error, {already_exist, ?KEY_REDACTION}}, Filter) -> log_redaction(
 public_key(#{components := Components}) ->
     << <<Public/binary>> || #{public := Public} <- Components >>.
 
-%% @doc Sign a message: ML-DSA-87 alone for a one-component key, Macula's composite ML-DSA-87-PS384 for a hybrid key.
+%% @doc Sign a message: ML-DSA-87 alone for a one-component key, the LAMPS composite id-MLDSA87-RSA4096-PSS-SHA512 for
+%% a hybrid key.
 -spec sign(iodata(), node_key()) -> binary().
 sign(Message, #{components := [#{algorithm := mldsa87, private := Private}]}) ->
-    mldsa87_signature(Private, iolist_to_binary(Message));
+    mldsa87_signature(Private, iolist_to_binary(Message), <<>>);
 sign(Message, #{profile := Profile,
                 components := [#{algorithm := mldsa87, private := MlDsaPrivate},
                                #{algorithm := rsa_pss, private := RsaPrivate}]}) ->
     Representative = composite_representative(Message),
     {ok, #{digest := Digest} = Params} = composite_rsa_params(Profile),
     {ok, RsaKey} = decode_rsa_private(RsaPrivate),
-    MlDsaSignature = mldsa87_signature(MlDsaPrivate, Representative),
+    MlDsaSignature = mldsa87_signature(MlDsaPrivate, Representative, <<?COMPOSITE_LABEL>>),
     RsaSignature = crypto:sign(rsa, Digest, Representative, rsa_private_list(RsaKey), pss_options(Params)),
     <<MlDsaSignature/binary, RsaSignature/binary>>.
 
@@ -217,7 +220,7 @@ sign(Message, #{profile := Profile,
 -spec verify(iodata(), binary(), binary(), term()) -> boolean().
 verify(Message, Signature, Public, pq_pure)
   when byte_size(Signature) =:= ?MLDSA87_SIGNATURE_BYTES, byte_size(Public) =:= ?MLDSA87_PUBLIC_BYTES ->
-    verified_call(fun() -> mldsa87_verifies(Public, iolist_to_binary(Message), Signature) end);
+    verified_call(fun() -> mldsa87_verifies(Public, iolist_to_binary(Message), Signature, <<>>) end);
 verify(Message, Signature, Public, pq_hybrid) when is_binary(Signature), is_binary(Public) ->
     composite_verified(byte_size(Signature) =:= signature_bytes(pq_hybrid), Message, Signature, Public);
 verify(_Message, _Signature, _Public, _Profile) ->
@@ -228,7 +231,7 @@ verify(_Message, _Signature, _Public, _Profile) ->
 composite_verified(true, Message, <<MlDsaSignature:?MLDSA87_SIGNATURE_BYTES/binary, RsaSignature/binary>>,
                    <<MlDsaPublic:?MLDSA87_PUBLIC_BYTES/binary, RsaPublicDer/binary>>) ->
     Representative = composite_representative(Message),
-    MlDsaValid = mldsa87_verifies(MlDsaPublic, Representative, MlDsaSignature),
+    MlDsaValid = mldsa87_verifies(MlDsaPublic, Representative, MlDsaSignature, <<?COMPOSITE_LABEL>>),
     rsa_half_verifies(MlDsaValid, decode_rsa_public(RsaPublicDer), RsaSignature, Representative,
                       composite_rsa_params(pq_hybrid));
 composite_verified(_LengthHolds, _Message, _Signature, _Public) ->
@@ -396,17 +399,17 @@ rsa_key_verifies(true, RsaPublic, Signature, Representative, Digest, Options) ->
 rsa_key_verifies(false, _RsaPublic, _Signature, _Representative, _Digest, _Options) ->
     false.
 
-%% ML-DSA-87 under the empty context, as both the pure signature and the composite's ML-DSA half use it.
-mldsa87_signature(Private, Message) ->
-    {ok, Signature} = macula_crypto_nif:mldsa_sign(mldsa87, mldsa87_private(Private), Message, <<>>),
+%% ML-DSA-87 under a context string: empty for a signature by ML-DSA-87 alone, the label for a composite's half.
+mldsa87_signature(Private, Message, Context) ->
+    {ok, Signature} = macula_crypto_nif:mldsa_sign(mldsa87, mldsa87_private(Private), Message, Context),
     Signature.
 
 %% A private key stored as its seed, or in the expanded form of a key generated before D6's amendment.
 mldsa87_private(<<_:32/binary>> = Seed) -> {seed, Seed};
 mldsa87_private(Expanded) -> {expanded, Expanded}.
 
-mldsa87_verifies(Public, Message, Signature) ->
-    macula_crypto_nif:mldsa_verify(mldsa87, Public, Message, Signature, <<>>).
+mldsa87_verifies(Public, Message, Signature, Context) ->
+    macula_crypto_nif:mldsa_verify(mldsa87, Public, Message, Signature, Context).
 
 verified_call(Verify) ->
     try Verify() of

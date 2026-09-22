@@ -460,8 +460,8 @@ Raf answered "go with the recommendations" on 2026-09-10.
 | D3 | EU key exchange at level 5 | Custom SecP384r1MLKEM1024 group in Rust | Accepted |
 | D4 | EU signature form and classical half | ML-DSA-87 in TLS; hybrid elsewhere; RSA-PSS-4096 | Accepted (revised) |
 | D5 | node_id derivation | SHA-256 over label, profile and identity keys | Accepted |
-| D6 | How node keys are stored | One purpose per key, expanded ML-DSA keys, round trip on load | Accepted (revised) |
-| D7 | Key encoding in UCANs and DIDs | Published names; composite `ML-DSA-87-PS384`; `aud` by node_id | Accepted |
+| D6 | How node keys are stored | One purpose per key, ML-DSA keys as seeds (expanded still load), round trip on load | Accepted (amended) |
+| D7 | Key encoding in UCANs and DIDs | Published names; `macula-mldsa` for all ML-DSA; LAMPS composite `id-MLDSA87-RSA4096-PSS-SHA512`; `aud` by node_id | Accepted (amended) |
 | D8 | OpenSSL floor and base images | OpenSSL 3.5.0 or newer at build time; station and realm on Debian 13 | Accepted |
 | D9 | `reckon_gater` capability signing | Separate plan in `reckon-db-org`, finished before Stage 6 | Accepted |
 | D10 | A stack that cannot do its profile | .NET out of the first switch; Python ships a patch | Accepted (.NET) |

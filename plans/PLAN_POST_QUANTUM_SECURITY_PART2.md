@@ -179,10 +179,12 @@ change, the done criterion and the effort. The US profile goes first; the EU par
     public key that differs from the one derived from its private key, a key saved for another purpose or
     profile, and an Ed25519 key file are refused;
   - `test/macula_node_keys_signing_tests.erl` (new): a US signature is ML-DSA-87 over the message; an EU signature is
-    Macula's composite, whose halves both verify over M'; a signature with one invalid half, a half on its own, a
-    signature under the other profile and a non-canonical key encoding are refused;
-  - `test/fixtures/composite_ml_dsa_87_ps384/`: the composites signed by OTP and by Go in V8, which verify and are
-    refused when altered;
+    the LAMPS composite, whose halves both verify over M', ML-DSA-87 with the label as its context; a signature with
+    one invalid half, a half on its own, a signature under the other profile and a non-canonical key encoding are
+    refused;
+  - `test/fixtures/lamps_mldsa87_rsa4096_pss_sha512/`: the draft's own vector, whose signature verifies and is
+    refused when altered or made with a context, and whose key loads as a node key and signs; and
+    `test/fixtures/lamps_composite_zero_dropped/`, a composite with its RSA half one byte short, refused;
   - `test/macula_node_keys_node_id_tests.erl` (new): the three D5 reference vectors, node_ids derived from the
     carried identity key, and no node_id for CONNECT or TLS keys;
   - `test/macula_record_tests.erl`: the carried key must derive to the claimed node_id;
@@ -638,6 +640,9 @@ Every stack also meets these, each red first:
     identity;
   - the handshake frames and identity per WP 1.3, with the EU classical half per D4 and V8.
 - **Red first:**
+  - the EU composite is the LAMPS `id-MLDSA87-RSA4096-PSS-SHA512` (D7, amended 2026-09-22): the draft's own
+    vector, in `macula`'s `test/fixtures/lamps_mldsa87_rsa4096_pss_sha512/`, verifies; the draft's key signs
+    composites that `macula` verifies; and `test/fixtures/lamps_composite_zero_dropped/sig.bin` is refused;
   - the WP 1.2 and WP 1.5 assertions, as integration tests against the 11.0.0 stations;
   - identity key generation runs the node_id puzzle loop, regenerating only the ML-DSA-87 half of a pq_hybrid key;
   - a provider verifies every inbound CALL's signature against its caller before the handler runs; an unverified
@@ -716,6 +721,9 @@ Every stack also meets these, each red first:
     - tagged output is opt-in per call, subscription and serve, and `"0x"` with hex stays the default;
     - Go's FFI layer makes the output choice, because only Go knows which values were bytes.
 - **Red first:**
+  - the EU composite is the LAMPS `id-MLDSA87-RSA4096-PSS-SHA512` (D7, amended 2026-09-22): the draft's own
+    vector, in `macula`'s `test/fixtures/lamps_mldsa87_rsa4096_pss_sha512/`, verifies; the draft's key signs
+    composites that `macula` verifies; and `test/fixtures/lamps_composite_zero_dropped/sig.bin` is refused;
   - in `macula-go`, identity key generation runs the node_id puzzle loop, regenerating only
     the ML-DSA-87 half of a pq_hybrid key; `macula-ts` takes it through Go;
   - `transport/pq_handshake_test.go` (new) asserts `ConnectionState().TLS.CurveID`, the certificate signature
@@ -805,6 +813,9 @@ Every stack also meets these, each red first:
   - the `cryptography` floor raised to a version with ML-KEM and ML-DSA;
   - the token checks of WP 1.4, for calls and streams.
 - **Red first:**
+  - the EU composite is the LAMPS `id-MLDSA87-RSA4096-PSS-SHA512` (D7, amended 2026-09-22): the draft's own
+    vector, in `macula`'s `test/fixtures/lamps_mldsa87_rsa4096_pss_sha512/`, verifies; the draft's key signs
+    composites that `macula` verifies; and `test/fixtures/lamps_composite_zero_dropped/sig.bin` is refused;
   - identity key generation runs the node_id puzzle loop, regenerating only the ML-DSA-87 half of a pq_hybrid key;
   - `tests/test_pq_handshake.py`, against the 11.0.0 stations: success in the client's profile, and failure against a
     classical-only station and against an unbound TLS key;

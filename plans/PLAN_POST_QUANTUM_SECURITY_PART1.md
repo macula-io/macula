@@ -370,8 +370,9 @@ Ceilings from signing and verifying alone, per core, estimated from the table:
     composite verifies on the other, an altered half and a wrong label are refused, and the standard library builds
     for all five prebuilt targets with cgo off ✅. The RSA signer is constant-time and verifies after signing, with
     no blinding ✅; whether that meets D4's signer condition is open ⚠.
-  - Erlang: `macula_node_keys` verifies both the OTP and the Go composite vectors, kept as test fixtures on the
-    `post-quantum` branch ✅.
+  - D7 replaced that composite with the LAMPS `id-MLDSA87-RSA4096-PSS-SHA512` on 2026-09-22, so the check above
+    no longer covers the construction in use. Erlang: `macula_node_keys` verifies the draft's own vector and signs
+    with the draft's key as a node key ✅. Go against the draft's vector is WP 4.2 ⚠.
   - Rust: no brainpoolP384r1 ✅; RSA-PSS through aws-lc-rs ⚠ (V4).
 - **Done when:** the vector verifies in every stack, with a named implementation that meets the conditions above.
 - **Effort:** 2 days.

@@ -36,6 +36,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   file written by this version does not load on 12.0.0-alpha.1 or earlier,
   which accept only the expanded form.
 
+- **The `pq_hybrid` signature is now the IETF LAMPS composite
+  `id-MLDSA87-RSA4096-PSS-SHA512`**, as `draft-ietf-lamps-pq-composite-sigs`
+  defines it, replacing Macula's own composite (D7, as amended). Both halves
+  sign M' = Prefix || Label || len(ctx) || ctx || SHA-512(M) under the label
+  `COMPSIG-MLDSA87-RSA4096-PSS-SHA512` with an empty ctx; ML-DSA-87 now signs
+  with that label as its context string, which OTP cannot do, and RSA-PSS
+  stays SHA-384 with a 48-byte salt. It is proven against the draft's own
+  vector: the draft's signature verifies, and the draft's private key loads as
+  a node key and signs composites whose halves the draft's construction
+  accepts. It still travels under the JOSE `alg` `ML-DSA-87-PS384`, since
+  JOSE has no name for it.
+
+  **Breaking on the wire for `pq_hybrid`:** a `pq_hybrid` signature made by
+  12.0.0-alpha.1 or earlier does not verify on this version, and the reverse.
+  Keys and key files are unchanged, and `pq_pure` is unaffected.
+
 ## [12.0.0-alpha.1] - 2026-09-22
 
 **A pre-release: post-quantum KEY EXCHANGE, not post-quantum

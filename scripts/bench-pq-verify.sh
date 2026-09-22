@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Measures signing and verification cost per crypto profile, ML-DSA-87
-# (pq_pure) and the composite ML-DSA-87-PS384 (pq_hybrid), through
+# (pq_pure) and the LAMPS composite id-MLDSA87-RSA4096-PSS-SHA512 (pq_hybrid), through
 # macula_node_keys:sign/2 and verify/4 on one core, for a set of message
 # sizes. The verification budget per connection cites these numbers.
 set -euo pipefail

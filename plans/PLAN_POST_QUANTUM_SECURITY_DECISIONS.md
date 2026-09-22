@@ -340,9 +340,9 @@ before its wire checks are green.
   - "constant-time" or "side-channel resistant", without an evaluation;
   - that ML-DSA-87 alone is acceptable in Europe;
   - that Ed25519 is part of the EU profile;
-  - that Macula's hybrid signature is the LAMPS composite or `id-MLDSA87-RSA4096-PSS-SHA512`: it is Macula's own
-    composite, `ML-DSA-87-PS384` (D7). D7 adopts the LAMPS composite on 2026-09-22; this rule is revisited only once
-    that construction passes the draft's test vectors and ships, and Saturnus reads any new wording.
+  - that Macula's hybrid signature is the LAMPS composite or `id-MLDSA87-RSA4096-PSS-SHA512`, until a release that
+    signs with it ships: `macula` main signs it and passes the draft's own vector, while every released version
+    signs Macula's own composite (D7). Saturnus reads any new wording.
 - **US, when true:** "algorithms aligned with CNSA 2.0 (ML-KEM-1024, ML-DSA-87, AES-256, SHA-384)". Never imply
   deployability in National Security Systems, which also needs NIAP or NSA validation ⚠ (V14). Preconditions: V13
   and V14 closed.
