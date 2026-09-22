@@ -62,10 +62,25 @@ cd "$(dirname "$0")/.."
 SHARDS="${SHARDS:-3}"
 OUT="${TMPDIR:-/tmp}/macula-test-parallel.$$"
 mkdir -p "$OUT"
-# A failing run keeps its shard logs: the summary names the module but the
+# ANY failing run keeps its logs, and the condition is the EXIT STATUS, not a
+# flag set at one place in the script. The summary names the module but the
 # reason is in the log, and deleting it means running the whole thing again to
-# read what it already knew.
-cleanup_out() { if [ "${KEEP:-0}" = 1 ]; then echo "shard logs kept in $OUT"; else rm -rf "$OUT"; fi; }
+# read what it already knew, by which time an intermittent fault may be gone for
+# good.
+#
+# It used to key off a KEEP flag the summary set. That covered a shard failing
+# and nothing else: a compile failure or the enumeration refusal exits BEFORE
+# the summary runs, so those deleted $OUT, compile.log included, which is the
+# one file worth having when a compile fails. Reported by Mercurius after a
+# shard died with no tests in one second and the reason was gone.
+cleanup_out() {
+    local rc=$?
+    if [ "$rc" -ne 0 ] || [ "${KEEP:-0}" = 1 ]; then
+        echo "logs kept in $OUT (exit $rc)"
+    else
+        rm -rf "$OUT"
+    fi
+}
 trap cleanup_out EXIT
 
 # ---------------------------------------------------------------------------
