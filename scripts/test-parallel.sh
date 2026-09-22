@@ -112,9 +112,24 @@ if [ -n "$WANT_OTP" ] && [ -n "$HAVE_OTP" ] && [ "$WANT_OTP" != "$HAVE_OTP" ]; t
     exit 1
 fi
 
-echo "==> compiling once (shards share this build)"
-if ! rebar3 as test compile > "$OUT/compile.log" 2>&1; then
-    echo "compile failed:"; tail -30 "$OUT/compile.log"; exit 1
+# ⚠ The warm-up runs `rebar3 eunit', NOT `rebar3 as test compile'. They do not
+# produce the same artefacts: eunit REBUILDS what `as test compile' just made,
+# verified by beam mtime. So warming with `as test compile' left every shard
+# with work to do, all three ran eunit, all three compiled the same test modules
+# into the one shared _build, and they raced on erlc's atomic rename:
+#
+#   Compiling test/..._tests.erl failed
+#   failed to rename ..._tests.bea# to ..._tests.beam: no such file or directory
+#
+# It only bites on a tree eunit has not built yet, so it is invisible on a warm
+# machine and hits someone on a fresh checkout, which is exactly when they are
+# about to push. Found by Mercurius on a worktree checked out minutes earlier.
+#
+# Running one cheap module compiles everything the way the shards will, so they
+# then find the tree warm and compile nothing.
+echo "==> warming the build once, the way the shards will (shards share it)"
+if ! rebar3 eunit --module=macula_z32_tests > "$OUT/compile.log" 2>&1; then
+    echo "warm-up failed:"; tail -30 "$OUT/compile.log"; exit 1
 fi
 
 # ---------------------------------------------------------------------------
