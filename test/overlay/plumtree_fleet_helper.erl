@@ -1,30 +1,18 @@
-%% @doc CT helper for the Plumtree + PubSub acceptance suite.
+%% @doc CT helper for the Plumtree + PubSub acceptance suite: a fleet of in-VM stations that gossip signed
+%% publications, as a node does in 12.
 %%
-%% Each station is a process that holds, per realm:
-%% <ul>
-%%   <li>a `hecate_plumtree' state (eager + lazy push)</li>
-%%   <li>a `hecate_pubsub' state (topic → subscriber set)</li>
-%% </ul>
+%% Each station is a process with an identity key and, per realm, a `hecate_plumtree' state (eager and lazy push) and
+%% a `hecate_pubsub' state (topic to subscribers). A station publishes a PUBLISH it signs with its identity key; Plumtree
+%% verifies every publication, pushes it to eager peers and announces it to lazy ones, and hands each new one over as a
+%% delivery, which reaches the station's local subscribers to its topic. A station logs the payloads it delivered.
 %%
-%% Stations share an in-VM router that delivers frames between
-%% station inboxes. On receiving a frame the station dispatches to
-%% whichever module owns the frame type:
-%% <ul>
-%%   <li>`plumtree_*' → `hecate_plumtree:process/3' (delivers
-%%       payloads locally; we then forward delivered payloads to
-%%       `hecate_pubsub:process/3' so local subscribers fire).</li>
-%%   <li>`subscribe' / `unsubscribe' / `event' →
-%%       `hecate_pubsub:process/3' directly; `event' frames also
-%%       enter the plumtree dispatcher via the local publish path.</li>
-%% </ul>
-%%
-%% `connect/4' wires two stations' plumtree peer sets directly (no
-%% HyParView handshake — that's `macula-hyparview''s concern, kept
-%% out of this package's test surface entirely).
+%% `connect/4' wires two stations' Plumtree peer sets directly: no HyParView handshake, which is
+%% `macula_hyparview_SUITE''s concern. Frames travel as their encoded bytes through a router process that delivers
+%% them with the sender's node_id and the realm, and settle/1 waits until no frame is in flight.
 -module(plumtree_fleet_helper).
 
 -export([
-    start_fleet/3,
+    start_fleet/2,
     stop_fleet/1,
     connect/4,
     subscribe/4,
@@ -33,235 +21,180 @@
 ]).
 
 -record(station, {
-    name   :: atom(),
-    pid    :: pid(),
-    kp     :: macula_node_keys:node_key(),
-    pubkey :: macula_node_keys:node_id()
+    name    :: atom(),
+    pid     :: pid(),
+    node_id :: macula_node_keys:node_id()
 }).
+
+-define(PROFILE, pq_pure).
 
 %%=====================================================================
 %% Fleet lifecycle
 %%=====================================================================
 
-start_fleet(Names, Realms, _Opts) when is_list(Names), is_list(Realms) ->
-    Router = spawn_router(),
-    Stations = [build_station(N, Realms, Router) || N <- Names],
-    Map = maps:from_list([{S#station.pubkey, S#station.pid}
-                          || S <- Stations]),
-    Router ! {table, Map},
-    NameMap = maps:from_list([{S#station.name, S} || S <- Stations]),
-    #{router => Router, stations => NameMap, realms => Realms}.
+%% @doc A fleet of stations named Names, each a member of every realm, by 32-byte id, in Realms.
+start_fleet(Names, Realms) when is_list(Names), is_list(Realms) ->
+    Router = spawn_link(fun() -> router_loop(#{}) end),
+    Stations = [build_station(Name, Realms, Router) || Name <- Names],
+    Router ! {table, maps:from_list([{S#station.node_id, S#station.pid} || S <- Stations])},
+    #{router => Router, stations => maps:from_list([{S#station.name, S} || S <- Stations])}.
 
 stop_fleet(#{router := Router, stations := Stations}) ->
-    maps:foreach(fun(_N, S) -> S#station.pid ! stop end, Stations),
+    maps:foreach(fun(_Name, #station{pid = Pid}) -> Pid ! stop end, Stations),
     Router ! stop,
     ok.
 
 build_station(Name, Realms, Router) ->
-    Kp = macula_test_identity:key(),
-    {ok, Pub} = macula_node_keys:node_id(Kp),
-    Pid = spawn(fun() ->
-        station_loop(init_state(Name, Kp, Pub, Realms, Router))
-    end),
-    #station{name = Name, pid = Pid, kp = Kp, pubkey = Pub}.
+    Key = macula_test_identity:key(),
+    {ok, NodeId} = macula_node_keys:node_id(Key),
+    PerRealm = maps:from_list([{Realm, realm_state(NodeId, Realm)} || Realm <- Realms]),
+    Pid = spawn_link(fun() ->
+                         station_loop(#{key => Key, node_id => NodeId, router => Router, realms => PerRealm,
+                                        delivered => #{}, seen => 0})
+                     end),
+    #station{name = Name, pid = Pid, node_id = NodeId}.
 
-init_state(Name, Kp, Pub, Realms, Router) ->
-    Per = maps:from_list(
-            [{R, #{plum   => hecate_plumtree:new(Kp, R),
-                   pubsub => hecate_pubsub:new(R)}}
-             || R <- Realms]),
-    #{
-        name   => Name,
-        kp     => Kp,
-        pubkey => Pub,
-        router => Router,
-        realms => Per,
-        delivered => #{}   %% {realm, topic} → [payload]
-    }.
+realm_state(NodeId, Realm) ->
+    {ok, Plumtree} = hecate_plumtree:new(NodeId, Realm),
+    #{plumtree => Plumtree, pubsub => hecate_pubsub:new(Realm, ?PROFILE)}.
 
 %%=====================================================================
-%% Public helpers
+%% Test API
 %%=====================================================================
 
-%% @doc Wire A→B and B→A into each other's plumtree peer set for
-%% `Realm' directly — no HyParView handshake.
+%% @doc Wire NameA and NameB into each other's Plumtree peer set for Realm.
 connect(#{stations := Map} = _Net, NameA, NameB, Realm) ->
-    #station{pid = PidA, pubkey = PubA} = maps:get(NameA, Map),
-    #station{pid = PidB, pubkey = PubB} = maps:get(NameB, Map),
-    call_station(PidA, {wire_peer, Realm, PubB}),
-    call_station(PidB, {wire_peer, Realm, PubA}),
-    ok.
+    #station{pid = PidA, node_id = A} = maps:get(NameA, Map),
+    #station{pid = PidB, node_id = B} = maps:get(NameB, Map),
+    ok = call(PidA, {add_peer, Realm, B}),
+    ok = call(PidB, {add_peer, Realm, A}).
 
+%% @doc Station Name subscribes itself to Topic in Realm.
 subscribe(#{stations := Map} = _Net, Name, Realm, Topic) ->
-    #station{pid = Pid, pubkey = Pub} = maps:get(Name, Map),
-    call_station(Pid, {local_subscribe, Realm, Topic, Pub}).
-
-publish(#{stations := Map} = _Net, Name, Realm, Topic, Payload) ->
     #station{pid = Pid} = maps:get(Name, Map),
-    call_station(Pid, {local_publish, Realm, Topic, Payload}).
+    call(Pid, {subscribe, Realm, Topic}).
 
+%% @doc Station Name publishes Payload to Topic in Realm, and the fleet settles.
+publish(#{stations := Map} = Net, Name, Realm, Topic, Payload) ->
+    #station{pid = Pid} = maps:get(Name, Map),
+    ok = call(Pid, {publish, Realm, Topic, Payload}),
+    settle(Net).
+
+%% @doc The payloads station Name delivered to its subscribers to Topic in Realm, newest first.
 deliveries(#{stations := Map} = _Net, Name, {Realm, Topic}) ->
     #station{pid = Pid} = maps:get(Name, Map),
-    call_station(Pid, {deliveries, Realm, Topic}).
+    call(Pid, {deliveries, Realm, Topic}).
 
 %%=====================================================================
-%% Station loop
+%% Settling: no frame in flight
+%%=====================================================================
+
+%% Every frame goes through the router, which delivers in order, so once the router and then every station have
+%% answered a call, every frame sent before that has been handled. A round in which no station handled a frame means
+%% nothing is left in flight.
+settle(#{router := Router, stations := Map} = Net) ->
+    Seen = fun() ->
+               ok = call(Router, sync),
+               lists:sum([call(Pid, seen) || #station{pid = Pid} <- maps:values(Map)])
+           end,
+    settled(Seen(), Seen, Net).
+
+settled(Count, Seen, Net) ->
+    next_round(Seen(), Count, Seen, Net).
+
+next_round(Count, Count, _Seen, _Net) -> ok;
+next_round(Later, _Count, Seen, Net) -> settled(Later, Seen, Net).
+
+%%=====================================================================
+%% Station
 %%=====================================================================
 
 station_loop(State) ->
     receive
-        stop -> ok;
-        {frame, Frame}             -> station_loop(dispatch_frame(Frame, State));
-        {control, From, Ref, Msg}  ->
-            {Reply, State2} = control(Msg, State),
-            From ! {Ref, Reply},
-            station_loop(State2);
-        _Other ->
-            station_loop(State)
+        stop ->
+            ok;
+        {frame, From, Realm, Bytes} ->
+            station_loop(handle_frame(From, Realm, Bytes, State));
+        {call, Caller, Ref, Request} ->
+            {Reply, State1} = handle_call(Request, State),
+            Caller ! {Ref, Reply},
+            station_loop(State1)
     end.
 
-%%---------------------------------------------------------------------
-%% Control messages (synchronous)
-%%---------------------------------------------------------------------
+handle_call({add_peer, Realm, Peer}, State) ->
+    {ok, update_realm(State, Realm, fun(#{plumtree := P} = R) -> R#{plumtree := hecate_plumtree:add_peer(P, Peer)} end)};
+handle_call({subscribe, Realm, Topic}, #{node_id := Self} = State) ->
+    {ok, update_realm(State, Realm, fun(#{pubsub := S} = R) -> R#{pubsub := hecate_pubsub:subscribe(S, Topic, Self)} end)};
+handle_call({publish, Realm, Topic, Payload}, #{key := Key, realms := Realms} = State) ->
+    Now = erlang:system_time(millisecond),
+    Publish = macula_frame:publish(#{realm => Realm, topic => Topic, seq => 1, published_at => Now,
+                                     payload => Payload}, Key),
+    #{plumtree := Plumtree} = maps:get(Realm, Realms),
+    {Plumtree1, Actions, Deliveries} = hecate_plumtree:publish(Plumtree, Publish, Now),
+    {ok, handled(Realm, Plumtree1, Actions, Deliveries, State)};
+handle_call({deliveries, Realm, Topic}, #{delivered := Delivered} = State) ->
+    {maps:get({Realm, Topic}, Delivered, []), State};
+handle_call(seen, #{seen := Seen} = State) ->
+    {Seen, State}.
 
-control({wire_peer, Realm, Peer}, State) ->
-    {ok, update_realm(State, Realm, fun(#{plum := Pl} = RS) ->
-        RS#{plum := hecate_plumtree:add_peer(Pl, Peer)}
-    end)};
+%% A GOSSIP carries its realm inside its signed publication, so a frame arrives with the realm it was sent in, as a
+%% station link delivers a frame on the realm's overlay subscription.
+handle_frame(From, Realm, Bytes, #{realms := Realms, seen := Seen} = State) ->
+    {ok, Frame, <<>>} = macula_frame:decode(Bytes),
+    #{plumtree := Plumtree} = maps:get(Realm, Realms),
+    Clocks = #{wall => erlang:system_time(millisecond), monotonic => erlang:monotonic_time(millisecond)},
+    {Plumtree1, Actions, Deliveries} = hecate_plumtree:process(Plumtree, From, Frame, Clocks),
+    handled(Realm, Plumtree1, Actions, Deliveries, State#{seen := Seen + 1}).
 
-control({local_subscribe, Realm, Topic, Sub}, State) ->
-    {ok, update_realm(State, Realm, fun(#{pubsub := PS} = RS) ->
-        RS#{pubsub := hecate_pubsub:subscribe(PS, Topic, Sub)}
-    end)};
+handled(Realm, Plumtree, Actions, Deliveries, State) ->
+    [send(State, Realm, Peer, Out) || {send, Peer, Out} <- Actions],
+    State1 = update_realm(State, Realm, fun(R) -> R#{plumtree := Plumtree} end),
+    lists:foldl(fun({_MsgId, Publication}, Acc) -> delivered(Realm, Publication, Acc) end, State1, Deliveries).
 
-control({local_publish, Realm, Topic, Payload}, State) ->
-    RS = realm_state(State, Realm),
-    PubId   = maps:get(pubkey, State),
-    EventF  = hecate_pubsub:build_event(
-                maps:get(pubsub, RS),
-                #{topic => Topic, realm => Realm,
-                  publisher => PubId, seq => 0,
-                  payload => Payload, published_at_ms => 0},
-                maps:get(kp, State)),
-    MsgId   = crypto:strong_rand_bytes(16),
-    {Plum1, Sends, Delivered} =
-        hecate_plumtree:publish(maps:get(plum, RS), MsgId, EventF),
-    %% "Local delivered" — feed into pubsub for local subscribers too.
-    State2 = deliver_payloads(Delivered, Realm, State, RS),
-    emit_plumtree_sends(Sends, Realm, State2),
-    State3 = update_realm(State2, Realm, fun(R) -> R#{plum := Plum1} end),
-    {ok, State3};
+%% A delivery reaches the station's own subscribers to its topic, and is logged when there is one.
+delivered(Realm, #{topic := Topic, payload := Payload}, #{realms := Realms, delivered := Delivered} = State) ->
+    #{pubsub := PubSub} = maps:get(Realm, Realms),
+    logged(hecate_pubsub:subscribers(PubSub, Topic), {Realm, Topic}, Payload, Delivered, State).
 
-control({deliveries, Realm, Topic}, State) ->
-    {maps:get({Realm, Topic}, maps:get(delivered, State), []), State}.
+logged([], _Key, _Payload, _Delivered, State) -> State;
+logged([_ | _], Key, Payload, Delivered, State) ->
+    State#{delivered := Delivered#{Key => [Payload | maps:get(Key, Delivered, [])]}}.
 
-%%---------------------------------------------------------------------
-%% Frame dispatch
-%%---------------------------------------------------------------------
+update_realm(#{realms := Realms} = State, Realm, Fun) ->
+    State#{realms := Realms#{Realm := Fun(maps:get(Realm, Realms))}}.
 
-dispatch_frame(#{frame_type := FT} = Frame, State) ->
-    case FT of
-        plumtree_gossip -> dispatch_plumtree(Frame, State);
-        plumtree_ihave  -> dispatch_plumtree(Frame, State);
-        plumtree_graft  -> dispatch_plumtree(Frame, State);
-        plumtree_prune  -> dispatch_plumtree(Frame, State);
-        subscribe       -> dispatch_pubsub(Frame, State);
-        unsubscribe     -> dispatch_pubsub(Frame, State);
-        event           -> dispatch_pubsub(Frame, State);
-        _               -> State
-    end.
-
-%%---------------------------------------------------------------------
-%% Plumtree dispatch
-%%---------------------------------------------------------------------
-
-dispatch_plumtree(#{realm := Realm} = Frame, State) ->
-    RS = realm_state(State, Realm),
-    From = maps:get(sender, Frame, undefined),
-    {Plum1, Sends, Delivered} =
-        hecate_plumtree:process(maps:get(plum, RS), From, Frame),
-    State1 = deliver_payloads(Delivered, Realm, State, RS),
-    emit_plumtree_sends(Sends, Realm, State1),
-    update_realm(State1, Realm, fun(R) -> R#{plum := Plum1} end).
-
-emit_plumtree_sends([], _Realm, _State) -> ok;
-emit_plumtree_sends([{send, Peer, Frame} | Rest], Realm, State) ->
-    route(State, Peer, frame_with_sender(Frame, Realm, State)),
-    emit_plumtree_sends(Rest, Realm, State).
-
-frame_with_sender(Frame, _Realm, State) ->
-    Frame#{sender => maps:get(pubkey, State)}.
-
-deliver_payloads([], _Realm, State, _RS) -> State;
-deliver_payloads([{_MsgId, Payload} | Rest], Realm, State, RS) ->
-    State1 = feed_pubsub(Payload, Realm, State, RS),
-    deliver_payloads(Rest, Realm, State1, RS).
-
-feed_pubsub(#{frame_type := event, topic := T} = Frame, Realm, State, RS) ->
-    {_, Subs} = hecate_pubsub:process(maps:get(pubsub, RS),
-                                      undefined, Frame),
-    log_delivery(State, Realm, T, maps:get(payload, Frame), Subs);
-feed_pubsub(_Other, _Realm, State, _RS) ->
-    State.
-
-log_delivery(State, Realm, Topic, Payload, Subs) when Subs =/= [] ->
-    Key = {Realm, Topic},
-    Delivered = maps:get(delivered, State),
-    Existing  = maps:get(Key, Delivered, []),
-    State#{delivered := Delivered#{Key => [Payload | Existing]}};
-log_delivery(State, _Realm, _Topic, _Payload, _Subs) ->
-    State.
-
-%%---------------------------------------------------------------------
-%% Pubsub dispatch (direct SUBSCRIBE/UNSUBSCRIBE/EVENT — rare in tests)
-%%---------------------------------------------------------------------
-
-dispatch_pubsub(#{realm := Realm} = Frame, State) ->
-    RS = realm_state(State, Realm),
-    {PS1, _} = hecate_pubsub:process(maps:get(pubsub, RS), undefined, Frame),
-    update_realm(State, Realm, fun(R) -> R#{pubsub := PS1} end).
-
-%%=====================================================================
-%% Internals
-%%=====================================================================
-
-realm_state(State, Realm) ->
-    maps:get(Realm, maps:get(realms, State)).
-
-update_realm(State, Realm, Fun) ->
-    Realms = maps:get(realms, State),
-    RS  = maps:get(Realm, Realms),
-    RS1 = Fun(RS),
-    State#{realms := Realms#{Realm => RS1}}.
-
-route(State, DstPubKey, Msg) ->
-    maps:get(router, State) ! {route, DstPubKey, Msg},
+send(#{router := Router, node_id := Self}, Realm, To, Frame) ->
+    Router ! {route, Self, To, Realm, macula_frame:encode(Frame)},
     ok.
-
-call_station(Pid, Msg) ->
-    Ref = make_ref(),
-    Pid ! {control, self(), Ref, Msg},
-    receive {Ref, Reply} -> Reply
-    after 500 -> {error, station_timeout}
-    end.
 
 %%=====================================================================
 %% Router
 %%=====================================================================
 
-spawn_router() ->
-    spawn(fun() -> router_loop(undefined) end).
-
 router_loop(Table) ->
     receive
-        {table, T}             -> router_loop(T);
-        {route, Dst, Msg}      -> route_to(Table, Dst, Msg), router_loop(Table);
-        stop                   -> ok
+        {table, Table1} ->
+            router_loop(Table1);
+        {route, From, To, Realm, Bytes} ->
+            deliver(maps:find(To, Table), From, Realm, Bytes),
+            router_loop(Table);
+        {call, Caller, Ref, sync} ->
+            Caller ! {Ref, ok},
+            router_loop(Table);
+        stop ->
+            ok
     end.
 
-route_to(undefined, _, _) -> ok;
-route_to(Table, Dst, Msg) ->
-    case maps:find(Dst, Table) of
-        {ok, Pid} -> Pid ! {frame, Msg};
-        error     -> ok
+deliver({ok, Pid}, From, Realm, Bytes) -> Pid ! {frame, From, Realm, Bytes};
+deliver(error, _From, _Realm, _Bytes) -> ok.
+
+%%=====================================================================
+%% Internals
+%%=====================================================================
+
+call(Pid, Request) ->
+    Ref = make_ref(),
+    Pid ! {call, self(), Ref, Request},
+    receive {Ref, Reply} -> Reply
+    after 5000 -> erlang:error({no_reply, Request})
     end.

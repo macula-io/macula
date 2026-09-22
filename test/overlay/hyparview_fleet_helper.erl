@@ -1,248 +1,177 @@
-%% @doc CT helper for the HyParView acceptance suite.
+%% @doc CT helper for the HyParView acceptance suite: a fleet of in-VM stations that admit one another through
+%% realm-gated JOIN, as a node does in 12.
 %%
-%% Each station is a process that holds, per realm, a
-%% `macula_hyparview_view' (active + passive partial view). Stations
-%% share an in-VM router that delivers frames between station
-%% inboxes. On receiving a `hyparview_*' frame the station dispatches
-%% to `macula_hyparview_proto:process/4', which emits outbound frames
-%% via the router and mutates the view.
+%% Each station is a process with an identity key and, per realm, a HyParView view and a gated ctx(): the realm's key
+%% id, the profile, and the station's own endorsement for the NEIGHBOR frames it sends. Admission is
+%% `macula_hyparview_proto:process/4''s own: a JOIN carries the joiner's endorsement in its `record' field, and the
+%% receiving station verifies it against the realm key and the sender.
 %%
-%% `join/5' drives the realm-join handshake: the joiner signs a JOIN
-%% frame, attaches the admin-signed endorsement, sends it to a seed;
-%% the seed verifies via `macula_hyparview_endorsement:
-%% verify_endorsement/3' and admits the joiner into its active view.
-%% Non-endorsed or bogus-endorsed joiners are silently dropped.
+%% Frames travel as their encoded bytes, through a router process that delivers them with the sender's node_id, the
+%% way a station link delivers an overlay frame with its sender. settle/1 waits until no frame is in flight, so a test
+%% can assert what a join did not do.
 -module(hyparview_fleet_helper).
 
 -export([
-    start_fleet/3,
+    start_fleet/2,
     stop_fleet/1,
     endorse/4,
     join/5,
     active_view/3,
-    pubkey_of/2
+    node_id_of/2
 ]).
 
 -record(station, {
-    name   :: atom(),
-    pid    :: pid(),
-    kp     :: macula_node_keys:node_key(),
-    pubkey :: macula_node_keys:node_id()
+    name    :: atom(),
+    pid     :: pid(),
+    node_id :: macula_node_keys:node_id()
 }).
+
+-define(PROFILE, pq_pure).
 
 %%=====================================================================
 %% Fleet lifecycle
 %%=====================================================================
 
-%% @doc Build a fleet of stations. The realm id IS the admin pubkey
-%% in our model — same convention the SDK constructors use.
-start_fleet(Names, Realms, _Opts) when is_list(Names), is_list(Realms) ->
-    Router = spawn_router(),
-    Stations = [build_station(N, Realms, Router) || N <- Names],
-    Map = maps:from_list([{S#station.pubkey, S#station.pid}
-                          || S <- Stations]),
-    Router ! {table, Map},
-    NameMap = maps:from_list([{S#station.name, S} || S <- Stations]),
-    #{router => Router, stations => NameMap, realms => Realms}.
+%% @doc A fleet of stations named Names, each a member of every realm in Realms, a list of
+%% #{realm := RealmId, realm_key := RealmKey}.
+start_fleet(Names, Realms) when is_list(Names), is_list(Realms) ->
+    Router = spawn_link(fun() -> router_loop(#{}) end),
+    Stations = [build_station(Name, Realms, Router) || Name <- Names],
+    Router ! {table, maps:from_list([{S#station.node_id, S#station.pid} || S <- Stations])},
+    #{router => Router, stations => maps:from_list([{S#station.name, S} || S <- Stations])}.
 
 stop_fleet(#{router := Router, stations := Stations}) ->
-    maps:foreach(fun(_N, S) -> S#station.pid ! stop end, Stations),
+    maps:foreach(fun(_Name, #station{pid = Pid}) -> Pid ! stop end, Stations),
     Router ! stop,
     ok.
 
 build_station(Name, Realms, Router) ->
-    Kp = macula_test_identity:key(),
-    {ok, Pub} = macula_node_keys:node_id(Kp),
-    Pid = spawn(fun() ->
-        station_loop(init_state(Name, Kp, Pub, Realms, Router))
-    end),
-    #station{name = Name, pid = Pid, kp = Kp, pubkey = Pub}.
+    Key = macula_test_identity:key(),
+    {ok, NodeId} = macula_node_keys:node_id(Key),
+    PerRealm = maps:from_list([{Realm, #{view => macula_hyparview_view:new(NodeId),
+                                         ctx => gated_ctx(Realm, RealmKey, NodeId)}}
+                               || #{realm := Realm, realm_key := RealmKey} <- Realms]),
+    Pid = spawn_link(fun() -> station_loop(#{node_id => NodeId, router => Router, realms => PerRealm, seen => 0}) end),
+    #station{name = Name, pid = Pid, node_id = NodeId}.
 
-init_state(Name, Kp, Pub, Realms, Router) ->
-    Per = maps:from_list(
-            [{R, #{view => macula_hyparview_view:new(Pub)}} || R <- Realms]),
-    #{
-        name   => Name,
-        kp     => Kp,
-        pubkey => Pub,
-        router => Router,
-        realms => Per
-    }.
+gated_ctx(Realm, RealmKey, NodeId) ->
+    #{self_id => NodeId, realm => Realm, now => 0,
+      realm_key_id => macula_node_keys:key_id(RealmKey), profile => ?PROFILE,
+      self_endorsement => endorsement(Realm, RealmKey, NodeId)}.
 
 %%=====================================================================
-%% Public helpers
+%% Test API
 %%=====================================================================
 
-pubkey_of(#{stations := Map}, Name) ->
-    (maps:get(Name, Map))#station.pubkey.
+node_id_of(#{stations := Map}, Name) ->
+    (maps:get(Name, Map))#station.node_id.
 
-endorse(#{stations := Map}, Admin, Realm, Name) ->
-    #station{pubkey = Pub} = maps:get(Name, Map),
-    R = macula_record:realm_member_endorsement(
-          Realm,
-          #{realm => Realm, member_node => Pub, roles => [<<"peer">>]}),
-    macula_record:sign(R, Admin).
+%% @doc The wire form of a realm member endorsement for station Name, signed by SigningKey.
+endorse(Net, SigningKey, Realm, Name) ->
+    endorsement(Realm, SigningKey, node_id_of(Net, Name)).
 
-active_view(#{stations := Map} = _Net, Name, Realm) ->
+%% @doc JoinerName sends SeedName a JOIN for Realm carrying Endorsement, and the fleet settles.
+join(#{stations := Map} = Net, JoinerName, SeedName, Realm, Endorsement) ->
+    #station{pid = Joiner} = maps:get(JoinerName, Map),
+    ok = call_station(Joiner, {send_join, Realm, node_id_of(Net, SeedName), Endorsement}),
+    settle(Net).
+
+active_view(#{stations := Map}, Name, Realm) ->
     #station{pid = Pid} = maps:get(Name, Map),
     call_station(Pid, {active_view, Realm}).
 
-%% @doc Run the admission handshake: `JoinerName' sends a signed
-%% `hyparview_join' frame to `SeedName' bundled with `Endorsement'
-%% (admin-signed member endorsement). Seed verifies via
-%% `macula_hyparview_endorsement' and either admits or drops.
-join(#{stations := Map} = _Net, JoinerName, SeedName, Realm, Endorsement) ->
-    #station{pid = JPid}    = maps:get(JoinerName, Map),
-    #station{pubkey = SPub} = maps:get(SeedName,   Map),
-    call_station(JPid, {send_join, Realm, SPub, Endorsement}),
-    %% Handshake is a chain of one-shot messages; give the router a
-    %% brief window to fan out NEIGHBOR(high) replies.
-    timer:sleep(20),
-    ok.
+%%=====================================================================
+%% Settling: no frame in flight
+%%=====================================================================
+
+%% Every frame goes through the router, which delivers in order, so once the router and then every station have
+%% answered a call, every frame sent before that has been handled. A round in which no station handled a frame means
+%% nothing is left in flight.
+settle(#{router := Router, stations := Map} = Net) ->
+    Seen = fun() ->
+               ok = call(Router, sync),
+               lists:sum([call_station(Pid, seen) || #station{pid = Pid} <- maps:values(Map)])
+           end,
+    settled(Seen(), Seen, Net).
+
+settled(Count, Seen, Net) ->
+    next_round(Seen(), Count, Seen, Net).
+
+next_round(Count, Count, _Seen, _Net) -> ok;
+next_round(Later, _Count, Seen, Net) -> settled(Later, Seen, Net).
 
 %%=====================================================================
-%% Station loop
+%% Station
 %%=====================================================================
 
 station_loop(State) ->
     receive
-        stop -> ok;
-        {frame, Frame}             -> station_loop(dispatch_frame(Frame, State));
-        {control, From, Ref, Msg}  ->
-            {Reply, State2} = control(Msg, State),
-            From ! {Ref, Reply},
-            station_loop(State2);
-        _Other ->
-            station_loop(State)
+        stop ->
+            ok;
+        {frame, From, Bytes} ->
+            station_loop(handle_frame(From, Bytes, State));
+        {call, Caller, Ref, Request} ->
+            {Reply, State1} = handle_call(Request, State),
+            Caller ! {Ref, Reply},
+            station_loop(State1)
     end.
 
-%%---------------------------------------------------------------------
-%% Control messages (synchronous)
-%%---------------------------------------------------------------------
-
-control({send_join, Realm, SeedPub, Endorsement}, State) ->
-    JPub = maps:get(pubkey, State),
-    %% Test-only side channel for the endorsement so the seed can
-    %% verify it — production wire format carries it in the JOIN
-    %% frame's own `record' field (see `macula_hyparview_endorsement:
-    %% build_join/4').
-    Frame = macula_frame:hyparview_join(#{realm => Realm, new_member => JPub}),
-    Env   = #{frame => Frame, endorsement => Endorsement,
-              realm => Realm, joiner => JPub},
-    route(State, SeedPub, {join_envelope, Env}),
+handle_call({send_join, Realm, Seed, Endorsement}, #{node_id := Self} = State) ->
+    send(State, Seed, macula_hyparview_endorsement:build_join(Realm, Self, Endorsement)),
     {ok, State};
+handle_call({active_view, Realm}, #{realms := Realms} = State) ->
+    #{view := View} = maps:get(Realm, Realms),
+    {macula_hyparview_view:active(View), State};
+handle_call(seen, #{seen := Seen} = State) ->
+    {Seen, State}.
 
-control({active_view, Realm}, State) ->
-    RS = realm_state(State, Realm),
-    {macula_hyparview_view:active(maps:get(view, RS)), State}.
+handle_frame(From, Bytes, #{realms := Realms, seen := Seen} = State) ->
+    {ok, #{realm := Realm} = Frame, <<>>} = macula_frame:decode(Bytes),
+    #{view := View, ctx := Ctx} = RealmState = maps:get(Realm, Realms),
+    {View1, Actions} = macula_hyparview_proto:process(View, From, Frame, Ctx#{now := erlang:system_time(millisecond)}),
+    [send(State, Peer, Out) || {send, Peer, Out} <- Actions],
+    State#{realms := Realms#{Realm := RealmState#{view := View1}}, seen := Seen + 1}.
 
-%%---------------------------------------------------------------------
-%% Frame dispatch
-%%---------------------------------------------------------------------
-
-dispatch_frame({join_envelope, #{frame := Frame, endorsement := End,
-                                 realm := Realm, joiner := Joiner}}, State) ->
-    handle_join_envelope(Frame, End, Realm, Joiner, State);
-dispatch_frame(#{frame_type := FT} = Frame, State) ->
-    case FT of
-        hyparview_join          -> dispatch_overlay(Frame, State);
-        hyparview_forward_join  -> dispatch_overlay(Frame, State);
-        hyparview_neighbor      -> dispatch_overlay(Frame, State);
-        hyparview_disconnect    -> dispatch_overlay(Frame, State);
-        hyparview_shuffle       -> dispatch_overlay(Frame, State);
-        hyparview_shuffle_reply -> dispatch_overlay(Frame, State);
-        _                       -> State
-    end.
-
-handle_join_envelope(Frame, Endorsement, Realm, Joiner, State) ->
-    case macula_hyparview_endorsement:verify_endorsement(Endorsement, Realm, Joiner) of
-        {ok, _Roles} ->
-            admit_joiner(Frame, Realm, Joiner, State);
-        {error, _} ->
-            State   %% silently drop
-    end.
-
-admit_joiner(_Frame, Realm, Joiner, State) ->
-    %% Admit joiner into active view and reply NEIGHBOR(high).
-    State1 = update_realm(State, Realm, fun(#{view := V} = RS) ->
-        RS#{view := macula_hyparview_view:add_active(V, Joiner)}
-    end),
-    Reply = macula_frame:hyparview_neighbor(
-                                #{realm => Realm, priority => high}),
-    route(State1, Joiner, Reply),
-    State1.
-
-%%---------------------------------------------------------------------
-%% Overlay dispatch
-%%---------------------------------------------------------------------
-
-dispatch_overlay(#{realm := Realm} = Frame, State) ->
-    RS = realm_state(State, Realm),
-    Ctx = #{
-        self_id  => maps:get(pubkey, State),
-        identity => maps:get(kp, State),
-        arwl     => 6, prwl => 3,
-        shuffle_ttl => 4,
-        now      => erlang:monotonic_time(millisecond)
-    },
-    From = maps:get(new_member, Frame, undefined),
-    {NewView, Actions} = macula_hyparview_proto:process(
-                           maps:get(view, RS), From, Frame, Ctx),
-    apply_overlay_actions(Actions, State,
-                          fun(ST) ->
-                              update_realm(ST, Realm,
-                                           fun(R) -> R#{view := NewView} end)
-                          end).
-
-apply_overlay_actions([], State, Finalize) ->
-    Finalize(State);
-apply_overlay_actions([{send, Peer, Frame} | Rest], State, Finalize) ->
-    route(State, Peer, Frame),
-    apply_overlay_actions(Rest, State, Finalize);
-apply_overlay_actions([_ | Rest], State, Finalize) ->
-    apply_overlay_actions(Rest, State, Finalize).
-
-%%=====================================================================
-%% Internals
-%%=====================================================================
-
-realm_state(State, Realm) ->
-    maps:get(Realm, maps:get(realms, State)).
-
-update_realm(State, Realm, Fun) ->
-    Realms = maps:get(realms, State),
-    RS  = maps:get(Realm, Realms),
-    RS1 = Fun(RS),
-    State#{realms := Realms#{Realm => RS1}}.
-
-route(State, DstPubKey, Msg) ->
-    maps:get(router, State) ! {route, DstPubKey, Msg},
+send(#{router := Router, node_id := Self}, To, Frame) ->
+    Router ! {route, Self, To, macula_frame:encode(Frame)},
     ok.
-
-call_station(Pid, Msg) ->
-    Ref = make_ref(),
-    Pid ! {control, self(), Ref, Msg},
-    receive {Ref, Reply} -> Reply
-    after 500 -> {error, station_timeout}
-    end.
 
 %%=====================================================================
 %% Router
 %%=====================================================================
 
-spawn_router() ->
-    spawn(fun() -> router_loop(undefined) end).
-
 router_loop(Table) ->
     receive
-        {table, T}             -> router_loop(T);
-        {route, Dst, Msg}      -> route_to(Table, Dst, Msg), router_loop(Table);
-        stop                   -> ok
+        {table, Table1} ->
+            router_loop(Table1);
+        {route, From, To, Bytes} ->
+            deliver(maps:find(To, Table), From, Bytes),
+            router_loop(Table);
+        {call, Caller, Ref, sync} ->
+            Caller ! {Ref, ok},
+            router_loop(Table);
+        stop ->
+            ok
     end.
 
-route_to(undefined, _, _) -> ok;
-route_to(Table, Dst, Msg) ->
-    case maps:find(Dst, Table) of
-        {ok, Pid} -> Pid ! {frame, Msg};
-        error     -> ok
+deliver({ok, Pid}, From, Bytes) -> Pid ! {frame, From, Bytes};
+deliver(error, _From, _Bytes) -> ok.
+
+%%=====================================================================
+%% Internals
+%%=====================================================================
+
+endorsement(Realm, SigningKey, Member) ->
+    Unsigned = macula_record:realm_member_endorsement(Realm, #{realm => Realm, member_node => Member,
+                                                               roles => [<<"peer">>]}),
+    macula_record:encode(macula_record:sign(Unsigned, SigningKey)).
+
+call_station(Pid, Request) ->
+    call(Pid, Request).
+
+call(Pid, Request) ->
+    Ref = make_ref(),
+    Pid ! {call, self(), Ref, Request},
+    receive {Ref, Reply} -> Reply
+    after 5000 -> erlang:error({no_reply, Request})
     end.

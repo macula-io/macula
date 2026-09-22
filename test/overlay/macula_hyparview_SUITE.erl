@@ -1,7 +1,7 @@
 %% @doc Acceptance tests for realm-join admission (Part 6 §9.6 / Part
 %% 3 §7.1). Exercises the full JOIN → verify-endorsement → admit
-%% path end-to-end across two in-VM stations, deterministically and
-%% without a real network.
+%% path end-to-end across two in-VM stations, over the frame codec,
+%% deterministically and without a real network.
 -module(macula_hyparview_SUITE).
 
 -include_lib("common_test/include/ct.hrl").
@@ -22,41 +22,30 @@ end_per_suite(_Cfg) -> ok.
 %%---------------------------------------------------------------------
 
 realm_join_admits_new_member(_Cfg) ->
-    {ok, AdminKp} = macula_node_keys:generate(realm, pq_pure),
-    Realm   = macula_node_keys:key_id(AdminKp),
-    Net = hyparview_fleet_helper:start_fleet([seed, joiner], [Realm], #{}),
+    #{realm := Realm, realm_key := RealmKey} = RealmSpec = realm(),
+    Net = hyparview_fleet_helper:start_fleet([seed, joiner], [RealmSpec]),
     try
-        End = hyparview_fleet_helper:endorse(Net, AdminKp, Realm, joiner),
-        hyparview_fleet_helper:join(Net, joiner, seed, Realm, End),
-        Active = hyparview_fleet_helper:active_view(Net, seed, Realm),
-        JoinerPub = pubkey_of(Net, joiner),
-        true = lists:member(JoinerPub, Active)
+        Endorsement = hyparview_fleet_helper:endorse(Net, RealmKey, Realm, joiner),
+        ok = hyparview_fleet_helper:join(Net, joiner, seed, Realm, Endorsement),
+        Joiner = hyparview_fleet_helper:node_id_of(Net, joiner),
+        true = lists:member(Joiner, hyparview_fleet_helper:active_view(Net, seed, Realm))
     after
         hyparview_fleet_helper:stop_fleet(Net)
     end.
 
+%% An endorsement signed by any key but the realm's is refused; the realm's own still admits afterwards.
 realm_join_rejects_bogus_endorsement(_Cfg) ->
-    {ok, RealAdmin} = macula_node_keys:generate(realm, pq_pure),
-    Realm     = macula_node_keys:key_id(RealAdmin),
-    {ok, Impostor}  = macula_node_keys:generate(realm, pq_pure),
-    Net = hyparview_fleet_helper:start_fleet([seed, joiner], [Realm], #{}),
+    #{realm := Realm, realm_key := RealmKey} = RealmSpec = realm(),
+    {ok, Impostor} = macula_node_keys:generate(realm, pq_pure),
+    Net = hyparview_fleet_helper:start_fleet([seed, joiner], [RealmSpec]),
     try
-        %% Build endorsement but sign with the impostor — verify must fail.
-        RealEnd = hyparview_fleet_helper:endorse(Net, RealAdmin, Realm, joiner),
-        JoinerPub = pubkey_of(Net, joiner),
-        Bogus0 = macula_record:realm_member_endorsement(
-                   Realm,
-                   #{realm => Realm, member_node => JoinerPub,
-                     roles => [<<"peer">>]}),
-        Bogus = macula_record:sign(Bogus0, Impostor),
-        hyparview_fleet_helper:join(Net, joiner, seed, Realm, Bogus),
-        %% Seed must NOT admit the bogus joiner.
-        Active = hyparview_fleet_helper:active_view(Net, seed, Realm),
-        false = lists:member(JoinerPub, Active),
-        %% Sanity: a subsequent valid endorsement still admits.
-        hyparview_fleet_helper:join(Net, joiner, seed, Realm, RealEnd),
-        Active2 = hyparview_fleet_helper:active_view(Net, seed, Realm),
-        true  = lists:member(JoinerPub, Active2)
+        Joiner = hyparview_fleet_helper:node_id_of(Net, joiner),
+        Bogus = hyparview_fleet_helper:endorse(Net, Impostor, Realm, joiner),
+        ok = hyparview_fleet_helper:join(Net, joiner, seed, Realm, Bogus),
+        false = lists:member(Joiner, hyparview_fleet_helper:active_view(Net, seed, Realm)),
+        Real = hyparview_fleet_helper:endorse(Net, RealmKey, Realm, joiner),
+        ok = hyparview_fleet_helper:join(Net, joiner, seed, Realm, Real),
+        true = lists:member(Joiner, hyparview_fleet_helper:active_view(Net, seed, Realm))
     after
         hyparview_fleet_helper:stop_fleet(Net)
     end.
@@ -65,4 +54,7 @@ realm_join_rejects_bogus_endorsement(_Cfg) ->
 %% Helpers
 %%=====================================================================
 
-pubkey_of(Net, Name) -> hyparview_fleet_helper:pubkey_of(Net, Name).
+%% A realm: its 32-byte id, and the key its endorsements are signed with.
+realm() ->
+    {ok, RealmKey} = macula_node_keys:generate(realm, pq_pure),
+    #{realm => crypto:strong_rand_bytes(32), realm_key => RealmKey}.

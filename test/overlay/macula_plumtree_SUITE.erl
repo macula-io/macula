@@ -1,7 +1,7 @@
 %% @doc Acceptance tests for Plumtree gossip + realm-scoped PubSub
 %% (Part 3 §7.3 / Part 6 §6). Covers end-to-end delivery across a
-%% chain topology and cross-realm isolation, deterministically and
-%% without a real network.
+%% chain topology and cross-realm isolation, with signed publications
+%% over the frame codec, deterministically and without a real network.
 -module(macula_plumtree_SUITE).
 
 -include_lib("common_test/include/ct.hrl").
@@ -22,9 +22,8 @@ end_per_suite(_Cfg) -> ok.
 %%---------------------------------------------------------------------
 
 plumtree_delivers_to_all_subscribers(_Cfg) ->
-    {ok, AdminKp} = macula_node_keys:generate(realm, pq_pure),
-    Realm   = macula_node_keys:key_id(AdminKp),
-    Net = plumtree_fleet_helper:start_fleet([a, b, c, d, e], [Realm], #{}),
+    Realm = crypto:strong_rand_bytes(32),
+    Net = plumtree_fleet_helper:start_fleet([a, b, c, d, e], [Realm]),
     try
         %% Chain topology: a — b — c — d — e. Every message must
         %% traverse intermediate hops.
@@ -37,7 +36,6 @@ plumtree_delivers_to_all_subscribers(_Cfg) ->
          || N <- [a, b, c, d, e]],
 
         ok = plumtree_fleet_helper:publish(Net, a, Realm, <<"chat">>, <<"hello">>),
-        timer:sleep(100),
 
         %% Each station must see exactly one delivery of the event.
         [begin
@@ -54,10 +52,10 @@ plumtree_delivers_to_all_subscribers(_Cfg) ->
 %%---------------------------------------------------------------------
 
 cross_realm_isolation(_Cfg) ->
-    {ok, AdminR1} = macula_node_keys:generate(realm, pq_pure), R1 = macula_node_keys:key_id(AdminR1),
-    {ok, AdminR2} = macula_node_keys:generate(realm, pq_pure), R2 = macula_node_keys:key_id(AdminR2),
+    R1 = crypto:strong_rand_bytes(32),
+    R2 = crypto:strong_rand_bytes(32),
     %% Both realms share the same fleet identities; wiring is per-realm.
-    Net = plumtree_fleet_helper:start_fleet([a, b, c], [R1, R2], #{}),
+    Net = plumtree_fleet_helper:start_fleet([a, b, c], [R1, R2]),
     try
         %% In R1: a—b connected. In R2: b—c connected.
         ok = plumtree_fleet_helper:connect(Net, a, b, R1),
@@ -69,7 +67,6 @@ cross_realm_isolation(_Cfg) ->
         ok = plumtree_fleet_helper:subscribe(Net, c, R2, <<"feed">>),
 
         ok = plumtree_fleet_helper:publish(Net, a, R1, <<"feed">>, <<"r1-only">>),
-        timer:sleep(100),
 
         %% Delivered on R1 subscribers in R1:
         1 = length(plumtree_fleet_helper:deliveries(Net, a, {R1, <<"feed">>})),
