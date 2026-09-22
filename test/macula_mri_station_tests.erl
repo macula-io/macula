@@ -2,13 +2,13 @@
 %%% @doc Tests for the `station' MRI type added in macula 4.3.0.
 %%%
 %%% Station MRIs are self-rooted: the realm field carries an
-%%% Ed25519 pubkey (z-base-32 encoded, 52 chars), there is no
+%%% Ed25519 node_id (z-base-32 encoded, 52 chars), there is no
 %%% reverse-domain notation, and the path must be empty.
 %%%
-%%% Form: `mri:station:<52-char-z32-pubkey>'.
+%%% Form: `mri:station:<52-char-z32-node_id>'.
 %%%
 %%% Required by hecate-daemon's serve_dns_over_mesh slice for
-%%% synthesising station qnames (e.g., `<z32(pubkey)>._st.macula.io.').
+%%% synthesising station qnames (e.g., `<z32(node_id)>._st.macula.io.').
 %%% @end
 %%%-------------------------------------------------------------------
 -module(macula_mri_station_tests).
@@ -33,9 +33,9 @@ station_test_() ->
         fun roundtrip_station/0,
         fun new_station_via_general_constructor/0,
         fun rejects_station_with_path/0,
-        fun rejects_station_with_short_pubkey/0,
+        fun rejects_station_with_short_node_id/0,
         fun rejects_station_with_invalid_z32/0,
-        fun rejects_station_with_uppercase_pubkey/0,
+        fun rejects_station_with_uppercase_node_id/0,
         fun station_is_builtin_type/0
      ]}.
 
@@ -44,8 +44,8 @@ station_test_() ->
 %%===================================================================
 
 parse_station_mri() ->
-    Pubkey = crypto:strong_rand_bytes(32),
-    Z32 = macula_z32:encode(Pubkey),
+    NodeId = crypto:strong_rand_bytes(32),
+    Z32 = macula_z32:encode(NodeId),
     Mri = <<"mri:station:", Z32/binary>>,
     {ok, Parsed} = macula_mri:parse(Mri),
     ?assertEqual(station, maps:get(type, Parsed)),
@@ -53,16 +53,16 @@ parse_station_mri() ->
     ?assertEqual([], maps:get(path, Parsed)).
 
 format_station_mri() ->
-    Pubkey = crypto:strong_rand_bytes(32),
-    Z32 = macula_z32:encode(Pubkey),
+    NodeId = crypto:strong_rand_bytes(32),
+    Z32 = macula_z32:encode(NodeId),
     Map = #{type => station, realm => Z32, path => []},
     Expected = <<"mri:station:", Z32/binary>>,
     ?assertEqual(Expected, macula_mri:format(Map)).
 
 roundtrip_station() ->
     %% A station MRI parsed and re-formatted matches the original.
-    Pubkey = crypto:strong_rand_bytes(32),
-    Z32 = macula_z32:encode(Pubkey),
+    NodeId = crypto:strong_rand_bytes(32),
+    Z32 = macula_z32:encode(NodeId),
     Original = <<"mri:station:", Z32/binary>>,
     {ok, Parsed} = macula_mri:parse(Original),
     Reformatted = macula_mri:format(Parsed),
@@ -70,8 +70,8 @@ roundtrip_station() ->
 
 new_station_via_general_constructor() ->
     %% macula_mri:new/3 should accept the station type.
-    Pubkey = crypto:strong_rand_bytes(32),
-    Z32 = macula_z32:encode(Pubkey),
+    NodeId = crypto:strong_rand_bytes(32),
+    Z32 = macula_z32:encode(NodeId),
     {ok, Mri} = macula_mri:new(station, Z32, []),
     Expected = <<"mri:station:", Z32/binary>>,
     ?assertEqual(Expected, Mri).
@@ -81,34 +81,34 @@ new_station_via_general_constructor() ->
 %%===================================================================
 
 rejects_station_with_path() ->
-    Pubkey = crypto:strong_rand_bytes(32),
-    Z32 = macula_z32:encode(Pubkey),
+    NodeId = crypto:strong_rand_bytes(32),
+    Z32 = macula_z32:encode(NodeId),
     %% Station type with non-empty path → must reject; stations
     %% are atomic identifiers.
     ?assertEqual({error, station_must_have_empty_path},
                  macula_mri:new(station, Z32, [<<"path">>])).
 
-rejects_station_with_short_pubkey() ->
+rejects_station_with_short_node_id() ->
     %% z32 input that decodes to fewer than 32 bytes → reject.
     Short = macula_z32:encode(crypto:strong_rand_bytes(16)),
-    {error, {invalid_station_pubkey_length, _}} =
+    {error, {invalid_station_node_id_length, _}} =
         macula_mri:new(station, Short, []).
 
 rejects_station_with_invalid_z32() ->
     %% Realm field that doesn't decode as z32 at all.
     Bad = <<"NOTVALIDZ32!">>,
-    {error, {invalid_station_pubkey_encoding, _}} =
+    {error, {invalid_station_node_id_encoding, _}} =
         macula_mri:new(station, Bad, []).
 
-rejects_station_with_uppercase_pubkey() ->
+rejects_station_with_uppercase_node_id() ->
     %% z-base-32 alphabet is lowercase only; uppercase chars are
     %% outside the alphabet and decode/1 must reject. Catches a
     %% common accidental-mangling pattern (DNS label
     %% case-insensitivity could "helpfully" upcase a label).
-    Pubkey = crypto:strong_rand_bytes(32),
-    Z32 = macula_z32:encode(Pubkey),
+    NodeId = crypto:strong_rand_bytes(32),
+    Z32 = macula_z32:encode(NodeId),
     Upper = string:uppercase(Z32),
-    {error, {invalid_station_pubkey_encoding, _}} =
+    {error, {invalid_station_node_id_encoding, _}} =
         macula_mri:new(station, Upper, []).
 
 %%===================================================================

@@ -83,7 +83,7 @@ Examples:
 - `mri:app:io.macula/acme/counter` -- an application
 - `mri:device:io.macula/acme/sensor-1` -- a device
 
-24 built-in types: realm, org, user, app, service, artifact, instance, license, cert, key, topic, proc, content, device, cluster, location, zone, network, model, dataset, config, class, taxonomy, station (the last is self-rooted by Ed25519 pubkey, not realm-scoped).
+24 built-in types: realm, org, user, app, service, artifact, instance, license, cert, key, topic, proc, content, device, cluster, location, zone, network, model, dataset, config, class, taxonomy, station (the last is self-rooted by node_id, not realm-scoped).
 
 ### MRI Type Registry
 Runtime registry for MRI types. Built-in types are always valid. Custom types can be registered per-realm via `macula_mri_registry`.

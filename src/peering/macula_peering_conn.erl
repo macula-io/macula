@@ -111,7 +111,8 @@
     %% Mirrors `dht_recipient' for the pubsub category. After DHT was
     %% bypassed (4.4.3), inbound EVENT became the dominant work on
     %% station observers — multi-publisher cases fire bursts of
-    %% Ed25519-verify-per-event work that backs up the same gen_server
+    %% a signature check per event, ML-DSA-87 since 12.0.0 and slower
+    %% than the Ed25519 this was written for, backing up the gen_server
     %% mailbox that handles handler dispatch and ADVERTISE / SUBSCRIBE
     %% propagation. Stations on macula >= 4.4.4 set this to a dedicated
     %% pubsub frame dispatcher.

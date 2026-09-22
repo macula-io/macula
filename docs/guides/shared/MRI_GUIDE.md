@@ -126,9 +126,11 @@ path    = segment *("/" segment)
 
 ### Self-Rooted Identifiers
 
-Stations carry their own root of trust (their Ed25519 pubkey). They have no
-reverse-domain realm and no path; the realm field of the MRI carries the pubkey
-directly, z-base-32 encoded (32 bytes → 52 chars; the canonical PKARR encoding).
+Stations carry their own root of trust: their node_id, the SHA-256 over their
+identity key (D5). They have no reverse-domain realm and no path; the realm
+field of the MRI carries that node_id, z-base-32 encoded (32 bytes to 52 chars,
+the canonical PKARR encoding). It carried an Ed25519 public key until 12.0.0,
+when identity keys became ML-DSA-87 and no identifier could hold one.
 
 | Type | Path Schema | Example |
 |------|-------------|---------|

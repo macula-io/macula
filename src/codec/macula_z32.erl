@@ -1,7 +1,7 @@
 %%% @doc z-base-32 codec (Phil Zimmermann's "Human-Oriented Base-32
 %%% Encoding"). Alphabet: `ybndrfg8ejkmcpqxot1uwisza345h769'.
 %%%
-%%% Used by Macula to encode 32-byte Ed25519 pubkeys as DNS-label-
+%%% Used by Macula to encode 32-byte node_ids as DNS-label-
 %%% friendly strings: 32 bytes → 52 ASCII characters, comfortably
 %%% within DNS's 63-char per-label cap. PKARR (the
 %%% public-key-addressable resource record convention) and projects
@@ -17,7 +17,7 @@
 %%% over from the encoder's right-padding.
 %%%
 %%% Length convention (the cases that matter for Macula):
-%%%   - 32 bytes (Ed25519 pubkey) → 52 chars
+%%%   - 32 bytes (a node_id) → 52 chars
 %%%   - 16 bytes (UUID-like) → 26 chars
 %%%   - empty → empty
 %%%

@@ -435,10 +435,15 @@ type_to_binary(Atom) when is_atom(Atom) -> atom_to_binary(Atom, utf8).
 validate_parsed(#{type := Type, realm := Realm, path := Path}) ->
     validate_type(Type, Realm, Path).
 
-%% Station MRIs are self-rooted: the realm field carries an
-%% Ed25519 pubkey (z-base-32 encoded, 52 chars), there is no
-%% reverse-domain, and the path must be empty. Validate against
-%% the macula_z32 codec rather than the reverse-domain regex.
+%% Station MRIs are self-rooted: the realm field carries the station's
+%% node_id (z-base-32 encoded, 32 bytes to 52 chars), there is no
+%% reverse-domain, and the path must be empty. Validate against the
+%% macula_z32 codec rather than the reverse-domain regex.
+%%
+%% It held an Ed25519 public key until 12.0.0, when a node_id became a
+%% SHA-256 hash over an identity key (D5) and that key became ML-DSA-87,
+%% 2,592 bytes, which no identifier could carry. The size is the same 32
+%% bytes; what it names is not.
 validate_type(station, Realm, Path) ->
     validate_station(Realm, Path);
 validate_type(Type, Realm, Path) ->
@@ -447,16 +452,16 @@ validate_type(Type, Realm, Path) ->
         false -> {error, {invalid_type, Type}}
     end.
 
-validate_station(_Pubkey, [_ | _]) ->
+validate_station(_NodeId, [_ | _]) ->
     {error, station_must_have_empty_path};
-validate_station(Pubkey, []) when is_binary(Pubkey) ->
-    case macula_z32:decode(Pubkey) of
+validate_station(NodeId, []) when is_binary(NodeId) ->
+    case macula_z32:decode(NodeId) of
         {ok, <<_:32/binary>>} -> ok;
-        {ok, _Other}          -> {error, {invalid_station_pubkey_length, Pubkey}};
-        {error, invalid_z32}  -> {error, {invalid_station_pubkey_encoding, Pubkey}}
+        {ok, _Other}          -> {error, {invalid_station_node_id_length, NodeId}};
+        {error, invalid_z32}  -> {error, {invalid_station_node_id_encoding, NodeId}}
     end;
 validate_station(_, _) ->
-    {error, station_pubkey_must_be_binary}.
+    {error, station_node_id_must_be_binary}.
 
 validate_realm(Realm, Path) when is_binary(Realm), byte_size(Realm) > 0 ->
     validate_realm_format(Realm, Path);

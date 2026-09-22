@@ -34,7 +34,7 @@
     device, cluster, location, zone, network,
     model, dataset, config,
     class, taxonomy,
-    station          %% v4.3.0: self-rooted by Ed25519 pubkey
+    station          %% self-rooted by node_id, not by a realm
 ]).
 
 -record(state, {}).
