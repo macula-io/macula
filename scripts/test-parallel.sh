@@ -15,6 +15,22 @@
 # three tests that were running twice. To judge whether a test is honest, run it
 # alone (`rebar3 eunit --module=X') and run it under these shards.
 #
+# ⛔ DO NOT PARALLELISE WITHIN A SHARD. Shards are separate OS processes and so
+# separate VMs, which is what makes them safe. Inside one shard eunit runs
+# modules SERIALLY, and 16 test modules depend on that today: they set a GLOBAL
+# application env in setup and restore it in cleanup, which is only sound while
+# nothing else runs between the two. Counted 2026-09-23, the heaviest being
+# macula_dist_tests, macula_stream_tests, macula_stream_sessions_tests, the
+# three macula_station_link_stream_* modules, macula_foundation_tests,
+# macula_crypto_profile_tests, macula_cluster_tests, macula_client_pool_keys_tests
+# and macula_client_node_identity_tests.
+#
+# It would not fail loudly. Another module's pool picks up the temp path one
+# module set, writes a node identity into a directory that module's cleanup then
+# deletes, and it surfaces as a missing or unreadable key somewhere unrelated,
+# looking like a bug in identity storage rather than a test leak. Anything that
+# wants more parallelism must give each unit its own VM, as the shards do.
+#
 # WHAT IT DOES NOT DO: change which tests run. The module list is taken from
 # the compiled beams, not from a filename pattern, and the script refuses to
 # run unless every module it found lands in exactly one shard. See "The list"
