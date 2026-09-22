@@ -478,6 +478,15 @@ change, the done criterion and the effort. The US profile goes first; the EU par
     (WP 1.4, WP 4.2): `MaculaRealm.Identity.RealmUcanIssuer` mints with `:macula_ucan.create/4` and the realm key,
     in place of `:macula_ucan_nif.create/5`, which `macula` 12 no longer has; a service names the realm's issuer by
     that key's key id (`realm_member_required`). This starts only after `macula` 12 lands (Raf's order);
+  - the mint is the last of five steps, since the realm's device identity is Ed25519 in four places before it, and a
+    `macula` 12 device, an ML-DSA node key named by node_id, is refused at the first (Saturnus, from macula-realm
+    main, 2026-09-22):
+    - `DeviceKeyOwnershipProof`, the device-tier RPC join, takes only a 32-byte key and verifies with Ed25519;
+    - `JoinSession`'s changeset, the web join, accepts only a 32-byte Ed25519 public key;
+    - `MembershipAdmission`'s allow and deny lists key on the hex Ed25519 key, so operators' lists move to
+      node_ids;
+    - `IssueRealmCertificates.issue_ed25519_app_cert` builds the device certificate around an Ed25519 key, under
+      an RSA realm CA;
   - the realm carries its profile (D1);
   - the `io.macula` realm deployment in the EU profile, as a separate deployment on the post-quantum fleet
     (D14, D19), and a
