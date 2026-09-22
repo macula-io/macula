@@ -1,6 +1,13 @@
 %%% @doc Tests for macula_key_leak_sample: a depth-limited print of a whole key map and a printed decoded RSA private key
 %%% each show a form the sample finds, and the public halves alone show none.
--module(macula_key_leak_sample_tests).
+%%%
+%%% NOT named macula_key_leak_sample_tests, which is what it tests. eunit pairs a
+%%% module with a `<module>_tests' sibling, and both this and macula_key_leak_sample
+%%% live under test/, so the pair made `rebar3 eunit' run these three tests TWICE:
+%%% once by walking the helper and picking up its sibling, once by walking the
+%%% sibling directly. The suite's headline count was 3 higher than the number of
+%%% distinct tests. Breaking the name pairing is what stops that.
+-module(macula_key_leak_tests).
 
 -include_lib("eunit/include/eunit.hrl").
 

@@ -205,19 +205,29 @@ self_connection_prevention_test_() ->
 %%% High-Level API Tests (macula_cluster module)
 %%%===================================================================
 
+%% erlang:function_exported/3 answers false for a module that is not LOADED,
+%% not only for one that lacks the function. These four asserted the export
+%% without loading macula_cluster first, so they passed only when some earlier
+%% module in the same run had already loaded it, and failed whenever this module
+%% ran on its own or first in a shard. Loading it here asserts the same thing
+%% and asks nothing of the order the suite happens to run in.
+exports(F, A) ->
+    {module, macula_cluster} = code:ensure_loaded(macula_cluster),
+    erlang:function_exported(macula_cluster, F, A).
+
 macula_cluster_start_cluster_exports_test() ->
     %% Verify the function is exported
-    ?assert(erlang:function_exported(macula_cluster, start_cluster, 0)),
-    ?assert(erlang:function_exported(macula_cluster, start_cluster, 1)).
+    ?assert(exports(start_cluster, 0)),
+    ?assert(exports(start_cluster, 1)).
 
 macula_cluster_stop_cluster_exports_test() ->
-    ?assert(erlang:function_exported(macula_cluster, stop_cluster, 0)).
+    ?assert(exports(stop_cluster, 0)).
 
 macula_cluster_nodes_exports_test() ->
-    ?assert(erlang:function_exported(macula_cluster, nodes, 0)).
+    ?assert(exports(nodes, 0)).
 
 macula_cluster_is_clustered_exports_test() ->
-    ?assert(erlang:function_exported(macula_cluster, is_clustered, 0)).
+    ?assert(exports(is_clustered, 0)).
 
 macula_cluster_is_clustered_false_initially_test() ->
     %% Stop any running strategies first

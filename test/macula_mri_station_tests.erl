@@ -16,12 +16,26 @@
 -include_lib("eunit/include/eunit.hrl").
 
 setup() ->
+    %% Stop what we start, and only that: if the registry is already up
+    %% (another module's fixture, or the macula application) leave it alone.
     case whereis(macula_mri_registry) of
-        undefined -> {ok, _} = macula_mri_registry:start_link([]);
-        _ -> ok
+        undefined ->
+            {ok, Pid} = macula_mri_registry:start_link([]),
+            {started_here, Pid};
+        _ ->
+            already_running
     end.
 
-cleanup(_) -> ok.
+%% Runs whether the tests passed or failed, because it is the teardown of a
+%% setup fixture rather than a call at the end of a test body. macula_mri_registry
+%% is a supervised child of macula_root, so a copy left registered here makes the
+%% NEXT module's application:ensure_all_started(macula) fail with
+%% {already_started, Pid} and take every test in it down.
+cleanup({started_here, Pid}) ->
+    gen_server:stop(Pid),
+    ok;
+cleanup(already_running) ->
+    ok.
 
 station_test_() ->
     {setup,
