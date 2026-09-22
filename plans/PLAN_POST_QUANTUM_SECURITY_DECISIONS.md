@@ -926,30 +926,36 @@ before its wire checks are green.
   - The pinned realm key is what keeps the admin invariant true at the moment it matters most, which is a station
     switched on before its realm's trust list exists.
 - **Amends D23**, which said handshake frames carry no endorsement. See the note there.
-- ⚠ **Open, and the one number Raf should confirm: the endorsement's lifetime, which IS the removal bound.** The
-  verifier caps the window at 30 days (`macula_record:max_endorsement_window_ms/0`), which is far too long for this
-  use. Two shapes, and they trade the same thing:
-  - **D22's cadence**, valid 1 hour, reissued every 15 minutes, 5 minutes of tolerance: a removed member stops
-    connecting within 65 minutes, the same bound and the same words as D22. Cost: every member refreshes from the
-    realm every 15 minutes, so the realm's availability becomes every member's availability.
-  - **A longer window plus withdrawal**, for example valid 24 hours and reissued at half its life, with the station
-    checking the endorsement slot's tombstone after admitting rather than during the handshake
-    (`slot_endorsement/4` already returns `withdrawn`, and a tombstone outlives the endorsement's own expiry). The
-    bound is then how soon that check runs, not the expiry, and a handshake never waits on a lookup.
-  - **Recommended:** the second, with the post-admission check bounded and stated, because the first couples every
-    connection in the mesh to the realm being up, which is the failure the fleet already has with `org_directory`.
+- **The removal bound, decided by Raf on 2026-09-22: a long endorsement, and withdrawal checked after admitting.**
+  An endorsement is valid for at most 24 hours and is reissued at half its life. **The expiry is not the removal
+  bound.** The station looks up the member's endorsement slot AFTER admitting the connection, never during the
+  handshake, and drops the connection when the realm key's tombstone says `withdrawn`; `slot_endorsement/4` already
+  returns exactly that, and a tombstone outlives the endorsement's own expiry. The bound is how soon that lookup
+  runs: **within 60 seconds of admitting, and every 15 minutes on an open connection thereafter**, which is the
+  cadence D22 already uses for status on open connections. A removed member therefore keeps a connection for at most
+  that interval, and cannot make a new one once the endorsement expires.
+  - **Why not D22's 1-hour, 15-minute cadence for the endorsement itself**, which would have given a 65-minute bound
+    in D22's own words: the endorsement is issued by the REALM, not by the node's own identity key, so that cadence
+    would make every member refresh from the realm every 15 minutes and turn the realm's availability into every
+    member's availability. That is the failure the fleet already has with `org_directory`, where a realm roll left
+    services unable to advertise for up to two hours.
+  - The 30-day cap in `macula_record:max_endorsement_window_ms/0` stays as the record layer's outer limit; 24 hours
+    is this use's limit and the issuer's rule.
 - **Consequences when `enforce` is on:** the all-zero realm demo path stops working, and with it `macula-mcp` device
   auto-join out of the box, the `mcl-*` services and `macula-e2e`, each of which needs an invite first. The other
   SDKs follow in tier 2.
-- ⚠ **Open: a pinned home realm key against realm-agnostic stations.** Sprint A (2026-04-15) reversed per-realm state
-  on the station: stations are realm-agnostic infrastructure. One pinned key for break-glass is not realm state, but
-  it is a binding, and it needs Raf's word rather than passing unnoticed.
+- **A pinned home realm key, accepted by Raf on 2026-09-22, against Sprint A.** Sprint A (2026-04-15) reversed
+  per-realm state on the station: stations are realm-agnostic infrastructure. This is a deliberate, narrow exception
+  to that, put to Raf as such: ONE public key, used only to recognise admins, and no realm state, views or
+  membership on the station. Without it a station switched on before the trust list exists can verify nobody,
+  including its own admins, and the admin invariant above would not hold.
 - ⚠ **Open: rotating the pinned key.** If a realm key is compromised or rotated, every station's pin moves. How it
   moves, and whether a station holding a stale pin admits admins or refuses them, is undecided.
 - **Depends on:** the published realm trust list D28 waits on, for every non-admin check. Until it exists, a station
   switched to `enforce` admits admins and refuses everyone else, so the design must make that visible when the
   setting is turned on rather than leave it looking like "nobody can connect".
-- **Status:** proposed 2026-09-22 by Neptunus, from Raf's decisions of the same day. **Not accepted yet**; the three
-  open points above are Raf's.
+- **Status:** accepted by Raf on 2026-09-22, in four answers: build it in 12.0.0 with a toggle; the default is OFF;
+  admins ALWAYS have access; and, of the two removal shapes above, the long endorsement with withdrawal checked
+  after admitting. One point stays open, marked above: rotating a pinned realm key.
 - **Blocks:** WP 1.3 (the CONNECT check), WP 1.5 (the `member_endorsement` field), WP 1.6, WP 3.1 (the realm issuing
   and withdrawing endorsements). The station check is built after macula 12 lands.
