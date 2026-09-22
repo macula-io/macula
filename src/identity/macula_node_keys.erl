@@ -50,6 +50,8 @@
 -export([
     generate/2,
     generate/3,
+    node_identity/1,
+    node_identity/2,
     save/2,
     load/3,
     redacted/1,
@@ -129,6 +131,101 @@ generate(Purpose, Profile, Options) when map_size(Options) =:= 0 ->
 %%------------------------------------------------------------------
 %% Persistence
 %%------------------------------------------------------------------
+
+%% @doc THE NODE'S identity key: one per node, persisted, shared by every pool and by the distribution tunnel.
+%%
+%% Loads the stored key, or grinds one and stores it if there is none. The path comes from the `node_identity_path'
+%% macula application env, so no caller repeats the convention. Callers hold what they are given; nothing is cached
+%% here.
+%%
+%% ⚠ THIS RUNS BEFORE THE APPLICATION IS STARTED. `macula_dist' is the `-proto_dist macula' driver, so net_kernel
+%% calls its `listen/1' during KERNEL startup when the node is named on the command line, and it starts no
+%% application: there is no `ensure_all_started' anywhere in `macula_dist_system'. A supervised owner process would
+%% not exist to ask at that moment, which is why the serialisation below is in the FILESYSTEM and not in a process.
+-spec node_identity(macula_crypto_profile:profile()) -> {ok, node_key()} | {error, term()}.
+node_identity(Profile) ->
+    node_identity(node_identity_path(), Profile).
+
+%% @doc As `node_identity/1', at an explicit path. Exported so a test can point a node at its own key file instead of
+%% the machine's: a test that used the configured path would read, and on a fresh machine WRITE, the identity of
+%% whatever is running the suite.
+-spec node_identity(file:name_all(), macula_crypto_profile:profile()) -> {ok, node_key()} | {error, term()}.
+node_identity(Path, Profile) ->
+    stored_or_ground(load(Path, identity, Profile), Path, Profile).
+
+stored_or_ground({ok, _Key} = Stored, _Path, _Profile) ->
+    Stored;
+stored_or_ground({error, enoent}, Path, Profile) ->
+    ground_and_store(generate(identity, Profile, #{puzzle_difficulty => puzzle_difficulty()}), Path, Profile);
+%% ⛔ A FILE THAT EXISTS AND WILL NOT LOAD IS NEVER OVERWRITTEN. Wrong profile, wrong permissions, corrupt,
+%% truncated: every one is refused and left exactly as it is. Grinding a replacement would be the single most
+%% destructive thing this module could do — the node's permissions point at an id it could then no longer prove, and
+%% the evidence of what went wrong would be gone. An operator can move the file aside deliberately; this cannot do it
+%% for them.
+%%
+%% ⚠ THIS CLAUSE IS NOT WHAT MAKES THAT SAFE, AND SAYING SO MATTERS. `create_new/2' refuses to replace an existing
+%% file, so even without this clause a ground replacement could not land. Both were mutated to find out: removing
+%% either one alone leaves the file intact and every test green, and only removing BOTH destroys it. So the two are
+%% independent guards and this one's real work is smaller and worth stating honestly — it returns the ORIGINAL
+%% refusal, which says what is wrong with the file, instead of an `eexist' from the store followed by the same load
+%% failing again, and it skips a pointless grind on the way.
+stored_or_ground({error, _Refusal} = Refused, _Path, _Profile) ->
+    Refused.
+
+ground_and_store({ok, Key}, Path, Profile) ->
+    claimed(create_new(Path, encode(Key)), Key, Path, Profile);
+ground_and_store({error, _} = Failed, _Path, _Profile) ->
+    Failed.
+
+%% ⚠ THE LOSER OF A RACE USES THE WINNER'S KEY, and that is the whole point. Two pools, or a pool and a distribution
+%% tunnel, can start at once: `macula_client:connect/2' is a plain `gen_server:start_link', so `init/1' runs in the
+%% new process and nothing serialises two of them. Both would find no file and both would grind.
+%%
+%% `create_new/2' only ever creates, never replaces, so exactly one of them stores a key and the other is told
+%% `eexist' and reads back what the winner stored. Both then hold the SAME key. A plain save would have let the later
+%% writer replace the file while the earlier caller carried on holding the key it ground, which is two node_ids on one
+%% node: the exact thing this design exists to prevent, arriving as a rare startup flake.
+%%
+%% That is not a guess about a race that might exist. Eight concurrent first starts are driven in
+%% `macula_client_node_identity_tests', and with `create_new/2' mutated to replace rather than refuse they come back
+%% with more than one node_id.
+%%
+%% The cost of losing is one wasted grind, about a second of CPU, once, and never a wrong identity.
+claimed(ok, Key, _Path, _Profile) ->
+    {ok, Key};
+claimed({error, eexist}, _Ours, Path, Profile) ->
+    load(Path, identity, Profile);
+claimed({error, _} = Failed, _Key, _Path, _Profile) ->
+    Failed.
+
+%% Creates `Path' with `Blob', and REFUSES to replace an existing file.
+%%
+%% The temporary is named with both a VM-unique integer and the OS pid, so it is unique across two Erlang nodes
+%% sharing one path as well as within one VM. The content is written there, in the same directory so the link below
+%% stays on one filesystem, and two writers cannot corrupt each other's, and is linked into place only if nothing is there: `file:make_link/2' is atomic and answers `eexist'
+%% rather than replacing. `save/2' cannot be used here — it renames, and a rename REPLACES.
+%%
+%% The link rather than a rename is also what stops a reader seeing a half-written file: the name appears only once
+%% the content behind it is complete.
+create_new(Path, Blob) ->
+    Tmp = iolist_to_binary([Path, ".new.", integer_to_binary(erlang:unique_integer([positive])),
+                            ".", list_to_binary(os:getpid())]),
+    linked(write_restricted(filelib:ensure_dir(Path), Tmp, Tmp, Blob), Tmp, Path).
+
+linked(ok, Tmp, Path) ->
+    Result = file:make_link(Tmp, Path),
+    _ = file:delete(Tmp),
+    Result;
+linked({error, _} = Failed, Tmp, _Path) ->
+    _ = file:delete(Tmp),
+    Failed.
+
+%% Where the node's identity lives: the `node_identity_path' macula application env, or the platform's per-user data
+%% directory. `filename:basedir/2' rather than a path of our own invention, so the file lands where the platform says
+%% a user's application data belongs and an operator does not have to learn a macula-specific convention.
+node_identity_path() ->
+    application:get_env(macula, node_identity_path,
+                        filename:join(filename:basedir(user_data, "macula"), "identity.key")).
 
 %% @doc Save a key atomically. The temporary file is restricted to its owner before the key is written into it.
 -spec save(file:name_all(), node_key()) -> ok | {error, term()}.

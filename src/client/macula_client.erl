@@ -2317,9 +2317,15 @@ keys_with_issuer({error, Reason}, _NodeIdentity, _Profile, _Start) ->
 %% ground when the caller did pass a key.
 node_identity({error, _} = Refusal, _Profile) ->
     Refusal;
+%% ⚠ NO KEY SUPPLIED MEANS THE NODE'S IDENTITY, NOT A NEW ONE. This clause used to call
+%% `macula_node_keys:generate/3' and grind a fresh puzzle per pool, so two pools on one machine were two
+%% different nodes and every restart made a stranger of anything not handed a key: its (org, node_id)
+%% grants stopped matching a node that no longer existed. Raf's ruling, 2026-09-23: one identity per node,
+%% stored, shared by pools and the distribution tunnel. `node_identity/1' loads it or grinds it ONCE and
+%% stores it, and the supplied-key clauses below are untouched so an application can still run a
+%% deliberately separate participant on the same machine.
 node_identity(error, Profile) ->
-    macula_node_keys:generate(identity, Profile,
-                              #{puzzle_difficulty => macula_node_keys:puzzle_difficulty()});
+    macula_node_keys:node_identity(Profile);
 node_identity({ok, #{purpose := identity, profile := Profile} = Key}, Profile) ->
     {ok, Key};
 node_identity({ok, #{purpose := identity, profile := Other}}, _Profile) ->
