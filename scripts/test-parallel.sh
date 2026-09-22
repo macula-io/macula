@@ -5,6 +5,16 @@
 # parallel by giving each check its own runner, but that does nothing for the
 # run you do before pushing, which is where the waiting actually happens.
 #
+# IT IS ALSO AN INSTRUMENT, NOT ONLY A SPEED TOOL. A test can be green for a
+# reason that has nothing to do with the code under test, and no amount of
+# reading it will show that. Two things expose the family: a MUTATION catches a
+# test whose expected value happens to equal what a bug produces; a DIFFERENT
+# SCHEDULE catches tests that depend on the order or timing the suite happens to
+# give them. This is the second of those. On its first honest run it found a
+# registry left registered, four assertions that needed a module loaded, and
+# three tests that were running twice. To judge whether a test is honest, run it
+# alone (`rebar3 eunit --module=X') and run it under these shards.
+#
 # WHAT IT DOES NOT DO: change which tests run. The module list is taken from
 # the compiled beams, not from a filename pattern, and the script refuses to
 # run unless every module it found lands in exactly one shard. See "The list"
@@ -50,6 +60,27 @@ trap cleanup_out EXIT
 # at the same time. Doing it here means each shard finds the tree warm and
 # compiles nothing.
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# The OTP on PATH, checked before anything else.
+#
+# This script inherits whatever `erl' is first on PATH. On a box whose default
+# is a different major, the run dies inside a DEPENDENCY with no mention of
+# versions: under OTP 29 it is meck, on `'catch ...' is deprecated', and the
+# only thing this script would otherwise print is "compile failed". That is two
+# confusing runs for the next person, so it is named here instead.
+#
+# The wanted major comes from .tool-versions, not a constant, so this does not
+# need editing when the team moves major.
+# ---------------------------------------------------------------------------
+WANT_OTP=$(awk '/^erlang /{split($2, v, "."); print v[1]}' .tool-versions 2>/dev/null)
+HAVE_OTP=$(erl -noshell -eval 'io:format("~s", [erlang:system_info(otp_release)]), halt().' 2>/dev/null)
+if [ -n "$WANT_OTP" ] && [ -n "$HAVE_OTP" ] && [ "$WANT_OTP" != "$HAVE_OTP" ]; then
+    echo "OTP $HAVE_OTP is on PATH; .tool-versions asks for $WANT_OTP." >&2
+    echo "A run under another major is drift, not a test result. Put the right erl first:" >&2
+    echo "  PATH=<otp-$WANT_OTP>/bin:\$PATH $0" >&2
+    exit 1
+fi
+
 echo "==> compiling once (shards share this build)"
 if ! rebar3 as test compile > "$OUT/compile.log" 2>&1; then
     echo "compile failed:"; tail -30 "$OUT/compile.log"; exit 1

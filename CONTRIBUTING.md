@@ -28,7 +28,17 @@ rebar3 compile
 # Run tests: the unit tests, then the fleet suites in test/overlay
 rebar3 eunit
 rebar3 ct
+
+# The same eunit tests in parallel shards, for the run before a push.
+# About half the wall clock, same tests, one result.
+bash scripts/test-parallel.sh
 ```
+
+`scripts/test-parallel.sh` is also how to check that a test is honest rather
+than merely passing. A test can be green because of the order or timing the
+suite happens to give it; running it under the shards, and on its own with
+`rebar3 eunit --module=<module>`, is what exposes that. Both are worth doing for
+a test you have just written.
 
 ## Coding Standards
 
