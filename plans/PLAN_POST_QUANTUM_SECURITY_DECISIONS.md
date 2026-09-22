@@ -644,6 +644,11 @@ before its wire checks are green.
   equivalent ⚠; a post-quantum foundation list would need m-of-n independent ML-DSA signatures.
 - A foundation record carries one foundation signature in the signed-object format.
 - **Relation:** endorsement answers whether to use a station, not which station a dial reaches (D16).
+- ⚠ **Amended by Raf on 2026-09-22 (D31):** "Handshake frames carry no endorsement" no longer holds without
+  qualification. A handshake frame MAY carry a realm MEMBERSHIP endorsement, about the connecting node and not about
+  the station, and a station checks it only when `invite_only` is on, which it is not by default. The rest of D23
+  stands: no endorsement is needed to USE a station, and station endorsement, if it ever comes, stays a separate
+  record checked by the node that picks a station.
 
 ### D24 Hashes under signatures
 
@@ -882,3 +887,69 @@ before its wire checks are green.
 - **Waiting on:** V20, before 12 is final. If generation at 12 bits is too slow on the slowest supported client
   device, the value goes back to Raf.
 - **Blocks:** WP 4.5 (`enforce`).
+
+### D31 Invite-only: membership checked at CONNECT, off by default
+
+- **Question:** should a station accept a connection only from a node that was invited to a realm, and how is that
+  turned on and off without breaking the wire?
+- **Answer, decided by Raf on 2026-09-22:**
+  - A station may require the connecting node to present a realm membership endorsement in CONNECT. It is checked in
+    the station's CONNECT check, before HELLO, beside the puzzle check (WP 1.3).
+  - **`invite_only` is a station setting with the same three values the puzzle check already uses:** `off`,
+    `log_only`, `enforce`. `enforce` refuses with `not_invited`; `log_only` admits and reports; `off` does not look
+    at the field.
+  - ⛔ **`off` is the default, and unset means open.** Turning it on is a deliberate per-deployment setting, on the
+    station for enforcement and on the realm for admission.
+  - **The `connect` frame always carries `member_endorsement`**, empty when the node has none, so changing the
+    setting never changes the wire. It is NOT covered by the CONNECT proof, which signs a fixed-length
+    concatenation, so adding the field does not alter the proof and WP 1.5 can ship before it.
+  - **The endorsement is the one that already exists:** `realm_member_endorsement`, record type `0x05`, verified by
+    `macula_hyparview_endorsement:verify_endorsement/3` against `#{profile, realm, realm_key_id}`. Nothing calls that
+    function today. No new record type, no new verifier.
+  - **Binding to the connection is free.** The verifier checks `member_node` against the node_id the CONNECT proof
+    establishes, so an endorsement copied from another member is useless without that member's CONNECT key.
+  - ⛔ **Admins always have access (Raf, 2026-09-22), and that is an invariant, not a default.** No setting, missing
+    trust list, member list or expired endorsement may lock a realm admin out. An admin is a realm member
+    endorsement carrying an admin role (`verify_endorsement/3` already returns the endorsed roles), issued by the
+    realm from its own event store, where admins are appointed and dismissed
+    (`realm_admin_appointed_v1` / `realm_admin_dismissed_v1`, projected to `realm_admins`). **A station pins its home
+    realm's key id in local configuration**, so it verifies an admin endorsement on its own, without the published
+    trust list D28 still waits on. There is NO station-local admin list: that would be a second source of truth that
+    drifts from the realm's.
+  - **Refusals say what is wrong without naming who may pass.** A node refused while the trust list is unpublished
+    gets a reason that names the missing trust list; it never reveals the admins.
+- **Why:**
+  - It makes the mesh invitational without a second membership mechanism: the record, the verifier and the roles are
+    already built, and the endorsement is bound to the connecting node by a check that already exists.
+  - Default off, and a field that is always on the wire, mean the switch is a deployment decision rather than a wire
+    version. The wire breaks once, in 12.0.0, not twice.
+  - The pinned realm key is what keeps the admin invariant true at the moment it matters most, which is a station
+    switched on before its realm's trust list exists.
+- **Amends D23**, which said handshake frames carry no endorsement. See the note there.
+- ⚠ **Open, and the one number Raf should confirm: the endorsement's lifetime, which IS the removal bound.** The
+  verifier caps the window at 30 days (`macula_record:max_endorsement_window_ms/0`), which is far too long for this
+  use. Two shapes, and they trade the same thing:
+  - **D22's cadence**, valid 1 hour, reissued every 15 minutes, 5 minutes of tolerance: a removed member stops
+    connecting within 65 minutes, the same bound and the same words as D22. Cost: every member refreshes from the
+    realm every 15 minutes, so the realm's availability becomes every member's availability.
+  - **A longer window plus withdrawal**, for example valid 24 hours and reissued at half its life, with the station
+    checking the endorsement slot's tombstone after admitting rather than during the handshake
+    (`slot_endorsement/4` already returns `withdrawn`, and a tombstone outlives the endorsement's own expiry). The
+    bound is then how soon that check runs, not the expiry, and a handshake never waits on a lookup.
+  - **Recommended:** the second, with the post-admission check bounded and stated, because the first couples every
+    connection in the mesh to the realm being up, which is the failure the fleet already has with `org_directory`.
+- **Consequences when `enforce` is on:** the all-zero realm demo path stops working, and with it `macula-mcp` device
+  auto-join out of the box, the `mcl-*` services and `macula-e2e`, each of which needs an invite first. The other
+  SDKs follow in tier 2.
+- ⚠ **Open: a pinned home realm key against realm-agnostic stations.** Sprint A (2026-04-15) reversed per-realm state
+  on the station: stations are realm-agnostic infrastructure. One pinned key for break-glass is not realm state, but
+  it is a binding, and it needs Raf's word rather than passing unnoticed.
+- ⚠ **Open: rotating the pinned key.** If a realm key is compromised or rotated, every station's pin moves. How it
+  moves, and whether a station holding a stale pin admits admins or refuses them, is undecided.
+- **Depends on:** the published realm trust list D28 waits on, for every non-admin check. Until it exists, a station
+  switched to `enforce` admits admins and refuses everyone else, so the design must make that visible when the
+  setting is turned on rather than leave it looking like "nobody can connect".
+- **Status:** proposed 2026-09-22 by Neptunus, from Raf's decisions of the same day. **Not accepted yet**; the three
+  open points above are Raf's.
+- **Blocks:** WP 1.3 (the CONNECT check), WP 1.5 (the `member_endorsement` field), WP 1.6, WP 3.1 (the realm issuing
+  and withdrawing endorsements). The station check is built after macula 12 lands.
