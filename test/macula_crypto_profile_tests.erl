@@ -89,8 +89,6 @@ no_profile_contains_a_classical_only_or_weaker_algorithm_test() ->
 every_post_quantum_algorithm_is_at_level_5_test() ->
     [begin
          {ok, D} = macula_crypto_profile:definition(P),
-         ?assert(lists:member(maps:get(key_exchange_group, D),
-                              [mlkem1024, secp384r1_mlkem1024])),
          ?assertEqual(mldsa87, maps:get(tls_signature_scheme, D)),
          [?assertEqual(mldsa87, hd(maps:get(K, D)))
           || K <- [identity_signature, connect_proof_signature]]
@@ -105,31 +103,35 @@ every_post_quantum_algorithm_is_at_level_5_test() ->
 %%
 %% What it does buy: the key set cannot change without someone editing this
 %% list, so a field cannot be added back without a deliberate act.
-%% `key_exchange_group' is the one field kept without a reader, by ruling,
-%% and it carries that warning in `definition()'.
 %%
-%% Six fields failed this before it existed: `tls_cipher_suite',
+%% EVERY FIELD HERE IS READ. Seven failed this: `tls_cipher_suite',
 %% `status_signature', `binding_digest', `content_id_digest',
-%% `node_id_digest' and `profile'.
+%% `node_id_digest', `profile' and, on Raf's ruling of 2026-09-22,
+%% `key_exchange_group', which declared a group no code offered.
 definition_key_set_is_pinned_test() ->
     Read = [tls_signature_scheme, identity_signature, connect_proof_signature],
-    DeclaredButInert = [key_exchange_group],
     [begin
          {ok, D} = macula_crypto_profile:definition(P),
-         ?assertEqual(lists:sort(Read ++ DeclaredButInert),
-                      lists:sort(maps:keys(D)))
+         ?assertEqual(lists:sort(Read), lists:sort(maps:keys(D)))
+     end
+     || P <- macula_crypto_profile:profiles()].
+
+%% A profile says nothing about the key exchange: both offer the hybrids of
+%% `macula-pqc', and the group is not a profile's to choose (Raf, 2026-09-22).
+no_profile_declares_a_key_exchange_group_test() ->
+    [begin
+         {ok, D} = macula_crypto_profile:definition(P),
+         ?assertEqual(false, is_map_key(key_exchange_group, D))
      end
      || P <- macula_crypto_profile:profiles()].
 
 us_profile_is_post_quantum_only_test() ->
     {ok, D} = macula_crypto_profile:definition(pq_pure),
-    ?assertEqual(mlkem1024, maps:get(key_exchange_group, D)),
     [?assertEqual([mldsa87], maps:get(K, D))
      || K <- [identity_signature, connect_proof_signature]].
 
 eu_signatures_pair_mldsa87_with_a_bsi_classical_algorithm_test() ->
     {ok, D} = macula_crypto_profile:definition(pq_hybrid),
-    ?assertEqual(secp384r1_mlkem1024, maps:get(key_exchange_group, D)),
     [begin
          [mldsa87, {Classical, _Params}] = maps:get(K, D),
          ?assert(lists:member(Classical, ?BSI_TABLE_5_3))
@@ -151,9 +153,7 @@ algorithm_names(Profile) ->
     {ok, D} = macula_crypto_profile:definition(Profile),
     Signatures = lists:append([maps:get(K, D) || K <- [identity_signature,
                                                        connect_proof_signature]]),
-    [maps:get(key_exchange_group, D),
-     maps:get(tls_signature_scheme, D)
-     | [signature_name(S) || S <- Signatures]].
+    [maps:get(tls_signature_scheme, D) | [signature_name(S) || S <- Signatures]].
 
 signature_name({Name, _Params}) -> Name;
 signature_name(Name) when is_atom(Name) -> Name.

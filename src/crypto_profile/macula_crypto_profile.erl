@@ -16,12 +16,12 @@
 %%       verify.</li>
 %% </ul>
 %%
-%% ⚠ `key_exchange_group' IS A TARGET AND NOT A DESCRIPTION OF THE WIRE.
-%% Nothing reads it: the QUIC NIF offers the same key exchange groups
-%% whatever a node's profile. See `definition/1' for what is actually
-%% negotiated and why the field is kept anyway. Read a profile NAME as
-%% naming the policy the profile serves, never as a statement about the
-%% key exchange a connection got.
+%% ⚠ A PROFILE SAYS NOTHING ABOUT THE KEY EXCHANGE. Both offer the groups
+%% of the `macula-pqc' crate, SecP384r1MLKEM1024 then SecP256r1MLKEM768,
+%% whatever a node's profile. Read a profile NAME as naming the policy the
+%% profile serves, never as a statement about the key exchange a connection
+%% got. The map declared a `key_exchange_group' until 12.0.0; see
+%% `definition/1'.
 %%
 %% See plans/PLAN_POST_QUANTUM_SECURITY.md, decisions D1 to D5 and D24.
 -module(macula_crypto_profile).
@@ -66,7 +66,6 @@
     %% What this does NOT say: it makes no claim either way about the
     %% signature half of this map. Signatures are a separate question and
     %% a separate audit.
-    key_exchange_group      := mlkem1024 | secp384r1_mlkem1024,
     tls_signature_scheme    := mldsa87,
     identity_signature      := [signature_algorithm(), ...],
     connect_proof_signature := [signature_algorithm(), ...]
@@ -99,16 +98,19 @@ profiles() ->
 %%
 %% == What is actually negotiated ==
 %%
-%% `key_exchange_group' IS A DECLARED TARGET AND NOT A DESCRIPTION OF THE
-%% WIRE. Nothing reads it. The QUIC NIF takes every TLS configuration from
-%% the `macula-pqc' crate, whatever the node's profile, and offers
-%% SecP384r1MLKEM1024 then SecP256r1MLKEM768 and nothing classical, so two
-%% nodes on this version negotiate SecP384r1MLKEM1024.
+%% The QUIC NIF takes every TLS configuration from the `macula-pqc' crate,
+%% whatever the node's profile, and offers SecP384r1MLKEM1024 then
+%% SecP256r1MLKEM768 and nothing classical, so two nodes on this version
+%% negotiate SecP384r1MLKEM1024. ML-KEM-1024 is inside that group.
 %%
-%% The declared group of `pq_hybrid', `secp384r1_mlkem1024', is therefore
-%% the one negotiated, but because every node offers it, not because the
-%% profile asked for it. The declared group of `pq_pure', `mlkem1024', is
-%% never negotiated: no pure ML-KEM group is offered.
+%% THE MAP DECLARES NO KEY EXCHANGE GROUP, on Raf's ruling of 2026-09-22.
+%% It declared one until then, and nothing read it: `pq_hybrid' named the
+%% group every node offers anyway, and `pq_pure' named `mlkem1024', a pure
+%% group nothing offered, so the field claimed of one profile something
+%% that was never true. Pure ML-KEM-1024 is added if someone needs CNSA 2.0
+%% alignment, and adding it is ADDITIVE: a further group offered beside the
+%% hybrids, which breaks nothing on the wire, since a peer that does not
+%% have it still agrees on a hybrid.
 %%
 %% So a profile NAME names the policy the profile serves. It is never a
 %% statement about the key exchange a connection got. Key exchange is
@@ -118,9 +120,9 @@ profiles() ->
 -spec definition(term()) ->
         {ok, definition()} | {error, {crypto_profile_unknown, term()}}.
 definition(pq_pure) ->
-    {ok, profile_definition(mlkem1024, [mldsa87])};
+    {ok, profile_definition([mldsa87])};
 definition(pq_hybrid) ->
-    {ok, profile_definition(secp384r1_mlkem1024, [mldsa87, ?RSA_PSS_4096])};
+    {ok, profile_definition([mldsa87, ?RSA_PSS_4096])};
 definition(Other) ->
     {error, {crypto_profile_unknown, Other}}.
 
@@ -147,21 +149,21 @@ configured() ->
 %% Internals
 %%------------------------------------------------------------------
 
-%% Every field here is read by something, except `key_exchange_group',
-%% which is kept on purpose and carries its own warning in `definition()'.
+%% Every field here is read by something.
 %%
-%% Six fields were removed because nothing had ever read them:
+%% Seven fields were removed because nothing had ever read them:
 %% `tls_cipher_suite', `status_signature', `binding_digest',
-%% `content_id_digest', `node_id_digest' and `profile' itself. Each stated a
-%% value that the code hardcodes at its use site, so the profile could
-%% disagree with the node and nothing would notice. `profile' went last: a
-%% caller already has the profile in hand, since it is the argument to
-%% `definition/1'. `definition_key_set_is_pinned_test' is what keeps this
-%% true, and it is a KEY-SET PIN rather than a reader check: the list of
-%% readers is maintained by hand.
-profile_definition(Group, Signature) ->
-    #{key_exchange_group      => Group,
-      tls_signature_scheme    => mldsa87,
+%% `content_id_digest', `node_id_digest', `profile' itself and
+%% `key_exchange_group'. Each stated a value that the code hardcodes at its
+%% use site, so the profile could disagree with the node and nothing would
+%% notice. `profile' went because a caller already has the profile in hand,
+%% since it is the argument to `definition/1', and `key_exchange_group' on
+%% Raf's ruling of 2026-09-22: the group belongs to `macula-pqc', not to a
+%% profile. `definition_key_set_is_pinned_test' is what keeps this true,
+%% and it is a KEY-SET PIN rather than a reader check: the list of readers
+%% is maintained by hand.
+profile_definition(Signature) ->
+    #{tls_signature_scheme    => mldsa87,
       identity_signature      => Signature,
       connect_proof_signature => Signature}.
 

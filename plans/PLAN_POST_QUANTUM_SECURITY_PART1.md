@@ -467,9 +467,11 @@ Ceilings from signing and verifying alone, per core, estimated from the table:
 
 #### V19 TLS 1.3 in OTP `ssl` with the profile groups
 
-- **What to verify:** OTP 28.4.2 `ssl` completes a TLS 1.3 handshake with the group `mlkem1024` in the US profile
-  and `secp384r1mlkem1024` in the EU profile, each with an ML-DSA-87 certificate, as a distribution tunnel needs
-  (D29).
+- **What to verify:** OTP 28.4.2 `ssl` completes a TLS 1.3 handshake with the groups `mlkem1024` and
+  `secp384r1mlkem1024`, each with an ML-DSA-87 certificate, as a distribution tunnel needs (D29).
+- ⚠ **Read the `mlkem1024` half as evidence about OTP, not about a profile.** This was written when `pq_pure`
+  declared a pure group; since D3's ruling of 2026-09-22 no profile declares one, and both offer the hybrids. The
+  result stands as what OTP can do if pure ML-KEM-1024 is ever added beside them.
 - **Result, 2026-09-12 ✅:** two OTP 28.4.2 nodes (`ssl` 11.5.4, OpenSSL 3.6.4) completed a TLS 1.3 handshake over
   loopback with `mlkem1024` and with `secp384r1mlkem1024`, each with a self-signed ML-DSA-87 certificate on the
   accepting side, signature scheme `mldsa87`, `TLS_AES_256_GCM_SHA384`, no session tickets and no early data. Both

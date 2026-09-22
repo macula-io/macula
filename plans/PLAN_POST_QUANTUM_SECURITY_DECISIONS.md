@@ -6,9 +6,12 @@ table there gives each decision's answer in short and its status.
 ### D1 Where the profile is chosen
 
 - **Answer, accepted by Raf on 2026-09-10:** **One profile per realm.**
-- **Why:** the realm is the trust domain. A US-profile peer (pure ML-KEM-1024) and an EU-profile peer
-  (SecP384r1MLKEM1024) share no key exchange group, so they cannot complete a handshake. With D2, a realm's
-  programs use the station instances of its profile.
+- **Why:** the realm is the trust domain. A US-profile peer and an EU-profile peer cannot verify each other's
+  signatures: a `pq_pure` verifier takes ML-DSA-87 alone, and a `pq_hybrid` one takes the LAMPS composite, so a
+  peer of the other profile is refused wherever a signature is checked. With D2, a realm's programs use the
+  station instances of its profile.
+- ⚠ **This rationale rested on key exchange until 2026-09-22**, when the profile stopped declaring a group (D3):
+  both profiles now offer the same hybrids, so they share key exchange and are separated by signatures alone.
 - **Blocks:** WP 1.1, WP 3.1.
 
 ### D2 One station instance per profile
@@ -38,6 +41,13 @@ table there gives each decision's answer in short and its status.
   ML-KEM-1024, and it interoperates with Go 1.27 and OpenSSL 3.6.4 in both directions, including
   HelloRetryRequest ✅. BSI names it ✅ and it matches the level-5 requirement. BSI intends to recommend it once its
   RFC is adopted ✅ (TR-02102-2 section 3.4.2).
+- **A PROFILE DECLARES NO KEY EXCHANGE GROUP, decided by Raf on 2026-09-22: "drop it".** The definition map
+  carried a `key_exchange_group` that nothing read: `pq_hybrid` named the group every node offers anyway, and
+  `pq_pure` named `mlkem1024`, a pure group nothing has ever offered, so the field claimed of one profile
+  something that was never true, which is macula#15's shape. Both profiles use the groups `macula-pqc` offers,
+  SecP384r1MLKEM1024 then SecP256r1MLKEM768. **Pure ML-KEM-1024 is added if someone needs CNSA 2.0 alignment, and
+  adding it is ADDITIVE**: a further group offered beside the hybrids, so nothing breaks on the wire and a peer
+  without it still agrees on a hybrid. Removed from `macula_crypto_profile` on 2026-09-22.
 - **Alternatives:**
   - wait for upstream rustls (unknown date ⚠);
   - or run the EU profile at SecP256r1MLKEM768, which rustls and Go have today ✅ and BSI names ✅, but which is
@@ -395,6 +405,10 @@ before its wire checks are green.
 - **US, when true:** "algorithms aligned with CNSA 2.0 (ML-KEM-1024, ML-DSA-87, AES-256, SHA-384)". Never imply
   deployability in National Security Systems, which also needs NIAP or NSA validation ⚠ (V14). Preconditions: V13
   and V14 closed.
+  - ⚠ **What that claim rests on, after D3's 2026-09-22 ruling:** ML-KEM-1024 is used INSIDE
+    SecP384r1MLKEM1024, never alone, on every link in both profiles. The claim names algorithms and stays true;
+    wording that implies a pure ML-KEM key exchange, or that a profile selects one, does not. Saturnus reads any
+    public wording, as this decision already requires.
   - Identifier qualifier, while D5 keeps SHA-256: "Algorithms are aligned with CNSA 2.0, except that identifiers
     (node, realm, DHT keys) use SHA-256." Texts about today's format also add that content identifiers use
     BLAKE3, which is not a NIST-standardised hash function.
