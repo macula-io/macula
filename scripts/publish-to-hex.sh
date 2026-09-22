@@ -7,12 +7,11 @@
 # hex.pm directly.
 #
 # The release path is .github/workflows/publish-hex.yml, armed by pushing the
-# tag. Its verify job repeats these checks on a clean runner, and its publish
-# job then WAITS in the `hex-publish' environment for a required reviewer
-# before anything is sent. A gate is only worth as much as the absence of a
-# way around it, and a script on a maintainer's machine that publishes without
-# that reviewer is a way around it: two paths to one version, one of them
-# unreviewed.
+# tag. Its verify job repeats these checks on a clean runner from the pushed
+# tag, and its publish job then publishes with no further gate, by design:
+# pushing the tag IS the release, and the push is where it is approved. A
+# script on a maintainer's machine that also published would be a second path
+# to one version, built from whatever that machine held.
 #
 # So this is now the local half of that workflow: everything up to, and
 # including, the dry run. Run it before pushing a tag, to find out on your own
@@ -62,8 +61,8 @@ cat <<EOF
 To release it:
   git push origin v${MACULA_VERSION}
 
-That arms .github/workflows/publish-hex.yml. Its publish job waits for its
-required reviewer; approving that run is what publishes.
+That arms .github/workflows/publish-hex.yml, which verifies the tag and then
+publishes with no further gate: pushing the tag IS the release.
 
 Afterwards, to check hex serves the tagged code rather than assuming it:
   scripts/is_hex_serving_what_git_says.sh ${MACULA_VERSION}

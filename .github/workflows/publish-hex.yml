@@ -6,8 +6,10 @@ name: Publish to hex
 # checks that the checkout is the clean, pushed release tag, builds the
 # package and docs, publishes, and checks that hex serves the tagged code.
 #
-# - A pushed tag vX.Y.Z runs `verify`. Then `publish` waits in the
-#   `hex-publish` environment until its required reviewer approves it.
+# - A pushed tag vX.Y.Z runs `verify`, then `publish`, WITH NO FURTHER GATE:
+#   the `hex-publish` environment has no required reviewer, by design. The
+#   tag is the release, and pushing it is the approval. Its only rule is that
+#   it admits `v*.*.*` tags and nothing else.
 # - A manual dispatch is a dry run: it runs `verify` for the given tag and
 #   never publishes. GitHub only dispatches a workflow that is on the
 #   default branch.

@@ -8,9 +8,9 @@
 # indefinitely, and nothing complains.
 #
 # It does NOT tag and does NOT publish. A tag is a push, a push goes through
-# the gate, and the tag is what arms .github/workflows/publish-hex.yml, whose
-# publish job then waits for its required reviewer. Any path that reaches
-# hex.pm without passing that reviewer defeats the point of having one.
+# the gate, and the tag is what arms .github/workflows/publish-hex.yml, which
+# then publishes with no further gate, by design: pushing the tag IS the
+# release. Any other path to hex.pm would be a second, unchecked one.
 #
 # Usage:
 #   scripts/bump-version.sh 11.6.0
