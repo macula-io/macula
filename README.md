@@ -191,10 +191,10 @@ Hash = macula_blake3_nif:hash(<<"hello">>).
 ```
 
 UCAN capability tokens (`macula_ucan`) are signed by node keys too, with
-the profile's `alg`; a token names its issuer by `did:key` and its audience by
-node_id (see the [Authorization guide](docs/guides/shared/AUTHORIZATION_GUIDE.md)).
-Moving them to the profile's algorithm is one of the steps left before
-12.0.0.
+the profile's `alg`: `ML-DSA-87` in `pq_pure` and `ML-DSA-87-PS384`, the
+LAMPS composite, in `pq_hybrid`. A token names its issuer by `did:key` and
+its audience by node_id, and an EdDSA token is refused (see the
+[Authorization guide](docs/guides/shared/AUTHORIZATION_GUIDE.md)).
 
 ---
 
