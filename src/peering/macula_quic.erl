@@ -495,8 +495,10 @@ async_accept_stream(Conn, _Opts) ->
 handshake(Conn) ->
     {ok, Conn}.
 
-%% @doc Get remote address of a connection.
--spec peername(reference()) -> {ok, {string(), inet:port_number()}} | {error, term()}.
+%% @doc Get remote address of a connection. The host is the IP address as
+%% TEXT, a binary such as `<<"127.0.0.1">>' or `<<"::1">>': the NIF formats
+%% the address, it does not return an `inet' tuple.
+-spec peername(reference()) -> {ok, {binary(), inet:port_number()}} | {error, term()}.
 peername(Conn) ->
     nif_peername(Conn).
 

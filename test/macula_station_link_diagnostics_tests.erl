@@ -26,7 +26,47 @@ diagnostics_test_() ->
      {"a peering exit whose reason holds a key logs no form of it at notice, with the redaction filter removed",
       {spawn, fun a_peering_exit_reason_logs_only_its_name/0}},
      {"a failed connect whose reason holds a key logs no form of it, with the redaction filter removed",
-      {spawn, fun a_failed_connect_reason_logs_only_its_name/0}}].
+      {spawn, fun a_failed_connect_reason_logs_only_its_name/0}},
+     {"a station that is not the one the seed names is logged with both node ids in hex",
+      {spawn, fun a_mismatch_names_both_node_ids/0}},
+     {"a link tells its pool why it disconnected, both node ids included",
+      {spawn, fun a_link_tells_its_pool_about_a_mismatch/0}},
+     {"what a link tells its pool of a reason holding a key is the reason's name and no form of the key",
+      {spawn, fun a_link_tells_its_pool_only_the_name/0}}].
+
+%% `peer_identity_mismatch' names the station the seed expected and the one that answered. Both are node ids, public by
+%% construction (the SHA-256 of a public key), and an operator cannot tell a stale pin from a moved station without
+%% both, so the disconnect event carries them in lowercase hex beside the reason's name.
+a_mismatch_names_both_node_ids() ->
+    Events = captured(fun() ->
+                          {Link, Peer} = link_with_peer(),
+                          Mon = erlang:monitor(process, Link),
+                          Link ! {macula_peering, disconnected, Peer, mismatch()},
+                          ok = ended(Mon, Link),
+                          Peer ! stop
+                      end),
+    [#{msg := {report, #{properties := Props}}}] = on_topic(<<"_macula.station_link.disconnected">>, Events),
+    ?assertMatch(#{reason := <<"peer_identity_mismatch">>}, Props),
+    ?assertEqual({hex(<<16#AA:256>>), hex(<<16#BB:256>>)},
+                 {maps:get(expected_node_id, Props), maps:get(presented_node_id, Props)}).
+
+a_link_tells_its_pool_about_a_mismatch() ->
+    {Link, Peer} = link_with_peer(#{pool => self()}),
+    Link ! {macula_peering, disconnected, Peer, mismatch()},
+    ?assertEqual(#{reason => <<"peer_identity_mismatch">>,
+                   expected_node_id => hex(<<16#AA:256>>), presented_node_id => hex(<<16#BB:256>>)},
+                 maps:remove(at_ms, told_pool(Link))),
+    Peer ! stop.
+
+a_link_tells_its_pool_only_the_name() ->
+    Key = key(),
+    {Link, Peer} = link_with_peer(#{pool => self()}),
+    Link ! {macula_peering, disconnected, Peer, crash_reason(Key)},
+    Told = told_pool(Link),
+    ?assertEqual(#{reason => <<"function_clause">>}, maps:remove(at_ms, Told)),
+    ?assert(is_integer(maps:get(at_ms, Told))),
+    ?assertEqual([], macula_key_leak_sample:found([term_to_binary(Told)], Key)),
+    Peer ! stop.
 
 %% A connect that fails with a reason holding a key logs its event at info with the reason's name only: with the
 %% redaction filter removed, no connect_failed event's term or formatted text holds a form of the key.
@@ -174,9 +214,12 @@ leaked(Event, Key) ->
 %% A link that believes it is connected, whose connect never dials, with a process of this test as its peering
 %% connection, linked to the link as a peering process is.
 link_with_peer() ->
+    link_with_peer(#{}).
+
+link_with_peer(Extra) ->
     {ok, Link} = macula_station_link:start_link(
-                   with_link_keys(#{seed => #{host => <<"127.0.0.1">>, port => 1},
-                                    connect => fun(_PeeringOpts) -> {error, not_dialed_here} end})),
+                   with_link_keys(Extra#{seed => #{host => <<"127.0.0.1">>, port => 1},
+                                         connect => fun(_PeeringOpts) -> {error, not_dialed_here} end})),
     unlink(Link),
     Peer = spawn(fun() ->
                      true = link(Link),
@@ -189,6 +232,20 @@ link_with_peer() ->
                                     setelement(?PEER_NODE_ID_INDEX, setelement(?PEER_PID_INDEX, S, Peer), <<7:256>>)
                                 end),
     {Link, Peer}.
+
+%% The handshake's refusal when the station answering is not the one the seed expects.
+mismatch() ->
+    {peer_identity_mismatch, #{expected => <<16#AA:256>>, derived => <<16#BB:256>>}}.
+
+hex(Id) -> binary:encode_hex(Id, lowercase).
+
+%% What the link told its pool before it stopped.
+told_pool(Link) ->
+    receive
+        {macula_link_disconnected, Link, Summary} -> Summary
+    after ?EVENT_MS ->
+        erlang:error(pool_not_told)
+    end.
 
 ended(Mon, Link) ->
     receive

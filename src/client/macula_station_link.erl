@@ -199,6 +199,10 @@
     %% the pool counts the peer by. Both required.
     admission := pid(),
     share := term(),
+    %% The pool this link belongs to. Told why the link disconnected, as
+    %% `{macula_link_disconnected, Link, Summary}', before the link stops,
+    %% because the link's exit is `normal' whatever the reason was.
+    pool => pid(),
     %% The function that opens the peering connection, by default
     %% `macula_peering:connect/1'. An option, so a test replaces no
     %% shared module.
@@ -297,6 +301,7 @@
     %% this link receives, and this link's share in it.
     admission        :: pid(),
     share            :: term(),
+    pool             :: pid() | undefined,
     connect          :: fun((map()) -> {ok, pid()} | {error, term()}),
     %% The functions every dedicated stream is opened, written and closed
     %% through (start opts `open_stream', `send_on_stream', `close_stream').
@@ -1316,7 +1321,8 @@ started({ok, Seed, Key, Profile, Issuer}, Opts) ->
     RetryMs  = maps:get(connect_retry_backoff_ms, Opts, app_env(connect_retry_backoff_ms, ?CONNECT_RETRY_BACKOFF_MS)),
     State    = #state{seed = Seed, node_identity = Key, profile = Profile,
                       issuer = Issuer, admission = maps:get(admission, Opts),
-                      share = maps:get(share, Opts), connect = Connect, open_stream = OpenStream,
+                      share = maps:get(share, Opts), pool = maps:get(pool, Opts, undefined),
+                      connect = Connect, open_stream = OpenStream,
                       send_on_stream = SendOnStream, close_stream = CloseStream,
                       capabilities = Caps, alpn = Alpn,
                       connect_timeout_ms = Tmo,
@@ -1617,7 +1623,7 @@ handle_info({macula_peering, frame, Pid, Frame, _RecvAtUs},
     {noreply, fold_frames(drain_frames(Pid, [Frame]), S)};
 
 handle_info({macula_peering, disconnected, Pid, Reason},
-            #state{peer_pid = Pid, seed = Seed} = S) ->
+            #state{peer_pid = Pid, seed = Seed, pool = Pool} = S) ->
     %% The one place the PEER-SIDE disconnect reason (e.g. `peer_closed'
     %% detail, `drained') is ever known. Everything downstream of this
     %% -- `fail_all_pending' and the eventual `{stop, normal, ...}' --
@@ -1625,11 +1631,10 @@ handle_info({macula_peering, disconnected, Pid, Reason},
     %% `macula_client:on_down_routed/5' has left to log. Without this,
     %% a station-initiated close is indistinguishable from any other
     %% disconnect in every log this link ever produces.
-    macula_diagnostics:event(notice, <<"_macula.station_link.disconnected">>, #{
-        seed     => Seed,
-        peer_pid => Pid,
-        reason   => macula_reason_name:text(Reason)
-    }),
+    Summary = disconnect_summary(Reason),
+    macula_diagnostics:event(notice, <<"_macula.station_link.disconnected">>,
+                             maps:merge(#{seed => Seed, peer_pid => Pid}, Summary)),
+    pool_told(Pool, Summary#{at_ms => erlang:system_time(millisecond)}),
     NewS = fail_all_pending({disconnected, macula_reason_name:text(Reason)}, cancel_liveness(S)),
     %% Stop normally — the supervisor (or owning gen_server) decides
     %% whether to restart us.
@@ -1809,6 +1814,27 @@ terminate(Reason, #state{peer_pid = Pid} = S) when is_pid(Pid) ->
     ok;
 terminate(Reason, S) ->
     answer_waiting_callers({link_stopped, macula_reason_name:text(Reason)}, S).
+
+%% Why a link disconnected, in what leaves this process: the reason's name, and
+%% for the reasons listed below the named facts an operator needs and nothing
+%% else, so a reason that holds a key never takes it along.
+disconnect_summary(Reason) ->
+    (disconnect_detail(Reason))#{reason => macula_reason_name:text(Reason)}.
+
+%% The station that answered is not the one the seed names. Both are node ids,
+%% SHA-256 of a public key and public by construction, and without both an
+%% operator cannot tell a stale pin from a station whose identity moved.
+disconnect_detail({error, Reason}) ->
+    disconnect_detail(Reason);
+disconnect_detail({peer_identity_mismatch, #{expected := <<_:256>> = Expected,
+                                             derived := <<_:256>> = Derived}}) ->
+    #{expected_node_id => binary:encode_hex(Expected, lowercase),
+      presented_node_id => binary:encode_hex(Derived, lowercase)};
+disconnect_detail(_Reason) ->
+    #{}.
+
+pool_told(undefined, _Summary) -> ok;
+pool_told(Pool, Summary) -> Pool ! {macula_link_disconnected, self(), Summary}, ok.
 
 answer_waiting_callers(Reason, #state{pending = Pending, content_pending = ContentPending}) ->
     maps:foreach(fun(_RequestId, {From, _TRef, _Request}) -> gen_server:reply(From, {error, Reason}) end, Pending),

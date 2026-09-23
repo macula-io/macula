@@ -755,10 +755,32 @@ binding_hash(#{tbs := Tbs}) ->
 %% A handshake or an open connection that ends for a local reason: the
 %% controlling process and diagnostics hear it, the peer does not. The
 %% diagnostics line is bounded per node, with a count of the rest.
-closed(Reason, #data{role = Role} = Data) ->
-    ok = macula_diagnostics:bounded_event(info, <<"_macula.peering.closed">>, #{role => Role, reason => Reason}),
+closed(Reason, #data{role = Role, quic_conn = Conn} = Data) ->
+    ok = macula_diagnostics:bounded_event(info, <<"_macula.peering.closed">>,
+                                          peer_named(Conn, #{role => Role, reason => Reason})),
     notify(disconnected, Reason, Data),
     {stop, normal, Data}.
+
+%% The address this connection talks to, as `peer'. A connection closed at its
+%% first frame, as a version refusal is, has no peer identity yet (that arrives
+%% in CONNECT), but its QUIC connection knows the remote address, and without
+%% it a station refusing every peer logs the same line naming nobody (macula#24).
+peer_named(Conn, Props) when is_reference(Conn) ->
+    with_address(macula_quic:peername(Conn), Props);
+peer_named(_NoConn, Props) ->
+    Props.
+
+with_address({ok, {Host, Port}}, Props) ->
+    Props#{peer => iolist_to_binary(address_text(Host, Port))};
+with_address({error, _}, Props) ->
+    Props.
+
+%% An IPv6 host is bracketed, so the port stays readable after its colons.
+address_text(Host, Port) when is_binary(Host) ->
+    bracketed(binary:match(Host, <<":">>) =/= nomatch, Host, integer_to_list(Port)).
+
+bracketed(true, Host, Port) -> ["[", Host, "]:", Port];
+bracketed(false, Host, Port) -> [Host, ":", Port].
 
 %% After HELLO the peer hears this side's statements as status frames,
 %% and the connection ends when the peer's statement lapses or its

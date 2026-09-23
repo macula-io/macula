@@ -120,7 +120,7 @@
 -export([first_success/3]).
 -endif.
 
--export_type([pool/0, opts/0, seed/0, status/0, link_info/0, handler/0,
+-export_type([pool/0, opts/0, seed/0, status/0, link_info/0, last_disconnect/0, handler/0,
               stream_handler/0, auth_policy/0]).
 
 %% Per-procedure auth policy for `advertise'. `open' (default) serves any
@@ -187,13 +187,27 @@
 %% Per-link view returned by `links/1'. One entry per configured seed
 %% that currently has a spawned link worker. `node_id' is the peer
 %% station's pubkey (`undefined' until CONNECT/HELLO completes);
-%% `host' is the dial host parsed from the seed.
+%% `host' is the dial host parsed from the seed. `last_disconnect' is why
+%% this seed's link last went down, kept across the respawn that replaced
+%% it, or `undefined' if it never has: see `last_disconnect()'.
 -type link_info() :: #{
-    seed      := seed(),
-    host      := binary() | undefined,
-    pid       := pid(),
-    connected := boolean(),
-    node_id   := macula_node_keys:node_id() | undefined
+    seed            := seed(),
+    host            := binary() | undefined,
+    pid             := pid(),
+    connected       := boolean(),
+    node_id         := macula_node_keys:node_id() | undefined,
+    last_disconnect := last_disconnect() | undefined
+}.
+%% Why a seed's link last went down, and when (`at_ms', system time). `reason'
+%% is the reason's name only, never its terms. A `peer_identity_mismatch' also
+%% names the node id the seed expected and the one the station presented, in
+%% lowercase hex: both are public, and an operator needs both to tell a stale
+%% pin from a station whose identity moved.
+-type last_disconnect() :: #{
+    reason            := binary(),
+    at_ms             := integer(),
+    expected_node_id  => binary(),
+    presented_node_id => binary()
 }.
 -type seed() :: binary() | string()
               | #{host := binary() | string(),
@@ -521,6 +535,9 @@
     dedup_sweep   :: pos_integer(),
     %% seed → link_state
     links = #{}   :: #{seed() => #link_state{}},
+    %% Why each seed's link last went down. Outlives the link entry, which
+    %% goes with the link, so the respawned link still reports it.
+    last_disconnects = #{} :: #{seed() => last_disconnect()},
     %% pool-owned SubRef → sub_spec
     subs = #{}    :: #{reference() => #sub_spec{}},
     %% {realm, topic} → set of pool-owned SubRefs
@@ -1344,7 +1361,9 @@ init_with_keys({ok, #{node_identity := NodeIdentity, issuer := Issuer, issuer_st
             capabilities       => maps:get(capabilities, Opts, 0),
             alpn               => maps:get(alpn, Opts, [<<"macula">>]),
             connect_timeout_ms => maps:get(connect_timeout_ms, Opts, 30_000),
-            admission          => Admission
+            admission          => Admission,
+            %% Every link tells this pool why it disconnected before it stops.
+            pool               => self()
         },
         %% For the links this pool dials (seeds AND `call_station'
         %% targets): `expected_node_id', the station node_id the
@@ -1602,8 +1621,8 @@ handle_call(status, _From,
     },
     {reply, {ok, Status}, S};
 
-handle_call(links, _From, #state{links = Links} = S) ->
-    {reply, {ok, link_infos(Links)}, S};
+handle_call(links, _From, #state{links = Links, last_disconnects = Last} = S) ->
+    {reply, {ok, link_infos(Links, Last)}, S};
 
 handle_call(_Req, _From, S) ->
     {reply, {error, unknown_call}, S}.
@@ -1685,6 +1704,10 @@ handle_info({'EXIT', Admission, Reason}, #state{admission = Admission} = S) ->
     %% requests without the ones it has seen, so it stops, and its owner
     %% starts a fresh one.
     {stop, {shutdown, {admission_down, Reason}}, S};
+%% A link says why it disconnected, just before it stops `normal'. Its DOWN
+%% follows this message, as signals from one process arrive in order.
+handle_info({macula_link_disconnected, Pid, Summary}, S) ->
+    {noreply, disconnect_kept(find_link_by_pid(Pid, S), Summary, S)};
 handle_info({'EXIT', _Pid, _Reason}, S) ->
     %% Links are linked to us via gen_server:start_link in
     %% start_link_for_seed (we trap_exit). The DOWN monitor fires
@@ -2528,18 +2551,19 @@ link_healthy(Pid) ->
 
 %% Build one `link_info()' per spawned link. Skips seeds whose link
 %% worker is not (yet) a live pid — those have no addressable station.
-link_infos(Links) ->
-    [link_info(Seed, Pid)
+link_infos(Links, Last) ->
+    [link_info(Seed, Pid, maps:get(Seed, Last, undefined))
      || {Seed, #link_state{pid = Pid}} <- maps:to_list(Links),
         is_pid(Pid)].
 
-link_info(Seed, Pid) ->
+link_info(Seed, Pid, LastDisconnect) ->
     Connected = link_healthy(Pid),
-    #{seed      => Seed,
-      host      => seed_host(Seed),
-      pid       => Pid,
-      connected => Connected,
-      node_id   => link_node_id(Pid, Connected)}.
+    #{seed            => Seed,
+      host            => seed_host(Seed),
+      pid             => Pid,
+      connected       => Connected,
+      node_id         => link_node_id(Pid, Connected),
+      last_disconnect => LastDisconnect}.
 
 %% Only probe the peer pubkey on a connected link; a mid-handshake
 %% link answers `{error, not_connected}'.
@@ -3144,10 +3168,11 @@ held_start_resumed(Seed, ExtraOpts, S) ->
     Started = start_link_for_seed(Seed, ExtraOpts, S),
     replay_to_seed(maps:get(Seed, Started#state.links, undefined), Started).
 
-on_down_routed({ok, Seed}, _Mon, Pid, Reason, S) ->
+on_down_routed({ok, Seed}, _Mon, Pid, Reason, S0) ->
     macula_diagnostics:event(<<"_macula.client.link_down">>,
                              #{seed => Seed, pid => Pid, reason => Reason}),
     erlang:send_after(?LINK_RESPAWN_DELAY_MS, self(), {respawn_link, Seed}),
+    S = exit_kept(Reason, Seed, S0),
     S1 = S#state{links = maps:remove(Seed, S#state.links),
                  link_subs = maps:remove(Pid, S#state.link_subs)},
     {noreply, maybe_rediscover_now(S1)};
@@ -3175,6 +3200,28 @@ rediscover_if_no_links([], S) ->
     schedule_discovery(?LINK_RESPAWN_DELAY_MS + ?INITIAL_DISCOVERY_DELAY_MS, S);
 rediscover_if_no_links(_Pids, S) ->
     S.
+
+find_link_by_pid(Pid, #state{links = Links}) ->
+    case [Seed || {Seed, #link_state{pid = P}} <- maps:to_list(Links), P =:= Pid] of
+        [Seed | _] -> {ok, Seed};
+        []         -> error
+    end.
+
+%% A link's own account of its disconnect: its reason's name and the facts
+%% the link chose to name, never the reason's terms.
+disconnect_kept({ok, Seed}, Summary, #state{last_disconnects = Last} = S) ->
+    S#state{last_disconnects = Last#{Seed => Summary}};
+disconnect_kept(error, _Summary, S) ->
+    S.
+
+%% A link that ended without saying why (killed, crashed) is kept by its exit
+%% reason's name. A `normal' exit follows a disconnect the link already told
+%% us about, or a stop the pool asked for, so it replaces nothing.
+exit_kept(normal, _Seed, S) ->
+    S;
+exit_kept(Reason, Seed, #state{last_disconnects = Last} = S) ->
+    S#state{last_disconnects = Last#{Seed => #{reason => macula_reason_name:text(Reason),
+                                               at_ms => erlang:system_time(millisecond)}}}.
 
 find_link_by_mon(Mon, #state{links = Links}) ->
     case [Seed || {Seed, #link_state{mon = M}} <- maps:to_list(Links),
