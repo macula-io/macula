@@ -7,7 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [Unreleased]
+## [12.0.0] - 2026-09-23
+
+**Post-quantum end to end: key exchange AND authentication.** Every QUIC
+link negotiates `SecP384r1MLKEM1024` or `SecP256r1MLKEM768` and nothing
+classical, from the [`macula-pqc`](https://crates.io/crates/macula-pqc)
+crate. Every signature macula makes or checks is ML-DSA-87 on
+[`macula-mldsa`](https://crates.io/crates/macula-mldsa): node keys, the
+self-signed certificate a listener presents, the binding a dial verifies
+against it, and UCAN tokens. The one classical signature left is by
+design, the RSA-PSS half of the `pq_hybrid` composite
+`id-MLDSA87-RSA4096-PSS-SHA512`, which sits beside ML-DSA-87 rather than
+instead of it. A test scans `src/` and `native/` on every run so no other
+one returns.
+
+**Breaking on the wire: a node on 11.5.0 or earlier cannot connect to this
+version, in either direction**, and neither key exchange nor
+authentication has a classical fallback. Upgrade every node together.
+`pq_hybrid` signatures also break against `12.0.0-alpha.1`, which this
+release folds in: that pre-release was never published, so this is one
+release and not two.
+
+The SDKs for the other stacks do not speak this version yet.
 
 ### Added
 
@@ -176,133 +197,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is not gated: that handshake names its peer. The setting goes when the
   tunnel lands.
 
-### Removed
-
-- **The `verify` and `verify_pubkey` dial options**, and the webpki, key-pin
-  and no-verification modes they chose. `macula_quic:connect/4` and
-  `async_connect/4` refuse a dial carrying either, with
-  `{error, {verify_option_removed, Name}}`; `macula:connect/2`,
-  `call_station/8`, `call_stream_station/7`, `put_content_station/5` and
-  `get_content_station/5` refuse `verify` in any value, in the options map or
-  in a seed or station map, with
-  `{error, {refused, {verify, one_verification_mode}}}`; and a peering dial
-  target carrying it does not start, with
-  `{error, {target, {verify, one_verification_mode}}}`. An option that chose
-  among modes that no longer exist is refused rather than accepted and
-  ignored, which is macula#15's lesson. `pin_tls_cert => false` still passes.
-- **`macula_tls`**, the TLS mode module: `quic_client_opts/0,1`,
-  `quic_client_opts_with_hostname/1`, `quic_server_opts/0,1`,
-  `get_tls_mode/0`, `is_production_mode/0`, `hostname_verify_fun/3`,
-  `ensure_cert_exists/2`, `generate_self_signed_cert/1`, `derive_node_id/1`
-  and `get_cert_paths/0`. It chose between the removed dial modes, generated
-  RSA certificates through `openssl`, and derived a node_id from a
-  certificate's key, which a node_id has not been since 11.0.0. Nothing in
-  macula used the rest. `MACULA_TLS_MODE`, `MACULA_TLS_CERTFILE`,
-  `MACULA_TLS_KEYFILE` and `MACULA_TLS_CACERTFILE`, and the `tls_mode`,
-  `tls_certfile`, `tls_keyfile`, `tls_cacertfile`, `cert_path`, `key_path`,
-  `cert_key_bits` and `cert_validity_days` app env keys, are read by nothing
-  now.
-- **`macula_identity`, the Ed25519 identity of 10.x**: `generate/0,1`,
-  `load/1`, `save/2`, `public/1`, `private/1`, `node_id/1`, `sign/2`,
-  `verify/3`, `puzzle_evidence/1`, `puzzle_valid/1,2` and
-  `check_puzzle_difficulty/0`. A node's keys, node_id and puzzle are
-  `macula_node_keys`. Its `pubkey()` type is replaced by
-  `macula_node_keys:node_id()` where a value is a node_id, and by
-  `macula_ucan_nif:issuer_key()` for a UCAN policy's issuer, which is still an
-  Ed25519 key.
-- **`macula_frame:sign/2`, `verify/2` and `signature/1`**, the Ed25519 frame
-  signature, and the optional `signature` field of the frame header. Nothing
-  signed a frame this way: a frame that needs a signature carries it in a
-  signed object (D13) or, in `pq_hybrid`, as a neighbour signature (D17).
-- **`macula_crypto_nif:grind_puzzle/1`**, which ground Ed25519 keys for
-  `macula_identity`. `macula_node_keys:generate/3` grinds identity keys.
-- **`macula_ucan_nif` and its Rust crate**, the Ed25519 UCAN tokens,
-  replaced by `macula_ucan` (above).
-- **`macula_crypto_nif:generate_keypair/0`, `sign/2` and `verify/3`**, its
-  Ed25519, which only `macula_ucan_nif` used. With them go its Erlang
-  fallbacks and the crate's `ed25519-dalek` and `rand`.
-- **`macula_did_nif` and its Rust crate**, which built and parsed DID
-  documents for hierarchical `did:macula:` names, signed with Ed25519. D7
-  retires the `did:macula:` prefix, and nothing called it: not macula,
-  macula-station, macula-realm, mcl-om or mcl-echo.
-
-### Fixed
-
-- **The relay's control channel read a frame length with no cap, and skipped a
-  frame it could not decode.** A 32-bit length was taken as a promise about
-  bytes that had not arrived: a length of 4 GiB, from the relay or anything
-  able to write on that stream, is a reader that waits and holds everything
-  arriving meanwhile until the node dies, and nothing bounded it. A frame that
-  failed to decode was skipped with a warning and reading carried on, so the
-  next bytes read as a length were the middle of something else and one bad
-  frame became an endless run of them on a connection that looked alive. Both
-  now end the connection, as a closed control stream already does. The cap is
-  65,536 bytes, the same the handshake's reader uses, judged on the header
-  alone. `macula_dist_relay_protocol:decode_buffer/1` answers
-  `{ok, Messages, Rest}` or `{error, Reason}`, and `max_frame_bytes/0` is
-  exported.
-
-- **A provider went dark before its authorization expired.**
-  `macula:advertise/5` builds a procedure advertisement with its type's own
-  5-minute lifetime, which knows nothing about the org directory and
-  delegation it carries, and signed it unbounded. Both verifiers refuse an
-  advertisement that ends after the earlier of those two expiries,
-  `macula_record:verify_authorization/3` here and macula-station's at
-  admission, so in the last 5 minutes of every authorization window a
-  provider signed advertisements its own pool then refused with
-  `{provider_authorization, {error, authorization_outlived}}`, and stopped
-  advertising early. The advertisement is now signed under that earlier
-  expiry as its bound, so it ends with its authorization rather than after
-  it. The seam entry `sign_node_record` in `advertise/5`'s and
-  `provider_authorization/4`'s options takes the bounded arity: a caller
-  that overrides it passes a `fun/3` now.
-
-- **A record signed under a `not_after` bound outlived the bound by its own
-  age.** `macula_client:sign_node_record/3` wrote the bound into the record as
-  `expires_at` and then refreshed it, and a refresh keeps a record's LIFETIME:
-  the bound was re-anchored to a second, later clock read, and the record ended
-  at the bound plus however long it had sat unsigned. Signed straight after
-  building, that was a millisecond; built a minute before it is signed, a
-  minute, and nothing bounded the gap. `macula_record:refresh/3` now stamps the
-  record and ends it on ONE clock read, at the earlier of the record's own
-  expiry and the bound, and refuses a bound at or before that read with
-  `{error, not_after_passed}` rather than signing a record whose expiry
-  precedes its own start. A caller capping a record against a delegation's
-  expiry got a record the delegation no longer covers; anything already signed
-  that way stands and expires on its own.
-
-- **A direct-mode distribution listener could not load any certificate.**
-  `macula_dist` passed `certfile` and `keyfile` to `macula_quic:listen/3`,
-  which reads `cert` and `key`, so it always tried to open a file named
-  "undefined" and the listener failed to start. It now passes the right keys,
-  and makes its certificate as everything else does: self-signed ML-DSA-87 on
-  a fresh TLS key, with the key file its owner's alone (D12, D29). A
-  certificate directory that already holds the RSA pair the old code wrote
-  (generation ran even though the listener then failed) must be cleared: the
-  key loader refuses that pair.
-
-## [12.0.0-alpha.1] - 2026-09-22
-
-**A pre-release: post-quantum KEY EXCHANGE, not post-quantum
-authentication.** Every QUIC link now negotiates `SecP384r1MLKEM1024` or
-`SecP256r1MLKEM768` and nothing classical (first entry below).
-Authentication is not post-quantum yet, and 12.0.0 is reserved for when it
-is:
-
-- The certificate a QUIC listener presents is classically signed, since
-  `rustls-webpki` has no ML-DSA, and `macula_key_bindings:tls_binding/4`
-  binds that classical leaf.
-- `macula_tls` and `macula_dist` generate RSA-2048 certificates through
-  `openssl`.
-- The ML-DSA pin primitive is not built, so `pin_tls_cert => true` is
-  refused (see below).
-
-**Breaking on the wire: a node on 11.5.0 or earlier cannot connect to this
-version, in either direction.** Upgrade every node together. A pre-release
-is never selected by a `~>` requirement on 11.x or earlier: depend on
-`12.0.0-alpha.1` by name.
-
-### Changed
 
 - **QUIC links now negotiate POST-QUANTUM KEY EXCHANGE, and nothing else.**
   The QUIC NIF builds every TLS configuration from
@@ -490,6 +384,111 @@ is never selected by a `~>` requirement on 11.x or earlier: depend on
   and `outcome`. Agnostic by construction and with no threshold, so a
   measurement can separate the two without the code having decided in advance
   what it expects to find.
+
+### Removed
+
+- **The `verify` and `verify_pubkey` dial options**, and the webpki, key-pin
+  and no-verification modes they chose. `macula_quic:connect/4` and
+  `async_connect/4` refuse a dial carrying either, with
+  `{error, {verify_option_removed, Name}}`; `macula:connect/2`,
+  `call_station/8`, `call_stream_station/7`, `put_content_station/5` and
+  `get_content_station/5` refuse `verify` in any value, in the options map or
+  in a seed or station map, with
+  `{error, {refused, {verify, one_verification_mode}}}`; and a peering dial
+  target carrying it does not start, with
+  `{error, {target, {verify, one_verification_mode}}}`. An option that chose
+  among modes that no longer exist is refused rather than accepted and
+  ignored, which is macula#15's lesson. `pin_tls_cert => false` still passes.
+- **`macula_tls`**, the TLS mode module: `quic_client_opts/0,1`,
+  `quic_client_opts_with_hostname/1`, `quic_server_opts/0,1`,
+  `get_tls_mode/0`, `is_production_mode/0`, `hostname_verify_fun/3`,
+  `ensure_cert_exists/2`, `generate_self_signed_cert/1`, `derive_node_id/1`
+  and `get_cert_paths/0`. It chose between the removed dial modes, generated
+  RSA certificates through `openssl`, and derived a node_id from a
+  certificate's key, which a node_id has not been since 11.0.0. Nothing in
+  macula used the rest. `MACULA_TLS_MODE`, `MACULA_TLS_CERTFILE`,
+  `MACULA_TLS_KEYFILE` and `MACULA_TLS_CACERTFILE`, and the `tls_mode`,
+  `tls_certfile`, `tls_keyfile`, `tls_cacertfile`, `cert_path`, `key_path`,
+  `cert_key_bits` and `cert_validity_days` app env keys, are read by nothing
+  now.
+- **`macula_identity`, the Ed25519 identity of 10.x**: `generate/0,1`,
+  `load/1`, `save/2`, `public/1`, `private/1`, `node_id/1`, `sign/2`,
+  `verify/3`, `puzzle_evidence/1`, `puzzle_valid/1,2` and
+  `check_puzzle_difficulty/0`. A node's keys, node_id and puzzle are
+  `macula_node_keys`. Its `pubkey()` type is replaced by
+  `macula_node_keys:node_id()` where a value is a node_id, and by
+  `macula_ucan_nif:issuer_key()` for a UCAN policy's issuer, which is still an
+  Ed25519 key.
+- **`macula_frame:sign/2`, `verify/2` and `signature/1`**, the Ed25519 frame
+  signature, and the optional `signature` field of the frame header. Nothing
+  signed a frame this way: a frame that needs a signature carries it in a
+  signed object (D13) or, in `pq_hybrid`, as a neighbour signature (D17).
+- **`macula_crypto_nif:grind_puzzle/1`**, which ground Ed25519 keys for
+  `macula_identity`. `macula_node_keys:generate/3` grinds identity keys.
+- **`macula_ucan_nif` and its Rust crate**, the Ed25519 UCAN tokens,
+  replaced by `macula_ucan` (above).
+- **`macula_crypto_nif:generate_keypair/0`, `sign/2` and `verify/3`**, its
+  Ed25519, which only `macula_ucan_nif` used. With them go its Erlang
+  fallbacks and the crate's `ed25519-dalek` and `rand`.
+- **`macula_did_nif` and its Rust crate**, which built and parsed DID
+  documents for hierarchical `did:macula:` names, signed with Ed25519. D7
+  retires the `did:macula:` prefix, and nothing called it: not macula,
+  macula-station, macula-realm, mcl-om or mcl-echo.
+
+### Fixed
+
+- **The relay's control channel read a frame length with no cap, and skipped a
+  frame it could not decode.** A 32-bit length was taken as a promise about
+  bytes that had not arrived: a length of 4 GiB, from the relay or anything
+  able to write on that stream, is a reader that waits and holds everything
+  arriving meanwhile until the node dies, and nothing bounded it. A frame that
+  failed to decode was skipped with a warning and reading carried on, so the
+  next bytes read as a length were the middle of something else and one bad
+  frame became an endless run of them on a connection that looked alive. Both
+  now end the connection, as a closed control stream already does. The cap is
+  65,536 bytes, the same the handshake's reader uses, judged on the header
+  alone. `macula_dist_relay_protocol:decode_buffer/1` answers
+  `{ok, Messages, Rest}` or `{error, Reason}`, and `max_frame_bytes/0` is
+  exported.
+
+- **A provider went dark before its authorization expired.**
+  `macula:advertise/5` builds a procedure advertisement with its type's own
+  5-minute lifetime, which knows nothing about the org directory and
+  delegation it carries, and signed it unbounded. Both verifiers refuse an
+  advertisement that ends after the earlier of those two expiries,
+  `macula_record:verify_authorization/3` here and macula-station's at
+  admission, so in the last 5 minutes of every authorization window a
+  provider signed advertisements its own pool then refused with
+  `{provider_authorization, {error, authorization_outlived}}`, and stopped
+  advertising early. The advertisement is now signed under that earlier
+  expiry as its bound, so it ends with its authorization rather than after
+  it. The seam entry `sign_node_record` in `advertise/5`'s and
+  `provider_authorization/4`'s options takes the bounded arity: a caller
+  that overrides it passes a `fun/3` now.
+
+- **A record signed under a `not_after` bound outlived the bound by its own
+  age.** `macula_client:sign_node_record/3` wrote the bound into the record as
+  `expires_at` and then refreshed it, and a refresh keeps a record's LIFETIME:
+  the bound was re-anchored to a second, later clock read, and the record ended
+  at the bound plus however long it had sat unsigned. Signed straight after
+  building, that was a millisecond; built a minute before it is signed, a
+  minute, and nothing bounded the gap. `macula_record:refresh/3` now stamps the
+  record and ends it on ONE clock read, at the earlier of the record's own
+  expiry and the bound, and refuses a bound at or before that read with
+  `{error, not_after_passed}` rather than signing a record whose expiry
+  precedes its own start. A caller capping a record against a delegation's
+  expiry got a record the delegation no longer covers; anything already signed
+  that way stands and expires on its own.
+
+- **A direct-mode distribution listener could not load any certificate.**
+  `macula_dist` passed `certfile` and `keyfile` to `macula_quic:listen/3`,
+  which reads `cert` and `key`, so it always tried to open a file named
+  "undefined" and the listener failed to start. It now passes the right keys,
+  and makes its certificate as everything else does: self-signed ML-DSA-87 on
+  a fresh TLS key, with the key file its owner's alone (D12, D29). A
+  certificate directory that already holds the RSA pair the old code wrote
+  (generation ran even though the listener then failed) must be cleared: the
+  key loader refuses that pair.
 
 ## [11.5.0] - 2026-09-21
 

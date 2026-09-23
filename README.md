@@ -18,8 +18,8 @@
 
 ---
 
-> **12.0.0-alpha.1, a pre-release: post-quantum key exchange AND
-> post-quantum signatures.** Every QUIC link negotiates
+> **12.0.0: post-quantum key exchange AND post-quantum signatures.**
+> Every QUIC link negotiates
 > `SecP384r1MLKEM1024`, then `SecP256r1MLKEM768`, and nothing classical,
 > from the [`macula-pqc`](https://crates.io/crates/macula-pqc) crate. Every
 > signature is ML-DSA-87 on
@@ -99,20 +99,20 @@ the client you build against.
 Add to `rebar.config`:
 
 ```erlang
-{deps, [{macula, "12.0.0-alpha.1"}]}.
+{deps, [{macula, "~> 12.0"}]}.
 ```
 
 Or in Elixir `mix.exs`:
 
 ```elixir
 defp deps do
-  [{:macula, "12.0.0-alpha.1"}]
+  [{:macula, "~> 12.0"}]
 end
 ```
 
-12.0.0-alpha.1 is a pre-release, so it is named exactly: no `~>`
-requirement on an earlier version selects it. The latest stable release is
-11.5.0 (`~> 11.5`), which cannot connect to it.
+12.0.0 breaks on the wire: a node on 11.5.0 or earlier cannot connect to
+it, in either direction, and there is no classical fallback for either key
+exchange or authentication. Upgrade every node together.
 
 <p align="center">
   <img src="assets/connect_flow.svg" alt="SDK Connect Flow" width="100%">

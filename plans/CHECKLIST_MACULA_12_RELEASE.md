@@ -22,10 +22,11 @@ is the mistake this line exists to prevent.** A consumer break fails a build, in
 and can retry. These stop a box BOOTING, or arrive on a schedule nobody set. They need to be done before the
 rolling starts, not discovered during it.
 
-- [ ] **The classical-signing ratchet's exception list is empty.** `test/macula_no_classical_signing_tests.erl`,
-      `known()` returns `[]`. It does today; confirm it at the tag, because the list is what a late fix is
-      tempted to grow.
-- [ ] **The wire negotiates a post-quantum key exchange group**, which is already proved and needs confirming
+- [x] **The classical-signing ratchet's exception list is empty.** `test/macula_no_classical_signing_tests.erl`,
+      `known()` returns `[]`. Confirmed at the tag by RUNNING it rather than reading it, which is the point: the
+      scan of `src/` and `native/` found nothing beyond the empty list, 4 of 4 green. The one sanctioned
+      classical signature is `allowed()`'s RSA-PSS in `macula_node_keys`, the EU composite's second half.
+- [x] **The wire negotiates a post-quantum key exchange group**, which is already proved and needs confirming
       rather than building. ⛔ **Do not try to ask a live QUIC connection what it negotiated.** `quinn` does not
       surface it: `rustls` has the accessor, but `quinn_proto`'s session holds its rustls connection in a private
       field. `macula_quic_pq_kx_tests` says so at length, and chasing it is a day someone can lose.
@@ -35,8 +36,14 @@ rolling starts, not discovered during it.
       ⚠ **So confirm the condition, not the conclusion:** that `macula-pqc`'s list is still exactly its two groups
       with no classical fallback. The moment a fallback is added, a completed handshake is consistent with X25519
       again and the Erlang half stops proving anything.
-- [ ] **Invite-only is present and OFF.** D31: the field always travels, the setting defaults to `off`, and a
-      station with no setting is open.
+      **Confirmed at the tag**: `every_configuration_offers_exactly_macula_pqcs_groups` passes, and it asserts
+      the exact list on BOTH the listener's and the dialler's provider, so neither can build its own.
+- [x] **Invite-only is present and OFF**, for the half that lives here. D31: the field always travels, the
+      setting defaults to `off`, and a station with no setting is open.
+      `member_endorsement` is in `?CONNECT_KEYS` in `macula_handshake`, which the decoder matches EXACTLY, so it
+      always travels; and this repo hands it over without ever checking it. ⚠ **The `invite_only` SETTING is not
+      in this repo**: requiring an endorsement is the station's CONNECT check, so "defaults to off" is
+      `macula-station`'s to confirm, not something this tag can carry.
 - [ ] ⛔ **EVERY station on the fleet holds an ML-DSA-87 TLS certificate and key before it is rolled.** This is a
       cutover item, not a build item: a 12 station with any other leaf **refuses to start**, with
       `{listen_failed, "load private key: ... the PKCS#8 key is not ML-DSA-87"}`. **A Let's Encrypt leaf cannot
@@ -58,7 +65,7 @@ rolling starts, not discovered during it.
       ⚠ **Do not use expiry order to plan the rolling order.** They do not expire together and the longest-lived
       is amsterdam, which carries nothing else that makes it special: expiry order says nothing about cutover
       order.
-- [ ] **Know what the handshake survives before anyone asks in an incident.** Measured, V21 in
+- [x] **Know what the handshake survives before anyone asks in an incident.** Measured, V21 in
       `PLAN_POST_QUANTUM_SECURITY_PART1.md`: **our client hello spans four to five datagrams**, and the
       handshake completes reliably up to 20% sustained datagram loss in both directions, degrading above that
       into dial timeouts rather than crashes. Recorded because someone will otherwise re-derive it at the worst
@@ -70,6 +77,9 @@ rolling starts, not discovered during it.
       `unsupported_version`, which says what to do. D31: the wire breaks once, in 12.0.0, not twice. **So no
       station, realm or service crosses the cutover alone**, and the last thing to confirm before the tag is that
       the version on the wire is the one 12 ships.
+      **Confirmed at the tag: `?VERSION` is 4** in `macula_handshake`, against the 3 the fleet requires today.
+      ⚠ **Unticked because the other half is not done**: no station, realm or service has crossed yet, so
+      "the fleet rolls together" is still ahead of us and this item is settled only on the macula side.
 
 - [ ] ⚠ **The six boxes are not interchangeable: frankfurt is the fleet's SEED NAME, and rolling it has a blast
       radius no other box has.** `station-de-frankfurt.macula.io` was retargeted onto it in July, and by
@@ -144,6 +154,8 @@ misled a porter on 2026-09-23 alone, each caught by someone USING the document r
 - [ ] **`macula-e2e`'s seam suite is green against 12.** It runs on 11.x today by design: the seam tests the stack
       that exists, and moving it to 12 tests the port rather than the harness. See
       `macula-e2e/plans/DESIGN_REALM_SEAM_E2E.md`.
+      **State at the tag: green at steps 0 to 7, 4 of 4, against the 11.x stack.** Steps 8 to 10 are blocked on a
+      bootable realm, which is a different wait from the port.
 
 ⛔ **`macula-dist-relay` is NOT on this list and is not ported.** It stays on `macula ~> 11.x` (Raf, 2026-09-23).
 It consumes `macula_tls:quic_server_opts/0`, which 12 deletes. Do not "finish" it.
@@ -157,7 +169,16 @@ It consumes `macula_tls:quic_server_opts/0`, which 12 deletes. Do not "finish" i
 
 ## The release
 
-- [ ] **CHANGELOG**: the `12.0.0` section, dated, with `12.0.0-alpha.1` folded into it.
+⛔ **The tag goes AHEAD OF the consumer list, by decision.** Raf, 2026-09-23, with the open items below in front
+of him: the tag does not wait for the three unfinished ports or for the seam to be green against 12. The reason
+is the order above rather than an exception to it, and it is the ⚠ two paragraphs up made deliberate: an SDK
+defect that a port turns up afterwards becomes a 12.0.1, which is cheap because a tag publishes itself. **So the
+unticked boxes below are not oversights and are not to be ticked to make the release look ready.**
+
+- [x] **CHANGELOG**: the `12.0.0` section, dated, with `12.0.0-alpha.1` folded into it. One section, since the
+      alpha was never published: no tag, never on hex. Its "not post-quantum authentication yet" preamble is
+      gone rather than carried forward, because 12.0.0 is post-quantum on both halves and keeping it would have
+      shipped a false caveat.
 - [ ] **The tag `v12.0.0`.** The tag IS the release: a pushed `v*` tag publishes directly, with no reviewer, by
       design.
 
