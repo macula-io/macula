@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [12.0.1] - 2026-09-23
+
+**12.0.0 is not on hex and never will be: its publish crashed before it sent
+anything.** This release is 12.0.0's contents plus the one-line build fix that
+lets it publish. There is no code difference; read the 12.0.0 section below for
+what the release actually contains.
+
+### Fixed
+
+- **`rebar3_hex` is pinned to `~> 7.2.0`.** It was unpinned, so the `v12.0.0` tag
+  run fetched 7.3.0, published upstream on 2026-09-22, which reads no environment
+  variable for authentication at all. The workflow's `HEX_API_KEY` was ignored,
+  authentication resolved to nothing, and `hex_cli_auth:with_api` returned a value
+  the caller does not match, so the job died on `{badmatch, #{...}}` at
+  `rebar3_hex_publish.erl:372` and printed no reason. Nothing was sent to hex.
+  ⚠ A `--dry-run` guard cannot catch this, because a dry run never authenticates:
+  the dry-run step passed with a placeholder key in the same run that failed.
+
 ## [12.0.0] - 2026-09-23
 
 **Post-quantum end to end: key exchange AND authentication.** Every QUIC
