@@ -11,6 +11,11 @@ that step.
 
 ## Before the tag
 
+⚠ **The fleet items below are a DIFFERENT SHAPE OF RISK from the consumer list, and scheduling them the same way
+is the mistake this line exists to prevent.** A consumer break fails a build, in front of someone who is watching
+and can retry. These stop a box BOOTING, or arrive on a schedule nobody set. They need to be done before the
+rolling starts, not discovered during it.
+
 - [ ] **The classical-signing ratchet's exception list is empty.** `test/macula_no_classical_signing_tests.erl`,
       `known()` returns `[]`. It does today; confirm it at the tag, because the list is what a late fix is
       tempted to grow.
@@ -32,17 +37,21 @@ that step.
       be used.** No new material is needed: a station mints its own from the identity seed it already stores, via
       `macula_quic:generate_self_signed_cert/2`. ⚠ It stops a box BOOTING rather than failing a build, so it is
       the one item on this list that can take the fleet down if it is missed.
-- [ ] ⚠ **The `/certs` mount is READ-ONLY on every box checked, so minting is not enough: each box needs a
-      COMPOSE CHANGE.** A station cannot write a self-minted certificate where it reads one. Measured by Terra
-      on the boxes, 2026-09-23. **Five of six confirmed; amsterdam refused ssh and is UNKNOWN rather than
-      assumed to match** — check it rather than inferring it from the other five.
+- [ ] ⚠ **The `/certs` mount is READ-ONLY on all SIX boxes, so minting is not enough: each box needs a COMPOSE
+      CHANGE.** A station cannot write a self-minted certificate where it reads one. Measured by Terra on the
+      boxes, 2026-09-23, six of six.
+      **What they hold today: six distinct certificates, five EC P-256 and one RSA-2048 on frankfurt, and ZERO
+      ML-DSA-87.** So every box needs both a new certificate and a compose change; none is already right.
 - [ ] ⚠ **Do the cutover before the certificates renew, around early October.** Issued early August, expiring
       early November, and **each box runs its own ACME client writing its own certificate**: six independent
       certificates, not one shared file. A renewal rewrites the file under a listener still serving what it read
       at boot, so a cutover that has not happened by then meets a SCHEDULED disturbance rather than a random one.
-      ⚠ The evidence for "independent" is **five distinct sha256s**, and it is worth keeping because the configs
+      ⚠ The evidence for "independent" is **six distinct sha256s**, and it is worth keeping because the configs
       say the opposite: **a shared PATH in six configs is not a shared thing**, and anyone reading the configs
       alone would conclude it was.
+      ⚠ **Do not use expiry order to plan the rolling order.** They do not expire together and the longest-lived
+      is amsterdam, which carries nothing else that makes it special: expiry order says nothing about cutover
+      order.
 - [ ] **Know what the handshake survives before anyone asks in an incident.** Measured, V21 in
       `PLAN_POST_QUANTUM_SECURITY_PART1.md`: **our client hello spans four to five datagrams**, and the
       handshake completes reliably up to 20% sustained datagram loss in both directions, degrading above that

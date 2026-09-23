@@ -33,6 +33,24 @@ OUT="${OUT:-$(mktemp -d)}"
 export PATH="$OTP_BIN:$PATH"
 cd "$ROOT"
 
+# ⚠ REFUSE A RUN UNDER THE WRONG OTP, and refuse LOUDLY.
+#
+# `PATH="$OTP_BIN:$PATH"` with a directory that has stopped existing does not fail: it falls through to the next
+# entry in silence. On a box whose next entry is another major, the symptom is a confusing error inside a
+# dependency with nothing said about versions, which has already cost two runs here. The default being right is
+# not the property worth having; the wrongness being loud is.
+#
+# The wanted major comes from .tool-versions rather than a constant, so this survives the next OTP move.
+# Pattern lifted from scripts/test-parallel.sh, deliberately, so the two refuse the same way.
+WANT_OTP=$(awk '/^erlang /{split($2, v, "."); print v[1]}' .tool-versions 2>/dev/null)
+HAVE_OTP=$(erl -noshell -eval 'io:format("~s", [erlang:system_info(otp_release)]), halt().' 2>/dev/null)
+if [ -n "$WANT_OTP" ] && [ -n "$HAVE_OTP" ] && [ "$WANT_OTP" != "$HAVE_OTP" ]; then
+    echo "OTP $HAVE_OTP is on PATH; .tool-versions asks for $WANT_OTP." >&2
+    echo "A measurement under another major is drift, not a result. Put the right erl first:" >&2
+    echo "  OTP_BIN=<otp-$WANT_OTP>/bin $0" >&2
+    exit 1
+fi
+
 # The probe lives beside this script so the measurement and its instrument stay together.
 erlc -o "$OUT" -pa _build/test/lib/macula/ebin "$HERE/lossy_handshake.erl"
 
