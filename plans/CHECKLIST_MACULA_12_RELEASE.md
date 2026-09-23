@@ -44,22 +44,24 @@ rolling starts, not discovered during it.
       always travels; and this repo hands it over without ever checking it. ⚠ **The `invite_only` SETTING is not
       in this repo**: requiring an endorsement is the station's CONNECT check, so "defaults to off" is
       `macula-station`'s to confirm, not something this tag can carry.
-- [ ] ⛔ **EVERY station on the fleet holds an ML-DSA-87 TLS certificate and key before it is rolled.** This is a
-      cutover item, not a build item: a 12 station with any other leaf **refuses to start**, with
-      `{listen_failed, "load private key: ... the PKCS#8 key is not ML-DSA-87"}`. **A Let's Encrypt leaf cannot
-      be used.** No new material is needed: a station mints its own from the identity seed it already stores, via
-      `macula_quic:generate_self_signed_cert/2`. ⚠ It stops a box BOOTING rather than failing a build, so it is
-      the one item on this list that can take the fleet down if it is missed.
-- [ ] ⚠ **Each box needs a COMPOSE CHANGE, but NOT the one first written here: a station on 12 does not want
-      `/certs` at all.** The self-minting path writes the certificate AND the key into a per-process directory
-      under the temp root (`write_temp_cert_pair` in `macula_station_listener`), so both halves name the same
-      key by construction and neither goes near the mount. **So the change is "give the station a writable
-      directory and stop pointing it at `/certs`", not "make `/certs` writable"**, and the read-only mount is
-      not the obstacle. Neptunus, from the port; the temp-root shape is already on the station's main.
-      ⚠ The compose files today name `/certs/.../wildcard_.macula.io.crt` through the LEGACY `certfile`/`keyfile`
-      path, which 12 refuses outright, so leaving them as they are is what breaks a box, not the mount's mode.
-      **What they hold today: six distinct certificates, five EC P-256 and one RSA-2048 on frankfurt, and ZERO
-      ML-DSA-87.** No box is already right.
+- [ ] ⛔ **Each box's config must stop naming a certificate, and its data directory must be writable.** A 12 station
+      owns its TLS leaf (`macula_station_tls` on macula-station main): at start, and again halfway through each
+      leaf's 7-day binding, it mints a fresh ML-DSA-87 TLS key (never the identity key, D6) and a self-signed leaf,
+      writes both under `{data_dir}/tls`, has the statement issuer bind it, and hot-reloads the listener. **A Let's
+      Encrypt leaf cannot be used and none is needed.** `certfile` and `keyfile` are REFUSED at config load
+      (`macula_station_config`), so a box whose config still names them does not boot. ⚠ It stops a box BOOTING
+      rather than failing a build, so it is the item on this list that can take the fleet down if it is missed.
+      ⚠ The compose files today name `/certs/.../wildcard_.macula.io.crt` through that `certfile`/`keyfile` path.
+      **The change is "drop both keys and the `/certs` mount, and let the station write `{data_dir}/tls`"**; the
+      mount's read-only mode was never the obstacle. **What the boxes hold today: six distinct certificates, five
+      EC P-256 and one RSA-2048 on frankfurt, and ZERO ML-DSA-87.** None of them is used once the box is on 12.
+- [ ] ⛔ **The data directory IS the station's identity, and only half of its loss is caught.** The identity is
+      `{data_dir}/identity.erl.bin`. A data directory that holds anything but no identity file refuses to start
+      with `{bad_config, {identity_missing_in_used_data_dir, Path}}` (`macula_station_config`). **An EMPTY data
+      directory, which is what a lost volume looks like, still generates a new identity without a word**, so a
+      station whose volume did not survive a recreation comes up with a new node_id, and every pin on the old one
+      (the realm's `expected_node_id` per seed, every peer's `outbound_peers`) refuses it. Verify each station's
+      node_id against the pins after the roll.
 
 - [ ] ⛔ **A LEAF MUST CARRY NEITHER THE STATION'S IDENTITY KEY NOR THE CLIENT'S CONNECT KEY. Any other
       tls-purpose key works.** It is not "the leaf must carry the TLS key": nothing requires that particular key,
