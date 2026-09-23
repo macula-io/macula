@@ -65,6 +65,24 @@ rolling starts, not discovered during it.
       station, realm or service crosses the cutover alone**, and the last thing to confirm before the tag is that
       the version on the wire is the one 12 ships.
 
+### Decided, with its risk: the station memory limits do not change for the cutover
+
+**Not an action item, and it has no checkbox on purpose.** Raf decided on 2026-09-23, with the numbers below in
+front of him, that the station memory limits stay as they are through the cutover.
+
+The measured position, Terra on the boxes: **frankfurt runs at 99.99% of a 1 GiB limit, about 400 KB of
+headroom**, with over a million cgroup ceiling events and no kills so far, because reclaim keeps winning.
+Falkenstein is second at 83.7%. The limits are not uniform — 1.5 GiB on three, 1 GiB on two, 896 MiB on one —
+and neither are the hosts. And **12 makes every station heavier**: ML-DSA-87 keys and signatures, a CONNECT of
+about 30.8 KB against 21.8 KB, and a handshake of four to five datagrams instead of one.
+
+**So: limits unchanged by decision. Frankfurt is the box to watch first during the cutover**, and it also
+carries the realm and the portal. The expected failure mode there is a station that is killed and restarts by
+policy, not one that stays down.
+
+⛔ **This was decided, so it is not reopened by someone reading it and proposing a higher limit. Only a NEW
+measurement reopens it.**
+
 ## Every Erlang and Elixir consumer, ported and green
 
 Each is its own repo, its own CI, and its own owner. Green means that repo's own suite, not that it compiles.
