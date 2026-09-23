@@ -240,6 +240,7 @@ Ceilings from signing and verifying alone, per core, estimated from the table:
 | V18 | Revocation under BSI and ANSSI | Saturnus | answered; D22 pending Raf | 0.5 day |
 | V19 | TLS 1.3 in OTP `ssl` with the profile groups | Mercury | done | 0.5 day |
 | V20 | Node_id puzzle cost on the slowest client device | unassigned | open | 0.5 day |
+| V21 | The handshake under datagram loss, and its size on the wire | Venus | done | 0.5 day |
 
 #### V2 OpenSSL in the runtime images
 
@@ -497,3 +498,47 @@ Ceilings from signing and verifying alone, per core, estimated from the table:
 - **Done when:** the mean and the 95th percentile are recorded for each stack on that device. If 12 bits is too slow
   there, the value goes back to Raf (D30).
 - **Effort:** 0.5 day.
+#### V21 The handshake under datagram loss, and its size on the wire
+
+- **What to verify:** whether OUR handshake completes when a datagram carrying it is dropped, deliberately and
+  repeatedly. Not "does QUIC handle loss": msquic HARDCODES classical key exchange groups, and its own source
+  comment says why — ML-KEM key shares make the hellos span multiple UDP datagrams, and their tests "hit a buffer
+  space assertion failure" or "time out on loss recovery". We offer ML-KEM-1024 hybrids and nothing else, so ours
+  is the large handshake.
+- **Result, 2026-09-23 ✅ (Venus). The headline nothing else in the estate states: OUR CLIENT HELLO SPANS FOUR
+  TO FIVE DATAGRAMS.** Clean handshakes on loopback: the client's opening flight is four or five datagrams of
+  1,200 bytes — it varies between runs, and a single run would have reported whichever it saw — with about
+  6.5 to 7.5 KB from the client in 8 to 11 datagrams, and about 15 to 15.5 KB from the server in 15 to 18.
+  The number that matters is not the exact count but that it is SEVERAL: one datagram cannot carry our hello.
+- **Under loss**, a deterministic drop of one datagram in N in BOTH directions, 8 attempts per point:
+
+  | loss | at a 20 s deadline | at a 10 s deadline |
+  |---|---|---|
+  | 1 in 8 (12.5%) | 8 of 8 | 8 of 8 |
+  | 1 in 6 (16.7%) | 8 of 8 | — |
+  | 1 in 5 (20%) | **8 of 8** | **8 of 8** |
+  | 1 in 4 (25%) | 6 of 8 | 7 of 8 |
+  | 1 in 3 (33%) | 6 of 8 | — |
+  | 1 in 2 (50%) | 6 of 8 | — |
+
+  Dropping a single specific datagram of the hello, the 1st, 2nd or 3rd from the client, **recovered every time**.
+  No assertion failure, no crash, nothing resembling what msquic reported. It retransmits and completes.
+- ⚠ **How to read the failures.** Every one is a dial timeout, never a refusal or a crash; one had 1,220
+  datagrams dropped by the relay, still retransmitting when the clock ran out. So it is "does not complete inside
+  the deadline at 25% sustained loss", not "cannot complete".
+  **The deadline is not what decides it**: halving it from 20 s to 10 s left the curve where it was. The two
+  shipped defaults bracket the measurement anyway — `macula_client`'s `connect_timeout_ms` is 30,000 and its
+  `dial_timeout_ms` is 10,000, with `macula_peering_conn`'s own handshake timeout at 30,000.
+- ⚠ **What this did NOT test**, as sharply as what it did: **loopback is not a lossy link** (no latency, jitter,
+  reordering, congestion or MTU variation), and a deterministic every-Nth drop **is not bursty real-world loss**,
+  which is correlated and would likely be worse for a five-datagram flight. Only the QUIC/TLS handshake, not the
+  macula CONNECT and HELLO that follow it inside the connection. One machine, one build, 8 attempts per point,
+  no distribution.
+- **Not both profiles, and the question dissolves:** the TLS handshake is profile-independent. Both offer the same
+  two key exchange groups and both present an ML-DSA-87 leaf (D12), so these datagrams are identical either way.
+  The profile changes the macula CONNECT frame, which travels afterwards.
+- **The instrument is `scripts/lossy-handshake.sh`**, reusable: a user-space UDP relay, no root unlike netem, and
+  deterministic, so it drops "the second datagram of the hello" rather than a percentage. It counts and sizes
+  every datagram in the same run that drops them.
+- **Effort:** 0.5 day.
+

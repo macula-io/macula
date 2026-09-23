@@ -26,6 +26,18 @@ that step.
       again and the Erlang half stops proving anything.
 - [ ] **Invite-only is present and OFF.** D31: the field always travels, the setting defaults to `off`, and a
       station with no setting is open.
+- [ ] ⛔ **EVERY station on the fleet holds an ML-DSA-87 TLS certificate and key before it is rolled.** This is a
+      cutover item, not a build item: a 12 station with any other leaf **refuses to start**, with
+      `{listen_failed, "load private key: ... the PKCS#8 key is not ML-DSA-87"}`. **A Let's Encrypt leaf cannot
+      be used.** No new material is needed: a station mints its own from the identity seed it already stores, via
+      `macula_quic:generate_self_signed_cert/2`. ⚠ It stops a box BOOTING rather than failing a build, so it is
+      the one item on this list that can take the fleet down if it is missed.
+- [ ] **Know what the handshake survives before anyone asks in an incident.** Measured, V21 in
+      `PLAN_POST_QUANTUM_SECURITY_PART1.md`: **our client hello spans four to five datagrams**, and the
+      handshake completes reliably up to 20% sustained datagram loss in both directions, degrading above that
+      into dial timeouts rather than crashes. Recorded because someone will otherwise re-derive it at the worst
+      possible moment, and because it is the fact that decides whether a foreign stack on a bad link can reach
+      us at all.
 - [ ] **The wire version is settled, and the fleet rolls together.** D31's `member_endorsement` forces a version
       bump whether or not anyone turns invite-only on: the frame decoder matches a frame's key set EXACTLY, so an
       added key is `malformed_frame` to a peer that does not know it, and a version bump turns that into
@@ -37,8 +49,14 @@ that step.
 
 Each is its own repo, its own CI, and its own owner. Green means that repo's own suite, not that it compiles.
 
-- [ ] **`macula-station`** — ⚠ its listener options changed shape: `macula_quic:listen/3` reads `cert` and `key`,
-      and its tests carry the old shape too.
+⚠ **If a break listed here turns out not to be real, SAY SO here rather than working around it or deleting the
+line.** The next porter reads this list and not the thread that corrected it, and a list that warns about a
+break that does not exist costs them the same hour as one that misses a break that does. Three references
+misled a porter on 2026-09-23 alone, each caught by someone USING the document rather than auditing it.
+
+- [ ] **`macula-station`**. ⚠ The `certfile`/`keyfile` break previously listed here **was not real**: the station
+      already passes `cert` and `key`; those other names are its own internal map keys, translated in
+      `macula_transport`. Left here as a correction rather than deleted, per the practice below.
 - [ ] **`macula-realm`** — ⚠ device identity is Ed25519-only in four places (both join proofs, the admission
       lists, the device certificate) and is refused before any mint, so this is not a one-call swap. WP 3.1.
 - [ ] **`mcl-om`** — ⚠ the `verify` option is gone from pool and per-call options and is refused by name.
