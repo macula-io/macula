@@ -11,6 +11,12 @@ that step.
 
 ## Before the tag
 
+⚠ **A configuration describes intent, and only a reading describes the fleet.** Every item below was found by
+someone going to the boxes, and each one contradicted what the configuration implied: six configs naming one
+certificate path with six distinct certificates behind them; one "fleet memory limit" that is six limits on
+differently sized hosts; a box that is the fleet's seed without its own configuration saying so; and — the
+strongest of them — **four of six boxes whose configuration we cannot currently trace to any repository we own.**
+
 ⚠ **The fleet items below are a DIFFERENT SHAPE OF RISK from the consumer list, and scheduling them the same way
 is the mistake this line exists to prevent.** A consumer break fails a build, in front of someone who is watching
 and can retry. These stop a box BOOTING, or arrive on a schedule nobody set. They need to be done before the
@@ -77,13 +83,21 @@ rolling starts, not discovered during it.
       ⛔ **And this one is worse than the other two: it is not visible in frankfurt's own configuration at all.**
       The box does not know it is the seed. The fact lives in a COMMENT in a compose file, describing who dials
       it. Reading every file on the box would not find it, so no amount of care on the box answers the question.
-      ⛔ **Which compose repo, because this is a trap that has already caught two people: frankfurt is managed
-      via `macula-portal-compose` (Raf), and BOTH `macula-portal-compose` and `macula-realm-compose` carry the
-      same comment.** The two repos share **25 file names**, including `docker-compose.yml`,
-      `scripts/deploy-station.sh` and a station config. **They have already diverged**: the portal copy carries
-      an eleven-line block about `MACULA_CONNECT_TO_MESH` that the realm copy does not. So a reading taken from
-      the wrong copy can be right by luck today and wrong tomorrow — which is exactly what happened when the
-      fleet's certificates were first surveyed. **Name the repo when you quote either.**
+      ⛔ **There is ONE repository, `macula-portal-compose`, and a stale duplicate CHECKOUT of it under its
+      former name.** `macula-realm-compose` was RENAMED to `macula-portal-compose`: both clones share root
+      commit `5d3d795`, the GitHub API returns the new name for the old one, and the old-named clone is simply
+      **two commits behind** (`2e0c94b`, the RpcAdvertiser switch, and `9793a4c`). Of their 25 shared file
+      names, 23 are byte-identical and the 2 that differ are the files those commits touch. **Nothing forked.**
+      ⚠ The hazard is still real and is sharper stated properly: **two working copies of ONE repository on one
+      workstation, under two names, one of them behind, both containing frankfurt's station config**, drifting
+      further every time the real one moves. A reading taken from the stale copy is right by luck.
+      **Name the repo, and check it is current, when you quote either.**
+      ⛔ **AND AN OPEN QUESTION THAT MATTERS MORE: a deploy directory name is not a repository name.** The six
+      boxes deploy from four differently named directories, and `macula-relay-compose`, `macula-station-compose`
+      and `station` **do not exist as repositories anywhere we own**. So for four of the six we cannot currently
+      say which repository their configuration comes from. Terra is establishing it, one read-only connection
+      per box. **This is the question, not the answer**: do not plan the compose change on an assumption about
+      where those directories came from.
 
 ### Decided, with its risk: the station memory limits do not change for the cutover
 
