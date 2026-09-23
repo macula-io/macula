@@ -482,12 +482,41 @@ composite_rsa_params(Profile) ->
 hybrid_rsa_params({ok, #{identity_signature := [mldsa87, {rsa_pss, Params}]}}) -> {ok, Params};
 hybrid_rsa_params(_Definition) -> error.
 
+%% A carried RSA key is accepted in its one DER encoding only. `der_decode' also takes BER forms (a long-form length,
+%% an INTEGER with redundant leading zeros), so the key is re-encoded and compared. The re-encoding is built here
+%% directly from the two integers rather than through the generic ASN.1 encoder, which cost more per verify than any
+%% other step outside the two signature checks; `macula_node_keys_carried_form_tests' holds it to the library's.
 decode_rsa_public(Der) ->
     try public_key:der_decode('RSAPublicKey', Der) of
-        #'RSAPublicKey'{} = Key -> canonical_rsa_public(public_key:der_encode('RSAPublicKey', Key) =:= Der, Key)
+        #'RSAPublicKey'{modulus = N, publicExponent = E} = Key when is_integer(N), N > 0, is_integer(E), E > 0 ->
+            canonical_rsa_public(rsa_public_der_canonical(N, E) =:= Der, Key);
+        #'RSAPublicKey'{} ->
+            error
     catch
         error:_ -> error
     end.
+
+%% DER of RSAPublicKey ::= SEQUENCE { modulus INTEGER, publicExponent INTEGER } for positive integers: each INTEGER
+%% in its fewest bytes, with one leading zero byte only where the top bit would otherwise read as a sign, and every
+%% length in its shortest form.
+rsa_public_der_canonical(N, E) ->
+    der_tlv(16#30, <<(der_tlv(16#02, der_positive_integer(N)))/binary,
+                     (der_tlv(16#02, der_positive_integer(E)))/binary>>).
+
+der_positive_integer(I) ->
+    sign_padded(binary:encode_unsigned(I)).
+
+sign_padded(<<Top, _/binary>> = Bytes) when Top >= 16#80 -> <<0, Bytes/binary>>;
+sign_padded(Bytes) -> Bytes.
+
+der_tlv(Tag, Value) ->
+    <<Tag, (der_length(byte_size(Value)))/binary, Value/binary>>.
+
+der_length(Length) when Length < 16#80 ->
+    <<Length>>;
+der_length(Length) ->
+    Bytes = binary:encode_unsigned(Length),
+    <<(16#80 bor byte_size(Bytes)), Bytes/binary>>.
 
 canonical_rsa_public(true, Key) -> {ok, Key};
 canonical_rsa_public(false, _Key) -> error.
@@ -659,7 +688,13 @@ pss_options(#{mgf1_digest := Mgf1Digest, salt_bytes := SaltBytes}) ->
 unsigned(Bin) when is_binary(Bin) -> binary:decode_unsigned(Bin);
 unsigned(Int) when is_integer(Int) -> Int.
 
-bit_length(N) -> length(integer_to_list(N, 2)).
+%% The bits of a positive integer, from its byte length and its top byte, without writing all 4096 of them out.
+bit_length(N) when N > 0 ->
+    <<Top, _/binary>> = Bytes = binary:encode_unsigned(N),
+    (byte_size(Bytes) - 1) * 8 + length(integer_to_list(Top, 2));
+%% A modulus that is not positive has no size a key could have, and is refused as the wrong size, not crashed on.
+bit_length(_NotPositive) ->
+    0.
 
 %%------------------------------------------------------------------
 %% Internals: key file format

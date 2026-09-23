@@ -28,6 +28,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   peer's address (`host:port`), so a connection refused before its handshake
   names anyone is no longer anonymous.
 
+### Changed
+
+- A `pq_hybrid` verify is about 18% faster (440 to 362 µs, best of five
+  interleaved runs on one core). The carried RSA key's two well-formedness
+  checks are unchanged in what they accept: its DER is compared against a
+  canonical encoding built directly from the modulus and exponent instead of
+  through the generic ASN.1 encoder, and the modulus's bit length is read
+  from its byte length and top byte instead of a 4096-character base-2
+  string.
+
 ### Fixed
 
 - `macula_quic:peername/1` returns the host as a binary; its spec said a
