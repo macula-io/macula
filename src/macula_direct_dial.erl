@@ -147,7 +147,7 @@
 %%%-------------------------------------------------------------------
 -module(macula_direct_dial).
 
--export([call/5, call/6, call_stream/5, call_stream/6,
+-export([call/5, call/6, call_stream/5, call_stream/6, providers/4, providers/5,
         publish_advertisement/4, publish_advertisement/5,
         get_content/3, get_content/4, fetch_content/4, fetch_content/5,
         resolve_content_provider/2, put_content/4, put_content/5,
@@ -254,9 +254,18 @@ call(Pool, Realm, Procedure, Payload, TimeoutMs) ->
 %% `TimeoutMs' bounds resolution, each candidate's connect wait and the
 %% CALL itself (see "Resolution" in the module doc). An org namespaced
 %% procedure's authorization is checked against the realm key the pool
-%% pinned for `Realm': see the module doc's "Trust model" section. `Opts'
-%% takes no option: `realm_trust' and `verify_cert_chain' are refused with
-%% `{error, {removed_option, Key}}' before anything is looked up.
+%% pinned for `Realm': see the module doc's "Trust model" section.
+%%
+%% `Opts' takes `provider', a provider's node_id: the call then goes to THAT
+%% provider only. Resolution and the trust check are exactly as without it;
+%% only candidates whose advertisement that provider signed are tried, the
+%% pool's remembered head start included, and a provider with no trusted
+%% advertisement by the deadline is `{error, {unresolved,
+%% provider_not_advertised}}'. A caller that wants one answer from each of
+%% several providers makes one call per provider (see `providers/4').
+%% A `provider' that is not a 32-byte node_id is `{error, {invalid_option,
+%% provider}}', and `realm_trust' and `verify_cert_chain' are refused with
+%% `{error, {removed_option, Key}}', both before anything is looked up.
 -spec call(macula:pool(), macula:realm(), macula:procedure(), term(),
           1..600_000, map()) -> {ok, term()} | {error, term()}.
 call(Pool, Realm, Procedure, Payload, TimeoutMs, Opts)
@@ -265,15 +274,72 @@ call(Pool, Realm, Procedure, Payload, TimeoutMs, Opts)
                         Opts).
 
 call_unless_removed(none, Pool, Realm, Procedure, Payload, TimeoutMs, Opts) ->
+    call_to(provider_option(Opts), Pool, Realm, Procedure, Payload, TimeoutMs, Opts);
+call_unless_removed(Removed, _Pool, _Realm, _Procedure, _Payload, _TimeoutMs, _Opts) ->
+    {error, Removed}.
+
+call_to({error, _} = Invalid, _Pool, _Realm, _Procedure, _Payload, _TimeoutMs, _Opts) ->
+    Invalid;
+call_to({ok, Only}, Pool, Realm, Procedure, Payload, TimeoutMs, Opts) ->
     Dial = dial(Pool, [find_records, find_record, call_station, resolved_candidate,
                        remember_resolved], Opts),
     Deadline = deadline(TimeoutMs),
-    each_candidate(head_start(Dial, Realm, Procedure),
-                   advertised_stations(Dial, Realm, Procedure),
+    each_candidate(only_provider(Only, head_start(Dial, Realm, Procedure)),
+                   only_provider_found(Only, advertised_stations(Dial, Realm, Procedure)),
                    station_try(Dial, call_work(Dial, Realm, Procedure, Payload, Deadline)),
-                   Deadline);
-call_unless_removed(Removed, _Pool, _Realm, _Procedure, _Payload, _TimeoutMs, _Opts) ->
-    {error, Removed}.
+                   Deadline).
+
+%% Which provider a call is limited to, `any' when the caller named none.
+provider_option(#{provider := <<_:256>> = Provider}) -> {ok, Provider};
+provider_option(#{provider := _}) -> {error, {invalid_option, provider}};
+provider_option(#{}) -> {ok, any}.
+
+%% The candidates a call named provider may try: those its advertisements
+%% name. Resolution and trust ran before this, unchanged.
+only_provider(any, Candidates) ->
+    Candidates;
+only_provider(Provider, Candidates) ->
+    [C || #{provider := P} = C <- Candidates, P =:= Provider].
+
+%% A pass that found candidates, none of them the named provider's, is a pass
+%% that answered with nothing qualifying, and says whose absence it was.
+only_provider_found(any, Find) ->
+    Find;
+only_provider_found(Provider, Find) ->
+    fun(Deadline) -> provider_pass(Find(Deadline), Provider) end.
+
+provider_pass({ok, Candidates}, Provider) ->
+    candidates_or(only_provider(Provider, Candidates), provider_not_advertised);
+provider_pass(NoCandidate, _Provider) ->
+    NoCandidate.
+
+%% @doc As `providers/5' with no options.
+-spec providers(macula:pool(), macula:realm(), macula:procedure(), pos_integer()) ->
+    {ok, [#{provider := <<_:256>>, station := <<_:256>>}]} | {error, term()}.
+providers(Pool, Realm, Procedure, TimeoutMs) ->
+    providers(Pool, Realm, Procedure, TimeoutMs, #{}).
+
+%% @doc Who provides `Procedure' in `Realm': every advertisement that passes
+%% the trust check a call applies (see "Trust model"), as the provider that
+%% signed it and the station it names, in the order the DHT answered. ONE
+%% lookup, bounded by `TimeoutMs', and no retry: a provider whose record has
+%% not replicated to this pool's stations yet is simply not listed. `{error,
+%% {unresolved, procedure_not_advertised}}' when the DHT has no advertisement,
+%% `{error, {unresolved, no_trusted_advertisement}}' when none passes the trust
+%% check, `{error, {unresolved, Reason}}' when the lookup failed. A provider
+%% advertising through two stations is listed once per station. `Opts' takes
+%% only `dial_io' (see "Dial I/O").
+-spec providers(macula:pool(), macula:realm(), macula:procedure(), pos_integer(), map()) ->
+    {ok, [#{provider := <<_:256>>, station := <<_:256>>}]} | {error, term()}.
+providers(Pool, Realm, Procedure, TimeoutMs, Opts)
+  when is_integer(TimeoutMs), TimeoutMs > 0, TimeoutMs =< 600_000 ->
+    Find = advertised_stations(dial(Pool, [find_records], Opts), Realm, Procedure),
+    listed(Find(deadline(TimeoutMs))).
+
+listed({ok, Candidates}) ->
+    {ok, [maps:with([provider, station], C) || C <- Candidates]};
+listed({_AnsweredOrFailed, Error}) ->
+    Error.
 
 %% @doc As `call_stream/6' with no options.
 -spec call_stream(macula:pool(), macula:realm(), macula:procedure(), term(),

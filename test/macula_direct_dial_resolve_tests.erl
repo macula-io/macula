@@ -89,7 +89,17 @@ teardown(_) ->
 
 resolve_test_() ->
     {foreach, fun setup/0, fun teardown/1,
-     [{timeout, 30, fun call_tries_the_next_advertisement_when_a_station_has_no_endpoint/0},
+     [{timeout, 30, fun call_to_a_provider_dials_only_that_providers_station/0},
+      {timeout, 30, fun call_to_a_provider_that_is_not_advertised_says_so/0},
+      {timeout, 30, fun call_to_a_provider_skips_another_providers_head_start/0},
+      {timeout, 30, fun call_to_a_provider_uses_its_own_head_start/0},
+      {timeout, 30, fun call_to_a_provider_that_is_not_a_node_id_is_refused/0},
+      {timeout, 30, fun providers_lists_every_trusted_provider_and_its_station/0},
+      {timeout, 30, fun providers_lists_no_untrusted_advertisement/0},
+      {timeout, 30, fun providers_reports_a_procedure_nobody_advertises/0},
+      {timeout, 30, fun providers_is_bounded_by_its_timeout/0},
+      {timeout, 30, fun the_facade_lists_the_providers_and_calls_the_one_named/0},
+      {timeout, 30, fun call_tries_the_next_advertisement_when_a_station_has_no_endpoint/0},
       {timeout, 30, fun call_retries_when_no_advertisement_qualifies/0},
       {timeout, 30, fun call_tries_the_next_station_when_a_dial_fails/0},
       {timeout, 30, fun call_never_sends_the_request_twice/0},
@@ -255,6 +265,116 @@ call_retries_when_no_advertisement_qualifies() ->
     ?assertEqual([dial_url(Fresh)], visits()).
 
 %% A station whose link doesn't connect is passed over for the next one.
+%%%===================================================================
+%%% One provider, named: `call/6' with `provider'
+%%%===================================================================
+
+%% Two providers advertise the procedure, each through its own station. A call
+%% that names B reaches B's station and nothing else, even though A comes
+%% first and would answer: a caller fanning out one call per provider must not
+%% have every call land on whichever provider the DHT lists first.
+call_to_a_provider_dials_only_that_providers_station() ->
+    A = station(<<"a.test">>), B = station(<<"b.test">>),
+    AdA = advertisement(A), #{key_id := ProviderB} = AdB = advertisement(B),
+    set_replies(procedure_key(), [[AdA, AdB]]),
+    set_endpoint(A, endpoint_record(A)),
+    set_endpoint(B, endpoint_record(B)),
+    set_answer(dial_url(A), {ok, <<"from a">>}),
+    set_answer(dial_url(B), {ok, <<"from b">>}),
+    ?assertEqual({ok, <<"from b">>}, call(3000, ?PROC, #{provider => ProviderB})),
+    ?assertEqual([dial_url(B)], visits()).
+
+%% A provider that advertises nothing trusted is reported by name at the
+%% deadline, and no other provider is called in its place.
+call_to_a_provider_that_is_not_advertised_says_so() ->
+    A = station(<<"a.test">>),
+    set_replies(procedure_key(), [[advertisement(A)]]),
+    set_endpoint(A, endpoint_record(A)),
+    set_answer(dial_url(A), {ok, <<"from a">>}),
+    ?assertEqual({error, {unresolved, provider_not_advertised}},
+                 call(500, ?PROC, #{provider => <<16#77:256>>})),
+    ?assertEqual([], visits()).
+
+%% The pool's remembered station for the procedure belongs to another
+%% provider: it is no head start for this call.
+call_to_a_provider_skips_another_providers_head_start() ->
+    A = station(<<"a.test">>), B = station(<<"b.test">>),
+    remember_station(?PROC, A, <<16#66:256>>),
+    #{key_id := ProviderB} = AdB = advertisement(B),
+    set_replies(procedure_key(), [[AdB]]),
+    set_endpoint(B, endpoint_record(B)),
+    set_answer(dial_url(A), {ok, <<"from a">>}),
+    set_answer(dial_url(B), {ok, <<"from b">>}),
+    ?assertEqual({ok, <<"from b">>}, call(3000, ?PROC, #{provider => ProviderB})),
+    ?assertEqual([dial_url(B)], visits()).
+
+%% ... and a remembered station of the named provider still is one.
+call_to_a_provider_uses_its_own_head_start() ->
+    A = station(<<"a.test">>),
+    Provider = provider_id(),
+    remember_station(?PROC, A, Provider),
+    set_answer(dial_url(A), {ok, <<"from a">>}),
+    ?assertEqual({ok, <<"from a">>}, call(3000, ?PROC, #{provider => Provider})),
+    ?assertEqual([dial_url(A)], visits()),
+    ?assertEqual(0, lookups(procedure_key())).
+
+call_to_a_provider_that_is_not_a_node_id_is_refused() ->
+    ?assertEqual({error, {invalid_option, provider}},
+                 call(500, ?PROC, #{provider => <<"not 32 bytes">>})),
+    ?assertEqual(0, lookups(procedure_key())).
+
+%%%===================================================================
+%%% Who provides a procedure: `providers/4'
+%%%===================================================================
+
+%% Every advertisement that passes the same trust check a call applies, as the
+%% provider that signed it and the station it names, in the order the DHT
+%% answered.
+providers_lists_every_trusted_provider_and_its_station() ->
+    A = station(<<"a.test">>), B = station(<<"b.test">>),
+    #{key_id := PA} = AdA = advertisement(A), #{key_id := PB} = AdB = advertisement(B),
+    set_replies(procedure_key(), [[AdA, AdB]]),
+    ?assertEqual({ok, [#{provider => PA, station => maps:get(id, A)},
+                       #{provider => PB, station => maps:get(id, B)}]},
+                 macula_direct_dial:providers(self(), ?REALM, ?PROC, 1000)),
+    ?assertEqual([], visits()).
+
+%% An org namespaced procedure whose advertisement carries no authorization is
+%% nobody's: listing it would hand a caller a provider a call refuses.
+providers_lists_no_untrusted_advertisement() ->
+    A = station(<<"a.test">>),
+    set_replies(org_procedure_key(), [[advertisement(A, ?ORG_PROC)]]),
+    ?assertEqual({error, {unresolved, no_trusted_advertisement}},
+                 macula_direct_dial:providers(self(), ?REALM, ?ORG_PROC, 1000)).
+
+providers_reports_a_procedure_nobody_advertises() ->
+    set_replies(procedure_key(), [[]]),
+    ?assertEqual({error, {unresolved, procedure_not_advertised}},
+                 macula_direct_dial:providers(self(), ?REALM, ?PROC, 1000)).
+
+%% One pass, bounded: a lookup that never answers ends at the timeout.
+providers_is_bounded_by_its_timeout() ->
+    set_replies(procedure_key(), [silent]),
+    {Ms, Result} = timed(fun() -> macula_direct_dial:providers(self(), ?REALM, ?PROC, 300) end),
+    ?assertMatch({error, {unresolved, _}}, Result),
+    ?assert(Ms < 1500).
+
+%% The public face: list the providers with `macula:providers/4', then call
+%% each by name with `macula:call/6'. Every provider answers, each from its
+%% own station, once.
+the_facade_lists_the_providers_and_calls_the_one_named() ->
+    A = station(<<"a.test">>), B = station(<<"b.test">>),
+    set_replies(procedure_key(), [[advertisement(A), advertisement(B)]]),
+    set_endpoint(A, endpoint_record(A)),
+    set_endpoint(B, endpoint_record(B)),
+    set_answer(dial_url(A), {ok, <<"from a">>}),
+    set_answer(dial_url(B), {ok, <<"from b">>}),
+    {ok, Providers} = macula:providers(self(), ?REALM, ?PROC, 1000),
+    Answers = [macula:call(self(), ?REALM, ?PROC, <<"hi">>, 3000, #{provider => P})
+               || #{provider := P} <- Providers],
+    ?assertEqual([{ok, <<"from a">>}, {ok, <<"from b">>}], Answers),
+    ?assertEqual([dial_url(A), dial_url(B)], visits()).
+
 call_tries_the_next_station_when_a_dial_fails() ->
     A = station(<<"a.test">>), B = station(<<"b.test">>),
     set_replies(procedure_key(), [[advertisement(A), advertisement(B)]]),

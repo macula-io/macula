@@ -5,7 +5,7 @@
 %%%
 %%% Apps connect via `connect/2', which returns a `macula_client'
 %%% pool that internally wraps N peering links to N stations.
-%%% `publish/4,5', `subscribe/4,5', `unsubscribe/2', `call/5',
+%%% `publish/4,5', `subscribe/4,5', `unsubscribe/2', `call/5,6', `providers/3,4',
 %%% `advertise/5', `unadvertise/3', `call_stream/5',
 %%% `advertise_stream/5', and `unadvertise_stream/3' route through
 %%% the pool with realm-per-call semantics. See `macula_pubsub' for
@@ -40,6 +40,9 @@
 
 %% RPC — realm-per-call against a V2 pool
 -export([call/5,
+         call/6,
+         providers/3,
+         providers/4,
          call_station/7,
          call_station/8,
          advertise/5,
@@ -306,6 +309,35 @@ unsubscribe(Pool, SubRef) when is_pid(Pool), is_reference(SubRef) ->
     {ok, term()} | {error, term()}.
 call(Pool, Realm, Procedure, Payload, TimeoutMs) ->
     macula_direct_dial:call(Pool, Realm, Procedure, Payload, TimeoutMs).
+
+%% @doc As `call/5', with `Opts'. `#{provider => NodeId}' calls THAT
+%% provider of `Procedure' and no other: the procedure is resolved and its
+%% advertisements trust-checked exactly as `call/5' does, and only the named
+%% provider's are tried. A provider with no trusted advertisement by the
+%% deadline is `{error, {unresolved, provider_not_advertised}}'. To have
+%% every provider of a procedure answer, list them with `providers/3,4' and
+%% make one call per provider. See `macula_direct_dial:call/6'.
+-spec call(pool(), realm(), procedure(), term(), 1..600_000,
+           #{provider => <<_:256>>}) ->
+    {ok, term()} | {error, term()}.
+call(Pool, Realm, Procedure, Payload, TimeoutMs, Opts) when is_map(Opts) ->
+    macula_direct_dial:call(Pool, Realm, Procedure, Payload, TimeoutMs, Opts).
+
+%% @doc As `providers/4', within 5 seconds.
+-spec providers(pool(), realm(), procedure()) ->
+    {ok, [#{provider := <<_:256>>, station := <<_:256>>}]} | {error, term()}.
+providers(Pool, Realm, Procedure) ->
+    providers(Pool, Realm, Procedure, 5_000).
+
+%% @doc Who provides `Procedure' in `Realm': each provider whose
+%% advertisement passes the same trust check `call/5' applies, with the
+%% station it serves from, in one DHT lookup bounded by `TimeoutMs'. A
+%% provider whose record has not replicated yet is not listed; ask again
+%% for a fresher answer. See `macula_direct_dial:providers/4'.
+-spec providers(pool(), realm(), procedure(), 1..600_000) ->
+    {ok, [#{provider := <<_:256>>, station := <<_:256>>}]} | {error, term()}.
+providers(Pool, Realm, Procedure, TimeoutMs) ->
+    macula_direct_dial:providers(Pool, Realm, Procedure, TimeoutMs).
 
 %% @doc Issue a CALL to `Target', a provider's node_id, at ONE specific
 %% station, dialing it directly even if it is not in the pool's seed set.
@@ -824,13 +856,13 @@ find_content_providers(Pool, <<2, _Codec:8, _Hash:48/binary>> = MCID) when is_pi
                          ?DHT_RECORD_TIMEOUT_MS)).
 
 classify_find_providers({ok, Wires}) when is_list(Wires) ->
-    with_profile(fun(Profile) -> {ok, providers(Wires, Profile)} end);
+    with_profile(fun(Profile) -> {ok, content_providers(Wires, Profile)} end);
 classify_find_providers({ok, Reply}) ->
     {error, {unexpected_reply, Reply}};
 classify_find_providers({error, _} = E) ->
     E.
 
-providers(Wires, Profile) ->
+content_providers(Wires, Profile) ->
     lists:filtermap(fun(Wire) -> decode_provider(Wire, Profile) end, Wires).
 
 %% A provider from a content announcement that verifies under Profile.

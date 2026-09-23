@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- `macula:call/6` with `#{provider => NodeId}` calls one named provider of a
+  procedure and no other. Resolution and the D25 trust check are exactly as
+  `call/5`'s; only that provider's advertisements are tried, and one with no
+  trusted advertisement by the deadline is
+  `{error, {unresolved, provider_not_advertised}}`.
+- `macula:providers/3,4` lists who provides a procedure: each provider whose
+  advertisement passes the same trust check, with the station it serves from,
+  in one bounded DHT lookup. Listing then calling each by name is how a caller
+  gets one answer from every provider.
+- `macula:links/1` entries carry `last_disconnect`: why that seed's link last
+  went down, kept across the respawn that replaced it, with both node ids for
+  a `peer_identity_mismatch`.
+- `_macula.station_link.disconnected` names the expected and presented node
+  ids for a `peer_identity_mismatch`, and `_macula.peering.closed` names the
+  peer's address (`host:port`), so a connection refused before its handshake
+  names anyone is no longer anonymous.
+
+### Fixed
+
+- `macula_quic:peername/1` returns the host as a binary; its spec said a
+  string. `macula_dist` put that binary into `#net_address{}` where OTP
+  expects an address tuple, and called an IPv6 peer `inet`. It is now parsed,
+  with `inet6` for IPv6.
+- `connect/2`, `join_mesh/1` and `macula_client:opts()` documented a pool
+  given no `node_identity` as generating one; it loads the node's one stored
+  identity.
+
+---
+
 ## [12.0.0] - 2026-09-23
 
 **Post-quantum end to end: key exchange AND authentication.** Every QUIC
