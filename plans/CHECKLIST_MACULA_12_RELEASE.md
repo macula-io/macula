@@ -50,11 +50,27 @@ rolling starts, not discovered during it.
       be used.** No new material is needed: a station mints its own from the identity seed it already stores, via
       `macula_quic:generate_self_signed_cert/2`. ⚠ It stops a box BOOTING rather than failing a build, so it is
       the one item on this list that can take the fleet down if it is missed.
-- [ ] ⚠ **The `/certs` mount is READ-ONLY on all SIX boxes, so minting is not enough: each box needs a COMPOSE
-      CHANGE.** A station cannot write a self-minted certificate where it reads one. Measured by Terra on the
-      boxes, 2026-09-23, six of six.
+- [ ] ⚠ **Each box needs a COMPOSE CHANGE, but NOT the one first written here: a station on 12 does not want
+      `/certs` at all.** The self-minting path writes the certificate AND the key into a per-process directory
+      under the temp root (`write_temp_cert_pair` in `macula_station_listener`), so both halves name the same
+      key by construction and neither goes near the mount. **So the change is "give the station a writable
+      directory and stop pointing it at `/certs`", not "make `/certs` writable"**, and the read-only mount is
+      not the obstacle. Neptunus, from the port; the temp-root shape is already on the station's main.
+      ⚠ The compose files today name `/certs/.../wildcard_.macula.io.crt` through the LEGACY `certfile`/`keyfile`
+      path, which 12 refuses outright, so leaving them as they are is what breaks a box, not the mount's mode.
       **What they hold today: six distinct certificates, five EC P-256 and one RSA-2048 on frankfurt, and ZERO
-      ML-DSA-87.** So every box needs both a new certificate and a compose change; none is already right.
+      ML-DSA-87.** No box is already right.
+
+- [ ] ⛔ **The self-signed leaf carries the station's TLS key, NEVER its identity key**, and getting this wrong
+      STALLS SILENTLY. Neptunus made the wrong inference first, from the D6 sentence anyone would read: the
+      identity key SIGNS A BINDING over the leaf (`macula_key_bindings:tls_binding/4` takes the identity key and
+      the leaf DER), and a dialling client checks that binding against the leaf it was shown. A leaf built on the
+      identity key registers a binding nothing matches.
+      ⚠ **The symptom names nothing**: the dial returns `{ok, Pid}`, the worker never leaves `handshaking`, and
+      the listener eventually cuts it as `too_slow`, which reads as a timeout to tune. Neptunus proved it stuck
+      rather than slow by raising the deadline to 60s and getting identical failures.
+      ⛔ **This belongs in the WP 4.x porting notes as much as here: every other-stack SDK meets the same
+      inference**, and none of them will have a station author beside them to catch it.
 - [ ] ⚠ **Do the cutover before the certificates renew, around early October.** Issued early August, expiring
       early November, and **each box runs its own ACME client writing its own certificate**: six independent
       certificates, not one shared file. A renewal rewrites the file under a listener still serving what it read
@@ -154,8 +170,14 @@ misled a porter on 2026-09-23 alone, each caught by someone USING the document r
 - [ ] **`macula-e2e`'s seam suite is green against 12.** It runs on 11.x today by design: the seam tests the stack
       that exists, and moving it to 12 tests the port rather than the harness. See
       `macula-e2e/plans/DESIGN_REALM_SEAM_E2E.md`.
-      **State at the tag: green at steps 0 to 7, 4 of 4, against the 11.x stack.** Steps 8 to 10 are blocked on a
-      bootable realm, which is a different wait from the port.
+      **State at the tag: green at steps 0 to 7, 4 of 4, against the 11.x stack.**
+      ⛔ **And steps 8 to 10 are now blocked on the station's port, not on the realm.** The realm helper exists
+      (`MaculaRealm.Testing`, branch `saturnus/macula-12`) and it is built on macula 12, while the seam pins
+      `macula ~> 11.4` and the station apps at a sha that pins `~> 11.3`. **Those two cannot connect and are not
+      meant to**: `?VERSION` is 3 at v11.5.0 and 4 here, which is the wire break this release exists to make. So
+      the order is the station's port, then the seam repinned to 12, then steps 8 to 10 against the 12 realm.
+      There is no arrangement of the current pins that runs them, and a seam that appeared to pass across that
+      gap would be testing something other than what it claims.
 
 ⛔ **`macula-dist-relay` is NOT on this list and is not ported.** It stays on `macula ~> 11.x` (Raf, 2026-09-23).
 It consumes `macula_tls:quic_server_opts/0`, which 12 deletes. Do not "finish" it.
