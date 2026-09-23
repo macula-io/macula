@@ -61,21 +61,20 @@ rolling starts, not discovered during it.
       **What they hold today: six distinct certificates, five EC P-256 and one RSA-2048 on frankfurt, and ZERO
       ML-DSA-87.** No box is already right.
 
-- [ ] ⛔ **A self-signed leaf minted from the node's IDENTITY key is refused, and the refusal is a SILENT STALL.**
-      Minting it from the station's TLS key instead is what fixed it. Both halves are measured, from Neptunus's
-      port.
-      ⚠ **The symptom names nothing**: the dial returns `{ok, Pid}`, the worker never leaves `handshaking`, and
-      the listener eventually cuts it as `too_slow`, which reads as a timeout to tune. Proved stuck rather than
-      slow by raising the deadline to 60s and getting identical failures.
-      ⚠ **THE MECHANISM IS NOT YET NAMED, AND THIS LINE DELIBERATELY DOES NOT GUESS AT ONE.** An earlier version
-      of it said the leaf's key must equal the registered TLS key. That may not be the check: the handshake looks
-      a leaf up by the SHA-384 of the certificate being SERVED, and what comes back carries no private key, so
-      what must agree is the certificate served and the certificate registered. Neptunus is running a contained
-      experiment to name the real check; the likeliest candidate, unconfirmed, is a rule that the leaf must not
-      carry the identity key at all, which is D12's whole point.
-      ⛔ **This goes into the WP 4.x porting notes, because every other-stack SDK meets the same inference from
-      the same D6 sentence. It goes in as the OBSERVATION ONLY until the mechanism is named**: five SDK teams
-      cannot check our reasoning, and a wrong mechanism stated confidently is worse to them than no mechanism.
+- [ ] ⛔ **A LEAF MUST CARRY NEITHER THE STATION'S IDENTITY KEY NOR THE CLIENT'S CONNECT KEY. Any other
+      tls-purpose key works.** It is not "the leaf must carry the TLS key": nothing requires that particular key,
+      only that the leaf carries neither of those two.
+      The check is `macula_handshake:keys_in_view_distinct/1`, one key one purpose (D6, D16), refusing with
+      `key_purpose_reuse`.
+      ⛔ **AND IT FIRES ON THE CLIENT, after the station has already answered.** `keys_in_view_distinct/1` runs
+      in `answer_challenge/2`, the client's step, so **the station never sees a refusal at all**: its worker
+      simply never leaves `handshaking` and the listener cuts it as `too_slow`. The dial returns `{ok, Pid}` and
+      reads as a timeout to tune. Raising the deadline to 60s changes nothing, which is how it was proved stuck
+      rather than slow.
+      ⚠ **So whoever diagnoses this must read the CLIENT's diagnostics.** The server's say only that something
+      went quiet, and every hour lost to this has been lost on the server side.
+      ⛔ **Into the WP 4.x porting notes: every other-stack SDK meets the same inference from the same D6
+      sentence**, and none of them will have a station author beside them.
 - [ ] ⚠ **Do the cutover before the certificates renew, around early October.** Issued early August, expiring
       early November, and **each box runs its own ACME client writing its own certificate**: six independent
       certificates, not one shared file. A renewal rewrites the file under a listener still serving what it read
