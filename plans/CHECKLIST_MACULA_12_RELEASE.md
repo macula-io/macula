@@ -74,6 +74,10 @@ rolling starts, not discovered during it.
       ⚠ Same shape as the two items above: **a configuration describes intent, and only a reading describes the
       fleet.** Six boxes that look interchangeable in the configs, and one of them is the thing the others find
       each other through.
+      ⛔ **And this one is worse than the other two: it is not visible in frankfurt's own configuration at all.**
+      The box does not know it is the seed. The fact lives in a COMMENT, in a DIFFERENT REPOSITORY, describing
+      who dials it. Reading every file on the box would not find it, so no amount of care on the box answers the
+      question — which is exactly why it has to be written down here.
 
 ### Decided, with its risk: the station memory limits do not change for the cutover
 
