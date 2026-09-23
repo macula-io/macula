@@ -61,16 +61,21 @@ rolling starts, not discovered during it.
       **What they hold today: six distinct certificates, five EC P-256 and one RSA-2048 on frankfurt, and ZERO
       ML-DSA-87.** No box is already right.
 
-- [ ] ⛔ **The self-signed leaf carries the station's TLS key, NEVER its identity key**, and getting this wrong
-      STALLS SILENTLY. Neptunus made the wrong inference first, from the D6 sentence anyone would read: the
-      identity key SIGNS A BINDING over the leaf (`macula_key_bindings:tls_binding/4` takes the identity key and
-      the leaf DER), and a dialling client checks that binding against the leaf it was shown. A leaf built on the
-      identity key registers a binding nothing matches.
+- [ ] ⛔ **A self-signed leaf minted from the node's IDENTITY key is refused, and the refusal is a SILENT STALL.**
+      Minting it from the station's TLS key instead is what fixed it. Both halves are measured, from Neptunus's
+      port.
       ⚠ **The symptom names nothing**: the dial returns `{ok, Pid}`, the worker never leaves `handshaking`, and
-      the listener eventually cuts it as `too_slow`, which reads as a timeout to tune. Neptunus proved it stuck
-      rather than slow by raising the deadline to 60s and getting identical failures.
-      ⛔ **This belongs in the WP 4.x porting notes as much as here: every other-stack SDK meets the same
-      inference**, and none of them will have a station author beside them to catch it.
+      the listener eventually cuts it as `too_slow`, which reads as a timeout to tune. Proved stuck rather than
+      slow by raising the deadline to 60s and getting identical failures.
+      ⚠ **THE MECHANISM IS NOT YET NAMED, AND THIS LINE DELIBERATELY DOES NOT GUESS AT ONE.** An earlier version
+      of it said the leaf's key must equal the registered TLS key. That may not be the check: the handshake looks
+      a leaf up by the SHA-384 of the certificate being SERVED, and what comes back carries no private key, so
+      what must agree is the certificate served and the certificate registered. Neptunus is running a contained
+      experiment to name the real check; the likeliest candidate, unconfirmed, is a rule that the leaf must not
+      carry the identity key at all, which is D12's whole point.
+      ⛔ **This goes into the WP 4.x porting notes, because every other-stack SDK meets the same inference from
+      the same D6 sentence. It goes in as the OBSERVATION ONLY until the mechanism is named**: five SDK teams
+      cannot check our reasoning, and a wrong mechanism stated confidently is worse to them than no mechanism.
 - [ ] ⚠ **Do the cutover before the certificates renew, around early October.** Issued early August, expiring
       early November, and **each box runs its own ACME client writing its own certificate**: six independent
       certificates, not one shared file. A renewal rewrites the file under a listener still serving what it read
