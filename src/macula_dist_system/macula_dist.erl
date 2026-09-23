@@ -70,7 +70,8 @@
     packet_mode/1,
     set_packet_mode/2,
     extract_frame/4,
-    parse_frames/2
+    parse_frames/2,
+    make_net_address/2
 ]).
 -endif.
 
@@ -616,12 +617,24 @@ quic_address({S, S}, Node) when is_port(S) ->
 quic_address({Conn, _Stream}, Node) ->
     make_net_address(macula_quic:peername(Conn), Node).
 
-make_net_address({ok, {IP, Port}}, Node) ->
+%% `inet:peername/1' answers with an address tuple; `macula_quic:peername/1'
+%% with the host as TEXT, a binary. `#net_address.address' holds a tuple, and
+%% `family' says which kind, so text is parsed first and an IPv6 peer, which is
+%% every peer on an AAAA-only fleet, is `inet6', not `inet'.
+make_net_address({ok, {Host, Port}}, Node) when is_binary(Host) ->
+    parsed_address(inet:parse_address(binary_to_list(Host)), Port, Node);
+make_net_address({ok, {IP, Port}}, Node) when is_tuple(IP) ->
     #net_address{address = {IP, Port}, host = atom_to_list(Node),
-                 protocol = ?DRIVER, family = ?FAMILY};
+                 protocol = ?DRIVER, family = family_of(IP)};
 make_net_address(_, Node) ->
     #net_address{address = undefined, host = atom_to_list(Node),
                  protocol = ?DRIVER, family = ?FAMILY}.
+
+parsed_address({ok, IP}, Port, Node) -> make_net_address({ok, {IP, Port}}, Node);
+parsed_address({error, einval}, _Port, Node) -> make_net_address(unknown, Node).
+
+family_of(IP) when tuple_size(IP) =:= 8 -> inet6;
+family_of(_IPv4) -> inet.
 
 %% --- handshake_complete ---
 %%
