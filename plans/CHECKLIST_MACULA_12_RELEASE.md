@@ -75,9 +75,15 @@ rolling starts, not discovered during it.
       fleet.** Six boxes that look interchangeable in the configs, and one of them is the thing the others find
       each other through.
       ⛔ **And this one is worse than the other two: it is not visible in frankfurt's own configuration at all.**
-      The box does not know it is the seed. The fact lives in a COMMENT, in a DIFFERENT REPOSITORY, describing
-      who dials it. Reading every file on the box would not find it, so no amount of care on the box answers the
-      question — which is exactly why it has to be written down here.
+      The box does not know it is the seed. The fact lives in a COMMENT in a compose file, describing who dials
+      it. Reading every file on the box would not find it, so no amount of care on the box answers the question.
+      ⛔ **Which compose repo, because this is a trap that has already caught two people: frankfurt is managed
+      via `macula-portal-compose` (Raf), and BOTH `macula-portal-compose` and `macula-realm-compose` carry the
+      same comment.** The two repos share **25 file names**, including `docker-compose.yml`,
+      `scripts/deploy-station.sh` and a station config. **They have already diverged**: the portal copy carries
+      an eleven-line block about `MACULA_CONNECT_TO_MESH` that the realm copy does not. So a reading taken from
+      the wrong copy can be right by luck today and wrong tomorrow — which is exactly what happened when the
+      fleet's certificates were first surveyed. **Name the repo when you quote either.**
 
 ### Decided, with its risk: the station memory limits do not change for the cutover
 
@@ -105,7 +111,9 @@ in this line; until then this says only what would settle the question, not what
 
 ## Every Erlang and Elixir consumer, ported and green
 
-Each is its own repo, its own CI, and its own owner. Green means that repo's own suite, not that it compiles.
+Each is its own repo, its own CI, and its own owner. **Green here means compiled against a `_checkouts` macula
+and that repo's own suite passing — NOT an image build**, which cannot happen until the tag puts macula 12 on
+hex. See the order under The release.
 
 ⚠ **If a break listed here turns out not to be real, SAY SO here rather than working around it or deleting the
 line.** The next porter reads this list and not the thread that corrected it, and a list that warns about a
@@ -137,6 +145,22 @@ It consumes `macula_tls:quic_server_opts/0`, which 12 deletes. Do not "finish" i
 
 - [ ] **CHANGELOG**: the `12.0.0` section, dated, with `12.0.0-alpha.1` folded into it.
 - [ ] **The tag `v12.0.0`.** The tag IS the release: a pushed `v*` tag publishes directly, with no reviewer, by
-      design. So everything above is true BEFORE the tag is pushed, not after.
+      design.
+
+⛔ **The order matters and it is not the obvious one, because an image cannot be built before the tag.** A
+consumer's image is built in ITS CI, its CI resolves dependencies from hex, and **macula 12 is not on hex until
+the tag publishes it**. A committed git dependency on macula is forbidden, so there is no way to build a consumer
+image first. The order is therefore:
+
+1. **Consumers proven LOCALLY** against a `_checkouts` macula: compiled and their own suites green. That, and not
+   an image build, is what "green against 12" means in the consumer list above.
+2. **The tag**, which publishes to hex.
+3. **Consumers bump to `~> 12.0`**, and their CI builds images against it for the first time.
+4. **The fleet rolls**, with the certificate and compose work above already done.
+
+⚠ **So an SDK defect can first appear at step 3, AFTER the tag.** That is expected rather than a failure of this
+list, and it is cheap: it becomes a 12.0.1, and a tag publishes by itself. **Do not try to avoid it with a
+release candidate on hex** — that cuts against no-intermediate-releases and leaves every consumer pinned to
+something that has to move again.
 - [ ] **One announcement, with the release.** No standalone post before it. The post-quantum wording is what D11
       gates, and the claim is what 12 actually does rather than what the plan intends.
