@@ -83,6 +83,12 @@ policy, not one that stays down.
 ⛔ **This was decided, so it is not reopened by someone reading it and proposing a higher limit. Only a NEW
 measurement reopens it.**
 
+⚠ **And here is the measurement that would.** A restart of frankfurt's station before the cutover was under
+consideration on 2026-09-23. **Its before-and-after would say whether that gigabyte is a WORKING SET or an
+ACCUMULATION**, which is the difference between a limit that is merely tight and one that was always going to be
+reached. **No such restart has happened and there is no result here to read.** If one is done, its numbers belong
+in this line; until then this says only what would settle the question, not what the answer is.
+
 ## Every Erlang and Elixir consumer, ported and green
 
 Each is its own repo, its own CI, and its own owner. Green means that repo's own suite, not that it compiles.
