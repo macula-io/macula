@@ -73,8 +73,9 @@ rolling starts, not discovered during it.
       rather than slow.
       ⚠ **So whoever diagnoses this must read the CLIENT's diagnostics.** The server's say only that something
       went quiet, and every hour lost to this has been lost on the server side.
-      ⛔ **Into the WP 4.x porting notes: every other-stack SDK meets the same inference from the same D6
-      sentence**, and none of them will have a station author beside them.
+      ⛔ **Every other-stack SDK meets the same inference from the same D6 sentence**, and none of them will have a
+      station author beside them. The rule, re-read from the 12.0.0 source with both sides' checks and the
+      byte-search detail, is in the Stage 4 "Porting notes" of `PLAN_POST_QUANTUM_SECURITY_PART2.md`.
 - [ ] ⚠ **Do the cutover before the certificates renew, around early October.** Issued early August, expiring
       early November, and **each box runs its own ACME client writing its own certificate**: six independent
       certificates, not one shared file. A renewal rewrites the file under a listener still serving what it read

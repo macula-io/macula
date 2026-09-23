@@ -740,6 +740,56 @@ Every stack also meets these, each red first:
   when none qualifies, within the call's deadline (D25 item 9);
 - a stack refuses to advertise a procedure name without an org namespace, and so does every policy it offers (D25).
 
+### Porting notes, read from the 12.0.0 source
+
+Each of these was read from the module at the `v12.0.0` tag, not from a summary. Three versions of the first one were
+stated before this one, and two were wrong. If a note and the module disagree, the module wins and the note gets fixed.
+
+**One key, one purpose: what the leaf may carry (D6, D16).** Two functions in `macula_handshake` check it, one on
+each side, and both refuse with `key_purpose_reuse`:
+
+- the client, in `answer_challenge/2` through `keys_in_view_distinct/1`, before it sends CONNECT: its own identity
+  key and CONNECT key share no half, and the station's leaf carries neither the station's identity key nor the
+  client's CONNECT key;
+- the station, in `accept_connect/2` through `client_keys_distinct/1`: the client's identity key and CONNECT key
+  share no half, and the leaf this connection presented does not carry the CONNECT key.
+
+So **a leaf must carry neither the station's identity key nor any client's CONNECT key. Nothing requires any
+particular key in it.** The TLS binding (`macula_key_bindings:verify_tls_binding/5`) signs the SHA-384 of the
+whole leaf DER under the station's identity key, so it binds the leaf itself, not a key inside it. A port has to
+reproduce the details exactly:
+
+- "carries" means the ML-DSA-87 half of the key (its first `?MLDSA87_PUBLIC_BYTES` bytes) appears **anywhere in
+  the leaf DER, found by a byte search** (`in_leaf/2`). It does not mean the certificate's public key parsed out of
+  SubjectPublicKeyInfo. The classical half of a hybrid key is not searched for in the leaf;
+- "share a half" means the ML-DSA-87 halves are equal, or the classical halves are equal and not empty
+  (`shares_a_half/2`);
+- ⛔ **the client check fires AFTER the station has answered the challenge.** A client refusing on it closes
+  without CONNECT, so a station whose own identity key is in its leaf never sees a refusal. Its worker stays in
+  `handshaking` until the listener cuts it as `too_slow`. A longer deadline changes nothing. **Diagnose it from
+  the client's diagnostics. The station's only show that something went quiet;**
+- a port that leaves the client check out does not get away with it. A CONNECT key found in the leaf is still
+  refused by the station, this time as a visible refusal. A station identity key found in the leaf, though, is
+  only ever checked by the client, so the port connects to a misconfigured station without noticing.
+
+**Trust options: one verification mode.** `macula:trust_options_checked/1` refuses `verify` in any value with
+`{error, {refused, {verify, one_verification_mode}}}`, and `pin_tls_cert => true` with
+`{error, {refused, {pin_tls_cert, no_pin_primitive_for_mldsa87_identity}}}`. It checks the option map and every
+seed map in `connect/2`, and both the target and the options in `call_station/7,8`. A port offering a verify mode or
+a certificate pin as an option is porting something 12 removed. A station is trusted through its handshake, under
+the node_id the dial expects, and in no other way.
+
+⚠ **`realm_trust` looks optional, and without it every org-namespaced call fails in a way that looks unrelated.**
+- **On a call it is refused.** `macula_direct_dial` refuses it by name, as `{error, {removed_option, realm_trust}}`,
+  alongside `verify_cert_chain`. A realm key never arrives with a request.
+- **At connect it is optional, and connect is the only place it can go.** `macula_client:init/1` starts a pool with
+  no `realm_trust` without complaint. It refuses a malformed one as `{realm_trust, invalid}`, and a key for the other
+  profile as `{realm_trust, profile_mismatch}`.
+- **Without the realm's key pinned, no org-namespaced advertisement in that realm is trusted.** A call then returns
+  `{error, {unresolved, no_trusted_advertisement}}`, which reads like a resolution problem rather than a missing
+  pin. An advertise returns `{error, {provider_authorization, no_realm_key}}`.
+- **So a port has to take realm keys at pool start and nowhere else, and name the missing pin when it reports.**
+
 ### WP 4.1 `macula-rust`
 
 - [ ] macula-rust negotiates only profile algorithms and runs the connection handshake.
