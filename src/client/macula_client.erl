@@ -202,8 +202,8 @@
 -type opts() :: #{
     %% The node identity key that every link in the pool shares: an
     %% identity key in the node's crypto profile. Stations see the pool
-    %% as a single peer (one node_id across N links). Generated when
-    %% absent, with a node_id that meets the puzzle. Given as the key, or
+    %% as a single peer (one node_id across N links). When absent, the
+    %% node's one stored identity (macula_node_keys:node_identity/1). Given as the key, or
     %% as a loader {Module, Function, Args} that returns {ok, Key}, which a
     %% child spec must use so the spec holds no key. A loader's Args say
     %% where the key is and never hold it, because a supervisor logs them

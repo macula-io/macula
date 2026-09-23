@@ -154,7 +154,11 @@
 %% Honored opts (full reference: `macula_client:opts()'):
 %% <ul>
 %%   <li>`node_identity': the pool's node identity key, in the node's crypto
-%%       profile; generated with a puzzle-solved node_id if absent.</li>
+%%       profile. If absent, the pool uses the node's one stored identity
+%%       (`macula_node_keys:node_identity/1', at the `node_identity_path'
+%%       application env): loaded if stored, ground and stored once if not,
+%%       and refused, never replaced, if the file exists and will not load.
+%%       Every pool on the node, and every restart, is then the same node.</li>
 %%   <li>`realm_trust': the realm keys the pool pins, one per realm id, as
 %%       `#{RealmId => RealmKey}', each realm's public key as carried. A call
 %%       trusts an org namespaced advertisement only through the key pinned
@@ -1244,7 +1248,8 @@ unmonitor_nodes() -> macula_cluster:unmonitor_nodes().
 %%       `{error, {relays, expected_node_id_required}}' before any pool
 %%       starts.</li>
 %%   <li>`node_identity': the V2 pool's node identity key,
-%%       `macula_node_keys:node_key()'. Default: generated.</li>
+%%       `macula_node_keys:node_key()'. Default: the node's one stored
+%%       identity, as for `connect/2'.</li>
 %% </ul>
 %%
 %% Internally builds a V2 `macula_client:pool()' and registers it
