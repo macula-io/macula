@@ -32,6 +32,17 @@ that step.
       be used.** No new material is needed: a station mints its own from the identity seed it already stores, via
       `macula_quic:generate_self_signed_cert/2`. ⚠ It stops a box BOOTING rather than failing a build, so it is
       the one item on this list that can take the fleet down if it is missed.
+- [ ] ⚠ **The `/certs` mount is READ-ONLY on every box checked, so minting is not enough: each box needs a
+      COMPOSE CHANGE.** A station cannot write a self-minted certificate where it reads one. Measured by Terra
+      on the boxes, 2026-09-23. **Five of six confirmed; amsterdam refused ssh and is UNKNOWN rather than
+      assumed to match** — check it rather than inferring it from the other five.
+- [ ] ⚠ **Do the cutover before the certificates renew, around early October.** Issued early August, expiring
+      early November, and **each box runs its own ACME client writing its own certificate**: six independent
+      certificates, not one shared file. A renewal rewrites the file under a listener still serving what it read
+      at boot, so a cutover that has not happened by then meets a SCHEDULED disturbance rather than a random one.
+      ⚠ The evidence for "independent" is **five distinct sha256s**, and it is worth keeping because the configs
+      say the opposite: **a shared PATH in six configs is not a shared thing**, and anyone reading the configs
+      alone would conclude it was.
 - [ ] **Know what the handshake survives before anyone asks in an incident.** Measured, V21 in
       `PLAN_POST_QUANTUM_SECURITY_PART1.md`: **our client hello spans four to five datagrams**, and the
       handshake completes reliably up to 20% sustained datagram loss in both directions, degrading above that
