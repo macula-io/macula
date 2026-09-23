@@ -382,9 +382,23 @@ table there gives each decision's answer in short and its status.
   - Not chosen: patching msquic ourselves (only if a paying customer needs .NET), and our own msquic bindings.
   - Offering a fix upstream is public and needs Raf's explicit yes.
   - Why: no msquic build today can offer ML-KEM ✅ (V6).
-- **Python:** V7 proved that a client-side patch to aioquic's `tls.py` gives both profiles against a Go server ✅,
-  so Python stays in the programme. **Open:** how the patch ships: fork, vendor or upstream (Pluto). The packaging
-  facts are in V7.
+  - ⚠ **REOPENED by Raf, 2026-09-23: "what is the lowest common denominator? Is there no 3rd party package for
+    .NET that can help us?"** The question is the MINIMUM change that lets a .NET client reach a 12 station at
+    all. Research in flight (Venus); this entry stands until it answers. What the 2026-09-23 survey establishes
+    and the research does not change: .NET 10's TLS API has no named-group setter at all, so even a
+    post-quantum-capable provider underneath could not be told to offer our groups through
+    `SslClientAuthenticationOptions`.
+- **Python: OUR OWN FORK, PINNED, AND OFFERED UPSTREAM. Decided by Raf, 2026-09-23.** V7 proved a client-side
+  patch to aioquic's `tls.py` gives both profiles against a Go server ✅; the recorded run on branch
+  `spike/pq-aioquic` shows `NEGOTIATED group=SecP384r1MLKEM1024 (4589)` with ALPN `macula`, and an unpatched
+  client refused, which is what 12 does to it today.
+  - **We fork, and macula-py pins the fork.** That way the timing is ours and the SDK work starts now rather
+    than waiting on someone else's roadmap.
+  - **The patch is offered to aioquic's authors**, with V7's evidence, which already exists.
+  - **If they take it, the fork goes.** It is a means, not a position.
+  - ⚠ aioquic implements TLS 1.3 in Python rather than delegating to OpenSSL, so this could never have been a
+    build flag: aioquic 1.3.0's `Group` enum holds five classical curves and GREASE, with no ML-KEM of any kind,
+    not even `X25519MLKEM768`.
 - **Any other stack:** decide after Stage 0. With no classical fallback, such a stack cannot connect at all.
 - **Blocks:** WP 4.3, WP 4.4.
 
