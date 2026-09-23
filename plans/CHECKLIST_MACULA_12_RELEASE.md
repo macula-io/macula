@@ -65,6 +65,16 @@ rolling starts, not discovered during it.
       station, realm or service crosses the cutover alone**, and the last thing to confirm before the tag is that
       the version on the wire is the one 12 ships.
 
+- [ ] ⚠ **The six boxes are not interchangeable: frankfurt is the fleet's SEED NAME, and rolling it has a blast
+      radius no other box has.** `station-de-frankfurt.macula.io` was retargeted onto it in July, and by
+      macula-realm-compose's own comment every warden, the sentinel and capture-archive dial it. So restarting or
+      rolling frankfurt removes the endpoint other things bootstrap from, which is true of no other box, and it
+      also carries the realm and the portal. **Decide its place in the rolling order deliberately rather than
+      alphabetically or by expiry.**
+      ⚠ Same shape as the two items above: **a configuration describes intent, and only a reading describes the
+      fleet.** Six boxes that look interchangeable in the configs, and one of them is the thing the others find
+      each other through.
+
 ### Decided, with its risk: the station memory limits do not change for the cutover
 
 **Not an action item, and it has no checkbox on purpose.** Raf decided on 2026-09-23, with the numbers below in
