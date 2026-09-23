@@ -48,13 +48,14 @@ env:
   # ships. scripts/is_erlang_the_pinned_version.sh asserts the second against
   # the first below rather than assuming it; this copy exists to key the PLT
   # cache.
-  OTP_VERSION: '28.4.2'
-  # The container runs as root with HOME=/root, but a GitHub container job
-  # overrides HOME to /github/home. rustup would then install under a home
-  # that is not root's, leaving dangling symlinks and `cargo: not found` once
-  # rebar's cargo pre_hook runs in a subprocess. Pin both homes explicitly.
-  CARGO_HOME: /root/.cargo
-  RUSTUP_HOME: /root/.rustup
+  OTP_VERSION: '28.4.3'
+  # The tools the build image (container: below) must carry, asserted by
+  # scripts/is_ci_image_the_pinned_one.sh before anything builds. They name
+  # what the pinned image digest already contains; move them together with it.
+  # Rust comes from the image (CARGO_HOME=/usr/local/cargo, RUSTUP_HOME=
+  # /usr/local/rustup, baked in); this job installs none of its own.
+  CI_REBAR3_VERSION: '3.27.0'
+  CI_RUST_VERSION: '1.98.1'
 
 concurrency:
   # On a BRANCH a newer push should cancel the older run: nobody is waiting on
@@ -104,16 +105,21 @@ jobs:
     # `{badarg,{"evp.c",259},"Bad key type"}`, taking out every test that
     # needs a node identity, which for a post-quantum SDK is most of them.
     # ML-DSA arrived in OpenSSL 3.5. This image carries OpenSSL 3.5.7 and
-    # OTP 28.4.2, and generating an ML-DSA-87 key in it was measured rather
+    # OTP 28.4.3, and generating an ML-DSA-87 key in it was measured rather
     # than read off a supports list. The runner underneath is still an
     # ordinary public one, so nothing about the security property above
     # changes; the cost is an image pull.
     #
-    # The image also supplies rebar3 3.27.0, so this job does NOT run
-    # erlef/setup-beam. Installing another OTP over the image's would link
-    # crypto against a different libcrypto and could quietly put back the
-    # exact failure the container is here to fix.
-    container: ghcr.io/macula-io/macula-ci-otp:latest
+    # The image also supplies rebar3 and Rust, pinned exactly, so this job
+    # runs neither erlef/setup-beam nor rustup. Installing another OTP over
+    # the image's would link crypto against a different libcrypto and could
+    # quietly put back the exact failure the container is here to fix.
+    #
+    # ⚠ PINNED BY DATED TAG AND DIGEST, never :latest. With :latest, any
+    # rebuild of the image changed the toolchain this repo builds with, with
+    # no commit here. A new toolchain now arrives only as a commit to this
+    # line, together with CI_REBAR3_VERSION / CI_RUST_VERSION above.
+    container: ghcr.io/macula-io/macula-ci-otp:20260923-1352@sha256:aff1d39bc4aa29d13044b90b38e9b7f4b757d50818cc11c5bb7e84cdbf82ac70
 
     timeout-minutes: 60
 
@@ -128,18 +134,14 @@ jobs:
       # path, which reads as unrelated test failures rather than as a missing
       # toolchain.
       #
-      # The image carries cc, cmake, git, curl and perl but no Rust. The
-      # symlinks matter: rebar's cargo pre_hook runs in a subprocess whose
-      # PATH does not include $CARGO_HOME/bin.
-      - name: Install Rust
-        run: |
-          export HOME=/root
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
-            | sh -s -- -y --profile minimal --default-toolchain stable
-          ln -sf "$CARGO_HOME/bin/cargo" /usr/local/bin/cargo
-          ln -sf "$CARGO_HOME/bin/rustc" /usr/local/bin/rustc
-          cargo --version
-          rustc --version
+      # The Rust they build with is the image's, pinned. This step installed
+      # rustup's `stable' at job time, back when the image carried no Rust,
+      # so the compiler floated even with the image pinned. The image has
+      # shipped Rust since macula-ci-images 0c9ec10, and macula-station's CI
+      # builds every NIF crate from source with it, through the same
+      # pre_hook, with nothing installed at job time.
+      - name: Check the CI image and its toolchain are the pinned ones
+        run: bash scripts/is_ci_image_the_pinned_one.sh .github/workflows/test.yml
 
       # The download cache only. Deliberately NOT native/*/target and
       # NOT priv/*.so: build-nifs.sh skips a crate whose .so is newer than
@@ -149,9 +151,11 @@ jobs:
       - name: Cache the cargo download registry
         uses: actions/cache@v4
         with:
+          # /usr/local/cargo, the image's baked-in CARGO_HOME: a cache path is
+          # a claim about where the tool writes.
           path: |
-            /root/.cargo/registry
-            /root/.cargo/git
+            /usr/local/cargo/registry
+            /usr/local/cargo/git
           key: cargo-${{ runner.os }}-${{ hashFiles('native/*/Cargo.lock') }}
           restore-keys: cargo-${{ runner.os }}-
 
