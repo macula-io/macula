@@ -1088,10 +1088,14 @@ draining(info, {quic, stream_closed, Stream, Detail},
          #data{quic_stream = Stream} = Data) ->
     notify(disconnected, {peer_closed_during_drain, Detail}, Data),
     {stop, normal, Data};
+%% The peer's FIN is its answer to our GOODBYE, when this side closed
+%% first: information, not an end. The drain goes on until the dedicated
+%% streams are idle or the timeout, as it does when the peer closed first;
+%% stopping here cut this side's own in-flight streams (macula#36). A
+%% control stream closed with an error (above) still ends it at once.
 draining(info, {quic, peer_send_shutdown, Stream, _Detail},
          #data{quic_stream = Stream} = Data) ->
-    notify(disconnected, peer_closed_during_drain, Data),
-    {stop, normal, Data};
+    {keep_state, Data};
 %% A failed write (the GOODBYE, or a frame sent before it) ends the drain
 %% as a closed control stream does.
 draining(info, {quic, send_failed, Stream, Reason},
