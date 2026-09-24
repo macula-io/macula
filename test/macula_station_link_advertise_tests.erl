@@ -230,10 +230,10 @@ renewal_stops_at_the_specs_bound_test_() ->
     {spawn, {timeout, 10,
      fun() ->
          Pid = start_connected_link(),
-         NotAfter = erlang:system_time(millisecond) + 1_200,
+         NotAfter = erlang:system_time(millisecond) + 2_500,
          ok = macula_station_link:advertise(Pid, ?REALM, ?PROCEDURE, fun unary_handler/1, open,
-                                            (spec(NotAfter))#{ttl_ms => 400}),
-         Sent = frames_until_quiet(1_000),
+                                            (spec(NotAfter))#{ttl_ms => 1_000}),
+         Sent = frames_until_quiet(1_500),
          ?assert(length(Sent) >= 2),
          [?assert(maps:get(expires_at, advertised_record(F)) =< NotAfter) || F <- Sent],
          ?assert(erlang:system_time(millisecond) > NotAfter),
@@ -246,12 +246,40 @@ an_unadvertised_spec_is_not_renewed_test_() ->
      fun() ->
          Pid = start_connected_link(),
          ok = macula_station_link:advertise(Pid, ?REALM, ?PROCEDURE, fun unary_handler/1, open,
-                                            (spec(erlang:system_time(millisecond) + 60_000))#{ttl_ms => 600}),
+                                            (spec(erlang:system_time(millisecond) + 60_000))#{ttl_ms => 1_000}),
          _ = advertised_record(sent_frame_within(2_000)),
          ok = macula_station_link:unadvertise(Pid, ?REALM, ?PROCEDURE),
          ?assertEqual([], [F || {sent, #{frame_type := advertise}} = F <- [sent_frame_within(1_200)]]),
          macula_station_link:stop(Pid)
      end}}.
+
+%% A signing that fails for a reason that can pass (the pool busy, a timeout) is tried again while the spec stands, so
+%% one bad moment does not leave a provider unroutable for the rest of the link's life.
+a_signing_that_fails_once_is_tried_again_test_() ->
+    {spawn, {timeout, 10,
+     fun() ->
+         {ok, _} = application:ensure_all_started(macula),
+         Opts = with_link_keys(#{seed => #{host => <<"127.0.0.1">>, port => 1}, connect_timeout_ms => 2000}),
+         Flaky = refusing_once(maps:get(pool, Opts)),
+         {ok, Pid} = macula_station_link:start_link(Opts#{pool => Flaky}),
+         Peer = self(),
+         _ = sys:replace_state(Pid, fun(S) -> setelement(?PEER_PID_INDEX, S, Peer) end),
+         _ = sys:replace_state(Pid, fun(S) -> setelement(?PEER_NODE_ID_INDEX, S, <<9:256>>) end),
+         ok = macula_station_link:advertise(Pid, ?REALM, ?PROCEDURE, fun unary_handler/1, open,
+                                            spec(erlang:system_time(millisecond) + 60_000)),
+         ?assertEqual(<<9:256>>, maps:get(serving_station, advertised_record(sent_frame_within(3_000)))),
+         macula_station_link:stop(Pid)
+     end}}.
+
+%% A pool that refuses its first signing as busy and passes every later call to `Pool'.
+refusing_once(Pool) ->
+    spawn(fun() ->
+              receive {'$gen_call', From, _First} -> gen_server:reply(From, {error, busy}) end,
+              (fun Loop() ->
+                   receive {'$gen_call', From2, Msg} -> gen_server:reply(From2, gen_server:call(Pool, Msg)) end,
+                   Loop()
+               end)()
+          end).
 
 %% Every frame sent until none arrives for `QuietMs'.
 frames_until_quiet(QuietMs) ->

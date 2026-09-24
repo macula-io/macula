@@ -36,7 +36,7 @@
          payload_bounded/1, wire_bounded/1,
          domain_type/1, domain_record_checked/1]).
 -export([type/1, key/1, key_id/1, version/1, created_at/1, expires_at/1, payload/1, signature/1]).
--export([payload_field/2, type_procedure_advertisement/0]).
+-export([payload_field/2, type_procedure_advertisement/0, procedure_advertisement_max_lifetime_ms/0]).
 -export([read_node_record/1, read_procedure_advertisement/1, read_station_endpoint/1, read_tombstone/1,
          read_org_directory/1, read_procedure_delegation/1, read_content_announcement/1,
          read_foundation_realm_trust_list/1]).
@@ -664,6 +664,11 @@ read_foundation_realm_trust_list(#{type := ?TYPE_FOUNDATION_REALM_TRUST_LIST, pa
 %%------------------------------------------------------------------
 %% Provider authorization (D25 item 6)
 %%------------------------------------------------------------------
+
+%% @doc The longest a procedure advertisement lives, `created_at' to `expires_at'; every verifier refuses a longer one.
+-spec procedure_advertisement_max_lifetime_ms() -> pos_integer().
+procedure_advertisement_max_lifetime_ms() ->
+    ?PROCEDURE_ADVERTISEMENT_MAX_LIFETIME_MS.
 
 %% @doc A procedure's org namespace: the text before the first "/" of its name, when there is one and it is not "_".
 -spec procedure_org(binary()) -> {org, binary()} | none | {error, malformed}.

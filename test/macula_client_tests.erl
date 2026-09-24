@@ -1079,6 +1079,38 @@ the_directory_realm_is_the_realm_of_its_advertisement_test() ->
 advertisement(Realm, Procedure) ->
     macula_record:procedure_advertisement(<<1:256>>, Realm, Procedure, <<2:256>>).
 
+%% The directory's procedure is org-namespaced, so a caller trusts its advertisement only through the realm key it
+%% pins (D25): a discovery pool with no `realm_trust' would resolve `no_trusted_advertisement' on every run and stay on
+%% its bootstrap links, silently. It is refused at start instead, naming what is missing.
+a_discovery_pool_without_realm_trust_is_refused_test_() ->
+    {timeout, 5,
+     fun() ->
+         {ok, _} = application:ensure_all_started(macula),
+         ?assertEqual({error, {station_discovery, realm_trust_required}},
+                      macula_client:connect([], #{station_discovery => #{enabled => true}})),
+         ?assertEqual({error, {station_discovery, realm_trust_required}},
+                      macula_client:connect([], #{station_discovery => #{enabled => true}, realm_trust => #{}})),
+         {ok, Pool} = macula_client:connect([], #{station_discovery => #{enabled => true},
+                                                   realm_trust => realm_trust()}),
+         ok = macula_client:close(Pool)
+     end}.
+
+%% Discovery that is not enabled is not judged: its options are not read.
+disabled_discovery_options_are_not_refused_test_() ->
+    {timeout, 5,
+     fun() ->
+         {ok, _} = application:ensure_all_started(macula),
+         {ok, Pool} = macula_client:connect([], #{station_discovery => #{enabled => false,
+                                                                          procedure => <<"no_org">>}}),
+         ok = macula_client:close(Pool)
+     end}.
+
+%% A realm trust the pool accepts: one realm id, pinned to a well-formed realm key of the node's profile.
+realm_trust() ->
+    {ok, Profile} = macula_crypto_profile:configured(),
+    {ok, RealmKey} = macula_node_keys:generate(realm, Profile),
+    #{<<9:256>> => macula_node_keys:public_key(RealmKey)}.
+
 %% The discovery procedure must be an org-namespaced name, as every served procedure is (D25); anything else could
 %% never be advertised, so the pool refuses it at start rather than discovering nothing forever.
 a_discovery_procedure_without_an_org_is_refused_test_() ->
@@ -1087,7 +1119,8 @@ a_discovery_procedure_without_an_org_is_refused_test_() ->
          {ok, _} = application:ensure_all_started(macula),
          process_flag(trap_exit, true),
          ?assertMatch({error, {station_discovery, {procedure, <<"hecate_stations.list_stations">>}}},
-                      macula_client:connect([], #{station_discovery =>
+                      macula_client:connect([], #{realm_trust => realm_trust(),
+                                                  station_discovery =>
                                                       #{enabled => true,
                                                         procedure => <<"hecate_stations.list_stations">>}}))
      end}.
@@ -1119,7 +1152,8 @@ connect_with_station_discovery_enabled_and_no_seeds_stays_alive_test_() ->
     {setup,
      fun() ->
          {ok, Pool} = macula_client:connect(
-                        [], #{station_discovery => #{enabled => true,
+                        [], #{realm_trust => realm_trust(),
+                              station_discovery => #{enabled => true,
                                                      refresh_ms => 60_000}}),
          Pool
      end,
@@ -1148,6 +1182,7 @@ discovered_link_that_never_connects_is_given_up_test_() ->
      fun() ->
          {ok, Pool} = macula_client:connect(
                         [], #{expected_node_id => <<1:256>>,
+                              realm_trust => realm_trust(),
                               station_discovery =>
                               #{enabled => true, refresh_ms => 60_000,
                                 giveup_after_ms => 150,
@@ -1181,6 +1216,7 @@ bootstrap_seed_that_never_connects_is_not_given_up_test_() ->
          {ok, Pool} = macula_client:connect(
                         [<<"quic://127.0.0.1:1">>],
                         #{expected_node_id => <<1:256>>,
+                          realm_trust => realm_trust(),
                           station_discovery =>
                           #{enabled => true, refresh_ms => 60_000,
                             giveup_after_ms => 150,

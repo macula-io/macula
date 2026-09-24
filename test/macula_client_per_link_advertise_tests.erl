@@ -126,6 +126,24 @@ a_malformed_spec_is_refused_before_the_pool_keeps_it_test_() ->
          ok = macula_client:close(Pool)
      end}.
 
+%% A spec's ttl_ms lies within what the signer accepts: from a second up to the advertisement type's own maximum
+%% lifetime. Past it every signing would be refused while advertise/6 answered ok, and the caller would believe it was
+%% routable.
+a_spec_ttl_is_bounded_by_the_advertisement_type_test_() ->
+    {timeout, 10,
+     fun() ->
+         Pool = pool(),
+         Max = macula_record:procedure_advertisement_max_lifetime_ms(),
+         Spec = fun(Ttl) -> (spec())#{ttl_ms => Ttl} end,
+         Handler = fun(_) -> {ok, counted} end,
+         [?assertError(function_clause,
+                       macula_client:advertise(Pool, ?REALM, ?PROCEDURE, Handler, open, Spec(Ttl)))
+          || Ttl <- [999, Max + 1]],
+         [?assertMatch(ok, macula_client:advertise(Pool, ?REALM, ?PROCEDURE, Handler, open, Spec(Ttl)))
+          || Ttl <- [1_000, Max]],
+         ok = macula_client:close(Pool)
+     end}.
+
 %% A registration with no advertisement (the local-only form the
 %% distribution pool uses) still reaches every link's handler table.
 a_registration_without_an_advertisement_reaches_every_link_test_() ->

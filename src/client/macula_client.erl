@@ -61,12 +61,20 @@
 %% An advertisement spec (macula_station_link:advertisement_spec()), checked
 %% in a guard: anything else a caller passes as a map raises function_clause
 %% before a link or the pool keeps it.
+%% A spec's ttl_ms is at least a second, and at most the advertisement type's
+%% own maximum lifetime (macula_record:procedure_advertisement_max_lifetime_ms/0,
+%% held equal by macula_client_per_link_advertise_tests): past it every
+%% signing would be refused while advertise answered ok.
+-define(MIN_SPEC_TTL_MS, 1_000).
+-define(MAX_SPEC_TTL_MS, 300_000).
+
 -define(IS_ADVERTISEMENT_SPEC(A),
         (is_map(A) andalso is_integer(map_get(not_after, A))
          andalso is_binary(map_get(org_directory, map_get(authorization, A)))
          andalso is_binary(map_get(procedure_delegation, map_get(authorization, A)))
          andalso (not is_map_key(ttl_ms, A)
-                  orelse (is_integer(map_get(ttl_ms, A)) andalso map_get(ttl_ms, A) > 0)))).
+                  orelse (is_integer(map_get(ttl_ms, A)) andalso map_get(ttl_ms, A) >= ?MIN_SPEC_TTL_MS
+                          andalso map_get(ttl_ms, A) =< ?MAX_SPEC_TTL_MS)))).
 -behaviour(gen_server).
 
 -export([connect/2, close/1, child_spec/3, status/1, links/1, sign_node_record/2, sign_node_record/3, sign_domain_record/2,
@@ -294,6 +302,10 @@
         %% `mcl-stations/list_stations'; a name without an org namespace
         %% is refused at connect, `{station_discovery, {procedure, P}}'.
         %% Every station it lists is dialled pinned to its `node_id'.
+        %% The directory's advertisement is trusted only through the
+        %% realm key the pool pins, so enabled discovery needs
+        %% `realm_trust' naming the directory's realm; without any, the
+        %% pool is refused, `{station_discovery, realm_trust_required}'.
         procedure  => binary(),
         %% Re-run discovery on this cadence, and opportunistically the
         %% moment every currently-held link goes unhealthy at once
@@ -1234,21 +1246,31 @@ init({Seeds, Opts}) ->
 %% every org namespaced advertisement of its realm untrusted without saying why. A key well formed for the other
 %% profile is refused by its own name.
 init_within_realm_trust(none, Seeds, Opts) ->
-    init_within_discovery(discovery_refusal(maps:get(station_discovery, Opts, #{})), Seeds, Opts);
+    init_within_link_limits(link_limit_outside_its_range(Opts), Seeds, Opts);
 init_within_realm_trust(Refusal, _Seeds, _Opts) ->
     {error, Refusal}.
 
-%% A discovery procedure is a served procedure, so it has an org namespace
-%% (D25); one without could never be advertised, and a pool discovering
-%% nothing forever would look like a directory with no stations.
+%% Enabled discovery that could never find a directory does not start the
+%% pool, naming what is missing: a pool discovering nothing forever looks
+%% like a directory with no stations. The directory's procedure is served,
+%% so it has an org namespace (D25), and a caller trusts its advertisement
+%% only through the realm key it pins, so `realm_trust' must pin at least
+%% one realm. Discovery that is not enabled is not judged.
 init_within_discovery(none, Seeds, Opts) ->
-    init_within_link_limits(link_limit_outside_its_range(Opts), Seeds, Opts);
+    init_within_seed_limit(length(Seeds), maps:get(max_seeds, Opts, ?DEFAULT_MAX_SEEDS), Seeds, Opts);
 init_within_discovery(Refusal, _Seeds, _Opts) ->
     {error, Refusal}.
 
-discovery_refusal(#{procedure := Procedure}) ->
+discovery_refusal(#{station_discovery := #{enabled := true} = Discovery} = Opts) ->
+    discovery_trust_refusal(maps:get(realm_trust, Opts, #{}), Discovery);
+discovery_refusal(_NotEnabled) ->
+    none.
+
+discovery_trust_refusal(Trust, _Discovery) when map_size(Trust) =:= 0 ->
+    {station_discovery, realm_trust_required};
+discovery_trust_refusal(_Trust, #{procedure := Procedure}) ->
     discovery_procedure_refusal(procedure_org(Procedure), Procedure);
-discovery_refusal(_Default) ->
+discovery_trust_refusal(_Trust, _DefaultProcedure) ->
     none.
 
 procedure_org(Procedure) when is_binary(Procedure) -> macula_record:procedure_org(Procedure);
@@ -1294,7 +1316,7 @@ init_within_link_limits({Key, Value}, _Seeds, _Opts) ->
 %% Request admission limits outside their ranges, or out of order, do not
 %% start the pool, and nothing is dialed.
 init_within_admission_limits(none, Seeds, Opts) ->
-    init_within_seed_limit(length(Seeds), maps:get(max_seeds, Opts, ?DEFAULT_MAX_SEEDS), Seeds, Opts);
+    init_within_discovery(discovery_refusal(Opts), Seeds, Opts);
 init_within_admission_limits(Refusal, _Seeds, _Opts) ->
     {error, Refusal}.
 
@@ -2979,14 +3001,19 @@ first_realm([])          -> error.
 
 list_stations_with_realm({ok, Realm}, Pool, Procedure) ->
     report_discovered(macula:call(Pool, Realm, Procedure, #{}, ?DISCOVERY_CALL_TIMEOUT_MS), Pool);
-list_stations_with_realm(error, _Pool, _Procedure) ->
+list_stations_with_realm(error, _Pool, Procedure) ->
+    logger:notice("[macula_client] station discovery found no advertisement of ~ts", [Procedure]),
     ok.
 
 report_discovered({ok, Payload}, Pool) ->
     Seeds = station_seeds(Payload),
     Seeds =/= [] andalso gen_server:cast(Pool, {discovered_stations, Seeds}),
     ok;
-report_discovered({error, _Reason}, _Pool) ->
+%% A failed discovery changes nothing and the next refresh tries again, but it
+%% says why: a directory that cannot be trusted (`no_trusted_advertisement')
+%% or reached looks, unlogged, exactly like one with no stations.
+report_discovered({error, Reason}, _Pool) ->
+    logger:notice("[macula_client] station discovery found no stations: ~p", [Reason]),
     ok.
 
 %% `payload_field/2' (macula_record.erl, exported) is the established

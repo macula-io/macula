@@ -23,12 +23,18 @@ Wire-compatible with 12.0 to 12.3 in both directions.
   refused at connect without an org namespace), reads the realm from the
   advertisement whose `procedure` matches, and dials every listed station pinned
   to its `node_id`: the hostname when the row has one, else its first advertised
-  address. (#31)
+  address. The directory's advertisement is trusted through the realm key the pool
+  pins, so enabled discovery needs `realm_trust` naming the directory's realm; a
+  pool without one is refused at connect (`{station_discovery,
+  realm_trust_required}`), and a discovery run that finds nothing logs why. (#31)
 - **A plain `macula:advertise/5` provider stays routable.** A station drops an
   advertisement when it expires (at most 5 minutes), and the SDK sent one only on
   advertise and on connect. Each link now renews a spec's advertisement at half
   its remaining life, signed in the pool and naming the same station, until the
-  spec's `not_after`. A spec may carry `ttl_ms`. This needs macula-station 0.6.2
+  spec's `not_after`. A signing refused for a reason that can pass (the pool busy)
+  is tried again a second later. A spec may carry `ttl_ms`, from one second up to
+  the advertisement type's maximum (`macula_record:procedure_advertisement_max_lifetime_ms/0`,
+  new). This needs macula-station 0.6.2
   (macula-station#7) on the station, since an older one drops a renewal on the
   same connection. (#32)
 - **A draining connection keeps draining when the peer's FIN arrives.** When this

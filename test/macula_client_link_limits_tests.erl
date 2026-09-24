@@ -82,7 +82,7 @@ configured_seeds_never_spend_the_new_peer_budget() ->
 %% discovery run offers them again.
 discovery_past_the_new_peer_budget_defers_its_additions() ->
     {ok, Pool} = macula_client:connect([], #{station_discovery => #{enabled => true, max_links => 5},
-                                             new_peer_budget => 1}),
+                                             realm_trust => realm_trust(), new_peer_budget => 1}),
     ok = gen_server:cast(Pool, {discovered_stations, [{seed(5), undefined}, {seed(6), undefined}]}),
     {ok, #{refused_dials := Refused}} = macula_client:status(Pool),
     ?assertEqual(#{new_peer_budget_spent => 1}, Refused),
@@ -110,7 +110,8 @@ a_direct_dial_to_a_seed_the_pool_cannot_dial_is_refused() ->
 %% Discovered stations whose seeds cannot be dialed are refused and counted where they enter the pool, which starts no
 %% link for them and keeps serving.
 discovered_seeds_the_pool_cannot_dial_are_refused() ->
-    {ok, Pool} = macula_client:connect([], #{station_discovery => #{enabled => true, max_links => 5}}),
+    {ok, Pool} = macula_client:connect([], #{station_discovery => #{enabled => true, max_links => 5},
+                                             realm_trust => realm_trust()}),
     Unusable = [#{host => {not_a, host}, port => 4433, expected_node_id => <<1:256>>},
                 #{host => [16#110000], port => 4433, expected_node_id => <<2:256>>},
                 #{host => <<"127.0.0.1">>, port => 0, expected_node_id => <<3:256>>}],
@@ -168,3 +169,9 @@ call_station(Pool, Seed) ->
 
 seed(Port) ->
     #{host => <<"127.0.0.1">>, port => Port, expected_node_id => <<Port:256>>}.
+
+%% A realm trust the pool accepts, as station discovery needs one.
+realm_trust() ->
+    {ok, Profile} = macula_crypto_profile:configured(),
+    {ok, RealmKey} = macula_node_keys:generate(realm, Profile),
+    #{<<9:256>> => macula_node_keys:public_key(RealmKey)}.

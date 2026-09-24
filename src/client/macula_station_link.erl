@@ -96,13 +96,23 @@
 %% A spec's advertisement is renewed at half its remaining life, but never
 %% sooner than this after the last signing.
 -define(MIN_RENEWAL_MS, 100).
+%% A signing refused for a reason that can pass is tried again after this.
+-define(SIGNING_RETRY_MS, 1_000).
+
+%% A spec's ttl_ms is at least a second, and at most the advertisement type's
+%% own maximum lifetime (macula_record:procedure_advertisement_max_lifetime_ms/0,
+%% held equal by macula_client_per_link_advertise_tests): past it every
+%% signing would be refused while advertise answered ok.
+-define(MIN_SPEC_TTL_MS, 1_000).
+-define(MAX_SPEC_TTL_MS, 300_000).
 
 -define(IS_ADVERTISEMENT_SPEC(A),
         (is_map(A) andalso is_integer(map_get(not_after, A))
          andalso is_binary(map_get(org_directory, map_get(authorization, A)))
          andalso is_binary(map_get(procedure_delegation, map_get(authorization, A)))
          andalso (not is_map_key(ttl_ms, A)
-                  orelse (is_integer(map_get(ttl_ms, A)) andalso map_get(ttl_ms, A) > 0)))).
+                  orelse (is_integer(map_get(ttl_ms, A)) andalso map_get(ttl_ms, A) >= ?MIN_SPEC_TTL_MS
+                          andalso map_get(ttl_ms, A) =< ?MAX_SPEC_TTL_MS)))).
 -behaviour(gen_server).
 
 %% What a call error says about trying the same request somewhere else. See
@@ -498,8 +508,9 @@
 
 %% What a provider registers to advertise: a pre-signed advertisement's
 %% wire form, or a spec the link signs per send (see `advertise/6').
-%% `ttl_ms' is optional: the signed advertisement's own lifetime, which the
-%% advertisement type caps; renewal keeps it alive in turn.
+%% `ttl_ms' is optional: the signed advertisement's own lifetime, from a
+%% second up to the advertisement type's maximum (anything else is refused
+%% with function_clause); renewal keeps it alive in turn.
 -type advertisement_spec() :: #{authorization := map(),
                                 not_after     := integer(),
                                 ttl_ms        => pos_integer()}.
@@ -2564,9 +2575,9 @@ not_sent(Realm, Proc, Reason) ->
 %% sent, its renewal is armed for half its remaining life, since the
 %% station drops it when it expires (#32). Past the spec's bound the
 %% signing refuses and the chain ends there.
-on_advertisement_signed({Realm, Proc}, _Spec, _Station, {error, Reason}, S) ->
+on_advertisement_signed({Realm, Proc} = Key, Spec, Station, {error, Reason}, S) ->
     not_sent(Realm, Proc, Reason),
-    S;
+    retried(final_signing_refusal(Reason), Key, Spec, Station, S);
 on_advertisement_signed(Key, Spec, Station, {ok, Signed},
                         #state{advertisements = Ads, peer_node_id = Station, peer_pid = Pid} = S)
   when is_pid(Pid), map_get(Key, Ads) =:= Spec ->
@@ -2575,11 +2586,33 @@ on_advertisement_signed(Key, Spec, Station, {ok, Signed},
 on_advertisement_signed(_Key, _Spec, _Station, {ok, _Signed}, S) ->
     S.
 
-renewal_armed(Key, ExpiresAt, #state{renewals = Renewals} = S) ->
+renewal_armed(Key, ExpiresAt, S) ->
+    renewal_in(Key, max(?MIN_RENEWAL_MS, (ExpiresAt - erlang:system_time(millisecond)) div 2), S).
+
+renewal_in(Key, In, #state{renewals = Renewals} = S) ->
     Ref = make_ref(),
-    In = max(?MIN_RENEWAL_MS, (ExpiresAt - erlang:system_time(millisecond)) div 2),
     _ = erlang:send_after(In, self(), {renew_advertisement, Key, Ref}),
     S#state{renewals = Renewals#{Key => Ref}}.
+
+%% A signing refused for a reason that can pass (the pool busy or slow to
+%% answer) is tried again while the same spec stands and the same station is
+%% connected, so one bad moment does not end the chain for the link's life.
+%% A refusal the same spec would meet again is final.
+retried(false, Key, Spec, Station,
+        #state{advertisements = Ads, peer_node_id = Station, peer_pid = Pid} = S)
+  when is_pid(Pid), map_get(Key, Ads) =:= Spec ->
+    renewal_in(Key, ?SIGNING_RETRY_MS, S);
+retried(_FinalOrStale, _Key, _Spec, _Station, S) ->
+    S.
+
+final_signing_refusal(not_after_passed)        -> true;
+final_signing_refusal(lifetime_too_long)       -> true;
+final_signing_refusal(lifetime_reversed)       -> true;
+final_signing_refusal(record_too_large)        -> true;
+final_signing_refusal(malformed_record)        -> true;
+final_signing_refusal(key_id_mismatch)         -> true;
+final_signing_refusal(not_a_node_signed_type)  -> true;
+final_signing_refusal(_MayPass)                -> false.
 
 %% Sign again what is still registered as a spec, while connected; a
 %% withdrawn procedure, a pre-signed one or a link between stations has
