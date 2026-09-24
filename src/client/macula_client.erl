@@ -834,20 +834,24 @@ advertise(Pool, Realm, Procedure, Handler, Policy)
         (is_tuple(Handler) andalso tuple_size(Handler) =:= 2)) ->
     advertise(Pool, Realm, Procedure, Handler, Policy, undefined).
 
-%% @doc As `advertise/5', with the pool-signed provider advertisement
-%% (`EncodedAd', the resolved D25 authorization included) fanned out to
-%% every link as an ADVERTISE frame. The facade resolves the
-%% authorization before calling here; a `undefined' `EncodedAd'
-%% registers the handler locally and sends no frame (legacy behaviour).
+%% @doc As `advertise/5', with the provider advertisement (the resolved
+%% D25 authorization included) fanned out to every link as an ADVERTISE
+%% frame. `Ad' is an advertisement spec each link signs per send, naming
+%% its own station (what the facade passes), or a pre-signed
+%% advertisement's wire form every link sends as it is. The facade
+%% resolves the authorization before calling here; `undefined'
+%% registers the handler locally and sends no frame.
 -spec advertise(pool(), <<_:256>>, binary(), handler(), auth_policy(),
-                binary() | undefined) -> ok | {error, term()}.
+                macula_station_link:advertisement() | undefined) ->
+    ok | {error, term()}.
 advertise(Pool, Realm, Procedure, Handler, Policy, EncodedAd)
   when is_pid(Pool),
        is_binary(Realm), byte_size(Realm) =:= 32,
        is_binary(Procedure),
        (is_function(Handler, 1) orelse
         (is_tuple(Handler) andalso tuple_size(Handler) =:= 2)),
-       (is_binary(EncodedAd) orelse EncodedAd =:= undefined) ->
+       (is_binary(EncodedAd) orelse is_map(EncodedAd)
+        orelse EncodedAd =:= undefined) ->
     gen_server:call(Pool, {advertise, Realm, Procedure, Handler, Policy,
                            EncodedAd},
                     5_000).
@@ -913,14 +917,15 @@ advertise_stream(Pool, Realm, Procedure, Mode, Handler, Policy)
     advertise_stream(Pool, Realm, Procedure, Mode, Handler, Policy,
                      undefined).
 
-%% @doc As `advertise_stream/6', with the pool-signed provider
-%% advertisement (`EncodedAd', the resolved D25 authorization included)
-%% fanned out to every link as an ADVERTISE frame. `undefined'
-%% registers the handler locally and sends no frame (legacy behaviour).
+%% @doc As `advertise_stream/6', with the provider advertisement fanned
+%% out to every link as an ADVERTISE frame: a spec each link signs
+%% naming its own station, or a pre-signed wire form (see
+%% `advertise/6'). `undefined' registers the handler locally and sends
+%% no frame.
 -spec advertise_stream(pool(), <<_:256>>, binary(),
                        macula_frame:stream_mode(),
                        stream_handler(), auth_policy(),
-                       binary() | undefined) ->
+                       macula_station_link:advertisement() | undefined) ->
     ok | {error, term()}.
 advertise_stream(Pool, Realm, Procedure, Mode, Handler, Policy, EncodedAd)
   when is_pid(Pool),
@@ -929,7 +934,8 @@ advertise_stream(Pool, Realm, Procedure, Mode, Handler, Policy, EncodedAd)
        (Mode =:= server_stream orelse Mode =:= client_stream
         orelse Mode =:= bidi),
        is_function(Handler, 2),
-       (is_binary(EncodedAd) orelse EncodedAd =:= undefined) ->
+       (is_binary(EncodedAd) orelse is_map(EncodedAd)
+        orelse EncodedAd =:= undefined) ->
     gen_server:call(Pool,
                     {advertise_stream, Realm, Procedure, Mode, Handler,
                      Policy, EncodedAd},
@@ -1571,7 +1577,7 @@ handle_call({advertise_stream, Realm, Procedure, Mode, Handler, Policy,
 
 handle_call({unadvertise_stream, Realm, Procedure}, _From,
             #state{stream_procs = SP, node_identity = Key} = S) ->
-    Withdrawal = withdrawal_for(maps:find({Realm, Procedure}, SP),
+    Withdrawal = withdrawal_for(stream_registration(maps:find({Realm, Procedure}, SP)),
                                 Realm, Procedure, Key),
     _ = fanout_unadvertise_stream(spawned_link_pids(S), Realm, Procedure,
                                   Withdrawal),
@@ -2486,43 +2492,53 @@ safe_link_unadvertise_stream(Pid, Realm, Proc, Withdrawal) ->
     catch _:_ -> skipped
     end.
 
+%% A stored stream registration `{Mode, Handler, Policy, Ad}' in the
+%% `{HandlerOrMode, Policy, Ad}' shape `withdrawal_for/4' reads.
+stream_registration({ok, {Mode, _Handler, Policy, Ad}}) -> {ok, {Mode, Policy, Ad}};
+stream_registration(error) -> error.
+
 %% The withdrawal for an unadvertise: a tombstone over a FRESH
 %% advertisement of the same (realm, procedure) — fresh so its version
 %% is later than the registered one — signed by the provider (the
-%% pool's own node identity). Built from the stored advertisement's
-%% own authorization, decoded back from the wire form. `undefined' for
-%% a legacy local-only register, which sent no advertisement to
-%% withdraw.
+%% pool's own node identity). Built from the registered authorization:
+%% the spec's own, or the pre-signed advertisement's, decoded back from
+%% the wire form. A tombstone's slot is the (realm, procedure), not the
+%% serving station, so one withdrawal serves every link. `undefined'
+%% for a local-only register, which sent no advertisement to withdraw.
 withdrawal_for(error, _Realm, _Proc, _Key) ->
     undefined;
-withdrawal_for({ok, {_HandlerOrMode, _Policy, undefined}}, _Realm, _Proc,
-               _Key) ->
-    undefined;
-withdrawal_for({ok, {_HandlerOrMode, _Policy, EncodedAd}}, Realm, Proc, Key)
-  when is_binary(EncodedAd) ->
-    #{profile := Profile} = Key,
+withdrawal_for({ok, {_HandlerOrMode, _Policy, Ad}}, Realm, Proc, Key) ->
+    withdrawal_signed(registered_authorization(Ad, Key), Realm, Proc, Key).
+
+registered_authorization(undefined, _Key) ->
+    none;
+registered_authorization(#{authorization := Authorization}, _Key) ->
+    {ok, Authorization};
+registered_authorization(EncodedAd, #{profile := Profile}) when is_binary(EncodedAd) ->
     case macula_record:verify(EncodedAd, Profile) of
         {ok, Ad} ->
-            Read = macula_record:read_procedure_advertisement(Ad),
-            Authorization = maps:get(authorization, Read),
-            NodeId = maps:get(advertiser_node, Read),
-            Unsigned = macula_record:procedure_advertisement(
-                         NodeId, Realm, Proc, NodeId,
-                         #{authorization => Authorization}),
-            %% The pool's own custody paths: sign the fresh ad the way
-            %% sign_node_record does, then withdraw it the way
-            %% withdraw_node_record does.
-            case node_record_signed(macula_record:node_signed(Unsigned),
-                                    Unsigned, Key) of
-                {ok, Signed} ->
-                    case tombstone_signed({ok, Signed},
-                                          macula_node_keys:public_key(Key),
-                                          shutdown, Key) of
-                        {ok, Tombstone} -> macula_record:encode(Tombstone);
-                        {error, _}      -> undefined
-                    end;
-                {error, _} ->
-                    undefined
+            {ok, maps:get(authorization, macula_record:read_procedure_advertisement(Ad))};
+        {error, _} ->
+            none
+    end.
+
+withdrawal_signed(none, _Realm, _Proc, _Key) ->
+    undefined;
+withdrawal_signed({ok, Authorization}, Realm, Proc, Key) ->
+    {ok, NodeId} = macula_node_keys:node_id(Key),
+    Unsigned = macula_record:procedure_advertisement(
+                 NodeId, Realm, Proc, NodeId,
+                 #{authorization => Authorization}),
+    %% The pool's own custody paths: sign the fresh ad the way
+    %% sign_node_record does, then withdraw it the way
+    %% withdraw_node_record does.
+    case node_record_signed(macula_record:node_signed(Unsigned),
+                            Unsigned, Key) of
+        {ok, Signed} ->
+            case tombstone_signed({ok, Signed}, macula_node_keys:public_key(Key),
+                                  shutdown, Key) of
+                {ok, Tombstone} -> macula_record:encode(Tombstone);
+                {error, _}      -> undefined
             end;
         {error, _} ->
             undefined

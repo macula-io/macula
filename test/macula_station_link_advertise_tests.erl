@@ -125,6 +125,102 @@ a_stream_advertisement_sends_the_same_advertise_frame_test_() ->
      end}}.
 
 %%------------------------------------------------------------------
+%% #29: the advertisement is signed per link, naming that link's station
+%%------------------------------------------------------------------
+
+%% Given the unsigned advertisement spec, the link signs it with its own
+%% node key and names ITS peer station as serving_station.
+a_spec_is_signed_naming_the_link_s_own_station_test_() ->
+    {spawn, {timeout, 5,
+     fun() ->
+         Pid = start_connected_link(),
+         NotAfter = erlang:system_time(millisecond) + 3_600_000,
+         ok = macula_station_link:advertise(Pid, ?REALM, ?PROCEDURE,
+                                            fun unary_handler/1, open,
+                                            spec(NotAfter)),
+         Ad = advertised_record(sent_frame_within(200)),
+         ?assertEqual(<<9:256>>, maps:get(serving_station, Ad)),
+         ?assertEqual(?PROCEDURE, maps:get(procedure, Ad)),
+         ?assertEqual(authorization(), maps:get(authorization, Ad)),
+         ?assert(maps:get(expires_at, Ad) =< NotAfter),
+         macula_station_link:stop(Pid)
+     end}}.
+
+%% A reconnect to a different station signs the advertisement again,
+%% naming the new station: a stored signed binary would keep naming the
+%% old one.
+a_reconnect_to_another_station_re_signs_naming_it_test_() ->
+    {spawn, {timeout, 5,
+     fun() ->
+         Pid = start_connected_link(),
+         ok = macula_station_link:advertise(Pid, ?REALM, ?PROCEDURE,
+                                            fun unary_handler/1, open,
+                                            spec(erlang:system_time(millisecond) + 3_600_000)),
+         ?assertEqual(<<9:256>>, maps:get(serving_station, advertised_record(sent_frame_within(200)))),
+         Pid ! {macula_peering, connected, self(), <<10:256>>},
+         ?assertEqual(<<10:256>>, element(?PEER_NODE_ID_INDEX, sys:get_state(Pid))),
+         ?assertEqual(<<10:256>>, maps:get(serving_station, advertised_record(sent_frame_within(300)))),
+         macula_station_link:stop(Pid)
+     end}}.
+
+%% A spec registered before the handshake is signed when it is drained,
+%% naming the station that answered.
+a_spec_made_before_connect_names_the_station_that_answered_test_() ->
+    {spawn, {timeout, 5,
+     fun() ->
+         Pid = start_link_with_peer(),
+         ok = macula_station_link:advertise(Pid, ?REALM, ?PROCEDURE,
+                                            fun unary_handler/1, open,
+                                            spec(erlang:system_time(millisecond) + 3_600_000)),
+         ?assertEqual(none, sent_frame_within(200)),
+         Pid ! {macula_peering, connected, self(), <<11:256>>},
+         ?assertEqual(<<11:256>>, element(?PEER_NODE_ID_INDEX, sys:get_state(Pid))),
+         ?assertEqual(<<11:256>>, maps:get(serving_station, advertised_record(sent_frame_within(300)))),
+         macula_station_link:stop(Pid)
+     end}}.
+
+%% An authorization that has already ended signs nothing and sends
+%% nothing: its advertisement could only be refused.
+a_spec_past_its_bound_sends_nothing_test_() ->
+    {spawn, {timeout, 5,
+     fun() ->
+         Pid = start_connected_link(),
+         ok = macula_station_link:advertise(Pid, ?REALM, ?PROCEDURE,
+                                            fun unary_handler/1, open,
+                                            spec(erlang:system_time(millisecond) - 1_000)),
+         ?assertEqual(none, sent_frame_within(200)),
+         macula_station_link:stop(Pid)
+     end}}.
+
+%% The streaming path takes the same spec.
+a_stream_spec_is_signed_naming_the_link_s_own_station_test_() ->
+    {spawn, {timeout, 5,
+     fun() ->
+         Pid = start_connected_link(),
+         ok = macula_station_link:advertise_stream(Pid, ?REALM, ?PROCEDURE,
+                                                   bidi, fun stream_handler/2, open,
+                                                   spec(erlang:system_time(millisecond) + 3_600_000)),
+         ?assertEqual(<<9:256>>, maps:get(serving_station, advertised_record(sent_frame_within(200)))),
+         macula_station_link:stop(Pid)
+     end}}.
+
+authorization() ->
+    #{org_directory => <<"org directory wire">>, procedure_delegation => <<"delegation wire">>}.
+
+spec(NotAfter) ->
+    #{authorization => authorization(), not_after => NotAfter}.
+
+%% The advertisement a sent ADVERTISE frame carries, verified under the
+%% node's profile, as its fields.
+advertised_record({sent, #{frame_type := advertise, advertisement := Encoded}}) ->
+    {ok, Profile} = macula_crypto_profile:configured(),
+    {ok, Record} = macula_record:verify(Encoded, Profile),
+    maps:merge(macula_record:read_procedure_advertisement(Record),
+               #{expires_at => macula_record:expires_at(Record)});
+advertised_record(Other) ->
+    error({no_advertise_frame, Other}).
+
+%%------------------------------------------------------------------
 %% Helpers
 %%------------------------------------------------------------------
 

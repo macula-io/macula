@@ -1,11 +1,12 @@
 %% EUnit tests for the facade's provider advertise: `macula:advertise/5'
 %% resolves the pool's own D25 provider authorization — the
 %% realm-signed org directory and the org-signed procedure delegation
-%% naming the pool's node id — from the DHT, signs the advertisement,
-%% verifies it against the realm key the pool pins, and hands its wire
-%% form to the pool fan-out. Every missing piece of the chain fails
-%% fast with `{error, {provider_authorization, _}}', and nothing is
-%% sent.
+%% naming the pool's node id — from the DHT, signs an advertisement,
+%% verifies it against the realm key the pool pins, and hands the pool
+%% fan-out the advertisement spec (the verified authorization and the
+%% chain's bound), which each link signs naming its own station (#29).
+%% Every missing piece of the chain fails fast with
+%% `{error, {provider_authorization, _}}', and nothing is sent.
 %%
 %% The resolution's DHT calls and the fan-out itself are injected as
 %% the seam entries `advertise/5''s `Opts' takes (`provider_io/0' plus
@@ -27,7 +28,7 @@ provider_advertise_test_() ->
 
 cases(Keys) ->
     [{case_name(Case), fun() -> Case(Keys) end}
-     || Case <- [fun a_complete_chain_advertises_the_signed_wire_form/1,
+     || Case <- [fun a_complete_chain_hands_the_pool_a_spec_a_link_signs/1,
                  fun a_procedure_without_an_org_namespace_is_refused/1,
                  fun a_missing_org_directory_is_refused/1,
                  fun a_missing_delegation_is_refused/1,
@@ -40,20 +41,26 @@ cases(Keys) ->
 %% Happy path
 %%------------------------------------------------------------------
 
-a_complete_chain_advertises_the_signed_wire_form(
+a_complete_chain_hands_the_pool_a_spec_a_link_signs(
   #{node := NodeId, realm_key := RealmPub} = Keys) ->
     Handler = fun(_Payload) -> {ok, counted} end,
     with_opts(Keys, #{}, Handler, fun(Opts) ->
         ?assertEqual(ok, macula:advertise(self(), ?REALM, ?PROC, Handler, Opts))
     end),
-    Ad = advertise_sent(),
-    %% The sent advertisement decodes, names the pool's node, and its
-    %% authorization verifies against the pinned realm key.
-    {ok, Profile} = macula_crypto_profile:configured(),
-    {ok, Decoded} = macula_record:verify(Ad, Profile),
+    Spec = advertise_sent(),
+    %% The pool gets the spec, not a signed advertisement naming any
+    %% station: the station is the link's to name.
+    ?assertMatch(#{authorization := #{org_directory := _, procedure_delegation := _},
+                   not_after := _}, Spec),
+    %% What a link connected to a station makes of it names that
+    %% station, is the pool's node's, and its authorization verifies
+    %% against the pinned realm key.
+    Station = <<9:256>>,
+    Decoded = link_signed(Keys, Spec, Station),
     Read = macula_record:read_procedure_advertisement(Decoded),
     ?assertEqual(NodeId, maps:get(advertiser_node, Read)),
-    ?assertEqual(NodeId, maps:get(serving_station, Read)),
+    ?assertEqual(Station, maps:get(serving_station, Read)),
+    {ok, Profile} = macula_crypto_profile:configured(),
     ?assertEqual(ok,
                  macula_record:verify_authorization(
                    Decoded, #{profile => Profile, realm_key => RealmPub},
@@ -89,9 +96,10 @@ capped_at(Keys, DirTtl, DelTtl) ->
     with_opts(Keys, #{find_record => Stub}, Handler, fun(Opts) ->
         ?assertEqual(ok, macula:advertise(self(), ?REALM, ?PROC, Handler, Opts))
     end),
-    Ad = advertise_sent(),
+    Spec = advertise_sent(),
+    ?assertEqual(Earliest, maps:get(not_after, Spec)),
     {ok, Profile} = macula_crypto_profile:configured(),
-    {ok, Decoded} = macula_record:verify(Ad, Profile),
+    Decoded = link_signed(Keys, Spec, <<9:256>>),
     ?assertEqual(Earliest, macula_record:expires_at(Decoded)),
     %% And the consequence that matters: the pool's own check of the
     %% chain, the one that refuses an advertisement outliving it.
@@ -113,11 +121,11 @@ a_republished_chain_restores_the_full_lifetime(Keys) ->
     with_opts(Keys, #{find_record => Ending}, Handler, fun(Opts) ->
         ?assertEqual(ok, macula:advertise(self(), ?REALM, ?PROC, Handler, Opts))
     end),
-    Near = expires_at_of(advertise_sent()),
+    Near = expires_at_of(Keys, advertise_sent()),
     with_opts(Keys, #{find_record => Republished}, Handler, fun(Opts) ->
         ?assertEqual(ok, macula:advertise(self(), ?REALM, ?PROC, Handler, Opts))
     end),
-    After = expires_at_of(advertise_sent()),
+    After = expires_at_of(Keys, advertise_sent()),
     %% The second is no longer held down by the chain that was ending:
     %% it runs the advertisement's own lifetime, which is longer than
     %% the 2 minutes the first was capped to.
@@ -128,10 +136,41 @@ a_republished_chain_restores_the_full_lifetime(Keys) ->
     %% advertisement past its own 5-minute lifetime.
     ?assert(Left =< 5 * ?MINUTE).
 
-expires_at_of(Ad) ->
+expires_at_of(Keys, Spec) ->
+    macula_record:expires_at(link_signed(Keys, Spec, <<9:256>>)).
+
+%% The advertisement a link connected to `Station' sends for `Spec',
+%% taken from the frame a real macula_station_link puts on the wire,
+%% verified under the node's profile.
+link_signed(#{key := Key}, Spec, Station) ->
+    {ok, _} = application:ensure_all_started(macula),
+    {ok, Issuer} = macula_statement_issuer_sup:start_issuer(fun() -> Key end, self()),
+    {ok, Admission} = macula_request_admission:start_link(
+                        #{caller_quota => 256, share => 1024, cap => 46080,
+                          reply_bytes => 262144, reply_bytes_total => 16777216}),
+    {ok, Link} = macula_station_link:start_link(
+                   #{seed => #{host => <<"127.0.0.1">>, port => 1},
+                     connect_timeout_ms => 2000,
+                     node_identity => fun() -> Key end, issuer => Issuer,
+                     admission => Admission,
+                     share => {seed, {<<"127.0.0.1">>, 1}},
+                     expected_node_id => <<1:256>>}),
+    Peer = self(),
+    _ = sys:replace_state(Link, fun(S) ->
+            setelement(macula_station_link:state_field_index(peer_pid), S, Peer)
+        end),
+    Link ! {macula_peering, connected, Peer, Station},
+    ok = macula_station_link:advertise(Link, ?REALM, ?PROC,
+                                       fun(_) -> {ok, counted} end, open, Spec),
+    Encoded = receive
+                  {'$gen_cast', {send_frame, #{frame_type := advertise,
+                                               advertisement := A}}} -> A
+              after 1_000 -> error(no_advertise_frame)
+              end,
+    macula_station_link:stop(Link),
     {ok, Profile} = macula_crypto_profile:configured(),
-    {ok, Decoded} = macula_record:verify(Ad, Profile),
-    macula_record:expires_at(Decoded).
+    {ok, Decoded} = macula_record:verify(Encoded, Profile),
+    Decoded.
 
 %%------------------------------------------------------------------
 %% Refusals — nothing is sent under any of them
@@ -180,7 +219,7 @@ an_unpinned_realm_key_is_refused(Keys) ->
 
 %% The `Opts' the tests hand `advertise/5': the provider_io entries the
 %% resolution reads its DHT calls from, plus the `advertise' fan-out
-%% override recording the sent wire form, each overridable per case.
+%% override recording the spec it is handed, each overridable per case.
 with_opts(Keys, Overrides, _Handler, Fun) ->
     Self = self(),
     Base = #{status => fun(_Pool) ->
@@ -197,8 +236,8 @@ with_opts(Keys, Overrides, _Handler, Fun) ->
                               {ok, maps:get(realm_key, Keys)}
                           end,
              advertise => fun(_Pool, _Realm, _Proc, _Hand, _Policy,
-                              EncodedAd) ->
-                              Self ! {advertised, EncodedAd},
+                              Spec) ->
+                              Self ! {advertised, Spec},
                               ok
                           end},
     Fun(maps:merge(Base, Overrides)).
@@ -249,7 +288,7 @@ verified(Record) ->
     {ok, Profile} = macula_crypto_profile:configured(),
     macula_record:verify(macula_record:encode(Record), Profile).
 
-%% The encoded advertisement the facade handed to the pool fan-out, or
+%% The advertisement spec the facade handed to the pool fan-out, or
 %% not_sent.
 advertise_sent() ->
     receive

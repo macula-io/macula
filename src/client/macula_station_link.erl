@@ -149,7 +149,8 @@
     parse_seed/1
 ]).
 
--export_type([handler/0, stream_handler/0, overlay_subscription/0]).
+-export_type([handler/0, stream_handler/0, overlay_subscription/0,
+              advertisement/0, advertisement_spec/0]).
 
 -ifdef(TEST).
 -export([with_client_stream/3]).
@@ -355,7 +356,7 @@
     %% frame does not distinguish them. Absent for a legacy local-only
     %% register (the pool-level advertise without a resolved
     %% authorization), which sends no frame at all.
-    advertisements = #{} :: #{{<<_:256>>, binary()} => binary()},
+    advertisements = #{} :: #{{<<_:256>>, binary()} => advertisement()},
     %% Advertised streaming procedures. Same wire shape as `procedures'
     %% (one `advertise' frame per entry replayed on reconnect); the
     %% stored value carries the declared mode (`server_stream' /
@@ -477,6 +478,12 @@
                  | {module(), atom()}.
 
 -type stream_handler() :: fun((pid(), term()) -> any()).
+
+%% What a provider registers to advertise: a pre-signed advertisement's
+%% wire form, or a spec the link signs per send (see `advertise/6').
+-type advertisement_spec() :: #{authorization := map(),
+                                not_after     := integer()}.
+-type advertisement() :: binary() | advertisement_spec().
 
 %%====================================================================
 %% Public API
@@ -878,18 +885,24 @@ advertise(Pid, Realm, Procedure, Handler,
     gen_server:call(Pid, {advertise, Realm, Procedure, Handler, Policy}, 5_000).
 
 %% @doc As `advertise/5', sending the resolved provider advertisement
-%% as an ADVERTISE frame. `EncodedAd' is the pool-signed advertisement's
-%% wire form; the link stores it (for the unadvertise withdrawal and the
-%% handshake drain) and sends it at once when connected.
+%% as an ADVERTISE frame. `Ad' is either a pre-signed advertisement's
+%% wire form, sent as it is, or an advertisement spec the link signs
+%% with its node key each time it sends, naming the station it is
+%% connected to as `serving_station' (a pool of several links, and a
+%% reconnect to another station, each get an advertisement naming their
+%% own station). The link stores it (for the handshake drain) and sends
+%% it at once when connected; `undefined' registers the handler and
+%% sends nothing.
 -spec advertise(pid(), <<_:256>>, binary(), handler(),
-                macula_client:auth_policy(), binary()) -> ok.
+                macula_client:auth_policy(), advertisement() | undefined) -> ok.
 advertise(Pid, Realm, Procedure, Handler, Policy, EncodedAd)
   when is_pid(Pid),
        is_binary(Realm), byte_size(Realm) =:= 32,
        is_binary(Procedure),
        (is_function(Handler, 1) orelse
         (is_tuple(Handler) andalso tuple_size(Handler) =:= 2)),
-       is_binary(EncodedAd) ->
+       (is_binary(EncodedAd) orelse is_map(EncodedAd)
+        orelse EncodedAd =:= undefined) ->
     gen_server:call(Pid, {advertise, Realm, Procedure, Handler, Policy,
                           EncodedAd}, 5_000).
 
@@ -1141,7 +1154,7 @@ advertise_stream(Pid, Realm, Procedure, Mode, Handler, Policy)
 %% streaming from RPC procedures).
 -spec advertise_stream(pid(), <<_:256>>, binary(),
                        macula_frame:stream_mode(), stream_handler(),
-                       macula_client:auth_policy(), binary()) -> ok.
+                       macula_client:auth_policy(), advertisement() | undefined) -> ok.
 advertise_stream(Pid, Realm, Procedure, Mode, Handler, Policy, EncodedAd)
   when is_pid(Pid),
        is_binary(Realm), byte_size(Realm) =:= 32,
@@ -1149,7 +1162,8 @@ advertise_stream(Pid, Realm, Procedure, Mode, Handler, Policy, EncodedAd)
        (Mode =:= server_stream orelse Mode =:= client_stream
         orelse Mode =:= bidi),
        is_function(Handler, 2),
-       is_binary(EncodedAd) ->
+       (is_binary(EncodedAd) orelse is_map(EncodedAd)
+        orelse EncodedAd =:= undefined) ->
     ok = valid_policy(Policy),
     gen_server:call(Pid,
                     {stream_advertise, Realm, Procedure, Mode, Handler,
@@ -2474,10 +2488,37 @@ maybe_send_advertise(_Realm, _Proc, _EncodedAd, #state{peer_pid = undefined}) ->
     ok;
 maybe_send_advertise(_Realm, _Proc, _EncodedAd, #state{peer_node_id = undefined}) ->
     ok;
-maybe_send_advertise(_Realm, _Proc, EncodedAd, #state{peer_pid = Pid}) ->
+maybe_send_advertise(_Realm, _Proc, EncodedAd, #state{peer_pid = Pid})
+  when is_binary(EncodedAd) ->
+    send_advertise(Pid, EncodedAd);
+maybe_send_advertise(Realm, Proc, Spec, #state{peer_pid = Pid} = S) ->
+    send_signed_advertise(Realm, Proc, signed_advertisement(Realm, Proc, Spec, S), Pid).
+
+send_advertise(Pid, EncodedAd) ->
     Frame = macula_frame:advertise(#{advertisement => EncodedAd}),
     try macula_peering:send_frame(Pid, Frame) catch _:_ -> ok end,
     ok.
+
+send_signed_advertise(_Realm, _Proc, {ok, Signed}, Pid) ->
+    send_advertise(Pid, macula_record:encode(Signed));
+send_signed_advertise(Realm, Proc, {error, Reason}, _Pid) ->
+    logger:warning("[macula_station_link] advertisement of ~ts in realm ~ts not sent: ~p",
+                 [Proc, binary:encode_hex(Realm), Reason]),
+    ok.
+
+%% The advertisement this link sends for a spec: signed now with the
+%% link's node key, naming the station this link is connected to, and
+%% bounded by the spec's `not_after' (the earlier expiry of the chain it
+%% carries), so it never outlives its authorization. Past the bound
+%% there is nothing to send: any verifier would refuse it.
+signed_advertisement(Realm, Proc, #{authorization := Authorization, not_after := NotAfter},
+                     #state{node_identity = Key, peer_node_id = Station}) ->
+    NodeId = node_id(Key),
+    Unsigned = macula_record:procedure_advertisement(
+                 NodeId, Realm, Proc, Station, #{authorization => Authorization}),
+    try macula_record:refresh(Unsigned, Key, NotAfter)
+    catch Class:Why -> {error, {Class, Why}}
+    end.
 
 maybe_send_unadvertise(_Realm, _Proc, undefined, _S) ->
     ok;

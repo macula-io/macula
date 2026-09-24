@@ -383,8 +383,11 @@ do_call_station(Pool, Station, Target, Realm, Procedure, Payload, TimeoutMs, Opt
 %% the pool resolves its own D25 provider authorization — the
 %% realm-signed `org_directory' and the org-signed
 %% `procedure_delegation' that names the pool's node id, both fetched
-%% from the DHT — signs the advertisement, and sends it as an
-%% ADVERTISE frame to every link (replayed on link respawn). The
+%% from the DHT — verifies it against the pinned realm key, and hands
+%% every link the advertisement to sign: each link signs its own,
+%% naming the station it is connected to as `serving_station', and
+%% sends it as an ADVERTISE frame (signed again on reconnect and on
+%% link respawn, never past the chain's earlier expiry). The
 %% procedure must carry an org namespace, and the pool must run a
 %% provisioned identity whose delegation the org has published, and
 %% pin the realm's key (`realm_trust' at connect); a missing piece
@@ -405,8 +408,8 @@ advertise(Pool, Realm, Procedure, Handler, Opts)
   when is_pid(Pool), is_binary(Realm), byte_size(Realm) =:= 32 ->
     Policy = maps:get(auth, Opts, open),
     Advertise = maps:get(advertise, Opts, fun macula_client:advertise/6),
-    advertise_authorized(Pool, Realm, Procedure, Opts, fun(EncodedAd) ->
-        Advertise(Pool, Realm, Procedure, Handler, Policy, EncodedAd)
+    advertise_authorized(Pool, Realm, Procedure, Opts, fun(Spec) ->
+        Advertise(Pool, Realm, Procedure, Handler, Policy, Spec)
     end).
 
 %% @doc Stop advertising a procedure on a V2 pool.
@@ -1024,20 +1027,20 @@ advertise_stream(Pool, Realm, Procedure, Mode, Handler, Opts)
         orelse Mode =:= bidi),
        is_function(Handler, 2), is_map(Opts) ->
     Policy = maps:get(auth, Opts, open),
-    advertise_authorized(Pool, Realm, Procedure, Opts, fun(EncodedAd) ->
+    advertise_authorized(Pool, Realm, Procedure, Opts, fun(Spec) ->
         macula_client:advertise_stream(Pool, Realm, Procedure, Mode, Handler,
-                                       Policy, EncodedAd)
+                                       Policy, Spec)
     end).
 
 %% The provider-authorization resolution behind `advertise' and
 %% `advertise_stream': the pool's own D25 chain, fetched from the DHT,
 %% signed and verified before a single frame goes out. Any missing
-%% piece fails fast under `provider_authorization'.
+%% piece fails fast under `provider_authorization'. What reaches the
+%% pool is the advertisement spec, not the signed check: each link
+%% signs its own advertisement naming the station it is connected to,
+%% bounded by the chain (macula_station_link:advertisement_spec()).
 advertise_authorized(Pool, Realm, Procedure, Opts, Fun) ->
-    signed_provider_advertisement(Pool, Realm, Procedure, provider_io(Opts),
-                                  fun(Signed) ->
-                                      Fun(macula_record:encode(Signed))
-                                  end).
+    signed_provider_advertisement(Pool, Realm, Procedure, provider_io(Opts), Fun).
 
 %% @doc Resolve this pool's own D25 provider authorization for an
 %% org-namespaced `Procedure' under `Realm' — the realm-signed
@@ -1070,7 +1073,7 @@ provider_authorization(Pool, Realm, Procedure) ->
 provider_authorization(Pool, Realm, Procedure, Opts) ->
     case signed_provider_advertisement(Pool, Realm, Procedure,
                                        provider_io(Opts),
-                                       fun authorization_of/1) of
+                                       fun(#{authorization := A}) -> A end) of
         {error, _} = E -> E;
         Authorization -> {ok, Authorization}
     end.
@@ -1083,15 +1086,11 @@ provider_io(Opts) ->
       realm_key        => maps:get(realm_key, Opts,
                                    fun macula_client:realm_key/2)}.
 
-authorization_of(Signed) ->
-    #{authorization := Authorization} =
-        macula_record:read_procedure_advertisement(Signed),
-    Authorization.
-
 %% The pool's own D25 chain, resolved from the DHT, signed and verified
-%% against the realm key the pool pins, passed to `Fun' as the signed
-%% advertisement. Any missing piece fails fast under
-%% `provider_authorization'.
+%% against the realm key the pool pins, passed to `Fun' as the
+%% advertisement spec: the verified authorization and the bound no
+%% advertisement carrying it may pass. Any missing piece fails fast
+%% under `provider_authorization'.
 signed_provider_advertisement(Pool, Realm, Procedure, Io, Fun) ->
     case macula_record:procedure_org(Procedure) of
         none ->
@@ -1157,7 +1156,13 @@ sign_provider_advertisement(Io, Pool, Realm, Procedure, OrgDir, Deleg,
     case (maps:get(sign_node_record, Io))(Pool, Unsigned,
                                           #{not_after => NotAfter}) of
         {ok, Signed} ->
-            trusted_provider_advertisement(Io, Pool, Realm, Signed, Fun);
+            trusted_provider_advertisement(
+              Io, Pool, Realm, Signed,
+              fun(Verified) ->
+                  #{authorization := A} =
+                      macula_record:read_procedure_advertisement(Verified),
+                  Fun(#{authorization => A, not_after => NotAfter})
+              end);
         {error, _} = E ->
             {error, {provider_authorization, E}}
     end.

@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [12.3.0] - 2026-09-24
+
+Wire-compatible with 12.0, 12.1 and 12.2 in both directions: the ADVERTISE
+frame and the advertisement record are unchanged; what changes is the station
+the record names.
+
+### Fixed
+
+- A provider's advertisement names the station it was sent to. The facade
+  signed one advertisement with `serving_station` set to the provider's own
+  node id and every link sent that, so a direct-dialling caller looked up a
+  `station_endpoint` for the provider, found none, and failed as unresolved
+  while the provider was healthy. Each link now signs its own
+  advertisement per send, naming the station it is connected to, bounded by
+  the earlier expiry of the org directory and the delegation it carries; a
+  reconnect to another station, and a respawned link, sign again naming it.
+  Past the bound a link sends nothing and logs why. (#29)
+- `macula_client:unadvertise_stream/3` no longer crashes the pool. The
+  withdrawal read the stored stream registration as a unary one and failed on
+  its mode.
+- `macula_client:advertise/4,5` (a registration with no advertisement, as the
+  distribution pool makes) reaches every link's handler table again. The link
+  refused the `undefined` advertisement, so the handler was never registered
+  and the call answered `{error, no_healthy_station}`.
+
+### Added
+
+- `macula_client:advertise/6` and `advertise_stream/7` (and the matching
+  `macula_station_link` calls) accept an advertisement spec,
+  `#{authorization := map(), not_after := integer()}`
+  (`macula_station_link:advertisement_spec()`), which each link signs. A
+  pre-signed advertisement's wire form is still accepted and sent as it is.
+
 ## [12.2.1] - 2026-09-24
 
 Bug fixes. Wire-compatible with 12.0, 12.1 and 12.2 in both directions.
