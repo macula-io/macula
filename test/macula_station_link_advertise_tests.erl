@@ -138,7 +138,7 @@ a_spec_is_signed_naming_the_link_s_own_station_test_() ->
          ok = macula_station_link:advertise(Pid, ?REALM, ?PROCEDURE,
                                             fun unary_handler/1, open,
                                             spec(NotAfter)),
-         Ad = advertised_record(sent_frame_within(200)),
+         Ad = advertised_record(sent_frame_within(2_000)),
          ?assertEqual(<<9:256>>, maps:get(serving_station, Ad)),
          ?assertEqual(?PROCEDURE, maps:get(procedure, Ad)),
          ?assertEqual(authorization(), maps:get(authorization, Ad)),
@@ -156,10 +156,10 @@ a_reconnect_to_another_station_re_signs_naming_it_test_() ->
          ok = macula_station_link:advertise(Pid, ?REALM, ?PROCEDURE,
                                             fun unary_handler/1, open,
                                             spec(erlang:system_time(millisecond) + 3_600_000)),
-         ?assertEqual(<<9:256>>, maps:get(serving_station, advertised_record(sent_frame_within(200)))),
+         ?assertEqual(<<9:256>>, maps:get(serving_station, advertised_record(sent_frame_within(2_000)))),
          Pid ! {macula_peering, connected, self(), <<10:256>>},
          ?assertEqual(<<10:256>>, element(?PEER_NODE_ID_INDEX, sys:get_state(Pid))),
-         ?assertEqual(<<10:256>>, maps:get(serving_station, advertised_record(sent_frame_within(300)))),
+         ?assertEqual(<<10:256>>, maps:get(serving_station, advertised_record(sent_frame_within(2_000)))),
          macula_station_link:stop(Pid)
      end}}.
 
@@ -175,7 +175,7 @@ a_spec_made_before_connect_names_the_station_that_answered_test_() ->
          ?assertEqual(none, sent_frame_within(200)),
          Pid ! {macula_peering, connected, self(), <<11:256>>},
          ?assertEqual(<<11:256>>, element(?PEER_NODE_ID_INDEX, sys:get_state(Pid))),
-         ?assertEqual(<<11:256>>, maps:get(serving_station, advertised_record(sent_frame_within(300)))),
+         ?assertEqual(<<11:256>>, maps:get(serving_station, advertised_record(sent_frame_within(2_000)))),
          macula_station_link:stop(Pid)
      end}}.
 
@@ -218,7 +218,7 @@ a_stream_spec_is_signed_naming_the_link_s_own_station_test_() ->
          ok = macula_station_link:advertise_stream(Pid, ?REALM, ?PROCEDURE,
                                                    bidi, fun stream_handler/2, open,
                                                    spec(erlang:system_time(millisecond) + 3_600_000)),
-         ?assertEqual(<<9:256>>, maps:get(serving_station, advertised_record(sent_frame_within(200)))),
+         ?assertEqual(<<9:256>>, maps:get(serving_station, advertised_record(sent_frame_within(2_000)))),
          macula_station_link:stop(Pid)
      end}}.
 

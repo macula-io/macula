@@ -89,6 +89,14 @@
 %% `failure_scope/1' says what a call error means for trying the same request
 %% somewhere else.
 -module(macula_station_link).
+
+%% An advertisement spec (macula_station_link:advertisement_spec()), checked
+%% in a guard: anything else a caller passes as a map raises function_clause
+%% before a link or the pool keeps it.
+-define(IS_ADVERTISEMENT_SPEC(A),
+        (is_map(A) andalso is_integer(map_get(not_after, A))
+         andalso is_binary(map_get(org_directory, map_get(authorization, A)))
+         andalso is_binary(map_get(procedure_delegation, map_get(authorization, A))))).
 -behaviour(gen_server).
 
 %% What a call error says about trying the same request somewhere else. See
@@ -901,7 +909,7 @@ advertise(Pid, Realm, Procedure, Handler, Policy, EncodedAd)
        is_binary(Procedure),
        (is_function(Handler, 1) orelse
         (is_tuple(Handler) andalso tuple_size(Handler) =:= 2)),
-       (is_binary(EncodedAd) orelse is_map(EncodedAd)
+       (is_binary(EncodedAd) orelse ?IS_ADVERTISEMENT_SPEC(EncodedAd)
         orelse EncodedAd =:= undefined) ->
     gen_server:call(Pid, {advertise, Realm, Procedure, Handler, Policy,
                           EncodedAd}, 5_000).
@@ -1162,7 +1170,7 @@ advertise_stream(Pid, Realm, Procedure, Mode, Handler, Policy, EncodedAd)
        (Mode =:= server_stream orelse Mode =:= client_stream
         orelse Mode =:= bidi),
        is_function(Handler, 2),
-       (is_binary(EncodedAd) orelse is_map(EncodedAd)
+       (is_binary(EncodedAd) orelse ?IS_ADVERTISEMENT_SPEC(EncodedAd)
         orelse EncodedAd =:= undefined) ->
     ok = valid_policy(Policy),
     gen_server:call(Pid,

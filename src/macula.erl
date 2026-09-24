@@ -384,10 +384,14 @@ do_call_station(Pool, Station, Target, Realm, Procedure, Payload, TimeoutMs, Opt
 %% realm-signed `org_directory' and the org-signed
 %% `procedure_delegation' that names the pool's node id, both fetched
 %% from the DHT — verifies it against the pinned realm key, and hands
-%% every link the advertisement to sign: each link signs its own,
-%% naming the station it is connected to as `serving_station', and
-%% sends it as an ADVERTISE frame (signed again on reconnect and on
-%% link respawn, never past the chain's earlier expiry). The
+%% every link the advertisement spec: for each link the pool signs an
+%% advertisement naming the station that link is connected to as
+%% `serving_station', sent as an ADVERTISE frame (signed again on
+%% reconnect and on link respawn, never past the chain's earlier
+%% expiry). The frame registers the procedure at that station; it
+%% does not put a record in the DHT, which is what a direct-dialling
+%% caller resolves (`macula_response:advertise_direct/6,7' publishes
+%% that one). The
 %% procedure must carry an org namespace, and the pool must run a
 %% provisioned identity whose delegation the org has published, and
 %% pin the realm's key (`realm_trust' at connect); a missing piece

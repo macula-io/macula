@@ -10,21 +10,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [12.3.0] - 2026-09-24
 
 Wire-compatible with 12.0, 12.1 and 12.2 in both directions: the ADVERTISE
-frame and the advertisement record are unchanged; what changes is the station
-the record names.
+frame and the advertisement record are unchanged.
 
 ### Fixed
 
-- A provider's advertisement names the station it was sent to. The facade
-  signed one advertisement with `serving_station` set to the provider's own
-  node id and every link sent that, so a direct-dialling caller looked up a
-  `station_endpoint` for the provider, found none, and failed as unresolved
-  while the provider was healthy. Each link now has its pool sign an
-  advertisement per send (records a node signs about itself are still signed
-  in the pool only), naming the station the link is connected to, bounded by
-  the earlier expiry of the org directory and the delegation it carries; a
-  reconnect to another station, and a respawned link, sign again naming it.
-  Past the bound a link sends nothing and logs why. (#29)
+- The advertisement a provider's ADVERTISE frame carries names the station it
+  was sent to as `serving_station`. The facade signed one advertisement naming
+  the provider's own node id and every link sent it. Now the pool signs one per
+  link, naming the station that link is connected to, bounded by the earlier
+  expiry of the org directory and the delegation it carries (still signed in
+  the pool only); a reconnect to another station, and a respawned link, sign
+  again naming it. Past the bound a link sends nothing and logs why. No caller
+  sees a difference today: a station routes a CALL by the connection the
+  ADVERTISE arrived on and reads nothing else from it, and a direct-dialling
+  caller resolves the DHT record `macula_response:advertise_direct/6,7`
+  publishes, which already named the connected station. (#29)
 - `macula_client:unadvertise_stream/3` no longer crashes the pool. The
   withdrawal read the stored stream registration as a unary one and failed on
   its mode.
@@ -38,7 +38,8 @@ the record names.
 - `macula_client:advertise/6` and `advertise_stream/7` (and the matching
   `macula_station_link` calls) accept an advertisement spec,
   `#{authorization := map(), not_after := integer()}`
-  (`macula_station_link:advertisement_spec()`), which each link signs. A
+  (`macula_station_link:advertisement_spec()`), which the pool signs per link.
+  A map of any other shape raises `function_clause` in the caller. A
   pre-signed advertisement's wire form is still accepted and sent as it is.
 
 ## [12.2.1] - 2026-09-24

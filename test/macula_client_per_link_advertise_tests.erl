@@ -96,6 +96,34 @@ unadvertising_a_pre_signed_stream_keeps_the_pool_test_() ->
          ok = macula_client:close(Pool)
      end}.
 
+%% A map that is not an advertisement spec is refused in the caller,
+%% before the pool stores it: stored, it would crash every link on
+%% every handshake.
+a_malformed_spec_is_refused_before_the_pool_keeps_it_test_() ->
+    {timeout, 10,
+     fun() ->
+         Pool = pool(),
+         Handler = fun(_) -> {ok, counted} end,
+         Stream = fun(_, _) -> ok end,
+         Bad = [#{}, #{authorization => #{}, not_after => 1},
+                #{authorization => #{org_directory => <<"d">>, procedure_delegation => <<"p">>},
+                  not_after => soon}],
+         [?assertError(function_clause,
+                       macula_client:advertise(Pool, ?REALM, ?PROCEDURE, Handler, open, B))
+          || B <- Bad],
+         [?assertError(function_clause,
+                       macula_client:advertise_stream(Pool, ?REALM, ?PROCEDURE, bidi, Stream, open, B))
+          || B <- Bad],
+         {ok, [#{pid := Link} | _]} = macula_client:links(Pool),
+         [?assertError(function_clause,
+                       macula_station_link:advertise(Link, ?REALM, ?PROCEDURE, Handler, open, B))
+          || B <- Bad],
+         [?assertError(function_clause,
+                       macula_station_link:advertise_stream(Link, ?REALM, ?PROCEDURE, bidi, Stream, open, B))
+          || B <- Bad],
+         ok = macula_client:close(Pool)
+     end}.
+
 %% A registration with no advertisement (the local-only form the
 %% distribution pool uses) still reaches every link's handler table.
 a_registration_without_an_advertisement_reaches_every_link_test_() ->
