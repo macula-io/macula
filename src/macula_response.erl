@@ -83,7 +83,10 @@
 
 -optional_callbacks([terminate/2]).
 
--define(CALL_TIMEOUT, 30_000).
+%% How long a response waits for its handler: `handler_timeout_ms', 30 s by
+%% default, and never past the 600 s a caller may wait for any call.
+-define(DEFAULT_HANDLER_TIMEOUT_MS, 30_000).
+-define(MAX_HANDLER_TIMEOUT_MS, 600_000).
 -define(REQUEST_RECEIVED, <<"rpc.received_v1">>).
 -define(REQUEST_REPLIED, <<"rpc.replied_v1">>).
 
@@ -95,6 +98,7 @@
 -type advertise_opts() :: #{advertise => advertise(),
                             publish_advertisement => publish_advertisement(),
                             fact_publish => macula_lifetime_announcer:publish(),
+                            handler_timeout_ms => 1..600_000,
                             atom() => term()}.
 
 -record(rstate, {
@@ -118,7 +122,11 @@ advertise(Pool, Realm, Procedure, Module, Args) ->
     advertise(Pool, Realm, Procedure, Module, Args, #{}).
 
 %% @doc As `advertise/5'. `Opts' may include `announce' (default
-%% `true'), `auth' (forwarded to `macula:advertise/5'), and
+%% `true'), `auth' (forwarded to `macula:advertise/5'),
+%% `handler_timeout_ms' — how long to wait for the handler before the caller
+%% is answered `temporary_relay_failure', an integer from 1 to 600000,
+%% default 30000; anything else is refused as
+%% `{error, {invalid_handler_timeout_ms, Value}}' — and
 %% `reuse_sup' — an existing supervisor pid (as returned by a prior
 %% `advertise/5,6' call) to register the handler again with, without
 %% starting a new factory supervisor. Use this for a periodic
@@ -128,17 +136,26 @@ advertise(Pool, Realm, Procedure, Module, Args) ->
 -spec advertise(macula:pool(), macula:realm(), macula:procedure(),
                 module(), term(), advertise_opts()) -> {ok, pid()} | {error, term()}.
 advertise(Pool, Realm, Procedure, Module, Args, Opts) when is_map(Opts) ->
+    advertise_within(handler_timeout(maps:get(handler_timeout_ms, Opts, ?DEFAULT_HANDLER_TIMEOUT_MS)),
+                     Pool, Realm, Procedure, Module, Args, Opts).
+
+advertise_within({ok, Timeout}, Pool, Realm, Procedure, Module, Args, Opts) ->
     Advertise = arity_5(maps:get(advertise, Opts, fun macula:advertise/5)),
     FactPublish = arity_4(maps:get(fact_publish, Opts, fun macula:publish/4)),
     Sup = existing_or_new_sup(maps:get(reuse_sup, Opts, undefined)),
     Announce = maps:get(announce, Opts, true),
     Handler = fun(Payload) ->
-        dispatch(Sup, Module, Pool, Realm, Announce, FactPublish, Args, Payload)
+        dispatch(Sup, Module, Pool, Realm, Announce, FactPublish, Args, Payload, Timeout)
     end,
     case Advertise(Pool, Realm, Procedure, Handler, without_functions(Opts)) of
         ok -> {ok, Sup};
         {error, Reason} -> {error, Reason}
-    end.
+    end;
+advertise_within({error, _} = Refused, _Pool, _Realm, _Procedure, _Module, _Args, _Opts) ->
+    Refused.
+
+handler_timeout(Ms) when is_integer(Ms), Ms >= 1, Ms =< ?MAX_HANDLER_TIMEOUT_MS -> {ok, Ms};
+handler_timeout(Other) -> {error, {invalid_handler_timeout_ms, Other}}.
 
 %% A `reuse_sup' pid from a caller's prior `advertise/6' call can have
 %% died since (e.g. the caller itself crashed and, being linked to the
@@ -238,10 +255,10 @@ log_publish_result({error, Reason}, Procedure) ->
 unadvertise(Pool, Realm, Procedure) ->
     macula:unadvertise(Pool, Realm, Procedure).
 
-dispatch(Sup, Module, Pool, Realm, Announce, FactPublish, Args, Payload) ->
+dispatch(Sup, Module, Pool, Realm, Announce, FactPublish, Args, Payload, Timeout) ->
     Child = [Module, Pool, Realm, Announce, FactPublish, Args, Payload],
     case supervisor:start_child(Sup, Child) of
-        {ok, Pid} -> gen_server:call(Pid, run, ?CALL_TIMEOUT);
+        {ok, Pid} -> gen_server:call(Pid, run, Timeout);
         {error, Reason} -> {error, Reason}
     end.
 
@@ -318,5 +335,7 @@ arity_4(Fun) when is_function(Fun, 4) -> Fun.
 
 arity_5(Fun) when is_function(Fun, 5) -> Fun.
 
+%% The options that are this node's own business: the functions, and the
+%% handler timeout, which bounds this node's wait on its handler.
 without_functions(Opts) ->
-    maps:without([advertise, publish_advertisement, fact_publish], Opts).
+    maps:without([advertise, publish_advertisement, fact_publish, handler_timeout_ms], Opts).

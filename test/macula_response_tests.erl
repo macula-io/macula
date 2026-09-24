@@ -26,7 +26,10 @@ handle_request(#{a := A, b := B}, State) ->
 handle_request(#{boom := true}, _State) ->
     error(boom);
 handle_request(bad, State) ->
-    {error, invalid_payload, State}.
+    {error, invalid_payload, State};
+handle_request(#{sleep := Ms}, State) ->
+    timer:sleep(Ms),
+    {reply, slept, State}.
 
 %%%===================================================================
 %%% Advertise and publish functions
@@ -69,7 +72,38 @@ response_test_() ->
                  fun reuse_sup_resends_advertise_without_a_new_supervisor/0,
                  fun reuse_sup_with_a_dead_pid_starts_a_fresh_supervisor/0,
                  fun without_an_advertise_function_it_advertises_through_macula/0,
-                 fun an_advertise_option_that_is_not_an_arity_5_fun_is_refused/0]].
+                 fun an_advertise_option_that_is_not_an_arity_5_fun_is_refused/0,
+                 fun a_handler_slower_than_its_timeout_fails/0,
+                 fun a_handler_within_a_longer_timeout_answers_its_reply/0,
+                 fun the_handler_timeout_stays_with_the_response/0,
+                 fun a_handler_timeout_out_of_range_is_refused/0]].
+
+%% #25: the handler timeout was a fixed 30 s, so a handler that needed longer
+%% had its success reported to the caller as temporary_relay_failure. It is an
+%% advertise option now. Small values stand in for the real ones here.
+a_handler_slower_than_its_timeout_fails() ->
+    {ok, _Sup} = advertise((functions(self()))#{handler_timeout_ms => 50}),
+    {Handler, _} = next_advertised(),
+    ?assertExit({timeout, _}, Handler(#{sleep => 300})).
+
+a_handler_within_a_longer_timeout_answers_its_reply() ->
+    {ok, _Sup} = advertise((functions(self()))#{handler_timeout_ms => 2000}),
+    {Handler, _} = next_advertised(),
+    ?assertEqual({ok, slept}, Handler(#{sleep => 300})).
+
+%% It bounds this node's own wait on its handler; the station is not told.
+the_handler_timeout_stays_with_the_response() ->
+    {ok, _Sup} = advertise((functions(self()))#{handler_timeout_ms => 2000, announce => false}),
+    {_Handler, Advertised} = next_advertised(),
+    ?assertEqual(#{announce => false}, Advertised).
+
+%% A caller waits at most 600 s for any call, so a longer handler timeout would
+%% only hide the failure somewhere else.
+a_handler_timeout_out_of_range_is_refused() ->
+    [?assertEqual({error, {invalid_handler_timeout_ms, V}},
+                  advertise((functions(self()))#{handler_timeout_ms => V}))
+     || V <- [0, -1, 600_001, 1.5, infinity]],
+    ?assertEqual(none, receive {advertised, _, _} -> advertised after 0 -> none end).
 
 %% A station's wire-level registration for a procedure is tied to the
 %% connection that sent it, and does not survive that connection being
