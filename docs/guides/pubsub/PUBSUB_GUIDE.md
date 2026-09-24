@@ -126,6 +126,19 @@ delivering `outcome => cancelled` in the `pubsub.publish_completed_v1`
 mesh fact — same shape as `macula_feeder`'s `sharing.put_started_v1` /
 `sharing.put_completed_v1`.
 
+`start_link/5,6` returns as soon as the publisher is running. The start
+announcement and the publish follow, so the caller never waits on the pool.
+With the defaults, each publish costs three frames: the payload and the two
+announcements. A publisher that sends many facts, such as telemetry, passes
+`announce => false` to `start_link/7` and sends only the payload.
+
+A subscriber ends when its subscription ends. That is `macula_event_gone`
+when the pool closes cleanly, or `{pool_down, Reason}` when the pool process
+dies without saying so, because it was killed or taken down by a link. Both
+are abnormal exits, so a supervisor restarts the subscriber against the pool
+that is current. A process that calls `macula:subscribe/4,5` itself should
+monitor the pool the same way.
+
 Unlike `macula_subscriber`, `macula_publisher:start_link/6`'s last argument
 is `Args` (for `Module:init/1`) — there's no way to pass `macula:publish/5`'s
 own `Opts` (e.g. `timeout_ms`) through the wrapper. See

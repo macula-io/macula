@@ -18,7 +18,9 @@
 %%%
 %%% `start_link/7' takes two functions in its options: `publish', the one
 %%% it publishes `Payload' with, and `fact_publish', the one it announces
-%%% its facts with. Both are called as `Publish(Pool, Realm, Topic,
+%%% its facts with. Its `announce' option (default `true') switches the
+%%% two announcements off, for a publisher whose facts are many and whose
+%%% every extra frame counts. Both are called as `Publish(Pool, Realm, Topic,
 %%% Payload)' and default to `macula:publish/4'. A test gives its own
 %%% functions this way instead of replacing the `macula' module.
 %%%
@@ -48,7 +50,7 @@
 
 -export([start_link/5, start_link/6, start_link/7]).
 -export([cancel/1]).
--export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
+-export([init/1, handle_continue/2, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
 -export_type([publish/0, start_opts/0]).
 
@@ -63,7 +65,8 @@
 
 -type publish() :: fun((macula:pool(), macula:realm(), macula:topic(), term()) ->
                           ok | {error, term()}).
--type start_opts() :: #{publish => publish(), fact_publish => publish()}.
+-type start_opts() :: #{publish => publish(), fact_publish => publish(),
+                        announce => boolean()}.
 
 -record(pstate, {
     module       :: module(),
@@ -72,7 +75,7 @@
     announce     :: boolean(),
     fact_publish :: publish(),
     publish_id   :: binary(),
-    worker       :: pid(),
+    worker       :: pid() | undefined,
     completed    :: boolean(),
     user         :: term()
 }).
@@ -97,9 +100,14 @@ start_link(Module, Pool, Realm, Topic, Payload, Args) ->
 start_link(Module, Pool, Realm, Topic, Payload, Args, Opts) when is_map(Opts) ->
     Publish = publish_function(publish, Opts),
     FactPublish = publish_function(fact_publish, Opts),
+    Announce = announce(maps:get(announce, Opts, true)),
     gen_server:start_link(?MODULE,
-                          {Module, Pool, Realm, Topic, Payload, true, Args,
+                          {Module, Pool, Realm, Topic, Payload, Announce, Args,
                            Publish, FactPublish}, []).
+
+%% Whether the publisher announces its start and completion as mesh facts.
+%% Anything but a boolean is refused with function_clause, in the caller.
+announce(Announce) when is_boolean(Announce) -> Announce.
 
 %% The options' function under Key, or macula:publish/4 without one. One
 %% that is not an arity 4 fun is refused with function_clause, in the
@@ -120,21 +128,29 @@ cancel(Pid) -> gen_server:stop(Pid).
 %%%===================================================================
 
 %% @private
+%% The start announcement and the publish happen in handle_continue/2, after
+%% start_link has returned: announcing inside init/1 made the caller wait a
+%% pool round trip before its own publish had even begun.
 init({Module, Pool, Realm, Topic, Payload, Announce, InitArgs, Publish, FactPublish}) ->
     process_flag(trap_exit, true),
     case Module:init(InitArgs) of
         {ok, UserState} ->
-            PublishId = crypto:strong_rand_bytes(16),
-            publish(FactPublish, Announce, Pool, Realm, ?PUBLISH_STARTED,
-                    #{publish_id => PublishId, topic => Topic}),
-            Worker = spawn_worker(Publish, Pool, Realm, Topic, Payload),
             {ok, #pstate{module = Module, pool = Pool, realm = Realm,
                         announce = Announce, fact_publish = FactPublish,
-                        publish_id = PublishId,
-                        worker = Worker, completed = false, user = UserState}};
+                        publish_id = crypto:strong_rand_bytes(16),
+                        completed = false, user = UserState},
+             {continue, {publish, Publish, Topic, Payload}}};
         {stop, Reason} ->
             {stop, Reason}
     end.
+
+%% @private
+handle_continue({publish, Publish, Topic, Payload},
+                #pstate{pool = Pool, realm = Realm, announce = Announce,
+                        fact_publish = FactPublish, publish_id = PublishId} = State) ->
+    publish(FactPublish, Announce, Pool, Realm, ?PUBLISH_STARTED,
+            #{publish_id => PublishId, topic => Topic}),
+    {noreply, State#pstate{worker = spawn_worker(Publish, Pool, Realm, Topic, Payload)}}.
 
 spawn_worker(Publish, Pool, Realm, Topic, Payload) ->
     Parent = self(),
@@ -165,6 +181,10 @@ deliver({noreply, NewUser}, State) -> {noreply, State#pstate{user = NewUser}};
 deliver({stop, Reason, NewUser}, State) -> {stop, Reason, State#pstate{user = NewUser}}.
 
 %% @private
+%% Stopped before the publish began (its start announcement failed): nothing
+%% ran, so nothing completed.
+terminate(_Reason, #pstate{worker = undefined}) ->
+    ok;
 terminate(_Reason, #pstate{worker = Worker, completed = true}) ->
     unlink(Worker),
     exit(Worker, kill),

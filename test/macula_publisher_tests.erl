@@ -54,7 +54,47 @@ publisher_test_() ->
                  fun failure_still_announces_completion/0,
                  fun cancel_before_publish_resolves_announces_cancelled/0,
                  fun without_publish_functions_it_announces_through_macula/0,
-                 fun a_publish_option_that_is_not_an_arity_4_fun_is_refused/0]].
+                 fun a_publish_option_that_is_not_an_arity_4_fun_is_refused/0,
+                 fun without_announcements_a_publish_is_one_frame/0,
+                 fun start_link_does_not_wait_for_the_announcement/0,
+                 fun an_announce_option_that_is_not_a_boolean_is_refused/0]].
+
+%% #27: announcements could not be switched off, so every fact cost three
+%% frames. A telemetry publisher wants one.
+without_announcements_a_publish_is_one_frame() ->
+    process_flag(trap_exit, true),
+    Test = self(),
+    Publish = fun(_Pool, _Realm, Topic, Payload) -> Test ! {publish, Topic, Payload}, ok end,
+    {ok, _Pid} = macula_publisher:start_link(?MODULE, pool, ?REALM, ?TOPIC, #{x => 1}, self(),
+                                             #{publish => Publish, fact_publish => facts_to(Test),
+                                               announce => false}),
+    ?assertEqual({published, ok}, wait_published()),
+    ?assertEqual({publish, ?TOPIC, #{x => 1}}, receive {publish, _, _} = P -> P after 0 -> none end),
+    ?assertEqual(no_fact, next_fact()).
+
+%% #27: the started announcement went out inside init/1, so start_link waited a
+%% pool round trip before the publish it was asked for had even begun.
+start_link_does_not_wait_for_the_announcement() ->
+    process_flag(trap_exit, true),
+    Test = self(),
+    %% The start announcement blocks until released; the completion does not.
+    Blocking = fun(_Pool, _Realm, <<"pubsub.publish_started_v1">> = Topic, _Payload) ->
+                       Test ! {announcing, Topic},
+                       receive go -> ok after 5_000 -> ok end;
+                  (_Pool, _Realm, _Topic, _Payload) ->
+                       ok
+               end,
+    {ok, Pid} = macula_publisher:start_link(?MODULE, pool, ?REALM, ?TOPIC, #{x => 1}, self(),
+                                            #{publish => answering(ok), fact_publish => Blocking}),
+    ?assertEqual({announcing, <<"pubsub.publish_started_v1">>},
+                 receive {announcing, _} = A -> A after 1000 -> not_announcing end),
+    Pid ! go,
+    ?assertEqual({published, ok}, wait_published()).
+
+an_announce_option_that_is_not_a_boolean_is_refused() ->
+    ?assertError(function_clause,
+                 macula_publisher:start_link(?MODULE, pool, ?REALM, ?TOPIC, #{x => 1}, self(),
+                                             #{announce => no})).
 
 successful_publish_reports_completed() ->
     process_flag(trap_exit, true),
@@ -88,11 +128,16 @@ cancel_before_publish_resolves_announces_cancelled() ->
 
 %% Without publish functions the publisher announces with
 %% macula:publish/4, which passes a pool that is not a process on to
-%% macula_pubsub:publish/5, whose guard refuses it.
+%% macula_pubsub:publish/5, whose guard refuses it. The announcement is made
+%% after start_link has returned, so the publisher exits with it.
 without_publish_functions_it_announces_through_macula() ->
     process_flag(trap_exit, true),
-    ?assertMatch({error, {function_clause, [{macula_pubsub, publish, _, _} | _]}},
-                 macula_publisher:start_link(?MODULE, pool, ?REALM, ?TOPIC, #{x => 1}, self())).
+    {ok, Pid} = macula_publisher:start_link(?MODULE, pool, ?REALM, ?TOPIC, #{x => 1}, self()),
+    receive
+        {'EXIT', Pid, Reason} ->
+            ?assertMatch({function_clause, [{macula_pubsub, publish, _, _} | _]}, Reason)
+    after 1000 -> ?assert(false)
+    end.
 
 a_publish_option_that_is_not_an_arity_4_fun_is_refused() ->
     ?assertError(function_clause,
