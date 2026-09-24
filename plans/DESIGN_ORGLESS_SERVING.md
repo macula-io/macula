@@ -3,7 +3,8 @@
 This exists so an org-less node (an MCP agent, a CLI) can serve a procedure on the macula 12 mesh, which today
 only a node holding an org's delegation can do.
 
-Status: options for Raf's decision, 2026-09-24. Venus and Mercurius. macula-mcp is held on 12 until this is decided
+Status: **decided by Raf on 2026-09-24: option 4 for the protocol (the self-authorizing `~<hex(node_id)>/<name>`
+namespace), and option 1 (rooms over pubsub) now.** Venus and Mercurius. macula-mcp is held on 12 until this is decided
 (Raf, 2026-09-24). Code read against macula e3fb3518 and macula-station b2cb203.
 
 ## Where things stand
@@ -85,7 +86,14 @@ binaries), never the chain, and a direct ADVERTISE replaces the single registry 
 junk bytes. Callers refuse replies not signed by their target (`macula_frame:verify_reply/3` → `not_the_target`),
 so this is a denial of service, not impersonation. Filed as macula-station#10, for 0.6.3.
 
-## Decision asked of Raf
+## Decision
 
-1. Option 4 for org-less serving (SDK + station release + D25 amendment), with option 1 for rooms now?
-2. Or option 3 only (no protocol change, a join-flow change), accepting that callers must pin the realm key?
+Raf, 2026-09-24: **(a) option 4 plus rooms over pubsub.**
+
+- The SDK side is built after macula 12.4.0: the facade accepts a `~<hex(own node_id)>/<name>` procedure without an
+  authorization, and a caller trusts that form only when the advertisement's signer is the node the namespace names.
+  Fixtures are shared with macula-go.
+- The two station admissions change with Mars. Per-node caps (macula-station#6) apply, so a node cannot flood the
+  registry through its own namespace. It ships in or after macula-station 0.6.3, and does not delay 0.6.3's security
+  fix (macula-station#10).
+- D25 is amended (the wording is reviewed by Raf, as D25 is a decision record).
