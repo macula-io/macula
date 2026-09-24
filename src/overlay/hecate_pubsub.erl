@@ -311,14 +311,6 @@ process(State, _From, _Frame) ->
 on_subscribe(#{realm := R} = State,
              #{realm := Eventr, topic := T, subscriber := Sub})
   when Eventr =:= R ->
-    %% [mpong-trace] temporary — diagnose state_broadcast_v1 routing.
-    case T of
-        <<"io.macula/beam-campus/hecate/mpong/", Suffix/binary>> ->
-            SubHex = binary:encode_hex(binary:part(Sub, 0, 6)),
-            logger:info("[mpong-trace] on_subscribe topic=mpong/~s sub=~s",
-                        [Suffix, SubHex]);
-        _ -> ok
-    end,
     {subscribe(State, T, Sub), []};
 on_subscribe(State, _Frame) ->
     {State, []}.

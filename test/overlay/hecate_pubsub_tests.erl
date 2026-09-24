@@ -4,6 +4,9 @@
 
 -include_lib("eunit/include/eunit.hrl").
 
+%% A logger handler that forwards every event to the test process.
+-export([log/2]).
+
 %%---------------------------------------------------------------------
 %% Construction + inspection
 %%---------------------------------------------------------------------
@@ -134,6 +137,36 @@ process_subscribe_frame_records_test() ->
     Sub = id(7),
     {S1, []} = hecate_pubsub:process(new(R), Sub, subscribe_frame(R, <<"t">>, Sub)),
     ?assert(hecate_pubsub:is_subscribed(S1, <<"t">>, Sub)).
+
+%% A subscription is recorded, not logged: this runs for every SUBSCRIBE a
+%% station relays. A temporary per-topic info trace for the retired
+%% beam-campus/hecate mpong topics logged about 400 lines an hour at each
+%% station, long after anything published there.
+process_subscribe_logs_nothing_test() ->
+    R = realm(),
+    Sub = id(7),
+    Logged = capture_logs(fun() ->
+        hecate_pubsub:process(new(R), Sub,
+                              subscribe_frame(R, <<"io.macula/beam-campus/hecate/mpong/state_broadcast_v1">>, Sub))
+    end),
+    ?assertEqual([], Logged).
+
+log(Event, #{config := #{test := Pid}}) -> Pid ! {logged, Event}.
+
+capture_logs(Fun) ->
+    #{level := Level} = logger:get_primary_config(),
+    ok = logger:set_primary_config(level, all),
+    ok = logger:add_handler(capture, ?MODULE, #{level => all, config => #{test => self()}}),
+    try
+        _ = Fun(),
+        drain_logs()
+    after
+        logger:remove_handler(capture),
+        logger:set_primary_config(level, Level)
+    end.
+
+drain_logs() ->
+    receive {logged, #{msg := Msg}} -> [Msg | drain_logs()] after 100 -> [] end.
 
 process_subscribe_for_wrong_realm_is_ignored_test() ->
     R1 = realm(),

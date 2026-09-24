@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### Removed
+
+- The temporary `[mpong-trace]` info logging in the overlay pubsub
+  (`hecate_pubsub:on_subscribe`, `hecate_pubsub_server`'s relay). It traced the
+  retired `io.macula/beam-campus/hecate/mpong/*_v1` topics and logged about 400
+  lines an hour at every station, long after anything published there.
+
 ## [12.2.0] - 2026-09-24
 
 Additive and wire-compatible with 12.0 and 12.1 in both directions: nothing

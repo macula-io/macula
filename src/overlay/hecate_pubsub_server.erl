@@ -282,19 +282,11 @@ do_relay_publish(_Frame, _S) ->
 
 relayed({ok, #{realm := R, topic := Topic}}, Frame, #state{realm = R} = S) ->
     Matched = hecate_pubsub:subscribers(S#state.pubsub, Topic),
-    trace_mpong(Topic, Matched),
     {hecate_pubsub:build_event(Frame, direct), Matched};
 relayed({ok, _AnotherRealm}, _Frame, _S) ->
     {error, realm_mismatch};
 relayed({error, _} = Refusal, _Frame, _S) ->
     Refusal.
-
-%% [mpong-trace] temporary: diagnose state_broadcast_v1 routing
-%% (see project_mpong_state_broadcast_bug memory). Remove after fix.
-trace_mpong(<<"io.macula/beam-campus/hecate/mpong/", Suffix/binary>>, Matched) ->
-    logger:info("[mpong-trace] do_relay_publish topic=mpong/~s matched=~p", [Suffix, length(Matched)]);
-trace_mpong(_Topic, _Matched) ->
-    ok.
 
 handle_cast(_Msg, S) ->
     {noreply, S}.
