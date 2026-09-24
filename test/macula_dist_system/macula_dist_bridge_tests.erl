@@ -226,7 +226,7 @@ bridge_metrics_updated_on_tunnel_in_test() ->
     ?assertEqual(byte_size(Plaintext), counters:get(Metrics, 2)),
     ?assertEqual(1, counters:get(Metrics, 4)),
 
-    exit(Bridge, kill),
+    ok = stopped(Bridge, kill),
     try gen_tcp:close(BridgeSockB) catch _:_ -> ok end,
     stop_mock_pool(MockPool),
     flush_exits(),
@@ -328,14 +328,7 @@ setup_bridge() ->
 teardown_bridge(#{bridge := Bridge, mock_pool := MockPool,
                   bridge_sock_peer := BridgeSockB}) ->
     try gen_tcp:close(BridgeSockB) catch _:_ -> ok end,
-    MonRef = monitor(process, Bridge),
-    try exit(Bridge, shutdown) catch _:_ -> ok end,
-    receive
-        {'DOWN', MonRef, process, Bridge, _} -> ok
-    after 2000 ->
-        try exit(Bridge, kill) catch _:_ -> ok end,
-        receive {'DOWN', MonRef, process, Bridge, _} -> ok after 1000 -> ok end
-    end,
+    ok = stopped(Bridge, shutdown),
     stop_mock_pool(MockPool),
     persistent_term:erase(macula_dist_tunnels),
     %% Flush any EXIT messages from linked processes
@@ -345,6 +338,28 @@ teardown_bridge(#{bridge := Bridge, mock_pool := MockPool,
 %%%===================================================================
 %%% Helpers
 %%%===================================================================
+
+%% Stop a process linked to this one and consume ITS exit signal before
+%% returning, so the caller may switch `trap_exit' off afterwards. exit/2
+%% returns before the process dies, and a `flush_exits/0' that ran before the
+%% signal landed left it in flight: with `trap_exit' then off, an exit signal
+%% with reason `killed' killed the eunit process itself (#22: 5 runs in 200
+%% cancelled with ::killed, and no assertion failed). Waiting for a 'DOWN' is
+%% not enough either: this process is linked, and it is the link's signal
+%% that kills. So wait for the link's own `{'EXIT', Pid, _}', which arrives
+%% as a message only while `trap_exit' is on. Escalates to `kill' if a polite
+%% reason is ignored, and fails loudly if the process will not die.
+stopped(Pid, Reason) ->
+    _ = process_flag(trap_exit, true),
+    exit(Pid, Reason),
+    receive
+        {'EXIT', Pid, _} -> ok
+    after 2000 ->
+        exit(Pid, kill),
+        receive {'EXIT', Pid, _} -> ok
+        after 1000 -> error({still_alive, Pid})
+        end
+    end.
 
 flush_exits() ->
     receive
