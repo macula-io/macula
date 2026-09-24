@@ -19,8 +19,9 @@ the record names.
   signed one advertisement with `serving_station` set to the provider's own
   node id and every link sent that, so a direct-dialling caller looked up a
   `station_endpoint` for the provider, found none, and failed as unresolved
-  while the provider was healthy. Each link now signs its own
-  advertisement per send, naming the station it is connected to, bounded by
+  while the provider was healthy. Each link now has its pool sign an
+  advertisement per send (records a node signs about itself are still signed
+  in the pool only), naming the station the link is connected to, bounded by
   the earlier expiry of the org directory and the delegation it carries; a
   reconnect to another station, and a respawned link, sign again naming it.
   Past the bound a link sends nothing and logs why. (#29)

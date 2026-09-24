@@ -117,7 +117,9 @@ a_registration_without_an_advertisement_reaches_every_link_test_() ->
 
 pool() ->
     {ok, _} = application:ensure_all_started(macula),
-    {ok, Pool} = macula_client:connect(?SEEDS, #{}),
+    {ok, Profile} = macula_crypto_profile:configured(),
+    {ok, Key} = macula_node_keys:generate(identity, Profile),
+    {ok, Pool} = macula_client:connect(?SEEDS, #{node_identity => Key}),
     Pool.
 
 spec() ->

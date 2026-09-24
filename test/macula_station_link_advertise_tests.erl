@@ -192,6 +192,24 @@ a_spec_past_its_bound_sends_nothing_test_() ->
          macula_station_link:stop(Pid)
      end}}.
 
+%% A node's records are signed in its pool only: a link started with no
+%% pool has no one to sign a spec and sends nothing.
+a_spec_on_a_link_without_a_pool_sends_nothing_test_() ->
+    {spawn, {timeout, 5,
+     fun() ->
+         {ok, _} = application:ensure_all_started(macula),
+         {ok, Pid} = macula_station_link:start_link(maps:remove(pool, with_link_keys(#{
+             seed => #{host => <<"127.0.0.1">>, port => 1}, connect_timeout_ms => 2000}))),
+         Peer = self(),
+         _ = sys:replace_state(Pid, fun(S) -> setelement(?PEER_PID_INDEX, S, Peer) end),
+         _ = sys:replace_state(Pid, fun(S) -> setelement(?PEER_NODE_ID_INDEX, S, <<9:256>>) end),
+         ok = macula_station_link:advertise(Pid, ?REALM, ?PROCEDURE,
+                                            fun unary_handler/1, open,
+                                            spec(erlang:system_time(millisecond) + 3_600_000)),
+         ?assertEqual(none, sent_frame_within(300)),
+         macula_station_link:stop(Pid)
+     end}}.
+
 %% The streaming path takes the same spec.
 a_stream_spec_is_signed_naming_the_link_s_own_station_test_() ->
     {spawn, {timeout, 5,
@@ -237,7 +255,9 @@ with_link_keys(Opts) ->
     %% A link also starts with a request admission and its share in it.
     {ok, Admission} = macula_request_admission:start_link(#{caller_quota => 256, share => 1024, cap => 46080,
                                                              reply_bytes => 262144, reply_bytes_total => 16777216}),
-    Opts#{node_identity => fun() -> Key end, issuer => Issuer, admission => Admission,
+    %% A link signs its advertisements through its pool, which holds the same node identity.
+    {ok, Pool} = macula_client:connect([], #{node_identity => Key}),
+    Opts#{node_identity => fun() -> Key end, issuer => Issuer, admission => Admission, pool => Pool,
           share => {seed, {<<"127.0.0.1">>, 1}}, expected_node_id => <<1:256>>}.
 
 %% A link whose peering connection is this process, not yet connected.

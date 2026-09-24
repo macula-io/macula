@@ -886,8 +886,8 @@ advertise(Pid, Realm, Procedure, Handler,
 
 %% @doc As `advertise/5', sending the resolved provider advertisement
 %% as an ADVERTISE frame. `Ad' is either a pre-signed advertisement's
-%% wire form, sent as it is, or an advertisement spec the link signs
-%% with its node key each time it sends, naming the station it is
+%% wire form, sent as it is, or an advertisement spec the link has its
+%% pool sign each time it sends, naming the station it is
 %% connected to as `serving_station' (a pool of several links, and a
 %% reconnect to another station, each get an advertisement naming their
 %% own station). The link stores it (for the handshake drain) and sends
@@ -1611,6 +1611,10 @@ handle_info(attempt_connect, #state{seed = Seed, node_identity = Key, issuer = I
         controlling_pid => self()
     },
     after_connect_request(Connect(PeeringOpts), S);
+
+handle_info({advertisement_signed, Key, Spec, Station, Signed}, S) ->
+    on_advertisement_signed(Key, Spec, Station, Signed, S),
+    {noreply, S};
 
 handle_info({macula_peering, connected, Pid, PeerNodeId},
             #state{peer_pid = Pid} = S) ->
@@ -2491,34 +2495,54 @@ maybe_send_advertise(_Realm, _Proc, _EncodedAd, #state{peer_node_id = undefined}
 maybe_send_advertise(_Realm, _Proc, EncodedAd, #state{peer_pid = Pid})
   when is_binary(EncodedAd) ->
     send_advertise(Pid, EncodedAd);
-maybe_send_advertise(Realm, Proc, Spec, #state{peer_pid = Pid} = S) ->
-    send_signed_advertise(Realm, Proc, signed_advertisement(Realm, Proc, Spec, S), Pid).
+maybe_send_advertise(Realm, Proc, Spec, #state{peer_node_id = Station} = S) ->
+    sign_advertisement(Realm, Proc, Spec, Station, S).
 
 send_advertise(Pid, EncodedAd) ->
     Frame = macula_frame:advertise(#{advertisement => EncodedAd}),
     try macula_peering:send_frame(Pid, Frame) catch _:_ -> ok end,
     ok.
 
-send_signed_advertise(_Realm, _Proc, {ok, Signed}, Pid) ->
-    send_advertise(Pid, macula_record:encode(Signed));
-send_signed_advertise(Realm, Proc, {error, Reason}, _Pid) ->
-    logger:warning("[macula_station_link] advertisement of ~ts in realm ~ts not sent: ~p",
-                 [Proc, binary:encode_hex(Realm), Reason]),
+%% The advertisement this link sends for a spec names the station this
+%% link is connected to, and is bounded by the spec's `not_after' (the
+%% earlier expiry of the chain it carries), so it never outlives its
+%% authorization. A record a node signs about itself is signed in its
+%% pool's process only (macula_record_signing_custody_tests), so the
+%% link asks the pool, from a worker: the pool may be inside a call to
+%% this link (its advertise fan-out) and never waits on the signing.
+%% The worker hands the result back as `{advertisement_signed, ...}',
+%% sent only while the spec is still registered and the link is still
+%% connected to the station it names.
+sign_advertisement(Realm, Proc, _Spec, _Station, #state{pool = undefined}) ->
+    not_sent(Realm, Proc, no_pool);
+sign_advertisement(Realm, Proc, #{authorization := Authorization, not_after := NotAfter} = Spec,
+                   Station, #state{pool = Pool, node_identity = Key}) ->
+    Link = self(),
+    Unsigned = macula_record:procedure_advertisement(
+                 node_id(Key), Realm, Proc, Station, #{authorization => Authorization}),
+    _ = spawn(fun() ->
+            Signed = try macula_client:sign_node_record(Pool, Unsigned, #{not_after => NotAfter})
+                     catch Class:Why -> {error, {Class, Why}}
+                     end,
+            Link ! {advertisement_signed, {Realm, Proc}, Spec, Station, Signed}
+        end),
     ok.
 
-%% The advertisement this link sends for a spec: signed now with the
-%% link's node key, naming the station this link is connected to, and
-%% bounded by the spec's `not_after' (the earlier expiry of the chain it
-%% carries), so it never outlives its authorization. Past the bound
-%% there is nothing to send: any verifier would refuse it.
-signed_advertisement(Realm, Proc, #{authorization := Authorization, not_after := NotAfter},
-                     #state{node_identity = Key, peer_node_id = Station}) ->
-    NodeId = node_id(Key),
-    Unsigned = macula_record:procedure_advertisement(
-                 NodeId, Realm, Proc, Station, #{authorization => Authorization}),
-    try macula_record:refresh(Unsigned, Key, NotAfter)
-    catch Class:Why -> {error, {Class, Why}}
-    end.
+not_sent(Realm, Proc, Reason) ->
+    logger:warning("[macula_station_link] advertisement of ~ts in realm ~ts not sent: ~p",
+                   [Proc, binary:encode_hex(Realm), Reason]),
+    ok.
+
+%% A signed advertisement goes out only if what it answers still
+%% stands: the same spec registered, the same station connected.
+on_advertisement_signed({Realm, Proc}, _Spec, _Station, {error, Reason}, _S) ->
+    not_sent(Realm, Proc, Reason);
+on_advertisement_signed(Key, Spec, Station, {ok, Signed},
+                        #state{advertisements = Ads, peer_node_id = Station, peer_pid = Pid})
+  when is_pid(Pid), map_get(Key, Ads) =:= Spec ->
+    send_advertise(Pid, macula_record:encode(Signed));
+on_advertisement_signed(_Key, _Spec, _Station, {ok, _Signed}, _S) ->
+    ok.
 
 maybe_send_unadvertise(_Realm, _Proc, undefined, _S) ->
     ok;

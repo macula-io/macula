@@ -145,6 +145,7 @@ expires_at_of(Keys, Spec) ->
 link_signed(#{key := Key}, Spec, Station) ->
     {ok, _} = application:ensure_all_started(macula),
     {ok, Issuer} = macula_statement_issuer_sup:start_issuer(fun() -> Key end, self()),
+    {ok, Pool} = macula_client:connect([], #{node_identity => Key}),
     {ok, Admission} = macula_request_admission:start_link(
                         #{caller_quota => 256, share => 1024, cap => 46080,
                           reply_bytes => 262144, reply_bytes_total => 16777216}),
@@ -152,7 +153,7 @@ link_signed(#{key := Key}, Spec, Station) ->
                    #{seed => #{host => <<"127.0.0.1">>, port => 1},
                      connect_timeout_ms => 2000,
                      node_identity => fun() -> Key end, issuer => Issuer,
-                     admission => Admission,
+                     admission => Admission, pool => Pool,
                      share => {seed, {<<"127.0.0.1">>, 1}},
                      expected_node_id => <<1:256>>}),
     Peer = self(),
@@ -168,6 +169,7 @@ link_signed(#{key := Key}, Spec, Station) ->
               after 1_000 -> error(no_advertise_frame)
               end,
     macula_station_link:stop(Link),
+    ok = macula_client:close(Pool),
     {ok, Profile} = macula_crypto_profile:configured(),
     {ok, Decoded} = macula_record:verify(Encoded, Profile),
     Decoded.
