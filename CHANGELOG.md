@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [12.2.0] - 2026-09-24
+
+Additive and wire-compatible with 12.0 and 12.1 in both directions: nothing
+here changes a frame.
+
+### Added
+
+- `macula_response:advertise/6` takes `handler_timeout_ms`: how long a
+  response waits for its handler before the caller is answered
+  `temporary_relay_failure`, 1 to 600000 ms (the longest any caller waits),
+  default 30000. It was a fixed 30 s, so a handler that needed longer had its
+  success reported to the caller as a failure while it went on and finished.
+  Anything else is refused as `{error, {invalid_handler_timeout_ms, Value}}`.
+  It bounds this node's own wait and is not sent to the station. (#25)
+- `macula_publisher:start_link/7` takes `announce => false`, which publishes
+  the payload alone, without `pubsub.publish_started_v1` and
+  `pubsub.publish_completed_v1`: one frame per fact instead of three. (#27)
+
+### Changed
+
+- `macula_publisher:start_link/5,6,7` returns as soon as the publisher runs.
+  The start announcement and the publish follow in `handle_continue/2`; the
+  announcement used to be sent from `init/1`, so the caller waited a pool round
+  trip before its publish had begun. A publisher whose start announcement
+  fails now exits after `start_link` has returned `{ok, Pid}`, instead of
+  `start_link` returning `{error, _}`. (#27)
+
+### Fixed
+
+- A `macula_subscriber` ends when its pool dies without saying so. The pool
+  sends `macula_event_gone` only from its `terminate/2`, so a pool that was
+  killed, or taken down by a link, left the subscriber alive, subscribed to
+  nothing and looking healthy. It monitors the pool and stops with
+  `{pool_down, Reason}`, an abnormal exit its supervisor restarts.
+  `macula_pubsub:subscribe_callback/4`'s receiver ends with its pool too. A
+  process that calls `macula:subscribe/4,5` itself should monitor the pool the
+  same way. (#26)
+
 ## [12.1.0] - 2026-09-23
 
 ### Added
