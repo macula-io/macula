@@ -139,7 +139,8 @@ event_meta(#{realm := Realm, publisher := Publisher, seq := Seq,
 %% callback for every inbound event. The receiver monitors the
 %% caller; if the caller dies, the receiver follows and the
 %% subscription is cleaned up by the pool's standard subscriber-DOWN
-%% path.
+%% path. It monitors the pool too, and ends when the pool dies: a pool
+%% that is killed sends no `macula_event_gone'.
 %%
 %% A crashing callback does NOT kill the receiver — the exception is
 %% logged and the next event is delivered. This is intentional: a
@@ -178,25 +179,28 @@ await_init(Receiver, Mon) ->
     end.
 
 receiver_init(Caller, Pool, Realm, Topic, Callback) ->
-    CallerMon = erlang:monitor(process, Caller),
+    Mons = {erlang:monitor(process, Caller), erlang:monitor(process, Pool)},
     on_subscribe(macula_client:subscribe(Pool, Realm, Topic, self(), #{}),
-                 Caller, CallerMon, Callback).
+                 Caller, Mons, Callback).
 
-on_subscribe({ok, SubRef}, Caller, CallerMon, Callback) ->
+on_subscribe({ok, SubRef}, Caller, Mons, Callback) ->
     Caller ! {?MODULE, started, self(), SubRef},
-    receiver_loop(SubRef, CallerMon, Callback);
-on_subscribe({error, _} = E, Caller, CallerMon, _Callback) ->
+    receiver_loop(SubRef, Mons, Callback);
+on_subscribe({error, _} = E, Caller, {CallerMon, PoolMon}, _Callback) ->
     Caller ! {?MODULE, failed, self(), E},
-    erlang:demonitor(CallerMon, [flush]).
+    erlang:demonitor(CallerMon, [flush]),
+    erlang:demonitor(PoolMon, [flush]).
 
-receiver_loop(SubRef, CallerMon, Callback) ->
+receiver_loop(SubRef, {CallerMon, PoolMon} = Mons, Callback) ->
     receive
         {macula_event, SubRef, Topic, Payload, Meta} ->
             invoke(Callback, Topic, Payload, Meta),
-            receiver_loop(SubRef, CallerMon, Callback);
+            receiver_loop(SubRef, Mons, Callback);
         {macula_event_gone, SubRef, _Reason} ->
             ok;
         {'DOWN', CallerMon, process, _, _} ->
+            ok;
+        {'DOWN', PoolMon, process, _Pool, _Reason} ->
             ok
     end.
 

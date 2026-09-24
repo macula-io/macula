@@ -14,6 +14,14 @@
 %%% arrives as a `Module:handle_event/4' call against state your module
 %%% owns and threads itself.
 %%%
+%%% == When the subscription ends ==
+%%%
+%%% The subscriber stops with the pool's reason on `macula_event_gone', and
+%%% with `{pool_down, Reason}' when the pool process dies without sending it
+%%% (killed, or taken down by a link). Both are abnormal exits, so a supervisor
+%%% restarts it against whatever pool is current. A process that calls
+%%% `macula:subscribe/4,5' itself should monitor the pool the same way.
+%%%
 %%% == Subscribe function ==
 %%%
 %%% `start_link/6' takes `subscribe' in its options: the function the
@@ -70,9 +78,10 @@
 -type start_opts() :: #{subscribe => subscribe(), atom() => term()}.
 
 -record(sstate, {
-    module  :: module(),
-    sub_ref :: term(),
-    user    :: term()
+    module   :: module(),
+    sub_ref  :: term(),
+    pool_mon :: reference(),
+    user     :: term()
 }).
 
 %% @doc Start a subscriber. Subscribes `Module' to `(Realm, Topic)' on
@@ -113,10 +122,15 @@ init({Module, Pool, Realm, Topic, Args, Subscribe, Opts}) ->
             {stop, Reason}
     end.
 
+%% The pool is monitored once the subscription is held: it says
+%% `macula_event_gone' only from its terminate/2, and a pool that is killed,
+%% or dies from a link while not trapping exits, says nothing. Without the
+%% monitor the subscriber would stay alive, subscribed to nothing.
 subscribe(Subscribe, Module, Pool, Realm, Topic, Opts, UserState) ->
     case Subscribe(Pool, Realm, Topic, self(), Opts) of
         {ok, SubRef} ->
-            {ok, #sstate{module = Module, sub_ref = SubRef, user = UserState}};
+            {ok, #sstate{module = Module, sub_ref = SubRef,
+                         pool_mon = erlang:monitor(process, Pool), user = UserState}};
         {error, Reason} ->
             {stop, Reason}
     end.
@@ -135,6 +149,8 @@ handle_info({macula_event, SubRef, Topic, Payload, Meta},
     dispatch(Module:handle_event(Topic, Payload, Meta, User), State);
 handle_info({macula_event_gone, SubRef, Reason}, #sstate{sub_ref = SubRef} = State) ->
     {stop, Reason, State};
+handle_info({'DOWN', Mon, process, _Pool, Reason}, #sstate{pool_mon = Mon} = State) ->
+    {stop, {pool_down, Reason}, State};
 handle_info(_Msg, State) ->
     {noreply, State}.
 

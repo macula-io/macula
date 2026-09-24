@@ -45,8 +45,15 @@ subscribed(Test) ->
 %% start_link/6 links the caller, so a test whose subscriber exits with
 %% a non-normal reason sets trap_exit itself, first thing in the test.
 start_subscriber(Opts) ->
-    macula_subscriber:start_link(?MODULE, pool, ?REALM, ?TOPIC, self(),
+    start_subscriber(pool(), Opts).
+
+start_subscriber(Pool, Opts) ->
+    macula_subscriber:start_link(?MODULE, Pool, ?REALM, ?TOPIC, self(),
                                  Opts#{subscribe => subscribed(self())}).
+
+%% A process standing in for the pool: the subscriber watches it.
+pool() ->
+    spawn(fun() -> receive stop -> ok end end).
 
 %%%===================================================================
 %%% Tests
@@ -61,7 +68,26 @@ subscriber_test_() ->
                  fun init_stop_propagates/0,
                  fun the_subscribe_function_gets_the_other_options/0,
                  fun without_a_subscribe_function_it_subscribes_through_macula/0,
-                 fun a_subscribe_option_that_is_not_an_arity_5_fun_is_refused/0]].
+                 fun a_subscribe_option_that_is_not_an_arity_5_fun_is_refused/0,
+                 fun stops_when_the_pool_dies_without_saying_so/0]].
+
+%% #26: the pool says macula_event_gone only from its terminate/2. One that is
+%% killed, or dies from a link while not trapping exits, says nothing, and the
+%% subscriber used to stay alive, subscribed to nothing, looking healthy.
+stops_when_the_pool_dies_without_saying_so() ->
+    process_flag(trap_exit, true),
+    Pool = pool(),
+    {ok, Pid} = start_subscriber(Pool, #{}),
+    Ref = monitor(process, Pid),
+    exit(Pool, kill),
+    receive
+        {'DOWN', Ref, process, Pid, {pool_down, killed}} -> ok
+    after 1000 -> ?assert(false)
+    end,
+    receive
+        {terminated, {pool_down, killed}} -> ok
+    after 1000 -> ?assert(false)
+    end.
 
 receives_events_and_threads_state() ->
     {ok, Pid} = start_subscriber(#{}),
@@ -104,13 +130,14 @@ init_stop_propagates() ->
                                               #{subscribe => Refusing})).
 
 the_subscribe_function_gets_the_other_options() ->
-    {ok, Pid} = start_subscriber(#{delivery => at_least_once}),
+    Pool = pool(),
+    {ok, Pid} = start_subscriber(Pool, #{delivery => at_least_once}),
     Subscribed = receive
                      {subscribed, _, _, _, _, _} = Call -> Call
                  after 1000 ->
                      nothing_subscribed
                  end,
-    ?assertEqual({subscribed, pool, ?REALM, ?TOPIC, Pid, #{delivery => at_least_once}},
+    ?assertEqual({subscribed, Pool, ?REALM, ?TOPIC, Pid, #{delivery => at_least_once}},
                  Subscribed),
     ok = gen_server:stop(Pid).
 

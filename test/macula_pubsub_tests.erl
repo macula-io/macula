@@ -114,6 +114,31 @@ subscribe_callback_swallows_callback_crash_test_() ->
          ok = macula_client:close(Pool)
      end}.
 
+%% #26: a pool that is killed sends no macula_event_gone. The receiver watched
+%% only its caller, so it waited for events forever.
+subscribe_callback_receiver_ends_when_the_pool_is_killed_test_() ->
+    {timeout, 5,
+     fun() ->
+         process_flag(trap_exit, true),
+         {ok, _} = application:ensure_all_started(macula),
+         {ok, Pool} = macula_client:connect([], #{}),
+         Before = callback_receivers(),
+         {ok, _SubRef} = macula_pubsub:subscribe_callback(
+                            Pool, ?REALM, <<"cb.pool_killed_v1">>, fun(_, _, _) -> ok end),
+         [Receiver] = callback_receivers() -- Before,
+         Ref = monitor(process, Receiver),
+         exit(Pool, kill),
+         receive
+             {'DOWN', Ref, process, Receiver, _} -> ok
+         after 2_000 -> erlang:error(receiver_outlived_its_pool)
+         end
+     end}.
+
+%% The processes waiting in a callback receiver's loop.
+callback_receivers() ->
+    [P || P <- processes(),
+          {current_function, {macula_pubsub, receiver_loop, _}} <- [process_info(P, current_function)]].
+
 subscribe_callback_rejects_wrong_arity_test() ->
     {ok, _} = application:ensure_all_started(macula),
     {ok, Pool} = macula_client:connect([], #{}),
