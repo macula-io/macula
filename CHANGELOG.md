@@ -7,7 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [Unreleased]
+## [12.2.1] - 2026-09-24
+
+Bug fixes. Wire-compatible with 12.0, 12.1 and 12.2 in both directions.
+
+### Fixed
+
+- A handler's `{error, Reason}` reaches the caller as `{error, Detail}`, the
+  handler's own reason. The provider answered it with code `unknown_error`,
+  while a caller unwraps only `handler_error` (as the reply table in
+  `macula_station_link` documents), so every handler's refusal reached a
+  caller as an opaque provider error that looked like a platform fault. The
+  provider now sends `handler_error`. A caller that meets an older provider's
+  `unknown_error` decodes it as before. (#28)
 
 ### Removed
 
