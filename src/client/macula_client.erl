@@ -121,7 +121,8 @@
 -export([select_publish_targets/2, safe_link_publish/5]).
 %% Station discovery selection math — exported for direct testing, same
 %% rationale as `select_publish_targets/2' above.
--export([ordered_for_selection/2, select_discovery_seeds/3, station_seed/1, seed_peer/1]).
+-export([ordered_for_selection/2, select_discovery_seeds/3, station_seed/1, station_seeds/1,
+         find_list_stations_realm/2, seed_peer/1]).
 %% A state field's position in the state tuple, by name, for the key redaction tests.
 -export([state_field_index/1]).
 %% How a pool call moves from one link to the next, over any links and
@@ -267,14 +268,15 @@
     %% every key is well formed for the node's crypto profile.
     realm_trust        => #{<<_:256>> => binary()},
 
-    %% Opt-in dynamic station discovery via `hecate_stations.list_stations'
-    %% (the mesh's canonical station directory). Absent, or
+    %% Opt-in dynamic station discovery via the station directory's
+    %% `list_stations' (`mcl-stations/list_stations' unless `procedure'
+    %% names another). Absent, or
     %% `#{enabled => false}': the pool behaves exactly as before this
     %% option existed -- `Seeds' is the whole story, forever. Enabled:
     %% `Seeds' becomes the BOOTSTRAP list (unchanged meaning -- dialled
     %% first, and the permanent fallback if discovery never succeeds).
     %% Once a bootstrap link connects, the pool resolves which realm
-    %% `hecate_stations.list_stations' is advertised under (a DHT lookup;
+    %% the directory's procedure is advertised under (a DHT lookup;
     %% there is no way to know its realm without asking first) and calls
     %% it; every station it returns that isn't already a link gets one
     %% (up to `max_links'), replayed with current subs/advertises exactly
@@ -288,6 +290,11 @@
     %% opted in.
     station_discovery => #{
         enabled    => boolean(),
+        %% The directory's org-namespaced procedure. Default
+        %% `mcl-stations/list_stations'; a name without an org namespace
+        %% is refused at connect, `{station_discovery, {procedure, P}}'.
+        %% Every station it lists is dialled pinned to its `node_id'.
+        procedure  => binary(),
         %% Re-run discovery on this cadence, and opportunistically the
         %% moment every currently-held link goes unhealthy at once
         %% (independent of the timer -- that's exactly the moment "the
@@ -441,12 +448,15 @@
 %% `no_healthy_station' back and retries on the next refresh tick, same
 %% as any other transient failure.
 -define(INITIAL_DISCOVERY_DELAY_MS, 500).
-%% `hecate_stations.list_stations' is a plain mesh RPC; this timeout
+%% The station directory's `list_stations' is a plain mesh RPC; this timeout
 %% belongs to the discovery worker only, an ordinary call deadline. The
 %% `_dht.find_records_by_type' lookup half of discovery uses `macula.erl'
 %% own `?DHT_RECORD_TIMEOUT_MS' internally.
 -define(DISCOVERY_CALL_TIMEOUT_MS, 5_000).
--define(LIST_STATIONS_PROCEDURE, <<"hecate_stations.list_stations">>).
+%% The station directory's procedure, unless `station_discovery''s
+%% `procedure' names another: mcl-stations serves it (hecate_stations,
+%% which served `hecate_stations.list_stations', is retired).
+-define(DEFAULT_LIST_STATIONS_PROCEDURE, <<"mcl-stations/list_stations">>).
 
 %% A discovered station nobody chose -- unlike a hand-configured seed,
 %% it is safe to give up on one that never once connects and free its
@@ -521,7 +531,8 @@
     max_links       :: pos_integer(),
     timer           :: reference() | undefined,
     giveup_after_ms :: pos_integer(),
-    giveup_sweep_ms :: pos_integer()
+    giveup_sweep_ms :: pos_integer(),
+    procedure       :: binary()
 }).
 
 -record(sub_spec, {
@@ -1223,9 +1234,28 @@ init({Seeds, Opts}) ->
 %% every org namespaced advertisement of its realm untrusted without saying why. A key well formed for the other
 %% profile is refused by its own name.
 init_within_realm_trust(none, Seeds, Opts) ->
-    init_within_link_limits(link_limit_outside_its_range(Opts), Seeds, Opts);
+    init_within_discovery(discovery_refusal(maps:get(station_discovery, Opts, #{})), Seeds, Opts);
 init_within_realm_trust(Refusal, _Seeds, _Opts) ->
     {error, Refusal}.
+
+%% A discovery procedure is a served procedure, so it has an org namespace
+%% (D25); one without could never be advertised, and a pool discovering
+%% nothing forever would look like a directory with no stations.
+init_within_discovery(none, Seeds, Opts) ->
+    init_within_link_limits(link_limit_outside_its_range(Opts), Seeds, Opts);
+init_within_discovery(Refusal, _Seeds, _Opts) ->
+    {error, Refusal}.
+
+discovery_refusal(#{procedure := Procedure}) ->
+    discovery_procedure_refusal(procedure_org(Procedure), Procedure);
+discovery_refusal(_Default) ->
+    none.
+
+procedure_org(Procedure) when is_binary(Procedure) -> macula_record:procedure_org(Procedure);
+procedure_org(_NotABinary)                         -> none.
+
+discovery_procedure_refusal({org, _Org}, _Procedure) -> none;
+discovery_procedure_refusal(_NoOrg, Procedure)      -> {station_discovery, {procedure, Procedure}}.
 
 realm_trust_refusal(#{realm_trust := Trust}) when is_map(Trust) ->
     {ok, Profile} = macula_crypto_profile:configured(),
@@ -1432,7 +1462,8 @@ init_discovery(#{enabled := true} = Opts) ->
         max_links       = maps:get(max_links, Opts, ?DEFAULT_DISCOVERY_MAX_LINKS),
         timer           = undefined,
         giveup_after_ms = maps:get(giveup_after_ms, Opts, ?DEFAULT_DISCOVERY_GIVEUP_MS),
-        giveup_sweep_ms = maps:get(giveup_sweep_ms, Opts, ?DEFAULT_DISCOVERY_GIVEUP_SWEEP_MS)
+        giveup_sweep_ms = maps:get(giveup_sweep_ms, Opts, ?DEFAULT_DISCOVERY_GIVEUP_SWEEP_MS),
+        procedure       = maps:get(procedure, Opts, ?DEFAULT_LIST_STATIONS_PROCEDURE)
     };
 init_discovery(_NotEnabled) ->
     undefined.
@@ -1644,7 +1675,7 @@ handle_call(_Req, _From, S) ->
     {reply, {error, unknown_call}, S}.
 
 %% Delivered by the discovery worker (`run_station_discovery/1') after a
-%% successful `hecate_stations.list_stations' call, as raw
+%% successful `list_stations' call, as raw
 %% `[{Seed, NodeId}]' pairs -- NOT pre-deduped or pre-capped (the worker
 %% only knows the seeds/links at spawn time, so all of that has to
 %% happen here, against the pool's actual current state, not a stale
@@ -1688,9 +1719,9 @@ handle_info(run_discovery, #state{discovery = undefined} = S) ->
     %% Disabled after being scheduled (should not happen -- discovery
     %% is fixed at connect/2 time today) or a stray message. No-op.
     {noreply, S};
-handle_info(run_discovery, #state{discovery = D} = S) ->
+handle_info(run_discovery, #state{discovery = #discovery_state{procedure = Procedure} = D} = S) ->
     Self = self(),
-    _ = spawn(fun() -> run_station_discovery(Self) end),
+    _ = spawn(fun() -> run_station_discovery(Self, Procedure) end),
     {noreply, schedule_discovery(D#discovery_state.refresh_ms, S)};
 
 handle_info(dedup_sweep, S) ->
@@ -2725,10 +2756,10 @@ add_usable_discovered_seeds(Stations, #state{discovery = D, links = Links,
 %% left, in `NewSeeds' order.
 %%
 %% Comparison is by NORMALIZED `{host, port}' (via `normalize_seed/1'),
-%% not raw seed term equality: real bootstrap seeds are `https://...'
-%% (every live deployment config), discovery always builds `quic://...'
-%% (`seed_url/2') -- as plain strings those never compare equal for the
-%% identical physical station. `MaxLinks - length(ExistingSeeds)' relies
+%% not raw seed term equality: a bootstrap seed may be a URL or a map,
+%% and discovery always builds a pinned `#{host, port, expected_node_id}'
+%% map -- as raw terms those never compare equal for the identical
+%% physical station. `MaxLinks - length(ExistingSeeds)' relies
 %% on `ExistingSeeds' containing no duplicate STATIONS (only possible
 %% if the caller passes a raw, non-deduped union -- `sets:size/1' is
 %% used for the actual room count precisely to stay correct even then).
@@ -2913,88 +2944,42 @@ give_up_on(Seed, Pid, Mon, #state{links = Links, dial_extra_opts = Opts} = S) ->
 
 %% Runs in a spawned worker (never the pool gen_server — the DHT lookup
 %% + `list_stations' call are ordinary blocking RPCs with real network
-%% round trips). Failure at any step (DHT lookup, `hecate_stations' not
+%% round trips). Failure at any step (DHT lookup, the directory not
 %% currently advertised, the `list_stations' call itself) leaves the
 %% pool exactly as it was; the next refresh tick tries again. This is
 %% the fallback Raf's brief asked for: it falls out of "a failed
 %% discovery attempt is just a no-op" rather than needing its own
 %% special-cased error path.
-run_station_discovery(Pool) ->
+run_station_discovery(Pool, Procedure) ->
     Type = macula_record:type_procedure_advertisement(),
-    resolve_realm_and_list(macula:find_records_by_type(Pool, Type), Pool).
+    resolve_realm_and_list(macula:find_records_by_type(Pool, Type), Pool, Procedure).
 
-resolve_realm_and_list({ok, Records}, Pool) ->
-    list_stations_with_realm(find_list_stations_realm(Records), Pool);
-resolve_realm_and_list({error, _Reason}, _Pool) ->
+resolve_realm_and_list({ok, Records}, Pool, Procedure) ->
+    list_stations_with_realm(find_list_stations_realm(Records, Procedure), Pool, Procedure);
+resolve_realm_and_list({error, _Reason}, _Pool, _Procedure) ->
     ok.
 
-%% `procedure_advertisement' is a mesh-wide DHT record type: ANY
-%% identity can `_dht.put_record' one (the station's only gate is
-%% `macula_record:verify/1', a signature/envelope check with no URI
-%% shape validation), so unlike `hecate_stations.list_stations''s own
-%% RESULT payload (first-party, this pool's own already-authenticated
-%% call), this SET is not trusted input. A single malformed record
-%% anywhere in the DHT view must not crash the whole discovery pass --
-%% pre-filter to the shape `read_procedure_advertisement/1' actually
-%% expects before calling it, and make every parsing step below total.
-find_list_stations_realm(Records) ->
+%% `procedure_advertisement' is a mesh-wide DHT record type any identity
+%% can put, so this set is untrusted input: a malformed record must not
+%% crash the discovery pass. Only well-formed advertisements are read, and
+%% the directory's realm is the `realm_id' of the one whose `procedure' is
+%% the configured discovery procedure. The call that follows goes through
+%% the facade, which checks that advertisement's authorization chain
+%% against the realm key the pool pins before trusting it.
+-spec find_list_stations_realm([term()], binary()) -> {ok, <<_:256>>} | error.
+find_list_stations_realm(Records, Procedure) ->
     Type = macula_record:type_procedure_advertisement(),
-    WellFormed = [R || R = #{type := T, payload := P} <- Records,
-                       T =:= Type, is_map(P)],
-    Advertisements = [macula_record:read_procedure_advertisement(R) || R <- WellFormed],
-    case lists:filtermap(fun realm_for_list_stations/1, Advertisements) of
-        [Realm | _] -> {ok, Realm};
-        []          -> error
-    end.
+    Realms = [Realm || #{type := T, payload := P} = R <- Records, T =:= Type, is_map(P),
+                       #{procedure := Proc, realm_id := Realm} <- [macula_record:read_procedure_advertisement(R)],
+                       Proc =:= Procedure, is_binary(Realm), byte_size(Realm) =:= 32],
+    first_realm(Realms).
 
-%% `procedure_uri' is `<64 hex realm>/<procedure>' (see
-%% `macula_record.erl''s own storage_key/1 doc). Exact-match the
-%% procedure segment -- `advertise_direct' publishes a SECOND, distinct
-%% record naming a `_/'-prefixed procedure for the direct-dial path;
-%% this deliberately only matches the plain, gossip-routed one, since
-%% discovery calls through the pool's own already-established links,
-%% not direct-dial. Same filter macula-mcp's `mesh_list_stations' tool
-%% already uses (`mesh_stations.ts'), the reference this was ported from.
-%% `binary:split/3' with `[global]' yields 3+ segments for the `_/'
-%% variant (and for any procedure name that itself contains a `/'), so
-%% the 2-element pattern below rejects both without misparsing either.
-realm_for_list_stations(#{procedure_uri := Uri}) when is_binary(Uri) ->
-    match_procedure_uri(binary:split(Uri, <<"/">>, [global]));
-realm_for_list_stations(_) ->
-    false.
+first_realm([Realm | _]) -> {ok, Realm};
+first_realm([])          -> error.
 
-match_procedure_uri([RealmHex, ?LIST_STATIONS_PROCEDURE]) ->
-    realm_from_hex(RealmHex);
-match_procedure_uri(_) ->
-    false.
-
-%% Total over any peer-suppliable `RealmHex': a right-sized-but-non-hex
-%% value would otherwise reach `binary:decode_hex/1' and `badarg' --
-%% caught, not guarded against up front, since validating hex-ness
-%% without a regex is awkward in pure guards. `try...catch', not a bare
-%% `catch Expr' (deprecated, a hard compile failure under a consumer's
-%% own `warnings_as_errors' -- see the commit replacing 12 other sites
-%% of this same pattern earlier today).
-realm_from_hex(Hex) when is_binary(Hex), byte_size(Hex) =:= 64 ->
-    valid_realm(decode_hex_safe(Hex));
-realm_from_hex(_Hex) ->
-    false.
-
-decode_hex_safe(Hex) ->
-    try binary:decode_hex(Hex)
-    catch _:_ -> invalid
-    end.
-
-valid_realm(Bin) when is_binary(Bin), byte_size(Bin) =:= 32 ->
-    {true, Bin};
-valid_realm(_NotAValidRealm) ->
-    false.
-
-list_stations_with_realm({ok, Realm}, Pool) ->
-    report_discovered(macula:call(Pool, Realm, ?LIST_STATIONS_PROCEDURE,
-                                  #{}, ?DISCOVERY_CALL_TIMEOUT_MS),
-                      Pool);
-list_stations_with_realm(error, _Pool) ->
+list_stations_with_realm({ok, Realm}, Pool, Procedure) ->
+    report_discovered(macula:call(Pool, Realm, Procedure, #{}, ?DISCOVERY_CALL_TIMEOUT_MS), Pool);
+list_stations_with_realm(error, _Pool, _Procedure) ->
     ok.
 
 report_discovered({ok, Payload}, Pool) ->
@@ -3012,7 +2997,7 @@ report_discovered({error, _Reason}, _Pool) ->
 %% arriving as the atom `station' — already-atomized here — while
 %% `hostname'/`city' values from the very same record stayed binaries —
 %% never pre-declared atoms — is the exact, previously-hit bug this
-%% guards). `quic_port'/`host_advertised' are `hecate_stations'' own
+%% guards). `quic_port'/`host_advertised' are the directory's own
 %% atoms, not declared anywhere in this SDK's own source, so they are
 %% NOT guaranteed to already exist in an arbitrary caller's VM — hand-
 %% rolled atom-keyed pattern matching against this reply would be
@@ -3035,103 +3020,32 @@ station_seed(Station) when is_map(Station) ->
 station_seed(_) ->
     false.
 
-%% `hostname' -- the DNS name the station's own TLS certificate actually
-%% covers -- is preferred whenever present, unchanged from before this
-%% station ever had a fallback: it dials under the pool's normal
-%% default (WebPKI), keeping full TLS-layer MITM resistance for the
-%% common case (every fleet station checked so far has a working
-%% hostname except one, deliberately -- see below).
-%%
-%% Only when a row has NO `hostname' at all does this fall back to
-%% `host_advertised' (a bare IP literal -- checked live, every entry in
-%% this fleet is a raw IPv6 address, never a DNS name) dialled under
-%% Pinned trust: `expected_node_id' set to the row's own `node_id',
-%% no TLS certificate pin is possible for a bare
-%% IP to validate against WebPKI-style -- trust is enforced entirely at
-%% the application layer, via the handshake's signed
-%% `node_id', exactly the mode the peering layer
-%% documents for "TLS terminated by a PKI unrelated to its macula
-%% identity". Requires a `node_id' to pin against -- without one there
-%% is nothing safe to authenticate a bare IP with, so it is skipped
-%% exactly like a station with neither field at all.
-%%
-%% This priority (hostname first, IP+Pinned only as a genuine fallback)
-%% was a deliberate choice, not the only one considered: a station's
-%% `node_id' is present on essentially every row regardless of whether
-%% it also has a working hostname, so a "prefer IP+Pinned whenever a
-%% node_id exists" rule (checked directly against a real, independent,
-%% already-shipped implementation of exactly that priority) would also
-%% work mechanically -- live-verified against this exact fleet, dialing
-%% an ordinary Let's-Encrypt-backed station by its bare IP under Pinned
-%% trust connects just as cleanly as dialing it by hostname. It was
-%% rejected as the DEFAULT ordering specifically because it means every
-%% station's dial loses TLS-layer verification (`macula_quic' itself
-%% logs "vulnerable to MITM ... outside development" for this mode),
-%% not just the ones that genuinely have no other option -- a much
-%% larger blast radius for no benefit to the common case, which already
-%% has a perfectly good hostname to dial through WebPKI.
-%%
-%% UPDATE (2026-09-05): the producer-side bug this section originally
-%% described is fixed (`macula_station_app:hostname_or_default/1',
-%% deleted -- an unconfigured `geo.hostname' is now genuinely omitted,
-%% not defaulted to the OS hostname). That fix alone is NOT sufficient
-%% to make Toronto's row actually change, though, per a second
-%% Fable review: `hecate_stations'' own read model
-%% (`station_read_model:upsert_node_record/1') is read-modify-write --
-%% a fresh announcement with `hostname' genuinely absent does not
-%% clear an ALREADY-PERSISTED `hostname' value from a prior (buggy)
-%% announcement, it only ever ADDS a field, never removes one. Toronto
-%% announced "station-ca-toronto" under the old bug for a while, so
-%% its existing `hecate_stations' doc likely still carries that value
-%% until either a tombstone/retire cycle runs or `hecate_stations'
-%% own upsert semantics change to make an announcer's record
-%% authoritative for its own optional fields -- a separate, not-yet-
-%% decided fix in a different service. This function is NOT the thing
-%% to check for whether Toronto is actually reachable yet -- query
-%% `hecate_stations.list_stations' directly and look at the real row.
-%% This clause is still correct and worth keeping regardless: it is
-%% exactly right for ANY row that genuinely has no `hostname' at all
-%% (the `kind = daemon' rows already look like this), independent of
-%% whichever specific station eventually clears its stale record.
-seed_from_fields(Hostname, _HostAdvertised, Port, NodeId)
-  when is_binary(Hostname), byte_size(Hostname) > 0, is_integer(Port) ->
-    {true, {seed_url(unwrap_wire_text(Hostname), Port), NodeId}};
-%% `NodeId' must be exactly 32 bytes, a node_id, or there is no identity
-%% for the dial to expect, and the handshake would refuse it downstream.
-%% Failing closed here instead means a malformed row never burns a
-%% `max_links' slot until `giveup_after_ms' only to fail the same way.
-seed_from_fields(_Hostname, HostAdvertised, Port, NodeId)
+%% Every discovered station is dialled PINNED to its row's `node_id': a
+%% macula 12 link refuses a seed without `expected_node_id', and 12
+%% stations present certificates that name no host, so trust is the
+%% handshake's signed node_id and nothing else. The dial target is the
+%% row's `hostname' when it has one, else its first advertised address
+%% (a bare IP, dialled as a map seed with no URL bracketing: the QUIC dial
+%% takes `host' as a plain literal). A row without a 32-byte `node_id', a
+%% `quic_port' or anything to dial is skipped: there is nothing to pin, or
+%% nowhere to go.
+seed_from_fields(Hostname, HostAdvertised, Port, NodeId)
   when is_integer(Port), is_binary(NodeId), byte_size(NodeId) =:= 32 ->
-    pinned_seed_from_host_advertised(HostAdvertised, Port, NodeId);
+    pinned_seed(dial_host(unwrap_wire_text(Hostname), HostAdvertised), Port, NodeId);
 seed_from_fields(_Hostname, _HostAdvertised, _Port, _NodeId) ->
     false.
 
-pinned_seed_from_host_advertised([Ip | _], Port, NodeId) ->
-    ip_pinned_seed(unwrap_wire_text(Ip), Port, NodeId);
-pinned_seed_from_host_advertised(_NotAList, _Port, _NodeId) ->
-    false.
+dial_host(Hostname, _HostAdvertised) when is_binary(Hostname), byte_size(Hostname) > 0 ->
+    Hostname;
+dial_host(_NoHostname, [Address | _]) ->
+    unwrap_wire_text(Address);
+dial_host(_NoHostname, _NoAddress) ->
+    undefined.
 
-%% No `seed_url/2' bracketing here: this is a MAP seed, not a URL
-%% string -- `macula_station_link:parse_seed/1' passes a `#{host,
-%% port}' map through unchanged (no `uri_string:parse/1' involved), and
-%% the underlying QUIC dial takes `host' as a plain literal either way
-%% (live-verified with an unbracketed IPv6 `host' value).
-ip_pinned_seed(Ip, Port, NodeId) when is_binary(Ip), byte_size(Ip) > 0 ->
-    {true, {#{host => Ip, port => Port,
-             expected_node_id => NodeId}, NodeId}};
-ip_pinned_seed(_Ip, _Port, _NodeId) ->
+pinned_seed(Host, Port, NodeId) when is_binary(Host), byte_size(Host) > 0 ->
+    {true, {#{host => Host, port => Port, expected_node_id => NodeId}, NodeId}};
+pinned_seed(_NoHost, _Port, _NodeId) ->
     false.
-
-%% Bracket only a literal IPv6 address (contains a colon) per RFC 3986 --
-%% `hostname' never needs this. Only used for the hostname/WebPKI path;
-%% the IP+Pinned fallback builds a map seed, not a URL string.
-seed_url(Host, Port) ->
-    PortBin = integer_to_binary(Port),
-    HostBin = case binary:match(Host, <<":">>) of
-                 nomatch -> Host;
-                 _       -> <<"[", Host/binary, "]">>
-              end,
-    <<"quic://", HostBin/binary, ":", PortBin/binary>>.
 
 %% Small local duplicate of `macula_record:unwrap_text/1' (not exported
 %% there) — a `host_advertised' list ENTRY is not itself run through

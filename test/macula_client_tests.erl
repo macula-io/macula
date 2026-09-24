@@ -991,53 +991,20 @@ select_discovery_seeds_unparseable_seed_falls_back_to_raw_compare_test() ->
                  macula_client:select_discovery_seeds(
                    [<<"not-a-url">>], [<<"not-a-url">>], 5)).
 
-%% Real `hecate_stations.list_stations' row shape (payload_field/2's own
-%% pass-through: field names already atomized -- `hostname'/`quic_port'/
-%% `node_id' are common enough atoms to already exist in a real caller's
-%% VM -- see live confirmation in this function's own module doc).
-%% `hostname' present: builds a seed against it, paired with `node_id',
-%% and does NOT fall back to `host_advertised' at all.
-station_seed_prefers_hostname_over_host_advertised_test() ->
+%% A discovered station is always dialled PINNED to the row's `node_id': a macula 12 link refuses a seed without
+%% `expected_node_id' (`{seeds, expected_node_id_required}'), and 12 stations present certificates that name no host,
+%% so the WebPKI hostname seed this used to build could never connect (live, 2026-09-24). The hostname is the dial
+%% target when the row has one; otherwise the first advertised address.
+station_seed_dials_the_hostname_pinned_to_the_node_id_test() ->
     Station = #{hostname => <<"station-de-frankfurt.macula.io">>,
                host_advertised => [<<"2a01:7e01::f03c:94ff:fe22:719e">>],
                quic_port => 4433,
                node_id => <<1:256>>},
-    ?assertEqual({true, {<<"quic://station-de-frankfurt.macula.io:4433">>, <<1:256>>}},
+    ?assertEqual({true, {#{host => <<"station-de-frankfurt.macula.io">>, port => 4433,
+                          expected_node_id => <<1:256>>}, <<1:256>>}},
                  macula_client:station_seed(Station)).
 
-%% KNOWN LIMITATION, documented via test (adversarial review, 2026-09-05):
-%% pins the exact row shape `station-ca-toronto' was announcing under
-%% the now-fixed `macula_station_app' bug (an unconfigured
-%% `geo.hostname' defaulted to the OS hostname instead of being
-%% genuinely absent). That producer-side bug is fixed as of 2026-09-05,
-%% but `hecate_stations'' own read model does not retroactively clear
-%% an already-persisted field on a fresh announcement (read-modify-
-%% write upsert, a separate, not-yet-fixed issue) -- so a row shaped
-%% EXACTLY like this may keep showing up in the real directory for a
-%% while yet, and this function correctly keeps taking the WebPKI path
-%% for it regardless. See `seed_from_fields/4''s own doc for the full,
-%% current state. This test is not a claim about Toronto's live row
-%% today -- it pins the SHAPE, and the behavior for that shape, so a
-%% future reader can tell at a glance what the SDK does with it either
-%% way.
-station_seed_toronto_real_row_shape_currently_uses_webpki_test() ->
-    Station = #{hostname => <<"station-ca-toronto">>,
-               host_advertised => [<<"2600:3c04::2000:f0ff:feb9:e155">>],
-               quic_port => 4433,
-               node_id => <<1:256>>},
-    ?assertEqual({true, {<<"quic://station-ca-toronto:4433">>, <<1:256>>}},
-                 macula_client:station_seed(Station)).
-
-%% No `hostname' on record (seen live: at least one real fleet entry,
-%% deliberately DNS-less) but `host_advertised' + `node_id' both
-%% present: falls back to a Pinned-trust seed against the bare IP. The
-%% TLS certificate is not pinned, because there is no CA-issued cert for
-%% a raw IP to validate; trust is enforced entirely at the app layer via
-%% `expected_node_id'. The seed carried a `pin_tls_cert => false' key
-%% until macula#15: nothing read it. Live-verified against the real station this
-%% models (both a genuinely self-signed station and, separately, an
-%% ordinary Let's-Encrypt-backed one dialled the same way).
-station_seed_with_no_hostname_falls_back_to_pinned_ip_test() ->
+station_seed_with_no_hostname_dials_its_first_address_pinned_test() ->
     Station = #{host_advertised => [<<"2600:3c04::2000:f0ff:feb9:e155">>],
                quic_port => 4433, node_id => <<1:256>>},
     ?assertEqual({true, {#{host => <<"2600:3c04::2000:f0ff:feb9:e155">>,
@@ -1045,34 +1012,7 @@ station_seed_with_no_hostname_falls_back_to_pinned_ip_test() ->
                         <<1:256>>}},
                  macula_client:station_seed(Station)).
 
-%% No `hostname' AND no `node_id': nothing safe to authenticate a bare
-%% IP with (no CA cert, no pubkey to pin) -- skipped, same as before
-%% this station had a fallback at all.
-station_seed_with_no_hostname_and_no_node_id_is_skipped_test() ->
-    Station = #{host_advertised => [<<"2600:3c04::2000:f0ff:feb9:e155">>],
-               quic_port => 4433},
-    ?assertEqual(false, macula_client:station_seed(Station)).
-
-%% A `node_id' that isn't exactly 32 bytes is nothing valid to dial
-%% -- a peering connection does not start without a 32-byte
-%% `expected_node_id' anyway, so this fails closed at seed-construction time
-%% instead of burning a `max_links' slot until `giveup_after_ms' only
-%% to fail the same way later.
-station_seed_with_wrong_length_node_id_is_skipped_test() ->
-    Station = #{host_advertised => [<<"2600:3c04::2000:f0ff:feb9:e155">>],
-               quic_port => 4433, node_id => <<1, 2, 3>>},
-    ?assertEqual(false, macula_client:station_seed(Station)).
-
-%% No `hostname' AND no `host_advertised' either -- nothing to dial at
-%% all, regardless of `node_id'.
-station_seed_with_neither_hostname_nor_host_advertised_is_skipped_test() ->
-    Station = #{quic_port => 4433, node_id => <<1:256>>},
-    ?assertEqual(false, macula_client:station_seed(Station)).
-
-%% An empty-string `hostname' is not a usable hostname -- treated the
-%% same as absent, falling back to `host_advertised' + Pinned trust
-%% rather than building a seed against an empty dial target.
-station_seed_with_empty_hostname_falls_back_to_pinned_ip_test() ->
+station_seed_with_an_empty_hostname_dials_its_first_address_test() ->
     Station = #{hostname => <<>>,
                host_advertised => [<<"2600:3c04::2000:f0ff:feb9:e155">>],
                quic_port => 4433, node_id => <<1:256>>},
@@ -1080,6 +1020,16 @@ station_seed_with_empty_hostname_falls_back_to_pinned_ip_test() ->
                           port => 4433, expected_node_id => <<1:256>>},
                         <<1:256>>}},
                  macula_client:station_seed(Station)).
+
+%% Without a 32-byte `node_id' there is nothing to pin, so nothing to dial.
+station_seed_without_a_node_id_is_skipped_test() ->
+    ?assertEqual(false, macula_client:station_seed(#{hostname => <<"station-ca-toronto">>, quic_port => 4433})),
+    ?assertEqual(false, macula_client:station_seed(#{host_advertised => [<<"2600:3c04::1">>], quic_port => 4433})),
+    ?assertEqual(false, macula_client:station_seed(#{host_advertised => [<<"2600:3c04::1">>], quic_port => 4433,
+                                                    node_id => <<1, 2, 3>>})).
+
+station_seed_with_nothing_to_dial_is_skipped_test() ->
+    ?assertEqual(false, macula_client:station_seed(#{quic_port => 4433, node_id => <<1:256>>})).
 
 station_seed_with_no_quic_port_is_skipped_test() ->
     Station = #{hostname => <<"station-de-frankfurt.macula.io">>, node_id => <<1:256>>},
@@ -1097,13 +1047,50 @@ station_seed_ignores_trust_keys_a_row_carries_test() ->
     ?assertEqual([macula_client:station_seed(Row) || Row <- Rows],
                  [macula_client:station_seed(maps:merge(Row, Carried)) || Row <- Rows]).
 
-%% `node_id' passes through even when `undefined' (a defensive shape
-%% `already_connected_to/2' -- not exported, covered live -- treats as
-%% "can't rule in or out", not a reason to skip the station outright).
-station_seed_with_no_node_id_still_builds_a_seed_test() ->
-    Station = #{hostname => <<"station-ca-toronto">>, quic_port => 4433},
-    ?assertEqual({true, {<<"quic://station-ca-toronto:4433">>, undefined}},
-                 macula_client:station_seed(Station)).
+%% mcl-stations' reply as it reaches a caller: `station_read_model:to_wire/1' keeps the doc's binary keys and tags the
+%% text fields `{text, _}', `list_stations' wraps the rows as `#{stations => Rows}', and macula's codec carries it.
+%% Every live row becomes a pinned seed.
+a_list_stations_reply_from_mcl_stations_gives_pinned_seeds_test() ->
+    Row = #{<<"id">> => <<"station-1">>, <<"node_id">> => <<7:256>>,
+            <<"hostname">> => {text, <<"pq.station-de-nuremberg.macula.io">>},
+            <<"city">> => {text, <<"Nuremberg">>}, <<"country">> => {text, <<"DE">>},
+            <<"continent">> => {text, <<"EU">>}, <<"kind">> => {text, <<"station">>},
+            <<"version">> => {text, <<"0.6.2">>}, <<"quic_port">> => 4433,
+            <<"host_advertised">> => [{text, <<"2a01:4f8::1">>}],
+            <<"node_record_expires_at">> => 1789000000000},
+    Bare = maps:without([<<"hostname">>], Row#{<<"node_id">> => <<8:256>>}),
+    Delivered = macula_record_cbor:decode(macula_record_cbor:encode(#{stations => [Row, Bare]})),
+    ?assertEqual([{#{host => <<"pq.station-de-nuremberg.macula.io">>, port => 4433,
+                     expected_node_id => <<7:256>>}, <<7:256>>},
+                  {#{host => <<"2a01:4f8::1">>, port => 4433, expected_node_id => <<8:256>>}, <<8:256>>}],
+                 macula_client:station_seeds(Delivered)).
+
+%% The directory's realm is read from its procedure advertisement: the one whose `procedure' is the configured
+%% discovery procedure, `mcl-stations/list_stations' by default. A 12 advertisement carries `realm_id' and
+%% `procedure'; the `procedure_uri' this matched before never exists, so discovery never found a realm (live,
+%% 2026-09-24: 21 advertisements on nuremberg, none with `procedure_uri').
+the_directory_realm_is_the_realm_of_its_advertisement_test() ->
+    Realm = <<9:256>>,
+    Records = [advertisement(<<3:256>>, <<"mcl-echo/echo">>), advertisement(Realm, <<"mcl-stations/list_stations">>)],
+    ?assertEqual({ok, Realm}, macula_client:find_list_stations_realm(Records, <<"mcl-stations/list_stations">>)),
+    ?assertEqual(error, macula_client:find_list_stations_realm(Records, <<"other-org/list_stations">>)),
+    ?assertEqual(error, macula_client:find_list_stations_realm([not_a_record, #{}], <<"mcl-stations/list_stations">>)).
+
+advertisement(Realm, Procedure) ->
+    macula_record:procedure_advertisement(<<1:256>>, Realm, Procedure, <<2:256>>).
+
+%% The discovery procedure must be an org-namespaced name, as every served procedure is (D25); anything else could
+%% never be advertised, so the pool refuses it at start rather than discovering nothing forever.
+a_discovery_procedure_without_an_org_is_refused_test_() ->
+    {timeout, 5,
+     fun() ->
+         {ok, _} = application:ensure_all_started(macula),
+         process_flag(trap_exit, true),
+         ?assertMatch({error, {station_discovery, {procedure, <<"hecate_stations.list_stations">>}}},
+                      macula_client:connect([], #{station_discovery =>
+                                                      #{enabled => true,
+                                                        procedure => <<"hecate_stations.list_stations">>}}))
+     end}.
 
 %% `station_discovery' absent: `connect/2' behaves exactly as before --
 %% no discovery timer armed, `link_selection' defaults to
@@ -1122,7 +1109,7 @@ connect_without_station_discovery_behaves_as_before_test_() ->
      end}.
 
 %% `station_discovery => #{enabled => true}' with zero seeds and no
-%% network to actually resolve `hecate_stations' against: must not
+%% network to actually resolve a station directory against: must not
 %% crash the pool. The discovery worker's own `find_records_by_type'
 %% call fails immediately (no healthy station), which is exactly the
 %% "stay on bootstrap seeds" fallback path -- proven here by the pool
@@ -1153,7 +1140,7 @@ connect_with_station_discovery_enabled_and_no_seeds_stays_alive_test_() ->
 %% is given up on and removed once it has been alive longer than
 %% `giveup_after_ms' without ever connecting -- proven by `links/1'
 %% going from one entry to zero. Bypasses the real discovery worker
-%% (no live `hecate_stations' to call here) by casting exactly the
+%% (no live station directory to call here) by casting exactly the
 %% message `add_discovered_seeds/2' expects, same shape
 %% `run_station_discovery/1' itself would deliver.
 discovered_link_that_never_connects_is_given_up_test_() ->
