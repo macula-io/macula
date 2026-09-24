@@ -2992,8 +2992,10 @@ build_inbound_call_reply({ok, Handler}, Request, Payload, Key) ->
 %%
 %% Mapping:
 %%   * handler returns `{error, Reason}' →
-%%     `provider_error(code = <<"unknown_error">>,
-%%                     detail = handler_error_detail(Reason))'
+%%     `provider_error(code = <<"handler_error">>,
+%%                     detail = handler_error_detail(Reason))', which a
+%%     caller unwraps to `{error, Detail}' (`call_result/1'): the same
+%%     constant on both sides
 %%   * handler crashes →
 %%     `provider_error(code = <<"temporary_relay_failure">>)'
 %%   * handler returns anything else →
@@ -3002,7 +3004,7 @@ safe_invoke_handler(Handler, Payload, Request, Key) ->
     try invoke_handler(Handler, Payload) of
         {error, Reason} ->
             macula_frame:provider_error(#{request => Request,
-                                          code    => <<"unknown_error">>,
+                                          code    => ?HANDLER_ERROR_CODE,
                                           detail  => handler_error_detail(Reason)},
                                         Key);
         Reply ->

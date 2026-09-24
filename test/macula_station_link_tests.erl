@@ -1341,17 +1341,16 @@ inbound_call_handler_error_tuple_emits_call_error_test_() ->
     %% `_dht.put_record' got a bad-signature record from the
     %% replication path.
     %%
-    %% The error is funneled into `code = <<"unknown_error">>' with the
-    %% reason's name in `detail'. Handlers that need a specific BOLT#4
-    %% code can crash with a tagged error or use the dedicated frame
-    %% builders.
+    %% #28: the code is `handler_error', the one a caller unwraps to
+    %% `{error, Detail}'. It was `unknown_error', so every handler's own
+    %% reason reached a caller as an opaque provider error that looked like
+    %% a platform fault.
     {timeout, 5,
      fun() ->
          Handler = fun(_Args) -> {error, invalid_token} end,
          {Pid, CallerKey} = inbound_call_fixture([{<<"_test.app_error">>, Handler}]),
          CallFrame = inject_call(Pid, self(), CallerKey, <<4:128>>, <<"_test.app_error">>),
-         ?assertMatch({error, #{code := <<"unknown_error">>, detail := Detail}}
-                        when is_binary(Detail),
+         ?assertMatch({error, #{code := <<"handler_error">>, detail := <<"invalid_token">>}},
                       await_result(CallFrame, 1_000)),
          macula_station_link:stop(Pid),
          ok
@@ -1370,7 +1369,7 @@ binary_reason_crosses_the_wire_verbatim_test_() ->
          Handler = fun(_Args) -> {error, <<"hold_full">>} end,
          {Pid, CallerKey} = inbound_call_fixture([{<<"_test.refusal">>, Handler}]),
          CallFrame = inject_call(Pid, self(), CallerKey, <<7:128>>, <<"_test.refusal">>),
-         ?assertMatch({error, #{detail := <<"hold_full">>}},
+         ?assertMatch({error, #{code := <<"handler_error">>, detail := <<"hold_full">>}},
                       await_result(CallFrame, 1_000)),
          macula_station_link:stop(Pid),
          ok
