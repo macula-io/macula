@@ -6,14 +6,11 @@
 %% start without exactly one known profile.
 %%
 %% <ul>
-%%   <li>`pq_pure': the CNSA 2.0 algorithms. ML-KEM-1024
-%%       key exchange as its DECLARED TARGET, ML-DSA-87 signatures,
-%%       AES-256, no classical half.</li>
-%%   <li>`pq_hybrid': SecP384r1MLKEM1024 hybrid key exchange as its
-%%       DECLARED TARGET, ML-DSA-87 alone
-%%       in TLS, and every other signature hybrid: ML-DSA-87 plus
-%%       RSA-PSS-4096 with SHA-384, valid only if both halves
-%%       verify.</li>
+%%   <li>`pq_pure': the CNSA 2.0 policy. ML-DSA-87 signatures, AES-256,
+%%       no classical half.</li>
+%%   <li>`pq_hybrid': ML-DSA-87 alone in TLS, and every other signature
+%%       hybrid: ML-DSA-87 plus RSA-PSS-4096 with SHA-384, valid only if
+%%       both halves verify.</li>
 %% </ul>
 %%
 %% ⚠ A PROFILE SAYS NOTHING ABOUT THE KEY EXCHANGE. Both offer the groups
@@ -45,27 +42,6 @@
 }.
 -type signature_algorithm() :: mldsa87 | {rsa_pss, rsa_pss_params()}.
 -type definition() :: #{
-    %% ⚠ DECLARED TARGET. NOT READ BY ANYTHING.
-    %%
-    %% What a connection negotiates is decided by the `macula-pqc' crate,
-    %% which every TLS configuration in `native/macula_quic' is built from,
-    %% whatever the node's profile: SecP384r1MLKEM1024, then
-    %% SecP256r1MLKEM768, nothing classical. Two nodes on this version
-    %% negotiate SecP384r1MLKEM1024, which is `pq_hybrid''s declared group,
-    %% because every node offers it and not because this field asked.
-    %% `mlkem1024', `pq_pure''s declared group, is never negotiated: no pure
-    %% ML-KEM group is offered. (BSI TR-02102-2 INTENDS TO RECOMMEND
-    %% SecP384r1MLKEM1024 once the corresponding RFC is adopted. Say
-    %% "intends to recommend". BSI does not recommend it yet.)
-    %%
-    %% The field is kept, deliberately, as the target each profile is
-    %% aiming at. Keeping a declared-but-inert field is exactly the defect
-    %% macula#15 exists to punish, so it is kept ONLY with this said next
-    %% to it, and honouring it is tracked as work rather than assumed.
-    %%
-    %% What this does NOT say: it makes no claim either way about the
-    %% signature half of this map. Signatures are a separate question and
-    %% a separate audit.
     tls_signature_scheme    := mldsa87,
     identity_signature      := [signature_algorithm(), ...],
     connect_proof_signature := [signature_algorithm(), ...]
