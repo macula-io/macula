@@ -7,6 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [12.4.0] - 2026-09-24
+
+Wire-compatible with 12.0 to 12.3 in both directions.
+
+### Fixed
+
+- **Station discovery works on 12 and finds mcl-stations.** It could not work
+  on 12 at all, measured against nuremberg: a discovery-enabled pool stayed on
+  its one bootstrap link. It called `hecate_stations.list_stations`, retired
+  with hecate-*. It looked for the directory's realm in a `procedure_uri` field
+  that 12 advertisements do not carry. And it built unpinned `quic://hostname`
+  seeds, which a 12 link refuses (`{seeds, expected_node_id_required}`). Now
+  `station_discovery` takes `procedure` (default `mcl-stations/list_stations`,
+  refused at connect without an org namespace), reads the realm from the
+  advertisement whose `procedure` matches, and dials every listed station pinned
+  to its `node_id`: the hostname when the row has one, else its first advertised
+  address. (#31)
+- **A plain `macula:advertise/5` provider stays routable.** A station drops an
+  advertisement when it expires (at most 5 minutes), and the SDK sent one only on
+  advertise and on connect. Each link now renews a spec's advertisement at half
+  its remaining life, signed in the pool and naming the same station, until the
+  spec's `not_after`. A spec may carry `ttl_ms`. This needs macula-station 0.6.2
+  (macula-station#7) on the station, since an older one drops a renewal on the
+  same connection. (#32)
+- **A draining connection keeps draining when the peer's FIN arrives.** When this
+  side closed first, the peer's control-stream FIN stopped the connection at once
+  and cut this side's in-flight dedicated streams. The drain now ends on
+  `dedicated_streams_idle` or its timeout, whoever closed first. A control stream
+  closed with an error still ends it at once. (#36)
+- **The crypto profile docs no longer give a profile a key exchange.** The
+  orphaned `key_exchange_group` commentary on `definition()` is gone.
+
+### Added
+
+- **Request-admission refusals name who was refused.** The once-a-minute warning
+  now lists the callers (node id prefix) and procedures refused in the window,
+  most refused first, and `macula_request_admission:refusal_sources/1` returns
+  the latest list by kind. `macula_refusal_report:refused/4` counts a refusal
+  with its source, bounded to 64 sources per window with the rest as `other`.
+  (#34)
+- `macula_client:station_seeds/1` and `find_list_stations_realm/2` are exported
+  for tests of the directory's reply shape.
+
 ## [12.3.0] - 2026-09-24
 
 Wire-compatible with 12.0, 12.1 and 12.2 in both directions: the ADVERTISE
