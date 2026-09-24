@@ -210,6 +210,56 @@ a_spec_on_a_link_without_a_pool_sends_nothing_test_() ->
          macula_station_link:stop(Pid)
      end}}.
 
+%% #32: an advertisement lives a few minutes and the station drops it once it expires, so a link keeps a spec's
+%% advertisement alive: it signs again at half the remaining life, naming the same station, until the spec's bound.
+a_spec_is_signed_again_before_its_advertisement_expires_test_() ->
+    {spawn, {timeout, 10,
+     fun() ->
+         Pid = start_connected_link(),
+         ok = macula_station_link:advertise(Pid, ?REALM, ?PROCEDURE, fun unary_handler/1, open,
+                                            (spec(erlang:system_time(millisecond) + 60_000))#{ttl_ms => 1_000}),
+         First = advertised_record(sent_frame_within(2_000)),
+         Second = advertised_record(sent_frame_within(1_500)),
+         ?assertEqual(<<9:256>>, maps:get(serving_station, Second)),
+         ?assert(maps:get(expires_at, Second) > maps:get(expires_at, First)),
+         macula_station_link:stop(Pid)
+     end}}.
+
+%% Renewal ends at the spec's bound: nothing is signed past what authorizes it.
+renewal_stops_at_the_specs_bound_test_() ->
+    {spawn, {timeout, 10,
+     fun() ->
+         Pid = start_connected_link(),
+         NotAfter = erlang:system_time(millisecond) + 1_200,
+         ok = macula_station_link:advertise(Pid, ?REALM, ?PROCEDURE, fun unary_handler/1, open,
+                                            (spec(NotAfter))#{ttl_ms => 400}),
+         Sent = frames_until_quiet(1_000),
+         ?assert(length(Sent) >= 2),
+         [?assert(maps:get(expires_at, advertised_record(F)) =< NotAfter) || F <- Sent],
+         ?assert(erlang:system_time(millisecond) > NotAfter),
+         macula_station_link:stop(Pid)
+     end}}.
+
+%% A withdrawn procedure is not renewed.
+an_unadvertised_spec_is_not_renewed_test_() ->
+    {spawn, {timeout, 10,
+     fun() ->
+         Pid = start_connected_link(),
+         ok = macula_station_link:advertise(Pid, ?REALM, ?PROCEDURE, fun unary_handler/1, open,
+                                            (spec(erlang:system_time(millisecond) + 60_000))#{ttl_ms => 600}),
+         _ = advertised_record(sent_frame_within(2_000)),
+         ok = macula_station_link:unadvertise(Pid, ?REALM, ?PROCEDURE),
+         ?assertEqual([], [F || {sent, #{frame_type := advertise}} = F <- [sent_frame_within(1_200)]]),
+         macula_station_link:stop(Pid)
+     end}}.
+
+%% Every frame sent until none arrives for `QuietMs'.
+frames_until_quiet(QuietMs) ->
+    case sent_frame_within(QuietMs) of
+        none -> [];
+        Sent -> [Sent | frames_until_quiet(QuietMs)]
+    end.
+
 %% The streaming path takes the same spec.
 a_stream_spec_is_signed_naming_the_link_s_own_station_test_() ->
     {spawn, {timeout, 5,

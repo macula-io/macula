@@ -93,10 +93,16 @@
 %% An advertisement spec (macula_station_link:advertisement_spec()), checked
 %% in a guard: anything else a caller passes as a map raises function_clause
 %% before a link or the pool keeps it.
+%% A spec's advertisement is renewed at half its remaining life, but never
+%% sooner than this after the last signing.
+-define(MIN_RENEWAL_MS, 100).
+
 -define(IS_ADVERTISEMENT_SPEC(A),
         (is_map(A) andalso is_integer(map_get(not_after, A))
          andalso is_binary(map_get(org_directory, map_get(authorization, A)))
-         andalso is_binary(map_get(procedure_delegation, map_get(authorization, A))))).
+         andalso is_binary(map_get(procedure_delegation, map_get(authorization, A)))
+         andalso (not is_map_key(ttl_ms, A)
+                  orelse (is_integer(map_get(ttl_ms, A)) andalso map_get(ttl_ms, A) > 0)))).
 -behaviour(gen_server).
 
 %% What a call error says about trying the same request somewhere else. See
@@ -365,6 +371,9 @@
     %% register (the pool-level advertise without a resolved
     %% authorization), which sends no frame at all.
     advertisements = #{} :: #{{<<_:256>>, binary()} => advertisement()},
+    %% The pending renewal of each spec's advertisement: only the timer
+    %% whose reference is here acts, so a reconnect cannot double a chain.
+    renewals = #{} :: #{{<<_:256>>, binary()} => reference()},
     %% Advertised streaming procedures. Same wire shape as `procedures'
     %% (one `advertise' frame per entry replayed on reconnect); the
     %% stored value carries the declared mode (`server_stream' /
@@ -489,8 +498,11 @@
 
 %% What a provider registers to advertise: a pre-signed advertisement's
 %% wire form, or a spec the link signs per send (see `advertise/6').
+%% `ttl_ms' is optional: the signed advertisement's own lifetime, which the
+%% advertisement type caps; renewal keeps it alive in turn.
 -type advertisement_spec() :: #{authorization := map(),
-                                not_after     := integer()}.
+                                not_after     := integer(),
+                                ttl_ms        => pos_integer()}.
 -type advertisement() :: binary() | advertisement_spec().
 
 %%====================================================================
@@ -1621,7 +1633,12 @@ handle_info(attempt_connect, #state{seed = Seed, node_identity = Key, issuer = I
     after_connect_request(Connect(PeeringOpts), S);
 
 handle_info({advertisement_signed, Key, Spec, Station, Signed}, S) ->
-    on_advertisement_signed(Key, Spec, Station, Signed, S),
+    {noreply, on_advertisement_signed(Key, Spec, Station, Signed, S)};
+
+handle_info({renew_advertisement, Key, Ref}, #state{renewals = Renewals} = S)
+  when map_get(Key, Renewals) =:= Ref ->
+    {noreply, renewed(Key, S#state{renewals = maps:remove(Key, Renewals)})};
+handle_info({renew_advertisement, _Key, _Ref}, S) ->
     {noreply, S};
 
 handle_info({macula_peering, connected, Pid, PeerNodeId},
@@ -2527,7 +2544,8 @@ sign_advertisement(Realm, Proc, #{authorization := Authorization, not_after := N
                    Station, #state{pool = Pool, node_identity = Key}) ->
     Link = self(),
     Unsigned = macula_record:procedure_advertisement(
-                 node_id(Key), Realm, Proc, Station, #{authorization => Authorization}),
+                 node_id(Key), Realm, Proc, Station,
+                 maps:merge(#{authorization => Authorization}, maps:with([ttl_ms], Spec))),
     _ = spawn(fun() ->
             Signed = try macula_client:sign_node_record(Pool, Unsigned, #{not_after => NotAfter})
                      catch Class:Why -> {error, {Class, Why}}
@@ -2542,15 +2560,36 @@ not_sent(Realm, Proc, Reason) ->
     ok.
 
 %% A signed advertisement goes out only if what it answers still
-%% stands: the same spec registered, the same station connected.
-on_advertisement_signed({Realm, Proc}, _Spec, _Station, {error, Reason}, _S) ->
-    not_sent(Realm, Proc, Reason);
+%% stands: the same spec registered, the same station connected. Once
+%% sent, its renewal is armed for half its remaining life, since the
+%% station drops it when it expires (#32). Past the spec's bound the
+%% signing refuses and the chain ends there.
+on_advertisement_signed({Realm, Proc}, _Spec, _Station, {error, Reason}, S) ->
+    not_sent(Realm, Proc, Reason),
+    S;
 on_advertisement_signed(Key, Spec, Station, {ok, Signed},
-                        #state{advertisements = Ads, peer_node_id = Station, peer_pid = Pid})
+                        #state{advertisements = Ads, peer_node_id = Station, peer_pid = Pid} = S)
   when is_pid(Pid), map_get(Key, Ads) =:= Spec ->
-    send_advertise(Pid, macula_record:encode(Signed));
-on_advertisement_signed(_Key, _Spec, _Station, {ok, _Signed}, _S) ->
-    ok.
+    send_advertise(Pid, macula_record:encode(Signed)),
+    renewal_armed(Key, macula_record:expires_at(Signed), S);
+on_advertisement_signed(_Key, _Spec, _Station, {ok, _Signed}, S) ->
+    S.
+
+renewal_armed(Key, ExpiresAt, #state{renewals = Renewals} = S) ->
+    Ref = make_ref(),
+    In = max(?MIN_RENEWAL_MS, (ExpiresAt - erlang:system_time(millisecond)) div 2),
+    _ = erlang:send_after(In, self(), {renew_advertisement, Key, Ref}),
+    S#state{renewals = Renewals#{Key => Ref}}.
+
+%% Sign again what is still registered as a spec, while connected; a
+%% withdrawn procedure, a pre-signed one or a link between stations has
+%% nothing to renew (a reconnect signs afresh on its own).
+renewed({Realm, Proc} = Key, #state{advertisements = Ads, peer_pid = Pid, peer_node_id = Station} = S)
+  when is_pid(Pid), is_binary(Station), is_map(map_get(Key, Ads)) ->
+    sign_advertisement(Realm, Proc, map_get(Key, Ads), Station, S),
+    S;
+renewed(_Key, S) ->
+    S.
 
 maybe_send_unadvertise(_Realm, _Proc, undefined, _S) ->
     ok;

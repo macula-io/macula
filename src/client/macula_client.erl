@@ -64,7 +64,9 @@
 -define(IS_ADVERTISEMENT_SPEC(A),
         (is_map(A) andalso is_integer(map_get(not_after, A))
          andalso is_binary(map_get(org_directory, map_get(authorization, A)))
-         andalso is_binary(map_get(procedure_delegation, map_get(authorization, A))))).
+         andalso is_binary(map_get(procedure_delegation, map_get(authorization, A)))
+         andalso (not is_map_key(ttl_ms, A)
+                  orelse (is_integer(map_get(ttl_ms, A)) andalso map_get(ttl_ms, A) > 0)))).
 -behaviour(gen_server).
 
 -export([connect/2, close/1, child_spec/3, status/1, links/1, sign_node_record/2, sign_node_record/3, sign_domain_record/2,

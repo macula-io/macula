@@ -107,7 +107,9 @@ a_malformed_spec_is_refused_before_the_pool_keeps_it_test_() ->
          Stream = fun(_, _) -> ok end,
          Bad = [#{}, #{authorization => #{}, not_after => 1},
                 #{authorization => #{org_directory => <<"d">>, procedure_delegation => <<"p">>},
-                  not_after => soon}],
+                  not_after => soon},
+                #{authorization => #{org_directory => <<"d">>, procedure_delegation => <<"p">>},
+                  not_after => 1, ttl_ms => 0}],
          [?assertError(function_clause,
                        macula_client:advertise(Pool, ?REALM, ?PROCEDURE, Handler, open, B))
           || B <- Bad],
