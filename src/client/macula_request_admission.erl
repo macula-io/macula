@@ -32,13 +32,17 @@
 %% milliseconds of wall-clock time, passed in by the caller.
 %%
 %% Every refusal, and every reply not stored, is counted by kind and logged
-%% at most once a minute per kind (`macula_refusal_report'); `refusals/1'
+%% at most once a minute per kind (`macula_refusal_report'), naming the callers
+%% refused (the first 8 bytes of the node id, in hex) and the procedures they
+%% asked for, most refused first; `refusal_sources/1' has the latest of those
+%% lists by kind, and `refusals/1'
 %% reads the counts.
 -module(macula_request_admission).
 
 -behaviour(gen_server).
 
--export([start_link/1, admit/4, admit/5, store_reply/5, sweep/2, refusals/1, stop/1]).
+-export([start_link/1, admit/4, admit/5, store_reply/5, sweep/2, refusals/1, refusal_sources/1,
+         refusal_line/3, stop/1]).
 -export([init/1, handle_call/3, handle_cast/2]).
 
 -export_type([limits/0, request/0, refusal/0, verdict/0]).
@@ -94,7 +98,7 @@ admit(Admission, #{caller := <<_:256>>, request_id := <<_:128>>, request_hash :=
                    deadline := Deadline} = Request, Share, NowMs, TimeoutMs)
   when is_integer(Deadline), Deadline >= 0, is_integer(NowMs) ->
     gen_server:call(Admission,
-                    {admit, maps:with([caller, request_id, request_hash, deadline], Request), Share, NowMs},
+                    {admit, maps:with([caller, request_id, request_hash, deadline, procedure], Request), Share, NowMs},
                     TimeoutMs).
 
 %% @doc Store the signed reply of an admitted request, `Bytes' long, for its
@@ -111,6 +115,13 @@ store_reply(Admission, #{caller := <<_:256>> = Caller, request_id := <<_:128>> =
 -spec sweep(pid(), integer()) -> non_neg_integer().
 sweep(Admission, NowMs) when is_integer(NowMs) ->
     gen_server:call(Admission, {sweep, NowMs}).
+
+%% @doc The callers and procedures of the latest refusal report of each kind,
+%% most refused first: `{CallerPrefixHex, Procedure | undefined}' with its
+%% count, and `other' for sources past the window's bound.
+-spec refusal_sources(pid()) -> #{atom() => [{{binary(), binary() | undefined} | other, pos_integer()}]}.
+refusal_sources(Admission) ->
+    gen_server:call(Admission, refusal_sources).
 
 %% @doc Every refusal, and every reply not stored (`reply_not_stored'),
 %% counted by kind.
@@ -131,12 +142,14 @@ init(Limits) ->
 
 handle_call({admit, #{deadline := Deadline} = Request, Share, Now}, _From, S) ->
     {Verdict, NewS} = in_window(deadline_verdict(Deadline, Now), Request, Share, Now, S),
-    {reply, Verdict, refusal_counted(Verdict, Now, NewS)};
+    {reply, Verdict, refusal_counted(Verdict, source(Request), Now, NewS)};
 handle_call({store_reply, Key, Hash, Reply, Bytes, Now}, _From, S) ->
     {Result, NewS} = stored(maps:find(Key, S#state.entries), Key, Hash, Reply, Bytes, S),
-    {reply, Result, reply_counted(Result, Now, NewS)};
+    {reply, Result, reply_counted(Result, source(Key), Now, NewS)};
 handle_call(refusals, _From, #state{refusals = Report} = S) ->
     {reply, macula_refusal_report:counts(Report), S};
+handle_call(refusal_sources, _From, #state{refusals = Report} = S) ->
+    {reply, macula_refusal_report:last_sources(Report), S};
 handle_call({sweep, Now}, _From, #state{entries = Entries} = S) ->
     Expired = [Key || Key := #entry{expires_at = ExpiresAt} <- Entries, ExpiresAt < Now],
     {reply, length(Expired), lists:foldl(fun forget/2, S, Expired)}.
@@ -150,24 +163,42 @@ handle_cast(_Message, S) ->
 
 %% A refusal is counted under its kind alone, never a deadline's
 %% milliseconds, so the kinds counted stay a fixed set.
-refusal_counted({refused, Refusal}, Now, S) -> count_kind(refusal_kind(Refusal), Now, S);
-refusal_counted(_AdmittedOrCopy, _Now, S)   -> S.
+refusal_counted({refused, Refusal}, Source, Now, S) -> count_kind(refusal_kind(Refusal), Source, Now, S);
+refusal_counted(_AdmittedOrCopy, _Source, _Now, S)   -> S.
 
-reply_counted(not_kept, Now, S)     -> count_kind(reply_not_stored, Now, S);
-reply_counted(_KeptOrGone, _Now, S) -> S.
+reply_counted(not_kept, Source, Now, S)     -> count_kind(reply_not_stored, Source, Now, S);
+reply_counted(_KeptOrGone, _Source, _Now, S) -> S.
+
+%% Who a refusal is about: the caller's node id prefix, and the procedure when
+%% the request names one (a reply is counted by its entry's key, which does not).
+source(#{caller := Caller} = Request) -> {caller_prefix(Caller), maps:get(procedure, Request, undefined)};
+source({Caller, _RequestId})          -> {caller_prefix(Caller), undefined}.
+
+caller_prefix(<<Prefix:8/binary, _/binary>>) -> binary:encode_hex(Prefix, lowercase).
 
 refusal_kind({expired, _PastMs})        -> expired;
 refusal_kind({not_yet_valid, _AheadMs}) -> not_yet_valid;
 refusal_kind(Kind)                      -> Kind.
 
-count_kind(Kind, Now, #state{refusals = Report} = S) ->
-    S#state{refusals = logged(macula_refusal_report:refused(Report, Kind, Now), Kind)}.
+count_kind(Kind, Source, Now, #state{refusals = Report} = S) ->
+    S#state{refusals = logged(macula_refusal_report:refused(Report, Kind, Source, Now), Kind)}.
 
-logged({report, Count, Report}, Kind) ->
-    logger:warning("[macula_request_admission] ~b refused: ~p", [Count, Kind]),
+logged({report, Count, Sources, Report}, Kind) ->
+    logger:warning("~ts", [refusal_line(Count, Kind, Sources)]),
     Report;
 logged({quiet, Report}, _Kind) ->
     Report.
+
+%% @doc The warning a refusal report logs: how many, of what kind, and from
+%% whom on what, most refused first.
+-spec refusal_line(pos_integer(), atom(), [{term(), pos_integer()}]) -> iolist().
+refusal_line(Count, Kind, Sources) ->
+    [io_lib:format("[macula_request_admission] ~b refused: ~p, from ", [Count, Kind]),
+     lists:join(", ", [source_text(Source, N) || {Source, N} <- Sources])].
+
+source_text({Prefix, undefined}, N) -> io_lib:format("~ts (~b)", [Prefix, N]);
+source_text({Prefix, Procedure}, N) -> io_lib:format("~ts on ~ts (~b)", [Prefix, Procedure, N]);
+source_text(other, N)               -> io_lib:format("others (~b)", [N]).
 
 deadline_verdict(Deadline, Now) when Deadline < Now - ?DEADLINE_PAST_TOLERANCE_MS ->
     {expired, Now - ?DEADLINE_PAST_TOLERANCE_MS - Deadline};

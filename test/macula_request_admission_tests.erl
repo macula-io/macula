@@ -233,6 +233,24 @@ refusals_are_counted_by_kind_test() ->
                      macula_request_admission:refusals(A))
     end).
 
+%% A refusal names its caller and procedure, so a caller_quota warning can be traced to the node filling its quota
+%% and what it is calling (macula#34: a fleet node logged caller_quota once a minute, naming no one).
+refusals_name_their_caller_and_procedure_test() ->
+    with_admission(fun(A) ->
+        [new = admit(A, (request(1, N))#{procedure => <<"acme/count_v1">>}, link_a) || N <- [1, 2]],
+        {refused, caller_quota} = admit(A, (request(1, 3))#{procedure => <<"acme/count_v1">>}, link_a),
+        Prefix = binary:encode_hex(binary:part(<<1:256>>, 0, 8), lowercase),
+        ?assertEqual(#{caller_quota => [{{Prefix, <<"acme/count_v1">>}, 1}]},
+                     macula_request_admission:refusal_sources(A))
+    end).
+
+the_refusal_line_names_the_sources_test() ->
+    ?assertEqual("[macula_request_admission] 3 refused: caller_quota, from 00000000000000aa on acme/count_v1 (2), "
+                 "00000000000000bb on acme/other_v1 (1)",
+                 lists:flatten(macula_request_admission:refusal_line(
+                   3, caller_quota, [{{<<"00000000000000aa">>, <<"acme/count_v1">>}, 2},
+                                     {{<<"00000000000000bb">>, <<"acme/other_v1">>}, 1}]))).
+
 %% Copies racing on several connections admit the request once, and the losers leave no place taken behind.
 racing_copies_admit_a_request_once_test() ->
     with_admission(fun(A) ->
