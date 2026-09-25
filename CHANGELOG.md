@@ -7,6 +7,71 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [12.6.0] - 2026-09-25
+
+Content is served by the node that shares it (D27). A station keeps no content:
+macula-station stopped storing it at D27 (647dfba), so content put or fetched
+through a station has not worked since. Wire-compatible with 12.0 to 12.5 at the
+frame level. A 12.5 verifier accepts a 12.6 content announcement, but only 12.6
+can fetch from one; a 12.6 fetcher refuses an older announcement, which names no
+realm, station or procedure.
+
+Needs macula-station 0.6.2 or later on the station a sharer is linked to (the
+content procedure's advertisement is renewed on the same connection), and 0.6.4
+or later for the `~<node id>/content_v1` form a node without an org serves on.
+
+### Added
+
+- **`macula:share_content/3,4`, `unshare_content/3`, `get_content/3,4`.** A
+  node shares bytes in a realm and gets the root MCID back. It keeps them in its
+  pool's sharer, serves them on a `server_stream` procedure of its own
+  (`~<node id>/content_v1`, or `<org>/content_v1_<node id>` with
+  `#{org => Org}`), and announces them in the DHT, naming the realm, the station
+  it is reachable through and that procedure. The announcement is renewed while
+  the content is shared, made again when the node moves station, and withdrawn
+  with a tombstone on unshare.
+  - `get_content` finds the announcements and tries each sharer through the
+    station it named, in a random order. It accepts only a procedure bound to
+    the announcer and verifies every block, manifest and chunk against the MCID.
+    It answers `{ok, Bytes}`, `{error, not_shared}` or
+    `{error, {unavailable, [{Sharer, Reason}]}}`, naming each sharer that
+    failed. Bounds: `max_bytes` (256 MiB), `max_chunks` (16,384), `parallel`
+    (4), `chunk_timeout_ms` (15 s).
+  - Modules `macula_content_store`, `macula_content_serve`,
+    `macula_content_sharer` (one per pool, under `macula_content_sharer_sup`)
+    and `macula_content_fetch`.
+- The content announcement record (0x11) carries `realm_id`,
+  `serving_station` and `procedure`, and a verifier refuses one without them.
+
+### Changed
+
+- **`macula_feeder` and `macula_download` share from and fetch from the node.**
+  `start_link/4,5,6` keep their arguments. The start options are now `share`,
+  `unshare`, `share_opts` and `fact_publish` (feeder) and `fetch`,
+  `fetch_opts` and `fact_publish` (download). A feeder cancelled while its
+  share is in flight unshares it.
+- `macula_record:content_announcement/3` takes the announcement's opts,
+  `realm_id`, `serving_station` and `procedure` required, in place of an
+  endpoint; `content_announcement/4` is gone.
+
+### Removed
+
+- Removed: put_content/2, get_content/2, *_station forms and the station-store
+  calls; non-functional since station D27 (647dfba); use
+  share_content/get_content/4.
+  - `macula`: `put_content/2`, `get_content/2`, `put_content_station/4,5`,
+    `get_content_station/4,5`, `find_content_providers/2`.
+  - `macula_direct_dial`: `put_content/4,5`, `get_content/3,4`,
+    `fetch_content/4,5`, `resolve_content_provider/2,3`.
+  - `macula_feeder:start_link_direct/5,6,7`,
+    `macula_download:start_link_direct/4,5,6`.
+  - `macula_content_transfer` and its registry.
+  - `macula_station_link`: `open_content_stream/1`, `call_on_stream/6`,
+    `close_content_stream/2`, `abort_content_stream/4`. `macula_client`:
+    `pick_connected_link/1`, `ensure_station_link/4`.
+
+---
+
 ## [12.5.1] - 2026-09-25
 
 Wire-compatible with 12.0 to 12.5 in both directions. Upgrade every provider:

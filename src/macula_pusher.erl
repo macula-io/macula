@@ -8,8 +8,8 @@
 %%% around the transfer — including `outcome => cancelled' if the
 %%% pusher is stopped before the push resolves.
 %%%
-%%% Unlike `macula_feeder' (which puts into content-addressed storage
-%%% for a downloader to discover and pull later), this actively pushes
+%%% Unlike `macula_feeder' (which shares content from this node
+%%% for a downloader to find and fetch later), this actively pushes
 %%% bytes AT a specific, already-known recipient advertising an upload
 %%% procedure (`macula_upload:advertise/5,6') — the `client_stream'
 %%% mode `STREAMING_GUIDE.md' names for exactly this ("an upload, a
@@ -48,28 +48,15 @@
 %%% reports it back) so `cancel/1' reaches it for a real, peer-visible
 %%% `macula_stream:abort/3' STREAM_ERROR — not a blunt local kill that
 %%% leaves the recipient inferring cancellation from the connection
-%%% simply going away. Mirrors `macula_feeder''s own `content_transfer'
-%%% field / `reap_content_transfer/1' pattern exactly, one layer down
-%%% (a raw stream instead of a transfer pid).
+%%% simply going away.
 %%%
 %%% == Direct-dial ==
 %%%
-%%% A correction from the plan's literal wording, worth recording:
-%%% "mirrors `macula_feeder''s shape exactly" holds for the WRAPPER
-%%% (supervised gen_server, cancel via a held handle, mesh facts) but
-%%% not for direct-dial's DIAL semantics. Content-sharing's direct-dial
-%%% targets a named STATION (`macula_feeder:start_link_direct/5,6'
-%%% takes an explicit `Station' pubkey, resolved via its own signed
-%%% `station_endpoint' record) because content storage has no notion of
-%%% "advertised procedures." A push targets a specific ADVERTISED
-%%% PROCEDURE instead (`macula_upload:advertise_direct/6,7''s
-%%% `procedure_advertisement'), so `start_link_direct/5,6' mirrors
-%%% `macula_stream_sink:start_link_direct/5,6''s shape instead — same
-%%% `Procedure'-based resolve, no `Station' parameter — and reuses
-%%% `macula_direct_dial:call_stream/5' as-is, which already resolves
-%%% and dials as one step (unlike content-transfer's lower-level
-%%% primitives, there is no separate resolve step for this module to
-%%% drive itself).
+%%% A push targets a specific ADVERTISED PROCEDURE
+%%% (`macula_upload:advertise_direct/6,7''s `procedure_advertisement'), so
+%%% `start_link_direct/5,6' mirrors `macula_stream_sink:start_link_direct/5,6''s
+%%% shape: a `Procedure'-based resolve, no `Station' parameter, reusing
+%%% `macula_direct_dial:call_stream/5', which resolves and dials as one step.
 %%%
 %%% == Stream I/O ==
 %%%
