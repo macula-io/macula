@@ -19,7 +19,6 @@
 -define(PEER_NODE_ID_INDEX, macula_station_link:state_field_index(peer_node_id)).
 -define(NODE_IDENTITY_INDEX, macula_station_link:state_field_index(node_identity)).
 -define(REFUSED_REPLIES_INDEX, macula_station_link:state_field_index(refused_replies)).
--define(CONTENT_PENDING_INDEX, macula_station_link:state_field_index(content_pending)).
 
 %% A call to `station' is a request to the node_id of the station the link is connected to, signed with the link's node
 %% identity key, carrying the caller's deadline.
@@ -327,36 +326,6 @@ a_crashing_link_tells_its_callers_only_the_name_of_its_reason_test_() ->
          ?assertEqual([{error, {link_stopped, <<"function_clause">>}}, {error, {link_stopped, <<"function_clause">>}}],
                       Answers),
          ?assertEqual([], [Private || Private <- Privates, binary:match(term_to_binary(Answers), Private) =/= nomatch])
-     end}}.
-
-%% A link that stops answers a caller waiting on a content stream call as well.
-stopping_the_link_answers_a_content_stream_caller_test_() ->
-    {spawn, {timeout, 5,
-     fun() ->
-         {Pid, _StationKey, _Profile} = start_link_to_station(),
-         Test = self(),
-         Tag = make_ref(),
-         _ = sys:replace_state(Pid, fun(S) ->
-                 setelement(?CONTENT_PENDING_INDEX, S, #{make_ref() => {{Test, Tag}, make_ref()}})
-             end),
-         ok = macula_station_link:stop(Pid),
-         ?assertEqual({error, {link_stopped, <<"normal">>}}, receive {Tag, Reply} -> Reply after 1_000 -> no_reply end)
-     end}}.
-
-%% A content stream call still waiting in the link's mailbox when the link stops gets the same final error, not an exit.
-a_content_stream_call_waiting_for_a_stopping_link_gets_a_final_error_test_() ->
-    {spawn, {timeout, 5,
-     fun() ->
-         {Pid, _StationKey, _Profile} = start_link_to_station(),
-         ok = sys:suspend(Pid),
-         Test = self(),
-         Ref = make_ref(),
-         _ = spawn(fun() ->
-                       Test ! {Ref, macula_station_link:call_on_stream(Pid, make_ref(), ?REALM, ?PROCEDURE, #{}, 4_000)}
-                   end),
-         ok = waiting(Pid, fun({call_on_stream, _, _, _, _, _}) -> true; (_) -> false end, 100),
-         ok = macula_station_link:stop(Pid),
-         ?assertEqual({error, {link_stopped, <<"normal">>}}, answer(Ref))
      end}}.
 
 %% When the link's connection closes, every pending caller is answered at once, and the calls count as sent.

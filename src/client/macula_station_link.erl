@@ -173,13 +173,6 @@
     is_connected/1,
     failure_scope/1,
     peer_node_id/1,
-    %% Dedicated-stream content transfer (PLAN_PER_STREAM_QUIC_ISOLATION.md
-    %% Phase 2). Not for general RPC use — see the moduledoc on
-    %% `open_content_stream/1'.
-    open_content_stream/1,
-    call_on_stream/6,
-    close_content_stream/2,
-    abort_content_stream/4,
     %% Exported for `macula_client''s discovery-seed dedup, which needs
     %% to know whether two differently-spelled seeds (e.g. `https://'
     %% bootstrap vs. `quic://' discovery-generated) name the same
@@ -442,20 +435,6 @@
     %% `stream_bufs' or closes. A dedicated stream stays open only while it
     %% carries a session or is this link's own client stream.
     opening_bufs = #{} :: #{reference() => binary()},
-    %% Dedicated content-transfer streams (PLAN_PER_STREAM_QUIC_ISOLATION.md
-    %% Phase 2). One `put_content'/`get_content' call pins one link and
-    %% opens one of these via `open_content_stream/1', then issues every
-    %% block/manifest CALL for that transfer on it via `call_on_stream/6'
-    %% — sequentially, never concurrently, so unlike `pending' (keyed by
-    %% CALL id, many outstanding at once) this needs no per-call id: at
-    %% most one entry per stream reference at any time.
-    %% `content_stream_bufs' buffers partial frames the same way
-    %% `stream_bufs' does for streaming-RPC dedicated streams; a content
-    %% stream is a wholly separate reference space from `client_streams'
-    %% / `server_streams' even though the underlying primitive
-    %% (`macula_peering:open_dedicated_stream/1') is the same one.
-    content_stream_bufs = #{} :: #{reference() => binary()},
-    content_pending = #{}     :: #{reference() => {gen_server:from(), reference(), macula_frame:verified_request()}},
     %% App-level liveness state. `liveness_timer' is the next-tick
     %% reference (or undefined when not armed). `liveness_outstanding'
     %% holds the request_id and the request of an in-flight probe (or
@@ -656,74 +635,6 @@ failure_scope({error, {dial_refused, _}})   -> candidate;
 failure_scope({error, {refused, _Reason}})  -> request;
 failure_scope({error, {open_too_large, _}}) -> request;
 failure_scope({error, _Reason})             -> provider.
-
-%% @doc Open a dedicated QUIC stream for a sequence of related unary
-%% CALLs — content transfer's one purpose so far (see
-%% PLAN_PER_STREAM_QUIC_ISOLATION.md Phase 2). NOT a general-purpose
-%% "any RPC can have its own stream" facility: `call/6,7' remains the
-%% right choice for an ordinary one-off CALL, and this link's pool
-%% caller is expected to have already picked ONE link for the whole
-%% sequence (`macula_client:pick_connected_link/1') before opening a
-%% stream on it, since a dedicated stream only isolates traffic on
-%% the link it was opened on.
--spec open_content_stream(pid()) -> {ok, reference()} | {error, term()}.
-open_content_stream(Pid) when is_pid(Pid) ->
-    gen_server:call(Pid, open_content_stream, 10_000).
-
-%% @doc Send a CALL on `Stream' (from `open_content_stream/1') and
-%% block for its RESULT/ERROR on that same stream. Sequential by
-%% design — sending a second CALL on `Stream' before the first
-%% replies is a caller bug (undefined which reply matches which
-%% call), so this link only ever tracks one outstanding call per
-%% content stream.
--spec call_on_stream(pid(), reference(), <<_:256>>, binary(), term(),
-                     pos_integer()) -> {ok, term()} | {error, term()}.
-call_on_stream(Pid, Stream, Realm, Procedure, Payload, TimeoutMs)
-  when is_pid(Pid), is_reference(Stream),
-       is_binary(Realm), byte_size(Realm) =:= 32,
-       is_binary(Procedure),
-       is_integer(TimeoutMs), TimeoutMs > 0 ->
-    GenTimeout = TimeoutMs + 500,
-    try
-        gen_server:call(Pid,
-                        {call_on_stream, Stream, Realm, Procedure, Payload,
-                         TimeoutMs},
-                        GenTimeout)
-    catch
-        %% Read as call/7 reads the exits of its call, the reason by name only.
-        exit:{timeout, _}                    -> {error, timeout};
-        exit:{noproc, _}                     -> {error, noproc};
-        exit:{Reason, {gen_server, call, _}} -> {error, {link_stopped, macula_reason_name:text(Reason)}}
-    end.
-
-%% @doc Close a content stream opened via `open_content_stream/1'.
-%% Idempotent; a stream already closed by disconnect cleanup is a
-%% no-op. Any pending call on `Stream' is failed with
-%% `{error, closed}' first, so a caller that closes out from under
-%% its own in-flight `call_on_stream/6' gets a clean reply instead of
-%% a hang.
--spec close_content_stream(pid(), reference()) -> ok.
-close_content_stream(Pid, Stream) when is_pid(Pid), is_reference(Stream) ->
-    gen_server:cast(Pid, {close_content_stream, Stream}).
-
-%% @doc Abort a content stream opened via `open_content_stream/1' —
-%% the cancel-with-a-real-signal counterpart to `close_content_stream/2'.
-%% Resets `Stream''s send side with `Code' via
-%% `macula_quic:reset_stream/2', a QUIC RESET_STREAM frame the PEER's
-%% own read genuinely observes (`{quic, stream_closed, PeerStream,
-%% {reset, Code}}' — see `macula_content_transfer', PLAN_PUSH_UPLOAD.md
-%% Phase 1), not merely a dropped connection to infer from the way
-%% `close_content_stream/2''s graceful FIN is. Any pending call on
-%% `Stream' is failed with `{error, cancelled}' (distinct from
-%% `close_content_stream/2''s `{error, closed}' — the caller asked for
-%% this one, it didn't just lose its connection). `Message' is local
-%% diagnostics only; QUIC RESET_STREAM carries only the numeric `Code'
-%% on the wire, no string.
--spec abort_content_stream(pid(), reference(), non_neg_integer(), binary()) -> ok.
-abort_content_stream(Pid, Stream, Code, Message)
-  when is_pid(Pid), is_reference(Stream), is_integer(Code), Code >= 0,
-       is_binary(Message) ->
-    gen_server:cast(Pid, {abort_content_stream, Stream, Code, Message}).
 
 %% @doc Send a PUBLISH frame fire-and-forget. The link stamps a
 %% monotonic per-link `seq' onto the frame and the local
@@ -980,8 +891,7 @@ unadvertise(Pid, Realm, Procedure, EncodedWithdrawal)
 %% @doc Subscribe to overlay-protocol frames for `Realm' — any frame
 %% type the built-in call/event/result/error handling above doesn't
 %% recognise (today: HyParView `hyparview_*', Plumtree `plumtree_*';
-%% SWIM and content-transfer frames have their own dedicated paths and
-%% never reach this). Every such frame whose `realm' field matches
+%% SWIM frames have their own path and never reach this). Every such frame whose `realm' field matches
 %% `Realm' is delivered to `Subscriber'.
 %%
 %% Unlike `subscribe/4' there is no wire-level SUBSCRIBE/UNSUBSCRIBE
@@ -1428,32 +1338,6 @@ handle_call({call, Target, Realm, Proc, Payload, DeadlineMs, Token}, From, S) ->
     call_in_time(DeadlineMs - erlang:system_time(millisecond),
                  {Target, Realm, Proc, Payload, DeadlineMs, Token}, From, S);
 
-handle_call(open_content_stream, _From, #state{peer_node_id = undefined} = S) ->
-    {reply, {error, not_connected}, S};
-handle_call(open_content_stream, _From,
-            #state{peer_pid = Pid, content_stream_bufs = Bufs} = S) ->
-    open_content_stream_result(macula_peering:open_dedicated_stream(Pid), Bufs, S);
-
-handle_call({call_on_stream, _Stream, _Realm, _Proc, _Payload, _Tmo}, _From,
-            #state{peer_node_id = undefined} = S) ->
-    {reply, {error, not_connected}, S};
-handle_call({call_on_stream, Stream, Realm, Proc, Payload, Tmo}, From,
-            #state{node_identity = Id, peer_node_id = Station,
-                   content_pending = CP, content_stream_bufs = Bufs} = S)
-        when is_map_key(Stream, Bufs) ->
-    CallSpec = #{
-        request_id => crypto:strong_rand_bytes(16),
-        procedure  => Proc,
-        realm      => Realm,
-        target     => Station,
-        deadline   => erlang:system_time(millisecond) + Tmo,
-        payload    => Payload
-    },
-    await_content_call_reply(
-      send_on_content_stream(Stream, CallSpec, Id), Stream, From, Tmo, CP, S);
-handle_call({call_on_stream, _Stream, _Realm, _Proc, _Payload, _Tmo}, _From, S) ->
-    {reply, {error, invalid_stream}, S};
-
 handle_call({publish, _Realm, _Topic, _Payload}, _From,
             #state{peer_node_id = undefined} = S) ->
     %% Require the full HELLO handshake before publishing — the
@@ -1628,15 +1512,6 @@ handle_call(_Req, _From, S) ->
 handle_cast({send_stream_bytes, Sid, Bytes, Last}, S) ->
     {noreply, stream_bytes_sent(find_stream(Sid, S), Sid, Bytes, Last, S)};
 
-handle_cast({close_content_stream, Stream}, S) ->
-    {noreply, close_content_stream_state(Stream, S)};
-
-handle_cast({abort_content_stream, Stream, Code, Message}, S) ->
-    macula_diagnostics:event(<<"_macula.station_link.content_abort">>,
-                             #{stream => Stream, code => Code,
-                               message => Message}),
-    {noreply, abort_content_stream_state(Stream, Code, S)};
-
 handle_cast({unsubscribe, SubRef}, S) ->
     {noreply, on_unsubscribe(SubRef, S)};
 
@@ -1765,39 +1640,14 @@ handle_info({quic, Bin, Stream, _Flags}, #state{stream_bufs = Bufs} = S)
     Buf = maps:get(Stream, Bufs),
     {noreply, dedicated_items(macula_frame:parse_received(<<Buf/binary, Bin/binary>>), Stream, S)};
 
-%% Bytes on one of our content-transfer streams (opened via
-%% `open_content_stream/1', always by us — content is never
-%% peer-initiated, unlike streaming RPC's inbound STREAM_OPEN case,
-%% so there is no `new_dedicated_stream' seeding clause to match this
-%% one). Bytes that do not decode, or a reply missing a field it
-%% requires, end the stream and fail the call waiting on it
-%% (`content_items/3').
-handle_info({quic, Bin, Stream, _Flags},
-            #state{content_stream_bufs = Bufs} = S)
-        when is_binary(Bin), is_map_key(Stream, Bufs) ->
-    Buf = maps:get(Stream, Bufs),
-    {noreply, content_items(macula_frame:parse_received(<<Buf/binary, Bin/binary>>), Stream, S)};
-
 %% A write on one of our dedicated streams failed: the sessions it carries
 %% can send nothing more, so they end as they do when the link is lost.
 handle_info({quic, send_failed, Stream, Reason}, #state{stream_bufs = Bufs} = S)
         when is_map_key(Stream, Bufs) ->
     {noreply, end_sessions_on_stream(Stream, {send_failed, Reason}, S)};
 
-%% A write on one of our content-transfer streams failed: no call can
-%% reach the peer on it any more, so it is torn down as on a close, and a
-%% call still waiting on it fails with the write's reason.
-handle_info({quic, send_failed, Stream, Reason},
-            #state{content_stream_bufs = Bufs} = S)
-        when is_map_key(Stream, Bufs) ->
-    {noreply, teardown_content_stream_state(Stream, {error, {send_failed, Reason}},
-                                            fun macula_quic:close_stream/1, S)};
-
 handle_info({call_timeout, RequestId}, #state{pending = P} = S) ->
     on_timeout(maps:take(RequestId, P), S);
-
-handle_info({content_call_timeout, Stream}, #state{content_pending = CP} = S) ->
-    on_content_timeout(maps:take(Stream, CP), S);
 
 handle_info(liveness_tick, S) ->
     {noreply, on_liveness_tick(S)};
@@ -1911,9 +1761,8 @@ disconnect_detail(_Reason) ->
 pool_told(undefined, _Summary) -> ok;
 pool_told(Pool, Summary) -> Pool ! {macula_link_disconnected, self(), Summary}, ok.
 
-answer_waiting_callers(Reason, #state{pending = Pending, content_pending = ContentPending}) ->
-    maps:foreach(fun(_RequestId, {From, _TRef, _Request}) -> gen_server:reply(From, {error, Reason}) end, Pending),
-    maps:foreach(fun(_Stream, {From, _TRef}) -> gen_server:reply(From, {error, Reason}) end, ContentPending).
+answer_waiting_callers(Reason, #state{pending = Pending}) ->
+    maps:foreach(fun(_RequestId, {From, _TRef, _Request}) -> gen_server:reply(From, {error, Reason}) end, Pending).
 
 code_change(_OldVsn, S, _Extra) -> {ok, S}.
 
@@ -2043,10 +1892,8 @@ on_frame(#{frame_type := call} = Frame, S) ->
 %% `on_frame/2' decodes. A stream frame reaching this function is a
 %% protocol violation and falls through to the catch-all below.
 %%
-%% SWIM and content-transfer frames have their own dedicated paths
-%% (content: `dispatch_dedicated_frame/3'; SWIM: station-to-station,
-%% never reaches a daemon-side client connection at all) and never
-%% land here. HyParView / Plumtree frames DO land here — fan out to
+%% SWIM frames are station-to-station and never reach a daemon-side
+%% client connection at all. HyParView / Plumtree frames DO land here — fan out to
 %% whoever called `overlay_subscribe/3' for the frame's realm, if
 %% anyone. A frame with no `realm' field, or no matching subscriber,
 %% is dropped, same as every overlay frame was before this existed.
@@ -2162,156 +2009,14 @@ on_timeout({{From, _OldTRef, _Request}, NewP}, S) ->
 
 %% -- Content-transfer dedicated streams (Phase 2) -------------------
 
-open_content_stream_result({ok, Stream}, Bufs, S) ->
-    {reply, {ok, Stream}, S#state{content_stream_bufs = Bufs#{Stream => <<>>}}};
-open_content_stream_result({error, _} = E, _Bufs, S) ->
-    {reply, E, S}.
-
-send_on_content_stream(Stream, CallSpec, Id) ->
-    try content_call_sent(Stream, CallSpec, Id)
-    catch C:R -> {error, {C, R}}
-    end.
-
-content_call_sent(Stream, CallSpec, Id) ->
-    case macula_frame:stream_bytes({call, CallSpec}, Id) of
-        {ok, Built} ->
-            Bytes = macula_frame:written_bytes(Built),
-            content_call_written(macula_peering:send_on_stream(Stream, Bytes),
-                                 CallSpec, Id);
-        {error, _} = Refused -> Refused
-    end.
-
-content_call_written(ok, CallSpec, Id) -> {ok, content_request(CallSpec, Id)};
-content_call_written({error, _} = E, _CallSpec, _Id) -> E.
-
-%% The request data a content reply verifies against: the id, the hash
-%% of the request's signed tbs, and the target the reply must report.
-content_request(CallSpec, Id) ->
-    #{request := #{tbs := Tbs}} = macula_frame:call(CallSpec, Id),
-    #{request_id   => maps:get(request_id, CallSpec),
-      request_hash => crypto:hash(sha384, Tbs),
-      target       => maps:get(target, CallSpec)}.
-
-await_content_call_reply({ok, Request}, Stream, From, Tmo, Pending, S) ->
-    TRef = erlang:send_after(Tmo, self(), {content_call_timeout, Stream}),
-    {noreply, S#state{content_pending = Pending#{Stream => {From, TRef, Request}}}};
-await_content_call_reply({error, _} = Refused, _Stream, _From, _Tmo, _Pending, S) ->
-    {reply, Refused, S}.
-
-on_content_timeout(error, S) ->
-    {noreply, S};
-on_content_timeout({{From, _OldTRef}, NewCP}, S) ->
-    gen_server:reply(From, {error, timeout}),
-    {noreply, S#state{content_pending = NewCP}}.
-
-dispatch_content_frame(#{frame_type := Type} = Frame, Stream, S)
-  when Type =:= result; Type =:= error ->
-    verify_content_reply(Frame, Stream, S);
-dispatch_content_frame(_Frame, _Stream, S) ->
-    %% Anything else arriving on a content stream is a protocol
-    %% violation — this side only ever sends CALL on one, so the only
-    %% legitimate replies are RESULT/ERROR.
-    S.
-
-%% A reply on a content stream verifies against the request the stream
-%% carries; one that does not ends the stream and fails the call
-%% waiting on it, naming the refusal.
-verify_content_reply(Frame, Stream, #state{content_pending = CP, profile = Profile} = S) ->
-    case maps:find(Stream, CP) of
-        {ok, {_From, _TRef, Request}} ->
-            content_reply_verified(macula_frame:verify_reply(Frame, Request, Profile),
-                                   Stream, S);
-        error ->
-            S
-    end.
-
-content_reply_verified({ok, Fields}, Stream, S) ->
-    deliver_content_reply(Stream, content_reply_result(Fields), S);
-content_reply_verified({error, Refusal}, Stream, S) ->
-    teardown_content_stream_state(Stream, {error, Refusal},
-                                  fun macula_quic:close_stream/1, S).
-
-content_reply_result(#{frame_type := result, payload := Payload}) ->
-    {ok, Payload};
-content_reply_result(#{frame_type := error, code := Code} = Fields) ->
-    {error, {call_error, Code, maps:get(detail, Fields, undefined)}}.
-
-%% What `macula_frame:parse_received/1' gave for a content stream, handled as
-%% `dedicated_items/3' handles a dedicated stream's: a reply that does not
-%% decode, or lacks a field it requires, ends the stream and fails the call
-%% waiting on it.
-content_items({ok, Items, Tail}, Stream, #state{content_stream_bufs = Bufs} = S) ->
-    {_Open, NewS} = dispatch_content_items(Items, Stream,
-                                           S#state{content_stream_bufs = Bufs#{Stream => Tail}}),
-    NewS;
-content_items({malformed, Items, Reason}, Stream, S) ->
-    end_malformed_content(dispatch_content_items(Items, Stream, S), Stream, Reason).
-
-dispatch_content_items([], _Stream, S) ->
-    {open, S};
-dispatch_content_items([{invalid_frame, _Type, _Field} = Invalid | _Rest], Stream, S) ->
-    {ended, teardown_malformed_content(Stream, Invalid, S)};
-dispatch_content_items([Frame | Rest], Stream, S) ->
-    dispatch_content_items(Rest, Stream, dispatch_content_frame(Frame, Stream, S)).
-
-end_malformed_content({open, S}, Stream, Reason) ->
-    teardown_malformed_content(Stream, Reason, S);
-end_malformed_content({ended, S}, _Stream, _Reason) ->
-    S.
-
-teardown_malformed_content(Stream, Reason, S) ->
-    teardown_content_stream_state(Stream, {error, {malformed, Reason}},
-                                  fun macula_quic:close_stream/1, S).
-
-deliver_content_reply(Stream, Reply, #state{content_pending = CP} = S) ->
-    reply_content_pending(maps:take(Stream, CP), Reply, S).
-
-reply_content_pending(error, _Reply, S) ->
-    %% No caller waiting (race with timeout, or a stray reply after
-    %% `close_content_stream/2' already failed it).
-    S;
-reply_content_pending({{From, TRef, _Request}, NewCP}, Reply, S) ->
-    _ = erlang:cancel_timer(TRef),
-    gen_server:reply(From, Reply),
-    S#state{content_pending = NewCP}.
-
-close_content_stream_state(Stream, S) ->
-    teardown_content_stream_state(Stream, {error, closed},
-                                  fun macula_quic:close_stream/1, S).
-
-abort_content_stream_state(Stream, Code, S) ->
-    teardown_content_stream_state(Stream, {error, cancelled},
-                                  fun(St) -> macula_quic:reset_stream(St, Code) end,
-                                  S).
-
-teardown_content_stream_state(Stream, LocalFailReason, CloseFun,
-                              #state{content_pending = CP,
-                                     content_stream_bufs = Bufs} = S) ->
-    NewCP = fail_content_pending(maps:take(Stream, CP), CP, LocalFailReason),
-    try CloseFun(Stream) catch _:_ -> ok end,
-    S#state{content_pending = NewCP,
-            content_stream_bufs = maps:remove(Stream, Bufs)}.
-
-fail_content_pending(error, CP, _Reason) ->
-    CP;
-fail_content_pending({{From, TRef, _Request}, NewCP}, _CP, Reason) ->
-    _ = erlang:cancel_timer(TRef),
-    gen_server:reply(From, Reason),
-    NewCP.
-
 fail_all_pending(Reason, #state{pending = P, subscriptions = Subs,
                                 overlay_subscriptions = OverlaySubs,
                                 client_streams = CS,
-                                server_streams = SS,
-                                content_pending = ContentP} = S) ->
+                                server_streams = SS} = S) ->
     maps:foreach(fun(_RequestId, {From, TRef, _Request}) ->
         _ = erlang:cancel_timer(TRef),
         gen_server:reply(From, {error, Reason})
     end, P),
-    maps:foreach(fun(_Stream, {From, TRef}) ->
-        _ = erlang:cancel_timer(TRef),
-        gen_server:reply(From, {error, Reason})
-    end, ContentP),
     maps:foreach(fun(SubRef, {_Realm, _Topic, Subscriber, Mon}) ->
         erlang:demonitor(Mon, [flush]),
         Subscriber ! {macula_event_gone, SubRef, Reason}
@@ -2333,11 +2038,6 @@ fail_all_pending(Reason, #state{pending = P, subscriptions = Subs,
     end,
     maps:foreach(AbortFun, CS),
     maps:foreach(AbortFun, SS),
-    %% Content streams have no paired process to abort — just reclaim
-    %% the QUIC resource, same as `close_content_stream_state/2' does
-    %% on a normal close.
-    maps:foreach(fun(Stream, _Buf) -> close_dedicated_stream(Stream, S) end,
-                S#state.content_stream_bufs),
     %% A stream the peer opened that brought no whole frame yet carries no
     %% session to abort either.
     maps:foreach(fun(Stream, _Buf) -> close_dedicated_stream(Stream, S) end,
@@ -2345,7 +2045,7 @@ fail_all_pending(Reason, #state{pending = P, subscriptions = Subs,
     S#state{pending = #{}, subscriptions = #{}, topic_index = #{},
             overlay_subscriptions = #{}, overlay_realm_index = #{},
             client_streams = #{}, server_streams = #{}, stream_bufs = #{},
-            opening_bufs = #{}, content_pending = #{}, content_stream_bufs = #{}}.
+            opening_bufs = #{}}.
 
 abort_stream_process(Pid, Reason) ->
     try

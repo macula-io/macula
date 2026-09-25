@@ -20,21 +20,10 @@
 %%% `macula_manifest''s `from_wire/1'), and chunks are sent in order
 %%% over the ONE `client_stream' the recipient reads from.
 %%%
-%%% == No multi-stream parallelism here — a deliberate correction ==
+%%% == One stream, chunks in order ==
 %%%
-%%% An earlier draft of this plan said this module "sends chunks via
-%%% the Phase 3 multi-stream engine." Traced why that can't be true:
-%%% Phase 3's multi-stream engine lives entirely inside
-%%% the old station-store content transfer, built on content-sharing's OWN dedicated
-%%% content-stream bookkeeping (`macula_station_link''s
-%%% `content_stream_bufs' / `open_content_stream') — a wire mechanism
-%%% streaming RPC's `client_stream'/`macula_stream' doesn't have and
-%%% was never meant to. This plan's own scope-decision section says so
-%%% explicitly: "Multi-stream parallel chunk transfer is a
-%%% content-sharing-only concern. It does NOT extend to
-%%% `macula_streamer'/`macula_stream_sink'." Chunks here go out
-%%% sequentially over the one stream `macula:call_stream/5' /
-%%% `macula_direct_dial:call_stream/5' opens — the same shape a hand
+%%% Chunks go out sequentially over the one stream `macula:call_stream/5' /
+%%% `macula_direct_dial:call_stream/5' opens: the same shape a hand
 %%% written `client_stream' caller would use, just chunked and hashed
 %%% for you.
 %%%

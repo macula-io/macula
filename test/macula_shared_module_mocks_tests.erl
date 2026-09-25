@@ -30,11 +30,11 @@
 %% tests above took their module's functions from its options.
 %% (macula_provider_advertise_tests.erl left this list when the
 %% provider-advertisement resolution took its DHT calls from the
-%% provider_io seam, 11.4.0.)
+%% provider_io seam, 11.4.0; macula_station_link_tests.erl left it when its
+%% content-stream tests went with the station-served content, 12.6.0.)
 -define(ALLOWED, ["macula_dht_records_tests.erl",
                   "macula_direct_dial_resolve_tests.erl",
-                  "macula_link_respawn_replay_tests.erl",
-                  "macula_station_link_tests.erl"]).
+                  "macula_link_respawn_replay_tests.erl"]).
 
 no_test_replaces_a_shared_module_test() ->
     Sources = test_sources(),

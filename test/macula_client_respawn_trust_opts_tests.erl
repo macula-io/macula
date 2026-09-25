@@ -60,8 +60,8 @@ a_direct_dial_pin_survives_a_link_respawn() ->
 %% unreachable host, so the call itself returns an error; the link child it
 %% started is what this test is about.
 dialed_link_pid(Pool) ->
-    _ = macula_client:ensure_station_link(Pool, ?STATION,
-                                          #{expected_node_id => ?STATION_PIN}, 200),
+    _ = macula_client:call_station(Pool, ?STATION, ?STATION_PIN, <<0:256>>, <<"acme/probe">>, #{}, 200, <<>>,
+                                   #{expected_node_id => ?STATION_PIN}),
     Pid = link_pid(Pool),
     ?assertNotEqual(undefined, Pid),
     Pid.

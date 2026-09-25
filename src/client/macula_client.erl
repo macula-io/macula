@@ -102,15 +102,6 @@
          advertise/4, advertise/5, advertise/6, unadvertise/3,
          advertise_stream/5, advertise_stream/6, advertise_stream/7,
          unadvertise_stream/3]).
-%% Dedicated-stream content transfer (see
-%% PLAN_PER_STREAM_QUIC_ISOLATION.md Phase 2) — called by the
-%% `macula' facade to pin one link for a whole put_content/get_content
-%% transfer instead of letting `call_linked_station/5' pick per underlying block CALL.
--export([pick_connected_link/1]).
-%% Direct-dial content transfer — called by the `macula' facade to pin
-%% a link to a SPECIFIC (resolved) station rather than picking from the
-%% pool's existing links.
--export([ensure_station_link/4]).
 %% Direct-dial resolution head start — called by `macula_direct_dial' to
 %% remember which station last answered a procedure, and to get it back.
 -export([resolved_candidate/3, remember_resolved/5]).
@@ -336,7 +327,7 @@
         refresh_ms => pos_integer(),
         %% Cap on total concurrent links (bootstrap + discovered) --
         %% counts EVERY entry in `#state.links', including direct-dial
-        %% targets (`call_station'/`ensure_station_link') and a seed
+        %% targets (`call_station'/`call_stream_station') and a seed
         %% still mid-respawn after a failed dial, not only successfully
         %% connected discovered stations. A large station directory
         %% should not mean dozens of QUIC connections. Default 5.
@@ -388,7 +379,7 @@
     max_seeds => pos_integer(),
 
     %% Most direct-dial links a pool holds at once: links dialed by
-    %% `call_station', `ensure_station_link' or `call_stream_station' to a
+    %% `call_station' or `call_stream_station' to a
     %% station that is not already a link. A fresh dial past it is refused
     %% with `{error, too_many_direct_links}'. Default 8.
     max_direct_links => pos_integer(),
@@ -763,38 +754,6 @@ call_linked_station(Pool, Realm, Procedure, Payload, TimeoutMs)
        is_integer(TimeoutMs), TimeoutMs > 0, TimeoutMs =< 600_000 ->
     gen_server:call(Pool, {linked_station_call, Realm, Procedure, Payload, TimeoutMs},
                     TimeoutMs + 1_000).
-
-%% @doc Pick one currently-connected link and return its pid, without
-%% issuing a call. For a caller that needs to pin ONE link across a
-%% sequence of related calls — a dedicated QUIC stream, opened once
-%% on the returned pid (via the internal station-link module's
-%% content-stream API), only isolates one link's traffic, so every
-%% call in the sequence must go over that same link. `call_linked_station/5' picks
-%% fresh per call (`call_first_success/5') and is the wrong primitive
-%% for that.
-%%
-%% Selection matches `call_first_success/5''s ordering (first
-%% connected link wins) so behaviour is unsurprising relative to the
-%% existing pool-routed path.
--spec pick_connected_link(pool()) -> {ok, pid()} | {error, no_healthy_station}.
-pick_connected_link(Pool) when is_pid(Pool) ->
-    gen_server:call(Pool, pick_connected_link).
-
-%% @doc As `pick_connected_link/1', but for a SPECIFIC station — reuse
-%% a live link to `Station' or dial (and wait up to `TimeoutMs' for the
-%% handshake on) a fresh one, naming the station it must prove through
-%% `LinkOpts' (`expected_node_id', mirroring `call_station/9'). This is direct-dial's content-transfer primitive:
-%% the returned pid is pinned for a whole `put_content'/`get_content'
-%% dedicated-stream transfer exactly like `pick_connected_link/1', just
-%% against a caller-resolved station instead of whichever pool link is
-%% already up.
--spec ensure_station_link(pool(), seed(), map(), pos_integer()) ->
-    {ok, pid()} | {error, term()}.
-ensure_station_link(Pool, Station, LinkOpts, TimeoutMs)
-  when is_pid(Pool), is_map(LinkOpts),
-       is_integer(TimeoutMs), TimeoutMs > 0 ->
-    gen_server:call(Pool, {ensure_station_link, Station, LinkOpts, TimeoutMs},
-                    TimeoutMs + 2_000).
 
 %% @doc Issue a CALL to `Target', a provider's node_id, at ONE specific
 %% station, dialing it directly even if it is not in the pool's seed set.
@@ -1576,10 +1535,6 @@ handle_call({subscribe, Realm, Topic, Subscriber, Opts}, _From, S) ->
 handle_call({unsubscribe, SubRef}, _From, S) ->
     {reply, ok, drop_sub(SubRef, S)};
 
-handle_call(pick_connected_link, _From, S) ->
-    {reply, first_connected_link(ordered_for_selection(connected_link_pids(S),
-                                                       S#state.link_selection)), S};
-
 handle_call({linked_station_call, Realm, Procedure, Payload, TimeoutMs}, From, S) ->
     %% Worker-spawn so concurrent CALLs don't serialise through the
     %% pool gen_server. Each per-link `macula_station_link:call/6'
@@ -1603,15 +1558,6 @@ handle_call({call_station, Station, Target, Realm, Procedure, Payload, TimeoutMs
             fun(Pid) ->
                 call_when_connected(Pid, Target, Realm, Procedure, Payload, TimeoutMs, DialTimeoutMs, Ucan)
             end);
-
-handle_call({ensure_station_link, Station, LinkOpts, TimeoutMs}, From, S) ->
-    %% Same shape as call_station: ensure the link, wait for its
-    %% handshake in a worker so the pool never blocks. Unlike
-    %% call_station this hands back the connected pid itself rather
-    %% than making a call over it — the caller opens a dedicated
-    %% content stream on it directly (see macula:with_content_stream/2).
-    on_link(ensure_link(Station, LinkOpts, S), From,
-            fun(Pid) -> content_link_when_connected(Pid, TimeoutMs) end);
 
 handle_call({advertise, Realm, Procedure, Handler, Policy}, _From,
             #state{procs = P} = S) ->
@@ -2274,18 +2220,6 @@ call_after_connect(true, Pid, Target, Realm, Proc, Payload, Deadline, Ucan) ->
 call_after_connect(false, _Pid, _Target, _Realm, _Proc, _Payload, _Deadline, _Ucan) ->
     {error, not_connected}.
 
-%% As `call_when_connected/8', but for `ensure_station_link/4': waits
-%% for a freshly-dialed link's handshake, then hands back the pid
-%% itself rather than making a call over it.
-content_link_when_connected(undefined, _TimeoutMs) ->
-    {error, not_connected};
-content_link_when_connected(Pid, TimeoutMs) ->
-    Deadline = erlang:monotonic_time(millisecond) + TimeoutMs,
-    content_link_after_connect(await_connected(Pid, Deadline), Pid).
-
-content_link_after_connect(true, Pid)   -> {ok, Pid};
-content_link_after_connect(false, _Pid) -> {error, not_connected}.
-
 %% Live links that have completed CONNECT/HELLO. Used by publish,
 %% which (unlike advertise) gains nothing from dispatching to a
 %% mid-handshake link.
@@ -2306,11 +2240,8 @@ select_publish_targets(Targets, Replication) ->
     %% lists:sublist/2 already caps at length(Targets) on its own.
     lists:sublist(Targets, Replication).
 
-first_connected_link([Pid | _]) -> {ok, Pid};
-first_connected_link([])        -> {error, no_healthy_station}.
-
 %% Candidate ordering for `call_first_success/5', `select_publish_targets/2'
-%% (via its `lists:sublist/2' first-N), and `pick_connected_link/1'.
+%% (via its `lists:sublist/2' first-N).
 %% `first_success': today's behaviour, byte-for-byte -- whatever order
 %% `Pids' already came in (spawn order, i.e. seed-list order). `random':
 %% shuffle first, so which link is tried first (and which N a
