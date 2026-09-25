@@ -752,6 +752,12 @@ before its wire checks are green.
      - Revised 2026-09-15: the certificate form is gone. The realm issues no X.509 certificates (design B1), so only
        the org directory and the delegation authorize a provider, and a verifier refuses any other form as
        `authorization_form_unsupported`.
+     - Revised 2026-09-24: a node's own namespace. A procedure named `~<node_id>/<name>`, where `<node_id>` is
+       the 64 lowercase hex characters of the advertiser's node_id, is authorized by the advertisement's own
+       signature: it carries no authorization, and a verifier accepts it as a target only when the
+       advertisement's signer is the node the namespace names. Only that node's key can sign for it, so it
+       impersonates no one, and a caller trusting it trusts that node, not an org. It carries no org, so no
+       capability grant (D7) names it, and an org's procedures keep the org directory and delegation form.
   7. **Stations report transport failures only.** A station may sign an ERROR or STREAM_ERROR as reported_by only with
      a relay error code distinct from every provider result, and never a RESULT. A relay error means the outcome is
      unknown, not that the call failed. Providers deduplicate requests on caller and call id.
@@ -764,30 +770,31 @@ before its wire checks are green.
      the first request may already have run.
 - **Answers to the design questions:**
   - **Who may provide a procedure:** the realm's provider authorization decides (item 6), and the caller, not a
-
     station, picks and signs the target among authorized providers (item 2). In 11.0.0 every procedure has an org
     namespace, so every provider carries an authorization (next answer).
-  - **Procedures without an org namespace, decided by Raf on 2026-09-14:** `macula` 11.0.0 requires an org namespace
-    on every procedure. A name whose first segment is `_`, a name without `/`, and a name that starts with `/` are
-    refused when a procedure is advertised and by every authorization policy.
-    - **Why:** every provider then carries a provider authorization (item 6), every capability grant has an org that
-      owns it (D7), and the provider check and the caller check share one definition of who owns a name. Not taken:
-      the realm owning `_` and signing its procedure delegations, which keeps today's names but makes the realm key a
-      signer in regular use.
-    - **Consequences:** the procedures in use without an org namespace are listed and renamed before 11.0.0, and
-      every publisher gets an org directory entry (WP 3.1, WP 6.1, open items).
-    station, picks and signs the target among authorized providers (item 2). In 11.0.0 every procedure has an org
-    namespace, so every provider carries an authorization (next answer).
-  - **Procedures without an org namespace, decided by Raf on 2026-09-14:** `macula` 11.0.0 requires an org namespace
-    on every procedure. A name whose first segment is `_`, a name without `/`, and a name that starts with `/` are
-    refused when a procedure is advertised and by every authorization policy.
-    - **Why:** every provider then carries a provider authorization (item 6), every capability grant has an org that
-      owns it (D7), and the provider check and the caller check share one definition of who owns a name. Under the
-      earlier rule, any realm member could provide a procedure without an org namespace, and the reply binding
-      proved only that the reply came from the node the caller chose. Not taken: the realm owning `_` and signing
-      its procedure delegations, which keeps today's names but makes the realm key a signer in regular use.
-    - **Consequences:** the procedures in use without an org namespace are listed and renamed before 11.0.0, and
-      every publisher gets an org directory entry (WP 3.1, WP 6.1, open items).
+  - **Procedures without an org namespace, decided by Raf on 2026-09-14, revised on 2026-09-24:** every
+    procedure has an org namespace or is in its advertiser's own namespace (item 6). A name whose first
+    segment is `_`, a name without `/`, a name that starts with `/`, and a `~` namespace that is not
+    exactly the advertiser's node_id are refused when a procedure is advertised and by every authorization
+    policy.
+    - **Why:** every org procedure carries a provider authorization (item 6), every capability grant has an
+      org that owns it (D7), and the provider check and the caller check share one definition of who owns a
+      name. Under the earlier rule, any realm member could provide a procedure without an org namespace, and
+      the reply binding proved only that the reply came from the node the caller chose. A node's own
+      namespace keeps that binding and adds nothing more: a caller calling `~<node_id>/<name>` gets a reply
+      from exactly that node, and trusts nothing beyond it. Not taken: the realm owning `_` and signing its
+      procedure delegations, which keeps today's names but makes the realm key a signer in regular use; a
+      realm-held `member` org with a delegation per admitted node, which needs no protocol change but a
+      realm key pinned by every caller.
+    - **Why a node's own namespace, 2026-09-24:** an org-less node (an agent, a CLI) could not serve at all,
+      since an org and its delegations are admitted by a human and nothing is admitted automatically.
+      Rooms and announcements use pubsub; a node's own namespace gives such a node request and reply, with
+      run-once admission and a reply bound to the request, without a human per node.
+    - **Bound:** a station counts a node's own-namespace advertisements against the same per-advertiser
+      caps as its org advertisements (macula-station#6), so the namespace cannot flood a registry.
+    - **Consequences:** the procedures in use without an org namespace are listed and renamed before 11.0.0,
+      and every publisher gets an org directory entry (WP 3.1, WP 6.1, open items). The SDKs and the station
+      accept the `~` form from macula 12.5.0 and macula-station 0.6.4 or later.
   - **Hecate services, accepted by Raf on 2026-09-11:** in 11.0.0 every hecate service procedure has the org
     namespace `hecate`, as `DESIGN_PQ_SIGNED_FRAMES_AND_RECORDS.md` defines it, with a procedure delegation per
     service (WP 6.1).
@@ -825,7 +832,9 @@ before its wire checks are green.
   - a provider stream frame from another signer, out of sequence, or on a stream whose first provider frame was not
     seen is refused, and a stream whose STREAM_END does not sign the last sequence number fails;
   - an advertisement without valid provider authorization, or expired, is never a target;
-  - an advertisement, or a request, for a procedure without an org namespace is refused;
+  - an advertisement, or a request, for a procedure without an org namespace is refused, except in the
+    advertiser's own `~<node_id>` namespace, and an own-namespace advertisement signed by any other node is
+    refused;
   - a relay error never ends a call as failed.
 
 ### D26 One key form for peer-supplied maps

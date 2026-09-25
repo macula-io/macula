@@ -90,7 +90,8 @@ so this is a denial of service, not impersonation. Filed as macula-station#10, f
 
 Raf, 2026-09-24: **(a) option 4 plus rooms over pubsub.**
 
-- The SDK side is built after macula 12.4.0: the facade accepts a `~<hex(own node_id)>/<name>` procedure without an
+- The SDK side ships in macula 12.5.0 (`macula_record:own_namespace/1`, shared fixtures in
+  `test/fixtures/own_namespace/`); the station side in macula-station 0.6.4. It was planned as: the facade accepts a `~<hex(own node_id)>/<name>` procedure without an
   authorization, and a caller trusts that form only when the advertisement's signer is the node the namespace names.
   Fixtures are shared with macula-go.
 - The two station admissions change with Mars. Per-node caps (macula-station#6) apply, so a node cannot flood the
