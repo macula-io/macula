@@ -3040,11 +3040,11 @@ open_within_limit(true, Bytes, Opts, Caller, #state{profile = Profile} = S) ->
 client_session(false, _Bytes, _Open, _Opts, _Caller, S) ->
     {reply_value, {error, {refused, attach_id_taken}}, S};
 client_session(true, Bytes, #{request_id := AttachId, mode := Mode} = Open, Opts, Caller,
-               #state{peer_pid = Conn, profile = Profile, node_identity = Key} = S) ->
+               #state{peer_pid = Conn, profile = Profile, node_identity = Key, peer_node_id = Station} = S) ->
     {ok, StreamPid} = macula_stream:start_link(#{id => AttachId, role => client, mode => Mode,
                                                  owner => maps:get(owner, Opts, Caller),
                                                  key => fun() -> Key end, open => Open, conn => Conn,
-                                                 profile => Profile}),
+                                                 profile => Profile, station => Station}),
     ok = macula_stream:attach_to_link(StreamPid, self(), AttachId),
     Mon = erlang:monitor(process, StreamPid),
     {reply_value, {ok, StreamPid}, client_stream_opened(opened_stream(S), Bytes, AttachId, StreamPid, Mon, S)}.

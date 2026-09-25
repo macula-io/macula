@@ -1904,7 +1904,8 @@ verify_caller_stream(_Frame, _State, _Profile) ->
 %% push sets is not: through a relay that sender is the frame's origin, not the connection peer, and it may be no
 %% neighbour during view churn through no fault of the relay.
 -spec charged_refusal(malformed_frame | signature_invalid | key_id_mismatch | seq_mismatch | stream_ended
-                      | request_mismatch | not_the_target | placement_allowance | unsolicited_shuffle_reply
+                      | request_mismatch | not_the_target | not_the_connection | placement_allowance
+                      | unsolicited_shuffle_reply
                       | {expired, pos_integer()} | {not_yet_valid, pos_integer()} | ihave_allowance
                       | graft_unanswered | wrong_realm | not_a_peer | no_subscriber) ->
         boolean().
@@ -1924,6 +1925,7 @@ refusal_charge(seq_mismatch) -> uncharged;
 refusal_charge(stream_ended) -> uncharged;
 refusal_charge(request_mismatch) -> uncharged;
 refusal_charge(not_the_target) -> uncharged;
+refusal_charge(not_the_connection) -> uncharged;
 refusal_charge(placement_allowance) -> charged;
 refusal_charge(unsolicited_shuffle_reply) -> charged;
 refusal_charge({expired, PastMs}) when is_integer(PastMs) -> freshness_charge(PastMs);

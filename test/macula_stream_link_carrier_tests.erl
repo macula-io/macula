@@ -29,7 +29,42 @@ cases(Keys) ->
                  fun a_control_frame_on_a_stream_rejects_the_connection_and_ends_the_stream_in_pq_pure/1,
                  fun a_control_frame_on_a_stream_rejects_the_connection_and_ends_the_stream_in_pq_hybrid/1,
                  fun the_status_of_a_stream_carries_its_key_loader_and_no_key_half/1,
-                 fun a_stream_given_a_key_instead_of_its_loader_does_not_start/1]].
+                 fun a_stream_given_a_key_instead_of_its_loader_does_not_start/1,
+                 fun the_stations_relay_error_for_the_open_ends_the_stream_at_once/1,
+                 fun a_relay_error_from_another_station_is_refused/1,
+                 fun a_relay_error_for_another_request_is_refused/1]].
+
+%% The station the link is connected to reports that it cannot reach the provider (macula#42): the caller's stream
+%% ends at once with the station's code, rather than at its deadline.
+the_stations_relay_error_for_the_open_ends_the_stream_at_once(#{caller := Caller, station := Station} = Keys) ->
+    Open = verified_open(Keys, server_stream),
+    Stream = stream(client, Caller, Open, pq_pure, macula_node_keys:key_id(Station)),
+    ok = macula_stream:deliver_frame(Stream, relay_error_frame(Open, Station)),
+    ?assertMatch({error, {<<"unknown_next_peer">>, _}}, macula_stream:recv(Stream, 1000)),
+    ?assertEqual(none, no_more_reports()),
+    gen_server:stop(Stream).
+
+%% Only the station the link is connected to speaks for the route: another station's report is refused, and the stream
+%% waits on.
+a_relay_error_from_another_station_is_refused(#{caller := Caller, station := Station, provider := Other} = Keys) ->
+    Open = verified_open(Keys, server_stream),
+    Stream = stream(client, Caller, Open, pq_pure, macula_node_keys:key_id(Station)),
+    ok = macula_stream:deliver_frame(Stream, relay_error_frame(Open, Other)),
+    ?assertMatch({not_the_connection, _}, reported()),
+    ?assertEqual({error, timeout}, macula_stream:recv(Stream, 200)),
+    gen_server:stop(Stream).
+
+a_relay_error_for_another_request_is_refused(#{caller := Caller, station := Station} = Keys) ->
+    Open = verified_open(Keys, server_stream),
+    Another = verified_request(Caller, (open_spec(Keys, server_stream))#{request_id => <<8:128>>}),
+    Stream = stream(client, Caller, Open, pq_pure, macula_node_keys:key_id(Station)),
+    ok = macula_stream:deliver_frame(Stream, relay_error_frame(Another, Station)),
+    ?assertMatch({request_mismatch, _}, reported()),
+    ?assertEqual({error, timeout}, macula_stream:recv(Stream, 200)),
+    gen_server:stop(Stream).
+
+relay_error_frame(Open, Station) ->
+    wire(macula_frame:relay_error(#{frame_type => stream_error, request => Open, code => unknown_next_peer}, Station)).
 
 %%------------------------------------------------------------------
 %% Cases
@@ -208,7 +243,7 @@ a_stream_given_a_key_instead_of_its_loader_does_not_start(#{provider := Provider
 
 keys() ->
     Generate = fun() -> {ok, Key} = macula_node_keys:generate(identity, pq_pure), Key end,
-    #{caller => Generate(), provider => Generate()}.
+    #{caller => Generate(), provider => Generate(), station => Generate()}.
 
 case_name(Case) ->
     {name, Name} = erlang:fun_info(Case, name),
@@ -235,10 +270,14 @@ verified_request(Caller, Spec) ->
 stream(Role, Key, Open) ->
     stream(Role, Key, Open, pq_pure).
 
-stream(Role, Key, #{mode := Mode} = Open, Profile) ->
+stream(Role, Key, Open, Profile) ->
+    stream(Role, Key, Open, Profile, <<5:256>>).
+
+%% ... whose link is connected to the station `Station', the node id a relay error must come from.
+stream(Role, Key, #{mode := Mode} = Open, Profile, Station) ->
     {ok, Pid} = macula_stream:start_link(#{id => ?SID, role => Role, mode => Mode, owner => self(),
                                             key => fun() -> Key end, open => Open, conn => self(),
-                                            profile => Profile}),
+                                            profile => Profile, station => Station}),
     ok = macula_stream:attach_to_link(Pid, self(), ?SID),
     Pid.
 

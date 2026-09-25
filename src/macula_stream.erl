@@ -159,7 +159,10 @@
     open     :: macula_frame:verified_request() | undefined,
     conn     :: pid() | undefined,
     profile  :: macula_crypto_profile:profile() | undefined,
-    verifier :: macula_frame:stream_state() | undefined
+    verifier :: macula_frame:stream_state() | undefined,
+    %% A caller's stream: the node_id of the station its link is connected
+    %% to, the one station whose relay error for this open it takes.
+    station  :: <<_:256>> | undefined
 }).
 
 %%%===================================================================
@@ -646,8 +649,9 @@ replied({_Sent, State}, Result) ->
 %% @private A stream started with the key loader and STREAM_OPEN of a
 %% link-carried stream signs, numbers and verifies its frames; a local
 %% pair has none of these.
-carried(#{key := Key, open := Open, conn := Conn, profile := Profile}, State) ->
-    State#state{key = Key, open = Open, conn = Conn, profile = Profile, verifier = macula_frame:open_stream(Open)};
+carried(#{key := Key, open := Open, conn := Conn, profile := Profile} = Opts, State) ->
+    State#state{key = Key, open = Open, conn = Conn, profile = Profile, verifier = macula_frame:open_stream(Open),
+                station = maps:get(station, Opts, undefined)};
 carried(_LocalPair, State) ->
     State.
 
@@ -802,8 +806,25 @@ peer_frame(true, _Frame, #state{conn = Conn} = State) ->
 peer_frame(false, _Frame, #state{ended = Ended, conn = Conn} = State) when Ended =/= undefined ->
     ok = macula_peering:object_refused(Conn, stream_ended),
     State;
+peer_frame(false, #{frame_type := stream_error, relay_error := _} = Frame,
+           #state{role = client, open = Open, profile = Profile, station = Station} = State)
+  when is_binary(Station) ->
+    relay_error_verified(macula_frame:verify_relay_error(Frame, Open, Profile, Station), State);
+%% A caller's stream started without its station takes no station's relay error.
+peer_frame(false, #{frame_type := stream_error, relay_error := _}, #state{role = client} = State) ->
+    relay_error_verified({error, not_the_connection}, State);
 peer_frame(false, Frame, #state{role = Role, verifier = Verifier, profile = Profile} = State) ->
     verified_frame(peer_verified(Role, Frame, Verifier, Profile), State).
+
+%% @private The station the caller's link is connected to reports it cannot
+%% reach the provider (macula#42): the session ends at once with the
+%% station's code, verified against this stream's own STREAM_OPEN and that
+%% station, the check a CALL's relay error gets. Any other is refused.
+relay_error_verified({ok, #{code := Code}}, State) ->
+    error_arrived(atom_to_binary(Code), <<"reported by the station">>, State);
+relay_error_verified({error, Refusal}, #state{conn = Conn} = State) ->
+    ok = macula_peering:object_refused(Conn, Refusal),
+    State.
 
 %% @private A link-carried stream's caller side verifies the provider's
 %% frames, and its provider side the caller's.
