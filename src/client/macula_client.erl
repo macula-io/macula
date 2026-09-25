@@ -2199,18 +2199,17 @@ renewal_registered({_Registered, NewS}, _Registration, Kind, Key, _S) ->
 renewal_retried(#{ad := #{not_after := NotAfter}, renew_backoff := Backoff} = Registration, Reason,
                 Kind, {_Realm, Procedure} = Key, #state{renew_recheck = Recheck} = S) ->
     Left = NotAfter - erlang:system_time(millisecond),
-    Next = retried(Left > 0, Registration, Backoff, Left, Recheck, Procedure, Reason),
-    stored(Kind, Key, renewal_timed(maps:remove(renew_timer, Next), Kind, Key, maps:get(renew_delay, Next)), S).
+    {Delay, Next} = retried(Left > 0, Registration, Backoff, Left, Recheck, Procedure, Reason),
+    stored(Kind, Key, renewal_timed(maps:remove(renew_timer, Next), Kind, Key, Delay), S).
 
 retried(true, Registration, Backoff, Left, _Recheck, _Procedure, _Reason) ->
-    Registration#{renew_delay => max(?MIN_RENEW_DELAY_MS, min(Backoff, Left)),
-                  renew_backoff => Backoff * 2};
+    {max(?MIN_RENEW_DELAY_MS, min(Backoff, Left)), Registration#{renew_backoff => Backoff * 2}};
 retried(false, #{renew_expired := false} = Registration, _Backoff, _Left, Recheck, Procedure, Reason) ->
     logger:error("[macula_client] ~ts can no longer be advertised: its authorization expired and no "
                  "fresh one could be had (~0p). Asking again every ~b ms.", [Procedure, Reason, Recheck]),
-    Registration#{renew_delay => Recheck, renew_expired => true};
+    {Recheck, Registration#{renew_expired => true}};
 retried(false, Registration, _Backoff, _Left, Recheck, _Procedure, _Reason) ->
-    Registration#{renew_delay => Recheck}.
+    {Recheck, Registration}.
 
 %% The station a link to `Seed' must prove: the node_id its seed map pins,
 %% else the one its dial or the pool pins. Every link the pool starts has

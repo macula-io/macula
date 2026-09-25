@@ -289,7 +289,7 @@ answered_logged(false, _TimeUs, Procedure, Reason, Ms) -> answered_until_logged(
 sent_delegations(0) -> [];
 sent_delegations(N) ->
     receive
-        {'$gen_cast', {send_frame, #{frame_type := advertise, advertisement := Encoded}}} ->
+        {'$gen_cast', {send_frame, _, #{frame_type := advertise, advertisement := Encoded}}} ->
             [delegation_of(Encoded) | sent_delegations(N - 1)]
     after 1_000 -> []
     end.
@@ -306,7 +306,7 @@ delegations_within(Ms) ->
 
 delegations_within(Ms, Acc) ->
     receive
-        {'$gen_cast', {send_frame, #{frame_type := advertise, advertisement := Encoded}}} ->
+        {'$gen_cast', {send_frame, _, #{frame_type := advertise, advertisement := Encoded}}} ->
             delegations_within(Ms, [delegation_of(Encoded) | Acc])
     after Ms -> lists:reverse(Acc)
     end.
