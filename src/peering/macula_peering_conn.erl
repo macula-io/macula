@@ -159,8 +159,22 @@
     %% interval × max_misses. A CALL is understood by every released
     %% peer, so a mixed-version fleet answers the probe safely.
     liveness_interval_ms => pos_integer(),
-    liveness_max_misses  => pos_integer()
+    liveness_max_misses  => pos_integer(),
+    %% Opt-in: called for every application frame this connection writes
+    %% and reads, in this connection's process, as
+    %% `Observer(Direction, FrameType, Bytes, Us)', where `Bytes' is the
+    %% frame's size on the wire. A frame written is seen twice: `queued',
+    %% with the microseconds it waited in this connection's mailbox from
+    %% its `macula_peering:send_frame/2', then `out', with the microseconds
+    %% encoding it and the write that carried it took (a write carries up
+    %% to 64 coalesced frames, and each of them reports it). A frame read
+    %% is seen once, `in', with the microseconds decoding and verifying it
+    %% took. An observer that raises is logged and dropped.
+    frame_observer       => frame_observer()
 }.
+
+-type frame_observer() :: fun((queued | out | in, atom(), non_neg_integer(), non_neg_integer()) -> term()).
+-export_type([frame_observer/0]).
 
 -record(data, {
     role             :: client | server,
@@ -226,7 +240,11 @@
     liveness_interval_ms :: undefined | pos_integer(),
     liveness_max_misses  = 2 :: pos_integer(),
     liveness_outstanding :: undefined | {<<_:128>>, macula_frame:verified_request()},
-    liveness_misses      = 0 :: non_neg_integer()
+    liveness_misses      = 0 :: non_neg_integer(),
+    %% The `frame_observer' option, and while a read frame is decoded
+    %% for it, its size and the microsecond its decoding began.
+    frame_observer       :: undefined | frame_observer(),
+    reading              :: undefined | {non_neg_integer(), integer()}
 }).
 
 -define(DRAIN_TIMEOUT_MS, 5_000).
@@ -308,7 +326,8 @@ started({ok, Identity, Profile}, ok, #{role := Role} = Opts) ->
         quic_conn        = maps:get(quic_conn, Opts, undefined),
         buf              = <<>>,
         liveness_interval_ms = maps:get(liveness_interval_ms, Opts, undefined),
-        liveness_max_misses  = maps:get(liveness_max_misses, Opts, 2)
+        liveness_max_misses  = maps:get(liveness_max_misses, Opts, 2),
+        frame_observer       = observer_opt(maps:get(frame_observer, Opts, undefined))
     },
     {ok, initial_state(Role), Data};
 started({error, Refusal}, _RoleReady, _Opts) ->
@@ -964,15 +983,15 @@ connected(cast, {close, Reason}, Data) ->
 connected(cast, {reject, Reason}, Data) ->
     notify(disconnected, Reason, Data),
     {stop, normal, Data};
-connected(cast, {send_frame, Frame}, Data) ->
-    %% Coalesce: drain any other queued `{send_frame, _}' casts and
+connected(cast, {send_frame, QueuedAt, Frame}, Data) ->
+    %% Coalesce: drain any other queued `{send_frame, _, _}' casts and
     %% emit them in a single NIF write. Cuts per-NIF overhead +
     %% gen_statem reduction-counter cost when many EVENT/PUBLISH
     %% frames burst together (pubsub flood, DHT batch put). The
     %% Quinn stream still handles MTU-level packetisation; this is
     %% purely an Erlang-side amortization.
-    Frames = drain_send_frames([Frame]),
-    {_Sent, Signed} = send_application_frames(Frames, Data),
+    Queued = drain_send_frames([{Frame, QueuedAt}]),
+    {_Sent, Signed} = sent_queued(Queued, Data),
     {keep_state, Signed};
 %% The issuer's statement for the binding this side presented goes to
 %% the peer as a status frame.
@@ -1009,7 +1028,13 @@ open_frames({error, frame_too_large}, Data) ->
 open_frame([], Data, Actions) ->
     {keep_state, Data, lists:reverse(Actions)};
 open_frame([Bytes | Rest], Data, Actions) ->
-    routed(macula_record_cbor:decode_strict(Bytes), Rest, Data, Actions).
+    routed(macula_record_cbor:decode_strict(Bytes), Rest, reading(Bytes, Data), Actions).
+
+%% With a frame observer, the size of the frame being read on the wire, its
+%% 32-bit length prefix included as a written frame's size is, and when its
+%% decoding began.
+reading(_Bytes, #data{frame_observer = undefined} = Data) -> Data;
+reading(Bytes, Data) -> Data#data{reading = {4 + byte_size(Bytes), now_us()}}.
 
 %% Each frame is decoded once, and its frame_type routes it.
 routed({ok, Wire}, Rest, Data, Actions) ->
@@ -1040,8 +1065,9 @@ status_read({error, Reason}, _Rest, Data, _Actions) ->
 %% tbs holds, for this connection and the next seq from the peer, and a
 %% refused one closes the connection with the refusal.
 neighbour_read({ok, Opened}, Frame, Rest, Data, Actions) ->
-    ok = route_frame(Opened, Data),
-    open_frame(Rest, received(Frame, maybe_liveness_reply(Opened, Data)), Actions);
+    Read = read_observed(Opened, Data),
+    ok = route_frame(Opened, Read),
+    open_frame(Rest, received(Frame, maybe_liveness_reply(Opened, Read)), Actions);
 neighbour_read({error, Reason}, _Frame, _Rest, Data, _Actions) ->
     closed(Reason, Data).
 
@@ -1207,6 +1233,31 @@ send_application_frame(_Frame, #data{quic_stream = undefined} = Data) ->
 send_application_frame(Frame, #data{quic_stream = Stream} = Data) ->
     send_encoded(encode_or_drop(Frame, Data), Stream).
 
+%% Frames taken from the mailbox with the microsecond each was queued at:
+%% sent as they are, or timed for the frame observer.
+sent_queued(Queued, #data{frame_observer = undefined} = Data) ->
+    send_application_frames([Frame || {Frame, _QueuedAt} <- Queued], Data);
+sent_queued(_Queued, #data{quic_stream = undefined} = Data) ->
+    {ok, Data};
+sent_queued(Queued, #data{quic_stream = Stream} = Data) ->
+    {Encoded, Timed, Signed} = lists:foldl(fun timed_encode/2, {[], [], Data}, Queued),
+    WriteStart = now_us(),
+    Sent = macula_quic:send(Stream, lists:reverse(Encoded)),
+    WriteUs = now_us() - WriteStart,
+    {Sent, lists:foldl(fun({Type, Size, WaitUs, EncodeUs}, Acc) ->
+                           observed(out, Type, Size, EncodeUs + WriteUs,
+                                    observed(queued, Type, Size, WaitUs, Acc))
+                       end, Signed, lists:reverse(Timed))}.
+
+timed_encode({Frame, QueuedAt}, {Encoded, Timed, Data}) ->
+    Start = now_us(),
+    timed_kept(encode_or_drop(Frame, Data), Frame, Start - QueuedAt, now_us() - Start, Encoded, Timed).
+
+timed_kept({{true, Bytes}, Data}, #{frame_type := Type}, WaitUs, EncodeUs, Encoded, Timed) ->
+    {[Bytes | Encoded], [{Type, byte_size(Bytes), max(0, WaitUs), EncodeUs} | Timed], Data};
+timed_kept({false, Data}, _Frame, _WaitUs, _EncodeUs, Encoded, Timed) ->
+    {Encoded, Timed, Data}.
+
 %% Encode N frames into one iolist and push them as a single NIF call.
 %% Their producers sign what they carry, and in pq_hybrid this
 %% connection neighbour-signs the control frames among them, in order.
@@ -1254,7 +1305,7 @@ send_liveness_probe(#data{identity = Kp, profile = Profile,
         payload    => #{}}, Kp),
     {ok, Request} = macula_frame:verify_request(Probe, Profile),
     ProbeData = Data#data{liveness_outstanding = {RequestId, Request}},
-    {_Sent, Data1} = send_application_frames([Probe], ProbeData),
+    {_Sent, Data1} = sent_queued([{Probe, now_us()}], ProbeData),
     Data1.
 
 %% A frame naming the outstanding probe's request_id: verified against
@@ -1344,7 +1395,7 @@ encoded({Frame, Data}) ->
 %% Drain queued send_frame casts. Capped at ?MAX_BATCH frames per
 %% pass so a runaway producer can't park us in the receive forever.
 %% A `cast' arrives in the gen_statem mailbox as
-%% `{'$gen_cast', {send_frame, F}}'. We pattern-match that exact
+%% `{'$gen_cast', {send_frame, QueuedAt, F}}'. We pattern-match that exact
 %% shape so unrelated mailbox traffic stays untouched.
 -define(MAX_BATCH, 64).
 drain_send_frames(Acc) ->
@@ -1354,8 +1405,8 @@ drain_send_frames(Acc, 0) ->
     lists:reverse(Acc);
 drain_send_frames(Acc, N) ->
     receive
-        {'$gen_cast', {send_frame, F}} ->
-            drain_send_frames([F | Acc], N - 1)
+        {'$gen_cast', {send_frame, QueuedAt, F}} ->
+            drain_send_frames([{F, QueuedAt} | Acc], N - 1)
     after 0 ->
         lists:reverse(Acc)
     end.
@@ -1389,6 +1440,30 @@ dial_timeout(Target) ->
 %%------------------------------------------------------------------
 %% Clock
 %%------------------------------------------------------------------
+
+now_us() ->
+    erlang:monotonic_time(microsecond).
+
+read_observed(_Opened, #data{reading = undefined} = Data) ->
+    Data;
+read_observed(#{frame_type := Type}, #data{reading = {Size, Start}} = Data) ->
+    observed(in, Type, Size, now_us() - Start, Data#data{reading = undefined}).
+
+%% The frame observer, called in this connection: one that raises is the
+%% application's bug in a process every producer on the link shares, so it
+%% is logged and dropped rather than taking the connection down.
+observed(_Direction, _Type, _Size, _Us, #data{frame_observer = undefined} = Data) ->
+    Data;
+observed(Direction, Type, Size, Us, #data{frame_observer = Observer} = Data) ->
+    try Observer(Direction, Type, Size, Us) of
+        _ -> Data
+    catch Class:Reason ->
+        logger:error("[macula_peering_conn] frame_observer dropped after it raised ~p:~p", [Class, Reason]),
+        Data#data{frame_observer = undefined}
+    end.
+
+observer_opt(undefined) -> undefined;
+observer_opt(Observer) when is_function(Observer, 4) -> Observer.
 
 now_ms(#data{clock = Clock}) ->
     Clock().

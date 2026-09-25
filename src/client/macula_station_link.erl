@@ -1328,7 +1328,7 @@ handle_call({call, _Target, _Realm, _Proc, _Payload, _DeadlineMs, _Token}, _From
     %% `macula_peering:connect/1' returns, BEFORE the peering worker
     %% has finished handshaking. Frames sent during the peering
     %% statem's `handshaking' state have no clause for
-    %% `cast({send_frame, _})' and silently fall into
+    %% `cast({send_frame, _, _})' and silently fall into
     %% `drop_unexpected', so the call frame never lands on the wire
     %% and the caller eventually times out at `Tmo'. Returning
     %% `{error, not_connected}' here lets the caller back off and
@@ -2213,7 +2213,7 @@ send_unsubscribe(Pid, Realm, Topic, Id) ->
 %% returns, before handshaking finishes) -- matches `is_connected/1'.
 %% Gating on `peer_pid' alone let a
 %% SUBSCRIBE frame through mid-handshake, where the peering statem has no
-%% clause for `cast({send_frame, _})' and silently drops it via
+%% clause for `cast({send_frame, _, _})' and silently drops it via
 %% `drop_unexpected' (logged as `_macula.peering.unexpected_event') --
 %% verified live: every occurrence in a real deployment's logs landed in
 %% the few-hundred-ms window right after a `_macula.client.link_down'

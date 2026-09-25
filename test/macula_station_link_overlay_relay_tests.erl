@@ -208,7 +208,7 @@ station_of(Pid) ->
 %% The overlay_relay envelope a link sent to `Target', as its station receives it.
 sent_envelope(Target) ->
     receive
-        {'$gen_cast', {send_frame, #{frame_type := overlay_relay} = Frame}} ->
+        {'$gen_cast', {send_frame, _, #{frame_type := overlay_relay} = Frame}} ->
             #{peer := Target} = Envelope = received(Frame),
             Envelope
     after 1_000 ->

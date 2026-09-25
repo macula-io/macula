@@ -146,7 +146,7 @@ plant_fake_peer(Link) ->
 
 relay_frames(Test, Tag) ->
     receive
-        {'$gen_cast', {send_frame, Frame}} ->
+        {'$gen_cast', {send_frame, _, Frame}} ->
             Test ! {Tag, Frame},
             relay_frames(Test, Tag)
     after 30_000 ->

@@ -409,7 +409,7 @@ answer_within(Ref, Ms) ->
 %% The request the link sends next, as its receiver verifies it.
 sent_request(Profile) ->
     receive
-        {'$gen_cast', {send_frame, #{frame_type := call} = Frame}} ->
+        {'$gen_cast', {send_frame, _, #{frame_type := call} = Frame}} ->
             {ok, Request} = macula_frame:verify_request(received(Frame), Profile),
             Request
     after 1_000 ->
@@ -434,7 +434,7 @@ received(Frame) ->
 %% The first frame the link sent to its peer within `Ms', or none.
 sent_frame_within(Ms) ->
     receive
-        {'$gen_cast', {send_frame, Frame}} -> {sent, Frame}
+        {'$gen_cast', {send_frame, _, Frame}} -> {sent, Frame}
     after Ms ->
         none
     end.

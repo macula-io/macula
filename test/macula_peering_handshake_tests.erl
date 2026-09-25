@@ -148,7 +148,11 @@ handshake_test_() ->
            {"liveness probe answered by the peer keeps the connection open",
             {timeout, 30, fun() -> answered_liveness_probe_keeps_the_connection_open(Ctx) end}},
            {"liveness is opt-in: a conn without the opts sends no probe",
-            {timeout, 30, fun() -> liveness_is_opt_in(Ctx) end}}]
+            {timeout, 30, fun() -> liveness_is_opt_in(Ctx) end}},
+           {"a frame observer sees each frame queued and written on one side and read on the other",
+            {timeout, 30, fun() -> a_frame_observer_sees_each_frame_both_ways(Ctx) end}},
+           {"a frame observer that crashes is dropped and the connection serves on",
+            {timeout, 30, fun() -> a_crashing_frame_observer_is_dropped(Ctx) end}}]
       end}}.
 
 %%====================================================================
@@ -688,8 +692,9 @@ connect(#{client_key := ClientKey, client_issuer := ClientIssuer, station_key :=
                  expected_node_id => maps:get(expected, Options, node_id(StationKey))},
                maps:get(target_extra, Options, #{})),
     {ok, Client} = macula_peering:connect(
-                     maps:merge(maps:with([liveness_interval_ms,
-                                           liveness_max_misses], Options),
+                     maps:merge(maps:merge(maps:with([liveness_interval_ms,
+                                                      liveness_max_misses], Options),
+                                           observer_opt(client_observer, Options)),
                                 #{identity => ClientKey, issuer => ClientIssuer,
                                   capabilities => ?CLIENT_CAPABILITIES, controlling_pid => self(),
                                   clock => fixed(maps:get(client_clock, Options, ?T0 + ?MINUTE)),
@@ -700,7 +705,12 @@ station_opts(#{station_key := StationKey, station_issuer := StationIssuer}, Opti
     Opts = #{identity => StationKey, issuer => StationIssuer, capabilities => ?STATION_CAPABILITIES,
              controlling_pid => self(), puzzle => #{mode => maps:get(mode, Options)},
              clock => fixed(maps:get(station_clock, Options, ?T0 + ?MINUTE))},
-    maps:merge(Opts, maps:with([accept_owner], Options)).
+    maps:merge(maps:merge(Opts, maps:with([accept_owner], Options)), observer_opt(station_observer, Options)).
+
+observer_opt(Key, Options) ->
+    maps:fold(fun(K, Observer, Acc) when K =:= Key -> Acc#{frame_observer => Observer};
+                 (_K, _V, Acc) -> Acc
+              end, #{}, Options).
 
 accept_one(StationOpts) ->
     receive
@@ -1143,6 +1153,46 @@ liveness_is_opt_in(Ctx) ->
         ok
     end,
     cleanup_pair(Client, Station, World).
+
+%%====================================================================
+%% Frame observer
+%%====================================================================
+
+%% The sending side sees each frame it writes twice: queued, with how long it waited in the connection's mailbox,
+%% and out, with how long encoding and writing it took. The reading side sees it once, in, with how long decoding it
+%% took. Each names the frame type and its size on the wire.
+a_frame_observer_sees_each_frame_both_ways(Ctx) ->
+    World = world(Ctx, #{}),
+    Test = self(),
+    Observer = fun(Side) -> fun(Dir, Type, Size, Us) -> Test ! {observed, Side, Dir, Type, Size, Us}, ok end end,
+    {Client, Station} = connect(World, #{mode => off, client_observer => Observer(client),
+                                         station_observer => Observer(station)}),
+    _ = {await(Client, connected), await(Station, connected)},
+    Pings = [ping(), ping()],
+    ok = sent(Client, Station, Pings),
+    Sizes = [byte_size(macula_frame:encode(P)) || P <- Pings],
+    [?assertMatch({queued, ping, Size, Us} when is_integer(Us) andalso Us >= 0, observed(client, queued)) || Size <- Sizes],
+    [?assertMatch({out, ping, Size, Us} when is_integer(Us) andalso Us >= 0, observed(client, out)) || Size <- Sizes],
+    [?assertMatch({in, ping, Size, Us} when is_integer(Us) andalso Us >= 0, observed(station, in)) || Size <- Sizes],
+    cleanup_pair(Client, Station, World).
+
+%% An observer is the application's code in a connection every producer shares: one that raises is logged, dropped,
+%% and never called again, and the connection serves on.
+a_crashing_frame_observer_is_dropped(Ctx) ->
+    World = world(Ctx, #{}),
+    Calls = counters:new(1, []),
+    Crashing = fun(_Dir, _Type, _Size, _Us) -> counters:add(Calls, 1, 1), error(observer_bug) end,
+    {Client, Station} = connect(World, #{mode => off, client_observer => Crashing}),
+    _ = {await(Client, connected), await(Station, connected)},
+    ok = sent(Client, Station, [ping(), ping()]),
+    ?assertEqual(1, counters:get(Calls, 1)),
+    ?assertEqual(open, still_open(Client, 300)),
+    cleanup_pair(Client, Station, World).
+
+observed(Side, Dir) ->
+    receive {observed, Side, Dir, Type, Size, Us} -> {Dir, Type, Size, Us}
+    after 2_000 -> erlang:error({not_observed, Side, Dir})
+    end.
 
 %% Answer the first `N' `_macula.ping' CALLs the peer conn delivers to
 %% this controller with a RESULT signed by the peer's own identity,

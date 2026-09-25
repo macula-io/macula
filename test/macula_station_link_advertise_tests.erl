@@ -358,7 +358,7 @@ start_connected_link() ->
 %% The first frame the link sent to its peer within `Ms', or none.
 sent_frame_within(Ms) ->
     receive
-        {'$gen_cast', {send_frame, Frame}} -> {sent, Frame}
+        {'$gen_cast', {send_frame, _, Frame}} -> {sent, Frame}
     after Ms ->
         none
     end.

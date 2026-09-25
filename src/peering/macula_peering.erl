@@ -145,8 +145,10 @@ reject(Pid, Reason) ->
 send_frame(Pid, Frame) when is_map(Frame) ->
     cast_checked(macula_frame:check_frame(Frame), Pid, Frame).
 
+%% Stamped with the microsecond it was queued, so the connection can report
+%% how long it waited (`macula_peering_conn''s `frame_observer').
 cast_checked(ok, Pid, Frame) ->
-    gen_statem:cast(Pid, {send_frame, Frame});
+    gen_statem:cast(Pid, {send_frame, erlang:monotonic_time(microsecond), Frame});
 cast_checked({error, Reason} = Rejected, _Pid, Frame) ->
     logger:error("[macula_peering] refused unsendable ~p frame: ~ts",
                  [maps:get(frame_type, Frame, unknown),

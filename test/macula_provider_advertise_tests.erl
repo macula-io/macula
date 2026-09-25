@@ -169,7 +169,7 @@ link_signed(#{key := Key}, Spec, Station, Procedure) ->
     ok = macula_station_link:advertise(Link, ?REALM, Procedure,
                                        fun(_) -> {ok, counted} end, open, Spec),
     Encoded = receive
-                  {'$gen_cast', {send_frame, #{frame_type := advertise,
+                  {'$gen_cast', {send_frame, _, #{frame_type := advertise,
                                                advertisement := A}}} -> A
               after 1_000 -> error(no_advertise_frame)
               end,

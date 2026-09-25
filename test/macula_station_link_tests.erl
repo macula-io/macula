@@ -156,7 +156,7 @@ subscribe_sends_frame_test_() ->
                           Pid, ?REALM, <<"_mesh.station.announced_v1">>, self()),
          ?assert(is_reference(SubRef)),
          receive
-             {'$gen_cast', {send_frame, #{frame_type := subscribe,
+             {'$gen_cast', {send_frame, _, #{frame_type := subscribe,
                                           topic := <<"_mesh.station.announced_v1">>,
                                           realm := R}}} ->
                  ?assertEqual(?REALM, R)
@@ -198,7 +198,7 @@ event_frame_delivered_to_subscriber_test_() ->
          {ok, SubRef} = macula_station_link:subscribe(
                           Pid, ?REALM, Topic, self()),
          receive
-             {'$gen_cast', {send_frame, #{frame_type := subscribe}}} -> ok
+             {'$gen_cast', {send_frame, _, #{frame_type := subscribe}}} -> ok
          after 1_000 -> erlang:error(no_subscribe_frame)
          end,
          {Event, PublisherKey} = signed_event(?REALM, Topic, 42,
@@ -254,7 +254,7 @@ event_publisher_sig_verify_test_() ->
          end),
          Topic = <<"io.macula/x/y/v1">>,
          {ok, SubRef} = macula_station_link:subscribe(Pid, ?REALM, Topic, self()),
-         receive {'$gen_cast', {send_frame, #{frame_type := subscribe}}} -> ok
+         receive {'$gen_cast', {send_frame, _, #{frame_type := subscribe}}} -> ok
          after 1_000 -> erlang:error(no_subscribe_frame) end,
 
          MkEvent = fun(Seq, Payload) ->
@@ -349,7 +349,7 @@ event_in_other_realm_not_delivered_test_() ->
          {ok, _SubRef} = macula_station_link:subscribe(
                            Pid, RealmA, Topic, self()),
          receive
-             {'$gen_cast', {send_frame, #{frame_type := subscribe}}} -> ok
+             {'$gen_cast', {send_frame, _, #{frame_type := subscribe}}} -> ok
          after 1_000 -> erlang:error(no_subscribe_frame)
          end,
          {ok, Profile} = macula_crypto_profile:configured(),
@@ -398,7 +398,7 @@ publish_sends_frame_and_increments_seq_test_() ->
          ok = macula_station_link:publish(Pid, ?REALM, Topic,
                                            #{temp => 20}),
          Frame1 = receive
-             {'$gen_cast', {send_frame, #{frame_type := publish} = F}} -> F
+             {'$gen_cast', {send_frame, _, #{frame_type := publish} = F}} -> F
          after 1_000 -> erlang:error(no_publish_frame_1)
          end,
          Verified1 = verified_publish(Frame1),
@@ -409,7 +409,7 @@ publish_sends_frame_and_increments_seq_test_() ->
          ok = macula_station_link:publish(Pid, ?REALM, Topic,
                                            #{temp => 21}),
          Frame2 = receive
-             {'$gen_cast', {send_frame, #{frame_type := publish} = F2}} -> F2
+             {'$gen_cast', {send_frame, _, #{frame_type := publish} = F2}} -> F2
          after 1_000 -> erlang:error(no_publish_frame_2)
          end,
          ?assertEqual(1, maps:get(seq, verified_publish(Frame2))),
@@ -450,13 +450,13 @@ publish5_uses_caller_seq_test_() ->
          Topic = <<"weather.measured_v1">>,
          ok = macula_station_link:publish(Pid, ?REALM, Topic, #{n => 1}, 4242),
          F1 = receive
-             {'$gen_cast', {send_frame, #{frame_type := publish} = A}} -> A
+             {'$gen_cast', {send_frame, _, #{frame_type := publish} = A}} -> A
          after 1_000 -> erlang:error(no_publish_frame_1)
          end,
          ?assertEqual(4242, maps:get(seq, verified_publish(F1))),
          ok = macula_station_link:publish(Pid, ?REALM, Topic, #{n => 2}, 4243),
          F2 = receive
-             {'$gen_cast', {send_frame, #{frame_type := publish} = B}} -> B
+             {'$gen_cast', {send_frame, _, #{frame_type := publish} = B}} -> B
          after 1_000 -> erlang:error(no_publish_frame_2)
          end,
          ?assertEqual(4243, maps:get(seq, verified_publish(F2))),
@@ -464,7 +464,7 @@ publish5_uses_caller_seq_test_() ->
          %% pool-less publish/4 still starts from 0.
          ok = macula_station_link:publish(Pid, ?REALM, Topic, #{n => 3}),
          F3 = receive
-             {'$gen_cast', {send_frame, #{frame_type := publish} = C}} -> C
+             {'$gen_cast', {send_frame, _, #{frame_type := publish} = C}} -> C
          after 1_000 -> erlang:error(no_publish_frame_3)
          end,
          ?assertEqual(0, maps:get(seq, verified_publish(F3))),
@@ -537,12 +537,12 @@ unsubscribe_sends_frame_and_clears_test_() ->
          {ok, SubRef} = macula_station_link:subscribe(
                           Pid, ?REALM, Topic, self()),
          receive
-             {'$gen_cast', {send_frame, #{frame_type := subscribe}}} -> ok
+             {'$gen_cast', {send_frame, _, #{frame_type := subscribe}}} -> ok
          after 1_000 -> erlang:error(no_subscribe_frame)
          end,
          ok = macula_station_link:unsubscribe(Pid, SubRef),
          receive
-             {'$gen_cast', {send_frame, #{frame_type := unsubscribe,
+             {'$gen_cast', {send_frame, _, #{frame_type := unsubscribe,
                                           topic := T,
                                           realm := R}}} ->
                  ?assertEqual(Topic, T),
@@ -600,11 +600,11 @@ subscriber_down_drops_subscription_test_() ->
          after 1_000 -> erlang:error(subscriber_did_not_subscribe)
          end,
          receive
-             {'$gen_cast', {send_frame, #{frame_type := subscribe}}} -> ok
+             {'$gen_cast', {send_frame, _, #{frame_type := subscribe}}} -> ok
          after 1_000 -> erlang:error(no_subscribe_frame)
          end,
          receive
-             {'$gen_cast', {send_frame, #{frame_type := unsubscribe}}} -> ok
+             {'$gen_cast', {send_frame, _, #{frame_type := unsubscribe}}} -> ok
          after 1_000 -> erlang:error(no_cleanup_unsubscribe)
          end,
          macula_station_link:stop(Pid),
@@ -645,7 +645,7 @@ disconnect_notifies_subscribers_test_() ->
                           Pid, ?REALM,
                           <<"_mesh.station.announced_v1">>, self()),
          receive
-             {'$gen_cast', {send_frame, #{frame_type := subscribe}}} -> ok
+             {'$gen_cast', {send_frame, _, #{frame_type := subscribe}}} -> ok
          after 1_000 -> erlang:error(no_subscribe_frame)
          end,
          Pid ! {macula_peering, disconnected, FakePeer, peer_closed},
@@ -747,8 +747,8 @@ send_overlay_frame_sends_on_wire_test_() ->
 receive_frame_cast(_Frame, 0) -> false;
 receive_frame_cast(Frame, N) ->
     receive
-        {'$gen_cast', {send_frame, F}} when F =:= Frame -> true;
-        {'$gen_cast', {send_frame, _Other}} -> receive_frame_cast(Frame, N - 1)
+        {'$gen_cast', {send_frame, _, F}} when F =:= Frame -> true;
+        {'$gen_cast', {send_frame, _, _Other}} -> receive_frame_cast(Frame, N - 1)
     after 1_000 -> false
     end.
 
@@ -788,10 +788,10 @@ send_overlay_frame_3_wraps_target_in_relay_envelope_test_() ->
 receive_relay_envelope(_Target, 0) -> false;
 receive_relay_envelope(Target, N) ->
     receive
-        {'$gen_cast', {send_frame, #{frame_type := overlay_relay,
+        {'$gen_cast', {send_frame, _, #{frame_type := overlay_relay,
                                      peer := P} = F}} when P =:= Target ->
             F;
-        {'$gen_cast', {send_frame, _Other}} -> receive_relay_envelope(Target, N - 1)
+        {'$gen_cast', {send_frame, _, _Other}} -> receive_relay_envelope(Target, N - 1)
     after 1_000 -> false
     end.
 
@@ -1007,7 +1007,7 @@ subscribe_before_connect_drains_on_connected_test_() ->
                           <<"_mesh.station.announced_v1">>, self()),
          ?assert(is_reference(SubRef)),
          receive
-             {'$gen_cast', {send_frame, _}} ->
+             {'$gen_cast', {send_frame, _, _}} ->
                  erlang:error(premature_send_frame)
          after 200 -> ok
          end,
@@ -1018,7 +1018,7 @@ subscribe_before_connect_drains_on_connected_test_() ->
          end),
          Pid ! {macula_peering, connected, FakePeer, PeerNodeId},
          receive
-             {'$gen_cast', {send_frame, #{frame_type := subscribe,
+             {'$gen_cast', {send_frame, _, #{frame_type := subscribe,
                                           topic := T}}} ->
                  ?assertEqual(<<"_mesh.station.announced_v1">>, T)
          after 1_000 ->
@@ -1034,7 +1034,7 @@ subscribe_before_connect_drains_on_connected_test_() ->
 %% used to gate on peer_pid alone instead of peer_node_id, so a
 %% SUBSCRIBE frame sent in this exact window landed on the wire while the
 %% peering statem was still in `handshaking' -- which has no clause for
-%% `cast({send_frame, _})' and silently drops it via `drop_unexpected'.
+%% `cast({send_frame, _, _})' and silently drops it via `drop_unexpected'.
 %% Reproduced live: hecate-stations' own logs showed this exact frame
 %% (topic _dht.records.N.stored) dropped on every reconnect.
 %%------------------------------------------------------------------
@@ -1061,7 +1061,7 @@ subscribe_during_handshake_not_sent_early_test_() ->
                           <<"_dht.records.1.stored">>, self()),
          ?assert(is_reference(SubRef)),
          receive
-             {'$gen_cast', {send_frame, _}} ->
+             {'$gen_cast', {send_frame, _, _}} ->
                  erlang:error(premature_send_frame)
          after 200 -> ok
          end,
@@ -1070,7 +1070,7 @@ subscribe_during_handshake_not_sent_early_test_() ->
          PeerNodeId = macula_test_identity:node_id(),
          Pid ! {macula_peering, connected, FakePeer, PeerNodeId},
          receive
-             {'$gen_cast', {send_frame, #{frame_type := subscribe,
+             {'$gen_cast', {send_frame, _, #{frame_type := subscribe,
                                           topic := T}}} ->
                  ?assertEqual(<<"_dht.records.1.stored">>, T)
          after 1_000 ->
@@ -1211,7 +1211,7 @@ binary_reason_crosses_the_wire_verbatim_test_() ->
 
 flush_send_frame_casts() ->
     receive
-        {'$gen_cast', {send_frame, _}} -> flush_send_frame_casts()
+        {'$gen_cast', {send_frame, _, _}} -> flush_send_frame_casts()
     after 0 -> ok
     end.
 
@@ -1402,7 +1402,7 @@ inject_call_with_ucan(Pid, FakePeer, CallerKey, CallId, Proc, UcanToken) ->
 %% against; only silence is expected.
 no_reply_in(TimeoutMs) ->
     receive
-        {'$gen_cast', {send_frame, #{frame_type := Type}}} when Type =:= result; Type =:= error ->
+        {'$gen_cast', {send_frame, _, #{frame_type := Type}}} when Type =:= result; Type =:= error ->
             {error, {unexpected_reply, Type}}
     after TimeoutMs ->
         timeout
@@ -1421,7 +1421,7 @@ await_result(CallFrame, TimeoutMs) ->
 %% that verifies but names another request is skipped, not returned.
 await_reply_for(RequestId, Request, Profile, TimeoutMs) ->
     receive
-        {'$gen_cast', {send_frame, #{frame_type := Type} = Frame}}
+        {'$gen_cast', {send_frame, _, #{frame_type := Type} = Frame}}
           when Type =:= result; Type =:= error ->
             case macula_frame:claimed_reply_ids(Frame) of
                 {ok, #{request_id := RequestId}} ->

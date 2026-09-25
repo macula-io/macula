@@ -26,7 +26,7 @@ liveness_tick_emits_probe_call_test_() ->
          {Pid, StationKey, Profile} = start_link_to_station(),
          Pid ! liveness_tick,
          Probe = receive
-             {'$gen_cast', {send_frame, #{frame_type := call} = Frame}} -> Frame
+             {'$gen_cast', {send_frame, _, #{frame_type := call} = Frame}} -> Frame
          after 1_000 ->
              erlang:error(no_probe_call_emitted)
          end,
@@ -160,7 +160,7 @@ answer_next_probe(Pid, Profile, Answer, Key) ->
 %% The request of the probe the link sends next, as its receiver verifies it.
 sent_probe(Profile) ->
     receive
-        {'$gen_cast', {send_frame, #{frame_type := call} = Probe}} ->
+        {'$gen_cast', {send_frame, _, #{frame_type := call} = Probe}} ->
             {ok, #{procedure := <<"_macula.ping">>} = Request} = macula_frame:verify_request(received(Probe), Profile),
             Request
     after 1_000 ->

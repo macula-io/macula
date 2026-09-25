@@ -216,7 +216,7 @@ sent_stations(N) ->
 sent_frames(0) -> [];
 sent_frames(N) ->
     receive
-        {'$gen_cast', {send_frame, #{frame_type := T} = Frame}}
+        {'$gen_cast', {send_frame, _, #{frame_type := T} = Frame}}
           when T =:= advertise; T =:= unadvertise ->
             [Frame | sent_frames(N - 1)]
     after 1_000 -> []
