@@ -27,7 +27,73 @@ sharer_test_() ->
       {"with no station connected the content is kept and announced once one is",
        fun() -> cleaned(fun no_station_yet_announces_later/0) end},
       {"the sharer ends with its pool", fun() -> cleaned(fun the_sharer_ends_with_its_pool/0) end},
-      {"a pool with no station yet keeps the registration", fun() -> cleaned(fun no_station_keeps_registration/0) end}]}.
+      {"a pool with no station yet keeps the registration", fun() -> cleaned(fun no_station_keeps_registration/0) end},
+      {"a renewal due while no station is connected is made once one is",
+       fun() -> cleaned(fun a_renewal_due_in_an_outage_is_made_after_it/0) end},
+      {"a realm serves only what is shared in it", fun() -> cleaned(fun a_realm_serves_only_its_own/0) end},
+      {"sharing and serving do not wait on announcing", fun() -> cleaned(fun serving_does_not_wait_on_announcing/0) end},
+      {"an announcement the DHT did not take is made again at the next station check",
+       fun() -> cleaned(fun a_failed_put_is_made_again/0) end},
+      {"unsharing while an announcement is in flight withdraws that announcement",
+       fun() -> cleaned(fun unsharing_withdraws_an_announcement_in_flight/0) end}]}.
+
+%% A station roll returns the same station: a renewal that fell in the outage must still be made, or the announcement
+%% expires while the content is shared and its node online.
+a_renewal_due_in_an_outage_is_made_after_it() ->
+    {Sharer, Io, _Node} = sharer(#{announce_ttl_ms => 400, station_check_ms => 50}),
+    {ok, MCID} = macula_content_sharer:share(Sharer, ?REALM, <<"hello">>, #{}),
+    ok = wait_until(fun() -> length(announced_stations(Io, MCID)) =:= 1 end, 1_000),
+    set_station(Io, none),
+    timer:sleep(400),
+    Before = length(announced_stations(Io, MCID)),
+    set_station(Io, ?STATION_A),
+    ok = wait_until(fun() -> length(announced_stations(Io, MCID)) > Before end, 1_000).
+
+a_realm_serves_only_its_own() ->
+    Other = <<8:256>>,
+    {Sharer, Io, _Node} = sharer(#{}),
+    {ok, MCID} = macula_content_sharer:share(Sharer, ?REALM, <<"hello">>, #{}),
+    ?assertEqual(not_found, macula_content_sharer:lookup(Sharer, Other, root, MCID)),
+    {ok, MCID} = macula_content_sharer:share(Sharer, Other, <<"hello">>, #{}),
+    ok = wait_until(fun() -> lists:member(Other, announced_realms(Io, MCID)) end, 1_000),
+    ok = macula_content_sharer:unshare(Sharer, ?REALM, MCID),
+    ?assertEqual(not_found, macula_content_sharer:lookup(Sharer, ?REALM, root, MCID)),
+    ?assertMatch({ok, #{kind := block}}, macula_content_sharer:lookup(Sharer, Other, root, MCID)),
+    ?assertEqual([?REALM], [maps:get(realm_id, macula_record:read_content_announcement(W))
+                            || {withdraw, W} <- asked(Io, withdraw)]).
+
+serving_does_not_wait_on_announcing() ->
+    {Sharer, _Io, _Node} = sharer(#{put_record => fun(_P, _Signed) -> timer:sleep(3_000), ok end}),
+    T0 = erlang:monotonic_time(millisecond),
+    {ok, MCID} = macula_content_sharer:share(Sharer, ?REALM, <<"hello">>, #{}),
+    {ok, _} = macula_content_sharer:share(Sharer, ?REALM, <<"second">>, #{}),
+    ?assertMatch({ok, _}, macula_content_sharer:lookup(Sharer, ?REALM, root, MCID)),
+    ?assert(erlang:monotonic_time(millisecond) - T0 < 1_000).
+
+a_failed_put_is_made_again() ->
+    Test = self(),
+    Tries = counters:new(1, []),
+    Put = fun(_P, Signed) ->
+              counters:add(Tries, 1, 1),
+              Test ! {put, Signed},
+              put_answer(counters:get(Tries, 1))
+          end,
+    {Sharer, _Io, _Node} = sharer(#{put_record => Put, station_check_ms => 50}),
+    {ok, _MCID} = macula_content_sharer:share(Sharer, ?REALM, <<"hello">>, #{}),
+    ok = wait_until(fun() -> counters:get(Tries, 1) >= 2 end, 1_000).
+
+put_answer(1) -> {error, no_route};
+put_answer(_) -> ok.
+
+unsharing_withdraws_an_announcement_in_flight() ->
+    Test = self(),
+    Put = fun(_P, Signed) -> Test ! {putting, self(), Signed}, receive go -> ok end end,
+    {Sharer, Io, _Node} = sharer(#{put_record => Put}),
+    {ok, MCID} = macula_content_sharer:share(Sharer, ?REALM, <<"hello">>, #{}),
+    {Putter, InFlight} = receive {putting, P, R} -> {P, R} after 1_000 -> error(no_put) end,
+    ok = macula_content_sharer:unshare(Sharer, ?REALM, MCID),
+    Putter ! go,
+    ok = wait_until(fun() -> [W || {withdraw, W} <- asked(Io, withdraw), W =:= InFlight] =/= [] end, 1_000).
 
 %% The pool keeps a registration no link could take yet, and replays it when one comes up: the share stands.
 no_station_keeps_registration() ->
@@ -39,6 +105,7 @@ sharing_registers_and_announces() ->
     {ok, MCID} = macula_content_sharer:share(Sharer, ?REALM, <<"hello">>, #{}),
     Own = <<"~", (hex(Node))/binary, "/content_v1">>,
     ?assertEqual([{advertise_stream, ?REALM, Own, server_stream}], asked(Io, advertise_stream)),
+    ok = wait_until(fun() -> asked(Io, put_record) =/= [] end, 1_000),
     [{put_record, Announcement}] = asked(Io, put_record),
     ?assertMatch(#{announcer_node := Node, mcid := MCID, realm_id := ?REALM, serving_station := ?STATION_A,
                    procedure := Own, size := 5},
@@ -55,6 +122,7 @@ a_second_share_registers_nothing() ->
     {ok, A} = macula_content_sharer:share(Sharer, ?REALM, <<"a">>, #{}),
     {ok, B} = macula_content_sharer:share(Sharer, ?REALM, <<"b">>, #{}),
     ?assertEqual(1, length(asked(Io, advertise_stream))),
+    ok = wait_until(fun() -> length(asked(Io, put_record)) =:= 2 end, 1_000),
     ?assertEqual(lists:sort([A, B]), lists:sort([maps:get(mcid, macula_record:read_content_announcement(R))
                                                   || {put_record, R} <- asked(Io, put_record)])).
 
@@ -62,17 +130,18 @@ what_is_shared_is_served() ->
     {Sharer, _Io, _Node} = sharer(#{}),
     {ok, MCID} = macula_content_sharer:share(Sharer, ?REALM, <<"hello">>, #{}),
     ?assertEqual({ok, #{kind => block, mcid => MCID, bytes => <<"hello">>}},
-                 macula_content_sharer:lookup(Sharer, root, MCID)),
-    ?assertEqual(not_found, macula_content_sharer:lookup(Sharer, root, <<2, 16#55, 0:384>>)).
+                 macula_content_sharer:lookup(Sharer, ?REALM, root, MCID)),
+    ?assertEqual(not_found, macula_content_sharer:lookup(Sharer, ?REALM, root, <<2, 16#55, 0:384>>)).
 
 unsharing_withdraws() ->
     {Sharer, Io, _Node} = sharer(#{}),
     {ok, A} = macula_content_sharer:share(Sharer, ?REALM, <<"a">>, #{}),
     {ok, B} = macula_content_sharer:share(Sharer, ?REALM, <<"b">>, #{}),
+    ok = wait_until(fun() -> length(asked(Io, put_record)) =:= 2 end, 1_000),
     ok = macula_content_sharer:unshare(Sharer, ?REALM, A),
     [{withdraw, Withdrawn}] = asked(Io, withdraw),
     ?assertEqual(A, maps:get(mcid, macula_record:read_content_announcement(Withdrawn))),
-    ?assertEqual(not_found, macula_content_sharer:lookup(Sharer, root, A)),
+    ?assertEqual(not_found, macula_content_sharer:lookup(Sharer, ?REALM, root, A)),
     ?assertEqual([], asked(Io, unadvertise_stream)),
     ok = macula_content_sharer:unshare(Sharer, ?REALM, B),
     ?assertMatch([{unadvertise_stream, ?REALM, _}], asked(Io, unadvertise_stream)),
@@ -94,7 +163,7 @@ no_station_yet_announces_later() ->
     set_station(Io, none),
     {ok, MCID} = macula_content_sharer:share(Sharer, ?REALM, <<"hello">>, #{}),
     ?assertEqual([], asked(Io, put_record)),
-    ?assertMatch({ok, _}, macula_content_sharer:lookup(Sharer, root, MCID)),
+    ?assertMatch({ok, _}, macula_content_sharer:lookup(Sharer, ?REALM, root, MCID)),
     set_station(Io, ?STATION_A),
     ok = wait_until(fun() -> announced_stations(Io, MCID) =/= [] end, 2_000).
 
@@ -156,6 +225,10 @@ set_station(Io, Station) ->
 
 asked(Io, Kind) ->
     [Entry || {asked, _, Entry} <- lists:keysort(2, ets:lookup(Io, asked)), element(1, Entry) =:= Kind].
+
+announced_realms(Io, MCID) ->
+    [R || {put_record, Rec} <- asked(Io, put_record),
+          #{mcid := M, realm_id := R} <- [macula_record:read_content_announcement(Rec)], M =:= MCID].
 
 announced_stations(Io, MCID) ->
     [S || {put_record, R} <- asked(Io, put_record),

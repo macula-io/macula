@@ -30,9 +30,18 @@ or later for the `~<node id>/content_v1` form a node without an org serves on.
   it is reachable through and that procedure. The announcement is renewed while
   the content is shared, made again when the node moves station, and withdrawn
   with a tombstone on unshare.
+  - Announcing runs in the background, so sharing and serving never wait on the
+    DHT. An announcement that did not land, or a renewal that fell while no
+    station was connected, is made at the next station check (30 s).
+  - A realm serves only what is shared in it. The same bytes shared in two
+    realms are announced in both, and unsharing in one leaves the other.
   - `get_content` finds the announcements and tries each sharer through the
     station it named, in a random order. It accepts only a procedure bound to
     the announcer and verifies every block, manifest and chunk against the MCID.
+    Each chunk must be the size its manifest declares, so a fetch never receives
+    more than the manifest's size, which `max_bytes` bounds, and a raw root
+    larger than a chunk is refused. The fetch runs in a worker linked to the
+    caller: it ends with the caller and leaves nothing in its mailbox.
     It answers `{ok, Bytes}`, `{error, not_shared}` or
     `{error, {unavailable, [{Sharer, Reason}]}}`, naming each sharer that
     failed. Bounds: `max_bytes` (256 MiB), `max_chunks` (16,384), `parallel`

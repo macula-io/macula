@@ -48,10 +48,13 @@ answered(malformed, Stream, _Lookup) ->
     refused(Stream, <<"malformed">>, <<"a fetch names one content id and wants root or block">>).
 
 sent({ok, Body}, Stream) ->
-    ok = macula:send(Stream, Body, msgpack),
-    macula:close_stream(Stream);
+    closed_after(macula:send(Stream, Body, msgpack), Stream);
 sent(not_found, Stream) ->
     refused(Stream, <<"not_shared">>, <<"this node does not share that content">>).
+
+%% A send the stream refuses means the fetcher has gone: there is nothing left to close.
+closed_after(ok, Stream) -> macula:close_stream(Stream);
+closed_after({error, _Gone}, _Stream) -> ok.
 
 refused(Stream, Code, Message) ->
     _ = macula_stream:abort(Stream, Code, Message),

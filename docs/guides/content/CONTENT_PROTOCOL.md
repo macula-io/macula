@@ -94,8 +94,8 @@ the stream**:
 | `#{kind => block, mcid => MCID, bytes => Bytes}` | a raw root, or a chunk |
 | `#{kind => manifest, mcid => MCID, manifest => Manifest}` | a manifest root |
 
-or with the stream error `not_shared` (content it does not hold; a raw root is
-not served as a chunk) or `malformed` (args that name no content id, or want
+or with the stream error `not_shared` (content it does not hold in the realm
+of the procedure asked; a raw root is not served as a chunk) or `malformed` (args that name no content id, or want
 anything else). Keys and text values arrive as a station link delivers them,
 tagged or not; both ends read them the way any wire payload is read.
 
@@ -118,8 +118,11 @@ tagged or not; both ends read them the way any wire payload is read.
      any of its sizes is read, then fit the caller's bounds before a chunk is
      asked for.
 5. Ask for each chunk on its own stream, a bounded number at a time, and
-   verify each against its own chunk MCID as it arrives; then assemble in
-   order and verify the whole against the manifest's size and Merkle root.
+   check each against the size the manifest declares for it and its own chunk
+   MCID as it arrives; then assemble in order and verify the whole against the
+   manifest's size and Merkle root. A manifest's MCID covers its sizes and root
+   hash, not its chunk list, so the declared size is what bounds each chunk:
+   what a fetch receives never exceeds the manifest's size.
 
 A sharer that fails in any step moves the fetch to the next. When every one
 has failed the answer is `{error, {unavailable, [{Sharer, Reason}]}}`, naming
@@ -131,11 +134,11 @@ each. Nothing of a failed attempt is kept, and nothing is resumed.
 
 | Bound | Default |
 |---|---|
-| bytes of one DATA body | one chunk (a block larger than 256 KiB is refused) |
+| bytes of one DATA body | a raw root at most one chunk (256 KiB); a chunk exactly the size its manifest declares |
 | content size (`max_bytes`) | 256 MiB |
 | chunks per manifest (`max_chunks`) | 16,384 (4 GiB of 256 KiB chunks) |
 | chunk streams open at once (`parallel`) | 4 |
-| per-stream deadline (`chunk_timeout_ms`) | 15 s |
+| per-stream deadline, dial and answer (`chunk_timeout_ms`) | 15 s |
 
 ---
 

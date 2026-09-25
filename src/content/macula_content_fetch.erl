@@ -26,8 +26,10 @@
 %% == Bounds ==
 %%
 %% `max_bytes' (256 MiB by default) bounds the content, `max_chunks' (16,384, 4 GiB of 256 KiB chunks) a manifest,
-%% `chunk_timeout_ms' (15 s) each stream, `parallel' (4) the chunk streams open at once. A DATA body is at most one
-%% frame, which the stream layer bounds; a block larger than a chunk is refused.
+%% `chunk_timeout_ms' (15 s) each stream, dial and answer together, `parallel' (4) the chunk streams open at once.
+%% A raw root larger than a chunk is refused, and every chunk must be exactly the size its manifest declares, so what a
+%% fetch receives never exceeds the manifest's size, which `max_bytes' bounds. The fetch runs in the caller's process
+%% and leaves nothing in its mailbox.
 -module(macula_content_fetch).
 
 -export([get/3, io/0]).
@@ -39,6 +41,8 @@
 -define(PARALLEL, 4).
 -define(CODEC_RAW, 16#55).
 -define(CODEC_MANIFEST, 16#56).
+%% macula_manifest:default_chunk_size/0, what a sharer chunks by.
+-define(CHUNK_SIZE, 262144).
 
 %% @doc The facade's own functions, the io a fetch uses when not given another.
 -spec io() -> map().
@@ -52,10 +56,28 @@ io() ->
 -spec get(pid(), macula:mcid(), map()) -> {ok, binary()} | {error, term()}.
 get(Pool, <<2, Codec, _:48/binary>> = MCID, Opts)
   when is_pid(Pool), (Codec =:= ?CODEC_RAW orelse Codec =:= ?CODEC_MANIFEST), is_map(Opts) ->
-    Ctx = context(Pool, MCID, Opts),
-    from_sharers(in_realm(maps:get(realm, Opts, any), sharers(found(Ctx), MCID, Opts)), Ctx, []);
+    Caller = self(),
+    {Worker, Mon} = spawn_opt(fun() -> Caller ! {fetched, self(), fetched(Pool, MCID, Opts)} end, [link, monitor]),
+    answered(Worker, Mon);
 get(_Pool, _MCID, _Opts) ->
     {error, invalid_mcid}.
+
+%% The fetch runs in a worker linked to the caller, which owns every stream and chunk worker of it: a killed caller
+%% takes the fetch with it, and the caller's mailbox is left as it was, the link's exit included for a caller that
+%% traps exits.
+answered(Worker, Mon) ->
+    Result = receive
+                 {fetched, Worker, R} -> R;
+                 {'DOWN', Mon, process, Worker, Reason} -> {error, {fetch_worker, Reason}}
+             end,
+    true = erlang:demonitor(Mon, [flush]),
+    true = unlink(Worker),
+    receive {'EXIT', Worker, _} -> ok after 0 -> ok end,
+    Result.
+
+fetched(Pool, MCID, Opts) ->
+    Ctx = context(Pool, MCID, Opts),
+    from_sharers(in_realm(maps:get(realm, Opts, any), sharers(found(Ctx), MCID, Opts)), Ctx, []).
 
 context(Pool, MCID, Opts) ->
     #{pool => Pool, mcid => MCID,
@@ -136,7 +158,7 @@ through({error, Reason}, _Sharer, _Ctx) ->
 %%====================================================================
 
 root({ok, #{kind := block, bytes := Bytes}}, _Dial, #{mcid := MCID, max_bytes := Max}) ->
-    within_bytes(byte_size(Bytes), Max, fun() -> block_verified(MCID, Bytes) end);
+    within_bytes(byte_size(Bytes), Max, fun() -> raw_root(MCID, Bytes) end);
 root({ok, #{kind := manifest, manifest := Wire}}, Dial, #{mcid := MCID} = Ctx) ->
     manifest(macula_manifest:from_wire(Wire), MCID, Dial, Ctx);
 root({ok, _Other}, _Dial, _Ctx) ->
@@ -156,20 +178,27 @@ matched(ok, #{size := Size, chunk_count := Count} = Manifest, Dial, #{max_bytes 
 matched({error, _} = Error, _Manifest, _Dial, _Ctx) ->
     Error.
 
+%% Content of at most one chunk is shared as one raw block, so a larger raw root is not content a sharer made.
+raw_root(MCID, Bytes) when byte_size(Bytes) =< ?CHUNK_SIZE -> block_verified(MCID, Bytes);
+raw_root(_MCID, _Bytes) -> {error, block_too_large}.
+
 within_bytes(Size, Max, _Next) when Size > Max -> {error, {too_large, Size}};
 within_bytes(_Size, _Max, Next) -> Next().
 
 within_chunks(Count, Max, _Next) when Count > Max -> {error, {too_many_chunks, Count}};
 within_chunks(_Count, _Max, Next) -> Next().
 
-chunks(#{chunk_count := Count} = Manifest, Dial, #{parallel := Parallel} = Ctx) ->
-    ChunkIds = [begin {ok, C} = macula_manifest:chunk_mcid(Manifest, I), C end || I <- lists:seq(0, Count - 1)],
-    assembled(in_batches(ChunkIds, Parallel, Dial, Ctx, []), Manifest).
+%% Each chunk with the size its manifest declares: the manifest's content id covers its size and root hash but not
+%% its chunk list, so a chunk's own hash does not bound its size; this declaration does, and `macula_manifest' holds
+%% every declared size to the manifest's chunk size and total.
+chunks(#{chunks := Infos} = Manifest, Dial, #{parallel := Parallel} = Ctx) ->
+    Chunks = [{<<2, ?CODEC_RAW, Hash/binary>>, Size} || #{hash := Hash, size := Size} <- Infos],
+    assembled(in_batches(Chunks, Parallel, Dial, Ctx, []), Manifest).
 
 in_batches([], _Parallel, _Dial, _Ctx, Acc) ->
     {ok, lists:reverse(Acc)};
-in_batches(ChunkIds, Parallel, Dial, Ctx, Acc) ->
-    {Batch, Rest} = lists:split(min(Parallel, length(ChunkIds)), ChunkIds),
+in_batches(Chunks, Parallel, Dial, Ctx, Acc) ->
+    {Batch, Rest} = lists:split(min(Parallel, length(Chunks)), Chunks),
     batch_done(batch(Batch, Dial, Ctx), Rest, Parallel, Dial, Ctx, Acc).
 
 batch_done({ok, Blocks}, Rest, Parallel, Dial, Ctx, Acc) ->
@@ -177,35 +206,44 @@ batch_done({ok, Blocks}, Rest, Parallel, Dial, Ctx, Acc) ->
 batch_done({error, _} = Error, _Rest, _Parallel, _Dial, _Ctx, _Acc) ->
     Error.
 
-%% One stream per chunk, the batch at once; every block verified against its own content id.
-batch(ChunkIds, Dial, Ctx) ->
+%% One stream per chunk, the batch at once; every block verified against its own content id and declared size. Each
+%% worker is linked, so it ends with the fetch, and demonitored with its answer; a batch that stops early kills,
+%% demonitors and drains the rest.
+batch(Chunks, Dial, Ctx) ->
     Self = self(),
-    Workers = [spawn_monitor(fun() -> Self ! {chunk, self(), chunk(C, Dial, Ctx)} end) || C <- ChunkIds],
-    collected([Pid || {Pid, _Mon} <- Workers], maps:get(chunk_timeout_ms, Ctx) + 1_000, []).
+    Workers = [spawn_opt(fun() -> Self ! {chunk, self(), chunk(C, Dial, Ctx)} end, [link, monitor]) || C <- Chunks],
+    collected(Workers, maps:get(chunk_timeout_ms, Ctx) + 1_000, []).
 
 collected([], _Timeout, Acc) ->
     {ok, lists:reverse(Acc)};
-collected([Pid | Rest], Timeout, Acc) ->
+collected([{Pid, Mon} | Rest] = Workers, Timeout, Acc) ->
     receive
-        {chunk, Pid, {ok, Bytes}} -> collected(Rest, Timeout, [Bytes | Acc]);
-        {chunk, Pid, {error, _} = Error} -> stopped(Rest), Error;
-        {'DOWN', _Mon, process, Pid, Reason} when Reason =/= normal -> stopped(Rest), {error, {chunk_worker, Reason}}
+        {chunk, Pid, {ok, Bytes}} -> true = erlang:demonitor(Mon, [flush]), collected(Rest, Timeout, [Bytes | Acc]);
+        {chunk, Pid, {error, _} = Error} -> stopped(Workers), Error;
+        {'DOWN', Mon, process, Pid, Reason} -> stopped(Rest), {error, {chunk_worker, Reason}}
     after Timeout ->
-        stopped([Pid | Rest]), {error, chunk_timeout}
+        stopped(Workers), {error, chunk_timeout}
     end.
 
-stopped(Pids) -> [exit(P, kill) || P <- Pids], ok.
+stopped(Workers) ->
+    [begin
+         true = unlink(Pid),
+         exit(Pid, kill),
+         true = erlang:demonitor(Mon, [flush]),
+         receive {chunk, Pid, _} -> ok after 0 -> ok end
+     end || {Pid, Mon} <- Workers],
+    ok.
 
-chunk(ChunkId, Dial, #{max_bytes := _} = Ctx) ->
-    block_of(asked(Dial, ChunkId, block, Ctx), ChunkId).
+chunk({ChunkId, Size}, Dial, Ctx) ->
+    block_of(asked(Dial, ChunkId, block, Ctx), ChunkId, Size).
 
-block_of({ok, #{kind := block, bytes := Bytes}}, ChunkId) when byte_size(Bytes) =< 262144 ->
+block_of({ok, #{kind := block, bytes := Bytes}}, ChunkId, Size) when byte_size(Bytes) =:= Size ->
     block_verified(ChunkId, Bytes);
-block_of({ok, #{kind := block}}, _ChunkId) ->
-    {error, block_too_large};
-block_of({ok, _Other}, _ChunkId) ->
+block_of({ok, #{kind := block}}, _ChunkId, _Size) ->
+    {error, block_size_mismatch};
+block_of({ok, _Other}, _ChunkId, _Size) ->
     {error, unexpected_body};
-block_of({error, _} = Error, _ChunkId) ->
+block_of({error, _} = Error, _ChunkId, _Size) ->
     Error.
 
 block_verified(<<2, ?CODEC_RAW, Hash:48/binary>>, Bytes) ->
@@ -229,17 +267,19 @@ whole({error, _} = Error, _Bytes) -> Error.
 %% One stream
 %%====================================================================
 
-%% Open a stream to the sharer for one content id and read the one DATA body it answers with.
+%% Open a stream to the sharer for one content id and read the one DATA body it answers with, the dial and the
+%% answer within one `chunk_timeout_ms'.
 asked(#{url := Url, node := Node, realm := Realm, procedure := Procedure, station := Station}, MCID, Want,
       #{pool := Pool, io := #{call_stream_station := Open}, chunk_timeout_ms := Timeout}) ->
+    Deadline = erlang:monotonic_time(millisecond) + Timeout,
     opened(Open(Pool, Url, Node, Realm, Procedure, #{mcid => MCID, want => Want},
-                #{expected_node_id => Station, timeout_ms => Timeout}), Timeout).
+                #{expected_node_id => Station, dial_timeout_ms => Timeout, timeout_ms => Timeout}), Deadline).
 
-opened({ok, Stream}, Timeout) ->
-    Answer = body(macula:recv(Stream, Timeout)),
+opened({ok, Stream}, Deadline) ->
+    Answer = body(macula:recv(Stream, max(0, Deadline - erlang:monotonic_time(millisecond)))),
     _ = catch macula:close_stream(Stream),
     Answer;
-opened({error, _} = Error, _Timeout) ->
+opened({error, _} = Error, _Deadline) ->
     Error.
 
 body({data, Body}) when is_map(Body) -> {ok, read_body(Body)};

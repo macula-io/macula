@@ -17,7 +17,31 @@ serve_test_() ->
       {"a chunk of a held manifest is answered as a block", fun a_chunk_is_answered_as_a_block/0},
       {"content not held is refused not_shared", fun content_not_held_is_refused/0},
       {"args that name no content id are refused malformed", fun malformed_args_are_refused/0},
-      {"wire-shaped args, text keys and values, are read", fun wire_shaped_args_are_read/0}]}.
+      {"wire-shaped args, text keys and values, are read", fun wire_shaped_args_are_read/0},
+      {"an answer the fetcher is gone for ends quietly", fun an_answer_nobody_takes_ends_quietly/0}]}.
+
+%% A fetcher that closes its stream before the answer is sent: the stream refuses the send, and the handler ends
+%% without crashing or closing a stream that is gone.
+an_answer_nobody_takes_ends_quietly() ->
+    {MCID, Store} = macula_content_store:added(<<"hello">>, #{}, macula_content_store:new()),
+    Lookup = fun(Want, M) -> macula_content_serve:lookup(Want, M, Store) end,
+    Stream = refusing_stream(self()),
+    ?assertEqual(ok, macula_content_serve:serve(Stream, #{mcid => MCID, want => root}, Lookup)),
+    ?assertEqual([send], received_calls()).
+
+%% A stand-in stream that answers every call `{error, closed}' and reports what it was asked.
+refusing_stream(Test) ->
+    spawn_link(fun Loop() ->
+                   receive
+                       {'$gen_call', From, Request} ->
+                           Test ! {stream_call, element(1, Request)},
+                           gen:reply(From, {error, closed}),
+                           Loop()
+                   end
+               end).
+
+received_calls() ->
+    receive {stream_call, Kind} -> [Kind | received_calls()] after 100 -> [] end.
 
 a_raw_root_is_answered_as_a_block() ->
     {MCID, Store} = macula_content_store:added(<<"hello">>, #{}, macula_content_store:new()),

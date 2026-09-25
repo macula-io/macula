@@ -18,9 +18,9 @@ facade_test_() ->
                {ok, MCID} = macula:share_content(Pool, ?REALM, <<"hello">>),
                {ok, Sharer} = macula_content_sharer_sup:sharer(Pool),
                ?assertEqual({ok, Sharer}, macula_content_sharer_sup:sharer(Pool)),
-               ?assertMatch({ok, #{kind := block}}, macula_content_sharer:lookup(Sharer, root, MCID)),
+               ?assertMatch({ok, #{kind := block}}, macula_content_sharer:lookup(Sharer, ?REALM, root, MCID)),
                ok = macula:unshare_content(Pool, ?REALM, MCID),
-               ?assertEqual(not_found, macula_content_sharer:lookup(Sharer, root, MCID))
+               ?assertEqual(not_found, macula_content_sharer:lookup(Sharer, ?REALM, root, MCID))
            end},
           {"content nobody announces is not_shared",
            fun() -> ?assertEqual({error, not_shared}, macula:get_content(Pool, ?REALM, <<2, 16#55, 0:384>>)) end},

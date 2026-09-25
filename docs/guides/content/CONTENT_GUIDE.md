@@ -54,9 +54,17 @@ ok = macula:unshare_content(Pool, Realm, Mcid).
 `share_content` keeps the bytes in the pool's sharer (one per pool), serves
 them, and announces their root MCID in the DHT naming the realm, the station
 your node is reachable through, and your node's content procedure. It returns
-at once; the announcement is renewed while the content is shared, announced
-again if your node moves to another station, and made as soon as a station is
-connected if none is yet.
+at once and announces in the background; the announcement is renewed while the
+content is shared, announced again if your node moves to another station, and
+made as soon as a station is connected if none is yet, including a renewal that
+fell while no station was.
+
+A realm serves only what is shared in it: content shared in one realm is not
+served on another realm's procedure. Sharing the same bytes in two realms
+announces them in both, and unsharing in one leaves the other.
+
+The sharer keeps what it shares in memory, for as long as the pool lives:
+share again after a restart.
 
 Your node serves content on one procedure per realm:
 
@@ -78,7 +86,9 @@ the fetch to the next. It needs no realm key: content verifies itself.
 | `{error, invalid_mcid}` | not a tag 2 (SHA-384) content id |
 
 `get_content/4` takes bounds: `max_bytes` (256 MiB by default), `max_chunks`,
-`chunk_timeout_ms`, `parallel`.
+`chunk_timeout_ms` (dial and answer of one stream), `parallel`. A fetch holds
+up to twice the content's size while it assembles it: 512 MiB at the default
+bound. It runs in your process, leaves nothing in its mailbox, and ends with it.
 
 ---
 

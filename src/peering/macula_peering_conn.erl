@@ -863,7 +863,7 @@ connected(internal, drain_buffer, #data{buf = Buf} = Data) ->
 %% task can start delivering `{quic, Bin, Stream, Flags}' to `Pid'
 %% before `Pid' has any idea `Stream' exists — every consumer's
 %% dedicated-stream handling keys off already knowing the stream
-%% (`stream_bufs' / `content_stream_bufs', seeded only by THIS
+%% (`stream_bufs', seeded only by THIS
 %% notification), so that data had nowhere to land and was silently
 %% dropped by whichever catch-all `Pid' happened to have. Reordering
 %% closes the window structurally: passive mode guarantees zero
