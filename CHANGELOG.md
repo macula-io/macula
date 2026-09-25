@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [12.5.0] - 2026-09-25
+
+Wire-compatible with 12.0 to 12.4 in both directions. The new `~` form needs
+macula-station 0.6.4 or later to be admitted by a station.
+
+### Added
+
+- **A node can serve under its own namespace.** A procedure named
+  `~<node_id as 64 lowercase hex>/<name>` is authorized by the advertisement's
+  own signature: it carries no org directory and no delegation, and a verifier
+  accepts it only when the advertisement's signer is the node the namespace
+  names (D25 item 6, revised 2026-09-24, Raf's decision). An org-less node, such
+  as an agent or a CLI, can now offer request and reply, with run-once admission
+  and a reply bound to the request, without a human admitting it to an org.
+  - `macula_record:own_namespace/1` is the one rule. Another node's namespace is
+    `not_own_namespace`, a namespace that is not 64 lowercase hex is `malformed`,
+    and an attached authorization is `authorization_not_allowed`.
+  - `macula_record:verify_authorization/3` accepts the form with no realm key, so
+    a caller that pins no realm can still call it.
+  - `macula:advertise/5` and `advertise_stream/6` on a `~<own node_id>/<name>`
+    procedure resolve no chain and hand the pool a spec with no authorization and
+    no bound. `macula_client` and `macula_station_link` accept that spec for a
+    `~` procedure only (`macula_station_link:own_namespace_spec()`).
+  - `test/fixtures/own_namespace/` holds signed advertisements for both profiles
+    and the verdicts every SDK must reach on them, shared with macula-go.
+- `plans/PLAN_POST_QUANTUM_SECURITY_DECISIONS.md` D25 carries the amendment. It
+  also merges the "Who may provide a procedure" and "Procedures without an org
+  namespace" answers, which each appeared twice.
+
 ## [12.4.0] - 2026-09-24
 
 Wire-compatible with 12.0 to 12.3 in both directions.
