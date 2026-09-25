@@ -757,7 +757,8 @@ before its wire checks are green.
        signature: it carries no authorization, and a verifier accepts it as a target only when the
        advertisement's signer is the node the namespace names. Only that node's key can sign for it, so it
        impersonates no one, and a caller trusting it trusts that node, not an org. It carries no org, so no
-       capability grant (D7) names it, and an org's procedures keep the org directory and delegation form.
+       org directory or delegation authorizes it; a UCAN chain rooted at that node may gate it (D7). An org's
+       procedures keep the org directory and delegation form.
   7. **Stations report transport failures only.** A station may sign an ERROR or STREAM_ERROR as reported_by only with
      a relay error code distinct from every provider result, and never a RESULT. A relay error means the outcome is
      unknown, not that the call failed. Providers deduplicate requests on caller and call id.
