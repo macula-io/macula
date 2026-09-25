@@ -19,7 +19,7 @@ quinn = "0.11"
 # certificate and the one verifier a dial uses. So rustls selects no
 # crypto provider of its own in this manifest. The published crate, not a
 # git or path dependency.
-macula-pqc = "0.2"
+macula-pqc = "0.3"
 # TLS 1.3 only: macula-pqc's builders fix it, so rustls is built without
 # TLS 1.2 at all.
 rustls = { version = "0.23", default-features = false, features = ["logging", "std"] }

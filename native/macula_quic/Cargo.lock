@@ -446,18 +446,18 @@ checksum = "112b39cec0b298b6c1999fee3e31427f74f676e4cb9879ed1a121b43661a4154"
 
 [[package]]
 name = "macula-keccak"
-version = "0.2.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "41f02855604bfbf713c17b8a6b810b2ec383aba24a9372b4d2d81756c5741306"
+checksum = "d99a9ef94be3261f1debe3b04bebcafb992f7f29fb990a87e080365a810567bb"
 dependencies = [
  "zeroize",
 ]
 
 [[package]]
 name = "macula-mldsa"
-version = "0.2.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ae0e3b7f9786c967ecf126a95020efa00867536ff2f4bb5e160856bb8600ea0f"
+checksum = "e846a49c6be27e4e9abf33a88ac1edcfc4e0c3308e2bdb92f12e101c05856ebb"
 dependencies = [
  "getrandom 0.4.3",
  "macula-keccak",
@@ -466,9 +466,9 @@ dependencies = [
 
 [[package]]
 name = "macula-mlkem"
-version = "0.2.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "67ba0a522c08c6cb6c66c397777f2ee026f9392a889d2b00c2c05d71e2409eed"
+checksum = "9d1dde77fd0a48f76533836a342cd4c2cf844f63e2d534330b182a52b85b3471"
 dependencies = [
  "getrandom 0.4.3",
  "macula-keccak",
@@ -477,9 +477,9 @@ dependencies = [
 
 [[package]]
 name = "macula-pqc"
-version = "0.2.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0b0be81c08c35d9aa1bf53caab2be96219c15497abcc483b156a23330ebebe0a"
+checksum = "2bbd8755ca194c2d381cb15f49f0ca2022c86129e8c6b8c9bd685d3c77b728af"
 dependencies = [
  "macula-mldsa",
  "macula-pqc-kx",
@@ -489,9 +489,9 @@ dependencies = [
 
 [[package]]
 name = "macula-pqc-kx"
-version = "0.2.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0eaacd7d3c538693f69975deed55252c846c0e2d6b69655271ea811fe045c638"
+checksum = "151b72a3953fe9bfa0046421046b13b7cd360133d8cd1caf39b468ac25f98456"
 dependencies = [
  "macula-mlkem",
  "rustls",

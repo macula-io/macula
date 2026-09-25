@@ -58,8 +58,19 @@ pub fn build_server_config(
         .cloned()
         .ok_or_else(|| format!("no certificate found in {}", certfile))?;
 
-    let server_crypto = server_tls_config(certs, key, &settings.alpn)?;
+    let config = quic_server_config(server_tls_config(certs, key, &settings.alpn)?, settings)?;
+    Ok((config, leaf))
+}
 
+/// A listener's Quinn configuration around its rustls half, with the
+/// listener's transport settings.
+///
+/// QUIC protects its Initial packets with AES-128-GCM, as RFC 9001 fixes for
+/// QUIC version 1, and Quinn looks for that suite in the handshake's own list
+/// unless it is handed one. `macula-pqc`'s list holds AES-256-GCM alone, so
+/// both configurations here take the Initial suite from
+/// `macula_pqc::quic_initial_suite()`.
+pub fn quic_server_config(server_crypto: rustls::ServerConfig, settings: &ServerSettings) -> Result<ServerConfig, String> {
     let mut transport = TransportConfig::default();
     transport.max_idle_timeout(Some(
         quinn::IdleTimeout::try_from(Duration::from_millis(settings.idle_timeout_ms))
@@ -72,12 +83,15 @@ pub fn build_server_config(
 
     let mut config =
         ServerConfig::with_crypto(Arc::new(
-            quinn::crypto::rustls::QuicServerConfig::try_from(server_crypto)
-                .map_err(|e| format!("QUIC server config: {}", e))?,
+            quinn::crypto::rustls::QuicServerConfig::with_initial(
+                Arc::new(server_crypto),
+                macula_pqc::quic_initial_suite(),
+            )
+            .map_err(|e| format!("QUIC server config: {}", e))?,
         ));
     config.transport_config(Arc::new(transport));
 
-    Ok((config, leaf))
+    Ok(config)
 }
 
 /// The rustls half of a listener's configuration, before Quinn wraps it.
@@ -179,7 +193,7 @@ pub fn build_client_config(
     apply_flow_control(&mut transport, DEFAULT_STREAM_RECEIVE_WINDOW, DEFAULT_RECEIVE_WINDOW)?;
 
     let mut config = ClientConfig::new(Arc::new(
-        quinn::crypto::rustls::QuicClientConfig::try_from(crypto)
+        quinn::crypto::rustls::QuicClientConfig::with_initial(Arc::new(crypto), macula_pqc::quic_initial_suite())
             .map_err(|e| format!("QUIC client config: {}", e))?,
     ));
     config.transport_config(Arc::new(transport));
@@ -504,6 +518,60 @@ mod tests {
         .expect("classical station");
         let agreed = handshake(client_tls_config(&alpn), classical_station);
         assert!(agreed.is_err(), "a station with an ECDSA certificate was accepted: {agreed:?}");
+    }
+
+    /// The one TLS 1.3 cipher suite this NIF's handshakes may agree on,
+    /// AES-256-GCM with SHA-384, for the listener and the dialler alike
+    /// (macula issue #39).
+    #[test]
+    fn every_configuration_offers_only_aes_256_gcm() {
+        let alpn = vec!["macula".to_string()];
+        let (certs, key) = test_identity();
+        let server = server_tls_config(certs, key, &alpn).expect("server config");
+        let client = client_tls_config(&alpn);
+        for (name, provider) in [("listener", server.crypto_provider()), ("dialler", client.crypto_provider())] {
+            let suites: Vec<rustls::CipherSuite> = provider.cipher_suites.iter().map(|s| s.suite()).collect();
+            assert_eq!(suites, vec![rustls::CipherSuite::TLS13_AES_256_GCM_SHA384], "{name}");
+        }
+    }
+
+    /// A QUIC connection completes between the NIF's own listener and
+    /// dialler configurations. QUIC protects its Initial packets with
+    /// AES-128-GCM (RFC 9001), which the handshake's suite list does not
+    /// carry, so Quinn is handed that suite apart from it: without it
+    /// neither configuration builds.
+    #[test]
+    fn a_quic_connection_completes_between_the_nifs_own_configurations() {
+        let alpn = vec!["macula".to_string()];
+        let (certs, key) = test_identity();
+        let settings = ServerSettings {
+            alpn: alpn.clone(),
+            idle_timeout_ms: 10_000,
+            keep_alive_ms: 1_000,
+            bidi_streams: 4,
+            uni_streams: 4,
+            stream_receive_window: DEFAULT_STREAM_RECEIVE_WINDOW,
+            receive_window: DEFAULT_RECEIVE_WINDOW,
+        };
+        let server_config = quic_server_config(server_tls_config(certs, key, &alpn).expect("tls"), &settings)
+            .expect("the listener's QUIC configuration");
+        let client_config = build_client_config(&alpn, 10_000, 1_000).expect("the dialler's QUIC configuration");
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        runtime.block_on(async move {
+            let server = quinn::Endpoint::server(server_config, "127.0.0.1:0".parse().unwrap()).expect("listener");
+            let addr = server.local_addr().expect("address");
+            let accepted = tokio::spawn(async move {
+                server.accept().await.expect("incoming").await.map(|_| ()).map_err(|e| e.to_string())
+            });
+            let mut client = quinn::Endpoint::client("127.0.0.1:0".parse().unwrap()).expect("dialler");
+            client.set_default_client_config(client_config);
+            let connected = client.connect(addr, "localhost").expect("connect").await;
+            assert!(connected.is_ok(), "{:?}", connected.err());
+            assert_eq!(accepted.await.expect("join"), Ok(()));
+        });
     }
 
     /// Runs one handshake between the NIF's own server and client
