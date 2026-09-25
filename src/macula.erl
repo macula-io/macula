@@ -394,8 +394,19 @@ do_call_station(Pool, Station, Target, Realm, Procedure, Payload, TimeoutMs, Opt
 %% any identified caller), `{ucan_required, IssuerNodeId}' (gated to
 %% tokens from one known node), or `{realm_member_required, RealmKeyId,
 %% RequiredCan}' (gated to realm membership at a specific tier) -- see
-%% `macula_client:auth_policy()' for the full set. `Opts' may also
-%% carry `advertise', an arity-6 override for the pool fan-out (see
+%% `macula_client:auth_policy()' for the full set.
+%%
+%% `stations => [StationNodeId]' registers the procedure on the links to
+%% those stations only, each named by the node_id its link pins, and a link
+%% respawned later registers it again only when its station is one of them.
+%% A station the pool holds no link to is refused as `{error,
+%% {station_not_linked, StationNodeId}}', an empty list as `{error,
+%% {stations, empty}}' and anything but a list of 32-byte node ids as
+%% `{error, {stations, malformed}}'; nothing is registered or kept. Without
+%% it every link registers the procedure.
+%%
+%% `Opts' may also carry `advertise', an arity-6 override for the pool
+%% fan-out, which then decides where the procedure registers (see
 %% `macula_response:advertise_opts()'), and the `provider_io/0' seam
 %% entries the resolution reads its DHT calls from.
 -spec advertise(pool(), realm(), procedure(),
@@ -403,11 +414,29 @@ do_call_station(Pool, Station, Target, Realm, Procedure, Payload, TimeoutMs, Opt
     ok | {error, term()}.
 advertise(Pool, Realm, Procedure, Handler, Opts)
   when is_pid(Pool), is_binary(Realm), byte_size(Realm) =:= 32 ->
-    Policy = maps:get(auth, Opts, open),
-    Advertise = maps:get(advertise, Opts, fun macula_client:advertise/6),
-    advertise_authorized(Pool, Realm, Procedure, Opts, fun(Spec) ->
-        Advertise(Pool, Realm, Procedure, Handler, Policy, Spec)
+    on_stations(stations_opt(Opts), fun(Stations) ->
+        Policy = maps:get(auth, Opts, open),
+        Advertise = maps:get(advertise, Opts,
+                             fun(P, R, Pr, H, Po, Spec) ->
+                                 macula_client:advertise(P, R, Pr, H, Po, Spec, Stations)
+                             end),
+        advertise_authorized(Pool, Realm, Procedure, Opts, fun(Spec) ->
+            Advertise(Pool, Realm, Procedure, Handler, Policy, Spec)
+        end)
     end).
+
+%% The `stations' an advertisement names, checked before anything is resolved
+%% or registered: `all' when it names none.
+stations_opt(#{stations := []}) -> {error, {stations, empty}};
+stations_opt(#{stations := Stations}) -> node_ids(Stations, Stations);
+stations_opt(#{}) -> {ok, all}.
+
+node_ids([], Stations) -> {ok, Stations};
+node_ids([<<_:256>> | Rest], Stations) -> node_ids(Rest, Stations);
+node_ids(_NotANodeIdList, _Stations) -> {error, {stations, malformed}}.
+
+on_stations({ok, Stations}, Fun) -> Fun(Stations);
+on_stations({error, _} = Refused, _Fun) -> Refused.
 
 %% @doc Stop advertising a procedure on a V2 pool.
 -spec unadvertise(pool(), realm(), procedure()) -> ok.
@@ -883,7 +912,8 @@ advertise_stream(Pool, Realm, Procedure, Mode, Handler)
 %% procedure's policy, the same set `advertise/5' takes: `open' (default),
 %% `{ucan_required, IssuerNodeId}' or `{realm_member_required, RealmKeyId,
 %% RequiredCan}'. A consumer presents its token with `call_stream/5''s
-%% `ucan_token' opt.
+%% `ucan_token' opt. `stations' registers it on the links to those stations
+%% only, as `advertise/5' does.
 -spec advertise_stream(pool(), realm(), procedure(),
                         stream_mode(), stream_handler(), map()) ->
         ok | {error, term()}.
@@ -893,10 +923,12 @@ advertise_stream(Pool, Realm, Procedure, Mode, Handler, Opts)
        (Mode =:= server_stream orelse Mode =:= client_stream
         orelse Mode =:= bidi),
        is_function(Handler, 2), is_map(Opts) ->
-    Policy = maps:get(auth, Opts, open),
-    advertise_authorized(Pool, Realm, Procedure, Opts, fun(Spec) ->
-        macula_client:advertise_stream(Pool, Realm, Procedure, Mode, Handler,
-                                       Policy, Spec)
+    on_stations(stations_opt(Opts), fun(Stations) ->
+        Policy = maps:get(auth, Opts, open),
+        advertise_authorized(Pool, Realm, Procedure, Opts, fun(Spec) ->
+            macula_client:advertise_stream(Pool, Realm, Procedure, Mode, Handler,
+                                           Policy, Spec, Stations)
+        end)
     end).
 
 %% The provider-authorization resolution behind `advertise' and

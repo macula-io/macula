@@ -12,7 +12,7 @@
 %% on its state machine and so the replay path is independently
 %% testable.
 -module(macula_client_replay).
--export([subs_to/2, advs_to/2, stream_advs_to/2]).
+-export([subs_to/2, advs_to/3, stream_advs_to/3]).
 
 %% @doc Re-issue a SUBSCRIBE frame for every distinct `{Realm, Topic}'
 %% in `TopicIndex' against `LinkPid', and return the SubRef the link
@@ -32,44 +32,36 @@ subs_to(LinkPid, TopicIndex) when is_pid(LinkPid), is_map(TopicIndex) ->
        || {R, T} <- maps:keys(TopicIndex),
           {ok, LinkSubRef} <- [macula_station_link:subscribe(LinkPid, R, T, PoolPid)]]).
 
-%% @doc Register the handler of every advertised procedure in `Procs'
-%% on `LinkPid'. Mirrors `subs_to/2' for the RPC surface — used by the
-%% pool to restore a respawned station link's handlers.
+%% @doc Register on `LinkPid' every advertised procedure in `Procs' whose
+%% stations include `Station', the station that link pins (`all' names every
+%% station). Mirrors `subs_to/2' for the RPC surface: the pool restores a
+%% respawned station link's registrations with it.
 %%
 %% Errors from individual link advertise calls are swallowed: the
 %% next link respawn cycle re-tries.
--spec advs_to(pid(), #{{<<_:256>>, binary()} =>
-                        {macula_station_link:handler(),
-                         macula_client:auth_policy()}}) -> ok.
-advs_to(LinkPid, Procs) when is_pid(LinkPid), is_map(Procs) ->
+-spec advs_to(pid(), <<_:256>> | undefined, #{{<<_:256>>, binary()} => map()}) -> ok.
+advs_to(LinkPid, Station, Procs) when is_pid(LinkPid), is_map(Procs) ->
     maps:foreach(
-      fun({Realm, Procedure}, {Handler, Policy, EncodedAd}) ->
-          _ = macula_station_link:advertise(LinkPid, Realm,
-                                             Procedure, Handler, Policy,
-                                             EncodedAd)
-      end, Procs),
+      fun({Realm, Procedure}, #{handler := Handler, policy := Policy, ad := EncodedAd}) ->
+          _ = macula_station_link:advertise(LinkPid, Realm, Procedure, Handler, Policy, EncodedAd)
+      end, for_station(Station, Procs)),
     ok.
 
-%% @doc Register the handler of every streaming procedure in
-%% `StreamProcs' on `LinkPid'. Mirrors `advs_to/2' for the
-%% streaming RPC surface (SDK 3.17+). Stored shape is
-%% `{Mode, Handler, Policy}' so the receiving link dispatches inbound
-%% STREAM_OPEN frames with the correct mode and keeps enforcing the
-%% procedure's auth policy.
+%% @doc Register on `LinkPid' every streaming procedure in `StreamProcs'
+%% whose stations include `Station', as `advs_to/3' does for procedures. The
+%% registration keeps its mode, so the link dispatches an inbound STREAM_OPEN
+%% correctly, and its auth policy.
 %%
-%% Errors are swallowed (same policy as `advs_to/2').
--spec stream_advs_to(pid(),
-                     #{{<<_:256>>, binary()} =>
-                       {macula_frame:stream_mode(),
-                        macula_station_link:stream_handler(),
-                        macula_client:auth_policy()}}) -> ok.
-stream_advs_to(LinkPid, StreamProcs)
-  when is_pid(LinkPid), is_map(StreamProcs) ->
+%% Errors are swallowed (same policy as `advs_to/3').
+-spec stream_advs_to(pid(), <<_:256>> | undefined, #{{<<_:256>>, binary()} => map()}) -> ok.
+stream_advs_to(LinkPid, Station, StreamProcs) when is_pid(LinkPid), is_map(StreamProcs) ->
     maps:foreach(
-      fun({Realm, Procedure}, {Mode, Handler, Policy, EncodedAd}) ->
-          _ = macula_station_link:advertise_stream(LinkPid, Realm,
-                                                    Procedure, Mode,
-                                                    Handler, Policy,
-                                                    EncodedAd)
-      end, StreamProcs),
+      fun({Realm, Procedure}, #{mode := Mode, handler := Handler, policy := Policy, ad := EncodedAd}) ->
+          _ = macula_station_link:advertise_stream(LinkPid, Realm, Procedure, Mode, Handler, Policy, EncodedAd)
+      end, for_station(Station, StreamProcs)),
     ok.
+
+for_station(Station, Registrations) ->
+    maps:filter(fun(_Key, #{stations := all}) -> true;
+                   (_Key, #{stations := Stations}) -> lists:member(Station, Stations)
+                end, Registrations).

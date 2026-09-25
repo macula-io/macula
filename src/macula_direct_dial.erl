@@ -353,7 +353,9 @@ publish_advertisement(Pool, Realm, Procedure, NodeIdentity) ->
 %% that node_id and the station knows the pool's connection by it.
 %% `Opts' may include `authorization', the provider authorization an org
 %% namespaced procedure needs (D25 item 6), as
-%% `#{org_directory => Wire, procedure_delegation => Wire}', and `ttl_ms'.
+%% `#{org_directory => Wire, procedure_delegation => Wire}', `ttl_ms', and
+%% `stations', which makes the serving station the first of those node ids the
+%% pool is connected to (`macula:advertise/5' registers there).
 %% `cert_chain', a 10.x
 %% option `authorization' replaces, is refused with
 %% `{error, {removed_option, cert_chain}}' before anything is read or put.
@@ -367,8 +369,8 @@ publish_advertisement(Pool, Realm, Procedure, NodeIdentity, Opts) ->
 publish_unless_removed(none, Pool, Realm, Procedure, NodeIdentity, Opts) ->
     #{links := Links} = Dial = dial(Pool, [links, put_record], Opts),
     case Links(Pool) of
-        {ok, Linked} -> on_links(connected_station(Linked), Dial, Realm,
-                                 Procedure, NodeIdentity, Opts);
+        {ok, Linked} -> on_links(connected_station(Linked, maps:get(stations, Opts, all)), Dial,
+                                 Realm, Procedure, NodeIdentity, Opts);
         {error, _} = Error -> Error
     end;
 publish_unless_removed(Removed, _Pool, _Realm, _Procedure, _NodeIdentity, _Opts) ->
@@ -423,11 +425,16 @@ ttl_ms_opt(_Opts) ->
 %% include configured-but-not-yet-spawned or dead entries, and taking
 %% one of those blindly would publish an advertisement pointing at a
 %% station this pool cannot currently prove it can reach.
-connected_station(Links) ->
-    case [S || #{connected := true, node_id := S} <- Links, is_binary(S)] of
-        [Station | _] -> {ok, Station};
-        [] -> {error, no_healthy_link}
-    end.
+%% The station the record names: the pool's first connected station, or with
+%% `stations' the first of them it is connected to, where the procedure is
+%% registered.
+connected_station(Links, Stations) ->
+    first_station([S || #{connected := true, node_id := S} <- Links, is_binary(S)], Stations).
+
+first_station([Station | _], all) -> {ok, Station};
+first_station(Connected, Stations) when is_list(Stations) ->
+    first_station([S || S <- Stations, lists:member(S, Connected)], all);
+first_station([], all) -> {error, no_healthy_link}.
 
 %% @doc As `resolve_station_endpoint/3', within 10 seconds.
 -spec resolve_station_endpoint(macula:pool(), <<_:256>>) ->

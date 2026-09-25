@@ -99,8 +99,8 @@
 %% RPC fan-out (since 3.16.0) — called by the `macula' facade.
 -export([call_linked_station/5, call_station/7, call_station/8, call_station/9,
          call_station/10,
-         advertise/4, advertise/5, advertise/6, unadvertise/3,
-         advertise_stream/5, advertise_stream/6, advertise_stream/7,
+         advertise/4, advertise/5, advertise/6, advertise/7, unadvertise/3,
+         advertise_stream/5, advertise_stream/6, advertise_stream/7, advertise_stream/8,
          unadvertise_stream/3]).
 %% Direct-dial resolution head start — called by `macula_direct_dial' to
 %% remember which station last answered a procedure, and to get it back.
@@ -569,6 +569,20 @@
     order      :: macula_pubsub_order:t()
 }).
 
+%% An advertised procedure as the pool keeps it: what each link registers,
+%% and the stations it registers on, `all' for every link.
+-type registration() :: #{handler  := handler(),
+                          policy   := auth_policy(),
+                          ad       := macula_station_link:advertisement() | undefined,
+                          stations := stations()}.
+-type stream_registration() :: #{mode     := macula_frame:stream_mode(),
+                                 handler  := stream_handler(),
+                                 policy   := auth_policy(),
+                                 ad       := macula_station_link:advertisement() | undefined,
+                                 stations := stations()}.
+-type stations() :: all | [<<_:256>>, ...].
+-export_type([stations/0]).
+
 -record(state, {
     seeds         :: [seed()],
     node_id       :: <<_:256>>,
@@ -596,14 +610,12 @@
     %% SUBSCRIBE, from a subscribe or from the replay onto a respawned
     %% link, so an unsubscribe reaches every link that carried it.
     link_subs = #{} :: #{pid() => #{{<<_:256>>, binary()} => reference()}},
-    %% Advertised procedures — pool replays these on link respawn.
-    %% {realm, procedure} → handler
-    procs = #{}   :: #{{<<_:256>>, binary()} => {handler(), auth_policy()}},
-    %% Advertised streaming procedures — replayed on link respawn
-    %% alongside `procs'. {realm, procedure} → {mode, handler, policy}
-    stream_procs = #{} :: #{{<<_:256>>, binary()} =>
-                            {macula_frame:stream_mode(),
-                             stream_handler(), auth_policy()}},
+    %% Advertised procedures, replayed on a link respawn to the links
+    %% whose station the registration names: {realm, procedure} →
+    %% registration.
+    procs = #{}   :: #{{<<_:256>>, binary()} => registration()},
+    %% Advertised streaming procedures, replayed alongside `procs'.
+    stream_procs = #{} :: #{{<<_:256>>, binary()} => stream_registration()},
     dedup_tab     :: ets:tid(),
     %% Per-`ordered'-subscription reorder-buffer timeout + count cap, and
     %% a lazily armed one-shot timer that fires to release timed-out gaps.
@@ -867,8 +879,30 @@ advertise(Pool, Realm, Procedure, Handler, Policy, EncodedAd)
        (is_binary(EncodedAd) orelse ?IS_ADVERTISEMENT_SPEC(EncodedAd)
         orelse ?IS_OWN_NAMESPACE_SPEC(Procedure, EncodedAd)
         orelse EncodedAd =:= undefined) ->
-    gen_server:call(Pool, {advertise, Realm, Procedure, Handler, Policy,
-                           EncodedAd},
+    advertise(Pool, Realm, Procedure, Handler, Policy, EncodedAd, all).
+
+%% @doc As `advertise/6', registered on the links to `Stations' only, each
+%% named by the node_id its link pins, or on every link for `all'. A station
+%% the pool holds no link to is refused as `{error, {station_not_linked,
+%% StationNodeId}}', and nothing is registered or kept. A link respawned
+%% later registers the procedure again only when its station is one of
+%% `Stations'.
+-spec advertise(pool(), <<_:256>>, binary(), handler(), auth_policy(),
+                macula_station_link:advertisement() | undefined, stations()) ->
+    ok | {error, term()}.
+advertise(Pool, Realm, Procedure, Handler, Policy, EncodedAd, Stations)
+  when is_pid(Pool),
+       is_binary(Realm), byte_size(Realm) =:= 32,
+       is_binary(Procedure),
+       (is_function(Handler, 1) orelse
+        (is_tuple(Handler) andalso tuple_size(Handler) =:= 2)),
+       (is_binary(EncodedAd) orelse ?IS_ADVERTISEMENT_SPEC(EncodedAd)
+        orelse ?IS_OWN_NAMESPACE_SPEC(Procedure, EncodedAd)
+        orelse EncodedAd =:= undefined),
+       (Stations =:= all orelse (is_list(Stations) andalso Stations =/= [])) ->
+    gen_server:call(Pool, {advertise, Realm, Procedure,
+                           #{handler => Handler, policy => Policy, ad => EncodedAd,
+                             stations => Stations}},
                     5_000).
 
 %% @doc Drop a previously-advertised procedure on every healthy link
@@ -952,9 +986,30 @@ advertise_stream(Pool, Realm, Procedure, Mode, Handler, Policy, EncodedAd)
        (is_binary(EncodedAd) orelse ?IS_ADVERTISEMENT_SPEC(EncodedAd)
         orelse ?IS_OWN_NAMESPACE_SPEC(Procedure, EncodedAd)
         orelse EncodedAd =:= undefined) ->
+    advertise_stream(Pool, Realm, Procedure, Mode, Handler, Policy, EncodedAd, all).
+
+%% @doc As `advertise_stream/7', registered on the links to `Stations' only,
+%% as `advertise/7' registers a procedure.
+-spec advertise_stream(pool(), <<_:256>>, binary(),
+                       macula_frame:stream_mode(),
+                       stream_handler(), auth_policy(),
+                       macula_station_link:advertisement() | undefined, stations()) ->
+    ok | {error, term()}.
+advertise_stream(Pool, Realm, Procedure, Mode, Handler, Policy, EncodedAd, Stations)
+  when is_pid(Pool),
+       is_binary(Realm), byte_size(Realm) =:= 32,
+       is_binary(Procedure),
+       (Mode =:= server_stream orelse Mode =:= client_stream
+        orelse Mode =:= bidi),
+       is_function(Handler, 2),
+       (is_binary(EncodedAd) orelse ?IS_ADVERTISEMENT_SPEC(EncodedAd)
+        orelse ?IS_OWN_NAMESPACE_SPEC(Procedure, EncodedAd)
+        orelse EncodedAd =:= undefined),
+       (Stations =:= all orelse (is_list(Stations) andalso Stations =/= [])) ->
     gen_server:call(Pool,
-                    {advertise_stream, Realm, Procedure, Mode, Handler,
-                     Policy, EncodedAd},
+                    {advertise_stream, Realm, Procedure,
+                     #{mode => Mode, handler => Handler, policy => Policy, ad => EncodedAd,
+                       stations => Stations}},
                     5_000).
 
 %% @doc Drop a streaming procedure on every healthy link and remove
@@ -1559,28 +1614,15 @@ handle_call({call_station, Station, Target, Realm, Procedure, Payload, TimeoutMs
                 call_when_connected(Pid, Target, Realm, Procedure, Payload, TimeoutMs, DialTimeoutMs, Ucan)
             end);
 
-handle_call({advertise, Realm, Procedure, Handler, Policy}, _From,
-            #state{procs = P} = S) ->
-    Pids = spawned_link_pids(S),
-    Reply = fanout_advertise(Pids, Realm, Procedure, Handler, Policy,
-                             undefined),
-    {reply, Reply,
-     S#state{procs = P#{{Realm, Procedure} =>
-                        {Handler, Policy, undefined}}}};
-handle_call({advertise, Realm, Procedure, Handler, Policy, EncodedAd}, _From,
-            #state{procs = P} = S) ->
-    Pids = spawned_link_pids(S),
-    Reply = fanout_advertise(Pids, Realm, Procedure, Handler, Policy,
-                             EncodedAd),
-    {reply, Reply,
-     S#state{procs = P#{{Realm, Procedure} =>
-                        {Handler, Policy, EncodedAd}}}};
+handle_call({advertise, Realm, Procedure, Registration}, _From, S) ->
+    {Reply, NewS} = advertised(unary, {Realm, Procedure}, Registration, S),
+    {reply, Reply, NewS};
 
 handle_call({unadvertise, Realm, Procedure}, _From,
             #state{procs = P, node_identity = Key} = S) ->
-    Withdrawal = withdrawal_for(maps:find({Realm, Procedure}, P),
-                                Realm, Procedure, Key),
-    _ = fanout_unadvertise(spawned_link_pids(S), Realm, Procedure,
+    Registered = maps:find({Realm, Procedure}, P),
+    Withdrawal = withdrawal_for(Registered, Realm, Procedure, Key),
+    _ = fanout_unadvertise(registered_link_pids(Registered, S), Realm, Procedure,
                            Withdrawal),
     {reply, ok, S#state{procs = maps:remove({Realm, Procedure}, P)}};
 
@@ -1594,28 +1636,15 @@ handle_call({call_stream_station, Station, Target, Realm, Procedure, Args, Opts,
     on_link(ensure_link(Station, LinkOpts, S), From,
             fun(Pid) -> stream_when_connected(Pid, Target, Realm, Procedure, Args, Opts) end);
 
-handle_call({advertise_stream, Realm, Procedure, Mode, Handler, Policy}, _From,
-            #state{stream_procs = SP} = S) ->
-    Pids = spawned_link_pids(S),
-    Reply = fanout_advertise_stream(Pids, Realm, Procedure, Mode, Handler,
-                                    Policy, undefined),
-    {reply, Reply,
-     S#state{stream_procs = SP#{{Realm, Procedure} =>
-                                {Mode, Handler, Policy, undefined}}}};
-handle_call({advertise_stream, Realm, Procedure, Mode, Handler, Policy,
-             EncodedAd}, _From, #state{stream_procs = SP} = S) ->
-    Pids = spawned_link_pids(S),
-    Reply = fanout_advertise_stream(Pids, Realm, Procedure, Mode, Handler,
-                                    Policy, EncodedAd),
-    {reply, Reply,
-     S#state{stream_procs = SP#{{Realm, Procedure} =>
-                                {Mode, Handler, Policy, EncodedAd}}}};
+handle_call({advertise_stream, Realm, Procedure, Registration}, _From, S) ->
+    {Reply, NewS} = advertised(stream, {Realm, Procedure}, Registration, S),
+    {reply, Reply, NewS};
 
 handle_call({unadvertise_stream, Realm, Procedure}, _From,
             #state{stream_procs = SP, node_identity = Key} = S) ->
-    Withdrawal = withdrawal_for(stream_registration(maps:find({Realm, Procedure}, SP)),
-                                Realm, Procedure, Key),
-    _ = fanout_unadvertise_stream(spawned_link_pids(S), Realm, Procedure,
+    Registered = maps:find({Realm, Procedure}, SP),
+    Withdrawal = withdrawal_for(Registered, Realm, Procedure, Key),
+    _ = fanout_unadvertise_stream(registered_link_pids(Registered, S), Realm, Procedure,
                                   Withdrawal),
     {reply, ok,
      S#state{stream_procs = maps:remove({Realm, Procedure}, SP)}};
@@ -1931,6 +1960,66 @@ prior_link_state(Seed, #state{links = Links}) ->
 
 spawned_link_pids(#state{links = Links}) ->
     [P || #link_state{pid = P} <- maps:values(Links), is_pid(P)].
+
+%% Register an advertisement on the links to its stations and keep it for
+%% the respawns: the one path an advertise and a stream advertise take. A
+%% station the pool holds no link to refuses the whole registration, before
+%% any link is touched.
+advertised(Kind, Key, #{stations := Stations} = Registration, S) ->
+    registered(Kind, Key, Registration, station_link_pids(Stations, S), S).
+
+registered(_Kind, _Key, _Registration, {error, _} = Refused, S) ->
+    {Refused, S};
+registered(_Kind, _Key, _Registration, {ok, []}, S) ->
+    {{error, no_healthy_station}, S};
+registered(unary, Key, Registration, {ok, Pids}, #state{procs = P} = S) ->
+    {fanout_advertise(Pids, Key, Registration), S#state{procs = P#{Key => Registration}}};
+registered(stream, Key, Registration, {ok, Pids}, #state{stream_procs = SP} = S) ->
+    {fanout_advertise_stream(Pids, Key, Registration),
+     S#state{stream_procs = SP#{Key => Registration}}}.
+
+%% The live links to `Stations', each found by the node_id its link pins, or
+%% every live link for `all'. The first station without one is named.
+station_link_pids(all, S) ->
+    {ok, spawned_link_pids(S)};
+station_link_pids(Stations, S) ->
+    ByStation = link_pids_by_station(S),
+    station_link_pids(Stations, ByStation, []).
+
+station_link_pids([], _ByStation, Acc) ->
+    {ok, lists:reverse(Acc)};
+station_link_pids([Station | Rest], ByStation, Acc) ->
+    station_link_pid(maps:find(Station, ByStation), Station, Rest, ByStation, Acc).
+
+station_link_pid({ok, Pids}, _Station, Rest, ByStation, Acc) ->
+    station_link_pids(Rest, ByStation, lists:reverse(Pids, Acc));
+station_link_pid(error, Station, _Rest, _ByStation, _Acc) ->
+    {error, {station_not_linked, Station}}.
+
+link_pids_by_station(#state{links = Links} = S) ->
+    maps:groups_from_list(fun({Seed, _Pid}) -> pinned_station(Seed, S) end,
+                          fun({_Seed, Pid}) -> Pid end,
+                          live_links(Links)).
+
+%% The live links an advertisement was registered on, for its withdrawal: a
+%% station that has lost its link since is skipped, and a registration the
+%% pool does not hold reaches every link, as an unadvertise always has.
+registered_link_pids({ok, #{stations := all}}, S) ->
+    spawned_link_pids(S);
+registered_link_pids({ok, #{stations := Stations}}, S) ->
+    ByStation = link_pids_by_station(S),
+    lists:append([maps:get(Station, ByStation, []) || Station <- Stations]);
+registered_link_pids(error, S) ->
+    spawned_link_pids(S).
+
+%% The station a link to `Seed' must prove: the node_id its seed map pins,
+%% else the one its dial or the pool pins. Every link the pool starts has
+%% one (`init_with_pinned_seeds/3', `seed_checked/4').
+pinned_station(#{expected_node_id := Station}, _S) ->
+    Station;
+pinned_station(Seed, #state{link_opts = LinkOpts} = S) ->
+    maps:get(expected_node_id, dial_opts_for(Seed, S),
+             maps:get(expected_node_id, LinkOpts, undefined)).
 
 %% Reuse a live link to `Station', else dial a new one and add it to the
 %% pool exactly like a seed link (monitored, respawn-on-DOWN). Returns
@@ -2437,9 +2526,7 @@ next_in_scope(Settled, E, _Rest, _Connected, _Call)
 %% station delivers once the link connects. Filtering by
 %% `is_connected/1' here leaves the link's map out of sync with the
 %% pool's intent.
-fanout_advertise([], _Realm, _Proc, _Handler, _Policy, _EncodedAd) ->
-    {error, no_healthy_station};
-fanout_advertise(Pids, Realm, Proc, Handler, Policy, EncodedAd) ->
+fanout_advertise(Pids, {Realm, Proc}, #{handler := Handler, policy := Policy, ad := EncodedAd}) ->
     Results = [safe_link_advertise(P, Realm, Proc, Handler, Policy, EncodedAd)
                || P <- Pids, is_process_alive(P)],
     summarize_advertise([R || R <- Results, R =/= skipped]).
@@ -2497,9 +2584,8 @@ stream_after_connect(false, _Pid, _Target, _Realm, _Proc, _Args, _Opts) ->
 %% as `fanout_advertise/4' for unary; partial success counts. Same
 %% rationale for dispatching to pre-handshake links — see the
 %% comment on `fanout_advertise/4'.
-fanout_advertise_stream([], _Realm, _Proc, _Mode, _Handler, _Policy, _EncodedAd) ->
-    {error, no_healthy_station};
-fanout_advertise_stream(Pids, Realm, Proc, Mode, Handler, Policy, EncodedAd) ->
+fanout_advertise_stream(Pids, {Realm, Proc},
+                        #{mode := Mode, handler := Handler, policy := Policy, ad := EncodedAd}) ->
     Results = [safe_link_advertise_stream(P, Realm, Proc, Mode, Handler,
                                           Policy, EncodedAd)
                || P <- Pids, is_process_alive(P)],
@@ -2521,11 +2607,6 @@ safe_link_unadvertise_stream(Pid, Realm, Proc, Withdrawal) ->
     catch _:_ -> skipped
     end.
 
-%% A stored stream registration `{Mode, Handler, Policy, Ad}' in the
-%% `{HandlerOrMode, Policy, Ad}' shape `withdrawal_for/4' reads.
-stream_registration({ok, {Mode, _Handler, Policy, Ad}}) -> {ok, {Mode, Policy, Ad}};
-stream_registration(error) -> error.
-
 %% The withdrawal for an unadvertise: a tombstone over a FRESH
 %% advertisement of the same (realm, procedure) — fresh so its version
 %% is later than the registered one — signed by the provider (the
@@ -2536,7 +2617,7 @@ stream_registration(error) -> error.
 %% for a local-only register, which sent no advertisement to withdraw.
 withdrawal_for(error, _Realm, _Proc, _Key) ->
     undefined;
-withdrawal_for({ok, {_HandlerOrMode, _Policy, Ad}}, Realm, Proc, Key) ->
+withdrawal_for({ok, #{ad := Ad}}, Realm, Proc, Key) ->
     withdrawal_signed(registered_authorization(Ad, Key), Realm, Proc, Key).
 
 registered_authorization(undefined, _Key) ->
@@ -2686,10 +2767,11 @@ on_respawn_link(Seed, S) ->
 
 dial_opts_for(Seed, #state{dial_extra_opts = Opts}) -> maps:get(Seed, Opts, #{}).
 
-replay_to_seed(#link_state{pid = Pid}, S) when is_pid(Pid) ->
+replay_to_seed(#link_state{seed = Seed, pid = Pid}, S) when is_pid(Pid) ->
     LinkSubRefs = macula_client_replay:subs_to(Pid, S#state.topic_index),
-    macula_client_replay:advs_to(Pid, S#state.procs),
-    macula_client_replay:stream_advs_to(Pid, S#state.stream_procs),
+    Station = pinned_station(Seed, S),
+    macula_client_replay:advs_to(Pid, Station, S#state.procs),
+    macula_client_replay:stream_advs_to(Pid, Station, S#state.stream_procs),
     S#state{link_subs = (S#state.link_subs)#{Pid => LinkSubRefs}};
 replay_to_seed(_, S) ->
     S.
