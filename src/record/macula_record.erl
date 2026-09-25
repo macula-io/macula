@@ -36,7 +36,8 @@
          payload_bounded/1, wire_bounded/1,
          domain_type/1, domain_record_checked/1]).
 -export([type/1, key/1, key_id/1, version/1, created_at/1, expires_at/1, payload/1, signature/1]).
--export([payload_field/2, type_procedure_advertisement/0, procedure_advertisement_max_lifetime_ms/0]).
+-export([payload_field/2, type_procedure_advertisement/0, procedure_advertisement_max_lifetime_ms/0,
+         own_namespace/1]).
 -export([read_node_record/1, read_procedure_advertisement/1, read_station_endpoint/1, read_tombstone/1,
          read_org_directory/1, read_procedure_delegation/1, read_content_announcement/1,
          read_foundation_realm_trust_list/1]).
@@ -670,6 +671,44 @@ read_foundation_realm_trust_list(#{type := ?TYPE_FOUNDATION_REALM_TRUST_LIST, pa
 procedure_advertisement_max_lifetime_ms() ->
     ?PROCEDURE_ADVERTISEMENT_MAX_LIFETIME_MS.
 
+%% @doc Whether a procedure advertisement is in its advertiser's own namespace, and admissible there (D25 item 6,
+%% revised 2026-09-24): a procedure `~<node_id>/<name>', where `<node_id>' is the 64 lowercase hex characters of the
+%% advertisement's `advertiser_node', carrying no authorization. Verifying the advertisement binds `advertiser_node'
+%% to its signer, so only that node can sign for its namespace. `not_own_namespace' for an org procedure, a procedure
+%% without a namespace or another node's namespace; `malformed' for a `~' namespace that is not 64 lowercase hex;
+%% `authorization_not_allowed' when one is attached. The one rule the SDK and the station's admissions share.
+-spec own_namespace(m_record()) -> ok | {error, not_own_namespace | malformed | authorization_not_allowed}.
+own_namespace(#{type := ?TYPE_PROCEDURE_ADVERTISEMENT} = Advertisement) ->
+    #{procedure := Procedure, advertiser_node := Advertiser, authorization := Authorization} =
+        read_procedure_advertisement(Advertisement),
+    own_namespace_of(procedure_org(Procedure), Advertiser, Authorization);
+own_namespace(_NotAnAdvertisement) ->
+    {error, not_own_namespace}.
+
+own_namespace_of({org, <<"~", Hex/binary>>}, Advertiser, Authorization) ->
+    own_node(node_hex(Hex), Advertiser, Authorization);
+own_namespace_of(_NotOwn, _Advertiser, _Authorization) ->
+    {error, not_own_namespace}.
+
+own_node({ok, Advertiser}, Advertiser, undefined) -> ok;
+own_node({ok, Advertiser}, Advertiser, _Attached) -> {error, authorization_not_allowed};
+own_node({ok, _AnotherNode}, _Advertiser, _Authorization) -> {error, not_own_namespace};
+own_node(malformed, _Advertiser, _Authorization) -> {error, malformed}.
+
+%% Exactly 64 lowercase hex characters, the one spelling of a node_id in a namespace, so a node has one namespace.
+node_hex(Hex) when byte_size(Hex) =:= 64 ->
+    lowercase_hex(Hex, binary:encode_hex(decoded_or_empty(Hex), lowercase));
+node_hex(_Hex) ->
+    malformed.
+
+decoded_or_empty(Hex) ->
+    try binary:decode_hex(Hex)
+    catch error:badarg -> <<>>
+    end.
+
+lowercase_hex(Hex, Hex) -> {ok, binary:decode_hex(Hex)};
+lowercase_hex(_Hex, _Other) -> malformed.
+
 %% @doc A procedure's org namespace: the text before the first "/" of its name, when there is one and it is not "_".
 -spec procedure_org(binary()) -> {org, binary()} | none | {error, malformed}.
 procedure_org(Procedure) when is_binary(Procedure) ->
@@ -679,7 +718,8 @@ procedure_org(Procedure) when is_binary(Procedure) ->
 %% the realm-signed org directory and the org-signed procedure delegation, the only authorization form. The realm
 %% key is the carried realm key the caller pins, or the realm key id the foundation realm trust list's pairs name
 %% for the advertisement's realm_id (D28). A procedure with an org namespace needs an authorization for that org,
-%% a procedure without one carries none, and the advertisement expires no later than any part of its
+%% a procedure in its advertiser's own namespace (`~<node_id>/<name>', `own_namespace/1') carries none and needs no
+%% realm key, a procedure without a namespace carries none, and the advertisement expires no later than any part of its
 %% authorization. An authorization in any other form, a certificate chain included, is refused as
 %% authorization_form_unsupported: 11.0.0 has no certificate form.
 -spec verify_authorization(m_record(), trust(), integer()) -> ok | {error, authorization_refusal()}.
@@ -1191,6 +1231,10 @@ with_authorization(Payload, #{org_directory := Directory, procedure_delegation :
 
 authorization_for({error, malformed}, _Authorization, _Adv, _Trust, _Now) ->
     {error, malformed};
+%% A node's own namespace is authorized by the advertisement's signature alone: no realm key is needed, since no
+%% realm or org signs for it.
+authorization_for({org, <<"~", _/binary>>}, _Authorization, Adv, _Trust, _Now) ->
+    own_namespace(Adv);
 authorization_for(none, undefined, _Adv, _Trust, _Now) ->
     ok;
 authorization_for(none, _Present, _Adv, _Trust, _Now) ->

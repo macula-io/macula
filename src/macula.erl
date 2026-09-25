@@ -1101,6 +1101,13 @@ signed_provider_advertisement(Pool, Realm, Procedure, Io, Fun) ->
             {error, {provider_authorization, no_org_namespace}};
         {error, malformed} ->
             {error, {provider_authorization, malformed_procedure}};
+        {org, <<"~", _/binary>>} ->
+            case (maps:get(status, Io))(Pool) of
+                {ok, #{self_node_id := NodeId}} ->
+                    own_namespace_spec(Realm, Procedure, NodeId, Fun);
+                {error, _} = E ->
+                    E
+            end;
         {org, Org} ->
             case (maps:get(status, Io))(Pool) of
                 {ok, #{self_node_id := NodeId}} ->
@@ -1110,6 +1117,23 @@ signed_provider_advertisement(Pool, Realm, Procedure, Io, Fun) ->
                     E
             end
     end.
+
+%% A procedure in this node's own namespace, `~<own node_id>/<name>', is
+%% authorized by the advertisement's own signature (D25 item 6, revised
+%% 2026-09-24): no org directory, no delegation, no bound but the
+%% advertisement's own lifetime. What each link signs is checked by the
+%% same rule every verifier uses, before any spec reaches the pool; another
+%% node's namespace is refused here.
+own_namespace_spec(Realm, Procedure, NodeId, Fun) ->
+    own_namespace_checked(
+      macula_record:own_namespace(
+        macula_record:procedure_advertisement(NodeId, Realm, Procedure, NodeId)),
+      Fun).
+
+own_namespace_checked(ok, Fun) ->
+    Fun(#{});
+own_namespace_checked({error, Reason}, _Fun) ->
+    {error, {provider_authorization, Reason}}.
 
 resolve_org_directory(Io, Pool, Realm, Org, Procedure, NodeId, Fun) ->
     Find = maps:get(find_record, Io),

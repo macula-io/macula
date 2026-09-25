@@ -1,0 +1,99 @@
+[
+  {
+    "file": "pq_pure/own_ok.bin",
+    "now_ms": 1790255155231,
+    "own_namespace": "ok",
+    "procedure": "~c262ab187797d2d6f5904fdc74959246b45c7a81624f247ecafb555bef6125de/ring",
+    "profile": "pq_pure",
+    "verify_authorization": "ok"
+  },
+  {
+    "file": "pq_pure/own_other_node.bin",
+    "now_ms": 1790255155235,
+    "own_namespace": "not_own_namespace",
+    "procedure": "~0000000000000000000000000000000000000000000000000000000000000001/ring",
+    "profile": "pq_pure",
+    "verify_authorization": "not_own_namespace"
+  },
+  {
+    "file": "pq_pure/own_with_authorization.bin",
+    "now_ms": 1790255155237,
+    "own_namespace": "authorization_not_allowed",
+    "procedure": "~c262ab187797d2d6f5904fdc74959246b45c7a81624f247ecafb555bef6125de/ring",
+    "profile": "pq_pure",
+    "verify_authorization": "authorization_not_allowed"
+  },
+  {
+    "file": "pq_pure/own_uppercase_hex.bin",
+    "now_ms": 1790255155237,
+    "own_namespace": "malformed",
+    "procedure": "~C262AB187797D2D6F5904FDC74959246B45C7A81624F247ECAFB555BEF6125DE/ring",
+    "profile": "pq_pure",
+    "verify_authorization": "malformed"
+  },
+  {
+    "file": "pq_pure/own_short_hex.bin",
+    "now_ms": 1790255155238,
+    "own_namespace": "malformed",
+    "procedure": "~c262ab187797d2d6f5904fdc74959246b45c7a81624f247ecafb555bef6125/ring",
+    "profile": "pq_pure",
+    "verify_authorization": "malformed"
+  },
+  {
+    "file": "pq_pure/org_without_chain.bin",
+    "now_ms": 1790255155239,
+    "own_namespace": "not_own_namespace",
+    "procedure": "acme/ring",
+    "profile": "pq_pure",
+    "verify_authorization": "no_authorization"
+  },
+  {
+    "file": "pq_hybrid/own_ok.bin",
+    "now_ms": 1790255155762,
+    "own_namespace": "ok",
+    "procedure": "~a820040248be75d36d38296c1cf353fc2af86529ed6c2bc7334e08ed58570ed7/ring",
+    "profile": "pq_hybrid",
+    "verify_authorization": "ok"
+  },
+  {
+    "file": "pq_hybrid/own_other_node.bin",
+    "now_ms": 1790255155769,
+    "own_namespace": "not_own_namespace",
+    "procedure": "~0000000000000000000000000000000000000000000000000000000000000001/ring",
+    "profile": "pq_hybrid",
+    "verify_authorization": "not_own_namespace"
+  },
+  {
+    "file": "pq_hybrid/own_with_authorization.bin",
+    "now_ms": 1790255155776,
+    "own_namespace": "authorization_not_allowed",
+    "procedure": "~a820040248be75d36d38296c1cf353fc2af86529ed6c2bc7334e08ed58570ed7/ring",
+    "profile": "pq_hybrid",
+    "verify_authorization": "authorization_not_allowed"
+  },
+  {
+    "file": "pq_hybrid/own_uppercase_hex.bin",
+    "now_ms": 1790255155781,
+    "own_namespace": "malformed",
+    "procedure": "~A820040248BE75D36D38296C1CF353FC2AF86529ED6C2BC7334E08ED58570ED7/ring",
+    "profile": "pq_hybrid",
+    "verify_authorization": "malformed"
+  },
+  {
+    "file": "pq_hybrid/own_short_hex.bin",
+    "now_ms": 1790255155787,
+    "own_namespace": "malformed",
+    "procedure": "~a820040248be75d36d38296c1cf353fc2af86529ed6c2bc7334e08ed58570e/ring",
+    "profile": "pq_hybrid",
+    "verify_authorization": "malformed"
+  },
+  {
+    "file": "pq_hybrid/org_without_chain.bin",
+    "now_ms": 1790255155793,
+    "own_namespace": "not_own_namespace",
+    "procedure": "acme/ring",
+    "profile": "pq_hybrid",
+    "verify_authorization": "no_authorization"
+  }
+]
+

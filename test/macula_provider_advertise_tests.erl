@@ -35,7 +35,9 @@ cases(Keys) ->
                  fun an_unpinned_realm_key_is_refused/1,
                  fun a_delegation_ending_first_caps_the_advertisement/1,
                  fun an_org_directory_ending_first_caps_the_advertisement/1,
-                 fun a_republished_chain_restores_the_full_lifetime/1]].
+                 fun a_republished_chain_restores_the_full_lifetime/1,
+                 fun an_own_namespace_procedure_needs_no_chain/1,
+                 fun another_nodes_namespace_is_refused/1]].
 
 %%------------------------------------------------------------------
 %% Happy path
@@ -142,7 +144,10 @@ expires_at_of(Keys, Spec) ->
 %% The advertisement a link connected to `Station' sends for `Spec',
 %% taken from the frame a real macula_station_link puts on the wire,
 %% verified under the node's profile.
-link_signed(#{key := Key}, Spec, Station) ->
+link_signed(Keys, Spec, Station) ->
+    link_signed(Keys, Spec, Station, ?PROC).
+
+link_signed(#{key := Key}, Spec, Station, Procedure) ->
     {ok, _} = application:ensure_all_started(macula),
     {ok, Issuer} = macula_statement_issuer_sup:start_issuer(fun() -> Key end, self()),
     {ok, Pool} = macula_client:connect([], #{node_identity => Key}),
@@ -161,7 +166,7 @@ link_signed(#{key := Key}, Spec, Station) ->
             setelement(macula_station_link:state_field_index(peer_pid), S, Peer)
         end),
     Link ! {macula_peering, connected, Peer, Station},
-    ok = macula_station_link:advertise(Link, ?REALM, ?PROC,
+    ok = macula_station_link:advertise(Link, ?REALM, Procedure,
                                        fun(_) -> {ok, counted} end, open, Spec),
     Encoded = receive
                   {'$gen_cast', {send_frame, #{frame_type := advertise,
@@ -173,6 +178,36 @@ link_signed(#{key := Key}, Spec, Station) ->
     {ok, Profile} = macula_crypto_profile:configured(),
     {ok, Decoded} = macula_record:verify(Encoded, Profile),
     Decoded.
+
+%%------------------------------------------------------------------
+%% A node's own namespace (D25 item 6, revised 2026-09-24)
+%%------------------------------------------------------------------
+
+%% `~<own node_id>/<name>' resolves no org directory and no delegation: the pool gets a spec with no authorization and
+%% no bound, and what a link signs from it verifies with no realm key.
+an_own_namespace_procedure_needs_no_chain(#{node := NodeId} = Keys) ->
+    Handler = fun(_P) -> {ok, counted} end,
+    Procedure = <<"~", (binary:encode_hex(NodeId, lowercase))/binary, "/ring">>,
+    NoDirectory = fun(_Pool, _Key) -> error(no_lookup_expected) end,
+    with_opts(Keys, #{find_record => NoDirectory}, Handler, fun(Opts) ->
+        ?assertEqual(ok, macula:advertise(self(), ?REALM, Procedure, Handler, Opts))
+    end),
+    Spec = advertise_sent(),
+    ?assertEqual(false, is_map_key(authorization, Spec)),
+    ?assertEqual(false, is_map_key(not_after, Spec)),
+    {ok, Profile} = macula_crypto_profile:configured(),
+    Decoded = link_signed(Keys, Spec, <<9:256>>, Procedure),
+    ?assertEqual(ok, macula_record:verify_authorization(Decoded, #{profile => Profile},
+                                                        erlang:system_time(millisecond))).
+
+another_nodes_namespace_is_refused(Keys) ->
+    Handler = fun(_P) -> {ok, counted} end,
+    Procedure = <<"~", (binary:encode_hex(<<1:256>>, lowercase))/binary, "/ring">>,
+    with_opts(Keys, #{}, Handler, fun(Opts) ->
+        ?assertEqual({error, {provider_authorization, not_own_namespace}},
+                     macula:advertise(self(), ?REALM, Procedure, Handler, Opts))
+    end),
+    ?assertEqual(not_sent, advertise_sent()).
 
 %%------------------------------------------------------------------
 %% Refusals — nothing is sent under any of them

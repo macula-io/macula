@@ -144,6 +144,22 @@ a_spec_ttl_is_bounded_by_the_advertisement_type_test_() ->
          ok = macula_client:close(Pool)
      end}.
 
+%% A node's own namespace takes a spec with no authorization and no bound (D25 item 6, revised 2026-09-24); an org
+%% procedure never does, so it cannot be advertised without its chain.
+an_own_namespace_spec_is_for_a_tilde_procedure_only_test_() ->
+    {timeout, 10,
+     fun() ->
+         Pool = pool(),
+         Handler = fun(_) -> {ok, counted} end,
+         Own = <<"~", (binary:encode_hex(<<5:256>>, lowercase))/binary, "/ring">>,
+         ?assertEqual(ok, macula_client:advertise(Pool, ?REALM, Own, Handler, open, #{})),
+         ?assertEqual(ok, macula_client:advertise(Pool, ?REALM, Own, Handler, open, #{ttl_ms => 60_000})),
+         ?assertError(function_clause, macula_client:advertise(Pool, ?REALM, ?PROCEDURE, Handler, open, #{})),
+         ?assertError(function_clause, macula_client:advertise(Pool, ?REALM, Own, Handler, open,
+                                                               #{not_after => 1})),
+         ok = macula_client:close(Pool)
+     end}.
+
 %% A registration with no advertisement (the local-only form the
 %% distribution pool uses) still reaches every link's handler table.
 a_registration_without_an_advertisement_reaches_every_link_test_() ->

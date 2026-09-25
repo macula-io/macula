@@ -91,8 +91,9 @@
 -module(macula_station_link).
 
 %% An advertisement spec (macula_station_link:advertisement_spec()), checked
-%% in a guard: anything else a caller passes as a map raises function_clause
-%% before a link or the pool keeps it.
+%% in a guard without raising (an exception would fail the whole guard,
+%% `orelse' included): anything else a caller passes as a map raises
+%% function_clause before a link or the pool keeps it.
 %% A spec's advertisement is renewed at half its remaining life, but never
 %% sooner than this after the last signing.
 -define(MIN_RENEWAL_MS, 100).
@@ -106,9 +107,23 @@
 -define(MIN_SPEC_TTL_MS, 1_000).
 -define(MAX_SPEC_TTL_MS, 300_000).
 
+%% A spec for a procedure in the node's own namespace (`~<node_id>/<name>',
+%% D25 item 6 revised 2026-09-24): no authorization and no bound, only an
+%% optional ttl_ms. Accepted for a `~' procedure only, so an org procedure
+%% cannot be advertised without its chain.
+-define(IS_OWN_NAMESPACE_SPEC(P, A),
+        (is_map(A) andalso byte_size(P) > 0 andalso binary_part(P, 0, 1) =:= <<"~">>
+         andalso not is_map_key(authorization, A) andalso not is_map_key(not_after, A)
+         andalso (not is_map_key(ttl_ms, A)
+                  orelse (is_integer(map_get(ttl_ms, A)) andalso map_get(ttl_ms, A) >= ?MIN_SPEC_TTL_MS
+                          andalso map_get(ttl_ms, A) =< ?MAX_SPEC_TTL_MS)))).
+
 -define(IS_ADVERTISEMENT_SPEC(A),
-        (is_map(A) andalso is_integer(map_get(not_after, A))
+        (is_map(A) andalso is_map_key(not_after, A) andalso is_integer(map_get(not_after, A))
+         andalso is_map_key(authorization, A) andalso is_map(map_get(authorization, A))
+         andalso is_map_key(org_directory, map_get(authorization, A))
          andalso is_binary(map_get(org_directory, map_get(authorization, A)))
+         andalso is_map_key(procedure_delegation, map_get(authorization, A))
          andalso is_binary(map_get(procedure_delegation, map_get(authorization, A)))
          andalso (not is_map_key(ttl_ms, A)
                   orelse (is_integer(map_get(ttl_ms, A)) andalso map_get(ttl_ms, A) >= ?MIN_SPEC_TTL_MS
@@ -174,7 +189,7 @@
 ]).
 
 -export_type([handler/0, stream_handler/0, overlay_subscription/0,
-              advertisement/0, advertisement_spec/0]).
+              advertisement/0, advertisement_spec/0, own_namespace_spec/0]).
 
 -ifdef(TEST).
 -export([with_client_stream/3]).
@@ -514,7 +529,11 @@
 -type advertisement_spec() :: #{authorization := map(),
                                 not_after     := integer(),
                                 ttl_ms        => pos_integer()}.
--type advertisement() :: binary() | advertisement_spec().
+%% A spec for a procedure in the node's own namespace, `~<node_id>/<name>':
+%% no authorization and no bound, since the advertisement's own signature
+%% authorizes it (D25 item 6, revised 2026-09-24). Only a `~' procedure takes it.
+-type own_namespace_spec() :: #{ttl_ms => pos_integer()}.
+-type advertisement() :: binary() | advertisement_spec() | own_namespace_spec().
 
 %%====================================================================
 %% Public API
@@ -933,6 +952,7 @@ advertise(Pid, Realm, Procedure, Handler, Policy, EncodedAd)
        (is_function(Handler, 1) orelse
         (is_tuple(Handler) andalso tuple_size(Handler) =:= 2)),
        (is_binary(EncodedAd) orelse ?IS_ADVERTISEMENT_SPEC(EncodedAd)
+        orelse ?IS_OWN_NAMESPACE_SPEC(Procedure, EncodedAd)
         orelse EncodedAd =:= undefined) ->
     gen_server:call(Pid, {advertise, Realm, Procedure, Handler, Policy,
                           EncodedAd}, 5_000).
@@ -1194,6 +1214,7 @@ advertise_stream(Pid, Realm, Procedure, Mode, Handler, Policy, EncodedAd)
         orelse Mode =:= bidi),
        is_function(Handler, 2),
        (is_binary(EncodedAd) orelse ?IS_ADVERTISEMENT_SPEC(EncodedAd)
+        orelse ?IS_OWN_NAMESPACE_SPEC(Procedure, EncodedAd)
         orelse EncodedAd =:= undefined) ->
     ok = valid_policy(Policy),
     gen_server:call(Pid,
@@ -2551,14 +2572,15 @@ send_advertise(Pid, EncodedAd) ->
 %% connected to the station it names.
 sign_advertisement(Realm, Proc, _Spec, _Station, #state{pool = undefined}) ->
     not_sent(Realm, Proc, no_pool);
-sign_advertisement(Realm, Proc, #{authorization := Authorization, not_after := NotAfter} = Spec,
-                   Station, #state{pool = Pool, node_identity = Key}) ->
+sign_advertisement(Realm, Proc, Spec, Station, #state{pool = Pool, node_identity = Key}) ->
     Link = self(),
+    %% An org procedure's spec carries its authorization and its bound; an
+    %% own-namespace spec carries neither (see advertisement() above).
     Unsigned = macula_record:procedure_advertisement(
-                 node_id(Key), Realm, Proc, Station,
-                 maps:merge(#{authorization => Authorization}, maps:with([ttl_ms], Spec))),
+                 node_id(Key), Realm, Proc, Station, maps:with([authorization, ttl_ms], Spec)),
+    SignOpts = maps:with([not_after], Spec),
     _ = spawn(fun() ->
-            Signed = try macula_client:sign_node_record(Pool, Unsigned, #{not_after => NotAfter})
+            Signed = try macula_client:sign_node_record(Pool, Unsigned, SignOpts)
                      catch Class:Why -> {error, {Class, Why}}
                      end,
             Link ! {advertisement_signed, {Realm, Proc}, Spec, Station, Signed}
