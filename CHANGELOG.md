@@ -40,8 +40,9 @@ or later for the `~<node id>/content_v1` form a node without an org serves on.
     the announcer and verifies every block, manifest and chunk against the MCID.
     Each chunk must be the size its manifest declares, so a fetch never receives
     more than the manifest's size, which `max_bytes` bounds, and a raw root
-    larger than a chunk is refused. The fetch runs in a worker linked to the
-    caller: it ends with the caller and leaves nothing in its mailbox.
+    larger than a chunk is refused. The fetch runs in a worker that ends with
+    the caller and leaves nothing in its mailbox; a chunk stream that fails
+    moves the fetch to the next sharer and never takes the caller down.
     It answers `{ok, Bytes}`, `{error, not_shared}` or
     `{error, {unavailable, [{Sharer, Reason}]}}`, naming each sharer that
     failed. Bounds: `max_bytes` (256 MiB), `max_chunks` (16,384), `parallel`

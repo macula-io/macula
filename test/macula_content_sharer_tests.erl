@@ -35,7 +35,22 @@ sharer_test_() ->
       {"an announcement the DHT did not take is made again at the next station check",
        fun() -> cleaned(fun a_failed_put_is_made_again/0) end},
       {"unsharing while an announcement is in flight withdraws that announcement",
-       fun() -> cleaned(fun unsharing_withdraws_an_announcement_in_flight/0) end}]}.
+       fun() -> cleaned(fun unsharing_withdraws_an_announcement_in_flight/0) end},
+      {"a renewal that finds a new station announces everything through it",
+       {timeout, 20, fun() -> cleaned(fun a_renewal_on_a_new_station_moves_every_share/0) end}}]}.
+
+%% A roll to another station between two station checks, found first by one share's renewal: every share moves to the
+%% new station then, not only the renewing one, and not only at each share's own renewal half an hour later.
+a_renewal_on_a_new_station_moves_every_share() ->
+    {Sharer, Io, _Node} = sharer(#{announce_ttl_ms => 4_000, station_check_ms => 60_000}),
+    {ok, Early} = macula_content_sharer:share(Sharer, ?REALM, <<"early">>, #{}),
+    timer:sleep(1_500),
+    {ok, Late} = macula_content_sharer:share(Sharer, ?REALM, <<"late">>, #{}),
+    timer:sleep(300),
+    set_station(Io, ?STATION_B),
+    %% Early's renewal fires at 2 s; Late's own would not until 3.5 s.
+    ok = wait_until(fun() -> lists:member(?STATION_B, announced_stations(Io, Early)) end, 1_000),
+    ok = wait_until(fun() -> lists:member(?STATION_B, announced_stations(Io, Late)) end, 500).
 
 %% A station roll returns the same station: a renewal that fell in the outage must still be made, or the announcement
 %% expires while the content is shared and its node online.

@@ -28,8 +28,13 @@
 %% `max_bytes' (256 MiB by default) bounds the content, `max_chunks' (16,384, 4 GiB of 256 KiB chunks) a manifest,
 %% `chunk_timeout_ms' (15 s) each stream, dial and answer together, `parallel' (4) the chunk streams open at once.
 %% A raw root larger than a chunk is refused, and every chunk must be exactly the size its manifest declares, so what a
-%% fetch receives never exceeds the manifest's size, which `max_bytes' bounds. The fetch runs in the caller's process
-%% and leaves nothing in its mailbox.
+%% fetch receives never exceeds the manifest's size, which `max_bytes' bounds.
+%%
+%% == Processes ==
+%%
+%% The fetch runs in a worker that monitors its caller and ends when the caller does, taking its chunk workers with
+%% it. A chunk worker that crashes fails its sharer, and a fetch worker that crashes answers `{error, {fetch_worker,
+%% Reason}}': neither takes the caller down, and the caller's mailbox is left as it was.
 -module(macula_content_fetch).
 
 -export([get/3, io/0]).
@@ -57,26 +62,26 @@ io() ->
 get(Pool, <<2, Codec, _:48/binary>> = MCID, Opts)
   when is_pid(Pool), (Codec =:= ?CODEC_RAW orelse Codec =:= ?CODEC_MANIFEST), is_map(Opts) ->
     Caller = self(),
-    {Worker, Mon} = spawn_opt(fun() -> Caller ! {fetched, self(), fetched(Pool, MCID, Opts)} end, [link, monitor]),
+    {Worker, Mon} = spawn_monitor(fun() ->
+                                      process_flag(trap_exit, true),
+                                      CallerMon = erlang:monitor(process, Caller),
+                                      Caller ! {fetched, self(), fetched(Pool, MCID, CallerMon, Opts)}
+                                  end),
     answered(Worker, Mon);
 get(_Pool, _MCID, _Opts) ->
     {error, invalid_mcid}.
 
-%% The fetch runs in a worker linked to the caller, which owns every stream and chunk worker of it: a killed caller
-%% takes the fetch with it, and the caller's mailbox is left as it was, the link's exit included for a caller that
-%% traps exits.
+%% The worker owns every stream and chunk worker of the fetch, so what they leave behind is left in its mailbox.
 answered(Worker, Mon) ->
     Result = receive
                  {fetched, Worker, R} -> R;
                  {'DOWN', Mon, process, Worker, Reason} -> {error, {fetch_worker, Reason}}
              end,
     true = erlang:demonitor(Mon, [flush]),
-    true = unlink(Worker),
-    receive {'EXIT', Worker, _} -> ok after 0 -> ok end,
     Result.
 
-fetched(Pool, MCID, Opts) ->
-    Ctx = context(Pool, MCID, Opts),
+fetched(Pool, MCID, CallerMon, Opts) ->
+    Ctx = (context(Pool, MCID, Opts))#{caller_mon => CallerMon},
     from_sharers(in_realm(maps:get(realm, Opts, any), sharers(found(Ctx), MCID, Opts)), Ctx, []).
 
 context(Pool, MCID, Opts) ->
@@ -157,7 +162,7 @@ through({error, Reason}, _Sharer, _Ctx) ->
 %% The root and the chunks
 %%====================================================================
 
-root({ok, #{kind := block, bytes := Bytes}}, _Dial, #{mcid := MCID, max_bytes := Max}) ->
+root({ok, #{kind := block, bytes := Bytes}}, _Dial, #{mcid := MCID, max_bytes := Max}) when is_binary(Bytes) ->
     within_bytes(byte_size(Bytes), Max, fun() -> raw_root(MCID, Bytes) end);
 root({ok, #{kind := manifest, manifest := Wire}}, Dial, #{mcid := MCID} = Ctx) ->
     manifest(macula_manifest:from_wire(Wire), MCID, Dial, Ctx);
@@ -206,33 +211,33 @@ batch_done({ok, Blocks}, Rest, Parallel, Dial, Ctx, Acc) ->
 batch_done({error, _} = Error, _Rest, _Parallel, _Dial, _Ctx, _Acc) ->
     Error.
 
-%% One stream per chunk, the batch at once; every block verified against its own content id and declared size. Each
-%% worker is linked, so it ends with the fetch, and demonitored with its answer; a batch that stops early kills,
-%% demonitors and drains the rest.
+%% One stream per chunk, the batch at once; every block verified against its own content id and declared size. The
+%% chunk workers are linked to the fetch worker, which traps exits: a chunk worker that crashes fails the batch, and a
+%% fetch that ends early, or whose caller has gone, takes the rest with it.
 batch(Chunks, Dial, Ctx) ->
     Self = self(),
-    Workers = [spawn_opt(fun() -> Self ! {chunk, self(), chunk(C, Dial, Ctx)} end, [link, monitor]) || C <- Chunks],
-    collected(Workers, maps:get(chunk_timeout_ms, Ctx) + 1_000, []).
+    Workers = [spawn_link(fun() -> Self ! {chunk, self(), chunk(C, Dial, Ctx)} end) || C <- Chunks],
+    collected(Workers, maps:get(caller_mon, Ctx), maps:get(chunk_timeout_ms, Ctx) + 1_000, []).
 
-collected([], _Timeout, Acc) ->
+%% Each worker's exit is taken as it ends, so a fetch of many chunks never scans a mailbox of old exits.
+collected([], _CallerMon, _Timeout, Acc) ->
     {ok, lists:reverse(Acc)};
-collected([{Pid, Mon} | Rest] = Workers, Timeout, Acc) ->
+collected([Pid | Rest] = Workers, CallerMon, Timeout, Acc) ->
     receive
-        {chunk, Pid, {ok, Bytes}} -> true = erlang:demonitor(Mon, [flush]), collected(Rest, Timeout, [Bytes | Acc]);
-        {chunk, Pid, {error, _} = Error} -> stopped(Workers), Error;
-        {'DOWN', Mon, process, Pid, Reason} -> stopped(Rest), {error, {chunk_worker, Reason}}
+        {chunk, Pid, {ok, Bytes}} -> ended(Pid), collected(Rest, CallerMon, Timeout, [Bytes | Acc]);
+        {chunk, Pid, {error, _} = Error} -> ended(Pid), stopped(Rest), Error;
+        {'EXIT', Pid, Reason} -> stopped(Rest), {error, {chunk_worker, Reason}};
+        {'DOWN', CallerMon, process, _, _} -> exit(shutdown)
     after Timeout ->
         stopped(Workers), {error, chunk_timeout}
     end.
 
 stopped(Workers) ->
-    [begin
-         true = unlink(Pid),
-         exit(Pid, kill),
-         true = erlang:demonitor(Mon, [flush]),
-         receive {chunk, Pid, _} -> ok after 0 -> ok end
-     end || {Pid, Mon} <- Workers],
+    [begin exit(Pid, kill), ended(Pid) end || Pid <- Workers],
     ok.
+
+ended(Pid) ->
+    receive {'EXIT', Pid, _} -> ok end.
 
 chunk({ChunkId, Size}, Dial, Ctx) ->
     block_of(asked(Dial, ChunkId, block, Ctx), ChunkId, Size).

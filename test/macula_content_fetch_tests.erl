@@ -33,7 +33,26 @@ fetch_test_() ->
       {"a fetch leaves nothing in the caller's mailbox", fun a_fetch_leaves_the_mailbox_empty/0},
       {"a failed chunk batch leaves nothing in the caller's mailbox",
        fun a_failed_batch_leaves_the_mailbox_empty/0},
-      {"a killed caller stops its fetch's chunk streams", fun a_killed_caller_stops_its_fetch/0}]}.
+      {"a killed caller stops its fetch's chunk streams", fun a_killed_caller_stops_its_fetch/0},
+      {"a chunk worker that crashes fails its sharer, and the caller lives on",
+       fun a_crashing_chunk_worker_fails_its_sharer/0},
+      {"a root block without bytes is refused", fun a_root_block_without_bytes_is_refused/0}]}.
+
+%% A chunk stream whose io exits (a gen_server call timing out) fails that sharer and moves the fetch on; the caller,
+%% which traps no exits, is not taken down with it.
+a_crashing_chunk_worker_fails_its_sharer() ->
+    {Sharer, MCID} = honest_sharer(crypto:strong_rand_bytes(?CHUNK + 1)),
+    ?assertEqual(false, process_flag(trap_exit, false)),
+    ?assertMatch({error, {unavailable, [{_, {chunk_worker, boom}}]}}, fetch([Sharer#{crash_on_block => true}], MCID, #{})),
+    ?assertEqual({message_queue_len, 0}, settled_queue()).
+
+%% A body is the sharer's word: a block root without its bytes is an unexpected body, not a crash.
+a_root_block_without_bytes_is_refused() ->
+    MCID = <<2, 16#55, (crypto:hash(sha384, <<"x">>))/binary>>,
+    [begin
+         Liar = sharer(fun(Stream, _Args) -> ok = macula:send(Stream, Body, msgpack), macula:close_stream(Stream) end),
+         ?assertMatch({error, {unavailable, [{_, unexpected_body}]}}, fetch([Liar], MCID, #{}))
+     end || Body <- [#{kind => block, mcid => MCID}, #{kind => block, mcid => MCID, bytes => 1}]].
 
 %% A manifest's own content id covers its sizes and root hash, not its chunk list: a sharer can list, under a
 %% 1-byte chunk size, the hashes of blocks it will answer with at a chunk's full size. Each block matches its own
@@ -238,6 +257,7 @@ watched(Watcher, #{want := block}) -> Watcher ! {asked_chunk, self()};
 watched(_Watcher, _Args) -> ok.
 
 dialed(#{dead := true}, _Args) -> {error, not_connected};
+dialed(#{crash_on_block := true}, #{want := block}) -> exit(boom);
 dialed(#{local := Local}, Args) -> macula:call_stream(Local, Args).
 
 announcement(#{node := Node, key := Key, procedure := Procedure}, MCID) ->

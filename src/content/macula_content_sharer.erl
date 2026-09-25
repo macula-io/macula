@@ -193,7 +193,7 @@ new_share(true, _Key, _Meta, S) ->
     S;
 new_share(false, Key, Meta, #state{shares = Shares} = S) ->
     S1 = S#state{shares = Shares#{Key => #share{meta = Meta, renewal = due}}},
-    announced(Key, connected_station(S1), S1).
+    announced_through(connected_station(S1), Key, S1).
 
 %% What an announcement carries besides where: the name, the size and, for a manifest, the chunk count.
 share_meta(Bytes, Opts, Store, MCID) ->
@@ -255,7 +255,7 @@ announced(Key, Station, #state{shares = Shares} = S) ->
     Sharer = self(),
     Unsigned = unsigned_announcement(Key, Station, Share, S),
     {Worker, Mon} = spawn_monitor(fun() -> Sharer ! {announce_done, self(), announce(S, Unsigned)} end),
-    S#state{station = Station, workers = (S#state.workers)#{Worker => {Mon, Key, Ref}},
+    S#state{workers = (S#state.workers)#{Worker => {Mon, Key, Ref}},
             shares = Shares#{Key := Share#share{renewal = {announcing, Ref}}}}.
 
 unsigned_announcement({Realm, MCID}, Station, #share{meta = Meta},
@@ -304,10 +304,21 @@ worker_lost({{_Mon, Key, Ref}, Rest}, Reason, S) ->
 worker_lost(error, _Reason, S) ->
     S.
 
+%% A renewal that finds the node on another station than the one announced moves every share there, as a station check
+%% would.
 renewed({ok, #share{renewal = {armed, Ref}}}, Key, Ref, S) ->
-    announced(Key, connected_station(S), S);
+    announced_through(connected_station(S), Key, S);
 renewed(_StaleOrGone, _Key, _Ref, S) ->
     S.
+
+%% One share announced through the node's station, or, when the node is on another station than the one announced,
+%% every share through it.
+announced_through(Station, Key, #state{station = Station} = S) ->
+    announced(Key, Station, S);
+announced_through(undefined, Key, S) ->
+    announced(Key, undefined, S);
+announced_through(Station, _Key, S) ->
+    station_checked(Station, S).
 
 %% Announce everything again when the node is now reachable through another station, or what is due when through the
 %% same one.
@@ -316,7 +327,7 @@ station_checked(undefined, S) ->
 station_checked(Station, #state{station = Station, shares = Shares} = S) ->
     announced_all([K || K := #share{renewal = due} <- Shares], Station, S);
 station_checked(Station, #state{shares = Shares} = S) ->
-    announced_all(maps:keys(Shares), Station, S).
+    announced_all(maps:keys(Shares), Station, S#state{station = Station}).
 
 announced_all(Keys, Station, S) ->
     lists:foldl(fun(Key, Acc) -> announced(Key, Station, Acc) end, S, Keys).

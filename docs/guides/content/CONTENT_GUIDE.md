@@ -88,7 +88,9 @@ the fetch to the next. It needs no realm key: content verifies itself.
 `get_content/4` takes bounds: `max_bytes` (256 MiB by default), `max_chunks`,
 `chunk_timeout_ms` (dial and answer of one stream), `parallel`. A fetch holds
 up to twice the content's size while it assembles it: 512 MiB at the default
-bound. It runs in your process, leaves nothing in its mailbox, and ends with it.
+bound. It runs in a worker that ends when your process does and leaves nothing
+in your mailbox, and no failure of it takes your process down: a sharer that
+misbehaves or a chunk stream that fails moves the fetch to the next sharer.
 
 ---
 
