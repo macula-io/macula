@@ -121,6 +121,31 @@ an_expired_entry_not_yet_swept_does_not_hold_its_request_id_test() ->
         ?assertEqual(new, macula_request_admission:admit(A, Reused, link_a, After))
     end).
 
+%% A full bound is judged on the entries alive when admission runs: before refusing, the admission drops the entries
+%% past their deadline plus 5 minutes, so a caller whose quota holds only expired entries is admitted without waiting
+%% for a sweep (macula#37: a station's liveness pings held a provider's quota for a caller full for good).
+a_caller_whose_quota_holds_only_expired_entries_is_admitted_without_a_sweep_test() ->
+    with_admission(fun(A) ->
+        Deadline = ?NOW + ?MINUTE,
+        [new = admit(A, (request(1, N))#{deadline => Deadline}, link_a) || N <- [1, 2]],
+        After = Deadline + 5 * ?MINUTE + 1,
+        ?assertEqual(new, macula_request_admission:admit(A, (request(1, 3))#{deadline => After}, link_a, After)),
+        ?assertEqual(new, macula_request_admission:admit(A, (request(1, 4))#{deadline => After}, link_a, After)),
+        ?assertEqual({refused, caller_quota},
+                     macula_request_admission:admit(A, (request(1, 5))#{deadline => After}, link_a, After))
+    end).
+
+%% Likewise a full set: its expired entries leave it, and every caller holding one gets its place back.
+a_set_full_of_expired_entries_admits_without_a_sweep_test() ->
+    with_admission(fun(A) ->
+        Deadline = ?NOW + ?MINUTE,
+        [new = admit(A, (request(C, 1))#{deadline => Deadline}, Share)
+         || {C, Share} <- [{1, link_a}, {2, link_a}, {3, link_b}, {4, link_b}, {5, link_c}]],
+        After = Deadline + 5 * ?MINUTE + 1,
+        ?assertEqual(new, macula_request_admission:admit(A, (request(6, 1))#{deadline => After}, link_c, After)),
+        ?assertEqual(1, macula_request_admission:sweep(A, After + 6 * ?MINUTE))
+    end).
+
 %% Stored reply bytes are bounded per caller: a reply past the bound is not kept, and a copy of its request is then
 %% refused.
 a_reply_past_the_callers_byte_bound_is_not_kept_test() ->

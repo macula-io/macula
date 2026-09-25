@@ -23,7 +23,8 @@ request_admission_test_() ->
                   fun a_respawned_link_keeps_the_share_of_its_seed/0,
                   fun the_limits_come_from_the_option_then_the_environment_then_the_defaults/0,
                   fun a_pool_stops_when_its_admission_ends/0,
-                  fun a_pools_admission_ends_with_the_pool/0]]}.
+                  fun a_pools_admission_ends_with_the_pool/0,
+                  fun the_pool_sweeps_its_admission_every_admission_sweep_ms/0]]}.
 
 %% Each admission limit is an integer from 1 to its cap. Anything else, an atom included, does not start the pool.
 an_admission_limit_outside_its_range_does_not_start_the_pool() ->
@@ -98,6 +99,20 @@ a_pools_admission_ends_with_the_pool() ->
     ok = macula_client:close(Pool),
     ?assertEqual(ended, receive {'DOWN', Mon, process, Admission, _Reason} -> ended after ?EVENT_MS -> still_running end).
 
+%% The pool removes its admission's expired entries every `admission_sweep_ms', as it sweeps its publication dedup
+%% table, so the entries of callers that never ask again leave too (macula#37: a provider held 1313 entries of 53
+%% callers, every one kept past its expiry because nothing swept). The earliest deadline admitted, 5 minutes past,
+%% expires as it is admitted.
+the_pool_sweeps_its_admission_every_admission_sweep_ms() ->
+    {ok, Pool} = macula_client:connect([seed(1)], #{admission_sweep_ms => 50}),
+    [#{pid := Link}] = links(Pool),
+    {Admission, Share} = held(Link),
+    Now = erlang:system_time(millisecond),
+    new = macula_request_admission:admit(Admission, (request(<<1:256>>, 1, Now))#{deadline => Now - 300_000},
+                                         Share, Now),
+    ?assertEqual(0, entries_within(Admission, 40)),
+    ok = macula_client:close(Pool).
+
 %%------------------------------------------------------------------
 %% Helpers
 %%------------------------------------------------------------------
@@ -152,3 +167,13 @@ one_caller_past_its_quota(Opts) ->
 request(Caller, I, Now) ->
     #{caller => Caller, request_id => <<I:128>>, request_hash => crypto:hash(sha384, <<I:64>>),
       deadline => Now + 30_000}.
+
+%% How many entries the admission holds once none are left, or after Tries looks 50 ms apart.
+entries_within(Admission, Tries) ->
+    entries_left(map_size(element(3, sys:get_state(Admission))), Admission, Tries).
+
+entries_left(0, _Admission, _Tries) -> 0;
+entries_left(Held, _Admission, 0)   -> Held;
+entries_left(_Held, Admission, Tries) ->
+    timer:sleep(50),
+    entries_within(Admission, Tries - 1).

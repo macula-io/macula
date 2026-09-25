@@ -174,6 +174,8 @@
 %%   <li>`alpn' — QUIC ALPN list (default `[<<"macula">>]').</li>
 %%   <li>`connect_timeout_ms' — per-link CONNECT/HELLO deadline (default 30_000).</li>
 %%   <li>`dedup_sweep_ms': how often the inbound publication dedup table is swept.</li>
+%%   <li>`admission_sweep_ms': how often the request admission is swept for
+%%       entries past their deadline plus 5 minutes (default 30_000).</li>
 %%   <li>`verify' — ⚠ REFUSED in any value, here and on every seed in
 %%       `Seeds', with `{error, {refused, {verify, one_verification_mode}}}'.
 %%       A link trusts a station in one way only: its handshake signature

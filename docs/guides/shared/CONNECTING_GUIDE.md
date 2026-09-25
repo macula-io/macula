@@ -98,6 +98,7 @@ Every option has a default. Most apps pass `#{}`.
 | `alpn` | `[binary()]` | `[<<"macula">>]` | QUIC ALPN list |
 | `connect_timeout_ms` | `pos_integer()` | `30_000` | Per-link CONNECT timeout |
 | `dedup_sweep_ms` | `pos_integer()` | `30_000` | Dedup-table sweep interval |
+| `admission_sweep_ms` | `pos_integer()` | `30_000` | Request admission sweep interval: entries past their deadline plus 5 minutes leave |
 
 ### Identity
 

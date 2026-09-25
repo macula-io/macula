@@ -2986,9 +2986,35 @@ fan_event({ok, {_R, _T, Subscriber, _Mon}}, SubRef, Topic, Payload, Meta) ->
 %% an unknown `(realm, procedure)' (no handler registered on this
 %% link) maps to `unknown_next_peer'
 %% (0x01) — same taxonomy as `hecate_handler_dispatch'.
-handle_inbound_call({ok, Request}, #state{admission = Admission, share = Share} = S) ->
-    on_call_admission(admitted(Admission, Request, Share), Request, S);
+handle_inbound_call({ok, #{realm := <<0:256>>, procedure := ?LIVENESS_PROCEDURE, caller := Station,
+                           target := Target} = Request},
+                    #state{peer_node_id = Station, node_identity = Id, peer_pid = Pid} = S) when is_pid(Pid) ->
+    probe_or_request(Target =:= macula_node_keys:key_id(Id), Request, S);
+handle_inbound_call({ok, Request}, S) ->
+    admitted_call(Request, S);
 handle_inbound_call(_VerifiedRequest, _State) ->
+    ok.
+
+admitted_call(Request, #state{admission = Admission, share = Share} = S) ->
+    on_call_admission(admitted(Admission, Request, Share), Request, S).
+
+%% The liveness probe of this link's station, a `_macula.ping' CALL on the
+%% all-zero realm signed by that station and targeted at this node
+%% (`macula_peering_conn:send_liveness_probe/1'), is answered
+%% `unknown_next_peer' as any procedure without a handler is, but outside
+%% admission: it runs nothing, and the station probes every link each 30 s,
+%% which as admitted requests kept its caller quota on this provider full
+%% (macula#37). Any other ping, from another caller or for another node, is
+%% judged like any request, so answering outside admission is bounded by the
+%% one station behind this link.
+probe_or_request(true, Request, #state{node_identity = Id, peer_pid = Pid}) ->
+    liveness_answered(Request, Id, Pid);
+probe_or_request(false, Request, S) ->
+    admitted_call(Request, S).
+
+liveness_answered(Request, Id, Pid) ->
+    Reply = macula_frame:provider_error(#{request => Request, code => <<"unknown_next_peer">>}, Id),
+    sent_or_faulted(macula_peering:send_frame(Pid, Reply), Pid, Request, Id),
     ok.
 
 %% The pool's admission judges a CALL before any policy or handler, as it does a STREAM_OPEN: the signed deadline

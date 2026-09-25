@@ -31,6 +31,14 @@
 %% share and the set always count exactly the entries held. Times are
 %% milliseconds of wall-clock time, passed in by the caller.
 %%
+%% An entry past its deadline plus 5 minutes leaves the set before any
+%% request is judged, so a bound only ever counts live entries, and the
+%% pool sweeps the set on a timer (`expire/2') for the callers that never
+%% ask again. The entries are also held in order of expiry, so removing the
+%% expired ones costs only those, never a pass over the set (macula#37: a
+%% provider's entries were removed only by a sweep nothing ran, and a
+%% station's liveness pings kept its caller quota full for good).
+%%
 %% Every refusal, and every reply not stored, is counted by kind and logged
 %% at most once a minute per kind (`macula_refusal_report'), naming the callers
 %% refused (the first 8 bytes of the node id, in hex) and the procedures they
@@ -41,7 +49,7 @@
 
 -behaviour(gen_server).
 
--export([start_link/1, admit/4, admit/5, store_reply/5, sweep/2, refusals/1, refusal_sources/1,
+-export([start_link/1, admit/4, admit/5, store_reply/5, sweep/2, expire/2, refusals/1, refusal_sources/1,
          refusal_line/3, stop/1]).
 -export([init/1, handle_call/3, handle_cast/2]).
 
@@ -70,6 +78,8 @@
 -record(state, {
     limits          :: limits(),
     entries = #{}   :: #{{<<_:256>>, <<_:128>>} => #entry{}},
+    %% Every entry's key under its expiry, earliest first.
+    expiry = gb_sets:empty() :: gb_sets:set({integer(), {<<_:256>>, <<_:128>>}}),
     callers = #{}   :: #{<<_:256>> => pos_integer()},
     shares = #{}    :: #{term() => pos_integer()},
     reply_bytes = #{} :: #{<<_:256>> => pos_integer()},
@@ -116,6 +126,12 @@ store_reply(Admission, #{caller := <<_:256>> = Caller, request_id := <<_:128>> =
 sweep(Admission, NowMs) when is_integer(NowMs) ->
     gen_server:call(Admission, {sweep, NowMs}).
 
+%% @doc As `sweep/2', returning at once: the pool's periodic sweep, which
+%% must not wait on its admission.
+-spec expire(pid(), integer()) -> ok.
+expire(Admission, NowMs) when is_integer(NowMs) ->
+    gen_server:cast(Admission, {sweep, NowMs}).
+
 %% @doc The callers and procedures of the latest refusal report of each kind,
 %% most refused first: `{CallerPrefixHex, Procedure | undefined}' with its
 %% count, and `other' for sources past the window's bound.
@@ -141,7 +157,8 @@ init(Limits) ->
     {ok, #state{limits = Limits, refusals = macula_refusal_report:new(?REFUSAL_REPORT_WINDOW_MS)}}.
 
 handle_call({admit, #{deadline := Deadline} = Request, Share, Now}, _From, S) ->
-    {Verdict, NewS} = in_window(deadline_verdict(Deadline, Now), Request, Share, Now, S),
+    {_Removed, Live} = swept(Now, S),
+    {Verdict, NewS} = in_window(deadline_verdict(Deadline, Now), Request, Share, Live),
     {reply, Verdict, refusal_counted(Verdict, source(Request), Now, NewS)};
 handle_call({store_reply, Key, Hash, Reply, Bytes, Now}, _From, S) ->
     {Result, NewS} = stored(maps:find(Key, S#state.entries), Key, Hash, Reply, Bytes, S),
@@ -150,10 +167,13 @@ handle_call(refusals, _From, #state{refusals = Report} = S) ->
     {reply, macula_refusal_report:counts(Report), S};
 handle_call(refusal_sources, _From, #state{refusals = Report} = S) ->
     {reply, macula_refusal_report:last_sources(Report), S};
-handle_call({sweep, Now}, _From, #state{entries = Entries} = S) ->
-    Expired = [Key || Key := #entry{expires_at = ExpiresAt} <- Entries, ExpiresAt < Now],
-    {reply, length(Expired), lists:foldl(fun forget/2, S, Expired)}.
+handle_call({sweep, Now}, _From, S) ->
+    {Removed, NewS} = swept(Now, S),
+    {reply, Removed, NewS}.
 
+handle_cast({sweep, Now}, S) ->
+    {_Removed, NewS} = swept(Now, S),
+    {noreply, NewS};
 handle_cast(_Message, S) ->
     {noreply, S}.
 
@@ -207,20 +227,15 @@ deadline_verdict(Deadline, Now) when Deadline > Now + ?DEADLINE_AHEAD_MAX_MS ->
 deadline_verdict(_Deadline, _Now) ->
     inside.
 
-in_window(inside, #{caller := Caller, request_id := RequestId} = Request, Share, Now, S) ->
+in_window(inside, #{caller := Caller, request_id := RequestId} = Request, Share, S) ->
     Key = {Caller, RequestId},
-    seen(held(maps:find(Key, S#state.entries), Now), Key, Request, Share, S);
-in_window(Refusal, _Request, _Share, _Now, S) ->
+    seen(held(maps:find(Key, S#state.entries)), Key, Request, Share, S);
+in_window(Refusal, _Request, _Share, S) ->
     {{refused, Refusal}, S}.
 
-%% Expiry is judged when admission runs: an entry past its deadline plus 5
-%% minutes no longer holds its request_id, even before a sweep removes it.
-held({ok, #entry{expires_at = ExpiresAt}}, Now) when ExpiresAt < Now -> expired;
-held({ok, Entry}, _Now)                                             -> {held, Entry};
-held(error, _Now)                                                   -> absent.
+held({ok, Entry}) -> {held, Entry};
+held(error)       -> absent.
 
-seen(expired, Key, Request, Share, S) ->
-    seen(absent, Key, Request, Share, forget(Key, S));
 seen({held, #entry{hash = Hash, reply = pending}}, _Key, #{request_hash := Hash}, _Share, S) ->
     {{copy, pending}, S};
 seen({held, #entry{hash = Hash, reply = {reply, Reply, _Bytes}}}, _Key, #{request_hash := Hash}, _Share, S) ->
@@ -247,8 +262,10 @@ first_full_bound([Refusal | _]) -> {refused, Refusal};
 first_full_bound([])            -> room.
 
 admitted(room, {Caller, _RequestId} = Key, #{request_hash := Hash, deadline := Deadline}, Share, S) ->
-    Entry = #entry{hash = Hash, expires_at = Deadline + ?KEPT_PAST_DEADLINE_MS, share = Share},
+    ExpiresAt = Deadline + ?KEPT_PAST_DEADLINE_MS,
+    Entry = #entry{hash = Hash, expires_at = ExpiresAt, share = Share},
     {new, S#state{entries = maps:put(Key, Entry, S#state.entries),
+                  expiry = gb_sets:add_element({ExpiresAt, Key}, S#state.expiry),
                   callers = bump(Caller, 1, S#state.callers),
                   shares = bump(Share, 1, S#state.shares)}};
 admitted(Refused, _Key, _Request, _Share, S) ->
@@ -269,17 +286,35 @@ kept_or_not(true, Entry, {Caller, _RequestId} = Key, Reply, Bytes, S) ->
 kept_or_not(false, Entry, Key, _Reply, _Bytes, S) ->
     {not_kept, S#state{entries = maps:put(Key, Entry#entry{reply = not_kept}, S#state.entries)}}.
 
-forget({Caller, _RequestId} = Key, #state{entries = Entries} = S) ->
-    released(maps:take(Key, Entries), Caller, S).
+%% The entries past their deadline plus 5 minutes at `Now' leave, earliest
+%% first, and how many did.
+swept(Now, S) ->
+    swept(Now, 0, S).
 
-released({#entry{share = Share, reply = Reply}, Entries}, Caller, S) ->
+swept(Now, Removed, #state{expiry = Expiry} = S) ->
+    next_expired(earliest(gb_sets:is_empty(Expiry), Expiry), Now, Removed, S).
+
+earliest(true, _Expiry) -> none;
+earliest(false, Expiry) -> gb_sets:smallest(Expiry).
+
+next_expired({ExpiresAt, Key}, Now, Removed, S) when ExpiresAt < Now ->
+    swept(Now, Removed + 1, forget(Key, S));
+next_expired(_LiveOrNone, _Now, Removed, S) ->
+    {Removed, S}.
+
+%% Only a key the set holds is forgotten: a key in the expiry index but not
+%% in the entries is a broken invariant, and crashes here rather than leave
+%% `swept/3' taking the same smallest key for ever (Fable QA on #37).
+forget({Caller, _RequestId} = Key, #state{entries = Entries} = S) ->
+    released(maps:take(Key, Entries), Key, Caller, S).
+
+released({#entry{share = Share, reply = Reply, expires_at = ExpiresAt}, Entries}, Key, Caller, S) ->
     S#state{entries = Entries,
+            expiry = gb_sets:delete({ExpiresAt, Key}, S#state.expiry),
             callers = bump(Caller, -1, S#state.callers),
             shares = bump(Share, -1, S#state.shares),
             reply_bytes = bump(Caller, -reply_size(Reply), S#state.reply_bytes),
-            reply_total = S#state.reply_total - reply_size(Reply)};
-released(error, _Caller, S) ->
-    S.
+            reply_total = S#state.reply_total - reply_size(Reply)}.
 
 reply_size({reply, _Reply, Bytes}) -> Bytes;
 reply_size(_PendingOrNotKept)      -> 0.

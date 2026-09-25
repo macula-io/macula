@@ -284,6 +284,11 @@
     %% entries whose publication has expired. Default 30_000.
     dedup_sweep_ms     => pos_integer(),
 
+    %% How often the request admission is swept for entries past their
+    %% deadline plus 5 minutes, the callers' that never ask again. Default
+    %% 30_000.
+    admission_sweep_ms => pos_integer(),
+
     %% The realm keys the pool pins, one per realm id: each realm's public
     %% key as carried, configured per deployment beside the realm id. A call
     %% trusts an org namespaced advertisement only through the key pinned for
@@ -456,6 +461,7 @@
 %% raising the default makes it matter for everyone.
 -define(DEFAULT_REPLICATION, 2).
 -define(DEFAULT_DEDUP_SWEEP_MS, 30_000).
+-define(DEFAULT_ADMISSION_SWEEP_MS, 30_000).
 %% How long an `ordered' subscription waits for a missing seq before
 %% skipping the gap (a genuinely lost fact). Bounds head-of-line delay.
 -define(DEFAULT_ORDER_TIMEOUT_MS, 250).
@@ -581,6 +587,7 @@
     link_opts     :: map(),
     replication   :: pos_integer(),
     dedup_sweep   :: pos_integer(),
+    admission_sweep :: pos_integer(),
     %% seed → link_state
     links = #{}   :: #{seed() => #link_state{}},
     %% Why each seed's link last went down. Outlives the link entry, which
@@ -1458,6 +1465,7 @@ init_with_keys({ok, #{node_identity := NodeIdentity, issuer := Issuer, issuer_st
         %% refused; see `macula:trust_options_checked/1'.
         maps:with([expected_node_id], Opts)),
     DedupSweep  = maps:get(dedup_sweep_ms, Opts, ?DEFAULT_DEDUP_SWEEP_MS),
+    AdmissionSweep = maps:get(admission_sweep_ms, Opts, ?DEFAULT_ADMISSION_SWEEP_MS),
     Replication = maps:get(replication_factor, Opts, ?DEFAULT_REPLICATION),
     DedupTab    = macula_client_dedup:new(),
     OrderTimeout = maps:get(order_timeout_ms, Opts, ?DEFAULT_ORDER_TIMEOUT_MS),
@@ -1467,6 +1475,7 @@ init_with_keys({ok, #{node_identity := NodeIdentity, issuer := Issuer, issuer_st
     State0 = #state{seeds = Seeds, node_id = NodeId, realm_keys = maps:get(realm_trust, Opts, #{}),
                     link_opts = LinkOpts, replication = Replication,
                     dedup_sweep = DedupSweep,
+                    admission_sweep = AdmissionSweep,
                     dedup_tab = DedupTab,
                     order_timeout = OrderTimeout, order_max_buffer = OrderMaxBuf,
                     flush_timer = undefined,
@@ -1482,6 +1491,7 @@ init_with_keys({ok, #{node_identity := NodeIdentity, issuer := Issuer, issuer_st
                     admission = Admission},
     State1 = lists:foldl(fun start_link_for_seed/2, State0, Seeds),
     erlang:send_after(DedupSweep, self(), dedup_sweep),
+    erlang:send_after(AdmissionSweep, self(), admission_sweep),
     arm_giveup_sweep(Discovery),
     {ok, schedule_discovery(?INITIAL_DISCOVERY_DELAY_MS, State1)}.
 
@@ -1766,6 +1776,14 @@ handle_info(run_discovery, #state{discovery = #discovery_state{procedure = Proce
 handle_info(dedup_sweep, S) ->
     _ = macula_client_dedup:sweep(S#state.dedup_tab, erlang:system_time(millisecond)),
     erlang:send_after(S#state.dedup_sweep, self(), dedup_sweep),
+    {noreply, S};
+
+%% The admission removes the expired entries of callers that never ask
+%% again; a caller that does ask finds its own gone already
+%% (`macula_request_admission'). A cast, so the pool never waits on it.
+handle_info(admission_sweep, #state{admission = Admission} = S) ->
+    ok = macula_request_admission:expire(Admission, erlang:system_time(millisecond)),
+    erlang:send_after(S#state.admission_sweep, self(), admission_sweep),
     {noreply, S};
 
 handle_info(discovery_giveup_sweep, #state{discovery = undefined} = S) ->

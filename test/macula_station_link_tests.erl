@@ -1459,6 +1459,49 @@ a_repeated_call_gets_its_stored_reply_and_a_reused_id_is_refused_test_() ->
          ok
      end}.
 
+%% The link's station's liveness probe, a `_macula.ping' CALL on the all-zero realm signed by that station and
+%% targeted at this node, is answered as before (`unknown_next_peer') but takes no place in the admission: stations
+%% probe every link every 30 s, and each probe held an entry for its deadline plus 5 minutes, so a station filled its
+%% caller quota on a provider within hours (macula#37). A ping from any other caller, or targeted at another node, is
+%% judged like any request and takes an entry, as does a CALL for an unknown procedure.
+a_liveness_probe_is_answered_without_an_admission_entry_test_() ->
+    {timeout, 5,
+     fun() ->
+         {Pid, StationKey} = inbound_call_fixture([]),
+         Admission = element(macula_station_link:state_field_index(admission), sys:get_state(Pid)),
+         {ok, Profile} = macula_crypto_profile:configured(),
+         {ok, OtherKey} = macula_node_keys:generate(identity, Profile),
+         [begin
+              Pid ! {macula_peering, frame, self(), Ping},
+              ?assertMatch({error, #{code := <<"unknown_next_peer">>}}, await_result(Ping, 1_000))
+          end || Ping <- [ping(StationKey, link_node_id(Pid)), ping(OtherKey, link_node_id(Pid))]],
+         %% Its reply is signed by this node, not the one it names, so it does not verify as that node's reply; the
+         %% link has judged it once it answers the next message.
+         Pid ! {macula_peering, frame, self(), ping(StationKey, <<1:256>>)},
+         _ = sys:get_state(Pid),
+         %% The station's ping to this node on another realm, or for another procedure on the all-zero realm, is not
+         %% its probe either.
+         [begin
+              Pid ! {macula_peering, frame, self(), Ping},
+              ?assertMatch({error, #{code := <<"unknown_next_peer">>}}, await_result(Ping, 1_000))
+          end || Ping <- [ping(StationKey, link_node_id(Pid), ?REALM, <<"_macula.ping">>),
+                          ping(StationKey, link_node_id(Pid), <<0:256>>, <<"_macula.pong">>)]],
+         Other = inject_call(Pid, self(), StationKey, crypto:strong_rand_bytes(16), <<"_no.such.procedure">>),
+         ?assertMatch({error, #{code := <<"unknown_next_peer">>}}, await_result(Other, 1_000)),
+         Later = erlang:system_time(millisecond) + 3_600_000,
+         ?assertEqual(5, macula_request_admission:sweep(Admission, Later)),
+         macula_station_link:stop(Pid),
+         ok
+     end}.
+
+ping(CallerKey, Target) ->
+    ping(CallerKey, Target, <<0:256>>, <<"_macula.ping">>).
+
+ping(CallerKey, Target, Realm, Procedure) ->
+    macula_frame:call(#{request_id => crypto:strong_rand_bytes(16), realm => Realm,
+                        procedure => Procedure, target => Target,
+                        deadline => erlang:system_time(millisecond) + 30_000, payload => #{}}, CallerKey).
+
 %% A CALL with a deadline of the test's choosing.
 inject_call_with_deadline(Pid, CallerKey, Deadline) ->
     Frame = macula_frame:call(
