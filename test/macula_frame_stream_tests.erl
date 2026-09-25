@@ -37,7 +37,9 @@ cases(Keys) ->
                  fun a_caller_frame_out_of_order_is_refused/1,
                  fun nothing_follows_a_caller_stream_end/1,
                  fun a_caller_has_no_stream_reply/1,
-                 fun a_stream_error_frame_carries_exactly_one_signed_object/1]].
+                 fun a_stream_error_frame_carries_exactly_one_signed_object/1,
+                 fun a_forged_caller_frame_in_place_leaves_next_unchanged/1,
+                 fun a_forged_provider_frame_in_place_leaves_next_unchanged/1]].
 
 %%------------------------------------------------------------------
 %% Provider stream frames
@@ -241,6 +243,30 @@ nothing_follows_a_caller_stream_end(#{caller := Caller} = Keys) ->
     {ok, _, Ended} = macula_frame:verify_caller_stream(End, macula_frame:open_stream(Open), pq_pure),
     After = wire(macula_frame:caller_stream(chunk(1), Caller, Open)),
     ?assertEqual({error, stream_ended}, macula_frame:verify_caller_stream(After, Ended, pq_pure)).
+
+%%------------------------------------------------------------------
+%% A forged frame does not move the stream
+%%------------------------------------------------------------------
+
+%% A frame in the right place still has to verify, and one that does not leaves the stream where it stood: the genuine
+%% frame with that same sequence number is still the next one the stream accepts.
+a_forged_caller_frame_in_place_leaves_next_unchanged(#{caller := Caller, other := Other} = Keys) ->
+    Open = verified_open(Keys, bidi),
+    State = macula_frame:open_stream(Open),
+    Tbs = chunk_tbs(Open, macula_node_keys:key_id(Caller), 0),
+    Forged = crafted(stream_data, caller_stream, macula_signed_object:sign_held(?CALLER_STREAM_LABEL, Tbs, Other)),
+    ?assertEqual({error, signature_invalid}, macula_frame:verify_caller_stream(wire(Forged), State, pq_pure)),
+    Genuine = wire(macula_frame:caller_stream(chunk(0), Caller, Open)),
+    ?assertMatch({ok, _, _}, macula_frame:verify_caller_stream(Genuine, State, pq_pure)).
+
+a_forged_provider_frame_in_place_leaves_next_unchanged(#{provider := Provider, other := Other} = Keys) ->
+    Open = verified_open(Keys, bidi),
+    State = provider_verified(Keys, Open, [chunk(0)]),
+    Tbs = chunk_tbs(Open, macula_node_keys:key_id(Provider), 1),
+    Forged = crafted(stream_data, stream, macula_signed_object:sign_held(?STREAM_LABEL, Tbs, Other)),
+    ?assertEqual({error, signature_invalid}, macula_frame:verify_provider_stream(wire(Forged), State, pq_pure)),
+    Genuine = wire(macula_frame:provider_stream(chunk(1), Provider, Open)),
+    ?assertMatch({ok, _, _}, macula_frame:verify_provider_stream(Genuine, State, pq_pure)).
 
 %% STREAM_REPLY has no caller_stream field: a peer's frame carrying one is refused as it is decoded, and the same frame
 %% built in process is refused by the verifier.
