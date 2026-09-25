@@ -106,39 +106,16 @@
 %%%
 %%% == Content ==
 %%%
-%%% `put_content/4' has no resolve step at all — unlike a GET, a PUT
-%%% names its OWN target: the caller already knows (or is choosing)
-%%% which station to seed, so it takes `Station' directly and resolves
-%%% only that station's own `station_endpoint' (`resolve_station_endpoint/2,3',
-%%% the same machinery `call/6' uses internally for `serving_station').
-%%%
-%%% `get_content/3' and `fetch_content/4' resolve and fetch deliberately
-%%% WITHOUT the authorization check above: content's threat model
-%%% genuinely differs from RPC's. An RPC reply is opaque and unverifiable
-%%% except by trusting whoever answered, so proving the ADVERTISER is
-%%% authorized matters. Content is content-addressed, and the fetched
-%%% bytes are checked against the MCID client-side regardless of which
-%%% peer served them. Single-block content is re-hashed against the MCID
-%%% (in `macula_content_transfer'). For chunked content
-%%% the fetched manifest is used only if its MCID, recomputed from its
-%%% canonical fields, is the one requested (`macula_manifest:verify_mcid/2');
-%%% each chunk is then hashed against that manifest, and the reassembled
-%%% bytes are checked against its size and root hash
-%%% (`macula_manifest:verify/2'). A rogue or unauthorized announcer can at
-%%% most refuse to serve or waste a dial; it cannot make a caller accept
-%%% content that does not match the MCID it asked for. The same holds for
-%%% trying the next provider after a fetch that fails, so every announced
-%%% provider is a candidate the way advertisements are for calls. What
-%%% still matters, and is still mandatory, is (1)'s analogue for
-%%% `content_announcement': the signer must equal the `announcer_node'
-%%% it claims (the check `macula:find_content_providers/2' makes too), so
-%%% an attacker cannot at least misattribute who is claiming to serve what.
+%%% Content is fetched from the node that shares it (D27): see
+%%% `macula_content_fetch', which resolves a serving station's endpoint with
+%%% `resolve_station_endpoint/3' and opens its stream with
+%%% `macula:call_stream_station/7', and checks no advertisement's
+%%% authorization: content is verified by its content id.
 %%%
 %%% == Dial I/O ==
 %%%
-%%% The DHT lookups, dials and transfers a call runs on come from the
-%%% `dial_io' in its `Opts', or else from `macula' and
-%%% `macula_content_transfer'. A given `dial_io' has every function the call
+%%% The DHT lookups and dials a call runs on come from the `dial_io' in its
+%%% `Opts', or else from `macula'. A given `dial_io' has every function the call
 %%% runs on, each at the arity its key takes, and may carry the other
 %%% `dial_io()' functions; any other is refused with `function_clause', in
 %%% the caller. The option is for tests and for embedding direct dial; other
@@ -149,20 +126,15 @@
 
 -export([call/5, call/6, call_stream/5, call_stream/6, providers/4, providers/5,
         publish_advertisement/4, publish_advertisement/5,
-        get_content/3, get_content/4, fetch_content/4, fetch_content/5,
-        resolve_content_provider/2, put_content/4, put_content/5,
         resolve_station_endpoint/2, resolve_station_endpoint/3,
         resolve_station_endpoint/4, removed_option/2]).
 
 %% Only tests call these arities so far, each with a dial_io.
--ignore_xref([{get_content, 4}, {fetch_content, 5}, {put_content, 5},
-              {resolve_station_endpoint, 4}]).
+-ignore_xref([{resolve_station_endpoint, 4}]).
 
 -ifdef(TEST).
-%% Exports for unit tests: pure helpers that are otherwise private, and
-%% resolve_content_provider/3, which goes with resolve_content_provider/2 in
-%% 11.0.0.
--export([advertisement_trusted/2, adv_opts/1, resolve_content_provider/3]).
+%% Exports for unit tests: pure helpers that are otherwise private.
+-export([advertisement_trusted/2, adv_opts/1]).
 -endif.
 
 %% The functions direct dial looks up, dials and fetches with, by key. See
@@ -181,14 +153,6 @@
                                                  macula:realm(), macula:procedure(), term(),
                                                  map()) ->
                                                     {ok, macula:stream()} | {error, term()}),
-                     put_content_station => fun((macula:pool(), macula_client:seed(), binary(),
-                                                 pos_integer(), map()) ->
-                                                    {ok, macula:mcid()} | {error, term()}),
-                     start_get_station => fun((macula:pool(), macula_client:seed(),
-                                               macula:mcid(), pos_integer(), map()) ->
-                                                  {ok, pid()}),
-                     await => fun((pid(), timeout()) -> {ok, term()} | {error, term()}),
-                     cancel => fun((pid()) -> ok),
                      resolved_candidate => fun((macula:pool(), macula:realm(),
                                                 macula:procedure()) ->
                                                    {ok, map(), macula_client:seed()} | none),
@@ -465,120 +429,6 @@ connected_station(Links) ->
         [] -> {error, no_healthy_link}
     end.
 
-%% @doc Fetch `MCID' from one of its providers, resolved via their signed
-%% `content_announcement's, and dialed directly. Same return shape as
-%% `macula:get_content/2'; resolve failures surface as `{error,
-%% {unresolved, Reason}}', and once a provider's fetch has failed, the
-%% most recent failure is the result instead. `TimeoutMs' bounds the whole
-%% fetch: lookups, each provider's connect wait and the transfers. See
-%% `fetch_content/4' for how providers are chosen, and the module doc's
-%% "Content" section
-%% for why it checks no provider authorization, unlike
-%% `call/6'. Only chunked content is discoverable this way — see
-%% `macula:find_content_providers/2'.
--spec get_content(macula:pool(), macula:mcid(), pos_integer()) ->
-    {ok, binary()} | {error, term()}.
-get_content(Pool, MCID, TimeoutMs) ->
-    get_content(Pool, MCID, TimeoutMs, #{}).
-
-%% @doc As `get_content/3', on the `dial_io' in `Opts' (see "Dial I/O" in
-%% the module doc).
--spec get_content(macula:pool(), macula:mcid(), pos_integer(), map()) ->
-    {ok, binary()} | {error, term()}.
-get_content(Pool, MCID, TimeoutMs, Opts) ->
-    content_get(dial(Pool, [find_records, start_get_station, await, cancel], Opts), MCID,
-                TimeoutMs).
-
-content_get(Dial, <<2, Codec, _:48/binary>> = MCID, TimeoutMs)
-  when Codec =:= 16#55; Codec =:= 16#56 ->
-    fetch_from_providers(Dial, MCID, TimeoutMs, transfer_fetch(Dial, MCID));
-content_get(_Dial, _MCID, _TimeoutMs) ->
-    {error, invalid_mcid}.
-
-%% @doc Fetch `MCID' from the first of its announced providers whose fetch
-%% succeeds, within `TimeoutMs', by the rules `call/6' resolves by (see
-%% "Resolution" in the module doc): a provider whose fetch fails, including
-%% one whose bytes don't verify against `MCID', is passed over for the
-%% next, and one that failed is tried again only when its announcement has
-%% changed. `Fetch(Endpoint, Pinned, ConnectMs, RemainingMs)' runs one
-%% fetch: `Pinned' is the dial trust override that pins the announcer,
-%% `ConnectMs' the time that provider gets to connect, `RemainingMs' what
-%% remains of the deadline; it returns `{ok, Bytes}' or `{error, Reason}'.
-%% `macula_download' supplies its own, so a cancel reaches whichever
-%% transfer is running.
--spec fetch_content(macula:pool(), macula:mcid(), pos_integer(),
-                    fun((binary(), map(), pos_integer(), pos_integer()) ->
-                            {ok, binary()} | {error, term()})) ->
-    {ok, binary()} | {error, term()}.
-fetch_content(Pool, MCID, TimeoutMs, Fetch) ->
-    fetch_content(Pool, MCID, TimeoutMs, Fetch, #{}).
-
-%% @doc As `fetch_content/4', on the `dial_io' in `Opts' (see "Dial I/O" in
-%% the module doc).
--spec fetch_content(macula:pool(), macula:mcid(), pos_integer(),
-                    fun((binary(), map(), pos_integer(), pos_integer()) ->
-                            {ok, binary()} | {error, term()}), map()) ->
-    {ok, binary()} | {error, term()}.
-fetch_content(Pool, MCID, TimeoutMs, Fetch, Opts) ->
-    fetch_from_providers(dial(Pool, [find_records], Opts), MCID, TimeoutMs, Fetch).
-
-fetch_from_providers(Dial, MCID, TimeoutMs, Fetch) ->
-    Deadline = deadline(TimeoutMs),
-    each_candidate(content_providers(Dial, MCID), provider_try(Fetch, Deadline),
-                   Deadline).
-
-%% @doc Resolve `MCID''s provider via its signed `content_announcement',
-%% asking the DHT again past a not-yet-replicated announcement for up to
-%% 10 seconds. Returns the announcement of the first provider that
-%% qualifies, `{error, content_not_announced}' when none has by then, or
-%% the last lookup's own error when that lookup failed. Deprecated: removed
-%% in 11.0.0. Use `fetch_content/4', which also moves on to the next
-%% provider when a fetch fails.
--spec resolve_content_provider(macula:pool(), macula:mcid()) ->
-    {ok, map()} | {error, term()}.
-resolve_content_provider(Pool, MCID) ->
-    resolve_content_provider(Pool, MCID, #{}).
-
-%% As `resolve_content_provider/2', on the `dial_io' in `Opts'. Exported for
-%% tests only, and removed with it in 11.0.0.
--spec resolve_content_provider(macula:pool(), macula:mcid(), map()) ->
-    {ok, map()} | {error, term()}.
-resolve_content_provider(Pool, MCID, Opts) ->
-    bare_error(each_candidate(content_providers(dial(Pool, [find_records], Opts), MCID),
-                              fun(#{announcement := Announcement}, _Share, _Seen) ->
-                                  {done, {ok, Announcement}}
-                              end,
-                              deadline(?DEFAULT_RESOLVE_TIMEOUT_MS))).
-
-bare_error({ok, _} = Resolved) -> Resolved;
-bare_error(Error) -> bare_reason(Error).
-
-%% @doc Resolve `Station''s dialable `quic://' URL from its own signed
-%% `station_endpoint' record and put `Bytes' there directly. Same
-%% return shape as `macula:put_content/2'; resolve failures surface as
-%% `{error, {unresolved, Reason}}'. `TimeoutMs' bounds the endpoint
-%% lookup and the connect wait (`macula:put_content_station/5'); the
-%% underlying block/manifest transfer has its own internal timeouts.
--spec put_content(macula:pool(), <<_:256>>, binary(),
-                  pos_integer()) -> {ok, macula:mcid()} | {error, term()}.
-put_content(Pool, Station, Bytes, TimeoutMs) ->
-    put_content(Pool, Station, Bytes, TimeoutMs, #{}).
-
-%% @doc As `put_content/4', on the `dial_io' in `Opts' (see "Dial I/O" in
-%% the module doc).
--spec put_content(macula:pool(), <<_:256>>, binary(),
-                  pos_integer(), map()) -> {ok, macula:mcid()} | {error, term()}.
-put_content(Pool, Station, Bytes, TimeoutMs, Opts) ->
-    Dial = dial(Pool, [find_record, put_content_station], Opts),
-    Deadline = deadline(TimeoutMs),
-    put_at(station_endpoint(Dial, Station, Deadline), Dial, Bytes, Deadline).
-
-put_at({found, {ok, {Station, DialUrl}}, _Version},
-       #{pool := Pool, put_content_station := PutContentStation}, Bytes, Deadline) ->
-    PutContentStation(Pool, DialUrl, Bytes, budget(Deadline), pinned(Station));
-put_at(Lookup, _Dial, _Bytes, _Deadline) ->
-    lookup_error(Lookup).
-
 %% @doc As `resolve_station_endpoint/3', within 10 seconds.
 -spec resolve_station_endpoint(macula:pool(), <<_:256>>) ->
     {ok, binary()} | {error, term()}.
@@ -641,10 +491,6 @@ dial_function(find_records, Fun) when is_function(Fun, 3) -> ok;
 dial_function(find_record, Fun) when is_function(Fun, 3) -> ok;
 dial_function(call_station, Fun) when is_function(Fun, 8) -> ok;
 dial_function(call_stream_station, Fun) when is_function(Fun, 7) -> ok;
-dial_function(put_content_station, Fun) when is_function(Fun, 5) -> ok;
-dial_function(start_get_station, Fun) when is_function(Fun, 5) -> ok;
-dial_function(await, Fun) when is_function(Fun, 2) -> ok;
-dial_function(cancel, Fun) when is_function(Fun, 1) -> ok;
 dial_function(resolved_candidate, Fun) when is_function(Fun, 3) -> ok;
 dial_function(remember_resolved, Fun) when is_function(Fun, 5) -> ok.
 
@@ -658,10 +504,6 @@ default_dial_io() ->
       find_record => fun macula:find_record/3,
       call_station => fun macula:call_station/8,
       call_stream_station => fun macula:call_stream_station/7,
-      put_content_station => fun macula:put_content_station/5,
-      start_get_station => fun macula_content_transfer:start_get_station/5,
-      await => fun macula_content_transfer:await/2,
-      cancel => fun macula_content_transfer:cancel/1,
       resolved_candidate => fun macula_client:resolved_candidate/3,
       remember_resolved => fun macula_client:remember_resolved/5}.
 
@@ -675,10 +517,8 @@ default_dial_io() ->
 %% one pass to the next. At the deadline the result is, in this order, the
 %% most recent candidate failure, why the latest answered lookup found nothing
 %% qualifying, the latest failed lookup's error, or a timeout.
-each_candidate(Find, Try, Deadline) ->
-    each_candidate([], Find, Try, Deadline).
-
-%% As `each_candidate/3', trying `HeadStart' before the DHT is asked at all.
+%%
+%% `HeadStart' is tried before the DHT is asked at all.
 %%
 %% A HEAD START, NEVER A SUBSTITUTE. Its candidates go through the SAME
 %% `Try', the SAME `share/2' and the SAME `Deadline' as any other, they
@@ -1121,77 +961,6 @@ build_dial_url(Station, EpRec) ->
             {error, malformed_station_endpoint}
     end.
 
-%% One pass over `MCID''s content announcements.
-content_providers(#{pool := Pool, find_records := FindRecords}, MCID) ->
-    Key = macula_record:content_key(MCID),
-    fun(Deadline) ->
-        qualifying_providers(FindRecords(Pool, Key, lookup_timeout(Deadline)))
-    end.
-
-qualifying_providers({ok, Recs}) ->
-    candidates_or(lists:flatmap(fun trusted_provider/1, Recs), content_not_announced);
-qualifying_providers({error, Reason}) ->
-    {failed, {error, {unresolved, Reason}}}.
-
-%% A `content_announcement' qualifies when its signer is the `announcer_node'
-%% it claims, keeping the record's version. The record arrives verified
-%% under the node's crypto profile (`macula:find_records/3').
-trusted_provider(#{key_id := KeyId, version := Version} = Rec) ->
-    announced(read_announcement(Rec), KeyId, Version);
-trusted_provider(_Rec) ->
-    [].
-
-announced(#{announcer_node := KeyId, endpoint := Endpoint} = Announcement, KeyId, Version)
-  when is_binary(Endpoint) ->
-    [#{provider => KeyId, version => Version, endpoint => Endpoint,
-       announcement => Announcement}];
-announced(_Announcement, _KeyId, _Version) ->
-    [].
-
-read_announcement(Rec) ->
-    try macula_record:read_content_announcement(Rec)
-    catch _:_ -> undefined
-    end.
-
-%% Fetches from one provider, unless it already failed on the same
-%% announcement.
-provider_try(Fetch, Deadline) ->
-    fun(#{provider := Key} = Provider, Share, Seen) ->
-        fetch_unless_failed(maps:find(Key, Seen), Provider, Share, Seen, Fetch, Deadline)
-    end.
-
-fetch_unless_failed({ok, #{record := Version, error := Error}}, #{version := Version},
-                    _Share, Seen, _Fetch, _Deadline) ->
-    {next, Error, Seen};
-fetch_unless_failed(_NewOrChanged, #{provider := Key, version := Version,
-                                     endpoint := Endpoint},
-                    Share, Seen, Fetch, Deadline) ->
-    fetched(Fetch(Endpoint, pinned(Key), budget(Share), budget(Deadline)), Key, Version,
-            Seen).
-
-fetched({ok, _} = Fetched, _Key, _Version, _Seen) ->
-    {done, Fetched};
-fetched({error, _} = Error, Key, Version, Seen) ->
-    failed(Key, Version, none, Error, Seen).
-
-%% Fetches from one provider through `macula_content_transfer', within what
-%% remains of the deadline, and reaps the transfer whatever its outcome.
-transfer_fetch(#{pool := Pool, start_get_station := StartGetStation, await := Await,
-                 cancel := Cancel}, MCID) ->
-    fun(Endpoint, Pinned, ConnectMs, RemainingMs) ->
-        {ok, Transfer} = StartGetStation(Pool, Endpoint, MCID, ConnectMs, Pinned),
-        Result = await_transfer(Await, Transfer, RemainingMs),
-        _ = Cancel(Transfer),
-        Result
-    end.
-
-await_transfer(Await, Transfer, RemainingMs) ->
-    try Await(Transfer, RemainingMs)
-    catch exit:{timeout, _} -> {error, timeout}
-    end.
-
-%% The identity a dial must prove: the one a signed DHT record resolved.
-%% See the module doc's "Trust model".
 pinned(Node) ->
     #{expected_node_id => Node}.
 

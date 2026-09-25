@@ -7,7 +7,7 @@
 %%% starts one supervised, ephemeral receiver: it reads the manifest
 %%% `macula_pusher' passed as the stream's open-time `Args' (decoded
 %%% via `macula_manifest:from_wire/1', the same decode content
-%%% sharing's own `_content.get_manifest' path already relies on),
+%%% a fetcher's own manifest check relies on),
 %%% uses it only when its MCID, recomputed from its canonical fields,
 %%% is the MCID it names (`macula_manifest:verify_mcid/2'),
 %%% accumulates pushed chunks, and once the sender half-closes,

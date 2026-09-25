@@ -23,7 +23,7 @@
     org_directory/3, org_directory/4,
     procedure_delegation/2, procedure_delegation/3,
     procedure_advertisement/4, procedure_advertisement/5,
-    content_announcement/3, content_announcement/4,
+    content_announcement/3,
     foundation_seed_list/1, foundation_seed_list/2,
     foundation_parameter/2, foundation_parameter/3,
     foundation_realm_trust_list/1, foundation_realm_trust_list/2,
@@ -109,8 +109,8 @@
 -type realm_member_endorsement_opts() :: #{valid_from => pos_integer(), valid_until => pos_integer(),
                                            ttl_ms => pos_integer()}.
 -type procedure_advertisement_opts() :: #{authorization => map(), ttl_ms => pos_integer()}.
--type content_announcement_opts() :: #{name => binary(), size => non_neg_integer(), chunk_count => non_neg_integer(),
-                                       realm_id => <<_:256>>, serving_station => <<_:256>>, procedure => binary(),
+-type content_announcement_opts() :: #{realm_id := <<_:256>>, serving_station := <<_:256>>, procedure := binary(),
+                                       name => binary(), size => non_neg_integer(), chunk_count => non_neg_integer(),
                                        ttl_ms => pos_integer()}.
 -type foundation_seed() :: #{node_id := <<_:256>>, addresses := [map()], tier := 3 | 4}.
 -type foundation_seed_list_opts() :: #{valid_from => pos_integer(), valid_until => pos_integer(),
@@ -285,15 +285,13 @@ procedure_advertisement(AdvertiserNode, RealmId, Procedure, ServingStation, Opts
     unsigned(?TYPE_PROCEDURE_ADVERTISEMENT,
              with_authorization(Payload, maps:get(authorization, Opts, undefined)), Opts).
 
-%% @doc A node's announcement, signed by the node, that it shares the content with this tag 2 content id.
--spec content_announcement(<<_:256>>, <<_:400>>, binary()) -> m_record().
-content_announcement(AnnouncerNode, MCID, Endpoint) ->
-    content_announcement(AnnouncerNode, MCID, Endpoint, #{}).
-
--spec content_announcement(<<_:256>>, <<_:400>>, binary(), content_announcement_opts()) -> m_record().
-content_announcement(AnnouncerNode, <<2, _Codec:8, _Hash:48/binary>> = MCID, Endpoint, Opts)
-  when is_binary(AnnouncerNode), byte_size(AnnouncerNode) =:= 32, is_binary(Endpoint) ->
-    unsigned(?TYPE_CONTENT_ANNOUNCEMENT, content_announcement_payload(AnnouncerNode, MCID, Endpoint, Opts), Opts).
+%% @doc A node's announcement, signed by the node, that it shares the content with this tag 2 content id, naming where
+%% it is served (D27): the realm, the station the node is reachable through, and the node's content procedure.
+-spec content_announcement(<<_:256>>, <<_:400>>, content_announcement_opts()) -> m_record().
+content_announcement(AnnouncerNode, <<2, _Codec:8, _Hash:48/binary>> = MCID,
+                     #{realm_id := <<_:256>>, serving_station := <<_:256>>, procedure := Procedure} = Opts)
+  when is_binary(AnnouncerNode), byte_size(AnnouncerNode) =:= 32, is_binary(Procedure) ->
+    unsigned(?TYPE_CONTENT_ANNOUNCEMENT, content_announcement_payload(AnnouncerNode, MCID, Opts), Opts).
 
 %% @doc A foundation's seed list, signed by a foundation key.
 -spec foundation_seed_list([foundation_seed()]) -> m_record().
@@ -650,7 +648,6 @@ read_procedure_delegation(#{type := ?TYPE_PROCEDURE_DELEGATION, payload := P}) -
 read_content_announcement(#{type := ?TYPE_CONTENT_ANNOUNCEMENT, payload := P}) ->
     #{announcer_node => payload_field(P, <<"announcer_node">>),
       mcid           => payload_field(P, <<"mcid">>),
-      endpoint       => payload_field(P, <<"endpoint">>),
       realm_id       => payload_field(P, <<"realm_id">>),
       serving_station => payload_field(P, <<"serving_station">>),
       procedure      => payload_field(P, <<"procedure">>),
@@ -1045,7 +1042,9 @@ payload_ok(?TYPE_FOUNDATION_PARAMETER, P) -> is_text(field(P, <<"param_name">>))
 payload_ok(?TYPE_FOUNDATION_REALM_TRUST_LIST, P) -> trust_list_payload_ok(P);
 payload_ok(?TYPE_FOUNDATION_T3_ATTESTATION, P) -> is_id(field(P, <<"station_id">>));
 payload_ok(?TYPE_CONTENT_ANNOUNCEMENT, P) ->
-    is_id(field(P, <<"announcer_node">>)) andalso is_content_id(field(P, <<"mcid">>));
+    is_id(field(P, <<"announcer_node">>)) andalso is_content_id(field(P, <<"mcid">>))
+        andalso is_id(field(P, <<"realm_id">>)) andalso is_id(field(P, <<"serving_station">>))
+        andalso is_text_field(field(P, <<"procedure">>));
 payload_ok(?TYPE_STATION_ENDPOINT, _P) -> true;
 payload_ok(?TYPE_ORG_DIRECTORY, P) ->
     is_id(field(P, <<"realm_id">>)) andalso is_text(field(P, <<"org_name">>)) andalso is_id(field(P, <<"org_key">>));
@@ -1122,6 +1121,9 @@ slot_value_ok(_IdName, Value) ->
     is_id(Value).
 
 field(Payload, Name) -> maps:get({text, Name}, Payload, undefined).
+
+is_text_field({text, Bin}) when is_binary(Bin), Bin =/= <<>> -> true;
+is_text_field(_Other) -> false.
 
 is_id(<<_:256>>) -> true;
 is_id(_Other) -> false.
@@ -1387,10 +1389,9 @@ realm_member_endorsement_payload(RealmId, Member, Roles, ValidFrom, ValidUntil) 
 with_uint(Map, _Key, undefined) -> Map;
 with_uint(Map, Key, N) when is_integer(N), N >= 0 -> Map#{{text, Key} => N}.
 
-content_announcement_payload(AnnouncerNode, MCID, Endpoint, Opts) ->
+content_announcement_payload(AnnouncerNode, MCID, Opts) ->
     Base = #{{text, <<"announcer_node">>} => AnnouncerNode,
-             {text, <<"mcid">>}           => MCID,
-             {text, <<"endpoint">>}       => {text, Endpoint}},
+             {text, <<"mcid">>}           => MCID},
     M1 = with_text(Base, <<"name">>, maps:get(name, Opts, undefined)),
     M2 = with_uint(M1, <<"size">>, maps:get(size, Opts, undefined)),
     M3 = with_uint(M2, <<"chunk_count">>, maps:get(chunk_count, Opts, undefined)),

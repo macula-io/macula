@@ -86,7 +86,7 @@ tombstones_share_the_slot_and_key_id_of_what_they_withdraw_test() ->
                  {macula_record:foundation_seed_list([]), Foundation},
                  {macula_record:foundation_parameter(<<"max_hops">>, 8), Foundation},
                  {macula_record:foundation_t3_attestation(fill(3), 1789000000000), Foundation},
-                 {macula_record:content_announcement(macula_node_keys:key_id(Id), mcid(), <<"quic://h:1">>), Id},
+                 {macula_record:content_announcement(macula_node_keys:key_id(Id), mcid(), #{realm_id => <<7:256>>, serving_station => <<9:256>>, procedure => <<"acme/content_v1_x">>}), Id},
                  {macula_record:station_endpoint(4433), Id},
                  {macula_record:envelope(16#20, #{}, #{subject_id => <<"s1">>}), Realm},
                  {macula_record:envelope(16#21, #{}, #{}), Id}],

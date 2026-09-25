@@ -45,7 +45,7 @@ records_named_by_their_payload_match_the_vectors_test() ->
              {"51c6fc4b520eed65bb556522be043366a888fb7c9a2d0915392378ca0adb8c31",
               macula_record:foundation_t3_attestation(fill(16#77), 1789000000000)},
              {"c3860b4b53a5ad2ab73ec3c26ec8c228e46f2f0c123732b257ea5c8b93351138",
-              macula_record:content_announcement(fill(16#55), mcid(), <<"quic://h:1">>)},
+              macula_record:content_announcement(fill(16#55), mcid(), #{realm_id => <<7:256>>, serving_station => <<9:256>>, procedure => <<"acme/content_v1_x">>})},
              {"a0c45a66de0f7000a76726e424add18ef32014cbd106e9c72e8c8425c1282924",
               macula_record:org_directory(RealmId, <<"acme">>, fill(16#44))}],
     [?assertEqual(hex(list_to_binary(Hex)), macula_record:storage_key(Record)) || {Hex, Record} <- Cases].

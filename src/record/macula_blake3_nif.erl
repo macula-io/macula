@@ -102,16 +102,16 @@ is_nif_loaded() ->
 %%
 %% Pre-fix: `macula_blake3_nif:hash/1' read the flag without first
 %% ensuring the crypto-NIF module had been loaded. If no other path
-%% had referenced `macula_crypto_nif' yet (e.g. an SDK consumer that
-%% only ever calls `macula:put_content' / `get_content' on the way to
-%% computing an MCID), `is_nif_loaded()' returned `false' and the
+%% had referenced `macula_crypto_nif' yet (e.g. an SDK consumer whose
+%% first hash was on the way to computing a content id),
+%% `is_nif_loaded()' returned `false' and the
 %% Erlang fallback fired. The fallback is NOT plain `crypto:hash(sha256, _)':
 %% inputs over 1024 bytes go through a tree-hash that compresses
 %% 1024-byte chunks individually with SHA-256, then pair-hashes the
 %% chunk hashes — producing an output that matches NEITHER real
 %% BLAKE3 (the relay's path) NOR plain SHA-256 (the relay's
 %% `match_any_hash' fallback). Result: any blob > 1024 bytes hit a
-%% spurious `hash_mismatch' on `_content.put_block'.
+%% spurious `hash_mismatch' at the station's content store of the time.
 %%
 %% Force-loading here makes the NIF status deterministic for every
 %% caller, regardless of module-reference order. If the NIF really

@@ -20,7 +20,7 @@
 
 %% Modules that processes all over a running node call.
 -define(WATCHED, [macula, macula_stream, macula_direct_dial, macula_client,
-                  macula_content_transfer, macula_station_link, macula_peering,
+                  macula_station_link, macula_peering,
                   macula_quic]).
 
 %% Test sources that still replace a watched module, until their module

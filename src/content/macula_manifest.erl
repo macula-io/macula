@@ -1,22 +1,18 @@
 %% @doc Fixed-size chunking, Merkle-root computation, and manifest
 %% construction for content larger than one storage block.
 %%
-%% Mirrors macula-station's `macula_manifest' /
-%% `macula_content_chunker' / `macula_content_hasher' BYTE-FOR-BYTE:
-%% same MCID format, same default chunk size (256 KiB), same Merkle
-%% fold, same canonical-CBOR MCID derivation, same manifest wire shape.
-%% This is deliberate, not incidental — the SDK puts a manifest via the
-%% station's existing (unmodified) `_content.put_manifest' /
-%% `_content.get_manifest' RPCs, so the two sides must agree on the
-%% algorithm bit-for-bit. Both hash with SHA-384 through OTP crypto and
-%% use the same deterministic CBOR encoder (`macula_record_cbor',
-%% SDK-owned; the station's manifest module calls it directly), so this
-%% is a faithful client-side port, not a re-derivation.
+%% Every SDK builds the same manifest for the same bytes, bit for bit: the
+%% same MCID format, default chunk size (256 KiB), Merkle fold,
+%% canonical-CBOR MCID derivation and wire shape. A sharer serves this
+%% manifest and a fetcher from another SDK verifies it
+%% (`macula_content_store', `macula_content_fetch', D27). It hashes with
+%% SHA-384 through OTP crypto and encodes with the deterministic CBOR
+%% encoder (`macula_record_cbor').
 %%
 %% MCID format (50 bytes): `<<Tag:8, Codec:8, Hash:48/binary>>'. The tag
 %% names the hash; the post-quantum format has only tag 2, SHA-384 (D24).
 %% `?CODEC_RAW' (16#55) addresses a single chunk (or a whole blob that
-%% fits in one chunk — see the module doc on `macula:put_content/2').
+%% fits in one chunk, see `macula_content_store').
 %% `?CODEC_MANIFEST' (16#56) addresses a manifest describing many
 %% chunks.
 -module(macula_manifest).
@@ -73,8 +69,7 @@ create(Data) -> create(Data, #{}).
 
 %% @doc Split `Data' into fixed-size chunks and build its manifest.
 %% Returns the manifest and the chunk bytes in order (index 0 first),
-%% so a caller can upload each chunk (via `_content.put_block') and
-%% then the manifest (via `_content.put_manifest'). Options:
+%% which a sharer keeps and serves (`macula_content_store'). Options:
 %% <ul>
 %%   <li>`name' — content name (default `<<"unnamed">>')</li>
 %%   <li>`chunk_size' — bytes per chunk, a positive integer (default
@@ -107,11 +102,10 @@ create_chunked(Data, Opts, ChunkSize) when is_integer(ChunkSize), ChunkSize > 0 
     },
     {ok, Body#{mcid => compute_mcid(Body, Algorithm)}, Chunks}.
 
-%% @doc The MCID a chunk at `Index' is stored/fetched under: tag 2,
-%% codec raw, and the chunk's SHA-384 hash. The station derives this same
-%% value independently when serving the chunk, so both sides agree on its
-%% address without exchanging it, and a fetched chunk is checked against it
-%% by `macula_content_transfer:verify_block_hash/2'.
+%% @doc The MCID a chunk at `Index' is served and fetched under: tag 2,
+%% codec raw, and the chunk's SHA-384 hash. A sharer and a fetcher derive
+%% it independently, and a fetched chunk is checked against it
+%% (`macula_content_fetch').
 -spec chunk_mcid(manifest(), non_neg_integer()) -> {ok, mcid()} | {error, invalid_index}.
 chunk_mcid(#{chunks := Chunks}, Index)
   when Index >= 0, Index < length(Chunks) ->
@@ -169,11 +163,9 @@ recomputed_mcid(_Utf8Name, _Manifest, _Algorithm, _Mcid) ->
 mcid_result(true)  -> ok;
 mcid_result(false) -> {error, manifest_mcid_mismatch}.
 
-%% @doc Read a manifest as it arrives over `_content.get_manifest': the
-%% station stores + returns the map exactly as its RPC layer decoded
-%% it, with no dedicated re-encode/decode round trip on either side
-%% — so the shape depends on the general CALL-result codec, not the
-%% canonical `{text,_}' record shape. Robust to atom keys, to
+%% @doc Read a manifest as it arrives in a stream DATA body from a sharer
+%% (`macula_content_fetch'): the map as the stream codec decoded it, not
+%% the canonical `{text,_}' record shape. Robust to atom keys, to
 %% binary-string keys (mirroring `macula_record:payload_field/2'), and to
 %% `{text, Bin}' keys: the frame decoder resolves a key to an atom only
 %% when that atom already exists, so in a node that has not yet loaded

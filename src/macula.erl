@@ -67,19 +67,10 @@
 -export([sign_node_record/2, sign_node_record/3, sign_domain_record/2,
          withdraw_node_record/3, parse_stations/1]).
 
-%% Content-addressed blob storage. `_content.put_block' /
-%% `_content.get_block' RPCs against the relay's local content
-%% store. MCID is a 50-byte binary: the hash tag (2, SHA-384), the
-%% codec (16#55 raw, 16#56 manifest), then the 48-byte SHA-384 hash. The
-%% relay validates the payload's hash on `put_block' and rejects mismatches.
--export([put_content/2,
-         put_content_station/4, put_content_station/5,
-         get_content/2,
-         get_content_station/4, get_content_station/5,
-         find_content_providers/2]).
-
 %% Node-served content (D27): the node that shares content keeps it and
-%% serves it; stations only relay.
+%% serves it; stations only relay. A content id (MCID) is 50 bytes: the hash
+%% tag (2, SHA-384), the codec (16#55 raw, 16#56 manifest), then the 48-byte
+%% hash.
 -export([share_content/3, share_content/4, unshare_content/3,
          get_content/3, get_content/4]).
 
@@ -105,11 +96,6 @@
 
 -ifdef(TEST).
 -export([join_pool_args/1]).
-%% Exports for unit tests — pure helpers that are otherwise private.
-%% `verify_block_hash/2' moved to `macula_content_transfer' (Phase 1,
-%% PLAN_PUSH_UPLOAD.md) along with the rest of the content-stream
-%% transfer internals — see `macula_content_transfer:verify_block_hash/2'.
--export([decode_provider/2]).
 -endif.
 
 %% Types
@@ -471,11 +457,6 @@ unadvertise(Pool, Realm, Procedure) ->
 -define(DHT_FIND_RECORDS_PROC,         <<"_dht.find_records">>).
 -define(DHT_FIND_RECORDS_BY_TYPE_PROC, <<"_dht.find_records_by_type">>).
 -define(DHT_RECORD_TIMEOUT_MS,         5_000).
--define(TYPE_CONTENT_ANNOUNCEMENT,     16#11).
-
-%% `_content.*' procedure names, realm, and timeouts moved to
-%% `macula_content_transfer' (Phase 1, PLAN_PUSH_UPLOAD.md) along with
-%% the transfer logic that used them.
 
 %% @doc Store a signed record in the mesh DHT via a V2 pool.
 %%
@@ -712,185 +693,10 @@ callback_with({ok, Record}, Fun) -> Fun(Record), ok;
 callback_with({error, _}, _Fun) -> ok.
 
 %%%===================================================================
-%%% Content-addressed blob storage (v4.2.7+)
+%%% Node-served content (D27)
 %%%===================================================================
 
 -type mcid() :: <<_:400>>.
-
-
-%% @doc Store `Bytes' in the mesh's content store and return its MCID
-%% (Macula Content ID, 50 bytes: tag 2 for SHA-384, codec, then the 48-byte hash).
-%% Content that fits in one block (`byte_size(Bytes) =&lt;
-%% macula_manifest:default_chunk_size/0', 256 KiB) is sent as a
-%% single `_content.put_block', and the MCID is `&lt;&lt;2, 16#55,
-%% SHA-384(Bytes)&gt;&gt;'. Larger content is split
-%% into chunks (`macula_manifest:create/1'), each chunk sent
-%% via its own `_content.put_block', then a `content_manifest' via
-%% `_content.put_manifest'; the returned MCID is the manifest's
-%% (`&lt;&lt;2, 16#56, _/binary&gt;&gt;'), Merkle-rooted over every chunk. Either
-%% way the station verifies each block's hash before accepting it.
-%%
-%% The whole transfer — every block call plus the manifest call for
-%% chunked content — rides one dedicated QUIC stream on one pinned
-%% pool link (see PLAN_PER_STREAM_QUIC_ISOLATION.md Phase 2), so a
-%% large blob transfer no longer head-of-line-blocks other RPC/PubSub
-%% traffic on the same connection.
-%%
-%% A thin blocking wrapper over `macula_content_transfer:start_put/2' +
-%% `await/1' — see that module for the addressable form (a live pid,
-%% real cancel with a peer-visible abort, pause/resume/multi-stream as
-%% later phases land). PLAN_PUSH_UPLOAD.md Phase 1.
--spec put_content(pool(), binary()) -> {ok, mcid()} | {error, term()}.
-put_content(Pool, Bytes) when is_pid(Pool), is_binary(Bytes) ->
-    {ok, Pid} = macula_content_transfer:start_put(Pool, Bytes),
-    Result = macula_content_transfer:await(Pid),
-    macula_content_transfer:cancel(Pid),
-    Result.
-
-%% @doc As `put_content/2', dialing `Station' directly (reusing a live
-%% link or dialing + waiting up to `TimeoutMs' for one) instead of
-%% picking from the pool's existing links — the content-transfer
-%% counterpart to `call_station/7'. `Station' and `TimeoutMs' mean
-%% exactly what they do there; the underlying block/manifest transfer
-%% has its own internal timeouts regardless of `TimeoutMs', which
-%% bounds only the connect wait. See `macula_direct_dial:put_content/4'
-%% to resolve a station by identity and put in one call.
--spec put_content_station(pool(), macula_client:seed(), binary(),
-                          pos_integer()) -> {ok, mcid()} | {error, term()}.
-put_content_station(Pool, Station, Bytes, TimeoutMs) ->
-    put_content_station(Pool, Station, Bytes, TimeoutMs, #{}).
-
-%% @doc As `put_content_station/4', naming the station this dial must prove,
-%% `expected_node_id' (see `call_station/8'). `pin_tls_cert => true' and
-%% `verify' are REFUSED as `call_station/8' describes.
--spec put_content_station(pool(), macula_client:seed(), binary(),
-                          pos_integer(), map()) ->
-    {ok, mcid()} | {error, term()}.
-put_content_station(Pool, Station, Bytes, TimeoutMs, Opts) ->
-    refused(target_checked(Station, Opts),
-            fun() -> do_put_content_station(Pool, Station, Bytes, TimeoutMs, Opts) end).
-
-do_put_content_station(Pool, Station, Bytes, TimeoutMs, Opts) ->
-    {ok, Pid} = macula_content_transfer:start_put_station(
-                  Pool, Station, Bytes, TimeoutMs, Opts),
-    Result = macula_content_transfer:await(Pid),
-    macula_content_transfer:cancel(Pid),
-    Result.
-
-%% @doc Fetch the bytes for a previously-stored MCID. Returns
-%% `{error, not_found}' if no provider in the pool's reach holds a
-%% copy (for chunked content, if any single chunk is unreachable).
-%% Dispatches on the MCID's codec byte: `16#55' (raw/single-block)
-%% fetches one block, BLAKE3-verified by the station before it leaves
-%% the store; `16#56' (manifest) fetches the manifest, then every
-%% chunk in order, reassembles, and verifies the whole against the
-%% manifest's size and Merkle root before returning.
-%%
-%% A thin blocking wrapper over `macula_content_transfer:start_get/2' +
-%% `await/1' — see the note on `put_content/2'.
-%% `MCID' must carry one of the two codec bytes `put_content/2' ever
-%% mints (`16#55' single-block, `16#56' chunked manifest) — anything
-%% else can't have come from this SDK's own put path (a corrupted
-%% record, a caller's encoding bug, or hostile input on a path that
-%% turns user-controlled bytes into an MCID) and is rejected here
-%% rather than reaching `macula_content_transfer''s internal dispatch,
-%% whose `is_chunked/2' clauses assume this shape and previously
-%% crashed the calling process's linked worker on anything else.
--spec get_content(pool(), mcid()) ->
-    {ok, binary()} | {error, not_found | invalid_mcid | term()}.
-get_content(Pool, <<2, Codec, _:48/binary>> = MCID)
-  when is_pid(Pool), (Codec =:= 16#55 orelse Codec =:= 16#56) ->
-    {ok, Pid} = macula_content_transfer:start_get(Pool, MCID),
-    Result = macula_content_transfer:await(Pid),
-    macula_content_transfer:cancel(Pid),
-    Result;
-get_content(Pool, _MCID) when is_pid(Pool) ->
-    {error, invalid_mcid}.
-
-%% @doc As `get_content/2', dialing `Station' directly (reusing a live
-%% link or dialing + waiting up to `TimeoutMs' for one) instead of
-%% picking from the pool's existing links — the content-transfer
-%% counterpart to `call_station/7'. `Station' and `TimeoutMs' mean
-%% exactly what they do there; the underlying block/manifest transfer
-%% has its own internal timeouts regardless of `TimeoutMs', which
-%% bounds only the connect wait. See `find_content_providers/2' to
-%% resolve a station to dial, or `macula_direct_dial:get_content/3' to
-%% resolve-and-fetch in one call.
--spec get_content_station(pool(), macula_client:seed(), mcid(),
-                          pos_integer()) ->
-    {ok, binary()} | {error, not_found | term()}.
-get_content_station(Pool, Station, MCID, TimeoutMs) ->
-    get_content_station(Pool, Station, MCID, TimeoutMs, #{}).
-
-%% @doc As `get_content_station/4', naming the station this dial must prove,
-%% `expected_node_id' (see `call_station/8'). `pin_tls_cert => true' and
-%% `verify' are REFUSED as `call_station/8' describes.
-%% See `get_content/2' on why a malformed `MCID' is rejected here
-%% rather than reaching `macula_content_transfer'.
--spec get_content_station(pool(), macula_client:seed(), mcid(),
-                          pos_integer(), map()) ->
-    {ok, binary()} | {error, not_found | invalid_mcid | term()}.
-get_content_station(Pool, Station, <<2, Codec, _:48/binary>> = MCID, TimeoutMs, Opts)
-  when Codec =:= 16#55 orelse Codec =:= 16#56 ->
-    refused(target_checked(Station, Opts),
-            fun() -> do_get_content_station(Pool, Station, MCID, TimeoutMs, Opts) end);
-get_content_station(_Pool, _Station, _MCID, _TimeoutMs, _Opts) ->
-    {error, invalid_mcid}.
-
-do_get_content_station(Pool, Station, MCID, TimeoutMs, Opts) ->
-    {ok, Pid} = macula_content_transfer:start_get_station(
-                  Pool, Station, MCID, TimeoutMs, Opts),
-    Result = macula_content_transfer:await(Pid),
-    macula_content_transfer:cancel(Pid),
-    Result.
-
-%% @doc Resolve every host currently announcing an MCID: hosts that
-%% stored a chunked put (`_content.put_manifest') and got
-%% `content_announcement'd automatically by the station on receipt
-%% (`macula_content_announcer'). `get_content/2' already reaches a
-%% copy via the connected station's own 1-hop peer relay, so this is
-%% for a caller that wants to know WHO holds an MCID, or to dial a
-%% specific one directly with `get_content_station/4,5' — e.g. when the
-%% connected station's relay hop budget does not reach the host (a
-%% partial-mesh pair with no mutual peer), or to route around a
-%% specific host deliberately.
-%%
-%% Each entry is verified under the node's crypto profile before its
-%% `endpoint' is trusted: its signature, and that its signer is the
-%% `announcer_node' it names, since `macula_record:verify/2' refuses a
-%% record whose payload names another signer. Unverifiable records and
-%% records of another type are dropped, not surfaced as errors.
-%% Single-block content (put via `_content.put_block' alone) is not
-%% announced: resolving its MCID returns `{ok, []}'.
--spec find_content_providers(pool(), mcid()) -> {ok, [map()]} | {error, term()}.
-find_content_providers(Pool, <<2, _Codec:8, _Hash:48/binary>> = MCID) when is_pid(Pool) ->
-    classify_find_providers(
-      macula_client:call_linked_station(Pool, ?DHT_REALM, ?DHT_FIND_RECORDS_PROC,
-                         #{key => macula_record:content_key(MCID)},
-                         ?DHT_RECORD_TIMEOUT_MS)).
-
-classify_find_providers({ok, Wires}) when is_list(Wires) ->
-    with_profile(fun(Profile) -> {ok, content_providers(Wires, Profile)} end);
-classify_find_providers({ok, Reply}) ->
-    {error, {unexpected_reply, Reply}};
-classify_find_providers({error, _} = E) ->
-    E.
-
-content_providers(Wires, Profile) ->
-    lists:filtermap(fun(Wire) -> decode_provider(Wire, Profile) end, Wires).
-
-%% A provider from a content announcement that verifies under Profile.
-%% The verification covers the signer: a record merely stored under the
-%% right key but signed by a node other than the `announcer_node' it
-%% names is refused with key_id_mismatch, the same class of gap
-%% `macula_direct_dial' closes for `station_endpoint'.
-decode_provider(Signed, Profile) ->
-    provider(macula_record:verify(Signed, Profile)).
-
-provider({ok, #{type := ?TYPE_CONTENT_ANNOUNCEMENT} = Record}) ->
-    {true, macula_record:read_content_announcement(Record)};
-provider(_RefusedOrAnotherType) ->
-    false.
 
 %% @doc Share `Bytes' in `Realm', as `share_content/4' with no options.
 -spec share_content(pool(), realm(), binary()) -> {ok, mcid()} | {error, term()}.
@@ -1557,9 +1363,9 @@ found(error, Keys, Map, Default) -> first_found(Keys, Map, Default).
 
 %% Every public entry point that takes a seed, a station or a per-dial TLS
 %% trust map runs this before it does anything else: `connect/2',
-%% `call_station/7,8', `call_stream_station/7', `put_content_station/5',
-%% `get_content_station/5' and `join_mesh/1'. `pin_tls_cert => true' is
-%% refused, and `verify' in any value; `pin_tls_cert => false' and absence
+%% `call_station/7,8', `call_stream_station/7' and `join_mesh/1'.
+%% `pin_tls_cert => true' is refused, and `verify' in any value;
+%% `pin_tls_cert => false' and absence
 %% pass through.
 %%
 %% WHY NEITHER CAN BE HONOURED, so the next reader does not re-litigate it.

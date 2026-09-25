@@ -138,7 +138,7 @@ dialed(#{local := Local}, Args) -> macula:call_stream(Local, Args).
 
 announcement(#{node := Node, key := Key, procedure := Procedure}, MCID) ->
     macula_record:refresh(macula_record:content_announcement(
-                            Node, MCID, <<>>,
+                            Node, MCID,
                             #{realm_id => ?REALM, serving_station => ?STATION, procedure => Procedure}), Key).
 
 hex(Node) -> binary:encode_hex(Node, lowercase).

@@ -1,12 +1,10 @@
 %%%-------------------------------------------------------------------
 %%% @doc Real two-endpoint coverage for `macula_quic:reset_stream/2'.
 %%%
-%%% Content-transfer cancel (`macula_content_transfer:cancel/3', see
-%%% PLAN_PUSH_UPLOAD.md Phase 1) needs a genuinely peer-visible abort
-%%% signal, not just a dropped connection. `macula_stream:abort/3'
-%%% (streaming RPC's abort) can't be reused — content streams are raw
-%%% QUIC dedicated streams owned by `macula_station_link', not
-%%% `macula_stream' gen_servers. This drives Quinn against itself on
+%%% Aborting a raw QUIC dedicated stream needs a genuinely peer-visible
+%%% signal, not just a dropped connection; `macula_stream:abort/3'
+%%% (streaming RPC's abort) works on `macula_stream' gen_servers, not on
+%%% the raw streams `macula_station_link' owns. This drives Quinn against itself on
 %%% loopback to prove the QUIC-native alternative actually reaches the
 %%% peer: a
 %%% `reset_stream/2' on one side's send half must surface as a

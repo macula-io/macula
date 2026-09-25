@@ -9,17 +9,14 @@
 %%% endpoint record the station itself signed, and an org namespaced procedure
 %%% needs a provider authorization.
 %%%
-%%% The DHT, the dials, the transfers and the realm keys the pool pins are
-%%% faked with meck on the `macula' facade, `macula_client' and
-%%% `macula_content_transfer'. The records
+%%% The DHT, the dials and the realm keys the pool pins are faked with meck on
+%%% the `macula' facade and `macula_client'. The records
 %%% themselves are real: signed with node keys in the node's crypto profile and
 %%% handed over verified, as the facade hands them over.
 -module(macula_direct_dial_resolve_tests).
 
 -include_lib("eunit/include/eunit.hrl").
 
--behaviour(macula_download).
--export([init/1, handle_downloaded/2]).
 
 -define(STATE, macula_direct_dial_resolve_tests_state).
 -define(REALM, <<16#11:256>>).
@@ -39,7 +36,6 @@ setup() ->
     ets:insert(?STATE, {visits, []}),
     meck:new(macula, [passthrough, non_strict]),
     meck:new(macula_client, [passthrough, non_strict]),
-    meck:new(macula_content_transfer, [passthrough]),
     %% A pool pins no realm key unless a test pins one (pin_realm_key/2).
     meck:expect(macula_client, realm_key, fun(_Pool, _Realm) -> none end),
     %% No head start unless a test plants one (remember_station/3), and what
@@ -66,25 +62,12 @@ setup() ->
                         ets:insert(?STATE, {stream_provider, Provider}),
                         visit(DialUrl)
                 end),
-    meck:expect(macula, get_content_station,
-                fun(_Pool, Endpoint, _Mcid, _TimeoutMs, _Opts) -> visit(Endpoint) end),
-    meck:expect(macula, put_content_station,
-                fun(_Pool, DialUrl, _Bytes, _TimeoutMs, _Opts) -> visit(DialUrl) end),
-    meck:expect(macula_content_transfer, start_get_station,
-                fun(_Pool, Endpoint, _Mcid, _TimeoutMs, _Opts) ->
-                        {ok, {fake_transfer, Endpoint}}
-                end),
-    meck:expect(macula_content_transfer, await,
-                fun({fake_transfer, Endpoint}, _Timeout) -> visit(Endpoint) end),
-    meck:expect(macula_content_transfer, await,
-                fun({fake_transfer, Endpoint}) -> visit(Endpoint) end),
-    meck:expect(macula_content_transfer, cancel, fun(_Transfer) -> ok end),
     meck:expect(macula, publish, fun(_Pool, _Realm, _Topic, _Payload) -> ok end),
     meck:expect(macula, publish, fun(_Pool, _Realm, _Topic, _Payload, _Opts) -> ok end),
     ok.
 
 teardown(_) ->
-    meck:unload([macula, macula_client, macula_content_transfer]),
+    meck:unload([macula, macula_client]),
     ets:delete(?STATE).
 
 resolve_test_() ->
@@ -123,10 +106,7 @@ resolve_test_() ->
       {timeout, 30, fun call_stream_tries_the_next_station_when_a_dial_fails/0},
       {timeout, 30, fun call_stream_never_opens_the_stream_twice/0},
       {timeout, 30, fun call_stream_names_the_provider_its_advertisement_names/0},
-      {timeout, 30, fun get_content_retries_when_no_provider_qualifies/0},
-      {timeout, 30, fun get_content_tries_the_next_provider_after_a_failed_fetch/0},
-      {timeout, 30, fun get_content_timeout_bounds_resolution/0},
-      {timeout, 30, fun put_content_timeout_bounds_the_endpoint_lookup/0},
+      {timeout, 30, fun resolve_endpoint_timeout_bounds_the_endpoint_lookup/0},
       {timeout, 30, fun a_published_advertisement_is_signed_by_the_node_identity_and_put_as_its_wire_form/0},
       {timeout, 30, fun a_call_dials_the_station_a_trusted_advertisement_names_pinned_to_its_node_id/0},
       {timeout, 30, fun an_endpoint_signed_by_another_node_is_not_dialed/0},
@@ -137,38 +117,28 @@ resolve_test_() ->
       {timeout, 30, fun call_dials_a_refusing_station_once_per_endpoint_version/0},
       {timeout, 30, fun call_tries_an_advertisement_that_appears_on_a_later_pass/0},
       {timeout, 30, fun resolution_backs_off_between_passes/0},
-      {timeout, 30, fun get_content_fetches_from_a_failing_provider_once_per_announcement/0},
       {timeout, 30, fun call_picks_up_an_endpoint_record_that_changes_mid_deadline/0},
-      {timeout, 60, fun download_direct_tries_the_next_provider_after_a_failed_fetch/0},
-      {timeout, 60, fun download_direct_retries_when_no_provider_qualifies/0},
-      {timeout, 30, fun resolve_content_provider_returns_the_first_qualifying_provider/0},
-      {timeout, 30, fun resolve_content_provider_reports_content_not_announced/0},
       {timeout, 30, fun call_reports_the_last_candidate_failure_when_a_later_pass_finds_none/0},
       {timeout, 30, fun call_reports_the_last_candidate_failure_when_a_later_lookup_fails/0},
-      {timeout, 30, fun get_content_reports_the_last_candidate_failure_when_a_later_lookup_fails/0},
       {timeout, 30, fun call_reports_not_advertised_when_a_lookup_answered_before_later_ones_failed/0},
-      {timeout, 30, fun get_content_reports_not_announced_when_a_lookup_answered_before_later_ones_failed/0},
       {timeout, 30, fun call_reports_a_failed_lookup_at_its_deadline_when_no_candidate_was_tried/0},
-      {timeout, 30, fun get_content_reports_a_failed_lookup_at_its_deadline_when_no_provider_was_tried/0},
       {timeout, 30, fun call_reports_a_timeout_when_no_lookup_was_answered_in_time/0},
-      {timeout, 30, fun get_content_reports_a_timeout_when_no_lookup_was_answered_in_time/0},
       {timeout, 30, fun call_keeps_a_lookup_error_when_a_later_lookup_is_cut_off_by_the_deadline/0},
       {timeout, 30, fun call_retries_after_a_lookup_fails/0},
-      {timeout, 30, fun get_content_retries_after_a_lookup_fails/0},
-      {timeout, 30, fun put_content_reports_no_station_endpoint_when_a_lookup_answered_not_found/0},
-      {timeout, 30, fun put_content_retries_an_endpoint_lookup_that_fails/0},
-      {timeout, 30, fun put_content_reports_a_failed_endpoint_lookup_when_every_lookup_failed/0},
-      {timeout, 30, fun put_content_reports_a_timeout_when_no_endpoint_lookup_was_answered_in_time/0},
-      {timeout, 30, fun put_content_keeps_a_lookup_error_when_a_later_endpoint_lookup_is_cut_off_by_the_deadline/0},
+      {timeout, 30, fun resolve_endpoint_reports_no_station_endpoint_when_a_lookup_answered_not_found/0},
+      {timeout, 30, fun resolve_endpoint_retries_an_endpoint_lookup_that_fails/0},
+      {timeout, 30, fun resolve_endpoint_reports_a_failed_endpoint_lookup_when_every_lookup_failed/0},
+      {timeout, 30, fun resolve_endpoint_reports_a_timeout_when_no_endpoint_lookup_was_answered_in_time/0},
+      {timeout, 30, fun resolve_endpoint_keeps_a_lookup_error_when_a_later_endpoint_lookup_is_cut_off_by_the_deadline/0},
       {timeout, 30, fun call_reports_a_timeout_when_no_endpoint_lookup_was_answered_in_time/0},
-      {timeout, 30, fun put_content_asks_again_past_a_malformed_endpoint_record/0},
-      {timeout, 30, fun put_content_reports_a_malformed_endpoint_record_at_its_deadline/0},
-      {timeout, 30, fun put_content_asks_again_past_an_expired_endpoint_record/0},
-      {timeout, 30, fun put_content_reports_an_expired_endpoint_record_at_its_deadline/0},
+      {timeout, 30, fun resolve_endpoint_asks_again_past_a_malformed_endpoint_record/0},
+      {timeout, 30, fun resolve_endpoint_reports_a_malformed_endpoint_record_at_its_deadline/0},
+      {timeout, 30, fun resolve_endpoint_asks_again_past_an_expired_endpoint_record/0},
+      {timeout, 30, fun resolve_endpoint_reports_an_expired_endpoint_record_at_its_deadline/0},
       {timeout, 30, fun resolve_station_endpoint_tells_an_expired_record_from_an_absent_one/0},
-      {timeout, 30, fun put_content_ends_the_lookup_at_a_lifetime_refusal/0},
-      {timeout, 30, fun put_content_ends_the_lookup_at_a_reversed_lifetime/0},
-      {timeout, 30, fun put_content_ends_the_lookup_at_an_endpoint_record_that_does_not_verify/0},
+      {timeout, 30, fun resolve_endpoint_ends_the_lookup_at_a_lifetime_refusal/0},
+      {timeout, 30, fun resolve_endpoint_ends_the_lookup_at_a_reversed_lifetime/0},
+      {timeout, 30, fun resolve_endpoint_ends_the_lookup_at_an_endpoint_record_that_does_not_verify/0},
       {timeout, 30, fun a_call_with_a_removed_trust_option_is_refused_before_any_lookup/0},
       {timeout, 30, fun a_stream_with_a_removed_trust_option_is_refused_before_any_lookup/0},
       {timeout, 30, fun a_call_passing_realm_trust_is_refused_before_any_lookup/0},
@@ -228,7 +198,7 @@ dial_io() ->
           end,
       call_stream_station =>
           fun(_Pool, DialUrl, _Provider, _Realm, _Proc, _Args, _Opts) -> visit(DialUrl) end,
-      put_content_station =>
+      resolve_endpoint_station =>
           fun(_Pool, DialUrl, _Bytes, _TimeoutMs, _Opts) -> visit(DialUrl) end,
       start_get_station =>
           fun(_Pool, Endpoint, _Mcid, _TimeoutMs, _Opts) -> {ok, {fake_transfer, Endpoint}} end,
@@ -635,43 +605,13 @@ call_stream_names_the_provider_its_advertisement_names() ->
     ?assertEqual([{stream_provider, Provider}], ets:lookup(?STATE, stream_provider)).
 
 %%%===================================================================
-%%% Content
+%%% Station endpoints
 %%%===================================================================
 
-%% When no provider has announced the content yet, resolution asks again.
-get_content_retries_when_no_provider_qualifies() ->
-    P = station(<<"p.test">>),
-    Mcid = mcid(),
-    set_replies(macula_record:content_key(Mcid), [[], [announcement(P, Mcid)]]),
-    set_answer(dial_url(P), {ok, <<"content">>}),
-    ?assertEqual({ok, <<"content">>},
-                 macula_direct_dial:get_content(self(), Mcid, 3000)).
-
-%% A provider whose fetch fails is passed over for the next: a fetch is
-%% verified against its MCID, so trying another provider is safe.
-get_content_tries_the_next_provider_after_a_failed_fetch() ->
-    A = station(<<"a.test">>), B = station(<<"b.test">>),
-    Mcid = mcid(),
-    set_replies(macula_record:content_key(Mcid),
-                [[announcement(A, Mcid), announcement(B, Mcid)]]),
-    set_answer(dial_url(A), {error, hash_mismatch}),
-    set_answer(dial_url(B), {ok, <<"content">>}),
-    ?assertEqual({ok, <<"content">>},
-                 macula_direct_dial:get_content(self(), Mcid, 3000)),
-    ?assertEqual([dial_url(A), dial_url(B)], visits()).
-
-%% The timeout bounds the search for a provider.
-get_content_timeout_bounds_resolution() ->
-    {Elapsed, Result} =
-        timed(fun() -> macula_direct_dial:get_content(self(), mcid(), 300) end),
-    ?assertMatch({error, {unresolved, _}}, Result),
-    ?assert(Elapsed < 1000).
-
-%% The timeout bounds the lookup of the station a put goes to.
-put_content_timeout_bounds_the_endpoint_lookup() ->
+resolve_endpoint_timeout_bounds_the_endpoint_lookup() ->
     S = station(<<"s.test">>),
-    {Elapsed, Result} = timed(fun() -> put_at_station(S, 300) end),
-    ?assertMatch({error, {unresolved, _}}, Result),
+    {Elapsed, Result} = timed(fun() -> resolve_endpoint(S, 300) end),
+    ?assertMatch({error, _}, Result),
     ?assert(Elapsed < 1000).
 
 %%%===================================================================
@@ -871,19 +811,6 @@ resolution_backs_off_between_passes() ->
     Lookups = lookups(procedure_key()),
     ?assert(Lookups >= 5 andalso Lookups =< 8).
 
-%% A provider whose fetch fails is fetched from again only when its
-%% announcement changes.
-get_content_fetches_from_a_failing_provider_once_per_announcement() ->
-    A = station(<<"a.test">>),
-    Mcid = mcid(),
-    set_replies(macula_record:content_key(Mcid), [[announcement(A, Mcid)]]),
-    set_answer(dial_url(A), {error, hash_mismatch}),
-    ?assertEqual({error, hash_mismatch},
-                 macula_direct_dial:get_content(self(), Mcid, 2000)),
-    ?assertEqual([dial_url(A)], visits()).
-
-%% A station whose endpoint record changes partway through the deadline is
-%% reached at the new endpoint.
 call_picks_up_an_endpoint_record_that_changes_mid_deadline() ->
     Old = station(<<"a-old.test">>),
     Moved = Old#{host => <<"a.test">>},
@@ -898,53 +825,9 @@ call_picks_up_an_endpoint_record_that_changes_mid_deadline() ->
     ?assertEqual([dial_url(Old), dial_url(Moved)], visits()).
 
 %%%===================================================================
-%%% Direct downloads (macula_download)
+%%% Calls across passes
 %%%===================================================================
 
-%% A direct download whose provider's fetch fails moves on to the next provider.
-download_direct_tries_the_next_provider_after_a_failed_fetch() ->
-    process_flag(trap_exit, true),
-    A = station(<<"a.test">>), B = station(<<"b.test">>),
-    Mcid = mcid(),
-    set_replies(macula_record:content_key(Mcid),
-                [[announcement(A, Mcid), announcement(B, Mcid)]]),
-    set_answer(dial_url(A), {error, hash_mismatch}),
-    set_answer(dial_url(B), {ok, <<"content">>}),
-    {ok, _Download} = macula_download:start_link_direct(?MODULE, self(), ?REALM, Mcid, self()),
-    ?assertEqual({downloaded, {ok, <<"content">>}}, downloaded()),
-    ?assertEqual([dial_url(A), dial_url(B)], visits()).
-
-%% A direct download asks again when no provider has announced the content yet.
-download_direct_retries_when_no_provider_qualifies() ->
-    process_flag(trap_exit, true),
-    P = station(<<"p.test">>),
-    Mcid = mcid(),
-    set_replies(macula_record:content_key(Mcid), [[], [announcement(P, Mcid)]]),
-    set_answer(dial_url(P), {ok, <<"content">>}),
-    {ok, _Download} = macula_download:start_link_direct(?MODULE, self(), ?REALM, Mcid, self()),
-    ?assertEqual({downloaded, {ok, <<"content">>}}, downloaded()).
-
-%% resolve_content_provider/2 returns the first provider whose announcement
-%% qualifies, asking again until one does.
-resolve_content_provider_returns_the_first_qualifying_provider() ->
-    P = station(<<"p.test">>),
-    Mcid = mcid(),
-    set_replies(macula_record:content_key(Mcid), [[], [announcement(P, Mcid)]]),
-    Node = maps:get(id, P),
-    Endpoint = dial_url(P),
-    ?assertMatch({ok, #{announcer_node := Node, endpoint := Endpoint}},
-                 macula_direct_dial:resolve_content_provider(self(), Mcid)).
-
-%% When no provider qualifies within its 10 seconds, resolve_content_provider/2
-%% reports the content as not announced.
-resolve_content_provider_reports_content_not_announced() ->
-    Mcid = mcid(),
-    set_replies(macula_record:content_key(Mcid), [[]]),
-    ?assertEqual({error, content_not_announced},
-                 macula_direct_dial:resolve_content_provider(self(), Mcid)).
-
-%% Once a candidate has failed before sending, a later pass that finds no
-%% candidate doesn't take its place: the call reports the refused dial.
 call_reports_the_last_candidate_failure_when_a_later_pass_finds_none() ->
     A = station(<<"a.test">>),
     set_replies(procedure_key(), [[advertisement(A)], []]),
@@ -960,56 +843,18 @@ call_reports_the_last_candidate_failure_when_a_later_lookup_fails() ->
     set_answer(dial_url(A), {error, not_connected}),
     ?assertEqual({error, not_connected}, call(1000)).
 
-%% get_content reports a provider's failed fetch in the same way when a later
-%% content lookup fails.
-get_content_reports_the_last_candidate_failure_when_a_later_lookup_fails() ->
-    A = station(<<"a.test">>),
-    Mcid = mcid(),
-    set_replies(macula_record:content_key(Mcid),
-                [[announcement(A, Mcid)], {error, connection_lost}]),
-    set_answer(dial_url(A), {error, not_connected}),
-    ?assertEqual({error, not_connected},
-                 macula_direct_dial:get_content(self(), Mcid, 1000)).
-
-%% At the deadline a call reports, in this order: the last candidate failure,
-%% why an answered lookup found nothing qualifying, a failed lookup's own
-%% error, or a timeout.
-
-%% A lookup that answered decides the reason over later lookups that failed.
 call_reports_not_advertised_when_a_lookup_answered_before_later_ones_failed() ->
     set_replies(procedure_key(), [[], {error, connection_lost}]),
     ?assertEqual({error, {unresolved, procedure_not_advertised}}, call(1000)).
 
-get_content_reports_not_announced_when_a_lookup_answered_before_later_ones_failed() ->
-    Mcid = mcid(),
-    set_replies(macula_record:content_key(Mcid), [[], {error, connection_lost}]),
-    ?assertEqual({error, {unresolved, content_not_announced}},
-                 macula_direct_dial:get_content(self(), Mcid, 1000)).
-
-%% When every lookup failed, the lookup's own error is the reason.
 call_reports_a_failed_lookup_at_its_deadline_when_no_candidate_was_tried() ->
     set_replies(procedure_key(), [{error, connection_lost}]),
     ?assertEqual({error, {unresolved, connection_lost}}, call(1000)).
 
-get_content_reports_a_failed_lookup_at_its_deadline_when_no_provider_was_tried() ->
-    Mcid = mcid(),
-    set_replies(macula_record:content_key(Mcid), [{error, connection_lost}]),
-    ?assertEqual({error, {unresolved, connection_lost}},
-                 macula_direct_dial:get_content(self(), Mcid, 1000)).
-
-%% With no answer and no error before the deadline, the reason is a timeout.
 call_reports_a_timeout_when_no_lookup_was_answered_in_time() ->
     set_replies(procedure_key(), [silent]),
     ?assertEqual({error, {unresolved, timeout}}, call(500)).
 
-get_content_reports_a_timeout_when_no_lookup_was_answered_in_time() ->
-    Mcid = mcid(),
-    set_replies(macula_record:content_key(Mcid), [silent]),
-    ?assertEqual({error, {unresolved, timeout}},
-                 macula_direct_dial:get_content(self(), Mcid, 500)).
-
-%% A lookup the deadline cuts off records nothing, so an earlier lookup's
-%% error stands.
 call_keeps_a_lookup_error_when_a_later_lookup_is_cut_off_by_the_deadline() ->
     set_replies(procedure_key(), [{error, connection_lost}, silent]),
     ?assertEqual({error, {unresolved, connection_lost}}, call(1000)).
@@ -1022,42 +867,31 @@ call_retries_after_a_lookup_fails() ->
     set_answer(dial_url(A), {ok, <<"from a">>}),
     ?assertEqual({ok, <<"from a">>}, call(2000)).
 
-get_content_retries_after_a_lookup_fails() ->
-    P = station(<<"p.test">>),
-    Mcid = mcid(),
-    set_replies(macula_record:content_key(Mcid), [{error, connection_lost}, [announcement(P, Mcid)]]),
-    set_answer(dial_url(P), {ok, <<"content">>}),
-    ?assertEqual({ok, <<"content">>}, macula_direct_dial:get_content(self(), Mcid, 2000)).
-
-%% Within one station endpoint lookup, retries included, the result is: the
-%% endpoint not found when a lookup answered so, else a failed lookup's
-%% error, else a timeout.
-put_content_reports_no_station_endpoint_when_a_lookup_answered_not_found() ->
+resolve_endpoint_reports_no_station_endpoint_when_a_lookup_answered_not_found() ->
     S = station(<<"s.test">>),
     set_endpoint_replies(S, [not_found, {error, connection_lost}]),
-    ?assertEqual({error, {unresolved, station_endpoint_not_found}}, put_at_station(S, 1000)).
+    ?assertEqual({error, station_endpoint_not_found}, resolve_endpoint(S, 1000)).
 
-put_content_retries_an_endpoint_lookup_that_fails() ->
+resolve_endpoint_retries_an_endpoint_lookup_that_fails() ->
     S = station(<<"s.test">>),
     set_endpoint_replies(S, [{error, connection_lost}, endpoint_record(S)]),
-    set_answer(dial_url(S), {ok, <<"mcid">>}),
-    ?assertEqual({ok, <<"mcid">>}, put_at_station(S, 2000)).
+    ?assertEqual({ok, dial_url(S)}, resolve_endpoint(S, 2000)).
 
-put_content_reports_a_failed_endpoint_lookup_when_every_lookup_failed() ->
+resolve_endpoint_reports_a_failed_endpoint_lookup_when_every_lookup_failed() ->
     S = station(<<"s.test">>),
     set_endpoint_replies(S, [{error, connection_lost}]),
-    ?assertEqual({error, {unresolved, connection_lost}}, put_at_station(S, 1000)),
+    ?assertEqual({error, connection_lost}, resolve_endpoint(S, 1000)),
     ?assert(endpoint_lookups(S) > 1).
 
-put_content_reports_a_timeout_when_no_endpoint_lookup_was_answered_in_time() ->
+resolve_endpoint_reports_a_timeout_when_no_endpoint_lookup_was_answered_in_time() ->
     S = station(<<"s.test">>),
     set_endpoint_replies(S, [silent]),
-    ?assertEqual({error, {unresolved, timeout}}, put_at_station(S, 500)).
+    ?assertEqual({error, timeout}, resolve_endpoint(S, 500)).
 
-put_content_keeps_a_lookup_error_when_a_later_endpoint_lookup_is_cut_off_by_the_deadline() ->
+resolve_endpoint_keeps_a_lookup_error_when_a_later_endpoint_lookup_is_cut_off_by_the_deadline() ->
     S = station(<<"s.test">>),
     set_endpoint_replies(S, [{error, connection_lost}, silent]),
-    ?assertEqual({error, {unresolved, connection_lost}}, put_at_station(S, 1000)).
+    ?assertEqual({error, connection_lost}, resolve_endpoint(S, 1000)).
 
 %% A candidate whose endpoint lookup never answers in time fails with a
 %% timeout, and so does the call when it was the last candidate tried.
@@ -1069,36 +903,34 @@ call_reports_a_timeout_when_no_endpoint_lookup_was_answered_in_time() ->
 
 %% A record that verifies but names no dialable endpoint is asked about
 %% again, as an absent one is.
-put_content_asks_again_past_a_malformed_endpoint_record() ->
+resolve_endpoint_asks_again_past_a_malformed_endpoint_record() ->
     S = station(<<"s.test">>),
     set_endpoint_replies(S, [malformed_endpoint_record(S), endpoint_record(S)]),
-    set_answer(dial_url(S), {ok, <<"mcid">>}),
-    ?assertEqual({ok, <<"mcid">>}, put_at_station(S, 2000)).
+    ?assertEqual({ok, dial_url(S)}, resolve_endpoint(S, 2000)).
 
 %% When every lookup found only a malformed record, that is the reason.
-put_content_reports_a_malformed_endpoint_record_at_its_deadline() ->
+resolve_endpoint_reports_a_malformed_endpoint_record_at_its_deadline() ->
     S = station(<<"s.test">>),
     set_endpoint_replies(S, [malformed_endpoint_record(S)]),
-    ?assertEqual({error, {unresolved, malformed_station_endpoint}}, put_at_station(S, 1000)),
+    ?assertEqual({error, malformed_station_endpoint}, resolve_endpoint(S, 1000)),
     ?assert(endpoint_lookups(S) > 1).
 
 %% The facade refuses an expired endpoint record as `expired'; that is asked
 %% about again, as an absent record is.
-put_content_asks_again_past_an_expired_endpoint_record() ->
+resolve_endpoint_asks_again_past_an_expired_endpoint_record() ->
     S = station(<<"s.test">>),
     set_endpoint_replies(S, [{error, expired}, endpoint_record(S)]),
-    set_answer(dial_url(S), {ok, <<"mcid">>}),
-    ?assertEqual({ok, <<"mcid">>}, put_at_station(S, 2000)).
+    ?assertEqual({ok, dial_url(S)}, resolve_endpoint(S, 2000)).
 
 %% An endpoint record that stays expired to the deadline is reported AS
 %% expired, not as an absent one. The two mean different things to an
 %% operator: absent is "this station never published an endpoint", expired is
 %% "this station published one and our own clock check refused it as stale".
 %% It is asked about again throughout, as an absent record is.
-put_content_reports_an_expired_endpoint_record_at_its_deadline() ->
+resolve_endpoint_reports_an_expired_endpoint_record_at_its_deadline() ->
     S = station(<<"s.test">>),
     set_endpoint_replies(S, [{error, expired}]),
-    ?assertEqual({error, {unresolved, station_endpoint_expired}}, put_at_station(S, 1000)),
+    ?assertEqual({error, station_endpoint_expired}, resolve_endpoint(S, 1000)),
     ?assert(endpoint_lookups(S) > 1).
 
 %% The two conditions reach the public facade as two different atoms. This is
@@ -1116,47 +948,31 @@ resolve_station_endpoint_tells_an_expired_record_from_an_absent_one() ->
 %% expires_at are outside what its type allows, and asking the same station
 %% again cannot change that. It ends the lookup rather than being retried to
 %% the deadline like a transport failure.
-put_content_ends_the_lookup_at_a_lifetime_refusal() ->
+resolve_endpoint_ends_the_lookup_at_a_lifetime_refusal() ->
     S = station(<<"s.test">>),
     set_endpoint_replies(S, [{error, lifetime_too_long}, endpoint_record(S)]),
-    ?assertEqual({error, {unresolved, lifetime_too_long}}, put_at_station(S, 1000)),
+    ?assertEqual({error, lifetime_too_long}, resolve_endpoint(S, 1000)),
     ?assertEqual(1, endpoint_lookups(S)),
     ?assertEqual([], visits()).
 
-put_content_ends_the_lookup_at_a_reversed_lifetime() ->
+resolve_endpoint_ends_the_lookup_at_a_reversed_lifetime() ->
     S = station(<<"s.test">>),
     set_endpoint_replies(S, [{error, lifetime_reversed}, endpoint_record(S)]),
-    ?assertEqual({error, {unresolved, lifetime_reversed}}, put_at_station(S, 1000)),
+    ?assertEqual({error, lifetime_reversed}, resolve_endpoint(S, 1000)),
     ?assertEqual(1, endpoint_lookups(S)),
     ?assertEqual([], visits()).
 
 %% A record the facade refuses for any other reason is a record that does not
 %% verify, and ends the lookup with that reason.
-put_content_ends_the_lookup_at_an_endpoint_record_that_does_not_verify() ->
+resolve_endpoint_ends_the_lookup_at_an_endpoint_record_that_does_not_verify() ->
     S = station(<<"s.test">>),
     set_endpoint_replies(S, [{error, signature_invalid}, endpoint_record(S)]),
-    ?assertEqual({error, {unresolved, signature_invalid}}, put_at_station(S, 1000)),
+    ?assertEqual({error, signature_invalid}, resolve_endpoint(S, 1000)),
     ?assertEqual(1, endpoint_lookups(S)),
     ?assertEqual([], visits()).
 
-put_at_station(#{id := Id}, TimeoutMs) ->
-    macula_direct_dial:put_content(self(), Id, <<"bytes">>, TimeoutMs).
-
 resolve_endpoint(#{id := Id}, TimeoutMs) ->
     macula_direct_dial:resolve_station_endpoint(self(), Id, TimeoutMs).
-
-%% macula_download callbacks: hand the outcome back to the test process.
-init(Parent) -> {ok, Parent}.
-
-handle_downloaded(Result, Parent) ->
-    Parent ! {downloaded, Result},
-    {stop, normal, Parent}.
-
-downloaded() ->
-    receive
-        {downloaded, Result} -> {downloaded, Result}
-    after 40_000 -> no_download_result
-    end.
 
 %%%===================================================================
 %%% Helpers: calls and fakes
@@ -1347,11 +1163,6 @@ advertisement(#{id := StationId}, Procedure) ->
                macula_record:procedure_advertisement(macula_node_keys:key_id(Provider), ?REALM, Procedure,
                                                      StationId),
                Provider)).
-
-mcid() -> <<2, 16#55, (crypto:strong_rand_bytes(48))/binary>>.
-
-announcement(#{key := Key, id := Id} = Station, Mcid) ->
-    verified(macula_record:sign(macula_record:content_announcement(Id, Mcid, dial_url(Station)), Key)).
 
 %% The realm key and the org key an authorization chains to.
 authority() ->

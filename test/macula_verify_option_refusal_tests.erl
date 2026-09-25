@@ -20,7 +20,6 @@
 -define(NODE, <<7:256>>).
 -define(REALM, <<0:256>>).
 -define(SEED, <<"quic://127.0.0.1:4433">>).
--define(MCID, <<2, 16#55, 0:384>>).
 -define(VERIFY, #{expected_node_id => ?NODE, verify => none}).
 
 %% `foreach': each test gets its own pool, so one failure does not cancel
@@ -61,16 +60,6 @@ refusals() ->
           ?_assertEqual(?REFUSAL,
                         macula:call_stream_station(Pool, ?SEED, ?NODE, ?REALM, <<"x.y">>, #{},
                                                    maps:merge(?VERIFY, #{dial_timeout_ms => 200})))}
-     end,
-     fun(Pool) ->
-         {"put_content_station refuses verify",
-          ?_assertEqual(?REFUSAL,
-                        macula:put_content_station(Pool, ?SEED, <<"bytes">>, 300, ?VERIFY))}
-     end,
-     fun(Pool) ->
-         {"get_content_station refuses verify",
-          ?_assertEqual(?REFUSAL,
-                        macula:get_content_station(Pool, ?SEED, ?MCID, 300, ?VERIFY))}
      end,
      fun(_Pool) ->
          {"connect refuses verify in its options, before any pool is started",

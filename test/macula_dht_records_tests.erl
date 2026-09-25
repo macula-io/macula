@@ -8,7 +8,6 @@
 
 -define(EU_TIMEOUT, 120).
 -define(KEY, <<7:256>>).
--define(ENDPOINT, <<"quic://[::1]:4433">>).
 
 dht_records_test_() ->
     {timeout, ?EU_TIMEOUT, {setup, fun start/0, fun stop/1, fun cases/1}}.
@@ -24,8 +23,7 @@ cases(Keys) ->
                  fun an_ok_reply_answers_ok_in_both_forms/1,
                  fun found_records_that_do_not_verify_are_dropped/1,
                  fun records_found_by_type_that_do_not_verify_are_dropped/1,
-                 fun a_subscription_delivers_only_verified_records/1,
-                 fun a_content_provider_comes_only_from_a_verified_announcement/1]].
+                 fun a_subscription_delivers_only_verified_records/1]].
 
 %%------------------------------------------------------------------
 %% Putting a record
@@ -97,19 +95,6 @@ a_subscription_delivers_only_verified_records(#{key := Key} = Keys) ->
     Wrapped(<<"_dht.records.1.stored">>, #{not_a => record}, #{}),
     KeyId = macula_node_keys:key_id(Key),
     ?assertMatch([#{key_id := KeyId}], delivered()).
-
-%%------------------------------------------------------------------
-%% Content providers
-%%------------------------------------------------------------------
-
-a_content_provider_comes_only_from_a_verified_announcement(#{key := Key} = Keys) ->
-    {ok, NodeId} = macula_node_keys:node_id(Key),
-    MCID = <<2, 16#55, (crypto:strong_rand_bytes(48))/binary>>,
-    Announcement = macula_record:sign(macula_record:content_announcement(NodeId, MCID, ?ENDPOINT), Key),
-    NodeRecord = macula_record:encode(node_record(Keys)),
-    replying({ok, [tampered(Announcement), macula_record:encode(Announcement), NodeRecord]}),
-    ?assertMatch({ok, [#{announcer_node := NodeId, endpoint := ?ENDPOINT}]},
-                 macula:find_content_providers(self(), MCID)).
 
 %%------------------------------------------------------------------
 %% Helpers

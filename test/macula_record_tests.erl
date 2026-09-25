@@ -97,7 +97,7 @@ every_builder_record_signs_and_verifies_test() ->
     Signed = [Node,
               macula_record:sign(macula_record:tombstone(Node, shutdown), Id),
               macula_record:sign(macula_record:station_endpoint(4433), Id),
-              macula_record:sign(macula_record:content_announcement(NodeId, Mcid, <<"quic://h:1">>), Id),
+              macula_record:sign(macula_record:content_announcement(NodeId, Mcid, #{realm_id => <<7:256>>, serving_station => <<9:256>>, procedure => <<"acme/content_v1_x">>}), Id),
               macula_record:sign(macula_record:procedure_advertisement(NodeId, RealmId, <<"acme/x">>, fill(2)), Id),
               macula_record:sign(macula_record:envelope(16#20, #{}, #{}), Id),
               macula_record:sign(macula_record:envelope(16#20, #{}, #{subject_id => <<"s1">>}), Id),
@@ -237,7 +237,7 @@ each_type_signs_within_its_maximum_lifetime_test_() ->
         Builds =
             [{Id, 48 * Hour, fun(Ttl) -> macula_record:node_record(NodeId, [], 0, #{ttl_ms => Ttl}) end},
              {Id, 48 * Hour,
-              fun(Ttl) -> macula_record:content_announcement(NodeId, Mcid, <<"quic://a.example:4433">>, #{ttl_ms => Ttl})
+              fun(Ttl) -> macula_record:content_announcement(NodeId, Mcid, #{realm_id => <<7:256>>, serving_station => <<9:256>>, procedure => <<"acme/content_v1_x">>, ttl_ms => Ttl})
               end},
              {Id, 5 * ?MINUTE,
               fun(Ttl) -> macula_record:procedure_advertisement(NodeId, RealmId, <<"acme/echo_v1">>, fill(16#77),

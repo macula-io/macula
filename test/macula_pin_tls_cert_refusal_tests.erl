@@ -60,7 +60,6 @@
 -define(NODE, <<7:256>>).
 -define(REALM, <<0:256>>).
 -define(SEED, <<"quic://127.0.0.1:4433">>).
--define(MCID, <<2, 16#55, 0:384>>).
 -define(PIN, #{expected_node_id => ?NODE, pin_tls_cert => true}).
 
 %% `foreach', not `setup': each test gets its own pool. Under a shared
@@ -110,16 +109,6 @@ refusals() ->
                                                    <<"x.y">>, #{},
                                                    maps:merge(?PIN, #{dial_timeout_ms => 200})))}
      end,
-     fun(Pool) ->
-         {"put_content_station refuses a requested pin",
-          ?_assertEqual(?REFUSAL,
-                        macula:put_content_station(Pool, ?SEED, <<"bytes">>, 300, ?PIN))}
-     end,
-     fun(Pool) ->
-         {"get_content_station refuses a requested pin",
-          ?_assertEqual(?REFUSAL,
-                        macula:get_content_station(Pool, ?SEED, ?MCID, 300, ?PIN))}
-     end,
      fun(_Pool) ->
          {"connect refuses a requested pin, before any pool is started",
           ?_assertEqual(?REFUSAL, macula:connect([], #{pin_tls_cert => true}))}
@@ -159,14 +148,7 @@ pool_starts(Opts) ->
 %%------------------------------------------------------------------
 
 unchanged() ->
-    [fun(Pool) ->
-         {"an invalid MCID is still an invalid MCID: the refusal does not "
-          "swallow a fault that was already being reported",
-          ?_assertEqual({error, invalid_mcid},
-                        macula:get_content_station(Pool, ?SEED, <<"not an mcid">>,
-                                                   300, ?PIN))}
-     end,
-     %% `macula_station_link:add_tls_opts/2' folded `pin_tls_cert' into
+    [%% `macula_station_link:add_tls_opts/2' folded `pin_tls_cert' into
      %% the seed map for a consumer that no longer exists. A seed still
      %% carrying it would put the dead key back on the peering target.
      fun(_Pool) ->

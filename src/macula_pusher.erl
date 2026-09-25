@@ -25,7 +25,7 @@
 %%% An earlier draft of this plan said this module "sends chunks via
 %%% the Phase 3 multi-stream engine." Traced why that can't be true:
 %%% Phase 3's multi-stream engine lives entirely inside
-%%% `macula_content_transfer', built on content-sharing's OWN dedicated
+%%% the old station-store content transfer, built on content-sharing's OWN dedicated
 %%% content-stream bookkeeping (`macula_station_link''s
 %%% `content_stream_bufs' / `open_content_stream') — a wire mechanism
 %%% streaming RPC's `client_stream'/`macula_stream' doesn't have and
@@ -61,7 +61,7 @@
 %%% leaves the recipient inferring cancellation from the connection
 %%% simply going away. Mirrors `macula_feeder''s own `content_transfer'
 %%% field / `reap_content_transfer/1' pattern exactly, one layer down
-%%% (a raw stream instead of a `macula_content_transfer' pid).
+%%% (a raw stream instead of a transfer pid).
 %%%
 %%% == Direct-dial ==
 %%%

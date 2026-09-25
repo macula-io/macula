@@ -149,7 +149,7 @@ every_chunk_id_verifies_as_a_block_test() ->
     {ok, M, Chunks} = macula_manifest:create(Data, #{chunk_size => 200}),
     [begin
          {ok, ChunkMcid} = macula_manifest:chunk_mcid(M, I),
-         ?assertEqual({ok, C}, macula_content_transfer:verify_block_hash(ChunkMcid, C))
+         ?assertEqual(<<2, 16#55, (crypto:hash(sha384, C))/binary>>, ChunkMcid)
      end || {I, C} <- lists:zip(lists:seq(0, length(Chunks) - 1), Chunks)].
 
 another_hash_algorithm_is_refused_on_create_test_() ->

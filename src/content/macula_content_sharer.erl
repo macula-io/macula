@@ -235,7 +235,7 @@ signed_announcement(MCID, Realm, Station, Meta,
                     #state{pool = Pool, node_id = NodeId, procedures = Procs, announce_ttl_ms = Ttl,
                            io = #{sign_node_record := Sign}}) ->
     Unsigned = macula_record:content_announcement(
-                 NodeId, MCID, <<>>,
+                 NodeId, MCID,
                  Meta#{realm_id => Realm, serving_station => Station, procedure => maps:get(Realm, Procs),
                        ttl_ms => Ttl}),
     Sign(Pool, Unsigned, #{}).
