@@ -1027,3 +1027,66 @@ before its wire checks are green.
   after admitting. One point stays open, marked above: rotating a pinned realm key.
 - **Blocks:** WP 1.3 (the CONNECT check), WP 1.5 (the `member_endorsement` field), WP 1.6, WP 3.1 (the realm issuing
   and withdrawing endorsements). The station check is built after macula 12 lands.
+
+### D32 Provider revocation bound: short delegations, renewed
+
+- **Question (macula#38):** once an admin revokes a provider, how soon must callers stop reaching it, and how,
+  without making the realm a synchronous dependency of any call?
+- **What held before:** a caller (`macula_direct_dial` → `macula_record:verify_authorization/3`) and a station
+  (`macula_dht_admission:authorized/5`) check the `procedure_delegation` embedded in the advertisement by
+  signature, fields and expiry, and read no withdrawal. Revocation tombstones the delegation's DHT slot, and nothing
+  reads it. The provider re-signs its advertisement with the same embedded delegation until that delegation
+  expires, so the bound was the delegation's lifetime: 6 hours (`REALM_AND_ORG_MAX_LIFETIME_MS`), reissued every 2.
+- **Answer, decided by Raf on 2026-09-25: positive freshness, D22's shape.** A `procedure_delegation` lives
+  **30 minutes**, and the realm reissues it to every admitted provider **every 10 minutes**. A revoked provider gets
+  no fresh one, and every verifier refuses its advertisement once the last one expires. Nothing is looked up on a
+  call, and a lost or hidden tombstone cannot reopen the window.
+  - **The bound:** a revoked provider is refused within **35 minutes** (the lifetime plus 5 minutes of clock
+    tolerance). A caller's resolved-advertisement cache cannot extend it, because an advertisement never outlives
+    the delegation it carries.
+  - **The provider renews:** the pool re-resolves each advertised spec's chain at a third of its remaining life and
+    re-registers it on the registration's stations that have a link at that moment (every link for `all`); a
+    station without a link gets the fresh spec when its link respawns, so one station down never keeps the others
+    on a chain that runs out. It retries on a backoff capped under the remaining life. At the chain's `not_after`
+    it logs at error level with the last reason, and afterwards re-checks slowly so a re-grant revives it without
+    a restart. `mcl_om` already re-resolves every 30 seconds.
+  - ⚠ **The direct-dial DHT record is the app's to renew.** `macula_response:advertise_direct/7` publishes the
+    `authorization` it is given, and the pool does not re-resolve it. An app that republishes that record must
+    resolve the authorization again each time (`macula:provider_authorization/3`), or its direct-dial path goes
+    dark 30 minutes after the realm shortens delegations while its pooled path stays up. `mcl_om` does; the doc of
+    `advertise_direct/7` says so. Taking this into the pool is possible later and is not part of step (1).
+  - **Enforced, not just issued:** once every realm issues 30-minute delegations, the record layer's maximum
+    lifetime for type `0x16` becomes 30 minutes. The realm's signer refuses a longer one, and every verifier refuses
+    it too, so neither a realm by mistake nor a stolen org key can mint around the bound. `org_directory` keeps
+    6 hours: it names the org, not the provider.
+  - **The tombstone stays**, written at revocation with a retried put. It is information, for logs and a possible
+    later station-side accelerator, never the stop condition.
+- ⚠ **The price, stated with the number:** the lifetime is also how long providers survive a realm outage. With a
+  30-minute lifetime and a 10-minute reissue, a realm that cannot reach the DHT for about **20 minutes** starts
+  taking providers dark, and all of them are dark after about 30. This is the exact failure D31 refused for member
+  endorsements ("turn the realm's availability into every member's availability"). It is accepted here, by Raf, with
+  that trade-off in front of him, because the two cases differ:
+  - a member endorsement guards a connection that a station holds and can re-check after admitting, so a long
+    record with a withdrawal lookup on that connection gives a short bound;
+  - a provider's authorization is checked by the CALLER, which verifies the chain embedded in the advertisement
+    (direct dial included) and holds no connection anyone could re-check. Only a bound carried by the chain
+    itself, its lifetime, reaches that caller. (A withdrawal lookup would have the same weaknesses as D31's own:
+    the DHT answers with whichever entry a station holds first. Those are not the distinction; the verifier is.)
+- **Not taken:**
+  - callers checking the delegation's tombstone at resolution: fails open, and costs a lookup on every cold call;
+  - stations refusing tombstoned delegations as the bound: fails open for the same reason, and covers only the
+    stations that check. It may come later as an accelerator under the bound;
+  - a realm-signed status statement per delegation: the same realm dependency as a short delegation, with a second
+    record to carry.
+- **Release order, and it is load-bearing:**
+  1. macula: the pool re-resolves before expiry. It is harmless with 6-hour delegations, and a plain
+     `macula:advertise` provider would go dark after 30 minutes without it. The direct-dial record stays the
+     app's to re-resolve (above);
+  2. macula-realm: the 30-minute lifetime, the 10-minute reissue, and the retried tombstone put, rolled once
+     providers run (1) or `mcl_om`;
+  3. macula: the `0x16` maximum lifetime in signer and verifier, as its own release, strictly after (2) is live on
+     every realm. Earlier, it refuses every live 6-hour delegation and takes every provider dark.
+- **Acceptance:** revoke a provider, keep it re-advertising with its last delegation, and a caller's
+  `macula:call/5` to it is refused within 35 minutes (SDK test under a controlled clock, and one end-to-end run).
+- **Amends** D25's six-hour caller-side revocation bound. The `macula_direct_dial` moduledoc that states it changes
+  with step (3), when the bound in the code changes.
