@@ -47,13 +47,13 @@ io() ->
       resolve_station_endpoint => fun macula_direct_dial:resolve_station_endpoint/3,
       call_stream_station => fun macula:call_stream_station/7}.
 
-%% @doc Fetch `MCID' from a node that shares it. `Opts': `max_bytes', `max_chunks', `chunk_timeout_ms', `parallel',
-%% and `io' (see `io/0').
+%% @doc Fetch `MCID' from a node that shares it. `Opts': `realm' (only that realm's announcements), `max_bytes',
+%% `max_chunks', `chunk_timeout_ms', `parallel', and `io' (see `io/0').
 -spec get(pid(), macula:mcid(), map()) -> {ok, binary()} | {error, term()}.
 get(Pool, <<2, Codec, _:48/binary>> = MCID, Opts)
   when is_pid(Pool), (Codec =:= ?CODEC_RAW orelse Codec =:= ?CODEC_MANIFEST), is_map(Opts) ->
     Ctx = context(Pool, MCID, Opts),
-    from_sharers(sharers(found(Ctx), MCID, Opts), Ctx, []);
+    from_sharers(in_realm(maps:get(realm, Opts, any), sharers(found(Ctx), MCID, Opts)), Ctx, []);
 get(_Pool, _MCID, _Opts) ->
     {error, invalid_mcid}.
 
@@ -103,6 +103,10 @@ bound_to(Procedure, Node) ->
 
 org_bound([Org, Name], Name) -> Org =/= <<>> andalso binary:first(Org) =/= $~ andalso Org =/= <<"_">>;
 org_bound(_Split, _Name) -> false.
+
+%% A fetch in a realm uses only the announcements that name it.
+in_realm(any, Sharers) -> Sharers;
+in_realm(Realm, Sharers) -> [S || #{realm := R} = S <- Sharers, R =:= Realm].
 
 ordered(as_given, Sharers) -> Sharers;
 ordered(random, Sharers) -> [S || {_, S} <- lists:sort([{rand:uniform(), S} || S <- Sharers])].

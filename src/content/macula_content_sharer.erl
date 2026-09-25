@@ -157,6 +157,9 @@ advertised(Proc, Realm, #state{pool = Pool, io = #{advertise_stream := Advertise
 
 registered(ok, Proc, Realm, Bytes, Opts, #state{procedures = Procs} = S) ->
     kept(Realm, Bytes, Opts, S#state{procedures = Procs#{Realm => Proc}});
+%% The pool keeps a registration no link could take yet and replays it when one comes up, so the share stands.
+registered({error, no_healthy_station}, Proc, Realm, Bytes, Opts, S) ->
+    registered(ok, Proc, Realm, Bytes, Opts, S);
 registered({error, _} = Refusal, _Proc, _Realm, _Bytes, _Opts, S) ->
     {reply, Refusal, S}.
 

@@ -96,6 +96,16 @@ init([]) ->
             type => worker
         },
 
+        %% The content sharers, one per pool (D27): the content a node
+        %% shares, kept, served and announced by the node itself.
+        #{
+            id => macula_content_sharer_sup,
+            start => {macula_content_sharer_sup, start_link, []},
+            restart => permanent,
+            shutdown => infinity,
+            type => supervisor
+        },
+
         %% Local registry + dispatcher for streaming RPC (v1.5.0+).
         %% In-process pairing of client/server stream halves; the QUIC-
         %% backed cross-node path lands in Phase 2 of

@@ -26,7 +26,13 @@ sharer_test_() ->
       {"announcements are renewed before they expire", fun() -> cleaned(fun announcements_are_renewed/0) end},
       {"with no station connected the content is kept and announced once one is",
        fun() -> cleaned(fun no_station_yet_announces_later/0) end},
-      {"the sharer ends with its pool", fun() -> cleaned(fun the_sharer_ends_with_its_pool/0) end}]}.
+      {"the sharer ends with its pool", fun() -> cleaned(fun the_sharer_ends_with_its_pool/0) end},
+      {"a pool with no station yet keeps the registration", fun() -> cleaned(fun no_station_keeps_registration/0) end}]}.
+
+%% The pool keeps a registration no link could take yet, and replays it when one comes up: the share stands.
+no_station_keeps_registration() ->
+    {Sharer, _Io, _Node} = sharer(#{advertise_stream => fun(_P, _R, _Pr, _M, _H, _O) -> {error, no_healthy_station} end}),
+    ?assertMatch({ok, _}, macula_content_sharer:share(Sharer, ?REALM, <<"hello">>, #{})).
 
 sharing_registers_and_announces() ->
     {Sharer, Io, Node} = sharer(#{}),

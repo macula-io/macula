@@ -25,7 +25,13 @@ fetch_test_() ->
       {"an announcement naming another node's procedure is ignored", fun a_foreign_procedure_is_ignored/0},
       {"a dead first sharer moves the fetch to the next", fun a_dead_sharer_moves_on/0},
       {"every sharer failing names each", fun every_sharer_failing_names_each/0},
-      {"content nobody announces is not_shared", fun content_nobody_announces_is_not_shared/0}]}.
+      {"content nobody announces is not_shared", fun content_nobody_announces_is_not_shared/0},
+      {"a fetch in a realm uses only that realm's announcements", fun a_fetch_keeps_to_its_realm/0}]}.
+
+a_fetch_keeps_to_its_realm() ->
+    {Sharer, MCID} = honest_sharer(<<"hello">>),
+    ?assertEqual({ok, <<"hello">>}, fetch([Sharer], MCID, #{realm => ?REALM})),
+    ?assertEqual({error, not_shared}, fetch([Sharer], MCID, #{realm => <<8:256>>})).
 
 a_raw_root_is_fetched() ->
     {Sharer, MCID} = honest_sharer(<<"hello, mesh">>),

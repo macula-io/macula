@@ -78,6 +78,11 @@
          get_content_station/4, get_content_station/5,
          find_content_providers/2]).
 
+%% Node-served content (D27): the node that shares content keeps it and
+%% serves it; stations only relay.
+-export([share_content/3, share_content/4, unshare_content/3,
+         get_content/3, get_content/4]).
+
 %% Streaming RPC (LOCAL in-process + V2 pool, see PLAN_MACULA_STREAMING.md)
 -export([
     call_stream/2, call_stream/3, call_stream/5, call_stream_station/7,
@@ -886,6 +891,56 @@ provider({ok, #{type := ?TYPE_CONTENT_ANNOUNCEMENT} = Record}) ->
     {true, macula_record:read_content_announcement(Record)};
 provider(_RefusedOrAnotherType) ->
     false.
+
+%% @doc Share `Bytes' in `Realm', as `share_content/4' with no options.
+-spec share_content(pool(), realm(), binary()) -> {ok, mcid()} | {error, term()}.
+share_content(Pool, Realm, Bytes) ->
+    share_content(Pool, Realm, Bytes, #{}).
+
+%% @doc Share `Bytes' in `Realm' from this node (D27): the pool's sharer keeps
+%% them, serves them on the node's own content procedure and announces their
+%% root in the DHT, naming the realm, the station the node is reachable
+%% through and that procedure (`macula_content_sharer'). Returns the root's
+%% content id: bytes of at most 256 KiB are one raw block, larger bytes a
+%% manifest over their chunks. The content is available while this node is
+%% online. `Opts': `name', and `org', the org whose delegation serves the
+%% content (`<org>/content_v1_<node id>'); without `org' the node serves in
+%% its own namespace (`~<node id>/content_v1').
+-spec share_content(pool(), realm(), binary(), map()) -> {ok, mcid()} | {error, term()}.
+share_content(Pool, Realm, Bytes, Opts)
+  when is_pid(Pool), is_binary(Realm), byte_size(Realm) =:= 32, is_binary(Bytes), is_map(Opts) ->
+    shared_by(macula_content_sharer_sup:sharer(Pool), Realm, Bytes, Opts).
+
+shared_by({ok, Sharer}, Realm, Bytes, Opts) -> macula_content_sharer:share(Sharer, Realm, Bytes, Opts);
+shared_by({error, _} = Error, _Realm, _Bytes, _Opts) -> Error.
+
+%% @doc Stop sharing the root `MCID' in `Realm': its announcement is withdrawn
+%% and its bytes dropped. Idempotent.
+-spec unshare_content(pool(), realm(), mcid()) -> ok.
+unshare_content(Pool, Realm, MCID) when is_pid(Pool) ->
+    unshared_by(macula_content_sharer_sup:sharer(Pool), Realm, MCID).
+
+unshared_by({ok, Sharer}, Realm, MCID) -> macula_content_sharer:unshare(Sharer, Realm, MCID);
+unshared_by({error, _}, _Realm, _MCID) -> ok.
+
+%% @doc Fetch `MCID' in `Realm', as `get_content/4' with no options.
+-spec get_content(pool(), realm(), mcid()) -> {ok, binary()} | {error, term()}.
+get_content(Pool, Realm, MCID) ->
+    get_content(Pool, Realm, MCID, #{}).
+
+%% @doc Fetch `MCID' from a node that shares it in `Realm' (D27): find its
+%% announcements, open a stream to a sharer through the station it
+%% announced, and verify every block and the manifest against their content
+%% ids (`macula_content_fetch'). A sharer that fails moves the fetch to the
+%% next; `{error, {unavailable, [{Sharer, Reason}]}}' when all fail,
+%% `{error, not_shared}' when none announces it, `{error, invalid_mcid}' for
+%% an id that is not tag 2. `Opts': `max_bytes' (256 MiB), `max_chunks',
+%% `chunk_timeout_ms', `parallel'. No realm key is needed: content verifies
+%% itself.
+-spec get_content(pool(), realm(), mcid(), map()) -> {ok, binary()} | {error, term()}.
+get_content(Pool, Realm, MCID, Opts)
+  when is_pid(Pool), is_binary(Realm), byte_size(Realm) =:= 32, is_map(Opts) ->
+    macula_content_fetch:get(Pool, MCID, Opts#{realm => Realm}).
 
 %%%===================================================================
 %%% Streaming RPC (v1.5.0+)
