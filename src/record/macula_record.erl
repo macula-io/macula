@@ -110,6 +110,7 @@
                                            ttl_ms => pos_integer()}.
 -type procedure_advertisement_opts() :: #{authorization => map(), ttl_ms => pos_integer()}.
 -type content_announcement_opts() :: #{name => binary(), size => non_neg_integer(), chunk_count => non_neg_integer(),
+                                       realm_id => <<_:256>>, serving_station => <<_:256>>, procedure => binary(),
                                        ttl_ms => pos_integer()}.
 -type foundation_seed() :: #{node_id := <<_:256>>, addresses := [map()], tier := 3 | 4}.
 -type foundation_seed_list_opts() :: #{valid_from => pos_integer(), valid_until => pos_integer(),
@@ -650,6 +651,9 @@ read_content_announcement(#{type := ?TYPE_CONTENT_ANNOUNCEMENT, payload := P}) -
     #{announcer_node => payload_field(P, <<"announcer_node">>),
       mcid           => payload_field(P, <<"mcid">>),
       endpoint       => payload_field(P, <<"endpoint">>),
+      realm_id       => payload_field(P, <<"realm_id">>),
+      serving_station => payload_field(P, <<"serving_station">>),
+      procedure      => payload_field(P, <<"procedure">>),
       name           => payload_field(P, <<"name">>),
       size           => payload_field(P, <<"size">>),
       chunk_count    => payload_field(P, <<"chunk_count">>)}.
@@ -1389,7 +1393,16 @@ content_announcement_payload(AnnouncerNode, MCID, Endpoint, Opts) ->
              {text, <<"endpoint">>}       => {text, Endpoint}},
     M1 = with_text(Base, <<"name">>, maps:get(name, Opts, undefined)),
     M2 = with_uint(M1, <<"size">>, maps:get(size, Opts, undefined)),
-    with_uint(M2, <<"chunk_count">>, maps:get(chunk_count, Opts, undefined)).
+    M3 = with_uint(M2, <<"chunk_count">>, maps:get(chunk_count, Opts, undefined)),
+    %% D27: where the content is served, the realm and the sharer's own
+    %% procedure a STREAM_OPEN routes by, and the station it is reachable
+    %% through now, which a fetcher resolves to that station's own endpoint.
+    M4 = with_id(M3, <<"realm_id">>, maps:get(realm_id, Opts, undefined)),
+    M5 = with_id(M4, <<"serving_station">>, maps:get(serving_station, Opts, undefined)),
+    with_text(M5, <<"procedure">>, maps:get(procedure, Opts, undefined)).
+
+with_id(Map, _Key, undefined) -> Map;
+with_id(Map, Key, <<_:256>> = Id) -> Map#{{text, Key} => Id}.
 
 foundation_seed_list_payload(Version, ValidFrom, ValidUntil, Seeds) ->
     #{{text, <<"version">>}     => Version,

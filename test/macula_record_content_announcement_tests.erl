@@ -64,12 +64,38 @@ read_content_announcement_returns_the_typed_payload_test() ->
                                               #{name => <<"a.bin">>, size => 10, chunk_count => 1}),
     {ok, V} = macula_record:verify(macula_record:encode(macula_record:sign(Full, Id)), pq_pure),
     ?assertEqual(#{announcer_node => NodeId, mcid => mcid(), endpoint => <<"quic://h:1">>, name => <<"a.bin">>,
-                   size => 10, chunk_count => 1},
+                   size => 10, chunk_count => 1, realm_id => undefined, serving_station => undefined,
+                   procedure => undefined},
                  macula_record:read_content_announcement(V)),
     ?assertEqual(#{announcer_node => NodeId, mcid => mcid(), endpoint => <<"quic://h:1">>, name => undefined,
-                   size => undefined, chunk_count => undefined},
+                   size => undefined, chunk_count => undefined, realm_id => undefined,
+                   serving_station => undefined, procedure => undefined},
                  macula_record:read_content_announcement(macula_record:content_announcement(NodeId, mcid(),
                                                                                             <<"quic://h:1">>))).
+
+%% D27: an announcement names where its content is served: the realm and the sharer's own procedure a STREAM_OPEN
+%% routes by, and the station the sharer is reachable through now, as 32 bytes a fetcher resolves to that station's own
+%% endpoint record (never an address the sharer wrote).
+the_announcement_names_realm_station_and_procedure_test() ->
+    Id = key(),
+    NodeId = macula_node_keys:key_id(Id),
+    Procedure = <<"acme/content_v1_", (binary:encode_hex(NodeId, lowercase))/binary>>,
+    Unsigned = macula_record:content_announcement(NodeId, mcid(), <<"quic://h:1">>,
+                                                  #{realm_id => fill(7), serving_station => fill(9),
+                                                    procedure => Procedure}),
+    P = macula_record:payload(Unsigned),
+    ?assertEqual(fill(7), maps:get({text, <<"realm_id">>}, P)),
+    ?assertEqual(fill(9), maps:get({text, <<"serving_station">>}, P)),
+    ?assertEqual({text, Procedure}, maps:get({text, <<"procedure">>}, P)),
+    {ok, V} = macula_record:verify(macula_record:encode(macula_record:sign(Unsigned, Id)), pq_pure),
+    ?assertMatch(#{realm_id := <<7:8, _/binary>>, serving_station := <<9:8, _/binary>>, procedure := Procedure},
+                 macula_record:read_content_announcement(V)).
+
+%% Where-fields of the wrong size are refused when the announcement is built.
+the_where_fields_are_checked_test() ->
+    [?assertError(function_clause,
+                  macula_record:content_announcement(fill(1), mcid(), <<"e">>, Opts))
+     || Opts <- [#{realm_id => <<1, 2>>}, #{serving_station => <<1:8>>}, #{procedure => 42}]].
 
 key() ->
     {ok, Key} = macula_node_keys:generate(identity, pq_pure),
