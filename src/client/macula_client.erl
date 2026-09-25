@@ -2071,8 +2071,8 @@ advertised(Kind, Key, #{stations := Stations} = Registration, S) ->
 
 registered(_Kind, _Key, _Registration, {error, _} = Refused, S) ->
     {Refused, S};
-registered(_Kind, _Key, _Registration, {ok, []}, S) ->
-    {{error, no_healthy_station}, S};
+%% With no link up (every link respawning), the registration is kept all the
+%% same and answered no_healthy_station: the respawned links replay it.
 registered(unary, Key, Registration, {ok, Pids}, #state{procs = P} = S) ->
     {fanout_advertise(Pids, Key, Registration), S#state{procs = P#{Key => Registration}}};
 registered(stream, Key, Registration, {ok, Pids}, #state{stream_procs = SP} = S) ->

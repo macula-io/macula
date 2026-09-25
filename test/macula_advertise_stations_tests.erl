@@ -25,7 +25,27 @@ stations_test_() ->
                                       fun an_empty_or_malformed_list_is_refused/0,
                                       fun a_respawned_link_replays_only_what_names_its_station/0,
                                       fun a_stream_advertisement_goes_to_the_named_stations_only/0,
-                                      fun without_stations_every_link_has_it/0]].
+                                      fun without_stations_every_link_has_it/0,
+                                      fun an_advertise_with_no_link_up_is_kept_for_the_respawn/0]].
+
+%% With no link up (its link respawning), an advertise answers no_healthy_station and is kept: the respawned link
+%% registers it, as 12.6 did and as the content sharer relies on.
+an_advertise_with_no_link_up_is_kept_for_the_respawn() ->
+    {ok, _} = application:ensure_all_started(macula),
+    {ok, Pool} = macula_client:connect([?SEED_A], #{}),
+    try
+        {ok, #{self_node_id := Me}} = macula:status(Pool),
+        Proc = <<"~", (binary:encode_hex(Me, lowercase))/binary, "/echo">>,
+        Old = link_pid(Pool, ?A),
+        Mon = erlang:monitor(process, Old),
+        exit(Old, kill),
+        receive {'DOWN', Mon, process, Old, _} -> ok after 2_000 -> error(link_not_down) end,
+        ?assertEqual({error, no_healthy_station}, macula:advertise(Pool, ?REALM, Proc, fun handler/1, #{})),
+        _ = wait_new(Pool, ?A, Old, 100),
+        ?assert(holds(Pool, ?A, Proc))
+    after
+        ok = macula_client:close(Pool)
+    end.
 
 an_advertisement_goes_to_the_named_stations_only() ->
     with_pool(fun(Pool, Proc) ->

@@ -16,10 +16,13 @@ calls_on_an_ended_stream_answer_closed() ->
     ?assertEqual({error, closed}, macula_stream:send(Stream, <<"x">>)),
     ?assertEqual({error, closed}, macula_stream:send(Stream, #{a => 1}, msgpack)),
     ?assertEqual({error, closed}, macula_stream:recv(Stream, 100)),
-    ?assertEqual({error, closed}, macula_stream:abort(Stream, <<"gone">>, <<"gone">>)).
+    ?assertEqual({error, closed}, macula_stream:abort(Stream, <<"gone">>, <<"gone">>)),
+    ?assertEqual({error, closed}, macula_stream:await_reply(Stream, 100)).
 
 closing_an_ended_stream_is_ok() ->
-    ?assertEqual(ok, macula_stream:close(ended_stream())).
+    Stream = ended_stream(),
+    ?assertEqual(ok, macula_stream:close(Stream)),
+    ?assertEqual(ok, macula_stream:close_send(Stream)).
 
 %% A local stream ended the way a stream ends: its owner has gone.
 ended_stream() ->

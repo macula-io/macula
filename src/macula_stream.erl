@@ -235,7 +235,7 @@ recv(Pid, Timeout) ->
 %% @doc Half-close the write side. Recv side stays open.
 -spec close_send(pid()) -> ok.
 close_send(Pid) ->
-    gen_server:call(Pid, close_send).
+    closed(stream_call(Pid, close_send)).
 
 %% @doc Close both sides. Idempotent: closing a stream that has ended is `ok'.
 -spec close(pid()) -> ok.
@@ -256,7 +256,7 @@ await_reply(Pid, Timeout) ->
                     infinity -> infinity;
                     N when is_integer(N) -> N + 100
                 end,
-    gen_server:call(Pid, {await_reply, Timeout}, GsTimeout).
+    stream_call(Pid, {await_reply, Timeout}, GsTimeout).
 
 %% @doc Server-side: emit the terminal reply.
 -spec set_reply(pid(), term()) -> ok.

@@ -1240,7 +1240,10 @@ sent_queued(Queued, #data{frame_observer = undefined} = Data) ->
 sent_queued(_Queued, #data{quic_stream = undefined} = Data) ->
     {ok, Data};
 sent_queued(Queued, #data{quic_stream = Stream} = Data) ->
-    {Encoded, Timed, Signed} = lists:foldl(fun timed_encode/2, {[], [], Data}, Queued),
+    %% Every frame of the batch left the mailbox now: the encoding of the
+    %% frames before it is not its wait.
+    Taken = now_us(),
+    {Encoded, Timed, Signed} = lists:foldl(fun(Q, Acc) -> timed_encode(Q, Taken, Acc) end, {[], [], Data}, Queued),
     WriteStart = now_us(),
     Sent = macula_quic:send(Stream, lists:reverse(Encoded)),
     WriteUs = now_us() - WriteStart,
@@ -1249,9 +1252,9 @@ sent_queued(Queued, #data{quic_stream = Stream} = Data) ->
                                     observed(queued, Type, Size, WaitUs, Acc))
                        end, Signed, lists:reverse(Timed))}.
 
-timed_encode({Frame, QueuedAt}, {Encoded, Timed, Data}) ->
+timed_encode({Frame, QueuedAt}, Taken, {Encoded, Timed, Data}) ->
     Start = now_us(),
-    timed_kept(encode_or_drop(Frame, Data), Frame, Start - QueuedAt, now_us() - Start, Encoded, Timed).
+    timed_kept(encode_or_drop(Frame, Data), Frame, Taken - QueuedAt, now_us() - Start, Encoded, Timed).
 
 timed_kept({{true, Bytes}, Data}, #{frame_type := Type}, WaitUs, EncodeUs, Encoded, Timed) ->
     {[Bytes | Encoded], [{Type, byte_size(Bytes), max(0, WaitUs), EncodeUs} | Timed], Data};

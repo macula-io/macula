@@ -16,7 +16,7 @@ Wire-compatible with 12.0 to 12.6 at the frame level.
 
 A peer offering only AES-128-GCM or ChaCha20 for the TLS handshake is now
 refused, in both roles. Every released Macula SDK and station offers
-AES-256-GCM first, so none is affected.
+AES-256-GCM among its suites, so none is affected.
 
 ### Added
 
@@ -35,7 +35,12 @@ AES-256-GCM first, so none is affected.
   - With `stations`, the direct-dial record (`advertise_direct/7`,
     `macula_direct_dial:publish_advertisement/5`) names the first of those
     stations the pool is connected to, where the procedure is registered.
-  - Without it, every link registers the procedure, as before.
+  - Without it, every link registers the procedure, as before, and an
+    advertise made while no link is up answers `{error, no_healthy_station}`
+    and is kept for the links that come back.
+  - An `advertise` override option replaces the pool fan-out, so it decides
+    where the procedure registers; `stations` then only chooses the station
+    the direct-dial record names.
 - **`frame_observer` on a peering connection** (`macula_peering:connect/1`,
   `accept/2`), opt-in:
   `fun((queued | out | in, FrameType, Bytes, Us) -> _)`, called in the
@@ -78,7 +83,8 @@ AES-256-GCM first, so none is affected.
   (macula-pqc 0.3, macula#39). QUIC still protects its Initial packets with
   AES-128-GCM, as RFC 9001 fixes for QUIC version 1: the NIF hands that
   suite to Quinn apart from the handshake's list
-  (`macula_pqc::quic_initial_suite()`).
+  (`macula_pqc::quic_initial_suite()`, which macula-pqc's own tests pin to
+  AES-128-GCM).
 - `macula_peering:send_frame/2` stamps each frame with the time it was
   queued. A process standing in for a connection in a test now receives
   `{send_frame, QueuedAt, Frame}`.
@@ -95,7 +101,8 @@ AES-256-GCM first, so none is affected.
   content, a sharer gone offline no longer costs each fetch a full
   `chunk_timeout_ms` once the station has noticed it is gone.
 - **A call on an ended stream answers `{error, closed}`** (#41). `send`,
-  `recv` and `abort` exited the caller with `noproc`; `close` answers `ok`.
+  `recv`, `abort` and `await_reply` exited the caller with `noproc`; `close`
+  and `close_send` answer `ok`.
 - **`macula_streamer:advertise/6` passes `stations`** to the stream
   advertisement, so a streaming provider registers where its direct-dial
   record says.
