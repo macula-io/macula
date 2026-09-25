@@ -204,9 +204,9 @@ send(Pid, Bin) when is_binary(Bin) ->
 
 -spec send(pid(), binary() | term(), encoding()) -> ok | {error, term()}.
 send(Pid, Body, raw) when is_binary(Body) ->
-    gen_server:call(Pid, {send, raw, Body});
+    stream_call(Pid, {send, raw, Body});
 send(Pid, Body, msgpack) ->
-    gen_server:call(Pid, {send, msgpack, Body}).
+    stream_call(Pid, {send, msgpack, Body}).
 
 %% @doc Receive the next chunk (blocks indefinitely).
 -spec recv(pid()) -> {chunk, binary()}
@@ -227,17 +227,20 @@ recv(Pid, Timeout) ->
                     infinity -> infinity;
                     N when is_integer(N) -> N + 100
                 end,
-    gen_server:call(Pid, {recv, Timeout}, GsTimeout).
+    stream_call(Pid, {recv, Timeout}, GsTimeout).
 
 %% @doc Half-close the write side. Recv side stays open.
 -spec close_send(pid()) -> ok.
 close_send(Pid) ->
     gen_server:call(Pid, close_send).
 
-%% @doc Close both sides. Idempotent.
+%% @doc Close both sides. Idempotent: closing a stream that has ended is `ok'.
 -spec close(pid()) -> ok.
 close(Pid) ->
-    gen_server:call(Pid, close).
+    closed(stream_call(Pid, close)).
+
+closed(ok) -> ok;
+closed({error, closed}) -> ok.
 
 %% @doc Wait for the terminal reply (client-stream / bidi).
 -spec await_reply(pid()) -> result().
@@ -272,10 +275,25 @@ abort(Pid, Code, Message) when is_binary(Code), is_binary(Message) ->
     aborted(macula_frame:text_checked(code, Code), Pid, Code, Message).
 
 aborted(ok, Pid, Code, Message) ->
-    gen_server:call(Pid, {abort, Code, Message});
+    stream_call(Pid, {abort, Code, Message});
 aborted({error, _} = Refused, Pid, _Code, Message) ->
-    ok = gen_server:call(Pid, {abort, ?ABORTED_CODE, Message}),
+    _ = stream_call(Pid, {abort, ?ABORTED_CODE, Message}),
     Refused.
+
+%% A call on the stream's process. A stream whose process has ended answers
+%% `{error, closed}': the other end going away is an outcome of a stream, not
+%% a fault of its caller (macula#41). Any other exit, a call timing out
+%% included, is the caller's as before.
+stream_call(Pid, Request) ->
+    stream_call(Pid, Request, 5_000).
+
+stream_call(Pid, Request, Timeout) ->
+    try gen_server:call(Pid, Request, Timeout)
+    catch exit:{Reason, {gen_server, call, _}} when Reason =:= noproc; Reason =:= normal; Reason =:= shutdown ->
+        {error, closed};
+          exit:{{shutdown, _}, {gen_server, call, _}} ->
+        {error, closed}
+    end.
 
 %% @doc Hand the stream to `NewOwner'. A stream ends when its owner ends;
 %% after this it ends when `NewOwner' does, and `NewOwner' is told when the
