@@ -1,15 +1,15 @@
 [
   {
     "file": "pq_pure/own_ok.bin",
-    "now_ms": 1790255155231,
+    "now_ms": 1790363855305,
     "own_namespace": "ok",
-    "procedure": "~c262ab187797d2d6f5904fdc74959246b45c7a81624f247ecafb555bef6125de/ring",
+    "procedure": "~07a00cda919d23fd9cbf8b4b39eed85fcbd72e3922fb2eadc34eab99de71338c/ring",
     "profile": "pq_pure",
     "verify_authorization": "ok"
   },
   {
     "file": "pq_pure/own_other_node.bin",
-    "now_ms": 1790255155235,
+    "now_ms": 1790363855308,
     "own_namespace": "not_own_namespace",
     "procedure": "~0000000000000000000000000000000000000000000000000000000000000001/ring",
     "profile": "pq_pure",
@@ -17,47 +17,55 @@
   },
   {
     "file": "pq_pure/own_with_authorization.bin",
-    "now_ms": 1790255155237,
+    "now_ms": 1790363855310,
     "own_namespace": "authorization_not_allowed",
-    "procedure": "~c262ab187797d2d6f5904fdc74959246b45c7a81624f247ecafb555bef6125de/ring",
+    "procedure": "~07a00cda919d23fd9cbf8b4b39eed85fcbd72e3922fb2eadc34eab99de71338c/ring",
     "profile": "pq_pure",
     "verify_authorization": "authorization_not_allowed"
   },
   {
     "file": "pq_pure/own_uppercase_hex.bin",
-    "now_ms": 1790255155237,
+    "now_ms": 1790363855311,
     "own_namespace": "malformed",
-    "procedure": "~C262AB187797D2D6F5904FDC74959246B45C7A81624F247ECAFB555BEF6125DE/ring",
+    "procedure": "~07A00CDA919D23FD9CBF8B4B39EED85FCBD72E3922FB2EADC34EAB99DE71338C/ring",
     "profile": "pq_pure",
     "verify_authorization": "malformed"
   },
   {
     "file": "pq_pure/own_short_hex.bin",
-    "now_ms": 1790255155238,
+    "now_ms": 1790363855313,
     "own_namespace": "malformed",
-    "procedure": "~c262ab187797d2d6f5904fdc74959246b45c7a81624f247ecafb555bef6125/ring",
+    "procedure": "~07a00cda919d23fd9cbf8b4b39eed85fcbd72e3922fb2eadc34eab99de7133/ring",
     "profile": "pq_pure",
     "verify_authorization": "malformed"
   },
   {
     "file": "pq_pure/org_without_chain.bin",
-    "now_ms": 1790255155239,
+    "now_ms": 1790363855314,
     "own_namespace": "not_own_namespace",
     "procedure": "acme/ring",
     "profile": "pq_pure",
     "verify_authorization": "no_authorization"
   },
   {
+    "file": "pq_pure/own_hex_without_a_name.bin",
+    "now_ms": 1790363855315,
+    "own_namespace": "not_own_namespace",
+    "procedure": "~07a00cda919d23fd9cbf8b4b39eed85fcbd72e3922fb2eadc34eab99de71338c",
+    "profile": "pq_pure",
+    "verify_authorization": "ok"
+  },
+  {
     "file": "pq_hybrid/own_ok.bin",
-    "now_ms": 1790255155762,
+    "now_ms": 1790363855662,
     "own_namespace": "ok",
-    "procedure": "~a820040248be75d36d38296c1cf353fc2af86529ed6c2bc7334e08ed58570ed7/ring",
+    "procedure": "~a552e6b5f762128fd89a805bbe4d6d34a6bb4c5581834267a1929a958568e6f7/ring",
     "profile": "pq_hybrid",
     "verify_authorization": "ok"
   },
   {
     "file": "pq_hybrid/own_other_node.bin",
-    "now_ms": 1790255155769,
+    "now_ms": 1790363855672,
     "own_namespace": "not_own_namespace",
     "procedure": "~0000000000000000000000000000000000000000000000000000000000000001/ring",
     "profile": "pq_hybrid",
@@ -65,35 +73,43 @@
   },
   {
     "file": "pq_hybrid/own_with_authorization.bin",
-    "now_ms": 1790255155776,
+    "now_ms": 1790363855678,
     "own_namespace": "authorization_not_allowed",
-    "procedure": "~a820040248be75d36d38296c1cf353fc2af86529ed6c2bc7334e08ed58570ed7/ring",
+    "procedure": "~a552e6b5f762128fd89a805bbe4d6d34a6bb4c5581834267a1929a958568e6f7/ring",
     "profile": "pq_hybrid",
     "verify_authorization": "authorization_not_allowed"
   },
   {
     "file": "pq_hybrid/own_uppercase_hex.bin",
-    "now_ms": 1790255155781,
+    "now_ms": 1790363855685,
     "own_namespace": "malformed",
-    "procedure": "~A820040248BE75D36D38296C1CF353FC2AF86529ED6C2BC7334E08ED58570ED7/ring",
+    "procedure": "~A552E6B5F762128FD89A805BBE4D6D34A6BB4C5581834267A1929A958568E6F7/ring",
     "profile": "pq_hybrid",
     "verify_authorization": "malformed"
   },
   {
     "file": "pq_hybrid/own_short_hex.bin",
-    "now_ms": 1790255155787,
+    "now_ms": 1790363855694,
     "own_namespace": "malformed",
-    "procedure": "~a820040248be75d36d38296c1cf353fc2af86529ed6c2bc7334e08ed58570e/ring",
+    "procedure": "~a552e6b5f762128fd89a805bbe4d6d34a6bb4c5581834267a1929a958568e6/ring",
     "profile": "pq_hybrid",
     "verify_authorization": "malformed"
   },
   {
     "file": "pq_hybrid/org_without_chain.bin",
-    "now_ms": 1790255155793,
+    "now_ms": 1790363855701,
     "own_namespace": "not_own_namespace",
     "procedure": "acme/ring",
     "profile": "pq_hybrid",
     "verify_authorization": "no_authorization"
+  },
+  {
+    "file": "pq_hybrid/own_hex_without_a_name.bin",
+    "now_ms": 1790363855708,
+    "own_namespace": "not_own_namespace",
+    "procedure": "~a552e6b5f762128fd89a805bbe4d6d34a6bb4c5581834267a1929a958568e6f7",
+    "profile": "pq_hybrid",
+    "verify_authorization": "ok"
   }
 ]
 

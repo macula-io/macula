@@ -34,7 +34,9 @@ provider_authorization_test_() ->
                       fun refuses_when_the_org_directory_is_missing/1,
                       fun refuses_when_the_delegation_is_missing/1,
                       fun refuses_without_a_pinned_realm_key/1,
-                      fun refuses_a_chain_that_does_not_verify/1]]
+                      fun refuses_a_chain_that_does_not_verify/1,
+                      fun an_own_namespace_procedure_needs_no_authorization/1,
+                      fun refuses_another_nodes_namespace/1]]
      end}.
 
 setup_keys() ->
@@ -58,6 +60,26 @@ setup_keys() ->
 profile() ->
     {ok, P} = macula_crypto_profile:configured(),
     P.
+
+%%--------------------------------------------------------------------
+%% A node's own namespace (D25 item 6, revised 2026-09-24)
+%%--------------------------------------------------------------------
+
+%% `~<own node_id>/<name>' needs no chain: the answer is `undefined', the
+%% value publish_advertisement/5 reads as no authorization. It crashed the
+%% caller in the 12.5.0 candidate (Fable).
+an_own_namespace_procedure_needs_no_authorization(#{node_id := NodeId} = K) ->
+    Own = <<"~", (binary:encode_hex(NodeId, lowercase))/binary, "/ring">>,
+    with_io(K, #{}, fun(Opts) ->
+        ?assertEqual({ok, undefined}, macula:provider_authorization(self(), ?REALM, Own, Opts))
+    end).
+
+refuses_another_nodes_namespace(K) ->
+    Other = <<"~", (binary:encode_hex(<<1:256>>, lowercase))/binary, "/ring">>,
+    with_io(K, #{}, fun(Opts) ->
+        ?assertEqual({error, {provider_authorization, not_own_namespace}},
+                     macula:provider_authorization(self(), ?REALM, Other, Opts))
+    end).
 
 %%--------------------------------------------------------------------
 %% The happy path

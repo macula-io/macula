@@ -9,8 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [12.5.0] - 2026-09-25
 
-Wire-compatible with 12.0 to 12.4 in both directions. The new `~` form needs
-macula-station 0.6.4 or later to be admitted by a station.
+Wire-compatible with 12.0 to 12.4 in both directions at the frame level. The new
+`~` form is refused as `no_authorization` by a caller on 12.4 or earlier and by
+every station released so far (up to macula-station 0.6.2): a station admits it
+from macula-station 0.6.4, which is not released yet. An agent on another SDK
+(macula-mcp over the TypeScript SDK, macula-go) serves this way once that SDK
+carries the same rule.
 
 ### Added
 
@@ -30,6 +34,9 @@ macula-station 0.6.4 or later to be admitted by a station.
     procedure resolve no chain and hand the pool a spec with no authorization and
     no bound. `macula_client` and `macula_station_link` accept that spec for a
     `~` procedure only (`macula_station_link:own_namespace_spec()`).
+  - `macula:provider_authorization/3,4` answers `{ok, undefined}` for the node's
+    own namespace, which `publish_advertisement/5` reads as no authorization, and
+    `{error, {provider_authorization, not_own_namespace}}` for another node's.
   - `test/fixtures/own_namespace/` holds signed advertisements for both profiles
     and the verdicts every SDK must reach on them, shared with macula-go.
 - `plans/PLAN_POST_QUANTUM_SECURITY_DECISIONS.md` D25 carries the amendment. It

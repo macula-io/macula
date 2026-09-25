@@ -22,12 +22,15 @@ the_fixtures_cover_every_verdict_test() ->
 reaches_its_verdict(#{<<"file">> := File, <<"profile">> := ProfileName, <<"now_ms">> := Now,
                       <<"procedure">> := Procedure,
                       <<"own_namespace">> := Own, <<"verify_authorization">> := Verified}) ->
-    Profile = binary_to_existing_atom(ProfileName),
+    Profile = profile(ProfileName),
     {ok, Bytes} = file:read_file(filename:join(?DIR, File)),
     {ok, Record} = macula_record:verify(Bytes, Profile, Now),
     ?assertEqual(Procedure, maps:get(procedure, macula_record:read_procedure_advertisement(Record))),
     ?assertEqual(Own, verdict(macula_record:own_namespace(Record))),
     ?assertEqual(Verified, verdict(macula_record:verify_authorization(Record, #{profile => Profile}, Now))).
+
+profile(<<"pq_pure">>) -> pq_pure;
+profile(<<"pq_hybrid">>) -> pq_hybrid.
 
 verdict(ok) -> <<"ok">>;
 verdict({error, Reason}) -> atom_to_binary(Reason).

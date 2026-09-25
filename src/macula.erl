@@ -1062,8 +1062,13 @@ advertise_authorized(Pool, Realm, Procedure, Opts, Fun) ->
 %% procedure has no org namespace, a chain piece is missing from the
 %% DHT, the pool pinned no key for `Realm', or the chain does not
 %% verify against that key — the same failures `advertise/5' reports.
+%%
+%% A procedure in this node's own namespace, `~<own node_id>/<name>', needs
+%% no chain (D25 item 6, revised 2026-09-24): the answer is `{ok, undefined}',
+%% which `publish_advertisement/5' reads as no authorization. Another node's
+%% namespace is `{error, {provider_authorization, not_own_namespace}}'.
 -spec provider_authorization(pool(), realm(), procedure()) ->
-    {ok, #{org_directory := binary(), procedure_delegation := binary()}} |
+    {ok, #{org_directory := binary(), procedure_delegation := binary()} | undefined} |
     {error, term()}.
 provider_authorization(Pool, Realm, Procedure) ->
     provider_authorization(Pool, Realm, Procedure, #{}).
@@ -1072,12 +1077,14 @@ provider_authorization(Pool, Realm, Procedure) ->
 %% calls from the `provider_io/0' seam entries in `Opts' (defaults to
 %% the facade's own functions) — the seam `advertise/5' accepts too.
 -spec provider_authorization(pool(), realm(), procedure(), provider_io()) ->
-    {ok, #{org_directory := binary(), procedure_delegation := binary()}} |
+    {ok, #{org_directory := binary(), procedure_delegation := binary()} | undefined} |
     {error, term()}.
 provider_authorization(Pool, Realm, Procedure, Opts) ->
     case signed_provider_advertisement(Pool, Realm, Procedure,
                                        provider_io(Opts),
-                                       fun(#{authorization := A}) -> A end) of
+                                       fun(#{authorization := A}) -> A;
+                                          (#{}) -> undefined
+                                       end) of
         {error, _} = E -> E;
         Authorization -> {ok, Authorization}
     end.

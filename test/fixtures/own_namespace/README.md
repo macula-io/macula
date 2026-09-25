@@ -21,6 +21,10 @@ authorization. It is accepted only when the 64 lowercase hex characters after `~
 | `own_uppercase_hex` | malformed | malformed |
 | `own_short_hex`: 62 characters | malformed | malformed |
 | `org_without_chain`: `acme/ring`, no chain | not_own_namespace | no_authorization |
+| `own_hex_without_a_name`: `~<own hex>`, no `/` | not_own_namespace | ok |
+
+The last row is the rule for a name without `/` (no namespace at all, so no authorization is asked of it), which
+D25 refuses at advertise time; it is here so no SDK reads `~<hex>` alone as an own namespace.
 
 `test/macula_own_namespace_fixtures_tests.erl` holds macula to every verdict; macula-go runs the same files.
 Regenerate with `scripts/generate-own-namespace-fixtures.sh` after `rebar3 compile`: new identities and new

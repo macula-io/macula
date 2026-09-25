@@ -16,7 +16,8 @@ Case = fun(Profile) ->
              {<<"own_with_authorization">>, <<"~", Hex/binary, "/ring">>, #{authorization => Auth}},
              {<<"own_uppercase_hex">>, <<"~", (string:uppercase(Hex))/binary, "/ring">>, #{}},
              {<<"own_short_hex">>, <<"~", (binary:part(Hex, 0, 62))/binary, "/ring">>, #{}},
-             {<<"org_without_chain">>, <<"acme/ring">>, #{}}],
+             {<<"org_without_chain">>, <<"acme/ring">>, #{}},
+             {<<"own_hex_without_a_name">>, <<"~", Hex/binary>>, #{}}],
     ok = filelib:ensure_path(filename:join(Dir, atom_to_list(Profile))),
     [begin
          Signed = macula_record:refresh(
