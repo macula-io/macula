@@ -51,6 +51,8 @@
 %% verified against the realm key the pool pins — the `authorization'
 %% opt a direct-dial record publish needs.
 -export([provider_authorization/3, provider_authorization/4]).
+%% The pool renews an advertised chain through this (D32); internal.
+-export([renew_authorization/4]).
 
 %% Signed DHT records — realm-agnostic infrastructure procedures
 %% (`_dht.put_record', `_dht.find_record', `_dht.find_records_by_type',
@@ -167,6 +169,10 @@
 %%   <li>`dedup_sweep_ms': how often the inbound publication dedup table is swept.</li>
 %%   <li>`admission_sweep_ms': how often the request admission is swept for
 %%       entries past their deadline plus 5 minutes (default 30_000).</li>
+%%   <li>`renew_backoff_ms' / `renew_recheck_ms': the retry delay of a failed
+%%       renewal of an advertised chain (default 5_000, doubling, never past
+%%       its `not_after') and how often a chain past it is asked for again
+%%       (default 300_000). See `advertise/5' and D32.</li>
 %%   <li>`verify' — ⚠ REFUSED in any value, here and on every seed in
 %%       `Seeds', with `{error, {refused, {verify, one_verification_mode}}}'.
 %%       A link trusts a station in one way only: its handshake signature
@@ -381,7 +387,10 @@ do_call_station(Pool, Station, Target, Realm, Procedure, Payload, TimeoutMs, Opt
 %% advertisement naming the station that link is connected to as
 %% `serving_station', sent as an ADVERTISE frame (signed again on
 %% reconnect and on link respawn, never past the chain's earlier
-%% expiry). The frame registers the procedure at that station; it
+%% expiry). The pool renews the chain at a third of its remaining life
+%% (`macula_client:advertise/8', D32): a delegation lives 30 minutes, so
+%% a provider stays advertised while the realm keeps reissuing, and
+%% drops out once it stops. The frame registers the procedure at that station; it
 %% does not put a record in the DHT, which is what a direct-dialling
 %% caller resolves (`macula_response:advertise_direct/6,7' publishes
 %% that one). The
@@ -418,7 +427,8 @@ advertise(Pool, Realm, Procedure, Handler, Opts)
         Policy = maps:get(auth, Opts, open),
         Advertise = maps:get(advertise, Opts,
                              fun(P, R, Pr, H, Po, Spec) ->
-                                 macula_client:advertise(P, R, Pr, H, Po, Spec, Stations)
+                                 macula_client:advertise(P, R, Pr, H, Po, Spec, Stations,
+                                                         renewal(R, Pr, Opts))
                              end),
         advertise_authorized(Pool, Realm, Procedure, Opts, fun(Spec) ->
             Advertise(Pool, Realm, Procedure, Handler, Policy, Spec)
@@ -927,7 +937,7 @@ advertise_stream(Pool, Realm, Procedure, Mode, Handler, Opts)
         Policy = maps:get(auth, Opts, open),
         advertise_authorized(Pool, Realm, Procedure, Opts, fun(Spec) ->
             macula_client:advertise_stream(Pool, Realm, Procedure, Mode, Handler,
-                                           Policy, Spec, Stations)
+                                           Policy, Spec, Stations, renewal(Realm, Procedure, Opts))
         end)
     end).
 
@@ -940,6 +950,26 @@ advertise_stream(Pool, Realm, Procedure, Mode, Handler, Opts)
 %% bounded by the chain (macula_station_link:advertisement_spec()).
 advertise_authorized(Pool, Realm, Procedure, Opts, Fun) ->
     signed_provider_advertisement(Pool, Realm, Procedure, provider_io(Opts), Fun).
+
+%% How the pool renews the chain an advertisement carries (D32): the same
+%% resolution, over the same `provider_io/0' seams the advertise was given,
+%% named as an MFA the pool applies with itself prepended. Only the seam
+%% entries travel, and in production there are none.
+renewal(Realm, Procedure, Opts) ->
+    {?MODULE, renew_authorization,
+     [Realm, Procedure, maps:with([status, find_record, sign_node_record, realm_key], Opts)]}.
+
+%% @private
+%% @doc The pool's renewal of an advertised chain (D32, macula#38): the chain
+%% resolved, signed and verified again as `advertise/5' does, answered as the
+%% fresh advertisement spec, or the same refusal `advertise/5' would give. A
+%% `procedure_delegation' lives 30 minutes, so the pool calls this at a third
+%% of the spec's remaining life, from a worker of its own. Internal: called
+%% through the MFA `advertise/5' registers.
+-spec renew_authorization(pool(), realm(), procedure(), map()) ->
+    {ok, macula_station_link:advertisement_spec()} | {error, term()}.
+renew_authorization(Pool, Realm, Procedure, Seams) ->
+    advertise_authorized(Pool, Realm, Procedure, Seams, fun(Spec) -> {ok, Spec} end).
 
 %% @doc Resolve this pool's own D25 provider authorization for an
 %% org-namespaced `Procedure' under `Realm' — the realm-signed

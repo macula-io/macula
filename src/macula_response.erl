@@ -214,7 +214,13 @@ advertise_direct(Pool, Realm, Procedure, Module, Args, NodeIdentity) ->
 %% re-advertise with `reuse_sup => Sup' (the pid this function
 %% returned the first time) registers the handler again and
 %% republishes the DHT record without leaking a new supervisor per
-%% tick. `cert_chain', a 10.x option `authorization' replaces, is refused
+%% tick. ⚠ Resolve `authorization' again on every tick
+%% (`macula:provider_authorization/3'), never once at startup: the pool
+%% renews the chain behind its own ADVERTISE frames (D32), but this DHT
+%% record carries the `authorization' it is given, and once delegations live
+%% 30 minutes a record republished with a captured one stops verifying and
+%% direct-dial callers lose the provider. `mcl_om' resolves it each round.
+%% `cert_chain', a 10.x option `authorization' replaces, is refused
 %% with `{error, {removed_option, cert_chain}}' before the handler is
 %% registered.
 -spec advertise_direct(macula:pool(), macula:realm(), macula:procedure(),

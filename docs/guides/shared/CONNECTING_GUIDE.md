@@ -99,6 +99,8 @@ Every option has a default. Most apps pass `#{}`.
 | `connect_timeout_ms` | `pos_integer()` | `30_000` | Per-link CONNECT timeout |
 | `dedup_sweep_ms` | `pos_integer()` | `30_000` | Dedup-table sweep interval |
 | `admission_sweep_ms` | `pos_integer()` | `30_000` | Request admission sweep interval: entries past their deadline plus 5 minutes leave |
+| `renew_backoff_ms` | `pos_integer()` | `5_000` | First retry delay of a failed chain renewal, doubling, never past the chain's `not_after` (D32) |
+| `renew_recheck_ms` | `pos_integer()` | `300_000` | How often a chain past its `not_after` is asked for again, so a re-grant revives the provider |
 
 ### Identity
 

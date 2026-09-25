@@ -37,7 +37,9 @@ cases(Keys) ->
                  fun an_org_directory_ending_first_caps_the_advertisement/1,
                  fun a_republished_chain_restores_the_full_lifetime/1,
                  fun an_own_namespace_procedure_needs_no_chain/1,
-                 fun another_nodes_namespace_is_refused/1]].
+                 fun another_nodes_namespace_is_refused/1,
+                 fun renewing_resolves_the_chain_the_dht_holds_now/1,
+                 fun an_advertised_chain_is_registered_with_its_renewal/1]].
 
 %%------------------------------------------------------------------
 %% Happy path
@@ -137,6 +139,51 @@ a_republished_chain_restores_the_full_lifetime(Keys) ->
     %% And no longer: the chain being long does not stretch the
     %% advertisement past its own 5-minute lifetime.
     ?assert(Left =< 5 * ?MINUTE).
+
+%%------------------------------------------------------------------
+%% Renewal (D32): a delegation lives 30 minutes, so the pool renews the chain
+%%------------------------------------------------------------------
+
+%% The renewal resolves the chain again, through the same seams, and answers
+%% the fresh spec: a chain the realm republished since ends later.
+renewing_resolves_the_chain_the_dht_holds_now(Keys) ->
+    Handler = fun(_P) -> {ok, counted} end,
+    {Ending, _} = short_chain_stub(Keys, ?HOUR, 2 * ?MINUTE),
+    {Republished, _} = short_chain_stub(Keys, 6 * ?HOUR, 30 * ?MINUTE),
+    with_opts(Keys, #{find_record => Ending}, Handler, fun(Opts) ->
+        ok = macula:advertise(self(), ?REALM, ?PROC, Handler, Opts)
+    end),
+    #{not_after := Before} = advertise_sent(),
+    with_opts(Keys, #{find_record => Republished}, Handler, fun(Opts) ->
+        {ok, #{not_after := After} = Spec} =
+            macula:renew_authorization(self(), ?REALM, ?PROC, maps:without([advertise], Opts)),
+        ?assert(After > Before),
+        ?assertMatch(#{authorization := #{org_directory := _, procedure_delegation := _}}, Spec)
+    end),
+    with_opts(Keys, #{find_record => find_stub(Keys, procedure_delegation)}, Handler, fun(Opts) ->
+        ?assertEqual({error, {provider_authorization, {procedure_delegation, not_found}}},
+                     macula:renew_authorization(self(), ?REALM, ?PROC, maps:without([advertise], Opts)))
+    end).
+
+%% Through a real pool: the registration `macula:advertise' makes carries the
+%% MFA the pool renews it with, `macula:renew_authorization' over the same
+%% resolution seams, never a closure.
+an_advertised_chain_is_registered_with_its_renewal(#{key := Key} = Keys) ->
+    Handler = fun(_P) -> {ok, counted} end,
+    {ok, Pool} = macula_client:connect([#{host => <<"127.0.0.1">>, port => 1,
+                                          expected_node_id => <<1:256>>}],
+                                       #{node_identity => Key}),
+    try
+        with_opts(Keys, #{}, Handler, fun(Opts) ->
+            Seams = maps:without([advertise], Opts),
+            ?assertEqual(ok, macula:advertise(Pool, ?REALM, ?PROC, Handler, Seams)),
+            Procs = element(macula_client:state_field_index(procs), sys:get_state(Pool)),
+            #{renew := Renew} = maps:get({?REALM, ?PROC}, Procs),
+            ?assertEqual({macula, renew_authorization, [?REALM, ?PROC, Seams]}, Renew)
+        end)
+    after
+        macula_client:close(Pool)
+    end.
 
 expires_at_of(Keys, Spec) ->
     macula_record:expires_at(link_signed(Keys, Spec, <<9:256>>)).

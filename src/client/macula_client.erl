@@ -90,6 +90,13 @@
          andalso (not is_map_key(ttl_ms, A)
                   orelse (is_integer(map_get(ttl_ms, A)) andalso map_get(ttl_ms, A) >= ?MIN_SPEC_TTL_MS
                           andalso map_get(ttl_ms, A) =< ?MAX_SPEC_TTL_MS)))).
+%% How a registration renews its chain (D32): an MFA the pool applies with
+%% itself prepended, never a closure, which a code reload would turn into a
+%% badfun while the pool holds it for hours.
+-define(IS_RENEW(R),
+        (R =:= undefined orelse (is_tuple(R) andalso tuple_size(R) =:= 3
+                                 andalso is_atom(element(1, R)) andalso is_atom(element(2, R))
+                                 andalso is_list(element(3, R))))).
 -behaviour(gen_server).
 
 -export([connect/2, close/1, child_spec/3, status/1, links/1, sign_node_record/2, sign_node_record/3, sign_domain_record/2,
@@ -107,6 +114,9 @@
 -export([resolved_candidate/3, remember_resolved/5]).
 %% Streaming RPC (since 3.17.0) — called by the `macula' facade.
 -export([call_stream_station/7]).
+%% Advertising with a renewal (D32): the facade's `advertise/5' and
+%% `advertise_stream/6' pass how to renew the chain they resolved.
+-export([advertise/8, advertise_stream/9]).
 
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          terminate/2, code_change/3, format_status/1]).
@@ -279,6 +289,13 @@
     %% deadline plus 5 minutes, the callers' that never ask again. Default
     %% 30_000.
     admission_sweep_ms => pos_integer(),
+
+    %% A renewal of an advertised chain that fails is retried after
+    %% `renew_backoff_ms' (default 5_000), doubling, never past the chain's
+    %% `not_after'; a chain past its `not_after' is re-checked every
+    %% `renew_recheck_ms' (default 300_000). See `advertise/8'.
+    renew_backoff_ms   => pos_integer(),
+    renew_recheck_ms   => pos_integer(),
 
     %% The realm keys the pool pins, one per realm id: each realm's public
     %% key as carried, configured per deployment beside the realm id. A call
@@ -453,6 +470,11 @@
 -define(DEFAULT_REPLICATION, 2).
 -define(DEFAULT_DEDUP_SWEEP_MS, 30_000).
 -define(DEFAULT_ADMISSION_SWEEP_MS, 30_000).
+-define(DEFAULT_RENEW_BACKOFF_MS, 5_000).
+-define(DEFAULT_RENEW_RECHECK_MS, 300_000).
+%% The earliest a renewal is asked for again, so a chain with almost no life
+%% left is not renewed in a tight loop.
+-define(MIN_RENEW_DELAY_MS, 100).
 %% How long an `ordered' subscription waits for a missing seq before
 %% skipping the gap (a genuinely lost fact). Bounds head-of-line delay.
 -define(DEFAULT_ORDER_TIMEOUT_MS, 250).
@@ -581,7 +603,10 @@
                                  ad       := macula_station_link:advertisement() | undefined,
                                  stations := stations()}.
 -type stations() :: all | [<<_:256>>, ...].
--export_type([stations/0]).
+%% How a registration renews its chain (D32): `apply(M, F, [Pool | A])' answers
+%% `{ok, Spec}' or `{error, Reason}'.
+-type renew() :: {module(), atom(), [term()]}.
+-export_type([stations/0, renew/0]).
 
 -record(state, {
     seeds         :: [seed()],
@@ -593,6 +618,12 @@
     replication   :: pos_integer(),
     dedup_sweep   :: pos_integer(),
     admission_sweep :: pos_integer(),
+    renew_backoff :: pos_integer(),
+    renew_recheck :: pos_integer(),
+    %% The renewal workers in flight: worker → its monitor, the registration
+    %% it renews and the renewal ref that registration held when it started
+    %% (D32).
+    renewals = #{} :: #{pid() => {reference(), unary | stream, {<<_:256>>, binary()}, reference()}},
     %% seed → link_state
     links = #{}   :: #{seed() => #link_state{}},
     %% Why each seed's link last went down. Outlives the link entry, which
@@ -900,9 +931,37 @@ advertise(Pool, Realm, Procedure, Handler, Policy, EncodedAd, Stations)
         orelse ?IS_OWN_NAMESPACE_SPEC(Procedure, EncodedAd)
         orelse EncodedAd =:= undefined),
        (Stations =:= all orelse (is_list(Stations) andalso Stations =/= [])) ->
+    advertise(Pool, Realm, Procedure, Handler, Policy, EncodedAd, Stations, undefined).
+
+%% @doc As `advertise/7', renewing the chain the spec carries (D32). A
+%% `procedure_delegation' lives 30 minutes, so at a third of the spec's
+%% remaining life the pool calls `apply(M, F, [Pool | A])' in a worker of its
+%% own, which answers `{ok, Spec}' or `{error, Reason}', and registers the
+%% fresh spec on the same stations. A failure or a crash is retried on a
+%% backoff that never passes the spec's `not_after'; past it the pool logs
+%% at error level, naming the procedure and the last reason, and asks again
+%% every `renew_recheck_ms', so a re-grant revives the provider without a
+%% restart. A spec without a chain (own namespace, a pre-signed
+%% advertisement, `undefined') is not renewed, and neither is one given
+%% `undefined'. An unadvertise, or another advertise of the procedure,
+%% supersedes a renewal in flight: its answer is dropped.
+-spec advertise(pool(), <<_:256>>, binary(), handler(), auth_policy(),
+                macula_station_link:advertisement() | undefined, stations(), renew() | undefined) ->
+    ok | {error, term()}.
+advertise(Pool, Realm, Procedure, Handler, Policy, EncodedAd, Stations, Renew)
+  when is_pid(Pool),
+       is_binary(Realm), byte_size(Realm) =:= 32,
+       is_binary(Procedure),
+       (is_function(Handler, 1) orelse
+        (is_tuple(Handler) andalso tuple_size(Handler) =:= 2)),
+       (is_binary(EncodedAd) orelse ?IS_ADVERTISEMENT_SPEC(EncodedAd)
+        orelse ?IS_OWN_NAMESPACE_SPEC(Procedure, EncodedAd)
+        orelse EncodedAd =:= undefined),
+       (Stations =:= all orelse (is_list(Stations) andalso Stations =/= [])),
+       ?IS_RENEW(Renew) ->
     gen_server:call(Pool, {advertise, Realm, Procedure,
                            #{handler => Handler, policy => Policy, ad => EncodedAd,
-                             stations => Stations}},
+                             stations => Stations, renew => Renew}},
                     5_000).
 
 %% @doc Drop a previously-advertised procedure on every healthy link
@@ -1006,10 +1065,31 @@ advertise_stream(Pool, Realm, Procedure, Mode, Handler, Policy, EncodedAd, Stati
         orelse ?IS_OWN_NAMESPACE_SPEC(Procedure, EncodedAd)
         orelse EncodedAd =:= undefined),
        (Stations =:= all orelse (is_list(Stations) andalso Stations =/= [])) ->
+    advertise_stream(Pool, Realm, Procedure, Mode, Handler, Policy, EncodedAd, Stations, undefined).
+
+%% @doc As `advertise_stream/8', renewing the chain as `advertise/8' does.
+-spec advertise_stream(pool(), <<_:256>>, binary(),
+                       macula_frame:stream_mode(),
+                       stream_handler(), auth_policy(),
+                       macula_station_link:advertisement() | undefined, stations(),
+                       renew() | undefined) ->
+    ok | {error, term()}.
+advertise_stream(Pool, Realm, Procedure, Mode, Handler, Policy, EncodedAd, Stations, Renew)
+  when is_pid(Pool),
+       is_binary(Realm), byte_size(Realm) =:= 32,
+       is_binary(Procedure),
+       (Mode =:= server_stream orelse Mode =:= client_stream
+        orelse Mode =:= bidi),
+       is_function(Handler, 2),
+       (is_binary(EncodedAd) orelse ?IS_ADVERTISEMENT_SPEC(EncodedAd)
+        orelse ?IS_OWN_NAMESPACE_SPEC(Procedure, EncodedAd)
+        orelse EncodedAd =:= undefined),
+       (Stations =:= all orelse (is_list(Stations) andalso Stations =/= [])),
+       ?IS_RENEW(Renew) ->
     gen_server:call(Pool,
                     {advertise_stream, Realm, Procedure,
                      #{mode => Mode, handler => Handler, policy => Policy, ad => EncodedAd,
-                       stations => Stations}},
+                       stations => Stations, renew => Renew}},
                     5_000).
 
 %% @doc Drop a streaming procedure on every healthy link and remove
@@ -1490,6 +1570,8 @@ init_with_keys({ok, #{node_identity := NodeIdentity, issuer := Issuer, issuer_st
                     link_opts = LinkOpts, replication = Replication,
                     dedup_sweep = DedupSweep,
                     admission_sweep = AdmissionSweep,
+                    renew_backoff = maps:get(renew_backoff_ms, Opts, ?DEFAULT_RENEW_BACKOFF_MS),
+                    renew_recheck = maps:get(renew_recheck_ms, Opts, ?DEFAULT_RENEW_RECHECK_MS),
                     dedup_tab = DedupTab,
                     order_timeout = OrderTimeout, order_max_buffer = OrderMaxBuf,
                     flush_timer = undefined,
@@ -1615,11 +1697,11 @@ handle_call({call_station, Station, Target, Realm, Procedure, Payload, TimeoutMs
             end);
 
 handle_call({advertise, Realm, Procedure, Registration}, _From, S) ->
-    {Reply, NewS} = advertised(unary, {Realm, Procedure}, Registration, S),
-    {reply, Reply, NewS};
+    {Reply, NewS} = advertised(unary, {Realm, Procedure}, Registration, renewal_cancelled(unary, {Realm, Procedure}, S)),
+    {reply, Reply, renewal_armed(unary, {Realm, Procedure}, NewS)};
 
-handle_call({unadvertise, Realm, Procedure}, _From,
-            #state{procs = P, node_identity = Key} = S) ->
+handle_call({unadvertise, Realm, Procedure}, _From, S0) ->
+    #state{procs = P, node_identity = Key} = S = renewal_cancelled(unary, {Realm, Procedure}, S0),
     Registered = maps:find({Realm, Procedure}, P),
     Withdrawal = withdrawal_for(Registered, Realm, Procedure, Key),
     _ = fanout_unadvertise(registered_link_pids(Registered, S), Realm, Procedure,
@@ -1637,11 +1719,12 @@ handle_call({call_stream_station, Station, Target, Realm, Procedure, Args, Opts,
             fun(Pid) -> stream_when_connected(Pid, Target, Realm, Procedure, Args, Opts) end);
 
 handle_call({advertise_stream, Realm, Procedure, Registration}, _From, S) ->
-    {Reply, NewS} = advertised(stream, {Realm, Procedure}, Registration, S),
-    {reply, Reply, NewS};
+    {Reply, NewS} = advertised(stream, {Realm, Procedure}, Registration,
+                               renewal_cancelled(stream, {Realm, Procedure}, S)),
+    {reply, Reply, renewal_armed(stream, {Realm, Procedure}, NewS)};
 
-handle_call({unadvertise_stream, Realm, Procedure}, _From,
-            #state{stream_procs = SP, node_identity = Key} = S) ->
+handle_call({unadvertise_stream, Realm, Procedure}, _From, S0) ->
+    #state{stream_procs = SP, node_identity = Key} = S = renewal_cancelled(stream, {Realm, Procedure}, S0),
     Registered = maps:find({Realm, Procedure}, SP),
     Withdrawal = withdrawal_for(Registered, Realm, Procedure, Key),
     _ = fanout_unadvertise_stream(registered_link_pids(Registered, S), Realm, Procedure,
@@ -1726,6 +1809,24 @@ handle_info({macula_event_gone, LinkSubRef, _Reason}, S) ->
     %% local consumers — they see a continuous stream. The link's SubRef
     %% is gone, so unsubscribe no longer sends it.
     {noreply, forget_link_sub(LinkSubRef, S)};
+
+handle_info({renew_due, Kind, Key, Ref}, S) ->
+    {noreply, renewal_started(renewal_current(registration(Kind, Key, S), Ref), Kind, Key, Ref, S)};
+
+handle_info({renewal_answer, Worker, Answer}, #state{renewals = Renewals} = S)
+  when is_map_key(Worker, Renewals) ->
+    {Mon, Kind, Key, Ref} = map_get(Worker, Renewals),
+    true = erlang:demonitor(Mon, [flush]),
+    Rest = S#state{renewals = maps:remove(Worker, Renewals)},
+    {noreply, renewal_answered(renewal_current(registration(Kind, Key, Rest), Ref), {renewed, Answer},
+                               Kind, Key, Rest)};
+
+%% A worker that died before answering: its renewal failed.
+handle_info({'DOWN', _Mon, process, Worker, Reason}, #state{renewals = Renewals} = S)
+  when is_map_key(Worker, Renewals) ->
+    {_Monitor, Kind, Key, Ref} = map_get(Worker, Renewals),
+    Rest = S#state{renewals = maps:remove(Worker, Renewals)},
+    {noreply, renewal_answered(renewal_current(registration(Kind, Key, Rest), Ref), Reason, Kind, Key, Rest)};
 
 handle_info({'DOWN', Mon, process, Pid, Reason}, S) ->
     on_down(Mon, Pid, Reason, S);
@@ -2011,6 +2112,105 @@ registered_link_pids({ok, #{stations := Stations}}, S) ->
     lists:append([maps:get(Station, ByStation, []) || Station <- Stations]);
 registered_link_pids(error, S) ->
     spawned_link_pids(S).
+
+%%--------------------------------------------------------------------
+%% Renewing an advertised chain (D32, macula#38)
+%%--------------------------------------------------------------------
+
+registration(unary, Key, #state{procs = P}) -> maps:find(Key, P);
+registration(stream, Key, #state{stream_procs = SP}) -> maps:find(Key, SP).
+
+stored(unary, Key, Registration, #state{procs = P} = S) -> S#state{procs = P#{Key => Registration}};
+stored(stream, Key, Registration, #state{stream_procs = SP} = S) -> S#state{stream_procs = SP#{Key => Registration}}.
+
+%% A registration with a chain and a way to renew it asks for a renewal at a
+%% third of the chain's remaining life, under a fresh ref: a timer or an
+%% answer carrying an older ref belongs to a registration since replaced or
+%% withdrawn, and is dropped.
+renewal_armed(Kind, Key, S) ->
+    armed(registration(Kind, Key, S), Kind, Key, S).
+
+armed({ok, #{renew := {_M, _F, _A}, ad := #{not_after := NotAfter}} = Registration}, Kind, Key,
+      #state{renew_backoff = Backoff} = S) ->
+    Delay = max(?MIN_RENEW_DELAY_MS, (NotAfter - erlang:system_time(millisecond)) div 3),
+    stored(Kind, Key, renewal_timed(Registration#{renew_backoff => Backoff, renew_expired => false},
+                                    Kind, Key, Delay), S);
+armed(_NoChainOrNoRenew, _Kind, _Key, S) ->
+    S.
+
+renewal_timed(Registration, Kind, Key, Delay) ->
+    Ref = make_ref(),
+    Registration#{renew_ref => Ref,
+                  renew_timer => erlang:send_after(Delay, self(), {renew_due, Kind, Key, Ref})}.
+
+%% The registration's pending renewal timer is cancelled, before it is
+%% replaced or withdrawn. A worker already running is left to finish; its
+%% answer is dropped by its ref.
+renewal_cancelled(Kind, Key, S) ->
+    timer_cancelled(registration(Kind, Key, S)),
+    S.
+
+timer_cancelled({ok, #{renew_timer := Timer}}) -> _ = erlang:cancel_timer(Timer), ok;
+timer_cancelled(_None) -> ok.
+
+renewal_current({ok, #{renew_ref := Ref} = Registration}, Ref) -> {current, Registration};
+renewal_current(_ReplacedOrWithdrawn, _Ref) -> stale.
+
+%% The renewal runs in a worker: resolving a chain calls the pool (a DHT
+%% lookup goes through it), so it cannot run here. The worker sends its
+%% answer; one that dies before answering is a failed renewal too, seen by
+%% its monitor.
+renewal_started({current, #{renew := {M, F, A}}}, Kind, Key, Ref, #state{renewals = Renewals} = S) ->
+    Pool = self(),
+    {Worker, Mon} = spawn_monitor(fun() -> Pool ! {renewal_answer, self(), apply(M, F, [Pool | A])} end),
+    S#state{renewals = Renewals#{Worker => {Mon, Kind, Key, Ref}}};
+renewal_started(stale, _Kind, _Key, _Ref, S) ->
+    S.
+
+renewal_answered({current, #{ad := #{not_after := Old}} = Registration},
+                 {renewed, {ok, #{not_after := New} = Spec}}, Kind, Key, S) when New > Old ->
+    renewal_registered(renewed(Kind, Key, Registration#{ad => Spec}, S), Registration, Kind, Key, S);
+renewal_answered({current, Registration}, {renewed, {ok, _SameChain}}, Kind, Key, S) ->
+    renewal_retried(Registration, not_yet_reissued, Kind, Key, S);
+renewal_answered({current, Registration}, {renewed, {error, Reason}}, Kind, Key, S) ->
+    renewal_retried(Registration, Reason, Kind, Key, S);
+renewal_answered({current, Registration}, Crashed, Kind, Key, S) ->
+    renewal_retried(Registration, {renewal_crashed, Crashed}, Kind, Key, S);
+renewal_answered(stale, _Answer, _Kind, _Key, S) ->
+    S.
+
+%% A renewal goes to the registration's stations that have a link now, not
+%% all or none as an advertise does: one station without a link must not keep
+%% the others on a chain that runs out. A station that comes back gets the
+%% stored spec when its link respawns (the replay). Fable QA on #38.
+renewed(Kind, Key, Registration, S) ->
+    registered(Kind, Key, Registration, {ok, registered_link_pids({ok, Registration}, S)}, S).
+
+%% A fresh chain that reached a link is armed anew; one with no station linked
+%% keeps the registration it had, and is retried.
+renewal_registered({{error, no_healthy_station} = Refused, _S}, Registration, Kind, Key, S) ->
+    renewal_retried(Registration, Refused, Kind, Key, S);
+renewal_registered({_Registered, NewS}, _Registration, Kind, Key, _S) ->
+    renewal_armed(Kind, Key, NewS).
+
+%% Asked again after the backoff, doubled for the next time, never past the
+%% chain's `not_after'. Past it, once, an error names the procedure and the
+%% reason; then the pool asks every `renew_recheck_ms'.
+renewal_retried(#{ad := #{not_after := NotAfter}, renew_backoff := Backoff} = Registration, Reason,
+                Kind, {_Realm, Procedure} = Key, #state{renew_recheck = Recheck} = S) ->
+    Left = NotAfter - erlang:system_time(millisecond),
+    Next = retried(Left > 0, Registration, Backoff, Left, Recheck, Procedure, Reason),
+    stored(Kind, Key, renewal_timed(maps:remove(renew_timer, Next), Kind, Key, maps:get(renew_delay, Next)), S).
+
+retried(true, Registration, Backoff, Left, _Recheck, _Procedure, _Reason) ->
+    Registration#{renew_delay => max(?MIN_RENEW_DELAY_MS, min(Backoff, Left)),
+                  renew_backoff => Backoff * 2};
+retried(false, #{renew_expired := false} = Registration, _Backoff, _Left, Recheck, Procedure, Reason) ->
+    logger:error("[macula_client] ~ts can no longer be advertised: its authorization expired and no "
+                 "fresh one could be had (~0p). Asking again every ~b ms.", [Procedure, Reason, Recheck]),
+    Registration#{renew_delay => Recheck, renew_expired => true};
+retried(false, Registration, _Backoff, _Left, Recheck, _Procedure, _Reason) ->
+    Registration#{renew_delay => Recheck}.
 
 %% The station a link to `Seed' must prove: the node_id its seed map pins,
 %% else the one its dial or the pool pins. Every link the pool starts has

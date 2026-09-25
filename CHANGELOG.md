@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- **The pool renews an advertised chain before it runs out** (D32, #38).
+  `macula:advertise/5` and `macula:advertise_stream/6` register how to resolve
+  the chain again (`macula:renew_authorization/4`, an MFA, never a closure),
+  and the pool asks for a fresh chain at a third of the spec's remaining life,
+  in a worker, then registers it on the registration's stations that have a
+  link at that moment; a station that comes back gets it when its link
+  respawns. A failure or a crash is
+  retried on a backoff (`renew_backoff_ms`, default 5 s) that never passes the
+  chain's `not_after`; past it the pool logs at error level, naming the
+  procedure and the last reason, and asks again every `renew_recheck_ms`
+  (default 5 min), so a re-grant revives the provider without a restart. An
+  unadvertise or another advertise drops a renewal in flight. This is harmless
+  with today's 6-hour delegations, and it has to be in every provider before
+  the realm shortens them to 30 minutes, which bounds how long a revoked
+  provider stays callable.
+  - `macula_client:advertise/8` and `macula_client:advertise_stream/9` take the
+    renewal MFA.
+  - ⚠ The direct-dial DHT record (`macula_response:advertise_direct/7`) is not
+    renewed by the pool: an app that republishes it must resolve
+    `authorization` again each time (`macula:provider_authorization/3`).
+    `mcl_om` does.
+
 ## [12.6.0] - 2026-09-25
 
 Content is served by the node that shares it (D27). A station keeps no content:
