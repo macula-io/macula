@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [12.5.1] - 2026-09-25
+
+Wire-compatible with 12.0 to 12.5 in both directions. Upgrade every provider:
+on 12.5.0 and earlier a provider's request admission never lets an entry go.
+
+### Fixed
+
+- **A provider's request admission lets its entries go at expiry** (#37). An
+  entry is kept until its request's deadline plus 5 minutes, but it was removed
+  only by `macula_request_admission:sweep/2`, which nothing called, so the set
+  only grew. A station's liveness probe (`_macula.ping`, every 30 s on every
+  link) took an entry each time, filling that station's caller quota on the
+  provider in about two hours: from then on the provider refused the calls the
+  station relayed as `caller_quota`, and in time would have refused every
+  caller as `admission_full`. Seen on mcl-echo: 1313 entries of 53 callers, four
+  stations at 256.
+  - The expired entries leave before each request is judged, so a bound counts
+    only live ones. They are held in order of expiry, so this costs only the
+    entries removed.
+  - The pool sweeps its admission every `admission_sweep_ms` (default 30 s), for
+    the callers that never ask again.
+  - The liveness probe of a link's own station is answered `unknown_next_peer`
+    as before, without taking an entry. Only that one: a `_macula.ping` from any
+    other caller, or targeted at another node, is judged like any request.
+
 ## [12.5.0] - 2026-09-25
 
 Wire-compatible with 12.0 to 12.4 in both directions at the frame level. The new
