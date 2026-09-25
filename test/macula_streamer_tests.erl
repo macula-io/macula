@@ -53,7 +53,17 @@ streamer_test_() ->
                  fun functions_of_another_shape_are_refused_before_anything_is_advertised/0,
                  fun without_functions_a_streamer_advertises_through_the_macula_facade/0,
                  fun reuse_sup_resends_advertise_without_a_new_supervisor/0,
-                 fun reuse_sup_with_a_dead_pid_starts_a_fresh_supervisor/0]].
+                 fun reuse_sup_with_a_dead_pid_starts_a_fresh_supervisor/0,
+                 fun the_stations_reach_the_stream_advertisement/0]].
+
+%% `stations' names where the procedure registers, so it reaches the stream
+%% advertisement with the auth policy, and nothing else of the options does.
+the_stations_reach_the_stream_advertisement() ->
+    Stations = [<<1:256>>],
+    Opts = (macula_scripted_stream:options([]))#{stations => Stations, auth => open},
+    {ok, _Sup} = macula_streamer:advertise(pool, ?REALM, <<"bulk.ingest">>, ?MODULE, self(), Opts),
+    [{_, _, _, Given}] = macula_scripted_stream:advertised(),
+    ?assertEqual(#{stations => Stations, auth => open}, Given).
 
 %% A station's wire-level registration for a procedure is tied to the
 %% connection that sent it, and does not survive that connection being

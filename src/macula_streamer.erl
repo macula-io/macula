@@ -228,9 +228,10 @@ advertise(Pool, Realm, Procedure, Module, Args, Opts) ->
     Handler = fun(StreamPid, StreamArgs) ->
         dispatch(Sup, Module, Pool, Realm, Announce, Args, Functions, StreamPid, StreamArgs)
     end,
-    %% The advertise function gets the procedure's auth policy, when the
-    %% options give one, and no other option.
-    case AdvertiseStream(Pool, Realm, Procedure, Mode, Handler, maps:with([auth], Opts)) of
+    %% The advertise function gets the procedure's auth policy and the
+    %% stations it registers on, when the options give them, and no other
+    %% option.
+    case AdvertiseStream(Pool, Realm, Procedure, Mode, Handler, maps:with([auth, stations], Opts)) of
         ok -> {ok, Sup};
         {error, Reason} -> {error, Reason}
     end.
