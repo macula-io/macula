@@ -52,12 +52,22 @@ sent({ok, Body}, Stream) ->
 sent(not_found, Stream) ->
     refused(Stream, <<"not_shared">>, <<"this node does not share that content">>).
 
-%% A send the stream refuses ends the stream with the reason, so a fetcher still waiting is answered at once.
+%% A send refused because the fetcher has gone ends quietly: a fetch drops the chunk streams it no longer needs. Any
+%% other refusal ends the stream with the reason, so a fetcher still waiting is answered at once.
 closed_after(ok, Stream) ->
     macula:close_stream(Stream);
 closed_after({error, Reason}, Stream) ->
+    unsent(fetcher_gone(Reason), Reason, Stream).
+
+unsent(true, _Reason, _Stream) ->
+    ok;
+unsent(false, Reason, Stream) ->
     logger:warning("[macula_content_serve] answer not sent: ~p", [Reason]),
     refused(Stream, <<"not_sent">>, <<"the answer could not be sent">>).
+
+fetcher_gone(no_peer) -> true;
+fetcher_gone(send_closed) -> true;
+fetcher_gone(_Other) -> false.
 
 refused(Stream, Code, Message) ->
     _ = macula_stream:abort(Stream, Code, Message),

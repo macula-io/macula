@@ -18,24 +18,36 @@ serve_test_() ->
       {"content not held is refused not_shared", fun content_not_held_is_refused/0},
       {"args that name no content id are refused malformed", fun malformed_args_are_refused/0},
       {"wire-shaped args, text keys and values, are read", fun wire_shaped_args_are_read/0},
-      {"an answer the stream refuses ends the stream", fun an_answer_the_stream_refuses_ends_it/0}]}.
+      {"an answer the stream refuses ends the stream", fun an_answer_the_stream_refuses_ends_it/0},
+      {"an answer the fetcher has gone for ends quietly", fun an_answer_nobody_takes_ends_quietly/0}]}.
+
+%% The fetcher went first: nothing to abort and nothing to warn about, since a fetch drops the chunk streams it no
+%% longer needs.
+an_answer_nobody_takes_ends_quietly() ->
+    {MCID, Store} = macula_content_store:added(<<"hello">>, #{}, macula_content_store:new()),
+    Lookup = fun(Want, M) -> macula_content_serve:lookup(Want, M, Store) end,
+    [begin
+         Stream = refusing_stream(self(), {error, Gone}),
+         ?assertEqual(ok, macula_content_serve:serve(Stream, #{mcid => MCID, want => root}, Lookup)),
+         ?assertEqual([send], received_calls())
+     end || Gone <- [no_peer, send_closed]].
 
 %% A send the stream refuses: the handler ends the stream with the reason, so a fetcher still waiting is answered at
 %% once, and does not crash.
 an_answer_the_stream_refuses_ends_it() ->
     {MCID, Store} = macula_content_store:added(<<"hello">>, #{}, macula_content_store:new()),
     Lookup = fun(Want, M) -> macula_content_serve:lookup(Want, M, Store) end,
-    Stream = refusing_stream(self()),
+    Stream = refusing_stream(self(), {error, closed}),
     ?assertEqual(ok, macula_content_serve:serve(Stream, #{mcid => MCID, want => root}, Lookup)),
     ?assertEqual([send, abort], received_calls()).
 
-%% A stand-in stream that answers every call `{error, closed}' and reports what it was asked.
-refusing_stream(Test) ->
+%% A stand-in stream that answers every call with `Reply' and reports what it was asked.
+refusing_stream(Test, Reply) ->
     spawn_link(fun Loop() ->
                    receive
                        {'$gen_call', From, Request} ->
                            Test ! {stream_call, element(1, Request)},
-                           gen:reply(From, {error, closed}),
+                           gen:reply(From, Reply),
                            Loop()
                    end
                end).

@@ -36,7 +36,37 @@ fetch_test_() ->
       {"a killed caller stops its fetch's chunk streams", fun a_killed_caller_stops_its_fetch/0},
       {"a chunk worker that crashes fails its sharer, and the caller lives on",
        fun a_crashing_chunk_worker_fails_its_sharer/0},
-      {"a root block without bytes is refused", fun a_root_block_without_bytes_is_refused/0}]}.
+      {"a root block without bytes is refused", fun a_root_block_without_bytes_is_refused/0},
+      {"a root manifest body without a manifest is refused", fun a_root_manifest_without_a_manifest_is_refused/0},
+      {"a root ask that crashes fails its sharer, and the next sharer serves",
+       fun a_crashing_root_ask_moves_to_the_next_sharer/0},
+      {"a killed caller stops its fetch while it asks for the root", fun a_killed_caller_stops_a_root_ask/0}]}.
+
+a_root_manifest_without_a_manifest_is_refused() ->
+    MCID = <<2, 16#56, 0:384>>,
+    [begin
+         Liar = sharer(fun(Stream, _Args) -> ok = macula:send(Stream, Body, msgpack), macula:close_stream(Stream) end),
+         ?assertMatch({error, {unavailable, [{_, unexpected_body}]}}, fetch([Liar], MCID, #{}))
+     end || Body <- [#{kind => manifest, mcid => MCID}, #{kind => manifest, mcid => MCID, manifest => 1}]].
+
+%% The root ask's io exits for the first sharer (a pool call timing out); the fetch moves on to the second.
+a_crashing_root_ask_moves_to_the_next_sharer() ->
+    {Honest, MCID} = honest_sharer(<<"still served">>),
+    {Other, _} = honest_sharer(<<"still served">>),
+    ?assertEqual({ok, <<"still served">>},
+                 fetch([Other#{crash_on_root => true}, Honest], MCID, #{order => as_given})),
+    ?assertEqual({message_queue_len, 0}, settled_queue()).
+
+%% The caller goes while the root is being asked for: the process asking ends with it.
+a_killed_caller_stops_a_root_ask() ->
+    MCID = <<2, 16#55, 0:384>>,
+    Test = self(),
+    Hanging = sharer(fun(_Stream, _Args) -> receive never -> ok end end),
+    Caller = spawn(fun() -> fetch([Hanging], MCID, #{}, Test) end),
+    Asker = receive {asked_root, W} -> W after 5_000 -> error(no_root_asked) end,
+    Mon = erlang:monitor(process, Asker),
+    exit(Caller, kill),
+    receive {'DOWN', Mon, process, _, _} -> ok after 2_000 -> error(root_ask_outlived_its_caller) end.
 
 %% A chunk stream whose io exits (a gen_server call timing out) fails that sharer and moves the fetch on; the caller,
 %% which traps no exits, is not taken down with it.
@@ -254,10 +284,12 @@ fetch(Sharers, MCID, Opts, Watcher) ->
 
 watched(none, _Args) -> ok;
 watched(Watcher, #{want := block}) -> Watcher ! {asked_chunk, self()};
+watched(Watcher, #{want := root}) -> Watcher ! {asked_root, self()};
 watched(_Watcher, _Args) -> ok.
 
 dialed(#{dead := true}, _Args) -> {error, not_connected};
 dialed(#{crash_on_block := true}, #{want := block}) -> exit(boom);
+dialed(#{crash_on_root := true}, #{want := root}) -> exit(boom);
 dialed(#{local := Local}, Args) -> macula:call_stream(Local, Args).
 
 announcement(#{node := Node, key := Key, procedure := Procedure}, MCID) ->

@@ -32,9 +32,10 @@
 %%
 %% == Processes ==
 %%
-%% The fetch runs in a worker that monitors its caller and ends when the caller does, taking its chunk workers with
-%% it. A chunk worker that crashes fails its sharer, and a fetch worker that crashes answers `{error, {fetch_worker,
-%% Reason}}': neither takes the caller down, and the caller's mailbox is left as it was.
+%% The fetch runs in a worker that monitors its caller, and every station resolution and stream ask, the root's and
+%% each chunk's, runs in a worker of its own linked to it. One that exits fails its sharer and the fetch moves on; a
+%% fetch worker that crashes answers `{error, {fetch_worker, Reason}}'. Nothing takes the caller down, a gone caller
+%% ends the fetch while it waits on any ask, and the caller's mailbox is left as it was.
 -module(macula_content_fetch).
 
 -export([get/3, io/0]).
@@ -149,12 +150,20 @@ from_sharers([#{node := Node} = Sharer | Rest], Ctx, Failures) ->
 tried({ok, Bytes}, _Rest, _Ctx, _Failures, _Node) -> {ok, Bytes};
 tried({error, Reason}, Rest, Ctx, [Node | Failures], Node) -> from_sharers(Rest, Ctx, [{Node, Reason} | Failures]).
 
-from_sharer(#{station := Station} = Sharer, #{pool := Pool, io := #{resolve_station_endpoint := Resolve}} = Ctx) ->
+%% Reaching a sharer and asking for the root runs in a worker, as every chunk ask does, so an io call that exits fails
+%% this sharer only and a gone caller ends the fetch here too.
+from_sharer(Sharer, #{chunk_timeout_ms := Timeout} = Ctx) ->
+    rooted(contained([fun() -> reached(Sharer, Ctx) end], root_worker, ?RESOLVE_TIMEOUT_MS + Timeout, Ctx), Ctx).
+
+rooted({ok, [{Dial, Answer}]}, Ctx) -> root(Answer, Dial, Ctx);
+rooted({error, _} = Error, _Ctx) -> Error.
+
+reached(#{station := Station} = Sharer, #{pool := Pool, io := #{resolve_station_endpoint := Resolve}} = Ctx) ->
     through(Resolve(Pool, Station, ?RESOLVE_TIMEOUT_MS), Sharer, Ctx).
 
 through({ok, Url}, Sharer, #{mcid := MCID} = Ctx) ->
     Dial = Sharer#{url => Url},
-    root(asked(Dial, MCID, root, Ctx), Dial, Ctx);
+    {ok, {Dial, asked(Dial, MCID, root, Ctx)}};
 through({error, Reason}, _Sharer, _Ctx) ->
     {error, {station_unresolved, Reason}}.
 
@@ -164,7 +173,7 @@ through({error, Reason}, _Sharer, _Ctx) ->
 
 root({ok, #{kind := block, bytes := Bytes}}, _Dial, #{mcid := MCID, max_bytes := Max}) when is_binary(Bytes) ->
     within_bytes(byte_size(Bytes), Max, fun() -> raw_root(MCID, Bytes) end);
-root({ok, #{kind := manifest, manifest := Wire}}, Dial, #{mcid := MCID} = Ctx) ->
+root({ok, #{kind := manifest, manifest := Wire}}, Dial, #{mcid := MCID} = Ctx) when is_map(Wire) ->
     manifest(macula_manifest:from_wire(Wire), MCID, Dial, Ctx);
 root({ok, _Other}, _Dial, _Ctx) ->
     {error, unexpected_body};
@@ -211,25 +220,29 @@ batch_done({ok, Blocks}, Rest, Parallel, Dial, Ctx, Acc) ->
 batch_done({error, _} = Error, _Rest, _Parallel, _Dial, _Ctx, _Acc) ->
     Error.
 
-%% One stream per chunk, the batch at once; every block verified against its own content id and declared size. The
-%% chunk workers are linked to the fetch worker, which traps exits: a chunk worker that crashes fails the batch, and a
-%% fetch that ends early, or whose caller has gone, takes the rest with it.
-batch(Chunks, Dial, Ctx) ->
+%% One stream per chunk, the batch at once; every block verified against its own content id and declared size.
+batch(Chunks, Dial, #{chunk_timeout_ms := Timeout} = Ctx) ->
+    contained([fun() -> chunk(C, Dial, Ctx) end || C <- Chunks], chunk_worker, Timeout, Ctx).
+
+%% Run each of `Funs' in a worker linked to the fetch worker, which traps exits, and collect their answers in order,
+%% each an `{ok, _}' or `{error, _}': the first error, a worker that exits as `{error, {Tag, Reason}}', or no answer
+%% within `Timeout' plus a second, stops the rest. A gone caller ends the fetch, and with it the workers.
+contained(Funs, Tag, Timeout, #{caller_mon := CallerMon}) ->
     Self = self(),
-    Workers = [spawn_link(fun() -> Self ! {chunk, self(), chunk(C, Dial, Ctx)} end) || C <- Chunks],
-    collected(Workers, maps:get(caller_mon, Ctx), maps:get(chunk_timeout_ms, Ctx) + 1_000, []).
+    Workers = [spawn_link(fun() -> Self ! {answer, self(), Fun()} end) || Fun <- Funs],
+    collected(Workers, Tag, CallerMon, Timeout + 1_000, []).
 
 %% Each worker's exit is taken as it ends, so a fetch of many chunks never scans a mailbox of old exits.
-collected([], _CallerMon, _Timeout, Acc) ->
+collected([], _Tag, _CallerMon, _Timeout, Acc) ->
     {ok, lists:reverse(Acc)};
-collected([Pid | Rest] = Workers, CallerMon, Timeout, Acc) ->
+collected([Pid | Rest] = Workers, Tag, CallerMon, Timeout, Acc) ->
     receive
-        {chunk, Pid, {ok, Bytes}} -> ended(Pid), collected(Rest, CallerMon, Timeout, [Bytes | Acc]);
-        {chunk, Pid, {error, _} = Error} -> ended(Pid), stopped(Rest), Error;
-        {'EXIT', Pid, Reason} -> stopped(Rest), {error, {chunk_worker, Reason}};
+        {answer, Pid, {ok, Answer}} -> ended(Pid), collected(Rest, Tag, CallerMon, Timeout, [Answer | Acc]);
+        {answer, Pid, {error, _} = Error} -> ended(Pid), stopped(Rest), Error;
+        {'EXIT', Pid, Reason} -> stopped(Rest), {error, {Tag, Reason}};
         {'DOWN', CallerMon, process, _, _} -> exit(shutdown)
     after Timeout ->
-        stopped(Workers), {error, chunk_timeout}
+        stopped(Workers), {error, {Tag, timeout}}
     end.
 
 stopped(Workers) ->
