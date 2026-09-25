@@ -96,8 +96,7 @@ direct-dial wraps](RPC_GUIDE.md#direct-dial-start_link_direct-advertise_direct).
 > **`pin_tls_cert => true` and `verify` are REFUSED.** They return
 > `{error, {refused, {pin_tls_cert, no_pin_primitive_for_mldsa87_identity}}}` and
 > `{error, {refused, {verify, one_verification_mode}}}`, from `connect/2`,
-> `call_station/8`, `call_stream_station/7`, `put_content_station/5` and
-> `get_content_station/5`, and whether you put them in the options map or in a
+> `call_station/8` and `call_stream_station/7`, and whether you put them in the options map or in a
 > seed or station map. `pin_tls_cert => false` and an absent key pass through
 > and change nothing.
 >
@@ -223,9 +222,8 @@ is looked up or published, and so is `realm_trust` on a call: the realm keys
 the pool pins and `authorization` replace them.
 
 This is the same resolve shape used by [content](../content/CONTENT_PROTOCOL.md)'s
-`get_content_station/4,5` and [streaming](../streaming/STREAMING_PROTOCOL.md)'s
-raw `call_stream_station/7`: one mechanism, reused across every primitive
-pair.
+fetch and [streaming](../streaming/STREAMING_PROTOCOL.md)'s raw
+`call_stream_station/7`: one mechanism, reused across every primitive pair.
 
 ---
 

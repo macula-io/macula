@@ -33,7 +33,7 @@ Macula SDK is an Erlang/OTP client library for connecting to a **federated relay
 | [PubSub](guides/pubsub/PUBSUB_GUIDE.md) | Topic-based messaging through the relay mesh |
 | [Topic Naming](guides/shared/TOPIC_NAMING_GUIDE.md) | Canonical 5-segment topic shape |
 | [RPC](guides/rpc/RPC_GUIDE.md) | Request/response; direct-dial via `call_station/7,8` or the supervised `start_link_direct`/`advertise_direct` |
-| [Content](guides/content/CONTENT_GUIDE.md) | Content-addressed blobs (MCID), single-block or chunked, plus push/upload at a known recipient; direct-dial fetch/seed |
+| [Content](guides/content/CONTENT_GUIDE.md) | Share blobs from your node and fetch them by content id (MCID), single-block or chunked, plus push/upload at a known recipient |
 | [Records](guides/shared/RECORDS_GUIDE.md) | Signed, TTL'd facts in the DHT — your own record types |
 | [Streaming](guides/streaming/STREAMING_GUIDE.md) | Streaming RPC (server / client / bidi); direct-dial via `call_stream_station/7` |
 | [HyParView](guides/overlay/HYPARVIEW_GUIDE.md) | Bounded partial-view realm membership |
@@ -53,7 +53,7 @@ observability, an SDK for another language.
 |----------|-------------|
 | [RPC Protocol](guides/rpc/RPC_PROTOCOL.md) | Raw `advertise`/`call`, direct-dial resolution internals, BOLT#4 error codes |
 | [PubSub Protocol](guides/pubsub/PUBSUB_PROTOCOL.md) | Raw `subscribe`/`publish`, hand-rolled callback pattern |
-| [Content Protocol](guides/content/CONTENT_PROTOCOL.md) | Raw `put_content`/`get_content`, MCID wire format, discovery, pause/resume/multi-stream |
+| [Content Protocol](guides/content/CONTENT_PROTOCOL.md) | The content id, the announcement record, the content procedure, the fetch and its bounds |
 | [Streaming Protocol](guides/streaming/STREAMING_PROTOCOL.md) | Raw `call_stream`/`advertise_stream`, local in-process streams |
 
 ## Reference

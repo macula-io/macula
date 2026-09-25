@@ -46,16 +46,16 @@
 > - **RPC** — `macula_request`/`macula_response`, unary call/reply.
 > - **Pub/Sub** — `macula_publisher`/`macula_subscriber`, publish and
 >   per-publisher-ordered subscribe.
-> - **Content sharing** — `macula_feeder`/`macula_download`, built on the
->   addressable `macula_content_transfer` primitive: a genuinely
->   peer-visible cancel (a real QUIC `RESET_STREAM`, not a local kill),
->   pause/resume between chunks, and parallel multi-stream chunk transfer.
+> - **Content sharing** — `macula_feeder`/`macula_download` over
+>   `macula:share_content/3,4` and `get_content/3,4`: the node that shares
+>   content keeps and serves it (stations only relay), and a fetcher
+>   verifies every chunk against the content id it asked for.
 > - **Streaming RPC** — `macula_streamer`/`macula_stream_sink`, server /
 >   client / bidi modes, with an optional `client_stream` receive loop and
 >   terminal-reply callback, and abort-wired cancel.
 > - **Push-initiated content transfer** — `macula_pusher`/`macula_upload`
->   push a file at a specific, already-known recipient (rather than into
->   content-addressed storage for someone to discover and pull later), with
+>   push a file at a specific, already-known recipient (rather than sharing
+>   it for anyone to fetch by its content id), with
 >   the same chunk/hash/verify integrity guarantees, over `client_stream`.
 > - **Overlay (HyParView + Plumtree)** — realm-scoped bounded partial
 >   views and epidemic broadcast trees, absorbed from the standalone
@@ -209,7 +209,7 @@ its audience by node_id, and an EdDSA token is refused (see the
 | [RPC Guide](docs/guides/rpc/RPC_GUIDE.md) | Direct-dial request/response |
 | [RPC Protocol](docs/guides/rpc/RPC_PROTOCOL.md) | Raw `advertise`/`call` primitives, error codes |
 | [Content Guide](docs/guides/content/CONTENT_GUIDE.md) | Content-addressed blobs (MCID), push/upload |
-| [Content Protocol](docs/guides/content/CONTENT_PROTOCOL.md) | Raw `put_content`/`get_content`, MCID format, discovery |
+| [Content Protocol](docs/guides/content/CONTENT_PROTOCOL.md) | The content id, the announcement, the content procedure, the fetch and its bounds |
 | [Records Guide](docs/guides/shared/RECORDS_GUIDE.md) | Signed, TTL'd facts in the DHT — your own record types |
 | [Streaming Guide](docs/guides/streaming/STREAMING_GUIDE.md) | Streaming RPC (server / client / bidi) |
 | [Streaming Protocol](docs/guides/streaming/STREAMING_PROTOCOL.md) | Raw `call_stream`/`advertise_stream` primitives |
