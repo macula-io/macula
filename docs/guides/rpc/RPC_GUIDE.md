@@ -114,6 +114,19 @@ connected station as the server, so a direct-dial consumer can find it:
                                               math_service, [], NodeIdentity).
 ```
 
+A provider linked to several stations registers at every one of them unless
+it names some: `#{stations => [StationNodeId]}` in the options registers the
+procedure only on the links to those stations, and the direct-dial record then
+names the first of them the pool is connected to. A station the pool has no
+link to is refused as `{error, {station_not_linked, StationNodeId}}`, and
+nothing is registered.
+
+```erlang
+{ok, _Sup} = macula_response:advertise_direct(Pool, Realm, Procedure,
+                                              math_service, [], NodeIdentity,
+                                              #{stations => [StationNodeId]}).
+```
+
 Consumer — `start_link_direct/6,7,8` resolves the advertisement, resolves
 and verifies the serving station's endpoint, and dials it in one hop:
 

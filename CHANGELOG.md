@@ -7,9 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [Unreleased]
+## [12.7.0] - 2026-09-26
+
+A provider picks the stations it serves through and keeps its authorization
+fresh, the QUIC handshake agrees on AES-256-GCM only, a stream to an absent
+provider fails at once, and a connection can report what each frame costs.
+Wire-compatible with 12.0 to 12.6 at the frame level.
+
+A peer offering only AES-128-GCM or ChaCha20 for the TLS handshake is now
+refused, in both roles. Every released Macula SDK and station offers
+AES-256-GCM first, so none is affected.
 
 ### Added
+
+- **`stations => [StationNodeId]` on `macula:advertise/5`,
+  `advertise_stream/6`, and the supervised `macula_response`,
+  `macula_streamer` and `macula_upload` `advertise/6` and
+  `advertise_direct/7`.** The
+  procedure registers on the links to those stations only, each named by
+  the node id its link pins. A link respawned later registers it again
+  only when its station is one of them, and an unadvertise withdraws it
+  there.
+  - A station the pool holds no link to is refused as
+    `{error, {station_not_linked, StationNodeId}}`, an empty list as
+    `{error, {stations, empty}}`, and anything but a list of 32-byte node
+    ids as `{error, {stations, malformed}}`. Nothing is registered or kept.
+  - With `stations`, the direct-dial record (`advertise_direct/7`,
+    `macula_direct_dial:publish_advertisement/5`) names the first of those
+    stations the pool is connected to, where the procedure is registered.
+  - Without it, every link registers the procedure, as before.
+- **`frame_observer` on a peering connection** (`macula_peering:connect/1`,
+  `accept/2`), opt-in:
+  `fun((queued | out | in, FrameType, Bytes, Us) -> _)`, called in the
+  connection for every application frame.
+  - A frame written is seen as `queued`, with the microseconds it waited in
+    the connection's mailbox since `macula_peering:send_frame/2`, then as
+    `out`, with the microseconds encoding it and the write that carried it
+    took. A write carries up to 64 coalesced frames, and each of them
+    reports it.
+  - A frame read is seen as `in`, with the microseconds decoding and
+    verifying it took.
+  - `Bytes` is the frame's size on the wire, its length prefix included.
+  - An observer that raises is logged and dropped; the connection serves on.
 
 - **The pool renews an advertised chain before it runs out** (D32, #38).
   `macula:advertise/5` and `macula:advertise_stream/6` register how to resolve
@@ -32,6 +71,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     renewed by the pool: an app that republishes it must resolve
     `authorization` again each time (`macula:provider_authorization/3`).
     `mcl_om` does.
+
+### Changed
+
+- **The TLS 1.3 handshake agrees on `TLS13_AES_256_GCM_SHA384` alone**
+  (macula-pqc 0.3, macula#39). QUIC still protects its Initial packets with
+  AES-128-GCM, as RFC 9001 fixes for QUIC version 1: the NIF hands that
+  suite to Quinn apart from the handshake's list
+  (`macula_pqc::quic_initial_suite()`).
+- `macula_peering:send_frame/2` stamps each frame with the time it was
+  queued. A process standing in for a connection in a test now receives
+  `{send_frame, QueuedAt, Frame}`.
+
+### Fixed
+
+- **A stream to a provider the station cannot reach ends at once** (#42).
+  The station's signed relay STREAM_ERROR (`unknown_next_peer`) was refused
+  by the caller's stream as `malformed_frame` and dropped, so `recv` waited
+  out its deadline: 20 s against a lab station, where a CALL to the same
+  absent target answered in 15 ms. The caller's stream now verifies it
+  against its own STREAM_OPEN and the station its link is connected to, and
+  ends with `{error, {<<"unknown_next_peer">>, _}}`: 16 ms measured. For
+  content, a sharer gone offline no longer costs each fetch a full
+  `chunk_timeout_ms` once the station has noticed it is gone.
+- **A call on an ended stream answers `{error, closed}`** (#41). `send`,
+  `recv` and `abort` exited the caller with `noproc`; `close` answers `ok`.
+- **`macula_streamer:advertise/6` passes `stations`** to the stream
+  advertisement, so a streaming provider registers where its direct-dial
+  record says.
+
+---
 
 ## [12.6.0] - 2026-09-25
 
