@@ -50,6 +50,7 @@
 
     %% Constructors — CALL (Part 6 §5)
     call/2, result/2, provider_error/2, relay_error/2,
+    payload_plain/1, plain_payload/1, error_plain/1, plain_error/1,
     verify_request/2, verify_reply/3, verify_relay_error/4, claimed_reply_ids/1, claimed_publication_realm/1,
     claimed_publication/1,
 
@@ -661,8 +662,8 @@
                       | {provider_stream | caller_stream, stream_spec(), verified_request() | undefined}.
 
 %% The fields a CALL build may name; a STREAM_OPEN build also names its mode.
--define(REQUEST_BUILD_KEYS, [request_id, realm, procedure, target, deadline, payload, token, proofs, source_route,
-                             retry_budget]).
+-define(REQUEST_BUILD_KEYS, [request_id, realm, procedure, target, deadline, payload, sealed, token, proofs,
+                             source_route, retry_budget]).
 
 %% The signed and encoded bytes of a frame built here, tagged so that only what stream_bytes/2 returns is written on a
 %% dedicated stream.
@@ -1039,18 +1040,27 @@ stream_open(#{mode := Mode} = Spec, Key) when Mode =:= server_stream; Mode =:= c
     request(stream_open, Spec, Key).
 
 request(Type, #{request_id := RequestId, realm := Realm, procedure := Procedure, target := Target,
-                deadline := Deadline, payload := Payload} = Spec, #{purpose := identity} = Key)
+                deadline := Deadline} = Spec, #{purpose := identity} = Key)
   when byte_size(RequestId) =:= 16, byte_size(Realm) =:= 32, is_binary(Procedure), byte_size(Target) =:= 32,
        is_integer(Deadline), Deadline >= 0, Deadline < ?MAX_PROTOCOL_INT ->
     ok = bounded_text(procedure, Procedure, ?MAX_PROCEDURE_BYTES),
-    ok = check_payload(Payload),
     Fields = optional_proofs(Spec, optional_token(Spec, maps:merge(maps:with([mode], Spec),
-                                             #{frame_type => Type, caller => macula_node_keys:key_id(Key),
+                                             (carried_payload(Spec))#{frame_type => Type,
+                                               caller => macula_node_keys:key_id(Key),
                                                request_id => RequestId, realm => Realm, procedure => {text, Procedure},
-                                               target => Target, deadline => Deadline, payload => Payload}))),
+                                               target => Target, deadline => Deadline}))),
     routed(#{version => ?PROTOCOL_VERSION, frame_type => Type,
              request => macula_signed_object:sign(?REQUEST_LABEL, to_wire(Fields), Key)},
            maps:with([source_route, retry_budget], Spec)).
+
+%% A request or RESULT carries its payload in the clear, or sealed (E2E design §3.1): exactly one of the two. A build
+%% with both, or neither, raises function_clause.
+carried_payload(#{payload := Payload} = Spec) when not is_map_key(sealed, Spec) ->
+    ok = check_payload(Payload),
+    #{payload => Payload};
+carried_payload(#{sealed := #{scheme := 1, key_id := <<_:64>>, ct := Ct} = Sealed} = Spec)
+  when not is_map_key(payload, Spec), is_binary(Ct) ->
+    #{sealed => Sealed}.
 
 optional_token(#{token := Token}, Fields) when is_binary(Token) -> Fields#{token => Token};
 optional_token(Spec, Fields) when not is_map_key(token, Spec) -> Fields.
@@ -1115,17 +1125,19 @@ request_table(Type) ->
       <<"proofs">> => {proofs, {bytes_set, ?MAX_PROOFS, ?MAX_PROOFS_BYTES}}}.
 
 %% @doc Sign a RESULT for a verified request with the provider's identity key.
--spec result(#{request := verified_request(), payload := term(), source_route_reverse => binary()},
+-spec result(#{request := verified_request(), payload => term(), sealed => sealed(), source_route_reverse => binary()},
              macula_node_keys:node_key()) -> frame().
-result(#{request := Request, payload := Payload} = Spec, Key) ->
-    ok = check_payload(Payload),
-    reply(result, #{payload => Payload}, Request, Spec, Key).
+result(#{request := Request} = Spec, Key) ->
+    reply(result, carried_payload(Spec), Request, Spec, Key).
 
 %% @doc Sign a provider's ERROR for a verified request: a code of at most 64 bytes and an optional detail of at most 256,
 %% both UTF-8. Other text raises a badmatch on `{error, {text_too_long, Field}}' or `{error, {invalid_text, Field}}'.
--spec provider_error(#{request := verified_request(), code := binary(), detail => binary(),
+-spec provider_error(#{request := verified_request(), code => binary(), detail => binary(), sealed => sealed(),
                        source_route_reverse => binary()}, macula_node_keys:node_key()) -> frame().
-provider_error(#{request := Request, code := Code} = Spec, Key) when is_binary(Code) ->
+provider_error(#{request := Request, sealed := #{scheme := 1, key_id := <<_:64>>, ct := Ct} = Sealed} = Spec, Key)
+  when not is_map_key(code, Spec), not is_map_key(detail, Spec), is_binary(Ct) ->
+    reply(error, #{sealed => Sealed}, Request, Spec, Key);
+provider_error(#{request := Request, code := Code} = Spec, Key) when is_binary(Code), not is_map_key(sealed, Spec) ->
     ok = bounded_text(code, Code, ?MAX_ERROR_CODE_BYTES),
     ok = optional_bounded_text(detail, maps:find(detail, Spec), ?MAX_ERROR_TEXT_BYTES),
     reply(error, optional_text(detail, Spec, #{code => {text, Code}}), Request, Spec, Key).
@@ -1695,8 +1707,8 @@ check_passed({error, _} = Refused, _Checks) -> Refused.
 %% A build names only the fields its frame has.
 known_build_keys({call, Spec})           -> only_build_keys(Spec, ?REQUEST_BUILD_KEYS);
 known_build_keys({stream_open, Spec})    -> only_build_keys(Spec, [mode | ?REQUEST_BUILD_KEYS]);
-known_build_keys({result, Spec})         -> only_build_keys(Spec, [request, payload, source_route_reverse]);
-known_build_keys({provider_error, Spec}) -> only_build_keys(Spec, [request, code, detail, source_route_reverse]);
+known_build_keys({result, Spec})         -> only_build_keys(Spec, [request, payload, sealed, source_route_reverse]);
+known_build_keys({provider_error, Spec}) -> only_build_keys(Spec, [request, code, detail, sealed, source_route_reverse]);
 known_build_keys({relay_error, Spec})    ->
     only_build_keys(Spec, [frame_type, request, code, offending_hop, source_route_partial]);
 known_build_keys({Side, Spec, _Open}) when Side =:= provider_stream; Side =:= caller_stream ->
@@ -1783,6 +1795,8 @@ relay_code_in_set(false) -> {error, relay_code_outside_its_set}.
 %% What of a build the wire must carry.
 sendable({Type, #{payload := Payload}}) when Type =:= call; Type =:= stream_open; Type =:= result ->
     check_payload(Payload);
+sendable({Type, #{sealed := _}}) when Type =:= call; Type =:= stream_open; Type =:= result ->
+    ok;
 sendable({Type, _Spec}) when Type =:= provider_error; Type =:= relay_error ->
     ok;
 sendable({Side, Spec, _VerifiedOpen}) when Side =:= provider_stream; Side =:= caller_stream ->
@@ -2782,6 +2796,51 @@ base(FrameType, Caps) ->
     ok | {error, {unsupported_payload_type, atom(), [term()]}}.
 check_payload(Payload) ->
     sized(check_value(Payload, []), Payload).
+
+%% @doc The plaintext a frame seals in place of `Payload' (E2E design §3.1): the deterministic CBOR of the payload, as
+%% the tbs would carry it in the clear. A payload the wire cannot carry is refused here, as it is before a clear send.
+-spec payload_plain(term()) -> {ok, binary()} | {error, {unsupported_payload_type, atom(), [term()]}}.
+payload_plain(Payload) ->
+    plain_of(check_payload(Payload), Payload).
+
+plain_of(ok, Payload) -> {ok, macula_record_cbor:encode(to_wire(Payload))};
+plain_of({error, _} = Refused, _Payload) -> Refused.
+
+%% @doc The payload an opened plaintext holds, in the shape a clear payload arrives in. Bytes that are not one CBOR
+%% value under the decoding rule are `sealed_refused': they are the peer's, only opened.
+-spec plain_payload(binary()) -> {ok, term()} | {error, sealed_refused}.
+plain_payload(Plain) when is_binary(Plain) ->
+    peer_plain(macula_record_cbor:decode_strict(Plain)).
+
+peer_plain({ok, Value}) -> {ok, peer_value(Value)};
+peer_plain(_NotOneValue) -> {error, sealed_refused}.
+
+%% @doc The plaintext a sealed provider ERROR carries: the CBOR array `[code, detail]', detail empty text when there
+%% is none. The code and detail are bounded as in a clear ERROR.
+-spec error_plain(#{code := binary(), detail => binary()}) ->
+    {ok, binary()} | {error, {text_too_long | invalid_text, code | detail}}.
+error_plain(#{code := Code} = Error) ->
+    Detail = maps:get(detail, Error, <<>>),
+    error_plain_checked(passed_checks([fun() -> bounded_text(code, Code, ?MAX_ERROR_CODE_BYTES) end,
+                                       fun() -> bounded_text(detail, Detail, ?MAX_ERROR_TEXT_BYTES) end]),
+                        Code, Detail).
+
+error_plain_checked(ok, Code, Detail) -> {ok, macula_record_cbor:encode([{text, Code}, {text, Detail}])};
+error_plain_checked({error, _} = Refused, _Code, _Detail) -> Refused.
+
+%% @doc The code and detail an opened ERROR plaintext holds; an empty detail reads as none. Anything else is
+%% `sealed_refused'.
+-spec plain_error(binary()) -> {ok, #{code := binary(), detail => binary()}} | {error, sealed_refused}.
+plain_error(Plain) when is_binary(Plain) ->
+    error_read(macula_record_cbor:decode_strict(Plain)).
+
+error_read({ok, [{text, Code}, {text, <<>>}]}) when byte_size(Code) =< ?MAX_ERROR_CODE_BYTES ->
+    {ok, #{code => Code}};
+error_read({ok, [{text, Code}, {text, Detail}]})
+  when byte_size(Code) =< ?MAX_ERROR_CODE_BYTES, byte_size(Detail) =< ?MAX_ERROR_TEXT_BYTES ->
+    {ok, #{code => Code, detail => Detail}};
+error_read(_NotAnError) ->
+    {error, sealed_refused}.
 
 %% @doc Is this whole frame sendable? Used by `macula_peering:send_frame/2',
 %% which is the single seam every producer passes through. Records travel
