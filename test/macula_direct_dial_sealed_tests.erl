@@ -26,7 +26,9 @@ cases() ->
      {"a stream carries the resolved advertisement", fun a_stream_carries_the_advertisement/0},
      {"a stream passes its policy to the station open", fun a_streams_policy_reaches_the_station_open/0},
      {"a stream's reseal re-resolves once, bound to the key the refusal names",
-      fun a_streams_reseal_is_bound_to_the_named_key/0}].
+      fun a_streams_reseal_is_bound_to_the_named_key/0},
+     {"a stream's reseal takes the provider's advertisement that names the key, not the first",
+      fun a_streams_reseal_finds_the_named_key_among_the_providers_advertisements/0}].
 
 the_call_carries_the_advertisement() ->
     F = fixture(),
@@ -115,6 +117,16 @@ a_streams_reseal_is_bound_to_the_named_key() ->
     ?assertEqual({error, {confidentiality, {key_mismatch, kem_id(2), kem_id(3)}}}, Reseal(kem_id(2))),
     ?assertEqual({error, {confidentiality, no_kem_key}}, Reseal(kem_id(2))),
     ?assertEqual({error, {confidentiality, no_kem_key}}, Reseal(no_key)).
+
+%% While a provider rotates, the DHT can still serve its previous
+%% advertisement beside the new one: the reseal takes the one naming the key
+%% the refusal named, wherever it comes in the lookup.
+a_streams_reseal_finds_the_named_key_among_the_providers_advertisements() ->
+    F = fixture(),
+    script(F, [[keyed_ad(F, kem(1))], [keyed_ad(F, kem(3)), keyed_ad(F, kem(2))]], [{ok, self()}]),
+    ?assertEqual({ok, self()}, stream(F, #{})),
+    [Opts] = calls(),
+    ?assertEqual({ok, kem(2)}, (maps:get(reseal, Opts))(kem_id(2))).
 
 %%------------------------------------------------------------------
 %% Helpers

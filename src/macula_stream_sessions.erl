@@ -57,7 +57,7 @@
 -behaviour(gen_server).
 
 -export([start_link/0, new_table/0, admit/2, sessions/0, sessions/1,
-         charge/2, release/2, inbox_bytes/0, refusals/0, session_share/0]).
+         charge/2, release/2, inbox_bytes/0, refusals/0, session_share/0, has_room/1]).
 %% Reads of the node's counts that nothing inside macula calls yet; the tests
 %% read them.
 -ignore_xref([{macula_stream_sessions, sessions, 0}]).
@@ -134,6 +134,17 @@ session_share() ->
 admit(Caller, Stream) when is_binary(Caller), is_pid(Stream) ->
     try gen_server:call(?SERVER, {admit, Caller, Stream}, ?ADMIT_TIMEOUT_MS)
     catch exit:{_Why, {gen_server, call, _Args}} -> {error, unavailable}
+    end.
+
+%% @doc Whether `Caller' and the node have room for one more served session
+%% now, read from the counts without asking this process: what a link checks
+%% before it pays for opening a sealed STREAM_OPEN, so a caller at its cap
+%% costs no decapsulation. `admit/2' still decides; a count that cannot be
+%% read leaves the decision to it.
+-spec has_room(binary()) -> ok | {error, caller_limit | node_limit}.
+has_room(Caller) when is_binary(Caller) ->
+    try admission(false, Caller)
+    catch error:badarg -> ok
     end.
 
 %% @doc The number of served sessions the node holds now.

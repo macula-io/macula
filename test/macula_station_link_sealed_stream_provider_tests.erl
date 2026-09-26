@@ -29,6 +29,8 @@ sealed_stream_provider_test_() ->
                          {"an unknown procedure is answered sealed", fun an_unknown_procedure_is_answered_sealed/1},
                          {"a mode mismatch is answered sealed", fun a_mode_mismatch_is_answered_sealed/1},
                          {"a session cap refusal stays clear", fun a_session_cap_refusal_stays_clear/1},
+                         {"a caller at its session cap is refused before its open is opened",
+                          fun a_caller_at_its_cap_is_refused_before_decapsulation/1},
                          {"a clear open to a procedure that takes only sealed ones is refused",
                           fun a_clear_open_to_a_required_procedure_is_refused/1},
                          {"a rotated KEM key does not break a stream already open",
@@ -37,17 +39,18 @@ sealed_stream_provider_test_() ->
 a_sealed_open_is_served_sealed_both_ways(#{link := Link} = W) ->
     Test = self(),
     ok = advertise(W, bidi, fun(Stream, Args) ->
-                                Test ! {served, Args},
+                                Test ! {served, Args, self()},
                                 {chunk, In} = macula_stream:recv(Stream, ?EVENT_MS),
                                 ok = macula_stream:send(Stream, <<"got ", In/binary>>),
                                 receive stop -> ok end
                             end),
     #{quic := Quic, open := Open, keys := Keys, caller := Caller} = sealed_open(W, bidi, #{city => {text, <<"Tienen">>}}),
-    Args = receive {served, A} -> A after ?EVENT_MS -> error(not_served) end,
+    {Args, Handler} = receive {served, A, H} -> {A, H} after ?EVENT_MS -> error(not_served) end,
     ?assertEqual({text, <<"Tienen">>}, macula:field(city, Args)),
     ?assertEqual(macula_node_keys:key_id(Caller), maps:get(caller, Args)),
     on_stream(Link, Quic, caller_sealed(0, <<"ping">>, Keys, Caller, Open)),
-    ?assertEqual({ok, <<"got ping">>}, provider_opened(written(Quic), 0, Keys, Open)).
+    ?assertEqual({ok, <<"got ping">>}, provider_opened(written(Quic), 0, Keys, Open)),
+    ended(Handler).
 
 an_open_to_another_key_is_refused_naming_the_current_one(W) ->
     ok = advertise(W, bidi, fun(_Stream, _Args) -> error(must_not_run) end),
@@ -80,6 +83,18 @@ a_session_cap_refusal_stays_clear(W) ->
                  ?assertMatch({ok, #{code := <<"too_many_sessions">>}}, clear_error(written(Quic), Open))
              end).
 
+%% A caller that holds all its sessions costs the node no decapsulation: the
+%% cap is read first, so even an open this node could not open is refused
+%% `too_many_sessions', not `sealed_refused'.
+a_caller_at_its_cap_is_refused_before_decapsulation(W) ->
+    ok = advertise(W, bidi, fun(_S, _A) -> error(must_not_run) end),
+    {Other, _Private} = macula_seal:generate_key(profile()),
+    with_env(max_served_sessions_per_caller, 0,
+             fun() ->
+                 #{quic := Quic, open := Open} = sealed_open(W, bidi, #{}, macula_seal:key_as_carried(Other)),
+                 ?assertMatch({ok, #{code := <<"too_many_sessions">>}}, clear_error(written(Quic), Open))
+             end).
+
 a_clear_open_to_a_required_procedure_is_refused(#{link := Link} = W) ->
     ok = advertise(W, bidi, fun(_S, _A) -> error(must_not_run) end),
     _ = sys:replace_state(Link, fun(S) ->
@@ -95,23 +110,32 @@ a_clear_open_to_a_required_procedure_is_refused(#{link := Link} = W) ->
 a_rotated_key_does_not_break_an_open_stream(#{link := Link} = W) ->
     Test = self(),
     ok = advertise(W, bidi, fun(Stream, _Args) ->
-                                Test ! served,
+                                Test ! {served, self()},
                                 {chunk, In} = macula_stream:recv(Stream, ?EVENT_MS),
                                 ok = macula_stream:send(Stream, <<"still ", In/binary>>),
                                 receive stop -> ok end
                             end),
     #{quic := Quic, open := Open, keys := Keys, caller := Caller} = sealed_open(W, bidi, #{}),
-    receive served -> ok after ?EVENT_MS -> error(not_served) end,
+    Handler = receive {served, H} -> H after ?EVENT_MS -> error(not_served) end,
     {ok, #{key_id := Before}} = macula_kem_keyring:current(node_id(W)),
     ok = rotated(macula_kem_keyring:rotate(node_id(W))),
     {ok, #{key_id := After}} = macula_kem_keyring:current(node_id(W)),
     ?assertNotEqual(Before, After),
     on_stream(Link, Quic, caller_sealed(0, <<"here">>, Keys, Caller, Open)),
-    ?assertEqual({ok, <<"still here">>}, provider_opened(written(Quic), 0, Keys, Open)).
+    ?assertEqual({ok, <<"still here">>}, provider_opened(written(Quic), 0, Keys, Open)),
+    ended(Handler).
 
 %%------------------------------------------------------------------
 %% Helpers
 %%------------------------------------------------------------------
+
+%% A served session's handler told to end, and seen gone, so its session is
+%% released before the next test counts sessions.
+ended(Handler) ->
+    Ref = erlang:monitor(process, Handler),
+    Handler ! stop,
+    receive {'DOWN', Ref, process, Handler, _} -> ok after ?EVENT_MS -> error(handler_never_ended) end,
+    timer:sleep(50).
 
 profile() ->
     {ok, Profile} = macula_crypto_profile:configured(),

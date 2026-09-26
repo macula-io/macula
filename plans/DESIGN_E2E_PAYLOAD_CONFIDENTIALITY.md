@@ -236,7 +236,11 @@ Every later stream frame seals its `body`, `payload` or `code`/`message` under t
 
 - **Caller to provider**: `nonce = seq as 96 bits`. The caller's frames are individually signed and numbered from 0,
   and one out of order is refused (`caller_checked/5`). `ss` lives only in the caller's stream state, and its seq
-  counter never resets while that state lives, so the nonce never repeats under `k_c2p`.
+  counter never resets while that state lives, so the nonce never repeats under `k_c2p`. The invariant that makes this
+  hold is stronger, and binds every sender: **one STREAM_OPEN's bytes seal exactly one caller stream state, ever.**
+  Every open and every reopen draws a new request id and a new encapsulation; a D25-style retry that resent an open's
+  bytes into a new stream state would repeat nonce 0 under the same `k_c2p`, and let a station replay the earlier
+  provider's frames into it, so no stream path resends an open.
 - **Provider to caller**: a **random 96-bit nonce** in `sealed`, as a reply. A D25 retry of a STREAM_OPEN after a
   provider restart is admitted as new, decapsulates to the same `ss`, and the new provider instance numbers its frames
   from 0 again: a seq-derived nonce would repeat under `k_p2c`.

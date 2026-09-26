@@ -120,6 +120,8 @@
 %% The bytes of chunks no reader has taken a stream keeps by default, the
 %% same as a QUIC stream's default receive window.
 -define(MAX_INBOX_BYTES, 16#1000000).
+%% Random 96-bit nonces under one key are bounded at 2^32 uses (NIST SP 800-38D).
+-define(MAX_SEALED_FRAMES, 1 bsl 32).
 
 %% A STREAM_ERROR message is text for people of at most 256 bytes, as a
 %% GOODBYE reason is.
@@ -169,8 +171,14 @@
     %% refused `sealed_refused' before it has sent anything: the open's
     %% args and the reseal that resolves the key the refusal names.
     reopen   :: #{args := term(), reseal := fun((<<_:64>> | no_key) -> {ok, binary()} | {error, term()})}
-              | undefined
+              | undefined,
+    %% A reseal and reopen in flight, run by a worker so the stream keeps
+    %% answering: its reference, and what the owner sent meanwhile, in order.
+    reopening :: {reference(), [term()]} | undefined,
+    %% The most frames a provider seals under its random nonces (GCM's bound).
+    max_sealed_frames = ?MAX_SEALED_FRAMES :: pos_integer()
 }).
+
 
 -define(CALLER_TO_PROVIDER, 0).
 -define(PROVIDER_TO_CALLER, 1).
@@ -183,7 +191,9 @@
 %%
 %% Required opts: id, role, mode, owner. Optional: max_inbox_bytes, the
 %% bytes of chunks no reader has taken that the stream keeps; a chunk past
-%% them ends the session (default 16 MiB). A stream carried by a
+%% them ends the session (default 16 MiB). A sealed provider stream seals at
+%% most max_sealed_frames frames under its random nonces (default 2^32, the
+%% GCM bound), and refuses more with `{error, sealed_frames_exhausted}'. A stream carried by a
 %% `macula_station_link' also takes `key' (a function that returns the
 %% node identity key it signs with, called each time it signs, so the
 %% stream never holds the key), `open' (the verified STREAM_OPEN),
@@ -407,7 +417,8 @@ init(Opts) ->
         mode = Mode,
         owner = Owner,
         owner_ref = OwnerRef,
-        max_inbox_bytes = maps:get(max_inbox_bytes, Opts, ?MAX_INBOX_BYTES)
+        max_inbox_bytes = maps:get(max_inbox_bytes, Opts, ?MAX_INBOX_BYTES),
+        max_sealed_frames = maps:get(max_sealed_frames, Opts, ?MAX_SEALED_FRAMES)
     })}.
 
 %% --- pair --------------------------------------------------------------
@@ -510,15 +521,17 @@ opened_by(_NoOpen) -> undefined.
 
 %% --- peer-delivered events --------------------------------------------
 
-handle_cast({peer_chunk, Encoding, Body}, State) ->
+%% An in-process pair's deliveries, which no frame verification or seal stands behind, are taken only by a stream
+%% whose peer is in process; a link-carried stream takes its peer's frames only as verified `peer_frame's.
+handle_cast({peer_chunk, Encoding, Body}, #state{peer = {local, _}} = State) ->
     {noreply, chunk_arrived(Encoding, Body, State)};
-handle_cast({peer_end, Role}, State) when Role =:= send; Role =:= both ->
+handle_cast({peer_end, Role}, #state{peer = {local, _}} = State) when Role =:= send; Role =:= both ->
     {noreply, end_arrived(Role, State)};
 
-handle_cast({peer_error, Code, Message}, State) ->
+handle_cast({peer_error, Code, Message}, #state{peer = {local, _}} = State) ->
     {noreply, error_arrived(Code, Message, State)};
 
-handle_cast({peer_reply, Result}, State) ->
+handle_cast({peer_reply, Result}, #state{peer = {local, _}} = State) ->
     {noreply, reply_arrived(Result, State)};
 handle_cast({peer_frame, #{frame_type := Type} = Frame}, State) ->
     {noreply, peer_frame(macula_frame:control_frame(Type), Frame, State)};
@@ -556,6 +569,8 @@ handle_info({'DOWN', Ref, process, Pid, _Reason}, State) ->
 %% A write of this stream's bytes failed on its link. The stream ends
 %% here with a transport failure, which its readers and reply waiters
 %% receive. It is not a refusal, so its connection hears nothing.
+handle_info({reopened, Ref, Result}, #state{reopening = {Ref, Queued}} = State) ->
+    {noreply, reopened(Result, Queued, State#state{reopening = undefined})};
 handle_info({stream_write_failed, Sid, Reason}, #state{id = Sid} = State) ->
     {noreply, transport_failed({error, {transport, Reason}}, State)};
 
@@ -565,9 +580,23 @@ handle_info(_Msg, State) ->
 terminate(_Reason, _State) -> ok.
 
 %% A link-carried stream holds its key's loader: status output and crash
-%% reports show it as a printed function, and any key they reach redacted.
+%% reports show it as a printed function, and any key they reach redacted. A
+%% sealed stream's keys and the args it would reopen with are redacted too.
+format_status(#{state := #state{} = State} = Status) ->
+    macula_node_keys:redacted(Status#{state := State#state{seal = redacted_seal(State#state.seal),
+                                                          reopen = redacted_reopen(State#state.reopen),
+                                                          reopening = redacted_reopening(State#state.reopening)}});
 format_status(Status) ->
     macula_node_keys:redacted(Status).
+
+redacted_seal(undefined) -> undefined;
+redacted_seal(_Keys) -> redacted.
+
+redacted_reopen(undefined) -> undefined;
+redacted_reopen(Reopen) -> Reopen#{args := redacted}.
+
+redacted_reopening(undefined) -> undefined;
+redacted_reopening({Ref, Queued}) -> {Ref, length(Queued)}.
 
 %%%===================================================================
 %%% Internal helpers
@@ -590,6 +619,9 @@ format_status(Status) ->
 %%   {reply, Result}
 forward_to_peer(#state{peer = undefined} = S, _Action) ->
     {{error, no_peer}, S};
+%% While a reopen is in flight nothing goes out: it waits, in order, for the new open.
+forward_to_peer(#state{reopening = {Ref, Queued}} = S, Action) ->
+    {ok, S#state{reopening = {Ref, Queued ++ [Action]}}};
 forward_to_peer(#state{peer = {local, Pid}} = S, {chunk, Encoding, Body}) ->
     {deliver_chunk(Pid, Encoding, Body), S#state{seq_out = S#state.seq_out + 1}};
 forward_to_peer(#state{peer = {local, Pid}} = S, {end_stream, Role}) ->
@@ -600,7 +632,10 @@ forward_to_peer(#state{peer = {local, Pid}} = S, {reply, Result}) ->
     {deliver_reply(Pid, Result), S};
 forward_to_peer(#state{peer = {remote_via_link, _Link, _Sid}, closed_send = true} = S, _Action) ->
     {{error, send_closed}, S};
-forward_to_peer(#state{peer = {remote_via_link, Link, Sid}, role = Role, mode = Mode} = S, Action) ->
+forward_to_peer(#state{peer = {remote_via_link, _Link, _Sid}} = S, Action) ->
+    via_link(Action, S).
+
+via_link(Action, #state{peer = {remote_via_link, Link, Sid}, role = Role, mode = Mode} = S) ->
     #{frame_type := Type} = Spec = frame_spec(Action, S#state.seq_out),
     sent_via_link(allowed(Role, Mode, Type), encodable(Spec), Spec, Link, Sid, S).
 
@@ -645,6 +680,9 @@ sent_via_link(false, _Encodable, _Spec, _Link, _Sid, S) ->
     {{error, not_allowed}, S};
 sent_via_link(true, {error, _} = Unsendable, _Spec, _Link, _Sid, S) ->
     {Unsendable, S};
+sent_via_link(true, ok, _Spec, _Link, _Sid, #state{role = server, seal = #{}, seq_out = Seq,
+                                                   max_sealed_frames = Max} = S) when Seq >= Max ->
+    {{error, sealed_frames_exhausted}, S};
 sent_via_link(true, ok, Spec, Link, Sid, #state{seq_out = Seq} = S) ->
     Bytes = macula_frame:encode(signed_frame(sealed_spec(Spec, S), S)),
     {macula_station_link:send_stream_bytes(Link, Sid, Bytes, last_frame(Spec)), S#state{seq_out = Seq + 1}}.
@@ -682,7 +720,9 @@ carried_nonce(server, Nonce, Sealed) -> Sealed#{nonce => Nonce}.
 %% @private The stream keys a sealed STREAM_OPEN agreed, or none for a clear
 %% stream.
 stream_seal(undefined) -> undefined;
-stream_seal(#{k_c2p := <<_:256>>, k_p2c := <<_:256>>, key_id := <<_:64>>} = Keys) -> Keys.
+stream_seal(#{k_c2p := <<_:256>>, k_p2c := <<_:256>>, key_id := <<_:64>>} = Keys) ->
+    %% k_req sealed the open, once: a stream keeps only what its frames seal under.
+    maps:with([k_c2p, k_p2c, key_id], Keys).
 
 signed_frame(Spec, #state{role = server, key = Load, open = Open}) ->
     macula_frame:provider_stream(Spec, Load(), Open);
@@ -922,22 +962,39 @@ peer_event(_ClearOnASealedStream, State) ->
 %% The provider could not open the open: it holds another key now, which it names, or none. A stream that has sent
 %% nothing reseals ONCE to the key its reseal resolves, bound to the one named (Amendment A1), and reopens through its
 %% link under a new request, keeping its pid; any other ends naming the key, and a second refusal is the answer.
-sealed_refused_arrived(Named, #state{seq_out = 0, reopen = #{args := Args, reseal := Reseal}} = State) ->
-    resealed(Reseal(Named), Args, State#state{reopen = undefined});
+%% The reseal (a lookup) and the reopen (a call to the link) run in a worker, so this stream keeps answering its
+%% owner and its link, and never waits on the link while the link may be calling it. What the owner sends meanwhile
+%% waits in order (`forward_to_peer/2') and goes out under the new open.
+sealed_refused_arrived(Named, #state{seq_out = 0, reopen = #{args := Args, reseal := Reseal},
+                                     peer = {remote_via_link, Link, Sid}, open = Open} = State) ->
+    Stream = self(),
+    Ref = make_ref(),
+    _ = spawn(fun() -> Stream ! {reopened, Ref, resealed_and_reopened(Reseal, Named, Link, Stream, Sid, Open, Args)} end),
+    State#state{reopen = undefined, reopening = {Ref, []}};
 sealed_refused_arrived(Named, State) ->
     refused_with({error, {sealed_refused, Named}}, State).
 
-resealed({ok, KemKey}, Args, #state{peer = {remote_via_link, Link, Sid}, open = Open} = State) ->
-    reopened(macula_station_link:reopen_stream(Link, self(), Sid, Open, Args, KemKey), Link, State);
-resealed({error, _} = Refused, _Args, State) ->
-    refused_with(Refused, State).
+resealed_and_reopened(Reseal, Named, Link, Stream, Sid, Open, Args) ->
+    try Reseal(Named) of
+        {ok, KemKey} -> macula_station_link:reopen_stream(Link, Stream, Sid, Open, Args, KemKey);
+        {error, _} = Refused -> Refused
+    catch
+        Class:_Reason -> {error, {reseal, Class}}
+    end.
 
-%% The link opened the new STREAM_OPEN on a new dedicated stream: this stream reads and writes under it from now on.
-reopened({ok, #{open := Open, seal := Keys, sid := Sid}}, Link, State) ->
-    State#state{id = Sid, peer = {remote_via_link, Link, Sid}, open = Open, verifier = macula_frame:open_stream(Open),
-                seal = stream_seal(Keys)};
-reopened({error, _} = Refused, _Link, State) ->
-    refused_with(Refused, State).
+%% The link opened the new STREAM_OPEN on a new dedicated stream: this stream reads and writes under it from now on,
+%% and what waited goes out, numbered from 0 under the new keys, whether or not the session has ended meanwhile (an
+%% abort's STREAM_ERROR ends the new session at the link too). A reopen that failed ends a session still running.
+reopened({ok, #{open := Open, seal := Keys, sid := Sid}}, Queued, #state{peer = {remote_via_link, Link, _Old}} = State) ->
+    flushed(Queued, State#state{id = Sid, peer = {remote_via_link, Link, Sid}, open = Open,
+                                verifier = macula_frame:open_stream(Open), seal = stream_seal(Keys)});
+reopened({error, _} = Refused, _Queued, #state{ended = undefined} = State) ->
+    refused_with(Refused, State);
+reopened({error, _}, _Queued, State) ->
+    State.
+
+flushed(Queued, State) ->
+    lists:foldl(fun(Action, S) -> {_Sent, S1} = via_link(Action, S), S1 end, State, Queued).
 
 refused_with(Err, #state{reply = Reply} = State) ->
     session_ended(Err, ended_with(Err, State#state{reply = first_reply(Reply, Err)})).

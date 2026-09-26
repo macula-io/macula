@@ -3307,6 +3307,10 @@ parse_seed(Url) when is_list(Url) ->
 %% under the request id as its attach id, and the open goes out as the first
 %% bytes on a dedicated stream of its own. The returned pid is bound to the
 %% requested `owner' (default: the caller), so a crashing owner ends it.
+%% A sealed caller stream numbers its frames from 0 and derives each nonce from that number under k_c2p (§5.2). That is
+%% safe only because one STREAM_OPEN's bytes seal exactly one caller stream state, ever: every open, and every reopen,
+%% draws a new request id and a new encapsulation here. A retry that resent an open's bytes into a new stream state
+%% would repeat nonce 0 under the same k_c2p; no path may.
 open_client_stream(Target, Realm, Proc, Args, Opts, Caller, #state{node_identity = Key, profile = Profile} = S) ->
     Spec = maps:merge(#{request_id => crypto:strong_rand_bytes(16), realm => Realm, procedure => Proc,
                         target => target_node_id(Target, S),
@@ -3647,9 +3651,8 @@ admitted(Admission, Open, Share) ->
 %% at all: each gets a STREAM_ERROR under its own open, whose code names why.
 %% A sealed open is refused right after admission, before any policy, as a
 %% sealed CALL is: this node opens no sealed payload yet.
-on_admission(new, #{sealed := Sealed} = Open, Stream, #state{node_identity = Id, profile = Profile} = S) ->
-    sealed_open_opened(opened_call(macula_kem_keyring:holder(macula_node_keys:key_id(Id)), Profile, Open, Sealed),
-                       Open, Stream, S);
+on_admission(new, #{sealed := _, caller := Caller} = Open, Stream, S) ->
+    sealed_open_with_room(macula_stream_sessions:has_room(Caller), Open, Stream, S);
 on_admission(new, #{realm := Realm, procedure := Proc} = Open, Stream, S) ->
     clear_open_admitted(clear_allowed({Realm, Proc}, S), Open, Stream, S);
 on_admission({copy, _Reply}, Open, Stream, S) ->
@@ -3660,6 +3663,15 @@ on_admission({refused, Refusal}, Open, Stream, S) ->
 %% The code a refusal by the request admission travels as: its kind's name.
 admission_code({Kind, _Ms}) when is_atom(Kind) -> atom_to_binary(Kind);
 admission_code(Kind) when is_atom(Kind) -> atom_to_binary(Kind).
+
+%% A caller at its session cap, or a node at its own, is refused in the clear before its open is opened, so it costs
+%% the node no decapsulation (`too_many_sessions', from the closed set).
+sealed_open_with_room(ok, #{sealed := Sealed} = Open, Stream, #state{node_identity = Id, profile = Profile} = S) ->
+    sealed_open_opened(opened_call(macula_kem_keyring:holder(macula_node_keys:key_id(Id)), Profile, Open, Sealed),
+                       Open, Stream, S);
+sealed_open_with_room({error, AtACap}, Open, Stream, S) ->
+    {Code, Message} = admission_refusal(AtACap),
+    refuse_open(Stream, Open, Code, Message, S).
 
 %% A sealed STREAM_OPEN is opened as a sealed CALL is (E2E design §5.2), and then served as a clear one with its
 %% opened args and the stream keys it agreed. One that does not open is refused in the clear, `sealed_refused', naming

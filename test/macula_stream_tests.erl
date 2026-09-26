@@ -433,10 +433,10 @@ served_streams_of_a_caller_share_its_inbox_budget() ->
         Bystander = served_stream(Link, Other),
         try
             Chunk = crypto:strong_rand_bytes(100_000),
-            [ok = macula_stream:deliver_chunk(S, raw, Chunk) || S <- Streams, _ <- lists:seq(1, 5)],
+            [ok = chunk_in(S, Chunk) || S <- Streams, _ <- lists:seq(1, 5)],
             ?assert(lists:sum([inbox_bytes(S) || S <- Streams]) =< Budget),
             ?assertMatch({told, _Stream, {error, {<<"resource_exhausted">>, _}}}, any_told(1_000)),
-            ok = macula_stream:deliver_chunk(Bystander, raw, Chunk),
+            ok = chunk_in(Bystander, Chunk),
             ?assert(inbox_bytes(Bystander) > 0)
         after
             end_served_streams([Bystander | Streams], Link)
@@ -457,7 +457,7 @@ served_streams_on_the_node_share_its_inbox_budget() ->
         Streams = [served_stream(Link, crypto:strong_rand_bytes(32)) || _ <- lists:seq(1, 4)],
         try
             Chunk = crypto:strong_rand_bytes(100_000),
-            [ok = macula_stream:deliver_chunk(S, raw, Chunk) || S <- Streams, _ <- lists:seq(1, 5)],
+            [ok = chunk_in(S, Chunk) || S <- Streams, _ <- lists:seq(1, 5)],
             ?assert(lists:sum([inbox_bytes(S) || S <- Streams]) =< Room),
             ?assertMatch({told, _Stream, {error, {<<"resource_exhausted">>, _}}}, any_told(1_000))
         after
@@ -477,9 +477,9 @@ a_read_chunk_gives_its_bytes_back() ->
         Stream = served_stream(Link, crypto:strong_rand_bytes(32)),
         try
             Chunk = crypto:strong_rand_bytes(100_000),
-            [ok = macula_stream:deliver_chunk(Stream, raw, Chunk) || _ <- lists:seq(1, 2)],
+            [ok = chunk_in(Stream, Chunk) || _ <- lists:seq(1, 2)],
             [{chunk, Chunk} = macula_stream:recv(Stream, 1_000) || _ <- lists:seq(1, 2)],
-            [ok = macula_stream:deliver_chunk(Stream, raw, Chunk) || _ <- lists:seq(1, 2)],
+            [ok = chunk_in(Stream, Chunk) || _ <- lists:seq(1, 2)],
             ?assert(inbox_bytes(Stream) > 0),
             ?assertEqual(not_told, any_told(100))
         after
@@ -496,19 +496,30 @@ apart(Test) ->
 %% A served bidi stream carried by Link, as a link starts one: with a loader of the provider's node identity key, the
 %% verified STREAM_OPEN it serves, Link as its connection and the pq_pure profile. It is admitted as a session of Caller
 %% and owned by the test process.
+%% A served stream's caller's frames are signed and numbered, as they arrive over its link: the caller's key, its
+%% open and its next seq are kept here for `chunk_in/2'.
 served_stream(Link, Caller) ->
     Provider = stream_node_key(),
+    Signer = stream_node_key(),
     OpenSpec = #{request_id => crypto:strong_rand_bytes(16), realm => <<0:256>>, procedure => <<"acme/count_v1">>,
                  target => macula_node_keys:key_id(Provider), deadline => erlang:system_time(millisecond) + 60_000,
                  payload => #{}, mode => bidi},
-    {ok, Open} = macula_frame:verify_request(as_received(macula_frame:stream_open(OpenSpec, stream_node_key())),
-                                             pq_pure),
+    {ok, Open} = macula_frame:verify_request(as_received(macula_frame:stream_open(OpenSpec, Signer)), pq_pure),
     {ok, Stream} = macula_stream:start_link(#{id => crypto:strong_rand_bytes(16), role => server, mode => bidi,
                                               owner => self(), key => fun() -> Provider end, open => Open, conn => Link,
                                               profile => pq_pure}),
     ok = macula_stream:attach_to_link(Stream, Link, crypto:strong_rand_bytes(16)),
     ok = macula_stream_sessions:admit(Caller, Stream),
+    put({caller_of, Stream}, {Signer, Open, 0}),
     Stream.
+
+%% The caller's next STREAM_DATA carrying Chunk, delivered as its link delivers it.
+chunk_in(Stream, Chunk) ->
+    {Signer, Open, Seq} = get({caller_of, Stream}),
+    put({caller_of, Stream}, {Signer, Open, Seq + 1}),
+    macula_stream:deliver_frame(Stream, as_received(macula_frame:caller_stream(#{frame_type => stream_data, seq => Seq,
+                                                                                  encoding => raw, body => Chunk},
+                                                                                Signer, Open))).
 
 stream_node_key() ->
     {ok, Key} = macula_node_keys:generate(identity, pq_pure),

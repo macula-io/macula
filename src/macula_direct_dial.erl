@@ -778,10 +778,14 @@ resealed_to_any({ok, Ad, <<_:64>>}, Call) -> Call(Ad);
 resealed_to_any(_NoKey, _Call) -> {error, {confidentiality, no_kem_key}}.
 
 %% The provider's advertisement in one fresh lookup, and the id of the key it names.
-reresolved(#{pool := Pool, find_records := Find}, Realm, Procedure, Provider, Deadline) ->
+reresolved(Dial, Realm, Procedure, Provider, Deadline) ->
+    providers_key(providers_ads(Dial, Realm, Procedure, Provider, Deadline)).
+
+%% The provider's own trusted advertisements of the procedure, in one fresh lookup.
+providers_ads(#{pool := Pool, find_records := Find}, Realm, Procedure, Provider, Deadline) ->
     Trust = trust(Pool, Realm, Procedure),
-    providers_key([Rec || Rec <- found(Find(Pool, macula_record:procedure_key(Realm, Procedure), budget(Deadline))),
-                          macula_record:key_id(Rec) =:= Provider, advertisement_trusted(Rec, Trust)]).
+    [Rec || Rec <- found(Find(Pool, macula_record:procedure_key(Realm, Procedure), budget(Deadline))),
+            macula_record:key_id(Rec) =:= Provider, advertisement_trusted(Rec, Trust)].
 
 found({ok, Recs}) -> Recs;
 found(_NotFound) -> [].
@@ -820,7 +824,18 @@ stream_work(#{pool := Pool, call_stream_station := CallStreamStation,
 stream_resealed(no_key, _Dial, _Realm, _Procedure, _Provider, _Deadline) ->
     {error, {confidentiality, no_kem_key}};
 stream_resealed(<<_:64>> = Named, Dial, Realm, Procedure, Provider, Deadline) ->
-    resealed_to(reresolved(Dial, Realm, Procedure, Provider, Deadline), Named, fun advertised_kem_key/1).
+    resealed_to(named_key(providers_ads(Dial, Realm, Procedure, Provider, Deadline), Named), Named,
+                fun advertised_kem_key/1).
+
+%% The advertisement of the provider's that names the key the refusal named, wherever the lookup gave it: while the
+%% provider rotates, the DHT may still serve its previous advertisement too. When none names it, the first one's key
+%% (a mismatch), or none.
+named_key(Ads, Named) ->
+    naming([Ad || Ad <- Ads, maps:find(kem_key_id, macula_record:read_procedure_advertisement(Ad)) =:= {ok, Named}],
+           Named, Ads).
+
+naming([Ad | _], Named, _Ads) -> {ok, Ad, Named};
+naming([], _Named, Ads) -> providers_key(Ads).
 
 advertised_kem_key(Ad) ->
     {ok, maps:get(kem_key, macula_record:read_procedure_advertisement(Ad))}.

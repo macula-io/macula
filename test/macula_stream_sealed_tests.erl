@@ -34,7 +34,14 @@ cases(Keys) ->
                  fun a_refused_open_after_a_send_ends_naming_the_key/1,
                  fun a_reseal_that_fails_ends_with_its_reason/1,
                  fun a_second_refusal_ends_the_stream/1,
-                 fun a_refusal_without_a_reseal_ends_naming_the_key/1]].
+                 fun a_refusal_without_a_reseal_ends_naming_the_key/1,
+                 fun the_stream_answers_and_queues_sends_while_it_reseals/1,
+                 fun an_abort_while_resealing_ends_at_once_and_reaches_the_new_stream/1,
+                 fun a_streams_status_shows_no_key_and_no_args/1,
+                 fun a_clear_refusal_after_seq_0_ends_the_session/1,
+                 fun a_clear_caller_chunk_on_a_sealed_served_stream_ends_the_session/1,
+                 fun a_link_carried_stream_takes_no_in_process_delivery/1,
+                 fun a_provider_seals_no_more_frames_than_random_nonces_allow/1]].
 
 %% The caller's nonce is its seq, so its ciphertext is the vectors' byte for
 %% byte (E2E_SEAL_V1.md, the stream_open entry's frames in direction 0).
@@ -254,9 +261,144 @@ a_refusal_without_a_reseal_ends_naming_the_key(#{caller := Caller, provider := P
     ?assertEqual({error, {sealed_refused, <<2:64>>}}, macula_stream:recv(Stream, 1000)),
     gen_server:stop(Stream).
 
+%% The reseal (a DHT lookup) and the reopen run outside the stream: while
+%% they do, the stream answers, and what its owner sends waits and then goes
+%% out under the new open, numbered from 0, never under the refused keys.
+the_stream_answers_and_queues_sends_while_it_reseals(#{caller := Caller, provider := Provider} = Keys) ->
+    Open = verified_open(Keys, bidi),
+    Test = self(),
+    Reseal = fun(_Named) -> Test ! {resealing, self()}, receive go -> {ok, <<"new kem key">>} end end,
+    Stream = stream(client, Caller, Open, seal(), reopen_by(Reseal)),
+    ok = macula_stream:deliver_frame(Stream, refusal(<<2:64>>, Provider, Open)),
+    Resealer = receive {resealing, R} -> R after 1000 -> error(no_reseal) end,
+    ?assertNotEqual(Stream, Resealer),
+    ?assertMatch(#{}, macula_stream:info(Stream)),
+    ok = macula_stream:send(Stream, <<"early">>),
+    ?assertEqual(none, sent_within(200)),
+    Resealer ! go,
+    NewOpen = verified_open(Keys, bidi, <<8:128>>),
+    #{k_c2p := KC2P} = NewSeal = seal(),
+    {Asker, {_Sid, _Open, _Args, _Kem}} = reopen_asked_by(#{open => NewOpen, seal => NewSeal, sid => <<8:128>>}),
+    ?assertNotEqual(Stream, Asker),
+    {Frame, false} = sent_on(<<8:128>>),
+    {ok, #{seq := 0, sealed := #{ct := Ct}}, _} =
+        macula_frame:verify_caller_stream(Frame, macula_frame:open_stream(NewOpen), pq_pure),
+    Aad = macula_seal:stream_aad(<<"stream_data">>, <<8:128>>, 0, 0),
+    ?assertEqual({ok, <<"early">>}, macula_seal:open(KC2P, macula_seal:stream_nonce(0), Aad, Ct)),
+    gen_server:stop(Stream).
+
+%% An abort while the reopen is pending ends the session at once for the
+%% owner, and once the new stream exists its error goes out on it, so the link
+%% does not keep a session nobody reads.
+an_abort_while_resealing_ends_at_once_and_reaches_the_new_stream(#{caller := Caller, provider := Provider} = Keys) ->
+    Open = verified_open(Keys, bidi),
+    Test = self(),
+    Reseal = fun(_Named) -> Test ! {resealing, self()}, receive go -> {ok, <<"new kem key">>} end end,
+    Stream = stream(client, Caller, Open, seal(), reopen_by(Reseal)),
+    ok = macula_stream:deliver_frame(Stream, refusal(<<2:64>>, Provider, Open)),
+    Resealer = receive {resealing, R} -> R after 1000 -> error(no_reseal) end,
+    ?assertNotEqual(Stream, Resealer),
+    ok = macula_stream:abort(Stream, <<"stop">>, <<"no longer wanted">>),
+    ?assertMatch({error, {<<"stop">>, _}}, macula_stream:recv(Stream, 1000)),
+    Resealer ! go,
+    NewOpen = verified_open(Keys, bidi, <<8:128>>),
+    _ = reopen_asked_by(#{open => NewOpen, seal => seal(), sid => <<8:128>>}),
+    {Frame, true} = sent_on(<<8:128>>),
+    ?assertMatch({ok, #{frame_type := stream_error, sealed := _}, _},
+                 macula_frame:verify_caller_stream(Frame, macula_frame:open_stream(NewOpen), pq_pure)),
+    gen_server:stop(Stream).
+
+%% A stream's status, and so its crash report, shows neither its stream keys
+%% nor the args it would reopen with.
+a_streams_status_shows_no_key_and_no_args(#{caller := Caller} = Keys) ->
+    Open = verified_open(Keys, bidi),
+    #{k_c2p := KC2P, k_p2c := KP2C} = Seal = seal(),
+    Args = #{secret => <<"the reopen args">>},
+    Stream = stream(client, Caller, Open, Seal, #{args => Args, reseal => fun(_) -> {error, unused} end}),
+    Status = term_to_binary(sys:get_status(Stream)),
+    [?assertEqual(nomatch, binary:match(Status, Secret)) || Secret <- [KC2P, KP2C, <<"the reopen args">>]],
+    gen_server:stop(Stream).
+
+%% A clear refusal is taken only as the provider's first frame: a later one is
+%% a downgrade.
+a_clear_refusal_after_seq_0_ends_the_session(#{caller := Caller, provider := Provider} = Keys) ->
+    Open = verified_open(Keys, bidi),
+    #{k_p2c := KP2C} = Seal = seal(),
+    Stream = stream(client, Caller, Open, Seal),
+    ok = macula_stream:deliver_frame(Stream, provider_sealed(stream_data, 0, #{encoding => raw}, <<"first">>, KP2C,
+                                                             Provider, Open)),
+    ?assertEqual({chunk, <<"first">>}, macula_stream:recv(Stream, 1000)),
+    ok = macula_stream:deliver_frame(Stream, provider_frame(#{frame_type => stream_error, seq => 1,
+                                                              code => <<"too_many_sessions">>, message => <<"x">>},
+                                                            Provider, Open)),
+    ?assertMatch({error, {<<"malformed_frame">>, _}}, macula_stream:recv(Stream, 1000)),
+    gen_server:stop(Stream).
+
+%% The provider's side refuses a clear caller frame on a sealed stream too.
+a_clear_caller_chunk_on_a_sealed_served_stream_ends_the_session(#{caller := Caller, provider := Provider} = Keys) ->
+    Open = verified_open(Keys, bidi),
+    Stream = stream(server, Provider, Open, seal()),
+    Clear = wire(macula_frame:caller_stream(#{frame_type => stream_data, seq => 0, encoding => raw,
+                                              body => <<"clear">>}, Caller, Open)),
+    ok = macula_stream:deliver_frame(Stream, Clear),
+    ?assertMatch({error, {<<"malformed_frame">>, _}}, macula_stream:recv(Stream, 1000)),
+    gen_server:stop(Stream).
+
+%% A link-carried stream takes its peer's frames only as verified frames: the
+%% in-process pair's deliveries, which skip verification and sealing, reach
+%% none of its readers.
+a_link_carried_stream_takes_no_in_process_delivery(#{caller := Caller} = Keys) ->
+    Open = verified_open(Keys, bidi),
+    Stream = stream(client, Caller, Open, seal()),
+    gen_server:cast(Stream, {peer_chunk, raw, <<"not verified">>}),
+    gen_server:cast(Stream, {peer_reply, {ok, forged}}),
+    gen_server:cast(Stream, {peer_error, <<"forged">>, <<"not verified">>}),
+    ?assertEqual({error, timeout}, macula_stream:recv(Stream, 300)),
+    gen_server:stop(Stream).
+
+%% A provider's frames carry random nonces under one k_p2c, which GCM bounds
+%% (2^32 frames, NIST SP 800-38D): past `max_sealed_frames' a provider stream
+%% seals nothing more and says so, rather than risk a repeated nonce.
+a_provider_seals_no_more_frames_than_random_nonces_allow(#{provider := Provider} = Keys) ->
+    Open = verified_open(Keys, bidi),
+    #{mode := Mode} = Open,
+    {ok, Stream} = macula_stream:start_link(#{id => ?SID, role => server, mode => Mode, owner => self(),
+                                              key => fun() -> Provider end, open => Open, conn => self(),
+                                              profile => pq_pure, seal => seal(), max_sealed_frames => 2}),
+    ok = macula_stream_sessions:admit(maps:get(caller, Open), Stream),
+    ok = macula_stream:attach_to_link(Stream, self(), ?SID),
+    ok = macula_stream:send(Stream, <<"one">>),
+    ok = macula_stream:send(Stream, <<"two">>),
+    _ = [sent(), sent()],
+    ?assertEqual({error, sealed_frames_exhausted}, macula_stream:send(Stream, <<"three">>)),
+    ?assertEqual(none, sent_within(200)),
+    gen_server:stop(Stream).
+
 %%------------------------------------------------------------------
 %% Helpers
 %%------------------------------------------------------------------
+
+%% The reopen request and who made it.
+reopen_asked_by(Reopened) ->
+    receive
+        {'$gen_call', {Asker, _} = From, {reopen_stream, _Stream, Sid, Open, Args, KemKey}} ->
+            gen_server:reply(From, {ok, Reopened}),
+            {Asker, {Sid, Open, Args, KemKey}}
+    after 1000 ->
+        error(no_reopen_asked)
+    end.
+
+sent_within(Ms) ->
+    receive {'$gen_cast', {send_stream_bytes, _Sid, _Bytes, _Last}} -> sent after Ms -> none end.
+
+sent_on(Sid) ->
+    receive
+        {'$gen_cast', {send_stream_bytes, Sid, Bytes, Last}} ->
+            {ok, Frame, <<>>} = macula_frame:decode(Bytes),
+            {Frame, Last}
+    after 1000 ->
+        erlang:error({no_frame_sent_on, Sid})
+    end.
 
 reopen_by(Reseal) ->
     #{args => #{}, reseal => Reseal}.
