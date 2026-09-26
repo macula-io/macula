@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [Unreleased]
+## [13.0.0] - 2026-09-26
 
 End-to-end payload confidentiality for calls and streams (plans/DESIGN_E2E_PAYLOAD_CONFIDENTIALITY.md, packages 2
 to 4, with Amendment A1): a call or a stream to a provider that names a KEM key is sealed by the caller and opened only
