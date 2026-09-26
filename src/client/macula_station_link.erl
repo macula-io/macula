@@ -585,7 +585,8 @@ call(Pid, Target, Realm, Procedure, Payload, TimeoutMs, Token, Seal)
        is_binary(Procedure),
        is_integer(TimeoutMs), TimeoutMs > 0, TimeoutMs =< ?MAX_CALL_TIMEOUT_MS,
        is_binary(Token),
-       (Seal =:= clear orelse (is_tuple(Seal) andalso element(1, Seal) =:= sealed_to)) ->
+       (Seal =:= clear orelse (tuple_size(Seal) =:= 2 andalso element(1, Seal) =:= sealed_to
+                                andalso is_binary(element(2, Seal)))) ->
     %% The deadline is the caller's: a link busy past it doesn't send the
     %% CALL at all (see call_in_time/4). gen_server timeout = TimeoutMs +
     %% 500 to give the server time to report a clean `{error, timeout}'

@@ -845,7 +845,8 @@ call_station(Pool, Station, Target, Realm, Procedure, Payload, TimeoutMs, UcanTo
        is_binary(UcanToken),
        is_map(LinkOpts),
        is_integer(DialTimeoutMs), DialTimeoutMs > 0,
-       (Seal =:= clear orelse (is_tuple(Seal) andalso element(1, Seal) =:= sealed_to)) ->
+       (Seal =:= clear orelse (is_tuple(Seal) andalso tuple_size(Seal) =:= 2 andalso element(1, Seal) =:= sealed_to
+                                andalso is_binary(element(2, Seal)))) ->
     gen_server:call(Pool,
                     {call_station, Station, Target, Realm, Procedure, Payload,
                      TimeoutMs, DialTimeoutMs, UcanToken, LinkOpts, Seal},

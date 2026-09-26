@@ -10,9 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [13.0.0] - 2026-09-26
 
 End-to-end payload confidentiality for calls and streams (plans/DESIGN_E2E_PAYLOAD_CONFIDENTIALITY.md, packages 2
-to 4, with Amendment A1): a call or a stream to a provider that names a KEM key is sealed by the caller and opened only
-by the provider, so every station on its path relays ciphertext. E2E seal scheme 1: ML-KEM-1024, plus P-384 in pq_hybrid, HKDF-SHA-384,
-AES-256-GCM, pinned by test/vectors/e2e_seal_v1.json.
+to 4, with Amendment A1): a call or a stream to a provider that names a KEM key is sealed by the caller to that key,
+and the provider seals what it answers. E2E seal scheme 1: ML-KEM-1024, plus P-384 in pq_hybrid, HKDF-SHA-384,
+AES-256-GCM, pinned by test/vectors/e2e_seal_v1.json. What a station on the path still sees is the design's §9 list.
+No confidentiality claim is made before the scheme is tested across SDKs and measured (D11).
 
 ### Changed (breaking)
 
@@ -21,7 +22,7 @@ AES-256-GCM, pinned by test/vectors/e2e_seal_v1.json.
   names no key. `confidential => off` sends in the clear, as the application's own decision. `confidential => required`
   without an advertisement resolves the target's advertisement and fails closed. Anything else, `call_station/7`
   included, is `{error, {confidentiality, no_signed_state}}`. An advertisement of another node or procedure is refused
-  by name (`not_the_target`, `not_the_procedure`). A lookup can deny a call, but never downgrade it (design §8.1).
+  by name (`not_the_target`, `not_the_realm`, `not_the_procedure`). A lookup can deny a call, but never downgrade it (design §8.1).
   Call sites to update:
   - mcl-om `src/mcl_om_capabilities.erl` (`dial_provider`), which now passes its verified advertisement (mcl_om
     0.33.0);
@@ -63,8 +64,8 @@ AES-256-GCM, pinned by test/vectors/e2e_seal_v1.json.
   key still opens calls for 30 minutes, then is deleted. A stolen key opens at most about 24.5 hours of calls.
   Precondition: one node identity runs in one VM.
 - **A provider opens a sealed CALL and seals every answer to it**: a RESULT, a handler's error, an unknown procedure,
-  an unauthorized request, a crash, all sealed under the call's reply key with a fresh nonce. A station sees that a
-  reply is an error, never which. A call that does not open is refused in the clear as `sealed_refused`, naming the
+  an unauthorized request, a crash, all sealed under the call's reply key with a fresh nonce. A reply's code and
+  detail travel sealed. A call that does not open is refused in the clear as `sealed_refused`, naming the
   key the provider holds now. A procedure whose spec says `required`, or one that has named its key past the window
   its last keyless advertisement lived in, refuses a clear call as `sealed_required`.
 - **A caller seals and opens.** `macula:call/5,6` seals to the key the advertisement it resolved names

@@ -99,8 +99,8 @@ stations: no open ports, NAT-friendly, no VPN. It provides:
   ordered delivery.
 - **Content** — content-addressed sharing and live streaming (MCID).
 - **DHT records** — signed, TTL'd records (advertisements, endpoints, more).
-- **Sealed calls and streams** — a payload sealed to the provider's KEM key,
-  opened only by the provider (off until `kem_advertise` is enabled).
+- **Sealed calls and streams** — a payload sealed to the provider's KEM key
+  (off until `kem_advertise` is enabled).
 - **Erlang distribution over mesh** — `net_adm:ping` across firewalls, no VPN.
 - **TCP bridge** — an unmodified TCP client reaches an unmodified TCP service
   across the mesh, one stream per connection, under the procedure's auth
