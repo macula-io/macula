@@ -82,7 +82,7 @@ unless stated; "out of our means" marks what needs money or an institution we do
 - [ ] #4: decide the revocation bound in macula issue #38.
 - [x] #5: every link type measured (PQKX_MEASUREMENT round 5).
 - [ ] #6: a loud, named refusal for a stored identity in another profile (macula issue #40).
-- [ ] #14: a design plan for end-to-end payload confidentiality.
+- [x] #14: a design plan for end-to-end payload confidentiality: [DESIGN_E2E_PAYLOAD_CONFIDENTIALITY.md](DESIGN_E2E_PAYLOAD_CONFIDENTIALITY.md), decided 2026-09-26, building.
 
 [mg]: PLAN_MILITARY_GRADE.md
 [pq]: PLAN_POST_QUANTUM_SECURITY.md
