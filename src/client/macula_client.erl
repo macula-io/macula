@@ -613,6 +613,12 @@
 
 -record(state, {
     seeds         :: [seed()],
+    %% Each connected link and the station it reached, from the link's own
+    %% notice at handshake, dropped on its disconnect notice or its DOWN. The
+    %% pool reads connectedness and stations from here and never calls into a
+    %% link from its own handle_call: a link busy signing or verifying frames
+    %% would hold every pool call (macula#44).
+    connected = #{} :: #{pid() => <<_:256>>},
     node_id       :: <<_:256>>,
     %% The realm keys pinned at start, from the `realm_trust' option: realm id
     %% to the realm's key as carried.
@@ -1756,10 +1762,9 @@ handle_call({unadvertise_stream, Realm, Procedure}, _From, S0) ->
 
 handle_call({realm_key, RealmId}, _From, #state{realm_keys = Keys} = S) ->
     {reply, pinned_realm_key(maps:find(RealmId, Keys)), S};
-handle_call({resolved_candidate, RealmId, Procedure}, _From,
-            #state{resolved = Resolved, links = Links} = S) ->
+handle_call({resolved_candidate, RealmId, Procedure}, _From, #state{resolved = Resolved} = S) ->
     {reply, still_usable(maps:find({RealmId, Procedure}, Resolved),
-                         erlang:monotonic_time(millisecond), live_links(Links)), S};
+                         erlang:monotonic_time(millisecond), known_links(S)), S};
 handle_call({sign_node_record, Record}, _From, #state{node_identity = Key} = S) ->
     {reply, node_record_signed(macula_record:node_signed(Record), Record, Key), S};
 handle_call({sign_node_record_bounded, Record}, _From, #state{node_identity = Key} = S) ->
@@ -1772,7 +1777,7 @@ handle_call({withdraw_node_record, Withdrawn, Reason}, _From, #state{node_identi
 handle_call(status, _From,
             #state{seeds = Seeds, links = Links, subs = Subs,
                    node_id = NodeId, replication = Replication} = S) ->
-    {Healthy, Failed} = count_link_health(Seeds, Links),
+    {Healthy, Failed} = count_link_health(Seeds, Links, S#state.connected),
     Status = #{
         seeds              => Seeds,
         healthy_links      => Healthy,
@@ -1798,7 +1803,7 @@ handle_call(status, _From,
     {reply, {ok, Status}, S};
 
 handle_call(links, _From, #state{links = Links, last_disconnects = Last} = S) ->
-    {reply, {ok, link_infos(Links, Last)}, S};
+    {reply, {ok, link_infos(Links, Last, S#state.connected)}, S};
 
 handle_call(_Req, _From, S) ->
     {reply, {error, unknown_call}, S}.
@@ -1908,8 +1913,11 @@ handle_info({'EXIT', Admission, Reason}, #state{admission = Admission} = S) ->
     {stop, {shutdown, {admission_down, Reason}}, S};
 %% A link says why it disconnected, just before it stops `normal'. Its DOWN
 %% follows this message, as signals from one process arrive in order.
-handle_info({macula_link_disconnected, Pid, Summary}, S) ->
-    {noreply, disconnect_kept(find_link_by_pid(Pid, S), Summary, S)};
+handle_info({macula_link_connected, Pid, NodeId}, S) ->
+    {noreply, link_connected(find_link_by_pid(Pid, S), Pid, NodeId, S)};
+handle_info({macula_link_disconnected, Pid, Summary}, #state{connected = Connected} = S) ->
+    {noreply, disconnect_kept(find_link_by_pid(Pid, S), Summary,
+                              S#state{connected = maps:remove(Pid, Connected)})};
 handle_info({'EXIT', _Pid, _Reason}, S) ->
     %% Links are linked to us via gen_server:start_link in
     %% start_link_for_seed (we trap_exit). The DOWN monitor fires
@@ -2295,8 +2303,8 @@ ensure_link_for(_Missing, Station, ExtraOpts, S) ->
 
 reuse_by_node_id(undefined, Station, ExtraOpts, S) ->
     dial_fresh(Station, ExtraOpts, S);
-reuse_by_node_id(NodeId, Station, ExtraOpts, #state{links = Links} = S) ->
-    reuse_or_dial(find_link_by_node_id(NodeId, Links), Station, ExtraOpts, S).
+reuse_by_node_id(NodeId, Station, ExtraOpts, S) ->
+    reuse_or_dial(find_link_by_node_id(NodeId, known_links(S)), Station, ExtraOpts, S).
 
 reuse_or_dial(Pid, _Station, _ExtraOpts, S) when is_pid(Pid) ->
     {Pid, S};
@@ -2395,8 +2403,13 @@ logged_refusal({quiet, Report}, _Reason) ->
 %% acceptable, RARE cost: only a direct-dial literal-key MISS reaches
 %% here at all (see `ensure_link/3''s own doc for why every subsequent
 %% call to the same resolved URL skips this entirely).
-find_link_by_node_id(NodeId, Links) ->
-    link_pid_of(first_matching_link(live_links(Links), NodeId)).
+find_link_by_node_id(NodeId, KnownLinks) ->
+    link_pid_of(first_matching_link(KnownLinks, NodeId)).
+
+%% The pool's links that have a process, as {seed, pid, station}: the
+%% station each told the pool at handshake, `undefined' before it.
+known_links(#state{links = Links, connected = Connected}) ->
+    [{Seed, Pid, maps:get(Pid, Connected, undefined)} || {Seed, Pid} <- live_links(Links)].
 
 %% The pool's links that have a process, as {seed, pid}: the shape both
 %% lookups below work on, and the shape a test can build without the pool.
@@ -2420,15 +2433,10 @@ live_links(Links) ->
 
 first_matching_link([], _NodeId) ->
     undefined;
-first_matching_link([{_Seed, Pid} = Link | Rest], NodeId) ->
-    %% safe_peer_node_id/1 (below, pre-existing) already absorbs a dead
-    %% or wedged link's gen_server:call exit -- exactly the "one bad
-    %% link must not crash this whole reuse scan" concern this function
-    %% would otherwise need its own try/catch for.
-    keep_or_next(safe_peer_node_id(Pid), Link, Rest, NodeId).
-
-keep_or_next(NodeId, Link, _Rest, NodeId) when NodeId =/= undefined -> Link;
-keep_or_next(_Other, _Link, Rest, NodeId) -> first_matching_link(Rest, NodeId).
+first_matching_link([{Seed, Pid, NodeId} | _Rest], NodeId) when NodeId =/= undefined ->
+    {Seed, Pid};
+first_matching_link([_Other | Rest], NodeId) ->
+    first_matching_link(Rest, NodeId).
 
 %% A remembered candidate is handed back only while its horizon has not
 %% elapsed AND the pool still holds a live link to the station it names.
@@ -2507,6 +2515,11 @@ report_connect_wait(Outcome, Pid, ElapsedMs) ->
                                link => Pid}),
     ok.
 
+%% The worker waiting on the link asks it for its station directly: this runs
+%% in that worker, never in the pool, so a busy link delays only this wait.
+link_node_id(Pid, true)   -> safe_peer_node_id(Pid);
+link_node_id(_Pid, false) -> undefined.
+
 connect_wait_reason(true)  -> connected;
 connect_wait_reason(false) -> deadline.
 
@@ -2533,10 +2546,15 @@ call_after_connect(false, _Pid, _Target, _Realm, _Proc, _Payload, _Deadline, _Uc
 %% Live links that have completed CONNECT/HELLO. Used by publish,
 %% which (unlike advertise) gains nothing from dispatching to a
 %% mid-handshake link.
-connected_link_pids(#state{} = S) ->
-    [P || P <- spawned_link_pids(S),
-          is_process_alive(P),
-          safe_is_connected(P)].
+connected_link_pids(#state{connected = Connected} = S) ->
+    [P || P <- spawned_link_pids(S), is_map_key(P, Connected)].
+
+%% A connected notice from a link the pool holds; one from a link it no longer
+%% holds (a notice racing that link's DOWN) is dropped.
+link_connected({ok, _Seed}, Pid, NodeId, #state{connected = Connected} = S) ->
+    S#state{connected = Connected#{Pid => NodeId}};
+link_connected(_NotHeld, _Pid, _NodeId, S) ->
+    S.
 
 %% Which of the currently-connected links receive one publish, given
 %% the pool's replication_factor: the first `Replication' of `Targets'
@@ -2888,56 +2906,50 @@ withdrawal_signed({ok, Authorization}, Realm, Proc, Key) ->
     end.
 
 %% Count `(healthy, failed)' links across configured seeds. A seed is
-%% healthy when its worker pid is alive AND its station_link reports
-%% `is_connected'. Anything else (no pid yet, dead pid, mid-handshake)
-%% counts as failed. Probes are sequential; cap at 1s per probe via
-%% `is_connected/1' so a hung station can't stall the whole
-%% `status/1' call past one second per stuck seed.
-count_link_health(Seeds, Links) ->
-    lists:foldl(fun(Seed, Acc) -> tally_seed(maps:find(Seed, Links), Acc) end,
+%% healthy when its link has told the pool it is connected. Anything else
+%% (no pid yet, mid-handshake, gone) counts as failed. Read from the pool's
+%% own state: no call into a link (macula#44).
+count_link_health(Seeds, Links, Connected) ->
+    lists:foldl(fun(Seed, Acc) -> tally_seed(maps:find(Seed, Links), Connected, Acc) end,
                 {0, 0}, Seeds).
 
-tally_seed({ok, #link_state{pid = Pid}}, {H, F}) when is_pid(Pid) ->
-    bump(link_healthy(Pid), H, F);
-tally_seed(_, {H, F}) ->
+tally_seed({ok, #link_state{pid = Pid}}, Connected, {H, F}) when is_pid(Pid) ->
+    bump(is_map_key(Pid, Connected), H, F);
+tally_seed(_, _Connected, {H, F}) ->
     {H, F + 1}.
 
 bump(true,  H, F) -> {H + 1, F};
 bump(false, H, F) -> {H, F + 1}.
 
-link_healthy(Pid) ->
-    is_process_alive(Pid) andalso safe_is_connected(Pid).
-
 %% Build one `link_info()' per spawned link. Skips seeds whose link
 %% worker is not (yet) a live pid — those have no addressable station.
-link_infos(Links, Last) ->
-    [link_info(Seed, Pid, maps:get(Seed, Last, undefined))
+link_infos(Links, Last, Connected) ->
+    [link_info(Seed, Pid, maps:get(Seed, Last, undefined), maps:find(Pid, Connected))
      || {Seed, #link_state{pid = Pid}} <- maps:to_list(Links),
         is_pid(Pid)].
 
-link_info(Seed, Pid, LastDisconnect) ->
-    Connected = link_healthy(Pid),
+%% A link's station, as it told the pool at handshake; `undefined' before.
+link_info(Seed, Pid, LastDisconnect, Station) ->
     #{seed            => Seed,
       host            => seed_host(Seed),
       pid             => Pid,
-      connected       => Connected,
-      node_id         => link_node_id(Pid, Connected),
+      connected       => Station =/= error,
+      node_id         => station_or_undefined(Station),
       last_disconnect => LastDisconnect}.
 
-%% Only probe the peer pubkey on a connected link; a mid-handshake
-%% link answers `{error, not_connected}'.
-link_node_id(Pid, true) ->
-    safe_peer_node_id(Pid);
-link_node_id(_Pid, false) ->
-    undefined.
+station_or_undefined({ok, NodeId}) -> NodeId;
+station_or_undefined(error)        -> undefined.
 
 %%--------------------------------------------------------------------
-%% Link probes that cannot kill the pool
+%% Link probes that cannot kill their caller
 %%
 %% `is_connected/1' and `peer_node_id/1' are both `gen_server:call' with
-%% a 1s cap, and every caller below runs INSIDE the pool's own process.
-%% A `gen_server:call' exits the CALLER two ways, and the pool is the
-%% caller:
+%% a 1s cap. The pool itself no longer calls them: it keeps each link's
+%% connectedness and station from the link's notice at handshake
+%% (macula#44), because a link busy signing or verifying frames held every
+%% pool call behind these probes. What still probes is a worker waiting on
+%% a link (`await_connected/2'). A `gen_server:call' exits the CALLER two
+%% ways:
 %%
 %%   - `{noproc, _}'  — the link died since the `is_process_alive/1'
 %%     check. Narrow, microseconds wide.
@@ -2945,10 +2957,10 @@ link_node_id(_Pid, false) ->
 %%     second. No race required at all, and a wedged station produces
 %%     exactly this.
 %%
-%% The second is the reachable one and it was unguarded. Either takes
-%% the pool down, and with it every subscription, advertisement and
-%% pending call the process is holding — so probing one sick link
-%% destroyed the client's entire connection to the mesh.
+%% The second is the reachable one and it was unguarded. When the pool
+%% probed, either took the pool down, and with it every subscription,
+%% advertisement and pending call the process was holding — so probing
+%% one sick link destroyed the client's entire connection to the mesh.
 %%
 %% ⚠ Deviation from let-it-crash, deliberate, per this repo's rule that
 %% try/catch is permitted where it preserves a signal that would
@@ -2965,7 +2977,8 @@ safe_is_connected(Pid) ->
 
 %% Also absorbs an unexpected reply shape. The previous `case' matched
 %% only `{ok, _}' and `{error, not_connected}', so any third answer was
-%% a `case_clause' in the pool — the same fatality by another route.
+%% a `case_clause' in the caller. Used only by a connect-waiting worker
+%% (`await_connected/2'), never by the pool itself (macula#44).
 safe_peer_node_id(Pid) ->
     try macula_station_link:peer_node_id(Pid) of
         {ok, NodeId} -> NodeId;
@@ -3048,7 +3061,7 @@ add_usable_discovered_seeds(Stations, #state{discovery = D, links = Links,
     ByStringSet = sets:from_list(ByString, [{version, 2}]),
     Fresh = [Seed || {Seed, NodeId} <- Stations,
                      sets:is_element(Seed, ByStringSet),
-                     not already_connected_to(NodeId, Links)],
+                     not already_connected_to(NodeId, known_links(S))],
     lists:foldl(fun add_one_discovered_seed/2, S, Fresh).
 
 %% Pure: which of `NewSeeds' are worth adding, given `ExistingSeeds'
@@ -3164,8 +3177,8 @@ already_connected_to(undefined, _Links) ->
     %% in or out by identity here -- falls through to the host/port
     %% dedup above, no worse than before this check existed.
     false;
-already_connected_to(NodeId, Links) ->
-    find_link_by_node_id(NodeId, Links) =/= undefined.
+already_connected_to(NodeId, KnownLinks) ->
+    find_link_by_node_id(NodeId, KnownLinks) =/= undefined.
 
 add_one_discovered_seed(Seed, S) ->
     discovered_within_budget(spend_dial_budget(Seed, S), Seed).
@@ -3216,7 +3229,7 @@ sweep_stale_discovered_links(GiveupAfterMs, #state{links = Links} = S) ->
 check_discovered_link(Seed, #link_state{discovered = true, ever_connected = false,
                                         pid = Pid} = LinkState,
                       Now, GiveupAfterMs, S) when is_pid(Pid) ->
-    judge_unconnected_link(safe_is_connected(Pid), Seed, LinkState, Now,
+    judge_unconnected_link(is_map_key(Pid, S#state.connected), Seed, LinkState, Now,
                            GiveupAfterMs, S);
 check_discovered_link(_Seed, _LinkState, _Now, _GiveupAfterMs, S) ->
     %% Not a discovered link, already proven connected once, or has no
@@ -3422,7 +3435,8 @@ on_down_routed({ok, Seed}, _Mon, Pid, Reason, S0) ->
     erlang:send_after(?LINK_RESPAWN_DELAY_MS, self(), {respawn_link, Seed}),
     S = exit_kept(Reason, Seed, S0),
     S1 = S#state{links = maps:remove(Seed, S#state.links),
-                 link_subs = maps:remove(Pid, S#state.link_subs)},
+                 link_subs = maps:remove(Pid, S#state.link_subs),
+                 connected = maps:remove(Pid, S#state.connected)},
     {noreply, maybe_rediscover_now(S1)};
 on_down_routed(error, Mon, _Pid, _Reason, S) ->
     {noreply, on_subscriber_down(Mon, S)}.

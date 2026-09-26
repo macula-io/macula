@@ -3,7 +3,9 @@
 %% answered a procedure stays usable as a direct-dial head start, and whether
 %% the pool still holds a live link to it.
 %%
-%% Both are driven here with explicit clock readings and explicit links,
+%% Both are driven here with explicit clock readings and explicit links, each
+%% `{Seed, Pid, StationNodeId}' as the pool knows it (`undefined' before the
+%% link's handshake),
 %% because neither property can be shown by inspection. That an entry's life
 %% is measured in ELAPSED MONOTONIC milliseconds rather than against a wall
 %% clock is visible only by moving the reading, and that a remembered station
@@ -28,16 +30,16 @@
 %% the pool's own live link to that station is keyed by, so the call names
 %% the link the pool already holds and dials nothing.
 a_remembered_station_comes_back_with_its_live_links_seed_test() ->
-    Link = link_answering(?STATION),
+    Link = {?SEED, self(), ?STATION},
     ?assertEqual({ok, candidate(), ?SEED},
-                 usable_at(remembered_at(0, 1_000), 999, [{?SEED, Link}])),
-    stop(Link).
+                 usable_at(remembered_at(0, 1_000), 999, [Link])),
+    ok.
 
 %% Nothing was ever remembered for this procedure.
 an_unremembered_procedure_has_no_head_start_test() ->
-    Link = link_answering(?STATION),
-    ?assertEqual(none, macula_client:still_usable(error, 0, [{?SEED, Link}])),
-    stop(Link).
+    Link = {?SEED, self(), ?STATION},
+    ?assertEqual(none, macula_client:still_usable(error, 0, [Link])),
+    ok.
 
 %%%===================================================================
 %%% The horizon is elapsed time, and only elapsed time
@@ -48,19 +50,19 @@ an_unremembered_procedure_has_no_head_start_test() ->
 %% `Now < Until'. Pinned deliberately, because an off-by-one here hands back
 %% a candidate for one millisecond past the lifetime it was granted.
 an_elapsed_horizon_ends_the_head_start_even_with_a_live_link_test() ->
-    Link = link_answering(?STATION),
+    Link = {?SEED, self(), ?STATION},
     Resolved = remembered_at(0, 1_000),
-    ?assertMatch({ok, _, _}, usable_at(Resolved, 999, [{?SEED, Link}])),
-    ?assertEqual(none, usable_at(Resolved, 1_000, [{?SEED, Link}])),
-    ?assertEqual(none, usable_at(Resolved, 1_001, [{?SEED, Link}])),
-    stop(Link).
+    ?assertMatch({ok, _, _}, usable_at(Resolved, 999, [Link])),
+    ?assertEqual(none, usable_at(Resolved, 1_000, [Link])),
+    ?assertEqual(none, usable_at(Resolved, 1_001, [Link])),
+    ok.
 
 %% A zero lifetime is remembered and is immediately past: an advertisement
 %% already at its expiry earns no head start rather than a free one.
 a_zero_lifetime_is_never_usable_test() ->
-    Link = link_answering(?STATION),
-    ?assertEqual(none, usable_at(remembered_at(500, 0), 500, [{?SEED, Link}])),
-    stop(Link).
+    Link = {?SEED, self(), ?STATION},
+    ?assertEqual(none, usable_at(remembered_at(500, 0), 500, [Link])),
+    ok.
 
 %% NEITHER function reads a clock. The horizon is fixed by the reading the
 %% caller passes at remember time, and compared against the reading the
@@ -69,14 +71,14 @@ a_zero_lifetime_is_never_usable_test() ->
 %% safe: a wall clock that steps between remembering and reading cannot
 %% lengthen or shorten an entry, because no wall clock is consulted at all.
 the_answer_depends_on_the_readings_given_and_not_on_real_time_test() ->
-    Link = link_answering(?STATION),
+    Link = {?SEED, self(), ?STATION},
     Resolved = remembered_at(0, 50),
-    First = usable_at(Resolved, 10, [{?SEED, Link}]),
+    First = usable_at(Resolved, 10, [Link]),
     timer:sleep(120),
     ?assertMatch({ok, _, _}, First),
-    ?assertEqual(First, usable_at(Resolved, 10, [{?SEED, Link}])),
-    ?assertEqual(none, usable_at(Resolved, 60, [{?SEED, Link}])),
-    stop(Link).
+    ?assertEqual(First, usable_at(Resolved, 10, [Link])),
+    ?assertEqual(none, usable_at(Resolved, 60, [Link])),
+    ok.
 
 %%%===================================================================
 %%% The live link is the evidence
@@ -92,22 +94,18 @@ a_remembered_station_with_no_live_link_is_not_handed_back_test() ->
 
 %% A pool with links, none of them to this station.
 a_live_link_to_another_station_is_not_a_head_start_test() ->
-    Other = link_answering(?OTHER_STATION),
-    ?assertEqual(none, usable_at(remembered_at(0, 60_000), 1,
-                                 [{<<"quic://[2a01:db8::9]:4433">>, Other}])),
-    stop(Other).
+    Other = {<<"quic://[2a01:db8::9]:4433">>, self(), ?OTHER_STATION},
+    ?assertEqual(none, usable_at(remembered_at(0, 60_000), 1, [Other])).
 
-%% A link that never answers must not wedge the pool or be mistaken for the
-%% station: `safe_peer_node_id/1' absorbs it and the scan moves on, so a mute
-%% link sitting in front of the real one costs a head start, not a pool.
-a_mute_link_is_passed_over_for_the_station_behind_it_test() ->
-    Mute = link_answering(never),
-    Real = link_answering(?STATION),
+%% A link the pool knows no station for (not connected yet) is not mistaken
+%% for the station: the scan passes over it to the real one behind it. The
+%% pool knows a link's station from the link's own notice at handshake and
+%% asks the link nothing (macula#44).
+a_link_with_no_known_station_is_passed_over_for_the_station_behind_it_test() ->
+    Unconnected = {<<"quic://[2a01:db8::9]:4433">>, self(), undefined},
+    Real = {?SEED, self(), ?STATION},
     ?assertEqual({ok, candidate(), ?SEED},
-                 usable_at(remembered_at(0, 60_000), 1,
-                           [{<<"quic://[2a01:db8::9]:4433">>, Mute}, {?SEED, Real}])),
-    stop(Mute),
-    stop(Real).
+                 usable_at(remembered_at(0, 60_000), 1, [Unconnected, Real])).
 
 %%%===================================================================
 %%% What the map holds
@@ -156,20 +154,3 @@ remembered_at(Now, TtlMs) ->
 usable_at(Resolved, Now, LiveLinks) ->
     macula_client:still_usable(maps:find(key(), Resolved), Now, LiveLinks).
 
-%% A stand-in for a link process: it answers `peer_node_id' with the station
-%% it is connected to, or never answers at all. Same shape the pool's own
-%% probe-guard tests use.
-link_answering(never) ->
-    spawn(fun Loop() -> receive _ -> Loop() end end);
-link_answering(NodeId) ->
-    spawn(fun Loop() ->
-              receive
-                  {'$gen_call', From, peer_node_id} ->
-                      gen_server:reply(From, {ok, NodeId}),
-                      Loop();
-                  _Other ->
-                      Loop()
-              end
-          end).
-
-stop(Pid) -> exit(Pid, kill).

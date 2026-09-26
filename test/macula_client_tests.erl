@@ -102,10 +102,10 @@ call_station_with_expected_node_id_and_no_match_falls_through_to_dial_test() ->
 %% The cap of ONE direct link is what makes reuse observable without a live
 %% station: a fresh dial would be refused with `too_many_direct_links' and
 %% counted in the pool's status, while a reuse is neither. The link is made to
-%% look connected with `sys:replace_state/2' over
-%% `macula_station_link:state_field_index/1', the same instrument
-%% `macula_key_redaction_tests' uses, because the reuse scan asks each link
-%% who its handshake peer is and an unconnected link has no answer.
+%% look connected by completing its handshake with this process as the peer:
+%% the link tells the pool which station it reached, and the reuse scan reads
+%% that from the pool's own state (macula#44), so an unconnected link has no
+%% station to match.
 a_second_call_to_the_same_station_under_another_name_reuses_its_link_test() ->
     {ok, _} = application:ensure_all_started(macula),
     Station = <<9:256>>,
@@ -136,13 +136,14 @@ call_pinned(Pool, Seed, Station) ->
 %% true.
 pretend_connected(Pool, Station) ->
     {ok, [#{pid := Link}]} = macula_client:links(Pool),
-    Field = fun macula_station_link:state_field_index/1,
-    _ = sys:replace_state(Link,
-                          fun(S) ->
-                              setelement(Field(peer_node_id),
-                                         setelement(Field(peer_pid), S, self()),
-                                         Station)
-                          end),
+    Peer = self(),
+    _ = sys:replace_state(Link, fun(S) ->
+                                    setelement(macula_station_link:state_field_index(peer_pid), S, Peer)
+                                end),
+    Link ! {macula_peering, connected, Peer, Station},
+    %% The link has handled its handshake, and the pool the link's notice.
+    _ = sys:get_state(Link),
+    _ = sys:get_state(Pool),
     ok.
 
 %%------------------------------------------------------------------

@@ -1561,6 +1561,9 @@ handle_info({macula_peering, connected, Pid, PeerNodeId},
     %% Handshake completed — cancel the connect watchdog and hand over
     %% to the steady-state app-liveness probe.
     S1 = cancel_connect_watchdog(S),
+    %% The pool keeps each link's connectedness and station from this notice
+    %% and never asks the link (macula#44).
+    pool_connected(S1#state.pool, PeerNodeId),
     NewS = arm_liveness(S1#state{peer_node_id = PeerNodeId,
                                  liveness_misses = 0,
                                  liveness_outstanding = undefined}),
@@ -1765,6 +1768,9 @@ disconnect_detail({peer_identity_mismatch, #{expected := <<_:256>> = Expected,
       presented_node_id => binary:encode_hex(Derived, lowercase)};
 disconnect_detail(_Reason) ->
     #{}.
+
+pool_connected(undefined, _PeerNodeId) -> ok;
+pool_connected(Pool, PeerNodeId) -> Pool ! {macula_link_connected, self(), PeerNodeId}, ok.
 
 pool_told(undefined, _Summary) -> ok;
 pool_told(Pool, Summary) -> Pool ! {macula_link_disconnected, self(), Summary}, ok.

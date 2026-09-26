@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### Fixed
+
+- **A busy link no longer stalls the pool** (#44). The pool asked every link
+  `is_connected` (and `peer_node_id`) from inside its own `handle_call`, on
+  every publish and every `links/1` and `status/1`; a link busy signing or
+  verifying frames answered nothing meanwhile, so every pool call waited
+  behind it (live: beam02 mcl-mpong's 5 s `sign_node_record` timed out 99
+  times). A link now tells the pool its station at handshake
+  (`{macula_link_connected, Link, StationNodeId}`), and the pool answers
+  publish target selection, `links/1`, `status/1`, link reuse by node id, the
+  resolved-candidate head start and the discovered-link watchdog from its own
+  state, dropped on the link's disconnect notice or DOWN. A worker waiting on
+  a link (`await_connected/2`) still asks the link itself, outside the pool.
+
 ## [12.9.0] - 2026-09-26
 
 Every verifier accepts a sealed payload, and every endpoint refuses one by name
