@@ -66,6 +66,17 @@ a test you have just written.
 - Use EUnit for unit tests, and common_test for a suite that runs several
   processes as a fleet (`test/overlay/`); CI runs both
 - Clean up test fixtures properly (see `ensure_stopped/0` pattern)
+- **A run passes on its exit code, never on the absence of "Failed".** A
+  cancelled eunit test (a fixture whose setup crashed, a test past its
+  timeout) prints `Failed: 0.  Skipped: 0.  Passed: N-1.` and
+  `One or more tests were cancelled.`: no failure line, one test short.
+  `rebar3 eunit` exits 1 on it, so trust the exit code, or read the summary
+  for `All N tests passed.` with the N you expect. A script or filter that
+  looks only for "Failed" reads that run as green (macula#43).
+- **A skipped Common Test case fails the run** unless `rebar.config` allows
+  it with a reason: `rebar3 ct` exits 0 on a case that skipped itself, so
+  `cth_skip_is_failure` (from `macula_testkit`) turns an unallowed skip into
+  a failure.
 
 ## Submitting Changes
 

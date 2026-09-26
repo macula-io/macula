@@ -265,7 +265,9 @@ for i in $(seq 0 $((SHARDS - 1))); do
     else
         failed=1
         printf '  shard %d: %4d tests  %3ds  FAILED\n' "$i" "$n" "$t"
-        grep -E '\*\*[^*]|Failed:|error|\.erl:[0-9]+' "$OUT/shard$i.log" | head -15 | sed 's/^/      /'
+        # `cancel' too: a cancelled test is a failure with no "Failed" line,
+        # and a filter without it hides which test never ran (macula#43).
+        grep -E '\*\*[^*]|Failed:|cancel|error|\.erl:[0-9]+' "$OUT/shard$i.log" | head -15 | sed 's/^/      /'
     fi
 done
 
