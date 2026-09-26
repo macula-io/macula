@@ -76,6 +76,20 @@ a_clear_answer_outside_the_set_is_refused_test_() ->
         macula_station_link:stop(Pid)
     end}.
 
+%% A sealed reply that does not open is the only answer its request will get
+%% (it is signed by the provider and bound to the request), so the call fails
+%% at once, naming why.
+a_sealed_reply_that_does_not_open_fails_the_call_test_() ->
+    {timeout, 10, fun() ->
+        #{link := Pid} = F = fixture(),
+        Caller = call_async(F, #{}, 3_000),
+        {Frame, _Opened, Keys, SealRequest} = received_call(F),
+        Wrong = Keys#{k_rep := <<0:256>>},
+        answer(F, Frame, sealed_result(F, Frame, Wrong, SealRequest, #{temp => 21})),
+        ?assertEqual({error, {confidentiality, reply_not_opened}}, result(Caller)),
+        macula_station_link:stop(Pid)
+    end}.
+
 %% A key of another profile's size seals nothing: the call fails before
 %% anything is sent.
 a_key_of_another_profile_is_refused_test_() ->

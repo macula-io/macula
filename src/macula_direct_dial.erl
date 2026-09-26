@@ -757,20 +757,25 @@ advertisement_opt(Ad) -> #{advertisement => Ad}.
 required_opt(required) -> #{confidential => required};
 required_opt(_Preferred) -> #{}.
 
-%% A call sealed to a key the provider no longer holds is refused naming the key it holds now, in a reply the
-%% provider signed for this request. ONE fresh lookup follows. Only an advertisement the provider signed that names
+%% A call sealed to a key the provider no longer holds is refused naming the key it holds now, or saying it holds
+%% none, in a reply the provider signed for this request. ONE fresh lookup follows. Only an advertisement the provider signed that names
 %% exactly that key is sealed to again, under a new request, and a second refusal is the result. Any other key fails,
 %% naming both; none, or a provider that holds no key, fails closed. Never the clear (E2E design §5.1, Amendment A1).
 resealed({error, {sealed_refused, <<_:64>> = Named}}, Call, Dial, Realm, Procedure, Provider, Deadline) ->
     resealed_to(reresolved(Dial, Realm, Procedure, Provider, Deadline), Named, Call);
-resealed({error, {sealed_refused, no_key}}, _Call, _Dial, _Realm, _Procedure, _Provider, _Deadline) ->
-    {error, {confidentiality, no_kem_key}};
+resealed({error, {sealed_refused, no_key}}, Call, Dial, Realm, Procedure, Provider, Deadline) ->
+    resealed_to_any(reresolved(Dial, Realm, Procedure, Provider, Deadline), Call);
 resealed(Result, _Call, _Dial, _Realm, _Procedure, _Provider, _Deadline) ->
     Result.
 
 resealed_to({ok, Ad, <<_:64>> = Named}, Named, Call) -> Call(Ad);
 resealed_to({ok, _Ad, <<_:64>> = Found}, Named, _Call) -> {error, {confidentiality, {key_mismatch, Named, Found}}};
 resealed_to(_NoKey, _Named, _Call) -> {error, {confidentiality, no_kem_key}}.
+
+%% A provider that answered it holds no key (its keyring lost, say) is sealed to once more, to the key its fresh
+%% advertisement names; one naming none fails closed.
+resealed_to_any({ok, Ad, <<_:64>>}, Call) -> Call(Ad);
+resealed_to_any(_NoKey, _Call) -> {error, {confidentiality, no_kem_key}}.
 
 %% The provider's advertisement in one fresh lookup, and the id of the key it names.
 reresolved(#{pool := Pool, find_records := Find}, Realm, Procedure, Provider, Deadline) ->

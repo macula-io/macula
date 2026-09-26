@@ -21,6 +21,7 @@ cases() ->
      {"a second refusal is the result: no third call", fun no_third_call/0},
      {"a re-resolve finding no key fails closed", fun a_keyless_reresolve_fails_closed/0},
      {"a provider that holds no key fails closed", fun a_provider_without_a_key_fails_closed/0},
+     {"a provider that lost its key is re-resolved once", fun a_provider_that_lost_its_key_is_resealed/0},
      {"a required call passes its policy to the station call", fun required_reaches_the_station_call/0}].
 
 the_call_carries_the_advertisement() ->
@@ -58,9 +59,18 @@ a_keyless_reresolve_fails_closed() ->
 
 a_provider_without_a_key_fails_closed() ->
     F = fixture(),
-    script(F, [[keyed_ad(F, kem(1))]], [{error, {sealed_refused, no_key}}]),
+    script(F, [[keyed_ad(F, kem(1))], [keyless_ad(F)]], [{error, {sealed_refused, no_key}}]),
     ?assertEqual({error, {confidentiality, no_kem_key}}, call(F, #{})),
     ?assertEqual(1, length(calls())).
+
+%% A provider whose keyring was lost answers no_key (signed, for this
+%% request); its fresh advertisement names a new key, which is sealed to once.
+a_provider_that_lost_its_key_is_resealed() ->
+    F = fixture(),
+    script(F, [[keyed_ad(F, kem(1))], [keyed_ad(F, kem(5))]], [{error, {sealed_refused, no_key}}, {ok, <<"pong">>}]),
+    ?assertEqual({ok, <<"pong">>}, call(F, #{})),
+    [_First, Second] = calls(),
+    ?assertEqual(kem(5), maps:get(kem_key, macula_record:read_procedure_advertisement(maps:get(advertisement, Second)))).
 
 required_reaches_the_station_call() ->
     F = fixture(),

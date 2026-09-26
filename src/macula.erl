@@ -417,21 +417,26 @@ advertised_key(Ad, Target, Realm, Procedure) ->
 
 advertised_by(#{advertiser_node := Target, realm_id := Realm, procedure := Procedure} = Read, Target, Realm, Procedure) ->
     {ok, maps:get(kem_key, Read, none)};
-advertised_by(#{advertiser_node := Target}, Target, _Realm, _Procedure) ->
+advertised_by(#{advertiser_node := Target, realm_id := Realm}, Target, Realm, _Procedure) ->
     {error, {confidentiality, not_the_procedure}};
+advertised_by(#{advertiser_node := Target}, Target, _Realm, _Procedure) ->
+    {error, {confidentiality, not_the_realm}};
 advertised_by(_AnotherNodes, _Target, _Realm, _Procedure) ->
     {error, {confidentiality, not_the_target}}.
 
-%% The key of the one advertisement `Target' signed among those resolved; anything else seals nothing.
+%% The key an advertisement `Target' signed names, among those resolved: a keyed one wins over a stale keyless one
+%% listed before it; anything else seals nothing.
 resolved_key({ok, Ads}, Target, Realm, Procedure) ->
     first_key([advertised_key(Ad, Target, Realm, Procedure) || Ad <- Ads,
                                                                macula_record:type(Ad) =:= macula_record:type_procedure_advertisement()]);
 resolved_key(_NothingResolved, _Target, _Realm, _Procedure) ->
     {ok, none}.
 
-first_key([{ok, _} = Found | _]) -> Found;
-first_key([_Refused | Rest]) -> first_key(Rest);
-first_key([]) -> {ok, none}.
+first_key(Found) ->
+    keyed_first([KemKey || {ok, KemKey} <- Found, is_binary(KemKey)]).
+
+keyed_first([KemKey | _]) -> {ok, KemKey};
+keyed_first([]) -> {ok, none}.
 
 sealed_by({ok, KemKey}, _Mode) when is_binary(KemKey) -> {ok, {sealed_to, KemKey}};
 sealed_by({ok, none}, required) -> {error, {confidentiality, no_kem_key}};

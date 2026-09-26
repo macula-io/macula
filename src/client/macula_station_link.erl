@@ -2089,13 +2089,15 @@ answer_of(_ClearResult, #{seal := {_Keys, _SealRequest}}) ->
 
 opened_answer({ok, Plain}, result) -> opened_result(macula_frame:plain_payload(Plain));
 opened_answer({ok, Plain}, error) -> opened_error(macula_frame:plain_error(Plain));
-opened_answer({error, sealed_refused}, _Type) -> {refused, sealed_reply_not_opened}.
+opened_answer({error, sealed_refused}, _Type) -> {error, {confidentiality, reply_not_opened}}.
 
+%% A sealed reply is signed by the provider and bound to its request, so it is the only answer that request gets: one
+%% that does not open, or opens to nothing a reply may hold, fails the call at once.
 opened_result({ok, Payload}) -> {ok, Payload};
-opened_result({error, sealed_refused}) -> {refused, sealed_reply_not_opened}.
+opened_result({error, sealed_refused}) -> {error, {confidentiality, reply_not_opened}}.
 
 opened_error({ok, Error}) -> call_result(Error#{frame_type => error});
-opened_error({error, sealed_refused}) -> {refused, sealed_reply_not_opened}.
+opened_error({error, sealed_refused}) -> {error, {confidentiality, reply_not_opened}}.
 
 %% A clear error answering a sealed request is one of the admission refusals, which carry no application data, or the
 %% request is answered by nothing that may answer it.

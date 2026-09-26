@@ -43,6 +43,20 @@ an_advertisement_of_another_procedure_is_refused_test() ->
                                                                      #{}), maps:get(key, F)),
     ?assertEqual({error, {confidentiality, not_the_procedure}}, seal(F, Target, #{advertisement => Other})).
 
+an_advertisement_for_another_realm_is_refused_test() ->
+    #{target := Target} = F = fixture(),
+    Other = macula_record:sign(macula_record:procedure_advertisement(Target, <<6:256>>, ?PROC, <<1:256>>, #{}),
+                               maps:get(key, F)),
+    ?assertEqual({error, {confidentiality, not_the_realm}}, seal(F, Target, #{advertisement => Other})).
+
+%% A stale keyless advertisement of the target listed first does not hide its
+%% keyed one: `required' seals to the key.
+required_prefers_the_targets_keyed_advertisement_test() ->
+    #{target := Target, kem_key := KemKey} = F = fixture(),
+    Resolve = fun() -> {ok, [keyless_ad(F), keyed_ad(F)]} end,
+    ?assertEqual({ok, {sealed_to, KemKey}},
+                 macula:call_seal(Target, ?REALM, ?PROC, #{confidential => required}, Resolve)).
+
 required_resolves_the_targets_advertisement_test() ->
     #{target := Target, kem_key := KemKey} = F = fixture(),
     Stranger = stranger_ad(),
