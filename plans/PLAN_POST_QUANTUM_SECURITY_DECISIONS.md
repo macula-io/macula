@@ -415,9 +415,20 @@ before its wire checks are green.
   - "constant-time" or "side-channel resistant", without an evaluation;
   - that ML-DSA-87 alone is acceptable in Europe;
   - that Ed25519 is part of the EU profile;
-  - that Macula's hybrid signature is the LAMPS composite or `id-MLDSA87-RSA4096-PSS-SHA512`, until a release that
-    signs with it ships: `macula` main signs it and passes the draft's own vector, while every released version
-    signs Macula's own composite (D7). Saturnus reads any new wording.
+  - that a release signs the LAMPS composite `id-MLDSA87-RSA4096-PSS-SHA512` when it does not. **Amended by Raf on
+    2026-09-26:**
+    - The releases that sign it:
+      - `macula` 12.0.0 and later: proven against the draft's own test vector (CHANGELOG [12.0.0]).
+      - `macula-go` v0.11.0 and later: checked against the same vector, and cross-verified with macula 12.1.0 both
+        ways (its CHANGELOG [0.11.0]).
+    - Every earlier release signs Macula's own composite (D7).
+    - No other SDK is named until its own check against the draft's vector is recorded.
+    - For those releases, the allowed wording is: "In the EU profile (`pq_hybrid`), signatures use the composite
+      ML-DSA-87 + RSA-PSS-4096 signature `id-MLDSA87-RSA4096-PSS-SHA512`, as the IETF draft
+      draft-ietf-lamps-pq-composite-sigs defines it, verified against the draft's own test vector."
+    - Never "the standard", "the RFC" or "IETF-standardised" before the RFC is published. Never "LAMPS-certified" or
+      "conformant". Never for a release or SDK not listed above.
+    - Saturnus reads any new wording.
 - **US, when true:** "algorithms aligned with CNSA 2.0 (ML-KEM-1024, ML-DSA-87, AES-256, SHA-384)". Never imply
   deployability in National Security Systems, which also needs NIAP or NSA validation ⚠ (V14). Preconditions: V13
   and V14 closed.
