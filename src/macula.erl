@@ -102,7 +102,7 @@
 -export([join_mesh/1, join_dist_relay/1, dist_relay_client/0]).
 
 -ifdef(TEST).
--export([join_pool_args/1]).
+-export([join_pool_args/1, renewal/3]).
 -endif.
 
 %% Types
@@ -1000,7 +1000,35 @@ advertise_stream(Pool, Realm, Procedure, Mode, Handler, Opts)
 %% signs its own advertisement naming the station it is connected to,
 %% bounded by the chain (macula_station_link:advertisement_spec()).
 advertise_authorized(Pool, Realm, Procedure, Opts, Fun) ->
-    signed_provider_advertisement(Pool, Realm, Procedure, provider_io(Opts), Fun).
+    confidential(confidentiality(maps:get(confidential, Opts, preferred), kem_advertise()), fun(Confidentiality) ->
+        signed_provider_advertisement(Pool, Realm, Procedure, provider_io(Opts),
+                                      fun(Spec) -> Fun(maps:merge(Spec, Confidentiality)) end)
+    end).
+
+%% Whether an advertisement names this node's KEM key (E2E design §8.2, Amendment A1), as spec fields: `kem' names
+%% it, and `confidential => required' also refuses every clear call. A key is named only once the node is switched on
+%% with the `kem_advertise' application setting, which stays `disabled' until every station runs the release that
+%% stores a keyed advertisement, and only when `confidential' is not `off'. `required' while switched off is refused:
+%% the provider would name no key and refuse every clear call, and so be unreachable.
+confidentiality(Mode, _Switch) when Mode =/= preferred, Mode =/= required, Mode =/= off ->
+    {error, {confidentiality, {not_a_mode, Mode}}};
+confidentiality(required, disabled) -> {error, {confidentiality, kem_advertise_disabled}};
+confidentiality(off, _Switch) -> {ok, #{}};
+confidentiality(preferred, disabled) -> {ok, #{}};
+confidentiality(preferred, enabled) -> {ok, #{kem => true}};
+confidentiality(required, enabled) -> {ok, #{kem => true, confidential => required}}.
+
+confidential({ok, Confidentiality}, Fun) -> Fun(Confidentiality);
+confidential({error, _} = Refused, _Fun) -> Refused.
+
+%% The node's `kem_advertise' switch: `disabled' unless set to `enabled'. A value outside the two raises, loudly, rather
+%% than quietly meaning off.
+kem_advertise() ->
+    kem_switch(application:get_env(macula, kem_advertise, disabled)).
+
+kem_switch(enabled) -> enabled;
+kem_switch(disabled) -> disabled;
+kem_switch(Other) -> erlang:error({kem_advertise, {not_a_switch, Other}}).
 
 %% How the pool renews the chain an advertisement carries (D32): the same
 %% resolution, over the same `provider_io/0' seams the advertise was given,
@@ -1008,7 +1036,7 @@ advertise_authorized(Pool, Realm, Procedure, Opts, Fun) ->
 %% entries travel, and in production there are none.
 renewal(Realm, Procedure, Opts) ->
     {?MODULE, renew_authorization,
-     [Realm, Procedure, maps:with([status, find_record, sign_node_record, realm_key], Opts)]}.
+     [Realm, Procedure, maps:with([status, find_record, sign_node_record, realm_key, confidential], Opts)]}.
 
 %% @private
 %% @doc The pool's renewal of an advertised chain (D32, macula#38): the chain
