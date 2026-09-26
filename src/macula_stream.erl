@@ -480,12 +480,19 @@ handle_call(info, _From, State) ->
         closed_send => State#state.closed_send,
         seq_out => State#state.seq_out,
         seq_in => State#state.seq_in,
-        reply => State#state.reply
+        reply => State#state.reply,
+        caller => opened_by(State#state.open)
     },
     {reply, Map, State};
 
 handle_call(_Msg, _From, State) ->
     {reply, {error, unknown}, State}.
+
+%% The node whose signed STREAM_OPEN opened a link-carried stream, as its
+%% signature verified it: for a served stream the caller, the identity a
+%% handler decides by. `undefined' for an in-process stream, which has no open.
+opened_by(#{caller := Caller}) -> Caller;
+opened_by(_NoOpen) -> undefined.
 
 %% --- peer-delivered events --------------------------------------------
 

@@ -3406,7 +3406,9 @@ served_with_id(false, _AttachId, _Handler, Open, Stream, S) ->
     refuse_open(Stream, Open, <<"unavailable">>, <<"sessions are not being admitted now">>, S);
 served_with_id(true, AttachId, Handler, #{procedure := Proc, payload := Args, caller := Caller, mode := Mode} = Open,
                Stream, #state{peer_pid = Conn, profile = Profile, node_identity = Key} = S) ->
-    Worker = spawn_stream_handler(Handler, Args, Proc),
+    %% The verified caller reaches the handler in its args, as a call's does
+    %% (`with_caller/2'): a handler that decides by identity reads it there.
+    Worker = spawn_stream_handler(Handler, with_caller(Args, Caller), Proc),
     {ok, StreamPid} = macula_stream:start_link(#{id => AttachId, role => server, mode => Mode, owner => Worker,
                                                  key => fun() -> Key end, open => Open, conn => Conn,
                                                  profile => Profile}),

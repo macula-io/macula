@@ -83,8 +83,9 @@ an_open_signed_by_another_key_is_not_served_and_a_genuine_one_is() ->
     Caller = caller_key(),
     Forged = make_ref(),
     open_on(Link, Forged, resigned(open_frame(World, Caller, #{payload => #{tag => 1}}), caller_key())),
-    open_on(Link, make_ref(), open_frame(World, Caller, #{payload => #{tag => 2}})),
-    ?assertEqual({handler_ran, #{{text, <<"tag">>} => 2}}, handler_ran_within(?EVENT_MS)),
+    Genuine = open_frame(World, Caller, #{payload => #{tag => 2}}),
+    open_on(Link, make_ref(), Genuine),
+    ?assertEqual({handler_ran, #{{text, <<"tag">>} => 2, caller => caller_of(Genuine)}}, handler_ran_within(?EVENT_MS)),
     ?assertEqual(none, handler_ran_within(300)),
     ?assertEqual(none, written_within(Forged, 0)),
     stop(World).
@@ -113,7 +114,7 @@ a_verified_open_runs_its_handler_and_the_session_signs_its_first_frame() ->
     Stream = make_ref(),
     Frame = open_frame(World, caller_key(), #{payload => #{n => 1}}),
     open_on(Link, Stream, Frame),
-    ?assertEqual({handler_ran, #{{text, <<"n">>} => 1}}, handler_ran_within(?EVENT_MS)),
+    ?assertEqual({handler_ran, #{{text, <<"n">>} => 1, caller => caller_of(Frame)}}, handler_ran_within(?EVENT_MS)),
     {ok, Written} = written_within(Stream, ?EVENT_MS),
     ?assertMatch({ok, #{frame_type := stream_data, seq := 0, body := <<"one">>}, _State},
                  macula_frame:verify_provider_stream(Written, macula_frame:open_stream(verified(Frame)), profile())),
@@ -172,14 +173,18 @@ an_open_the_admission_cannot_judge_is_refused_and_the_link_stays_up() ->
     stop(World).
 
 %% Callers choose request ids, so two callers' opens can carry the same one. Each reaches only its own handler, under
-%% an attach id the link chooses.
+%% an attach id the link chooses, with its own caller.
 opens_from_two_callers_with_one_request_id_reach_only_their_own_handlers() ->
     #{link := Link} = World = link_serving(fun(_Stream, Args) -> Args end),
     RequestId = crypto:strong_rand_bytes(16),
-    open_on(Link, make_ref(), open_frame(World, caller_key(), #{request_id => RequestId, payload => #{who => 1}})),
-    open_on(Link, make_ref(), open_frame(World, caller_key(), #{request_id => RequestId, payload => #{who => 2}})),
+    One = open_frame(World, caller_key(), #{request_id => RequestId, payload => #{who => 1}}),
+    Two = open_frame(World, caller_key(), #{request_id => RequestId, payload => #{who => 2}}),
+    open_on(Link, make_ref(), One),
+    open_on(Link, make_ref(), Two),
     Ran = lists:sort([handler_ran_within(?EVENT_MS), handler_ran_within(?EVENT_MS)]),
-    ?assertEqual([{handler_ran, #{{text, <<"who">>} => 1}}, {handler_ran, #{{text, <<"who">>} => 2}}], Ran),
+    ?assertEqual(lists:sort([{handler_ran, #{{text, <<"who">>} => 1, caller => caller_of(One)}},
+                             {handler_ran, #{{text, <<"who">>} => 2, caller => caller_of(Two)}}]),
+                 Ran),
     stop(World).
 
 %% A caller STREAM_DATA whose signature fails reaches no handler reader, and the connection is told once, charged.
@@ -530,6 +535,10 @@ open_frame(World, Caller, Overrides) ->
 verified(Frame) ->
     {ok, Open} = macula_frame:verify_request(Frame, profile()),
     Open.
+
+%% The verified caller of a STREAM_OPEN: what its handler finds in its args.
+caller_of(Frame) ->
+    maps:get(caller, verified(Frame)).
 
 wire(Frame) ->
     {ok, Decoded, <<>>} = macula_frame:decode(macula_frame:encode(Frame)),

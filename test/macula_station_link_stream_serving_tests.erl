@@ -34,7 +34,8 @@ stream_serving_test_() ->
                  fun a_stream_open_without_the_session_counter_is_refused/0,
                  fun a_refused_stream_open_starts_no_process/0,
                  fun a_streamer_served_session_ends_with_its_caller/0,
-                 fun a_sealed_stream_open_is_refused_by_name/0]]
+                 fun a_sealed_stream_open_is_refused_by_name/0,
+                 fun a_served_handler_sees_the_verified_caller/0]]
     ++ [{"a served session leaves no process behind: " ++ Name,
          {timeout, 15, {spawn, fun() -> process_flag(trap_exit, true), served_sessions_end(Handler, Ending) end}}}
         || {Name, Handler, Ending} <- [{"the handler closes and returns", fun close_and_return/2, none},
@@ -301,6 +302,30 @@ close_and_return(Stream, _Args) -> macula_stream:close(Stream).
 abort_and_return(Stream, _Args) -> macula_stream:abort(Stream, <<"stop">>, <<"stop">>).
 
 crash_serving(_Stream, _Args) -> error(deliberate).
+
+%% The node that signed a stream's STREAM_OPEN reaches its handler as `caller' in its args, as a call's does, and
+%% `macula_stream:info/1' names it: what a bridge logs and decides by. A `caller' field in the caller's own payload is
+%% replaced by the verified one, never read.
+a_served_handler_sees_the_verified_caller() ->
+    #{link := Link} = World = linked(),
+    Test = self(),
+    Procedure = <<"acme/foo.who">>,
+    ok = macula_station_link:advertise_stream(Link, ?REALM, Procedure, server_stream,
+                                              fun(Stream, Args) ->
+                                                  Test ! {caller_seen, maps:get(caller, Args, none),
+                                                          macula:field(caller, Args),
+                                                          macula:field(<<"caller">>, Args),
+                                                          maps:get(caller, macula_stream:info(Stream), none)},
+                                                  ok
+                                              end, open),
+    Caller = key(),
+    _ = opened_by_peer(World, Caller, Procedure, #{tag => 1, caller => <<99:256>>}),
+    Id = macula_node_keys:key_id(Caller),
+    %% The payload names another caller: every way the handler reads
+    %% `caller' still gives the verified one.
+    ?assertEqual({caller_seen, Id, Id, Id, Id},
+                 receive {caller_seen, _, _, _, _} = Seen -> Seen after ?EVENT_MS -> none end),
+    stop(Link).
 
 read_to_the_end(Stream, _Args) -> read_until_ended(macula_stream:recv(Stream, 5_000), Stream).
 
