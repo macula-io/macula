@@ -505,7 +505,9 @@ call_stream_answers_from_a_remembered_station_without_asking_the_dht() ->
 %%%===================================================================
 
 %% A DHT-resolved call that ANSWERED is remembered, as the candidate without
-%% the bookkeeping the loop carried, and with a lifetime to hold it for.
+%% the bookkeeping the loop carried, and with a lifetime to hold it for. The
+%% candidate keeps its verified advertisement, which a head start seals from
+%% (E2E design, Amendment A1).
 call_remembers_the_station_that_answered() ->
     A = station(<<"a.test">>),
     Advertisement = advertisement(A),
@@ -516,7 +518,7 @@ call_remembers_the_station_that_answered() ->
     ?assertEqual({ok, <<"from a">>}, call(3000)),
     {Candidate, TtlMs} = remembered(?PROC),
     ?assertEqual(#{provider => Provider, version => Version,
-                   station => maps:get(id, A)}, Candidate),
+                   station => maps:get(id, A), advertisement => Advertisement}, Candidate),
     ?assert(TtlMs > 0).
 
 %% The lifetime is the advertisement's OWN remaining lifetime, relative to
