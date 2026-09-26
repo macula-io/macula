@@ -399,10 +399,6 @@
     %% The pending renewal of each spec's advertisement: only the timer
     %% whose reference is here acts, so a reconnect cannot double a chain.
     renewals = #{} :: #{{<<_:256>>, binary()} => reference()},
-    %% When each procedure first named this node's KEM key in its spec: a clear
-    %% CALL to it is refused once its last keyless advertisement can no longer
-    %% be served (E2E design §8.1, "Opting in").
-    keyed_since = #{} :: #{{<<_:256>>, binary()} => integer()},
     %% Advertised streaming procedures. Same wire shape as `procedures'
     %% (one `advertise' frame per entry replayed on reconnect); the
     %% stored value carries the declared mode (`server_stream' /
@@ -523,11 +519,13 @@
                                 not_after     := integer(),
                                 ttl_ms        => pos_integer(),
                                 kem           => true,
+                                keyed_since   => integer(),
                                 confidential  => required}.
 %% A spec for a procedure in the node's own namespace, `~<node_id>/<name>':
 %% no authorization and no bound, since the advertisement's own signature
 %% authorizes it (D25 item 6, revised 2026-09-24). Only a `~' procedure takes it.
--type own_namespace_spec() :: #{ttl_ms => pos_integer(), kem => true, confidential => required}.
+-type own_namespace_spec() :: #{ttl_ms => pos_integer(), kem => true, keyed_since => integer(),
+                                confidential => required}.
 -type advertisement() :: binary() | advertisement_spec() | own_namespace_spec().
 
 %%====================================================================
@@ -1441,25 +1439,22 @@ handle_call({advertise, Realm, Proc, Handler, Policy, EncodedAd}, _From,
             #state{procedures = P, policies = Pols} = S) ->
     S1 = S#state{procedures     = P#{{Realm, Proc} => Handler},
                  policies       = set_policy({Realm, Proc}, Policy, Pols),
-                 advertisements = store_advertisement({Realm, Proc}, EncodedAd, S),
-                 keyed_since    = keyed_since({Realm, Proc}, EncodedAd, S#state.keyed_since)},
+                 advertisements = store_advertisement({Realm, Proc}, EncodedAd, S)},
     maybe_send_advertise(Realm, Proc, EncodedAd, S1),
     {reply, ok, S1};
 
 handle_call({unadvertise, Realm, Proc}, _From,
-            #state{procedures = P, policies = Pols, advertisements = Ads, keyed_since = Keyed} = S) ->
+            #state{procedures = P, policies = Pols, advertisements = Ads} = S) ->
     {reply, ok, S#state{procedures     = maps:remove({Realm, Proc}, P),
                         policies       = maps:remove({Realm, Proc}, Pols),
-                        advertisements = maps:remove({Realm, Proc}, Ads),
-                        keyed_since    = maps:remove({Realm, Proc}, Keyed)}};
+                        advertisements = maps:remove({Realm, Proc}, Ads)}};
 handle_call({unadvertise, Realm, Proc, EncodedWithdrawal}, _From,
             #state{procedures = P, policies = Pols} = S) ->
     maybe_send_unadvertise(Realm, Proc, EncodedWithdrawal, S),
     {reply, ok, S#state{procedures     = maps:remove({Realm, Proc}, P),
                         policies       = maps:remove({Realm, Proc}, Pols),
                         advertisements = maps:remove({Realm, Proc},
-                                                     S#state.advertisements),
-                        keyed_since    = maps:remove({Realm, Proc}, S#state.keyed_since)}};
+                                                     S#state.advertisements)}};
 
 %%-- Overlay-protocol frame transport --------------------------------
 
@@ -2394,15 +2389,6 @@ maybe_send_subscribe(Realm, Topic, #state{peer_pid = Pid, node_identity = Id}) -
 
 %% Store the advertisement bytes under its (realm, procedure); a
 %% `undefined' registration sends nothing and stores nothing.
-%% A spec that names the KEM key keeps the moment the procedure first named it, across renewals; one that does not
-%% forgets it.
-keyed_since(Key, #{kem := true}, Keyed) when not is_map_key(Key, Keyed) ->
-    Keyed#{Key => erlang:system_time(millisecond)};
-keyed_since(_Key, #{kem := true}, Keyed) ->
-    Keyed;
-keyed_since(Key, _KeylessOrPreSigned, Keyed) ->
-    maps:remove(Key, Keyed).
-
 store_advertisement(_Key, undefined, S) ->
     S#state.advertisements;
 store_advertisement(Key, EncodedAd, S) ->
@@ -2928,16 +2914,19 @@ on_call_admission(_Verdict, _Request, _S) ->
 
 %% Whether a procedure takes a clear CALL (E2E design §8.1, §8.2): not under `required', and not once it has named
 %% the KEM key long enough that its last keyless advertisement can no longer be served: that advertisement's lifetime
-%% and the clock tolerance past it.
-clear_allowed(Key, #state{advertisements = Ads, keyed_since = Keyed}) ->
-    clear_by_spec(maps:get(Key, Ads, undefined), maps:get(Key, Keyed, undefined)).
+%% and the clock tolerance past it, from the moment the pool first registered it keyed (`keyed_since', kept across
+%% respawns and renewals).
+clear_allowed(Key, #state{advertisements = Ads}) ->
+    clear_by_spec(maps:get(Key, Ads, undefined)).
 
-clear_by_spec(#{confidential := required}, _Since) ->
+clear_by_spec(#{confidential := required}) ->
     false;
-clear_by_spec(#{kem := true}, Since) when is_integer(Since) ->
+clear_by_spec(#{kem := true, keyed_since := Since}) when is_integer(Since) ->
     erlang:system_time(millisecond) =< Since + macula_record:procedure_advertisement_max_lifetime_ms()
                                               + macula_record:clock_tolerance_ms();
-clear_by_spec(_KeylessOrLocal, _Since) ->
+clear_by_spec(#{kem := true}) ->
+    false;
+clear_by_spec(_KeylessOrLocal) ->
     true.
 
 clear_call_admitted(true, Request, Payload, S) ->

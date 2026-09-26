@@ -56,21 +56,28 @@ required_refuses_a_clear_call_test_() ->
 %% keyless advertisement can be served ...
 a_newly_keyed_procedure_still_serves_clear_calls_test_() ->
     {timeout, 10, fun() ->
-        {Pid, CallerKey, Proc} = fixture(#{kem => true}, fun(_) -> #{ok => 1} end),
+        {Pid, CallerKey, Proc} = fixture(#{kem => true, keyed_since => erlang:system_time(millisecond)},
+                                         fun(_) -> #{ok => 1} end),
         ?assertMatch({ok, _}, await_reply(clear_call(Pid, CallerKey, Proc))),
         macula_station_link:stop(Pid)
     end}.
 
-%% ... and refuses one once it cannot.
+%% ... and refuses one once it cannot. The moment is the pool's, carried in the
+%% spec, so a respawned link cannot reopen the window.
 a_keyed_procedure_refuses_clear_calls_after_the_window_test_() ->
     {timeout, 10, fun() ->
-        {Pid, CallerKey, Proc} = fixture(#{kem => true}, fun(_) -> #{ok => 1} end),
         Window = macula_record:procedure_advertisement_max_lifetime_ms() + macula_record:clock_tolerance_ms(),
-        Index = macula_station_link:state_field_index(keyed_since),
-        _ = sys:replace_state(Pid, fun(S) ->
-                Since = element(Index, S),
-                setelement(Index, S, maps:map(fun(_Key, At) -> At - Window - 1 end, Since))
-            end),
+        Since = erlang:system_time(millisecond) - Window - 1,
+        {Pid, CallerKey, Proc} = fixture(#{kem => true, keyed_since => Since}, fun(_) -> #{ok => 1} end),
+        ?assertMatch({error, #{code := <<"sealed_required">>}}, await_reply(clear_call(Pid, CallerKey, Proc))),
+        macula_station_link:stop(Pid)
+    end}.
+
+%% A keyed spec with no moment (never registered through the pool) takes no
+%% clear call: no keyless history of it is known.
+a_keyed_spec_without_its_moment_refuses_clear_calls_test_() ->
+    {timeout, 10, fun() ->
+        {Pid, CallerKey, Proc} = fixture(#{kem => true}, fun(_) -> #{ok => 1} end),
         ?assertMatch({error, #{code := <<"sealed_required">>}}, await_reply(clear_call(Pid, CallerKey, Proc))),
         macula_station_link:stop(Pid)
     end}.

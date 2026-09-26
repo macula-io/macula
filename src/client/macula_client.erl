@@ -126,7 +126,7 @@
 
 -ifdef(TEST).
 %% The issuer restart delay and backoff, exported for macula_client_pool_keys_tests.
--export([issuer_restart_delay/2, next_issuer_backoff/1]).
+-export([issuer_restart_delay/2, next_issuer_backoff/1, keyed_since/2]).
 %% Probe guards — exported so a test can hang a link and prove the pool
 %% survives it. See the note above safe_is_connected/1.
 -export([safe_is_connected/1, safe_peer_node_id/1]).
@@ -2118,17 +2118,46 @@ spawned_link_pids(#state{links = Links}) ->
 %% station the pool holds no link to refuses the whole registration, before
 %% any link is touched.
 advertised(Kind, Key, #{stations := Stations} = Registration, S) ->
-    registered(Kind, Key, Registration, station_link_pids(Stations, S), S).
+    {ok, Profile} = macula_crypto_profile:configured(),
+    presigned_checked(names_a_key(maps:get(ad, Registration, undefined), Profile), Kind, Key, Registration,
+                      Stations, S).
+
+%% A pre-signed advertisement that names a KEM key is refused: no keyless history of it is knowable, so the provider
+%% could not close its clear-call window (E2E design §8.1). A key is named through a spec, `kem => true'.
+presigned_checked(false, Kind, Key, Registration, Stations, S) ->
+    registered(Kind, Key, Registration, station_link_pids(Stations, S), S);
+presigned_checked(true, _Kind, _Key, _Registration, _Stations, S) ->
+    {{error, {confidentiality, presigned_keyed_advertisement}}, S}.
+
+names_a_key(Encoded, Profile) when is_binary(Encoded) ->
+    keyed_record(macula_record:verify(Encoded, Profile));
+names_a_key(_SpecOrNone, _Profile) ->
+    false.
+
+keyed_record({ok, Record}) -> is_map_key(kem_key, macula_record:read_procedure_advertisement(Record));
+keyed_record({error, _}) -> false.
 
 registered(_Kind, _Key, _Registration, {error, _} = Refused, S) ->
     {Refused, S};
 %% With no link up (every link respawning), the registration is kept all the
 %% same and answered no_healthy_station: the respawned links replay it.
-registered(unary, Key, Registration, {ok, Pids}, #state{procs = P} = S) ->
+registered(unary, Key, Registration0, {ok, Pids}, #state{procs = P} = S) ->
+    Registration = keyed_since(Registration0, maps:find(Key, P)),
     {fanout_advertise(Pids, Key, Registration), S#state{procs = P#{Key => Registration}}};
-registered(stream, Key, Registration, {ok, Pids}, #state{stream_procs = SP} = S) ->
+registered(stream, Key, Registration0, {ok, Pids}, #state{stream_procs = SP} = S) ->
+    Registration = keyed_since(Registration0, maps:find(Key, SP)),
     {fanout_advertise_stream(Pids, Key, Registration),
      S#state{stream_procs = SP#{Key => Registration}}}.
+
+%% When a registration's spec first named the KEM key, kept here in the pool and carried in the spec
+%% (`keyed_since'), so a link respawn or a renewal never reopens the provider's clear-call window (E2E design §8.1,
+%% "Opting in"): the link reads it, and its own clock plays no part.
+keyed_since(#{ad := #{kem := true} = Spec} = Registration, {ok, #{ad := #{kem := true, keyed_since := Since}}}) ->
+    Registration#{ad := Spec#{keyed_since => Since}};
+keyed_since(#{ad := #{kem := true} = Spec} = Registration, _NotKeyedBefore) ->
+    Registration#{ad := Spec#{keyed_since => erlang:system_time(millisecond)}};
+keyed_since(Registration, _Previous) ->
+    Registration.
 
 %% The live links to `Stations', each found by the node_id its link pins, or
 %% every live link for `all'. The first station without one is named.
