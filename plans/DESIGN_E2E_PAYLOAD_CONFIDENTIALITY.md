@@ -81,10 +81,13 @@ Consequences, all wanted:
 ### 3.1 The sealed payload
 
 A new tbs field `sealed`, present **instead of** `payload` (or `body`, or `code`/`detail`/`message`), never beside it.
-On a CALL or STREAM_OPEN the sealed plaintext also holds the request's `token` and `proofs` (the caller's UCAN and its
-delegation chain), which only the provider reads (`macula_station_link:authorize_policy/3`), so a station no longer
-reads a caller's capabilities either. On a call sent in the clear (§8.1), `token` and `proofs` stay in the clear tbs
-where they are today.
+The request's `token` and `proofs` (the caller's UCAN and its delegation chain) are **not** sealed in scheme 1: they
+stay in the clear tbs beside `sealed`, sealed request or not, and the provider reads them there
+(`macula_station_link:authorize_policy/3`). The sealed plaintext is the payload's CBOR only, as the vectors pin
+(`test/vectors/E2E_SEAL_V1.md`). So a station still reads every caller's capabilities (§9). Sealing them changes the
+plaintext's shape and every SDK's vectors, so it is a later scheme's work. When it comes, a verifier must refuse
+`token` or `proofs` beside `sealed`. (Corrected 2026-09-26, Fable's review of 13.0.0: this paragraph had claimed they
+were sealed.)
 
 ```
 sealed = #{
@@ -445,6 +448,7 @@ A station on the path still sees:
 | **Every subscription** (node, realm, topic) | SUBSCRIBE is unsigned and plain |
 | **DHT records**: advertisements, content announcements, node and KEM key records | public by design |
 | **D27 content**, to anyone who asks the sharer for it | content is public; only the transfer is sealed |
+| **A request's `token` and `proofs`**, the caller's UCAN and its delegation chain, on a sealed CALL or STREAM_OPEN too | scheme 1 seals the payload only (§3.1). A UCAN is a bearer token whose `aud` is not checked on verify, so what a station reads it could present |
 | **Relay errors** (`unknown_next_peer`), and the closed set of admission refusals | the station makes the first; the second carry no payload (§5.1) |
 | **Stream `mode`, `encoding`, `role`; `ttl_ms`, `published_at`; `retry_budget`, `source_route`** | signed routing and verification state |
 | **An event's epoch key id**, and so when a group rotates, which is when its membership changes | routing needs no key id, but a member needs it to choose the key |
