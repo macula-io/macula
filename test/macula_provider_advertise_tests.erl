@@ -90,7 +90,7 @@ a_delegation_ending_first_caps_the_advertisement(Keys) ->
     capped_at(Keys, ?HOUR, 2 * ?MINUTE).
 
 an_org_directory_ending_first_caps_the_advertisement(Keys) ->
-    capped_at(Keys, 2 * ?MINUTE, ?HOUR).
+    capped_at(Keys, 2 * ?MINUTE, 30 * ?MINUTE).
 
 %% The chain is published with these lifetimes, the advertisement is
 %% sent, and it ends at the earlier of the two, not 5 minutes from now.
@@ -121,7 +121,7 @@ capped_at(Keys, DirTtl, DelTtl) ->
 a_republished_chain_restores_the_full_lifetime(Keys) ->
     Handler = fun(_P) -> {ok, counted} end,
     {Ending, _Earliest} = short_chain_stub(Keys, ?HOUR, 2 * ?MINUTE),
-    {Republished, _Fresh} = short_chain_stub(Keys, 6 * ?HOUR, 6 * ?HOUR),
+    {Republished, _Fresh} = short_chain_stub(Keys, 6 * ?HOUR, 30 * ?MINUTE),
     with_opts(Keys, #{find_record => Ending}, Handler, fun(Opts) ->
         ?assertEqual(ok, macula:advertise(self(), ?REALM, ?PROC, Handler, Opts))
     end),

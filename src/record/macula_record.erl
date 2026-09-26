@@ -171,6 +171,11 @@
 -define(CONTENT_ANNOUNCEMENT_MAX_LIFETIME_MS, 48 * 60 * 60 * 1000).
 -define(PROCEDURE_ADVERTISEMENT_MAX_LIFETIME_MS, 5 * 60 * 1000).
 -define(REALM_AND_ORG_MAX_LIFETIME_MS, 6 * 60 * 60 * 1000).
+%% D32 (macula#38): a procedure delegation lives at most 30 minutes, which is
+%% how soon a revoked provider is refused by every verifier: the realm stops
+%% reissuing, and a longer one is refused at signing and at verifying alike, so
+%% neither a realm by mistake nor a stolen org key can mint around the bound.
+-define(PROCEDURE_DELEGATION_MAX_LIFETIME_MS, 30 * 60 * 1000).
 -define(DOMAIN_RECORD_MAX_LIFETIME_MS, 7 * 24 * 60 * 60 * 1000).
 -define(DEFAULT_MAX_LIFETIME_MS, 30 * 24 * 60 * 60 * 1000).
 %% A payload sits in a record's tbs map, and the decoding rule accepts 64 levels, so a payload nests at most 63.
@@ -871,9 +876,9 @@ max_lifetime(?TYPE_NODE_RECORD, _Payload) -> ?NODE_RECORD_MAX_LIFETIME_MS;
 max_lifetime(?TYPE_CONTENT_ANNOUNCEMENT, _Payload) -> ?CONTENT_ANNOUNCEMENT_MAX_LIFETIME_MS;
 max_lifetime(?TYPE_PROCEDURE_ADVERTISEMENT, _Payload) -> ?PROCEDURE_ADVERTISEMENT_MAX_LIFETIME_MS;
 max_lifetime(?TYPE_STATION_ENDPOINT, _Payload) -> ?STATION_ENDPOINT_TTL_MS;
-max_lifetime(Type, _Payload) when Type =:= ?TYPE_REALM_STATIONS; Type =:= ?TYPE_ORG_DIRECTORY;
-                                  Type =:= ?TYPE_PROCEDURE_DELEGATION ->
+max_lifetime(Type, _Payload) when Type =:= ?TYPE_REALM_STATIONS; Type =:= ?TYPE_ORG_DIRECTORY ->
     ?REALM_AND_ORG_MAX_LIFETIME_MS;
+max_lifetime(?TYPE_PROCEDURE_DELEGATION, _Payload) -> ?PROCEDURE_DELEGATION_MAX_LIFETIME_MS;
 max_lifetime(?TYPE_REALM_MEMBER_ENDORSEMENT, _Payload) -> ?MAX_ENDORSEMENT_WINDOW_MS;
 max_lifetime(?TYPE_TOMBSTONE, #{{text, <<"withdrawn_type">>} := Withdrawn}) when Withdrawn =/= ?TYPE_TOMBSTONE ->
     max_lifetime(Withdrawn, #{}) + 2 * ?CLOCK_TOLERANCE_MS;

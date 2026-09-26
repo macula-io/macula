@@ -1100,6 +1100,13 @@ before its wire checks are green.
      providers run (1) or `mcl_om`;
   3. macula: the `0x16` maximum lifetime in signer and verifier, as its own release, strictly after (2) is live on
      every realm. Earlier, it refuses every live 6-hour delegation and takes every provider dark.
+- **Status, 2026-09-26:** (1) shipped in macula 12.7.0; (2) rolled on the io.macula realm 17dc65b (every delegation
+  now 30 minutes, reissued every 10); (3) the `0x16` cap in `macula_record` (`PROCEDURE_DELEGATION_MAX_LIFETIME_MS`),
+  in signer and verifier.
+- ⚠ **The projection-lag window (Mercurius, 2026-09-26):** the realm's reissue round reads the issued rows from its
+  read model, so a round that lands between a revoke's lapse event and its projection republishes that delegation
+  once more. The bound then runs from that issuance: a revoked provider is refused within 35 minutes of the LAST
+  issuance, which can be up to one round after the revoke.
 - **Acceptance:** revoke a provider, keep it re-advertising with its last delegation, and a caller's
   `macula:call/5` to it is refused within 35 minutes (SDK test under a controlled clock, and one end-to-end run).
 - **Amends** D25's six-hour caller-side revocation bound. The `macula_direct_dial` moduledoc that states it changes

@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [12.10.0] - 2026-09-26
+
+### Changed
+
+- **A procedure delegation lives at most 30 minutes** (D32 step 3, #38).
+  `macula_record` refuses a longer one at signing and at verifying
+  (`lifetime_too_long`), so neither a realm by mistake nor a stolen org key can
+  mint around the revocation bound. ⚠ A realm still issuing 6-hour delegations
+  has every provider refused under this release. The io.macula realm has
+  issued 30-minute ones since its 17dc65b rolled at 2026-09-26T07:07:20Z, so
+  the last 6-hour delegation it issued lapsed by 13:12:20Z, clock tolerance
+  included. A 0x16 tombstone now lives 30 minutes plus twice the clock
+  tolerance, which outlives every delegation this release accepts. The org
+  directory keeps its 6 hours.
+
 ## [12.9.1] - 2026-09-26
 
 ### Fixed
@@ -36,6 +51,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   subscription. The pool still waits on that link for up to 5 s: it no longer
   probes links, but it still calls them to subscribe and advertise.
 
+||||||| parent of c7bfaaa3 (feat: a procedure delegation lives at most 30 minutes (D32 step 3, #38))
 ## [12.9.0] - 2026-09-26
 
 Every verifier accepts a sealed payload, and every endpoint refuses one by name

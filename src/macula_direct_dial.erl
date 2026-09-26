@@ -101,8 +101,10 @@
 %%% A caller checks the authorization from the advertisement alone and looks
 %%% up no tombstone. A delegation its org withdraws is honoured until it
 %%% expires, so the caller-side revocation bound is the delegation's maximum
-%%% lifetime, six hours (`macula_record''s REALM_AND_ORG_MAX_LIFETIME_MS), and
-%%% it lengthens if that lifetime does.
+%%% lifetime: 30 minutes (D32, `macula_record''s
+%%% PROCEDURE_DELEGATION_MAX_LIFETIME_MS), plus 5 minutes of clock tolerance.
+%%% The realm reissues every 10 minutes, and a revoked provider gets no fresh
+%%% one.
 %%%
 %%% == Content ==
 %%%

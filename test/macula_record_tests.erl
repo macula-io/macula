@@ -249,7 +249,8 @@ each_type_signs_within_its_maximum_lifetime_test_() ->
                                                        #{ttl_ms => Ttl})
               end},
              {Realm, 6 * Hour, fun(Ttl) -> macula_record:org_directory(RealmId, <<"acme">>, OrgKeyId, #{ttl_ms => Ttl}) end},
-             {Org, 6 * Hour, fun(Ttl) -> macula_record:procedure_delegation(OrgKeyId, NodeId, #{ttl_ms => Ttl}) end},
+             %% D32 (macula#38): a delegation lives at most 30 minutes, the revocation bound.
+             {Org, 30 * ?MINUTE, fun(Ttl) -> macula_record:procedure_delegation(OrgKeyId, NodeId, #{ttl_ms => Ttl}) end},
              {Realm, 30 * Day, fun(Ttl) -> macula_record:realm_member_endorsement(RealmId, Endorsed, #{ttl_ms => Ttl}) end},
              {Realm, 30 * Day,
               fun(Ttl) -> macula_record:realm_directory(RealmId, <<"io.macula">>, fill(5), #{ttl_ms => Ttl}) end},
@@ -262,10 +263,12 @@ each_type_signs_within_its_maximum_lifetime_test_() ->
     end}.
 
 %% A verifier refuses a record signed past its type's maximum lifetime as lifetime_too_long: a node record a millisecond
-%% over 48 hours, a domain record a millisecond over 7 days (D28), and a realm directory signed for a year.
+%% over 48 hours, a domain record a millisecond over 7 days (D28), a realm directory signed for a year, and a procedure
+%% delegation a millisecond over 30 minutes (D32: whatever signed it, a longer one does not verify).
 a_record_signed_past_its_maximum_lifetime_is_refused_test() ->
     Id = key(identity),
     Realm = key(realm),
+    Org = key(org),
     Day = 24 * 60 * ?MINUTE,
     Fields = fun(#{type := Type, version := Version, created_at := Created, payload := Payload}, Lifetime) ->
                  #{{text, <<"type">>} => Type, {text, <<"version">>} => Version, {text, <<"created_at">>} => Created,
@@ -273,7 +276,8 @@ a_record_signed_past_its_maximum_lifetime_is_refused_test() ->
              end,
     Signed = [{Id, macula_record:node_record(macula_node_keys:key_id(Id), [], 0), 2 * Day + 1},
               {Id, macula_record:envelope(16#20, #{}, #{}), 7 * Day + 1},
-              {Realm, macula_record:realm_directory(fill(16#11), <<"io.macula">>, fill(5)), 365 * Day}],
+              {Realm, macula_record:realm_directory(fill(16#11), <<"io.macula">>, fill(5)), 365 * Day},
+              {Org, macula_record:procedure_delegation(macula_node_keys:key_id(Org), fill(16#22)), 30 * ?MINUTE + 1}],
     [?assertEqual({error, lifetime_too_long},
                   macula_record:verify(macula_signed_object:encode(
                                          macula_signed_object:sign(?LABEL, Fields(Unsigned, Lifetime), Key)), pq_pure))

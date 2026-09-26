@@ -24,7 +24,6 @@
 -define(PROC, <<"echo_v1">>).
 -define(ORG, <<"resolve-tests">>).
 -define(ORG_PROC, <<"resolve-tests/echo_v1">>).
--define(HOUR_MS, 3_600_000).
 -define(DAY_MS, 86_400_000).
 
 %%%===================================================================
@@ -1183,7 +1182,7 @@ authorized_advertisement(#{id := StationId}, #{realm := Realm, org := Org}, OrgN
     ProviderId = macula_node_keys:key_id(Provider),
     OrgId = macula_node_keys:key_id(Org),
     OrgDirectory = macula_record:sign(macula_record:org_directory(?REALM, OrgName, OrgId), Realm),
-    Delegation = macula_record:sign(macula_record:procedure_delegation(OrgId, ProviderId, #{ttl_ms => 6 * ?HOUR_MS}),
+    Delegation = macula_record:sign(macula_record:procedure_delegation(OrgId, ProviderId, #{ttl_ms => 30 * 60_000}),
                                     Org),
     Authorization = #{org_directory => macula_record:encode(OrgDirectory),
                       procedure_delegation => macula_record:encode(Delegation)},
