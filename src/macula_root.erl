@@ -66,6 +66,17 @@ init([]) ->
             type => worker
         },
 
+        %% The KEM keys this node's advertisements name and its sealed calls
+        %% open with, one current key per node identity (E2E design,
+        %% Amendment A1). Before any pool advertises or serves.
+        #{
+            id => macula_kem_keyring,
+            start => {macula_kem_keyring, start_link, []},
+            restart => permanent,
+            shutdown => 5000,
+            type => worker
+        },
+
         %% MRI Type Registry (type validation, custom type registration)
         #{
             id => macula_mri_registry,

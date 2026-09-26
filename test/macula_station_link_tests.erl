@@ -1149,8 +1149,9 @@ inject_call_with_payload(Pid, FakePeer, CallerKey, CallId, Proc, Payload) ->
     Pid ! {macula_peering, frame, FakePeer, Frame},
     Frame.
 
-%% This node opens no sealed payload yet (E2E packages 3 to 5), so a sealed
-%% CALL is answered `sealed_refused' in the clear, and its handler never runs.
+%% A node that holds no KEM key opens no sealed payload, so a sealed CALL is
+%% answered `sealed_refused' in the clear, and its handler never runs. A node
+%% that holds one serves it (macula_station_link_sealed_call_tests).
 inbound_sealed_call_is_refused_by_name_test_() ->
     {timeout, 5,
      fun() ->

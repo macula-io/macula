@@ -2777,32 +2777,16 @@ liveness_answered(Request, Id, Pid) ->
 %% A copy of a request already answered gets the stored reply, so a caller whose reply was lost is answered rather
 %% than served twice. A copy while the work is still running is refused `request_copy', as a copied STREAM_OPEN is:
 %% the caller may ask again once its first attempt has finished or its deadline has passed.
-on_call_admission(new, #{sealed := _} = Request, #state{node_identity = Id, peer_pid = Pid,
-                                                        admission = Admission}) when is_pid(Pid) ->
-    %% This node publishes no KEM key, so no caller seals to it: refused in the
-    %% clear, from the closed set a sealed request may be refused with.
-    Reply = macula_frame:provider_error(#{request => Request, code => <<"sealed_refused">>,
-                                          detail => <<"this node opens no sealed payload">>}, Id),
-    _ = stored_reply(Admission, Request, Reply),
-    sent_or_faulted(macula_peering:send_frame(Pid, Reply), Pid, Request, Id),
-    ok;
-on_call_admission(new, Request, #state{procedures = Procs, policies = Pols, node_identity = Id,
-                                       peer_pid = Pid, profile = Profile,
-                                       admission = Admission} = _S) when is_pid(Pid) ->
-    #{procedure := Proc, realm := Realm, payload := Payload} = Request,
-    %% Gate first (Slice 7b): an `open' procedure serves any identified
-    %% caller; a gated one requires a valid `token', else refuse
-    %% with BOLT#4 `unauthorized' instead of invoking the handler.
-    Verdict = authorize({Realm, Proc}, Request, Pols, Profile),
-    Found   = maps:find({Realm, Proc}, Procs),
-    PayloadWithCaller = with_caller(Payload, maps:get(caller, Request, undefined)),
-    _ = spawn(fun() ->
-            Reply = inbound_reply(Verdict, Found, Request, PayloadWithCaller, Id),
-            _ = stored_reply(Admission, Request, Reply),
-            sent_or_faulted(macula_peering:send_frame(Pid, Reply),
-                            Pid, Request, Id)
-        end),
-    ok;
+%% A sealed CALL (E2E design §5.1, Amendment A1) is opened with this node's KEM keyring and served on its plaintext,
+%% and every answer to it is sealed under its reply key. One that does not open is refused in the clear, from the
+%% closed set a sealed request may be refused with: `sealed_refused', naming the key this node holds now, so the
+%% caller seals again to it, or saying the node holds none.
+on_call_admission(new, #{sealed := Sealed} = Request, #state{node_identity = Id, profile = Profile,
+                                                              peer_pid = Pid} = S) when is_pid(Pid) ->
+    Opened = opened_call(macula_kem_keyring:holder(macula_node_keys:key_id(Id)), Profile, Request, Sealed),
+    sealed_call_opened(Opened, Request, S);
+on_call_admission(new, #{payload := Payload} = Request, #state{peer_pid = Pid} = S) when is_pid(Pid) ->
+    served_call(Request, Payload, clear, S);
 on_call_admission({copy, {reply, Reply}}, Request, #state{peer_pid = Pid, node_identity = Id}) when is_pid(Pid) ->
     sent_or_faulted(macula_peering:send_frame(Pid, Reply), Pid, Request, Id),
     ok;
@@ -2811,6 +2795,57 @@ on_call_admission({copy, pending}, Request, S) ->
 on_call_admission({refused, Refusal}, Request, S) ->
     call_refused(admission_code(Refusal), Request, S);
 on_call_admission(_Verdict, _Request, _S) ->
+    ok.
+
+%% The plaintext of a sealed CALL and its keys, or why it did not open: the id of the key this node holds now, or
+%% `no_key' when it holds none.
+opened_call({ok, Holder}, Profile, Request, Sealed) ->
+    SealRequest = seal_request(Request),
+    plain_call(macula_sealed_call:open_request(Profile, Holder, SealRequest, Sealed), SealRequest, Holder);
+opened_call(error, _Profile, _Request, _Sealed) ->
+    {refused, no_key}.
+
+plain_call({ok, Plain, Keys}, SealRequest, #{current_key_id := Current}) ->
+    decoded_call(macula_frame:plain_payload(Plain), Keys, SealRequest, Current);
+plain_call({error, {sealed_refused, Current}}, _SealRequest, _Holder) ->
+    {refused, Current}.
+
+decoded_call({ok, Payload}, Keys, SealRequest, _Current) -> {ok, Payload, {sealed, Keys, SealRequest}};
+decoded_call({error, sealed_refused}, _Keys, _SealRequest, Current) -> {refused, Current}.
+
+sealed_call_opened({ok, Payload, Seal}, Request, S) ->
+    served_call(Request, Payload, Seal, S);
+sealed_call_opened({refused, Why}, Request, #state{node_identity = Id, peer_pid = Pid, admission = Admission}) ->
+    Reply = macula_frame:provider_error(#{request => Request, code => <<"sealed_refused">>,
+                                          detail => refused_detail(Why)}, Id),
+    _ = stored_reply(Admission, Request, Reply),
+    sent_or_faulted(macula_peering:send_frame(Pid, Reply), Pid, Request, Id),
+    ok.
+
+%% What a `sealed_refused' says: the lowercase hex of the key id this node holds now, or that it holds none.
+refused_detail(no_key) -> <<"this node opens no sealed payload">>;
+refused_detail(<<_:64>> = Current) -> binary:encode_hex(Current, lowercase).
+
+%% A verified request's fields as its seal binds them.
+seal_request(#{frame_type := Type, realm := Realm, procedure := Procedure, caller := Caller, target := Target,
+               request_id := RequestId, deadline := Deadline}) ->
+    #{frame_type => atom_to_binary(Type), realm => Realm, procedure => Procedure, caller => Caller,
+      target => Target, request_id => RequestId, deadline => Deadline}.
+
+%% A CALL served: the gate first (Slice 7b), where an `open' procedure serves any identified caller and a gated one
+%% requires a valid `token', else `unauthorized' instead of invoking the handler; then its handler, on the payload
+%% with the verified caller. Its answer is built clear, or sealed when the request was.
+served_call(Request, Payload, Seal, #state{procedures = Procs, policies = Pols, node_identity = Id, peer_pid = Pid,
+                                           profile = Profile, admission = Admission}) ->
+    #{procedure := Proc, realm := Realm} = Request,
+    Verdict = authorize({Realm, Proc}, Request, Pols, Profile),
+    Found   = maps:find({Realm, Proc}, Procs),
+    PayloadWithCaller = with_caller(Payload, maps:get(caller, Request, undefined)),
+    _ = spawn(fun() ->
+            Reply = inbound_reply(Verdict, Found, Request, PayloadWithCaller, Id, Seal),
+            _ = stored_reply(Admission, Request, Reply),
+            sent_or_faulted(macula_peering:send_frame(Pid, Reply), Pid, Request, Id, Seal)
+        end),
     ok.
 
 call_refused(Code, Request, #state{peer_pid = Pid, node_identity = Id}) when is_pid(Pid) ->
@@ -2859,22 +2894,44 @@ with_caller(Payload, _Caller) ->
 
 %% The handler's reply, or a provider error when the reply frame
 %% refused to build: the unsendable handler result's fault code.
-inbound_reply(Verdict, Found, Request, Payload, Key) ->
-    try authorized_reply(Verdict, Found, Request, Payload, Key)
+inbound_reply(Verdict, Found, Request, Payload, Key, Seal) ->
+    try authorized_reply(Verdict, Found, Request, Payload, Key, Seal)
     catch
         error:Reason ->
-            macula_frame:provider_error(#{request => Request,
-                                          code => fault_code(Reason)}, Key)
+            reply_error(Seal, Request, fault_code(Reason), undefined, Key)
     end.
 
-authorized_reply(ok, Found, Request, Payload, Key) ->
-    build_inbound_call_reply(Found, Request, Payload, Key);
-authorized_reply(unauthorized, _Found, Request, _Payload, Key) ->
-    macula_frame:provider_error(#{request => Request, code => <<"unauthorized">>},
-                                Key);
-authorized_reply(malformed_frame, _Found, Request, _Payload, Key) ->
-    macula_frame:provider_error(#{request => Request, code => <<"malformed_frame">>},
-                                Key).
+authorized_reply(ok, Found, Request, Payload, Key, Seal) ->
+    build_inbound_call_reply(Found, Request, Payload, Key, Seal);
+authorized_reply(unauthorized, _Found, Request, _Payload, Key, Seal) ->
+    reply_error(Seal, Request, <<"unauthorized">>, undefined, Key);
+authorized_reply(malformed_frame, _Found, Request, _Payload, Key, Seal) ->
+    reply_error(Seal, Request, <<"malformed_frame">>, undefined, Key).
+
+%% A provider's RESULT or ERROR for a request, in the clear or sealed under the call's reply key with a fresh nonce
+%% (design §5.1). A sealed ERROR seals its code and detail, so a station sees that a reply is an error, never which.
+reply_result(clear, Request, Payload, Key) ->
+    macula_frame:result(#{request => Request, payload => Payload}, Key);
+reply_result({sealed, Keys, SealRequest}, Request, Payload, Key) ->
+    Sealed = sealed_reply(macula_frame:payload_plain(Payload), <<"result">>, Keys, SealRequest, Request, Key),
+    macula_frame:result(#{request => Request, sealed => Sealed}, Key).
+
+reply_error(clear, Request, Code, Detail, Key) ->
+    macula_frame:provider_error(with_detail(Detail, #{request => Request, code => Code}), Key);
+reply_error({sealed, Keys, SealRequest}, Request, Code, Detail, Key) ->
+    Plain = macula_frame:error_plain(with_detail(Detail, #{code => Code})),
+    macula_frame:provider_error(#{request => Request,
+                                  sealed => sealed_reply(Plain, <<"error">>, Keys, SealRequest, Request, Key)}, Key).
+
+with_detail(undefined, Fields) -> Fields;
+with_detail(Detail, Fields) when is_binary(Detail) -> Fields#{detail => Detail}.
+
+%% A reply's plaintext sealed; one the wire cannot carry raises its refusal, which the fault path answers, sealed too.
+sealed_reply({ok, Plain}, ReplyType, Keys, SealRequest, #{request_hash := RequestHash}, Key) ->
+    macula_sealed_call:seal_reply(Keys, SealRequest, #{frame_type => ReplyType, request_hash => RequestHash,
+                                                       responded_by => macula_node_keys:key_id(Key)}, Plain);
+sealed_reply({error, Reason}, _ReplyType, _Keys, _SealRequest, _Request, _Key) ->
+    erlang:error(Reason).
 
 authorize(Key, Frame, Pols, Profile) ->
     authorize_policy(maps:get(Key, Pols, open), Frame, Profile).
@@ -2915,14 +2972,15 @@ set_policy(Key, Policy, Pols) -> Pols#{Key => Policy}.
 %% the remote caller burning its entire deadline waiting for a frame
 %% that died here, which is a timeout where a taxonomy was available:
 %% the handler's return value was the problem and BOLT#4 can say so.
-sent_or_faulted(ok, _Pid, _Request, _Key) ->
+sent_or_faulted(Sent, Pid, Request, Key) ->
+    sent_or_faulted(Sent, Pid, Request, Key, clear).
+
+sent_or_faulted(ok, _Pid, _Request, _Key, _Seal) ->
     ok;
-sent_or_faulted({error, Reason}, Pid, Request, Key) ->
+sent_or_faulted({error, Reason}, Pid, Request, Key, Seal) ->
     logger:error("[macula_station_link] handler result unsendable, "
                  "faulting the call: ~ts", [macula_frame:explain(Reason)]),
-    _ = macula_peering:send_frame(
-          Pid, macula_frame:provider_error(#{request => Request,
-                                             code    => fault_code(Reason)}, Key)),
+    _ = macula_peering:send_frame(Pid, reply_error(Seal, Request, fault_code(Reason), undefined, Key)),
     ok.
 
 fault_code({unsupported_payload_type, payload_too_large, _Path}) -> <<"payload_too_large">>;
@@ -2930,11 +2988,10 @@ fault_code(_Other)                                               -> <<"unknown_e
 
 %% Handler not registered locally — synthesise a signed
 %% `unknown_next_peer' BOLT#4 error.
-build_inbound_call_reply(error, Request, _Payload, Key) ->
-    macula_frame:provider_error(#{request => Request, code => <<"unknown_next_peer">>},
-                                Key);
-build_inbound_call_reply({ok, Handler}, Request, Payload, Key) ->
-    safe_invoke_handler(Handler, Payload, Request, Key).
+build_inbound_call_reply(error, Request, _Payload, Key, Seal) ->
+    reply_error(Seal, Request, <<"unknown_next_peer">>, undefined, Key);
+build_inbound_call_reply({ok, Handler}, Request, Payload, Key, Seal) ->
+    safe_invoke_handler(Handler, Payload, Request, Key, Seal).
 
 %% Handler dispatch with crash trap and error-return funnel.
 %%
@@ -2958,24 +3015,18 @@ build_inbound_call_reply({ok, Handler}, Request, Payload, Key) ->
 %%     `provider_error(code = <<"temporary_relay_failure">>)'
 %%   * handler returns anything else →
 %%     `result(payload = normalise_reply(Reply))'
-safe_invoke_handler(Handler, Payload, Request, Key) ->
+safe_invoke_handler(Handler, Payload, Request, Key, Seal) ->
     try invoke_handler(Handler, Payload) of
         {error, Reason} ->
-            macula_frame:provider_error(#{request => Request,
-                                          code    => ?HANDLER_ERROR_CODE,
-                                          detail  => handler_error_detail(Reason)},
-                                        Key);
+            reply_error(Seal, Request, ?HANDLER_ERROR_CODE, handler_error_detail(Reason), Key);
         Reply ->
-            macula_frame:result(#{request => Request,
-                                  payload => normalise_reply(Reply)}, Key)
+            reply_result(Seal, Request, normalise_reply(Reply), Key)
     catch
         Class:Reason:Stack ->
             logger:warning(
               "[station_link] handler crashed: ~ts",
               [macula_reason_name:logged("~p:~p~n  stack=~p", [Class, Reason, Stack])]),
-            macula_frame:provider_error(#{request => Request,
-                                          code    => <<"temporary_relay_failure">>},
-                                        Key)
+            reply_error(Seal, Request, <<"temporary_relay_failure">>, undefined, Key)
     end.
 
 invoke_handler(Fun, Args) when is_function(Fun, 1) ->
