@@ -20,11 +20,15 @@ For every vector:
 5. `SEAL(key, nonce, aad, plain)` equals `ct`, and `OPEN` gives `plain` back
    and refuses one flipped bit.
 
-The sender's side of the key agreement is checked by round trip only: an SDK
+The sender's side of the key agreement is checked by round trip: an SDK
 encapsulates to a fresh key of its own and its recipient side recovers the
-same `ss`. `encaps_m` and `eph_priv` are there for generators with seeded
-primitives (FIPS 203 §6's testing interface). Go's `crypto/mlkem`, WebCrypto
-and OTP do not expose seeded encapsulation, and applications must not use it.
+same `ss`. Where a test can reach FIPS 203 §6's seeded interface, it checks
+the sender's side byte for byte as well, from `encaps_m` and `eph_priv`. Go
+1.26's `crypto/mlkem/mlkemtest` exposes it for known-answer tests; WebCrypto
+and OTP do not. An application never uses it.
+
+6. Every entry under `refusals` is refused: its recipient side answers
+   `sealed_refused` (or the SDK's name for it), never a secret.
 
 ## Notation
 
@@ -80,7 +84,10 @@ kem_ct = mlkem_ct || eph_pub                               (1568 + 97 bytes)
 ```
 
 The recipient validates `eph_pub` as a point on P-384 and refuses an ECDH
-output of all zeros.
+output of all zeros. That output is reachable: P-384 has points with x = 0, and
+the ephemeral point d^-1 * (0, sqrt b) puts d*E on one. Go's `crypto/ecdh` and
+OTP's `crypto` both return the 48 zero bytes without an error, so the check
+must be explicit. The `refusals` vector pins it.
 
 ## Call and stream keys
 
@@ -126,7 +133,10 @@ Extract.)
 ## The `sealed` map
 
 `sealed = #{scheme => 1, key_id, ct}` plus `kem_ct` on a CALL or STREAM_OPEN,
-and `nonce` where the table says the nonce is carried. The vectors give `ct`,
+and `nonce` where the table says the nonce is carried. On a call or a stream,
+`key_id` is the recipient key's id above. On an event it names the group
+epoch, which the group-key package (design §13 #5) defines; these vectors do
+not pin it. The vectors give `ct`,
 the ciphertext with its tag appended.
 
 ## The JSON

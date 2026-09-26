@@ -14,7 +14,14 @@ vectors_test_() ->
         || Profile := R <- Recipients]
     ++ [{call_name(C), fun() -> call_checked(C, maps:get(maps:get(<<"profile">>, C), Recipients)) end}
         || C <- maps:get(<<"calls">>, Doc)]
-    ++ [{"event", fun() -> event_checked(E) end} || E <- maps:get(<<"events">>, Doc)].
+    ++ [{"event", fun() -> event_checked(E) end} || E <- maps:get(<<"events">>, Doc)]
+    ++ [{"refusal: " ++ binary_to_list(maps:get(<<"why">>, R)), fun() -> refusal_checked(R) end}
+        || R <- maps:get(<<"refusals">>, Doc)].
+
+refusal_checked(R) ->
+    Private = #{mlkem_dk => x(R, <<"mlkem_dk">>), p384_priv => x(R, <<"p384_priv">>)},
+    ?assertEqual({error, sealed_refused},
+                 macula_seal:recipient_secret(pq_hybrid, Private, x(R, <<"key_as_carried">>), x(R, <<"kem_ct">>))).
 
 %% A recipient's key as carried, its hash and its id.
 recipient_checked(Profile, R) ->

@@ -232,15 +232,39 @@ fn event_vector() -> Json {
     let aad = cbor(vec![t("MACULA-E2E-EVENT-AAD-V1"), b(&realm), t(topic), b(&publisher), u(seq), u(published_at)]);
     let ct = seal(&k_pub, &nonce, &aad, &plain);
     json!({
-        "k_g": h(&k_g), "key_id": h(&fixed("event epoch id", 8)), "publisher": h(&publisher), "prk_g": h(&prk_g),
+        "k_g": h(&k_g), "publisher": h(&publisher), "prk_g": h(&prk_g),
         "k_pub": h(&k_pub), "realm": h(&realm), "topic": topic, "seq": seq, "published_at": published_at,
         "plain": h(&plain), "aad": h(&aad), "nonce": h(&nonce), "ct": h(&ct),
+    })
+}
+
+/// A pq_hybrid kem_ct whose ephemeral point makes the recipient's ECDH output
+/// all zeros: P-384 has points with x = 0, and E = d^-1 * (0, sqrt b) lands d*E on
+/// one (found by macula-go). A recipient must refuse it.
+fn zero_ecdh_refusal(hybrid_call: &Json, hybrid: &Json) -> Json {
+    let d = hex::decode("00001234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890ab").unwrap();
+    let e = hex::decode("04ebdd30df769d32acd5bff007110a624531892fdfb3210020ac0170860ff2266f6795e8ce7e98e0dcbd1d88364e4a0cdac0d941ef41aa7c4a7da63d248ee8b6be1ad4d3a8d0f7e6c8721e209797e522a8c17e82878aadf61d6dbb0dba05341754").unwrap();
+    let sk = SecretKey::from_slice(&d).expect("scalar");
+    let point = PublicKey::from_sec1_bytes(&e).expect("on the curve");
+    let shared = ecdh::diffie_hellman(sk.to_nonzero_scalar(), point.as_affine());
+    assert!(shared.raw_secret_bytes().iter().all(|b| *b == 0), "the refusal vector must reach a zero ECDH output");
+    let mlkem_ct = hex::decode(hybrid_call["mlkem_ct"].as_str().unwrap()).unwrap();
+    json!({
+        "why": "the ephemeral point makes the recipient's P-384 ECDH output 48 zero bytes",
+        "profile": "pq_hybrid",
+        "mlkem_dk": hybrid["mlkem_dk"],
+        "p384_priv": h(&d),
+        "key_as_carried": hybrid["key_as_carried"],
+        "kem_ct": h(&[mlkem_ct.as_slice(), e.as_slice()].concat()),
+        "expect": "sealed_refused",
     })
 }
 
 fn main() {
     let pure = recipient("pq_pure");
     let hybrid = recipient("pq_hybrid");
+    let hybrid_call = call_vector("pq_hybrid", &hybrid, "call");
+    let refusals = vec![zero_ecdh_refusal(&hybrid_call, &hybrid.json)];
     let doc = json!({
         "scheme": 1,
         "spec": "test/vectors/E2E_SEAL_V1.md",
@@ -248,11 +272,12 @@ fn main() {
         "recipients": {"pq_pure": pure.json, "pq_hybrid": hybrid.json},
         "calls": [
             call_vector("pq_pure", &pure, "call"),
-            call_vector("pq_hybrid", &hybrid, "call"),
+            hybrid_call,
             call_vector("pq_hybrid", &hybrid, "stream_open"),
             call_vector("pq_pure", &pure, "stream_open"),
         ],
         "events": [event_vector()],
+        "refusals": refusals,
     });
     println!("{}", serde_json::to_string_pretty(&doc).expect("json"));
 }
