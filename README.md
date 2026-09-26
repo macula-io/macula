@@ -84,6 +84,9 @@ stations: no open ports, NAT-friendly, no VPN. It provides:
 - **Content** — content-addressed sharing and live streaming (MCID).
 - **DHT records** — signed, TTL'd records (advertisements, endpoints, more).
 - **Erlang distribution over mesh** — `net_adm:ping` across firewalls, no VPN.
+- **TCP bridge** — an unmodified TCP client reaches an unmodified TCP service
+  across the mesh, one stream per connection, under the procedure's auth
+  policy (`macula_bridge`).
 - **Identity** — ML-DSA-87 node keys (with an RSA-PSS half under `pq_hybrid`), and UCAN tokens they sign.
 - **MRI** — typed, hierarchical resource identifiers.
 - **Zero-config LAN clustering** — UDP-multicast gossip.

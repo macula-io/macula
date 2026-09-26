@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [12.12.0] - 2026-09-26
+
+### Added
+
+- **`macula_bridge`: an unmodified TCP client reaches an unmodified TCP service across the mesh**, one bidi stream
+  per connection, under the procedure's auth policy (`serve/5`, `serve_with/3`, `listen/4`, `listen_with/2`,
+  `handler/2`, `local_port/1`, `stop/1`). `serve/5` refuses to run without an explicit `auth`. Credit is granted by the
+  receiver and counts what a chunk costs the receiving stream, capped on the serving end at one served session's
+  share of its caller's budget. A half-close, a reset, an idle connection and a write the peer stops reading are
+  each carried to the other side, or end the connection.
+- **`macula_stream_sessions:session_share/0`**: one served session's share of a caller's budget (the caller budget
+  divided by the per-caller session cap, 1 MiB by default).
+
+### Fixed
+
+- **A QUIC close on a dedicated stream ends its sessions.** A `stream_closed` or `peer_send_shutdown` under an open
+  session fell to a catch-all, and the session waited until its TTL. The owner now reads
+  `{error, {<<"disconnected">>, _}}`, as it does for a failed write.
+
 ## [12.11.1] - 2026-09-26
 
 ### Security
