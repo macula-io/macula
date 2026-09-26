@@ -114,6 +114,9 @@
 -export([resolved_candidate/3, remember_resolved/5]).
 %% Streaming RPC (since 3.17.0) — called by the `macula' facade.
 -export([call_stream_station/7]).
+%% A pool link to one station, for the `macula' facade's
+%% `ensure_station_link/4'.
+-export([ensure_station_link/4]).
 %% Advertising with a renewal (D32): the facade's `advertise/5' and
 %% `advertise_stream/6' pass how to renew the chain they resolved.
 -export([advertise/8, advertise_stream/9]).
@@ -973,6 +976,19 @@ unadvertise(Pool, Realm, Procedure)
        is_binary(Procedure) ->
     gen_server:call(Pool, {unadvertise, Realm, Procedure}, 5_000).
 
+%% @doc A pool link to `Station': a live one the pool holds, else one it
+%% dials, pinned to the station node_id in the seed or in `LinkOpts'
+%% (`expected_node_id'), and connected within `TimeoutMs'. The pool owns
+%% and monitors it, respawns it, and ends it when the pool ends. Answers
+%% `{error, not_connected}' when no handshake completes in time. Called
+%% through `macula:ensure_station_link/4'.
+-spec ensure_station_link(pool(), seed(), map(), pos_integer()) ->
+    {ok, pid()} | {error, term()}.
+ensure_station_link(Pool, Station, LinkOpts, TimeoutMs)
+  when is_pid(Pool), is_map(LinkOpts), is_integer(TimeoutMs), TimeoutMs > 0 ->
+    gen_server:call(Pool, {ensure_station_link, Station, maps:with([expected_node_id], LinkOpts), TimeoutMs},
+                    TimeoutMs + 2_000).
+
 %% @doc Open a streaming RPC to `Target', a provider's node_id, by DIALING
 %% a specific station directly (direct-dial). The streaming analogue of
 %% `call_station/7': ensure (reuse or dial) a link to `Station', await the
@@ -1707,6 +1723,12 @@ handle_call({unadvertise, Realm, Procedure}, _From, S0) ->
     _ = fanout_unadvertise(registered_link_pids(Registered, S), Realm, Procedure,
                            Withdrawal),
     {reply, ok, S#state{procs = maps:remove({Realm, Procedure}, P)}};
+
+handle_call({ensure_station_link, Station, LinkOpts, TimeoutMs}, From, S) ->
+    %% As call_station: ensure the link, and wait for its handshake in a
+    %% worker so the pool never blocks. It hands back the link itself.
+    on_link(ensure_link(Station, LinkOpts, S), From,
+            fun(Pid) -> link_when_connected(Pid, TimeoutMs) end);
 
 handle_call({call_stream_station, Station, Target, Realm, Procedure, Args, Opts,
              LinkOpts}, From, S) ->
@@ -2763,6 +2785,15 @@ safe_link_unadvertise(Pid, Realm, Proc, Withdrawal) ->
     try macula_station_link:unadvertise(Pid, Realm, Proc, Withdrawal)
     catch _:_ -> skipped
     end.
+
+%% `ensure_station_link/4': the link, once its handshake completes.
+link_when_connected(undefined, _TimeoutMs) ->
+    {error, not_connected};
+link_when_connected(Pid, TimeoutMs) ->
+    linked(await_connected(Pid, erlang:monotonic_time(millisecond) + TimeoutMs), Pid).
+
+linked(true, Pid) -> {ok, Pid};
+linked(false, _Pid) -> {error, not_connected}.
 
 %% Direct-dial streaming: wait for the ensured link's handshake, then
 %% open the stream there, naming its target. Mirrors `call_when_connected'

@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [12.8.0] - 2026-09-26
+
+Wire-compatible with 12.0 to 12.7. For a consumer that addresses one station
+through one pool link, as macula-realm's peer overlay does.
+
+### Added
+
+- **`macula:ensure_station_link/4`**, a pool link to one pinned station. It is a
+  live link the pool holds, else one it dials, answered once its handshake
+  completes within the timeout, or `{error, not_connected}`. The pool owns,
+  respawns and ends the link. With it, the facade forms of the overlay calls a
+  consumer drives the link with: `macula:overlay_subscribe/3`,
+  `overlay_unsubscribe/2`, and `send_overlay_frame/2,3`.
+
+### Fixed
+
+- **12.6.0 removed a function a consumer called.** It dropped
+  `macula_client:ensure_station_link/4` as dead code with the station-served
+  content path, but macula-realm's overlay (`PeerResolver.dial/4`) called it,
+  so no realm builds on 12.6.0 or later. The check before the removal grepped
+  the Erlang consumers and missed the Elixir ones. The function is back as
+  `macula:ensure_station_link/4` on the public facade, not as the internal. A
+  consumer should call the facade; the internal module stays internal. Every
+  repository, in Erlang, Elixir and Gleam, was then grepped for every function
+  12.6.0 and 12.7.0 removed:
+  - macula-realm called this one.
+  - macula-e2e still calls the station-served content functions 12.6.0 removed
+    (`put_content/2`, `get_content/2`, `get_content_station/5`,
+    `resolve_content_provider/2`, `macula_download:start_link_direct/4,5`).
+    It is rewritten onto `share_content`/`get_content` when it is repinned.
+  - No other repository calls a removed function.
+- **An overlay frame sent on a link still handshaking** was answered `ok`
+  and then dropped by the peering connection as an unexpected event.
+  `send_overlay_frame/2,3` now answers `{error, not_connected}` until the
+  handshake completes, as documented.
+
+---
+
 ## [12.7.0] - 2026-09-26
 
 A provider picks the stations it serves through and keeps its authorization

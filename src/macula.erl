@@ -76,6 +76,11 @@
 -export([share_content/3, share_content/4, unshare_content/3,
          get_content/3, get_content/4]).
 
+%% A pool link to one station, and the overlay frames a consumer drives it
+%% with (macula-realm's peer overlay).
+-export([ensure_station_link/4, overlay_subscribe/3, overlay_unsubscribe/2,
+         send_overlay_frame/2, send_overlay_frame/3]).
+
 %% Streaming RPC (LOCAL in-process + V2 pool, see PLAN_MACULA_STREAMING.md)
 -export([
     call_stream/2, call_stream/3, call_stream/5, call_stream_station/7,
@@ -872,6 +877,52 @@ call_stream_station(Pool, Station, Target, Realm, Procedure, Args, Opts)
     refused(target_checked(Station, Opts),
             fun() -> macula_client:call_stream_station(
                        Pool, Station, Target, Realm, Procedure, Args, Opts) end).
+
+%% @doc A pool link to `Station', for a consumer that must address one
+%% station through one link, as an overlay does: a live link the pool
+%% already holds to that station, else one it dials. The station is
+%% pinned by the `expected_node_id' in its seed map or in `Opts', which a
+%% link requires (D5, D16); `pin_tls_cert => true' and `verify' are
+%% refused as `call_station/8' describes. Answers `{ok, Link}' once the
+%% link's handshake has completed, within `TimeoutMs', or
+%% `{error, not_connected}'. The pool owns and monitors the link: it
+%% respawns it and ends it with the pool, so a consumer holds the pid and
+%% never stops it. Drive it with `overlay_subscribe/3' and
+%% `send_overlay_frame/2,3'.
+-spec ensure_station_link(pool(), macula_client:seed(), map(), pos_integer()) ->
+        {ok, pid()} | {error, term()}.
+ensure_station_link(Pool, Station, Opts, TimeoutMs)
+  when is_pid(Pool), is_map(Opts), is_integer(TimeoutMs), TimeoutMs > 0 ->
+    refused(target_checked(Station, Opts),
+            fun() -> macula_client:ensure_station_link(Pool, Station, Opts, TimeoutMs) end).
+
+%% @doc Take the overlay frames for `Realm' arriving on `Link' (from
+%% `ensure_station_link/4'), delivered to `Subscriber' as
+%% `{macula_overlay_frame, SubRef, Frame, Meta}', where `Meta' names the
+%% frame's authenticated `sender' and, for a relayed frame, the station it
+%% came `via'. A frame from the connected peer, or a GOSSIP, for a realm
+%% nobody on this link subscribed to is dropped.
+-spec overlay_subscribe(pid(), realm(), pid()) -> {ok, reference()} | {error, term()}.
+overlay_subscribe(Link, Realm, Subscriber) ->
+    macula_station_link:overlay_subscribe(Link, Realm, Subscriber).
+
+%% @doc Drop an overlay subscription. Idempotent.
+-spec overlay_unsubscribe(pid(), reference()) -> ok.
+overlay_unsubscribe(Link, SubRef) ->
+    macula_station_link:overlay_unsubscribe(Link, SubRef).
+
+%% @doc Send a pre-built, pre-signed overlay frame to the peer at the other
+%% end of `Link'. `{error, not_connected}' until its handshake completes.
+-spec send_overlay_frame(pid(), macula_frame:frame()) -> ok | {error, term()}.
+send_overlay_frame(Link, Frame) ->
+    macula_station_link:send_overlay_frame(Link, Frame).
+
+%% @doc Send a pre-built, pre-signed overlay frame to `TargetPeer' (its
+%% node_id), relayed by the station `Link' is connected to.
+%% `{error, not_connected}' until the link's handshake completes.
+-spec send_overlay_frame(pid(), <<_:256>>, macula_frame:frame()) -> ok | {error, term()}.
+send_overlay_frame(Link, TargetPeer, Frame) ->
+    macula_station_link:send_overlay_frame(Link, TargetPeer, Frame).
 
 %% @doc Open a LOCAL in-process client-stream or bidi call. Used
 %% for unit tests and same-BEAM dispatch via `macula_stream_local'.

@@ -1441,8 +1441,12 @@ handle_call({overlay_subscribe, Realm, Subscriber}, _From,
 handle_call({overlay_unsubscribe, SubRef}, _From, S) ->
     {reply, ok, on_overlay_unsubscribe(SubRef, S)};
 
+%% An overlay frame goes out only once the handshake has completed, which
+%% `peer_node_id' marks: `peer_pid' is set while the connection is still
+%% handshaking, when the peering connection drops an application frame as
+%% an unexpected event and the caller would be told `ok'.
 handle_call({send_overlay_frame, _Frame}, _From,
-            #state{peer_pid = undefined} = S) ->
+            #state{peer_node_id = undefined} = S) ->
     {reply, {error, not_connected}, S};
 handle_call({send_overlay_frame, Frame}, _From, #state{peer_pid = Pid} = S) ->
     Result = try macula_peering:send_frame(Pid, Frame)
@@ -1451,7 +1455,7 @@ handle_call({send_overlay_frame, Frame}, _From, #state{peer_pid = Pid} = S) ->
     {reply, Result, S};
 
 handle_call({send_overlay_frame_to, _Target, _Frame}, _From,
-            #state{peer_pid = undefined} = S) ->
+            #state{peer_node_id = undefined} = S) ->
     {reply, {error, not_connected}, S};
 handle_call({send_overlay_frame_to, Target, Frame}, _From,
             #state{peer_pid = Pid} = S) ->
