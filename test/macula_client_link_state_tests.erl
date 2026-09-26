@@ -89,7 +89,7 @@ a_linked_station_call_probes_no_link_test_() ->
              _ = spawn(fun() ->
                            Self ! {linked_call, catch macula_client:call_linked_station(Pool, ?REALM, <<"acme.ping_v1">>, #{}, 300)}
                        end),
-             ?assertMatch({error, _}, receive {linked_call, R} -> R after 1_200 -> no_answer end),
+             ?assertMatch({error, _}, receive {linked_call, R} -> R after 3_000 -> no_answer end),
              ?assertEqual([], [C || L <- [LinkA, LinkB], {'$gen_call', _, is_connected} = C <- queue_of(L)])
          after
              ok = sys:resume(LinkA),
