@@ -1091,11 +1091,14 @@ call_stream(Pid, Target, Realm, Procedure, Args, Opts)
 valid_stream_opts(Opts) ->
     ok = valid_stream_mode(maps:get(mode, Opts, server_stream)),
     ok = valid_stream_token(maps:get(ucan_token, Opts, <<>>)),
+    ok = valid_stream_seal(maps:get(seal, Opts, clear)),
     valid_stream_deadline(maps:get(deadline_ms, Opts, 0)).
 
 valid_stream_mode(Mode) when Mode =:= server_stream; Mode =:= client_stream; Mode =:= bidi -> ok.
 
 valid_stream_token(Token) when is_binary(Token) -> ok.
+valid_stream_seal(clear) -> ok;
+valid_stream_seal({sealed_to, KemKey}) when is_binary(KemKey) -> ok.
 
 valid_stream_deadline(DeadlineMs) when is_integer(DeadlineMs), DeadlineMs >= 0 -> ok.
 
@@ -1878,20 +1881,24 @@ call_sendable(ok, RemainingMs, {Target, Realm, Proc, Payload, DeadlineMs, Token,
 carried_call(clear, Spec, Payload, _Key, _Profile) ->
     {ok, Spec#{payload => Payload}, clear};
 carried_call({sealed_to, KemKey}, Spec, Payload, Key, Profile) ->
-    sealed_to(macula_seal:public_key(KemKey), Spec, Payload, Key, Profile).
+    sealed_to(macula_seal:public_key(KemKey), <<"call">>, Spec, Payload, Key, Profile).
 
 %% A caller seals only to a key of its own profile's size (Amendment A1). The key is the provider's, from its
 %% advertisement, so an encapsulation `crypto' refuses (a P-384 point off the curve) seals nothing either.
-sealed_to({ok, Profile, Public}, #{request_id := RequestId, realm := Realm, procedure := Proc, target := Target,
-                                   deadline := Deadline} = Spec, Payload, Key, Profile) ->
-    SealRequest = #{frame_type => <<"call">>, realm => Realm, procedure => Proc, caller => macula_node_keys:key_id(Key),
+%% A STREAM_OPEN seals the same way under its own frame type, and agrees the stream keys (§5.2) its stream seals under.
+sealed_to({ok, Profile, Public}, FrameType,
+          #{request_id := RequestId, realm := Realm, procedure := Proc, target := Target, deadline := Deadline} = Spec,
+          Payload, Key, Profile) ->
+    SealRequest = #{frame_type => FrameType, realm => Realm, procedure => Proc, caller => macula_node_keys:key_id(Key),
                     target => Target, request_id => RequestId, deadline => Deadline},
     {ok, Plain} = macula_frame:payload_plain(Payload),
     sealed_spec(catch macula_sealed_call:seal_request(Profile, Public, SealRequest, Plain), Spec, SealRequest);
-sealed_to(_AnotherProfileOrNoKey, _Spec, _Payload, _Key, _Profile) ->
+sealed_to(_AnotherProfileOrNoKey, _FrameType, _Spec, _Payload, _Key, _Profile) ->
     {error, {confidentiality, no_kem_key}}.
 
 sealed_spec({#{scheme := 1} = Sealed, #{k_rep := _} = Keys}, Spec, SealRequest) ->
+    {ok, Spec#{sealed => Sealed}, {Keys, SealRequest}};
+sealed_spec({#{scheme := 1} = Sealed, #{k_c2p := _, k_p2c := _} = Keys}, Spec, SealRequest) ->
     {ok, Spec#{sealed => Sealed}, {Keys, SealRequest}};
 sealed_spec(_Refused, _Spec, _SealRequest) ->
     {error, {confidentiality, no_kem_key}}.
@@ -3285,13 +3292,28 @@ parse_seed(Url) when is_list(Url) ->
 %% under the request id as its attach id, and the open goes out as the first
 %% bytes on a dedicated stream of its own. The returned pid is bound to the
 %% requested `owner' (default: the caller), so a crashing owner ends it.
-open_client_stream(Target, Realm, Proc, Args, Opts, Caller, #state{node_identity = Key} = S) ->
+open_client_stream(Target, Realm, Proc, Args, Opts, Caller, #state{node_identity = Key, profile = Profile} = S) ->
     Spec = maps:merge(#{request_id => crypto:strong_rand_bytes(16), realm => Realm, procedure => Proc,
                         target => target_node_id(Target, S),
                         deadline => maps:get(deadline_ms, Opts, erlang:system_time(millisecond) + 30_000),
-                        payload => Args, mode => maps:get(mode, Opts, server_stream)},
+                        mode => maps:get(mode, Opts, server_stream)},
                       open_token(maps:get(ucan_token, Opts, <<>>))),
-    open_built(macula_frame:stream_bytes({stream_open, Spec}, Key), Opts, Caller, S).
+    open_carried(carried_open(maps:get(seal, Opts, clear), Spec, Args, Key, Profile), Opts, Caller, S).
+
+%% A STREAM_OPEN carries its args in the clear, or sealed to the provider's KEM key with the stream keys its stream
+%% then seals under (E2E design §5.2).
+carried_open(clear, Spec, Args, _Key, _Profile) ->
+    {ok, Spec#{payload => Args}, clear};
+carried_open({sealed_to, KemKey}, Spec, Args, Key, Profile) ->
+    sealed_to(macula_seal:public_key(KemKey), <<"stream_open">>, Spec, Args, Key, Profile).
+
+open_carried({ok, Spec, Seal}, Opts, Caller, #state{node_identity = Key} = S) ->
+    open_built(macula_frame:stream_bytes({stream_open, Spec}, Key), Opts#{seal => stream_keys(Seal)}, Caller, S);
+open_carried({error, _} = Refused, _Opts, _Caller, S) ->
+    {reply_value, Refused, S}.
+
+stream_keys(clear) -> clear;
+stream_keys({Keys, _SealRequest}) -> Keys.
 
 %% An absent or empty token sends none.
 open_token(<<>>) -> #{};
@@ -3314,13 +3336,18 @@ client_session(false, _Bytes, _Open, _Opts, _Caller, S) ->
     {reply_value, {error, {refused, attach_id_taken}}, S};
 client_session(true, Bytes, #{request_id := AttachId, mode := Mode} = Open, Opts, Caller,
                #state{peer_pid = Conn, profile = Profile, node_identity = Key, peer_node_id = Station} = S) ->
-    {ok, StreamPid} = macula_stream:start_link(#{id => AttachId, role => client, mode => Mode,
-                                                 owner => maps:get(owner, Opts, Caller),
-                                                 key => fun() -> Key end, open => Open, conn => Conn,
-                                                 profile => Profile, station => Station}),
+    {ok, StreamPid} = macula_stream:start_link(sealed_stream(maps:get(seal, Opts),
+                                                             #{id => AttachId, role => client, mode => Mode,
+                                                               owner => maps:get(owner, Opts, Caller),
+                                                               key => fun() -> Key end, open => Open, conn => Conn,
+                                                               profile => Profile, station => Station})),
     ok = macula_stream:attach_to_link(StreamPid, self(), AttachId),
     Mon = erlang:monitor(process, StreamPid),
     {reply_value, {ok, StreamPid}, client_stream_opened(opened_stream(S), Bytes, AttachId, StreamPid, Mon, S)}.
+
+%% A stream whose open was sealed starts with the keys that open agreed.
+sealed_stream(clear, StreamOpts) -> StreamOpts;
+sealed_stream(Keys, StreamOpts) -> StreamOpts#{seal => Keys}.
 
 %% Opens this session's dedicated stream on the peering connection.
 opened_stream(#state{open_stream = Open, peer_pid = Conn}) ->
