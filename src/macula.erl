@@ -52,7 +52,7 @@
 %% opt a direct-dial record publish needs.
 -export([provider_authorization/3, provider_authorization/4]).
 %% The pool renews an advertised chain through this (D32); internal.
--export([renew_authorization/4, advertise_confidentiality/1]).
+-export([renew_authorization/4, advertise_confidentiality/1, call_seal/5]).
 
 %% Signed DHT records — realm-agnostic infrastructure procedures
 %% (`_dht.put_record', `_dht.find_record', `_dht.find_records_by_type',
@@ -380,8 +380,63 @@ do_call_station(Pool, Station, Target, Realm, Procedure, Payload, TimeoutMs, Opt
     Ucan = maps:get(ucan_token, Opts, <<>>),
     LinkOpts = maps:with([expected_node_id], Opts),
     DialTimeoutMs = maps:get(dial_timeout_ms, Opts, TimeoutMs),
-    macula_client:call_station(Pool, Station, Target, Realm, Procedure, Payload,
-                               TimeoutMs, Ucan, LinkOpts, DialTimeoutMs).
+    Resolve = fun() -> find_records(Pool, macula_record:procedure_key(Realm, Procedure)) end,
+    sealed_or_refused(call_seal(Target, Realm, Procedure, Opts, Resolve), fun(Seal) ->
+        macula_client:call_station(Pool, Station, Target, Realm, Procedure, Payload,
+                                   TimeoutMs, Ucan, LinkOpts, DialTimeoutMs, Seal)
+    end).
+
+sealed_or_refused({ok, Seal}, Call) -> Call(Seal);
+sealed_or_refused({error, _} = Refused, _Call) -> Refused.
+
+%% @private
+%% @doc How a call to the explicit `Target' is sent (E2E design §8.1, Amendment A1), decided from signed state only, so
+%% a lookup can deny the call but never downgrade it:
+%%
+%% - `advertisement', a verified procedure advertisement of `Target' for this realm and procedure (as `find_records/2'
+%%   or `providers/3' hand one over): sealed to its KEM key when it names one, in the clear when it names none, unless
+%%   `confidential => required', which then fails with `no_kem_key';
+%% - `confidential => off': in the clear, the application's own decision;
+%% - `confidential => required' without an advertisement: `Resolve()' looks up the procedure's advertisements, and
+%%   only one `Target' signed is used; with none, or one naming no key, the call fails with `no_kem_key';
+%% - none of these: `{error, {confidentiality, no_signed_state}}'.
+-spec call_seal(<<_:256>>, realm(), procedure(), map(), fun(() -> {ok, [map()]} | {error, term()})) ->
+    {ok, clear | {sealed_to, binary()}} | {error, {confidentiality, atom()}}.
+call_seal(_Target, _Realm, _Procedure, #{confidential := off}, _Resolve) ->
+    {ok, clear};
+call_seal(Target, Realm, Procedure, #{advertisement := Ad} = Opts, _Resolve) ->
+    sealed_by(advertised_key(Ad, Target, Realm, Procedure), maps:get(confidential, Opts, preferred));
+call_seal(Target, Realm, Procedure, #{confidential := required}, Resolve) ->
+    sealed_by(resolved_key(Resolve(), Target, Realm, Procedure), required);
+call_seal(_Target, _Realm, _Procedure, _Opts, _Resolve) ->
+    {error, {confidentiality, no_signed_state}}.
+
+%% The KEM key an advertisement of `Target' for this realm and procedure names, `none' when it names none.
+advertised_key(Ad, Target, Realm, Procedure) ->
+    advertised_by(macula_record:read_procedure_advertisement(Ad), Target, Realm, Procedure).
+
+advertised_by(#{advertiser_node := Target, realm_id := Realm, procedure := Procedure} = Read, Target, Realm, Procedure) ->
+    {ok, maps:get(kem_key, Read, none)};
+advertised_by(#{advertiser_node := Target}, Target, _Realm, _Procedure) ->
+    {error, {confidentiality, not_the_procedure}};
+advertised_by(_AnotherNodes, _Target, _Realm, _Procedure) ->
+    {error, {confidentiality, not_the_target}}.
+
+%% The key of the one advertisement `Target' signed among those resolved; anything else seals nothing.
+resolved_key({ok, Ads}, Target, Realm, Procedure) ->
+    first_key([advertised_key(Ad, Target, Realm, Procedure) || Ad <- Ads,
+                                                               macula_record:type(Ad) =:= macula_record:type_procedure_advertisement()]);
+resolved_key(_NothingResolved, _Target, _Realm, _Procedure) ->
+    {ok, none}.
+
+first_key([{ok, _} = Found | _]) -> Found;
+first_key([_Refused | Rest]) -> first_key(Rest);
+first_key([]) -> {ok, none}.
+
+sealed_by({ok, KemKey}, _Mode) when is_binary(KemKey) -> {ok, {sealed_to, KemKey}};
+sealed_by({ok, none}, required) -> {error, {confidentiality, no_kem_key}};
+sealed_by({ok, none}, _Preferred) -> {ok, clear};
+sealed_by({error, _} = Refused, _Mode) -> Refused.
 
 %% @doc Register a procedure handler on a V2 pool and advertise it:
 %% the pool resolves its own D25 provider authorization — the
