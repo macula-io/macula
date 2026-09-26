@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [12.11.0] - 2026-09-26
+
+### Added
+
+- **A procedure advertisement may carry its provider's KEM key** (E2E payload confidentiality, Amendment A1).
+  `macula_record:procedure_advertisement/5` takes a `kem_key` option (the key as carried: 1568 bytes of ML-KEM-1024,
+  or 1665 with a P-384 point) and writes it with its `kem_key_id` (the first 8 bytes of SHA-384 over it).
+  `read_procedure_advertisement/1` returns both when present. The two travel only as a pair: a lone field, a key of
+  another length or an id that is not its key's is refused as `malformed` at sign, at verify, and by every station's
+  STORE and ADVERTISE admission. ⚠ A node on 12.10 or earlier refuses a keyed advertisement, so stations move to
+  this release first, then callers, and only then do providers name a key (13.0.0, behind `kem_advertise`). No
+  advertisement carries a key in this release, since nothing builds one yet.
+
 ## [12.10.0] - 2026-09-26
 
 ### Changed
