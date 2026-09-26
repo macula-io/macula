@@ -20,7 +20,13 @@ cases() ->
      {"a CALL build with both payload and sealed raises", fun a_call_with_both_raises/1},
      {"a sealed RESULT and a sealed ERROR build and verify", fun sealed_replies_build/1},
      {"stream_bytes builds sealed requests and replies", fun stream_bytes_builds_sealed/1},
-     {"stream_bytes refuses a build with both", fun stream_bytes_refuses_both/1}].
+     {"stream_bytes refuses a build with both", fun stream_bytes_refuses_both/1},
+     {"sealed provider stream frames build and verify", fun sealed_provider_stream_frames_build/1},
+     {"sealed caller stream frames build and verify", fun sealed_caller_stream_frames_build/1},
+     {"stream_bytes builds sealed stream frames", fun stream_bytes_builds_sealed_stream_frames/1},
+     {"a stream frame build with both clear and sealed raises", fun a_stream_frame_with_both_raises/1},
+     {"a stream frame sealed against its side's nonce rule raises", fun a_stream_frame_against_its_nonce_rule_raises/1},
+     {"a STREAM_END has nothing to seal", fun a_stream_end_has_nothing_to_seal/1}].
 
 a_sealed_call_builds(#{caller := Caller} = Keys) ->
     {ok, Verified} = macula_frame:verify_request(wire(macula_frame:call(sealed_spec(Keys), Caller)), pq_pure),
@@ -59,6 +65,80 @@ stream_bytes_builds_sealed(#{caller := Caller, provider := Provider} = Keys) ->
 
 stream_bytes_refuses_both(#{caller := Caller} = Keys) ->
     ?assertError(function_clause, macula_frame:stream_bytes({call, (sealed_spec(Keys))#{payload => #{}}}, Caller)).
+
+%% A provider's stream frames seal their body, reply payload or error under a
+%% random nonce they carry (§5.2): a sealed STREAM_DATA keeps its encoding in
+%% the clear, and none of them carries its clear field too.
+sealed_provider_stream_frames_build(#{provider := Provider} = Keys) ->
+    Open = verified_bidi_open(Keys),
+    Data = macula_frame:provider_stream(#{frame_type => stream_data, seq => 0, encoding => raw,
+                                          sealed => provider_sealed()}, Provider, Open),
+    {ok, DataFields, Next} = macula_frame:verify_provider_stream(wire(Data), macula_frame:open_stream(Open), pq_pure),
+    ?assertMatch(#{frame_type := stream_data, encoding := raw, sealed := #{nonce := _}}, DataFields),
+    ?assertNot(is_map_key(body, DataFields)),
+    Reply = macula_frame:provider_stream(#{frame_type => stream_reply, seq => 1, sealed => provider_sealed()},
+                                         Provider, Open),
+    {ok, ReplyFields, _} = macula_frame:verify_provider_stream(wire(Reply), Next, pq_pure),
+    ?assertMatch(#{frame_type := stream_reply, sealed := _}, ReplyFields),
+    ?assertNot(is_map_key(payload, ReplyFields)),
+    Error = macula_frame:provider_stream(#{frame_type => stream_error, seq => 0, sealed => provider_sealed()},
+                                         Provider, Open),
+    {ok, ErrorFields, _} = macula_frame:verify_provider_stream(wire(Error), macula_frame:open_stream(Open), pq_pure),
+    ?assertMatch(#{frame_type := stream_error, sealed := _}, ErrorFields),
+    ?assertNot(is_map_key(code, ErrorFields)).
+
+%% A caller's stream frames seal under a nonce derived from their signed seq,
+%% so their sealed carries none.
+sealed_caller_stream_frames_build(#{caller := Caller} = Keys) ->
+    Open = verified_bidi_open(Keys),
+    Data = macula_frame:caller_stream(#{frame_type => stream_data, seq => 0, encoding => msgpack,
+                                        sealed => caller_sealed()}, Caller, Open),
+    {ok, DataFields, Next} = macula_frame:verify_caller_stream(wire(Data), macula_frame:open_stream(Open), pq_pure),
+    ?assertMatch(#{frame_type := stream_data, encoding := msgpack, sealed := _}, DataFields),
+    ?assertNot(is_map_key(nonce, maps:get(sealed, DataFields))),
+    Error = macula_frame:caller_stream(#{frame_type => stream_error, seq => 1, sealed => caller_sealed()}, Caller, Open),
+    ?assertMatch({ok, #{frame_type := stream_error, sealed := _}, _},
+                 macula_frame:verify_caller_stream(wire(Error), Next, pq_pure)).
+
+stream_bytes_builds_sealed_stream_frames(#{caller := Caller, provider := Provider} = Keys) ->
+    Open = verified_bidi_open(Keys),
+    {ok, ProviderBytes} = macula_frame:stream_bytes({provider_stream, #{frame_type => stream_data, seq => 0,
+                                                                        encoding => raw, sealed => provider_sealed()},
+                                                     Open}, Provider),
+    ?assertMatch({ok, #{sealed := _}, _},
+                 macula_frame:verify_provider_stream(decoded(ProviderBytes), macula_frame:open_stream(Open), pq_pure)),
+    {ok, CallerBytes} = macula_frame:stream_bytes({caller_stream, #{frame_type => stream_error, seq => 0,
+                                                                    sealed => caller_sealed()}, Open}, Caller),
+    ?assertMatch({ok, #{sealed := _}, _},
+                 macula_frame:verify_caller_stream(decoded(CallerBytes), macula_frame:open_stream(Open), pq_pure)).
+
+a_stream_frame_with_both_raises(#{provider := Provider} = Keys) ->
+    Open = verified_bidi_open(Keys),
+    [?assertError(function_clause, macula_frame:provider_stream(Spec, Provider, Open))
+     || Spec <- [#{frame_type => stream_data, seq => 0, encoding => raw, body => <<"x">>, sealed => provider_sealed()},
+                 #{frame_type => stream_reply, seq => 0, payload => 1, sealed => provider_sealed()},
+                 #{frame_type => stream_error, seq => 0, code => <<"c">>, message => <<"m">>,
+                   sealed => provider_sealed()}]].
+
+%% What the verifier refuses is never built: a provider's sealed without its
+%% nonce, a caller's with one.
+a_stream_frame_against_its_nonce_rule_raises(#{caller := Caller, provider := Provider} = Keys) ->
+    Open = verified_bidi_open(Keys),
+    ?assertError(function_clause,
+                 macula_frame:provider_stream(#{frame_type => stream_reply, seq => 0, sealed => caller_sealed()},
+                                              Provider, Open)),
+    ?assertError(function_clause,
+                 macula_frame:caller_stream(#{frame_type => stream_data, seq => 0, encoding => raw,
+                                              sealed => provider_sealed()}, Caller, Open)).
+
+a_stream_end_has_nothing_to_seal(#{provider := Provider} = Keys) ->
+    Open = verified_bidi_open(Keys),
+    ?assertError(function_clause,
+                 macula_frame:provider_stream(#{frame_type => stream_end, seq => 0, role => both,
+                                                sealed => provider_sealed()}, Provider, Open)),
+    ?assertEqual({error, {unknown_build_key, sealed}},
+                 macula_frame:stream_bytes({provider_stream, #{frame_type => stream_end, seq => 0, role => both,
+                                                               sealed => provider_sealed()}, Open}, Provider)).
 
 %%------------------------------------------------------------------
 %% Plaintext
@@ -124,6 +204,17 @@ request_sealed() ->
 
 reply_sealed() ->
     #{scheme => 1, key_id => <<1:64>>, nonce => <<3:96>>, ct => <<"ciphertext">>}.
+
+provider_sealed() ->
+    #{scheme => 1, key_id => <<1:64>>, nonce => <<4:96>>, ct => <<"stream ciphertext">>}.
+
+caller_sealed() ->
+    #{scheme => 1, key_id => <<1:64>>, ct => <<"stream ciphertext">>}.
+
+verified_bidi_open(#{caller := Caller} = Keys) ->
+    {ok, Open} = macula_frame:verify_request(wire(macula_frame:stream_open((sealed_spec(Keys))#{mode => bidi}, Caller)),
+                                             pq_pure),
+    Open.
 
 verified_call(#{caller := Caller} = Keys) ->
     {ok, Request} = macula_frame:verify_request(wire(macula_frame:call(call_spec(Keys), Caller)), pq_pure),

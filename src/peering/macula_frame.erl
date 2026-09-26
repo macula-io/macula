@@ -135,6 +135,7 @@
 -export_type([
     frame/0,
     sealed/0,
+    stream_sealed/0,
     frame_type/0,
     stream_build/0,
     stream_bytes/0,
@@ -646,8 +647,13 @@
     role       => stream_role(),
     code       => binary(),
     message    => binary(),
-    payload    => term()
+    payload    => term(),
+    sealed     => stream_sealed()
 }.
+
+%% A stream frame's sealed body, reply payload or error (E2E design §5.2): a provider's carries its random nonce, a
+%% caller's none, since it derives its nonce from its signed seq.
+-type stream_sealed() :: #{scheme := 1, key_id := <<_:64>>, ct := binary(), nonce => <<_:96>>}.
 
 %% A frame built here for a dedicated stream, as stream_bytes/2 takes it: a request, a provider's reply, a station's
 %% relay error, or a stream frame of either side under the verified STREAM_OPEN it belongs to.
@@ -1629,6 +1635,7 @@ open_stream(#{frame_type := stream_open} = Open) ->
 provider_stream(#{frame_type := Type, seq := Seq} = Spec, #{purpose := identity} = Key,
                 #{frame_type := stream_open} = Open)
   when is_integer(Seq), Seq >= 0, Seq < ?MAX_PROTOCOL_INT ->
+    ok = side_sealed(provider_stream, Spec),
     Tbs = to_wire(stream_tbs(Type, Spec, Key, Open)),
     #{version => ?PROTOCOL_VERSION, frame_type => Type, stream => provider_signed(Seq, Tbs, Key)}.
 
@@ -1642,6 +1649,7 @@ caller_stream(#{frame_type := Type, seq := Seq} = Spec, #{purpose := identity} =
               #{frame_type := stream_open, mode := Mode} = Open)
   when (Type =:= stream_end orelse Type =:= stream_error orelse (Type =:= stream_data andalso Mode =/= server_stream)),
        is_integer(Seq), Seq >= 0, Seq < ?MAX_PROTOCOL_INT ->
+    ok = side_sealed(caller_stream, Spec),
     Tbs = to_wire(stream_tbs(Type, Spec, Key, Open)),
     #{version => ?PROTOCOL_VERSION, frame_type => Type,
       caller_stream => macula_signed_object:sign_held(?CALLER_STREAM_LABEL, Tbs, Key)}.
@@ -1714,10 +1722,10 @@ known_build_keys({relay_error, Spec})    ->
 known_build_keys({Side, Spec, _Open}) when Side =:= provider_stream; Side =:= caller_stream ->
     only_build_keys(Spec, stream_build_keys(Spec)).
 
-stream_build_keys(#{frame_type := stream_data})  -> [frame_type, seq, encoding, body];
+stream_build_keys(#{frame_type := stream_data})  -> [frame_type, seq, encoding, body, sealed];
 stream_build_keys(#{frame_type := stream_end})   -> [frame_type, seq, role];
-stream_build_keys(#{frame_type := stream_error}) -> [frame_type, seq, code, message];
-stream_build_keys(#{frame_type := stream_reply}) -> [frame_type, seq, payload];
+stream_build_keys(#{frame_type := stream_error}) -> [frame_type, seq, code, message, sealed];
+stream_build_keys(#{frame_type := stream_reply}) -> [frame_type, seq, payload, sealed];
 stream_build_keys(_TypeTheBuilderRefuses)        -> [frame_type, seq].
 
 only_build_keys(Spec, Known) -> unknown_build_key(maps:keys(Spec) -- Known).
@@ -1825,20 +1833,41 @@ stream_tbs(Type, #{seq := Seq} = Spec, Key, #{request_id := RequestId, request_h
     (stream_fields(Type, Spec))#{frame_type => Type, request_id => RequestId, request_hash => RequestHash,
                                 signer => macula_node_keys:key_id(Key), seq => Seq}.
 
-stream_fields(stream_data, #{encoding := raw, body := Body}) when is_binary(Body) ->
+%% A frame carries its clear field or `sealed' in its place, never both (§3.1); a STREAM_END has nothing to seal.
+stream_fields(stream_data, #{encoding := Encoding, sealed := Sealed} = Spec)
+  when (Encoding =:= raw orelse Encoding =:= msgpack), not is_map_key(body, Spec) ->
+    #{encoding => Encoding, sealed => stream_sealed(Sealed)};
+stream_fields(stream_data, #{encoding := raw, body := Body} = Spec) when is_binary(Body), not is_map_key(sealed, Spec) ->
     #{encoding => raw, body => Body};
-stream_fields(stream_data, #{encoding := msgpack, body := Body}) ->
+stream_fields(stream_data, #{encoding := msgpack, body := Body} = Spec) when not is_map_key(sealed, Spec) ->
     ok = check_payload(Body),
     #{encoding => msgpack, body => Body};
-stream_fields(stream_end, #{role := Role}) when Role =:= send; Role =:= both ->
+stream_fields(stream_end, #{role := Role} = Spec) when (Role =:= send orelse Role =:= both), not is_map_key(sealed, Spec) ->
     #{role => Role};
-stream_fields(stream_error, #{code := Code, message := Message}) when is_binary(Code), is_binary(Message) ->
+stream_fields(stream_error, #{sealed := Sealed} = Spec) when not is_map_key(code, Spec), not is_map_key(message, Spec) ->
+    #{sealed => stream_sealed(Sealed)};
+stream_fields(stream_error, #{code := Code, message := Message} = Spec)
+  when is_binary(Code), is_binary(Message), not is_map_key(sealed, Spec) ->
     ok = bounded_text(code, Code, ?MAX_ERROR_CODE_BYTES),
     ok = bounded_text(message, Message, ?MAX_ERROR_TEXT_BYTES),
     #{code => {text, Code}, message => {text, Message}};
-stream_fields(stream_reply, #{payload := Payload}) ->
+stream_fields(stream_reply, #{sealed := Sealed} = Spec) when not is_map_key(payload, Spec) ->
+    #{sealed => stream_sealed(Sealed)};
+stream_fields(stream_reply, #{payload := Payload} = Spec) when not is_map_key(sealed, Spec) ->
     ok = check_payload(Payload),
     #{payload => Payload}.
+
+stream_sealed(#{scheme := 1, key_id := <<_:64>> = KeyId, ct := Ct, nonce := <<_:96>> = Nonce} = Sealed)
+  when is_binary(Ct), map_size(Sealed) =:= 4 ->
+    #{scheme => 1, key_id => KeyId, nonce => Nonce, ct => Ct};
+stream_sealed(#{scheme := 1, key_id := <<_:64>> = KeyId, ct := Ct} = Sealed) when is_binary(Ct), map_size(Sealed) =:= 3 ->
+    #{scheme => 1, key_id => KeyId, ct => Ct}.
+
+%% A provider's sealed stream frame carries its random nonce and a caller's carries none (§5.2): what the verifier
+%% refuses is never built.
+side_sealed(provider_stream, #{sealed := #{nonce := _}}) -> ok;
+side_sealed(caller_stream, #{sealed := Sealed}) when not is_map_key(nonce, Sealed) -> ok;
+side_sealed(_Side, Spec) when not is_map_key(sealed, Spec) -> ok.
 
 %% @doc Verify a provider's stream frame against the stream's state, and return its fields and the next state.
 %% Before the provider's first frame the verifier holds no provider key, so a frame without one is out of order. The
