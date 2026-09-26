@@ -1416,7 +1416,8 @@ dist_relay_client_result(Pid) -> {ok, Pid}.
 
 %% @private Wait until the V2 pool has at least one healthy
 %% station_link (CONNECT/HELLO completed). One-second polling, capped
-%% at `Retries' iterations.
+%% at `Retries' iterations. A handshake, not a route: see `healthy_links'
+%% in `macula_client:status/1'.
 wait_for_pool(_Pool, 0) ->
     ?LOG_WARNING("[macula] Mesh pool not ready after timeout");
 wait_for_pool(Pool, Retries) ->

@@ -1132,7 +1132,13 @@ unadvertise_stream(Pool, Realm, Procedure)
 %% Counts:
 %% <ul>
 %%   <li>`healthy_links' — links whose worker pid is alive and whose
-%%       CONNECT/HELLO handshake has completed.</li>
+%%       CONNECT/HELLO handshake has completed. That is necessary for a
+%%       call and not sufficient: it says nothing about any procedure. The
+%%       first call through the pool still resolves the procedure's
+%%       advertisement and, for a station it has no link to yet, dials one
+%%       (measured on macula 12.4.0 and again on 12.5.1: about 0.45 s for
+%%       that first call, 150-170 ms warm; #18). Wait on the call you need,
+%%       not on this count.</li>
 %%   <li>`failed_links' — every other configured seed (link not yet
 %%       spawned, dead, or still handshaking).</li>
 %% </ul>
