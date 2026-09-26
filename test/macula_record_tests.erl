@@ -218,8 +218,8 @@ the_clock_tolerance_is_five_minutes_test() ->
 %%------------------------------------------------------------------
 
 %% Every type lives at most its type's maximum, created_at to expires_at: a node record and a content announcement 48
-%% hours; a procedure advertisement and a station endpoint 5 minutes; realm stations, an org directory and a procedure
-%% delegation 6 hours; a realm member endorsement 30 days; a domain record 7 days; and a type with no rule of its own,
+%% hours; a procedure advertisement and a station endpoint 5 minutes; realm stations and an org directory 6 hours; a
+%% procedure delegation 30 minutes (D32); a realm member endorsement 30 days; a domain record 7 days; and a type with no rule of its own,
 %% such as a realm directory, 30 days. At the maximum a record signs; a millisecond past it sign/2 raises
 %% {lifetime_too_long, Type}.
 each_type_signs_within_its_maximum_lifetime_test_() ->

@@ -51,7 +51,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   subscription. The pool still waits on that link for up to 5 s: it no longer
   probes links, but it still calls them to subscribe and advertise.
 
-||||||| parent of c7bfaaa3 (feat: a procedure delegation lives at most 30 minutes (D32 step 3, #38))
 ## [12.9.0] - 2026-09-26
 
 Every verifier accepts a sealed payload, and every endpoint refuses one by name

@@ -1108,6 +1108,8 @@ before its wire checks are green.
   once more. The bound then runs from that issuance: a revoked provider is refused within 35 minutes of the LAST
   issuance, which can be up to one round after the revoke.
 - **Acceptance:** revoke a provider, keep it re-advertising with its last delegation, and a caller's
-  `macula:call/5` to it is refused within 35 minutes (SDK test under a controlled clock, and one end-to-end run).
+  `macula:call/5` to it is refused within 35 minutes of the realm's LAST issuance of that delegation: normally within
+  35 minutes of the revoke, and at worst about 45, when a reissue round lands between the lapse event and its
+  projection (the projection-lag window above). SDK test under a controlled clock, and one end-to-end run.
 - **Amends** D25's six-hour caller-side revocation bound. The `macula_direct_dial` moduledoc that states it changes
   with step (3), when the bound in the code changes.

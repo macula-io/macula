@@ -164,8 +164,8 @@
 -define(DEFAULT_TTL_MS, 48 * 60 * 60 * 1000).
 %% The longest a record of a type lives, created_at to expires_at. A node record and a content announcement 48 hours; a
 %% procedure advertisement 5 minutes, renewed at half that or sooner, so a provider that stops is gone within minutes; a
-%% station endpoint 5 minutes; realm stations, an org directory and a procedure delegation 6 hours; a realm member
-%% endorsement 30 days; a domain record 7 days (D28); and any other type 30 days, so no record keeps a key trusted
+%% station endpoint 5 minutes; realm stations and an org directory 6 hours; a procedure delegation 30 minutes (D32); a
+%% realm member endorsement 30 days; a domain record 7 days (D28); and any other type 30 days, so no record keeps a key trusted
 %% without end. A tombstone lives at most its withdrawn type's maximum plus twice the clock tolerance.
 -define(NODE_RECORD_MAX_LIFETIME_MS, 48 * 60 * 60 * 1000).
 -define(CONTENT_ANNOUNCEMENT_MAX_LIFETIME_MS, 48 * 60 * 60 * 1000).
