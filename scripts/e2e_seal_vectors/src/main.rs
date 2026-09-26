@@ -252,6 +252,7 @@ fn zero_ecdh_refusal(hybrid_call: &Json, hybrid: &Json) -> Json {
     json!({
         "why": "the ephemeral point makes the recipient's P-384 ECDH output 48 zero bytes",
         "profile": "pq_hybrid",
+        "mlkem_seed": hybrid["mlkem_seed"],
         "mlkem_dk": hybrid["mlkem_dk"],
         "p384_priv": h(&d),
         "key_as_carried": hybrid["key_as_carried"],

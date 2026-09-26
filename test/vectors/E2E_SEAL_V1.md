@@ -28,7 +28,11 @@ the sender's side byte for byte as well, from `encaps_m` and `eph_priv`. Go
 and OTP do not. An application never uses it.
 
 6. Every entry under `refusals` is refused: its recipient side answers
-   `sealed_refused` (or the SDK's name for it), never a secret.
+   `sealed_refused` (or the SDK's name for it), never a secret. In
+   particular, **a recipient MUST refuse an ECDH output of 48 zero bytes, with
+   an explicit check: neither Go's `crypto/ecdh` nor OTP's `crypto` refuses
+   it.** Each refusal entry carries its ML-KEM key both as `mlkem_seed` and as
+   `mlkem_dk`, like the recipients.
 
 ## Notation
 
@@ -83,8 +87,8 @@ ss  = HKDF-Extract(salt = "MACULA-E2E-HYBRID-V1", ikm)
 kem_ct = mlkem_ct || eph_pub                               (1568 + 97 bytes)
 ```
 
-The recipient validates `eph_pub` as a point on P-384 and refuses an ECDH
-output of all zeros. That output is reachable: P-384 has points with x = 0, and
+The recipient validates `eph_pub` as a point on P-384, and **MUST refuse an
+ECDH output of 48 zero bytes with an explicit check**. That output is reachable: P-384 has points with x = 0, and
 the ephemeral point d^-1 * (0, sqrt b) puts d*E on one. Go's `crypto/ecdh` and
 OTP's `crypto` both return the 48 zero bytes without an error, so the check
 must be explicit. The `refusals` vector pins it.
