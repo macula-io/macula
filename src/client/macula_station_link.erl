@@ -165,6 +165,7 @@
     overlay_frame_refused/3,
     %% Streaming RPC (SDK 3.17+, Part 6 §5.6)
     call_stream/6,
+    reopen_stream/6,
     advertise_stream/5,
     advertise_stream/6,
     advertise_stream/7,
@@ -1098,15 +1099,32 @@ valid_stream_opts(#{seal := Seal} = Opts) ->
     ok = valid_stream_mode(maps:get(mode, Opts, server_stream)),
     ok = valid_stream_token(maps:get(ucan_token, Opts, <<>>)),
     ok = valid_stream_seal(Seal),
+    ok = valid_stream_reseal(maps:get(reseal, Opts, none)),
     valid_stream_deadline(maps:get(deadline_ms, Opts, 0)).
 
 valid_stream_mode(Mode) when Mode =:= server_stream; Mode =:= client_stream; Mode =:= bidi -> ok.
 
 valid_stream_token(Token) when is_binary(Token) -> ok.
+valid_stream_reseal(none) -> ok;
+valid_stream_reseal(Reseal) when is_function(Reseal, 1) -> ok.
 valid_stream_seal(clear) -> ok;
 valid_stream_seal({sealed_to, KemKey}) when is_binary(KemKey) -> ok.
 
 valid_stream_deadline(DeadlineMs) when is_integer(DeadlineMs), DeadlineMs >= 0 -> ok.
+
+%% @doc Reopen a caller's sealed stream whose open the provider refused
+%% `sealed_refused' before the stream sent anything (E2E design §5.2,
+%% Amendment A1): the old session's dedicated stream closes, and a new
+%% STREAM_OPEN for the same target, procedure, mode, deadline and token,
+%% with `Args' sealed to `KemKey' under a new request id, goes out on a new
+%% one, carrying `StreamPid' on. Returns the new verified open, the keys it
+%% agreed and its attach id, which the stream reads and writes under from
+%% then on. The link does not call the stream, which waits on this call.
+-spec reopen_stream(pid(), pid(), macula_frame:stream_id(), macula_frame:verified_request(), term(), binary()) ->
+    {ok, #{open := macula_frame:verified_request(), seal := macula_sealed_call:keys(),
+           sid := macula_frame:stream_id()}} | {error, term()}.
+reopen_stream(Link, StreamPid, OldSid, Open, Args, KemKey) when is_pid(Link), is_pid(StreamPid), is_binary(KemKey) ->
+    gen_server:call(Link, {reopen_stream, StreamPid, OldSid, Open, Args, KemKey}, 5_000).
 
 %% @doc Register a streaming RPC handler on this link. Idempotent —
 %% re-advertising replaces the prior `{Mode, Handler}'. A STREAM_OPEN
@@ -1513,6 +1531,9 @@ handle_call({stream_open, _Target, _R, _P, _A, _O, _Caller}, _From,
     {reply, {error, not_connected}, S};
 handle_call({stream_open, Target, Realm, Proc, Args, Opts, Caller}, _From, S) ->
     {reply_value, Reply, NewS} = open_client_stream(Target, Realm, Proc, Args, Opts, Caller, S),
+    {reply, Reply, NewS};
+handle_call({reopen_stream, StreamPid, OldSid, Open, Args, KemKey}, _From, S) ->
+    {reply_value, Reply, NewS} = reopened_client_stream(StreamPid, Open, Args, KemKey, drop_stream(OldSid, S)),
     {reply, Reply, NewS};
 
 handle_call({stream_advertise, Realm, Proc, Mode, Handler, Policy}, _From,
@@ -2088,7 +2109,7 @@ answer_of(#{sealed := Sealed, frame_type := Type, responded_by := RespondedBy}, 
 answer_of(#{frame_type := error, reported_by := _} = Fields, #{seal := {_Keys, _SealRequest}}) ->
     call_result(Fields);
 answer_of(#{frame_type := error, code := <<"sealed_refused">>} = Fields, #{seal := {_Keys, _SealRequest}}) ->
-    {error, {sealed_refused, named_key(maps:get(detail, Fields, undefined))}};
+    {error, {sealed_refused, macula_sealed_call:refused_key(maps:get(detail, Fields, undefined))}};
 answer_of(#{frame_type := error, code := Code} = Fields, #{seal := {_Keys, _SealRequest}}) ->
     clear_refusal(macula_sealed_call:clear_refusal(Code), Fields);
 answer_of(_ClearResult, #{seal := {_Keys, _SealRequest}}) ->
@@ -2110,18 +2131,6 @@ opened_error({error, sealed_refused}) -> {error, {confidentiality, reply_not_ope
 %% request is answered by nothing that may answer it.
 clear_refusal(true, Fields) -> call_result(Fields);
 clear_refusal(false, _Fields) -> {refused, malformed_frame}.
-
-%% The key a `sealed_refused' names: its lowercase hex id, or none.
-named_key(Detail) when is_binary(Detail), byte_size(Detail) =:= 16 ->
-    hex_key(catch binary:decode_hex(Detail), Detail);
-named_key(_NoKey) ->
-    no_key.
-
-hex_key(<<_:64>> = KeyId, Detail) -> hex_named(binary:encode_hex(KeyId, lowercase) =:= Detail, KeyId);
-hex_key(_NotHex, _Detail) -> no_key.
-
-hex_named(true, KeyId) -> KeyId;
-hex_named(false, _KeyId) -> no_key.
 
 %% What a verified answer means to its caller. A provider's code and detail
 %% reach the caller as the binaries they arrived as, so nothing a provider
@@ -3304,7 +3313,7 @@ open_client_stream(Target, Realm, Proc, Args, Opts, Caller, #state{node_identity
                         deadline => maps:get(deadline_ms, Opts, erlang:system_time(millisecond) + 30_000),
                         mode => maps:get(mode, Opts, server_stream)},
                       open_token(maps:get(ucan_token, Opts, <<>>))),
-    open_carried(carried_open(maps:get(seal, Opts), Spec, Args, Key, Profile), Opts, Caller, S).
+    open_carried(carried_open(maps:get(seal, Opts), Spec, Args, Key, Profile), Opts#{args => Args}, Caller, S).
 
 %% A STREAM_OPEN carries its args in the clear, or sealed to the provider's KEM key with the stream keys its stream
 %% then seals under (E2E design §5.2).
@@ -3342,11 +3351,12 @@ client_session(false, _Bytes, _Open, _Opts, _Caller, S) ->
     {reply_value, {error, {refused, attach_id_taken}}, S};
 client_session(true, Bytes, #{request_id := AttachId, mode := Mode} = Open, Opts, Caller,
                #state{peer_pid = Conn, profile = Profile, node_identity = Key, peer_node_id = Station} = S) ->
-    {ok, StreamPid} = macula_stream:start_link(sealed_stream(maps:get(seal, Opts),
+    {ok, StreamPid} = macula_stream:start_link(reopening(Opts, maps:get(args, Opts),
+                                                         sealed_stream(maps:get(seal, Opts),
                                                              #{id => AttachId, role => client, mode => Mode,
                                                                owner => maps:get(owner, Opts, Caller),
                                                                key => fun() -> Key end, open => Open, conn => Conn,
-                                                               profile => Profile, station => Station})),
+                                                               profile => Profile, station => Station}))),
     ok = macula_stream:attach_to_link(StreamPid, self(), AttachId),
     Mon = erlang:monitor(process, StreamPid),
     {reply_value, {ok, StreamPid}, client_stream_opened(opened_stream(S), Bytes, AttachId, StreamPid, Mon, S)}.
@@ -3354,6 +3364,44 @@ client_session(true, Bytes, #{request_id := AttachId, mode := Mode} = Open, Opts
 %% A stream whose open was sealed starts with the keys that open agreed.
 sealed_stream(clear, StreamOpts) -> StreamOpts;
 sealed_stream(Keys, StreamOpts) -> StreamOpts#{seal => Keys}.
+
+%% A caller's sealed stream given a reseal may reopen once, with its args, when its open is refused
+%% `sealed_refused' (`reopen_stream/6').
+reopening(#{seal := clear}, _Args, StreamOpts) -> StreamOpts;
+reopening(#{reseal := Reseal}, Args, StreamOpts) -> StreamOpts#{reopen => #{args => Args, reseal => Reseal}};
+reopening(_NoReseal, _Args, StreamOpts) -> StreamOpts.
+
+%% The new STREAM_OPEN of a reopened stream: the old one's target, procedure, mode, deadline and token, its args
+%% sealed to the new key under a new request id, on a new dedicated stream.
+reopened_client_stream(StreamPid, #{target := Target, realm := Realm, procedure := Proc, deadline := Deadline,
+                                    mode := Mode} = Open, Args, KemKey,
+                       #state{node_identity = Key, profile = Profile} = S) ->
+    Spec = maps:merge(#{request_id => crypto:strong_rand_bytes(16), realm => Realm, procedure => Proc,
+                        target => Target, deadline => Deadline, mode => Mode},
+                      open_token(maps:get(token, Open, <<>>))),
+    reopen_carried(sealed_to(macula_seal:public_key(KemKey), <<"stream_open">>, Spec, Args, Key, Profile),
+                   StreamPid, S).
+
+reopen_carried({ok, Spec, {Keys, _SealRequest}}, StreamPid, #state{node_identity = Key} = S) ->
+    reopen_built(macula_frame:stream_bytes({stream_open, Spec}, Key), Keys, StreamPid, S);
+reopen_carried({error, _} = Refused, _StreamPid, S) ->
+    {reply_value, Refused, S}.
+
+reopen_built({ok, Built}, Keys, StreamPid, #state{profile = Profile} = S) ->
+    Bytes = macula_frame:written_bytes(Built),
+    {ok, Frame, <<>>} = macula_frame:decode(Bytes),
+    {ok, #{request_id := Sid} = Open} = macula_frame:verify_request(Frame, Profile),
+    reopen_within(byte_size(Bytes) - 4 =< stream_open_limit() andalso attach_id_free(Sid, S), Bytes, Open, Keys,
+                  StreamPid, S);
+reopen_built({error, Refusal}, _Keys, _StreamPid, S) ->
+    {reply_value, {error, {refused, Refusal}}, S}.
+
+reopen_within(false, _Bytes, _Open, _Keys, _StreamPid, S) ->
+    {reply_value, {error, {refused, reopen_not_sendable}}, S};
+reopen_within(true, Bytes, #{request_id := Sid} = Open, Keys, StreamPid, S) ->
+    Mon = erlang:monitor(process, StreamPid),
+    {reply_value, {ok, #{open => Open, seal => Keys, sid => Sid}},
+     client_stream_opened(opened_stream(S), Bytes, Sid, StreamPid, Mon, S)}.
 
 %% Opens this session's dedicated stream on the peering connection.
 opened_stream(#state{open_stream = Open, peer_pid = Conn}) ->

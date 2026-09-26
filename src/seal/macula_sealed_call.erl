@@ -13,7 +13,7 @@
 %% provider restart).
 -module(macula_sealed_call).
 
--export([seal_request/4, open_request/4, seal_reply/4, open_reply/4, clear_refusal/1]).
+-export([seal_request/4, open_request/4, seal_reply/4, open_reply/4, clear_refusal/1, refused_key/1]).
 
 -export_type([keys/0, holder/0, sealed/0, reply/0]).
 
@@ -45,6 +45,22 @@
 %%====================================================================
 %% The caller's side
 %%====================================================================
+
+%% @doc The key a provider's clear `sealed_refused' names in its detail (or
+%% message, on a stream): the id it holds now, as 16 lowercase hex digits,
+%% or `no_key' when the detail is anything else, which a provider that holds
+%% no key sends.
+-spec refused_key(term()) -> <<_:64>> | no_key.
+refused_key(Detail) when is_binary(Detail), byte_size(Detail) =:= 16 ->
+    hex_key(catch binary:decode_hex(Detail), Detail);
+refused_key(_NoKey) ->
+    no_key.
+
+hex_key(<<_:64>> = KeyId, Detail) -> hex_named(binary:encode_hex(KeyId, lowercase) =:= Detail, KeyId);
+hex_key(_NotHex, _Detail) -> no_key.
+
+hex_named(true, KeyId) -> KeyId;
+hex_named(false, _KeyId) -> no_key.
 
 %% @doc Whether `Code' is one a provider may answer a sealed request, a CALL
 %% or a STREAM_OPEN, with in the clear: an admission refusal, decided before

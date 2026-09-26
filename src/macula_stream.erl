@@ -164,7 +164,12 @@
     %% to, the one station whose relay error for this open it takes.
     station  :: <<_:256>> | undefined,
     %% A sealed stream: the keys its STREAM_OPEN agreed.
-    seal     :: macula_sealed_call:keys() | undefined
+    seal     :: macula_sealed_call:keys() | undefined,
+    %% A caller's sealed stream that may reseal ONCE when its open is
+    %% refused `sealed_refused' before it has sent anything: the open's
+    %% args and the reseal that resolves the key the refusal names.
+    reopen   :: #{args := term(), reseal := fun((<<_:64>> | no_key) -> {ok, binary()} | {error, term()})}
+              | undefined
 }).
 
 -define(CALLER_TO_PROVIDER, 0).
@@ -702,7 +707,8 @@ replied({_Sent, State}, Result) ->
 %% pair has none of these.
 carried(#{key := Key, open := Open, conn := Conn, profile := Profile} = Opts, State) ->
     State#state{key = Key, open = Open, conn = Conn, profile = Profile, verifier = macula_frame:open_stream(Open),
-                station = maps:get(station, Opts, undefined), seal = stream_seal(maps:get(seal, Opts, undefined))};
+                station = maps:get(station, Opts, undefined), seal = stream_seal(maps:get(seal, Opts, undefined)),
+                reopen = maps:get(reopen, Opts, undefined)};
 carried(_LocalPair, State) ->
     State.
 
@@ -899,15 +905,42 @@ verified_frame({error, Refusal}, #state{conn = Conn} = State) ->
 peer_event(#{sealed := _}, #state{seal = undefined} = State) ->
     error_arrived(<<"sealed_refused">>, <<"this node opens no sealed payload">>, State);
 peer_event(#{sealed := Sealed, frame_type := Type, seq := Seq} = Fields, #state{seal = Keys} = State) ->
-    opened_event(opened(Sealed, Type, Seq, Keys, State), Fields, State);
+    %% A sealed frame from the provider means it opened the open: nothing is resealed any more.
+    opened_event(opened(Sealed, Type, Seq, Keys, State), Fields, State#state{reopen = undefined});
 peer_event(Fields, #state{seal = undefined} = State) ->
     clear_event(Fields, State);
 peer_event(#{frame_type := stream_end} = Fields, State) ->
     clear_event(Fields, State);
+peer_event(#{frame_type := stream_error, code := <<"sealed_refused">>, message := Detail, seq := 0},
+           #state{role = client} = State) ->
+    sealed_refused_arrived(macula_sealed_call:refused_key(Detail), State);
 peer_event(#{frame_type := stream_error, code := Code, seq := 0} = Fields, #state{role = client} = State) ->
-    clear_refusal(Code =:= <<"sealed_refused">> orelse macula_sealed_call:clear_refusal(Code), Fields, State);
+    clear_refusal(macula_sealed_call:clear_refusal(Code), Fields, State);
 peer_event(_ClearOnASealedStream, State) ->
     abort_session(<<"malformed_frame">>, <<"a clear frame on a sealed stream">>, State).
+
+%% The provider could not open the open: it holds another key now, which it names, or none. A stream that has sent
+%% nothing reseals ONCE to the key its reseal resolves, bound to the one named (Amendment A1), and reopens through its
+%% link under a new request, keeping its pid; any other ends naming the key, and a second refusal is the answer.
+sealed_refused_arrived(Named, #state{seq_out = 0, reopen = #{args := Args, reseal := Reseal}} = State) ->
+    resealed(Reseal(Named), Args, State#state{reopen = undefined});
+sealed_refused_arrived(Named, State) ->
+    refused_with({error, {sealed_refused, Named}}, State).
+
+resealed({ok, KemKey}, Args, #state{peer = {remote_via_link, Link, Sid}, open = Open} = State) ->
+    reopened(macula_station_link:reopen_stream(Link, self(), Sid, Open, Args, KemKey), Link, State);
+resealed({error, _} = Refused, _Args, State) ->
+    refused_with(Refused, State).
+
+%% The link opened the new STREAM_OPEN on a new dedicated stream: this stream reads and writes under it from now on.
+reopened({ok, #{open := Open, seal := Keys, sid := Sid}}, Link, State) ->
+    State#state{id = Sid, peer = {remote_via_link, Link, Sid}, open = Open, verifier = macula_frame:open_stream(Open),
+                seal = stream_seal(Keys)};
+reopened({error, _} = Refused, _Link, State) ->
+    refused_with(Refused, State).
+
+refused_with(Err, #state{reply = Reply} = State) ->
+    session_ended(Err, ended_with(Err, State#state{reply = first_reply(Reply, Err)})).
 
 clear_refusal(true, Fields, State) ->
     clear_event(Fields, State);

@@ -29,7 +29,12 @@ cases(Keys) ->
                  fun a_clear_chunk_on_a_sealed_stream_ends_the_session/1,
                  fun a_clear_admission_refusal_reaches_the_reader_as_itself/1,
                  fun a_clear_error_outside_the_closed_set_ends_the_session/1,
-                 fun a_stream_end_stays_clear/1]].
+                 fun a_stream_end_stays_clear/1,
+                 fun a_refused_open_reopens_once_under_the_resealed_key/1,
+                 fun a_refused_open_after_a_send_ends_naming_the_key/1,
+                 fun a_reseal_that_fails_ends_with_its_reason/1,
+                 fun a_second_refusal_ends_the_stream/1,
+                 fun a_refusal_without_a_reseal_ends_naming_the_key/1]].
 
 %% The caller's nonce is its seq, so its ciphertext is the vectors' byte for
 %% byte (E2E_SEAL_V1.md, the stream_open entry's frames in direction 0).
@@ -155,9 +160,9 @@ a_clear_chunk_on_a_sealed_stream_ends_the_session(#{caller := Caller, provider :
     ?assertMatch({error, {<<"malformed_frame">>, _}}, macula_stream:recv(Stream, 1000)),
     gen_server:stop(Stream).
 
-%% A provider refuses a sealed open in the clear only for admission, from the
-%% closed set, and names its key when it refuses the seal itself: the reader
-%% gets the refusal as it came.
+%% A provider refuses a sealed open in the clear for admission, from the
+%% closed set: the reader gets the refusal as it came. (A clear
+%% `sealed_refused' is the reseal's, below.)
 a_clear_admission_refusal_reaches_the_reader_as_itself(#{caller := Caller, provider := Provider} = Keys) ->
     Open = verified_open(Keys, bidi),
     [begin
@@ -167,7 +172,7 @@ a_clear_admission_refusal_reaches_the_reader_as_itself(#{caller := Caller, provi
          ?assertEqual({error, {Code, Message}}, macula_stream:recv(Stream, 1000)),
          gen_server:stop(Stream)
      end || {Code, Message} <- [{<<"too_many_sessions">>, <<"no more sessions are served now">>},
-                                {<<"sealed_refused">>, <<"00000000000000ff">>}]].
+                                {<<"unavailable">>, <<"sessions are not being admitted now">>}]].
 
 a_clear_error_outside_the_closed_set_ends_the_session(#{caller := Caller, provider := Provider} = Keys) ->
     Open = verified_open(Keys, bidi),
@@ -188,9 +193,92 @@ a_stream_end_stays_clear(#{caller := Caller} = Keys) ->
                  macula_frame:verify_caller_stream(Frame, macula_frame:open_stream(Open), pq_pure)),
     gen_server:stop(Stream).
 
+%% A provider that no longer holds the key the open was sealed to refuses it
+%% in the clear, naming the key it holds now. While the caller has sent
+%% nothing, its stream reseals ONCE: it asks its reseal for the named key and
+%% its link to reopen under it, keeps its pid, and reads on under the new
+%% open's keys (Amendment A1, E2E design §5.2).
+a_refused_open_reopens_once_under_the_resealed_key(#{caller := Caller, provider := Provider} = Keys) ->
+    Open = verified_open(Keys, bidi),
+    Test = self(),
+    Reopen = #{args => #{n => 1}, reseal => fun(Named) -> Test ! {resealing, Named}, {ok, <<"new kem key">>} end},
+    Stream = stream(client, Caller, Open, seal(), Reopen),
+    ok = macula_stream:deliver_frame(Stream, refusal(<<2:64>>, Provider, Open)),
+    ?assertEqual({resealing, <<2:64>>}, receive {resealing, _} = R -> R after 1000 -> none end),
+    NewOpen = verified_open(Keys, bidi, <<8:128>>),
+    #{k_p2c := KP2C} = NewSeal = seal(),
+    ?assertEqual({?SID, Open, #{n => 1}, <<"new kem key">>}, reopen_asked(#{open => NewOpen, seal => NewSeal,
+                                                                            sid => <<8:128>>})),
+    ok = macula_stream:deliver_frame(Stream, provider_sealed(stream_data, 0, #{encoding => raw}, <<"after">>, KP2C,
+                                                             Provider, NewOpen)),
+    ?assertEqual({chunk, <<"after">>}, macula_stream:recv(Stream, 1000)),
+    gen_server:stop(Stream).
+
+%% Once the caller has sent, its frames are sealed under the refused keys and
+%% cannot be taken back: the stream ends naming the key, and asks no reopen.
+a_refused_open_after_a_send_ends_naming_the_key(#{caller := Caller, provider := Provider} = Keys) ->
+    Open = verified_open(Keys, bidi),
+    Stream = stream(client, Caller, Open, seal(), reopen_by(fun(_) -> {ok, <<"new">>} end)),
+    ok = macula_stream:send(Stream, <<"already sent">>),
+    _ = sent(),
+    ok = macula_stream:deliver_frame(Stream, refusal(<<2:64>>, Provider, Open)),
+    ?assertEqual({error, {sealed_refused, <<2:64>>}}, macula_stream:recv(Stream, 1000)),
+    ?assertEqual(none, no_reopen()),
+    gen_server:stop(Stream).
+
+a_reseal_that_fails_ends_with_its_reason(#{caller := Caller, provider := Provider} = Keys) ->
+    Open = verified_open(Keys, bidi),
+    Mismatch = {confidentiality, {key_mismatch, <<2:64>>, <<3:64>>}},
+    Stream = stream(client, Caller, Open, seal(), reopen_by(fun(_) -> {error, Mismatch} end)),
+    ok = macula_stream:deliver_frame(Stream, refusal(<<2:64>>, Provider, Open)),
+    ?assertEqual({error, Mismatch}, macula_stream:recv(Stream, 1000)),
+    ?assertEqual(none, no_reopen()),
+    gen_server:stop(Stream).
+
+%% A second refusal is the answer: no third open.
+a_second_refusal_ends_the_stream(#{caller := Caller, provider := Provider} = Keys) ->
+    Open = verified_open(Keys, bidi),
+    Stream = stream(client, Caller, Open, seal(), reopen_by(fun(_) -> {ok, <<"new">>} end)),
+    ok = macula_stream:deliver_frame(Stream, refusal(<<2:64>>, Provider, Open)),
+    NewOpen = verified_open(Keys, bidi, <<8:128>>),
+    _ = reopen_asked(#{open => NewOpen, seal => seal(), sid => <<8:128>>}),
+    ok = macula_stream:deliver_frame(Stream, refusal(<<4:64>>, Provider, NewOpen)),
+    ?assertEqual({error, {sealed_refused, <<4:64>>}}, macula_stream:recv(Stream, 1000)),
+    ?assertEqual(none, no_reopen()),
+    gen_server:stop(Stream).
+
+a_refusal_without_a_reseal_ends_naming_the_key(#{caller := Caller, provider := Provider} = Keys) ->
+    Open = verified_open(Keys, bidi),
+    Stream = stream(client, Caller, Open, seal()),
+    ok = macula_stream:deliver_frame(Stream, refusal(<<2:64>>, Provider, Open)),
+    ?assertEqual({error, {sealed_refused, <<2:64>>}}, macula_stream:recv(Stream, 1000)),
+    gen_server:stop(Stream).
+
 %%------------------------------------------------------------------
 %% Helpers
 %%------------------------------------------------------------------
+
+reopen_by(Reseal) ->
+    #{args => #{}, reseal => Reseal}.
+
+%% The provider's clear refusal of the open, naming the key it holds now.
+refusal(KeyId, Provider, Open) ->
+    provider_frame(#{frame_type => stream_error, seq => 0, code => <<"sealed_refused">>,
+                     message => binary:encode_hex(KeyId, lowercase)}, Provider, Open).
+
+%% The stream's request to its link (this process) to reopen, answered with
+%% Reopened: what it asked with.
+reopen_asked(Reopened) ->
+    receive
+        {'$gen_call', From, {reopen_stream, _Stream, Sid, Open, Args, KemKey}} ->
+            gen_server:reply(From, {ok, Reopened}),
+            {Sid, Open, Args, KemKey}
+    after 1000 ->
+        error(no_reopen_asked)
+    end.
+
+no_reopen() ->
+    receive {'$gen_call', _From, {reopen_stream, _, _, _, _, _}} -> asked after 200 -> none end.
 
 keys() ->
     {ok, _} = application:ensure_all_started(macula),
@@ -219,13 +307,20 @@ request_id(#{request_id := RequestId}) -> RequestId.
 
 %% A served stream keeps what it has not read on its caller's budget, so it is
 %% admitted first, as the link admits it.
-stream(Role, Key, #{mode := Mode, caller := Caller} = Open, Seal) ->
-    {ok, Pid} = macula_stream:start_link(#{id => ?SID, role => Role, mode => Mode, owner => self(),
-                                            key => fun() -> Key end, open => Open, conn => self(),
-                                            profile => pq_pure, station => <<5:256>>, seal => Seal}),
+stream(Role, Key, Open, Seal) ->
+    stream(Role, Key, Open, Seal, #{}).
+
+stream(Role, Key, #{mode := Mode, caller := Caller} = Open, Seal, Reopen) ->
+    {ok, Pid} = macula_stream:start_link(reopening(Reopen, #{id => ?SID, role => Role, mode => Mode, owner => self(),
+                                                              key => fun() -> Key end, open => Open, conn => self(),
+                                                              profile => pq_pure, station => <<5:256>>,
+                                                              seal => Seal})),
     ok = admitted(Role, Caller, Pid),
     ok = macula_stream:attach_to_link(Pid, self(), ?SID),
     Pid.
+
+reopening(Reopen, Opts) when map_size(Reopen) =:= 0 -> Opts;
+reopening(Reopen, Opts) -> Opts#{reopen => Reopen}.
 
 admitted(server, Caller, Pid) -> macula_stream_sessions:admit(Caller, Pid);
 admitted(client, _Caller, _Pid) -> ok.

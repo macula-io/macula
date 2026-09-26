@@ -24,7 +24,9 @@ cases() ->
      {"a provider that lost its key is re-resolved once", fun a_provider_that_lost_its_key_is_resealed/0},
      {"a required call passes its policy to the station call", fun required_reaches_the_station_call/0},
      {"a stream carries the resolved advertisement", fun a_stream_carries_the_advertisement/0},
-     {"a stream passes its policy to the station open", fun a_streams_policy_reaches_the_station_open/0}].
+     {"a stream passes its policy to the station open", fun a_streams_policy_reaches_the_station_open/0},
+     {"a stream's reseal re-resolves once, bound to the key the refusal names",
+      fun a_streams_reseal_is_bound_to_the_named_key/0}].
 
 the_call_carries_the_advertisement() ->
     F = fixture(),
@@ -97,6 +99,22 @@ a_streams_policy_reaches_the_station_open() ->
     ?assertEqual({ok, self()}, stream(F, #{confidential => required})),
     [Opts] = calls(),
     ?assertEqual(required, maps:get(confidential, Opts)).
+
+%% A stream's refused open is resealed by the stream itself (it was opened
+%% before the refusal arrived), with the reseal direct dial hands it: ONE fresh
+%% lookup, and only the key the refusal named. Another key fails naming both,
+%% none (or a provider that names no key) fails closed.
+a_streams_reseal_is_bound_to_the_named_key() ->
+    F = fixture(),
+    script(F, [[keyed_ad(F, kem(1))], [keyed_ad(F, kem(2))], [keyed_ad(F, kem(3))], [keyless_ad(F)]],
+           [{ok, self()}]),
+    ?assertEqual({ok, self()}, stream(F, #{})),
+    [Opts] = calls(),
+    Reseal = maps:get(reseal, Opts),
+    ?assertEqual({ok, kem(2)}, Reseal(kem_id(2))),
+    ?assertEqual({error, {confidentiality, {key_mismatch, kem_id(2), kem_id(3)}}}, Reseal(kem_id(2))),
+    ?assertEqual({error, {confidentiality, no_kem_key}}, Reseal(kem_id(2))),
+    ?assertEqual({error, {confidentiality, no_kem_key}}, Reseal(no_key)).
 
 %%------------------------------------------------------------------
 %% Helpers

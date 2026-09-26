@@ -27,7 +27,9 @@ sealed_stream_caller_test_() ->
                            fun a_key_of_another_profile_opens_no_stream/1},
                           {"a clear open stays clear", fun a_clear_open_stays_clear/1},
                           {"an open that names no seal is refused where it is made",
-                           fun an_open_naming_no_seal_is_refused/1}]].
+                           fun an_open_naming_no_seal_is_refused/1},
+                          {"a refused open reopens under the resealed key on a new stream, same stream pid",
+                           fun a_refused_open_reopens_under_the_resealed_key/1}]].
 
 a_sealed_open_opens_at_the_provider(W) ->
     #{open := Open, plain := Plain} = sealed_open(W, #{city => {text, <<"Tienen">>}}),
@@ -75,6 +77,41 @@ an_open_naming_no_seal_is_refused(#{link := Link, provider_id := Target}) ->
     ?assertError(function_clause, macula_station_link:call_stream(Link, Target, ?REALM, ?PROCEDURE, #{},
                                                                   #{mode => bidi})),
     ?assertEqual(none, receive {opened, _} -> opened after 200 -> none end).
+
+%% The provider refuses the open naming the key it holds now; the stream's
+%% reseal resolves that key, and the link reopens on a new dedicated stream,
+%% under a new request, sealed to it. The same stream reads on.
+a_refused_open_reopens_under_the_resealed_key(#{link := Link, provider := Provider, provider_id := Target,
+                                                 kem_key := OldKemKey}) ->
+    Test = self(),
+    {Public, Private} = macula_seal:generate_key(profile()),
+    NewKemKey = macula_seal:key_as_carried(Public),
+    NewId = macula_seal:key_id(NewKemKey),
+    NewHolder = #{current_key_id => NewId, lookup => fun(_KeyId) -> {ok, Private, NewKemKey} end},
+    {ok, Stream} = macula_station_link:call_stream(Link, Target, ?REALM, ?PROCEDURE, #{n => 1},
+                                                   #{mode => bidi, seal => {sealed_to, OldKemKey},
+                                                     reseal => fun(Named) -> Test ! {reseal, Named}, {ok, NewKemKey}
+                                                               end}),
+    OldQuic = receive {opened, Q1} -> Q1 after ?EVENT_MS -> error(no_stream_opened) end,
+    {ok, OldOpen} = macula_frame:verify_request(written(OldQuic), profile()),
+    Refusal = macula_frame:provider_stream(#{frame_type => stream_error, seq => 0, code => <<"sealed_refused">>,
+                                             message => binary:encode_hex(NewId, lowercase)}, Provider, OldOpen),
+    Link ! {quic, macula_frame:encode(Refusal), OldQuic, undefined},
+    ?assertEqual({reseal, NewId}, receive {reseal, _} = R -> R after ?EVENT_MS -> none end),
+    NewQuic = receive {opened, Q2} -> Q2 after ?EVENT_MS -> error(no_reopen) end,
+    {ok, NewOpen} = macula_frame:verify_request(written(NewQuic), profile()),
+    ?assertNotEqual(maps:get(request_id, OldOpen), maps:get(request_id, NewOpen)),
+    {ok, Plain, #{k_p2c := KP2C, key_id := KeyId}} =
+        macula_sealed_call:open_request(profile(), NewHolder, seal_request(NewOpen), maps:get(sealed, NewOpen)),
+    ?assertEqual({ok, #{{text, <<"n">>} => 1}}, macula_frame:plain_payload(Plain)),
+    Nonce = macula_seal:random_nonce(),
+    Aad = macula_seal:stream_aad(<<"stream_data">>, maps:get(request_id, NewOpen), 0, 1),
+    Chunk = macula_frame:provider_stream(#{frame_type => stream_data, seq => 0, encoding => raw,
+                                           sealed => #{scheme => 1, key_id => KeyId, nonce => Nonce,
+                                                       ct => macula_seal:seal(KP2C, Nonce, Aad, <<"reopened">>)}},
+                                         Provider, NewOpen),
+    Link ! {quic, macula_frame:encode(Chunk), NewQuic, undefined},
+    ?assertEqual({chunk, <<"reopened">>}, macula_stream:recv(Stream, ?EVENT_MS)).
 
 %%------------------------------------------------------------------
 %% Helpers

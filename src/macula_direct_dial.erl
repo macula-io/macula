@@ -794,19 +794,36 @@ keyed(error, _Ad) -> none.
 
 %% Opens the stream at one resolved station, on the same terms as `call_work/6': the station open is handed the
 %% candidate's verified advertisement to seal from (E2E design §8.1), and the stream's own `confidential', if any.
+%% A stream is refused `sealed_refused' only after it has opened, so the stream itself reseals, once, with the
+%% `reseal' handed here: the lookup and key binding `resealed/7' gives a call.
 stream_work(#{pool := Pool, call_stream_station := CallStreamStation,
-              remember_resolved := Remember}, Realm, Procedure, Args, StreamOpts) ->
+              remember_resolved := Remember} = Dial, Realm, Procedure, Args, StreamOpts) ->
     fun(#{provider := Provider} = Candidate) ->
         fun(Station, DialUrl, Share) ->
+            Reseal = fun(Named) ->
+                         stream_resealed(Named, Dial, Realm, Procedure, Provider,
+                                         deadline(maps:get(dial_timeout_ms, StreamOpts, ?DEFAULT_DIAL_TIMEOUT_MS)))
+                     end,
             sent_or_not(
               settled(CallStreamStation(Pool, DialUrl, Provider, Realm, Procedure, Args,
                                         maps:merge(StreamOpts,
                                                    maps:merge(advertisement_opt(maps:get(advertisement, Candidate,
                                                                                          undefined)),
-                                                              (pinned(Station))#{dial_timeout_ms => budget(Share)}))),
+                                                              (pinned(Station))#{dial_timeout_ms => budget(Share),
+                                                                                 reseal => Reseal}))),
                       Remember, Pool, Realm, Procedure, Candidate))
         end
     end.
+
+%% The KEM key a refused stream reseals to: the provider's, from ONE fresh lookup, and only when it names exactly the
+%% key the refusal named. Any other fails naming both; none, or a provider that holds no key, fails closed.
+stream_resealed(no_key, _Dial, _Realm, _Procedure, _Provider, _Deadline) ->
+    {error, {confidentiality, no_kem_key}};
+stream_resealed(<<_:64>> = Named, Dial, Realm, Procedure, Provider, Deadline) ->
+    resealed_to(reresolved(Dial, Realm, Procedure, Provider, Deadline), Named, fun advertised_kem_key/1).
+
+advertised_kem_key(Ad) ->
+    {ok, maps:get(kem_key, macula_record:read_procedure_advertisement(Ad))}.
 
 %% Whether a candidate's outcome settles the request or leaves the next one
 %% worth trying. The judgement is `macula_station_link:failure_scope/1''s and
