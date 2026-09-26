@@ -57,7 +57,7 @@
 -behaviour(gen_server).
 
 -export([start_link/0, new_table/0, admit/2, sessions/0, sessions/1,
-         charge/2, release/2, inbox_bytes/0, refusals/0]).
+         charge/2, release/2, inbox_bytes/0, refusals/0, session_share/0]).
 %% Reads of the node's counts that nothing inside macula calls yet; the tests
 %% read them.
 -ignore_xref([{macula_stream_sessions, sessions, 0}]).
@@ -120,6 +120,16 @@ new_table() ->
 %% Admission fails closed and never holds up the link that asks: when this
 %% process does not answer within a second, because it is restarting, gone
 %% or held up, the session is refused as `unavailable'.
+%% @doc The unread bytes one served session may keep and still leave every
+%% other session its caller may hold the same: the caller budget over the
+%% caller's session cap (1 MiB by default). A provider that credits its
+%% caller no more than this never has a healthy session refused for
+%% another one's stall.
+-spec session_share() -> pos_integer().
+session_share() ->
+    limit(max_served_inbox_bytes_per_caller, ?MAX_INBOX_BYTES_PER_CALLER)
+        div limit(max_served_sessions_per_caller, ?MAX_SESSIONS_PER_CALLER).
+
 -spec admit(binary(), pid()) -> ok | {error, caller_limit | node_limit | unavailable}.
 admit(Caller, Stream) when is_binary(Caller), is_pid(Stream) ->
     try gen_server:call(?SERVER, {admit, Caller, Stream}, ?ADMIT_TIMEOUT_MS)
