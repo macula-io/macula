@@ -33,7 +33,9 @@ stream_session_test_() ->
                  fun a_same_pool_request_keeps_its_client_and_server_sessions_apart/0,
                  fun a_failed_write_ends_the_session_it_was_for/0,
                  fun a_disconnect_ends_open_sessions/0,
-                 fun a_disconnect_tells_open_sessions_its_reasons_name_only/0]].
+                 fun a_disconnect_tells_open_sessions_its_reasons_name_only/0,
+                 fun a_closed_dedicated_stream_ends_its_session/0,
+                 fun a_dedicated_stream_the_peer_finished_ends_its_session/0]].
 
 %%------------------------------------------------------------------
 %% Cases
@@ -216,6 +218,28 @@ a_disconnect_tells_open_sessions_its_reasons_name_only() ->
     #{stream := StreamPid} = opened(World, macula_node_keys:key_id(key()), bidi),
     Link ! {macula_peering, disconnected, self(), {peer_gone, ?MARKER}},
     ?assertEqual({error, {<<"disconnected">>, <<"disconnected">>}}, macula_stream:await_reply(StreamPid, ?EVENT_MS)).
+
+%% A dedicated stream QUIC closes under an open session (the station relay gave the session up: its lifetime ran out,
+%% or the relay was lost) ends that session: a reader waiting on it gets a disconnected error instead of waiting for
+%% ever, the link closes the stream and stays up. A clean end never gets here: the relay closes a stream only once
+%% both sides have ended, and a half-close is a STREAM_END, not a QUIC close.
+a_closed_dedicated_stream_ends_its_session() ->
+    #{link := Link} = World = linked(),
+    #{stream := StreamPid, quic := Quic} = opened(World, macula_node_keys:key_id(key()), bidi),
+    Link ! {quic, stream_closed, Quic, none},
+    ?assertMatch({error, {<<"disconnected">>, _}}, macula_stream:recv(StreamPid, ?EVENT_MS)),
+    ?assertEqual(closed, receive {closed, Quic} -> closed after ?EVENT_MS -> not_closed end),
+    ?assert(is_process_alive(Link)),
+    stop(Link).
+
+%% Likewise a stream the peer finished (a QUIC FIN) while the session was open: nothing more can arrive on it.
+a_dedicated_stream_the_peer_finished_ends_its_session() ->
+    #{link := Link} = World = linked(),
+    #{stream := StreamPid, quic := Quic} = opened(World, macula_node_keys:key_id(key()), bidi),
+    Link ! {quic, peer_send_shutdown, Quic, undefined},
+    ?assertMatch({error, {<<"disconnected">>, _}}, macula_stream:recv(StreamPid, ?EVENT_MS)),
+    ?assert(is_process_alive(Link)),
+    stop(Link).
 
 %%------------------------------------------------------------------
 %% Helpers

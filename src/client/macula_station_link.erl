@@ -1657,6 +1657,25 @@ handle_info({quic, send_failed, Stream, Reason}, #state{stream_bufs = Bufs} = S)
         when is_map_key(Stream, Bufs) ->
     {noreply, end_sessions_on_stream(Stream, {send_failed, Reason}, S)};
 
+%% A dedicated stream QUIC closed, or the peer finished, under open sessions:
+%% nothing more can arrive on it, so they end as for a failed write. The
+%% station relay closes a session's streams only once both sides have ended,
+%% or when it gives the session up (its lifetime, a lost relay), and a
+%% half-close is a STREAM_END frame, never a QUIC close. Before these clauses
+%% the event fell to the catch-all, and a reader waited for ever.
+handle_info({quic, stream_closed, Stream, Flags}, #state{stream_bufs = Bufs} = S)
+        when is_map_key(Stream, Bufs) ->
+    {noreply, end_sessions_on_stream(Stream, {stream_closed, Flags}, S)};
+handle_info({quic, peer_send_shutdown, Stream, _}, #state{stream_bufs = Bufs} = S)
+        when is_map_key(Stream, Bufs) ->
+    {noreply, end_sessions_on_stream(Stream, peer_send_shutdown, S)};
+%% A stream that closes before its STREAM_OPEN completed carries no session.
+handle_info({quic, Closed, Stream, _}, #state{opening_bufs = Opening} = S)
+        when (Closed =:= stream_closed orelse Closed =:= peer_send_shutdown),
+             is_map_key(Stream, Opening) ->
+    ok = close_dedicated_stream(Stream, S),
+    {noreply, S#state{opening_bufs = maps:remove(Stream, Opening)}};
+
 handle_info({call_timeout, RequestId}, #state{pending = P} = S) ->
     on_timeout(maps:take(RequestId, P), S);
 
