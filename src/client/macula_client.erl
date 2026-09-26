@@ -615,9 +615,10 @@
     seeds         :: [seed()],
     %% Each connected link and the station it reached, from the link's own
     %% notice at handshake, dropped on its disconnect notice or its DOWN. The
-    %% pool reads connectedness and stations from here and never calls into a
-    %% link from its own handle_call: a link busy signing or verifying frames
-    %% would hold every pool call (macula#44).
+    %% pool reads connectedness and stations from here and never probes a
+    %% link for them: a link busy signing or verifying frames held every pool
+    %% call behind the probe (macula#44). The pool still calls links to
+    %% subscribe and advertise, each guarded so a busy link is skipped.
     connected = #{} :: #{pid() => <<_:256>>},
     node_id       :: <<_:256>>,
     %% The realm keys pinned at start, from the `realm_trust' option: realm id
@@ -1123,10 +1124,10 @@ unadvertise_stream(Pool, Realm, Procedure)
        is_binary(Procedure) ->
     gen_server:call(Pool, {unadvertise_stream, Realm, Procedure}, 5_000).
 
-%% @doc Aggregate health snapshot of the pool. Single round-trip to
-%% the pool's gen_server plus one `is_connected' probe per spawned
-%% link (each capped at 1s). Suitable for `/health' or
-%% `/status' endpoints; not for hot-loop polling.
+%% @doc Aggregate health snapshot of the pool. A single round-trip to
+%% the pool's gen_server, answered from the pool's own state: no link is
+%% asked, so a busy link delays nothing. Suitable for `/health' or
+%% `/status' endpoints.
 %%
 %% Counts:
 %% <ul>
@@ -1295,8 +1296,8 @@ wire_fields(Record) -> maps:with([key, tbs, signature], Record).
 %% `connected' flag, so a caller can resolve a specific station (by
 %% pubkey or hostname) to its link and address it directly.
 %%
-%% One `is_connected/1' + `peer_node_id/1' probe per spawned link
-%% (each capped at 1s). Not for hot-loop polling.
+%% Answered from the pool's own state: each link's connectedness and
+%% station come from the link's notice at handshake, and no link is asked.
 -spec links(pool()) -> {ok, [link_info()]}.
 links(Pool) when is_pid(Pool) ->
     gen_server:call(Pool, links, 5_000).
@@ -1658,8 +1659,9 @@ handle_call({publish, Realm, Topic, Payload, _Opts}, From, S) ->
     %% Publish only to links that have completed CONNECT/HELLO. A
     %% frame sent to a still-handshaking link is dropped on the floor, so
     %% selecting the first `replication' *spawned* links could report
-    %% `{error, not_connected}' while other links are healthy. RPC and
-    %% streams already filter by `is_connected/1'; publish must too.
+    %% `{error, not_connected}' while other links are healthy. The links
+    %% the pool holds connected are the candidates, as for a linked-station
+    %% call.
     %%
     %% Dispatch via a one-shot worker so concurrent publishes don't
     %% serialise through this gen_server (the per-link `publish/4'
@@ -1700,7 +1702,9 @@ handle_call({linked_station_call, Realm, Procedure, Payload, TimeoutMs}, From, S
     %% is a sync gen_server:call to the link; with the old
     %% `{reply, ..., S}' shape every caller blocked the pool until
     %% the link replied, capping concurrent CALL throughput at 1.
-    Pids = ordered_for_selection(spawned_link_pids(S), S#state.link_selection),
+    %% The candidates are the links the pool holds connected: the worker asks
+    %% none of them first, as a busy link would hold it (macula#44).
+    Pids = ordered_for_selection(connected_link_pids(S), S#state.link_selection),
     _ = spawn(fun() ->
         Reply = call_first_success(Pids, Realm, Procedure, Payload,
                                     TimeoutMs),
@@ -1911,10 +1915,11 @@ handle_info({'EXIT', Admission, Reason}, #state{admission = Admission} = S) ->
     %% requests without the ones it has seen, so it stops, and its owner
     %% starts a fresh one.
     {stop, {shutdown, {admission_down, Reason}}, S};
-%% A link says why it disconnected, just before it stops `normal'. Its DOWN
-%% follows this message, as signals from one process arrive in order.
+%% A link tells the pool its station at handshake.
 handle_info({macula_link_connected, Pid, NodeId}, S) ->
     {noreply, link_connected(find_link_by_pid(Pid, S), Pid, NodeId, S)};
+%% A link says why it disconnected, just before it stops `normal'. Its DOWN
+%% follows this message, as signals from one process arrive in order.
 handle_info({macula_link_disconnected, Pid, Summary}, #state{connected = Connected} = S) ->
     {noreply, disconnect_kept(find_link_by_pid(Pid, S), Summary,
                               S#state{connected = maps:remove(Pid, Connected)})};
@@ -2730,7 +2735,7 @@ node_identity({ok, _NotAnIdentityKey}, _Profile) ->
 %% pool, so walking the rest burns the caller's deadline to collect the same
 %% answer it already has.
 call_first_success(Pids, Realm, Proc, Payload, Tmo) ->
-    first_success(Pids, fun macula_station_link:is_connected/1,
+    first_success(Pids, fun(_Connected) -> true end,
                   fun(Pid) -> macula_station_link:call(Pid, station, Realm, Proc, Payload, Tmo) end).
 
 %% `call_first_success/5' over any links: `Connected(Link)' says whether a
@@ -3546,7 +3551,7 @@ issue_wire_subs(false, Realm, Topic, S) ->
     PoolPid = self(),
     Key = {Realm, Topic},
     lists:foldl(fun(P, Acc) ->
-                        record_link_sub(P, Key, macula_station_link:subscribe(P, Realm, Topic, PoolPid), Acc)
+                        record_link_sub(P, Key, macula_client_replay:link_subscribe(P, Realm, Topic, PoolPid), Acc)
                 end, S, spawned_link_pids(S)).
 
 %% Keeps the SubRef a link returned for Key's SUBSCRIBE, so unsubscribe can

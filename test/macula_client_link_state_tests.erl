@@ -16,6 +16,9 @@
 
 -include_lib("eunit/include/eunit.hrl").
 
+%% logger handler callback, defined at the foot of this module.
+-export([log/2]).
+
 -define(REALM, <<7:256>>).
 -define(STATION_A, <<21:256>>).
 -define(STATION_B, <<22:256>>).
@@ -58,8 +61,61 @@ pool_calls_answer_promptly_while_a_link_is_busy_test_() ->
              {SignMs, {ok, _Signed}} =
                  timed(fun() -> macula_client:sign_domain_record(Pool, macula_record:envelope(16#20, #{}, #{})) end),
              ?assert(SignMs < ?PROMPT_MS),
-             ?assertMatch({ok, _}, receive {links_answered, R} -> R after 2_000 -> none end)
+             ?assertMatch({ok, _}, receive {links_answered, R} -> R after 2_000 -> none end),
+
+             %% The load-independent proof: the pool sent the busy link
+             %% nothing. The publisher's call to it comes from another process
+             %% and stays in its queue.
+             ?assertEqual([], calls_from(Pool, LinkB))
          after
+             ok = sys:resume(LinkB),
+             ok = macula_client:close(Pool)
+         end
+     end}.
+
+%% A call to a linked station goes to the links the pool holds connected and
+%% asks none of them first whether it is: a busy link it would have probed
+%% crashed the worker after 1 s, so the caller got no answer until its own
+%% timeout. Now the worker calls the first link, and a busy one answers the
+%% caller with the link's own timeout.
+a_linked_station_call_probes_no_link_test_() ->
+    {timeout, 20,
+     fun() ->
+         {Pool, [LinkA, LinkB]} = connected_pool(),
+         ok = sys:suspend(LinkA),
+         ok = sys:suspend(LinkB),
+         try
+             Self = self(),
+             _ = spawn(fun() ->
+                           Self ! {linked_call, catch macula_client:call_linked_station(Pool, ?REALM, <<"acme.ping_v1">>, #{}, 300)}
+                       end),
+             ?assertMatch({error, _}, receive {linked_call, R} -> R after 1_200 -> no_answer end),
+             ?assertEqual([], [C || L <- [LinkA, LinkB], {'$gen_call', _, is_connected} = C <- queue_of(L)])
+         after
+             ok = sys:resume(LinkA),
+             ok = sys:resume(LinkB),
+             ok = macula_client:close(Pool)
+         end
+     end}.
+
+%% A subscribe while a link is busy past the link's own 5 s answer leaves the
+%% pool running: the link is skipped, loudly, and every other pool call keeps
+%% its answers. Before, the timeout exit took the pool down, and with it every
+%% subscription, advertisement and pending call.
+a_subscribe_past_a_busy_link_keeps_the_pool_test_() ->
+    {timeout, 30,
+     fun() ->
+         {Pool, [_LinkA, LinkB]} = connected_pool(),
+         Self = self(),
+         ok = logger:add_handler(?MODULE, ?MODULE, #{config => #{to => Self}, level => all}),
+         ok = sys:suspend(LinkB),
+         try
+             _ = spawn(fun() -> catch macula_client:subscribe(Pool, ?REALM, <<"acme.tick_v1">>, Self, #{}) end),
+             ?assertEqual(LinkB, receive {skipped, #{link := L}} -> L after 8_000 -> not_skipped end),
+             ?assert(is_process_alive(Pool)),
+             ?assertMatch({ok, #{healthy_links := 2}}, macula_client:status(Pool))
+         after
+             _ = logger:remove_handler(?MODULE),
              ok = sys:resume(LinkB),
              ok = macula_client:close(Pool)
          end
@@ -119,6 +175,22 @@ healthy_within(Pool, N, Tries) ->
 
 healthy_or_wait(true, _Pool, _N, _Tries) -> ok;
 healthy_or_wait(false, Pool, N, Tries) -> timer:sleep(20), healthy_within(Pool, N, Tries - 1).
+
+%% The calls `From' has sent `Link' that it has not answered yet.
+calls_from(From, Link) ->
+    [C || {'$gen_call', {Pid, _}, _} = C <- queue_of(Link), Pid =:= From].
+
+queue_of(Pid) ->
+    {messages, Q} = process_info(Pid, messages),
+    Q.
+
+%% logger handler callback: forwards the pool's skipped-subscribe event.
+log(#{msg := {report, #{event := <<"_macula.client.link_subscribe_skipped">>, properties := Props}}},
+    #{config := #{to := To}}) ->
+    To ! {skipped, Props},
+    ok;
+log(_LogEvent, _Config) ->
+    ok.
 
 timed(Fun) ->
     Start = erlang:monotonic_time(millisecond),

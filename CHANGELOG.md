@@ -22,6 +22,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   resolved-candidate head start and the discovered-link watchdog from its own
   state, dropped on the link's disconnect notice or DOWN. A worker waiting on
   a link (`await_connected/2`) still asks the link itself, outside the pool.
+- **A linked-station call no longer probes links** (#44). `put`, `find_record`,
+  `find_records_by_type` and `list` go through `call_linked_station/5`, whose
+  worker asked each link `is_connected` unguarded: a busy first link crashed
+  the worker after 1 s and its caller got no answer until its own timeout.
+  The worker now takes the links the pool holds connected and calls the first,
+  so a busy link answers that caller with its own timeout.
+- **A busy link no longer takes the pool down on a subscribe** (#44). The pool
+  subscribes every link inline, and a link that did not answer within 5 s
+  exited the pool with every subscription, advertisement and pending call. A
+  link that does not answer, or is gone, is now skipped and logged at warning
+  (`_macula.client.link_subscribe_skipped`); its next respawn replays the
+  subscription. The pool still waits on that link for up to 5 s: it no longer
+  probes links, but it still calls them to subscribe and advertise.
 
 ## [12.9.0] - 2026-09-26
 

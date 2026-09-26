@@ -12,7 +12,7 @@
 %% on its state machine and so the replay path is independently
 %% testable.
 -module(macula_client_replay).
--export([subs_to/2, advs_to/3, stream_advs_to/3]).
+-export([subs_to/2, advs_to/3, stream_advs_to/3, link_subscribe/4]).
 
 %% @doc Re-issue a SUBSCRIBE frame for every distinct `{Realm, Topic}'
 %% in `TopicIndex' against `LinkPid', and return the SubRef the link
@@ -30,7 +30,25 @@ subs_to(LinkPid, TopicIndex) when is_pid(LinkPid), is_map(TopicIndex) ->
     maps:from_list(
       [{{R, T}, LinkSubRef}
        || {R, T} <- maps:keys(TopicIndex),
-          {ok, LinkSubRef} <- [macula_station_link:subscribe(LinkPid, R, T, PoolPid)]]).
+          {ok, LinkSubRef} <- [link_subscribe(LinkPid, R, T, PoolPid)]]).
+
+%% @doc Subscribe `LinkPid' to `{Realm, Topic}' for the pool `PoolPid', as
+%% `macula_station_link:subscribe/4' does, except that a link that does not
+%% answer within that call's 5 s, or is gone, is skipped rather than taking
+%% the calling pool down with every subscription, advertisement and pending
+%% call it holds (macula#44). A skipped link is logged at warning with its
+%% reason; the next respawn of that link replays the subscription.
+-spec link_subscribe(pid(), <<_:256>>, binary(), pid()) -> {ok, reference()} | {error, term()}.
+link_subscribe(LinkPid, Realm, Topic, PoolPid) ->
+    try macula_station_link:subscribe(LinkPid, Realm, Topic, PoolPid)
+    catch exit:Reason -> skipped_subscribe(LinkPid, Realm, Topic, Reason)
+    end.
+
+skipped_subscribe(LinkPid, Realm, Topic, Reason) ->
+    macula_diagnostics:event(warning, <<"_macula.client.link_subscribe_skipped">>,
+                             #{link => LinkPid, realm => Realm, topic => Topic,
+                               reason => macula_reason_name:text(Reason)}),
+    {error, {link_subscribe_skipped, Reason}}.
 
 %% @doc Register on `LinkPid' every advertised procedure in `Procs' whose
 %% stations include `Station', the station that link pins (`all' names every
