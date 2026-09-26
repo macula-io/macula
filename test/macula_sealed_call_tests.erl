@@ -186,7 +186,13 @@ calls() -> maps:get(<<"calls">>, vectors()).
 
 recipient(Profile) -> maps:get(atom_to_binary(Profile), maps:get(<<"recipients">>, vectors())).
 
-profile(C) -> binary_to_existing_atom(maps:get(<<"profile">>, C)).
+profile(C) -> profile_named(maps:get(<<"profile">>, C)).
+
+%% A profile by its name in the file, never through binary_to_existing_atom: whether that atom exists yet depends on
+%% which modules happen to have loaded (Venus found this in the UCAN vectors).
+profile_named(<<"pq_pure">>) -> pq_pure;
+profile_named(<<"pq_hybrid">>) -> pq_hybrid.
+
 
 name(C) -> binary_to_list(<<(maps:get(<<"frame_type">>, C))/binary, " ", (maps:get(<<"profile">>, C))/binary>>).
 

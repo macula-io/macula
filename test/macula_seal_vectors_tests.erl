@@ -10,7 +10,7 @@ vectors_test_() ->
     Doc = vectors(),
     Recipients = maps:get(<<"recipients">>, Doc),
     [{"scheme 1", ?_assertEqual(1, maps:get(<<"scheme">>, Doc))}]
-    ++ [{recipient_name(Profile), fun() -> recipient_checked(binary_to_existing_atom(Profile), R) end}
+    ++ [{recipient_name(Profile), fun() -> recipient_checked(profile_named(Profile), R) end}
         || Profile := R <- Recipients]
     ++ [{call_name(C), fun() -> call_checked(C, maps:get(maps:get(<<"profile">>, C), Recipients)) end}
         || C <- maps:get(<<"calls">>, Doc)]
@@ -113,7 +113,13 @@ first_existing([F | Rest]) ->
 
 x(Map, Key) -> binary:decode_hex(maps:get(Key, Map)).
 
-profile(C) -> binary_to_existing_atom(maps:get(<<"profile">>, C)).
+profile(C) -> profile_named(maps:get(<<"profile">>, C)).
+
+%% A profile by its name in the file, never through binary_to_existing_atom: whether that atom exists yet depends on
+%% which modules happen to have loaded (Venus found this in the UCAN vectors).
+profile_named(<<"pq_pure">>) -> pq_pure;
+profile_named(<<"pq_hybrid">>) -> pq_hybrid.
+
 
 recipient_public(pq_pure, R) -> #{mlkem_ek => x(R, <<"mlkem_ek">>)};
 recipient_public(pq_hybrid, R) -> #{mlkem_ek => x(R, <<"mlkem_ek">>), p384_pub => x(R, <<"p384_pub">>)}.
