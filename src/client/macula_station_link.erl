@@ -3503,8 +3503,8 @@ dispatch_dedicated_frame(_Frame, _Stream, S) ->
 %% A verified, admitted and authorized STREAM_OPEN is served by the procedure
 %% this link advertised under its realm and name: `Stream' is the dedicated
 %% stream it came in on, and every frame of its session travels there.
-handle_inbound_stream_open(#{realm := Realm, procedure := Proc} = Open, Stream, S) ->
-    dispatch_stream_open(maps:find({Realm, Proc}, S#state.stream_procedures), Open, Stream, S).
+handle_inbound_stream_open(#{realm := Realm, procedure := Proc} = Open, Seal, Stream, S) ->
+    dispatch_stream_open(maps:find({Realm, Proc}, S#state.stream_procedures), Open, Seal, Stream, S).
 
 %% A first frame longer than the limit is refused from its length header, as
 %% `{malformed, [], frame_too_large}', which closes the stream
@@ -3593,11 +3593,11 @@ admitted(Admission, Open, Share) ->
 %% at all: each gets a STREAM_ERROR under its own open, whose code names why.
 %% A sealed open is refused right after admission, before any policy, as a
 %% sealed CALL is: this node opens no sealed payload yet.
-on_admission(new, #{sealed := _} = Open, Stream, S) ->
-    refuse_open(Stream, Open, <<"sealed_refused">>, <<"this node opens no sealed payload">>,
-                sealed_refused(sealed_stream_open, S));
-on_admission(new, Open, Stream, S) ->
-    on_stream_open_on(carries_a_session(Stream, S), Open, Stream, S);
+on_admission(new, #{sealed := Sealed} = Open, Stream, #state{node_identity = Id, profile = Profile} = S) ->
+    sealed_open_opened(opened_call(macula_kem_keyring:holder(macula_node_keys:key_id(Id)), Profile, Open, Sealed),
+                       Open, Stream, S);
+on_admission(new, #{realm := Realm, procedure := Proc} = Open, Stream, S) ->
+    clear_open_admitted(clear_allowed({Realm, Proc}, S), Open, Stream, S);
 on_admission({copy, _Reply}, Open, Stream, S) ->
     refuse_open(Stream, Open, <<"request_copy">>, <<"this request is already admitted">>, S);
 on_admission({refused, Refusal}, Open, Stream, S) ->
@@ -3606,6 +3606,20 @@ on_admission({refused, Refusal}, Open, Stream, S) ->
 %% The code a refusal by the request admission travels as: its kind's name.
 admission_code({Kind, _Ms}) when is_atom(Kind) -> atom_to_binary(Kind);
 admission_code(Kind) when is_atom(Kind) -> atom_to_binary(Kind).
+
+%% A sealed STREAM_OPEN is opened as a sealed CALL is (E2E design §5.2), and then served as a clear one with its
+%% opened args and the stream keys it agreed. One that does not open is refused in the clear, `sealed_refused', naming
+%% the key this node holds now.
+sealed_open_opened({ok, Args, {sealed, Keys, _SealRequest}}, Open, Stream, S) ->
+    on_stream_open_on(carries_a_session(Stream, S), (maps:remove(sealed, Open))#{payload => Args}, Keys, Stream, S);
+sealed_open_opened({refused, Why}, Open, Stream, S) ->
+    refuse_open(Stream, Open, <<"sealed_refused">>, refused_detail(Why), sealed_refused(sealed_stream_open, S)).
+
+%% A clear STREAM_OPEN is served as it is, unless its procedure takes only sealed ones (§8.1, §8.2).
+clear_open_admitted(true, Open, Stream, S) ->
+    on_stream_open_on(carries_a_session(Stream, S), Open, clear, Stream, S);
+clear_open_admitted(false, Open, Stream, S) ->
+    refuse_open(Stream, Open, <<"sealed_required">>, <<"this procedure takes sealed opens only">>, S).
 
 close_unless_carrying(true, _Stream, S) ->
     S;
@@ -3622,11 +3636,11 @@ close_sessionless_stream(Stream, #state{stream_bufs = Bufs} = S) ->
 %% already carries one, served here or opened by this link as a caller, is
 %% refused under that open, before its procedure's policy is asked; the session
 %% already on the stream keeps it, and the stream stays open for that session.
-on_stream_open_on(true, Open, Stream, S) ->
-    refuse_open(Stream, Open, <<"refused">>, <<"this stream already carries a session">>, S);
-on_stream_open_on(false, #{realm := Realm, procedure := Proc} = Open, Stream,
+on_stream_open_on(true, Open, Seal, Stream, S) ->
+    refuse_opened(Stream, Open, Seal, <<"refused">>, <<"this stream already carries a session">>, S);
+on_stream_open_on(false, #{realm := Realm, procedure := Proc} = Open, Seal, Stream,
                   #state{stream_policies = SPols, profile = Profile} = S) ->
-    on_stream_open_verdict(authorize({Realm, Proc}, Open, SPols, Profile), Open, Stream, S).
+    on_stream_open_verdict(authorize({Realm, Proc}, Open, SPols, Profile), Open, Seal, Stream, S).
 
 carries_a_session(Stream, #state{client_streams = CS, server_streams = SS}) ->
     lists:any(fun({_Pid, _Mon, On}) -> On =:= Stream end, maps:values(CS) ++ maps:values(SS)).
@@ -3634,38 +3648,38 @@ carries_a_session(Stream, #state{client_streams = CS, server_streams = SS}) ->
 %% Refused by the procedure's auth policy: a STREAM_ERROR on the caller's own
 %% stream, so it fails fast instead of waiting out its deadline, and no handler
 %% runs.
-on_stream_open_verdict(ok, Open, Stream, S) ->
-    handle_inbound_stream_open(Open, Stream, S);
-on_stream_open_verdict(unauthorized, Open, Stream, S) ->
-    refuse_open(Stream, Open, <<"unauthorized">>, <<"not authorized for this procedure">>, S);
-on_stream_open_verdict(malformed_frame, Open, Stream, S) ->
-    refuse_open(Stream, Open, <<"malformed_frame">>, <<"a proof no token in the chain names">>, S).
+on_stream_open_verdict(ok, Open, Seal, Stream, S) ->
+    handle_inbound_stream_open(Open, Seal, Stream, S);
+on_stream_open_verdict(unauthorized, Open, Seal, Stream, S) ->
+    refuse_opened(Stream, Open, Seal, <<"unauthorized">>, <<"not authorized for this procedure">>, S);
+on_stream_open_verdict(malformed_frame, Open, Seal, Stream, S) ->
+    refuse_opened(Stream, Open, Seal, <<"malformed_frame">>, <<"a proof no token in the chain names">>, S).
 
 %% A procedure this link does not advertise is refused `not_found'. The open's
 %% signed mode binds both sides' verifiers, so an open in a mode other than the
 %% one its procedure is advertised in is refused `mode_mismatch', not served.
-dispatch_stream_open(error, Open, Stream, S) ->
-    refuse_open(Stream, Open, <<"not_found">>, <<"procedure not advertised">>, S);
-dispatch_stream_open({ok, {Mode, Handler}}, #{mode := Mode} = Open, Stream, S) ->
+dispatch_stream_open(error, Open, Seal, Stream, S) ->
+    refuse_opened(Stream, Open, Seal, <<"not_found">>, <<"procedure not advertised">>, S);
+dispatch_stream_open({ok, {Mode, Handler}}, #{mode := Mode} = Open, Seal, Stream, S) ->
     AttachId = crypto:strong_rand_bytes(16),
-    served_with_id(attach_id_free(AttachId, S), AttachId, Handler, Open, Stream, S);
-dispatch_stream_open({ok, {_OtherMode, _Handler}}, Open, Stream, S) ->
-    refuse_open(Stream, Open, <<"mode_mismatch">>, <<"the procedure is advertised in another mode">>, S).
+    served_with_id(attach_id_free(AttachId, S), AttachId, Handler, Open, Seal, Stream, S);
+dispatch_stream_open({ok, {_OtherMode, _Handler}}, Open, Seal, Stream, S) ->
+    refuse_opened(Stream, Open, Seal, <<"mode_mismatch">>, <<"the procedure is advertised in another mode">>, S).
 
 %% A served session's attach id is chosen here, since callers choose request
 %% ids and two callers' opens may carry the same one. Its stream starts with the
 %% link's key as a closure, the verified open, the peering connection and the
 %% profile, owned by the process its handler will run in.
-served_with_id(false, _AttachId, _Handler, Open, Stream, S) ->
+served_with_id(false, _AttachId, _Handler, Open, _Seal, Stream, S) ->
     refuse_open(Stream, Open, <<"unavailable">>, <<"sessions are not being admitted now">>, S);
 served_with_id(true, AttachId, Handler, #{procedure := Proc, payload := Args, caller := Caller, mode := Mode} = Open,
-               Stream, #state{peer_pid = Conn, profile = Profile, node_identity = Key} = S) ->
+               Seal, Stream, #state{peer_pid = Conn, profile = Profile, node_identity = Key} = S) ->
     %% The verified caller reaches the handler in its args, as a call's does
     %% (`with_caller/2'): a handler that decides by identity reads it there.
     Worker = spawn_stream_handler(Handler, with_caller(Args, Caller), Proc),
-    {ok, StreamPid} = macula_stream:start_link(#{id => AttachId, role => server, mode => Mode, owner => Worker,
-                                                 key => fun() -> Key end, open => Open, conn => Conn,
-                                                 profile => Profile}),
+    {ok, StreamPid} = macula_stream:start_link(sealed_stream(Seal, #{id => AttachId, role => server, mode => Mode,
+                                                                     owner => Worker, key => fun() -> Key end,
+                                                                     open => Open, conn => Conn, profile => Profile})),
     serve_if_admitted(macula_stream_sessions:admit(Caller, StreamPid), AttachId, Worker, StreamPid, Open, Stream, S).
 
 %% A session past its caller's or the node's cap on served sessions, or one
@@ -3694,6 +3708,21 @@ admission_refusal(_AtACap) ->
 %% FIN.
 refuse_open(Stream, Open, Code, Message, S) ->
     ok = send_stream_refusal(Stream, Open, Code, Message, S),
+    close_unless_carrying(carries_a_session(Stream, S), Stream, S).
+
+%% A refusal decided once a sealed open is opened is about the procedure, so it goes sealed under the stream's k_p2c
+%% with a random nonce, as the provider's first frame (§5.2); a clear open's goes clear. Only the admission refusals,
+%% decided before anything is opened, go clear on a sealed open (`refuse_open/5').
+refuse_opened(Stream, Open, clear, Code, Message, S) ->
+    refuse_open(Stream, Open, Code, Message, S);
+refuse_opened(Stream, #{request_id := RequestId} = Open, #{k_p2c := KP2C, key_id := KeyId}, Code, Message,
+              #state{node_identity = Key} = S) ->
+    {ok, Plain} = macula_frame:error_plain(#{code => Code, detail => Message}),
+    Nonce = macula_seal:random_nonce(),
+    Aad = macula_seal:stream_aad(<<"stream_error">>, RequestId, 0, 1),
+    Sealed = #{scheme => 1, key_id => KeyId, nonce => Nonce, ct => macula_seal:seal(KP2C, Nonce, Aad, Plain)},
+    ok = refusal_built(macula_frame:stream_bytes({provider_stream, #{frame_type => stream_error, seq => 0,
+                                                                     sealed => Sealed}, Open}, Key), Stream, S),
     close_unless_carrying(carries_a_session(Stream, S), Stream, S).
 
 %% A refusal this link cannot build is not written.
