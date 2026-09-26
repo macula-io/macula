@@ -278,12 +278,6 @@
 %% The code a provider's ERROR carries for a handler that refused, with the
 %% handler's text as its detail.
 -define(HANDLER_ERROR_CODE, <<"handler_error">>).
-%% The clear codes a provider may answer a sealed request with (E2E design §5.1): the admission refusals, which carry
-%% no application data, a STREAM_OPEN's session admission (`too_many_sessions', `unavailable') included.
-%% `sealed_refused' is read on its own.
--define(SEALED_CLEAR_CODES, [<<"expired">>, <<"not_yet_valid">>, <<"request_id_reused">>, <<"request_copy">>,
-                             <<"reply_not_kept">>, <<"caller_quota">>, <<"share_full">>, <<"admission_full">>,
-                             <<"too_many_sessions">>, <<"unavailable">>]).
 -define(CONNECT_RETRY_BACKOFF_MS, 1_000).
 
 %% App-level liveness probe. Sends a tiny CALL (`_macula.ping' on the
@@ -2083,7 +2077,7 @@ answer_of(#{frame_type := error, reported_by := _} = Fields, #{seal := {_Keys, _
 answer_of(#{frame_type := error, code := <<"sealed_refused">>} = Fields, #{seal := {_Keys, _SealRequest}}) ->
     {error, {sealed_refused, named_key(maps:get(detail, Fields, undefined))}};
 answer_of(#{frame_type := error, code := Code} = Fields, #{seal := {_Keys, _SealRequest}}) ->
-    clear_refusal(lists:member(Code, ?SEALED_CLEAR_CODES), Fields);
+    clear_refusal(macula_sealed_call:clear_refusal(Code), Fields);
 answer_of(_ClearResult, #{seal := {_Keys, _SealRequest}}) ->
     {refused, malformed_frame}.
 

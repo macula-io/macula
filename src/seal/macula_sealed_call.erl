@@ -13,12 +13,18 @@
 %% provider restart).
 -module(macula_sealed_call).
 
--export([seal_request/4, open_request/4, seal_reply/4, open_reply/4]).
+-export([seal_request/4, open_request/4, seal_reply/4, open_reply/4, clear_refusal/1]).
 
 -export_type([keys/0, holder/0, sealed/0, reply/0]).
 
 -define(SCHEME, 1).
 -define(REQUEST_NONCE, <<0:96>>).
+%% The clear codes a provider may answer a sealed request with (E2E design §5.1): the admission refusals, which carry
+%% no application data, a STREAM_OPEN's session admission (`too_many_sessions', `unavailable') included.
+%% `sealed_refused' is read on its own.
+-define(CLEAR_REFUSALS, [<<"expired">>, <<"not_yet_valid">>, <<"request_id_reused">>, <<"request_copy">>,
+                         <<"reply_not_kept">>, <<"caller_quota">>, <<"share_full">>, <<"admission_full">>,
+                         <<"too_many_sessions">>, <<"unavailable">>]).
 
 %% A call's two keys, the request's and the reply's, and the id of the
 %% provider's KEM key the call was sealed to, which the reply names too. A
@@ -39,6 +45,14 @@
 %%====================================================================
 %% The caller's side
 %%====================================================================
+
+%% @doc Whether `Code' is one a provider may answer a sealed request, a CALL
+%% or a STREAM_OPEN, with in the clear: an admission refusal, decided before
+%% anything is opened and carrying no application data. A caller refuses any
+%% other clear code on a sealed request as malformed.
+-spec clear_refusal(binary()) -> boolean().
+clear_refusal(Code) when is_binary(Code) ->
+    lists:member(Code, ?CLEAR_REFUSALS).
 
 %% @doc Seal `Plain' as `Request''s payload to the provider's KEM key, and
 %% return the sealed payload and the call's keys, which open the reply.

@@ -162,8 +162,13 @@
     verifier :: macula_frame:stream_state() | undefined,
     %% A caller's stream: the node_id of the station its link is connected
     %% to, the one station whose relay error for this open it takes.
-    station  :: <<_:256>> | undefined
+    station  :: <<_:256>> | undefined,
+    %% A sealed stream: the keys its STREAM_OPEN agreed.
+    seal     :: macula_sealed_call:keys() | undefined
 }).
+
+-define(CALLER_TO_PROVIDER, 0).
+-define(PROVIDER_TO_CALLER, 1).
 
 %%%===================================================================
 %%% Public API
@@ -179,7 +184,11 @@
 %% stream never holds the key), `open' (the verified STREAM_OPEN),
 %% `conn' (the peering connection that carries it) and `profile'. A
 %% stream given the key itself as `key' does not start, and start_link
-%% returns `{error, {key, not_a_loader}}'.
+%% returns `{error, {key, not_a_loader}}'. A stream whose STREAM_OPEN was
+%% sealed takes `seal', the keys that open agreed
+%% (`macula_sealed_call:keys()', with `k_c2p' and `k_p2c'): it seals every
+%% frame it sends but a STREAM_END, and opens every frame it receives
+%% before anything of it is kept (E2E design §5.2).
 -spec start_link(map()) -> {ok, pid()} | {error, term()}.
 start_link(Opts) ->
     gen_server:start_link(?MODULE, Opts, []).
@@ -632,8 +641,43 @@ sent_via_link(false, _Encodable, _Spec, _Link, _Sid, S) ->
 sent_via_link(true, {error, _} = Unsendable, _Spec, _Link, _Sid, S) ->
     {Unsendable, S};
 sent_via_link(true, ok, Spec, Link, Sid, #state{seq_out = Seq} = S) ->
-    Bytes = macula_frame:encode(signed_frame(Spec, S)),
+    Bytes = macula_frame:encode(signed_frame(sealed_spec(Spec, S), S)),
     {macula_station_link:send_stream_bytes(Link, Sid, Bytes, last_frame(Spec)), S#state{seq_out = Seq + 1}}.
+
+%% @private A sealed stream's frame, its body, reply payload or error sealed
+%% under the key for its direction (E2E design §5.2): a caller's with the nonce
+%% its seq gives, a provider's with a random nonce it carries. A STREAM_END has
+%% nothing to seal; a clear stream's frames go as they are.
+sealed_spec(Spec, #state{seal = undefined}) ->
+    Spec;
+sealed_spec(#{frame_type := stream_end} = Spec, _S) ->
+    Spec;
+sealed_spec(#{frame_type := Type, seq := Seq} = Spec, #state{role = Role, seal = #{key_id := KeyId} = Keys,
+                                                             open = #{request_id := RequestId}}) ->
+    {ok, Plain} = plain_of(Spec),
+    {Key, Nonce, Direction} = sending(Role, Keys, Seq),
+    Ct = macula_seal:seal(Key, Nonce, macula_seal:stream_aad(atom_to_binary(Type), RequestId, Seq, Direction), Plain),
+    (maps:without([body, payload, code, message], Spec))#{sealed => carried_nonce(Role, Nonce, #{scheme => 1,
+                                                                                                key_id => KeyId,
+                                                                                                ct => Ct})}.
+
+plain_of(#{frame_type := stream_data, encoding := raw, body := Body}) -> {ok, Body};
+plain_of(#{frame_type := stream_data, encoding := msgpack, body := Body}) -> macula_frame:payload_plain(Body);
+plain_of(#{frame_type := stream_reply, payload := Payload}) -> macula_frame:payload_plain(Payload);
+plain_of(#{frame_type := stream_error, code := Code, message := <<>>}) -> macula_frame:error_plain(#{code => Code});
+plain_of(#{frame_type := stream_error, code := Code, message := Message}) ->
+    macula_frame:error_plain(#{code => Code, detail => Message}).
+
+sending(client, #{k_c2p := Key}, Seq) -> {Key, macula_seal:stream_nonce(Seq), ?CALLER_TO_PROVIDER};
+sending(server, #{k_p2c := Key}, _Seq) -> {Key, macula_seal:random_nonce(), ?PROVIDER_TO_CALLER}.
+
+carried_nonce(client, _Nonce, Sealed) -> Sealed;
+carried_nonce(server, Nonce, Sealed) -> Sealed#{nonce => Nonce}.
+
+%% @private The stream keys a sealed STREAM_OPEN agreed, or none for a clear
+%% stream.
+stream_seal(undefined) -> undefined;
+stream_seal(#{k_c2p := <<_:256>>, k_p2c := <<_:256>>, key_id := <<_:64>>} = Keys) -> Keys.
 
 signed_frame(Spec, #state{role = server, key = Load, open = Open}) ->
     macula_frame:provider_stream(Spec, Load(), Open);
@@ -658,7 +702,7 @@ replied({_Sent, State}, Result) ->
 %% pair has none of these.
 carried(#{key := Key, open := Open, conn := Conn, profile := Profile} = Opts, State) ->
     State#state{key = Key, open = Open, conn = Conn, profile = Profile, verifier = macula_frame:open_stream(Open),
-                station = maps:get(station, Opts, undefined)};
+                station = maps:get(station, Opts, undefined), seal = stream_seal(maps:get(seal, Opts, undefined))};
 carried(_LocalPair, State) ->
     State.
 
@@ -846,17 +890,77 @@ verified_frame({error, Refusal}, #state{conn = Conn} = State) ->
     ok = macula_peering:object_refused(Conn, Refusal),
     State.
 
-%% This node opens no sealed payload yet (E2E packages 3 to 5): a sealed frame
-%% ends the session by name rather than reaching a reader it cannot open for.
-peer_event(#{sealed := _}, State) ->
+%% A clear stream opens no sealed frame: one ends the session by name rather
+%% than reaching a reader it cannot open for. A sealed stream opens each sealed
+%% frame under the key for the peer's direction before anything of it takes
+%% effect, and takes nothing clear but a STREAM_END and, from the provider and
+%% as its first frame, a clear refusal from the closed set: anything else clear
+%% is a downgrade.
+peer_event(#{sealed := _}, #state{seal = undefined} = State) ->
     error_arrived(<<"sealed_refused">>, <<"this node opens no sealed payload">>, State);
-peer_event(#{frame_type := stream_data, encoding := Encoding, body := Body}, State) ->
+peer_event(#{sealed := Sealed, frame_type := Type, seq := Seq} = Fields, #state{seal = Keys} = State) ->
+    opened_event(opened(Sealed, Type, Seq, Keys, State), Fields, State);
+peer_event(Fields, #state{seal = undefined} = State) ->
+    clear_event(Fields, State);
+peer_event(#{frame_type := stream_end} = Fields, State) ->
+    clear_event(Fields, State);
+peer_event(#{frame_type := stream_error, code := Code, seq := 0} = Fields, #state{role = client} = State) ->
+    clear_refusal(Code =:= <<"sealed_refused">> orelse macula_sealed_call:clear_refusal(Code), Fields, State);
+peer_event(_ClearOnASealedStream, State) ->
+    abort_session(<<"malformed_frame">>, <<"a clear frame on a sealed stream">>, State).
+
+clear_refusal(true, Fields, State) ->
+    clear_event(Fields, State);
+clear_refusal(false, _Fields, State) ->
+    abort_session(<<"malformed_frame">>, <<"a clear frame on a sealed stream">>, State).
+
+%% The plaintext of a peer's sealed frame: under the key its key id names, the
+%% provider's with the nonce it carries, the caller's with its seq's.
+opened(#{key_id := KeyId, ct := Ct} = Sealed, Type, Seq, #{key_id := KeyId} = Keys,
+       #state{role = Role, open = #{request_id := RequestId}}) ->
+    {Key, Nonce, Direction} = receiving(Role, Keys, Sealed, Seq),
+    macula_seal:open(Key, Nonce, macula_seal:stream_aad(atom_to_binary(Type), RequestId, Seq, Direction), Ct);
+opened(_UnderAnotherKey, _Type, _Seq, _Keys, _State) ->
+    {error, sealed_refused}.
+
+receiving(client, #{k_p2c := Key}, #{nonce := Nonce}, _Seq) -> {Key, Nonce, ?PROVIDER_TO_CALLER};
+receiving(server, #{k_c2p := Key}, _Sealed, Seq) -> {Key, macula_seal:stream_nonce(Seq), ?CALLER_TO_PROVIDER}.
+
+opened_event({ok, Plain}, Fields, State) ->
+    unsealed_event(unsealed(Fields, Plain), State);
+opened_event({error, sealed_refused}, _Fields, State) ->
+    abort_session(<<"malformed_frame">>, <<"a sealed frame that does not open">>, State).
+
+%% A sealed frame's fields as they arrive in the clear, from its plaintext.
+unsealed(#{frame_type := stream_data, encoding := raw} = Fields, Plain) ->
+    {ok, (maps:remove(sealed, Fields))#{body => Plain}};
+unsealed(#{frame_type := stream_data, encoding := msgpack} = Fields, Plain) ->
+    with_field(body, macula_frame:plain_payload(Plain), Fields);
+unsealed(#{frame_type := stream_reply} = Fields, Plain) ->
+    with_field(payload, macula_frame:plain_payload(Plain), Fields);
+unsealed(#{frame_type := stream_error} = Fields, Plain) ->
+    unsealed_error(macula_frame:plain_error(Plain), Fields).
+
+with_field(Name, {ok, Value}, Fields) -> {ok, (maps:remove(sealed, Fields))#{Name => Value}};
+with_field(_Name, {error, _} = Refused, _Fields) -> Refused.
+
+unsealed_error({ok, #{code := Code} = Error}, Fields) ->
+    {ok, (maps:remove(sealed, Fields))#{code => Code, message => maps:get(detail, Error, <<>>)}};
+unsealed_error({error, _} = Refused, _Fields) ->
+    Refused.
+
+unsealed_event({ok, Fields}, State) ->
+    clear_event(Fields, State);
+unsealed_event({error, _}, State) ->
+    abort_session(<<"malformed_frame">>, <<"a sealed frame whose plaintext is not its frame's">>, State).
+
+clear_event(#{frame_type := stream_data, encoding := Encoding, body := Body}, State) ->
     chunk_arrived(Encoding, Body, State);
-peer_event(#{frame_type := stream_end, role := Role}, State) ->
+clear_event(#{frame_type := stream_end, role := Role}, State) ->
     end_arrived(Role, State);
-peer_event(#{frame_type := stream_error, code := Code, message := Message}, State) ->
+clear_event(#{frame_type := stream_error, code := Code, message := Message}, State) ->
     error_arrived(Code, Message, State);
-peer_event(#{frame_type := stream_reply, payload := Payload}, State) ->
+clear_event(#{frame_type := stream_reply, payload := Payload}, State) ->
     reply_arrived({ok, Payload}, State).
 
 %% @doc Either deliver a chunk to a waiting recv/2 caller or queue it.
