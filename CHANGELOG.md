@@ -28,15 +28,21 @@ reaches only this release and later.
     `#{sealed := #{scheme, key_id, ct, kem_ct | nonce}}`.
   - A station verifies and routes a sealed frame as any other, and never
     charges it.
-  - The shape is held to its frame: scheme 1; an 8-byte key id; a request's
-    carries a `kem_ct` and no nonce; a reply's and an event's a 12-byte nonce
-    and no `kem_ct`; a stream frame's no `kem_ct`.
+  - The shape is held to its frame:
+    - scheme 1 and an 8-byte key id, always;
+    - a request's carries a `kem_ct` of 1568 or 1665 bytes and no nonce;
+    - a reply's, an event's and a provider stream frame's carry a 12-byte nonce
+      and no `kem_ct`;
+    - a caller stream frame's carries neither: its nonce is its seq.
+    `macula_frame:sealed()` names the shape, and `verified_request()` and
+    `verified_publication()` carry `payload` or `sealed`.
   - A tbs with both `sealed` and the payload it replaces, or with neither, is
     refused `malformed_frame`, as is a STREAM_END with `sealed`.
 - **An endpoint refuses what it cannot open yet, by name, and crashes nothing.**
   - A sealed CALL is answered with a clear provider ERROR `sealed_refused`, and
     its handler never runs.
-  - A sealed STREAM_OPEN is refused `sealed_refused` on its own stream.
+  - A sealed STREAM_OPEN is refused `sealed_refused` on its own stream, right
+    after admission and before any policy, as a sealed CALL is.
   - A sealed RESULT answers its caller
     `{error, {call_error, <<"sealed_refused">>, undefined}}`.
   - A sealed stream frame ends its session `sealed_refused`.
@@ -56,7 +62,10 @@ reaches only this release and later.
 - **`test/vectors/e2e_seal_v1.json` and `E2E_SEAL_V1.md`, the byte-exact
   contract every SDK implements.** `scripts/e2e_seal_vectors` (Rust,
   `macula-mlkem` with fixed seeds, RustCrypto `p384`, `hkdf`, `aes-gcm`)
-  generates them, and `macula_seal` on OTP `crypto` reproduces them. Two
+  generates them, and `macula_seal` on OTP `crypto` reproduces them. A
+  `refusals` vector pins the one ECDH input every recipient MUST refuse: an
+  ephemeral point that makes the P-384 output 48 zero bytes, which Go's
+  `crypto/ecdh` and OTP's `crypto` both return without an error. Two
   independent implementations agree on every intermediate value, in both
   profiles. A vector carries each ML-KEM key as its 64-byte seed (the form Go
   loads) and as the expanded key OTP loads.

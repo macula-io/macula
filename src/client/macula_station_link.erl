@@ -3328,6 +3328,11 @@ admitted(Admission, Open, Share) ->
 
 %% A copy of an admitted open starts no second session, and a refused one none
 %% at all: each gets a STREAM_ERROR under its own open, whose code names why.
+%% A sealed open is refused right after admission, before any policy, as a
+%% sealed CALL is: this node opens no sealed payload yet.
+on_admission(new, #{sealed := _} = Open, Stream, S) ->
+    refuse_open(Stream, Open, <<"sealed_refused">>, <<"this node opens no sealed payload">>,
+                sealed_refused(sealed_stream_open, S));
 on_admission(new, Open, Stream, S) ->
     on_stream_open_on(carries_a_session(Stream, S), Open, Stream, S);
 on_admission({copy, _Reply}, Open, Stream, S) ->
@@ -3376,9 +3381,6 @@ on_stream_open_verdict(malformed_frame, Open, Stream, S) ->
 %% A procedure this link does not advertise is refused `not_found'. The open's
 %% signed mode binds both sides' verifiers, so an open in a mode other than the
 %% one its procedure is advertised in is refused `mode_mismatch', not served.
-dispatch_stream_open(_Found, #{sealed := _} = Open, Stream, S) ->
-    refuse_open(Stream, Open, <<"sealed_refused">>, <<"this node opens no sealed payload">>,
-                sealed_refused(sealed_stream_open, S));
 dispatch_stream_open(error, Open, Stream, S) ->
     refuse_open(Stream, Open, <<"not_found">>, <<"procedure not advertised">>, S);
 dispatch_stream_open({ok, {Mode, Handler}}, #{mode := Mode} = Open, Stream, S) ->

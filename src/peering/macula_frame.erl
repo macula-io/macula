@@ -133,6 +133,7 @@
 
 -export_type([
     frame/0,
+    sealed/0,
     frame_type/0,
     stream_build/0,
     stream_bytes/0,
@@ -415,7 +416,12 @@
     retry_budget => non_neg_integer()
 }.
 
-%% A request that verified: its fields, the caller's carried key, and request_hash, the SHA-384 of its tbs.
+%% A payload sealed end to end (E2E seal scheme 1, test/vectors/E2E_SEAL_V1.md):
+%% what a verifier reads of it, opening nothing.
+-type sealed() :: #{scheme := 1, key_id := <<_:64>>, ct := binary(), kem_ct => binary(), nonce => <<_:96>>}.
+
+%% A request that verified: its fields, the caller's carried key, and request_hash, the SHA-384 of its tbs. Its
+%% payload travels in the clear or sealed, exactly one of the two.
 -type verified_request() :: #{
     frame_type   := call | stream_open,
     key          := binary(),
@@ -426,7 +432,8 @@
     procedure    := binary(),
     target       := id256(),
     deadline     := non_neg_integer(),
-    payload      := term(),
+    payload      => term(),
+    sealed       => sealed(),
     mode         => stream_mode(),
     token        => binary()
 }.
@@ -562,7 +569,8 @@
     seq              := non_neg_integer(),
     published_at     := non_neg_integer(),
     ttl_ms           => 0..3600000,
-    payload          := term(),
+    payload          => term(),
+    sealed           => sealed(),
     key              := binary(),
     publication_hash := msg_id(),
     expires_at       := non_neg_integer()
@@ -1859,7 +1867,7 @@ held_later({error, _} = Refused) -> Refused.
 
 provider_later({ok, Shape, Fields}, Type,
                #{request := Open, provider := #{next := Next, signer := Signer} = Side} = State) ->
-    later_checked(stream_read(read_fields(maps:to_list(Fields), stream_table(Type), #{}), Type), Shape, Signer, Next,
+    later_checked(stream_read(read_fields(maps:to_list(Fields), stream_table(Type, provider_stream), #{}), Type), Shape, Signer, Next,
                   Open, Side, State);
 provider_later({error, Refusal}, _Type, _State) when Refusal =:= signature_invalid; Refusal =:= key_id_mismatch ->
     {error, Refusal};
@@ -1875,7 +1883,7 @@ later_checked(error, _Shape, _Signer, _Next, _Open, _Side, _State) ->
     {error, malformed_frame}.
 
 provider_first({ok, #{key := Key, fields := Fields}}, Type, #{request := Open, provider := Side} = State, Profile) ->
-    first_checked(stream_read(read_fields(maps:to_list(Fields), stream_table(Type), #{}), Type), Key, Open, Side,
+    first_checked(stream_read(read_fields(maps:to_list(Fields), stream_table(Type, provider_stream), #{}), Type), Key, Open, Side,
                   State, Profile);
 provider_first({error, signature_invalid}, _Type, _State, _Profile) ->
     {error, signature_invalid};
@@ -1960,7 +1968,7 @@ caller_frame(true, Side, Object, Type, #{request := #{key := CallerKey}} = State
                     State).
 
 caller_verified({ok, #{fields := Fields}}, Type, Side, #{request := Open} = State) ->
-    caller_checked(stream_read(read_fields(maps:to_list(Fields), stream_table(Type), #{}), Type), Type, Side, Open,
+    caller_checked(stream_read(read_fields(maps:to_list(Fields), stream_table(Type, caller_stream), #{}), Type), Type, Side, Open,
                    State);
 caller_verified({error, signature_invalid}, _Type, _Side, _State) ->
     {error, signature_invalid};
@@ -2008,7 +2016,9 @@ stream_result([], #{frame_type := Type, seq := Seq} = Read, SideName, Side, Stat
     {ok, maps:without([alg, request_id, request_hash], Read),
      State#{SideName := Side#{next := Seq + 1, ended := Type =:= stream_end}}}.
 
-stream_table(Type) ->
+%% `Side' is who sent the frame: a sealed payload's nonce is carried by the
+%% provider and derived from the seq by the caller (E2E_SEAL_V1.md).
+stream_table(Type, Side) ->
     #{<<"frame_type">> => {frame_type, {enum, [Type]}},
       <<"alg">> => {alg, value},
       <<"request_id">> => {request_id, {bytes, 16}},
@@ -2021,7 +2031,7 @@ stream_table(Type) ->
       <<"code">> => {code, {text_max, ?MAX_ERROR_CODE_BYTES}},
       <<"message">> => {message, {text_max, ?MAX_ERROR_TEXT_BYTES}},
       <<"payload">> => {payload, value},
-      <<"sealed">> => {sealed, {sealed, stream}}}.
+      <<"sealed">> => {sealed, {sealed, Side}}}.
 
 %%------------------------------------------------------------------
 %% Content transfer constructors (Part 6 §9)
@@ -3615,14 +3625,16 @@ sealed_table() ->
       <<"ct">> => {ct, bytes}}.
 
 sealed_read({ok, #{scheme := 1, key_id := _, ct := _} = Sealed}, Context) ->
-    sealed_shaped(sealed_shape(Context, is_map_key(kem_ct, Sealed), is_map_key(nonce, Sealed)), Sealed);
+    sealed_shaped(sealed_shape(Context, maps:find(kem_ct, Sealed), is_map_key(nonce, Sealed)), Sealed);
 sealed_read(_NotScheme1, _Context) ->
     error.
 
-sealed_shape(request, KemCt, Nonce) -> KemCt andalso not Nonce;
-sealed_shape(reply, KemCt, Nonce) -> Nonce andalso not KemCt;
-sealed_shape(event, KemCt, Nonce) -> Nonce andalso not KemCt;
-sealed_shape(stream, KemCt, _Nonce) -> not KemCt.
+%% A request's `kem_ct' is an ML-KEM-1024 ciphertext, followed in pq_hybrid by
+%% an uncompressed P-384 point: 1568 or 1665 bytes.
+sealed_shape(request, {ok, KemCt}, false) -> byte_size(KemCt) =:= 1568 orelse byte_size(KemCt) =:= 1665;
+sealed_shape(Context, error, true) when Context =:= reply; Context =:= event; Context =:= provider_stream -> true;
+sealed_shape(caller_stream, error, false) -> true;
+sealed_shape(_Context, _KemCt, _Nonce) -> false.
 
 sealed_shaped(true, Sealed) -> {ok, Sealed};
 sealed_shaped(false, _Sealed) -> error.

@@ -24,7 +24,10 @@ cases() ->
      {"a sealed publication verifies as PUBLISH and as EVENT", fun a_sealed_publication_verifies/1},
      {"a publication with both is malformed", fun a_publication_with_both_is_malformed/1},
      {"sealed provider stream frames verify, a sealed STREAM_END does not", fun sealed_stream_frames_verify/1},
-     {"a sealed of another scheme or shape is malformed", fun a_sealed_of_another_scheme_is_malformed/1}].
+     {"a sealed of another scheme or shape is malformed", fun a_sealed_of_another_scheme_is_malformed/1},
+     {"a caller's sealed stream frame derives its nonce, a provider's carries one",
+      fun a_stream_frames_sealed_nonce_follows_its_side/1},
+     {"a sealed publication verifies as GOSSIP", fun a_sealed_publication_verifies_as_gossip/1}].
 
 a_sealed_call_verifies(#{caller := Caller} = Keys) ->
     {ok, Verified} = macula_frame:verify_request(request(call, Keys, #{<<"sealed">> => request_sealed()}), profile()),
@@ -100,10 +103,47 @@ a_sealed_of_another_scheme_is_malformed(Keys) ->
     [?assertEqual({error, malformed_frame},
                   macula_frame:verify_request(request(call, Keys, #{<<"sealed">> => Sealed}), profile()))
      || Sealed <- [(request_sealed())#{{text, <<"scheme">>} => 2},
+                   (request_sealed())#{{text, <<"kem_ct">>} => <<2:8>>},
                    (request_sealed())#{{text, <<"key_id">>} => <<1:56>>},
                    maps:remove({text, <<"ct">>}, request_sealed()),
                    (request_sealed())#{{text, <<"extra">>} => 1},
                    <<"not a map">>]].
+
+%% A caller's frame derives its nonce from its seq and carries none; a
+%% provider's carries one (E2E_SEAL_V1.md). Each side's verifier holds it so.
+a_stream_frames_sealed_nonce_follows_its_side(#{caller := Caller, provider := Provider} = Keys) ->
+    {Open, OpenFrame} = bidi_open(Keys),
+    CallerFrame = fun(Sealed) -> caller_frame(Caller, Open, Sealed) end,
+    ?assertMatch({ok, #{sealed := _}, _},
+                 macula_frame:verify_caller_stream(CallerFrame(maps:remove({text, <<"nonce">>}, nonce_sealed())),
+                                                   macula_frame:open_stream(Open), profile())),
+    ?assertEqual({error, malformed_frame},
+                 macula_frame:verify_caller_stream(CallerFrame(nonce_sealed()), macula_frame:open_stream(Open),
+                                                   profile())),
+    NoNonce = #{<<"sealed">> => maps:remove({text, <<"nonce">>}, nonce_sealed()),
+                <<"encoding">> => {text, <<"raw">>}},
+    ?assertEqual({error, malformed_frame},
+                 macula_frame:verify_provider_stream(stream_frame(stream_data, 0, NoNonce, Provider, Open),
+                                                     macula_frame:open_stream(Open), profile())),
+    _ = OpenFrame.
+
+a_sealed_publication_verifies_as_gossip(Keys) ->
+    #{publication := Publication} = publication(Keys, #{<<"sealed">> => nonce_sealed()}),
+    Gossip = #{version => 2, frame_type => plumtree_gossip, publication => Publication, round => 0},
+    ?assertMatch({ok, #{sealed := _}}, macula_frame:verify_publication(Gossip, profile(), now_ms())).
+
+bidi_open(Keys) ->
+    Fields = #{<<"sealed">> => request_sealed(), <<"mode">> => {text, <<"bidi">>}},
+    Frame = request(stream_open, Keys, Fields),
+    {ok, Open} = macula_frame:verify_request(Frame, profile()),
+    {Open, Frame}.
+
+caller_frame(Caller, #{request_id := RequestId, request_hash := RequestHash}, Sealed) ->
+    Tbs = wire(#{<<"frame_type">> => {text, <<"stream_data">>}, <<"request_id">> => RequestId,
+                 <<"request_hash">> => RequestHash, <<"signer">> => macula_node_keys:key_id(Caller), <<"seq">> => 0,
+                 <<"encoding">> => {text, <<"raw">>}, <<"sealed">> => Sealed}),
+    #{version => 2, frame_type => stream_data,
+      caller_stream => macula_signed_object:sign_held(<<"MACULA-PQ-CALLER-STREAM-V1">>, Tbs, Caller)}.
 
 %%%===================================================================
 %%% Helpers: tbs built on the wire and signed as the builders sign them

@@ -255,7 +255,9 @@ fn zero_ecdh_refusal(hybrid_call: &Json, hybrid: &Json) -> Json {
         "mlkem_seed": hybrid["mlkem_seed"],
         "mlkem_dk": hybrid["mlkem_dk"],
         "p384_priv": h(&d),
-        "key_as_carried": hybrid["key_as_carried"],
+        "p384_pub": h(sk.public_key().to_encoded_point(false).as_bytes()),
+        "key_as_carried": h(&[hex::decode(hybrid["mlkem_ek"].as_str().unwrap()).unwrap().as_slice(),
+                              sk.public_key().to_encoded_point(false).as_bytes()].concat()),
         "kem_ct": h(&[mlkem_ct.as_slice(), e.as_slice()].concat()),
         "expect": "sealed_refused",
     })
