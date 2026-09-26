@@ -146,6 +146,9 @@ key rotates on its own schedule (§7.3) while the node_id, derived from the iden
 
 ### 4.2 Published as a record, signed by the identity key
 
+> **Superseded by Amendment A1:** the key travels in the provider's signed `procedure_advertisement` as the
+> `kem_key` and `kem_key_id` pair. There is no `node_kem_key` record.
+
 A new record type, `node_kem_key` (the next free built-in tag), stored under a key derived from the node_id:
 
 | Field | |
@@ -354,6 +357,8 @@ and the signature fails.
 
 ### 7.3 KEM key lifetime: bounding the forward-secrecy gap
 
+> **Superseded by Amendment A1:** daily rotation, and an old key deleted 30 minutes after it stops being advertised.
+
 A call is encrypted to the provider's long-lived KEM key, so that key, stolen, opens every call sent to it while it was
 current. The design bounds that:
 
@@ -500,6 +505,134 @@ later release without changing any of them.
 
 ---
 
+## Amendment A1 (2026-09-26): the KEM key travels in the advertisement
+
+This exists so a caller can seal to a provider using the same signed object that says the provider takes sealed
+calls, with one lookup and a short key exposure.
+
+### A1: What changes
+
+§4.2 proposed a separate record, `node_kem_key`, as a new built-in type, plus a signed `kem_key_id` in each
+`procedure_advertisement`. A1 drops that record. Instead, the provider's `procedure_advertisement` carries, signed by
+its identity key, **both or neither** of:
+
+| Field | |
+|---|---|
+| `kem_key` | the key as carried (`macula_seal:key_as_carried/1`): the ML-KEM-1024 encapsulation key, 1568 bytes in pq_pure, plus the uncompressed P-384 point in pq_hybrid, 1665 bytes |
+| `kem_key_id` | `macula_seal:key_id/1` of `kem_key`: the first 8 bytes of SHA-384 over it |
+
+The rule lives in `macula_record:advertisement_payload_ok/1`. That function admits the pair only together, with
+`kem_key` of 1568 or 1665 bytes and `kem_key_id` matching it. `payload_ok` takes no profile, and the record's `alg`
+is already checked against the verifier's profile before it runs. A caller seals only to a key of its own profile's
+length, and fails with `no_kem_key` otherwise. The payload then has 6 keys, or 7 with
+`authorization`. Because the rule sits in `payload_ok`, `sign/2`, `verify/3`, station STORE and the station's ADVERTISE
+admission all refuse a lone field or a mismatched pair in the same way. An advertisement with neither field names no
+key, so its provider has not opted in.
+
+It replaces these sentences in the design: §4.2 (the `node_kem_key` record and its table), §5.1 step 1 (fetch the
+target's `node_kem_key`), §5.3's key source, §10's lookup row, and §13 #2 ("`node_kem_key` record" becomes "the
+advertisement's `kem_key` pair"). The gate history gets one line: round 1's second required change (a withheld key
+record forcing cleartext) is what motivated the signed `kem_key_id`. A1 keeps that property and strengthens it, because
+the key and the opt-in are now under one signature.
+
+### A1: Why
+
+1. **Key and opt-in in one signed object.** A station can withhold an advertisement (a denial) but cannot serve the
+   opt-in without the key, or the key without the opt-in. Under §4.2 the key record and the advertisement are fetched
+   separately and can come from different moments.
+2. **One lookup.** Every call already resolves its provider's signed advertisement (D25), and the key now comes with
+   it. §4.2 costs a second DHT round trip on a cold call and needs a key cache with its own bounds.
+3. **A shorter key exposure** (below): about 24.5 hours, against about 8 days under §7.3.
+
+Considered and not taken: a domain-type record (tag 0x20 or above) *is* storable on 12.x stations today. It would
+still need the station roll for `sealed` (§13 #6), and it brings back the second lookup, so it loses on reasons 1 and 2.
+
+Only providers need a KEM key. Group keys (§6.2) reach a member over a sealed call to the distributor, which is a
+provider, so A1 serves calls, streams and group keys alike.
+
+### A1: What a 12.x node does with it, and the fleet order
+
+A 12.x node refuses a keyed advertisement. `advertisement_size_ok/2` admits exactly 4 payload keys, or 5 with
+`authorization`, so a 12.x station refuses it at STORE and at ADVERTISE, and a 12.x SDK refuses it when it resolves the
+provider. The same holds for §4.2's `kem_key_id`, so neither design avoids this. The order is therefore:
+
+1. **Stations** move to the macula release that carries the pair rule, together with the `sealed` acceptance §13 #6
+   already requires. That release is the station floor, rolled to all six.
+2. **Callers** move to 13.x. A 12.x caller cannot resolve a provider that names a key, so 13.0.0 is a flag day for
+   callers, not only for `call_station` users who relied on the old default (§8.1, "Explicit targets").
+3. **Providers** start naming their key.
+
+Before step 1 is complete on every station, a 13.x provider does not name a key. The default in §8.2 is tied to
+this, not to the SDK version: `confidential` on advertise defaults to naming the key only once the SDK is configured
+with the station floor (`kem_advertise => enabled`, off until the roll is confirmed). While it is not `enabled`, an
+`advertise` with `confidential => required` is refused at advertise time with
+`{error, {confidentiality, kem_advertise_disabled}}`, since a provider that names no key and refuses every clear call
+is unreachable. `preferred` and `off` advertise keyless, as before. A station's own procedures never
+name a key in the first release, because the station does not open sealed calls (§9, §11).
+
+### A1: Rotation and forward secrecy (replaces §7.3's numbers)
+
+- A provider holds its KEM keys in memory, in one keyring per node identity, and never writes them to disk.
+- **Precondition: one node identity runs in one VM** (Raf, 2026-09-23: one node, one node_id). If two VMs run one
+  identity, each advertises its own key. If the two VMs sit behind one station, every caller sees `sealed_refused`
+  naming two alternating key ids. Behind different stations the misconfiguration is invisible, so the rule is the
+  precondition itself, not its symptom.
+- A provider rotates its KEM key every **24 hours**. From the moment it rotates, its advertisements carry the new key.
+  A restart loses every key (they are only in memory): calls sealed to an old key get `sealed_refused` naming the
+  new one.
+- The latest moment a request sealed to a rotated-out key can still be admitted, counted from the rotation: 5 min (the
+  last advertisement's life) + 5 min (the D22 clock tolerance) + 10 min (the longest deadline) + 5 min (admission's
+  past-deadline tolerance) = **25 minutes**. The provider **keeps an old private key for 30 minutes after it stops
+  advertising it, then deletes it**, which leaves 5 minutes of margin.
+- A stolen KEM private key therefore opens at most about 24.5 hours of calls, against about 8 days under §7.3, and
+  nothing sealed after it was deleted.
+
+### A1: `sealed_refused` and re-resolving, bounded
+
+- The provider's `sealed_refused` names the `kem_key_id` it advertises now. That reply is provider-signed and bound to
+  the request by `request_hash` (D25), so the id is authentic and fresh.
+- The caller re-resolves **once per call**. It seals again, under a new request_id, only if the re-resolved
+  advertisement names exactly that id. If it names another, the call fails with
+  `{error, {confidentiality, key_mismatch, Named, Found}}`, giving both ids. If the re-resolve finds no advertisement,
+  or a keyless one, the call fails with `no_kem_key`, as §8.1 says. A call is sealed at most twice, and never
+  sent in the clear.
+- `call_station` with an advertisement passed by the application does not re-resolve. It returns the error naming the
+  current id, and the application fetches a new advertisement.
+
+### A1: Explicit targets (§8.1)
+
+`call_station` and `call_stream_station` seal from a verified advertisement passed in the options, whose
+`advertiser_node` must be the explicit target.
+- With `confidential => required` and no advertisement passed, the SDK resolves `(realm, procedure)` and takes only
+  an advertisement whose `advertiser_node` is the target. It seals if that advertisement names a key, and otherwise
+  fails with `no_kem_key`. This fails closed: a lookup can deny the call but never downgrade it.
+- `confidential => off` sends in the clear.
+- With none of these, the call is refused as `no_signed_state` (the 13.0.0 break Raf chose).
+- An encapsulation key that `crypto:encapsulate_key/2` rejects surfaces as `no_kem_key`, not a crash.
+
+### A1: Cost (amsterdam, one quiet hour, 2026-09-26 11:56-12:56Z, measured by Mars)
+
+- The station's total egress was 3,912 MB. ADVERTISE out was 831 MB in 26,790 frames. The router counted 8,295
+  changes and 18,590 re-sends from the 30 s reconcile (26,885; the two counters come from different places and differ
+  by 95). That is about 3.2 sends per renewal today.
+- The two fields add about 1,700 B per advertisement: 1,665 B of key, plus the id and their CBOR keys. The figures
+  below use 1,665 B and so understate it by about 2%, which changes no conclusion.
+- +1,665 B on every advertisement adds 26,790 × 1,665 B = **44.6 MB per hour, 1.1% of the station's egress**. After
+  Mars's digest/pull (one send per renewal) it is 8,295 × 1,665 B = **13.8 MB per hour, 0.35%**.
+- DHT STORE carries advertisements among other record types, and telemetry doesn't split it. Its upper bound is
+  3,552 × 1,665 B = 5.9 MB per hour (0.15%).
+- Per advertisement: about +7% for an org-namespaced one (about 24 KB with its directory and delegation), and about +25%
+  for an own-namespace one (about 7 KB). Both stay well under `MAX_RECORD_BYTES` (256 KiB).
+- §4.2 would save most of those bytes, at the price of the second lookup, the cache, a key and opt-in that are split
+  across two objects, and a key exposure of about 8 days.
+
+### A1: Not changed
+
+§3 (the sealed payload), §5.1 (call keys, AAD, nonces, the clear refusal set), §5.2 (streams; key source as above),
+§6 (group keys), `preferred` as the per-call default, and the E2E seal scheme 1 vectors are unchanged. The vectors gain
+three advertisement cases: a keyed advertisement, one whose id mismatches its key, and one with a lone field. Every
+SDK's record verifier must refuse the last two (macula-go, macula-rust).
+
 ## Gate history
 
 - **Round 1 (Fable), three required:**
@@ -522,3 +655,11 @@ later release without changing any of them.
   - clear calls keep `token` and `proofs` in the clear (§3.1);
   - stations accept `sealed` in events too (§13 #6);
   - two further rows in §9.
+- **Amendment A1 (2026-09-26), two Fable rounds.**
+  - Round 1: pass with two required changes. The first corrected the amendment's own premise: a 12.x node refuses an
+    advertisement with extra payload keys (`advertisement_size_ok/2`), so the pair rule rides the station roll. The
+    second bounded the `sealed_refused` re-resolve loop and wrote down the one-identity-one-VM precondition.
+  - Round 2: pass with two one-sentence changes: `required` on advertise while `kem_advertise` is off is refused, and
+    the two-VM symptom names the right party.
+  - Raf accepted A1 on quality (2026-09-26). It keeps round 1's reason for the signed `kem_key_id` (a withheld key
+    record must not force cleartext) and strengthens it: the key and the opt-in are under one signature.

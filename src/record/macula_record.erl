@@ -108,7 +108,7 @@
 -type realm_stations_opts() :: #{ttl_ms => pos_integer()}.
 -type realm_member_endorsement_opts() :: #{valid_from => pos_integer(), valid_until => pos_integer(),
                                            ttl_ms => pos_integer()}.
--type procedure_advertisement_opts() :: #{authorization => map(), ttl_ms => pos_integer()}.
+-type procedure_advertisement_opts() :: #{authorization => map(), ttl_ms => pos_integer(), kem_key => binary()}.
 -type content_announcement_opts() :: #{realm_id := <<_:256>>, serving_station := <<_:256>>, procedure := binary(),
                                        name => binary(), size => non_neg_integer(), chunk_count => non_neg_integer(),
                                        ttl_ms => pos_integer()}.
@@ -273,7 +273,9 @@ procedure_delegation(OrgKeyId, Advertiser, Opts)
 
 %% @doc A provider's advertisement of a procedure in a realm, signed by the provider. For a procedure with an org
 %% namespace the authorization option carries the provider authorization: org_directory and procedure_delegation as
-%% the records' wire form, the only authorization form. The builder refuses any other.
+%% the records' wire form, the only authorization form. The builder refuses any other. The kem_key option names the
+%% provider's KEM key as carried (E2E design, amendment A1), which the advertisement carries with its kem_key_id: a
+%% caller seals its request to that key.
 -spec procedure_advertisement(<<_:256>>, <<_:256>>, binary(), <<_:256>>) -> m_record().
 procedure_advertisement(AdvertiserNode, RealmId, Procedure, ServingStation) ->
     procedure_advertisement(AdvertiserNode, RealmId, Procedure, ServingStation, #{}).
@@ -288,7 +290,8 @@ procedure_advertisement(AdvertiserNode, RealmId, Procedure, ServingStation, Opts
                 {text, <<"advertiser_node">>} => AdvertiserNode,
                 {text, <<"serving_station">>} => ServingStation},
     unsigned(?TYPE_PROCEDURE_ADVERTISEMENT,
-             with_authorization(Payload, maps:get(authorization, Opts, undefined)), Opts).
+             with_kem_key(with_authorization(Payload, maps:get(authorization, Opts, undefined)),
+                          maps:get(kem_key, Opts, undefined)), Opts).
 
 %% @doc A node's announcement, signed by the node, that it shares the content with this tag 2 content id, naming where
 %% it is served (D27): the realm, the station the node is reachable through, and the node's content procedure.
@@ -618,11 +621,14 @@ read_node_record(#{type := ?TYPE_NODE_RECORD, payload := P}) ->
 
 -spec read_procedure_advertisement(m_record()) -> map().
 read_procedure_advertisement(#{type := ?TYPE_PROCEDURE_ADVERTISEMENT, payload := P}) ->
-    #{realm_id        => payload_field(P, <<"realm_id">>),
+    Read = #{realm_id        => payload_field(P, <<"realm_id">>),
       procedure       => payload_field(P, <<"procedure">>),
       advertiser_node => payload_field(P, <<"advertiser_node">>),
       serving_station => payload_field(P, <<"serving_station">>),
-      authorization   => read_authorization(maps:get({text, <<"authorization">>}, P, undefined))}.
+      authorization   => read_authorization(maps:get({text, <<"authorization">>}, P, undefined))},
+    maps:merge(Read, maps:from_list([{Field, maps:get({text, Name}, P)}
+                                     || {Name, Field} <- [{<<"kem_key">>, kem_key}, {<<"kem_key_id">>, kem_key_id}],
+                                        maps:is_key({text, Name}, P)])).
 
 -spec read_station_endpoint(m_record()) -> #{quic_port := 1..65535, host_advertised := [binary()]}.
 read_station_endpoint(#{type := ?TYPE_STATION_ENDPOINT, payload := P}) ->
@@ -1060,13 +1066,39 @@ payload_ok(_UnknownType, _P) -> false.
 advertisement_payload_ok(#{{text, <<"realm_id">>} := <<_:256>>, {text, <<"procedure">>} := {text, Procedure},
                            {text, <<"advertiser_node">>} := <<_:256>>, {text, <<"serving_station">>} := <<_:256>>} = P)
   when is_binary(Procedure) ->
-    advertisement_size_ok(map_size(P), maps:get({text, <<"authorization">>}, P, absent));
+    advertisement_size_ok(map_size(P), maps:get({text, <<"authorization">>}, P, absent), kem_key_pair(P));
 advertisement_payload_ok(_P) ->
     false.
 
-advertisement_size_ok(4, absent) -> true;
-advertisement_size_ok(5, Authorization) when is_map(Authorization) -> true;
-advertisement_size_ok(_Size, _Authorization) -> false.
+%% The four fields every advertisement carries, then an authorization map and a KEM key pair, each present or not.
+advertisement_size_ok(Size, Authorization, KemKeyPair) when KemKeyPair =/= malformed ->
+    Size =:= 4 + authorization_fields(Authorization) + KemKeyPair andalso authorization_ok(Authorization);
+advertisement_size_ok(_Size, _Authorization, malformed) ->
+    false.
+
+authorization_fields(absent) -> 0;
+authorization_fields(_Authorization) -> 1.
+
+authorization_ok(absent) -> true;
+authorization_ok(Authorization) -> is_map(Authorization).
+
+%% A provider's KEM key and its id travel only as a pair (E2E design, amendment A1): the key as carried, 1568 bytes
+%% (ML-KEM-1024) or 1665 (with a P-384 point), and the first 8 bytes of SHA-384 over it. The two fields count 2, their
+%% absence 0; a lone field, a key of another length or an id that is not its key's is malformed.
+kem_key_pair(#{{text, <<"kem_key">>} := KemKey, {text, <<"kem_key_id">>} := KemKeyId})
+  when is_binary(KemKey), (byte_size(KemKey) =:= 1568 orelse byte_size(KemKey) =:= 1665), is_binary(KemKeyId) ->
+    kem_key_matched(kem_key_id(KemKey) =:= KemKeyId);
+kem_key_pair(P) ->
+    kem_key_absent(maps:is_key({text, <<"kem_key">>}, P) orelse maps:is_key({text, <<"kem_key_id">>}, P)).
+
+kem_key_matched(true) -> 2;
+kem_key_matched(false) -> malformed.
+
+kem_key_absent(false) -> 0;
+kem_key_absent(true) -> malformed.
+
+kem_key_id(KemKey) ->
+    binary:part(crypto:hash(sha384, KemKey), 0, 8).
 
 %% The foundation realm trust list payload holds exactly realms_trusted, an array of maps, each with exactly a
 %% 32-byte realm_id and a 32-byte realm_key_id (DESIGN_PQ_SIGNED_FRAMES_AND_RECORDS.md, D28).
@@ -1233,6 +1265,12 @@ read_authorization(_NotAMap) ->
     malformed.
 
 %% The builder writes only the delegation form.
+%% The provider's KEM key and its id, which sign/2 checks as a pair like every verifier.
+with_kem_key(Payload, undefined) ->
+    Payload;
+with_kem_key(Payload, KemKey) when is_binary(KemKey) ->
+    Payload#{{text, <<"kem_key">>} => KemKey, {text, <<"kem_key_id">>} => kem_key_id(KemKey)}.
+
 with_authorization(Payload, undefined) ->
     Payload;
 with_authorization(Payload, #{org_directory := Directory, procedure_delegation := Delegation} = Authorization)
