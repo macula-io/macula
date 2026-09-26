@@ -245,8 +245,10 @@ load(Path, Purpose, Profile) ->
 %%------------------------------------------------------------------
 
 %% @doc A term with the private half of every key it holds replaced by the atom `redacted', at any depth: the private
-%% value of every map that holds both a public and a private value, as node key components and key pairs do. A
-%% function that captured values is replaced by its printed form, since what it captured can hold a key.
+%% value of every map that holds both a public and a private value, as node key components and key pairs do, and every
+%% sealed call's or stream's secret by name, in any map: its keys (`k_req', `k_rep', `k_c2p', `k_p2c') and a KEM
+%% private key's halves (`mlkem_dk', `p384_priv'). A function that captured values is replaced by its printed form,
+%% since what it captured can hold a key.
 -spec redacted(term()) -> term().
 redacted(Term) ->
     redacted(Term, #{}).
@@ -792,7 +794,12 @@ redacted(Other, _Modules) ->
     Other.
 
 redacted_value(Modules) ->
-    fun(_Key, Value) -> redacted(Value, Modules) end.
+    fun(Key, _Value) when Key =:= k_req; Key =:= k_rep; Key =:= k_c2p; Key =:= k_p2c;
+                          Key =:= mlkem_dk; Key =:= p384_priv ->
+           redacted;
+       (_Key, Value) ->
+           redacted(Value, Modules)
+    end.
 
 %% A function that captured values shows as its printed form, the way a report prints it, since what it captured can
 %% hold a key: a node identity key travels to a pool or an issuer as a function that returns it. A function that

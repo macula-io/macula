@@ -762,3 +762,14 @@ label(#{msg := {report, #{label := Label}}}) -> Label;
 label(#{msg := {report, #{event := Topic}}}) -> Topic;
 label(#{msg := {report, _}}) -> report;
 label(#{msg := _}) -> other.
+
+%% A sealed call's or stream's secrets are redacted by name, in any map at any
+%% depth: its keys and a KEM private key's halves (E2E, macula 13).
+seal_secrets_are_redacted_by_name_test() ->
+    Secret = <<"a-secret-that-must-not-print">>,
+    Held = {pending, #{seal => {#{k_req => Secret, k_rep => Secret, key_id => <<1:64>>}, #{caller => <<2:256>>}}},
+            [#{k_c2p => Secret, k_p2c => Secret}, #{mlkem_dk => Secret, p384_priv => Secret, mlkem_ek => <<3>>}]},
+    Redacted = macula_node_keys:redacted(Held),
+    ?assertEqual(nomatch, binary:match(term_to_binary(Redacted), Secret)),
+    ?assertMatch({pending, #{seal := {#{key_id := <<1:64>>, k_req := redacted}, _}}, [_, #{mlkem_ek := <<3>>}]},
+                 Redacted).
