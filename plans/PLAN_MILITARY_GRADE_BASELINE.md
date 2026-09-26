@@ -61,6 +61,7 @@ unless stated; "out of our means" marks what needs money or an institution we do
 | 21 | FIPS 140-3 validation of the cryptographic modules | CMVP (NIST and the Canadian Centre for Cyber Security) | ML-DSA is `macula-mldsa`, not a validated module (macula README) | Validation of our own module: **out of our means** (laboratory fees and an accredited process). Within means: evaluate using an already validated provider for the primitives it covers | Own validation: out of our means; evaluation: S |
 | 22 | Common Criteria evaluation | EUCC / Common Criteria | None | **Out of our means** without a sponsor and a funded evaluation | Out of our means |
 | 23 | Belgian CIS approval | NVO/ANS CIS approval ([PLAN_MILITARY_GRADE.md][mg] section 2.1) | Not started | Needs a Defence sponsor and a concrete system; not a technical task | Out of our control |
+| 24 | Proofs bound to what they authorise | CRA I(2)(d), (f); NIS2 21(2)(i) | Two v1 proofs signed only key or identity, time and procedure, with no domain tag, version, realm or nonce, and were replayable for 60 s. **Realm join and membership proofs: fixed and live** (macula-realm bd0a6a7, macula-realm#29, 2026-09-26): v2 signs `device_info` (what the admitter reads), `ttl_seconds`, the realm and a nonce; proved live with a throwaway key, tampered `device_info` refused. **`asserted_by` (mcl_om_ownership_proof, used by mcl-graph `learn_link`): v2 released as mcl_om 0.32.0** (hex, 2026-09-26; mcl-om#7, `mcl-om/plans/PLAN_OWNERSHIP_PROOF_V2.md`), and mcl-graph `learn_link` is on it (f97a0c1, not deployed) | Realm-join client signers: macula-mcp through macula-go's `devicerequest` package (Venus); macula-cli once it is ported to 12 | S; both verifiers done |
 
 ## 3. Reading the ranking
 
@@ -84,6 +85,7 @@ unless stated; "out of our means" marks what needs money or an institution we do
 - [ ] #4: decide the revocation bound in macula issue #38.
 - [x] #5: every link type measured (PQKX_MEASUREMENT round 5).
 - [ ] #6: a loud, named refusal for a stored identity in another profile (macula issue #40).
+- [ ] #24: both verifiers are done (macula-realm#29 live; mcl_om 0.32.0 and mcl-graph on it). Open: the realm-join client signers in macula-mcp (Venus).
 - [x] #14: a design plan for end-to-end payload confidentiality: [DESIGN_E2E_PAYLOAD_CONFIDENTIALITY.md](DESIGN_E2E_PAYLOAD_CONFIDENTIALITY.md), decided 2026-09-26, building.
 
 [mg]: PLAN_MILITARY_GRADE.md
