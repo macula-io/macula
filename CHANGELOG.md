@@ -9,7 +9,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+End-to-end payload confidentiality for calls (plans/DESIGN_E2E_PAYLOAD_CONFIDENTIALITY.md, packages 2 and 3, with
+Amendment A1): a call to a provider that names a KEM key is sealed by the caller and opened only by the provider, so
+every station on its path relays ciphertext. E2E seal scheme 1: ML-KEM-1024, plus P-384 in pq_hybrid, HKDF-SHA-384,
+AES-256-GCM, pinned by test/vectors/e2e_seal_v1.json.
+
+### Changed (breaking)
+
+- **`macula:call_station/7,8` decides to seal from signed state, or refuses the call.** It seals to the KEM key of
+  the verified advertisement of THAT target passed as `advertisement`, or sends in the clear when that advertisement
+  names no key. `confidential => off` sends in the clear, as the application's own decision. `confidential => required`
+  without an advertisement resolves the target's advertisement and fails closed. Anything else, `call_station/7`
+  included, is `{error, {confidentiality, no_signed_state}}`. An advertisement of another node or procedure is refused
+  by name (`not_the_target`, `not_the_procedure`). A lookup can deny a call, but never downgrade it (design §8.1).
+  Call sites to update:
+  - mcl-om `src/mcl_om_capabilities.erl` (`dial_provider`), which now passes its verified advertisement (mcl_om
+    0.33.0);
+  - mcl-echo `apps/mcl_echo/src/mcl_echo_call.erl` (its recording dial I/O forwards direct dial's options, which now
+    carry the advertisement, so only its pins change);
+  - macula-station's test suites and its test-cluster harness, which pass `confidential => off`.
+- **`macula_station_link:call/7`'s gen_server message carries its seal** (an eighth element). Only code that sends
+  the raw message, rather than calling `call/7,8`, is affected.
+- **A direct-dial candidate carries its verified advertisement** (`advertisement`), and so does the head start the
+  pool remembers.
+
 ### Added
+
+- **A provider's advertisement names its KEM key**, the `kem_key` pair 12.11.0 admits, once the node is switched on
+  with the `kem_advertise` application setting (default `disabled`; enable it only when every station runs a release
+  on macula 12.11 or later, and every caller runs 13). `macula:advertise/5` and
+  `macula_response:advertise_direct/6,7` take `confidential` (`preferred`, the default; `required`; `off`). `required`
+  also refuses clear calls, and is refused at advertise time as `kem_advertise_disabled` while the node is switched
+  off. The key is read from the keyring at every signing, so renewals carry a rotated key.
+- **`macula_kem_keyring`**: one KEM key per node identity per VM, in memory only, rotated every 24 hours. A replaced
+  key still opens calls for 30 minutes, then is deleted. A stolen key opens at most about 24.5 hours of calls.
+  Precondition: one node identity runs in one VM.
+- **A provider opens a sealed CALL and seals every answer to it**: a RESULT, a handler's error, an unknown procedure,
+  an unauthorized request, a crash, all sealed under the call's reply key with a fresh nonce. A station sees that a
+  reply is an error, never which. A call that does not open is refused in the clear as `sealed_refused`, naming the
+  key the provider holds now. A procedure whose spec says `required`, or one that has named its key past the window
+  its last keyless advertisement lived in, refuses a clear call as `sealed_required`.
+- **A caller seals and opens.** `macula:call/5,6` seals to the key the advertisement it resolved names
+  (`confidential => required` refuses keyless providers). A `sealed_refused` is followed by ONE fresh lookup: the call
+  is sealed again only when the provider's advertisement names exactly the key it named, and otherwise fails as
+  `{confidentiality, {key_mismatch, Named, Found}}` or `no_kem_key`. It never falls back to the clear. Against a sealed
+  request, a clear answer is accepted only as a relay error or an admission refusal from the closed set
+  (`expired`, `not_yet_valid`, `request_id_reused`, `request_copy`, `reply_not_kept`, `caller_quota`, `share_full`,
+  `admission_full`, `too_many_sessions`, `unavailable`).
+- `macula_sealed_call`, `macula_seal:generate_key/1`, `public_key/1`, `carried_key_size/1`, `macula_frame`'s
+  `payload_plain/1`, `plain_payload/1`, `error_plain/1`, `plain_error/1`, and the builders' `sealed` field.
+- The vectors pin a sealed ERROR (`error_reply`: plaintext `cbor([code, detail])`).
+
+### Test vectors
 
 - **`test/vectors/ucan_v1.json` and `UCAN_V1.md`, the UCAN contract every SDK implements** (D7), test-only: tokens
   `macula_ucan` minted in both profiles, each with its policy, context and verdict, covering every refusal, the order
