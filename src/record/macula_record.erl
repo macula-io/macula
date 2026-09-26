@@ -36,7 +36,7 @@
          payload_bounded/1, wire_bounded/1,
          domain_type/1, domain_record_checked/1]).
 -export([type/1, key/1, key_id/1, version/1, created_at/1, expires_at/1, payload/1, signature/1]).
--export([payload_field/2, type_procedure_advertisement/0, procedure_advertisement_max_lifetime_ms/0,
+-export([payload_field/2, type_procedure_advertisement/0, procedure_advertisement_max_lifetime_ms/0, clock_tolerance_ms/0,
          own_namespace/1]).
 -export([read_node_record/1, read_procedure_advertisement/1, read_station_endpoint/1, read_tombstone/1,
          read_org_directory/1, read_procedure_delegation/1, read_content_announcement/1,
@@ -682,6 +682,12 @@ read_foundation_realm_trust_list(#{type := ?TYPE_FOUNDATION_REALM_TRUST_LIST, pa
 -spec procedure_advertisement_max_lifetime_ms() -> pos_integer().
 procedure_advertisement_max_lifetime_ms() ->
     ?PROCEDURE_ADVERTISEMENT_MAX_LIFETIME_MS.
+
+%% @doc How far a record's clocks may disagree with a verifier's: a record is accepted this long before its created_at
+%% and after its expires_at (D22).
+-spec clock_tolerance_ms() -> pos_integer().
+clock_tolerance_ms() ->
+    ?CLOCK_TOLERANCE_MS.
 
 %% @doc Whether a procedure advertisement is in its advertiser's own namespace, and admissible there (D25 item 6,
 %% revised 2026-09-24): a procedure `~<node_id>/<name>', where `<node_id>' is the 64 lowercase hex characters of the

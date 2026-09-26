@@ -185,7 +185,7 @@
               advertisement/0, advertisement_spec/0, own_namespace_spec/0]).
 
 -ifdef(TEST).
--export([with_client_stream/3]).
+-export([with_client_stream/3, advertisement_opts/3]).
 %% The seed gate, exported so a test can assert the refusal directly rather
 %% than infer it from a link that failed to start.
 -export([seed_checked/4]).
@@ -392,6 +392,10 @@
     %% The pending renewal of each spec's advertisement: only the timer
     %% whose reference is here acts, so a reconnect cannot double a chain.
     renewals = #{} :: #{{<<_:256>>, binary()} => reference()},
+    %% When each procedure first named this node's KEM key in its spec: a clear
+    %% CALL to it is refused once its last keyless advertisement can no longer
+    %% be served (E2E design §8.1, "Opting in").
+    keyed_since = #{} :: #{{<<_:256>>, binary()} => integer()},
     %% Advertised streaming procedures. Same wire shape as `procedures'
     %% (one `advertise' frame per entry replayed on reconnect); the
     %% stored value carries the declared mode (`server_stream' /
@@ -510,11 +514,13 @@
 %% with function_clause); renewal keeps it alive in turn.
 -type advertisement_spec() :: #{authorization := map(),
                                 not_after     := integer(),
-                                ttl_ms        => pos_integer()}.
+                                ttl_ms        => pos_integer(),
+                                kem           => true,
+                                confidential  => required}.
 %% A spec for a procedure in the node's own namespace, `~<node_id>/<name>':
 %% no authorization and no bound, since the advertisement's own signature
 %% authorizes it (D25 item 6, revised 2026-09-24). Only a `~' procedure takes it.
--type own_namespace_spec() :: #{ttl_ms => pos_integer()}.
+-type own_namespace_spec() :: #{ttl_ms => pos_integer(), kem => true, confidential => required}.
 -type advertisement() :: binary() | advertisement_spec() | own_namespace_spec().
 
 %%====================================================================
@@ -1414,22 +1420,25 @@ handle_call({advertise, Realm, Proc, Handler, Policy, EncodedAd}, _From,
             #state{procedures = P, policies = Pols} = S) ->
     S1 = S#state{procedures     = P#{{Realm, Proc} => Handler},
                  policies       = set_policy({Realm, Proc}, Policy, Pols),
-                 advertisements = store_advertisement({Realm, Proc}, EncodedAd, S)},
+                 advertisements = store_advertisement({Realm, Proc}, EncodedAd, S),
+                 keyed_since    = keyed_since({Realm, Proc}, EncodedAd, S#state.keyed_since)},
     maybe_send_advertise(Realm, Proc, EncodedAd, S1),
     {reply, ok, S1};
 
 handle_call({unadvertise, Realm, Proc}, _From,
-            #state{procedures = P, policies = Pols, advertisements = Ads} = S) ->
+            #state{procedures = P, policies = Pols, advertisements = Ads, keyed_since = Keyed} = S) ->
     {reply, ok, S#state{procedures     = maps:remove({Realm, Proc}, P),
                         policies       = maps:remove({Realm, Proc}, Pols),
-                        advertisements = maps:remove({Realm, Proc}, Ads)}};
+                        advertisements = maps:remove({Realm, Proc}, Ads),
+                        keyed_since    = maps:remove({Realm, Proc}, Keyed)}};
 handle_call({unadvertise, Realm, Proc, EncodedWithdrawal}, _From,
             #state{procedures = P, policies = Pols} = S) ->
     maybe_send_unadvertise(Realm, Proc, EncodedWithdrawal, S),
     {reply, ok, S#state{procedures     = maps:remove({Realm, Proc}, P),
                         policies       = maps:remove({Realm, Proc}, Pols),
                         advertisements = maps:remove({Realm, Proc},
-                                                     S#state.advertisements)}};
+                                                     S#state.advertisements),
+                        keyed_since    = maps:remove({Realm, Proc}, S#state.keyed_since)}};
 
 %%-- Overlay-protocol frame transport --------------------------------
 
@@ -2286,6 +2295,15 @@ maybe_send_subscribe(Realm, Topic, #state{peer_pid = Pid, node_identity = Id}) -
 
 %% Store the advertisement bytes under its (realm, procedure); a
 %% `undefined' registration sends nothing and stores nothing.
+%% A spec that names the KEM key keeps the moment the procedure first named it, across renewals; one that does not
+%% forgets it.
+keyed_since(Key, #{kem := true}, Keyed) when not is_map_key(Key, Keyed) ->
+    Keyed#{Key => erlang:system_time(millisecond)};
+keyed_since(_Key, #{kem := true}, Keyed) ->
+    Keyed;
+keyed_since(Key, _KeylessOrPreSigned, Keyed) ->
+    maps:remove(Key, Keyed).
+
 store_advertisement(_Key, undefined, S) ->
     S#state.advertisements;
 store_advertisement(Key, EncodedAd, S) ->
@@ -2323,12 +2341,10 @@ send_advertise(Pid, EncodedAd) ->
 %% connected to the station it names.
 sign_advertisement(Realm, Proc, _Spec, _Station, #state{pool = undefined}) ->
     not_sent(Realm, Proc, no_pool);
-sign_advertisement(Realm, Proc, Spec, Station, #state{pool = Pool, node_identity = Key}) ->
+sign_advertisement(Realm, Proc, Spec, Station, #state{pool = Pool, node_identity = Key, profile = Profile}) ->
     Link = self(),
-    %% An org procedure's spec carries its authorization and its bound; an
-    %% own-namespace spec carries neither (see advertisement() above).
-    Unsigned = macula_record:procedure_advertisement(
-                 node_id(Key), Realm, Proc, Station, maps:with([authorization, ttl_ms], Spec)),
+    Unsigned = macula_record:procedure_advertisement(node_id(Key), Realm, Proc, Station,
+                                                     advertisement_opts(Spec, Key, Profile)),
     SignOpts = maps:with([not_after], Spec),
     _ = spawn(fun() ->
             Signed = try macula_client:sign_node_record(Pool, Unsigned, SignOpts)
@@ -2337,6 +2353,19 @@ sign_advertisement(Realm, Proc, Spec, Station, #state{pool = Pool, node_identity
             Link ! {advertisement_signed, {Realm, Proc}, Spec, Station, Signed}
         end),
     ok.
+
+%% What an advertisement is built with from its spec: an org procedure's authorization and its bound (an own-namespace
+%% spec carries neither, see advertisement() above), and, when the spec names the KEM key, the keyring's current key.
+%% It is read at every signing, so a rotated key reaches the next renewal (E2E design, Amendment A1).
+advertisement_opts(Spec, Key, Profile) ->
+    maps:merge(maps:with([authorization, ttl_ms], Spec), kem_key_opt(Spec, macula_node_keys:key_id(Key), Profile)).
+
+kem_key_opt(#{kem := true}, NodeId, Profile) ->
+    ok = macula_kem_keyring:ensure(NodeId, Profile),
+    {ok, #{key := KemKey}} = macula_kem_keyring:current(NodeId),
+    #{kem_key => KemKey};
+kem_key_opt(_Keyless, _NodeId, _Profile) ->
+    #{}.
 
 not_sent(Realm, Proc, Reason) ->
     logger:warning("[macula_station_link] advertisement of ~ts in realm ~ts not sent: ~p",
@@ -2785,8 +2814,9 @@ on_call_admission(new, #{sealed := Sealed} = Request, #state{node_identity = Id,
                                                               peer_pid = Pid} = S) when is_pid(Pid) ->
     Opened = opened_call(macula_kem_keyring:holder(macula_node_keys:key_id(Id)), Profile, Request, Sealed),
     sealed_call_opened(Opened, Request, S);
-on_call_admission(new, #{payload := Payload} = Request, #state{peer_pid = Pid} = S) when is_pid(Pid) ->
-    served_call(Request, Payload, clear, S);
+on_call_admission(new, #{payload := Payload, realm := Realm, procedure := Proc} = Request,
+                  #state{peer_pid = Pid} = S) when is_pid(Pid) ->
+    clear_call_admitted(clear_allowed({Realm, Proc}, S), Request, Payload, S);
 on_call_admission({copy, {reply, Reply}}, Request, #state{peer_pid = Pid, node_identity = Id}) when is_pid(Pid) ->
     sent_or_faulted(macula_peering:send_frame(Pid, Reply), Pid, Request, Id),
     ok;
@@ -2795,6 +2825,28 @@ on_call_admission({copy, pending}, Request, S) ->
 on_call_admission({refused, Refusal}, Request, S) ->
     call_refused(admission_code(Refusal), Request, S);
 on_call_admission(_Verdict, _Request, _S) ->
+    ok.
+
+%% Whether a procedure takes a clear CALL (E2E design §8.1, §8.2): not under `required', and not once it has named
+%% the KEM key long enough that its last keyless advertisement can no longer be served: that advertisement's lifetime
+%% and the clock tolerance past it.
+clear_allowed(Key, #state{advertisements = Ads, keyed_since = Keyed}) ->
+    clear_by_spec(maps:get(Key, Ads, undefined), maps:get(Key, Keyed, undefined)).
+
+clear_by_spec(#{confidential := required}, _Since) ->
+    false;
+clear_by_spec(#{kem := true}, Since) when is_integer(Since) ->
+    erlang:system_time(millisecond) =< Since + macula_record:procedure_advertisement_max_lifetime_ms()
+                                              + macula_record:clock_tolerance_ms();
+clear_by_spec(_KeylessOrLocal, _Since) ->
+    true.
+
+clear_call_admitted(true, Request, Payload, S) ->
+    served_call(Request, Payload, clear, S);
+clear_call_admitted(false, Request, _Payload, #state{node_identity = Id, peer_pid = Pid, admission = Admission}) ->
+    Reply = macula_frame:provider_error(#{request => Request, code => <<"sealed_required">>}, Id),
+    _ = stored_reply(Admission, Request, Reply),
+    sent_or_faulted(macula_peering:send_frame(Pid, Reply), Pid, Request, Id),
     ok.
 
 %% The plaintext of a sealed CALL and its keys, or why it did not open: the id of the key this node holds now, or
