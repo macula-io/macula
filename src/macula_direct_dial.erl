@@ -792,15 +792,18 @@ providers_key([]) -> none.
 keyed({ok, KemKeyId}, Ad) -> {ok, Ad, KemKeyId};
 keyed(error, _Ad) -> none.
 
-%% Opens the stream at one resolved station, on the same terms as `call_work/5'.
+%% Opens the stream at one resolved station, on the same terms as `call_work/6': the station open is handed the
+%% candidate's verified advertisement to seal from (E2E design §8.1), and the stream's own `confidential', if any.
 stream_work(#{pool := Pool, call_stream_station := CallStreamStation,
               remember_resolved := Remember}, Realm, Procedure, Args, StreamOpts) ->
     fun(#{provider := Provider} = Candidate) ->
         fun(Station, DialUrl, Share) ->
             sent_or_not(
               settled(CallStreamStation(Pool, DialUrl, Provider, Realm, Procedure, Args,
-                                        maps:merge(StreamOpts, (pinned(Station))#{
-                                            dial_timeout_ms => budget(Share)})),
+                                        maps:merge(StreamOpts,
+                                                   maps:merge(advertisement_opt(maps:get(advertisement, Candidate,
+                                                                                         undefined)),
+                                                              (pinned(Station))#{dial_timeout_ms => budget(Share)}))),
                       Remember, Pool, Realm, Procedure, Candidate))
         end
     end.

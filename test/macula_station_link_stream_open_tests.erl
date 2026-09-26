@@ -303,7 +303,7 @@ a_second_open_on_a_stream_that_carries_a_session_is_refused() ->
 an_open_on_a_callers_stream_is_refused() ->
     #{link := Link} = World = link_serving(),
     {ok, _Client} = macula_station_link:call_stream(Link, macula_node_keys:key_id(caller_key()), ?REALM,
-                                                    <<"foo.elsewhere">>, #{}, #{}),
+                                                    <<"foo.elsewhere">>, #{}, #{seal => clear}),
     Stream = receive {opened, Opened} -> Opened after ?EVENT_MS -> erlang:error(no_stream_opened) end,
     {ok, _ClientOpen} = written_within(Stream, ?EVENT_MS),
     Open = open_frame(World, caller_key(), #{}),

@@ -61,7 +61,8 @@ a_link_started_session_signs_its_open_and_its_first_frame() ->
 a_call_before_the_handshake_is_refused_and_opens_no_stream() ->
     #{link := Link} = linked(unconnected),
     ?assertEqual({error, not_connected},
-                 macula_station_link:call_stream(Link, macula_node_keys:key_id(key()), ?REALM, ?PROCEDURE, #{}, #{})),
+                 macula_station_link:call_stream(Link, macula_node_keys:key_id(key()), ?REALM, ?PROCEDURE, #{},
+                                                 #{seal => clear})),
     ?assertEqual(none, receive {opened, _} = Opened -> Opened after 200 -> none end),
     stop(Link).
 
@@ -72,11 +73,11 @@ a_refused_build_or_an_open_past_the_limit_opens_no_stream() ->
     Target = macula_node_keys:key_id(key()),
     TooLong = binary:copy(<<"p">>, 513),
     ?assertEqual({error, {refused, {text_too_long, procedure}}},
-                 macula_station_link:call_stream(Link, Target, ?REALM, TooLong, #{}, #{})),
+                 macula_station_link:call_stream(Link, Target, ?REALM, TooLong, #{}, #{seal => clear})),
     with_open_limit(1024, fun() ->
         ?assertEqual({error, {open_too_large, 1024}},
                      macula_station_link:call_stream(Link, Target, ?REALM, ?PROCEDURE, crypto:strong_rand_bytes(2048),
-                                                     #{}))
+                                                     #{seal => clear}))
     end),
     ?assertEqual(none, receive {opened, _} = Opened -> Opened after 200 -> none end),
     stop(Link).
@@ -90,12 +91,12 @@ an_open_just_within_the_limit_goes_out() ->
     Limit = byte_size(macula_frame:encode(Sized)) - 4 + 100,
     with_open_limit(Limit, fun() ->
         ?assertMatch({ok, _}, macula_station_link:call_stream(Link, Target, ?REALM, ?PROCEDURE,
-                                                              #{pad => binary:copy(<<0>>, 90)}, #{})),
+                                                              #{pad => binary:copy(<<0>>, 90)}, #{seal => clear})),
         ?assertMatch(#{frame_type := stream_open}, open_written_within(?EVENT_MS)),
         ?assertMatch({opened, _}, receive {opened, _} = Within -> Within after ?EVENT_MS -> none end),
         ?assertEqual({error, {open_too_large, Limit}},
                      macula_station_link:call_stream(Link, Target, ?REALM, ?PROCEDURE,
-                                                     #{pad => binary:copy(<<0>>, 110)}, #{})),
+                                                     #{pad => binary:copy(<<0>>, 110)}, #{seal => clear})),
         ?assertEqual(none, receive {opened, _} = Opened -> Opened after 200 -> none end)
     end),
     stop(Link).
@@ -318,7 +319,8 @@ opened(World, Target, Mode, Args, Opts) ->
     opened(World, Target, Mode, Args, Opts, written).
 
 opened(#{link := Link}, Target, Mode, Args, Opts, Writes) ->
-    {ok, StreamPid} = macula_station_link:call_stream(Link, Target, ?REALM, ?PROCEDURE, Args, Opts#{mode => Mode}),
+    {ok, StreamPid} = macula_station_link:call_stream(Link, Target, ?REALM, ?PROCEDURE, Args,
+                                                      (maps:merge(#{seal => clear}, Opts))#{mode => Mode}),
     Quic = receive {opened, Opened} -> Opened after ?EVENT_MS -> erlang:error(no_stream_opened) end,
     OpenFrame = open_written(Writes, Quic),
     {ok, Open} = macula_frame:verify_request(OpenFrame, profile()),

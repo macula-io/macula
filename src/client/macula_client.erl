@@ -112,7 +112,7 @@
 %% remember which station last answered a procedure, and to get it back.
 -export([resolved_candidate/3, remember_resolved/5]).
 %% Streaming RPC (since 3.17.0) — called by the `macula' facade.
--export([call_stream_station/7]).
+-export([call_stream_station/8]).
 %% A pool link to one station, for the `macula' facade's
 %% `ensure_station_link/4'.
 -export([ensure_station_link/4]).
@@ -980,11 +980,13 @@ ensure_station_link(Pool, Station, LinkOpts, TimeoutMs)
 %% handshake, plus any stream option (e.g. `mode').
 %% `Opts' also names the station this dial must prove, `expected_node_id',
 %% as `call_station/11' does. It is kept apart as the dial's own option, so
-%% it reaches `ensure_link/3' and not the stream open.
+%% it reaches `ensure_link/3' and not the stream open. `Seal' is how the
+%% STREAM_OPEN and its stream go, `clear' or `{sealed_to, KemKey}', decided
+%% by the caller from signed state (`macula:call_seal/5'), never defaulted.
 -spec call_stream_station(pool(), seed(), <<_:256>>, <<_:256>>, binary(), term(),
-                          map()) -> {ok, pid()} | {error, term()}.
-call_stream_station(Pool, Station, Target, Realm, Procedure, Args, Opts)
-  when is_pid(Pool),
+                          map(), clear | {sealed_to, binary()}) -> {ok, pid()} | {error, term()}.
+call_stream_station(Pool, Station, Target, Realm, Procedure, Args, Opts, Seal)
+  when is_pid(Pool), Seal =:= clear orelse (is_tuple(Seal) andalso element(1, Seal) =:= sealed_to),
        is_binary(Target), byte_size(Target) =:= 32,
        is_binary(Realm), byte_size(Realm) =:= 32,
        is_binary(Procedure),
@@ -993,7 +995,7 @@ call_stream_station(Pool, Station, Target, Realm, Procedure, Args, Opts)
     LinkOpts = maps:with([expected_node_id], Opts),
     gen_server:call(Pool,
                     {call_stream_station, Station, Target, Realm, Procedure, Args,
-                     Opts#{owner => maps:get(owner, Opts, self())}, LinkOpts},
+                     Opts#{owner => maps:get(owner, Opts, self()), seal => Seal}, LinkOpts},
                     DialTimeout + 2_000).
 
 %% @doc Advertise a streaming procedure handler on every healthy

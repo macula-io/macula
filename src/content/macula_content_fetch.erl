@@ -11,7 +11,10 @@
 %%   <li>Try the sharers one at a time, in a random order.</li>
 %%   <li>Resolve the serving station's own endpoint record and open a `server_stream' through it, pinned to the
 %%       station and targeted at the sharer, in the announced realm. No advertisement or realm-key check applies:
-%%       content verifies itself by its content id, so a fetcher that trusts no realm can still fetch.</li>
+%%       content verifies itself by its content id, so a fetcher that trusts no realm can still fetch. With no signed
+%%       advertisement there is no KEM key to seal to either, so the stream is opened in the clear, and says so
+%%       (`confidential => off', E2E design §8.1): a relaying station can read the transfer of content that anyone
+%%       holding its content id may fetch anyway.</li>
 %%   <li>Ask for the root. A block must hash to the content id; a manifest must match it
 %%       (`macula_manifest:verify_mcid/2') before any of its sizes is read, and then fit the caller's bounds before a
 %%       chunk is asked for.</li>
@@ -291,7 +294,8 @@ asked(#{url := Url, node := Node, realm := Realm, procedure := Procedure, statio
       #{pool := Pool, io := #{call_stream_station := Open}, chunk_timeout_ms := Timeout}) ->
     Deadline = erlang:monotonic_time(millisecond) + Timeout,
     opened(Open(Pool, Url, Node, Realm, Procedure, #{mcid => MCID, want => Want},
-                #{expected_node_id => Station, dial_timeout_ms => Timeout, timeout_ms => Timeout}), Deadline).
+                #{expected_node_id => Station, dial_timeout_ms => Timeout, timeout_ms => Timeout,
+                  confidential => off}), Deadline).
 
 opened({ok, Stream}, Deadline) ->
     Answer = body(macula:recv(Stream, max(0, Deadline - erlang:monotonic_time(millisecond)))),

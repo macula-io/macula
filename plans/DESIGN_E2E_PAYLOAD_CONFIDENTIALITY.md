@@ -247,6 +247,10 @@ A stream frame's AAD is `"MACULA-E2E-STREAM-AAD-V1" || frame_type || request_id 
 A replayed or reordered frame is still refused by its signed seq before anything is decrypted. STREAM_END carries
 nothing to seal.
 
+Once the provider has decapsulated, the stream keys depend only on `ss`, not on the keyring: a provider rotating its
+KEM key while a stream is open leaves that stream sealing and opening as before (tested), so a long-lived stream, an
+hours-long database session through the legacy bridge, outlives any number of daily rotations.
+
 The station's relay STREAM_ERROR (`unknown_next_peer`, #42) stays in the clear: it carries no payload, and the caller
 needs it without holding any key.
 
@@ -254,9 +258,12 @@ needs it without holding any key.
 
 - **Direct dial** (`macula_direct_dial`) resolves the provider's advertisement already, and the key comes with it
   (Amendment A1).
-- **D27 content streams** are sealed like any stream, so a relaying station no longer reads the content it relays. The
-  content itself stays public by design: anyone holding the MCID can ask the sharer for it. Sealing protects the
-  transfer, not the content's secrecy, and the guide must say exactly that.
+- **D27 content streams are NOT sealed in 13.0.0.** A content fetch trusts no realm by design (content verifies itself
+  by its content id), so it holds no signed advertisement and has no signed source for the sharer's KEM key to seal to.
+  It opens its streams with `confidential => off`, explicitly, and a relaying station reads the bytes it relays, as
+  before 13.0.0. The content itself is public by design: anyone holding the MCID can ask the sharer for it. Sealing the
+  transfer needs the sharer's KEM key in its signed content announcement, a record-format change with its own station
+  floor; that is its own package after 13.0.0.
 - **Several stations**: nothing changes. Only the endpoints hold keys, whatever path the frames take.
 
 ## 6. Pubsub: group keys and what fan-out costs
@@ -447,7 +454,8 @@ A station on the path still sees:
 | **Request ids, deadlines, stream seq, whether a reply is an error** | routing, admission and D25 state |
 | **Every subscription** (node, realm, topic) | SUBSCRIBE is unsigned and plain |
 | **DHT records**: advertisements, content announcements, node and KEM key records | public by design |
-| **D27 content**, to anyone who asks the sharer for it | content is public; only the transfer is sealed |
+| **D27 content**, to anyone who asks the sharer for it | content is public by design |
+| **D27 content transfers**, in the clear to every relaying station, in 13.0.0 | a fetch trusts no realm, so it has no signed source for the sharer's KEM key (§5.3); no release note or public text may claim sealed content until the announcement carries the key |
 | **A request's `token` and `proofs`**, the caller's UCAN and its delegation chain, on a sealed CALL or STREAM_OPEN too | scheme 1 seals the payload only (§3.1). A UCAN is a bearer token whose `aud` is not checked on verify, so what a station reads it could present |
 | **Relay errors** (`unknown_next_peer`), and the closed set of admission refusals | the station makes the first; the second carry no payload (§5.1) |
 | **Stream `mode`, `encoding`, `role`; `ttl_ms`, `published_at`; `retry_budget`, `source_route`** | signed routing and verification state |

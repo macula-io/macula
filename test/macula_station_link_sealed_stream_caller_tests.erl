@@ -25,7 +25,9 @@ sealed_stream_caller_test_() ->
                            fun a_providers_sealed_chunk_reaches_the_reader/1},
                           {"a key of another profile seals nothing and opens no stream",
                            fun a_key_of_another_profile_opens_no_stream/1},
-                          {"a clear open stays clear", fun a_clear_open_stays_clear/1}]].
+                          {"a clear open stays clear", fun a_clear_open_stays_clear/1},
+                          {"an open that names no seal is refused where it is made",
+                           fun an_open_naming_no_seal_is_refused/1}]].
 
 a_sealed_open_opens_at_the_provider(W) ->
     #{open := Open, plain := Plain} = sealed_open(W, #{city => {text, <<"Tienen">>}}),
@@ -66,6 +68,13 @@ a_clear_open_stays_clear(#{link := Link, provider_id := Target}) ->
     {ok, Open} = macula_frame:verify_request(written(Quic), profile()),
     ?assertNot(is_map_key(sealed, Open)),
     ?assertEqual(#{{text, <<"n">>} => 1}, maps:get(payload, Open)).
+
+%% How a stream goes is the caller's explicit decision, never a default: an
+%% open that names no seal raises in the calling process and opens nothing.
+an_open_naming_no_seal_is_refused(#{link := Link, provider_id := Target}) ->
+    ?assertError(function_clause, macula_station_link:call_stream(Link, Target, ?REALM, ?PROCEDURE, #{},
+                                                                  #{mode => bidi})),
+    ?assertEqual(none, receive {opened, _} -> opened after 200 -> none end).
 
 %%------------------------------------------------------------------
 %% Helpers

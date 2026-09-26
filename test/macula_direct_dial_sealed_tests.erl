@@ -22,7 +22,9 @@ cases() ->
      {"a re-resolve finding no key fails closed", fun a_keyless_reresolve_fails_closed/0},
      {"a provider that holds no key fails closed", fun a_provider_without_a_key_fails_closed/0},
      {"a provider that lost its key is re-resolved once", fun a_provider_that_lost_its_key_is_resealed/0},
-     {"a required call passes its policy to the station call", fun required_reaches_the_station_call/0}].
+     {"a required call passes its policy to the station call", fun required_reaches_the_station_call/0},
+     {"a stream carries the resolved advertisement", fun a_stream_carries_the_advertisement/0},
+     {"a stream passes its policy to the station open", fun a_streams_policy_reaches_the_station_open/0}].
 
 the_call_carries_the_advertisement() ->
     F = fixture(),
@@ -76,6 +78,23 @@ required_reaches_the_station_call() ->
     F = fixture(),
     script(F, [[keyed_ad(F, kem(1))]], [{ok, <<"pong">>}]),
     ?assertEqual({ok, <<"pong">>}, call(F, #{confidential => required})),
+    [Opts] = calls(),
+    ?assertEqual(required, maps:get(confidential, Opts)).
+
+%% A stream is opened on the same terms: the station open is handed the
+%% candidate's verified advertisement to seal from.
+a_stream_carries_the_advertisement() ->
+    F = fixture(),
+    script(F, [[keyed_ad(F, kem(1))]], [{ok, self()}]),
+    ?assertEqual({ok, self()}, stream(F, #{mode => bidi})),
+    [Opts] = calls(),
+    ?assertEqual(kem(1), maps:get(kem_key, macula_record:read_procedure_advertisement(maps:get(advertisement, Opts)))),
+    ?assertEqual(bidi, maps:get(mode, Opts)).
+
+a_streams_policy_reaches_the_station_open() ->
+    F = fixture(),
+    script(F, [[keyed_ad(F, kem(1))]], [{ok, self()}]),
+    ?assertEqual({ok, self()}, stream(F, #{confidential => required})),
     [Opts] = calls(),
     ?assertEqual(required, maps:get(confidential, Opts)).
 
@@ -146,8 +165,15 @@ fake_pool() ->
               end
           end).
 
+stream(#{procedure := Proc}, StreamOpts) ->
+    macula_direct_dial:call_stream(fake_pool(), ?REALM, Proc, #{}, StreamOpts, #{dial_io => dial_io()}).
+
 dial_io() ->
     #{find_records => fun(_Pool, _Key, _TimeoutMs) -> next(lookups, {ok, []}) end,
+      call_stream_station => fun(_Pool, _DialUrl, _Provider, _Realm, _Proc, _Args, Opts) ->
+                                 put(calls, [Opts | get(calls)]),
+                                 next(answers, {error, no_more_answers})
+                             end,
       find_record => fun(_Pool, _Key, _TimeoutMs) -> {ok, endpoint(get(fixture))} end,
       call_station => fun(_Pool, _DialUrl, _Provider, _Realm, _Proc, _Payload, _TimeoutMs, Opts) ->
                           put(calls, [Opts | get(calls)]),

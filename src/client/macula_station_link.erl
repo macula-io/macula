@@ -1062,6 +1062,12 @@ overlay_frame_refused(Client, Meta, Kind) when is_pid(Client) ->
 %%                 advertised with an auth policy
 %%                 (`advertise_stream/6'). Absent or empty sends
 %%                 none.</li>
+%%   <li>`seal' (required) — `clear', or `{sealed_to, KemKey}': the
+%%                 STREAM_OPEN is sealed to the provider's KEM key and
+%%                 the stream seals every frame under the keys it
+%%                 agreed (E2E design §5.2). The caller decides it from
+%%                 signed state (`macula:call_seal/5'); it is never
+%%                 defaulted.</li>
 %% </ul>
 %%
 %% Returns `{error, not_connected}' when the QUIC handshake has not
@@ -1088,10 +1094,10 @@ call_stream(Pid, Target, Realm, Procedure, Args, Opts)
 %% A stream open's options are checked here, in the calling process, as
 %% `advertise_stream/6' checks a policy: one outside its type raises
 %% `function_clause' in the caller and never in the link.
-valid_stream_opts(Opts) ->
+valid_stream_opts(#{seal := Seal} = Opts) ->
     ok = valid_stream_mode(maps:get(mode, Opts, server_stream)),
     ok = valid_stream_token(maps:get(ucan_token, Opts, <<>>)),
-    ok = valid_stream_seal(maps:get(seal, Opts, clear)),
+    ok = valid_stream_seal(Seal),
     valid_stream_deadline(maps:get(deadline_ms, Opts, 0)).
 
 valid_stream_mode(Mode) when Mode =:= server_stream; Mode =:= client_stream; Mode =:= bidi -> ok.
@@ -3298,7 +3304,7 @@ open_client_stream(Target, Realm, Proc, Args, Opts, Caller, #state{node_identity
                         deadline => maps:get(deadline_ms, Opts, erlang:system_time(millisecond) + 30_000),
                         mode => maps:get(mode, Opts, server_stream)},
                       open_token(maps:get(ucan_token, Opts, <<>>))),
-    open_carried(carried_open(maps:get(seal, Opts, clear), Spec, Args, Key, Profile), Opts, Caller, S).
+    open_carried(carried_open(maps:get(seal, Opts), Spec, Args, Key, Profile), Opts, Caller, S).
 
 %% A STREAM_OPEN carries its args in the clear, or sealed to the provider's KEM key with the stream keys its stream
 %% then seals under (E2E design §5.2).

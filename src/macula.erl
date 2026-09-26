@@ -928,6 +928,12 @@ call_stream(Pool, Realm, Procedure, Args, Opts)
 %% `Opts' also names the station this dial must prove, `expected_node_id'
 %% (see `macula_client:call_station/11'); `pin_tls_cert => true' and `verify'
 %% are REFUSED as `call_station/8' describes.
+%%
+%% Whether the STREAM_OPEN and every later frame is sealed is decided from
+%% signed state only, as for `call_station/8' (`call_seal/5', E2E design
+%% §8.1): `advertisement', `confidential => off' or `confidential =>
+%% required'. With none of them the open is refused
+%% `{error, {confidentiality, no_signed_state}}' before anything is sent.
 -spec call_stream_station(pool(), macula_client:seed(), <<_:256>>, realm(), procedure(),
                           term(), map()) -> {ok, stream()} | {error, term()}.
 call_stream_station(Pool, Station, Target, Realm, Procedure, Args, Opts)
@@ -935,8 +941,15 @@ call_stream_station(Pool, Station, Target, Realm, Procedure, Args, Opts)
        is_binary(Realm), byte_size(Realm) =:= 32,
        is_binary(Procedure), is_map(Opts) ->
     refused(target_checked(Station, Opts),
-            fun() -> macula_client:call_stream_station(
-                       Pool, Station, Target, Realm, Procedure, Args, Opts) end).
+            fun() -> do_call_stream_station(Pool, Station, Target, Realm, Procedure, Args, Opts) end).
+
+%% The pool is handed the seal decided, not the signed state it was decided from.
+do_call_stream_station(Pool, Station, Target, Realm, Procedure, Args, Opts) ->
+    Resolve = fun() -> find_records(Pool, macula_record:procedure_key(Realm, Procedure)) end,
+    sealed_or_refused(call_seal(Target, Realm, Procedure, Opts, Resolve), fun(Seal) ->
+        macula_client:call_stream_station(Pool, Station, Target, Realm, Procedure, Args,
+                                          maps:without([advertisement, confidential], Opts), Seal)
+    end).
 
 %% @doc A pool link to `Station', for a consumer that must address one
 %% station through one link, as an overlay does: a live link the pool

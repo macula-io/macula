@@ -276,7 +276,9 @@ fetch(Sharers, MCID, Opts, Watcher) ->
                                {ok, Announced}
                            end,
            resolve_station_endpoint => fun(_Pool, ?STATION, _T) -> {ok, <<"quic://station.test:4433">>} end,
-           call_stream_station => fun(_Pool, _Url, Target, ?REALM, _Proc, Args, #{expected_node_id := ?STATION}) ->
+           %% With no signed advertisement to seal from, the fetch opens in the clear, and says so (§8.1).
+           call_stream_station => fun(_Pool, _Url, Target, ?REALM, _Proc, Args,
+                                      #{expected_node_id := ?STATION, confidential := off}) ->
                                       _ = watched(Watcher, Args),
                                       dialed(maps:get(Target, ByNode), Args)
                                   end},
