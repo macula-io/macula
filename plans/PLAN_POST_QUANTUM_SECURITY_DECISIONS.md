@@ -421,6 +421,9 @@ before its wire checks are green.
       - `macula` 12.0.0 and later: proven against the draft's own test vector (CHANGELOG [12.0.0]).
       - `macula-go` v0.11.0 and later: checked against the same vector, and cross-verified with macula 12.1.0 both
         ways (its CHANGELOG [0.11.0]).
+      - `macula-php` 0.6.0 and later, and `macula-ts` 0.20.0 and later, which sign and verify through macula-go's
+        identity package: each checks the same vector on every test run, and each is cross-verified with macula
+        12.7.0 both ways (their CHANGELOGs [0.6.0] and [0.20.0], "Verified"). **Amended by Raf on 2026-09-26.**
     - Every earlier release signs Macula's own composite (D7).
     - No other SDK is named until its own check against the draft's vector is recorded.
     - For those releases, the allowed wording is: "In the EU profile (`pq_hybrid`), signatures use the composite
