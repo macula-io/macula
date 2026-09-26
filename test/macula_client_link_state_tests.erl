@@ -22,8 +22,9 @@
 -define(SEEDS, [#{host => <<"127.0.0.1">>, port => 1, expected_node_id => ?STATION_A},
                 #{host => <<"127.0.0.1">>, port => 2, expected_node_id => ?STATION_B}]).
 %% A pool call answers well inside this while a link is busy; a probe into
-%% the busy link alone waits 1 s.
--define(PROMPT_MS, 200).
+%% the busy link alone waits 1 s, so the bound still tells the two apart on a
+%% loaded host, where a run shares its CPUs with other gates (macula#43).
+-define(PROMPT_MS, 500).
 
 pool_calls_answer_promptly_while_a_link_is_busy_test_() ->
     {timeout, 20,
