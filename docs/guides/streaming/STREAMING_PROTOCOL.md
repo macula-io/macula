@@ -31,8 +31,13 @@ nothing written.
 
 ```erlang
 {ok, Stream} = macula:call_stream_station(Pool, StationUrl, ProviderNodeId, Realm,
-                                          Procedure, Args, #{}).
+                                          Procedure, Args, #{advertisement => Advertisement}).
 ```
+
+Since 13.0.0 a stream to an explicit station decides to seal exactly as `call_station/8`
+does: from the provider's verified `advertisement`, or `confidential => required | off`,
+and is otherwise refused as `{error, {confidentiality, no_signed_state}}` (see the
+[RPC Protocol](../rpc/RPC_PROTOCOL.md)).
 
 `Opts` may set `dial_timeout_ms` (default 10_000) for the dial and handshake,
 plus the same per-call TLS trust override as `call_station/8`: `verify` and

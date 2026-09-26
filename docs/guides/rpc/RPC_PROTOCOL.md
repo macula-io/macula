@@ -90,8 +90,19 @@ direct-dial wraps](RPC_GUIDE.md#direct-dial-start_link_direct-advertise_direct).
 -spec call_station(pool(), seed(), node_id(), realm(), procedure(), term(), timeout_ms(), opts()) ->
     {ok, term()} | {error, term()}.
 %% opts: #{ucan_token => Token,
-%%         expected_node_id => NodeId}  %% the station's node_id, required
+%%         expected_node_id => NodeId,     %% the station's node_id, required
+%%         advertisement => Advertisement, %% the provider's verified advertisement
+%%         confidential => required | off}
 ```
+
+> **Since 13.0.0 a call to an explicit station decides to seal from signed state, or is
+> refused.** Pass the provider's verified `advertisement` (from `find_records/2` or
+> `providers/3`): the call is sealed to the KEM key it names, and sent in the clear when it
+> names none. `confidential => required` without one resolves the provider's advertisement
+> and fails closed. `confidential => off` sends in the clear, as your own decision. With
+> none of these, including `call_station/7`, the call is
+> `{error, {confidentiality, no_signed_state}}`. A lookup can deny a call but never
+> downgrade it. See the [design](https://github.com/macula-io/macula/blob/main/plans/DESIGN_E2E_PAYLOAD_CONFIDENTIALITY.md), §8.1.
 
 > **`pin_tls_cert => true` and `verify` are REFUSED.** They return
 > `{error, {refused, {pin_tls_cert, no_pin_primitive_for_mldsa87_identity}}}` and
@@ -203,7 +214,8 @@ Trusted = fun(#{type := Type} = Record) ->
 StationUrl = <<"quic://[", Host/binary, "]:", (integer_to_binary(Port))/binary>>,
 
 {ok, Result} = macula:call_station(Pool, StationUrl, Provider, Realm, Procedure, Payload,
-                                   5_000, #{expected_node_id => Station}).
+                                   5_000, #{expected_node_id => Station,
+                                            advertisement => Advertisement}).
 ```
 
 For an org namespaced procedure, add the realm trust you hold to the map

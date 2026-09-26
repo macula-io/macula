@@ -18,6 +18,22 @@
 
 ---
 
+> **13.0.0: sealed calls and streams.** A caller can seal a call's or a
+> stream's payload to the provider's KEM key (ML-KEM-1024, plus P-384 in
+> `pq_hybrid`), taken from the provider's signed advertisement, and the
+> provider seals what it answers. It is **off by default**: a node names its
+> key only once `kem_advertise` is `enabled`, which waits until every station
+> runs a release on macula 12.11 or later and every caller runs 13. Routing
+> fields, sizes, timing, and a request's UCAN token stay visible to stations.
+> Content (D27) transfers are not sealed. See
+> [the design](https://github.com/macula-io/macula/blob/main/plans/DESIGN_E2E_PAYLOAD_CONFIDENTIALITY.md), §9.
+>
+> **Breaking API:** a call or stream to an explicit station
+> (`macula:call_station/7,8`, `call_stream_station`) needs `advertisement`,
+> `confidential => required` or `confidential => off`, and is otherwise
+> refused as `{confidentiality, no_signed_state}`. See
+> [CHANGELOG.md](CHANGELOG.md).
+
 > **12.0.0: post-quantum key exchange AND post-quantum signatures.**
 > Every QUIC link negotiates
 > `SecP384r1MLKEM1024`, then `SecP256r1MLKEM768`, and nothing classical,
@@ -83,6 +99,8 @@ stations: no open ports, NAT-friendly, no VPN. It provides:
   ordered delivery.
 - **Content** — content-addressed sharing and live streaming (MCID).
 - **DHT records** — signed, TTL'd records (advertisements, endpoints, more).
+- **Sealed calls and streams** — a payload sealed to the provider's KEM key,
+  opened only by the provider (off until `kem_advertise` is enabled).
 - **Erlang distribution over mesh** — `net_adm:ping` across firewalls, no VPN.
 - **TCP bridge** — an unmodified TCP client reaches an unmodified TCP service
   across the mesh, one stream per connection, under the procedure's auth
@@ -102,14 +120,14 @@ the client you build against.
 Add to `rebar.config`:
 
 ```erlang
-{deps, [{macula, "~> 12.0"}]}.
+{deps, [{macula, "~> 13.0"}]}.
 ```
 
 Or in Elixir `mix.exs`:
 
 ```elixir
 defp deps do
-  [{:macula, "~> 12.0"}]
+  [{:macula, "~> 13.0"}]
 end
 ```
 
