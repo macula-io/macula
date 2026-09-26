@@ -8,6 +8,9 @@
 
 -include_lib("eunit/include/eunit.hrl").
 
+%% logger handler callback, defined at the foot of this module.
+-export([log/2]).
+
 -define(REALM, crypto:hash(sha256, <<"test">>)).
 -define(PEER_PID_INDEX, macula_station_link:state_field_index(peer_pid)).
 -define(PEER_NODE_ID_INDEX, macula_station_link:state_field_index(peer_node_id)).
@@ -67,6 +70,27 @@ a_call_to_another_key_is_refused_naming_the_current_key_test_() ->
         ?assertEqual(binary:encode_hex(Current, lowercase), Detail),
         ?assertEqual(none, receive handler_ran -> ran after 200 -> none end),
         macula_station_link:stop(Pid)
+    end}.
+
+%% A handler that crashes on a sealed call leaves the opened payload out of
+%% every log event: its reason and its frames' arguments carry it.
+a_crash_on_a_sealed_call_logs_no_plaintext_test_() ->
+    {timeout, 10, fun() ->
+        Marker = <<"plaintext-that-must-not-be-logged">>,
+        ok = logger:add_handler(?MODULE, ?MODULE, #{config => #{to => self()}, level => all}),
+        try
+            Crash = fun(Args) -> {text, <<"nope">>} = macula:field(secret, Args) end,
+            {Pid, CallerKey} = fixture([{<<"_test.crash">>, Crash}]),
+            {Frame, Call} = sealed_call(Pid, CallerKey, <<"_test.crash">>, #{secret => {text, Marker}}),
+            Pid ! {macula_peering, frame, self(), Frame},
+            {error, Fields} = await_reply(Frame),
+            ?assertMatch({ok, #{code := <<"temporary_relay_failure">>}}, opened(error, Fields, Call)),
+            Logged = term_to_binary(drained_logs()),
+            ?assertEqual(nomatch, binary:match(Logged, Marker)),
+            macula_station_link:stop(Pid)
+        after
+            logger:remove_handler(?MODULE)
+        end
     end}.
 
 %% A node that holds no KEM key refuses a sealed call in the clear, as
@@ -158,6 +182,17 @@ opened(Type, #{sealed := Sealed, responded_by := RespondedBy},
 
 plain(result, Plain) -> macula_frame:plain_payload(Plain);
 plain(error, Plain) -> macula_frame:plain_error(Plain).
+
+drained_logs() ->
+    receive {logged, Event} -> [Event | drained_logs()] after 300 -> [] end.
+
+%% logger handler callback: every event, formatted, to the test.
+log(#{msg := Msg} = Event, #{config := #{to := To}}) ->
+    To ! {logged, {Msg, formatted(Msg), maps:get(meta, Event, #{})}},
+    ok.
+
+formatted({Format, Args}) when is_list(Format) -> catch lists:flatten(io_lib:format(Format, Args));
+formatted(Other) -> Other.
 
 profile() ->
     {ok, Profile} = macula_crypto_profile:configured(),

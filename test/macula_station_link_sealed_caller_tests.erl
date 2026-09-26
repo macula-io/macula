@@ -89,6 +89,19 @@ a_key_of_another_profile_is_refused_test_() ->
         macula_station_link:stop(Pid)
     end}.
 
+%% A pending sealed call's keys never show in the link's status or crash
+%% report: its reply key would open its reply.
+a_pending_calls_keys_stay_out_of_the_status_test_() ->
+    {timeout, 10, fun() ->
+        #{link := Pid} = F = fixture(),
+        _Caller = call_async(F, #{}),
+        {_Frame, _Opened, #{k_rep := KRep, k_req := KReq}, _SealRequest} = received_call(F),
+        Status = term_to_binary(sys:get_status(Pid)),
+        ?assertEqual(nomatch, binary:match(Status, KRep)),
+        ?assertEqual(nomatch, binary:match(Status, KReq)),
+        macula_station_link:stop(Pid)
+    end}.
+
 %%------------------------------------------------------------------
 %% Helpers
 %%------------------------------------------------------------------

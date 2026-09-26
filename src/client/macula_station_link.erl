@@ -1824,8 +1824,19 @@ answer_waiting_callers(Reason, #state{pending = Pending}) ->
 
 code_change(_OldVsn, S, _Extra) -> {ok, S}.
 
-%% Status output and crash reports show this process's keys with their private halves redacted.
-format_status(Status) -> macula_node_keys:redacted(Status).
+%% Status output and crash reports show this process's keys with their private halves redacted, and no sealed call's
+%% keys: a pending sealed call's reply key would open its reply.
+format_status(Status) -> macula_node_keys:redacted(seals_redacted(Status)).
+
+seals_redacted(#{state := #state{pending = Pending} = S} = Status) ->
+    Status#{state := S#state{pending = maps:map(fun(_Id, Entry) -> seal_redacted(Entry) end, Pending)}};
+seals_redacted(Status) ->
+    Status.
+
+seal_redacted({From, TRef, #{seal := {_Keys, _SealRequest}} = Request}) ->
+    {From, TRef, Request#{seal := sealed}};
+seal_redacted(Entry) ->
+    Entry.
 
 %%====================================================================
 %% Internals
@@ -3163,11 +3174,21 @@ safe_invoke_handler(Handler, Payload, Request, Key, Seal) ->
             reply_result(Seal, Request, normalise_reply(Reply), Key)
     catch
         Class:Reason:Stack ->
-            logger:warning(
-              "[station_link] handler crashed: ~ts",
-              [macula_reason_name:logged("~p:~p~n  stack=~p", [Class, Reason, Stack])]),
+            logged_crash(Seal, Class, Reason, Stack),
             reply_error(Seal, Request, <<"temporary_relay_failure">>, undefined, Key)
     end.
+
+%% A crash while serving a sealed call is logged by its reason's name and its frames without their arguments: the
+%% arguments of the top frame, and a badmatch's value, are the opened payload, which never reaches a log.
+logged_crash(clear, Class, Reason, Stack) ->
+    logger:warning("[station_link] handler crashed: ~ts",
+                   [macula_reason_name:logged("~p:~p~n  stack=~p", [Class, Reason, Stack])]);
+logged_crash({sealed, _Keys, _SealRequest}, Class, Reason, Stack) ->
+    logger:warning("[station_link] handler crashed serving a sealed call: ~p:~ts~n  stack=~p",
+                   [Class, macula_reason_name:text(Reason), [{M, F, arity_of(A)} || {M, F, A, _Loc} <- Stack]]).
+
+arity_of(Args) when is_list(Args) -> length(Args);
+arity_of(Arity) -> Arity.
 
 invoke_handler(Fun, Args) when is_function(Fun, 1) ->
     Fun(Args);
