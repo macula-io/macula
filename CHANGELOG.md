@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- **`test/vectors/ucan_v1.json` and `UCAN_V1.md`, the UCAN contract every SDK implements** (D7), test-only: tokens
+  `macula_ucan` minted in both profiles, each with its policy, context and verdict, covering every refusal, the order
+  the checks run in, and which capability a chain carries; proof ids, the keys' did:keys, key ids and node_ids, and
+  the narrowing matrix. `scripts/generate-ucan-vectors.sh` writes it from `macula_ucan`, and
+  `macula_ucan_vectors_tests` re-derives every verdict from it on each run.
+
 ## [12.12.0] - 2026-09-26
 
 ### Added
