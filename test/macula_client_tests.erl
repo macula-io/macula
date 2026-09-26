@@ -52,7 +52,7 @@ call_station_unreachable_returns_not_connected_test() ->
     {ok, _} = application:ensure_all_started(macula),
     {ok, Pool} = macula_client:connect([], #{}),
     Result = macula_client:call_station(Pool, ?SEED1, <<2:256>>, ?REALM,
-                                        <<"x.y">>, #{}, 300),
+                                        <<"x.y">>, #{}, 300, <<>>, #{}, 300, clear),
     ?assertEqual({error, not_connected}, Result),
     ?assert(is_process_alive(Pool)),
     ok = macula_client:close(Pool),
@@ -76,7 +76,7 @@ call_station_with_expected_node_id_and_no_match_falls_through_to_dial_test() ->
     Result = macula_client:call_station(Pool, ?SEED1, <<2:256>>, ?REALM, <<"x.y">>,
                                         #{}, 300, <<>>,
                                         #{expected_node_id => SomeNodeId,
-                                          pin_tls_cert => false}),
+                                          pin_tls_cert => false}, 300, clear),
     ?assertEqual({error, not_connected}, Result),
     ?assert(is_process_alive(Pool)),
     ok = macula_client:close(Pool),
@@ -128,7 +128,7 @@ reuse_seed(Port) -> #{host => <<"127.0.0.1">>, port => Port}.
 call_pinned(Pool, Seed, Station) ->
     macula_client:call_station(Pool, Seed, <<2:256>>, ?REALM, <<"x.y">>, #{}, 200, <<>>,
                                #{expected_node_id => Station, pin_tls_cert => false},
-                               100).
+                               100, clear).
 
 %% Make the pool's one link answer `peer_node_id' with `Station', which is
 %% what the reuse scan matches on. The peer pid is this process: nothing is
