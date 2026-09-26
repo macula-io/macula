@@ -12,7 +12,8 @@
 %% frames that carry a sealed payload are built elsewhere.
 -module(macula_seal).
 
--export([key_as_carried/1, key_hash/1, key_id/1, carried_key_size/1,
+-export([generate_key/1, public_key/1,
+         key_as_carried/1, key_hash/1, key_id/1, carried_key_size/1,
          sender_secret/2, recipient_secret/4,
          call_keys/3, stream_keys/2, event_key/2,
          request_aad/1, reply_aad/4, stream_aad/4, event_aad/5,
@@ -43,6 +44,33 @@
 %%====================================================================
 %% The recipient's key
 %%====================================================================
+
+%% @doc A fresh KEM keypair in a profile: an ML-KEM-1024 keypair, plus a P-384
+%% keypair in pq_hybrid. The private P-384 scalar is always 48 bytes.
+-spec generate_key(profile()) -> {public_key(), private_key()}.
+generate_key(pq_pure) ->
+    {Ek, Dk} = crypto:generate_key(mlkem1024, []),
+    {#{mlkem_ek => Ek}, #{mlkem_dk => Dk}};
+generate_key(pq_hybrid) ->
+    {Ek, Dk} = crypto:generate_key(mlkem1024, []),
+    {P384Pub, P384Priv} = crypto:generate_key(ecdh, secp384r1),
+    {#{mlkem_ek => Ek, p384_pub => P384Pub}, #{mlkem_dk => Dk, p384_priv => scalar_48(P384Priv)}}.
+
+scalar_48(Scalar) when byte_size(Scalar) =< 48 ->
+    Pad = (48 - byte_size(Scalar)) * 8,
+    <<0:Pad, Scalar/binary>>.
+
+%% @doc The public key a KEM key as carried holds, and the profile its size
+%% names: 1568 bytes in pq_pure, 1665 in pq_hybrid, whose tail is an
+%% uncompressed P-384 point. Anything else carries no key.
+-spec public_key(term()) -> {ok, profile(), public_key()} | error.
+public_key(<<Ek:?MLKEM_EK_BYTES/binary>>) ->
+    {ok, pq_pure, #{mlkem_ek => Ek}};
+public_key(<<Ek:?MLKEM_EK_BYTES/binary, 4, _:96/binary>> = Carried) ->
+    <<_:?MLKEM_EK_BYTES/binary, Point:?P384_POINT_BYTES/binary>> = Carried,
+    {ok, pq_hybrid, #{mlkem_ek => Ek, p384_pub => Point}};
+public_key(_NotAKey) ->
+    error.
 
 %% @doc A recipient's KEM key as it is carried and hashed: the ML-KEM key,
 %% followed by the P-384 point in pq_hybrid.
