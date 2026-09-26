@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [12.11.1] - 2026-09-26
+
+### Security
+
+- **A handler reads the verified caller, never one the payload names.** A CALL handler's args carried the
+  wire-authenticated caller under the atom key `caller`, but a payload's own `caller` field stayed beside it as the
+  text key `{text, <<"caller">>}`. `macula:field(caller, Args)` (and `field/3`, by atom or binary name) and
+  `macula_record:payload_field(Args, <<"caller">>)` look up the text key first, so a handler reading its caller
+  either way got whatever the caller wrote, and any identified node could present itself as another. Only
+  `maps:get(caller, Args)` was right. The payload's `caller` is now removed before the verified one is set, so every
+  way of reading `caller` gives the verified identity. A served stream's handler got no verified caller at all, so
+  a `caller` in its payload was the only one it could read; it now gets the verified one the same way (below).
+  Found by Fable's review of the bridge package. An audit of the macula-io, macula-services, macula-internal and
+  reckon-db-org repositories found no handler that read `caller` text-first: the realm (member
+  checks read the atom; admin procedures authorise on `admin_token`), mcl-om (`mcl_om_wire:field/3` reads the atom
+  first) and the station (reads none). Upgrade anyway: the documented reader was the vulnerable one.
+
+### Changed
+
+- **A served stream's handler gets its verified caller** in its args (`caller`), as a CALL handler does, and
+  `macula_stream:info/1` names the node whose signed STREAM_OPEN opened the stream (`caller`): the remote on a
+  served stream, this node on one it opened, `undefined` in-process. ⚠ A stream handler that matches
+  its args map exactly must allow the extra key.
+
 ## [12.11.0] - 2026-09-26
 
 ### Added
