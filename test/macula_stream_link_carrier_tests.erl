@@ -32,7 +32,20 @@ cases(Keys) ->
                  fun a_stream_given_a_key_instead_of_its_loader_does_not_start/1,
                  fun the_stations_relay_error_for_the_open_ends_the_stream_at_once/1,
                  fun a_relay_error_from_another_station_is_refused/1,
-                 fun a_relay_error_for_another_request_is_refused/1]].
+                 fun a_relay_error_for_another_request_is_refused/1,
+                 fun a_sealed_provider_frame_ends_the_stream_by_name/1]].
+
+%% This node opens no sealed payload yet: a sealed stream frame ends its stream
+%% `sealed_refused', rather than crashing the stream.
+a_sealed_provider_frame_ends_the_stream_by_name(#{caller := Caller, provider := Provider} = Keys) ->
+    Open = verified_open(Keys, server_stream),
+    Stream = stream(client, Caller, Open),
+    Frame = wire(macula_sealed_frames:provider_stream(stream_data, Provider, Open,
+                                                      [{<<"encoding">>, {text, <<"raw">>}}])),
+    ok = macula_stream:deliver_frame(Stream, Frame),
+    ?assertMatch({error, {<<"sealed_refused">>, _}}, macula_stream:recv(Stream, 1000)),
+    ?assert(is_process_alive(Stream)),
+    gen_server:stop(Stream).
 
 %% The station the link is connected to reports that it cannot reach the provider (macula#42): the caller's stream
 %% ends at once with the station's code, rather than at its deadline.

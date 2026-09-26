@@ -7,9 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [Unreleased]
+## [12.9.0] - 2026-09-26
+
+Every verifier accepts a sealed payload, and every endpoint refuses one by name
+while it cannot open it yet. This is the first step of end-to-end payload
+confidentiality (`plans/DESIGN_E2E_PAYLOAD_CONFIDENTIALITY.md` §13 #6): every
+station must run it before any SDK sends a sealed payload. Nothing sends one yet.
+Wire-compatible with 12.0 to 12.8 for every frame they build; a sealed frame
+reaches only this release and later.
 
 ### Added
+
+- **A signed tbs may carry `sealed` in place of its payload field.**
+  - It replaces `payload` in a request, a reply and a publication, and `body`,
+    `payload`, or `code` and `message` in a stream frame (a STREAM_DATA keeps
+    its `encoding`).
+  - `macula_frame:verify_request/2`, `verify_reply/3`,
+    `verify_provider_stream/3`, `verify_caller_stream/3` and
+    `verify_publication/3` accept it and return it as
+    `#{sealed := #{scheme, key_id, ct, kem_ct | nonce}}`.
+  - A station verifies and routes a sealed frame as any other, and never
+    charges it.
+  - The shape is held to its frame: scheme 1; an 8-byte key id; a request's
+    carries a `kem_ct` and no nonce; a reply's and an event's a 12-byte nonce
+    and no `kem_ct`; a stream frame's no `kem_ct`.
+  - A tbs with both `sealed` and the payload it replaces, or with neither, is
+    refused `malformed_frame`, as is a STREAM_END with `sealed`.
+- **An endpoint refuses what it cannot open yet, by name, and crashes nothing.**
+  - A sealed CALL is answered with a clear provider ERROR `sealed_refused`, and
+    its handler never runs.
+  - A sealed STREAM_OPEN is refused `sealed_refused` on its own stream.
+  - A sealed RESULT answers its caller
+    `{error, {call_error, <<"sealed_refused">>, undefined}}`.
+  - A sealed stream frame ends its session `sealed_refused`.
+  - A sealed EVENT is not delivered, and is counted and logged at most once a
+    window.
+  - Before this, a peer that sent a sealed-shaped frame to a 12.8 endpoint was
+    refused as malformed. From 12.9 the frame verifies, so without these
+    refusals a pattern match on `payload` would have crashed the link or the
+    stream.
 
 - **`macula_seal`, the end-to-end payload sealing primitives, scheme 1**
   (`plans/DESIGN_E2E_PAYLOAD_CONFIDENTIALITY.md` §13 #1). ML-KEM-1024, plus an

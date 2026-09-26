@@ -446,6 +446,9 @@
     liveness_misses = 0   :: non_neg_integer(),
     %% Replies refused before they could clear a probe, counted by reason.
     refused_replies       :: macula_refusal_report:t(),
+    %% Sealed frames this node cannot open yet (E2E packages 3 to 5), by
+    %% kind: counted, and logged at most once a window.
+    sealed_refusals       :: macula_refusal_report:t(),
     %% Relayed overlay frames dropped, and refusals of delivered overlay
     %% frames charged to no connection, counted by kind.
     refused_relays        :: macula_refusal_report:t(),
@@ -1306,6 +1309,7 @@ started({ok, Seed, Key, Profile, Issuer}, Opts) ->
                       liveness_interval_ms = LiveMs,
                       liveness_max_misses = LiveMiss,
                       refused_replies = macula_refusal_report:new(?REFUSED_REPLIES_WINDOW_MS),
+                      sealed_refusals = macula_refusal_report:new(?REFUSED_REPLIES_WINDOW_MS),
                       refused_relays = macula_refusal_report:new(?REFUSED_RELAYS_WINDOW_MS),
                       connect_retry_backoff_ms = RetryMs},
     process_flag(trap_exit, true),
@@ -1975,6 +1979,10 @@ call_answered({error, Refusal}, _RequestId, _From, _TRef, S) ->
 %% reach the caller as the binaries they arrived as, so nothing a provider
 %% sends takes the shape of a reason the link or the pool builds itself. A
 %% relay error names its code from a closed set.
+call_result(#{sealed := _}) ->
+    %% This node sealed nothing, so a sealed reply answers no request it made
+    %% as the provider sealed it.
+    {error, {call_error, <<"sealed_refused">>, undefined}};
 call_result(#{frame_type := result, payload := Payload}) ->
     {ok, Payload};
 call_result(#{frame_type := error, reported_by := _, code := Code}) ->
@@ -1983,6 +1991,20 @@ call_result(#{frame_type := error, code := ?HANDLER_ERROR_CODE, detail := Detail
     {error, Detail};
 call_result(#{frame_type := error, code := Code} = Fields) ->
     {error, {call_error, Code, maps:get(detail, Fields, undefined)}}.
+
+%% A sealed frame this node cannot open yet, since it holds no KEM key or group
+%% key (E2E packages 3 to 5): it is not delivered, and it is counted by kind,
+%% the log hearing of it at most once a window.
+sealed_refused(Kind, #state{sealed_refusals = Report} = S) ->
+    S#state{sealed_refusals = logged_sealed(macula_refusal_report:refused(Report, Kind, erlang:monotonic_time(millisecond)),
+                                           Kind)}.
+
+logged_sealed({report, Count, Report}, Kind) ->
+    logger:warning("[macula_station_link] refused ~b sealed frame(s) (~p): this node opens no sealed payload",
+                   [Count, Kind]),
+    Report;
+logged_sealed({quiet, Report}, _Kind) ->
+    Report.
 
 %% A refused reply changes nothing but its count, and the log hears of it at most once a window.
 refused_reply(Refusal, #state{refused_replies = Report} = S) ->
@@ -2632,6 +2654,8 @@ publication_expiry(#{published_at := PublishedAt} = Fields) ->
 %% fields come from the verified (or claimed) publication; the frame
 %% contributes only `delivered_via'. `PublisherVerified' is
 %% `on_inbound_event/3''s already-computed outcome (`true' | `false').
+deliver_event(#{sealed := _}, _Frame, _PublisherVerified, S) ->
+    sealed_refused(sealed_event, S);
 deliver_event(Fields, Frame, PublisherVerified, #state{topic_index = Idx} = S) ->
     Realm = maps:get(realm, Fields),
     Topic = maps:get(topic, Fields),
@@ -2728,6 +2752,15 @@ liveness_answered(Request, Id, Pid) ->
 %% A copy of a request already answered gets the stored reply, so a caller whose reply was lost is answered rather
 %% than served twice. A copy while the work is still running is refused `request_copy', as a copied STREAM_OPEN is:
 %% the caller may ask again once its first attempt has finished or its deadline has passed.
+on_call_admission(new, #{sealed := _} = Request, #state{node_identity = Id, peer_pid = Pid,
+                                                        admission = Admission}) when is_pid(Pid) ->
+    %% This node publishes no KEM key, so no caller seals to it: refused in the
+    %% clear, from the closed set a sealed request may be refused with.
+    Reply = macula_frame:provider_error(#{request => Request, code => <<"sealed_refused">>,
+                                          detail => <<"this node opens no sealed payload">>}, Id),
+    _ = stored_reply(Admission, Request, Reply),
+    sent_or_faulted(macula_peering:send_frame(Pid, Reply), Pid, Request, Id),
+    ok;
 on_call_admission(new, Request, #state{procedures = Procs, policies = Pols, node_identity = Id,
                                        peer_pid = Pid, profile = Profile,
                                        admission = Admission} = _S) when is_pid(Pid) ->
@@ -3343,6 +3376,9 @@ on_stream_open_verdict(malformed_frame, Open, Stream, S) ->
 %% A procedure this link does not advertise is refused `not_found'. The open's
 %% signed mode binds both sides' verifiers, so an open in a mode other than the
 %% one its procedure is advertised in is refused `mode_mismatch', not served.
+dispatch_stream_open(_Found, #{sealed := _} = Open, Stream, S) ->
+    refuse_open(Stream, Open, <<"sealed_refused">>, <<"this node opens no sealed payload">>,
+                sealed_refused(sealed_stream_open, S));
 dispatch_stream_open(error, Open, Stream, S) ->
     refuse_open(Stream, Open, <<"not_found">>, <<"procedure not advertised">>, S);
 dispatch_stream_open({ok, {Mode, Handler}}, #{mode := Mode} = Open, Stream, S) ->

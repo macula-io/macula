@@ -33,7 +33,8 @@ stream_serving_test_() ->
                  fun a_stream_open_past_the_callers_session_cap_is_refused/0,
                  fun a_stream_open_without_the_session_counter_is_refused/0,
                  fun a_refused_stream_open_starts_no_process/0,
-                 fun a_streamer_served_session_ends_with_its_caller/0]]
+                 fun a_streamer_served_session_ends_with_its_caller/0,
+                 fun a_sealed_stream_open_is_refused_by_name/0]]
     ++ [{"a served session leaves no process behind: " ++ Name,
          {timeout, 15, {spawn, fun() -> process_flag(trap_exit, true), served_sessions_end(Handler, Ending) end}}}
         || {Name, Handler, Ending} <- [{"the handler closes and returns", fun close_and_return/2, none},
@@ -402,6 +403,25 @@ caller_count_back_to(Count, _Caller, _Want, Ms) when Ms =< 0 -> Count;
 caller_count_back_to(_Count, Caller, Want, Ms) ->
     timer:sleep(20),
     caller_sessions_back_to(Caller, Want, Ms - 20).
+
+%% This node opens no sealed payload yet (E2E packages 3 to 5), so a sealed
+%% STREAM_OPEN is refused `sealed_refused' on its own stream, and no session
+%% is served.
+a_sealed_stream_open_is_refused_by_name() ->
+    #{link := Link} = World = linked(),
+    Procedure = <<"foo.sealed">>,
+    ok = macula_station_link:advertise_stream(Link, ?REALM, Procedure, server_stream, telling_how_it_ended(self())),
+    Open = wire(macula_sealed_frames:request(stream_open, #{request_id => crypto:strong_rand_bytes(16), realm => ?REALM,
+                                                            procedure => Procedure, target => node_id(World),
+                                                            deadline => erlang:system_time(millisecond) + 30_000,
+                                                            mode => server_stream}, key())),
+    Quic = make_ref(),
+    Link ! {macula_peering, new_dedicated_stream, self(), Quic},
+    Link ! {quic, macula_frame:encode(Open), Quic, undefined},
+    {ok, Refusal} = written_within(Quic, ?EVENT_MS),
+    ?assertMatch({ok, #{code := <<"sealed_refused">>}}, provider_fields(Open, Refusal)),
+    ?assertEqual(not_served, served_within(200)),
+    stop(World).
 
 %% A dedicated stream the peer opens with a verified STREAM_OPEN from Caller for Procedure, addressed to the link's
 %% node: the stream and the open frame as sent.

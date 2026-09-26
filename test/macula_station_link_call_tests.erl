@@ -72,6 +72,21 @@ a_verified_result_answers_the_caller_test_() ->
          macula_station_link:stop(Pid)
      end}}.
 
+%% This node sealed nothing, so a sealed RESULT is a provider's misstep: the
+%% caller is answered `sealed_refused', and the link serves on.
+a_sealed_result_answers_sealed_refused_test_() ->
+    {spawn, {timeout, 5,
+     fun() ->
+         {Pid, _StationKey, Profile} = start_link_to_station(),
+         ProviderKey = new_key(Profile),
+         Ref = call_async(Pid, macula_node_keys:key_id(ProviderKey), ?PROCEDURE, #{}, 2_000),
+         Request = sent_request(Profile),
+         deliver(Pid, macula_sealed_frames:result(Request, ProviderKey)),
+         ?assertEqual({error, {call_error, <<"sealed_refused">>, undefined}}, answer(Ref)),
+         ?assert(is_process_alive(Pid)),
+         macula_station_link:stop(Pid)
+     end}}.
+
 %% A provider error with the handler_error code reaches the caller as its detail text; any other provider error as
 %% {call_error, Code, Detail}, with Detail undefined when the error carries none.
 a_provider_error_reaches_the_caller_as_binaries_test_() ->

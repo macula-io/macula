@@ -1141,6 +1141,52 @@ inject_call_with_payload(Pid, FakePeer, CallerKey, CallId, Proc, Payload) ->
     Pid ! {macula_peering, frame, FakePeer, Frame},
     Frame.
 
+%% This node opens no sealed payload yet (E2E packages 3 to 5), so a sealed
+%% CALL is answered `sealed_refused' in the clear, and its handler never runs.
+inbound_sealed_call_is_refused_by_name_test_() ->
+    {timeout, 5,
+     fun() ->
+         Test = self(),
+         {Pid, CallerKey} = inbound_call_fixture([{<<"_test.sealed">>, fun(_) -> Test ! handler_ran, {ok, 1} end}]),
+         Frame = macula_sealed_frames:request(call, #{request_id => <<5:128>>, realm => ?REALM,
+                                                      procedure => <<"_test.sealed">>, target => link_node_id(Pid),
+                                                      deadline => erlang:system_time(millisecond) + 5_000},
+                                              CallerKey),
+         Pid ! {macula_peering, frame, self(), Frame},
+         ?assertMatch({error, #{code := <<"sealed_refused">>}}, await_result(Frame, 1_000)),
+         ?assertEqual(none, receive handler_ran -> ran after 200 -> none end),
+         ?assert(is_process_alive(Pid)),
+         macula_station_link:stop(Pid)
+     end}.
+
+%% A sealed EVENT is not delivered while this node holds no group key, and the
+%% link serves on.
+sealed_event_is_not_delivered_test_() ->
+    {timeout, 5,
+     fun() ->
+         {ok, _} = application:ensure_all_started(macula),
+         {ok, Pid} = macula_station_link:start_link(with_link_keys(#{
+             seed => #{host => <<"127.0.0.1">>, port => 1}, connect_timeout_ms => 2000})),
+         Test = self(),
+         PeerNodeId = macula_test_identity:node_id(),
+         _ = sys:replace_state(Pid, fun(S) ->
+             setelement(?PEER_NODE_ID_INDEX, setelement(?PEER_PID_INDEX, S, Test), PeerNodeId)
+         end),
+         Topic = <<"_mesh.sealed.v1">>,
+         {ok, SubRef} = macula_station_link:subscribe(Pid, ?REALM, Topic, self()),
+         receive {'$gen_cast', {send_frame, _, #{frame_type := subscribe}}} -> ok
+         after 1_000 -> erlang:error(no_subscribe_frame) end,
+         {ok, Profile} = macula_crypto_profile:configured(),
+         {ok, Publisher} = macula_node_keys:generate(identity, Profile),
+         Pid ! {macula_peering, frame, self(), macula_sealed_frames:publication(Publisher, ?REALM, Topic, 7)},
+         ?assertEqual(none, receive {macula_event, SubRef, _, _, _} -> delivered after 500 -> none end),
+         {Event, _} = signed_event(?REALM, Topic, 8, #{after_sealed => 1}),
+         Pid ! {macula_peering, frame, self(), Event},
+         ?assertMatch({macula_event, SubRef, Topic, _, _},
+                      receive {macula_event, SubRef, _, _, _} = M -> M after 2_000 -> none end),
+         macula_station_link:stop(Pid)
+     end}.
+
 inbound_call_unknown_procedure_returns_error_frame_test_() ->
     {timeout, 5,
      fun() ->

@@ -839,6 +839,10 @@ verified_frame({error, Refusal}, #state{conn = Conn} = State) ->
     ok = macula_peering:object_refused(Conn, Refusal),
     State.
 
+%% This node opens no sealed payload yet (E2E packages 3 to 5): a sealed frame
+%% ends the session by name rather than reaching a reader it cannot open for.
+peer_event(#{sealed := _}, State) ->
+    error_arrived(<<"sealed_refused">>, <<"this node opens no sealed payload">>, State);
 peer_event(#{frame_type := stream_data, encoding := Encoding, body := Body}, State) ->
     chunk_arrived(Encoding, Body, State);
 peer_event(#{frame_type := stream_end, role := Role}, State) ->

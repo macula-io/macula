@@ -1070,8 +1070,8 @@ request_signed(_OnlyFields, _Verified, _Type, _Profile) ->
     {error, malformed_frame}.
 
 request_read({ok, #{frame_type := Type, caller := Caller, request_id := _, realm := _, procedure := _, target := _,
-                    deadline := _, payload := _} = Read}, Key, Tbs, Type, Profile) ->
-    request_checked(is_map_key(mode, Read) =:= (Type =:= stream_open),
+                    deadline := _} = Read}, Key, Tbs, Type, Profile) ->
+    request_checked(is_map_key(mode, Read) =:= (Type =:= stream_open) andalso payload_or_sealed(Read),
                     Caller =:= macula_node_keys:node_id(Key, Profile), Read, Key, Tbs);
 request_read(_NotARequest, _Key, _Tbs, _Type, _Profile) ->
     {error, malformed_frame}.
@@ -1101,6 +1101,7 @@ request_table(Type) ->
       <<"target">> => {target, {bytes, 32}},
       <<"deadline">> => {deadline, uint},
       <<"payload">> => {payload, value},
+      <<"sealed">> => {sealed, {sealed, request}},
       <<"mode">> => {mode, {enum, [server_stream, client_stream, bidi]}},
       <<"token">> => {token, bytes},
       <<"proofs">> => {proofs, {bytes_set, ?MAX_PROOFS, ?MAX_PROOFS_BYTES}}}.
@@ -1156,9 +1157,16 @@ reply_read(_NotAReply, _Key, _Type, _Request, _Profile) ->
     {error, malformed_frame}.
 
 reply_shape(result, Read) ->
-    is_map_key(payload, Read) andalso not is_map_key(code, Read) andalso not is_map_key(detail, Read);
+    payload_or_sealed(Read) andalso not is_map_key(code, Read) andalso not is_map_key(detail, Read);
+reply_shape(error, #{sealed := _} = Read) ->
+    not is_map_key(code, Read) andalso not is_map_key(detail, Read) andalso not is_map_key(payload, Read);
 reply_shape(error, Read) ->
     is_map_key(code, Read) andalso not is_map_key(payload, Read).
+
+%% A payload travels in the clear or sealed (E2E seal scheme 1,
+%% test/vectors/E2E_SEAL_V1.md), exactly one of the two.
+payload_or_sealed(Read) ->
+    is_map_key(payload, Read) xor is_map_key(sealed, Read).
 
 reply_checked([false | _], _Read) -> {error, malformed_frame};
 reply_checked([true, false | _], _Read) -> {error, key_id_mismatch};
@@ -1173,6 +1181,7 @@ reply_table(Type) ->
       <<"request_hash">> => {request_hash, {bytes, 48}},
       <<"responded_by">> => {responded_by, {bytes, 32}},
       <<"payload">> => {payload, value},
+      <<"sealed">> => {sealed, {sealed, reply}},
       <<"code">> => {code, {text_max, ?MAX_ERROR_CODE_BYTES}},
       <<"detail">> => {detail, {text_max, ?MAX_ERROR_TEXT_BYTES}}}.
 
@@ -1533,10 +1542,11 @@ publication_signed(true, {error, signature_invalid}, _Profile, _Now) ->
 publication_signed(_OnlyFields, _Verified, _Profile, _Now) ->
     {error, malformed_frame}.
 
-publication_read({ok, #{publisher := Publisher, realm := _, topic := _, seq := _, published_at := PublishedAt,
-                        payload := _} = Read}, Key, Tbs, Profile, Now) ->
+publication_read({ok, #{publisher := Publisher, realm := _, topic := _, seq := _, published_at := PublishedAt}
+                  = Read}, Key, Tbs, Profile, Now) ->
     Expiry = PublishedAt + maps:get(ttl_ms, Read, ?PUBLICATION_DEFAULT_TTL_MS) + ?PUBLICATION_TOLERANCE_MS,
-    publication_checked([{maps:get(ttl_ms, Read, 0) =< ?PUBLICATION_MAX_TTL_MS, malformed_frame},
+    publication_checked([{payload_or_sealed(Read), malformed_frame},
+                         {maps:get(ttl_ms, Read, 0) =< ?PUBLICATION_MAX_TTL_MS, malformed_frame},
                          {Publisher =:= macula_node_keys:node_id(Key, Profile), key_id_mismatch},
                          {PublishedAt =< Now + ?PUBLICATION_TOLERANCE_MS,
                           {not_yet_valid, PublishedAt - (Now + ?PUBLICATION_TOLERANCE_MS)}},
@@ -1558,7 +1568,8 @@ publication_table() ->
       <<"seq">> => {seq, uint},
       <<"published_at">> => {published_at, uint},
       <<"ttl_ms">> => {ttl_ms, uint},
-      <<"payload">> => {payload, value}}.
+      <<"payload">> => {payload, value},
+      <<"sealed">> => {sealed, {sealed, event}}}.
 
 -spec validate_options(map()) -> ok.
 validate_options(M) when is_map(M) -> ok.
@@ -1970,11 +1981,14 @@ stream_read({ok, #{frame_type := Type, request_id := _, request_hash := _, signe
 stream_read(_NotAStreamFrame, _Type) ->
     error.
 
+stream_shape(stream_data, #{encoding := _, sealed := _} = Read) -> only_type_fields(Read, [encoding, sealed]);
 stream_shape(stream_data, #{encoding := raw, body := Body} = Read) ->
     is_binary(Body) andalso only_type_fields(Read, [encoding, body]);
 stream_shape(stream_data, #{encoding := msgpack, body := _} = Read) -> only_type_fields(Read, [encoding, body]);
 stream_shape(stream_end, #{role := _} = Read) -> only_type_fields(Read, [role]);
+stream_shape(stream_error, #{sealed := _} = Read) -> only_type_fields(Read, [sealed]);
 stream_shape(stream_error, #{code := _, message := _} = Read) -> only_type_fields(Read, [code, message]);
+stream_shape(stream_reply, #{sealed := _} = Read) -> only_type_fields(Read, [sealed]);
 stream_shape(stream_reply, #{payload := _} = Read) -> only_type_fields(Read, [payload]);
 stream_shape(_Type, _Read) -> false.
 
@@ -2006,7 +2020,8 @@ stream_table(Type) ->
       <<"role">> => {role, {enum, [send, both]}},
       <<"code">> => {code, {text_max, ?MAX_ERROR_CODE_BYTES}},
       <<"message">> => {message, {text_max, ?MAX_ERROR_TEXT_BYTES}},
-      <<"payload">> => {payload, value}}.
+      <<"payload">> => {payload, value},
+      <<"sealed">> => {sealed, {sealed, stream}}}.
 
 %%------------------------------------------------------------------
 %% Content transfer constructors (Part 6 §9)
@@ -3582,9 +3597,35 @@ read_value({list_of_bytes, Size}, Items) when is_list(Items) ->
     sized_items([Item || Item <- Items, is_binary(Item), byte_size(Item) =:= Size], Items);
 read_value({list_of_bytes, Size, Max}, Items) when is_list(Items), length(Items) =< Max ->
     read_value({list_of_bytes, Size}, Items);
+read_value({sealed, Context}, Sealed) when is_map(Sealed) ->
+    sealed_read(read_fields(maps:to_list(Sealed), sealed_table(), #{}), Context);
 read_value({optional, _Kind}, null) -> {ok, undefined};
 read_value({optional, Kind}, Value) -> read_value(Kind, Value);
 read_value(_Kind, _Value) -> error.
+
+%% A sealed payload's fields (test/vectors/E2E_SEAL_V1.md, "The sealed map").
+%% A verifier opens nothing; it holds the shape to the frame it rides in: a
+%% request's agrees a key and derives its nonce, a reply's and an event's
+%% carry a nonce, and a stream frame's never agrees a key.
+sealed_table() ->
+    #{<<"scheme">> => {scheme, uint},
+      <<"key_id">> => {key_id, {bytes, 8}},
+      <<"kem_ct">> => {kem_ct, bytes},
+      <<"nonce">> => {nonce, {bytes, 12}},
+      <<"ct">> => {ct, bytes}}.
+
+sealed_read({ok, #{scheme := 1, key_id := _, ct := _} = Sealed}, Context) ->
+    sealed_shaped(sealed_shape(Context, is_map_key(kem_ct, Sealed), is_map_key(nonce, Sealed)), Sealed);
+sealed_read(_NotScheme1, _Context) ->
+    error.
+
+sealed_shape(request, KemCt, Nonce) -> KemCt andalso not Nonce;
+sealed_shape(reply, KemCt, Nonce) -> Nonce andalso not KemCt;
+sealed_shape(event, KemCt, Nonce) -> Nonce andalso not KemCt;
+sealed_shape(stream, KemCt, _Nonce) -> not KemCt.
+
+sealed_shaped(true, Sealed) -> {ok, Sealed};
+sealed_shaped(false, _Sealed) -> error.
 
 sized_items(Items, Items) -> {ok, Items};
 sized_items(_Sized, _Items) -> error.
