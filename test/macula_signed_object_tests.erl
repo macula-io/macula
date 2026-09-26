@@ -14,8 +14,12 @@
 pq_pure_test_() ->
     {setup, fun() -> keys(pq_pure) end, fun cases/1}.
 
+%% The setup also finds the pq_hybrid object whose RSA half begins with a zero
+%% byte: a search of about 256 signings, random in length, so it runs under this
+%% group's timeout and not a single case's 5 s (macula#43: on a loaded host it
+%% ran past 5 s and eunit cancelled the case).
 pq_hybrid_test_() ->
-    {timeout, ?EU_TIMEOUT, {setup, fun() -> keys(pq_hybrid) end, fun cases/1}}.
+    {timeout, ?EU_TIMEOUT, {setup, fun() -> with_zero_dropped(keys(pq_hybrid)) end, fun cases/1}}.
 
 %% Every case signs inside its own test, so each one passes or fails on its own.
 cases(Keys) ->
@@ -59,17 +63,22 @@ cases(Keys) ->
 
 %% A signature is exactly its profile's length. One byte short or long is refused as signature_invalid, and in
 %% pq_hybrid so is a valid composite whose RSA half had its leading zero byte dropped: the same RSA value, one byte short.
-a_signature_of_another_length_is_refused(#{key := Key, profile := Profile}) ->
+a_signature_of_another_length_is_refused(#{key := Key, profile := Profile} = Keys) ->
     #{signature := Signature} = Object = object(Key),
     Others = [binary:part(Signature, 0, byte_size(Signature) - 1), <<Signature/binary, 0>>
-              | leading_zero_dropped(Profile, Key)],
+              | leading_zero_dropped(Profile, Keys)],
     [?assertEqual({error, signature_invalid}, macula_signed_object:verify(?LABEL, Object#{signature := Other}, Profile))
      || Other <- Others].
 
-%% In pq_hybrid, a composite for object(Key) whose RSA half began with a zero byte, with that byte dropped. The object's
-%% tbs is the same at every signing, and a PSS salt is random, so signing again finds one about once in 256 signatures.
-leading_zero_dropped(pq_hybrid, Key) -> [zero_dropped(object(Key), Key, 4096)];
-leading_zero_dropped(pq_pure, _Key) -> [].
+%% In pq_hybrid, a composite for object(Key) whose RSA half began with a zero byte, with that byte dropped, as the
+%% setup found it.
+leading_zero_dropped(pq_hybrid, #{zero_dropped := ZeroDropped}) -> [ZeroDropped];
+leading_zero_dropped(pq_pure, _Keys) -> [].
+
+%% The object's tbs is the same at every signing, and a PSS salt is random, so signing again finds one about once in
+%% 256 signatures.
+with_zero_dropped(#{key := Key} = Keys) ->
+    Keys#{zero_dropped => zero_dropped(object(Key), Key, 4096)}.
 
 zero_dropped(#{signature := <<MlDsa:4627/binary, 0, Rest/binary>>}, _Key, _Left) -> <<MlDsa/binary, Rest/binary>>;
 zero_dropped(_Object, Key, Left) when Left > 0 -> zero_dropped(object(Key), Key, Left - 1).
