@@ -982,7 +982,8 @@ ensure_station_link(Pool, Station, LinkOpts, TimeoutMs)
 %% as `call_station/11' does. It is kept apart as the dial's own option, so
 %% it reaches `ensure_link/3' and not the stream open. `Seal' is how the
 %% STREAM_OPEN and its stream go, `clear' or `{sealed_to, KemKey}', decided
-%% by the caller from signed state (`macula:call_seal/5'), never defaulted.
+%% by the caller from signed state (`macula:call_stream_station/7' decides
+%% it), never defaulted.
 -spec call_stream_station(pool(), seed(), <<_:256>>, <<_:256>>, binary(), term(),
                           map(), clear | {sealed_to, binary()}) -> {ok, pid()} | {error, term()}.
 call_stream_station(Pool, Station, Target, Realm, Procedure, Args, Opts, Seal)

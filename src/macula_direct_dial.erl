@@ -758,13 +758,15 @@ required_opt(required) -> #{confidential => required};
 required_opt(_Preferred) -> #{}.
 
 %% A call sealed to a key the provider no longer holds is refused naming the key it holds now, or saying it holds
-%% none, in a reply the provider signed for this request. ONE fresh lookup follows. Only an advertisement the provider signed that names
-%% exactly that key is sealed to again, under a new request, and a second refusal is the result. Any other key fails,
-%% naming both; none, or a provider that holds no key, fails closed. Never the clear (E2E design §5.1, Amendment A1).
+%% none, in a reply the provider signed for this request. ONE fresh lookup follows. Only an advertisement the provider
+%% signed that names exactly that key is sealed to again, under a new request, and a second refusal is the result; the
+%% lookup is searched for it, since while the provider rotates the DHT may still serve its previous advertisement too.
+%% Any other key fails, naming both; none fails closed. A provider that holds no key is sealed to once more, to the
+%% first key its fresh advertisements name. Never the clear (E2E design §5.1, Amendment A1).
 resealed({error, {sealed_refused, <<_:64>> = Named}}, Call, Dial, Realm, Procedure, Provider, Deadline) ->
-    resealed_to(reresolved(Dial, Realm, Procedure, Provider, Deadline), Named, Call);
+    resealed_to(named_key(providers_ads(Dial, Realm, Procedure, Provider, Deadline), Named), Named, Call);
 resealed({error, {sealed_refused, no_key}}, Call, Dial, Realm, Procedure, Provider, Deadline) ->
-    resealed_to_any(reresolved(Dial, Realm, Procedure, Provider, Deadline), Call);
+    resealed_to_any(any_key(providers_ads(Dial, Realm, Procedure, Provider, Deadline)), Call);
 resealed(Result, _Call, _Dial, _Realm, _Procedure, _Provider, _Deadline) ->
     Result.
 
@@ -772,14 +774,10 @@ resealed_to({ok, Ad, <<_:64>> = Named}, Named, Call) -> Call(Ad);
 resealed_to({ok, _Ad, <<_:64>> = Found}, Named, _Call) -> {error, {confidentiality, {key_mismatch, Named, Found}}};
 resealed_to(_NoKey, _Named, _Call) -> {error, {confidentiality, no_kem_key}}.
 
-%% A provider that answered it holds no key (its keyring lost, say) is sealed to once more, to the key its fresh
-%% advertisement names; one naming none fails closed.
+%% A provider that answered it holds no key (its keyring lost, say) is sealed to once more, to a key its fresh
+%% advertisements name; none naming one fails closed.
 resealed_to_any({ok, Ad, <<_:64>>}, Call) -> Call(Ad);
 resealed_to_any(_NoKey, _Call) -> {error, {confidentiality, no_kem_key}}.
-
-%% The provider's advertisement in one fresh lookup, and the id of the key it names.
-reresolved(Dial, Realm, Procedure, Provider, Deadline) ->
-    providers_key(providers_ads(Dial, Realm, Procedure, Provider, Deadline)).
 
 %% The provider's own trusted advertisements of the procedure, in one fresh lookup.
 providers_ads(#{pool := Pool, find_records := Find}, Realm, Procedure, Provider, Deadline) ->
@@ -790,11 +788,13 @@ providers_ads(#{pool := Pool, find_records := Find}, Realm, Procedure, Provider,
 found({ok, Recs}) -> Recs;
 found(_NotFound) -> [].
 
-providers_key([Ad | _]) -> keyed(maps:find(kem_key_id, macula_record:read_procedure_advertisement(Ad)), Ad);
-providers_key([]) -> none.
+%% The first of the provider's advertisements that names a KEM key, and that key's id; none when none does.
+any_key(Ads) ->
+    first_keyed([{Ad, maps:find(kem_key_id, macula_record:read_procedure_advertisement(Ad))} || Ad <- Ads]).
 
-keyed({ok, KemKeyId}, Ad) -> {ok, Ad, KemKeyId};
-keyed(error, _Ad) -> none.
+first_keyed([{Ad, {ok, KemKeyId}} | _]) -> {ok, Ad, KemKeyId};
+first_keyed([{_Keyless, error} | Rest]) -> first_keyed(Rest);
+first_keyed([]) -> none.
 
 %% Opens the stream at one resolved station, on the same terms as `call_work/6': the station open is handed the
 %% candidate's verified advertisement to seal from (E2E design §8.1), and the stream's own `confidential', if any.
@@ -819,23 +819,24 @@ stream_work(#{pool := Pool, call_stream_station := CallStreamStation,
         end
     end.
 
-%% The KEM key a refused stream reseals to: the provider's, from ONE fresh lookup, and only when it names exactly the
-%% key the refusal named. Any other fails naming both; none, or a provider that holds no key, fails closed.
-stream_resealed(no_key, _Dial, _Realm, _Procedure, _Provider, _Deadline) ->
-    {error, {confidentiality, no_kem_key}};
+%% The KEM key a refused stream reseals to, on a call's terms (`resealed/7'): the provider's, from ONE fresh lookup,
+%% only the key the refusal named (any other fails naming both, none fails closed), or, from a provider that holds no
+%% key, the first key its fresh advertisements name.
+stream_resealed(no_key, Dial, Realm, Procedure, Provider, Deadline) ->
+    resealed_to_any(any_key(providers_ads(Dial, Realm, Procedure, Provider, Deadline)), fun advertised_kem_key/1);
 stream_resealed(<<_:64>> = Named, Dial, Realm, Procedure, Provider, Deadline) ->
     resealed_to(named_key(providers_ads(Dial, Realm, Procedure, Provider, Deadline), Named), Named,
                 fun advertised_kem_key/1).
 
 %% The advertisement of the provider's that names the key the refusal named, wherever the lookup gave it: while the
-%% provider rotates, the DHT may still serve its previous advertisement too. When none names it, the first one's key
-%% (a mismatch), or none.
+%% provider rotates, the DHT may still serve its previous advertisement too. When none names it, the first key one
+%% names (a mismatch), or none.
 named_key(Ads, Named) ->
     naming([Ad || Ad <- Ads, maps:find(kem_key_id, macula_record:read_procedure_advertisement(Ad)) =:= {ok, Named}],
            Named, Ads).
 
 naming([Ad | _], Named, _Ads) -> {ok, Ad, Named};
-naming([], _Named, Ads) -> providers_key(Ads).
+naming([], _Named, Ads) -> any_key(Ads).
 
 advertised_kem_key(Ad) ->
     {ok, maps:get(kem_key, macula_record:read_procedure_advertisement(Ad))}.

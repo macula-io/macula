@@ -580,17 +580,14 @@ handle_info(_Msg, State) ->
 terminate(_Reason, _State) -> ok.
 
 %% A link-carried stream holds its key's loader: status output and crash
-%% reports show it as a printed function, and any key they reach redacted. A
-%% sealed stream's keys and the args it would reopen with are redacted too.
+%% reports show it as a printed function, and any key they reach redacted,
+%% a sealed stream's k_c2p and k_p2c by name. The args it would reopen with,
+%% and what waits while it reopens, are the caller's plaintext: redacted too.
 format_status(#{state := #state{} = State} = Status) ->
-    macula_node_keys:redacted(Status#{state := State#state{seal = redacted_seal(State#state.seal),
-                                                          reopen = redacted_reopen(State#state.reopen),
+    macula_node_keys:redacted(Status#{state := State#state{reopen = redacted_reopen(State#state.reopen),
                                                           reopening = redacted_reopening(State#state.reopening)}});
 format_status(Status) ->
     macula_node_keys:redacted(Status).
-
-redacted_seal(undefined) -> undefined;
-redacted_seal(_Keys) -> redacted.
 
 redacted_reopen(undefined) -> undefined;
 redacted_reopen(Reopen) -> Reopen#{args := redacted}.

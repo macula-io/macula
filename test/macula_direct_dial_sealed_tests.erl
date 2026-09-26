@@ -28,7 +28,13 @@ cases() ->
      {"a stream's reseal re-resolves once, bound to the key the refusal names",
       fun a_streams_reseal_is_bound_to_the_named_key/0},
      {"a stream's reseal takes the provider's advertisement that names the key, not the first",
-      fun a_streams_reseal_finds_the_named_key_among_the_providers_advertisements/0}].
+      fun a_streams_reseal_finds_the_named_key_among_the_providers_advertisements/0},
+     {"a stream whose provider lost its key reseals to any key its fresh advertisements name",
+      fun a_streams_reseal_after_a_lost_key_takes_any_named_key/0},
+     {"a call's reseal takes the provider's advertisement that names the key, not the first",
+      fun a_calls_reseal_finds_the_named_key_among_the_providers_advertisements/0},
+     {"a call whose provider lost its key reseals to the first advertisement that names any key",
+      fun a_calls_reseal_after_a_lost_key_skips_a_keyless_advertisement/0}].
 
 the_call_carries_the_advertisement() ->
     F = fixture(),
@@ -105,7 +111,8 @@ a_streams_policy_reaches_the_station_open() ->
 %% A stream's refused open is resealed by the stream itself (it was opened
 %% before the refusal arrived), with the reseal direct dial hands it: ONE fresh
 %% lookup, and only the key the refusal named. Another key fails naming both,
-%% none (or a provider that names no key) fails closed.
+%% none fails closed. (A provider that holds no key is re-resolved once, as a
+%% call is: see the lost-key case.)
 a_streams_reseal_is_bound_to_the_named_key() ->
     F = fixture(),
     script(F, [[keyed_ad(F, kem(1))], [keyed_ad(F, kem(2))], [keyed_ad(F, kem(3))], [keyless_ad(F)]],
@@ -127,6 +134,31 @@ a_streams_reseal_finds_the_named_key_among_the_providers_advertisements() ->
     ?assertEqual({ok, self()}, stream(F, #{})),
     [Opts] = calls(),
     ?assertEqual({ok, kem(2)}, (maps:get(reseal, Opts))(kem_id(2))).
+
+a_streams_reseal_after_a_lost_key_takes_any_named_key() ->
+    F = fixture(),
+    script(F, [[keyed_ad(F, kem(1))], [keyless_ad(F), keyed_ad(F, kem(5))]], [{ok, self()}]),
+    ?assertEqual({ok, self()}, stream(F, #{})),
+    [Opts] = calls(),
+    ?assertEqual({ok, kem(5)}, (maps:get(reseal, Opts))(no_key)).
+
+%% A call is resealed on the same pick as a stream: the provider's
+%% advertisement naming the refused key, wherever the lookup gives it.
+a_calls_reseal_finds_the_named_key_among_the_providers_advertisements() ->
+    F = fixture(),
+    script(F, [[keyed_ad(F, kem(1))], [keyed_ad(F, kem(3)), keyed_ad(F, kem(2))]],
+           [{error, {sealed_refused, kem_id(2)}}, {ok, <<"pong">>}]),
+    ?assertEqual({ok, <<"pong">>}, call(F, #{})),
+    [_First, Second] = calls(),
+    ?assertEqual(kem(2), maps:get(kem_key, macula_record:read_procedure_advertisement(maps:get(advertisement, Second)))).
+
+a_calls_reseal_after_a_lost_key_skips_a_keyless_advertisement() ->
+    F = fixture(),
+    script(F, [[keyed_ad(F, kem(1))], [keyless_ad(F), keyed_ad(F, kem(5))]],
+           [{error, {sealed_refused, no_key}}, {ok, <<"pong">>}]),
+    ?assertEqual({ok, <<"pong">>}, call(F, #{})),
+    [_First, Second] = calls(),
+    ?assertEqual(kem(5), maps:get(kem_key, macula_record:read_procedure_advertisement(maps:get(advertisement, Second)))).
 
 %%------------------------------------------------------------------
 %% Helpers

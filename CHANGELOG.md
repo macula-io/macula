@@ -9,9 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-End-to-end payload confidentiality for calls (plans/DESIGN_E2E_PAYLOAD_CONFIDENTIALITY.md, packages 2 and 3, with
-Amendment A1): a call to a provider that names a KEM key is sealed by the caller and opened only by the provider, so
-every station on its path relays ciphertext. E2E seal scheme 1: ML-KEM-1024, plus P-384 in pq_hybrid, HKDF-SHA-384,
+End-to-end payload confidentiality for calls and streams (plans/DESIGN_E2E_PAYLOAD_CONFIDENTIALITY.md, packages 2
+to 4, with Amendment A1): a call or a stream to a provider that names a KEM key is sealed by the caller and opened only
+by the provider, so every station on its path relays ciphertext. E2E seal scheme 1: ML-KEM-1024, plus P-384 in pq_hybrid, HKDF-SHA-384,
 AES-256-GCM, pinned by test/vectors/e2e_seal_v1.json.
 
 ### Changed (breaking)
@@ -39,6 +39,15 @@ AES-256-GCM, pinned by test/vectors/e2e_seal_v1.json.
   keeps, so a link respawn never reopens a provider's clear-call window.
 - **A direct-dial candidate carries its verified advertisement** (`advertisement`), and so does the head start the
   pool remembers.
+- **`macula:call_stream_station/7` decides to seal from signed state, or refuses the stream**, on exactly
+  `call_station/8`'s terms: `advertisement`, `confidential => off`, or `confidential => required`, and anything else is
+  `{error, {confidentiality, no_signed_state}}` before anything is sent. `macula:call_stream/5` (direct dial) hands
+  each candidate's verified advertisement to it.
+- **`macula_client:call_stream_station/7` is removed.** `macula_client:call_stream_station/8` takes its seal
+  explicitly, as `call_station/11` does. `macula_station_link:call_stream/6` requires `seal` in its options (`clear` or
+  `{sealed_to, KemKey}`): an open that names none raises `function_clause` in the caller and opens nothing.
+- **A link-carried stream ignores the in-process pair's deliveries** (`peer_chunk`, `peer_end`, `peer_error`,
+  `peer_reply`), which no verification or seal stands behind. It takes its peer's frames only as verified frames.
 
 ### Added
 
@@ -75,6 +84,39 @@ AES-256-GCM, pinned by test/vectors/e2e_seal_v1.json.
 - `macula_sealed_call`, `macula_seal:generate_key/1`, `public_key/1`, `carried_key_size/1`, `macula_frame`'s
   `payload_plain/1`, `plain_payload/1`, `error_plain/1`, `plain_error/1`, and the builders' `sealed` field.
 - The vectors pin a sealed ERROR (`error_reply`: plaintext `cbor([code, detail])`).
+- **Sealed streams** (design §5.2). A STREAM_OPEN sealed to the provider's KEM key agrees two stream keys, and every
+  later STREAM_DATA, STREAM_REPLY and STREAM_ERROR is sealed under the key for its direction:
+  - a caller's frames use a nonce derived from its signed seq; a provider's use a random nonce each frame carries;
+  - the AAD names the frame type, the request, the seq and the direction;
+  - STREAM_END carries nothing to seal.
+
+  The receiving stream opens each frame before anything of it is kept, so readers get plaintext. A sealed frame that
+  does not open, a clear frame on a sealed stream (a downgrade), or a clear error outside the closed set ends the
+  session `malformed_frame`. Once decapsulated, the stream keys no longer depend on the keyring, so a stream outlives
+  a KEM key rotation.
+- **A provider opens a sealed STREAM_OPEN and serves it sealed.** Admission refusals decided before anything is
+  opened go in the clear from the closed set: session caps (`too_many_sessions`, `unavailable`) and `sealed_refused`
+  naming the key it holds now. The session caps are read before decapsulation, so a caller at its cap costs no ML-KEM
+  decap. Anything decided after the open is about the procedure and goes sealed as the provider's first frame:
+  `unauthorized`, `not_found`, `mode_mismatch`, and a stream already carrying a session. A clear open to a procedure
+  that takes only sealed ones is refused `sealed_required`.
+- **A stream refused `sealed_refused` before it has sent anything reseals once.** Its reseal resolves the named key,
+  bound as a call's is, and its link reopens it under a new request id and a new encapsulation, keeping the stream's
+  pid. Both run outside the stream, so it keeps answering; what its owner sends meanwhile waits and goes out under the
+  new open. A stream refused after its first send is not resealed: it ends `{sealed_refused, KeyId}`.
+  `macula_bridge` then resets the local TCP connection, and the client reconnects, which resolves afresh.
+- **A provider stream seals at most `max_sealed_frames` frames** under its random nonces (default 2^32, the GCM
+  bound), then refuses `{error, sealed_frames_exhausted}`.
+- `macula_sealed_call:clear_refusal/1` and `refused_key/1` (the closed set and a refusal's named key, shared by calls
+  and streams), `macula_station_link:reopen_stream/6`, `macula_stream_sessions:has_room/1`.
+
+### Not sealed in 13.0.0
+
+- **D27 content transfers stay in the clear.** A content fetch trusts no realm by design (content verifies itself by
+  its content id), so it holds no signed source for the sharer's KEM key. It opens its streams with
+  `confidential => off`, explicitly, and a relaying station reads the bytes it relays, as before. The content itself
+  is public: anyone holding its MCID may fetch it. Sealing the transfer needs the sharer's key in its signed content
+  announcement, which is a package of its own (design §5.3, §9).
 
 ### Test vectors
 
