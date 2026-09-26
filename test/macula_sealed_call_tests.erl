@@ -19,8 +19,24 @@ the_provider_opens_the_vector_request_test_() ->
           Holder = holder(Profile),
           {ok, Plain, Keys} = macula_sealed_call:open_request(Profile, Holder, request(C), request_sealed(C)),
           ?assertEqual(x(maps:get(<<"request">>, C), <<"plain">>), Plain),
-          ?assertEqual(#{k_req => x(C, <<"k_req">>), k_rep => x(C, <<"k_rep">>), key_id => x(C, <<"key_id">>)}, Keys)
+          ?assertEqual(expected_keys(C), Keys)
       end} || C <- calls()].
+
+%% A STREAM_OPEN's keys are its request key and the two stream keys, and no
+%% reply key: a stream's later frames seal under the key for their
+%% direction, so a stream's keys cannot seal a reply.
+a_stream_opens_keys_cannot_seal_a_reply_test() ->
+    Request = (base_request(pq_pure))#{frame_type := <<"stream_open">>},
+    {Sealed, Keys} = macula_sealed_call:seal_request(pq_pure, public(pq_pure), Request, <<"open">>),
+    ?assertEqual([k_c2p, k_p2c, k_req, key_id], lists:sort(maps:keys(Keys))),
+    ?assertMatch({ok, <<"open">>, Keys}, macula_sealed_call:open_request(pq_pure, holder(pq_pure), Request, Sealed)),
+    Reply = #{frame_type => <<"result">>, request_hash => <<7:384>>, responded_by => maps:get(target, Request)},
+    ?assertError(function_clause, macula_sealed_call:seal_reply(Keys, Request, Reply, <<"no">>)).
+
+expected_keys(#{<<"frame_type">> := <<"stream_open">>} = C) ->
+    #{k_req => x(C, <<"k_req">>), k_c2p => x(C, <<"k_c2p">>), k_p2c => x(C, <<"k_p2c">>), key_id => x(C, <<"key_id">>)};
+expected_keys(C) ->
+    #{k_req => x(C, <<"k_req">>), k_rep => x(C, <<"k_rep">>), key_id => x(C, <<"key_id">>)}.
 
 %% The caller opens each vector's reply with the call's reply key. A
 %% stream_open's vector has stream frames instead, which the stream package

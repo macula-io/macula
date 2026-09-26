@@ -21,8 +21,12 @@
 -define(REQUEST_NONCE, <<0:96>>).
 
 %% A call's two keys, the request's and the reply's, and the id of the
-%% provider's KEM key the call was sealed to, which the reply names too.
--type keys() :: #{k_req := <<_:256>>, k_rep := <<_:256>>, key_id := <<_:64>>}.
+%% provider's KEM key the call was sealed to, which the reply names too. A
+%% STREAM_OPEN has its request key and the two stream keys instead of a reply
+%% key (design §5.2): its later frames seal under the key for their
+%% direction, and a stream's keys cannot seal a reply.
+-type keys() :: #{k_req := <<_:256>>, key_id := <<_:64>>,
+                  k_rep => <<_:256>>, k_c2p => <<_:256>>, k_p2c => <<_:256>>}.
 %% What a provider holds: a lookup of its KEM private key and that key as
 %% carried by the key's id, and the id of the key it advertises now.
 -type holder() :: #{lookup := fun((<<_:64>>) -> {ok, macula_seal:private_key(), binary()} | error),
@@ -103,6 +107,12 @@ seal_reply(#{k_rep := KRep, key_id := KeyId}, Request, Reply, Plain) ->
 %% Internal
 %%====================================================================
 
+keys(Secret, KeyId, #{frame_type := <<"stream_open">>, request_id := RequestId, caller := Caller,
+                      target := Target}) ->
+    Parties = {RequestId, Caller, Target},
+    {KReq, _KRep} = macula_seal:call_keys(Secret, <<"stream_open">>, Parties),
+    {KC2P, KP2C} = macula_seal:stream_keys(Secret, Parties),
+    #{k_req => KReq, k_c2p => KC2P, k_p2c => KP2C, key_id => KeyId};
 keys(Secret, KeyId, #{frame_type := FrameType, request_id := RequestId, caller := Caller, target := Target}) ->
     {KReq, KRep} = macula_seal:call_keys(Secret, FrameType, {RequestId, Caller, Target}),
     #{k_req => KReq, k_rep => KRep, key_id => KeyId}.
