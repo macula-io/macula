@@ -28,8 +28,15 @@ AES-256-GCM, pinned by test/vectors/e2e_seal_v1.json.
   - mcl-echo `apps/mcl_echo/src/mcl_echo_call.erl` (its recording dial I/O forwards direct dial's options, which now
     carry the advertisement, so only its pins change);
   - macula-station's test suites and its test-cluster harness, which pass `confidential => off`.
+- **`macula_client:call_station/7,8,9,10` are removed.** They sent in the clear with no signed state, walking
+  around the rule above. `macula_client:call_station/11` takes its seal explicitly (`clear` or `{sealed_to, Key}`),
+  and `macula:call_station/7,8` decides it. No consumer in macula-station, macula-realm, mcl-om or mcl-echo called
+  them.
 - **`macula_station_link:call/7`'s gen_server message carries its seal** (an eighth element). Only code that sends
   the raw message, rather than calling `call/7,8`, is affected.
+- **A pre-signed advertisement that names a KEM key is refused at registration**
+  (`{confidentiality, presigned_keyed_advertisement}`). A key is named through a spec, whose `keyed_since` the pool
+  keeps, so a link respawn never reopens a provider's clear-call window.
 - **A direct-dial candidate carries its verified advertisement** (`advertisement`), and so does the head start the
   pool remembers.
 
@@ -40,7 +47,9 @@ AES-256-GCM, pinned by test/vectors/e2e_seal_v1.json.
   on macula 12.11 or later, and every caller runs 13). `macula:advertise/5` and
   `macula_response:advertise_direct/6,7` take `confidential` (`preferred`, the default; `required`; `off`). `required`
   also refuses clear calls, and is refused at advertise time as `kem_advertise_disabled` while the node is switched
-  off. The key is read from the keyring at every signing, so renewals carry a rotated key.
+  off. The key is read from the keyring at every signing, so renewals carry a rotated key. The switch is read when a
+  procedure is advertised and renewed, not a live off switch: turning it off stops new keyed specs, but a stored
+  spec keeps naming the key until its chain lapses.
 - **`macula_kem_keyring`**: one KEM key per node identity per VM, in memory only, rotated every 24 hours. A replaced
   key still opens calls for 30 minutes, then is deleted. A stolen key opens at most about 24.5 hours of calls.
   Precondition: one node identity runs in one VM.
@@ -55,7 +64,14 @@ AES-256-GCM, pinned by test/vectors/e2e_seal_v1.json.
   `{confidentiality, {key_mismatch, Named, Found}}` or `no_kem_key`. It never falls back to the clear. Against a sealed
   request, a clear answer is accepted only as a relay error or an admission refusal from the closed set
   (`expired`, `not_yet_valid`, `request_id_reused`, `request_copy`, `reply_not_kept`, `caller_quota`, `share_full`,
-  `admission_full`, `too_many_sessions`, `unavailable`).
+  `admission_full`, `too_many_sessions`, `unavailable`). A sealed reply that does not open fails the call as
+  `{confidentiality, reply_not_opened}`. A provider that answers it holds no key gets the same single re-resolve.
+- **What stays visible.** A request's `token` and `proofs` (the caller's UCAN and its delegation chain) travel in the
+  clear beside `sealed`: scheme 1 seals the payload only. Sizes, timing and routing fields stay visible too (design
+  §9).
+- **A sealed call's secrets stay out of logs.** `macula_node_keys:redacted/1` redacts a call's or stream's keys and
+  a KEM private key's halves by name. A pending sealed call shows as `sealed` in the link's status, and a handler
+  crash on a sealed call is logged by its reason's name and frames without their arguments.
 - `macula_sealed_call`, `macula_seal:generate_key/1`, `public_key/1`, `carried_key_size/1`, `macula_frame`'s
   `payload_plain/1`, `plain_payload/1`, `error_plain/1`, `plain_error/1`, and the builders' `sealed` field.
 - The vectors pin a sealed ERROR (`error_reply`: plaintext `cbor([code, detail])`).
