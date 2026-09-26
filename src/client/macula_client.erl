@@ -104,8 +104,7 @@
 %% Internal API — called by `macula_pubsub' (and future surfaces).
 -export([publish/5, subscribe/5, unsubscribe/2]).
 %% RPC fan-out (since 3.16.0) — called by the `macula' facade.
--export([call_linked_station/5, call_station/7, call_station/8, call_station/9,
-         call_station/10, call_station/11,
+-export([call_linked_station/5, call_station/11,
          advertise/4, advertise/5, advertise/6, advertise/7, unadvertise/3,
          advertise_stream/5, advertise_stream/6, advertise_stream/7, advertise_stream/8,
          unadvertise_stream/3]).
@@ -818,55 +817,21 @@ call_linked_station(Pool, Realm, Procedure, Payload, TimeoutMs)
 %% provider's serving_station to its endpoint, then reach it in one hop
 %% here, with no mesh relay.
 %%
-%% Returns `{error, not_connected}' if the link does not complete its
-%% handshake before the deadline.
--spec call_station(pool(), seed(), <<_:256>>, <<_:256>>, binary(), term(),
-                   1..600_000) -> {ok, term()} | {error, term()}.
-call_station(Pool, Station, Target, Realm, Procedure, Payload, TimeoutMs) ->
-    call_station(Pool, Station, Target, Realm, Procedure, Payload, TimeoutMs, <<>>).
-
-%% @doc As `call_station/7', presenting a capability token (UCAN) to a
-%% gated provider. Empty token = none. Slice 7b.
--spec call_station(pool(), seed(), <<_:256>>, <<_:256>>, binary(), term(),
-                   1..600_000, binary()) -> {ok, term()} | {error, term()}.
-call_station(Pool, Station, Target, Realm, Procedure, Payload, TimeoutMs, UcanToken) ->
-    call_station(Pool, Station, Target, Realm, Procedure, Payload, TimeoutMs,
-                 UcanToken, #{}).
-
-%% @doc As `call_station/8', naming in `LinkOpts' the station THIS dial
-%% must prove: `expected_node_id'. `pin_tls_cert => true' and `verify' are
-%% REFUSED, see `macula:call_station/8'. The pool's own `connect/2'-time
-%% `expected_node_id' is fixed at connect time and applies to every link
-%% the pool dials (seeds and every `call_station' target alike),
-%% unworkable for direct-dial, whose whole point is reaching a station not
-%% known until resolved at call time. This lets a direct-dial caller name
-%% the node_id a signed DHT record just resolved, without changing the
-%% pool's expectation for its other links. Only applies when a NEW link is
-%% dialed for `Station': an already-connected link keeps the identity it
-%% proved.
--spec call_station(pool(), seed(), <<_:256>>, <<_:256>>, binary(), term(),
-                   1..600_000, binary(), map()) ->
-    {ok, term()} | {error, term()}.
-call_station(Pool, Station, Target, Realm, Procedure, Payload, TimeoutMs, UcanToken,
-             LinkOpts) ->
-    call_station(Pool, Station, Target, Realm, Procedure, Payload, TimeoutMs, UcanToken,
-                 LinkOpts, TimeoutMs).
-
-%% @doc As `call_station/9', waiting at most `DialTimeoutMs' of `TimeoutMs'
-%% for a freshly-dialed link's handshake; the CALL gets whatever remains of
-%% `TimeoutMs'. `{error, not_connected}' then comes back after
-%% `DialTimeoutMs', before any CALL was sent, so a direct-dial caller can
-%% move on to another station within its own deadline.
--spec call_station(pool(), seed(), <<_:256>>, <<_:256>>, binary(), term(),
-                   1..600_000, binary(), map(), pos_integer()) ->
-    {ok, term()} | {error, term()}.
-call_station(Pool, Station, Target, Realm, Procedure, Payload, TimeoutMs, UcanToken,
-             LinkOpts, DialTimeoutMs) ->
-    call_station(Pool, Station, Target, Realm, Procedure, Payload, TimeoutMs, UcanToken,
-                 LinkOpts, DialTimeoutMs, clear).
-
-%% @doc As `call_station/10', sealed to the provider's KEM key as carried with `{sealed_to, Key}' (E2E design §5.1;
-%% see `macula_station_link:call/8'), or in the clear with `clear'.
+%% `UcanToken' is a capability token for a gated provider (empty: none).
+%% `LinkOpts' names the station THIS dial must prove, `expected_node_id':
+%% the pool's own `connect/2'-time expectation applies to every link it
+%% dials, unworkable for direct dial, whose station is known only once
+%% resolved. It applies only when a NEW link is dialed for `Station'; an
+%% already-connected link keeps the identity it proved. `pin_tls_cert =>
+%% true' and `verify' are refused, see `macula:call_station/8'. At most
+%% `DialTimeoutMs' of `TimeoutMs' waits for a fresh link's handshake, and the
+%% CALL gets what remains: `{error, not_connected}' comes back after it,
+%% before any CALL was sent, so a direct-dial caller can move on.
+%%
+%% `Seal' is `{sealed_to, Key}', the provider's KEM key as carried, or
+%% `clear' (E2E design §5.1; see `macula_station_link:call/8'). It is
+%% explicit: this pool has no default and makes no decision of its own.
+%% `macula:call_station/7,8' decides it from signed state (`macula:call_seal/5').
 -spec call_station(pool(), seed(), <<_:256>>, <<_:256>>, binary(), term(),
                    1..600_000, binary(), map(), pos_integer(), clear | {sealed_to, binary()}) ->
     {ok, term()} | {error, term()}.
@@ -879,7 +844,8 @@ call_station(Pool, Station, Target, Realm, Procedure, Payload, TimeoutMs, UcanTo
        is_integer(TimeoutMs), TimeoutMs > 0, TimeoutMs =< 600_000,
        is_binary(UcanToken),
        is_map(LinkOpts),
-       is_integer(DialTimeoutMs), DialTimeoutMs > 0 ->
+       is_integer(DialTimeoutMs), DialTimeoutMs > 0,
+       (Seal =:= clear orelse (is_tuple(Seal) andalso element(1, Seal) =:= sealed_to)) ->
     gen_server:call(Pool,
                     {call_station, Station, Target, Realm, Procedure, Payload,
                      TimeoutMs, DialTimeoutMs, UcanToken, LinkOpts, Seal},
@@ -1008,12 +974,12 @@ ensure_station_link(Pool, Station, LinkOpts, TimeoutMs)
 
 %% @doc Open a streaming RPC to `Target', a provider's node_id, by DIALING
 %% a specific station directly (direct-dial). The streaming analogue of
-%% `call_station/7': ensure (reuse or dial) a link to `Station', await the
+%% `call_station/11': ensure (reuse or dial) a link to `Station', await the
 %% handshake, then open the stream there, naming `Target'.
 %% `Opts' may set `dial_timeout_ms' (default 10_000) for the dial and
 %% handshake, plus any stream option (e.g. `mode').
 %% `Opts' also names the station this dial must prove, `expected_node_id',
-%% as `call_station/8' does. It is kept apart as the dial's own option, so
+%% as `call_station/11' does. It is kept apart as the dial's own option, so
 %% it reaches `ensure_link/3' and not the stream open.
 -spec call_stream_station(pool(), seed(), <<_:256>>, <<_:256>>, binary(), term(),
                           map()) -> {ok, pid()} | {error, term()}.
@@ -2326,7 +2292,7 @@ pinned_station(Seed, #state{link_opts = LinkOpts} = S) ->
 %% closed one failed with `{disconnected, {peer_closed, ...}}'.
 %%
 %% `expected_node_id' (when a direct-dial caller supplies one — see
-%% `call_station/8') is exactly the station identity that caller already
+%% `call_station/11') is exactly the station identity that caller already
 %% resolved and verified via a signed DHT record before ever reaching
 %% here. A literal-key miss now falls back to asking every link this
 %% pool currently holds whether IT is already connected to that same
@@ -2334,7 +2300,7 @@ pinned_station(Seed, #state{link_opts = LinkOpts} = S) ->
 %%
 %% Deliberately does NOT do this for a caller with no `expected_node_id'
 %% (the pool's own seed-connect path never sets one — see
-%% `call_station/9''s own doc: "The pool's own `connect/2'-time
+%% `call_station/11''s own doc: "The pool's own `connect/2'-time
 %% `expected_node_id' is fixed at connect time"): scanning every link for
 %% a plain seed dial would add cost to the common path for no benefit,
 %% since a seed's `Station' string IS already its own canonical `Links'
