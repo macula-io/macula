@@ -92,6 +92,9 @@ peer_node_id(#{peer_node_id := NodeId}) ->
 %% The dialling side
 %%------------------------------------------------------------------
 
+%% The carrier is a process that ssl drives through `cb_info', which ssl:connect/3 accepts and its spec does not
+%% name (it lists gen_tcp sockets and hosts only), so dialyzer reads every call here as one that cannot succeed.
+-dialyzer({no_fail_call, dialled/2}).
 dialled({ok, Socket}, Options) ->
     ended(connected(ssl:connect(Socket, client_tls_options(), timeout(Options)), Options), Socket);
 dialled({error, _} = Refusal, _Options) ->

@@ -82,7 +82,7 @@ a test you have just written.
 
 1. Ensure the tree is fit to push: `scripts/is_tree_pushable.sh` (a clean tree,
    the pinned Erlang/OTP, `rebar3 xref`, then every eunit test)
-2. Run dialyzer: `rebar3 dialyzer`
+2. Run dialyzer as CI does, with the calls a consumer makes: `rebar3 as consumer_contracts dialyzer`
 3. Generate docs to check for warnings: `rebar3 edoc`
 4. Commit with clear messages
 5. Push to your fork

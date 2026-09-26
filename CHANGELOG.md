@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [13.0.1] - 2026-09-27
+
+Types, the dialyzer check that should have caught them, and one option that was accepted and did nothing. No wire
+change.
+
+### Fixed
+
+- **`macula:call/6` and `macula:call_stream/5` refuse `confidential => off`.** A call they resolve is sealed to the
+  advertisement it resolves (a lookup never downgrades a call, design §8.1), so `off` was accepted and ignored: the
+  call went sealed anyway. It is now `{error, {confidentiality, off_needs_explicit_target}}` before anything is looked
+  up, as macula-go refuses it; a clear call is `call_station/8`'s, to a target the application names. Any value other
+  than `preferred` or `required` is `{error, {invalid_option, confidential}}`. Found by Venus's interop run. `call/6`'s
+  spec now names `confidential`, which it did not.
+- **`macula_client:seed()` names `expected_node_id`.** A seed map may pin the node_id its station must prove, and
+  connect/2 reads that pin and documents it, but the type left the key out. Every consumer that dials by pin (every
+  mcl service) broke the contract of `macula:connect/2`, `macula_client:connect/2` and `macula:call_station/7,8` in
+  its own dialyzer, which then marked everything after the call unreachable (33 warnings in mcl-echo, found by Terra).
+- **`macula_client:opts()` names `order_timeout_ms` and `order_max_buffer`.** The pool reads both for its `ordered`
+  subscriptions; a consumer that set them broke the contract of connect/2.
+- **`macula_frame:request_spec()` carries `sealed`.** A sealed request's spec has a `sealed` field and no `payload`;
+  the type required a payload and named no seal.
+- **A pending call keeps its seal beside its request, not inside it.** The link held a sealed call's keys in the
+  verified request's map, which `verify_reply/3` and `verify_relay_error/4` type as a request and nothing more. The
+  pending entry is now `{From, TRef, Request, Seal}`, and format_status/1 still shows `sealed` in place of the keys.
+
+### Changed
+
+- **dialyzer reports a call that breaks a contract and a function that cannot return.** `no_fail_call` and
+  `no_return` were turned off in rebar.config from the first commit, so none of the above could fail this repository's
+  own check. With them on, the three types above and one OTP spec gap were all it found. The gap is ssl:connect/3,
+  whose spec lists no `cb_info` carrier process; `macula_dist_tunnel:dialled/2` suppresses that warning by name.
+- **`consumer_contracts/macula_consumer_contracts.erl` makes a consumer's calls for dialyzer to check.** It connects
+  and calls through a pinned seed, as the services do. CI's dialyzer runs `rebar3 as consumer_contracts dialyzer`,
+  whose profile adds it as an extra source directory; nothing runs it and the hex package does not carry it. Seen red against 13.0.0's `seed()`, `opts()` and
+  `call/6` spec.
+
 ## [13.0.0] - 2026-09-26
 
 End-to-end payload confidentiality for calls and streams (plans/DESIGN_E2E_PAYLOAD_CONFIDENTIALITY.md, packages 2

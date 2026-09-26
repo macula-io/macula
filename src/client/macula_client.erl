@@ -246,9 +246,12 @@
     expected_node_id  => binary(),
     presented_node_id => binary()
 }.
+%% A seed map may name the node_id its station must prove (a pinned seed),
+%% which stands over the pool's `expected_node_id' option: see connect/2.
 -type seed() :: binary() | string()
               | #{host := binary() | string(),
-                  port := inet:port_number()}.
+                  port := inet:port_number(),
+                  expected_node_id => <<_:256>>}.
 
 -type opts() :: #{
     %% The node identity key that every link in the pool shares: an
@@ -286,6 +289,12 @@
     %% How often the inbound publication dedup table is swept for
     %% entries whose publication has expired. Default 30_000.
     dedup_sweep_ms     => pos_integer(),
+
+    %% How long an `ordered' subscription waits for a missing seq before
+    %% skipping the gap, and how many out-of-order facts it holds per
+    %% publisher while it waits. Defaults 250 and 1024.
+    order_timeout_ms   => non_neg_integer(),
+    order_max_buffer   => pos_integer(),
 
     %% How often the request admission is swept for entries past their
     %% deadline plus 5 minutes, the callers' that never ask again. Default

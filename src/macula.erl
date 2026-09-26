@@ -321,8 +321,15 @@ call(Pool, Realm, Procedure, Payload, TimeoutMs) ->
 %% deadline is `{error, {unresolved, provider_not_advertised}}'. To have
 %% every provider of a procedure answer, list them with `providers/3,4' and
 %% make one call per provider. See `macula_direct_dial:call/6'.
+%%
+%% The call is sealed to the KEM key of the advertisement it resolves, when
+%% that advertisement names one (E2E design §8.1). `#{confidential =>
+%% required}' fails the call closed when none does. A lookup never downgrades
+%% a call, so `confidential => off' is refused as `{error, {confidentiality,
+%% off_needs_explicit_target}}': a clear call is `call_station/8''s, to a
+%% target the application names itself.
 -spec call(pool(), realm(), procedure(), term(), 1..600_000,
-           #{provider => <<_:256>>}) ->
+           #{provider => <<_:256>>, confidential => preferred | required}) ->
     {ok, term()} | {error, term()}.
 call(Pool, Realm, Procedure, Payload, TimeoutMs, Opts) when is_map(Opts) ->
     macula_direct_dial:call(Pool, Realm, Procedure, Payload, TimeoutMs, Opts).
@@ -912,6 +919,10 @@ call_stream(Procedure, Args, Opts) when is_binary(Procedure), is_map(Opts) ->
 %% An open whose signed STREAM_OPEN would be longer than
 %% `max_stream_open_bytes' (1 MiB by default) returns
 %% `{error, {open_too_large, Limit}}' without sending anything.
+%% The stream is sealed as `call/6' seals a call: `confidential => required'
+%% fails closed without a key, and `confidential => off' is refused as
+%% `{error, {confidentiality, off_needs_explicit_target}}' (see
+%% `call_stream_station/7').
 -spec call_stream(pool(), realm(), procedure(), term(), map()) ->
         {ok, stream()} | {error, term()}.
 call_stream(Pool, Realm, Procedure, Args, Opts)

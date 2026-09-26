@@ -172,8 +172,8 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            _build/default/*_plt
-            _build/default/*_plt.hash
+            _build/consumer_contracts/*_plt
+            _build/consumer_contracts/*_plt.hash
             /github/home/.cache/rebar3
           key: plt-${{ runner.os }}-otp${{ env.OTP_VERSION }}-${{ hashFiles('rebar.config', 'rebar.lock') }}
           restore-keys: plt-${{ runner.os }}-otp${{ env.OTP_VERSION }}-
@@ -247,4 +247,6 @@ jobs:
 
       - name: dialyzer
         if: matrix.check == 'dialyzer'
-        run: rebar3 dialyzer
+        # The consumer_contracts profile adds the calls a consumer makes, so a
+        # spec that refuses them fails here (rebar.config).
+        run: rebar3 as consumer_contracts dialyzer

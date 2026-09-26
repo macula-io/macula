@@ -34,7 +34,10 @@ cases() ->
      {"a call's reseal takes the provider's advertisement that names the key, not the first",
       fun a_calls_reseal_finds_the_named_key_among_the_providers_advertisements/0},
      {"a call whose provider lost its key reseals to the first advertisement that names any key",
-      fun a_calls_reseal_after_a_lost_key_skips_a_keyless_advertisement/0}].
+      fun a_calls_reseal_after_a_lost_key_skips_a_keyless_advertisement/0},
+     {"a call refuses confidential => off before any lookup", fun a_call_refuses_off/0},
+     {"a stream refuses confidential => off before any lookup", fun a_stream_refuses_off/0},
+     {"a confidential that names no policy is an invalid option", fun an_unknown_confidential_is_invalid/0}].
 
 the_call_carries_the_advertisement() ->
     F = fixture(),
@@ -90,6 +93,35 @@ required_reaches_the_station_call() ->
     ?assertEqual({ok, <<"pong">>}, call(F, #{confidential => required})),
     [Opts] = calls(),
     ?assertEqual(required, maps:get(confidential, Opts)).
+
+%% A lookup never downgrades a call (§8.1), so direct dial cannot send in the clear: `confidential => off' is the
+%% application's decision for a target it names itself (`call_station/8'). Accepted here it would do nothing, since
+%% the call is sealed to the advertisement it resolves, so it is refused by name before anything is looked up.
+a_call_refuses_off() ->
+    F = fixture(),
+    script(F, [[keyed_ad(F, kem(1))]], [{ok, <<"pong">>}]),
+    ?assertEqual({error, {confidentiality, off_needs_explicit_target}}, call(F, #{confidential => off})),
+    ?assertEqual([], calls()),
+    ?assertEqual([[keyed_ad_marker]], lookups_left()).
+
+a_stream_refuses_off() ->
+    F = fixture(),
+    script(F, [[keyed_ad(F, kem(1))]], [{ok, self()}]),
+    ?assertEqual({error, {confidentiality, off_needs_explicit_target}}, stream(F, #{confidential => off})),
+    ?assertEqual([], calls()),
+    ?assertEqual([[keyed_ad_marker]], lookups_left()).
+
+an_unknown_confidential_is_invalid() ->
+    F = fixture(),
+    script(F, [[keyed_ad(F, kem(1))]], [{ok, <<"pong">>}, {ok, self()}]),
+    ?assertEqual({error, {invalid_option, confidential}}, call(F, #{confidential => sometimes})),
+    ?assertEqual({error, {invalid_option, confidential}}, stream(F, #{confidential => sometimes})),
+    ?assertEqual([], calls()),
+    ?assertEqual([[keyed_ad_marker]], lookups_left()).
+
+%% The lookups a script still holds, each record shown as a marker: none was taken.
+lookups_left() ->
+    [[keyed_ad_marker || _ <- Records] || Records <- get(lookups)].
 
 %% A stream is opened on the same terms: the station open is handed the
 %% candidate's verified advertisement to seal from.

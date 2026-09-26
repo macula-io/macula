@@ -209,6 +209,10 @@
 
 -type url() :: binary() | string().
 
+%% What opens a pending call's reply: nothing for a clear call, a sealed call's keys and request. `sealed' stands in
+%% for the keys only in the copy of the state that format_status/1 shows.
+-type call_seal() :: clear | {macula_sealed_call:keys(), macula_seal:request()} | sealed.
+
 -type opts() :: #{
     %% Endpoint to dial. Either a URL (https://host:port) or a
     %% pre-parsed #{host, port} map. The map form may carry the
@@ -352,7 +356,8 @@
     %% peer's node id, set on `connected'.
     peer_node_id     :: <<_:256>> | undefined,
     %% map of CALL id (16 bytes) -> {From, TimerRef}.
-    pending = #{}    :: #{<<_:128>> => {gen_server:from(), reference(), macula_frame:verified_request()}},
+    pending = #{}    :: #{<<_:128>> => {gen_server:from(), reference(), macula_frame:verified_request(),
+                                          call_seal()}},
     %% Active topic subscriptions keyed by SubRef returned to the
     %% subscriber. The reverse `topic_index' lets inbound EVENT
     %% frames fan out to all SubRefs subscribed to a given
@@ -1845,7 +1850,8 @@ pool_told(undefined, _Summary) -> ok;
 pool_told(Pool, Summary) -> Pool ! {macula_link_disconnected, self(), Summary}, ok.
 
 answer_waiting_callers(Reason, #state{pending = Pending}) ->
-    maps:foreach(fun(_RequestId, {From, _TRef, _Request}) -> gen_server:reply(From, {error, Reason}) end, Pending).
+    maps:foreach(fun(_RequestId, {From, _TRef, _Request, _Seal}) -> gen_server:reply(From, {error, Reason}) end,
+                 Pending).
 
 code_change(_OldVsn, S, _Extra) -> {ok, S}.
 
@@ -1858,8 +1864,8 @@ seals_redacted(#{state := #state{pending = Pending} = S} = Status) ->
 seals_redacted(Status) ->
     Status.
 
-seal_redacted({From, TRef, #{seal := {_Keys, _SealRequest}} = Request}) ->
-    {From, TRef, Request#{seal := sealed}};
+seal_redacted({From, TRef, Request, {_Keys, _SealRequest}}) ->
+    {From, TRef, Request, sealed};
 seal_redacted(Entry) ->
     Entry.
 
@@ -1942,8 +1948,7 @@ call_verified({ok, Request}, Frame, RequestId, Seal, From, RemainingMs, #state{p
     %% NOT `ok = send_frame(...)': a frame the peering refuses comes back as
     %% an error, and a hard match would take this link down for every other
     %% caller on it. Reply with the reason instead.
-    await_call_reply(macula_peering:send_frame(Pid, Frame), RequestId, Request#{seal => Seal}, From, RemainingMs,
-                     P, S);
+    await_call_reply(macula_peering:send_frame(Pid, Frame), RequestId, Request, Seal, From, RemainingMs, P, S);
 call_verified({error, Refusal}, _Frame, _RequestId, _Seal, _From, _RemainingMs, S) ->
     {reply, {error, {refused, Refusal}}, S}.
 
@@ -1953,10 +1958,10 @@ target_node_id(NodeId, _S) -> NodeId.
 with_token(<<>>, Spec) -> Spec;
 with_token(Token, Spec) -> Spec#{token => Token}.
 
-await_call_reply(ok, RequestId, Request, From, Tmo, Pending, S) ->
+await_call_reply(ok, RequestId, Request, Seal, From, Tmo, Pending, S) ->
     TRef = erlang:send_after(Tmo, self(), {call_timeout, RequestId}),
-    {noreply, S#state{pending = Pending#{RequestId => {From, TRef, Request}}}};
-await_call_reply({error, Reason}, _RequestId, _Request, _From, _Tmo, _Pending, S) ->
+    {noreply, S#state{pending = Pending#{RequestId => {From, TRef, Request, Seal}}}};
+await_call_reply({error, Reason}, _RequestId, _Request, _Seal, _From, _Tmo, _Pending, S) ->
     {reply, {error, {refused, Reason}}, S}.
 
 -spec send_publish_frame(<<_:256>>, binary(), term(), non_neg_integer(),
@@ -2062,15 +2067,15 @@ held_request(RequestId, #state{liveness_outstanding = {RequestId, Request}}) ->
 held_request(RequestId, #state{pending = Pending}) ->
     pending_request(RequestId, maps:find(RequestId, Pending)).
 
-pending_request(RequestId, {ok, {From, TRef, Request}}) ->
-    {call, RequestId, From, TRef, Request};
+pending_request(RequestId, {ok, {From, TRef, Request, Seal}}) ->
+    {call, RequestId, From, TRef, Request, Seal};
 pending_request(_RequestId, error) ->
     unknown_request.
 
 answered({probe, Request}, Frame, S) ->
     probe_answered(verified_answer(Frame, Request, S), S);
-answered({call, RequestId, From, TRef, Request}, Frame, S) ->
-    call_answered(verified_answer(Frame, Request, S), RequestId, From, TRef, Request, S);
+answered({call, RequestId, From, TRef, Request, Seal}, Frame, S) ->
+    call_answered(verified_answer(Frame, Request, S), RequestId, From, TRef, Request, Seal, S);
 answered(unknown_request, _Frame, S) ->
     refused_reply(unknown_request, S).
 
@@ -2088,9 +2093,9 @@ probe_answered({error, Refusal}, S) ->
 
 %% A verified answer completes the call; a refused one leaves it pending. A sealed call's answer is opened first, and
 %% one that does not answer a sealed request is refused too.
-call_answered({ok, Fields}, RequestId, From, TRef, Request, S) ->
-    completed(answer_of(Fields, Request), RequestId, From, TRef, S);
-call_answered({error, Refusal}, _RequestId, _From, _TRef, _Request, S) ->
+call_answered({ok, Fields}, RequestId, From, TRef, Request, Seal, S) ->
+    completed(answer_of(Fields, Seal, Request), RequestId, From, TRef, S);
+call_answered({error, Refusal}, _RequestId, _From, _TRef, _Request, _Seal, S) ->
     refused_reply(Refusal, S).
 
 completed({refused, Refusal}, _RequestId, _From, _TRef, S) ->
@@ -2101,19 +2106,19 @@ completed(Result, RequestId, From, TRef, #state{pending = P} = S) ->
     S#state{pending = maps:remove(RequestId, P)}.
 
 %% What a verified answer means to a clear call, and to a sealed one (E2E design §5.1, §8.3).
-answer_of(Fields, #{seal := clear}) ->
+answer_of(Fields, clear, _Request) ->
     call_result(Fields);
-answer_of(#{sealed := Sealed, frame_type := Type, responded_by := RespondedBy}, #{seal := {Keys, SealRequest},
-                                                                                   request_hash := RequestHash}) ->
+answer_of(#{sealed := Sealed, frame_type := Type, responded_by := RespondedBy}, {Keys, SealRequest},
+          #{request_hash := RequestHash}) ->
     Reply = #{frame_type => atom_to_binary(Type), request_hash => RequestHash, responded_by => RespondedBy},
     opened_answer(macula_sealed_call:open_reply(Keys, SealRequest, Reply, Sealed), Type);
-answer_of(#{frame_type := error, reported_by := _} = Fields, #{seal := {_Keys, _SealRequest}}) ->
+answer_of(#{frame_type := error, reported_by := _} = Fields, {_Keys, _SealRequest}, _Request) ->
     call_result(Fields);
-answer_of(#{frame_type := error, code := <<"sealed_refused">>} = Fields, #{seal := {_Keys, _SealRequest}}) ->
+answer_of(#{frame_type := error, code := <<"sealed_refused">>} = Fields, {_Keys, _SealRequest}, _Request) ->
     {error, {sealed_refused, macula_sealed_call:refused_key(maps:get(detail, Fields, undefined))}};
-answer_of(#{frame_type := error, code := Code} = Fields, #{seal := {_Keys, _SealRequest}}) ->
+answer_of(#{frame_type := error, code := Code} = Fields, {_Keys, _SealRequest}, _Request) ->
     clear_refusal(macula_sealed_call:clear_refusal(Code), Fields);
-answer_of(_ClearResult, #{seal := {_Keys, _SealRequest}}) ->
+answer_of(_ClearResult, {_Keys, _SealRequest}, _Request) ->
     {refused, malformed_frame}.
 
 opened_answer({ok, Plain}, result) -> opened_result(macula_frame:plain_payload(Plain));
@@ -2187,7 +2192,7 @@ on_inbound_call({error, Why}, _Frame, S) ->
 
 on_timeout(error, S) ->
     {noreply, S};
-on_timeout({{From, _OldTRef, _Request}, NewP}, S) ->
+on_timeout({{From, _OldTRef, _Request, _Seal}, NewP}, S) ->
     gen_server:reply(From, {error, timeout}),
     {noreply, S#state{pending = NewP}}.
 
@@ -2197,7 +2202,7 @@ fail_all_pending(Reason, #state{pending = P, subscriptions = Subs,
                                 overlay_subscriptions = OverlaySubs,
                                 client_streams = CS,
                                 server_streams = SS} = S) ->
-    maps:foreach(fun(_RequestId, {From, TRef, _Request}) ->
+    maps:foreach(fun(_RequestId, {From, TRef, _Request, _Seal}) ->
         _ = erlang:cancel_timer(TRef),
         gen_server:reply(From, {error, Reason})
     end, P),

@@ -232,6 +232,10 @@ call(Pool, Realm, Procedure, Payload, TimeoutMs) ->
 %% A `provider' that is not a 32-byte node_id is `{error, {invalid_option,
 %% provider}}', and `realm_trust' and `verify_cert_chain' are refused with
 %% `{error, {removed_option, Key}}', both before anything is looked up.
+%% `confidential' is `preferred' (the default) or `required'; `off' is
+%% refused as `{error, {confidentiality, off_needs_explicit_target}}' and any
+%% other value as `{error, {invalid_option, confidential}}', also before
+%% anything is looked up.
 -spec call(macula:pool(), macula:realm(), macula:procedure(), term(),
           1..600_000, map()) -> {ok, term()} | {error, term()}.
 call(Pool, Realm, Procedure, Payload, TimeoutMs, Opts)
@@ -240,7 +244,8 @@ call(Pool, Realm, Procedure, Payload, TimeoutMs, Opts)
                         Opts).
 
 call_unless_removed(none, Pool, Realm, Procedure, Payload, TimeoutMs, Opts) ->
-    call_to(provider_option(Opts), Pool, Realm, Procedure, Payload, TimeoutMs, Opts);
+    call_to(with_confidential(confidential_option(Opts), provider_option(Opts)), Pool, Realm, Procedure, Payload,
+            TimeoutMs, Opts);
 call_unless_removed(Removed, _Pool, _Realm, _Procedure, _Payload, _TimeoutMs, _Opts) ->
     {error, Removed}.
 
@@ -255,6 +260,18 @@ call_to({ok, Only}, Pool, Realm, Procedure, Payload, TimeoutMs, Opts) ->
                    station_try(Dial, call_work(Dial, Realm, Procedure, Payload, Deadline,
                                                maps:get(confidential, Opts, preferred))),
                    Deadline).
+
+%% What a call or stream may ask of its confidentiality: `preferred' (the default) or `required'. A lookup never
+%% downgrades a call (E2E design §8.1), so a call direct dial resolves is sealed to the advertisement it resolves and
+%% cannot be sent in the clear: `off' is the application's decision for a target it names itself (`call_station/8',
+%% `call_stream_station/7'), and here it is refused by name rather than accepted and ignored.
+confidential_option(#{confidential := off}) -> {error, {confidentiality, off_needs_explicit_target}};
+confidential_option(#{confidential := Policy}) when Policy =:= preferred; Policy =:= required -> {ok, Policy};
+confidential_option(#{confidential := _}) -> {error, {invalid_option, confidential}};
+confidential_option(#{}) -> {ok, preferred}.
+
+with_confidential({ok, _Policy}, Checked) -> Checked;
+with_confidential({error, _} = Refused, _Checked) -> Refused.
 
 %% Which provider a call is limited to, `any' when the caller named none.
 provider_option(#{provider := <<_:256>> = Provider}) -> {ok, Provider};
@@ -333,15 +350,20 @@ call_stream(Pool, Realm, Procedure, Args, StreamOpts, Opts)
                                StreamOpts, Opts).
 
 call_stream_unless_removed(none, Pool, Realm, Procedure, Args, StreamOpts, Opts) ->
+    stream_to(confidential_option(StreamOpts), Pool, Realm, Procedure, Args, StreamOpts, Opts);
+call_stream_unless_removed(Removed, _Pool, _Realm, _Procedure, _Args, _StreamOpts, _Opts) ->
+    {error, Removed}.
+
+stream_to({error, _} = Refused, _Pool, _Realm, _Procedure, _Args, _StreamOpts, _Opts) ->
+    Refused;
+stream_to({ok, _Policy}, Pool, Realm, Procedure, Args, StreamOpts, Opts) ->
     Dial = dial(Pool, [find_records, find_record, call_stream_station, resolved_candidate,
                        remember_resolved], Opts),
     Deadline = deadline(maps:get(dial_timeout_ms, StreamOpts, ?DEFAULT_DIAL_TIMEOUT_MS)),
     each_candidate(head_start(Dial, Realm, Procedure),
                    advertised_stations(Dial, Realm, Procedure),
                    station_try(Dial, stream_work(Dial, Realm, Procedure, Args, StreamOpts)),
-                   Deadline);
-call_stream_unless_removed(Removed, _Pool, _Realm, _Procedure, _Args, _StreamOpts, _Opts) ->
-    {error, Removed}.
+                   Deadline).
 
 %% @doc As `publish_advertisement/5' with no provider authorization.
 -spec publish_advertisement(macula:pool(), macula:realm(), macula:procedure(),

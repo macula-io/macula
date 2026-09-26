@@ -404,14 +404,16 @@
 -type call_id() :: <<_:128>>.
 
 %% A request as its caller gives it to call/2 and stream_open/2 (D25). mode belongs to STREAM_OPEN only, and
-%% source_route and retry_budget are routing fields outside the signature.
+%% source_route and retry_budget are routing fields outside the signature. Its payload is in the clear or sealed,
+%% exactly one of the two.
 -type request_spec() :: #{
     request_id   := <<_:128>>,
     realm        := id256(),
     procedure    := binary(),
     target       := id256(),
     deadline     := non_neg_integer(),
-    payload      := term(),
+    payload      => term(),
+    sealed       => sealed(),
     mode         => stream_mode(),
     token        => binary(),
     source_route => binary(),
