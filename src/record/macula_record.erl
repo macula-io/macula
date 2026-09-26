@@ -1082,12 +1082,13 @@ authorization_fields(_Authorization) -> 1.
 authorization_ok(absent) -> true;
 authorization_ok(Authorization) -> is_map(Authorization).
 
-%% A provider's KEM key and its id travel only as a pair (E2E design, amendment A1): the key as carried, 1568 bytes
-%% (ML-KEM-1024) or 1665 (with a P-384 point), and the first 8 bytes of SHA-384 over it. The two fields count 2, their
-%% absence 0; a lone field, a key of another length or an id that is not its key's is malformed.
+%% A provider's KEM key and its id travel only as a pair (E2E design, amendment A1): the key as carried, of a profile's
+%% size, and its id, both as macula_seal defines them, so the id an advertisement names is the id every sealed payload
+%% and every refusal names. The two fields count 2, their absence 0; a lone field, a key of another size or an id
+%% that is not its key's is malformed.
 kem_key_pair(#{{text, <<"kem_key">>} := KemKey, {text, <<"kem_key_id">>} := KemKeyId})
-  when is_binary(KemKey), (byte_size(KemKey) =:= 1568 orelse byte_size(KemKey) =:= 1665), is_binary(KemKeyId) ->
-    kem_key_matched(kem_key_id(KemKey) =:= KemKeyId);
+  when is_binary(KemKey), is_binary(KemKeyId) ->
+    kem_key_matched(lists:member(byte_size(KemKey), kem_key_sizes()) andalso kem_key_id(KemKey) =:= KemKeyId);
 kem_key_pair(P) ->
     kem_key_absent(maps:is_key({text, <<"kem_key">>}, P) orelse maps:is_key({text, <<"kem_key_id">>}, P)).
 
@@ -1098,7 +1099,10 @@ kem_key_absent(false) -> 0;
 kem_key_absent(true) -> malformed.
 
 kem_key_id(KemKey) ->
-    binary:part(crypto:hash(sha384, KemKey), 0, 8).
+    macula_seal:key_id(KemKey).
+
+kem_key_sizes() ->
+    [macula_seal:carried_key_size(Profile) || Profile <- [pq_pure, pq_hybrid]].
 
 %% The foundation realm trust list payload holds exactly realms_trusted, an array of maps, each with exactly a
 %% 32-byte realm_id and a 32-byte realm_key_id (DESIGN_PQ_SIGNED_FRAMES_AND_RECORDS.md, D28).

@@ -12,7 +12,7 @@
 %% frames that carry a sealed payload are built elsewhere.
 -module(macula_seal).
 
--export([key_as_carried/1, key_hash/1, key_id/1,
+-export([key_as_carried/1, key_hash/1, key_id/1, carried_key_size/1,
          sender_secret/2, recipient_secret/4,
          call_keys/3, stream_keys/2, event_key/2,
          request_aad/1, reply_aad/4, stream_aad/4, event_aad/5,
@@ -34,6 +34,7 @@
                      caller := <<_:256>>, target := <<_:256>>, request_id := binary(),
                      deadline := non_neg_integer()}.
 
+-define(MLKEM_EK_BYTES, 1568).
 -define(MLKEM_CT_BYTES, 1568).
 -define(P384_POINT_BYTES, 97).
 -define(NONCE_BYTES, 12).
@@ -48,6 +49,12 @@
 -spec key_as_carried(public_key()) -> binary().
 key_as_carried(#{mlkem_ek := Ek, p384_pub := P384}) -> <<Ek/binary, P384/binary>>;
 key_as_carried(#{mlkem_ek := Ek}) -> Ek.
+
+%% @doc How many bytes a KEM key as carried has in a profile: the ML-KEM-1024
+%% encapsulation key, plus the uncompressed P-384 point in pq_hybrid.
+-spec carried_key_size(profile()) -> pos_integer().
+carried_key_size(pq_pure) -> ?MLKEM_EK_BYTES;
+carried_key_size(pq_hybrid) -> ?MLKEM_EK_BYTES + ?P384_POINT_BYTES.
 
 %% @doc The SHA-384 of a KEM key as carried, which the combiner binds.
 -spec key_hash(binary()) -> <<_:384>>.

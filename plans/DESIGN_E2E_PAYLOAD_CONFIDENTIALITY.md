@@ -174,7 +174,8 @@ cannot strip a signed field; and withholding the advertisement itself denies the
 The caller already knows its target: `target` is in every CALL's signed tbs (D25), so the caller has the node it must
 encrypt to.
 
-1. The caller has the target's `node_kem_key`, cached for its lifetime, or fetched from the DHT and verified.
+1. The caller seals to the `kem_key` of the target's verified advertisement, which it resolves for the call anyway
+   (Amendment A1). No other lookup, and no key cache.
 2. It encapsulates to it (`kem_ct`, `ss`), and derives two keys:
    ```
    k_req, k_rep = HKDF-Expand(ss, info = "MACULA-E2E-CALL-V1" || frame_type || request_id || caller || target, 64)
@@ -246,8 +247,8 @@ needs it without holding any key.
 
 ### 5.3 Direct dial, D27 content, and pools
 
-- **Direct dial** (`macula_direct_dial`) resolves the provider's advertisement already. It fetches the `node_kem_key`
-  in the same step, and the advertisement's `kem_key_id` says whether the cached one still holds.
+- **Direct dial** (`macula_direct_dial`) resolves the provider's advertisement already, and the key comes with it
+  (Amendment A1).
 - **D27 content streams** are sealed like any stream, so a relaying station no longer reads the content it relays. The
   content itself stays public by design: anyone holding the MCID can ask the sharer for it. Sealing protects the
   transfer, not the content's secrecy, and the guide must say exactly that.
@@ -463,7 +464,7 @@ text may say "stations relay payloads they cannot read" only once this is built,
 | Event | publication signature + payload | + tag, nonce, key id, CBOR | +~50 B, unchanged fan-out |
 | Caller CPU per call | one signature: 1.107 ms (D17) / 5.3 ms EU (D4) | + one encapsulation (75 µs measured), one HKDF, two AES-GCM | under 7% (US), under 2% (EU) |
 | Provider CPU per call | one verify, one sign | + one decapsulation (191 µs measured) | about 17% of the sign (US), under 4% (EU) |
-| Cold call to a new target | one advertisement lookup | + one `node_kem_key` lookup (none if the advertisement's key id matches the cache) | one DHT round trip, once per key lifetime |
+| Cold call to a new target | one advertisement lookup | the same lookup: the key is in the advertisement (Amendment A1) | about +1.7 KB per advertisement record, no second round trip |
 
 ## 11. Interaction with what exists
 
@@ -493,7 +494,7 @@ text may say "stations relay payloads they cannot read" only once this is built,
 |---|---|---|
 | 1 | Test-vector file: the suite, the combiner, the CBOR encoding of every `||`, KDF labels, AAD, and one sealed CALL/RESULT/stream/event per profile. The contract every SDK passes. | S |
 | 6 | macula-station accepts `sealed` in its verification tables, and does not charge it: in the request, reply and stream tables, **and in the publication table carried by EVENT and GOSSIP**, so #5 needs no second station roll. **Rolled to every station before #3 ships.** | S |
-| 2 | `kem` key purpose, `node_kem_key` record, `kem_key_id` in the advertisement, rotation and deletion (§7.3) | M |
+| 2 | The KEM keyring, the advertisement's `kem_key` pair, rotation and deletion (Amendment A1) | M |
 | 3 | Sealed CALL/RESULT/ERROR in `macula_frame` and the link, the clear refusal set, `sealed_refused`, the §8.1 rules, the policy option | M |
 | 4 | Sealed streams | S |
 | 5 | Group keys: the descriptor record, epochs, the distributor procedure, sealed publications, past-epoch retention | L |
@@ -529,9 +530,8 @@ length, and fails with `no_kem_key` otherwise. The payload then has 6 keys, or 7
 admission all refuse a lone field or a mismatched pair in the same way. An advertisement with neither field names no
 key, so its provider has not opted in.
 
-It replaces these sentences in the design: §4.2 (the `node_kem_key` record and its table), §5.1 step 1 (fetch the
-target's `node_kem_key`), §5.3's key source, §10's lookup row, and §13 #2 ("`node_kem_key` record" becomes "the
-advertisement's `kem_key` pair"). The gate history gets one line: round 1's second required change (a withheld key
+It replaces §4.2 (the `node_kem_key` record and its table, marked superseded there) and §7.3's numbers (likewise),
+and rewrites §5.1 step 1, §5.3's direct-dial key source, §10's cold-call row and §13 #2 in place. The gate history gets one line: round 1's second required change (a withheld key
 record forcing cleartext) is what motivated the signed `kem_key_id`. A1 keeps that property and strengthens it, because
 the key and the opt-in are now under one signature.
 
@@ -578,6 +578,8 @@ name a key in the first release, because the station does not open sealed calls 
   naming two alternating key ids. Behind different stations the misconfiguration is invisible, so the rule is the
   precondition itself, not its symptom.
 - A provider rotates its KEM key every **24 hours**. From the moment it rotates, its advertisements carry the new key.
+  An advertisement renewal therefore reads the keyring's current key when it signs, and never keeps the key it was
+  first advertised with, or a rotated key would never reach the advertisement.
   A restart loses every key (they are only in memory): calls sealed to an old key get `sealed_refused` naming the
   new one.
 - The latest moment a request sealed to a rotated-out key can still be admitted, counted from the rotation: 5 min (the
