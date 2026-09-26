@@ -83,7 +83,8 @@ Consequences, all wanted:
 A new tbs field `sealed`, present **instead of** `payload` (or `body`, or `code`/`detail`/`message`), never beside it.
 On a CALL or STREAM_OPEN the sealed plaintext also holds the request's `token` and `proofs` (the caller's UCAN and its
 delegation chain), which only the provider reads (`macula_station_link:authorize_policy/3`), so a station no longer
-reads a caller's capabilities either.
+reads a caller's capabilities either. On a call sent in the clear (§8.1), `token` and `proofs` stay in the clear tbs
+where they are today.
 
 ```
 sealed = #{
@@ -175,7 +176,8 @@ encrypt to.
    `sealed = #{scheme, kem_ct, key_id, ct}` in the CALL tbs in place of `payload`. It then signs as today.
 4. The provider verifies as today, then decapsulates with its KEM private key for `key_id`, derives the same keys, and
    opens `ct`. A failure answers `sealed_refused` in the clear, naming the provider's current `key_id`: the caller
-   re-resolves the key and never falls back to clear.
+   re-resolves the key and never falls back to clear. It seals again under a **new request_id**: admission would
+   refuse a new encapsulation under the same one as `request_id_reused`.
 5. The provider seals its RESULT payload, or its ERROR `code` and `detail`, under `k_rep` with a **fresh random 96-bit
    nonce** carried in `sealed`. It does no KEM of its own.
 
@@ -225,6 +227,9 @@ Every later stream frame seals its `body`, `payload` or `code`/`message` under t
   provider restart is admitted as new, decapsulates to the same `ss`, and the new provider instance numbers its frames
   from 0 again: a seq-derived nonce would repeat under `k_p2c`.
 
+A stream frame's AAD is `"MACULA-E2E-STREAM-AAD-V1" || frame_type || request_id || seq || direction`, with
+`direction` one byte (0 caller to provider, 1 provider to caller), encoded as §3.3 says for the test vectors.
+
 A replayed or reordered frame is still refused by its signed seq before anything is decrypted. STREAM_END carries
 nothing to seal.
 
@@ -264,15 +269,18 @@ Plumtree own the subscriber index. So there is no recipient to encapsulate to.
   under `k_rep`, carries the epoch key. There is no separate wrap object: the call's own encapsulation is the wrap. Who
   may have the key is the distributor's decision, from the realm's member endorsement (0x05) or a UCAN, the checks that
   already exist.
-- **An epoch** is a key id, a key, `publish_until` (its issue time plus `rotate_after`) and `accept_until`
+- **An epoch** is a key id, a key, `publish_until` (always its issue time plus `rotate_after`, 15 minutes, whether or
+  not a removal is pending) and `accept_until`
   (`publish_until` plus the 65-minute event life). A publisher re-pulls before sealing past `publish_until`: a "still
   current" answer is the same signed RESULT, priced in §6.3. A subscriber refuses an event whose epoch is past
   `accept_until`. A rotation notice on the group's topic may hasten the switch, but the lifetimes are the guarantee, since
   a station can withhold a notice.
-- **Event nonces**: `sealed` carries `key_id = epoch id` and `nonce = a 32-bit prefix derived from the publisher's
-  node_id || 64 random bits`. The publication `seq` is not used, since `macula_publication_seq` seeds it from the wall
-  clock and can repeat one after a clock step and a restart. With the prefix, GCM's random-nonce limit applies per
-  publisher per epoch, not to the whole group.
+- **Event keys and nonces.** Each publisher seals under its own subkey,
+  `K_pub = HKDF-Expand(K_g,e, "MACULA-E2E-EVENT-V1" || publisher, 32)`. A subscriber derives it from the publication's
+  signed `publisher` field and caches it. `sealed` carries `key_id = epoch id` and a **full 96-bit random nonce**. The
+  publication `seq` is not used, since `macula_publication_seq` seeds it from the wall clock and can repeat one after a
+  clock step and a restart. With a subkey per publisher, GCM's random-nonce bound (2^32 messages at a 2^-32 collision
+  probability) applies to one publisher in one epoch, and no two publishers ever share a key.
 - **Rotation herd.** The distributor issues epoch e+1 to members who ask during the last stretch of e, so a rotation is
   not n pulls in one instant, which admission's quotas would refuse.
 - **Past epochs.** A member keeps each epoch key for the longest event life (60 min `ttl_ms` + 5 min tolerance,
@@ -281,7 +289,8 @@ Plumtree own the subscriber index. So there is no recipient to encapsulate to.
 - **The AAD** is `realm || topic || publisher || seq || published_at`. The station reads all of these to route, and
   binding them stops a sealed payload being replayed under another topic.
 - **Rotation** is batched: removals take effect at the next rotation, which runs at most every `rotate_after`
-  (default 15 minutes, while a removal is pending) and at the latest every 24 hours. **Removal bound:** a removed member
+  (default 15 minutes) and at the latest every 24 hours. Publishers re-pull every `publish_until` regardless, which is
+  what the removal bound rests on. **Removal bound:** a removed member
   can open events for at most **2 × `rotate_after` + 65 minutes** after its removal (the next rotation, every publisher
   moving off the old epoch by its `publish_until`, and the event life), in D31/D32's form.
 - **A subscriber without the current key** asks the distributor for it, then opens the event. An event whose epoch it
@@ -373,8 +382,12 @@ downgrade).
   most 5 minutes (D25 item 8).
   - A node accepts it only when the advertisement's org is the topic's org segment (`{realm}/{org}/...`), or when it is
     the realm's own distributor for `_realm` topics.
-  - Policy is monotonic per node and group: once a node has seen `preferred` or `required`, it never accepts `off`.
-  - A node that has ever held an epoch key for a group never sends to it in the clear.
+  - Policy is keyed by **(realm, topic prefix)**, not by the group option a publisher passes, and is monotonic per
+    node: once a node has seen `preferred` or `required` for a prefix, it never accepts `off` for it.
+  - A node that has ever held an epoch key for a prefix never sends under it in the clear.
+  - **`required` is enforced at receipt.** A node holding a `required` descriptor for a prefix refuses every clear
+    event under that prefix, counts it and logs it at warning level, naming the publisher. A member, or a publisher on
+    an older release, cannot publish clear under the prefix unnoticed.
   - A publish or subscribe that names a group whose distributor advertisement the node cannot get fails closed.
   - A publish that names **no group** is sent in the clear, as today: the application's decision, made without any
     lookup. A realm with no distributor therefore still has clear pubsub, and no sealed pubsub.
@@ -423,6 +436,8 @@ A station on the path still sees:
 | **An event's epoch key id**, and so when a group rotates, which is when its membership changes | routing needs no key id, but a member needs it to choose the key |
 | **The profile** (pq_pure or pq_hybrid), from the length of `kem_ct` | inherent to the suite |
 | **A station's own procedures'** payloads, until the station itself takes packages 2 and 3 | a station serving a procedure is its endpoint, not a relay |
+| **Group membership**: which nodes pull an org's group keys, when they first join, and the rotation herd | a pull is a call to `<org>/group_keys_v1`, whose caller, target and timing a station sees |
+| **Everything, in the clear, during the mixed-fleet period** toward nodes that publish no key | under `preferred`, clear is the default toward a node that never opted in, not an exception (§8.1) |
 
 This design **makes no anonymity or traffic-flow claim.** `PLAN_MILITARY_GRADE_BASELINE.md` #18, traffic-flow confidentiality, keeps its own row. Public
 text may say "stations relay payloads they cannot read" only once this is built, tested across SDKs, and measured (D11).
@@ -466,7 +481,7 @@ text may say "stations relay payloads they cannot read" only once this is built,
 | # | Package | Size |
 |---|---|---|
 | 1 | Test-vector file: the suite, the combiner, the CBOR encoding of every `||`, KDF labels, AAD, and one sealed CALL/RESULT/stream/event per profile. The contract every SDK passes. | S |
-| 6 | macula-station accepts `sealed` in its verification tables, and does not charge it. **Rolled to every station before #3 ships.** | S |
+| 6 | macula-station accepts `sealed` in its verification tables, and does not charge it: in the request, reply and stream tables, **and in the publication table carried by EVENT and GOSSIP**, so #5 needs no second station roll. **Rolled to every station before #3 ships.** | S |
 | 2 | `kem` key purpose, `node_kem_key` record, `kem_key_id` in the advertisement, rotation and deletion (§7.3) | M |
 | 3 | Sealed CALL/RESULT/ERROR in `macula_frame` and the link, the clear refusal set, `sealed_refused`, the §8.1 rules, the policy option | M |
 | 4 | Sealed streams | S |
@@ -491,3 +506,13 @@ later release without changing any of them.
   - no publisher was made to leave an old epoch, so the removal bound did not hold (now §6.2).
 - Both rounds' observations were taken where they changed a claim; the rest are noted in the text. Two rounds is the
   cap: Raf decided the three open questions on 2026-09-26 (§12).
+- **Final verdict (Fable): pass with conditions**, both for pubsub, now met:
+  - a subkey per publisher and a full random nonce per event (§6.2);
+  - the policy keyed by topic prefix and `required` enforced at receipt (§8.1).
+  Also taken from the verdict:
+  - `publish_until` is always 15 minutes (§6.2);
+  - a re-seal takes a new request_id (§5.1);
+  - the stream AAD is defined (§5.2);
+  - clear calls keep `token` and `proofs` in the clear (§3.1);
+  - stations accept `sealed` in events too (§13 #6);
+  - two further rows in §9.
