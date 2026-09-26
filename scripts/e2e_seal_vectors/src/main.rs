@@ -184,10 +184,12 @@ fn call_vector(profile: &str, r: &Recipient, frame_type: &str) -> Json {
     v["k_req"] = json!(h(k_req));
     v["k_rep"] = json!(h(k_rep));
     v["request"] = json!({"plain": h(&request_plain), "aad": h(&request_aad), "nonce": h(&[0u8; 12]), "ct": h(&request_ct)});
-    v["reply"] = json!({
+    if frame_type == "call" {
+        v["reply"] = json!({
         "frame_type": reply_type, "request_hash": h(&request_hash), "responded_by": h(&target),
         "plain": h(&reply_plain), "aad": h(&reply_aad), "nonce": h(&reply_nonce), "ct": h(&reply_ct),
-    });
+        });
+    }
     if frame_type == "stream_open" {
         let okm = expand(&ss, &cbor(vec![t("MACULA-E2E-STREAM-V1"), b(&request_id), b(&caller), b(&target)]), 64);
         let (k_c2p, k_p2c) = okm.split_at(32);

@@ -119,10 +119,11 @@ For pq_hybrid (the EU profile, D3, D4), a key agreement is secure if **either** 
 
 ```
 ss = HKDF-Extract(salt = "MACULA-E2E-HYBRID-V1",
-                  ikm  = ss_mlkem || ss_ecdh || kem_ct_mlkem || ecdh_ephemeral_pub || recipient_kem_key_id)
+                  ikm  = ss_mlkem || ss_ecdh || kem_ct_mlkem || ecdh_ephemeral_pub || recipient_key_hash)
 ```
 
-where `recipient_kem_key_id` is the full 48-byte SHA-384 of the recipient's KEM key as carried. Binding both ciphertexts
+where `recipient_key_hash` is the full 48-byte SHA-384 of the recipient's KEM key as carried (its first 8 bytes are
+the `key_id` of §4.2). Binding both ciphertexts
 and the recipient's key into the extract follows X-Wing and the TLS hybrid draft (draft-ietf-tls-hybrid-design): no half
 can be swapped without changing `ss`. The "either half suffices" property rests on HMAC-SHA-384 as a PRF keyed by the
 public salt over the IKM. The P-384 half requires point validation on the peer's point and refuses an identity (all-zero)
@@ -131,6 +132,9 @@ both profiles run one code path.
 
 Every `||` in this document is over fixed-width fields or length-prefixed ones; the test vectors (§13 #1) define the
 encoding as the deterministic CBOR array of the listed fields, so no two field sequences encode alike.
+
+**`test/vectors/E2E_SEAL_V1.md` is normative.** Where a formula here and that file differ, the file holds: it is
+what every SDK implements and what the vectors pin.
 
 ## 4. The keys
 
@@ -170,7 +174,7 @@ encrypt to.
 1. The caller has the target's `node_kem_key`, cached for its lifetime, or fetched from the DHT and verified.
 2. It encapsulates to it (`kem_ct`, `ss`), and derives two keys:
    ```
-   k_req, k_rep = HKDF-Expand(ss, info = "MACULA-E2E-CALL-V1" || request_id || caller || target, 64)
+   k_req, k_rep = HKDF-Expand(ss, info = "MACULA-E2E-CALL-V1" || frame_type || request_id || caller || target, 64)
    ```
 3. It seals the payload: `ct = AES-256-GCM(k_req, nonce = 0^96, aad = A, payload)`, and puts
    `sealed = #{scheme, kem_ct, key_id, ct}` in the CALL tbs in place of `payload`. It then signs as today.
@@ -202,12 +206,13 @@ encapsulation under the same request_id as `request_id_reused`, and the random r
 A = "MACULA-E2E-AAD-V1" || frame_type || realm || procedure || caller || target || request_id || deadline
 ```
 
-and the KDF info in step 2 carries `frame_type` too, since CALL and STREAM_OPEN share it.
+and the KDF info in step 2 carries `frame_type` too, since CALL and STREAM_OPEN share the label.
 
 This is what defeats T3. A station, or a caller, that copies another caller's `sealed` into its own signed CALL
 changes `caller` or `request_id`, so the AAD no longer matches and the provider refuses it. Without the AAD, the
 provider would run someone else's request under the copier's authority, and the signature alone cannot see it, since
-the copier signed its own tbs. The reply's AAD adds `request_hash` and `responded_by`.
+the copier signed its own tbs. The reply's AAD is A with the reply's own `frame_type` (`result` or `error`) in place
+of the request's, followed by `request_hash` and `responded_by`, so a RESULT's ciphertext never opens as an ERROR's.
 
 ### 5.2 A stream
 
@@ -276,7 +281,8 @@ Plumtree own the subscriber index. So there is no recipient to encapsulate to.
   `accept_until`. A rotation notice on the group's topic may hasten the switch, but the lifetimes are the guarantee, since
   a station can withhold a notice.
 - **Event keys and nonces.** Each publisher seals under its own subkey,
-  `K_pub = HKDF-Expand(K_g,e, "MACULA-E2E-EVENT-V1" || publisher, 32)`. A subscriber derives it from the publication's
+  `K_pub = HKDF-Expand(HKDF-Extract(salt = "MACULA-E2E-EVENT-V1", K_g,e), "MACULA-E2E-EVENT-V1" || publisher, 32)`:
+  the Extract first because RFC 5869 wants a PRK of at least 48 bytes and an epoch key is 32. A subscriber derives it from the publication's
   signed `publisher` field and caches it. `sealed` carries `key_id = epoch id` and a **full 96-bit random nonce**. The
   publication `seq` is not used, since `macula_publication_seq` seeds it from the wall clock and can repeat one after a
   clock step and a restart. With a subkey per publisher, GCM's random-nonce bound (2^32 messages at a 2^-32 collision
@@ -286,7 +292,7 @@ Plumtree own the subscriber index. So there is no recipient to encapsulate to.
 - **Past epochs.** A member keeps each epoch key for the longest event life (60 min `ttl_ms` + 5 min tolerance,
   `verify_publication/3`), and the distributor serves past epochs to nodes that were members during them. So a subscriber
   offline across a rotation still opens what it was entitled to.
-- **The AAD** is `realm || topic || publisher || seq || published_at`. The station reads all of these to route, and
+- **The AAD** is `"MACULA-E2E-EVENT-AAD-V1" || realm || topic || publisher || seq || published_at`. The station reads all of these to route, and
   binding them stops a sealed payload being replayed under another topic.
 - **Rotation** is batched: removals take effect at the next rotation, which runs at most every `rotate_after`
   (default 15 minutes) and at the latest every 24 hours. Publishers re-pull every `publish_until` regardless, which is

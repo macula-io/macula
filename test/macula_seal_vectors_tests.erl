@@ -37,11 +37,17 @@ call_checked(C, R) ->
     Req = maps:get(<<"request">>, C),
     ?assertEqual(x(Req, <<"aad">>), macula_seal:request_aad(Request)),
     sealed_both_ways(x(C, <<"k_req">>), Req),
+    reply_checked(FrameType, C, Request),
+    streams_checked(FrameType, C, Parties).
+
+%% A call's reply; a STREAM_OPEN is answered by stream frames, never a reply.
+reply_checked(<<"call">>, C, Request) ->
     Rep = maps:get(<<"reply">>, C),
     ?assertEqual(x(Rep, <<"aad">>), macula_seal:reply_aad(Request, maps:get(<<"frame_type">>, Rep),
                                                           x(Rep, <<"request_hash">>), x(Rep, <<"responded_by">>))),
-    sealed_both_ways(x(C, <<"k_rep">>), Rep),
-    streams_checked(FrameType, C, Parties).
+    sealed_both_ways(x(C, <<"k_rep">>), Rep);
+reply_checked(<<"stream_open">>, C, _Request) ->
+    ?assertNot(maps:is_key(<<"reply">>, C)).
 
 streams_checked(<<"stream_open">>, C, Parties) ->
     ?assertEqual({x(C, <<"k_c2p">>), x(C, <<"k_p2c">>)}, macula_seal:stream_keys(x(C, <<"ss">>), Parties)),
@@ -82,13 +88,15 @@ sealed_both_ways(Key, V) ->
 %%%===================================================================
 
 vectors() ->
-    File = filename:join([code:lib_dir(macula), "..", "..", "..", "..", "test", "vectors", "e2e_seal_v1.json"]),
-    {ok, Bytes} = file:read_file(vector_file(File)),
+    {ok, Bytes} = file:read_file(vector_file()),
     json:decode(Bytes).
 
-%% The source tree's vector file, wherever eunit runs from.
-vector_file(Candidate) ->
-    first_existing([Candidate, "test/vectors/e2e_seal_v1.json", "../../test/vectors/e2e_seal_v1.json"]).
+%% The source tree's vector file, from the project root eunit runs in, or
+%% from the build tree's copy of the application.
+vector_file() ->
+    first_existing(["test/vectors/e2e_seal_v1.json", "../../test/vectors/e2e_seal_v1.json"]
+                   ++ [filename:join([Dir, "..", "..", "..", "..", "test", "vectors", "e2e_seal_v1.json"])
+                       || Dir <- [code:lib_dir(macula)], is_list(Dir)]).
 
 first_existing([F | Rest]) ->
     case filelib:is_regular(F) of
