@@ -369,14 +369,24 @@ publish_advertisement(Pool, Realm, Procedure, NodeIdentity, Opts) ->
                            NodeIdentity, Opts).
 
 publish_unless_removed(none, Pool, Realm, Procedure, NodeIdentity, Opts) ->
+    publish_confidential(macula:advertise_confidentiality(Opts), Pool, Realm, Procedure, NodeIdentity, Opts);
+publish_unless_removed(Removed, _Pool, _Realm, _Procedure, _NodeIdentity, _Opts) ->
+    {error, Removed}.
+
+%% The record names the node's KEM key as the pool's ADVERTISE does (macula:advertise_confidentiality/1), so a caller
+%% resolving it seals exactly when the provider expects it to.
+publish_confidential({ok, Confidentiality}, Pool, Realm, Procedure, NodeIdentity, Opts) ->
+    publish_linked(Pool, Realm, Procedure, NodeIdentity, maps:merge(Opts, Confidentiality));
+publish_confidential({error, _} = Refused, _Pool, _Realm, _Procedure, _NodeIdentity, _Opts) ->
+    Refused.
+
+publish_linked(Pool, Realm, Procedure, NodeIdentity, Opts) ->
     #{links := Links} = Dial = dial(Pool, [links, put_record], Opts),
     case Links(Pool) of
         {ok, Linked} -> on_links(connected_station(Linked, maps:get(stations, Opts, all)), Dial,
                                  Realm, Procedure, NodeIdentity, Opts);
         {error, _} = Error -> Error
-    end;
-publish_unless_removed(Removed, _Pool, _Realm, _Procedure, _NodeIdentity, _Opts) ->
-    {error, Removed}.
+    end.
 
 %% @doc The first option in `Opts' that 11.0.0 removed from a call or an
 %% advertisement, as `{removed_option, Key}', or `none'. On a call, the realm
@@ -397,7 +407,7 @@ on_links({ok, Station}, #{pool := Pool, put_record := PutRecord}, Realm, Procedu
     Advertiser = macula_node_keys:key_id(NodeIdentity),
     Ad = macula_record:sign(
            macula_record:procedure_advertisement(Advertiser, Realm, Procedure, Station,
-                                                  adv_opts(Opts)),
+                                                  maps:merge(adv_opts(Opts), kem_key_opt(Opts, NodeIdentity))),
            NodeIdentity),
     PutRecord(Pool, Ad);
 on_links({error, _} = Error, _Dial, _Realm, _Procedure, _NodeIdentity, _Opts) ->
@@ -412,6 +422,15 @@ on_links({error, _} = Error, _Dial, _Realm, _Procedure, _NodeIdentity, _Opts) ->
 %% from its own Opts, so the bug was purely in this forwarder.
 adv_opts(Opts) ->
     maps:merge(authorization_opt(Opts), ttl_ms_opt(Opts)).
+
+%% The node's current KEM key, read when the record is signed, so a republish after a rotation names the new one.
+kem_key_opt(#{kem := true}, #{profile := Profile} = NodeIdentity) ->
+    NodeId = macula_node_keys:key_id(NodeIdentity),
+    ok = macula_kem_keyring:ensure(NodeId, Profile),
+    {ok, #{key := KemKey}} = macula_kem_keyring:current(NodeId),
+    #{kem_key => KemKey};
+kem_key_opt(_Keyless, _NodeIdentity) ->
+    #{}.
 
 authorization_opt(#{authorization := Authorization}) when is_map(Authorization) ->
     #{authorization => Authorization};

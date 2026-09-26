@@ -52,7 +52,7 @@
 %% opt a direct-dial record publish needs.
 -export([provider_authorization/3, provider_authorization/4]).
 %% The pool renews an advertised chain through this (D32); internal.
--export([renew_authorization/4]).
+-export([renew_authorization/4, advertise_confidentiality/1]).
 
 %% Signed DHT records — realm-agnostic infrastructure procedures
 %% (`_dht.put_record', `_dht.find_record', `_dht.find_records_by_type',
@@ -1000,7 +1000,7 @@ advertise_stream(Pool, Realm, Procedure, Mode, Handler, Opts)
 %% signs its own advertisement naming the station it is connected to,
 %% bounded by the chain (macula_station_link:advertisement_spec()).
 advertise_authorized(Pool, Realm, Procedure, Opts, Fun) ->
-    confidential(confidentiality(maps:get(confidential, Opts, preferred), kem_advertise()), fun(Confidentiality) ->
+    confidential(advertise_confidentiality(Opts), fun(Confidentiality) ->
         signed_provider_advertisement(Pool, Realm, Procedure, provider_io(Opts),
                                       fun(Spec) -> Fun(maps:merge(Spec, Confidentiality)) end)
     end).
@@ -1010,6 +1010,14 @@ advertise_authorized(Pool, Realm, Procedure, Opts, Fun) ->
 %% with the `kem_advertise' application setting, which stays `disabled' until every station runs the release that
 %% stores a keyed advertisement, and only when `confidential' is not `off'. `required' while switched off is refused:
 %% the provider would name no key and refuse every clear call, and so be unreachable.
+%% @private
+%% @doc What an advertise's `confidential' option and this node's `kem_advertise' switch decide, as the spec fields an
+%% advertisement carries: `kem' when it names the KEM key, `confidential => required' when it also refuses clear
+%% calls. The pool's ADVERTISE and a direct-dial DHT record decide the same way (`macula_direct_dial').
+-spec advertise_confidentiality(map()) -> {ok, #{kem => true, confidential => required}} | {error, term()}.
+advertise_confidentiality(Opts) ->
+    confidentiality(maps:get(confidential, Opts, preferred), kem_advertise()).
+
 confidentiality(Mode, _Switch) when Mode =/= preferred, Mode =/= required, Mode =/= off ->
     {error, {confidentiality, {not_a_mode, Mode}}};
 confidentiality(required, disabled) -> {error, {confidentiality, kem_advertise_disabled}};
