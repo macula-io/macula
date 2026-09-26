@@ -252,7 +252,8 @@ call_to({ok, Only}, Pool, Realm, Procedure, Payload, TimeoutMs, Opts) ->
     Deadline = deadline(TimeoutMs),
     each_candidate(only_provider(Only, head_start(Dial, Realm, Procedure)),
                    only_provider_found(Only, advertised_stations(Dial, Realm, Procedure)),
-                   station_try(Dial, call_work(Dial, Realm, Procedure, Payload, Deadline)),
+                   station_try(Dial, call_work(Dial, Realm, Procedure, Payload, Deadline,
+                                               maps:get(confidential, Opts, preferred))),
                    Deadline).
 
 %% Which provider a call is limited to, `any' when the caller named none.
@@ -654,10 +655,11 @@ candidates_or(Candidates, _Reason) -> {ok, Candidates}.
 
 %% Every advertisement that passes the trust check, in the order given, as a
 %% candidate: the node_id of the provider that signed it, its record's
-%% version, and the station it names.
+%% version, the station it names, and the advertisement itself, which the call
+%% seals from (E2E design, Amendment A1).
 trusted_stations(Recs, Trust, Now) ->
     [#{provider => KeyId, version => Version, station => Station,
-       ttl_ms => reusable_for(Rec, Now)}
+       ttl_ms => reusable_for(Rec, Now), advertisement => Rec}
      || #{key_id := KeyId, version := Version} = Rec <- Recs,
         advertisement_trusted(Rec, Trust),
         Station <- serving_station(Rec)].
@@ -728,17 +730,62 @@ for_procedure(_OtherProcedure, _Rec, _Realm, _Procedure, _Trust) ->
 %% Sends the CALL to one resolved station. `not_connected' means the link
 %% never came up within the candidate's share, so nothing was sent and the
 %% next candidate may be tried; any other outcome means the CALL went out.
-call_work(#{pool := Pool, call_station := CallStation, remember_resolved := Remember},
-          Realm, Procedure, Payload, Deadline) ->
+call_work(#{pool := Pool, call_station := CallStation, remember_resolved := Remember} = Dial,
+          Realm, Procedure, Payload, Deadline, Policy) ->
     fun(#{provider := Provider} = Candidate) ->
         fun(Station, DialUrl, Share) ->
+            Call = fun(Ad) ->
+                       CallStation(Pool, DialUrl, Provider, Realm, Procedure, Payload, budget(Deadline),
+                                   maps:merge((pinned(Station))#{dial_timeout_ms => budget(Share)},
+                                              policy_opts(Policy, Ad)))
+                   end,
             sent_or_not(
-              settled(CallStation(Pool, DialUrl, Provider, Realm, Procedure, Payload,
-                                  budget(Deadline),
-                                  (pinned(Station))#{dial_timeout_ms => budget(Share)}),
+              settled(resealed(Call(maps:get(advertisement, Candidate, undefined)), Call, Dial, Realm, Procedure,
+                               Provider, Deadline),
                       Remember, Pool, Realm, Procedure, Candidate))
         end
     end.
+
+%% What a station call is told to seal from: the candidate's verified advertisement, and the call's own policy when
+%% it is `required' (`preferred' is the station call's default).
+policy_opts(Policy, Ad) ->
+    maps:merge(advertisement_opt(Ad), required_opt(Policy)).
+
+advertisement_opt(undefined) -> #{};
+advertisement_opt(Ad) -> #{advertisement => Ad}.
+
+required_opt(required) -> #{confidential => required};
+required_opt(_Preferred) -> #{}.
+
+%% A call sealed to a key the provider no longer holds is refused naming the key it holds now, in a reply the
+%% provider signed for this request. ONE fresh lookup follows. Only an advertisement the provider signed that names
+%% exactly that key is sealed to again, under a new request, and a second refusal is the result. Any other key fails,
+%% naming both; none, or a provider that holds no key, fails closed. Never the clear (E2E design §5.1, Amendment A1).
+resealed({error, {sealed_refused, <<_:64>> = Named}}, Call, Dial, Realm, Procedure, Provider, Deadline) ->
+    resealed_to(reresolved(Dial, Realm, Procedure, Provider, Deadline), Named, Call);
+resealed({error, {sealed_refused, no_key}}, _Call, _Dial, _Realm, _Procedure, _Provider, _Deadline) ->
+    {error, {confidentiality, no_kem_key}};
+resealed(Result, _Call, _Dial, _Realm, _Procedure, _Provider, _Deadline) ->
+    Result.
+
+resealed_to({ok, Ad, <<_:64>> = Named}, Named, Call) -> Call(Ad);
+resealed_to({ok, _Ad, <<_:64>> = Found}, Named, _Call) -> {error, {confidentiality, {key_mismatch, Named, Found}}};
+resealed_to(_NoKey, _Named, _Call) -> {error, {confidentiality, no_kem_key}}.
+
+%% The provider's advertisement in one fresh lookup, and the id of the key it names.
+reresolved(#{pool := Pool, find_records := Find}, Realm, Procedure, Provider, Deadline) ->
+    Trust = trust(Pool, Realm, Procedure),
+    providers_key([Rec || Rec <- found(Find(Pool, macula_record:procedure_key(Realm, Procedure), budget(Deadline))),
+                          macula_record:key_id(Rec) =:= Provider, advertisement_trusted(Rec, Trust)]).
+
+found({ok, Recs}) -> Recs;
+found(_NotFound) -> [].
+
+providers_key([Ad | _]) -> keyed(maps:find(kem_key_id, macula_record:read_procedure_advertisement(Ad)), Ad);
+providers_key([]) -> none.
+
+keyed({ok, KemKeyId}, Ad) -> {ok, Ad, KemKeyId};
+keyed(error, _Ad) -> none.
 
 %% Opens the stream at one resolved station, on the same terms as `call_work/5'.
 stream_work(#{pool := Pool, call_stream_station := CallStreamStation,

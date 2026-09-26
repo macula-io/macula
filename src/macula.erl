@@ -349,13 +349,13 @@ providers(Pool, Realm, Procedure, TimeoutMs) ->
 %% an existing link or dials and monitors a new one, waits for the
 %% handshake, and calls there. This is the direct-dial data path: resolve a
 %% provider's serving_station and its endpoint, then reach it in one hop.
-%% See `macula_client:call_station/7'.
+%% See `macula_client:call_station/7'. With no options it carries no signed state to decide on sealing from, so it is
+%% refused as `{error, {confidentiality, no_signed_state}}' (macula 13.0.0): use `call_station/8' with
+%% `advertisement', `confidential => required' or `confidential => off' (see `call_seal/5').
 -spec call_station(pool(), macula_client:seed(), <<_:256>>, realm(), procedure(),
                    term(), 1..600_000) -> {ok, term()} | {error, term()}.
 call_station(Pool, Station, Target, Realm, Procedure, Payload, TimeoutMs) ->
-    refused(trust_options_checked(Station),
-            fun() -> macula_client:call_station(Pool, Station, Target, Realm,
-                                                Procedure, Payload, TimeoutMs) end).
+    call_station(Pool, Station, Target, Realm, Procedure, Payload, TimeoutMs, #{}).
 
 %% @doc As `call_station/7', presenting a capability token to a gated
 %% provider via `Opts' (`#{ucan_token => Token}'). Empty/absent = none.
