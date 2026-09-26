@@ -199,7 +199,9 @@ under one `k_rep` would leak their XOR and GCM's authentication key. Hence a ran
 
 **Admission refusals are sent in the clear, from a closed set**, as the station's relay codes are (`RELAY_CODES`):
 `sealed_refused`, `expired`, `not_yet_valid`, `request_id_reused`, `request_copy`, `reply_not_kept`, `caller_quota`,
-`share_full`, `admission_full`. They carry no application data; `sealed_refused` names the provider's current key id in
+`share_full`, `admission_full`, and a STREAM_OPEN's session admission, `too_many_sessions` and `unavailable`
+(added 2026-09-26: decided before any handler, as `caller_quota` is). They carry no
+application data; `sealed_refused` names the provider's current key id in
 its `detail`. The same set applies to a provider's STREAM_ERROR refusing a STREAM_OPEN before it is decrypted. A clear `code` outside that set, answering a sealed request, is refused as
 `malformed_frame`. **A retry resends the same signed bytes (D25)**, never a re-encryption: admission would refuse a new
 encapsulation under the same request_id as `request_id_reused`, and the random reply nonce is what makes resending safe.

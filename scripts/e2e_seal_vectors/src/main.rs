@@ -189,6 +189,20 @@ fn call_vector(profile: &str, r: &Recipient, frame_type: &str) -> Json {
         "frame_type": reply_type, "request_hash": h(&request_hash), "responded_by": h(&target),
         "plain": h(&reply_plain), "aad": h(&reply_aad), "nonce": h(&reply_nonce), "ct": h(&reply_ct),
         });
+        // A provider ERROR seals its code and detail: the plaintext is the CBOR array [code, detail], both text,
+        // detail empty when there is none. The AAD is the reply's, with frame type "error".
+        let error_nonce = fixed(&format!("{name} error nonce"), 12);
+        let error_plain = cbor(vec![t("not_found"), t("no such city")]);
+        let error_aad = cbor(vec![
+            t("MACULA-E2E-AAD-V1"), t("error"), b(&realm), t(procedure), b(&caller), b(&target), b(&request_id),
+            u(deadline), b(&request_hash), b(&target),
+        ]);
+        let error_ct = seal(k_rep, &error_nonce, &error_aad, &error_plain);
+        v["error_reply"] = json!({
+        "frame_type": "error", "request_hash": h(&request_hash), "responded_by": h(&target),
+        "code": "not_found", "detail": "no such city",
+        "plain": h(&error_plain), "aad": h(&error_aad), "nonce": h(&error_nonce), "ct": h(&error_ct),
+        });
     }
     if frame_type == "stream_open" {
         let okm = expand(&ss, &cbor(vec![t("MACULA-E2E-STREAM-V1"), b(&request_id), b(&caller), b(&target)]), 64);

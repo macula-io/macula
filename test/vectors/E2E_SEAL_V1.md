@@ -124,6 +124,12 @@ k_c2p = okm[0..32]    k_p2c = okm[32..64]
 `request_hash`, `responded_by` and `publisher` are byte strings; `deadline`,
 `seq` and `published_at` are unsigned integers.
 
+A sealed provider ERROR carries no `code` or `detail` of its own: both are
+sealed, as the plaintext `cbor([code, detail])`, both text, with `detail` the
+empty text when there is none. A reader takes an empty `detail` as none. Each
+call vector's `error_reply` pins one, with its code and detail beside the
+plaintext.
+
 An event's key is the publisher's subkey of the group epoch key `k_g`:
 
 ```

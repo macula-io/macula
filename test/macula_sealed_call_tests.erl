@@ -50,6 +50,22 @@ the_caller_opens_the_vector_reply_test_() ->
                                                      reply_sealed(C)))
       end} || C <- calls(), is_map_key(<<"reply">>, C)].
 
+%% The caller opens each call vector's sealed ERROR, and its plaintext reads
+%% back as the code and detail beside it.
+the_caller_opens_the_vector_error_test_() ->
+    [{name(C), fun() ->
+          Error = maps:get(<<"error_reply">>, C),
+          {ok, Plain} = macula_sealed_call:open_reply(#{k_req => x(C, <<"k_req">>), k_rep => x(C, <<"k_rep">>),
+                                                        key_id => x(C, <<"key_id">>)}, request(C), reply(Error),
+                                                      #{scheme => 1, key_id => x(C, <<"key_id">>),
+                                                        nonce => x(Error, <<"nonce">>), ct => x(Error, <<"ct">>)}),
+          ?assertEqual(x(Error, <<"plain">>), Plain),
+          ?assertEqual({ok, #{code => maps:get(<<"code">>, Error), detail => maps:get(<<"detail">>, Error)}},
+                       macula_frame:plain_error(Plain)),
+          ?assertEqual({ok, Plain}, macula_frame:error_plain(#{code => maps:get(<<"code">>, Error),
+                                                                detail => maps:get(<<"detail">>, Error)}))
+      end} || C <- calls(), is_map_key(<<"error_reply">>, C)].
+
 %%------------------------------------------------------------------
 %% Round trips, both profiles
 %%------------------------------------------------------------------

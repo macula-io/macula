@@ -38,3 +38,4 @@ dist/
 /apps/
 rebar3.crashdump
 mix.lock
+/scripts/e2e_seal_vectors/target/

@@ -279,9 +279,11 @@
 %% handler's text as its detail.
 -define(HANDLER_ERROR_CODE, <<"handler_error">>).
 %% The clear codes a provider may answer a sealed request with (E2E design §5.1): the admission refusals, which carry
-%% no application data. `sealed_refused' is read on its own.
+%% no application data, a STREAM_OPEN's session admission (`too_many_sessions', `unavailable') included.
+%% `sealed_refused' is read on its own.
 -define(SEALED_CLEAR_CODES, [<<"expired">>, <<"not_yet_valid">>, <<"request_id_reused">>, <<"request_copy">>,
-                             <<"reply_not_kept">>, <<"caller_quota">>, <<"share_full">>, <<"admission_full">>]).
+                             <<"reply_not_kept">>, <<"caller_quota">>, <<"share_full">>, <<"admission_full">>,
+                             <<"too_many_sessions">>, <<"unavailable">>]).
 -define(CONNECT_RETRY_BACKOFF_MS, 1_000).
 
 %% App-level liveness probe. Sends a tiny CALL (`_macula.ping' on the
