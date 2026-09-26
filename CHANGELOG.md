@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- **`macula_seal`, the end-to-end payload sealing primitives, scheme 1**
+  (`plans/DESIGN_E2E_PAYLOAD_CONFIDENTIALITY.md` §13 #1). ML-KEM-1024, plus an
+  ephemeral P-384 ECDH in `pq_hybrid`, combined with HKDF-SHA-384; AES-256-GCM
+  seals. It covers the call, reply, stream and event keys, their AAD and
+  nonces, and the refusal of a malformed `kem_ct` or P-384 point. Nothing sends
+  a sealed payload yet: frames and policy come in later packages.
+- **`test/vectors/e2e_seal_v1.json` and `E2E_SEAL_V1.md`, the byte-exact
+  contract every SDK implements.** `scripts/e2e_seal_vectors` (Rust,
+  `macula-mlkem` with fixed seeds, RustCrypto `p384`, `hkdf`, `aes-gcm`)
+  generates them, and `macula_seal` on OTP `crypto` reproduces them. Two
+  independent implementations agree on every intermediate value, in both
+  profiles. A vector carries each ML-KEM key as its 64-byte seed (the form Go
+  loads) and as the expanded key OTP loads.
+
+---
+
 ## [12.8.0] - 2026-09-26
 
 Wire-compatible with 12.0 to 12.7. For a consumer that addresses one station
