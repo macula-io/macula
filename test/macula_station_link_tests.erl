@@ -1122,6 +1122,14 @@ inbound_call_threads_caller_into_payload_test_() ->
              {handler_saw, Payload} ->
                  ?assertEqual(Caller, maps:get(caller, Payload)),
                  ?assertNotEqual(SpoofedCaller, maps:get(caller, Payload)),
+                 %% Every way a handler can read `caller' gives the verified
+                 %% id: the wire field is gone, so `macula:field/2' and
+                 %% `macula_record:payload_field/2', which try the text key
+                 %% before the atom, cannot find the spoof.
+                 ?assertEqual(Caller, macula:field(caller, Payload)),
+                 ?assertEqual(Caller, macula:field(<<"caller">>, Payload)),
+                 ?assertEqual(Caller, macula_record:payload_field(Payload, <<"caller">>)),
+                 ?assertEqual(error, maps:find({text, <<"caller">>}, Payload)),
                  ?assertEqual(<<"abc">>, maps:get({text, <<"token">>}, Payload))
          after 1_000 ->
              erlang:error(handler_never_invoked)

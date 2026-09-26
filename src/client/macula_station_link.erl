@@ -2825,13 +2825,16 @@ reply_bytes(Reply) ->
 %%
 %% The merge happens here, not earlier, specifically so it happens AFTER
 %% the payload has been fully decoded from whatever the remote peer
-%% actually sent — `Payload#{caller => Caller}' deterministically
-%% overwrites any `caller' key a caller's own payload might have
-%% supplied, so the field a handler reads is always the wire-
-%% authenticated identity, never a value the caller could spoof by
-%% naming their own field the same thing.
+%% actually sent. A payload's own `caller' field decodes to the text key
+%% `{text, <<"caller">>}', which is not the atom `caller', so it is
+%% removed: `macula_record:payload_field(Args, <<"caller">>)' tries the
+%% text key before the atom, and would otherwise hand the handler the
+%% value the caller wrote. What a handler reads as `caller', by either
+%% key, is the wire-authenticated identity. (A byte-string key never
+%% arrives: the request's signed fields are decoded strictly, which
+%% refuses one as `bad_key'.)
 with_caller(Payload, Caller) when is_map(Payload), Caller =/= undefined ->
-    Payload#{caller => Caller};
+    (maps:remove({text, <<"caller">>}, Payload))#{caller => Caller};
 with_caller(Payload, _Caller) ->
     Payload.
 
