@@ -649,9 +649,11 @@ name a key in the first release, because the station does not open sealed calls 
 ### A1: Not changed
 
 §3 (the sealed payload), §5.1 (call keys, AAD, nonces, the clear refusal set), §5.2 (streams; key source as above),
-§6 (group keys), `preferred` as the per-call default, and the E2E seal scheme 1 vectors are unchanged. The vectors gain
-three advertisement cases: a keyed advertisement, one whose id mismatches its key, and one with a lone field. Every
-SDK's record verifier must refuse the last two (macula-go, macula-rust).
+§6 (group keys), `preferred` as the per-call default, and the E2E seal scheme 1 vectors are unchanged. The advertisement cases are in
+their own file, `test/vectors/e2e_seal_v1_advertisements.json` (spec: `test/vectors/E2E_SEAL_V1.md`, "Keyed
+advertisements"), with five per profile: a keyed advertisement, one whose id is another key's, a lone key, a lone id,
+and a key of no profile's size. Every SDK's record verifier must accept the first and refuse the other four
+(macula-go, macula-rust).
 
 ## Gate history
 

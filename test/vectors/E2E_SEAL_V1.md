@@ -154,3 +154,32 @@ the ciphertext with its tag appended.
 Byte strings are lowercase hex; `procedure` and `topic` are literal text;
 integers are JSON numbers. `plain` is an arbitrary payload: in use, it is the
 CBOR encoding of the application's payload.
+
+## Keyed advertisements (amendment A1)
+
+`e2e_seal_v1_advertisements.json` holds signed procedure advertisements, five
+per profile, each with the verdict macula's `macula_record:verify/3` reaches
+on its wire bytes at the profile's `now_ms`. A keyed advertisement carries the
+provider's KEM key as carried (`kem_key`, `kem_key_size` bytes in that
+profile) and that key's `kem_key_id`. The two travel only as a pair: a key the
+profile carries and its own id. Erlang generates this file
+(`scripts/generate-seal-advertisement-vectors.sh`), not the Rust generator
+that writes `e2e_seal_v1.json`. Signing is randomized, so a regenerated file
+has other bytes and the same verdicts. The committed file is the vector.
+
+For every case, an SDK's record verifier, given `record` (hex of the wire
+bytes), the profile and `now_ms`, must reach `verdict`:
+
+| `name` | `verdict` | the payload |
+|---|---|---|
+| `keyed` | `accepted` | the key as carried and its own id; the SDK must read back `kem_key` and `kem_key_id` |
+| `kem_key_id_of_another_key` | `malformed` | the id is another key's |
+| `kem_key_alone` | `malformed` | a key with no id |
+| `kem_key_id_alone` | `malformed` | an id with no key |
+| `kem_key_of_no_profile_size` | `malformed` | a key one byte short of the profile's size, with its own id |
+
+Every signature is valid, so a refusal can come only from the payload's
+shape. A verifier that checks only the signature accepts all five. The
+refused cases are signed over a payload `sign/2` refuses, the way `sign/2`
+signs. `malformed` is macula's name for the refusal, and an SDK may use its
+own.
