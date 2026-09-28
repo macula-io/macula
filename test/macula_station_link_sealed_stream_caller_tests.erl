@@ -216,8 +216,11 @@ a_provider_answering_under_the_refused_key_ends_the_stream(#{link := Link, provi
     %% The link has sent the reopen's STREAM_OPEN on a new dedicated stream: that session is told too.
     NewQuic = receive {opened, Q2} -> Q2 after ?EVENT_MS -> error(no_reopen) end,
     {ok, _NewOpen} = macula_frame:verify_request(written(NewQuic), profile()),
-    ?assertMatch({error, {<<"malformed_frame">>, _}}, macula_stream:recv(Stream, ?EVENT_MS)),
+    ?assertEqual({error, {<<"malformed_frame">>, <<"a provider answered under the key it refused">>}},
+                 macula_stream:recv(Stream, ?EVENT_MS)),
     ?assertMatch(#{frame_type := stream_error}, written(NewQuic)),
+    %% The link forgets the session its STREAM_ERROR ended: nothing stays held until the stream's owner exits.
+    ?assertEqual(#{}, until_no_client_streams(Link, 50)),
     ?assertEqual({ok, #{sealed => 1, provider => Target, seal_key_id => OldId}}, macula:stream_report(Stream)).
 
 %%------------------------------------------------------------------
@@ -270,6 +273,15 @@ seal_request(#{frame_type := Type, realm := Realm, procedure := Procedure, calle
                request_id := RequestId, deadline := Deadline}) ->
     #{frame_type => atom_to_binary(Type), realm => Realm, procedure => Procedure, caller => Caller,
       target => Target, request_id => RequestId, deadline => Deadline}.
+
+%% The link's client sessions once none is left, or what is left after Tries polls 20 ms apart.
+until_no_client_streams(Link, Tries) ->
+    Held = element(macula_station_link:state_field_index(client_streams), sys:get_state(Link)),
+    no_client_streams(Held, Link, Tries).
+
+no_client_streams(Held, _Link, _Tries) when Held =:= #{} -> Held;
+no_client_streams(Held, _Link, 0) -> Held;
+no_client_streams(_Held, Link, Tries) -> timer:sleep(20), until_no_client_streams(Link, Tries - 1).
 
 %% A bidi stream the link opens in the clear, and its verified open.
 clear_open(Link, Target) ->
