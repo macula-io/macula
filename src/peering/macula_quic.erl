@@ -74,6 +74,7 @@
     lost_packets/1,
     peer_leaf/1,
     presented_leaf/1,
+    export_keying_material/4,
 
     %% Stream
     send/2,
@@ -550,6 +551,18 @@ peer_leaf(Conn) ->
 presented_leaf(Conn) ->
     nif_presented_leaf(Conn).
 
+%% @doc Keying material exported from this connection's TLS 1.3 session
+%% (RFC 8446 section 7.5): `Length' bytes for `Label' and `Context'. Both ends
+%% of one connection export the same bytes; another connection, label or
+%% context exports different ones. Handshake v5 binds its session proofs to
+%% this value (plans/DESIGN_NEIGHBOUR_CHANNEL_BINDING.md). A closed
+%% connection returns `{error, already_closed}'.
+-spec export_keying_material(reference(), binary(), binary(), pos_integer()) ->
+    {ok, binary()} | {error, already_closed | export_failed}.
+export_keying_material(Conn, Label, Context, Length)
+  when is_binary(Label), is_binary(Context), is_integer(Length), Length > 0 ->
+    nif_export_keying_material(Conn, Label, Context, Length).
+
 %%%===================================================================
 %%% Stream API
 %%%===================================================================
@@ -792,6 +805,9 @@ nif_peer_leaf(_Conn) ->
     erlang:nif_error(nif_not_loaded).
 
 nif_presented_leaf(_Conn) ->
+    erlang:nif_error(nif_not_loaded).
+
+nif_export_keying_material(_Conn, _Label, _Context, _Length) ->
     erlang:nif_error(nif_not_loaded).
 
 nif_send(_Stream, _Data, _Ref) ->

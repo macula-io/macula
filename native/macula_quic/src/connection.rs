@@ -608,6 +608,39 @@ fn nif_presented_leaf<'a>(
     })
 }
 
+/// NIF: export_keying_material(ConnRef, Label, Context, Length) ->
+///     {ok, Bytes} | {error, already_closed | export_failed}
+///
+/// RFC 8446 section 7.5 keying material from this connection's TLS 1.3
+/// session. Both ends of one connection export the same bytes for the same
+/// label, context and length; any other session exports different ones.
+/// Handshake v5 binds its session proofs to this value
+/// (plans/DESIGN_NEIGHBOUR_CHANNEL_BINDING.md).
+#[rustler::nif]
+fn nif_export_keying_material<'a>(
+    env: Env<'a>,
+    conn: ResourceArc<ConnectionResource>,
+    label: Binary<'a>,
+    context: Binary<'a>,
+    length: usize,
+) -> NifResult<Term<'a>> {
+    if conn.closed.load(Ordering::Relaxed) {
+        return Ok((atoms::error(), atoms::already_closed()).encode(env));
+    }
+    let mut output =
+        OwnedBinary::new(length).ok_or(rustler::Error::BadArg)?;
+    Ok(
+        match conn.connection.export_keying_material(
+            output.as_mut_slice(),
+            label.as_slice(),
+            context.as_slice(),
+        ) {
+            Ok(()) => (atoms::ok(), output.release(env)).encode(env),
+            Err(_) => (atoms::error(), atoms::export_failed()).encode(env),
+        },
+    )
+}
+
 fn der_binary<'a>(env: Env<'a>, der: &[u8]) -> Binary<'a> {
     let mut binary = OwnedBinary::new(der.len()).expect("allocate a certificate binary");
     binary.as_mut_slice().copy_from_slice(der);

@@ -43,6 +43,7 @@ rustler::init!(
         connection::nif_lost_packets,
         connection::nif_peer_leaf,
         connection::nif_presented_leaf,
+        connection::nif_export_keying_material,
         // Stream
         stream::nif_send,
         stream::nif_async_send,
