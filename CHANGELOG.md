@@ -7,6 +7,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+Handshake version 5: a connection is authenticated once, by hybrid proofs bound to its TLS session, instead of by a
+composite signature on every control frame (plans/DESIGN_NEIGHBOUR_CHANNEL_BINDING.md). A pq_hybrid station stops
+paying an RSA-4096 signature (about 9 ms) per control frame it sends. Stations accept versions 4 and 5; a client
+dials 5 and falls back to 4 once, only on `unsupported_version`, so no peer is refused during a roll.
+
+### Added
+
+- **Handshake v5.** The opener and challenge stay version 4; the client picks 4 or 5 in CONNECT and HELLO answers in
+  the same version. In v5 the CONNECT proof (`MACULA-PQ-CONNECT-PROOF-V2`, by the CONNECT key) also covers E, the
+  session's TLS exporter value (`EXPORTER-macula-session-v1`, context client node_id || station node_id, 32 bytes),
+  and the client's capabilities; HELLO carries the station's `session_proof` (`MACULA-PQ-SESSION-PROOF-V1`, by its
+  identity key) over E, SHA-384 of the challenge and of CONNECT, both node_ids and the station's capabilities, signed
+  only after every check on CONNECT passes. After HELLO no frame carries a neighbour signature, in either profile; a
+  v5 connection refuses one as `malformed_frame`. A composite session proof whose ML-DSA half is valid and whose RSA
+  half is not is refused (`session_proof_invalid`): the property D17 kept, if ML-DSA-87 were broken.
+- **Falling back, and refusing a downgrade.** A station never seen on v5 that refuses a v5 CONNECT with
+  `unsupported_version` is dialled once more, on a new QUIC connection, with a v4 CONNECT, and with v4 for the next 10
+  minutes; from its second fallback a warning names it, at most once a minute. A station seen on v5 in this run that
+  answers v4 is refused (`v5_downgrade_refused`), logged with its node_id, until `macula_peering:forget_v5_peer/1` or
+  a restart. That includes a station rolled back below its first v5 release: that release is its rollback floor,
+  because a third-party client that saw it on v5 refuses it until that client restarts.
+- **Liveness on v5.** The probe is `liveness_ping`/`liveness_pong`, answered and consumed by the peer's connection,
+  unsigned; the signed `_macula.ping` CALL probe stays for v4 connections. The DHT's own `ping`/`pong` are untouched.
+- **The station's session proof budget.** At most `session_proofs_per_node_per_minute` (default 30) per client node
+  and `session_proofs_per_second` (default 30) in total, macula application environment options read once at start;
+  a value that is not an integer of at least 1 refuses the start. Past either limit CONNECT is refused
+  (`session_proof_rate`, logged with the limit). `macula_peering:session_proof_limits/0`.
+- **Counters.** `macula_peering:handshake_counters/0`: connections by version, control frames on v4 connections (the
+  old path, which must read zero fleet-wide before v4 is dropped), v4 fallbacks, refused downgrades, and session proof
+  refusals by reason.
+- `macula_quic:export_keying_material/4` (the TLS 1.3 exporter) and `macula_quic:tls_posture/0`.
+- `max_handshake_version` (4 or 5, default 5) on a station connection: at 4 it answers v5 as a pre-v5 station does.
+
+### Changed
+
+- **No TLS session resumption, and no 0-RTT, on either end.** D16 decided against resumption, but rustls resumes by
+  default and nothing turned it off: a second handshake between the same configurations resumed, and the listener
+  sent two tickets. Every connection is now a full handshake.
+- **Peering refuses to start on a TLS posture v5 cannot rely on**: both ends must offer exactly SecP384r1MLKEM1024
+  then SecP256r1MLKEM768, neither may do 0-RTT or send tickets, and a second handshake must be full
+  (`macula_tls_posture`). This proves the configured posture, not each connection's negotiated group.
+- `macula_handshake:answer_challenge/2` returns `{ok, Connect, Station, ExpectHello}`, and `read_hello/1` is
+  `read_hello/2`, taking that `ExpectHello`. `macula_dist_tunnel` stays on v4: its station answers v5 as an old one.
+
+---
+
 ## [13.1.0] - 2026-09-28
 
 A caller can learn whether the exchange behind its result was sealed, and to which key. Opt-in: no 13.0 caller's
