@@ -970,7 +970,7 @@ call_stream_station(Pool, Station, Target, Realm, Procedure, Args, Opts)
   when is_pid(Pool), is_binary(Target), byte_size(Target) =:= 32,
        is_binary(Realm), byte_size(Realm) =:= 32,
        is_binary(Procedure), is_map(Opts) ->
-    refused(target_checked(Station, Opts),
+    refused(first_error([target_checked(Station, Opts), report_valid(macula_direct_dial:stream_report_option(Opts))]),
             fun() -> do_call_stream_station(Pool, Station, Target, Realm, Procedure, Args, Opts) end).
 
 %% The pool is handed the seal decided, not the signed state it was decided from.

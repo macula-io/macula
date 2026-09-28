@@ -213,7 +213,11 @@ a_provider_answering_under_the_refused_key_ends_the_stream(#{link := Link, provi
     Link ! {quic, macula_frame:encode(Chunk), OldQuic, undefined},
     ?assertEqual({chunk, <<"under the old">>}, macula_stream:recv(Stream, ?EVENT_MS)),
     Resealer ! go,
+    %% The link has sent the reopen's STREAM_OPEN on a new dedicated stream: that session is told too.
+    NewQuic = receive {opened, Q2} -> Q2 after ?EVENT_MS -> error(no_reopen) end,
+    {ok, _NewOpen} = macula_frame:verify_request(written(NewQuic), profile()),
     ?assertMatch({error, {<<"malformed_frame">>, _}}, macula_stream:recv(Stream, ?EVENT_MS)),
+    ?assertMatch(#{frame_type := stream_error}, written(NewQuic)),
     ?assertEqual({ok, #{sealed => 1, provider => Target, seal_key_id => OldId}}, macula:stream_report(Stream)).
 
 %%------------------------------------------------------------------

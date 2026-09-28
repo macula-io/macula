@@ -43,7 +43,9 @@ Since 13.1.0 `macula:stream_report(Stream)` tells the caller whether its stream 
 `{ok, #{sealed := 0 | 1, provider := Provider, seal_key_id => KeyId}}`. It settles on the
 provider's first chunk or reply opened under the stream's key (on a clear stream, its first
 chunk, reply or end); before that, and on a stream that ended first, an error included, it is
-`{error, not_settled}`. A served stream has none (`{error, not_a_caller}`). See the
+`{error, not_settled}`. A served stream has none (`{error, not_a_caller}`). `report` in a stream's
+options is refused (`{error, {invalid_option, report}}`): a stream reports only through
+`stream_report/1`. See the
 [design](https://github.com/macula-io/macula/blob/main/plans/DESIGN_E2E_SEAL_REPORT.md), §3.
 
 `Opts` may set `dial_timeout_ms` (default 10_000) for the dial and handshake,

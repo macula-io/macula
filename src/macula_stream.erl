@@ -178,10 +178,11 @@
     reopening :: {reference(), [term()]} | undefined,
     %% The most frames a provider seals under its random nonces (GCM's bound).
     max_sealed_frames = ?MAX_SEALED_FRAMES :: pos_integer(),
-    %% Whether the caller's seal report has settled (DESIGN_E2E_SEAL_REPORT §3): set by the provider's first
-    %% STREAM_DATA or STREAM_REPLY opened under the stream's key, or on a clear stream by its first STREAM_DATA,
-    %% STREAM_REPLY or STREAM_END. An error never sets it.
-    settled = false :: boolean()
+    %% The caller's seal report once it has settled (DESIGN_E2E_SEAL_REPORT §3), fixed from the stream's seal and
+    %% open at that moment: set by the provider's first STREAM_DATA or STREAM_REPLY opened under the stream's key, or
+    %% on a clear stream by its first STREAM_DATA, STREAM_REPLY or STREAM_END. An error never sets it, and nothing
+    %% changes it after.
+    settled = undefined :: undefined | macula_station_link:report()
 }).
 
 
@@ -1003,18 +1004,23 @@ resealed_and_reopened(Reseal, Named, Link, Stream, Sid, Open, Args) ->
 %% The link opened the new STREAM_OPEN on a new dedicated stream: this stream reads and writes under it from now on,
 %% and what waited goes out, numbered from 0 under the new keys, whether or not the session has ended meanwhile (an
 %% abort's STREAM_ERROR ends the new session at the link too). A reopen that failed ends a session still running.
-reopened({ok, _Reopened}, _Queued, #state{settled = true} = State) ->
+reopened({ok, Reopened}, _Queued, #state{settled = Settled} = State) when Settled =/= undefined ->
     %% The provider answered under the very key it refused, before the reopen landed: an opened frame settled the
-    %% report on that key. Swapping to the reopen's key now would make the report name a key nothing was opened under,
-    %% and a provider that refuses a key and then answers under it is not coherent: the session ends.
-    abort_session(<<"malformed_frame">>, <<"a provider answered under the key it refused">>, State);
-reopened({ok, #{open := Open, seal := Keys, sid := Sid}}, Queued, #state{peer = {remote_via_link, Link, _Old}} = State) ->
-    flushed(Queued, State#state{id = Sid, peer = {remote_via_link, Link, Sid}, open = Open,
-                                verifier = macula_frame:open_stream(Open), seal = stream_seal(Keys)});
+    %% report on that key, and the report keeps it. A provider that refuses a key and then answers under it is not
+    %% coherent, so the session ends: on the reopen's session, which the link has just opened at the provider, so the
+    %% provider is told there and neither side holds it open.
+    abort_session(<<"malformed_frame">>, <<"a provider answered under the key it refused">>, adopted(Reopened, State));
+reopened({ok, Reopened}, Queued, State) ->
+    flushed(Queued, adopted(Reopened, State));
 reopened({error, _} = Refused, _Queued, #state{ended = undefined} = State) ->
     refused_with(Refused, State);
 reopened({error, _}, _Queued, State) ->
     State.
+
+%% This stream reads and writes on the reopen's session from now on.
+adopted(#{open := Open, seal := Keys, sid := Sid}, #state{peer = {remote_via_link, Link, _Old}} = State) ->
+    State#state{id = Sid, peer = {remote_via_link, Link, Sid}, open = Open, verifier = macula_frame:open_stream(Open),
+                seal = stream_seal(Keys)}.
 
 flushed(Queued, State) ->
     lists:foldl(fun(Action, S) -> {_Sent, S1} = via_link(Action, S), S1 end, State, Queued).
@@ -1070,8 +1076,19 @@ unsealed_event({error, _}, State) ->
     abort_session(<<"malformed_frame">>, <<"a sealed frame whose plaintext is not its frame's">>, State).
 
 %% The report settles on a provider frame of one of `Types', never on an error (DESIGN_E2E_SEAL_REPORT §3).
-settled_by(#{frame_type := Type}, Types, State) ->
-    State#state{settled = State#state.settled orelse lists:member(Type, Types)}.
+settled_by(#{frame_type := Type}, Types, #state{settled = undefined} = State) ->
+    settled_on(lists:member(Type, Types), State);
+settled_by(_Fields, _Types, State) ->
+    State.
+
+settled_on(true, State) -> State#state{settled = seal_report(State)};
+settled_on(false, State) -> State.
+
+%% The report, from the stream's seal and open at the moment it settles.
+seal_report(#state{seal = undefined, open = #{target := Target}}) ->
+    #{sealed => 0, provider => Target};
+seal_report(#state{seal = #{key_id := KeyId}, open = #{target := Target}}) ->
+    #{sealed => 1, provider => Target, seal_key_id => KeyId}.
 
 %% The caller's seal report, once settled: the stream's key id and the open's target.
 stream_report(#state{role = server}) ->
@@ -1079,12 +1096,10 @@ stream_report(#state{role = server}) ->
 stream_report(#state{open = undefined}) ->
     %% A local in-process stream: no exchange crossed the mesh, so there is nothing to report on.
     {error, not_settled};
-stream_report(#state{settled = false}) ->
+stream_report(#state{settled = undefined}) ->
     {error, not_settled};
-stream_report(#state{seal = undefined, open = #{target := Target}}) ->
-    {ok, #{sealed => 0, provider => Target}};
-stream_report(#state{seal = #{key_id := KeyId}, open = #{target := Target}}) ->
-    {ok, #{sealed => 1, provider => Target, seal_key_id => KeyId}}.
+stream_report(#state{settled = Report}) ->
+    {ok, Report}.
 
 clear_event(#{frame_type := stream_data, encoding := Encoding, body := Body}, State) ->
     chunk_arrived(Encoding, Body, State);

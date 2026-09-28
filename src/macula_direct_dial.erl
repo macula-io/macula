@@ -129,7 +129,7 @@
 -export([call/5, call/6, call_stream/5, call_stream/6, providers/4, providers/5,
         publish_advertisement/4, publish_advertisement/5,
         resolve_station_endpoint/2, resolve_station_endpoint/3,
-        resolve_station_endpoint/4, removed_option/2, report_option/1]).
+        resolve_station_endpoint/4, removed_option/2, report_option/1, stream_report_option/1]).
 
 %% Only tests call these arities so far, each with a dial_io.
 -ignore_xref([{resolve_station_endpoint, 4}]).
@@ -286,6 +286,13 @@ report_option(#{}) -> {ok, false}.
 with_report({ok, _Report}, Checked) -> Checked;
 with_report({error, _} = Refused, _Checked) -> Refused.
 
+%% @doc A stream reports through `macula:stream_report/1', so `report' on its open means nothing and is
+%% `{error, {invalid_option, report}}' whatever its value, as the C ABI refuses it, rather than accepted and ignored.
+%% `macula:call_stream_station/7' checks its own options with it too.
+-spec stream_report_option(map()) -> {ok, none} | {error, {invalid_option, report}}.
+stream_report_option(#{report := _}) -> {error, {invalid_option, report}};
+stream_report_option(#{}) -> {ok, none}.
+
 %% Which provider a call is limited to, `any' when the caller named none.
 provider_option(#{provider := <<_:256>> = Provider}) -> {ok, Provider};
 provider_option(#{provider := _}) -> {error, {invalid_option, provider}};
@@ -363,7 +370,8 @@ call_stream(Pool, Realm, Procedure, Args, StreamOpts, Opts)
                                StreamOpts, Opts).
 
 call_stream_unless_removed(none, Pool, Realm, Procedure, Args, StreamOpts, Opts) ->
-    stream_to(confidential_option(StreamOpts), Pool, Realm, Procedure, Args, StreamOpts, Opts);
+    stream_to(with_confidential(confidential_option(StreamOpts), stream_report_option(StreamOpts)), Pool, Realm,
+              Procedure, Args, StreamOpts, Opts);
 call_stream_unless_removed(Removed, _Pool, _Realm, _Procedure, _Args, _StreamOpts, _Opts) ->
     {error, Removed}.
 

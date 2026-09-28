@@ -48,6 +48,17 @@ refusals() ->
                          || Report <- [true, false]])}
      end,
      fun(Pool) ->
+         %% A stream reports through stream_report/1: `report' on its open means nothing and is refused, whatever its
+         %% value, as the C ABI refuses it (an option accepted and ignored is 13.0.1's lesson).
+         {"a stream open refuses report, whatever its value",
+          ?_assertEqual([?REFUSAL, ?REFUSAL, ?REFUSAL],
+                        [macula:call_stream(Pool, ?REALM, <<"x.y">>, #{}, #{report => true}),
+                         macula:call_stream(Pool, ?REALM, <<"x.y">>, #{}, #{report => false}),
+                         macula:call_stream_station(Pool, ?SEED, ?NODE, ?REALM, <<"x.y">>, #{},
+                                                    #{expected_node_id => ?NODE, confidential => off,
+                                                      report => true})])}
+     end,
+     fun(Pool) ->
          {"call refuses a report that is not a boolean",
           ?_assertEqual(?REFUSAL, macula:call(Pool, ?REALM, <<"x.y">>, #{}, 300, #{report => 1}))}
      end].
