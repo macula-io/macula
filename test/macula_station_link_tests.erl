@@ -486,8 +486,9 @@ publish6_seals_under_the_group_epoch_test_() ->
          {ok, Profile} = macula_crypto_profile:configured(),
          {ok, PeerKey} = macula_node_keys:generate(identity, Profile),
          {ok, PeerNodeId} = macula_node_keys:node_id(PeerKey),
+         FakePeer = self(),
          _ = sys:replace_state(Pid, fun(S) ->
-             setelement(?PEER_NODE_ID_INDEX, setelement(?PEER_PID_INDEX, S, self()), PeerNodeId)
+             setelement(?PEER_NODE_ID_INDEX, setelement(?PEER_PID_INDEX, S, FakePeer), PeerNodeId)
          end),
          #{id := Id} = Epoch = macula_group_epoch:new(erlang:system_time(millisecond), 15 * 60000),
          ok = macula_station_link:publish(Pid, ?REALM, <<"io.macula/acme/chat/said_v1">>, #{n => 1}, 9,
