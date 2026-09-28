@@ -55,6 +55,22 @@ ordered_skips_gap_after_timeout_test_() ->
         stop(Pool, Ref)
     end}.
 
+%% A pattern subscription's events keep their own topic however the
+%% ordering releases them: at once, or by the flush after a gap
+%% (macula#49). Before, a flushed event carried the pattern.
+pattern_flushed_event_keeps_its_topic_test_() ->
+    {timeout, 5, fun() ->
+        {ok, _} = application:ensure_all_started(macula),
+        {ok, Pool} = macula_client:connect([], #{order_timeout_ms => 50}),
+        Pattern = <<"order/*/wire_v1">>,
+        Concrete = <<"order/east/wire_v1">>,
+        {ok, Ref} = macula_client:subscribe(Pool, ?REALM, Pattern, self(), #{}),
+        inject(Pool, Concrete, ?PUB, 1),
+        inject(Pool, Concrete, ?PUB, 3),   %% 2 never arrives: 3 waits for the flush
+        ?assertEqual([{Concrete, 1}, {Concrete, 3}], collect_topics(Ref, 2, 1000)),
+        stop(Pool, Ref)
+    end}.
+
 %%%===================================================================
 %%% helpers
 %%%===================================================================
@@ -86,6 +102,15 @@ collect(Ref, Topic, N, Timeout) ->
     receive
         {macula_event, Ref, Topic, Payload, _Meta} ->
             [Payload | collect(Ref, Topic, N - 1, Timeout)]
+    after Timeout ->
+        []
+    end.
+
+collect_topics(_Ref, 0, _Timeout) ->
+    [];
+collect_topics(Ref, N, Timeout) ->
+    receive
+        {macula_event, Ref, Topic, Payload, _Meta} -> [{Topic, Payload} | collect_topics(Ref, N - 1, Timeout)]
     after Timeout ->
         []
     end.
