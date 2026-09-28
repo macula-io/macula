@@ -91,6 +91,8 @@ inside_the_ahead_window_the_next_epoch_comes_too(W) ->
 past_publish_until_the_next_epoch_is_current(W) ->
     ?_test(begin
         Node = member(W),
+        %% The group's first epoch starts at its first pull.
+        [_First] = epochs(call(W, Node, {text, <<"current">>})),
         advance(W, ?R - ?R div 3),
         [_Current, Next] = epochs(call(W, Node, {text, <<"current">>})),
         advance(W, ?R div 3),
