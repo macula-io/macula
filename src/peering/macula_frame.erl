@@ -41,6 +41,7 @@
 
     %% Constructors — DHT (Part 6 §7)
     ping/1, pong/1,
+    liveness_ping/1, liveness_pong/1,
     find_node/1, nodes/1,
     find_value/1, value/1,
     store/1, store_ack/1,
@@ -149,7 +150,7 @@
     swim_update/0,
     swim_update_spec/0,
     member_state/0,
-    ping_spec/0, pong_spec/0,
+    ping_spec/0, pong_spec/0, liveness_spec/0,
     find_node_spec/0, nodes_spec/0,
     find_value_spec/0, value_spec/0,
     store_spec/0, store_ack_spec/0,
@@ -233,6 +234,7 @@
 -type frame_type() :: connect | hello | goodbye
                     | swim_ping | swim_ack | swim_suspect | swim_confirm
                     | ping | pong
+                    | liveness_ping | liveness_pong
                     | find_node | nodes
                     | find_value | value
                     | store | store_ack
@@ -356,6 +358,7 @@
 
 -type ping_spec()          :: #{nonce := nonce128()}.
 -type pong_spec()          :: #{nonce := nonce128()}.
+-type liveness_spec()      :: #{nonce := nonce128()}.
 
 -type find_node_spec()     :: #{
     key    := id256(),
@@ -908,6 +911,18 @@ ping(#{nonce := N}) when is_binary(N), byte_size(N) =:= 16 ->
 -spec pong(pong_spec()) -> frame().
 pong(#{nonce := N}) when is_binary(N), byte_size(N) =:= 16 ->
     (base(pong, 0))#{nonce => N}.
+
+%% @doc The handshake v5 liveness probe (plans/DESIGN_NEIGHBOUR_CHANNEL_BINDING.md section 3): a peering connection
+%% sends it and the peer's peering connection answers it with liveness_pong, the same nonce. Neither is ever passed to
+%% the DHT, whose own ping and pong are different evidence. Session-authenticated, never neighbour-signed, and only on
+%% a v5 connection.
+-spec liveness_ping(liveness_spec()) -> frame().
+liveness_ping(#{nonce := N}) when is_binary(N), byte_size(N) =:= 16 ->
+    (base(liveness_ping, 0))#{nonce => N}.
+
+-spec liveness_pong(liveness_spec()) -> frame().
+liveness_pong(#{nonce := N}) when is_binary(N), byte_size(N) =:= 16 ->
+    (base(liveness_pong, 0))#{nonce => N}.
 
 -spec find_node(find_node_spec()) -> frame().
 find_node(#{key := K, origin := O, depth := D})
@@ -2151,9 +2166,10 @@ validate_manifest_payload(M) when is_map(M) -> ok.
 %%------------------------------------------------------------------
 
 %% @doc Whether a frame type belongs on a connection's control stream, in either profile: the frames pq_hybrid
-%% neighbour-signs (D17). One arriving on a dedicated stream is malformed_frame, and the connection closes.
+%% neighbour-signs on v4 (D17), and the v5 liveness probe's. One arriving on a dedicated stream is malformed_frame, and
+%% the connection closes.
 -spec control_frame(frame_type()) -> boolean().
-control_frame(FrameType) -> lists:member(FrameType, ?NEIGHBOUR_SIGNED).
+control_frame(FrameType) -> lists:member(FrameType, [liveness_ping, liveness_pong | ?NEIGHBOUR_SIGNED]).
 
 %% @doc Whether a relayed frame of this type is taken without a frame signature: every HyParView frame, JOIN,
 %% FORWARD_JOIN, NEIGHBOR, DISCONNECT, SHUFFLE and SHUFFLE_REPLY, and the Plumtree IHAVE, GRAFT and PRUNE, which D17
@@ -2167,10 +2183,13 @@ relayed_without_signature(FrameType) ->
                              hyparview_shuffle, hyparview_shuffle_reply, plumtree_ihave, plumtree_graft,
                              plumtree_prune, plumtree_gossip]).
 
-%% @doc Whether a profile neighbour-signs a frame type.
--spec neighbour_signed(macula_crypto_profile:profile(), frame_type()) -> boolean().
-neighbour_signed(pq_hybrid, FrameType) -> control_frame(FrameType);
-neighbour_signed(pq_pure, _FrameType) -> false.
+%% @doc Whether a connection neighbour-signs a frame type: by its profile on a handshake v4 connection, and never on a
+%% v5 one (`session'), where the session proofs authenticated the neighbour once
+%% (plans/DESIGN_NEIGHBOUR_CHANNEL_BINDING.md section 3).
+-spec neighbour_signed(macula_crypto_profile:profile() | session, frame_type()) -> boolean().
+neighbour_signed(pq_hybrid, FrameType) -> lists:member(FrameType, ?NEIGHBOUR_SIGNED);
+neighbour_signed(pq_pure, _FrameType) -> false;
+neighbour_signed(session, _FrameType) -> false.
 
 %% @doc Neighbour-sign a control frame with the sender's identity key, for one connection and one seq.
 -spec sign_neighbour(frame(), macula_node_keys:node_key(), #{connection := binary(), seq := non_neg_integer()}) ->
@@ -2187,7 +2206,7 @@ neighbour_signature(true, #{version := Version, frame_type := Type} = Frame, Key
 %% @doc Read a received frame under the connection's profile. A frame type the profile signs must be exactly
 %% {version, frame_type, neighbour}, signed by the peer's identity key for this connection and the next seq, and comes
 %% back as the frame its tbs holds. Any other frame must not carry neighbour and comes back as it is.
--spec verify_neighbour(frame(), #{profile := macula_crypto_profile:profile(), peer_key := binary(),
+-spec verify_neighbour(frame(), #{profile := macula_crypto_profile:profile() | session, peer_key := binary(),
                                   connection := binary(), seq := non_neg_integer()}) ->
         {ok, frame()} | {error, malformed_frame | signature_invalid}.
 verify_neighbour(#{frame_type := Type} = Frame, #{profile := Profile} = Opts) ->
@@ -2629,7 +2648,7 @@ received_rules(swim_ack) ->
                [{piggyback, {optional, {list_of, swim_update_rule()}}}]);
 received_rules(Type) when Type =:= swim_suspect; Type =:= swim_confirm ->
     base_rules([{target, key}, {target_incarnation, non_neg}, {suspected_by, key}, {ttl, non_neg}]);
-received_rules(Type) when Type =:= ping; Type =:= pong ->
+received_rules(Type) when Type =:= ping; Type =:= pong; Type =:= liveness_ping; Type =:= liveness_pong ->
     base_rules([{nonce, id16}]);
 received_rules(find_node) ->
     base_rules([{key, key}, {origin, key}, {depth, non_neg}]);
@@ -3088,6 +3107,8 @@ frame_type_named(<<"swim_suspect">>) -> {ok, swim_suspect};
 frame_type_named(<<"swim_confirm">>) -> {ok, swim_confirm};
 frame_type_named(<<"ping">>) -> {ok, ping};
 frame_type_named(<<"pong">>) -> {ok, pong};
+frame_type_named(<<"liveness_ping">>) -> {ok, liveness_ping};
+frame_type_named(<<"liveness_pong">>) -> {ok, liveness_pong};
 frame_type_named(<<"find_node">>) -> {ok, find_node};
 frame_type_named(<<"nodes">>) -> {ok, nodes};
 frame_type_named(<<"find_value">>) -> {ok, find_value};
@@ -3251,6 +3272,8 @@ field_table(ping) ->
       <<"call_id">> => {call_id, value},
       <<"source_route">> => {source_route, value},
       <<"nonce">> => {nonce, value}};
+field_table(Type) when Type =:= liveness_ping; Type =:= liveness_pong ->
+    field_table(ping);
 field_table(pong) ->
     #{<<"version">> => {version, value},
       <<"neighbour">> => {neighbour, held_object},

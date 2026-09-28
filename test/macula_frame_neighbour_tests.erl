@@ -13,6 +13,8 @@
                   store, store_ack, advertise, unadvertise, subscribe, unsubscribe,
                   overlay_relay, hyparview_join, hyparview_forward_join, hyparview_neighbor, hyparview_disconnect,
                   hyparview_shuffle, hyparview_shuffle_reply, plumtree_ihave, plumtree_graft, plumtree_prune, goodbye]).
+%% The v5 liveness probe's frames: control-stream frames that exist only on a session-authenticated connection.
+-define(LIVENESS, [liveness_ping, liveness_pong]).
 -define(DATA, [publish, event, plumtree_gossip, want, have, block, manifest_req, manifest_res, cancel, call, result,
                error, stream_open, stream_data, stream_end, stream_error, stream_reply]).
 
@@ -27,7 +29,15 @@ data_frames_are_never_neighbour_signed_test() ->
     [?assertNot(macula_frame:neighbour_signed(pq_hybrid, Type)) || Type <- ?DATA].
 
 no_frame_is_neighbour_signed_in_pq_pure_test() ->
-    [?assertNot(macula_frame:neighbour_signed(pq_pure, Type)) || Type <- ?CONTROL ++ ?DATA].
+    [?assertNot(macula_frame:neighbour_signed(pq_pure, Type)) || Type <- ?CONTROL ++ ?DATA ++ ?LIVENESS].
+
+%% On a handshake v5 connection the session proofs authenticate the neighbour once, and no frame carries a neighbour
+%% signature (plans/DESIGN_NEIGHBOUR_CHANNEL_BINDING.md section 3).
+no_frame_is_neighbour_signed_on_a_session_test() ->
+    [?assertNot(macula_frame:neighbour_signed(session, Type)) || Type <- ?CONTROL ++ ?DATA ++ ?LIVENESS].
+
+liveness_frames_are_never_neighbour_signed_test() ->
+    [?assertNot(macula_frame:neighbour_signed(pq_hybrid, Type)) || Type <- ?LIVENESS].
 
 %%------------------------------------------------------------------
 %% Signing and verifying, in pq_hybrid
@@ -54,6 +64,8 @@ cases(Keys) ->
                  fun a_control_frame_without_neighbour_is_refused_in_pq_hybrid/1,
                  fun a_frame_with_neighbour_is_refused_in_pq_pure/1,
                  fun a_control_frame_without_neighbour_is_read_as_is_in_pq_pure/1,
+                 fun a_frame_with_neighbour_is_refused_on_a_session/1,
+                 fun a_control_frame_without_neighbour_is_read_as_is_on_a_session/1,
                  fun a_data_frame_cannot_be_neighbour_signed/1]].
 
 a_signed_control_frame_verifies_with_its_connection_and_seq(#{key := Key} = Keys) ->
@@ -148,6 +160,14 @@ a_data_frame_cannot_be_neighbour_signed(#{key := Key} = Keys) ->
                                      payload => <<"p">>}, Key),
     ?assertError(function_clause, macula_frame:sign_neighbour(Publish, Key, at(Keys, 0))).
 
+a_frame_with_neighbour_is_refused_on_a_session(#{key := Key} = Keys) ->
+    Signed = wire(macula_frame:sign_neighbour(ping(), Key, at(Keys, 0))),
+    ?assertEqual({error, malformed_frame}, macula_frame:verify_neighbour(Signed, (opts(Keys, 0))#{profile => session})).
+
+a_control_frame_without_neighbour_is_read_as_is_on_a_session(Keys) ->
+    Ping = ping(),
+    ?assertEqual({ok, Ping}, macula_frame:verify_neighbour(Ping, (opts(Keys, 0))#{profile => session})).
+
 %%------------------------------------------------------------------
 %% Helpers
 %%------------------------------------------------------------------
@@ -177,6 +197,6 @@ opts(#{key := Key, connection := C}, Seq) ->
 
 %% The control frames are the frame types that belong on a connection's control stream, whatever the profile.
 control_frames_belong_on_the_control_stream_in_either_profile_test() ->
-    ?assertEqual({?CONTROL, []},
-                 {[Type || Type <- ?CONTROL, macula_frame:control_frame(Type)],
+    ?assertEqual({?CONTROL ++ ?LIVENESS, []},
+                 {[Type || Type <- ?CONTROL ++ ?LIVENESS, macula_frame:control_frame(Type)],
                   [Type || Type <- ?DATA, macula_frame:control_frame(Type)]}).
