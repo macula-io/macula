@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [13.1.0] - 2026-09-28
+
+A caller can learn whether the exchange behind its result was sealed, and to which key. Opt-in: no 13.0 caller's
+return changes. No wire change.
+
+### Added
+
+- **A call's seal report.** `macula:call/6` and `macula:call_station/8` take `report => true`; a result then comes back
+  as `{ok, Result, #{sealed := 0 | 1, provider := Target, seal_key_id => KeyId}}`. `sealed` is 1 when the request that
+  produced the result was sealed and its answer opened under the same key, whose id it names; 0, with no key, for a
+  clear call. After a `sealed_refused` and a reseal it names the reseal's key. An error carries no report. A `report`
+  that is not a boolean is `{error, {invalid_option, report}}` before anything is sent. `call_station/8` honours the
+  option because the pool's own direct dial calls through it. Below the facade: `macula_station_link:call/9` and
+  `macula_client:call_station/12` carry the flag, `macula_direct_dial:report_option/1` checks it, and the report type
+  is `macula_station_link:report()`. See `plans/DESIGN_E2E_SEAL_REPORT.md`.
+- **A stream's seal report.** `macula:stream_report/1` (and `macula_stream:report/1`) answers the same map for a
+  stream the caller opened. It settles on the provider's first STREAM_DATA or STREAM_REPLY opened under the stream's
+  key, or on a clear stream its first STREAM_DATA, STREAM_REPLY or STREAM_END; before that, and on a stream that
+  ended first, an error included, it is `{error, not_settled}`. A sealed stream's STREAM_END travels clear and settles
+  nothing. A served stream answers `{error, not_a_caller}`.
+- `macula_record:realm_member_endorsement_key/2`: the DHT slot of a realm member's endorsement and of the realm's
+  tombstone of it, which `macula_hyparview_endorsement:slot_endorsement/3,4` reads (macula-realm#31).
+
+Both reports state that sealing ran on the exchange, nothing more (D11).
+
+---
+
 ## [13.0.1] - 2026-09-27
 
 Types, the dialyzer check that should have caught them, and one option that was accepted and did nothing. No wire

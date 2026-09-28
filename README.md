@@ -18,6 +18,13 @@
 
 ---
 
+> **13.1.0: knowing a call was sealed.** A caller can ask for the seal
+> report of a call (`report => true` on `macula:call/6` or `call_station/8`)
+> or a stream (`macula:stream_report/1`): `sealed` 1 with the id of the KEM
+> key the exchange was sealed to, or 0 for a clear one, and the provider it
+> was addressed to. It states that sealing ran on that exchange, nothing more.
+> See [the design](https://github.com/macula-io/macula/blob/main/plans/DESIGN_E2E_SEAL_REPORT.md).
+
 > **13.0.0: sealed calls and streams.** A caller can seal a call's or a
 > stream's payload to the provider's KEM key (ML-KEM-1024, plus P-384 in
 > `pq_hybrid`), taken from the provider's signed advertisement, and the

@@ -39,6 +39,13 @@ does: from the provider's verified `advertisement`, or `confidential => required
 and is otherwise refused as `{error, {confidentiality, no_signed_state}}` (see the
 [RPC Protocol](../rpc/RPC_PROTOCOL.md)).
 
+Since 13.1.0 `macula:stream_report(Stream)` tells the caller whether its stream went sealed:
+`{ok, #{sealed := 0 | 1, provider := Provider, seal_key_id => KeyId}}`. It settles on the
+provider's first chunk or reply opened under the stream's key (on a clear stream, its first
+chunk, reply or end); before that, and on a stream that ended first, an error included, it is
+`{error, not_settled}`. A served stream has none (`{error, not_a_caller}`). See the
+[design](https://github.com/macula-io/macula/blob/main/plans/DESIGN_E2E_SEAL_REPORT.md), §3.
+
 `Opts` may set `dial_timeout_ms` (default 10_000) for the dial and handshake,
 plus the same per-call TLS trust override as `call_station/8`: `verify` and
 `expected_node_id` (see the [RPC Guide](../rpc/RPC_GUIDE.md)).
@@ -261,6 +268,7 @@ They are for unit tests and same-node dispatch. The pool forms
 | `set_reply(Stream, Result)` | provider: set the final result |
 | `abort(Stream, Code, Message)` | provider: end the stream with an error |
 | `close_stream(Stream)` | tear the stream down |
+| `stream_report(Stream)` | consumer: whether the stream went sealed, once it has settled (13.1.0) |
 | `open_stream/3,4`, `advertise_stream/2,3` (2-arity family), `call_stream/2,3` | local, in-process streams (no mesh) — unit tests and same-node dispatch |
 
 ---

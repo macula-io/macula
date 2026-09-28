@@ -104,6 +104,25 @@ direct-dial wraps](RPC_GUIDE.md#direct-dial-start_link_direct-advertise_direct).
 > `{error, {confidentiality, no_signed_state}}`. A lookup can deny a call but never
 > downgrade it. See the [design](https://github.com/macula-io/macula/blob/main/plans/DESIGN_E2E_PAYLOAD_CONFIDENTIALITY.md), §8.1.
 
+### Knowing a call was sealed (13.1.0)
+
+A `preferred` call (the default) is sealed whenever the provider's advertisement names a KEM
+key, and goes clear when it names none. To learn afterwards which it was, ask for the call's
+seal report with `report => true`, on `macula:call/6` or `call_station/8`:
+
+```erlang
+{ok, Result, #{sealed := 1, provider := Provider, seal_key_id := KeyId}} =
+    macula:call(Pool, Realm, Procedure, Args, 5_000, #{report => true}).
+```
+
+`sealed` is 1 when the request that produced the result was sealed and its answer opened
+under the same key, with that key's id; 0, with no key, for a clear call. After a
+`sealed_refused` and a reseal it names the reseal's key, never the first. `provider` is the
+node the call was addressed to. An error comes back as it is, with no report. A `report` that
+is not a boolean is `{error, {invalid_option, report}}` before anything is sent. The report
+states that sealing ran on this exchange, and nothing more: see the
+[design](https://github.com/macula-io/macula/blob/main/plans/DESIGN_E2E_SEAL_REPORT.md).
+
 > **`pin_tls_cert => true` and `verify` are REFUSED.** They return
 > `{error, {refused, {pin_tls_cert, no_pin_primitive_for_mldsa87_identity}}}` and
 > `{error, {refused, {verify, one_verification_mode}}}`, from `connect/2`,

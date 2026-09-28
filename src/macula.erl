@@ -90,6 +90,7 @@
     unadvertise_stream/1, unadvertise_stream/3,
     send/2, send/3,
     recv/1, recv/2,
+    stream_report/1,
     close_stream/1, close_send/1,
     await_reply/1, await_reply/2,
     set_reply/2, abort/3
@@ -1360,6 +1361,16 @@ recv(Stream) when is_pid(Stream) ->
                                  | {error, term()}.
 recv(Stream, Timeout) when is_pid(Stream) ->
     macula_stream:recv(Stream, Timeout).
+
+%% @doc The caller's seal report of a stream it opened (DESIGN_E2E_SEAL_REPORT): `sealed' 1 with the id of the KEM
+%% key the stream is sealed to, or 0 for a clear stream, and `provider', the stream's target. It states that the
+%% mechanism ran on this exchange, nothing more. It settles on the provider's first chunk or reply opened under the
+%% stream's key (on a clear stream, its first chunk, reply or end); after a reseal it names the reseal's key. Before
+%% it settles, on a stream that ended first, an error included, and on a local in-process stream it is
+%% `{error, not_settled}'; on a served stream, `{error, not_a_caller}'.
+-spec stream_report(stream()) -> {ok, macula_station_link:report()} | {error, not_settled | not_a_caller}.
+stream_report(Stream) when is_pid(Stream) ->
+    macula_stream:report(Stream).
 
 %% @doc Close a V1 stream (both sides). Renamed from `close/1' in
 %% 3.11.0 because `close/1' now refers to the V2 pool surface.

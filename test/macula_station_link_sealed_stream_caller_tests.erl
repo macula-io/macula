@@ -29,7 +29,17 @@ sealed_stream_caller_test_() ->
                           {"an open that names no seal is refused where it is made",
                            fun an_open_naming_no_seal_is_refused/1},
                           {"a refused open reopens under the resealed key on a new stream, same stream pid",
-                           fun a_refused_open_reopens_under_the_resealed_key/1}]].
+                           fun a_refused_open_reopens_under_the_resealed_key/1},
+                          {"a sealed stream's report settles on the provider's first opened chunk",
+                           fun a_sealed_streams_report_settles_on_an_opened_chunk/1},
+                          {"a sealed stream the provider ends before any data has no report",
+                           fun a_sealed_stream_ended_before_data_has_no_report/1},
+                          {"a clear stream's report settles on the provider's first chunk, sealed 0",
+                           fun a_clear_streams_report_settles_sealed_0/1},
+                          {"a clear stream refused at seq 0 has no report",
+                           fun a_clear_stream_refused_at_seq_0_has_no_report/1},
+                          {"a served stream has no report: it is not a caller's",
+                           fun a_served_stream_has_no_report/1}]].
 
 a_sealed_open_opens_at_the_provider(W) ->
     #{open := Open, plain := Plain} = sealed_open(W, #{city => {text, <<"Tienen">>}}),
@@ -111,7 +121,59 @@ a_refused_open_reopens_under_the_resealed_key(#{link := Link, provider := Provid
                                                        ct => macula_seal:seal(KP2C, Nonce, Aad, <<"reopened">>)}},
                                          Provider, NewOpen),
     Link ! {quic, macula_frame:encode(Chunk), NewQuic, undefined},
-    ?assertEqual({chunk, <<"reopened">>}, macula_stream:recv(Stream, ?EVENT_MS)).
+    ?assertEqual({chunk, <<"reopened">>}, macula_stream:recv(Stream, ?EVENT_MS)),
+    %% The report describes the exchange that produced the chunk: the reseal's key, never the first (§3).
+    ?assertEqual({ok, #{sealed => 1, provider => Target, seal_key_id => NewId}}, macula:stream_report(Stream)).
+
+%% DESIGN_E2E_SEAL_REPORT §3: a sealed stream's report settles on the
+%% provider's first data or reply opened under the stream's key, and names that
+%% key; before it, it is `not_settled', never guessed from the open.
+a_sealed_streams_report_settles_on_an_opened_chunk(#{link := Link, provider := Provider, provider_id := Target} = W) ->
+    #{stream := Stream, quic := Quic, open := Open, keys := #{k_p2c := KP2C, key_id := KeyId}} = sealed_open(W, #{}),
+    ?assertEqual({error, not_settled}, macula:stream_report(Stream)),
+    Nonce = macula_seal:random_nonce(),
+    Aad = macula_seal:stream_aad(<<"stream_data">>, maps:get(request_id, Open), 0, 1),
+    Sealed = #{scheme => 1, key_id => KeyId, nonce => Nonce, ct => macula_seal:seal(KP2C, Nonce, Aad, <<"back">>)},
+    Frame = macula_frame:provider_stream(#{frame_type => stream_data, seq => 0, encoding => raw, sealed => Sealed},
+                                         Provider, Open),
+    Link ! {quic, macula_frame:encode(Frame), Quic, undefined},
+    ?assertEqual({chunk, <<"back">>}, macula_stream:recv(Stream, ?EVENT_MS)),
+    ?assertEqual({ok, #{sealed => 1, provider => Target, seal_key_id => KeyId}}, macula:stream_report(Stream)).
+
+%% A STREAM_END travels clear on a sealed stream: nothing about it is opened,
+%% so it settles nothing (§3).
+a_sealed_stream_ended_before_data_has_no_report(#{link := Link, provider := Provider} = W) ->
+    #{stream := Stream, quic := Quic, open := Open} = sealed_open(W, #{}),
+    End = macula_frame:provider_stream(#{frame_type => stream_end, seq => 0, role => both}, Provider, Open),
+    Link ! {quic, macula_frame:encode(End), Quic, undefined},
+    ?assertEqual(eof, macula_stream:recv(Stream, ?EVENT_MS)),
+    ?assertEqual({error, not_settled}, macula:stream_report(Stream)).
+
+a_clear_streams_report_settles_sealed_0(#{link := Link, provider := Provider, provider_id := Target}) ->
+    #{stream := Stream, quic := Quic, open := Open} = clear_open(Link, Target),
+    ?assertEqual({error, not_settled}, macula:stream_report(Stream)),
+    Chunk = macula_frame:provider_stream(#{frame_type => stream_data, seq => 0, encoding => raw, body => <<"back">>},
+                                         Provider, Open),
+    Link ! {quic, macula_frame:encode(Chunk), Quic, undefined},
+    ?assertEqual({chunk, <<"back">>}, macula_stream:recv(Stream, ?EVENT_MS)),
+    ?assertEqual({ok, #{sealed => 0, provider => Target}}, macula:stream_report(Stream)).
+
+%% An error never settles a stream, clear or sealed, as a call's error carries
+%% no report.
+a_clear_stream_refused_at_seq_0_has_no_report(#{link := Link, provider := Provider, provider_id := Target}) ->
+    #{stream := Stream, quic := Quic, open := Open} = clear_open(Link, Target),
+    Refusal = macula_frame:provider_stream(#{frame_type => stream_error, seq => 0, code => <<"caller_quota">>,
+                                             message => <<>>}, Provider, Open),
+    Link ! {quic, macula_frame:encode(Refusal), Quic, undefined},
+    ?assertMatch({error, _}, macula_stream:recv(Stream, ?EVENT_MS)),
+    ?assertEqual({error, not_settled}, macula:stream_report(Stream)).
+
+%% The report is the caller's evidence; the provider side of a stream has
+%% none.
+a_served_stream_has_no_report(_W) ->
+    {ok, Served} = macula_stream:start_link(#{id => crypto:strong_rand_bytes(16), role => server, mode => bidi,
+                                              owner => self()}),
+    ?assertEqual({error, not_a_caller}, macula:stream_report(Served)).
 
 %%------------------------------------------------------------------
 %% Helpers
@@ -163,6 +225,13 @@ seal_request(#{frame_type := Type, realm := Realm, procedure := Procedure, calle
                request_id := RequestId, deadline := Deadline}) ->
     #{frame_type => atom_to_binary(Type), realm => Realm, procedure => Procedure, caller => Caller,
       target => Target, request_id => RequestId, deadline => Deadline}.
+
+%% A bidi stream the link opens in the clear, and its verified open.
+clear_open(Link, Target) ->
+    {ok, Stream} = macula_station_link:call_stream(Link, Target, ?REALM, ?PROCEDURE, #{}, #{mode => bidi, seal => clear}),
+    Quic = receive {opened, Opened} -> Opened after ?EVENT_MS -> error(no_stream_opened) end,
+    {ok, Open} = macula_frame:verify_request(written(Quic), profile()),
+    #{stream => Stream, quic => Quic, open => Open}.
 
 %% The next frame the link wrote on Quic, decoded.
 written(Quic) ->

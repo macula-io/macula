@@ -48,7 +48,8 @@
     set_error/2,
     abort/3,
     controlling_process/2,
-    info/1
+    info/1,
+    report/1
 ]).
 
 %% The check of the stream functions a supervised wrapper is given.
@@ -176,7 +177,11 @@
     %% answering: its reference, and what the owner sent meanwhile, in order.
     reopening :: {reference(), [term()]} | undefined,
     %% The most frames a provider seals under its random nonces (GCM's bound).
-    max_sealed_frames = ?MAX_SEALED_FRAMES :: pos_integer()
+    max_sealed_frames = ?MAX_SEALED_FRAMES :: pos_integer(),
+    %% Whether the caller's seal report has settled (DESIGN_E2E_SEAL_REPORT §3): set by the provider's first
+    %% STREAM_DATA or STREAM_REPLY opened under the stream's key, or on a clear stream by its first STREAM_DATA,
+    %% STREAM_REPLY or STREAM_END. An error never sets it.
+    settled = false :: boolean()
 }).
 
 
@@ -330,6 +335,16 @@ stream_call(Pid, Request, Timeout) ->
 -spec controlling_process(pid(), pid()) -> ok | {error, not_owner}.
 controlling_process(Pid, NewOwner) when is_pid(Pid), is_pid(NewOwner) ->
     gen_server:call(Pid, {controlling_process, NewOwner}).
+
+%% @doc The caller's seal report of this stream (DESIGN_E2E_SEAL_REPORT): `sealed' 1 with the id of the key the
+%% stream is sealed to, or 0 for a clear stream, and `provider', the open's target. It states that the mechanism ran on
+%% this exchange, nothing more. It settles on the provider's first STREAM_DATA or STREAM_REPLY opened under the
+%% stream's key (on a clear stream, its first STREAM_DATA, STREAM_REPLY or STREAM_END), after which no reseal can
+%% happen; before that, and on a stream that ended before it settled, it is `{error, not_settled}'. A served stream
+%% has none: `{error, not_a_caller}'.
+-spec report(pid()) -> {ok, macula_station_link:report()} | {error, not_settled | not_a_caller}.
+report(Pid) ->
+    gen_server:call(Pid, report).
 
 %% @doc Inspect stream state (debugging).
 -spec info(pid()) -> map().
@@ -489,6 +504,11 @@ handle_call({controlling_process, NewOwner}, {Owner, _Tag}, #state{owner = Owner
     {reply, ok, hand_over(NewOwner, State)};
 handle_call({controlling_process, _NewOwner}, _From, State) ->
     {reply, {error, not_owner}, State};
+
+%% --- report ------------------------------------------------------------
+
+handle_call(report, _From, State) ->
+    {reply, stream_report(State), State};
 
 %% --- info --------------------------------------------------------------
 
@@ -945,7 +965,8 @@ peer_event(#{sealed := Sealed, frame_type := Type, seq := Seq} = Fields, #state{
     %% A sealed frame from the provider means it opened the open: nothing is resealed any more.
     opened_event(opened(Sealed, Type, Seq, Keys, State), Fields, State#state{reopen = undefined});
 peer_event(Fields, #state{seal = undefined} = State) ->
-    clear_event(Fields, State);
+    %% On a clear stream only: a sealed stream's clear STREAM_END reaches clear_event/2 too, and settles nothing.
+    clear_event(Fields, settled_by(Fields, [stream_data, stream_reply, stream_end], State));
 peer_event(#{frame_type := stream_end} = Fields, State) ->
     clear_event(Fields, State);
 peer_event(#{frame_type := stream_error, code := <<"sealed_refused">>, message := Detail, seq := 0},
@@ -1037,9 +1058,28 @@ unsealed_error({error, _} = Refused, _Fields) ->
     Refused.
 
 unsealed_event({ok, Fields}, State) ->
-    clear_event(Fields, State);
+    %% Reached only from opened_event/3's success path, once the frame opened under the stream's key and its plaintext
+    %% is its frame's: here, and not in peer_event/2, which clears `reopen' before the frame is known to open.
+    clear_event(Fields, settled_by(Fields, [stream_data, stream_reply], State));
 unsealed_event({error, _}, State) ->
     abort_session(<<"malformed_frame">>, <<"a sealed frame whose plaintext is not its frame's">>, State).
+
+%% The report settles on a provider frame of one of `Types', never on an error (DESIGN_E2E_SEAL_REPORT §3).
+settled_by(#{frame_type := Type}, Types, State) ->
+    State#state{settled = State#state.settled orelse lists:member(Type, Types)}.
+
+%% The caller's seal report, once settled: the stream's key id and the open's target.
+stream_report(#state{role = server}) ->
+    {error, not_a_caller};
+stream_report(#state{open = undefined}) ->
+    %% A local in-process stream: no exchange crossed the mesh, so there is nothing to report on.
+    {error, not_settled};
+stream_report(#state{settled = false}) ->
+    {error, not_settled};
+stream_report(#state{seal = undefined, open = #{target := Target}}) ->
+    {ok, #{sealed => 0, provider => Target}};
+stream_report(#state{seal = #{key_id := KeyId}, open = #{target := Target}}) ->
+    {ok, #{sealed => 1, provider => Target, seal_key_id => KeyId}}.
 
 clear_event(#{frame_type := stream_data, encoding := Encoding, body := Body}, State) ->
     chunk_arrived(Encoding, Body, State);
