@@ -61,17 +61,19 @@ authenticate every frame after it. This is D18's session proof, taken.
 - **After HELLO.** With both proofs verified, neither end signs or expects a neighbour signature: control frames
   travel as pq_pure's do, `{version, frame_type, ...fields}`, on the control stream. A neighbour signature on a v5
   connection is `malformed_frame`, as a missing one is on v4.
-- **Liveness on v5 (Mars; Mercurius's call as owner).** Today `macula_peering_conn:send_liveness_probe/1` sends a
+- **Liveness on v5 (Mars; decided by Mercurius).** Today `macula_peering_conn:send_liveness_probe/1` sends a
   signed `_macula.ping` CALL in the all-zero realm on every opted-in connection, and the peer answers with a signed
-  `unknown_next_peer` relay error: two composite signs per connection per interval, which §5 leaves in place because
-  CALL and relay errors keep their own signatures. On v5 the probe becomes a `ping` control frame, answered with
-  `pong` by the peer's peering conn process itself, session-authenticated, no signature. On a v5 connection the conn
-  answers every `ping` and does not pass it to the DHT pid; it still passes every `pong` to the DHT pid, so the
-  station DHT's own `ping_peer` works unchanged. One pong per ping, and the station code does not change: its
-  `macula_dht_server:on_ping/3` only answers with a pong and records nothing (macula-station origin/main), so no
-  state is lost by not seeing pings on v5. On v4 connections pings reach the DHT as today. The zombie property holds: a dead VM has no conn
-  process to answer. What it gives up: today's relay error also proves the peer's router is alive, not only its
-  conn. If the owner wants that kept, v5 keeps the CALL probe and §7 carries its cost.
+  `unknown_next_peer` relay error: two composite signs per connection per interval, which §5 would leave in place
+  because CALL and relay errors keep their own signatures. v5 drops that probe. It gets its own two control frame
+  types, `liveness_ping` and `liveness_pong` (v5 only, session-authenticated, no signature, a 16-byte nonce): the
+  peer's peering conn process answers `liveness_ping` itself, and the probing conn consumes the `liveness_pong`;
+  neither is passed to the DHT pid. That proves the peer's VM and connection are alive, which is all
+  `peer_liveness_lost` needs; a dead VM has no conn process to answer.
+- **The DHT's `ping` and `pong` are not touched.** They reach the DHT pid on v4 and v5 alike, and the peer's DHT
+  answers them, because they are different evidence (Mercurius): a pong from the peer's DHT proves that DHT can
+  still serve, which is what a routing-table entry's liveness means. A conn that answered DHT pings would keep a
+  wedged DHT's routing entries alive while it answers no lookups. One pong per ping, from the right process, and
+  the station code does not change.
 - **Everything else is unchanged.** Records, advertisements, withdrawals, publications, requests, replies, relay
   errors and stream frames keep their own signatures in both profiles (§5).
 
@@ -154,6 +156,12 @@ appears in CONNECT:
   which are secure, so a downgrade costs CPU, never authenticity (and, against an ML-DSA-breaking attacker, the
   confidentiality of that connection's control traffic, §3).
 - A peer that offers neither is refused with the named reason `unsupported_version`, as now.
+- **Rollback floor (Mercurius).** `forget_v5_peer/1` reaches only peers we operate. A third-party SDK client that saw
+  a station on v5 refuses it after a rollback below v5 until that client restarts, and no operator can reach it.
+  So once a station has run v5, its rollback target must be a release that still speaks v5: the first v5 release a
+  station runs is its rollback floor. Rolling below it partitions that station from every client that saw it on
+  v5, bounded only by their restarts, and needs a stated decision, never a routine pin. The release notes of the
+  first v5 macula and macula-station releases say so.
 - **A later release drops v4**, once the old-path counter (§6) reads zero across the fleet AND `macula_dist_tunnel`
   runs v5 (Mercurius): the tunnel uses `macula_handshake` but has no D17 path, so it never shows in the counter, and
   dropping v4 before it moves would break every dist tunnel. It moves by computing `E` with OTP
@@ -179,7 +187,8 @@ carries an end-to-end signature today, so none loses one. Frames that carry thei
 | Frame | pq_hybrid v4 (today) | pq_hybrid v5 | Own end-to-end signature, unchanged |
 |---|---|---|---|
 | swim_ping, swim_ack, swim_suspect, swim_confirm | neighbour | session | none |
-| ping, pong | neighbour | session | none |
+| ping, pong (the DHT's; answered by the DHT) | neighbour | session | none |
+| liveness_ping, liveness_pong (new, v5 only; answered by the conn) | (CALL probe, signed) | session | none |
 | find_node, nodes, find_value | neighbour | session | none |
 | value | neighbour | session | each record's own |
 | store | neighbour | session | the record's own (MACULA-PQ-RECORD-V1) |
@@ -224,7 +233,7 @@ with hybrid signatures, instead of once per frame.
   verifies the client's proof as now. The client verifies one composite signature more. Two exporter computations.
 - **The liveness probe:** today interval x connections x 2 composite signs (the CALL and the relay error), 12 to 20 ms
   of signing per connection per interval, the largest steady-state signing on a station with about 40 connections
-  once hop frames stop signing. With the v5 ping/pong probe (§3): none. If the CALL probe is kept, this line stays.
+  once hop frames stop signing. With v5's `liveness_ping`/`liveness_pong` (§3): none.
 - **During the roll, a failed v5 attempt:** a v5 client dialling a v4-only station pays one QUIC+TLS handshake, one
   composite CONNECT sign (about 9 ms), and the refusal before it redials on v4, then the v4 handshake in full. That is
   roughly double the handshake cost to each old station, at most once per client per 10 minutes (§4), until that
@@ -255,10 +264,11 @@ with hybrid signatures, instead of once per frame.
   are counted.
 - After a fallback, the next connection to that node_id within 10 minutes sends a v4 CONNECT directly; after 10
   minutes it tries v5 again. A node_id seen on v5 is never dialled on v4.
-- On v5 the liveness probe is a `ping` answered by the peer's conn process with an unsigned `pong`; a peer whose
-  conn process is gone misses it and the connection closes `peer_liveness_lost` after the configured misses. On a
-  v5 connection a `ping` never reaches the DHT pid and a `pong` always does; on v4 both reach it as today. A
-  station-level test, with Mars: one pong per ping on each version, never two, never zero.
+- On v5 the liveness probe is `liveness_ping`, answered by the peer's conn process with `liveness_pong`, neither
+  signed nor passed to the DHT pid; a peer whose conn process is gone misses it and the connection closes
+  `peer_liveness_lost` after the configured misses. A peer with a wedged DHT passes the liveness probe and fails a
+  DHT `ping`. The DHT's `ping`/`pong` reach the DHT pid on v4 and v5. A station-level test, with Mars: one pong per
+  ping on each version, from the DHT, never two, never zero.
 - A peer that saw a node on v5, then gets `unsupported_version` from it (a rollback), refuses, logs the node_id once
   (bounded) and counts; after `macula_peering:forget_v5_peer/1` for that node_id it falls back to v4 again.
 - A pq_hybrid v5 node refuses to start with a key exchange group list other than macula-pqc's, and CI asserts that
