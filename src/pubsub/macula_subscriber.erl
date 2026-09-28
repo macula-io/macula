@@ -69,9 +69,17 @@
                         State :: term()) ->
     {noreply, NewState :: term()} | {stop, Reason :: term(), NewState :: term()}.
 
+%% A sealed event this subscription could not open (plans/DESIGN_E2E_SEALED_PUBSUB.md §7): `Info' names its
+%% publisher, its epoch (`seal_key_id') and the `reason'. Optional: without it the subscriber logs the event and
+%% serves on.
+-callback handle_unopened(Topic :: binary(),
+                          Info :: #{publisher := <<_:256>>, seal_key_id := <<_:64>>, reason := atom()},
+                          State :: term()) ->
+    {noreply, NewState :: term()} | {stop, Reason :: term(), NewState :: term()}.
+
 -callback terminate(Reason :: term(), State :: term()) -> any().
 
--optional_callbacks([terminate/2]).
+-optional_callbacks([handle_unopened/3, terminate/2]).
 
 -type subscribe() :: fun((macula:pool(), macula:realm(), macula:topic(), pid(), map()) ->
                             {ok, term()} | {error, term()}).
@@ -147,11 +155,20 @@ handle_cast(_Msg, State) ->
 handle_info({macula_event, SubRef, Topic, Payload, Meta},
             #sstate{module = Module, sub_ref = SubRef, user = User} = State) ->
     dispatch(Module:handle_event(Topic, Payload, Meta, User), State);
+handle_info({macula_event_unopened, SubRef, Topic, Info}, #sstate{module = Module, sub_ref = SubRef} = State) ->
+    unopened(erlang:function_exported(Module, handle_unopened, 3), Topic, Info, State);
 handle_info({macula_event_gone, SubRef, Reason}, #sstate{sub_ref = SubRef} = State) ->
     {stop, Reason, State};
 handle_info({'DOWN', Mon, process, _Pool, Reason}, #sstate{pool_mon = Mon} = State) ->
     {stop, {pool_down, Reason}, State};
 handle_info(_Msg, State) ->
+    {noreply, State}.
+
+unopened(true, Topic, Info, #sstate{module = Module, user = User} = State) ->
+    dispatch(Module:handle_unopened(Topic, Info, User), State);
+unopened(false, Topic, Info, #sstate{module = Module} = State) ->
+    ok = macula_diagnostics:bounded_event(warning, <<"_macula.subscriber.event_unopened">>,
+                                          Info#{topic => Topic, module => Module}),
     {noreply, State}.
 
 dispatch({noreply, NewUser}, State) ->

@@ -224,6 +224,13 @@ receiver_loop(SubRef, {CallerMon, PoolMon} = Mons, Callback) ->
         {macula_event, SubRef, Topic, Payload, Meta} ->
             invoke(Callback, Topic, Payload, Meta),
             receiver_loop(SubRef, Mons, Callback);
+        %% A sealed event this subscription could not open: the callback
+        %% takes payloads, and this one has none, so it is logged, never
+        %% left in the mailbox.
+        {macula_event_unopened, SubRef, Topic, Info} ->
+            ok = macula_diagnostics:bounded_event(warning, <<"_macula.pubsub.event_unopened">>,
+                                                  Info#{topic => Topic}),
+            receiver_loop(SubRef, Mons, Callback);
         {macula_event_gone, SubRef, _Reason} ->
             ok;
         {'DOWN', CallerMon, process, _, _} ->
