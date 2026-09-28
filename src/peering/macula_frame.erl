@@ -561,7 +561,8 @@
     topic        := binary(),
     seq          := non_neg_integer(),
     published_at := non_neg_integer(),
-    payload      := term(),
+    payload      => term(),
+    sealed       => sealed(),
     ttl_ms       => 0..3600000
 }.
 
@@ -1502,18 +1503,28 @@ overlay_relay(#{peer := P, payload := Bin})
 %%------------------------------------------------------------------
 
 %% @doc Sign a publication with the publisher's identity key, as a PUBLISH. Its tbs holds no frame_type, because the
-%% same bytes ride in every EVENT and GOSSIP made from it.
+%% same bytes ride in every EVENT and GOSSIP made from it. It carries `payload' in the clear, or `sealed' in its place
+%% (a sealed group's event, `macula_group_event'), exactly one of the two.
 -spec publish(publish_spec(), macula_node_keys:node_key()) -> frame().
-publish(#{realm := Realm, topic := Topic, seq := Seq, published_at := PublishedAt, payload := Payload} = Spec,
+publish(#{realm := Realm, topic := Topic, seq := Seq, published_at := PublishedAt} = Spec,
         #{purpose := identity} = Key)
   when byte_size(Realm) =:= 32, is_binary(Topic), is_integer(Seq), Seq >= 0, Seq < ?MAX_PROTOCOL_INT,
        is_integer(PublishedAt), PublishedAt >= 0, PublishedAt < ?MAX_PROTOCOL_INT ->
     ok = bounded_text(topic, Topic, ?MAX_TOPIC_BYTES),
-    ok = check_payload(Payload),
-    Fields = optional_ttl(Spec, #{publisher => macula_node_keys:key_id(Key), realm => Realm, topic => {text, Topic},
-                                  seq => Seq, published_at => PublishedAt, payload => Payload}),
+    Fields = optional_ttl(Spec, (published_payload(Spec))#{publisher => macula_node_keys:key_id(Key), realm => Realm,
+                                                            topic => {text, Topic}, seq => Seq,
+                                                            published_at => PublishedAt}),
     #{version => ?PROTOCOL_VERSION, frame_type => publish,
       publication => macula_signed_object:sign(?PUBLICATION_LABEL, to_wire(Fields), Key)}.
+
+%% An event's sealed payload carries its random nonce and agrees no key, as the verifier holds it to.
+published_payload(#{payload := Payload} = Spec) when not is_map_key(sealed, Spec) ->
+    ok = check_payload(Payload),
+    #{payload => Payload};
+published_payload(#{sealed := #{scheme := 1, key_id := <<_:64>> = KeyId, nonce := <<_:96>> = Nonce, ct := Ct} = Sealed}
+                  = Spec)
+  when not is_map_key(payload, Spec), is_binary(Ct), map_size(Sealed) =:= 4 ->
+    #{sealed => #{scheme => 1, key_id => KeyId, nonce => Nonce, ct => Ct}}.
 
 optional_ttl(#{ttl_ms := Ttl}, Fields) when is_integer(Ttl), Ttl >= 0, Ttl =< ?PUBLICATION_MAX_TTL_MS ->
     Fields#{ttl_ms => Ttl};
