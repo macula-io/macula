@@ -13,7 +13,10 @@
 
 -type fields() :: #{publisher := <<_:256>>, realm := <<_:256>>, topic := binary(), seq := non_neg_integer(),
                     published_at := non_neg_integer()}.
--export_type([fields/0]).
+%% What opening reads of a publication: the fields it was sealed with, and its seal. A verified publication is one.
+-type sealed_event() :: #{publisher := <<_:256>>, realm := <<_:256>>, topic := binary(), seq := non_neg_integer(),
+                          published_at := non_neg_integer(), sealed => macula_frame:sealed(), atom() => term()}.
+-export_type([fields/0, sealed_event/0]).
 
 %% @doc The `sealed' map of an event carrying `Payload', for a publication with `Fields', under `Epoch'.
 -spec seal(macula_group_epoch:epoch(), fields(), term()) ->
@@ -30,7 +33,7 @@ sealed({error, _} = Refused, _Id, _Key, _Aad) ->
 %% @doc The payload of a verified publication sealed under `Epoch', in the shape a clear payload arrives in.
 %% `tag_invalid' when it does not open: another epoch's key, a routing field that is not the one it was sealed with, or
 %% a byte of it changed. `not_sealed' for a publication in the clear.
--spec open(macula_group_epoch:epoch(), macula_frame:verified_publication()) ->
+-spec open(macula_group_epoch:epoch(), sealed_event()) ->
           {ok, term()} | {error, tag_invalid | not_sealed}.
 open(#{key := GroupKey}, #{sealed := #{nonce := Nonce, ct := Ct}, publisher := Publisher} = Publication) ->
     opened(macula_seal:open(macula_seal:event_key(GroupKey, Publisher), Nonce, aad(Publication), Ct));

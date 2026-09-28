@@ -468,14 +468,14 @@ select_publish_targets_honors_explicit_factor_above_one_test() ->
 %% still make it back to the caller via summarize_publish/2 even if a
 %% later selected link is dead. Proven directly against a real dead
 %% pid (a genuine `noproc' exit from gen_server:call, not a fake): if
-%% safe_link_publish/5 didn't catch it, THIS test process would take
+%% safe_link_publish/6 didn't catch it, THIS test process would take
 %% the exit and fail/crash rather than reach the assertion below.
 safe_link_publish_survives_a_dead_link_test() ->
     Pid = spawn(fun() -> ok end),
     %% Give it a moment to actually exit before calling.
     timer:sleep(10),
     ?assertNot(is_process_alive(Pid)),
-    Result = macula_client:safe_link_publish(Pid, ?REALM, <<"x.v1">>, hello, 1),
+    Result = macula_client:safe_link_publish(Pid, ?REALM, <<"x.v1">>, hello, 1, clear),
     ?assertMatch({error, _}, Result),
     ok.
 

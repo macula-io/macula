@@ -144,7 +144,7 @@
 %% The pure selection math behind publish/5's replication fan-out, and
 %% the per-link crash guard its fan-out worker uses — exported for
 %% macula_client_tests.erl only, see their own docs.
--export([select_publish_targets/2, safe_link_publish/5]).
+-export([select_publish_targets/2, safe_link_publish/6]).
 %% Station discovery selection math — exported for direct testing, same
 %% rationale as `select_publish_targets/2' above.
 -export([ordered_for_selection/2, select_discovery_seeds/3, station_seed/1, station_seeds/1,
@@ -474,7 +474,7 @@
 %% 3x traffic (2x, really, on top of the previous 1x) for marginal extra
 %% protection past "survives one bad station" -- see CONNECTING_GUIDE.md's
 %% Replication factor section. Note publish's own fan-out worker
-%% (`safe_link_publish/5') must not let one selected link's crash or
+%% (`safe_link_publish/6') must not let one selected link's crash or
 %% timeout swallow an earlier link's already-accepted frame -- with
 %% replication_factor=1 there was never a "later" link for that to matter;
 %% raising the default makes it matter for everyone.
