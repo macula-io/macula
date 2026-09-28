@@ -43,7 +43,7 @@
          read_foundation_realm_trust_list/1]).
 -export([procedure_org/1, verify_authorization/3]).
 -export([storage_key/1, procedure_key/2, content_key/1, station_endpoint_key/1, org_directory_key/2,
-         procedure_delegation_key/2, foundation_realm_trust_list_key/1]).
+         procedure_delegation_key/2, realm_member_endorsement_key/2, foundation_realm_trust_list_key/1]).
 
 -export_type([m_record/0, type_tag/0, version/0, refusal/0, reason/0, authorization/0, trust/0,
               authorization_refusal/0, node_record_opts/0, realm_directory_opts/0, realm_station_entry/0,
@@ -782,6 +782,13 @@ org_directory_key(<<_:256>> = RealmId, OrgName) when is_binary(OrgName) ->
 -spec procedure_delegation_key(<<_:256>>, <<_:256>>) -> <<_:256>>.
 procedure_delegation_key(<<_:256>> = OrgKeyId, <<_:256>> = Advertiser) ->
     derived(?TYPE_PROCEDURE_DELEGATION, [OrgKeyId, Advertiser]).
+
+%% @doc The storage key of a realm member endorsement, from the realm id and the member's node_id: the slot that holds
+%% the realm's endorsement of that member and, once the realm revokes it, the realm's tombstone of it. A lookup of this
+%% key is what macula_hyparview_endorsement:slot_endorsement/3,4 reads.
+-spec realm_member_endorsement_key(<<_:256>>, <<_:256>>) -> <<_:256>>.
+realm_member_endorsement_key(<<_:256>> = RealmId, <<_:256>> = Member) ->
+    derived(?TYPE_REALM_MEMBER_ENDORSEMENT, [RealmId, Member]).
 
 %% @doc The storage key of a foundation's realm trust list, from the foundation key id. The station computes it
 %% to fetch the list without holding its record.

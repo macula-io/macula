@@ -27,6 +27,20 @@ org_directory_key_vector_test() ->
     ?assertEqual(hex(<<"a0c45a66de0f7000a76726e424add18ef32014cbd106e9c72e8c8425c1282924">>),
                  macula_record:org_directory_key(fill(16#11), <<"acme">>)).
 
+%% A consumer finds a member's endorsement slot, and the realm's tombstone of it, from the pair alone
+%% (macula-realm#31): the same vector the endorsement record itself is stored under, below.
+realm_member_endorsement_key_vector_test() ->
+    ?assertEqual(hex(<<"d93b63bd8a0c04442b094aa046be12eb4e72e34156913e2e413904c580bfdc3b">>),
+                 macula_record:realm_member_endorsement_key(fill(16#11), fill(16#22))).
+
+realm_member_endorsement_key_is_the_records_storage_key_test() ->
+    RealmId = fill(16#33),
+    Member = fill(16#66),
+    Endorsement = macula_record:realm_member_endorsement(RealmId, #{realm => RealmId, member_node => Member,
+                                                                    roles => [<<"member">>]}),
+    ?assertEqual(macula_record:storage_key(Endorsement),
+                 macula_record:realm_member_endorsement_key(RealmId, Member)).
+
 procedure_delegation_key_vector_test() ->
     ?assertEqual(hex(<<"011574703bed4c79df51f4cc53afcebd79a4401518b830aa12587950d1edfda4">>),
                  macula_record:procedure_delegation_key(fill(16#44), fill(16#55))).
