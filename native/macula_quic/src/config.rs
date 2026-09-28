@@ -118,6 +118,12 @@ pub fn server_tls_config(
         .with_single_cert(certs, key)
         .map_err(|e| format!("TLS config error: {}", e))?;
     crypto.alpn_protocols = alpn.iter().map(|s| s.as_bytes().to_vec()).collect();
+    // No resumption and no early data (decision D16; handshake v5 relies on
+    // every frame travelling in 1-RTT). rustls keeps sessions and sends two
+    // TLS 1.3 tickets by default; neither is wanted.
+    crypto.session_storage = Arc::new(rustls::server::NoServerSessionStorage {});
+    crypto.send_tls13_tickets = 0;
+    crypto.max_early_data_size = 0;
     Ok(crypto)
 }
 
@@ -138,6 +144,10 @@ pub fn client_tls_config(alpn: &[String]) -> rustls::ClientConfig {
         .with_custom_certificate_verifier(Arc::new(macula_pqc::KeyPossessionVerifier::new()))
         .with_no_client_auth();
     crypto.alpn_protocols = alpn.iter().map(|s| s.as_bytes().to_vec()).collect();
+    // No resumption and no early data, as on the listener: every dial is a
+    // full handshake with a fresh certificate signature.
+    crypto.resumption = rustls::client::Resumption::disabled();
+    crypto.enable_early_data = false;
     crypto
 }
 
@@ -259,7 +269,7 @@ mod tests {
     use super::*;
     use rustls::pki_types::ServerName;
     use rustls::sign::SingleCertAndKey;
-    use rustls::{ClientConnection, Connection, NamedGroup, ServerConnection, SignatureScheme};
+    use rustls::{ClientConnection, Connection, HandshakeKind, NamedGroup, ServerConnection, SignatureScheme};
 
     use crate::cert;
 
@@ -572,6 +582,62 @@ mod tests {
             assert!(connected.is_ok(), "{:?}", connected.err());
             assert_eq!(accepted.await.expect("join"), Ok(()));
         });
+    }
+
+    /// No session is resumed (decision D16, and handshake v5's 1-RTT
+    /// invariant): a second handshake between the same two configurations is
+    /// a full one, with a fresh certificate signature. rustls resumes by
+    /// default, on both ends, so this holds only because both builders turn
+    /// it off.
+    #[test]
+    fn a_second_handshake_between_the_same_configurations_is_a_full_one() {
+        let alpn = vec!["macula".to_string()];
+        let (certs, key) = test_identity();
+        let server = Arc::new(server_tls_config(certs, key, &alpn).expect("server config"));
+        let client = Arc::new(client_tls_config(&alpn));
+        assert_eq!(handshake_kind(&client, &server), Ok(HandshakeKind::Full), "first");
+        assert_eq!(handshake_kind(&client, &server), Ok(HandshakeKind::Full), "second");
+    }
+
+    /// Neither end offers or accepts 0-RTT early data, which is replayable
+    /// by design: v5 drops the per-frame sequence numbers on the strength of
+    /// every frame travelling in 1-RTT.
+    #[test]
+    fn neither_end_offers_or_accepts_early_data() {
+        let alpn = vec!["macula".to_string()];
+        let (certs, key) = test_identity();
+        let server = server_tls_config(certs, key, &alpn).expect("server config");
+        let client = client_tls_config(&alpn);
+        assert_eq!(server.max_early_data_size, 0, "listener");
+        assert_eq!(server.send_tls13_tickets, 0, "listener tickets");
+        assert!(!server.session_storage.can_cache(), "listener session storage");
+        assert!(!client.enable_early_data, "dialler");
+    }
+
+    /// One handshake over shared configurations, so a session one handshake
+    /// stores is there for the next, returning whether it was full or
+    /// resumed.
+    fn handshake_kind(
+        client_cfg: &Arc<rustls::ClientConfig>,
+        server_cfg: &Arc<rustls::ServerConfig>,
+    ) -> Result<HandshakeKind, String> {
+        let mut client = Connection::Client(
+            ClientConnection::new(client_cfg.clone(), ServerName::try_from("localhost").unwrap())
+                .map_err(|e| format!("client connection: {}", e))?,
+        );
+        let mut server = Connection::Server(
+            ServerConnection::new(server_cfg.clone()).map_err(|e| format!("server connection: {}", e))?,
+        );
+        for _ in 0..20 {
+            let moved = pump(&mut client, &mut server)? + pump(&mut server, &mut client)?;
+            if moved == 0 && !client.is_handshaking() {
+                break;
+            }
+        }
+        if client.is_handshaking() {
+            return Err("handshake never completed".to_string());
+        }
+        client.handshake_kind().ok_or_else(|| "completed with no handshake kind".to_string())
     }
 
     /// Runs one handshake between the NIF's own server and client
