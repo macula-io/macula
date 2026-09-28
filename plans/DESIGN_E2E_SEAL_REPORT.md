@@ -8,7 +8,7 @@ result was sealed, and to which key.**
 | Kind | BUILD (an API shape; it makes no new claim about the mesh) |
 | Extends | `DESIGN_E2E_PAYLOAD_CONFIDENTIALITY.md` §5, §8, Amendment A1 |
 | Ships in | macula 13.1.0 (Erlang), macula-go 0.19.0 and libmacula 0.19.0, then the bindings on libmacula |
-| Status | Agreed with Mercurius (2026-09-28); Fable round 1 answered, back to Mercurius for the changed §3 and §4 |
+| Status | Agreed with Mercurius (2026-09-28), after Fable round 1 |
 | Written against | macula v13.0.1 (92137b94), macula-go v0.18.1 (afbb4d7) |
 
 ---
@@ -45,10 +45,12 @@ No booleans cross a wire or the C ABI: `sealed` is 0 or 1 everywhere, including 
 - **An error.** There is no report: an error is not a result, and its shape doesn't change. Callers that need to know
   whether a failure was a clear refusal already have it: relay errors and pre-open refusals come back as their own
   kinds (§8.3).
-- **A stream.** A stream's report **settles** when the first provider frame is **opened under the stream's key**, and
-  not before: that is the one event that shows the provider opened the STREAM_OPEN, and after it no reseal can happen
-  (A1). A clear stream settles at its first provider frame. Until then the report is refused as `not_settled`, never
-  guessed from the open. **A stream that ends before it settles has no report**, whatever ended it (a clear refusal, a
+- **A stream.** A stream's report **settles** on the provider's first `stream_data`, `stream_reply` or `stream_end`:
+  on a sealed stream, only once that frame is **opened under the stream's key**, the event that shows the provider
+  opened the STREAM_OPEN, after which no reseal can happen (A1); on a clear stream, when it arrives. **An error never
+  settles a stream, on either side:** a `stream_error`, sealed and opened or clear, and anything a station reported
+  (`reported_by`), leave it unsettled, as a call's error carries no report. Until it settles the report is refused as
+  `not_settled`, never guessed from the open. **A stream that ends before it settles has no report**, whatever ended it (a clear refusal, a
   failed reseal, the caller closing it): as with a call's error, there is no result to report on. So a stream refused
   `sealed_refused` whose reseal found no key never reports the key it was first sealed to.
 - **A caller's report only.** The report is the caller's evidence. The provider side of a stream has none: asked on a
@@ -100,9 +102,16 @@ the difference is scope, not design.
 
 **Streams.** A query, not a return change: `macula:stream_report(Stream) -> {ok, Report} | {error, not_settled} |
 {error, not_a_caller}`, answered by the stream process from `#state.seal` (`key_id`) and `#state.open` (the
-target). The stream state gains a `settled` marker, set in `peer_event/2`'s sealed clause when `opened/5` succeeds
-(the clause that already clears `reopen`), and at the first provider frame of a clear stream. The report is
-`not_settled` until the marker is set, including after the stream has ended.
+target). The stream state gains a `settled` marker, set in two places only, and only for a `stream_data`,
+`stream_reply` or `stream_end`:
+- on a sealed stream, in **`opened_event/3`'s `{ok, Plain}` path**, after the frame opened. Not in
+  `peer_event/2`'s sealed clause: that clause clears `reopen` in the state it hands to `opened_event/3` before
+  `opened/5`'s outcome is known, so a marker set there would settle on a frame that fails to open, reopening the
+  hole §10 records;
+- on a clear stream, in `clear_event/2`'s `stream_data`, `stream_end` and `stream_reply` clauses, never its
+  `stream_error` clause.
+
+The report is `not_settled` until the marker is set, including after the stream has ended.
 
 ## 5. Go (macula-go 0.19.0)
 
@@ -127,9 +136,11 @@ func (p *Pool) CallReport(ctx context.Context, c Call) (cbor.Value, stationlink.
 `stationlink.Link.Call` is an explicit target's call: its caller chose `SealTo` or `Clear` itself, and this note
 gives it no report (§4 says why Erlang differs).
 
-**Streams.** `func (s *stationlink.Stream) Report() (Report, error)`: `ErrNotSettled` until a provider frame has
-been opened under the stream's key (a flag set when `streamSeal.opened` succeeds; Go clears `reopen` only on a
-reseal, so `reopen` can't serve as the marker), or has arrived on a clear stream; `ErrNotACaller` on a served stream.
+**Streams.** `func (s *stationlink.Stream) Report() (Report, error)`: `ErrNotSettled` until the provider's first
+`stream_data`, `stream_reply` or `stream_end` has been opened under the stream's key (a flag set after
+`streamSeal.opened` succeeds on one of those frame types; Go clears `reopen` only on a reseal, so `reopen` can't
+serve as the marker), or has arrived on a clear stream. A `stream_error` never sets it. `ErrNotACaller` on a
+served stream.
 
 ## 6. The C ABI (libmacula 0.19.0) and the bindings
 
@@ -177,6 +188,8 @@ serves both. This note fixes only the names. The event side is built with packag
 4. `sealed` is 0 or 1 inside Erlang too: one value in every SDK beats the Erlang idiom here.
 5. `call_station/8` honours `report`, because it is the pool's own path (`default_dial_io/0`); Go's explicit
    `stationlink.Link.Call` gets none in this note, which is scope, not design.
+6. An error never settles a stream, sealed or clear, symmetrically with calls; the Erlang marker is set in
+   `opened_event/3`'s success path, not in `peer_event/2`.
 
 ## 10. Fable round 1 (2026-09-28), answered
 
