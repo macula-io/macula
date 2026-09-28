@@ -3,7 +3,8 @@
 %% Hosts the dynamic conn supervisor under which one
 %% `macula_peering_conn' gen_statem is spawned per peer connection, and,
 %% started before it, the owner of the table that says which handshake
-%% version each peer is dialled with (`macula_peer_versions').
+%% version each peer is dialled with (`macula_peer_versions') and of the
+%% station's session proof budget (`macula_session_proof_rate').
 -module(macula_peering_sup).
 -behaviour(supervisor).
 
@@ -22,6 +23,14 @@ init([]) ->
             shutdown => 5_000,
             type     => worker,
             modules  => [macula_peer_versions]
+        },
+        #{
+            id       => macula_session_proof_rate,
+            start    => {macula_session_proof_rate, start_link, []},
+            restart  => permanent,
+            shutdown => 5_000,
+            type     => worker,
+            modules  => [macula_session_proof_rate]
         },
         #{
             id       => macula_peering_conn_sup,
