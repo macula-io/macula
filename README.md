@@ -18,7 +18,7 @@
 
 ---
 
-> **Unreleased: sealed pubsub groups.** `group => Prefix` on `macula:publish/5`
+> **13.2.0: sealed pubsub groups.** `group => Prefix` on `macula:publish/5`
 > and `macula:subscribe/5` seals a group's events to its members, with keys
 > the org's distributor (`macula_group_keys`) hands to members that hold the
 > org's grant and a live realm membership. An event a subscriber cannot open
@@ -26,6 +26,12 @@
 > waits for `kem_advertise`. See the
 > [Pub/Sub guide](docs/guides/pubsub/PUBSUB_GUIDE.md) and
 > [the design](https://github.com/macula-io/macula/blob/main/plans/DESIGN_E2E_SEALED_PUBSUB.md).
+>
+> 13.2.0 is also the **first handshake v5 release**: a connection is
+> authenticated once, by proofs bound to its TLS session, instead of by a
+> signature on every control frame. A station that runs it makes it its
+> rollback floor. See [CHANGELOG.md](CHANGELOG.md) and
+> [the design](https://github.com/macula-io/macula/blob/main/plans/DESIGN_NEIGHBOUR_CHANNEL_BINDING.md).
 
 > **13.1.0: knowing a call was sealed.** A caller can ask for the seal
 > report of a call (`report => true` on `macula:call/6` or `call_station/8`)

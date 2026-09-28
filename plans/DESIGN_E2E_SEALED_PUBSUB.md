@@ -340,3 +340,21 @@ clock skew in the removal bound (§8), the pinning note (§2), and the register 
    - A group subscription's events are opened by a process of their own (`macula_group_opener`), because opening may
      pull a missed epoch over the pool, which must not wait on it.
    - `macula:call/6` takes `ucan_token`, the distributor pull's carrier.
+
+## 14. Membership checks outside groups (Raf's rule, 2026-09-29)
+
+**A node that enables endorsement admission must pass a membership check before it acts on a JOIN, FORWARD_JOIN or
+NEIGHBOR.** `macula_hyparview_proto:check_admission/3` verifies a presented endorsement (`verify_endorsement/3`),
+which checks its window at the time of the call and reads no tombstone, so on its own it admits a revoked member
+until its endorsement expires (at most 30 days).
+
+Today the only node that runs the overlay is the realm, and its `Overlay.Dispatcher` already refuses every gated
+frame whose claimed member is not a live admitted row in its own read model, before `process/4` runs (macula-realm
+b5e08e8, `apps/macula_realm/lib/macula_realm/overlay/dispatcher.ex`, `dispatch_gated/3` → `member_still_admitted?/2`).
+That check is the authority's own and no station can withhold it. No station runs the overlay.
+
+The check for any other node is built with the first such caller: an optional membership function in the admission
+context, and for a node that is not the realm a slot read (`find_records` of
+`macula_record:realm_member_endorsement_key/2` and `slot_endorsement/4`, as the distributor's default membership
+reads it, §3), with the same limit: a station on the lookup path can withhold a tombstone, so the guaranteed bound
+is the endorsement's own window.
