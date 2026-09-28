@@ -72,27 +72,31 @@ another key; that is the existing trust statement of the security register, not 
 ## 3. Who gets a key
 
 The distributor decides, per call, from the caller's verified identity (the CALL is signed by the caller, D25) and
-the proofs the caller sends with it. The SDK serves the procedure and asks the application one question:
+the UCAN the caller sends in the call's own `ucan_token`. The distributor (`macula_group_keys`) asks the application
+two questions, each with a default:
 
 ```erlang
-admits(CallerNodeId, Prefix, AtMs, Proofs) -> true | false
+membership(CallerNodeId) -> ok | {error, not_a_member | membership_unknown}
+removed(CallerNodeId) -> boolean()
 ```
 
-**The SDK's default `admits` requires both:**
+**A pull is admitted only with both:**
 
 1. **An org grant:** a UCAN issued by the org key, or delegated from it, carrying `can = "group_keys"` and
-   `with = mri:proc:<realm>/<org>/group_keys_v1` (or `mri:org:<realm>/<org>`, which covers it), valid at `AtMs`. The
-   distributor checks it with `macula_ucan:authorize/3` under the policy `{realm_member_required, OrgKeyId,
-   <<"group_keys">>}`: that form matches the issuer by key id, which is what an org key has
+   `with = mri:proc:<realm>/<org>/group_keys_v1` (or `mri:org:<realm>/<org>`, which covers it), valid at the time of
+   the call. The application advertises the procedure with the advertise policy `{realm_member_required, OrgKeyId,
+   <<"group_keys">>}`, so macula checks the call's `ucan_token` with `macula_ucan:authorize/3` before the handler
+   runs, and the handler never sees an unauthorized call: that form matches the issuer by key id, which is what an org key has
    (`macula_node_keys:key_id/2`); `{ucan_required, _}` matches identity keys by node id only and would refuse every
    org-issued token as `not_the_issuer`. The UCAN grammar has no topic prefix resource (`macula_ucan:grant/1` knows
    `mri:realm`, `mri:org` and `mri:proc`), so **in this release a grant admits its holder to every group of the org.** A
    per-prefix resource is its own later item, in every SDK's verifier at once.
-2. **Live realm membership:** the caller's realm endorsement, read from the mesh, not from the proofs: a lookup of
+2. **Live realm membership** (the default `membership`): the caller's realm endorsement, read from the mesh, never
+   from anything the caller presents: a lookup of
    `macula_record:realm_member_endorsement_key(Realm, CallerNodeId)` and
-   `macula_hyparview_endorsement:slot_endorsement/4` on what it returns. The slot's entry is verified at the current
-   time, and `AtMs` is applied only to the endorsement's `valid_from`..`valid_until` (so a renewed endorsement still
-   admits a past-epoch pull). Only the realm key's entry counts, and a realm-key tombstone of the endorsement answers
+   `macula_hyparview_endorsement:slot_endorsement/4` on what it returns. The slot's entry, window included, is verified
+   at the time of the call, for a past epoch too: a subscriber catching up on an epoch it missed is still a member, and
+   one that is not has no business reading the group. Only the realm key's entry counts, and a realm-key tombstone of the endorsement answers
    `withdrawn` (macula-realm#31 publishes both). A presented endorsement blob is never accepted on its own
    (`verify_endorsement/3` checks the window only at the current time and consults no tombstone).
    **What the tombstone bounds, honestly:** the lookup returns what the stations on its path serve, and a station can
@@ -102,16 +106,14 @@ admits(CallerNodeId, Prefix, AtMs, Proofs) -> true | false
    lookup that fails or times out refuses the pull as `membership_unknown` (its own code, not `not_a_member`), so the
    member retries (§4).
    Until macula-realm#31 has published an endorsement for every member, this check refuses everyone: the realm ships
-   before any distributor uses the default `admits`. A member's endorsement stays readable for as long as it is a
+   before any distributor uses the default `membership`. A member's endorsement stays readable for as long as it is a
    member, because the realm renews it before it expires (macula-realm#31's renewal sweep, 7 days ahead of
    `valid_until`) and never renews a revoked or resigned member.
 
-`AtMs` is the current time for the current epoch and the next, and the epoch's `issued_at` for a past one (§4). An
-application with its own member list passes its own `admits`.
+An application with its own member list passes its own `membership`.
 
 **The org removes a member with a removed set, absolute.** A UCAN lives until its own expiry, so the org's removal
-cannot wait on it. `macula:remove_group_member(Distributor, Org, NodeId)` adds a node to a set the default `admits`
-checks first: a node in it is refused every epoch, past or current, whatever it shows. The set is the application's
+cannot wait on it. The application's `removed` is asked before membership: a node in its removed set is refused every epoch, past or current, whatever it shows. The set is the application's
 state, not the SDK's, and the application must keep it across a distributor restart; a set lost to a restart
 re-admits every removed member whose grant still verifies. An application that issues only short-lived UCANs may run
 without a set, and its removal bound is then the UCAN's lifetime plus §8's.
@@ -158,7 +160,6 @@ payload:
 |---|---|---|
 | `prefix` | text | the group |
 | `epoch` | `current` (text) or 8 bytes | the current epoch, or a past one by id |
-| `proofs` | list of bytes | UCAN tokens, as §3 |
 
 The RESULT (sealed under `k_rep`, signed by the distributor):
 
@@ -168,10 +169,12 @@ The RESULT (sealed under `k_rep`, signed by the distributor):
 | `policy` | `required`, `preferred` or `off` (text) | §6 |
 | `epochs` | list | the asked epoch, and the next one inside the ahead window; each `#{id, key, issued_at, publish_until, accept_until}` |
 
-Under `off` the reply still carries epochs: `off` only means clear events are accepted too (§6). Refusals are provider
-errors, sealed like any provider error on a sealed call: `not_a_member`, `membership_unknown` (the membership lookup
-failed or timed out; retry), `unknown_epoch` (an id the distributor does not hold, including one lost to a restart)
-and `epoch_expired` (past its `accept_until`). The CBOR shape of both
+Under `off` the reply still carries epochs: `off` only means clear events are accepted too (§6). A call without a valid org
+grant is refused by macula before the handler (§3). The handler refuses with `{error, Reason}`, which macula answers
+as a provider error with code `handler_error` and the reason as its detail, sealed like any provider error on a sealed
+call: `not_a_member`, `membership_unknown` (the membership lookup failed or timed out; retry), `unknown_epoch` (an id
+the distributor does not hold, including one lost to a restart), `epoch_expired` (past its `accept_until`) and
+`unknown_group` (a prefix whose second segment is not the distributor's org). The CBOR shape of both
 payloads is pinned as a vector (§10).
 
 ## 6. Where the group policy travels (a change to §8.1)
@@ -277,7 +280,8 @@ when the member's endorsement expires (at most 30 days).")
   under a `required` prefix is refused and counted; a publish under a held prefix without `group` is refused; a
   restarted distributor answers a lost epoch `unknown_epoch`; a distributor advertising no KEM key is refused; a
   `~node` distributor is refused unpinned; a pinned org distributor refuses another delegated node's advertisement; a
-  fourth unknown id from one publisher in one epoch causes no pull; the fleet test of §9.
+  fourth unknown id from one publisher in one epoch causes no pull; a prefix another org owns gets `unknown_group`; the fleet
+  test of §9.
 
 ## 11. Fable round 1 (2026-09-28), answered
 
@@ -317,3 +321,13 @@ Round 1's three required changes were confirmed fixed. Required:
 Taken from the observations: the slot verified at the current time with `AtMs` applied only to the window (§3), the
 fleet order (realm first, §3), the lookup's cost in the measurement (§10), one pull per `unknown_epoch` answer (§7),
 clock skew in the removal bound (§8), the pinning note (§2), and the register sentence naming the org's groups (§8).
+
+## 13. Changes made while building the distributor (C2, 2026-09-28)
+
+1. The org UCAN rides the call's own `ucan_token` and is checked by macula under the procedure's advertise policy
+   before the handler runs, so the CALL has no `proofs` field (§3, §5).
+2. Membership is read at the time of the call for every epoch, past ones included, and the handler takes no `AtMs`:
+   a caller that is not a member now has no business reading a past epoch either (§3). This replaces round 2's
+   observation that applied `AtMs` to the window.
+3. Refusals are `{error, Reason}` answered as `handler_error` with the reason as detail, and `unknown_group` joins
+   them for a prefix another org owns (§5). The removed set is the application's `removed` function (§3).
