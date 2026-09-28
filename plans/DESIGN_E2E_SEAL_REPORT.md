@@ -8,7 +8,7 @@ result was sealed, and to which key.**
 | Kind | BUILD (an API shape; it makes no new claim about the mesh) |
 | Extends | `DESIGN_E2E_PAYLOAD_CONFIDENTIALITY.md` §5, §8, Amendment A1 |
 | Ships in | macula 13.1.0 (Erlang), macula-go 0.19.0 and libmacula 0.19.0, then the bindings on libmacula |
-| Status | Agreed with Mercurius (2026-09-28); one Fable round next |
+| Status | Agreed with Mercurius (2026-09-28); Fable round 1 answered, back to Mercurius for the changed §3 and §4 |
 | Written against | macula v13.0.1 (92137b94), macula-go v0.18.1 (afbb4d7) |
 
 ---
@@ -45,10 +45,14 @@ No booleans cross a wire or the C ABI: `sealed` is 0 or 1 everywhere, including 
 - **An error.** There is no report: an error is not a result, and its shape doesn't change. Callers that need to know
   whether a failure was a clear refusal already have it: relay errors and pre-open refusals come back as their own
   kinds (§8.3).
-- **A stream.** A stream's seal is fixed once the provider's first frame arrives: until then the stream may reseal once
-  (A1, macula `reopen`, macula-go `Stream.reopen`), and after it, it can't. So a stream's report **settles** at its
-  first received frame, or at its end, whichever comes first. Asked before that, the report is refused as
-  `not_settled`, never guessed from the open.
+- **A stream.** A stream's report **settles** when the first provider frame is **opened under the stream's key**, and
+  not before: that is the one event that shows the provider opened the STREAM_OPEN, and after it no reseal can happen
+  (A1). A clear stream settles at its first provider frame. Until then the report is refused as `not_settled`, never
+  guessed from the open. **A stream that ends before it settles has no report**, whatever ended it (a clear refusal, a
+  failed reseal, the caller closing it): as with a call's error, there is no result to report on. So a stream refused
+  `sealed_refused` whose reseal found no key never reports the key it was first sealed to.
+- **A caller's report only.** The report is the caller's evidence. The provider side of a stream has none: asked on a
+  served stream, it is refused (Erlang `{error, not_a_caller}`, Go `ErrNotACaller`, the cabi kind `not_a_caller`).
 
 ## 4. Erlang (macula 13.1.0)
 
@@ -70,44 +74,62 @@ Where it is built, from the link up (macula main b51202a8):
 1. **The link.** `macula_station_link:call_answered/7` is the one clause that holds both the verified answer and the
    pending call's `Seal` (`{Keys, SealRequest}`, with `Keys` carrying `key_id`, or `clear`). The report is built
    there and handed to `completed/5`, which does not see `Seal` today. The link replies `{ok, Result, Report}`
-   **only when the call asked for it**, so no other `call_station` caller's return changes.
-2. **The station call.** The option rides down as `report => true` in the station-call options, which
-   `macula_direct_dial:policy_opts/2` composes for `call_work/6`, through `macula_client:call_station/11` to the
-   link.
-3. **Direct dial.** `call_work/6` returns what the link replied. `resealed/7` passes anything but its two
+   **only when the call asked for it**, so the pending entry (`{From, TRef, Request, Seal}` today) must carry the flag.
+   Widening it touches `seal_redacted/1` (the `format_status` redaction) and the tests' `state_field_index/1`.
+2. **The flag's path down.** Neither lower hop has a slot for it today: `macula_client:call_station/11` takes the
+   link options as `maps:with([expected_node_id], Opts)` and a `Seal` guarded to `clear | {sealed_to, Key}`, and
+   `macula_station_link:call/8` guards `Seal` the same way. Both gain an explicit argument for it (a
+   `call_station/12` and a `call/9`), rather than widening `Seal`, whose guard is a confidentiality check and stays
+   exactly as it is.
+3. **The facade the pool dials through.** `macula_direct_dial:default_dial_io/0` makes `fun macula:call_station/8`
+   the pool's station call, so the pool's own path runs through the explicit-target facade. `call_station/8`
+   therefore **honours** `report => true` (validated by the same `report_option/1`), passes it to
+   `call_station/12`, and returns `{ok, Result, Report}` when asked. `policy_opts/2` adds it to what
+   `call_work/6` hands `CallStation`.
+4. **Direct dial.** `call_work/6` returns what the link replied. `resealed/7` passes anything but its two
    `{error, {sealed_refused, _}}` clauses through, so a resealed call returns the second call's reply and reports its
-   key. `settled/6`, `sent_or_not/1` and the `remember_resolved` path are written against `{ok, _}` and
-   `{error, _}` today: each clause must be checked to pass `{ok, Result, Report}` through untouched and to treat it
-   as the answer it is (remembered, sent).
+   key. `settled/6`, `outcome/1`, `remembering/6`, `sent_or_not/1` and the `dial_io` type's `call_station` return
+   (`{ok, term()} | {error, term()}`) are written against two shapes today: each must take `{ok, Result, Report}` as
+   the answer it is (remembered, sent), and dialyzer will name any that don't.
 
-**An explicit target gets no report**, in Erlang as in Go (§5): `call_station/8`'s caller chose the seal itself
-(`advertisement`, `confidential => required` or `off`), so it already knows. `report` there is
-`{invalid_option, report}`.
+**Why Erlang's explicit target reports and Go's doesn't.** In Erlang the pool dials through `call_station/8`, so
+refusing the option there would need an internal detour whose only purpose is to hide a working option; honouring it
+costs nothing and gives an explicit caller the same evidence. Go's pool doesn't route through its explicit
+`stationlink.Link.Call`, so this note doesn't add the report there. Go could add it later without changing its shape:
+the difference is scope, not design.
 
-**Streams.** A query, not a return change: `macula:stream_report(Stream) -> {ok, Report} | {error, not_settled}`,
-answered by the stream process from `#state.seal` (`key_id`) and `#state.open` (the target). It is `not_settled`
-while `reopen` or `reopening` is set and no provider frame has arrived.
+**Streams.** A query, not a return change: `macula:stream_report(Stream) -> {ok, Report} | {error, not_settled} |
+{error, not_a_caller}`, answered by the stream process from `#state.seal` (`key_id`) and `#state.open` (the
+target). The stream state gains a `settled` marker, set in `peer_event/2`'s sealed clause when `opened/5` succeeds
+(the clause that already clears `reopen`), and at the first provider frame of a clear stream. The report is
+`not_settled` until the marker is set, including after the stream has ended.
 
 ## 5. Go (macula-go 0.19.0)
 
 **Calls.** `Pool.Call`'s signature stays. A second method returns the report:
 
 ```go
-func (p *Pool) CallReport(ctx context.Context, c Call) (cbor.Value, Report, error)
-
+// in package stationlink, beside Confidentiality
 type Report struct {
     Sealed    int      // 0 or 1
     Provider  [32]byte
     SealKeyID [8]byte  // zero when Sealed is 0
 }
+
+// in package pool
+func (p *Pool) CallReport(ctx context.Context, c Call) (cbor.Value, stationlink.Report, error)
 ```
 
-`callAt` knows the key it sealed to, including after a reseal, so the report is built where the result returns.
-`stationlink.Link.Call` is an explicit target's call: its caller chose `SealTo` or `Clear` itself, so it gets no
-report.
+`Report` lives in `stationlink`, because `pool` imports `stationlink` and a stream's report comes from
+`stationlink.Stream`; `pool` uses that one type, so Go has one shape, not two same-named types.
 
-**Streams.** `func (s *stationlink.Stream) Report() (Report, error)`, with `stationlink.ErrNotSettled` while
-`s.reopen` is set and no provider frame has arrived.
+`callAt` knows the key it sealed to, including after a reseal, so the report is built where the result returns.
+`stationlink.Link.Call` is an explicit target's call: its caller chose `SealTo` or `Clear` itself, and this note
+gives it no report (§4 says why Erlang differs).
+
+**Streams.** `func (s *stationlink.Stream) Report() (Report, error)`: `ErrNotSettled` until a provider frame has
+been opened under the stream's key (a flag set when `streamSeal.opened` succeeds; Go clears `reopen` only on a
+reseal, so `reopen` can't serve as the marker), or has arrived on a clear stream; `ErrNotACaller` on a served stream.
 
 ## 6. The C ABI (libmacula 0.19.0) and the bindings
 
@@ -118,10 +140,13 @@ report.
 ```
 
 `seal_key_id` is absent when `sealed` is 0. Without `"report"`, or with `"report": 0`, the reply is unchanged. Any
-other value is `invalid_argument`.
+other value is `invalid_argument`. Today's decoder is strict (`callOptionsOf`, unknown fields refused), so no 0.18
+caller can already be passing it. The same options decoder serves `macula_pool_open_stream_opts`: there `"report"`
+is `invalid_argument`, since a stream reports through `macula_stream_report`.
 
 **Streams.** `char *macula_stream_report(macula_handle stream, char **err_out)` returns
-`{"sealed", "provider", "seal_key_id"}`, or fails with the error kind `not_settled`.
+`{"sealed", "provider", "seal_key_id"}`, or fails with the error kind `not_settled` or `not_a_caller`. Both are new
+kinds in the fixed error table (`cabi/abierror.go`, `CONTRACT.md` "Errors"), so this is a contract minor bump.
 
 Python, .NET and TypeScript expose the same three fields, with their own names for the method, when they ship on
 libmacula 0.19.0.
@@ -138,7 +163,8 @@ serves both. This note fixes only the names. The event side is built with packag
 - **Vectors aren't needed.** The report holds no new bytes: it names what the call already sealed.
 - **Each SDK, red first:** a keyed provider reports 1 with its key id; a keyless one reports 0 and no key id; a call
   refused `sealed_refused` and resealed reports the reseal's key id; an error returns no report; a stream reports
-  `not_settled` before its first frame and settles after it.
+  `not_settled` before its first opened provider frame and settles after it; a stream refused `sealed_refused` whose
+  reseal finds no key stays `not_settled` after it ends; a served stream is `not_a_caller`.
 - **Across SDKs:** `scripts/interop/sealed.sh` asserts the report both ways (Erlang calling Go, Go calling Erlang),
   both profiles, and macula-go#10 moves that into CI.
 
@@ -149,3 +175,14 @@ serves both. This note fixes only the names. The event side is built with packag
 2. No report on an error, even one the provider sealed: "report" means "about a result", and no error shape changes.
 3. A dedicated `macula:stream_report/1`, not a key in `macula_stream:info/1`, so `not_settled` is a return.
 4. `sealed` is 0 or 1 inside Erlang too: one value in every SDK beats the Erlang idiom here.
+5. `call_station/8` honours `report`, because it is the pool's own path (`default_dial_io/0`); Go's explicit
+   `stationlink.Link.Call` gets none in this note, which is scope, not design.
+
+## 10. Fable round 1 (2026-09-28), answered
+
+1. §4 contradicted itself (the pool dials through `call_station/8`), and the flag had no slot at
+   `macula_client:call_station/11` or `macula_station_link:call/8`: now §4 steps 2 and 3.
+2. The stream rule could report `sealed` 1 for a key nothing was opened under (a failed reseal ends the stream with
+   `reopen` cleared), and never settled a stream ended otherwise: now it settles only on an opened provider frame,
+   and an unsettled stream has no report (§3, §4, §5).
+3. Go's `Report` can't be returned from `stationlink` if `pool` declares it: now it lives in `stationlink` (§5).
