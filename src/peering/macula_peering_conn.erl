@@ -205,6 +205,8 @@
     %% and challenge bytes the checks run over, and a station's refusal
     %% while its refused HELLO reaches the client.
     expect           :: undefined | opener | challenge | connect | hello,
+    %% Client, between CONNECT and HELLO: what HELLO must answer (macula_handshake:read_hello/2).
+    expect_hello     :: undefined | macula_handshake:expect_hello(),
     leaf             :: undefined | binary(),
     challenge        :: undefined | binary(),
     refusal          :: undefined | term(),
@@ -651,7 +653,7 @@ handshake_step([Bytes | Rest], #data{expect = challenge} = Data) ->
 handshake_step([Bytes | Rest], #data{expect = connect} = Data) ->
     connect_checked(Rest, Bytes, Data);
 handshake_step([Bytes | Rest], #data{expect = hello} = Data) ->
-    hello_read(macula_handshake:read_hello(Bytes), Rest, Data).
+    hello_read(macula_handshake:read_hello(Bytes, Data#data.expect_hello), Rest, Data).
 
 %% Station: the opener, answered with a challenge over the leaf this
 %% connection presented.
@@ -705,8 +707,8 @@ connect_sent({ok, #{connect_binding := Binding} = Session}, Challenge, Data) ->
 connect_sent({error, Reason}, _Challenge, Data) ->
     closed(Reason, Data).
 
-answered({ok, Connect, Station}, OwnHash, #data{quic_stream = Stream} = Data) ->
-    Sent = with_peer(Station, Data#data{own_binding_hash = OwnHash, expect = hello}),
+answered({ok, Connect, Station, Expect}, OwnHash, #data{quic_stream = Stream} = Data) ->
+    Sent = with_peer(Station, Data#data{own_binding_hash = OwnHash, expect = hello, expect_hello = Expect}),
     handshake_written(send_handshake_bytes(Stream, Connect), Sent);
 answered({error, Reason}, _OwnHash, Data) ->
     closed(Reason, Data).

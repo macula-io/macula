@@ -122,8 +122,8 @@ challenged({ok, Challenge}, Leaf, Session, Options) ->
 challenged({error, _} = Refusal, _Leaf, _Session, _Options) ->
     Refusal.
 
-answered({ok, Connect, Station}, Session, Options) ->
-    sent(write(Session, Connect, Options), Station, Session, Options);
+answered({ok, Connect, Station, Expect}, Session, Options) ->
+    sent(write(Session, Connect, Options), {Station, Expect}, Session, Options);
 answered({error, _} = Refusal, _Session, _Options) ->
     Refusal.
 
@@ -132,8 +132,8 @@ sent(ok, Station, Session, Options) ->
 sent({error, _} = Refusal, _Station, _Session, _Options) ->
     Refusal.
 
-welcomed({ok, Hello}, Station, Session, _Options) ->
-    hello_read(macula_handshake:read_hello(Hello), Station, Session);
+welcomed({ok, Hello}, {Station, Expect}, Session, _Options) ->
+    hello_read(macula_handshake:read_hello(Hello, Expect), Station, Session);
 welcomed({error, _} = Refusal, _Station, _Session, _Options) ->
     Refusal.
 

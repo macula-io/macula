@@ -178,7 +178,7 @@ real_endorsement(Profile) ->
 %% the proof covers the challenge, so a fresh challenge would change the proof
 %% for reasons that have nothing to do with the endorsement.
 connect_of(#{challenge := Challenge} = World, Endorsement) ->
-    {ok, Connect, _Station} =
+    {ok, Connect, _Station, _Expect} =
         macula_handshake:answer_challenge(Challenge, client_session(World, Endorsement)),
     Connect.
 
