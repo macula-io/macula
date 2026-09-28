@@ -249,7 +249,8 @@ links(Pool) when is_pid(Pool) ->
 publish(Pool, Realm, Topic, Payload) ->
     macula_pubsub:publish(Pool, Realm, Topic, Payload).
 
-%% @doc Publish to `(Realm, Topic)' on `Pool' with options. See
+%% @doc Publish to `(Realm, Topic)' on `Pool' with options, `group' to
+%% seal it under a sealed group's current epoch. See
 %% `macula_pubsub:publish/5' for honored opts.
 -spec publish(pool(), realm(), topic(), term(), map()) ->
     ok | {error, term()}.
@@ -278,7 +279,9 @@ subscribe(Pool, Realm, Topic, Subscriber) ->
 %%       orders it itself.</li>
 %% </ul>
 %% Ordering state is kept per publisher, and apart for EVENTs whose
-%% publisher signature did not verify.
+%% publisher signature did not verify. `group' subscribes under a sealed
+%% group, joining it first; its events arrive opened, or once as
+%% `macula_event_unopened'.
 %% See `macula_pubsub:subscribe/5'.
 -spec subscribe(pool(), realm(), topic(), pid(), map()) ->
     {ok, reference()}

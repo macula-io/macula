@@ -46,7 +46,9 @@
 %% from the publication its link verified: its realm, its publisher's
 %% node_id, its seq and published_at, how this copy arrived, and
 %% publication_hash, the SHA-384 of its tbs, with expires_at, on which
-%% the pool delivers each publication once.
+%% the pool delivers each publication once. `sealed' is 1 for an event
+%% opened with a sealed group's epoch, named by `seal_key_id', and 0 for
+%% one that travelled in the clear.
 -type event_meta() :: #{
     realm            := <<_:256>>,
     publisher        := <<_:256>>,
@@ -54,7 +56,9 @@
     published_at     := non_neg_integer(),
     delivered_via    := macula_frame:delivery_channel(),
     publication_hash := <<_:384>>,
-    expires_at       := non_neg_integer()
+    expires_at       := non_neg_integer(),
+    sealed           => 0 | 1,
+    seal_key_id      => <<_:64>>
 }.
 
 %% @doc Publish to `(Realm, Topic)' on `Pool'. Equivalent to
@@ -70,7 +74,19 @@ publish(Pool, Realm, Topic, Payload) ->
 %% <ul>
 %%   <li>`timeout_ms' — gen_server call timeout (default 5_000).
 %%       Most apps leave this as default.</li>
+%%   <li>`group' — a sealed group's prefix, which `Topic' must be under
+%%       (plans/DESIGN_E2E_SEALED_PUBSUB.md): the payload is sealed under
+%%       the group's current epoch, its key pulled from the org's
+%%       distributor first. A refusal fails the publish closed as
+%%       `{error, {group, Reason}}'; a topic outside the prefix, or a
+%%       prefix with no org segment, is `{error, {invalid_option, group}}'.
+%%       `ucan_token' carries the org's grant to the distributor, and
+%%       `distributor' pins its node_id.</li>
 %% </ul>
+%%
+%% Without `group', a topic under a group this node holds is refused as
+%% `{error, {confidentiality, {group_held, Prefix}}}' rather than sent in
+%% the clear.
 %%
 %% Returns `ok' as soon as one configured station accepts the
 %% PUBLISH frame (partial success = success, per
@@ -102,9 +118,19 @@ subscribe(Pool, Realm, Topic, Subscriber) ->
 %% `{macula_event_gone, SubRef, Reason}' once when the subscription
 %% terminates (pool close, subscriber pid death).
 %%
-%% `Opts' is a forward-compatible map; Phase 1 honors no
-%% subscribe-time options. Future phases (history replay, server-
-%% side filters) will add named keys.
+%% `Opts' honors `delivery' (see `macula:subscribe/5') and `group', a
+%% sealed group's prefix `Topic' (or every topic a pattern matches) must
+%% be under, with `ucan_token' and `distributor' as for `publish/5'. The
+%% group is joined before the subscription is made, and a refusal fails
+%% it closed as `{error, {group, Reason}}'. Under a group, a sealed event
+%% arrives opened, its meta saying `sealed => 1' and `seal_key_id'; one
+%% that cannot be opened arrives once as `{macula_event_unopened, SubRef,
+%% Topic, #{publisher, seal_key_id, reason}}', and nothing of its payload.
+%% `reason' is one of `unknown_epoch', `epoch_expired', `not_a_member',
+%% `membership_unknown', `no_distributor', `no_group' (a sealed event on
+%% a subscription that named no group) and `tag_invalid'. A clear event
+%% carries `sealed => 0', and one under a prefix this node holds as
+%% `required' is refused, counted and logged naming its publisher.
 -spec subscribe(macula_client:pool(), <<_:256>>, binary(), pid(), map()) ->
     {ok, reference()}
     | {error, {text_too_long | invalid_text, topic} | {invalid_option, group}

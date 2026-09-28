@@ -214,7 +214,8 @@ from the same authority the advertisement field would have and cannot be forged 
 ## 7. The API (Erlang; the other SDKs follow the same shape)
 
 - `macula:publish(Pool, Realm, Topic, Payload, #{group => Prefix})` and
-  `macula:subscribe(Pool, Realm, Topic, Pid, #{group => Prefix})`, with `distributor => NodeId` (§2). `Topic`, or for a
+  `macula:subscribe(Pool, Realm, Topic, Pid, #{group => Prefix})`, with `distributor => NodeId` (§2) and
+  `ucan_token => Token`, the org's grant (§3). `Topic`, or for a
   pattern subscription every topic it matches, must be under `Prefix` (§2), and `Prefix` must have an org segment:
   anything else is `{error, {invalid_option, group}}` before anything is sent.
 - **Publishing** seals under §4's epoch with `k_pub` for its own node id, a fresh 96-bit random nonce and the scheme 1
@@ -322,7 +323,7 @@ Taken from the observations: the slot verified at the current time with `AtMs` a
 fleet order (realm first, §3), the lookup's cost in the measurement (§10), one pull per `unknown_epoch` answer (§7),
 clock skew in the removal bound (§8), the pinning note (§2), and the register sentence naming the org's groups (§8).
 
-## 13. Changes made while building the distributor (C2, 2026-09-28)
+## 13. Changes made while building (C2 to C4, 2026-09-28 and 29)
 
 1. The org UCAN rides the call's own `ucan_token` and is checked by macula under the procedure's advertise policy
    before the handler runs, so the CALL has no `proofs` field (§3, §5).
@@ -331,3 +332,11 @@ clock skew in the removal bound (§8), the pinning note (§2), and the register 
    observation that applied `AtMs` to the window.
 3. Refusals are `{error, Reason}` answered as `handler_error` with the reason as detail, and `unknown_group` joins
    them for a prefix another org owns (§5). The removed set is the application's `removed` function (§3).
+4. Built in C3 and C4 (2026-09-29):
+   - The holder is `macula_group_keyring`, one per pool. It stores what it holds in a table read through a handle, so
+     publishing, opening a held epoch and reading a policy never wait on a pull; only a pull goes through its process.
+   - The link seals a publication, since the seal is bound to the `published_at` it signs, and delivers a sealed
+     event unopened, its seal in the meta.
+   - A group subscription's events are opened by a process of their own (`macula_group_opener`), because opening may
+     pull a missed epoch over the pool, which must not wait on it.
+   - `macula:call/6` takes `ucan_token`, the distributor pull's carrier.
