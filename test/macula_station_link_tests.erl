@@ -472,6 +472,36 @@ publish5_uses_caller_seq_test_() ->
          ok
      end}.
 
+%% A pool-driven publish under a group epoch carries `sealed' in place of the payload,
+%% sealed by this link with the published_at it signs, so a member holding the epoch
+%% opens it.
+publish6_seals_under_the_group_epoch_test_() ->
+    {timeout, 5,
+     fun() ->
+         {ok, _} = application:ensure_all_started(macula),
+         {ok, Pid} = macula_station_link:start_link(with_link_keys(#{
+             seed     => #{host => <<"127.0.0.1">>, port => 1},
+             connect_timeout_ms => 2000
+         })),
+         {ok, Profile} = macula_crypto_profile:configured(),
+         {ok, PeerKey} = macula_node_keys:generate(identity, Profile),
+         {ok, PeerNodeId} = macula_node_keys:node_id(PeerKey),
+         _ = sys:replace_state(Pid, fun(S) ->
+             setelement(?PEER_NODE_ID_INDEX, setelement(?PEER_PID_INDEX, S, self()), PeerNodeId)
+         end),
+         #{id := Id} = Epoch = macula_group_epoch:new(erlang:system_time(millisecond), 15 * 60000),
+         ok = macula_station_link:publish(Pid, ?REALM, <<"io.macula/acme/chat/said_v1">>, #{n => 1}, 9,
+                                          {group, Epoch}),
+         F = receive {'$gen_cast', {send_frame, _, #{frame_type := publish} = A}} -> A
+             after 1_000 -> erlang:error(no_publish_frame)
+             end,
+         Verified = verified_publish(F),
+         ?assertNot(maps:is_key(payload, Verified)),
+         ?assertMatch(#{seq := 9, sealed := #{key_id := Id}}, Verified),
+         ?assertEqual({ok, #{{text, <<"n">>} => 1}}, macula_group_event:open(Epoch, Verified)),
+         macula_station_link:stop(Pid)
+     end}.
+
 publish5_not_connected_returns_error_test_() ->
     {timeout, 5,
      fun() ->
@@ -1168,9 +1198,10 @@ inbound_sealed_call_is_refused_by_name_test_() ->
          macula_station_link:stop(Pid)
      end}.
 
-%% A sealed EVENT is not delivered while this node holds no group key, and the
-%% link serves on.
-sealed_event_is_not_delivered_test_() ->
+%% A sealed EVENT reaches the subscriber unopened, with its seal and every field it
+%% was sealed with in the meta, for the pool to open with a group's epoch or to report
+%% (macula_group_keyring, macula_group_event). No payload travels with it.
+sealed_event_reaches_the_subscriber_with_its_seal_test_() ->
     {timeout, 5,
      fun() ->
          {ok, _} = application:ensure_all_started(macula),
@@ -1188,7 +1219,12 @@ sealed_event_is_not_delivered_test_() ->
          {ok, Profile} = macula_crypto_profile:configured(),
          {ok, Publisher} = macula_node_keys:generate(identity, Profile),
          Pid ! {macula_peering, frame, self(), macula_sealed_frames:publication(Publisher, ?REALM, Topic, 7)},
-         ?assertEqual(none, receive {macula_event, SubRef, _, _, _} -> delivered after 500 -> none end),
+         PublisherId = macula_node_keys:key_id(Publisher),
+         ?assertMatch({macula_event, SubRef, Topic, undefined,
+                       #{publisher := PublisherId, seq := 7, published_at := At,
+                         sealed := #{scheme := 1, key_id := <<1:64>>, nonce := <<3:96>>, ct := <<"ciphertext">>}}}
+                        when is_integer(At),
+                      receive {macula_event, SubRef, _, _, _} = Sealed -> Sealed after 2_000 -> none end),
          {Event, _} = signed_event(?REALM, Topic, 8, #{after_sealed => 1}),
          Pid ! {macula_peering, frame, self(), Event},
          ?assertMatch({macula_event, SubRef, Topic, _, _},
