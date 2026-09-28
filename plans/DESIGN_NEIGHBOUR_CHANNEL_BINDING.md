@@ -61,6 +61,15 @@ authenticate every frame after it. This is D18's session proof, taken.
 - **After HELLO.** With both proofs verified, neither end signs or expects a neighbour signature: control frames
   travel as pq_pure's do, `{version, frame_type, ...fields}`, on the control stream. A neighbour signature on a v5
   connection is `malformed_frame`, as a missing one is on v4.
+- **Liveness on v5 (Mars; Mercurius's call as owner).** Today `macula_peering_conn:send_liveness_probe/1` sends a
+  signed `_macula.ping` CALL in the all-zero realm on every opted-in connection, and the peer answers with a signed
+  `unknown_next_peer` relay error: two composite signs per connection per interval, which §5 leaves in place because
+  CALL and relay errors keep their own signatures. On v5 the probe becomes a `ping` control frame, answered with
+  `pong` by the peer's peering conn process itself, session-authenticated, no signature. The conn answers every
+  `ping` on v5 and still hands the `pong` to the DHT pid, so the DHT's own pings get the same answer, and a station's
+  DHT stops answering pings itself on v5 (one pong, not two). The zombie property holds: a dead VM has no conn
+  process to answer. What it gives up: today's relay error also proves the peer's router is alive, not only its
+  conn. If the owner wants that kept, v5 keeps the CALL probe and §7 carries its cost.
 - **Everything else is unchanged.** Records, advertisements, withdrawals, publications, requests, replies, relay
   errors and stream frames keep their own signatures in both profiles (§5).
 
@@ -100,6 +109,13 @@ authenticate every frame after it. This is D18's session proof, taken.
   expected during the roll, and from the second to the same node_id in a run a warning is logged naming the node_id
   and the count, at most once a minute per node_id. No cap: a cap would refuse a genuinely old station and
   partition the fleet during the roll, the failure §4 exists to avoid.
+- **A rollback meets the same refusal (Mars).** Rolling a station back below v5 (pinning the previous release) looks,
+  to every peer that saw it on v5 in this run, exactly like the downgrade above: they refuse it, no retry, until
+  they restart. The protection stays "for the run"; nothing expires it on a timer, because a timer is also the
+  attacker's wait. What keeps this from being a silent partition: every `v5_downgrade_refused` is logged with the
+  node_id and the count, bounded like the fallback warning, not only counted; and the remedy is stated here and in
+  the deployment guide when v5 ships: rolling a station back below v5 needs its peers restarted, or
+  `macula_peering:forget_v5_peer/1` called on them for that node_id (an operator action, never automatic).
 - **Signing cost as an attack surface (Mars).** The station verifies the client's CONNECT proof (one composite verify,
   about 0.17 ms) BEFORE it signs `session_proof` (one composite sign, 6 to 10 ms), so only a client that has just
   produced a valid composite proof over this session makes the station sign, once. That client paid the same RSA-4096
@@ -129,7 +145,10 @@ appears in CONNECT:
 - **Clients** (every SDK, and a station dialling another) send a v5 CONNECT. Refused `unsupported_version` by an old
   peer, they retry once on a new connection with a v4 CONNECT, always, with no configuration flag, and count it per
   node_id (§3). Only `unsupported_version` triggers the retry; every other refusal is final. A node_id already seen on
-  v5 in this run gets no retry (§3). That is safe: forcing the fallback only brings back v4's per-frame signatures,
+  v5 in this run gets no retry (§3). After a fallback, the client dials that node_id with a v4 CONNECT directly for
+  10 minutes, then tries v5 again (Mars): a slow roll with 0.7.1's lookup-only redials would otherwise pay a failed
+  v5 handshake on every new connection. This does not widen the downgrade: it applies only to a node never seen on
+  v5 in this run, which an attacker can already force onto v4 (§3). That is safe: forcing the fallback only brings back v4's per-frame signatures,
   which are secure, so a downgrade costs CPU, never authenticity (and, against an ML-DSA-breaking attacker, the
   confidentiality of that connection's control traffic, §3).
 - A peer that offers neither is refused with the named reason `unsupported_version`, as now.
@@ -184,7 +203,8 @@ with hybrid signatures, instead of once per frame.
   dependency.
 - New counters in `macula_peering`: connections by handshake version (v4, v5), `session_proof` refusals by reason
   (`session_proof_invalid`, `session_proof_missing`, `session_proof_rate`, `exporter_unavailable`),
-  `v5_downgrade_refused` (an `unsupported_version` from a node_id already seen on v5), `v4_hello_to_v5_connect`,
+  `v5_downgrade_refused` (an `unsupported_version` from a node_id already seen on v5; also logged with the node_id,
+  bounded, §3), `v4_hello_to_v5_connect`,
   v4 fallbacks after `unsupported_version` per node_id with the bounded warning (§3), and control frames received on
   v4 connections (the old-path counter).
 - At startup, macula refuses to run v5, in either profile, unless the QUIC provider's key exchange groups are exactly
@@ -200,9 +220,13 @@ with hybrid signatures, instead of once per frame.
   per frame on the fleet class, measured by Pluto's harness before and after.
 - **Per connection:** the station signs one composite `session_proof` (one composite sign, within Mars's budget) and
   verifies the client's proof as now. The client verifies one composite signature more. Two exporter computations.
+- **The liveness probe:** today interval x connections x 2 composite signs (the CALL and the relay error), 12 to 20 ms
+  of signing per connection per interval, the largest steady-state signing on a station with about 40 connections
+  once hop frames stop signing. With the v5 ping/pong probe (§3): none. If the CALL probe is kept, this line stays.
 - **During the roll, a failed v5 attempt:** a v5 client dialling a v4-only station pays one QUIC+TLS handshake, one
   composite CONNECT sign (about 9 ms), and the refusal before it redials on v4, then the v4 handshake in full. That is
-  roughly double the handshake cost to each old station, once per connection, until that station upgrades.
+  roughly double the handshake cost to each old station, at most once per client per 10 minutes (§4), until that
+  station upgrades.
 - **Measured before release:** per-frame cost, per-connection handshake time, and Pluto's N=40 boot CPU.
 - **Connection churn (Mars).** macula-station 0.7.1 closes lookup-only DHT connections after about 30 s idle and dials
   them again later, so handshakes per station go up just as v5 moves the cost from frames to handshakes. The
@@ -227,6 +251,13 @@ with hybrid signatures, instead of once per frame.
   counted, never taken as a v4 connection.
 - A second fallback to the same node_id logs one warning naming it; further fallbacks within a minute log none and
   are counted.
+- After a fallback, the next connection to that node_id within 10 minutes sends a v4 CONNECT directly; after 10
+  minutes it tries v5 again. A node_id seen on v5 is never dialled on v4.
+- On v5 the liveness probe is a `ping` answered by the peer's conn process with an unsigned `pong`; a peer whose
+  conn process is gone misses it and the connection closes `peer_liveness_lost` after the configured misses. A
+  station's DHT sends no second `pong` on v5.
+- A peer that saw a node on v5, then gets `unsupported_version` from it (a rollback), refuses, logs the node_id once
+  (bounded) and counts; after `macula_peering:forget_v5_peer/1` for that node_id it falls back to v4 again.
 - A pq_hybrid v5 node refuses to start with a key exchange group list other than macula-pqc's, and CI asserts that
   the release image starts, so a station that would refuse on the fleet is caught before it ships, not as an outage.
 - The station signs `session_proof` only after the CONNECT proof verifies: an invalid proof gets a refusal and no
