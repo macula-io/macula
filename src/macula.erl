@@ -335,8 +335,12 @@ call(Pool, Realm, Procedure, Payload, TimeoutMs) ->
 %% request that produced it was sealed and to which key (`sealed' 1 with
 %% `seal_key_id', or 0), and the `provider' it was addressed to. An error comes
 %% back as it is. Any value but a boolean is `{error, {invalid_option, report}}'.
+%%
+%% `ucan_token' presents a UCAN to a gated provider, as `call_station/8' does, on every station call the call makes;
+%% anything but bytes is `{error, {invalid_option, ucan_token}}' before anything is looked up.
 -spec call(pool(), realm(), procedure(), term(), 1..600_000,
-           #{provider => <<_:256>>, confidential => preferred | required, report => boolean()}) ->
+           #{provider => <<_:256>>, confidential => preferred | required, report => boolean(),
+             ucan_token => binary()}) ->
     {ok, term()} | {ok, term(), macula_station_link:report()} | {error, term()}.
 call(Pool, Realm, Procedure, Payload, TimeoutMs, Opts) when is_map(Opts) ->
     macula_direct_dial:call(Pool, Realm, Procedure, Payload, TimeoutMs, Opts).

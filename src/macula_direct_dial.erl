@@ -236,7 +236,9 @@ call(Pool, Realm, Procedure, Payload, TimeoutMs) ->
 %% `confidential' is `preferred' (the default) or `required'; `off' is
 %% refused as `{error, {confidentiality, off_needs_explicit_target}}' and any
 %% other value as `{error, {invalid_option, confidential}}', also before
-%% anything is looked up.
+%% anything is looked up. `ucan_token' (bytes) is presented to every station
+%% call, as `macula:call_station/8' presents it; any other value is
+%% `{error, {invalid_option, ucan_token}}', before anything is looked up.
 -spec call(macula:pool(), macula:realm(), macula:procedure(), term(),
           1..600_000, map()) -> {ok, term()} | {ok, term(), macula_station_link:report()} | {error, term()}.
 call(Pool, Realm, Procedure, Payload, TimeoutMs, Opts)
@@ -245,7 +247,8 @@ call(Pool, Realm, Procedure, Payload, TimeoutMs, Opts)
                         Opts).
 
 call_unless_removed(none, Pool, Realm, Procedure, Payload, TimeoutMs, Opts) ->
-    call_to(with_confidential(confidential_option(Opts), with_report(report_option(Opts), provider_option(Opts))),
+    call_to(with_confidential(confidential_option(Opts),
+                              with_report(report_option(Opts), with_ucan(ucan_option(Opts), provider_option(Opts)))),
             Pool, Realm, Procedure, Payload, TimeoutMs, Opts);
 call_unless_removed(Removed, _Pool, _Realm, _Procedure, _Payload, _TimeoutMs, _Opts) ->
     {error, Removed}.
@@ -260,7 +263,8 @@ call_to({ok, Only}, Pool, Realm, Procedure, Payload, TimeoutMs, Opts) ->
                    only_provider_found(Only, advertised_stations(Dial, Realm, Procedure)),
                    station_try(Dial, call_work(Dial, Realm, Procedure, Payload, Deadline,
                                                #{confidential => maps:get(confidential, Opts, preferred),
-                                                 report => maps:get(report, Opts, false)})),
+                                                 report => maps:get(report, Opts, false),
+                                                 ucan_token => maps:get(ucan_token, Opts, none)})),
                    Deadline).
 
 %% What a call or stream may ask of its confidentiality: `preferred' (the default) or `required'. A lookup never
@@ -294,6 +298,15 @@ stream_report_option(#{report := _}) -> {error, {invalid_option, report}};
 stream_report_option(#{}) -> {ok, none}.
 
 %% Which provider a call is limited to, `any' when the caller named none.
+%% A call's UCAN for a gated provider, presented to every station call it makes as `call_station/8' presents it:
+%% bytes, or absent for none. Anything else is `{error, {invalid_option, ucan_token}}', before anything is looked up.
+ucan_option(#{ucan_token := Token}) when is_binary(Token) -> {ok, Token};
+ucan_option(#{ucan_token := _}) -> {error, {invalid_option, ucan_token}};
+ucan_option(#{}) -> {ok, none}.
+
+with_ucan({ok, _Token}, Checked) -> Checked;
+with_ucan({error, _} = Refused, _Checked) -> Refused.
+
 provider_option(#{provider := <<_:256>> = Provider}) -> {ok, Provider};
 provider_option(#{provider := _}) -> {error, {invalid_option, provider}};
 provider_option(#{}) -> {ok, any}.
@@ -790,9 +803,14 @@ call_work(#{pool := Pool, call_station := CallStation, remember_resolved := Reme
     end.
 
 %% What a station call is told to seal from: the candidate's verified advertisement, and the call's own policy when
-%% it is `required' (`preferred' is the station call's default); and whether the call asked for its seal report.
-policy_opts(#{confidential := Policy, report := Report}, Ad) ->
-    maps:merge(maps:merge(advertisement_opt(Ad), required_opt(Policy)), report_opt(Report)).
+%% it is `required' (`preferred' is the station call's default); whether the call asked for its seal report; and the
+%% UCAN it presents, if any.
+policy_opts(#{confidential := Policy, report := Report} = Call, Ad) ->
+    maps:merge(maps:merge(maps:merge(advertisement_opt(Ad), required_opt(Policy)), report_opt(Report)),
+               ucan_opt(maps:get(ucan_token, Call, none))).
+
+ucan_opt(none) -> #{};
+ucan_opt(Token) -> #{ucan_token => Token}.
 
 report_opt(true) -> #{report => true};
 report_opt(false) -> #{}.
