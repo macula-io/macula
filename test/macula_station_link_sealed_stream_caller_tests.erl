@@ -39,7 +39,9 @@ sealed_stream_caller_test_() ->
                           {"a clear stream refused at seq 0 has no report",
                            fun a_clear_stream_refused_at_seq_0_has_no_report/1},
                           {"a served stream has no report: it is not a caller's",
-                           fun a_served_stream_has_no_report/1}]].
+                           fun a_served_stream_has_no_report/1},
+                          {"a provider that answers under the key it refused ends the stream; the report keeps that key",
+                           fun a_provider_answering_under_the_refused_key_ends_the_stream/1}]].
 
 a_sealed_open_opens_at_the_provider(W) ->
     #{open := Open, plain := Plain} = sealed_open(W, #{city => {text, <<"Tienen">>}}),
@@ -174,6 +176,45 @@ a_served_stream_has_no_report(_W) ->
     {ok, Served} = macula_stream:start_link(#{id => crypto:strong_rand_bytes(16), role => server, mode => bidi,
                                               owner => self()}),
     ?assertEqual({error, not_a_caller}, macula:stream_report(Served)).
+
+%% A provider refuses the open's key (sealed_refused naming another) and then,
+%% before the reopen lands, answers under the very key it refused. The chunk
+%% opened under the first key and settled the report on it; a reopen landing
+%% after that must not swap the report to the second key. The provider is
+%% incoherent, so the session ends, and the report still names the key the chunk
+%% opened under (Fable round 1, 13.1.0).
+a_provider_answering_under_the_refused_key_ends_the_stream(#{link := Link, provider := Provider,
+                                                             provider_id := Target, kem_key := OldKemKey,
+                                                             holder := Holder}) ->
+    Test = self(),
+    {Public, _Private} = macula_seal:generate_key(profile()),
+    NewKemKey = macula_seal:key_as_carried(Public),
+    NewId = macula_seal:key_id(NewKemKey),
+    {ok, Stream} = macula_station_link:call_stream(Link, Target, ?REALM, ?PROCEDURE, #{},
+                                                   #{mode => bidi, seal => {sealed_to, OldKemKey},
+                                                     reseal => fun(_Named) ->
+                                                                   Test ! {resealing, self()},
+                                                                   receive go -> {ok, NewKemKey} end
+                                                               end}),
+    OldQuic = receive {opened, Q1} -> Q1 after ?EVENT_MS -> error(no_stream_opened) end,
+    {ok, OldOpen} = macula_frame:verify_request(written(OldQuic), profile()),
+    {ok, _Plain, #{k_p2c := KP2C, key_id := OldId}} =
+        macula_sealed_call:open_request(profile(), Holder, seal_request(OldOpen), maps:get(sealed, OldOpen)),
+    Refusal = macula_frame:provider_stream(#{frame_type => stream_error, seq => 0, code => <<"sealed_refused">>,
+                                             message => binary:encode_hex(NewId, lowercase)}, Provider, OldOpen),
+    Link ! {quic, macula_frame:encode(Refusal), OldQuic, undefined},
+    Resealer = receive {resealing, R} -> R after ?EVENT_MS -> error(no_reseal) end,
+    Nonce = macula_seal:random_nonce(),
+    Aad = macula_seal:stream_aad(<<"stream_data">>, maps:get(request_id, OldOpen), 1, 1),
+    Chunk = macula_frame:provider_stream(#{frame_type => stream_data, seq => 1, encoding => raw,
+                                           sealed => #{scheme => 1, key_id => OldId, nonce => Nonce,
+                                                       ct => macula_seal:seal(KP2C, Nonce, Aad, <<"under the old">>)}},
+                                         Provider, OldOpen),
+    Link ! {quic, macula_frame:encode(Chunk), OldQuic, undefined},
+    ?assertEqual({chunk, <<"under the old">>}, macula_stream:recv(Stream, ?EVENT_MS)),
+    Resealer ! go,
+    ?assertMatch({error, {<<"malformed_frame">>, _}}, macula_stream:recv(Stream, ?EVENT_MS)),
+    ?assertEqual({ok, #{sealed => 1, provider => Target, seal_key_id => OldId}}, macula:stream_report(Stream)).
 
 %%------------------------------------------------------------------
 %% Helpers

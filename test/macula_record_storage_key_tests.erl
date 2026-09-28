@@ -39,6 +39,9 @@ realm_member_endorsement_key_is_the_records_storage_key_test() ->
     Endorsement = macula_record:realm_member_endorsement(RealmId, #{realm => RealmId, member_node => Member,
                                                                     roles => [<<"member">>]}),
     ?assertEqual(macula_record:storage_key(Endorsement),
+                 macula_record:realm_member_endorsement_key(RealmId, Member)),
+    %% The realm's tombstone of the endorsement lands in the same slot, which the key's doc also claims.
+    ?assertEqual(macula_record:storage_key(macula_record:tombstone(Endorsement, revoked)),
                  macula_record:realm_member_endorsement_key(RealmId, Member)).
 
 procedure_delegation_key_vector_test() ->

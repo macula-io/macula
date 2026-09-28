@@ -26,7 +26,9 @@ return changes. No wire change.
   stream the caller opened. It settles on the provider's first STREAM_DATA or STREAM_REPLY opened under the stream's
   key, or on a clear stream its first STREAM_DATA, STREAM_REPLY or STREAM_END; before that, and on a stream that
   ended first, an error included, it is `{error, not_settled}`. A sealed stream's STREAM_END travels clear and settles
-  nothing. A served stream answers `{error, not_a_caller}`.
+  nothing. A served stream answers `{error, not_a_caller}`. A provider that refuses a stream's key
+  (`sealed_refused`) and then, before the reopen lands, answers under that same key ends the session
+  (`malformed_frame`), so the report keeps naming the key the answer opened under.
 - `macula_record:realm_member_endorsement_key/2`: the DHT slot of a realm member's endorsement and of the realm's
   tombstone of it, which `macula_hyparview_endorsement:slot_endorsement/3,4` reads (macula-realm#31).
 

@@ -1003,6 +1003,11 @@ resealed_and_reopened(Reseal, Named, Link, Stream, Sid, Open, Args) ->
 %% The link opened the new STREAM_OPEN on a new dedicated stream: this stream reads and writes under it from now on,
 %% and what waited goes out, numbered from 0 under the new keys, whether or not the session has ended meanwhile (an
 %% abort's STREAM_ERROR ends the new session at the link too). A reopen that failed ends a session still running.
+reopened({ok, _Reopened}, _Queued, #state{settled = true} = State) ->
+    %% The provider answered under the very key it refused, before the reopen landed: an opened frame settled the
+    %% report on that key. Swapping to the reopen's key now would make the report name a key nothing was opened under,
+    %% and a provider that refuses a key and then answers under it is not coherent: the session ends.
+    abort_session(<<"malformed_frame">>, <<"a provider answered under the key it refused">>, State);
 reopened({ok, #{open := Open, seal := Keys, sid := Sid}}, Queued, #state{peer = {remote_via_link, Link, _Old}} = State) ->
     flushed(Queued, State#state{id = Sid, peer = {remote_via_link, Link, Sid}, open = Open,
                                 verifier = macula_frame:open_stream(Open), seal = stream_seal(Keys)});
