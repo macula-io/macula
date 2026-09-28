@@ -77,11 +77,6 @@
     %% difficulty of `macula_node_keys:puzzle_difficulty/0'. Required on
     %% the station role.
     puzzle          => #{mode := macula_handshake:puzzle_mode()},
-    %% The highest handshake version a station answers, 5 unless set. A
-    %% station at 4 answers a v5 CONNECT as a pre-v5 station does, with
-    %% unsupported_version: the mixed fleet's tests run against one
-    %% (plans/DESIGN_NEIGHBOUR_CHANNEL_BINDING.md section 4).
-    max_handshake_version => 4 | 5,
     %% Wall-clock milliseconds, for tests.
     clock           => fun(() -> integer()),
     %% Optional pid notified once when the worker completes the
@@ -215,11 +210,11 @@
     expect           :: undefined | opener | challenge | connect | hello,
     %% Client, between CONNECT and HELLO: what HELLO must answer (macula_handshake:read_hello/2).
     expect_hello     :: undefined | macula_handshake:expect_hello(),
-    %% The handshake version this connection completed, and the highest a
-    %% station answers. On version 5 no frame carries a neighbour
-    %% signature: the session proofs authenticated the peer once.
+    %% The handshake version this connection completed. On version 5 no
+    %% frame carries a neighbour signature: the session proofs
+    %% authenticated the peer once. A station always answers 5 and 4:
+    %% nothing caps it, since a cap would be a configured downgrade.
     version          :: undefined | macula_handshake:version(),
-    max_version = 5  :: macula_handshake:version(),
     leaf             :: undefined | binary(),
     challenge        :: undefined | binary(),
     refusal          :: undefined | term(),
@@ -338,7 +333,6 @@ started({ok, Identity, Profile}, ok, #{role := Role} = Opts) ->
         target           = maps:get(target, Opts, undefined),
         expected_node_id = maps:get(expected_node_id, maps:get(target, Opts, #{}), undefined),
         puzzle           = maps:get(mode, maps:get(puzzle, Opts, #{}), undefined),
-        max_version      = maps:get(max_handshake_version, Opts, 5),
         clock            = maps:get(clock, Opts, fun wall_clock_ms/0),
         quic_conn        = maps:get(quic_conn, Opts, undefined),
         buf              = <<>>,
@@ -815,15 +809,13 @@ connect_verdict({refused, Reason, Hello}, #data{quic_stream = Stream} = Data) ->
 %% connection's exporter, and a signer that signs a session proof with the
 %% identity key only within the session proof budget, counted by the real
 %% clock the budget is about.
-station_v5(#data{max_version = 5, quic_conn = Conn, identity = Identity}) ->
+station_v5(#data{quic_conn = Conn, identity = Identity}) ->
     #{export => exporter(Conn),
       sign_session_proof => fun(ClientNodeId, Message) ->
                                 session_proof(macula_session_proof_rate:allow(ClientNodeId,
                                                                               erlang:system_time(millisecond)),
                                               Message, Identity)
-                            end};
-station_v5(#data{max_version = 4}) ->
-    #{}.
+                            end}.
 
 session_proof(ok, Message, Identity) ->
     {ok, macula_node_keys:sign(Message, Identity)};

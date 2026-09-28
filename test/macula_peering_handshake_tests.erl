@@ -721,7 +721,7 @@ station_opts(#{station_key := StationKey, station_issuer := StationIssuer}, Opti
     Opts = #{identity => StationKey, issuer => StationIssuer, capabilities => ?STATION_CAPABILITIES,
              controlling_pid => self(), puzzle => #{mode => maps:get(mode, Options)},
              clock => fixed(maps:get(station_clock, Options, ?T0 + ?MINUTE))},
-    maps:merge(maps:merge(Opts, maps:with([accept_owner, max_handshake_version], Options)),
+    maps:merge(maps:merge(Opts, maps:with([accept_owner], Options)),
                observer_opt(station_observer, Options)).
 
 observer_opt(Key, Options) ->

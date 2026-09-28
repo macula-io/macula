@@ -40,7 +40,6 @@ dials 5 and falls back to 4 once, only on `unsupported_version`, so no peer is r
   old path, which must read zero fleet-wide before v4 is dropped), v4 fallbacks, refused downgrades, and session proof
   refusals by reason.
 - `macula_quic:export_keying_material/4` (the TLS 1.3 exporter) and `macula_quic:tls_posture/0`.
-- `max_handshake_version` (4 or 5, default 5) on a station connection: at 4 it answers v5 as a pre-v5 station does.
 
 ### Changed
 
