@@ -15,19 +15,26 @@ session_proof_rate_test_() ->
        fun per_node_minute/0},
       {"all clients together get 30 session proofs a second, then a refusal until the next second",
        fun total_second/0},
-      {"windows that ended are purged", fun purged/0}]}.
+      {"windows that ended are purged", fun purged/0},
+      {"the defaults are the limits in force", fun default_limits/0}]}.
+
+%% The limits come from the macula application environment, read once at start.
+configured_test_() ->
+    [{"configured limits replace the defaults", fun configured_limits/0},
+     {"a limit below 1, or not an integer, refuses to start and names itself", fun invalid_limits/0}].
 
 per_node_minute() ->
     Allowed = [macula_session_proof_rate:allow(?NODE, ?T0 + I * 1000) || I <- lists:seq(0, 29)],
     ?assertEqual(lists:duplicate(30, ok), Allowed),
-    ?assertEqual({error, session_proof_rate}, macula_session_proof_rate:allow(?NODE, ?T0 + 30000)),
+    ?assertEqual({error, {session_proof_rate, per_node_per_minute}},
+                 macula_session_proof_rate:allow(?NODE, ?T0 + 30000)),
     ?assertEqual(ok, macula_session_proof_rate:allow(<<2:256>>, ?T0 + 30001)),
     ?assertEqual(ok, macula_session_proof_rate:allow(?NODE, ?T0 + 60000)).
 
 total_second() ->
     Allowed = [macula_session_proof_rate:allow(<<I:256>>, ?T0 + 500) || I <- lists:seq(1, 30)],
     ?assertEqual(lists:duplicate(30, ok), Allowed),
-    ?assertEqual({error, session_proof_rate}, macula_session_proof_rate:allow(<<31:256>>, ?T0 + 999)),
+    ?assertEqual({error, {session_proof_rate, per_second}}, macula_session_proof_rate:allow(<<31:256>>, ?T0 + 999)),
     ?assertEqual(ok, macula_session_proof_rate:allow(<<31:256>>, ?T0 + 1000)).
 
 purged() ->
@@ -35,6 +42,42 @@ purged() ->
     ?assert(macula_session_proof_rate:windows() > 0),
     ok = macula_session_proof_rate:purge(?T0 + 2 * 60000),
     ?assertEqual(0, macula_session_proof_rate:windows()).
+
+default_limits() ->
+    ?assertEqual(#{per_node_per_minute => 30, per_second => 30}, macula_peering:session_proof_limits()).
+
+configured_limits() ->
+    with_env([{session_proofs_per_node_per_minute, 2}, {session_proofs_per_second, 3}],
+             fun() ->
+                 ?assertEqual(#{per_node_per_minute => 2, per_second => 3}, macula_session_proof_rate:limits()),
+                 ?assertEqual(ok, macula_session_proof_rate:allow(?NODE, ?T0)),
+                 ?assertEqual(ok, macula_session_proof_rate:allow(?NODE, ?T0 + 1000)),
+                 ?assertEqual({error, {session_proof_rate, per_node_per_minute}},
+                              macula_session_proof_rate:allow(?NODE, ?T0 + 2000))
+             end).
+
+invalid_limits() ->
+    process_flag(trap_exit, true),
+    [?assertEqual({error, {invalid_limit, Name, Value}}, started_with([{Name, Value}]))
+     || {Name, Value} <- [{session_proofs_per_second, 0}, {session_proofs_per_node_per_minute, -1},
+                          {session_proofs_per_second, <<"30">>}]],
+    process_flag(trap_exit, false).
+
+with_env(Env, Test) ->
+    {ok, Pid} = started_with(Env),
+    try Test() after unlink(Pid), exit(Pid, shutdown), wait_down(Pid), unset(Env) end.
+
+started_with(Env) ->
+    [ok = application:set_env(macula, Name, Value) || {Name, Value} <- Env],
+    Started = macula_session_proof_rate:start_link(),
+    unset_on_error(Started, Env).
+
+unset_on_error({ok, _} = Started, _Env) -> Started;
+unset_on_error(Error, Env) -> unset(Env), Error.
+
+unset(Env) ->
+    [ok = application:unset_env(macula, Name) || {Name, _} <- Env],
+    ok.
 
 wait_down(Pid) ->
     Ref = erlang:monitor(process, Pid),

@@ -51,7 +51,8 @@
     object_refused/2,
     refusals/1,
     forget_v5_peer/1,
-    handshake_counters/0
+    handshake_counters/0,
+    session_proof_limits/0
 ]).
 
 %% Exports with no caller inside macula yet: macula-station's observer relays
@@ -289,6 +290,14 @@ forget_v5_peer(<<_:256>> = NodeId) ->
 -spec handshake_counters() -> #{macula_peer_versions:counter() => non_neg_integer()}.
 handshake_counters() ->
     macula_peer_versions:counters().
+
+%% @doc The session proof limits in force on this station, beside the
+%% `session_proof_rate' refusals `handshake_counters/0' counts: the macula
+%% application environment's `session_proofs_per_node_per_minute' and
+%% `session_proofs_per_second', read at start.
+-spec session_proof_limits() -> macula_session_proof_rate:limits().
+session_proof_limits() ->
+    macula_session_proof_rate:limits().
 
 %% @doc Close a dedicated stream, one obtained from `open_dedicated_stream/1'
 %% or one the peer opened, gracefully: data already written still goes out,
