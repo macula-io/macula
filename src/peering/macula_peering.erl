@@ -49,7 +49,9 @@
     async_relay_on_stream/3,
     close_dedicated_stream/1,
     object_refused/2,
-    refusals/1
+    refusals/1,
+    forget_v5_peer/1,
+    handshake_counters/0
 ]).
 
 %% Exports with no caller inside macula yet: macula-station's observer relays
@@ -266,6 +268,27 @@ object_refused(Conn, Kind) when is_pid(Conn) ->
 -spec refusals(pid()) -> #{counts := #{atom() => pos_integer()}, charged := non_neg_integer()}.
 refusals(Conn) when is_pid(Conn) ->
     gen_statem:call(Conn, refusals).
+
+%% @doc Forget that the node NodeId completed a version 5 handshake with this
+%% node, so it is dialled again after it refuses version 5. Until then a
+%% station rolled back below its first v5 release is refused by every peer
+%% that saw it on v5 (`v5_downgrade_refused'), because that refusal is also
+%% what stops a downgrade (plans/DESIGN_NEIGHBOUR_CHANNEL_BINDING.md
+%% section 3). An operator action for a deliberate rollback, never
+%% automatic. It reaches only this node: a third-party client that saw the
+%% station on v5 refuses it until that client restarts, which is why a
+%% station's first v5 release is its rollback floor.
+-spec forget_v5_peer(<<_:256>>) -> ok.
+forget_v5_peer(<<_:256>> = NodeId) ->
+    macula_peer_versions:forget_v5_peer(NodeId).
+
+%% @doc This node's handshake counters since it started: connections by
+%% version, the old path's control frames, v4 fallbacks, refused downgrades
+%% and session proof refusals by reason (plans/DESIGN_NEIGHBOUR_CHANNEL_BINDING.md
+%% section 6).
+-spec handshake_counters() -> #{macula_peer_versions:counter() => non_neg_integer()}.
+handshake_counters() ->
+    macula_peer_versions:counters().
 
 %% @doc Close a dedicated stream, one obtained from `open_dedicated_stream/1'
 %% or one the peer opened, gracefully: data already written still goes out,
