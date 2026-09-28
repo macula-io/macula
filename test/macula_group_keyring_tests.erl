@@ -44,7 +44,8 @@ keyring_test_() ->
       fun a_pinned_distributor_is_the_only_one_asked/1,
       fun a_reply_whose_acceptance_is_not_the_protocols_is_refused/1,
       fun a_reply_for_another_prefix_is_refused/1,
-      fun the_policy_covering_a_topic_is_its_longest_joined_prefix/1]}.
+      fun the_policy_covering_a_topic_is_its_longest_joined_prefix/1,
+      fun a_held_group_is_answered_while_the_keyring_is_pulling/1]}.
 
 %%--------------------------------------------------------------------
 %% Fixture: a clock, the real distributor behind a fake wire, and a
@@ -61,7 +62,7 @@ setup() ->
                           #{org => <<"acme">>, policy => required, rotate_after_ms => ?R, now => Clock,
                             membership => fun(_Caller) -> ok end}),
     Handler = macula_group_keys:handler(Distributor),
-    {ok, Keyring} = macula_group_keyring:start_link(
+    {ok, KeyringPid} = macula_group_keyring:start_link(
                       #{now => Clock,
                         call => fun(Realm, Procedure, Payload, Opts) ->
                                     ets:insert(Log, {call, erlang:unique_integer([monotonic]),
@@ -73,9 +74,10 @@ setup() ->
                                                          {DelayMs, Msg}})
                                     end,
                         uniform => fun() -> 0.5 end}),
-    #{keyring => Keyring, distributor => Distributor, now => Now, log => Log, script => Script}.
+    #{keyring => macula_group_keyring:handle(KeyringPid), pid => KeyringPid, distributor => Distributor, now => Now,
+      log => Log, script => Script}.
 
-cleanup(#{keyring := Keyring, distributor := Distributor, log := Log, script := Script}) ->
+cleanup(#{pid := Keyring, distributor := Distributor, log := Log, script := Script}) ->
     [begin unlink(P), exit(P, shutdown) end || P <- [Keyring, Distributor]],
     ets:delete(Log),
     ets:delete(Script).
@@ -116,7 +118,7 @@ publish_epoch(#{keyring := K}) -> macula_group_keyring:publish_epoch(K, ?REALM, 
 open_epoch(#{keyring := K}, Id, Publisher) -> macula_group_keyring:open_epoch(K, ?REALM, ?PREFIX, Id, Publisher).
 
 %% Wakes the keyring as its scheduler would have, for the last thing it asked.
-wake(#{keyring := K} = W) ->
+wake(#{pid := K} = W) ->
     {_Delay, Msg} = lists:last(schedules(W)),
     K ! Msg,
     _ = sys:get_state(K),
@@ -309,3 +311,26 @@ the_policy_covering_a_topic_is_its_longest_joined_prefix(#{keyring := K} = W) ->
         ?assertEqual(none, macula_group_keyring:policy(K, ?REALM, <<"io.macula/acme/chatter/x_v1">>)),
         ?assertEqual(none, macula_group_keyring:policy(K, <<8:256>>, ?TOPIC))
     end).
+
+%% A pull can take a distributor's whole deadline. Publishing, opening a held epoch and reading a policy never wait on
+%% one: they read what the keyring last stored, so a slow distributor for one group stalls no publisher or subscriber.
+a_held_group_is_answered_while_the_keyring_is_pulling(#{keyring := K} = W) ->
+    ?_test(begin
+        {ok, _} = join(W),
+        {ok, #{id := Id}} = publish_epoch(W),
+        Parent = self(),
+        queue(W, [{reply, fun(Reply) -> Parent ! pulling, receive release -> Reply end end}]),
+        _Joiner = spawn(fun() -> Parent ! {joined, macula_group_keyring:join(K, ?REALM, <<?PREFIX/binary, "/room">>, #{})} end),
+        receive pulling -> ok after 5000 -> error(never_pulled) end,
+        T0 = erlang:monotonic_time(millisecond),
+        Answers = {publish_epoch(W), open_epoch(W, Id, <<1:256>>), macula_group_keyring:policy(K, ?REALM, ?TOPIC)},
+        Elapsed = erlang:monotonic_time(millisecond) - T0,
+        flush_release(W),
+        ?assertMatch({{ok, #{id := Id}}, {ok, #{id := Id}}, {ok, ?PREFIX, required}}, Answers),
+        ?assert(Elapsed < 1000)
+    end).
+
+%% The scripted reply blocks in the keyring's own call, so the release goes to the keyring.
+flush_release(#{pid := K}) ->
+    K ! release,
+    receive {joined, _} -> ok after 5000 -> ok end.
