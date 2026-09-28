@@ -17,13 +17,17 @@
 %% held epoch until its acceptance ends; an unknown id is pulled by id, at most three unknown ids per publisher per
 %% epoch, and an `unknown_epoch' answer is remembered until the id could no longer be accepted anyway.
 %%
+%% Only a pull goes through the keyring's process. What it holds is stored in a table it owns, read through a handle
+%% (`handle/1'): publishing under a current epoch, opening under a held one and reading a group's policy never wait on
+%% a pull, which can take the distributor's whole deadline, for this group or another.
+%%
 %% Refusals and failures are named by the closed set of §7: `not_a_member', `membership_unknown', `unknown_epoch',
 %% `epoch_expired', and `no_distributor' for a distributor that cannot be found, reached or understood. Epoch keys are
 %% held in memory only.
 -module(macula_group_keyring).
 -behaviour(gen_server).
 
--export([start_link/1, join/4, leave/3, publish_epoch/3, open_epoch/5, policy/3]).
+-export([start_link/1, handle/1, join/4, leave/3, publish_epoch/3, open_epoch/5, policy/3]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2]).
 
 -type policy() :: required | preferred | off.
@@ -33,7 +37,8 @@
                      schedule => fun((non_neg_integer(), term()) -> term()),
                      uniform => fun(() -> float())}.
 -type join_options() :: #{ucan_token => binary(), distributor => <<_:256>>}.
--export_type([options/0, join_options/0, policy/0, reason/0]).
+-opaque keyring() :: #{pid := pid(), table := ets:tid(), now := fun(() -> integer())}.
+-export_type([options/0, join_options/0, policy/0, reason/0, keyring/0]).
 
 -define(PULL_TIMEOUT_MS, 15000).
 -define(FIRST_BACKOFF_MS, 1000).
@@ -48,33 +53,66 @@
 start_link(Opts) when is_map(Opts) ->
     gen_server:start_link(?MODULE, Opts, []).
 
+%% @doc The handle every other function takes: the keyring's process, and the table it stores its groups in.
+-spec handle(pid()) -> keyring().
+handle(Pid) ->
+    gen_server:call(Pid, handle).
+
 %% @doc Join the group `Prefix' in `Realm': pull its current epoch and hold it. A group already held is not pulled
 %% again. `ucan_token' is the org's grant, `distributor' pins the distributor's node id.
--spec join(pid(), binary(), binary(), join_options()) -> {ok, policy()} | {error, reason() | {invalid_option, group}}.
-join(Keyring, Realm, Prefix, Opts) ->
-    gen_server:call(Keyring, {join, Realm, Prefix, Opts}, infinity).
+-spec join(keyring(), binary(), binary(), join_options()) ->
+          {ok, policy()} | {error, reason() | {invalid_option, group}}.
+join(#{pid := Pid}, Realm, Prefix, Opts) ->
+    gen_server:call(Pid, {join, Realm, Prefix, Opts}, infinity).
 
 %% @doc Stop holding the group, and erase its keys.
--spec leave(pid(), binary(), binary()) -> ok.
-leave(Keyring, Realm, Prefix) ->
-    gen_server:call(Keyring, {leave, Realm, Prefix}).
+-spec leave(keyring(), binary(), binary()) -> ok.
+leave(#{pid := Pid}, Realm, Prefix) ->
+    gen_server:call(Pid, {leave, Realm, Prefix}, infinity).
 
-%% @doc The epoch a publisher seals under now.
--spec publish_epoch(pid(), binary(), binary()) ->
+%% @doc The epoch a publisher seals under now: read from the table while one is current; otherwise the keyring pulls.
+-spec publish_epoch(keyring(), binary(), binary()) ->
           {ok, macula_group_epoch:epoch()} | {error, reason() | not_joined}.
-publish_epoch(Keyring, Realm, Prefix) ->
-    gen_server:call(Keyring, {publish_epoch, Realm, Prefix}, infinity).
+publish_epoch(#{pid := Pid, table := Table, now := Now}, Realm, Prefix) ->
+    publish_from_table(stored_epochs(Table, {Realm, Prefix}), Now(), Pid, Realm, Prefix).
 
-%% @doc The epoch `Id' an event from `Publisher' was sealed under, if it may be opened now.
--spec open_epoch(pid(), binary(), binary(), <<_:64>>, <<_:256>>) ->
+publish_from_table({ok, Epochs}, Now, Pid, Realm, Prefix) ->
+    current_or_pulled(macula_group_epoch:for_publish(Epochs, Now), Pid, Realm, Prefix);
+publish_from_table(not_joined, _Now, _Pid, _Realm, _Prefix) ->
+    {error, not_joined}.
+
+current_or_pulled({ok, Epoch}, _Pid, _Realm, _Prefix) -> {ok, Epoch};
+current_or_pulled({error, no_current_epoch}, Pid, Realm, Prefix) ->
+    gen_server:call(Pid, {publish_epoch, Realm, Prefix}, infinity).
+
+%% @doc The epoch `Id' an event from `Publisher' was sealed under, if it may be opened now: read from the table when it
+%% is held; otherwise the keyring pulls it by id, within its bounds.
+-spec open_epoch(keyring(), binary(), binary(), <<_:64>>, <<_:256>>) ->
           {ok, macula_group_epoch:epoch()} | {error, reason() | not_joined}.
-open_epoch(Keyring, Realm, Prefix, Id, Publisher) ->
-    gen_server:call(Keyring, {open_epoch, Realm, Prefix, Id, Publisher}, infinity).
+open_epoch(#{pid := Pid, table := Table, now := Now}, Realm, Prefix, Id, Publisher) ->
+    open_from_table(stored_epochs(Table, {Realm, Prefix}), Now(), Pid, {Realm, Prefix, Id, Publisher}).
+
+open_from_table({ok, Epochs}, Now, Pid, {_Realm, _Prefix, Id, _Publisher} = Ask) ->
+    held_or_pulled(lists:search(fun(#{id := E}) -> E =:= Id end, Epochs), Now, Pid, Ask);
+open_from_table(not_joined, _Now, _Pid, _Ask) ->
+    {error, not_joined}.
+
+held_or_pulled({value, Epoch}, Now, _Pid, _Ask) ->
+    acceptable(macula_group_epoch:acceptable(Epoch, Now), Epoch);
+held_or_pulled(false, _Now, Pid, {Realm, Prefix, Id, Publisher}) ->
+    gen_server:call(Pid, {open_epoch, Realm, Prefix, Id, Publisher}, infinity).
 
 %% @doc The joined group covering `Topic' (its longest joined prefix) and that group's policy, or `none'.
--spec policy(pid(), binary(), binary()) -> {ok, binary(), policy()} | none.
-policy(Keyring, Realm, Topic) ->
-    gen_server:call(Keyring, {policy, Realm, Topic}).
+-spec policy(keyring(), binary(), binary()) -> {ok, binary(), policy()} | none.
+policy(#{table := Table}, Realm, Topic) ->
+    covering([{byte_size(P), P, Policy} || {{_R, P}, Policy, _Epochs} <- ets:match_object(Table, {{Realm, '_'}, '_', '_'}),
+                                           under(Topic, P)]).
+
+stored_epochs(Table, Key) ->
+    stored_row(ets:lookup(Table, Key)).
+
+stored_row([{_Key, _Policy, Epochs}]) -> {ok, Epochs};
+stored_row([]) -> not_joined.
 
 %% @private
 init(Opts) ->
@@ -85,22 +123,22 @@ init(Opts) ->
                                        end),
            schedule => maps:get(schedule, Opts, fun(DelayMs, Msg) -> erlang:send_after(DelayMs, self(), Msg) end),
            uniform => maps:get(uniform, Opts, fun rand:uniform/0),
+           table => ets:new(?MODULE, [protected, set, {read_concurrency, true}]),
            groups => #{}}}.
 
 %% @private
+handle_call(handle, _From, #{table := Table, now := Now} = State) ->
+    {reply, #{pid => self(), table => Table, now => Now}, State};
 handle_call({join, Realm, Prefix, Opts}, _From, State) ->
     joined(org_of(Prefix), maps:find({Realm, Prefix}, maps:get(groups, State)), Realm, Prefix, Opts, State);
-handle_call({leave, Realm, Prefix}, _From, #{groups := Groups} = State) ->
+handle_call({leave, Realm, Prefix}, _From, #{groups := Groups, table := Table} = State) ->
+    true = ets:delete(Table, {Realm, Prefix}),
     {reply, ok, State#{groups := maps:remove({Realm, Prefix}, Groups)}};
 handle_call({publish_epoch, Realm, Prefix}, _From, State) ->
     with_group({Realm, Prefix}, State, fun(Group) -> publishing(Group, now(State), {Realm, Prefix}, State) end);
 handle_call({open_epoch, Realm, Prefix, Id, Publisher}, _From, State) ->
     with_group({Realm, Prefix}, State,
-               fun(Group) -> opening(Id, Publisher, Group, now(State), {Realm, Prefix}, State) end);
-handle_call({policy, Realm, Topic}, _From, #{groups := Groups} = State) ->
-    {reply, covering([{byte_size(P), P, Policy} || {{R, P}, #{policy := Policy}} <- maps:to_list(Groups),
-                                                   R =:= Realm, under(Topic, P)]),
-     State}.
+               fun(Group) -> opening(Id, Publisher, Group, now(State), {Realm, Prefix}, State) end).
 
 %% @private
 handle_cast(_Msg, State) -> {noreply, State}.
@@ -263,7 +301,9 @@ backed_off(#{backoff := Backoff, rotation := R} = Group, Key, #{schedule := Sche
 
 rotation(#{issued_at := I, publish_until := P}) -> P - I.
 
-stored(Group, Key, #{groups := Groups} = State) ->
+%% Every change to a group is stored in the table the handle reads, as it is kept here.
+stored(#{policy := Policy, epochs := Epochs} = Group, Key, #{groups := Groups, table := Table} = State) ->
+    true = ets:insert(Table, {Key, Policy, Epochs}),
     State#{groups := Groups#{Key => Group}}.
 
 %%--------------------------------------------------------------------
