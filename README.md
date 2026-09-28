@@ -18,6 +18,15 @@
 
 ---
 
+> **13.2.0: sealed pubsub groups.** `group => Prefix` on `macula:publish/5`
+> and `macula:subscribe/5` seals a group's events to its members, with keys
+> the org's distributor (`macula_group_keys`) hands to members that hold the
+> org's grant and a live realm membership. An event a subscriber cannot open
+> arrives as `macula_event_unopened`, never silently. Like sealed calls it
+> waits for `kem_advertise`. See the
+> [Pub/Sub guide](docs/guides/pubsub/PUBSUB_GUIDE.md) and
+> [the design](https://github.com/macula-io/macula/blob/main/plans/DESIGN_E2E_SEALED_PUBSUB.md).
+
 > **13.1.0: knowing a call was sealed.** A caller can ask for the seal
 > report of a call (`report => true` on `macula:call/6` or `call_station/8`)
 > or a stream (`macula:stream_report/1`): `sealed` 1 with the id of the KEM

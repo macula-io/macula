@@ -380,6 +380,88 @@ seq to order or drop; in `as_arrives` the dedup layer is the only filter.
 
 ---
 
+## Sealed groups
+
+A publication is signed but, by default, readable by every station it
+passes through. A **sealed group** keeps a group's events readable only by
+the group's members: stations still route and deliver them, and see who
+published what, where and when, but not the payload.
+
+**A group is a topic prefix** whose second segment is its org:
+`io.macula/acme/chat` is owned by `acme`, and covers every topic below it on a
+segment boundary (`io.macula/acme/chat/room/said_v1`, not
+`io.macula/acme/chatter/...`). The org runs one **distributor**, the
+procedure `acme/group_keys_v1` (`macula_group_keys`), which hands the group's
+keys to its members.
+
+```erlang
+%% A member: publish and subscribe under the group. The pool joins it first,
+%% pulling the group's key with the org's grant.
+Opts = #{group => <<"io.macula/acme/chat">>, ucan_token => OrgGrant},
+ok = macula:publish(Pool, Realm, <<"io.macula/acme/chat/room/said_v1">>, Payload, Opts),
+{ok, Sub} = macula:subscribe(Pool, Realm, <<"io.macula/acme/chat/room/said_v1">>, self(), Opts),
+receive
+    {macula_event, Sub, Topic, Payload, #{sealed := 1, seal_key_id := _Epoch}} -> ok;
+    {macula_event_unopened, Sub, Topic, #{publisher := _, seal_key_id := _, reason := _}} -> ok
+end.
+```
+
+**What it rests on.** This release builds sealed groups in the Erlang SDK.
+No confidentiality claim is made for the fleet before the scheme is tested
+across SDKs and measured (D11); the design names what each guarantee rests
+on.
+
+- **The key pull is sealed, and so is every event.** The member's pull is a
+  sealed call to the distributor's own KEM key, so no station on the path
+  sees an epoch key. Each publisher seals under its own subkey of the epoch
+  key, bound to the publication's realm, topic, publisher, seq and
+  `published_at`: an event moved to another topic, or replayed with another
+  seq, does not open.
+- **The distributor is the org's.** A member accepts a distributor only when
+  its advertisement verifies under the chain the realm operator signed (the
+  org directory, then the org's delegation of the node), for exactly
+  `<org>/group_keys_v1`. `distributor => NodeId` pins one.
+- **Membership is checked on every pull.** The distributor admits a caller
+  only with the org's grant (the call's own UCAN, checked by macula before the
+  handler runs) and a live realm membership, read from the realm's slot at
+  the time of the call, past epochs included. An application keeps a
+  **removed set** for members it expels: they are refused every epoch at once.
+- **Keys rotate.** An epoch publishes for 15 minutes (`rotate_after_ms`), and
+  every holder pulls the next one at a random instant in the last third, so a
+  rotation is spread out rather than a herd. A removed member reads nothing
+  published under an epoch it did not already hold: at most 85 minutes after
+  its removal, plus clock skew. What it already read, it keeps.
+
+**Fail closed.** A publish or subscribe under a group whose distributor cannot
+be found, reached or understood, or which refuses the member, fails as
+`{error, {group, Reason}}`. A publish that names no group under a prefix this
+node holds is refused as `{error, {confidentiality, {group_held, Prefix}}}`
+rather than sent in the clear. When the org's policy is `required`, a node
+holding the group refuses clear events under the prefix on every
+subscription, and logs the publisher.
+
+**An event that cannot be opened is never silent.** The subscriber gets
+`{macula_event_unopened, SubRef, Topic, #{publisher, seal_key_id, reason}}`
+once, and nothing of the payload. `reason` is one of `unknown_epoch`,
+`epoch_expired`, `not_a_member`, `membership_unknown`, `no_distributor`,
+`no_group` (a sealed event on a subscription that named no group) and
+`tag_invalid`. A subscriber that missed an epoch (offline across a rotation)
+pulls it by id, at most three unknown ids per publisher per epoch.
+
+**Running a distributor.** The org's application starts
+`macula_group_keys:start_link(#{org => <<"acme">>, policy => required, ...})`
+and advertises its `handler/1` as `acme/group_keys_v1` with the advertise
+policy `{realm_member_required, OrgKeyId, <<"group_keys">>}` and a
+`confidential => required` spec. Epoch keys live in memory only: a restarted
+distributor starts a new epoch, and a member that never pulled a lost one
+reports its events `unknown_epoch`.
+
+The full design, with what each guarantee rests on, is
+`plans/DESIGN_E2E_SEALED_PUBSUB.md`; the byte-exact payloads and the org
+grant's verdicts are `test/vectors/E2E_SEAL_V1.md`, "Sealed groups".
+
+---
+
 ## Topic naming reference
 
 Quick reference. Full specification:

@@ -55,6 +55,56 @@ dials 5 and falls back to 4 once, only on `unsupported_version`, so no peer is r
 
 ---
 
+## [13.2.0] - 2026-09-29
+
+Sealed pubsub groups: a group's events readable only by its members, with keys the org's distributor hands out
+(plans/DESIGN_E2E_SEALED_PUBSUB.md). Built in the Erlang SDK and pinned by vectors for the others. No confidentiality
+claim is made for the fleet before the scheme is tested across SDKs and measured (D11). A distributor names its KEM
+key only with `kem_advertise` enabled, so groups wait for the same switch sealed calls do. No wire change: a sealed
+publication was already a valid one.
+
+### Added
+
+- **Sealed groups.** `macula:publish/5` and `macula:subscribe/5` take `group => Prefix`, a topic prefix whose second
+  segment is its org, with `ucan_token` (the org's grant) and `distributor` (a pinned node id). The pool joins the
+  group first, pulling its epoch keys from the org's distributor `<org>/group_keys_v1` over a call sealed to the
+  distributor's KEM key, and a refusal fails the call closed as `{error, {group, Reason}}`. A topic outside the prefix,
+  or a prefix with no org segment, is `{error, {invalid_option, group}}`.
+  - A publish is sealed under the group's current epoch by the link, with the publisher's subkey of the epoch key, a
+    fresh nonce and the event AAD, and carries `sealed` in place of `payload`.
+  - A group subscription's events are opened by a process of their own (`macula_group_opener`): an opened event's
+    meta says `sealed => 1` and `seal_key_id`; one that cannot be opened arrives once as `{macula_event_unopened,
+    SubRef, Topic, #{publisher, seal_key_id, reason}}`, with `reason` from a closed set, and nothing of its payload.
+  - A node holding a group whose policy is `required` refuses clear events under its prefix on every subscription,
+    counted and logged naming the publisher. A clear publish under a held prefix is refused as `{error,
+    {confidentiality, {group_held, Prefix}}}`.
+- **`macula_group_keys`**, a sealed group's distributor: epochs of 15 minutes with independent random keys and ids,
+  the next handed out in the current's last third, and every pull admitted only with the org's grant (checked by the
+  advertise policy) and a live realm membership read from the realm's slot, past epochs included, minus an
+  application's removed set. Refusals are `handler_error` with the reason as detail.
+- **`macula_group_keyring`**, a node's keys for the groups it joined, one per pool: re-pulls at a random instant in
+  every ahead window, retries with backoff, keeps the policy monotonic, bounds unknown-id pulls to three per publisher
+  per epoch, and is read through a handle so that only a pull ever waits. `macula_group_epoch` and
+  `macula_group_event` are its pure parts.
+- **`macula:call/6` takes `ucan_token`**, presented to every station call it makes, the resealed one included.
+- **`macula_subscriber` takes an optional `handle_unopened/3`**; without it the subscriber logs an unopened event and
+  serves on. `subscribe_callback/4`'s receiver logs and drops one.
+- **Every event's meta carries `published_at`**, and `sealed` (0 or 1).
+- **Vectors:** `test/vectors/e2e_seal_v1_group_keys.json` pins the key pull's CALL and RESULT plaintexts and one
+  org-issued `group_keys` UCAN per profile with its verdicts (`test/vectors/E2E_SEAL_V1.md`, "Sealed groups").
+
+### Changed
+
+- **A sealed EVENT reaches the pool** instead of being refused at the link, so a subscription with no group is told
+  (`reason => no_group`) rather than left with nothing.
+
+### Fixed
+
+- **A pattern subscription's flushed events carry their topic** (#49). An event the ordering buffered and released
+  on `order_timeout_ms` was sent with the subscription's pattern; each event now keeps its topic through the ordering.
+
+---
+
 ## [13.1.0] - 2026-09-28
 
 A caller can learn whether the exchange behind its result was sealed, and to which key. Opt-in: no 13.0 caller's
