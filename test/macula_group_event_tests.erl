@@ -25,25 +25,25 @@ published(Key, Epoch, Payload) ->
     Verified.
 
 a_sealed_publication_verifies_with_sealed_and_no_payload_test() ->
-    Key = macula_node_keys:generate(identity, pq_pure),
+    {ok, Key} = macula_node_keys:generate(identity, pq_pure),
     #{id := Id} = Epoch = epoch(),
     Verified = published(Key, Epoch, #{{text, <<"said">>} => {text, <<"hello">>}}),
     ?assertNot(maps:is_key(payload, Verified)),
     ?assertMatch(#{sealed := #{scheme := 1, key_id := Id, nonce := <<_:96>>, ct := _}}, Verified).
 
 a_member_holding_the_epoch_opens_it_test() ->
-    Key = macula_node_keys:generate(identity, pq_pure),
+    {ok, Key} = macula_node_keys:generate(identity, pq_pure),
     Epoch = epoch(),
     Verified = published(Key, Epoch, #{{text, <<"said">>} => {text, <<"hello">>}}),
     ?assertEqual({ok, #{{text, <<"said">>} => {text, <<"hello">>}}}, macula_group_event:open(Epoch, Verified)).
 
 another_epochs_key_does_not_open_it_test() ->
-    Key = macula_node_keys:generate(identity, pq_pure),
+    {ok, Key} = macula_node_keys:generate(identity, pq_pure),
     Verified = published(Key, epoch(), <<"x">>),
     ?assertEqual({error, tag_invalid}, macula_group_event:open(epoch(), Verified)).
 
 a_routing_field_moved_does_not_open_it_test() ->
-    Key = macula_node_keys:generate(identity, pq_pure),
+    {ok, Key} = macula_node_keys:generate(identity, pq_pure),
     Epoch = epoch(),
     Verified = published(Key, Epoch, <<"x">>),
     [?assertEqual({error, tag_invalid}, macula_group_event:open(Epoch, Verified#{F => V}))
@@ -51,14 +51,14 @@ a_routing_field_moved_does_not_open_it_test() ->
                    {publisher, <<1:256>>}, {realm, <<8:256>>}]].
 
 every_seal_draws_a_fresh_nonce_test() ->
-    Key = macula_node_keys:generate(identity, pq_pure),
+    {ok, Key} = macula_node_keys:generate(identity, pq_pure),
     Epoch = epoch(),
     #{sealed := #{nonce := N1}} = published(Key, Epoch, <<"x">>),
     #{sealed := #{nonce := N2}} = published(Key, Epoch, <<"x">>),
     ?assertNotEqual(N1, N2).
 
 a_clear_publication_is_not_opened_test() ->
-    Key = macula_node_keys:generate(identity, pq_pure),
+    {ok, Key} = macula_node_keys:generate(identity, pq_pure),
     Frame = macula_frame:publish(#{realm => ?REALM, topic => ?TOPIC, seq => 3, published_at => ?NOW,
                                    payload => <<"x">>}, Key),
     {ok, Verified} = macula_frame:verify_publication(Frame, pq_pure, ?NOW),
