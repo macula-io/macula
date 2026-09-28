@@ -8,7 +8,7 @@ classical-strength authenticity D17 bought with it.**
 | Kind | CLAIM (an authentication argument), then BUILD |
 | Amends | D17 (neighbour signatures); takes D18 (the EU session proof) from "if ever taken" to built |
 | Milestone | M2 |
-| Status | Draft (Venus, 2026-09-29), for Mercurius (owner), Mars (station), then one Fable round; Saturnus words the register |
+| Status | Draft (Venus, 2026-09-29): Mars approved the station side; Mercurius (owner) to read; then one Fable round; Saturnus words the register |
 | Written against | macula v13.1.0 (47ab941e), macula-pqc v0.3.0, macula-go v0.19.0 |
 
 ---
@@ -51,6 +51,8 @@ authenticate every frame after it. This is D18's session proof, taken.
 - **The station's half.** HELLO, in version 5, carries `session_proof`: a signature by the station's identity key
   (composite in pq_hybrid) over `MACULA-PQ-SESSION-PROOF-V1 || 0x00 || E || SHA-384(challenge) || SHA-384(CONNECT) ||
   station node_id || client node_id || accepted capabilities`. The client verifies it before it acts on any frame.
+  The label gives the proof its own domain: no record, statement or frame signature uses it, so the identity key's
+  signature over it can never be taken for one of those, or one of those for it.
 - **After HELLO.** With both proofs verified, neither end signs or expects a neighbour signature: control frames
   travel as pq_pure's do, `{version, frame_type, ...fields}`, on the control stream. A neighbour signature on a v5
   connection is `malformed_frame`, as a missing one is on v4.
@@ -72,6 +74,13 @@ authenticate every frame after it. This is D18's session proof, taken.
   replayed, reordered or injected packet. That is what D17's `connection` hash and per-direction `seq` checked per
   frame (Mars's requirement 2): a frame from another connection cannot decrypt, and a replay or reorder cannot reach
   the stream. The connection still closes on any refusal, as now.
+- **Signing cost as an attack surface (Mars).** The station verifies the client's CONNECT proof (one composite verify,
+  about 0.17 ms) BEFORE it signs `session_proof` (one composite sign, 6 to 10 ms), so only a client that has just
+  produced a valid composite proof over this session makes the station sign, once. That client paid the same RSA-4096
+  sign to get there. For comparison, v4 signs nothing per connection in the handshake (its challenge material is
+  precomputed by `macula_statement_issuer`), but signs every control frame it sends, so today a peer can make a
+  station sign once per `ping` over one connection, at no cost of its own. v5 removes that. Session proofs are also
+  rate-limited per client node_id and in total, refused with the named reason `session_proof_rate` and counted (§6).
 - The relay trust D17 carries over. A station takes a relayed HyParView or Plumtree control frame with the relay's
   origin as its sender (`relayed_without_signature/1`), because the relay authenticated the originating connection.
   It still does, now by the session proof instead of per-frame signatures.
@@ -84,10 +93,14 @@ Handshake frames decode strictly against fixed layouts, and the handshake versio
 - **Stations first** accept versions 4 and 5 (Mars's requirement 4). A v4 CONNECT gets today's handshake and
   per-frame D17; a v5 CONNECT gets the session proof and no per-frame signatures.
 - **Clients** (every SDK, and a station dialling another) send v5. Refused `unsupported_version` by an old peer, they
-  retry once with v4 and count it. That is safe: forcing the fallback only brings back v4's per-frame signatures,
+  retry once with v4, always, with no configuration flag, and count it. Only `unsupported_version` triggers the retry;
+  every other refusal is final. That is safe: forcing the fallback only brings back v4's per-frame signatures,
   which are secure, so a downgrade costs CPU, never authenticity.
 - A peer that offers neither is refused with the named reason `unsupported_version`, as now.
 - **A later release drops v4**, once the old-path counter (§6) reads zero across the fleet.
+- **Why stations accept both:** the v3 bump refused mixed peers in both directions, so published clients were locked
+  out of the fleet until they upgraded (a partition). Accepting v4 and v5 on stations first means no peer is refused
+  during the roll.
 - **In scope:** macula (Erlang), then every SDK: macula-go (and through libmacula TypeScript, Python and .NET), and
   macula-rust. Every stack has the exporter: quinn 0.11 `export_keying_material` (Erlang NIF, Rust) and quic-go's
   `ConnectionState().TLS.ExportKeyingMaterial` (Go). D18 was held back because aioquic and .NET QUIC had none; both
@@ -128,7 +141,7 @@ with hybrid signatures, instead of once per frame.
   `macula_peering:send_frame/2` and receives verified frames as messages, so the station changes only its macula
   dependency.
 - New counters in `macula_peering`: connections by handshake version (v4, v5), `session_proof` refusals by reason
-  (`session_proof_invalid`, `session_proof_missing`, `exporter_unavailable`), v4 fallbacks after
+  (`session_proof_invalid`, `session_proof_missing`, `session_proof_rate`, `exporter_unavailable`), v4 fallbacks after
   `unsupported_version`, and control frames received on v4 connections (the old-path counter).
 - At startup, macula refuses to run pq_hybrid v5 unless the QUIC provider's key exchange groups are exactly
   macula-pqc's hybrid ML-KEM groups (read from the NIF), so a classical-only build can never carry v5.
@@ -141,6 +154,10 @@ with hybrid signatures, instead of once per frame.
 - **Per connection:** the station signs one composite `session_proof` (one composite sign, within Mars's budget) and
   verifies the client's proof as now. The client verifies one composite signature more. Two exporter computations.
 - **Measured before release:** per-frame cost, per-connection handshake time, and Pluto's N=40 boot CPU.
+- **Connection churn (Mars).** macula-station 0.7.1 closes lookup-only DHT connections after about 30 s idle and dials
+  them again later, so handshakes per station go up just as v5 moves the cost from frames to handshakes. The
+  measurement records handshakes per station per minute at N=40 on 0.7.1, times the composite-sign cost, so the
+  station's lookup-only window is set with that number in hand.
 
 ## 8. Tests, red first
 
@@ -154,13 +171,18 @@ with hybrid signatures, instead of once per frame.
   refused, retries v4 once, counted.
 - The Erlang, Go and Rust exporters agree byte for byte on a shared vector (label, context, session), and a
   cross-stack interop run connects each SDK to an Erlang station on v5, both profiles.
-- A pq_hybrid v5 node refuses to start with a key exchange group list other than macula-pqc's.
+- A pq_hybrid v5 node refuses to start with a key exchange group list other than macula-pqc's, and CI asserts that
+  the release image starts, so a station that would refuse on the fleet is caught before it ships, not as an outage.
+- The station signs `session_proof` only after the CONNECT proof verifies: an invalid proof gets a refusal and no
+  signature. Session proofs past the per-node or total rate are refused `session_proof_rate` and counted.
+- The v4 retry happens once, only after `unsupported_version`; any other refusal is not retried.
 
-## 9. Open questions for the reviewers
+## 9. Decided in review (Mars, 2026-09-29)
 
-1. **pq_pure on v5?** This note gives v5 to both profiles (one handshake), so pq_pure also gets the session proof: one
-   ML-DSA-87 sign per connection on the station (about 1.1 ms), and a binding to the session instead of only to the
-   leaf certificate. The alternative keeps pq_pure on v4's layout with a profile-specific HELLO.
-2. **The station's proof key:** the identity key (as here) or a per-station CONNECT-like key? D18 says "the CONNECT
-   keys carry it"; a station has no CONNECT key today.
-3. **The fallback retry** on `unsupported_version`: always, or only while a config flag says the fleet is mixed?
+1. **pq_pure moves to v5 too:** one handshake layout and one code path, and a session-bound proof is strictly better
+   than a leaf-bound one. One ML-DSA-87 sign per connection on the station (about 1.1 ms).
+2. **The station's proof key is its identity key**, domain-separated by `MACULA-PQ-SESSION-PROOF-V1` (§3). No new key.
+3. **The v4 retry is always on,** once, only after `unsupported_version`, with no configuration flag: a downgrade
+   costs CPU, never authenticity, and a flag would drift across boxes.
+4. **No explicit per-direction seq is kept:** the ordered control stream, AEAD and packet numbers cover D17's
+   connection and seq checks.
