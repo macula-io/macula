@@ -8,7 +8,7 @@ classical-strength authenticity D17 bought with it.**
 | Kind | CLAIM (an authentication argument), then BUILD |
 | Amends | D17 (neighbour signatures); takes D18 (the EU session proof) from "if ever taken" to built |
 | Milestone | M2 |
-| Status | Draft (Venus, 2026-09-29): Mars approved the station side; Mercurius (owner) to read; then one Fable round; Saturnus words the register |
+| Status | Draft (Venus, 2026-09-29): Mars approved the station side; Mercurius's three required changes in; then one Fable round; Saturnus words the register |
 | Written against | macula v13.1.0 (47ab941e), macula-pqc v0.3.0, macula-go v0.19.0 |
 
 ---
@@ -48,7 +48,7 @@ authenticate every frame after it. This is D18's session proof, taken.
   handshake version 5, also `E` and both ends' `capabilities`:
   `label || 0x00 || nonce || station node_id || client node_id || SHA-384(leaf DER) || SHA-384(challenge) || E ||
   client capabilities || station capabilities`. The label becomes `MACULA-PQ-CONNECT-PROOF-V2`. No new field.
-- **The station's half.** HELLO, in version 5, carries `session_proof`: a signature by the station's identity key
+- **The station's half.** HELLO, in version 5, gains one field, `session_proof`: a signature by the station's identity key
   (composite in pq_hybrid) over `MACULA-PQ-SESSION-PROOF-V1 || 0x00 || E || SHA-384(challenge) || SHA-384(CONNECT) ||
   station node_id || client node_id || accepted capabilities`. The client verifies it before it acts on any frame.
   The label gives the proof its own domain: no record, statement or frame signature uses it, so the identity key's
@@ -70,10 +70,24 @@ authenticate every frame after it. This is D18's session proof, taken.
   authenticated ends hold. Those keys come from the hybrid key exchange, so they hold if either P-384 ECDH or
   ML-KEM-1024 holds. That is the channel's integrity, not a classical-only fallback: Mars's hard condition, met by the
   pinned groups (§2), and asserted at startup (§6).
-- Control frames travel on one QUIC stream, which is reliable and ordered, and QUIC's packet numbers and AEAD refuse a
-  replayed, reordered or injected packet. That is what D17's `connection` hash and per-direction `seq` checked per
-  frame (Mars's requirement 2): a frame from another connection cannot decrypt, and a replay or reorder cannot reach
-  the stream. The connection still closes on any refusal, as now.
+- Control frames travel on the connection's QUIC streams, which are reliable and ordered, and QUIC's packet numbers
+  and AEAD refuse a replayed, reordered or injected 1-RTT packet. That is what D17's `connection` hash and
+  per-direction `seq` checked per frame (Mars's requirement 2): a frame from another connection cannot decrypt, and a
+  replay or reorder cannot reach a stream. The connection still closes on any refusal, as now.
+- **Only 1-RTT, asserted (Mercurius).** QUIC 0-RTT early data is replayable by design, so dropping D17's seq holds
+  only if no frame ever travels in 0-RTT. Nothing in `native/macula_quic` enables early data and rustls defaults
+  `max_early_data_size` to 0, so it is off today; v5 makes it an invariant. A v5 node refuses to start if its QUIC
+  configuration offers or accepts 0-RTT, on both sides, beside the group check (§6), with a test. A resumed (PSK)
+  session presents no certificate; v5 still authenticates it, because both proofs are over that session's own `E`.
+- **A downgrade, and how it is closed (Mercurius).** The v4 fallback's trigger, `unsupported_version`, is a handshake
+  refusal that arrives inside a TLS session before any session proof. An attacker who can forge ML-DSA-87 terminates
+  that TLS session and can inject it. On v4 that attacker, holding both TLS sessions, cannot inject a control frame
+  (the per-frame signatures stop it), but can READ every one: v5 is what defeats that reading. So a forced fallback
+  would give back, against that attacker, the confidentiality of control traffic; per-frame authenticity survives it.
+  v5 closes it: once a client has completed v5 with a station node_id, it refuses a later `unsupported_version` from
+  that node_id for the rest of the run (no retry), counted as `v5_downgrade_refused` (§6), tested (§8). What remains
+  is a first contact with a node never seen on v5 in this run: that one connection can be forced to v4, and
+  against an ML-DSA-breaking attacker its control traffic is readable though still authentic. The register says so.
 - **Signing cost as an attack surface (Mars).** The station verifies the client's CONNECT proof (one composite verify,
   about 0.17 ms) BEFORE it signs `session_proof` (one composite sign, 6 to 10 ms), so only a client that has just
   produced a valid composite proof over this session makes the station sign, once. That client paid the same RSA-4096
@@ -94,10 +108,13 @@ Handshake frames decode strictly against fixed layouts, and the handshake versio
   per-frame D17; a v5 CONNECT gets the session proof and no per-frame signatures.
 - **Clients** (every SDK, and a station dialling another) send v5. Refused `unsupported_version` by an old peer, they
   retry once with v4, always, with no configuration flag, and count it. Only `unsupported_version` triggers the retry;
-  every other refusal is final. That is safe: forcing the fallback only brings back v4's per-frame signatures,
+  every other refusal is final. A node_id already seen on v5 in this run gets no retry (§3). That is safe: forcing the fallback only brings back v4's per-frame signatures,
   which are secure, so a downgrade costs CPU, never authenticity.
 - A peer that offers neither is refused with the named reason `unsupported_version`, as now.
-- **A later release drops v4**, once the old-path counter (§6) reads zero across the fleet.
+- **A later release drops v4**, once the old-path counter (§6) reads zero across the fleet AND `macula_dist_tunnel`
+  runs v5 (Mercurius): the tunnel uses `macula_handshake` but has no D17 path, so it never shows in the counter, and
+  dropping v4 before it moves would break every dist tunnel. It moves by computing `E` with OTP
+  `ssl:export_key_materials/4`.
 - **Why stations accept both:** the v3 bump refused mixed peers in both directions, so published clients were locked
   out of the fleet until they upgraded (a partition). Accepting v4 and v5 on stations first means no peer is refused
   during the roll.
@@ -141,10 +158,12 @@ with hybrid signatures, instead of once per frame.
   `macula_peering:send_frame/2` and receives verified frames as messages, so the station changes only its macula
   dependency.
 - New counters in `macula_peering`: connections by handshake version (v4, v5), `session_proof` refusals by reason
-  (`session_proof_invalid`, `session_proof_missing`, `session_proof_rate`, `exporter_unavailable`), v4 fallbacks after
+  (`session_proof_invalid`, `session_proof_missing`, `session_proof_rate`, `exporter_unavailable`),
+  `v5_downgrade_refused` (an `unsupported_version` from a node_id already seen on v5), v4 fallbacks after
   `unsupported_version`, and control frames received on v4 connections (the old-path counter).
-- At startup, macula refuses to run pq_hybrid v5 unless the QUIC provider's key exchange groups are exactly
-  macula-pqc's hybrid ML-KEM groups (read from the NIF), so a classical-only build can never carry v5.
+- At startup, macula refuses to run v5, in either profile, unless the QUIC provider's key exchange groups are exactly
+  macula-pqc's hybrid ML-KEM groups (read from the NIF), so a classical-only build can never carry v5, and unless
+  0-RTT is neither offered nor accepted (§3).
 
 ## 7. Cost (Mars's requirement 6)
 
@@ -175,7 +194,10 @@ with hybrid signatures, instead of once per frame.
   the release image starts, so a station that would refuse on the fleet is caught before it ships, not as an outage.
 - The station signs `session_proof` only after the CONNECT proof verifies: an invalid proof gets a refusal and no
   signature. Session proofs past the per-node or total rate are refused `session_proof_rate` and counted.
-- The v4 retry happens once, only after `unsupported_version`; any other refusal is not retried.
+- The v4 retry happens once, only after `unsupported_version`; any other refusal is not retried. After a completed v5
+  handshake with a node_id, an `unsupported_version` from it is refused, not retried, and counted.
+- A v5 node configured to offer or accept 0-RTT refuses to start, client side and server side.
+- A resumed session on v5 is authenticated by both proofs over its own exporter value.
 
 ## 9. Decided in review (Mars, 2026-09-29)
 
