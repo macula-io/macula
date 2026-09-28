@@ -77,6 +77,11 @@
     %% difficulty of `macula_node_keys:puzzle_difficulty/0'. Required on
     %% the station role.
     puzzle          => #{mode := macula_handshake:puzzle_mode()},
+    %% The highest handshake version a station answers, 5 unless set. A
+    %% station at 4 answers a v5 CONNECT as a pre-v5 station does, with
+    %% unsupported_version: the mixed fleet's tests run against one
+    %% (plans/DESIGN_NEIGHBOUR_CHANNEL_BINDING.md section 4).
+    max_handshake_version => 4 | 5,
     %% Wall-clock milliseconds, for tests.
     clock           => fun(() -> integer()),
     %% Optional pid notified once when the worker completes the
@@ -157,7 +162,10 @@
     %% dies outright (the dead-but-healthy class — keep-alives defeat
     %% the QUIC idle timer for its full 300s) is reaped within
     %% interval × max_misses. A CALL is understood by every released
-    %% peer, so a mixed-version fleet answers the probe safely.
+    %% peer, so a mixed-version fleet answers the probe safely. On a
+    %% handshake v5 connection the probe is a `liveness_ping' instead,
+    %% answered with `liveness_pong' by the peer's connection itself,
+    %% unsigned and never handed to a controlling process or the DHT.
     liveness_interval_ms => pos_integer(),
     liveness_max_misses  => pos_integer(),
     %% Opt-in: called for every application frame this connection writes
@@ -207,6 +215,11 @@
     expect           :: undefined | opener | challenge | connect | hello,
     %% Client, between CONNECT and HELLO: what HELLO must answer (macula_handshake:read_hello/2).
     expect_hello     :: undefined | macula_handshake:expect_hello(),
+    %% The handshake version this connection completed, and the highest a
+    %% station answers. On version 5 no frame carries a neighbour
+    %% signature: the session proofs authenticated the peer once.
+    version          :: undefined | macula_handshake:version(),
+    max_version = 5  :: macula_handshake:version(),
     leaf             :: undefined | binary(),
     challenge        :: undefined | binary(),
     refusal          :: undefined | term(),
@@ -241,7 +254,8 @@
     %% reads it, and the consecutive unanswered-probe count.
     liveness_interval_ms :: undefined | pos_integer(),
     liveness_max_misses  = 2 :: pos_integer(),
-    liveness_outstanding :: undefined | {<<_:128>>, macula_frame:verified_request()},
+    liveness_outstanding :: undefined | {<<_:128>>, macula_frame:verified_request()}
+                          | {liveness_nonce, <<_:128>>},
     liveness_misses      = 0 :: non_neg_integer(),
     %% The `frame_observer' option, and while a read frame is decoded
     %% for it, its size and the microsecond its decoding began.
@@ -324,6 +338,7 @@ started({ok, Identity, Profile}, ok, #{role := Role} = Opts) ->
         target           = maps:get(target, Opts, undefined),
         expected_node_id = maps:get(expected_node_id, maps:get(target, Opts, #{}), undefined),
         puzzle           = maps:get(mode, maps:get(puzzle, Opts, #{}), undefined),
+        max_version      = maps:get(max_handshake_version, Opts, 5),
         clock            = maps:get(clock, Opts, fun wall_clock_ms/0),
         quic_conn        = maps:get(quic_conn, Opts, undefined),
         buf              = <<>>,
@@ -370,6 +385,13 @@ connecting(info, {quic, connected, Tag, Conn}, #data{dial_tag = Tag} = Data) ->
 connecting(info, {quic, connect_failed, Tag, Reason},
            #data{dial_tag = Tag} = Data) ->
     after_connect({error, Reason}, dial_ended(Data));
+%% After a v4 fallback the refused handshake's QUIC connection is closed and
+%% the dial starts again; its stream's last events arrive here, where no
+%% stream exists yet, and belong to nothing.
+connecting(info, {quic, Event, Stream, _Detail}, #data{quic_stream = undefined})
+  when is_reference(Stream), (Event =:= stream_closed orelse Event =:= peer_send_shutdown
+                              orelse Event =:= send_failed orelse is_binary(Event)) ->
+    keep_state_and_data;
 connecting(info, {'DOWN', Mon, process, _Owner, _Reason},
            #data{owner_mon = Mon} = Data) ->
     {stop, normal, cancel_dial(Data)};
@@ -691,13 +713,14 @@ challenged([], Challenge, #data{quic_conn = Conn} = Data) ->
 challenged(_Early, _Challenge, Data) ->
     closed(unexpected_frame, Data).
 
-client_session({ok, Leaf}, #data{issuer = Issuer, identity = Identity, profile = Profile,
+client_session({ok, Leaf}, #data{issuer = Issuer, identity = Identity, profile = Profile, quic_conn = Conn,
                                  expected_node_id = Expected, capabilities = Capabilities} = Data) ->
     #{connect_key := Key, connect_binding := Binding, connect_status := Status} =
         macula_statement_issuer:connect_material(Issuer),
     {ok, #{profile => Profile, expected_node_id => Expected, leaf => Leaf,
            identity_key => macula_node_keys:public_key(Identity), connect_key => Key, connect_binding => Binding,
-           connect_status => Status, capabilities => Capabilities, now => now_ms(Data)}};
+           connect_status => Status, capabilities => Capabilities, now => now_ms(Data),
+           version => macula_peer_versions:dial_version(Expected, now_ms(Data)), export => exporter(Conn)}};
 client_session({error, _} = NoLeaf, _Data) ->
     NoLeaf.
 
@@ -711,14 +734,54 @@ answered({ok, Connect, Station, Expect}, OwnHash, #data{quic_stream = Stream} = 
     Sent = with_peer(Station, Data#data{own_binding_hash = OwnHash, expect = hello, expect_hello = Expect}),
     handshake_written(send_handshake_bytes(Stream, Connect), Sent);
 answered({error, Reason}, _OwnHash, Data) ->
+    ok = counted_refusal(Reason),
     closed(Reason, Data).
 
 %% Client: HELLO. Frames that follow it in the same read are the
 %% station's first frames on the open connection.
-hello_read({ok, #{capabilities := Capabilities}}, Rest, Data) ->
-    after_hello(transition_to_connected(Data#data{peer_capabilities = Capabilities}), Rest);
+hello_read({ok, #{capabilities := Capabilities, version := Version}}, Rest, Data) ->
+    after_hello(transition_to_connected(Data#data{peer_capabilities = Capabilities, version = Version}), Rest);
+hello_read({error, {refused, unsupported_version}}, _Rest,
+           #data{expect_hello = #{version := 5}, peer_node_id = NodeId} = Data) ->
+    unsupported_v5(macula_peer_versions:unsupported_version(NodeId, now_ms(Data)), Data);
 hello_read({error, Reason}, _Rest, Data) ->
+    ok = counted_refusal(Reason),
     closed(Reason, Data).
+
+%% A station that refused a v5 CONNECT with unsupported_version. One seen on
+%% v5 in this run is refused as a downgrade, with no retry; any other gets
+%% one more dial, on a new QUIC connection, with a v4 CONNECT
+%% (plans/DESIGN_NEIGHBOUR_CHANNEL_BINDING.md sections 3 and 4).
+unsupported_v5(downgrade_refused, #data{peer_node_id = NodeId} = Data) ->
+    ok = macula_diagnostics:bounded_event(warning, <<"_macula.peering.v5_downgrade_refused">>,
+                                          #{node_id => binary:encode_hex(NodeId, lowercase),
+                                            remedy => <<"macula_peering:forget_v5_peer/1 after a deliberate rollback">>}),
+    closed(v5_downgrade_refused, Data);
+unsupported_v5({fall_back, _Count}, #data{peer_node_id = NodeId} = Data) ->
+    ok = fallback_warned(macula_peer_versions:fallback_warning(NodeId, now_ms(Data)), NodeId),
+    redial(Data).
+
+fallback_warned(no_warning, _NodeId) ->
+    ok;
+fallback_warned({warn, Count}, NodeId) ->
+    macula_diagnostics:event(warning, <<"_macula.peering.v4_fallback_repeated">>,
+                             #{node_id => binary:encode_hex(NodeId, lowercase), fallbacks => Count}).
+
+%% The refused handshake's QUIC connection closes and the dial starts
+%% again, with nothing of this handshake carried over.
+redial(Data) ->
+    ok = close_quic(Data),
+    {next_state, connecting,
+     Data#data{quic_conn = undefined, quic_stream = undefined, buf = <<>>, expect = undefined,
+               expect_hello = undefined, leaf = undefined, challenge = undefined, connection = undefined,
+               own_binding_hash = undefined, peer = undefined, peer_node_id = undefined}}.
+
+%% The handshake refusals the node-wide counters count.
+counted_refusal(Reason) when Reason =:= session_proof_invalid; Reason =:= session_proof_missing;
+                             Reason =:= v4_hello_to_v5_connect; Reason =:= exporter_unavailable ->
+    macula_peer_versions:count(Reason);
+counted_refusal(_Other) ->
+    ok.
 
 after_hello({next_state, connected, #data{buf = Buf} = Data, Actions}, Rest) ->
     Early = iolist_to_binary([macula_frame:encode_bytes(Bytes) || Bytes <- Rest]),
@@ -734,17 +797,46 @@ connect_checked([], Connect, #data{challenge = Challenge, leaf = Leaf, profile =
                                    capabilities = Capabilities} = Data) ->
     Session = #{profile => Profile, challenge => Challenge, leaf => Leaf, capabilities => Capabilities,
                 now => now_ms(Data), puzzle => #{difficulty => macula_node_keys:puzzle_difficulty(), mode => Mode}},
-    connect_verdict(macula_handshake:accept_connect(Connect, Session), Data);
+    connect_verdict(macula_handshake:accept_connect(Connect, maps:merge(Session, station_v5(Data))), Data);
 connect_checked(_Early, _Connect, Data) ->
     closed(unexpected_frame, Data).
 
-connect_verdict({accepted, #{capabilities := Capabilities} = Client, Hello}, #data{quic_stream = Stream} = Data) ->
-    Accepted = puzzle_reported(Client, with_peer(Client, Data#data{peer_capabilities = Capabilities})),
+connect_verdict({accepted, #{capabilities := Capabilities, version := Version} = Client, Hello},
+                #data{quic_stream = Stream} = Data) ->
+    Accepted = puzzle_reported(Client, with_peer(Client, Data#data{peer_capabilities = Capabilities,
+                                                                    version = Version})),
     hello_sent(send_handshake_bytes(Stream, Hello), Accepted);
 connect_verdict({refused, Reason, Hello}, #data{quic_stream = Stream} = Data) ->
     _ = send_handshake_bytes(Stream, Hello),
     {keep_state, Data#data{refusal = Reason, expect = undefined},
      [{state_timeout, ?REFUSAL_LINGER_MS, refusal_sent}]}.
+
+%% What a station answering version 5 hands the handshake: this
+%% connection's exporter, and a signer that signs a session proof with the
+%% identity key only within the session proof budget, counted by the real
+%% clock the budget is about.
+station_v5(#data{max_version = 5, quic_conn = Conn, identity = Identity}) ->
+    #{export => exporter(Conn),
+      sign_session_proof => fun(ClientNodeId, Message) ->
+                                session_proof(macula_session_proof_rate:allow(ClientNodeId,
+                                                                              erlang:system_time(millisecond)),
+                                              Message, Identity)
+                            end};
+station_v5(#data{max_version = 4}) ->
+    #{}.
+
+session_proof(ok, Message, Identity) ->
+    {ok, macula_node_keys:sign(Message, Identity)};
+session_proof({error, {session_proof_rate, Limit}}, _Message, _Identity) ->
+    ok = macula_peer_versions:count(session_proof_rate),
+    ok = macula_diagnostics:bounded_event(warning, <<"_macula.peering.session_proof_rate">>,
+                                          #{limit => Limit,
+                                            value => maps:get(Limit, macula_session_proof_rate:limits())}),
+    {error, session_proof_rate}.
+
+%% The TLS 1.3 exporter of this connection's session (RFC 8446 section 7.5).
+exporter(Conn) ->
+    fun(Label, Context, Length) -> macula_quic:export_keying_material(Conn, Label, Context, Length) end.
 
 hello_sent(ok, Data) ->
     transition_to_connected(Data);
@@ -811,12 +903,23 @@ transition_to_connected(#data{issuer = Issuer, own_binding_hash = Hash} = Data) 
 
 %% The issuer forgets a binding only once its not_after has passed.
 subscribed(ok, #data{peer = Peer} = Data) ->
+    ok = connection_counted(Data),
     notify(connected, Data#data.peer_node_id, Data),
     notify_handshake_complete(Data),
     {next_state, connected, Data#data{expect = undefined, leaf = undefined, challenge = undefined},
      lifecycle_timers(Peer, Data)};
 subscribed({error, unknown_binding}, Data) ->
     closed(binding_expired, Data).
+
+%% Connections by handshake version, node-wide; a client remembers the
+%% station it completed v5 with.
+connection_counted(#data{version = 5, role = client, peer_node_id = NodeId}) ->
+    ok = macula_peer_versions:completed_v5(NodeId),
+    macula_peer_versions:count(v5_connections);
+connection_counted(#data{version = 5}) ->
+    macula_peer_versions:count(v5_connections);
+connection_counted(#data{version = 4}) ->
+    macula_peer_versions:count(v4_connections).
 
 lifecycle_timers(#{status_expires_at := StatusExpiresAt, binding_not_after := NotAfter}, Data) ->
     [status_timer(StatusExpiresAt, Data),
@@ -1066,6 +1169,9 @@ status_read({error, Reason}, _Rest, Data, _Actions) ->
 %% In pq_hybrid a control frame comes back as the frame its neighbour
 %% tbs holds, for this connection and the next seq from the peer, and a
 %% refused one closes the connection with the refusal.
+neighbour_read({ok, #{frame_type := Type} = Opened}, _Frame, Rest, Data, Actions)
+  when Type =:= liveness_ping; Type =:= liveness_pong ->
+    liveness_read(Opened, Rest, Data, Actions);
 neighbour_read({ok, Opened}, Frame, Rest, Data, Actions) ->
     Read = read_observed(Opened, Data),
     ok = route_frame(Opened, Read),
@@ -1073,12 +1179,36 @@ neighbour_read({ok, Opened}, Frame, Rest, Data, Actions) ->
 neighbour_read({error, Reason}, _Frame, _Rest, Data, _Actions) ->
     closed(Reason, Data).
 
-neighbour_reader(#data{profile = Profile, peer = #{identity_key := PeerKey}, connection = Connection,
-                       received_seq = Seq}) ->
-    #{profile => Profile, peer_key => PeerKey, connection => Connection, seq => Seq}.
+neighbour_reader(#data{peer = #{identity_key := PeerKey}, connection = Connection, received_seq = Seq} = Data) ->
+    #{profile => neighbour_mode(Data), peer_key => PeerKey, connection => Connection, seq => Seq}.
 
-received(#{frame_type := Type}, #data{profile = Profile, received_seq = Seq} = Data) ->
-    counted(macula_frame:neighbour_signed(Profile, Type), Data#data{received_seq = Seq + 1}, Data).
+%% A frame read moves the seq on when it was neighbour-signed, and a
+%% control frame on a v4 connection counts as the old path, which must read
+%% zero across the fleet before v4 is dropped.
+received(#{frame_type := Type}, #data{received_seq = Seq} = Data) ->
+    ok = old_path_counted(Data#data.version, macula_frame:control_frame(Type)),
+    counted(macula_frame:neighbour_signed(neighbour_mode(Data), Type), Data#data{received_seq = Seq + 1}, Data).
+
+old_path_counted(4, true) -> macula_peer_versions:count(v4_control_frames);
+old_path_counted(_Version, _ControlFrame) -> ok.
+
+%% On v5 the session proofs authenticated the peer once, and no frame
+%% carries a neighbour signature; on v4 the profile says which do (D17).
+neighbour_mode(#data{version = 5}) -> session;
+neighbour_mode(#data{profile = Profile}) -> Profile.
+
+%% The v5 liveness probe, answered and consumed here: never routed. On a v4
+%% connection neither frame exists.
+liveness_read(_Frame, _Rest, #data{version = 4} = Data, _Actions) ->
+    closed(malformed_frame, Data);
+liveness_read(#{frame_type := liveness_ping, nonce := Nonce}, Rest, Data, Actions) ->
+    {_Sent, Answered} = send_application_frame(macula_frame:liveness_pong(#{nonce => Nonce}), Data),
+    open_frame(Rest, Answered, Actions);
+liveness_read(#{frame_type := liveness_pong, nonce := Nonce}, Rest,
+              #data{liveness_outstanding = {liveness_nonce, Nonce}} = Data, Actions) ->
+    open_frame(Rest, Data#data{liveness_outstanding = undefined, liveness_misses = 0}, Actions);
+liveness_read(#{frame_type := liveness_pong}, Rest, Data, Actions) ->
+    open_frame(Rest, Data, Actions).
 
 counted(true, Counted, _Data) -> Counted;
 counted(false, _Counted, Data) -> Data.
@@ -1297,6 +1427,10 @@ liveness_tick_action(#data{liveness_interval_ms = Ms}) ->
 %% `unknown_next_peer' relay error, a pool link with a provider error —
 %% so any verified reply proves the peer's application layer is alive,
 %% which the transport's keep-alive ACKs cannot.
+send_liveness_probe(#data{version = 5} = Data) ->
+    Nonce = crypto:strong_rand_bytes(16),
+    {_Sent, Probed} = send_application_frame(macula_frame:liveness_ping(#{nonce => Nonce}), Data),
+    Probed#data{liveness_outstanding = {liveness_nonce, Nonce}};
 send_liveness_probe(#data{identity = Kp, profile = Profile,
                           peer_node_id = Peer,
                           liveness_interval_ms = Ms} = Data) ->
@@ -1318,6 +1452,8 @@ send_liveness_probe(#data{identity = Kp, profile = Profile,
 %% (fresh probe on the next tick); anything else leaves the probe
 %% outstanding, so the tick counts the miss. The frame is still routed
 %% to the controlling pid as any other frame would be.
+maybe_liveness_reply(_Frame, #data{liveness_outstanding = {liveness_nonce, _Nonce}} = Data) ->
+    Data;
 maybe_liveness_reply(Frame, #data{liveness_outstanding = {RequestId, Request},
                                   profile = Profile,
                                   peer_node_id = Station} = Data) ->
@@ -1385,8 +1521,8 @@ encode_or_drop(Frame, Data) ->
 %% In pq_hybrid a control frame goes out neighbour-signed with this
 %% side's identity key, for this connection and the next seq. A frame
 %% that cannot be signed or encoded takes no seq.
-neighboured(#{frame_type := Type} = Frame, #data{profile = Profile} = Data) ->
-    neighbour_signed(macula_frame:neighbour_signed(Profile, Type), Frame, Data).
+neighboured(#{frame_type := Type} = Frame, Data) ->
+    neighbour_signed(macula_frame:neighbour_signed(neighbour_mode(Data), Type), Frame, Data).
 
 neighbour_signed(true, Frame, #data{identity = Identity, connection = Connection, sent_seq = Seq} = Data) ->
     {macula_frame:sign_neighbour(Frame, Identity, #{connection => Connection, seq => Seq}),

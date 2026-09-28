@@ -80,7 +80,8 @@
                              puzzle := #{difficulty := 0..256, mode := puzzle_mode()},
                              capabilities := non_neg_integer(), now := integer(),
                              export => exporter(),
-                             sign_session_proof => fun((iodata()) -> {ok, binary()} | {error, session_proof_rate})}.
+                             sign_session_proof => fun((<<_:256>>, iodata()) ->
+                                                               {ok, binary()} | {error, session_proof_rate})}.
 -type station() :: #{node_id := <<_:256>>, identity_key := binary(), tls_binding := envelope(),
                      status_expires_at := non_neg_integer(), binding_not_after := non_neg_integer(),
                      version := version()}.
@@ -309,7 +310,7 @@ session_proved(#{version := ?VERSION_5, exporter_value := E, client_node_id := C
                               capabilities := Capabilities}} = State) ->
     Message = session_proof_message(E, Challenge, Connect, challenge_node_id(Challenge, Profile), ClientNodeId,
                                     Capabilities),
-    with_session_proof(Sign(Message), State);
+    with_session_proof(Sign(ClientNodeId, Message), State);
 session_proved(State) ->
     {ok, State}.
 

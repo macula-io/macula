@@ -285,7 +285,7 @@ v5_refusal_cases(#{profile := Profile} = World) ->
         macula_handshake:accept_connect(Bytes, maps:merge(station_session_v5(World, Challenge), Changes))
     end,
     NoExporter = maps:remove(export, station_session_v5(World, Challenge)),
-    Rated = fun(_Message) -> {error, session_proof_rate} end,
+    Rated = fun(_ClientNodeId, _Message) -> {error, session_proof_rate} end,
     Version6 = rebuilt(Connect, #{<<"version">> => 6}),
     [%% A CONNECT proof over another session's exporter is refused.
      ?_assertMatch({refused, proof_invalid, _}, Accept(Connect, #{export => exporter(session_b)})),
@@ -309,7 +309,7 @@ v5_refusal_cases(#{profile := Profile} = World) ->
 %% Sign after verify: a CONNECT that fails any check never reaches the signer.
 signs_only_after_every_check(Connect, Accept, _Profile) ->
     Self = self(),
-    Watched = fun(Message) -> Self ! {signed, Message}, {error, session_proof_rate} end,
+    Watched = fun(_ClientNodeId, Message) -> Self ! {signed, Message}, {error, session_proof_rate} end,
     {refused, proof_invalid, _} = Accept(Connect, #{export => exporter(session_b), sign_session_proof => Watched}),
     {refused, status_expired, _} = Accept(Connect, #{now => ?NOW + 2 * ?HOUR, sign_session_proof => Watched}),
     ?assertEqual(nothing, receive {signed, _} -> signed after 0 -> nothing end),
@@ -369,7 +369,7 @@ client_session_v5(World) ->
 
 station_session_v5(#{station_id := StationKey} = World, Challenge) ->
     (station_session(World, Challenge))#{export => exporter(session_a),
-                                         sign_session_proof => fun(Message) ->
+                                         sign_session_proof => fun(_ClientNodeId, Message) ->
                                                                    {ok, macula_node_keys:sign(Message, StationKey)}
                                                                end}.
 

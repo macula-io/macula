@@ -27,6 +27,9 @@
 %% macula-station's exact dial target through a real handshake. Exported
 %% rather than duplicated: a second copy of this setup would drift.
 -export([setup/0, cleanup/1, world/2, connect/2, forget_world/1]).
+%% And the helpers macula_peering_v5_tests drives the same loopback pair with.
+-export([await/2, ended/1, still_open/2, finish/2, sent/3, on_control_stream/2, ping/0, node_id/1, wire/1,
+         frame_from/1, accept_one/1, station_opts/2, fixed/1]).
 -export([start_listener/1, stop_listener/1]).
 
 -include_lib("eunit/include/eunit.hrl").
@@ -687,6 +690,13 @@ connect(#{client_key := ClientKey, client_issuer := ClientIssuer, station_key :=
     %% `target_extra' lets another test module drive a target of its own
     %% shape through a real handshake. Additive and empty by default, so
     %% every test in this module is unaffected.
+    %%
+    %% `handshake => 4' dials the station with a v4 CONNECT, as a client
+    %% does for 10 minutes after the station refused v5
+    %% (plans/DESIGN_NEIGHBOUR_CHANNEL_BINDING.md section 4): the tests of
+    %% what v4 alone does (D17's neighbour signatures, the signed CALL
+    %% liveness probe) run on a v4 connection.
+    ok = dial_version(maps:get(handshake, Options, 5), node_id(StationKey), maps:get(client_clock, Options, ?T0 + ?MINUTE)),
     Target = maps:merge(
                #{host => <<"127.0.0.1">>, port => Port, timeout_ms => 5_000,
                  expected_node_id => maps:get(expected, Options, node_id(StationKey))},
@@ -701,11 +711,18 @@ connect(#{client_key := ClientKey, client_issuer := ClientIssuer, station_key :=
                                   target => Target})),
     {Client, accept_one(station_opts(World, Options))}.
 
+dial_version(5, _StationNodeId, _Now) ->
+    ok;
+dial_version(4, StationNodeId, Now) ->
+    {fall_back, _} = macula_peer_versions:unsupported_version(StationNodeId, Now),
+    ok.
+
 station_opts(#{station_key := StationKey, station_issuer := StationIssuer}, Options) ->
     Opts = #{identity => StationKey, issuer => StationIssuer, capabilities => ?STATION_CAPABILITIES,
              controlling_pid => self(), puzzle => #{mode => maps:get(mode, Options)},
              clock => fixed(maps:get(station_clock, Options, ?T0 + ?MINUTE))},
-    maps:merge(maps:merge(Opts, maps:with([accept_owner], Options)), observer_opt(station_observer, Options)).
+    maps:merge(maps:merge(Opts, maps:with([accept_owner, max_handshake_version], Options)),
+               observer_opt(station_observer, Options)).
 
 observer_opt(Key, Options) ->
     maps:fold(fun(K, Observer, Acc) when K =:= Key -> Acc#{frame_observer => Observer};
@@ -846,7 +863,7 @@ control_frames_verify_both_ways_around_a_status_frame_in_pq_hybrid(Ctx) ->
     #{issuer_tab := Tab, client_issuer := ClientIssuer, station_issuer := StationIssuer} = World =
         world(Ctx, #{profile => pq_hybrid}),
     Lapse = ?T0 + ?HOUR + 5 * ?MINUTE - 3_000,
-    {Client, Station} = connect(World, #{mode => off, client_clock => Lapse, station_clock => Lapse}),
+    {Client, Station} = connect(World, #{handshake => 4, mode => off, client_clock => Lapse, station_clock => Lapse}),
     _ = {await(Client, connected), await(Station, connected)},
     ok = sent(Client, Station, [ping() || _ <- lists:seq(1, 3)]),
     ok = sent(Station, Client, [ping() || _ <- lists:seq(1, 3)]),
@@ -862,7 +879,7 @@ control_frames_verify_both_ways_around_a_status_frame_in_pq_hybrid(Ctx) ->
 %% closes the connection with signature_invalid.
 a_control_frame_signed_by_another_key_closes_the_connection_in_pq_hybrid(Ctx) ->
     #{station_key := StationKey} = World = world(Ctx, #{profile => pq_hybrid}),
-    {Client, Station} = connect(World, #{mode => off}),
+    {Client, Station} = connect(World, #{handshake => 4, mode => off}),
     _ = {await(Client, connected), await(Station, connected)},
     Forged = macula_frame:sign_neighbour(ping(), StationKey,
                                          #{connection => crypto:hash(sha384, <<"a challenge">>), seq => 0}),
@@ -874,7 +891,7 @@ a_control_frame_signed_by_another_key_closes_the_connection_in_pq_hybrid(Ctx) ->
 %% connection with malformed_frame.
 a_control_frame_without_a_neighbour_signature_closes_the_connection_in_pq_hybrid(Ctx) ->
     World = world(Ctx, #{profile => pq_hybrid}),
-    {Client, Station} = connect(World, #{mode => off}),
+    {Client, Station} = connect(World, #{handshake => 4, mode => off}),
     _ = {await(Client, connected), await(Station, connected)},
     ok = on_control_stream(Client, macula_frame:encode(ping())),
     ?assertEqual(malformed_frame, ended(Station)),
@@ -886,7 +903,7 @@ a_control_frame_without_a_neighbour_signature_closes_the_connection_in_pq_hybrid
 %% frame without a neighbour signature would have closed that side instead.
 an_overlay_relay_goes_out_neighbour_signed_and_verifies_in_pq_hybrid(Ctx) ->
     World = world(Ctx, #{profile => pq_hybrid}),
-    {Client, Station} = connect(World, #{mode => off}),
+    {Client, Station} = connect(World, #{handshake => 4, mode => off}),
     _ = {await(Client, connected), await(Station, connected)},
     Relay = macula_frame:overlay_relay(#{peer => <<9:256>>, payload => macula_frame:encode(ping())}),
     ok = sent(Client, Station, [Relay]),
@@ -898,7 +915,7 @@ an_overlay_relay_goes_out_neighbour_signed_and_verifies_in_pq_hybrid(Ctx) ->
 %% closes the connection, and nothing reaches the controlling process.
 an_overlay_relay_without_a_neighbour_signature_closes_and_routes_nothing_in_pq_hybrid(Ctx) ->
     World = world(Ctx, #{profile => pq_hybrid}),
-    {Client, Station} = connect(World, #{mode => off}),
+    {Client, Station} = connect(World, #{handshake => 4, mode => off}),
     _ = {await(Client, connected), await(Station, connected)},
     ok = on_control_stream(Client, macula_frame:encode(unsigned_join_relay())),
     Reason = ended(Station),
@@ -910,7 +927,7 @@ an_overlay_relay_without_a_neighbour_signature_closes_and_routes_nothing_in_pq_h
 %% the connection with signature_invalid, and nothing is routed.
 an_overlay_relay_signed_by_another_key_closes_and_routes_nothing_in_pq_hybrid(Ctx) ->
     #{station_key := StationKey} = World = world(Ctx, #{profile => pq_hybrid}),
-    {Client, Station} = connect(World, #{mode => off}),
+    {Client, Station} = connect(World, #{handshake => 4, mode => off}),
     _ = {await(Client, connected), await(Station, connected)},
     Forged = macula_frame:sign_neighbour(unsigned_join_relay(), StationKey,
                                          #{connection => crypto:hash(sha384, <<"a challenge">>), seq => 0}),
@@ -1115,7 +1132,7 @@ a_store_whose_record_is_not_cbor_reaches_its_recipient_and_the_connection_serves
 
 liveness_probe_reaps_an_unanswering_peer(Ctx) ->
     World = world(Ctx, #{}),
-    {Client, Station} = connect(World, #{mode => off,
+    {Client, Station} = connect(World, #{handshake => 4, mode => off,
                                          liveness_interval_ms => 200,
                                          liveness_max_misses => 2}),
     _ = {await(Client, connected), await(Station, connected)},
@@ -1127,7 +1144,7 @@ liveness_probe_reaps_an_unanswering_peer(Ctx) ->
 
 answered_liveness_probe_keeps_the_connection_open(Ctx) ->
     #{station_key := StationKey} = World = world(Ctx, #{}),
-    {Client, Station} = connect(World, #{mode => off,
+    {Client, Station} = connect(World, #{handshake => 4, mode => off,
                                          liveness_interval_ms => 200,
                                          liveness_max_misses => 2}),
     _ = {await(Client, connected), await(Station, connected)},
@@ -1143,7 +1160,7 @@ answered_liveness_probe_keeps_the_connection_open(Ctx) ->
 
 liveness_is_opt_in(Ctx) ->
     World = world(Ctx, #{}),
-    {Client, Station} = connect(World, #{mode => off}),
+    {Client, Station} = connect(World, #{handshake => 4, mode => off}),
     _ = {await(Client, connected), await(Station, connected)},
     ?assertEqual(open, still_open(Client, 1_000)),
     receive
