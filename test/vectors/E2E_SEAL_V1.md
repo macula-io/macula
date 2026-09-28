@@ -145,9 +145,10 @@ Extract.)
 `sealed = #{scheme => 1, key_id, ct}` plus `kem_ct` on a CALL or STREAM_OPEN,
 and `nonce` where the table says the nonce is carried. On a call or a stream,
 `key_id` is the recipient key's id above. On an event it names the group
-epoch, which the group-key package (design §13 #5) defines; these vectors do
-not pin it. The vectors give `ct`,
-the ciphertext with its tag appended.
+epoch: the epoch's random 8-byte id, bound to its key only by the
+distributor's signed reply (`plans/DESIGN_E2E_SEALED_PUBSUB.md` §4), so these
+vectors do not pin it. The vectors give `ct`, the ciphertext with its tag
+appended.
 
 ## The JSON
 
@@ -183,3 +184,53 @@ shape. A verifier that checks only the signature accepts all five. The
 refused cases are signed over a payload `sign/2` refuses, the way `sign/2`
 signs. `malformed` is macula's name for the refusal, and an SDK may use its
 own.
+
+## Sealed groups (package 5)
+
+`e2e_seal_v1_group_keys.json` holds what a sealed group adds on top of the
+event seal above (`plans/DESIGN_E2E_SEALED_PUBSUB.md`). Erlang generates it
+(`scripts/generate-seal-group-keys-vectors.sh`); the payloads are
+deterministic, and the UCANs are signed anew on each run with the same
+verdicts, so the committed file is the vector.
+
+**The key pull's payloads.** A member pulls a group's epochs from
+`<org>/group_keys_v1` with a sealed call. `payloads` gives each payload's
+fields and its plaintext, `cbor` (hex), which is what the sealed call's `plain`
+is: the deterministic CBOR of the payload, as `macula_frame:payload_plain/1`
+builds it. An SDK must produce `call_current` and `call_by_id` byte for byte
+from their fields, and read `result` back to its fields.
+
+| Payload | Fields |
+|---|---|
+| `call_current` | `prefix` (text), `epoch` the text `current` |
+| `call_by_id` | `prefix` (text), `epoch` the 8-byte epoch id (bytes) |
+| `result` | `prefix` (text), `policy` (text: `required`, `preferred` or `off`), `epochs`, an array of maps with `id` (8 bytes), `key` (32 bytes), `issued_at`, `publish_until`, `accept_until` (unsigned integers, milliseconds) |
+
+Every map key is text. A member refuses a whole result whose `prefix` is not
+the one it asked for, whose `policy` is none of the three, whose `epochs` is
+empty, or any of whose epochs has another shape or an `accept_until` other
+than `publish_until` plus 65 minutes.
+
+**Refusals.** A distributor refuses a pull with a provider error whose code is
+`handler_error` and whose detail is one of `refusals`: `not_a_member`,
+`membership_unknown` (the membership lookup failed; retry), `unknown_epoch`,
+`epoch_expired` and `unknown_group` (a prefix whose second segment is not the
+distributor's org).
+
+**The org's grant.** The pull carries the org's UCAN as the call's own token,
+and the distributor's advertise policy checks it before its handler runs: the
+policy `realm_member_required` with the org key's key id and `can` equal to
+`group_keys`, which matches the issuer by key id (an org key has no node_id).
+Each profile under `profiles` gives the org key, the member and a stranger,
+and cases, each with its `token`, the `policy`, the `context` (caller, now in
+seconds, realm, procedure) and the `verdict` an SDK's `authorize` must reach,
+as `ucan_v1.json`'s cases do (`UCAN_V1.md`):
+
+| `name` | `verdict` |
+|---|---|
+| `ok_procedure_grant` | `ok`: `with = mri:proc:io.macula/acme/group_keys_v1` |
+| `ok_org_grant` | `ok`: `with = mri:org:io.macula/acme` covers the procedure |
+| `missing_capability` | the right resource, `can = invoke` |
+| `not_the_issuer` | signed by another org key |
+| `not_the_audience` | presented by a caller the token does not name |
+| `expired` | past its `exp` |

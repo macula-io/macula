@@ -8,7 +8,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 -behaviour(macula_subscriber).
--export([init/1, handle_event/4, terminate/2]).
+-export([init/1, handle_event/4, handle_unopened/3, terminate/2]).
 
 -define(REALM, <<0:256>>).
 -define(TOPIC, <<"t">>).
@@ -25,6 +25,11 @@ handle_event(Topic, Payload, Meta, #{parent := Parent} = State) ->
         #{stop := true} -> {stop, normal, State};
         _ -> {noreply, State}
     end.
+
+%% A sealed event this subscriber could not open (macula_group_opener).
+handle_unopened(Topic, Info, #{parent := Parent} = State) ->
+    Parent ! {unopened, Topic, Info},
+    {noreply, State}.
 
 terminate(Reason, #{parent := Parent}) ->
     Parent ! {terminated, Reason},
@@ -69,7 +74,35 @@ subscriber_test_() ->
                  fun the_subscribe_function_gets_the_other_options/0,
                  fun without_a_subscribe_function_it_subscribes_through_macula/0,
                  fun a_subscribe_option_that_is_not_an_arity_5_fun_is_refused/0,
-                 fun stops_when_the_pool_dies_without_saying_so/0]].
+                 fun stops_when_the_pool_dies_without_saying_so/0,
+                 fun an_unopened_event_reaches_handle_unopened/0,
+                 fun a_module_without_handle_unopened_serves_on/0]].
+
+%% An event the subscriber could not open is its module's to hear about, never
+%% dropped silently (plans/DESIGN_E2E_SEALED_PUBSUB.md §7).
+an_unopened_event_reaches_handle_unopened() ->
+    {ok, Pid} = start_subscriber(#{}),
+    Info = #{publisher => <<1:256>>, seal_key_id => <<2:64>>, reason => no_group},
+    Pid ! {macula_event_unopened, test_subref, <<"t">>, Info},
+    receive
+        {unopened, <<"t">>, Info} -> ok
+    after 1000 -> ?assert(false)
+    end,
+    ok = gen_server:stop(Pid).
+
+%% handle_unopened/3 is optional: without it the subscriber logs the event and
+%% keeps serving the ones it can.
+a_module_without_handle_unopened_serves_on() ->
+    {ok, Pid} = macula_subscriber:start_link(macula_subscriber_plain, pool(), ?REALM, ?TOPIC, self(),
+                                             #{subscribe => subscribed(self())}),
+    Pid ! {macula_event_unopened, test_subref, <<"t">>, #{publisher => <<1:256>>, seal_key_id => <<2:64>>,
+                                                         reason => no_group}},
+    Pid ! {macula_event, test_subref, <<"t">>, #{n => 2}, #{}},
+    receive
+        {seen, <<"t">>, #{n := 2}, _} -> ok
+    after 1000 -> ?assert(false)
+    end,
+    ok = gen_server:stop(Pid).
 
 %% #26: the pool says macula_event_gone only from its terminate/2. One that is
 %% killed, or dies from a link while not trapping exits, says nothing, and the

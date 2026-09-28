@@ -29,7 +29,8 @@ group_test_() ->
       fun a_subscribe_the_distributor_refuses_fails_closed/1,
       fun a_publish_under_a_group_pulls_its_key_first/1,
       fun a_clear_publish_under_a_held_prefix_names_the_group/1,
-      fun a_topic_outside_its_group_is_an_invalid_option/1]}.
+      fun a_topic_outside_its_group_is_an_invalid_option/1,
+      fun a_callback_subscription_logs_an_unopened_event_and_keeps_no_mail/1]}.
 
 setup() ->
     {ok, _} = application:ensure_all_started(macula),
@@ -201,4 +202,19 @@ a_topic_outside_its_group_is_an_invalid_option(#{pool := Pool} = W) ->
                      macula_client:publish(Pool, ?REALM, Outside, <<"x">>, #{group => ?PREFIX})),
         ?assertEqual({error, {invalid_option, group}}, subscribe(W, ?TOPIC, #{group => <<"io.macula">>})),
         ?assertEqual([], calls(W))
+    end).
+
+%% subscribe_callback's receiver answers only macula_event with the callback: an unopened event is logged and
+%% dropped, never left in its mailbox, where every one would stay for the subscription's life.
+a_callback_subscription_logs_an_unopened_event_and_keeps_no_mail(#{pool := Pool} = W) ->
+    ?_test(begin
+        Test = self(),
+        {ok, _Ref} = macula_pubsub:subscribe_callback(Pool, ?REALM, ?ELSEWHERE,
+                                                      fun(Topic, Payload, _Meta) -> Test ! {called, Topic, Payload} end),
+        _ = inject_sealed(W, ?ELSEWHERE, current_epoch(W), 1, <<"sealed">>),
+        ok = inject_clear(W, ?ELSEWHERE, 2, <<"clear">>),
+        receive {called, ?ELSEWHERE, <<"clear">>} -> ok after 2000 -> error(no_clear_event) end,
+        [Receiver] = [P || P <- erlang:processes(),
+                           process_info(P, current_function) =:= {current_function, {macula_pubsub, receiver_loop, 3}}],
+        ?assertEqual({message_queue_len, 0}, process_info(Receiver, message_queue_len))
     end).
