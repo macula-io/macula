@@ -18,7 +18,7 @@
 
 ---
 
-> **13.2.0: sealed pubsub groups.** `group => Prefix` on `macula:publish/5`
+> **Unreleased: sealed pubsub groups.** `group => Prefix` on `macula:publish/5`
 > and `macula:subscribe/5` seals a group's events to its members, with keys
 > the org's distributor (`macula_group_keys`) hands to members that hold the
 > org's grant and a live realm membership. An event a subscriber cannot open

@@ -14,7 +14,14 @@ composite signature on every control frame (plans/DESIGN_NEIGHBOUR_CHANNEL_BINDI
 paying an RSA-4096 signature (about 9 ms) per control frame it sends. Stations accept versions 4 and 5; a client
 dials 5 and falls back to 4 once, only on `unsupported_version`, so no peer is refused during a roll.
 
+Sealed pubsub groups: a group's events readable only by its members, with keys the org's distributor hands out
+(plans/DESIGN_E2E_SEALED_PUBSUB.md). Built in the Erlang SDK and pinned by vectors for the others. No confidentiality
+claim is made for the fleet before the scheme is tested across SDKs and measured (D11). A distributor names its KEM
+key only with `kem_advertise` enabled, so groups wait for the same switch sealed calls do. No wire change: a sealed
+publication was already a valid one.
+
 ### Added
+
 
 - **Handshake v5.** The opener and challenge stay version 4; the client picks 4 or 5 in CONNECT and HELLO answers in
   the same version. In v5 the CONNECT proof (`MACULA-PQ-CONNECT-PROOF-V2`, by the CONNECT key) also covers E, the
@@ -41,30 +48,6 @@ dials 5 and falls back to 4 once, only on `unsupported_version`, so no peer is r
   old path, which must read zero fleet-wide before v4 is dropped), v4 fallbacks, refused downgrades, and session proof
   refusals by reason.
 - `macula_quic:export_keying_material/4` (the TLS 1.3 exporter) and `macula_quic:tls_posture/0`.
-
-### Changed
-
-- **No TLS session resumption, and no 0-RTT, on either end.** D16 decided against resumption, but rustls resumes by
-  default and nothing turned it off: a second handshake between the same configurations resumed, and the listener
-  sent two tickets. Every connection is now a full handshake.
-- **Peering refuses to start on a TLS posture v5 cannot rely on**: both ends must offer exactly SecP384r1MLKEM1024
-  then SecP256r1MLKEM768, neither may do 0-RTT or send tickets, a second handshake must be full, and so must the
-  dialler's second handshake against a listener that does issue tickets (`macula_tls_posture`). This proves the configured posture, not each connection's negotiated group.
-- `macula_handshake:answer_challenge/2` returns `{ok, Connect, Station, ExpectHello}`, and `read_hello/1` is
-  `read_hello/2`, taking that `ExpectHello`. `macula_dist_tunnel` stays on v4: its station answers v5 as an old one.
-
----
-
-## [13.2.0] - 2026-09-29
-
-Sealed pubsub groups: a group's events readable only by its members, with keys the org's distributor hands out
-(plans/DESIGN_E2E_SEALED_PUBSUB.md). Built in the Erlang SDK and pinned by vectors for the others. No confidentiality
-claim is made for the fleet before the scheme is tested across SDKs and measured (D11). A distributor names its KEM
-key only with `kem_advertise` enabled, so groups wait for the same switch sealed calls do. No wire change: a sealed
-publication was already a valid one.
-
-### Added
-
 - **Sealed groups.** `macula:publish/5` and `macula:subscribe/5` take `group => Prefix`, a topic prefix whose second
   segment is its org, with `ucan_token` (the org's grant) and `distributor` (a pinned node id). The pool joins the
   group first, pulling its epoch keys from the org's distributor `<org>/group_keys_v1` over a call sealed to the
@@ -95,6 +78,14 @@ publication was already a valid one.
 
 ### Changed
 
+- **No TLS session resumption, and no 0-RTT, on either end.** D16 decided against resumption, but rustls resumes by
+  default and nothing turned it off: a second handshake between the same configurations resumed, and the listener
+  sent two tickets. Every connection is now a full handshake.
+- **Peering refuses to start on a TLS posture v5 cannot rely on**: both ends must offer exactly SecP384r1MLKEM1024
+  then SecP256r1MLKEM768, neither may do 0-RTT or send tickets, a second handshake must be full, and so must the
+  dialler's second handshake against a listener that does issue tickets (`macula_tls_posture`). This proves the configured posture, not each connection's negotiated group.
+- `macula_handshake:answer_challenge/2` returns `{ok, Connect, Station, ExpectHello}`, and `read_hello/1` is
+  `read_hello/2`, taking that `ExpectHello`. `macula_dist_tunnel` stays on v4: its station answers v5 as an old one.
 - **A sealed EVENT reaches the pool** instead of being refused at the link, so a subscription with no group is told
   (`reason => no_group`) rather than left with nothing.
 
