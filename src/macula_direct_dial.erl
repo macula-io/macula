@@ -129,7 +129,7 @@
 -export([call/5, call/6, call_stream/5, call_stream/6, providers/4, providers/5,
         publish_advertisement/4, publish_advertisement/5,
         resolve_station_endpoint/2, resolve_station_endpoint/3,
-        resolve_station_endpoint/4, removed_option/2]).
+        resolve_station_endpoint/4, removed_option/2, report_option/1]).
 
 %% Only tests call these arities so far, each with a dial_io.
 -ignore_xref([{resolve_station_endpoint, 4}]).
@@ -150,7 +150,8 @@
                      call_station => fun((macula:pool(), macula_client:seed(), <<_:256>>,
                                           macula:realm(), macula:procedure(), term(),
                                           pos_integer(), map()) ->
-                                             {ok, term()} | {error, term()}),
+                                             {ok, term()} | {ok, term(), macula_station_link:report()} |
+                                             {error, term()}),
                      call_stream_station => fun((macula:pool(), macula_client:seed(), <<_:256>>,
                                                  macula:realm(), macula:procedure(), term(),
                                                  map()) ->
@@ -244,8 +245,8 @@ call(Pool, Realm, Procedure, Payload, TimeoutMs, Opts)
                         Opts).
 
 call_unless_removed(none, Pool, Realm, Procedure, Payload, TimeoutMs, Opts) ->
-    call_to(with_confidential(confidential_option(Opts), provider_option(Opts)), Pool, Realm, Procedure, Payload,
-            TimeoutMs, Opts);
+    call_to(with_confidential(confidential_option(Opts), with_report(report_option(Opts), provider_option(Opts))),
+            Pool, Realm, Procedure, Payload, TimeoutMs, Opts);
 call_unless_removed(Removed, _Pool, _Realm, _Procedure, _Payload, _TimeoutMs, _Opts) ->
     {error, Removed}.
 
@@ -258,7 +259,8 @@ call_to({ok, Only}, Pool, Realm, Procedure, Payload, TimeoutMs, Opts) ->
     each_candidate(only_provider(Only, head_start(Dial, Realm, Procedure)),
                    only_provider_found(Only, advertised_stations(Dial, Realm, Procedure)),
                    station_try(Dial, call_work(Dial, Realm, Procedure, Payload, Deadline,
-                                               maps:get(confidential, Opts, preferred))),
+                                               #{confidential => maps:get(confidential, Opts, preferred),
+                                                 report => maps:get(report, Opts, false)})),
                    Deadline).
 
 %% What a call or stream may ask of its confidentiality: `preferred' (the default) or `required'. A lookup never
@@ -272,6 +274,17 @@ confidential_option(#{}) -> {ok, preferred}.
 
 with_confidential({ok, _Policy}, Checked) -> Checked;
 with_confidential({error, _} = Refused, _Checked) -> Refused.
+
+%% @doc Whether a call asks for its seal report (DESIGN_E2E_SEAL_REPORT): `report' is `true' or `false' (the
+%% default), and any other value is `{error, {invalid_option, report}}', before anything is looked up or sent.
+%% `macula:call_station/8' checks its own `report' with it too.
+-spec report_option(map()) -> {ok, boolean()} | {error, {invalid_option, report}}.
+report_option(#{report := Report}) when is_boolean(Report) -> {ok, Report};
+report_option(#{report := _}) -> {error, {invalid_option, report}};
+report_option(#{}) -> {ok, false}.
+
+with_report({ok, _Report}, Checked) -> Checked;
+with_report({error, _} = Refused, _Checked) -> Refused.
 
 %% Which provider a call is limited to, `any' when the caller named none.
 provider_option(#{provider := <<_:256>> = Provider}) -> {ok, Provider};
@@ -769,9 +782,12 @@ call_work(#{pool := Pool, call_station := CallStation, remember_resolved := Reme
     end.
 
 %% What a station call is told to seal from: the candidate's verified advertisement, and the call's own policy when
-%% it is `required' (`preferred' is the station call's default).
-policy_opts(Policy, Ad) ->
-    maps:merge(advertisement_opt(Ad), required_opt(Policy)).
+%% it is `required' (`preferred' is the station call's default); and whether the call asked for its seal report.
+policy_opts(#{confidential := Policy, report := Report}, Ad) ->
+    maps:merge(maps:merge(advertisement_opt(Ad), required_opt(Policy)), report_opt(Report)).
+
+report_opt(true) -> #{report => true};
+report_opt(false) -> #{}.
 
 advertisement_opt(undefined) -> #{};
 advertisement_opt(Ad) -> #{advertisement => Ad}.
@@ -895,8 +911,9 @@ settled(Result, Remember, Pool, Realm, Procedure, Candidate) ->
 candidate_source(#{dial := _Seed}) -> head_start;
 candidate_source(_Resolved)        -> dht.
 
-outcome({ok, _Answered})  -> answered;
-outcome(_NotAnswered)     -> not_answered.
+outcome({ok, _Answered})            -> answered;
+outcome({ok, _Answered, _Report})   -> answered;
+outcome(_NotAnswered)               -> not_answered.
 
 %% Agnostic by construction: every outcome of every candidate, no threshold.
 %% Reading the split of head starts to DHT resolutions is the measurement's
@@ -918,12 +935,18 @@ report_candidate(Source, Outcome, #{provider := Provider, station := Station}) -
 %% evidence about the ADVERTISEMENT, so refreshing the horizon on a hit
 %% would let one remembered station live for as long as it kept answering
 %% and the DHT would never be asked again.
-remembering({ok, _} = Answered, Remember, Pool, Realm, Procedure,
-            #{ttl_ms := TtlMs} = Candidate) ->
-    _ = Remember(Pool, Realm, Procedure, maps:without([ttl_ms], Candidate), TtlMs),
-    Answered;
+remembering({ok, _} = Answered, Remember, Pool, Realm, Procedure, Candidate) ->
+    remembered_answer(Answered, Remember, Pool, Realm, Procedure, Candidate);
+remembering({ok, _, _Report} = Answered, Remember, Pool, Realm, Procedure, Candidate) ->
+    remembered_answer(Answered, Remember, Pool, Realm, Procedure, Candidate);
 remembering(Result, _Remember, _Pool, _Realm, _Procedure, _Candidate) ->
     Result.
+
+remembered_answer(Answered, Remember, Pool, Realm, Procedure, #{ttl_ms := TtlMs} = Candidate) ->
+    _ = Remember(Pool, Realm, Procedure, maps:without([ttl_ms], Candidate), TtlMs),
+    Answered;
+remembered_answer(Answered, _Remember, _Pool, _Realm, _Procedure, _Candidate) ->
+    Answered.
 
 station_try(Dial, Work) ->
     fun(Candidate, Share, Seen) -> reach(Dial, Candidate, Share, Seen, Work(Candidate)) end.

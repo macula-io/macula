@@ -116,6 +116,55 @@ a_pending_calls_keys_stay_out_of_the_status_test_() ->
         macula_station_link:stop(Pid)
     end}.
 
+%% Asked for (DESIGN_E2E_SEAL_REPORT §2, §4), a sealed call's result comes
+%% with its report: sealed 1, the target, and the id of the key it was sealed
+%% to, which is the key its answer opened under.
+a_sealed_result_reports_its_key_when_asked_test_() ->
+    {timeout, 10, fun() ->
+        #{link := Pid, provider_id := ProviderId, kem_key := KemKey} = F = fixture(),
+        Caller = call_async(F, #{}, 3_000, {sealed_to, KemKey}, true),
+        {Frame, _Opened, Keys, SealRequest} = received_call(F),
+        answer(F, Frame, sealed_result(F, Frame, Keys, SealRequest, #{temp => 21})),
+        ?assertEqual({ok, #{{text, <<"temp">>} => 21},
+                      #{sealed => 1, provider => ProviderId, seal_key_id => macula_seal:key_id(KemKey)}},
+                     result(Caller)),
+        macula_station_link:stop(Pid)
+    end}.
+
+%% A clear call's result reports sealed 0 and its target, and no key.
+a_clear_result_reports_sealed_0_when_asked_test_() ->
+    {timeout, 10, fun() ->
+        #{link := Pid, provider_id := ProviderId} = F = fixture(),
+        Caller = call_async(F, #{}, 3_000, clear, true),
+        Frame = received_clear_call(),
+        answer(F, Frame, clear_result(F, Frame, #{temp => 21})),
+        ?assertEqual({ok, #{{text, <<"temp">>} => 21}, #{sealed => 0, provider => ProviderId}}, result(Caller)),
+        macula_station_link:stop(Pid)
+    end}.
+
+%% Not asked for, the return is `{ok, Result}' as before, sealed or not.
+no_report_unless_asked_test_() ->
+    {timeout, 10, fun() ->
+        #{link := Pid, kem_key := KemKey} = F = fixture(),
+        Caller = call_async(F, #{}, 3_000, {sealed_to, KemKey}, false),
+        {Frame, _Opened, Keys, SealRequest} = received_call(F),
+        answer(F, Frame, sealed_result(F, Frame, Keys, SealRequest, #{temp => 21})),
+        ?assertEqual({ok, #{{text, <<"temp">>} => 21}}, result(Caller)),
+        macula_station_link:stop(Pid)
+    end}.
+
+%% An error carries no report (§3), even asked for and even sealed.
+an_error_carries_no_report_test_() ->
+    {timeout, 10, fun() ->
+        #{link := Pid, kem_key := KemKey} = F = fixture(),
+        Caller = call_async(F, #{}, 3_000, {sealed_to, KemKey}, true),
+        {Frame, _Opened, Keys, SealRequest} = received_call(F),
+        answer(F, Frame, sealed_error(F, Frame, Keys, SealRequest, #{code => <<"handler_error">>,
+                                                                      detail => <<"no such city">>})),
+        ?assertEqual({error, <<"no such city">>}, result(Caller)),
+        macula_station_link:stop(Pid)
+    end}.
+
 %%------------------------------------------------------------------
 %% Helpers
 %%------------------------------------------------------------------
@@ -158,6 +207,22 @@ call_async(#{link := Pid, provider_id := Target, kem_key := KemKey}, Payload, Ti
                       macula_station_link:call(Pid, Target, ?REALM, <<"acme/echo_v1">>, Payload, TimeoutMs, <<>>,
                                                {sealed_to, KemKey})}
           end).
+
+%% A call sealed as `Seal', asking for its report or not (call/9).
+call_async(#{link := Pid, provider_id := Target}, Payload, TimeoutMs, Seal, Report) ->
+    Self = self(),
+    spawn(fun() ->
+              Self ! {call_result, self(),
+                      macula_station_link:call(Pid, Target, ?REALM, <<"acme/echo_v1">>, Payload, TimeoutMs, <<>>,
+                                               Seal, Report)}
+          end).
+
+%% The clear CALL the link sent.
+received_clear_call() ->
+    receive
+        {'$gen_cast', {send_frame, _, #{frame_type := call} = Frame}} -> Frame
+    after 3_000 -> error(no_call_sent)
+    end.
 
 result(Caller) ->
     receive {call_result, Caller, Result} -> Result after 5_000 -> error(no_result) end.

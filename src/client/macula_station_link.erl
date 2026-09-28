@@ -141,6 +141,7 @@
     call/6,
     call/7,
     call/8,
+    call/9,
     publish/4,
     publish/5,
     put_record/2, put_record/3,
@@ -212,6 +213,11 @@
 %% What opens a pending call's reply: nothing for a clear call, a sealed call's keys and request. `sealed' stands in
 %% for the keys only in the copy of the state that format_status/1 shows.
 -type call_seal() :: clear | {macula_sealed_call:keys(), macula_seal:request()} | sealed.
+
+%% A call's seal report (DESIGN_E2E_SEAL_REPORT): `sealed' 1 with the id of the key the call was sealed to and its
+%% answer opened under, or 0 for a clear call; `provider' is the call's target.
+-type report() :: #{sealed := 0 | 1, provider := <<_:256>>, seal_key_id => <<_:64>>}.
+-export_type([report/0]).
 
 -type opts() :: #{
     %% Endpoint to dial. Either a URL (https://host:port) or a
@@ -355,9 +361,10 @@
     peer_pid         :: pid() | undefined,
     %% peer's node id, set on `connected'.
     peer_node_id     :: <<_:256>> | undefined,
-    %% map of CALL id (16 bytes) -> {From, TimerRef}.
+    %% map of CALL id (16 bytes) -> {From, TimerRef, Request, Seal, Report}: what opens its reply, and whether
+    %% its caller asked for the seal report.
     pending = #{}    :: #{<<_:128>> => {gen_server:from(), reference(), macula_frame:verified_request(),
-                                          call_seal()}},
+                                          call_seal(), boolean()}},
     %% Active topic subscriptions keyed by SubRef returned to the
     %% subscriber. The reverse `topic_index' lets inbound EVENT
     %% frames fan out to all SubRefs subscribed to a given
@@ -574,16 +581,28 @@ call(Pid, Target, Realm, Procedure, Payload, TimeoutMs) ->
 call(Pid, Target, Realm, Procedure, Payload, TimeoutMs, Token) ->
     call(Pid, Target, Realm, Procedure, Payload, TimeoutMs, Token, clear).
 
+%% @doc As `call/9', with no report.
+-spec call(pid(), station | <<_:256>>, <<_:256>>, binary(), term(), 1..600_000, binary(),
+           clear | {sealed_to, binary()}) ->
+    {ok, term()} | {error, term()}.
+call(Pid, Target, Realm, Procedure, Payload, TimeoutMs, Token, Seal) ->
+    call(Pid, Target, Realm, Procedure, Payload, TimeoutMs, Token, Seal, false).
+
 %% @doc As `call/7', sealed to the provider's KEM key as carried (E2E design §5.1) with `{sealed_to, Key}', or in the
 %% clear with `clear'. A sealed call's reply is opened before it is answered. Against it, a clear provider error is
 %% accepted only from the closed set of admission refusals, and `sealed_refused' answers `{error, {sealed_refused,
 %% KeyId}}', naming the key the provider holds now, or `no_key' when it holds none. Any other clear answer is refused,
 %% and the call runs to its deadline. A key of another profile than this link's, or one that seals nothing, is
 %% `{error, {confidentiality, no_kem_key}}', and nothing is sent.
+%%
+%% `Report' `true' asks for the call's seal report (DESIGN_E2E_SEAL_REPORT): a result then comes back as
+%% `{ok, Result, #{sealed := 0 | 1, provider := Target, seal_key_id => KeyId}}', `sealed' 1 with the id of the key
+%% the call was sealed to, which is the key its answer opened under, or 0 for a clear call, with no key. It states
+%% that the mechanism ran on this exchange, nothing more. An error is returned as it is, with no report.
 -spec call(pid(), station | <<_:256>>, <<_:256>>, binary(), term(), 1..600_000, binary(),
-           clear | {sealed_to, binary()}) ->
-    {ok, term()} | {error, term()}.
-call(Pid, Target, Realm, Procedure, Payload, TimeoutMs, Token, Seal)
+           clear | {sealed_to, binary()}, boolean()) ->
+    {ok, term()} | {ok, term(), report()} | {error, term()}.
+call(Pid, Target, Realm, Procedure, Payload, TimeoutMs, Token, Seal, Report)
   when is_pid(Pid),
        (Target =:= station orelse (is_binary(Target) andalso byte_size(Target) =:= 32)),
        is_binary(Realm), byte_size(Realm) =:= 32,
@@ -591,7 +610,8 @@ call(Pid, Target, Realm, Procedure, Payload, TimeoutMs, Token, Seal)
        is_integer(TimeoutMs), TimeoutMs > 0, TimeoutMs =< ?MAX_CALL_TIMEOUT_MS,
        is_binary(Token),
        (Seal =:= clear orelse (tuple_size(Seal) =:= 2 andalso element(1, Seal) =:= sealed_to
-                                andalso is_binary(element(2, Seal)))) ->
+                                andalso is_binary(element(2, Seal)))),
+       is_boolean(Report) ->
     %% The deadline is the caller's: a link busy past it doesn't send the
     %% CALL at all (see call_in_time/4). gen_server timeout = TimeoutMs +
     %% 500 to give the server time to report a clean `{error, timeout}'
@@ -600,7 +620,7 @@ call(Pid, Target, Realm, Procedure, Payload, TimeoutMs, Token, Seal)
     GenTimeout = TimeoutMs + 500,
     try
         gen_server:call(Pid,
-                        {call, Target, Realm, Procedure, Payload, DeadlineMs, Token, Seal},
+                        {call, Target, Realm, Procedure, Payload, DeadlineMs, Token, Seal, Report},
                         GenTimeout)
     catch
         %% The exits of a gen_server call, read as call results. No link
@@ -1377,7 +1397,7 @@ started({ok, Seed, Key, Profile, Issuer}, Opts) ->
 app_env(Key, Default) ->
     application:get_env(macula, Key, Default).
 
-handle_call({call, _Target, _Realm, _Proc, _Payload, _DeadlineMs, _Token, _Seal}, _From,
+handle_call({call, _Target, _Realm, _Proc, _Payload, _DeadlineMs, _Token, _Seal, _Report}, _From,
             #state{peer_node_id = undefined} = S) ->
     %% Gate CALL on the full CONNECT/HELLO handshake (mirrors the
     %% `{publish, ...}' clause below). `peer_pid' is set the moment
@@ -1390,9 +1410,9 @@ handle_call({call, _Target, _Realm, _Proc, _Payload, _DeadlineMs, _Token, _Seal}
     %% `{error, not_connected}' here lets the caller back off and
     %% retry once the handshake completes.
     {reply, {error, not_connected}, S};
-handle_call({call, Target, Realm, Proc, Payload, DeadlineMs, Token, Seal}, From, S) ->
+handle_call({call, Target, Realm, Proc, Payload, DeadlineMs, Token, Seal, Report}, From, S) ->
     call_in_time(DeadlineMs - erlang:system_time(millisecond),
-                 {Target, Realm, Proc, Payload, DeadlineMs, Token, Seal}, From, S);
+                 {Target, Realm, Proc, Payload, DeadlineMs, Token, Seal, Report}, From, S);
 
 handle_call({publish, _Realm, _Topic, _Payload}, _From,
             #state{peer_node_id = undefined} = S) ->
@@ -1850,7 +1870,7 @@ pool_told(undefined, _Summary) -> ok;
 pool_told(Pool, Summary) -> Pool ! {macula_link_disconnected, self(), Summary}, ok.
 
 answer_waiting_callers(Reason, #state{pending = Pending}) ->
-    maps:foreach(fun(_RequestId, {From, _TRef, _Request, _Seal}) -> gen_server:reply(From, {error, Reason}) end,
+    maps:foreach(fun(_RequestId, {From, _TRef, _Request, _Seal, _Report}) -> gen_server:reply(From, {error, Reason}) end,
                  Pending).
 
 code_change(_OldVsn, S, _Extra) -> {ok, S}.
@@ -1864,8 +1884,8 @@ seals_redacted(#{state := #state{pending = Pending} = S} = Status) ->
 seals_redacted(Status) ->
     Status.
 
-seal_redacted({From, TRef, Request, {_Keys, _SealRequest}}) ->
-    {From, TRef, Request, sealed};
+seal_redacted({From, TRef, Request, {_Keys, _SealRequest}, Report}) ->
+    {From, TRef, Request, sealed, Report};
 seal_redacted(Entry) ->
     Entry.
 
@@ -1890,7 +1910,7 @@ publish_reply({error, _} = Refused, _Seq, S) ->
 %% deadline, and the call waits for its reply until then.
 call_in_time(RemainingMs, _Call, _From, S) when RemainingMs =< 0 ->
     {reply, {error, timeout}, S};
-call_in_time(RemainingMs, {_Target, _Realm, Proc, Payload, _DeadlineMs, _Token, _Seal} = Call, From, S) ->
+call_in_time(RemainingMs, {_Target, _Realm, Proc, Payload, _DeadlineMs, _Token, _Seal, _Report} = Call, From, S) ->
     call_sendable(sendable(macula_frame:text_checked(procedure, Proc), Payload), RemainingMs, Call, From, S).
 
 %% A procedure the frame's text bound refuses, or a payload the wire cannot
@@ -1904,12 +1924,12 @@ sendable({error, _} = Refused, _Payload) -> Refused.
 %% refused as well, so no caller's argument takes the link down.
 call_sendable({error, Unsendable}, _RemainingMs, _Call, _From, S) ->
     {reply, {error, {refused, Unsendable}}, S};
-call_sendable(ok, RemainingMs, {Target, Realm, Proc, Payload, DeadlineMs, Token, Seal}, From,
+call_sendable(ok, RemainingMs, {Target, Realm, Proc, Payload, DeadlineMs, Token, Seal, Report}, From,
               #state{node_identity = Key, profile = Profile} = S) ->
     RequestId = crypto:strong_rand_bytes(16),
     Spec = with_token(Token, #{request_id => RequestId, realm => Realm, procedure => Proc,
                                target => target_node_id(Target, S), deadline => DeadlineMs}),
-    call_built(carried_call(Seal, Spec, Payload, Key, Profile), RequestId, From, RemainingMs, S).
+    call_built(carried_call(Seal, Spec, Payload, Key, Profile), RequestId, Report, From, RemainingMs, S).
 
 %% A CALL's payload in the clear, or sealed to the provider's KEM key, with what opens its reply.
 carried_call(clear, Spec, Payload, _Key, _Profile) ->
@@ -1937,19 +1957,21 @@ sealed_spec({#{scheme := 1} = Sealed, #{k_c2p := _, k_p2c := _} = Keys}, Spec, S
 sealed_spec(_Refused, _Spec, _SealRequest) ->
     {error, {confidentiality, no_kem_key}}.
 
-call_built({ok, Spec, Seal}, RequestId, From, RemainingMs, #state{node_identity = Key, profile = Profile} = S) ->
+call_built({ok, Spec, Seal}, RequestId, Report, From, RemainingMs,
+           #state{node_identity = Key, profile = Profile} = S) ->
     Frame = macula_frame:call(Spec, Key),
-    call_verified(macula_frame:verify_request(Frame, Profile), Frame, RequestId, Seal, From, RemainingMs, S);
-call_built({error, _} = Refused, _RequestId, _From, _RemainingMs, S) ->
+    call_verified(macula_frame:verify_request(Frame, Profile), Frame, RequestId, {Seal, Report}, From, RemainingMs, S);
+call_built({error, _} = Refused, _RequestId, _Report, _From, _RemainingMs, S) ->
     {reply, Refused, S}.
 
 %% The request is kept as a verifier reads it, with what opens its reply.
-call_verified({ok, Request}, Frame, RequestId, Seal, From, RemainingMs, #state{peer_pid = Pid, pending = P} = S) ->
+call_verified({ok, Request}, Frame, RequestId, SealAndReport, From, RemainingMs,
+              #state{peer_pid = Pid, pending = P} = S) ->
     %% NOT `ok = send_frame(...)': a frame the peering refuses comes back as
     %% an error, and a hard match would take this link down for every other
     %% caller on it. Reply with the reason instead.
-    await_call_reply(macula_peering:send_frame(Pid, Frame), RequestId, Request, Seal, From, RemainingMs, P, S);
-call_verified({error, Refusal}, _Frame, _RequestId, _Seal, _From, _RemainingMs, S) ->
+    await_call_reply(macula_peering:send_frame(Pid, Frame), RequestId, Request, SealAndReport, From, RemainingMs, P, S);
+call_verified({error, Refusal}, _Frame, _RequestId, _SealAndReport, _From, _RemainingMs, S) ->
     {reply, {error, {refused, Refusal}}, S}.
 
 target_node_id(station, #state{peer_node_id = Station}) -> Station;
@@ -1958,10 +1980,10 @@ target_node_id(NodeId, _S) -> NodeId.
 with_token(<<>>, Spec) -> Spec;
 with_token(Token, Spec) -> Spec#{token => Token}.
 
-await_call_reply(ok, RequestId, Request, Seal, From, Tmo, Pending, S) ->
+await_call_reply(ok, RequestId, Request, {Seal, Report}, From, Tmo, Pending, S) ->
     TRef = erlang:send_after(Tmo, self(), {call_timeout, RequestId}),
-    {noreply, S#state{pending = Pending#{RequestId => {From, TRef, Request, Seal}}}};
-await_call_reply({error, Reason}, _RequestId, _Request, _Seal, _From, _Tmo, _Pending, S) ->
+    {noreply, S#state{pending = Pending#{RequestId => {From, TRef, Request, Seal, Report}}}};
+await_call_reply({error, Reason}, _RequestId, _Request, _SealAndReport, _From, _Tmo, _Pending, S) ->
     {reply, {error, {refused, Reason}}, S}.
 
 -spec send_publish_frame(<<_:256>>, binary(), term(), non_neg_integer(),
@@ -2067,15 +2089,15 @@ held_request(RequestId, #state{liveness_outstanding = {RequestId, Request}}) ->
 held_request(RequestId, #state{pending = Pending}) ->
     pending_request(RequestId, maps:find(RequestId, Pending)).
 
-pending_request(RequestId, {ok, {From, TRef, Request, Seal}}) ->
-    {call, RequestId, From, TRef, Request, Seal};
+pending_request(RequestId, {ok, {From, TRef, Request, Seal, Report}}) ->
+    {call, RequestId, From, TRef, Request, Seal, Report};
 pending_request(_RequestId, error) ->
     unknown_request.
 
 answered({probe, Request}, Frame, S) ->
     probe_answered(verified_answer(Frame, Request, S), S);
-answered({call, RequestId, From, TRef, Request, Seal}, Frame, S) ->
-    call_answered(verified_answer(Frame, Request, S), RequestId, From, TRef, Request, Seal, S);
+answered({call, RequestId, From, TRef, Request, Seal, Report}, Frame, S) ->
+    call_answered(verified_answer(Frame, Request, S), RequestId, From, TRef, Request, Seal, Report, S);
 answered(unknown_request, _Frame, S) ->
     refused_reply(unknown_request, S).
 
@@ -2092,11 +2114,25 @@ probe_answered({error, Refusal}, S) ->
     refused_reply(Refusal, S).
 
 %% A verified answer completes the call; a refused one leaves it pending. A sealed call's answer is opened first, and
-%% one that does not answer a sealed request is refused too.
-call_answered({ok, Fields}, RequestId, From, TRef, Request, Seal, S) ->
-    completed(answer_of(Fields, Seal, Request), RequestId, From, TRef, S);
-call_answered({error, Refusal}, _RequestId, _From, _TRef, _Request, _Seal, S) ->
+%% one that does not answer a sealed request is refused too. A result the caller asked the report for carries it,
+%% built here, the one place that holds both the answer and what the call was sealed under.
+call_answered({ok, Fields}, RequestId, From, TRef, Request, Seal, Report, S) ->
+    completed(reported(answer_of(Fields, Seal, Request), Report, Seal, Request), RequestId, From, TRef, S);
+call_answered({error, Refusal}, _RequestId, _From, _TRef, _Request, _Seal, _Report, S) ->
     refused_reply(Refusal, S).
+
+%% A result with its seal report when asked for (DESIGN_E2E_SEAL_REPORT §2, §3): a sealed call's result is only ever
+%% one its answer opened under the call's key, so `sealed' 1 names that key; a clear call's reports 0. Anything but a
+%% result, an error or a refusal, is returned as it is.
+reported({ok, Result}, true, Seal, #{target := Target}) ->
+    {ok, Result, seal_report(Seal, Target)};
+reported(Answer, _Report, _Seal, _Request) ->
+    Answer.
+
+seal_report(clear, Target) ->
+    #{sealed => 0, provider => Target};
+seal_report({#{key_id := KeyId}, _SealRequest}, Target) ->
+    #{sealed => 1, provider => Target, seal_key_id => KeyId}.
 
 completed({refused, Refusal}, _RequestId, _From, _TRef, S) ->
     refused_reply(Refusal, S);
@@ -2192,7 +2228,7 @@ on_inbound_call({error, Why}, _Frame, S) ->
 
 on_timeout(error, S) ->
     {noreply, S};
-on_timeout({{From, _OldTRef, _Request, _Seal}, NewP}, S) ->
+on_timeout({{From, _OldTRef, _Request, _Seal, _Report}, NewP}, S) ->
     gen_server:reply(From, {error, timeout}),
     {noreply, S#state{pending = NewP}}.
 
@@ -2202,7 +2238,7 @@ fail_all_pending(Reason, #state{pending = P, subscriptions = Subs,
                                 overlay_subscriptions = OverlaySubs,
                                 client_streams = CS,
                                 server_streams = SS} = S) ->
-    maps:foreach(fun(_RequestId, {From, TRef, _Request, _Seal}) ->
+    maps:foreach(fun(_RequestId, {From, TRef, _Request, _Seal, _Report}) ->
         _ = erlang:cancel_timer(TRef),
         gen_server:reply(From, {error, Reason})
     end, P),

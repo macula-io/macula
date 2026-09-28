@@ -844,8 +844,17 @@ call_linked_station(Pool, Realm, Procedure, Payload, TimeoutMs)
 -spec call_station(pool(), seed(), <<_:256>>, <<_:256>>, binary(), term(),
                    1..600_000, binary(), map(), pos_integer(), clear | {sealed_to, binary()}) ->
     {ok, term()} | {error, term()}.
+call_station(Pool, Station, Target, Realm, Procedure, Payload, TimeoutMs, UcanToken, LinkOpts, DialTimeoutMs, Seal) ->
+    call_station(Pool, Station, Target, Realm, Procedure, Payload, TimeoutMs, UcanToken, LinkOpts, DialTimeoutMs,
+                 Seal, false).
+
+%% @doc As `call_station/11'. `Report' `true' asks for the call's seal report: a result then comes back as
+%% `{ok, Result, Report}' (see `macula_station_link:call/9'); an error is returned as it is.
+-spec call_station(pool(), seed(), <<_:256>>, <<_:256>>, binary(), term(),
+                   1..600_000, binary(), map(), pos_integer(), clear | {sealed_to, binary()}, boolean()) ->
+    {ok, term()} | {ok, term(), macula_station_link:report()} | {error, term()}.
 call_station(Pool, Station, Target, Realm, Procedure, Payload, TimeoutMs, UcanToken,
-             LinkOpts, DialTimeoutMs, Seal)
+             LinkOpts, DialTimeoutMs, Seal, Report)
   when is_pid(Pool),
        is_binary(Target), byte_size(Target) =:= 32,
        is_binary(Realm), byte_size(Realm) =:= 32,
@@ -855,10 +864,11 @@ call_station(Pool, Station, Target, Realm, Procedure, Payload, TimeoutMs, UcanTo
        is_map(LinkOpts),
        is_integer(DialTimeoutMs), DialTimeoutMs > 0,
        (Seal =:= clear orelse (is_tuple(Seal) andalso tuple_size(Seal) =:= 2 andalso element(1, Seal) =:= sealed_to
-                                andalso is_binary(element(2, Seal)))) ->
+                                andalso is_binary(element(2, Seal)))),
+       is_boolean(Report) ->
     gen_server:call(Pool,
                     {call_station, Station, Target, Realm, Procedure, Payload,
-                     TimeoutMs, DialTimeoutMs, UcanToken, LinkOpts, Seal},
+                     TimeoutMs, DialTimeoutMs, UcanToken, LinkOpts, Seal, Report},
                     TimeoutMs + 2_000).
 
 %% @doc Register a procedure handler on every healthy link. Stored
@@ -1708,13 +1718,14 @@ handle_call({linked_station_call, Realm, Procedure, Payload, TimeoutMs}, From, S
     {noreply, S};
 
 handle_call({call_station, Station, Target, Realm, Procedure, Payload, TimeoutMs,
-             DialTimeoutMs, Ucan, LinkOpts, Seal}, From, S) ->
+             DialTimeoutMs, Ucan, LinkOpts, Seal, Report}, From, S) ->
     %% Ensure (reuse or dial) a link to the specific station, then hand
     %% the wait-for-handshake + call to a worker so the pool gen_server
     %% is never blocked (same rationale as a linked station call).
     on_link(ensure_link(Station, LinkOpts, S), From,
             fun(Pid) ->
-                call_when_connected(Pid, Target, Realm, Procedure, Payload, TimeoutMs, DialTimeoutMs, Ucan, Seal)
+                call_when_connected(Pid, Target, Realm, Procedure, Payload, TimeoutMs, DialTimeoutMs, Ucan, Seal,
+                                    Report)
             end);
 
 handle_call({advertise, Realm, Procedure, Registration}, _From, S) ->
@@ -2502,13 +2513,13 @@ link_pid(Station, #state{links = Links}) ->
 %% time remains of `TimeoutMs'. A reused, already-connected link calls
 %% immediately.
 call_when_connected(undefined, _Target, _Realm, _Proc, _Payload, _TimeoutMs, _DialTimeoutMs,
-                    _Ucan, _Seal) ->
+                    _Ucan, _Seal, _Report) ->
     {error, not_connected};
-call_when_connected(Pid, Target, Realm, Proc, Payload, TimeoutMs, DialTimeoutMs, Ucan, Seal) ->
+call_when_connected(Pid, Target, Realm, Proc, Payload, TimeoutMs, DialTimeoutMs, Ucan, Seal, Report) ->
     Now = erlang:monotonic_time(millisecond),
     Deadline = Now + TimeoutMs,
     call_after_connect(await_connected(Pid, Now + min(DialTimeoutMs, TimeoutMs)), Pid,
-                       Target, Realm, Proc, Payload, Deadline, Ucan, Seal).
+                       Target, Realm, Proc, Payload, Deadline, Ucan, Seal, Report).
 
 %% INSTRUMENT. Every connect wait reports HOW it ended, HOW LONG it took and
 %% WHOSE link it was, on both outcomes, with no threshold.
@@ -2566,10 +2577,10 @@ wait_or_give_up(true, Pid, Deadline) ->
 wait_or_give_up(false, _Pid, _Deadline) ->
     false.
 
-call_after_connect(true, Pid, Target, Realm, Proc, Payload, Deadline, Ucan, Seal) ->
+call_after_connect(true, Pid, Target, Realm, Proc, Payload, Deadline, Ucan, Seal, Report) ->
     Remaining = max(100, Deadline - erlang:monotonic_time(millisecond)),
-    macula_station_link:call(Pid, Target, Realm, Proc, Payload, Remaining, Ucan, Seal);
-call_after_connect(false, _Pid, _Target, _Realm, _Proc, _Payload, _Deadline, _Ucan, _Seal) ->
+    macula_station_link:call(Pid, Target, Realm, Proc, Payload, Remaining, Ucan, Seal, Report);
+call_after_connect(false, _Pid, _Target, _Realm, _Proc, _Payload, _Deadline, _Ucan, _Seal, _Report) ->
     {error, not_connected}.
 
 %% Live links that have completed CONNECT/HELLO. Used by publish,

@@ -286,7 +286,7 @@ a_stopping_link_replies_to_its_pending_call_test_() ->
          Provider = macula_node_keys:key_id(new_key(Profile)),
          Test = self(),
          Ref = make_ref(),
-         Call = {call, Provider, ?REALM, ?PROCEDURE, #{}, erlang:system_time(millisecond) + 4_000, <<>>, clear},
+         Call = {call, Provider, ?REALM, ?PROCEDURE, #{}, erlang:system_time(millisecond) + 4_000, <<>>, clear, false},
          _ = spawn(fun() -> Test ! {Ref, catch gen_server:call(Pid, Call, 4_500)} end),
          _ = sent_request(Profile),
          ok = macula_station_link:stop(Pid),
@@ -456,7 +456,7 @@ sent_frame_within(Ms) ->
 
 %% Waits, for at most `Tries' times 10 ms, until a call waits in the link's mailbox.
 call_waiting(Pid, Tries) ->
-    waiting(Pid, fun({call, _, _, _, _, _, _, _}) -> true; (_) -> false end, Tries).
+    waiting(Pid, fun({call, _, _, _, _, _, _, _, _}) -> true; (_) -> false end, Tries).
 
 %% Waits, for at most `Tries' times 10 ms, until a gen_server call whose request `Match' takes waits in the mailbox.
 waiting(_Pid, _Match, 0) ->

@@ -379,9 +379,16 @@ call_station(Pool, Station, Target, Realm, Procedure, Payload, TimeoutMs) ->
                    term(), 1..600_000, map()) ->
     {ok, term()} | {error, term()}.
 call_station(Pool, Station, Target, Realm, Procedure, Payload, TimeoutMs, Opts) ->
-    refused(target_checked(Station, Opts),
+    refused(first_error([target_checked(Station, Opts), report_checked(Opts)]),
             fun() -> do_call_station(Pool, Station, Target, Realm, Procedure,
                                      Payload, TimeoutMs, Opts) end).
+
+%% `ok', or the refusal of a `report' that is not a boolean, before anything is sent.
+report_checked(Opts) ->
+    report_valid(macula_direct_dial:report_option(Opts)).
+
+report_valid({ok, _Report}) -> ok;
+report_valid({error, _} = Refused) -> Refused.
 
 do_call_station(Pool, Station, Target, Realm, Procedure, Payload, TimeoutMs, Opts) ->
     Ucan = maps:get(ucan_token, Opts, <<>>),
@@ -390,7 +397,7 @@ do_call_station(Pool, Station, Target, Realm, Procedure, Payload, TimeoutMs, Opt
     Resolve = fun() -> find_records(Pool, macula_record:procedure_key(Realm, Procedure)) end,
     sealed_or_refused(call_seal(Target, Realm, Procedure, Opts, Resolve), fun(Seal) ->
         macula_client:call_station(Pool, Station, Target, Realm, Procedure, Payload,
-                                   TimeoutMs, Ucan, LinkOpts, DialTimeoutMs, Seal)
+                                   TimeoutMs, Ucan, LinkOpts, DialTimeoutMs, Seal, maps:get(report, Opts, false))
     end).
 
 sealed_or_refused({ok, Seal}, Call) -> Call(Seal);

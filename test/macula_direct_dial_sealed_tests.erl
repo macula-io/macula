@@ -37,7 +37,13 @@ cases() ->
       fun a_calls_reseal_after_a_lost_key_skips_a_keyless_advertisement/0},
      {"a call refuses confidential => off before any lookup", fun a_call_refuses_off/0},
      {"a stream refuses confidential => off before any lookup", fun a_stream_refuses_off/0},
-     {"a confidential that names no policy is an invalid option", fun an_unknown_confidential_is_invalid/0}].
+     {"a confidential that names no policy is an invalid option", fun an_unknown_confidential_is_invalid/0},
+     {"a call asking for its report passes it down and returns the station call's report",
+      fun a_reported_call_returns_the_station_calls_report/0},
+     {"a call not asking for its report passes none down", fun an_unreported_call_passes_no_report/0},
+     {"a resealed call returns the second call's report", fun a_resealed_call_returns_the_reseals_report/0},
+     {"a reported answer is remembered as an answer", fun a_reported_answer_is_remembered/0},
+     {"a report that is not a boolean is an invalid option", fun a_non_boolean_report_is_invalid/0}].
 
 the_call_carries_the_advertisement() ->
     F = fixture(),
@@ -116,6 +122,48 @@ an_unknown_confidential_is_invalid() ->
     script(F, [[keyed_ad(F, kem(1))]], [{ok, <<"pong">>}, {ok, self()}]),
     ?assertEqual({error, {invalid_option, confidential}}, call(F, #{confidential => sometimes})),
     ?assertEqual({error, {invalid_option, confidential}}, stream(F, #{confidential => sometimes})),
+    ?assertEqual([], calls()),
+    ?assertEqual([[keyed_ad_marker]], lookups_left()).
+
+%% DESIGN_E2E_SEAL_REPORT §4: `report => true' rides down to the station call, which builds the report where the
+%% answer is opened; direct dial returns it as it is.
+a_reported_call_returns_the_station_calls_report() ->
+    F = fixture(),
+    Report = #{sealed => 1, provider => maps:get(provider_id, F), seal_key_id => kem_id(1)},
+    script(F, [[keyed_ad(F, kem(1))]], [{ok, <<"pong">>, Report}]),
+    ?assertEqual({ok, <<"pong">>, Report}, call(F, #{report => true})),
+    [Opts] = calls(),
+    ?assertEqual(true, maps:get(report, Opts)).
+
+an_unreported_call_passes_no_report() ->
+    F = fixture(),
+    script(F, [[keyed_ad(F, kem(1))]], [{ok, <<"pong">>}]),
+    ?assertEqual({ok, <<"pong">>}, call(F, #{report => false})),
+    [Opts] = calls(),
+    ?assertNot(is_map_key(report, Opts)).
+
+%% The report describes the exchange that produced the result: after a reseal, the second call's (§3).
+a_resealed_call_returns_the_reseals_report() ->
+    F = fixture(),
+    Second = #{sealed => 1, provider => maps:get(provider_id, F), seal_key_id => kem_id(2)},
+    script(F, [[keyed_ad(F, kem(1))], [keyed_ad(F, kem(2))]],
+           [{error, {sealed_refused, kem_id(2)}}, {ok, <<"pong">>, Second}]),
+    ?assertEqual({ok, <<"pong">>, Second}, call(F, #{report => true})),
+    [First, Resealed] = calls(),
+    ?assertEqual(true, maps:get(report, First)),
+    ?assertEqual(true, maps:get(report, Resealed)).
+
+a_reported_answer_is_remembered() ->
+    F = fixture(),
+    script(F, [[keyed_ad(F, kem(1))]], [{ok, <<"pong">>, #{sealed => 1, provider => maps:get(provider_id, F),
+                                                           seal_key_id => kem_id(1)}}]),
+    {ok, <<"pong">>, _Report} = call(F, #{report => true}),
+    ?assertEqual(1, length(get(remembered))).
+
+a_non_boolean_report_is_invalid() ->
+    F = fixture(),
+    script(F, [[keyed_ad(F, kem(1))]], [{ok, <<"pong">>}]),
+    ?assertEqual({error, {invalid_option, report}}, call(F, #{report => yes})),
     ?assertEqual([], calls()),
     ?assertEqual([[keyed_ad_marker]], lookups_left()).
 
@@ -244,7 +292,8 @@ script(F, Lookups, Answers) ->
     put(fixture, F),
     put(lookups, Lookups),
     put(answers, Answers),
-    put(calls, []).
+    put(calls, []),
+    put(remembered, []).
 
 calls() -> lists:reverse(get(calls)).
 
@@ -274,7 +323,10 @@ dial_io() ->
                           next(answers, {error, no_more_answers})
                       end,
       resolved_candidate => fun(_Pool, _Realm, _Proc) -> none end,
-      remember_resolved => fun(_Pool, _Realm, _Proc, _Candidate, _TtlMs) -> ok end}.
+      remember_resolved => fun(_Pool, _Realm, _Proc, Candidate, _TtlMs) ->
+                               put(remembered, [Candidate | get(remembered)]),
+                               ok
+                           end}.
 
 next(Key, Default) ->
     next_of(get(Key), Key, Default).
