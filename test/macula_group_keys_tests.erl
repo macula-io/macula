@@ -154,3 +154,28 @@ a_call_without_a_caller_is_refused(#{handler := Handler}) ->
 
 the_policy_rides_every_reply(W) ->
     ?_assertMatch(#{policy := {text, <<"required">>}}, call(W, member(W), {text, <<"current">>})).
+
+%% A key never travels clear (plans/DESIGN_E2E_SEALED_PUBSUB.md §2): the distributor's own advertise options take the
+%% org's grant AND sealed calls only. With the node's KEM key named they make the spec whose provider link refuses a
+%% clear CALL as sealed_required (macula_station_link_kem_advertise_tests: required_refuses_a_clear_call_test_); with
+%% it unnamed they refuse to advertise at all, rather than advertise a keyless distributor.
+advertise_opts_take_the_org_grant_and_sealed_calls_only_test() ->
+    OrgKeyId = <<3:256>>,
+    ?assertEqual(#{auth => {realm_member_required, OrgKeyId, <<"group_keys">>}, confidential => required},
+                 macula_group_keys:advertise_opts(OrgKeyId)).
+
+advertise_opts_make_a_sealed_only_spec_or_none_test() ->
+    Prev = application:get_env(macula, kem_advertise),
+    try
+        ok = application:set_env(macula, kem_advertise, enabled),
+        ?assertEqual({ok, #{kem => true, confidential => required}},
+                     macula:advertise_confidentiality(macula_group_keys:advertise_opts(<<3:256>>))),
+        ok = application:set_env(macula, kem_advertise, disabled),
+        ?assertEqual({error, {confidentiality, kem_advertise_disabled}},
+                     macula:advertise_confidentiality(macula_group_keys:advertise_opts(<<3:256>>)))
+    after
+        restore_env(Prev)
+    end.
+
+restore_env(undefined) -> application:unset_env(macula, kem_advertise);
+restore_env({ok, Value}) -> application:set_env(macula, kem_advertise, Value).

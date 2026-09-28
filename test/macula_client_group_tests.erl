@@ -30,7 +30,9 @@ group_test_() ->
       fun a_publish_under_a_group_pulls_its_key_first/1,
       fun a_clear_publish_under_a_held_prefix_names_the_group/1,
       fun a_topic_outside_its_group_is_an_invalid_option/1,
-      fun a_callback_subscription_logs_an_unopened_event_and_keeps_no_mail/1]}.
+      fun a_callback_subscription_logs_an_unopened_event_and_keeps_no_mail/1,
+      fun a_distributor_that_is_not_a_node_id_is_refused_by_name/1,
+      fun a_pool_does_not_outlive_its_keyring/1]}.
 
 setup() ->
     {ok, _} = application:ensure_all_started(macula),
@@ -217,4 +219,30 @@ a_callback_subscription_logs_an_unopened_event_and_keeps_no_mail(#{pool := Pool}
         [Receiver] = [P || P <- erlang:processes(),
                            process_info(P, current_function) =:= {current_function, {macula_pubsub, receiver_loop, 3}}],
         ?assertEqual({message_queue_len, 0}, process_info(Receiver, message_queue_len))
+    end).
+
+a_distributor_that_is_not_a_node_id_is_refused_by_name(#{pool := Pool} = W) ->
+    ?_test(begin
+        ?assertEqual({error, {invalid_option, distributor}},
+                     macula_client:publish(Pool, ?REALM, ?TOPIC, <<"x">>, #{group => ?PREFIX, distributor => <<"beam00">>})),
+        ?assertEqual({error, {invalid_option, distributor}},
+                     subscribe(W, ?TOPIC, #{group => ?PREFIX, distributor => <<"beam00">>})),
+        ?assertEqual([], calls(W))
+    end).
+
+%% A pool whose keyring ended cannot read a group's policy or keys: it stops, naming why, rather than serve on over a
+%% table that no longer exists and crash on the next event.
+a_pool_does_not_outlive_its_keyring(_W) ->
+    ?_test(begin
+        process_flag(trap_exit, true),
+        {ok, Pool} = macula_client:connect([], #{}),
+        {links, Links} = process_info(Pool, links),
+        [Keyring] = [P || P <- Links, is_pid(P),
+                          {'$initial_call', {macula_group_keyring, init, 1}} =:=
+                              lists:keyfind('$initial_call', 1, element(2, process_info(P, dictionary)))],
+        Ref = monitor(process, Pool),
+        exit(Keyring, kill),
+        receive {'DOWN', Ref, process, Pool, Reason} -> ?assertEqual({group_keyring_down, killed}, Reason)
+        after 2000 -> error(pool_outlived_its_keyring)
+        end
     end).

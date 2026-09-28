@@ -45,7 +45,10 @@ keyring_test_() ->
       fun a_reply_whose_acceptance_is_not_the_protocols_is_refused/1,
       fun a_reply_for_another_prefix_is_refused/1,
       fun the_policy_covering_a_topic_is_its_longest_joined_prefix/1,
-      fun a_held_group_is_answered_while_the_keyring_is_pulling/1]}.
+      fun a_held_group_is_answered_while_the_keyring_is_pulling/1,
+      fun a_publish_triggered_pull_leaves_one_re_pull_chain/1,
+      fun a_distributor_that_is_not_a_node_id_is_an_invalid_option/1,
+      fun a_ucan_token_that_is_not_bytes_is_an_invalid_option/1]}.
 
 %%--------------------------------------------------------------------
 %% Fixture: a clock, the real distributor behind a fake wire, and a
@@ -73,6 +76,7 @@ setup() ->
                                         ets:insert(Log, {schedule, erlang:unique_integer([monotonic]),
                                                          {DelayMs, Msg}})
                                     end,
+                        cancel => fun(_Timer) -> ok end,
                         uniform => fun() -> 0.5 end}),
     #{keyring => macula_group_keyring:handle(KeyringPid), pid => KeyringPid, distributor => Distributor, now => Now,
       log => Log, script => Script}.
@@ -334,3 +338,34 @@ a_held_group_is_answered_while_the_keyring_is_pulling(#{keyring := K} = W) ->
 flush_release(#{pid := K}) ->
     K ! release,
     receive {joined, _} -> ok after 5000 -> ok end.
+
+%% A group has one re-pull chain, however many pulls a publish triggers: a pull replaces the pending re-pull, and a
+%% wake-up it replaced does nothing when it arrives. Otherwise every publish-triggered pull would add a chain that
+%% re-pulls every epoch for the pool's life (Fable, 13.2.0 QA).
+a_publish_triggered_pull_leaves_one_re_pull_chain(#{pid := K} = W) ->
+    ?_test(begin
+        {ok, _} = join(W),
+        advance(W, ?R),
+        queue(W, [{error, timeout}]),
+        ?assertEqual({error, no_distributor}, publish_epoch(W)),
+        Calls = length(calls(W)),
+        [begin K ! Msg, _ = sys:get_state(K) end || {_Delay, Msg} <- schedules(W)],
+        %% The join's window wake-up was replaced: of the two scheduled, only the backoff pulls.
+        ?assertEqual(Calls + 1, length(calls(W)))
+    end).
+
+a_distributor_that_is_not_a_node_id_is_an_invalid_option(#{keyring := K} = W) ->
+    ?_test(begin
+        ?assertEqual({error, {invalid_option, distributor}},
+                     macula_group_keyring:join(K, ?REALM, ?PREFIX, #{distributor => <<"beam00">>})),
+        ?assertEqual([], calls(W)),
+        %% The keyring serves on.
+        ?assertEqual({ok, required}, join(W))
+    end).
+
+a_ucan_token_that_is_not_bytes_is_an_invalid_option(#{keyring := K} = W) ->
+    ?_test(begin
+        ?assertEqual({error, {invalid_option, ucan_token}},
+                     macula_group_keyring:join(K, ?REALM, ?PREFIX, #{ucan_token => "grant"})),
+        ?assertEqual([], calls(W))
+    end).
