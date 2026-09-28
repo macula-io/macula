@@ -8,7 +8,7 @@ classical-strength authenticity D17 bought with it.**
 | Kind | CLAIM (an authentication argument), then BUILD |
 | Amends | D17 (neighbour signatures); takes D18 (the EU session proof) from "if ever taken" to built |
 | Milestone | M2 |
-| Status | Draft (Venus, 2026-09-29): Mars approved the station side; Mercurius's three required changes in; then one Fable round; Saturnus words the register |
+| Status | Accepted (2026-09-29): Mars (station) and Mercurius (macula) approved 01ac730f after Fable round 1; register row by Saturnus; building in macula (Venus) |
 | Written against | macula v13.1.0 (47ab941e), macula-pqc v0.3.0, macula-go v0.19.0 |
 
 ---
@@ -44,7 +44,8 @@ authenticate every frame after it. This is D18's session proof, taken.
 - **The exporter.** Both ends compute `E = TLS-Exporter("EXPORTER-macula-session-v1", context, 32)` (RFC 8446 §7.5)
   over the QUIC connection's TLS 1.3 session, with `context = initiator node_id || acceptor node_id` (D18's order).
   It is unique to this session, and both ends derive it from the hybrid key exchange's secret.
-- **The client's half.** The CONNECT proof (already signed by the CONNECT key, composite in pq_hybrid) covers, in
+- **The client's half.** The CONNECT proof (signed by the client's CONNECT key, never its identity key: one key, one
+  purpose, D6/D16; composite in pq_hybrid) covers, in
   handshake version 5, also `E` and the client's `capabilities`:
   `label || 0x00 || nonce || station node_id || client node_id || SHA-384(leaf DER) || SHA-384(challenge) || E ||
   client capabilities`. The label becomes `MACULA-PQ-CONNECT-PROOF-V2`. No new field. The station's capabilities are
@@ -174,10 +175,12 @@ appears in CONNECT:
   new `macula_quic` NIF function, since no NIF exposes it today) and quic-go's
   `ConnectionState().TLS.ExportKeyingMaterial` (Go). D18 was held back because aioquic and .NET QUIC had none; both
   bindings now run on libmacula.
-- **macula_dist_tunnel is the weakest path under this threat model.** It uses `macula_handshake` over OTP `ssl` with
-  no D17 path, so against an ML-DSA-breaking attacker its traffic has neither per-frame signatures nor a session
-  proof today. That is true before this change and is not made worse by it; the register (D29) says so, and it moves
-  to v5 before v4 is dropped (above).
+- **macula_dist_tunnel is parked, and would be the weakest path under this threat model.** Nothing in macula calls
+  it today (Fable, via the register; checked: no caller in `src/`), and direct distribution needs
+  `MACULA_DIST_UNIDENTIFIED_PEER=accept`. It uses `macula_handshake` over OTP `ssl` with no D17 path, so if it were
+  carried, an ML-DSA-breaking attacker would face neither per-frame signatures nor a session proof on it. This change
+  does not make that worse: the tunnel stays on v4 (its station session has no exporter, so it answers v5 as an old
+  station does) and moves to v5 before v4 is dropped (above).
 
 ## 5. Per-frame table (Mars's requirement 3)
 
