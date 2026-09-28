@@ -28,8 +28,8 @@
 > [the design](https://github.com/macula-io/macula/blob/main/plans/DESIGN_E2E_SEALED_PUBSUB.md).
 >
 > 13.2.0 is also the **first handshake v5 release**: a connection is
-> authenticated once, by proofs bound to its TLS session, instead of by a
-> signature on every control frame. A station that runs it makes it its
+> authenticated once, by proofs bound to its TLS session, instead of, in
+> pq_hybrid, by a signature on every control frame. A station that runs it makes it its
 > rollback floor. See [CHANGELOG.md](CHANGELOG.md) and
 > [the design](https://github.com/macula-io/macula/blob/main/plans/DESIGN_NEIGHBOUR_CHANNEL_BINDING.md).
 

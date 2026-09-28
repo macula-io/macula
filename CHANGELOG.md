@@ -10,7 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [13.2.0] - 2026-09-29
 
 The first handshake v5 release: a station that runs it makes it its rollback floor, and rolling it back below 13.2.0
-partitions it from every client that saw it on v5, so that is a stated decision, never a routine pin
+partitions it from every client that saw it on v5 until that client restarts (our own nodes:
+`macula_peering:forget_v5_peer/1`), so that is a stated decision, never a routine pin
 (plans/DESIGN_NEIGHBOUR_CHANNEL_BINDING.md §4). It also brings sealed pubsub groups.
 
 Handshake version 5: a connection is authenticated once, by hybrid proofs bound to its TLS session, instead of by a
