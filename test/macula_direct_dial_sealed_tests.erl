@@ -43,7 +43,10 @@ cases() ->
      {"a call not asking for its report passes none down", fun an_unreported_call_passes_no_report/0},
      {"a resealed call returns the second call's report", fun a_resealed_call_returns_the_reseals_report/0},
      {"a reported answer is remembered as an answer", fun a_reported_answer_is_remembered/0},
-     {"a report that is not a boolean is an invalid option", fun a_non_boolean_report_is_invalid/0}].
+     {"a report that is not a boolean is an invalid option", fun a_non_boolean_report_is_invalid/0},
+     {"a call's ucan_token reaches the station call", fun a_calls_ucan_token_reaches_the_station_call/0},
+     {"a call without a ucan_token passes none down", fun a_call_without_a_ucan_token_passes_none/0},
+     {"a ucan_token that is not bytes is an invalid option", fun a_non_binary_ucan_token_is_invalid/0}].
 
 the_call_carries_the_advertisement() ->
     F = fixture(),
@@ -340,3 +343,26 @@ wrapped(answers, Answer) -> Answer.
 profile() ->
     {ok, Profile} = macula_crypto_profile:configured(),
     Profile.
+
+%% A gated provider takes the caller's UCAN from the call's own token (the advertise policy checks it before the
+%% handler runs), so a call direct dial resolves presents it as `call_station/8' does: to every candidate it tries,
+%% the resealed call included.
+a_calls_ucan_token_reaches_the_station_call() ->
+    F = fixture(),
+    script(F, [[keyed_ad(F, kem(1))], [keyed_ad(F, kem(2))]], [{error, {sealed_refused, kem_id(2)}}, {ok, <<"pong">>}]),
+    ?assertEqual({ok, <<"pong">>}, call(F, #{ucan_token => <<"token">>})),
+    ?assertEqual([<<"token">>, <<"token">>], [maps:get(ucan_token, Opts) || Opts <- calls()]).
+
+a_call_without_a_ucan_token_passes_none() ->
+    F = fixture(),
+    script(F, [[keyed_ad(F, kem(1))]], [{ok, <<"pong">>}]),
+    ?assertEqual({ok, <<"pong">>}, call(F, #{})),
+    [Opts] = calls(),
+    ?assertNot(maps:is_key(ucan_token, Opts)).
+
+a_non_binary_ucan_token_is_invalid() ->
+    F = fixture(),
+    script(F, [[keyed_ad(F, kem(1))]], [{ok, <<"pong">>}]),
+    ?assertEqual({error, {invalid_option, ucan_token}}, call(F, #{ucan_token => "token"})),
+    ?assertEqual([], calls()),
+    ?assertEqual([[keyed_ad_marker]], lookups_left()).
