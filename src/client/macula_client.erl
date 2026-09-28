@@ -1384,7 +1384,7 @@ publishable_epoch({error, Reason}) -> {error, {group, Reason}}.
 %% A join's answer as publish and subscribe return it: a prefix that is no
 %% group is the caller's option, anything else the group's refusal.
 group_joined({ok, _Policy}) -> ok;
-group_joined({error, {invalid_option, group}} = Invalid) -> Invalid;
+group_joined({error, {invalid_option, _}} = Invalid) -> Invalid;
 group_joined({error, Reason}) -> {error, {group, Reason}}.
 
 join_options(Opts) ->
@@ -1405,6 +1405,9 @@ sealed_publish({ok, Seal}, Pool, Realm, Topic, Payload, Opts) ->
 sealed_publish({error, _} = Refused, _Pool, _Realm, _Topic, _Payload, _Opts) ->
     Refused.
 
+exited(true, Reason, S) -> {stop, {shutdown, {group_keyring_down, Reason}}, S};
+exited(false, _Reason, S) -> {noreply, S}.
+
 %% The pool's keyring, through its handle.
 group_keyring(Pool) ->
     gen_server:call(Pool, group_keyring, 5_000).
@@ -1418,7 +1421,7 @@ group_keyring(Pool) ->
 %% when the pool closes or the subscriber pid dies.
 -spec subscribe(pool(), <<_:256>>, binary(), pid(), map()) ->
     {ok, reference()}
-    | {error, {text_too_long | invalid_text, topic} | {invalid_option, group}
+    | {error, {text_too_long | invalid_text, topic} | {invalid_option, group | distributor | ucan_token}
               | {group, macula_group_keyring:reason()}}.
 subscribe(Pool, Realm, Topic, Subscriber, Opts)
   when is_pid(Pool),
@@ -2018,11 +2021,13 @@ handle_info({macula_link_connected, Pid, NodeId}, S) ->
 handle_info({macula_link_disconnected, Pid, Summary}, #state{connected = Connected} = S) ->
     {noreply, disconnect_kept(find_link_by_pid(Pid, S), Summary,
                               S#state{connected = maps:remove(Pid, Connected)})};
-handle_info({'EXIT', _Pid, _Reason}, S) ->
+handle_info({'EXIT', Pid, Reason}, #state{keyring = Keyring} = S) ->
     %% Links are linked to us via gen_server:start_link in
     %% start_link_for_seed (we trap_exit). The DOWN monitor fires
-    %% alongside; that path handles cleanup. Drop the EXIT.
-    {noreply, S};
+    %% alongside; that path handles cleanup. Drop the EXIT. The keyring's
+    %% is different: its table goes with it, and a pool that went on would
+    %% read a group's policy and keys from a table that no longer exists.
+    exited(Pid =:= macula_group_keyring:pid(Keyring), Reason, S);
 
 handle_info(_Other, S) ->
     {noreply, S}.

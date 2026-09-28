@@ -285,7 +285,7 @@ subscribe(Pool, Realm, Topic, Subscriber) ->
 %% See `macula_pubsub:subscribe/5'.
 -spec subscribe(pool(), realm(), topic(), pid(), map()) ->
     {ok, reference()}
-    | {error, {text_too_long | invalid_text, topic} | {invalid_option, group}
+    | {error, {text_too_long | invalid_text, topic} | {invalid_option, group | distributor | ucan_token}
               | {group, macula_group_keyring:reason()}}.
 subscribe(Pool, Realm, Topic, Subscriber, Opts) ->
     macula_pubsub:subscribe(Pool, Realm, Topic, Subscriber, Opts).

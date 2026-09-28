@@ -35,6 +35,7 @@
 -type options() :: #{pool => pid(), now => fun(() -> integer()),
                      call => fun((binary(), binary(), map(), map()) -> {ok, term(), map()} | {error, term()}),
                      schedule => fun((non_neg_integer(), term()) -> term()),
+                     cancel => fun((term()) -> term()),
                      uniform => fun(() -> float())}.
 -type join_options() :: #{ucan_token => binary(), distributor => <<_:256>>}.
 -opaque keyring() :: #{pid := pid(), table := ets:tid(), now := fun(() -> integer())}.
@@ -126,6 +127,7 @@ init(Opts) ->
                                                            ?PULL_TIMEOUT_MS, CallOpts)
                                        end),
            schedule => maps:get(schedule, Opts, fun(DelayMs, Msg) -> erlang:send_after(DelayMs, self(), Msg) end),
+           cancel => maps:get(cancel, Opts, fun erlang:cancel_timer/1),
            uniform => maps:get(uniform, Opts, fun rand:uniform/0),
            table => ets:new(?MODULE, [protected, set, {read_concurrency, true}]),
            groups => #{}}}.
@@ -137,6 +139,7 @@ handle_call({join, Realm, Prefix, Opts}, _From, State) ->
     joined(org_of(Prefix), maps:find({Realm, Prefix}, maps:get(groups, State)), Realm, Prefix, Opts, State);
 handle_call({leave, Realm, Prefix}, _From, #{groups := Groups, table := Table} = State) ->
     true = ets:delete(Table, {Realm, Prefix}),
+    _ = timer_cancelled(maps:get({Realm, Prefix}, Groups, #{}), State),
     {reply, ok, State#{groups := maps:remove({Realm, Prefix}, Groups)}};
 handle_call({publish_epoch, Realm, Prefix}, _From, State) ->
     with_group({Realm, Prefix}, State, fun(Group) -> publishing(Group, now(State), {Realm, Prefix}, State) end);
@@ -148,8 +151,8 @@ handle_call({open_epoch, Realm, Prefix, Id, Publisher}, _From, State) ->
 handle_cast(_Msg, State) -> {noreply, State}.
 
 %% @private
-handle_info({repull, Key}, #{groups := Groups} = State) ->
-    {noreply, repulled(maps:find(Key, Groups), Key, State)};
+handle_info({repull, Key, Token}, #{groups := Groups} = State) ->
+    {noreply, repulled(current_wake(maps:find(Key, Groups), Token), Key, State)};
 handle_info(_Msg, State) ->
     {noreply, State}.
 
@@ -162,9 +165,22 @@ joined({error, _} = Invalid, _Held, _Realm, _Prefix, _Opts, State) ->
 joined({ok, _Org}, {ok, #{policy := Policy}}, _Realm, _Prefix, _Opts, State) ->
     {reply, {ok, Policy}, State};
 joined({ok, Org}, error, Realm, Prefix, Opts, State) ->
+    options_valid(join_options_checked(Opts), Org, {Realm, Prefix}, Opts, State).
+
+%% A join's options, checked before anything is sent: a pinned distributor is a node id, a grant is bytes.
+join_options_checked(#{distributor := Node}) when not (is_binary(Node) andalso byte_size(Node) =:= 32) ->
+    {error, {invalid_option, distributor}};
+join_options_checked(#{ucan_token := Token}) when not is_binary(Token) ->
+    {error, {invalid_option, ucan_token}};
+join_options_checked(_Valid) ->
+    ok.
+
+options_valid({error, _} = Invalid, _Org, _Key, _Opts, State) ->
+    {reply, Invalid, State};
+options_valid(ok, Org, Key, Opts, State) ->
     Group = #{org => Org, ucan => maps:get(ucan_token, Opts, none), pin => pin(maps:find(distributor, Opts)),
-              epochs => [], unknown => #{}, budget => #{}, backoff => ?FIRST_BACKOFF_MS},
-    first_pull(pull(<<"current">>, Group, {Realm, Prefix}, State), {Realm, Prefix}, State).
+              epochs => [], unknown => #{}, budget => #{}, backoff => ?FIRST_BACKOFF_MS, timer => none},
+    first_pull(pull(<<"current">>, Group, Key, State), Key, State).
 
 pin({ok, <<_:256>> = Node}) -> {user, Node};
 pin(error) -> none.
@@ -294,14 +310,26 @@ after_repull({error, _Reason, Group}, Key, State) ->
     backed_off(Group, Key, State).
 
 %% The next re-pull: a random instant in the newest epoch's ahead window, or at once if that window has passed.
-scheduled(#{epochs := Epochs, rotation := R} = Group, Key, #{schedule := Schedule, uniform := Uniform} = State) ->
+scheduled(#{epochs := Epochs, rotation := R} = Group, Key, #{uniform := Uniform} = State) ->
     At = macula_group_epoch:repull_at(lists:last(Epochs), R, Uniform()),
-    Schedule(max(0, At - now(State)), {repull, Key}),
-    stored(Group, Key, State).
+    stored(woken_in(max(0, At - now(State)), Group, Key, State), Key, State).
 
-backed_off(#{backoff := Backoff, rotation := R} = Group, Key, #{schedule := Schedule} = State) ->
-    Schedule(Backoff, {repull, Key}),
-    stored(Group#{backoff := min(Backoff * 2, R div 3)}, Key, State).
+backed_off(#{backoff := Backoff, rotation := R} = Group, Key, State) ->
+    stored((woken_in(Backoff, Group, Key, State))#{backoff := min(Backoff * 2, max(R div 3, ?FIRST_BACKOFF_MS))},
+           Key, State).
+
+%% A group has one re-pull pending, whatever asked for it: a new one replaces the pending one, whose wake-up, if it
+%% is already on its way, names a token that is no longer the group's and does nothing (current_wake/2).
+woken_in(DelayMs, Group, Key, #{schedule := Schedule} = State) ->
+    _ = timer_cancelled(Group, State),
+    Token = make_ref(),
+    Group#{timer => {Token, Schedule(DelayMs, {repull, Key, Token})}}.
+
+timer_cancelled(#{timer := {_Token, Timer}}, #{cancel := Cancel}) -> Cancel(Timer);
+timer_cancelled(_NoTimer, _State) -> ok.
+
+current_wake({ok, #{timer := {Token, _Timer}} = Group}, Token) -> {ok, Group};
+current_wake(_GoneOrReplaced, _Token) -> error.
 
 rotation(#{issued_at := I, publish_until := P}) -> P - I.
 

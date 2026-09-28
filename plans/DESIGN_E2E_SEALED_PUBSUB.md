@@ -340,6 +340,9 @@ clock skew in the removal bound (§8), the pinning note (§2), and the register 
    - A group subscription's events are opened by a process of their own (`macula_group_opener`), because opening may
      pull a missed epoch over the pool, which must not wait on it.
    - `macula:call/6` takes `ucan_token`, the distributor pull's carrier.
+   - A key never travels clear, enforced on both sides: the member pulls with `confidential => required`, and the
+     distributor is advertised with `macula_group_keys:advertise_opts/1`, whose `confidential => required` makes its
+     link answer a clear pull `sealed_required`, and which refuses to advertise while the node names no KEM key.
 
 ## 14. Membership checks outside groups (Raf's rule, 2026-09-29)
 

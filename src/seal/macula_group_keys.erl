@@ -4,9 +4,16 @@
 %%
 %% The application advertises the handler as any provider advertises one (its
 %% mcl_om capability, or `macula_response:advertise_direct/7' kept alive with
-%% `reuse_sup'), with the advertise policy `{realm_member_required, OrgKeyId,
-%% <<"group_keys">>}': the org's `group_keys' UCAN is checked by macula before
-%% the handler runs, matched to the org key by its key id. The handler then
+%% `reuse_sup'), with `advertise_opts/1' merged into its options: the policy
+%% `{realm_member_required, OrgKeyId, <<"group_keys">>}', so the org's
+%% `group_keys' UCAN is checked by macula before the handler runs, matched to
+%% the org key by its key id, AND `confidential => required', so the provider's
+%% link answers a clear call `sealed_required' and a key never travels clear.
+%% With the node's `kem_advertise' switched off those options refuse to
+%% advertise at all (`kem_advertise_disabled'), rather than advertise a keyless
+%% distributor. The member side refuses a keyless distributor too
+%% (`macula_group_keyring' pulls with `confidential => required'): each side
+%% enforces it on its own. The handler then
 %% decides from the caller's wire-authenticated node id: a node in the
 %% application's removed set is refused every epoch, and so is a node that is
 %% not a live realm member, read from the realm's slot for its endorsement
@@ -28,7 +35,7 @@
 -module(macula_group_keys).
 -behaviour(gen_server).
 
--export([start_link/1, handler/1]).
+-export([start_link/1, handler/1, advertise_opts/1]).
 -export([init/1, handle_call/3, handle_cast/2]).
 
 -type policy() :: required | preferred | off.
@@ -43,6 +50,9 @@
 %% How long a group's epochs are kept past their acceptance, so a pull of one
 %% is answered `epoch_expired' rather than `unknown_epoch' for that long.
 -define(TOLERANCE_MS, 5 * 60000).
+%% How long the handler waits for the distributor: past a membership lookup's
+%% 5 s and within macula's 30 s handler budget.
+-define(HANDLER_WAIT_MS, 25000).
 
 %% @doc Start a distributor for `org''s groups. `membership' defaults to the
 %% realm slot read over `pool', which then needs `realm', `realm_key_id' and
@@ -54,10 +64,21 @@ start_link(#{org := Org, policy := Policy} = Opts)
   when is_binary(Org), (Policy =:= required orelse Policy =:= preferred orelse Policy =:= off) ->
     gen_server:start_link(?MODULE, Opts, []).
 
-%% @doc The `<org>/group_keys_v1' handler for a distributor, to advertise.
+%% @doc The `<org>/group_keys_v1' handler for a distributor, to advertise. It
+%% waits for the distributor as long as a membership lookup can take and less
+%% than macula's default handler budget (30 s), so a slow lookup answers
+%% `membership_unknown', not a relay failure.
 -spec handler(pid()) -> fun((map()) -> map() | {error, atom()}).
 handler(Pid) ->
-    fun(Payload) -> gen_server:call(Pid, {pull, Payload}) end.
+    fun(Payload) -> gen_server:call(Pid, {pull, Payload}, ?HANDLER_WAIT_MS) end.
+
+%% @doc The options the distributor's procedure is advertised with, merged into
+%% the application's own: the org's grant, checked before the handler runs, and
+%% sealed calls only.
+-spec advertise_opts(<<_:256>>) ->
+          #{auth := {realm_member_required, <<_:256>>, binary()}, confidential := required}.
+advertise_opts(<<_:256>> = OrgKeyId) ->
+    #{auth => {realm_member_required, OrgKeyId, <<"group_keys">>}, confidential => required}.
 
 %% @private
 init(#{org := Org, policy := Policy} = Opts) ->

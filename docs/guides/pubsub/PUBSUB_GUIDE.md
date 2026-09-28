@@ -450,9 +450,12 @@ pulls it by id, at most three unknown ids per publisher per epoch.
 
 **Running a distributor.** The org's application starts
 `macula_group_keys:start_link(#{org => <<"acme">>, policy => required, ...})`
-and advertises its `handler/1` as `acme/group_keys_v1` with the advertise
-policy `{realm_member_required, OrgKeyId, <<"group_keys">>}` and a
-`confidential => required` spec. Epoch keys live in memory only: a restarted
+and advertises its `handler/1` as `acme/group_keys_v1` with
+`macula_group_keys:advertise_opts(OrgKeyId)` merged into its options: the
+org's grant, checked before the handler runs, and sealed calls only, so a
+clear pull is answered `sealed_required`. With `kem_advertise` off those
+options refuse to advertise at all, rather than advertise a keyless
+distributor. Epoch keys live in memory only: a restarted
 distributor starts a new epoch, and a member that never pulled a lost one
 reports its events `unknown_epoch`.
 

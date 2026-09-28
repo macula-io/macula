@@ -242,7 +242,7 @@ a_pool_does_not_outlive_its_keyring(_W) ->
                               lists:keyfind('$initial_call', 1, element(2, process_info(P, dictionary)))],
         Ref = monitor(process, Pool),
         exit(Keyring, kill),
-        receive {'DOWN', Ref, process, Pool, Reason} -> ?assertEqual({group_keyring_down, killed}, Reason)
+        receive {'DOWN', Ref, process, Pool, Reason} -> ?assertEqual({shutdown, {group_keyring_down, killed}}, Reason)
         after 2000 -> error(pool_outlived_its_keyring)
         end
     end).
