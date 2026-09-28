@@ -144,6 +144,7 @@
     call/9,
     publish/4,
     publish/5,
+    publish/6,
     put_record/2, put_record/3,
     find_record/2, find_record/3,
     find_records_by_type/2, find_records_by_type/3,
@@ -715,6 +716,21 @@ publish(Pid, Realm, Topic, Payload, Seq)
        is_binary(Topic),
        is_integer(Seq), Seq >= 0 ->
     gen_server:call(Pid, {publish, Realm, Topic, Payload, Seq}, 5_000).
+
+%% @doc As `publish/5', sealed under a sealed group's epoch when `Seal' is `{group, Epoch}'
+%% (`macula_group_event'): the link seals the payload with the `published_at' it signs, and the
+%% publication carries `sealed' in its place. `clear' is `publish/5'.
+-spec publish(pid(), <<_:256>>, binary(), term(), non_neg_integer(),
+              clear | {group, macula_group_epoch:epoch()}) ->
+    ok | {error, not_connected | term()}.
+publish(Pid, Realm, Topic, Payload, Seq, clear) ->
+    publish(Pid, Realm, Topic, Payload, Seq);
+publish(Pid, Realm, Topic, Payload, Seq, {group, #{id := <<_:64>>, key := <<_:256>>}} = Seal)
+  when is_pid(Pid),
+       is_binary(Realm), byte_size(Realm) =:= 32,
+       is_binary(Topic),
+       is_integer(Seq), Seq >= 0 ->
+    gen_server:call(Pid, {publish, Realm, Topic, Payload, Seq, Seal}, 5_000).
 
 %% @doc Convenience wrapper for `_dht.put_record'. The record must be
 %% a fully-signed `macula_record:m_record()' map (build via
@@ -1423,6 +1439,9 @@ handle_call({publish, _Realm, _Topic, _Payload}, _From,
 handle_call({publish, _Realm, _Topic, _Payload, _Seq}, _From,
             #state{peer_node_id = undefined} = S) ->
     {reply, {error, not_connected}, S};
+handle_call({publish, _Realm, _Topic, _Payload, _Seq, _Seal}, _From,
+            #state{peer_node_id = undefined} = S) ->
+    {reply, {error, not_connected}, S};
 handle_call({publish, Realm, Topic, Payload}, _From,
             #state{publish_seq = Seq} = S) ->
     %% Standalone (pool-less) publish: fall back to the per-link
@@ -1438,6 +1457,8 @@ handle_call({publish, Realm, Topic, Payload}, _From,
 handle_call({publish, Realm, Topic, Payload, Seq}, _From, S) ->
     %% Pool-driven: the pool owns the seq, so there is none to advance.
     {reply, send_publish_frame(Realm, Topic, Payload, Seq, S), S};
+handle_call({publish, Realm, Topic, Payload, Seq, {group, Epoch}}, _From, S) ->
+    {reply, send_sealed_publish_frame(Realm, Topic, Payload, Seq, Epoch, S), S};
 
 handle_call(is_connected, _From, #state{peer_pid = undefined} = S) ->
     {reply, false, S};
@@ -1998,6 +2019,19 @@ send_publish_frame(Realm, Topic, Payload, Seq,
         payload      => Payload
     }, Id),
     macula_peering:send_frame(Pid, Frame).
+
+%% A group's event: sealed here, where published_at is decided, since the seal is bound to it.
+send_sealed_publish_frame(Realm, Topic, Payload, Seq, Epoch, #state{peer_pid = Pid, node_identity = Id}) ->
+    PublishedAt = erlang:system_time(millisecond),
+    sealed_publish_sent(macula_group_event:seal(Epoch, #{publisher => macula_node_keys:key_id(Id), realm => Realm,
+                                                         topic => Topic, seq => Seq, published_at => PublishedAt},
+                                                Payload),
+                        #{realm => Realm, topic => Topic, seq => Seq, published_at => PublishedAt}, Pid, Id).
+
+sealed_publish_sent({ok, Sealed}, Spec, Pid, Id) ->
+    macula_peering:send_frame(Pid, macula_frame:publish(Spec#{sealed => Sealed}, Id));
+sealed_publish_sent({error, _} = Refused, _Spec, _Pid, _Id) ->
+    Refused.
 
 after_connect_request({ok, Pid}, S) ->
     link(Pid),
@@ -2864,8 +2898,6 @@ publication_expiry(#{published_at := PublishedAt} = Fields) ->
 %% fields come from the verified (or claimed) publication; the frame
 %% contributes only `delivered_via'. `PublisherVerified' is
 %% `on_inbound_event/3''s already-computed outcome (`true' | `false').
-deliver_event(#{sealed := _}, _Frame, _PublisherVerified, S) ->
-    sealed_refused(sealed_event, S);
 deliver_event(Fields, Frame, PublisherVerified, #state{topic_index = Idx} = S) ->
     Realm = maps:get(realm, Fields),
     Topic = maps:get(topic, Fields),
@@ -2878,17 +2910,24 @@ deliver_event_to(error, _Fields, _Frame, _PublisherVerified, _S) ->
 deliver_event_to({ok, Set}, Fields, Frame, PublisherVerified,
                  #state{subscriptions = Subs}) ->
     Topic = maps:get(topic, Fields),
-    Payload = maps:get(payload, Fields),
-    Meta = #{realm              => maps:get(realm, Fields),
-             publisher          => maps:get(publisher, Fields),
-             publisher_verified => PublisherVerified,
-             seq                => maps:get(seq, Fields),
-             delivered_via      => maps:get(delivered_via, Frame, direct),
-             publication_hash   => publication_hash_of(Fields, Frame),
-             expires_at         => publication_expiry(Fields)},
+    %% A sealed event travels unopened, its seal and every field it was sealed with in the meta: the pool
+    %% opens it with a group's epoch, or reports it (macula_group_keyring).
+    Payload = maps:get(payload, Fields, undefined),
+    Meta = sealed_meta(Fields,
+                       #{realm              => maps:get(realm, Fields),
+                         publisher          => maps:get(publisher, Fields),
+                         publisher_verified => PublisherVerified,
+                         seq                => maps:get(seq, Fields),
+                         published_at       => maps:get(published_at, Fields),
+                         delivered_via      => maps:get(delivered_via, Frame, direct),
+                         publication_hash   => publication_hash_of(Fields, Frame),
+                         expires_at         => publication_expiry(Fields)}),
     sets:fold(fun(SubRef, _) ->
         deliver_event_one(SubRef, Topic, Payload, Meta, Subs)
     end, ok, Set).
+
+sealed_meta(#{sealed := Sealed}, Meta) -> Meta#{sealed => Sealed};
+sealed_meta(_Clear, Meta) -> Meta.
 
 deliver_event_one(SubRef, Topic, Payload, Meta, Subs) ->
     fan_event(maps:find(SubRef, Subs), SubRef, Topic, Payload, Meta).
