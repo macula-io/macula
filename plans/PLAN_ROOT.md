@@ -16,7 +16,7 @@ Plans, designs and research for the `macula` SDK. The master index of every Macu
 | [DESIGN_PQ_DHT_SLOTS_AND_BUDGET.md][slots] | DHT slot bounds, slot admission and the verification budget | Agreed |
 | [DESIGN_E2E_PAYLOAD_CONFIDENTIALITY.md][e2e] | Stations relay calls, streams and events without reading payloads | Decided, building |
 | [DESIGN_E2E_SEAL_REPORT.md][report] | A caller learns whether the exchange behind its result was sealed, and to which key | Draft, in review |
-| [DESIGN_E2E_SEALED_PUBSUB.md][sealedpubsub] | Group keys for sealed pubsub: the distributor's trust root, epochs, the key procedure, removal | Draft, in review |
+| [DESIGN_E2E_SEALED_PUBSUB.md][sealedpubsub] | Group keys for sealed pubsub: the distributor's trust root, epochs, the key procedure, removal | Reviewed (Fable, 2 rounds), for approval |
 | [CHECKLIST_MACULA_12_RELEASE.md][rel12] | The things that happen once, at the 12.0.0 cutover | Active |
 | [PLAN_11_ORG_NAMESPACE_MIGRATION.md][orgns] | What every provider changes before the namespace flip | Active |
 | [PLAN_RESOURCE_LEAK_HARDENING.md][leaks] | Resource and memory leak survey of the macula core | Survey complete |

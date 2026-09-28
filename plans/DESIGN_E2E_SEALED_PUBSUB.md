@@ -10,7 +10,7 @@ key, while stations and Plumtree carry one ciphertext per event exactly as they 
 | Changes | §8.1's group policy moves from a field of the distributor's advertisement into its signed, sealed reply, with a re-pull rule that bounds its age (§6); §8.1's topic segment rule is made exact (§2); §6.2's issuing-ahead is made exact (§4) |
 | Depends on | macula-realm#31 (the realm publishes endorsements and tombstones them on revoke) and `macula_record:realm_member_endorsement_key/2` (macula 13.1.0): §3 reads membership through them |
 | Ships in | the macula minor after 13.1.0; then macula-go, libmacula and the bindings |
-| Status | Fable round 1 answered (§11); for the Supervisor |
+| Status | Fable rounds 1 and 2 answered (§11), the cap reached; for the Supervisor |
 | Written against | macula main 6675a64d, macula-station 0.7.0 (d13453b) |
 
 ---
@@ -55,7 +55,8 @@ it delegates is therefore also trust to hand out its groups' keys. In this relea
 - **An org runs exactly one distributor per realm.** Two would split a group: publishers that resolved one seal under
   its epochs, members that resolved the other cannot open them.
 - **A member uses the first trusted advertisement the resolver returns**, as a call does (`macula_direct_dial`), and
-  keeps it for the group until its advertisement stops verifying.
+  keeps it for the group until its advertisement stops verifying. A member that must not take another delegated node
+  pins the distributor (below).
 - **`distributor => NodeId`** pins the distributor for a group: accepted only when the chain verifies and the
   advertisement's `advertiser_node` is `NodeId`. It is required for a `~<node_id>` distributor (own namespace, nothing
   in the realm vouches for it) and available for org groups, where it stops a second delegated node from being taken.
@@ -79,17 +80,31 @@ admits(CallerNodeId, Prefix, AtMs, Proofs) -> true | false
 
 **The SDK's default `admits` requires both:**
 
-1. **An org grant:** a UCAN issued by the org key, or delegated from it, with
-   `with = mri:proc:<realm>/<org>/group_keys_v1`, valid at `AtMs` (`macula_ucan`). The UCAN grammar has no topic
-   prefix resource (`macula_ucan:grant/1` knows `mri:realm`, `mri:org` and `mri:proc`), so **in this release a grant
-   admits its holder to every group of the org.** A per-prefix resource is its own later item, in every SDK's
-   verifier at once.
+1. **An org grant:** a UCAN issued by the org key, or delegated from it, carrying `can = "group_keys"` and
+   `with = mri:proc:<realm>/<org>/group_keys_v1` (or `mri:org:<realm>/<org>`, which covers it), valid at `AtMs`. The
+   distributor checks it with `macula_ucan:authorize/3` under the policy `{realm_member_required, OrgKeyId,
+   <<"group_keys">>}`: that form matches the issuer by key id, which is what an org key has
+   (`macula_node_keys:key_id/2`); `{ucan_required, _}` matches identity keys by node id only and would refuse every
+   org-issued token as `not_the_issuer`. The UCAN grammar has no topic prefix resource (`macula_ucan:grant/1` knows
+   `mri:realm`, `mri:org` and `mri:proc`), so **in this release a grant admits its holder to every group of the org.** A
+   per-prefix resource is its own later item, in every SDK's verifier at once.
 2. **Live realm membership:** the caller's realm endorsement, read from the mesh, not from the proofs: a lookup of
    `macula_record:realm_member_endorsement_key(Realm, CallerNodeId)` and
-   `macula_hyparview_endorsement:slot_endorsement/4` on what it returns, at `AtMs`. Only the realm key's entry counts,
-   and a realm-key tombstone of the endorsement answers `withdrawn` (macula-realm#31 publishes both), so a member the
-   realm revoked is refused as soon as the tombstone is stored. A presented endorsement blob is never accepted on its
-   own (`verify_endorsement/3` checks the window only at the current time and consults no tombstone).
+   `macula_hyparview_endorsement:slot_endorsement/4` on what it returns. The slot's entry is verified at the current
+   time, and `AtMs` is applied only to the endorsement's `valid_from`..`valid_until` (so a renewed endorsement still
+   admits a past-epoch pull). Only the realm key's entry counts, and a realm-key tombstone of the endorsement answers
+   `withdrawn` (macula-realm#31 publishes both). A presented endorsement blob is never accepted on its own
+   (`verify_endorsement/3` checks the window only at the current time and consults no tombstone).
+   **What the tombstone bounds, honestly:** the lookup returns what the stations on its path serve, and a station can
+   withhold the tombstone and serve the endorsement it still holds. So the tombstone shortens a revocation when the
+   lookup path is honest; the guaranteed bound is the endorsement's own window (at most 30 days) or the org's removed
+   set (below), whichever comes first. The distributor keeps no slot answer longer than one `rotate_after`, and a
+   lookup that fails or times out refuses the pull as `membership_unknown` (its own code, not `not_a_member`), so the
+   member retries (§4).
+   Until macula-realm#31 has published an endorsement for every member, this check refuses everyone: the realm ships
+   before any distributor uses the default `admits`. A member's endorsement stays readable for as long as it is a
+   member, because the realm renews it before it expires (macula-realm#31's renewal sweep, 7 days ahead of
+   `valid_until`) and never renews a revoked or resigned member.
 
 `AtMs` is the current time for the current epoch and the next, and the epoch's `issued_at` for a past one (§4). An
 application with its own member list passes its own `admits`.
@@ -120,6 +135,10 @@ tombstone), and §8's bound runs from then.
   window, whether or not it has seen an event.** This spreads the rotation over a third of an epoch instead of one
   instant (§6.2's rotation herd), keeps every holder's policy at most one epoch old (§6), and has each node holding e+1
   before e's `publish_until`.
+- **A pull that fails is retried until one succeeds.** A holder whose window pull failed (refused by quota, withheld,
+  timed out, `membership_unknown`), or whose newest epoch has passed `publish_until` because it missed the window (a
+  sleeping laptop), pulls at once and retries with backoff (doubling from 1 second, capped at `rotate_after` / 3)
+  until a pull succeeds. One lost pull never ends a holder's pulling.
 - **A publisher seals under the newest epoch it holds whose `issued_at` has passed.** So from `publish_until(e)` on,
   every publisher that pulled in the ahead window seals under e+1, which every holder that pulled already has.
 - **Kept for** `accept_until`, by the distributor and by every member. After it, no event under the epoch is
@@ -150,8 +169,9 @@ The RESULT (sealed under `k_rep`, signed by the distributor):
 | `epochs` | list | the asked epoch, and the next one inside the ahead window; each `#{id, key, issued_at, publish_until, accept_until}` |
 
 Under `off` the reply still carries epochs: `off` only means clear events are accepted too (§6). Refusals are provider
-errors, sealed like any provider error on a sealed call: `not_a_member`, `unknown_epoch` (an id the distributor does
-not hold, including one lost to a restart) and `epoch_expired` (past its `accept_until`). The CBOR shape of both
+errors, sealed like any provider error on a sealed call: `not_a_member`, `membership_unknown` (the membership lookup
+failed or timed out; retry), `unknown_epoch` (an id the distributor does not hold, including one lost to a restart)
+and `epoch_expired` (past its `accept_until`). The CBOR shape of both
 payloads is pinned as a vector (§10).
 
 ## 6. Where the group policy travels (a change to §8.1)
@@ -169,9 +189,9 @@ from the same authority the advertisement field would have and cannot be forged 
 
 - A node learns a group's policy by pulling its key. Every node that publishes or subscribes under a group pulls its
   key, and §4 has every holder pull again each epoch, event or no event.
-- **Age:** a holder's policy is at most one `rotate_after` old (§4's re-pull), against the advertisement's 5 minutes. A
-  pull that fails keeps the last policy: a publisher then fails closed once its newest epoch passes `publish_until`
-  (§7), and a subscriber keeps enforcing the last policy it had.
+- **Age:** once pulls succeed, a holder's policy is at most one `rotate_after` old (§4's re-pull), against the
+  advertisement's 5 minutes. While pulls fail, a publisher fails closed once its newest epoch passes `publish_until`
+  (§7), and a subscriber keeps enforcing the last policy it had and keeps retrying (§4).
 - No record format change, no station release, no SDK verifier change.
 
 §8.1's rules otherwise stand, keyed by `(realm, prefix)`:
@@ -202,9 +222,11 @@ from the same authority the advertisement field would have and cannot be forged 
 - **An event the subscriber cannot open** is not dropped silently: the subscriber gets
   `{macula_event_unopened, SubRef, Topic, #{publisher, seal_key_id, reason}}` once per event, and nothing of the
   payload. `reason` is one of a closed set every SDK uses: `unknown_epoch`, `epoch_expired`, `not_a_member`,
-  `no_distributor`, `no_group` (a sealed event on a subscription that named no group) and `tag_invalid`.
-- **Unknown ids are bounded.** A subscriber pulls a given `(prefix, id)` at most once and remembers an
-  `unknown_epoch` answer until that id could no longer be accepted anyway (65 minutes). It pulls for at most 3
+  `membership_unknown`, `no_distributor`, `no_group` (a sealed event on a subscription that named no group) and
+  `tag_invalid`.
+- **Unknown ids are bounded.** A subscriber pulls a given `(prefix, id)` once per `unknown_epoch` answer and
+  remembers that answer until the id could no longer be accepted anyway (65 minutes); a pull that failed for another
+  reason is retried under §4's backoff. It pulls for at most 3
   unknown ids per publisher per `rotate_after`; beyond that, events under further unknown ids from that publisher are
   reported `unknown_epoch` without a pull. A publisher sealing under random ids therefore costs the distributor at
   most 3 pulls per subscriber per epoch.
@@ -216,14 +238,17 @@ under epochs it already holds, until those epochs' `accept_until`. It can pull n
 
 The newest epoch it can hold was pulled no later than T. An epoch is handed out only once its predecessor's ahead
 window is open, so its `issued_at` is at most T + `rotate_after` / 3, its `publish_until` at most
-T + 4/3 × `rotate_after`, and its `accept_until` at most T + 4/3 × `rotate_after` + 65 minutes. **With the default
-15-minute rotation: at most 85 minutes after its removal.** In practice what stops it earlier is honest publishers
+T + 4/3 × `rotate_after`, and its `accept_until` at most T + 4/3 × `rotate_after` + 65 minutes, on the
+distributor's clock. **With the default 15-minute rotation: at most 85 minutes after its removal, plus the clock skew
+between the distributor and a publisher (at most the 5-minute tolerance).** In practice what stops it earlier is honest publishers
 leaving the epochs it holds by their `publish_until` (at most 20 minutes after T); the rest is the delivery of events
 published before that. Nothing sealed under a later epoch is open to it. It also keeps anything it already read:
 sealing cannot take back what a member has already opened.
 
-(For the register, one sentence: "A member removed from a group keeps reading the group's events for at most 85
-minutes after the group's distributor removes it, and keeps what it already read.")
+(For the register, one sentence: "A member removed from an org's groups keeps reading their events for at most 85
+minutes after the org's distributor starts refusing it, and keeps what it already read. The org's removal takes
+effect at once; a realm revocation takes effect when the distributor reads the realm's tombstone, and at the latest
+when the member's endorsement expires (at most 30 days).")
 
 ## 9. Stations, and what is claimed when
 
@@ -239,10 +264,12 @@ minutes after the group's distributor removes it, and keeps what it already read
 
 - **Vectors.** The event seal is profile-independent (AES-256-GCM under `k_pub`) and already in `e2e_seal_v1.json`
   (`events`). This package adds the `group_keys_v1` CALL and RESULT payloads' CBOR shape, so every SDK's distributor and
-  member agree byte for byte. The epoch id is random, so there is nothing to derive.
+  member agree byte for byte, and one org-issued `group_keys` UCAN per profile, so every SDK's distributor accepts
+  every SDK's token. The epoch id is random, so there is nothing to derive.
 - **Measurement (§13 #7):** distributor CPU and bytes per rotation at n = 1,000 and 10,000 members, both profiles,
-  against §6.3's estimates, with §4's jittered re-pull and request admission's quotas in place; publish and open cost
-  per event. No claim before these numbers.
+  against §6.3's estimates, with §4's jittered re-pull and request admission's quotas in place, and including the
+  membership lookup each pull costs the distributor (one DHT lookup, inside the call's deadline and against its own D28
+  budget); publish and open cost per event. No claim before these numbers.
 - **Tests, red first:** a member opens, a non-member gets `not_a_member`; a member the realm revoked (tombstone
   stored) gets `not_a_member`; a member in the removed set gets `not_a_member` for a past epoch too; a subscriber offline
   across a rotation pulls the past epoch and opens; a holder re-pulls in the ahead window with no events and picks up
@@ -273,3 +300,20 @@ org UCAN admitting every group of the org until a prefix resource exists (§3), 
 
 Answers adopted: the policy stays in the reply; epoch keys stay in memory only; the org UCAN is the default grant; the
 removed set is kept and absolute.
+
+## 12. Fable round 2 (2026-09-28), answered; the last
+
+Round 1's three required changes were confirmed fixed. Required:
+
+1. A failed or missed re-pull ended a holder's pulling, so one withheld reply made its policy age unbounded again: §4
+   now retries a failed or missed pull with backoff until one succeeds, and §6 states the age for both cases.
+2. The org grant named no policy form, and the obvious one (`{ucan_required, _}`) matches identity keys by node id,
+   refusing every org-issued token: §3 now names `macula_ucan:authorize/3` with `{realm_member_required, OrgKeyId,
+   <<"group_keys">>}`, the token's `can` and `with`, and §10 pins a token per profile.
+3. "Refused as soon as the tombstone is stored" was a claim a station on the lookup path could falsify by withholding
+   the tombstone: §3 now states the guaranteed bound (the endorsement window or the org's removed set), keeps no slot
+   answer past one `rotate_after`, and refuses a failed lookup as `membership_unknown` so the member retries.
+
+Taken from the observations: the slot verified at the current time with `AtMs` applied only to the window (§3), the
+fleet order (realm first, §3), the lookup's cost in the measurement (§10), one pull per `unknown_epoch` answer (§7),
+clock skew in the removal bound (§8), the pinning note (§2), and the register sentence naming the org's groups (§8).
