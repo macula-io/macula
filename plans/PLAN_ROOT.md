@@ -15,7 +15,8 @@ Plans, designs and research for the `macula` SDK. The master index of every Macu
 | [DESIGN_PQ_SIGNED_FRAMES_AND_RECORDS.md][signed] | Signed records and frames after the handshake | Agreed |
 | [DESIGN_PQ_DHT_SLOTS_AND_BUDGET.md][slots] | DHT slot bounds, slot admission and the verification budget | Agreed |
 | [DESIGN_E2E_PAYLOAD_CONFIDENTIALITY.md][e2e] | Stations relay calls, streams and events without reading payloads | Decided, building |
-| [DESIGN_E2E_SEAL_REPORT.md][report] | A caller learns whether the exchange behind its result was sealed, and to which key | Draft, in review |
+| [DESIGN_E2E_SEAL_REPORT.md][report] | A caller learns whether the exchange behind its result was sealed, and to which key | Built: macula 13.1.0, macula-go 0.19.0 |
+| [DESIGN_NEIGHBOUR_CHANNEL_BINDING.md][hopauth] | pq_hybrid hop frames authenticated per session (D18), not per frame (D17 amended) | Draft, in review |
 | [DESIGN_E2E_SEALED_PUBSUB.md][sealedpubsub] | Group keys for sealed pubsub: the distributor's trust root, epochs, the key procedure, removal | Reviewed (Fable, 2 rounds), for approval |
 | [CHECKLIST_MACULA_12_RELEASE.md][rel12] | The things that happen once, at the 12.0.0 cutover | Active |
 | [PLAN_11_ORG_NAMESPACE_MIGRATION.md][orgns] | What every provider changes before the namespace flip | Active |
@@ -45,6 +46,7 @@ Plans, designs and research for the `macula` SDK. The master index of every Macu
 [slots]: DESIGN_PQ_DHT_SLOTS_AND_BUDGET.md
 [e2e]: DESIGN_E2E_PAYLOAD_CONFIDENTIALITY.md
 [report]: DESIGN_E2E_SEAL_REPORT.md
+[hopauth]: DESIGN_NEIGHBOUR_CHANNEL_BINDING.md
 [sealedpubsub]: DESIGN_E2E_SEALED_PUBSUB.md
 [rel12]: CHECKLIST_MACULA_12_RELEASE.md
 [orgns]: PLAN_11_ORG_NAMESPACE_MIGRATION.md
