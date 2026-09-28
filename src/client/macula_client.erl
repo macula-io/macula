@@ -599,7 +599,12 @@
     mon        :: reference(),
     %% Per-publisher delivery ordering for this subscription (the
     %% `delivery' mode: ordered | latest_only | as_arrives).
-    order      :: macula_pubsub_order:t()
+    order      :: macula_pubsub_order:t(),
+    %% A subscription under a sealed group: its prefix, and the process that
+    %% opens its events (macula_group_opener), which the pool monitors.
+    group      = undefined :: binary() | undefined,
+    opener     = undefined :: pid() | undefined,
+    opener_mon = undefined :: reference() | undefined
 }).
 
 %% An advertised procedure as the pool keeps it: what each link registers,
@@ -713,6 +718,9 @@
     %% The request admission in which all the pool's links judge the requests
     %% they receive.
     admission :: pid(),
+    %% The keys of the sealed groups this node joined (macula_group_keyring),
+    %% linked to the pool, and the handle that reads them without a call.
+    keyring :: macula_group_keyring:keyring(),
     %% The station that last answered a procedure here, so direct dial can
     %% try it before asking the DHT again: {realm, procedure} -> the
     %% candidate and the monotonic millisecond it stops being usable.
@@ -1342,11 +1350,64 @@ publishable(ok, Payload) -> macula_frame:check_payload(Payload);
 publishable({error, _} = Refused, _Payload) -> Refused.
 
 publish_checked(ok, Pool, Realm, Topic, Payload, Opts) ->
-    Timeout = maps:get(timeout_ms, Opts, 5_000),
-    gen_server:call(Pool, {publish, Realm, Topic, Payload, Opts},
-                    Timeout + 500);
+    sealed_publish(publish_seal(maps:find(group, Opts), group_keyring(Pool), Realm, Topic, Opts),
+                   Pool, Realm, Topic, Payload, Opts);
 publish_checked({error, _} = Rejected, _Pool, _Realm, _Topic, _Payload, _Opts) ->
     Rejected.
+
+%% How a publish goes (plans/DESIGN_E2E_SEALED_PUBSUB.md §6): under `group',
+%% sealed under the group's current epoch, pulling its key first, or failing
+%% closed with the pull's refusal; without one, clear, unless this node holds a
+%% group covering the topic, which it names rather than publish in the clear.
+publish_seal({ok, Prefix}, Keyring, Realm, Topic, Opts) ->
+    group_epoch(in_group(Topic, Prefix), Keyring, Realm, Prefix, Opts);
+publish_seal(error, Keyring, Realm, Topic, _Opts) ->
+    held(macula_group_keyring:policy(Keyring, Realm, Topic)).
+
+held(none) -> {ok, clear};
+held({ok, Prefix, _Policy}) -> {error, {confidentiality, {group_held, Prefix}}}.
+
+group_epoch(false, _Keyring, _Realm, _Prefix, _Opts) ->
+    {error, {invalid_option, group}};
+group_epoch(true, Keyring, Realm, Prefix, Opts) ->
+    epoch_after(group_joined(macula_group_keyring:join(Keyring, Realm, Prefix, join_options(Opts))),
+                Keyring, Realm, Prefix).
+
+epoch_after(ok, Keyring, Realm, Prefix) ->
+    publishable_epoch(macula_group_keyring:publish_epoch(Keyring, Realm, Prefix));
+epoch_after({error, _} = Refused, _Keyring, _Realm, _Prefix) ->
+    Refused.
+
+publishable_epoch({ok, Epoch}) -> {ok, {group, Epoch}};
+publishable_epoch({error, Reason}) -> {error, {group, Reason}}.
+
+%% A join's answer as publish and subscribe return it: a prefix that is no
+%% group is the caller's option, anything else the group's refusal.
+group_joined({ok, _Policy}) -> ok;
+group_joined({error, {invalid_option, group}} = Invalid) -> Invalid;
+group_joined({error, Reason}) -> {error, {group, Reason}}.
+
+join_options(Opts) ->
+    maps:with([ucan_token, distributor], Opts).
+
+%% A topic, or every topic a pattern matches, under the group's prefix: equal to
+%% it or below it, on a segment boundary.
+in_group(Topic, Prefix) when is_binary(Prefix) ->
+    Size = byte_size(Prefix),
+    Topic =:= Prefix orelse (byte_size(Topic) > Size andalso binary:part(Topic, 0, Size + 1) =:= <<Prefix/binary, "/">>);
+in_group(_Topic, _NotAPrefix) ->
+    false.
+
+sealed_publish({ok, Seal}, Pool, Realm, Topic, Payload, Opts) ->
+    Timeout = maps:get(timeout_ms, Opts, 5_000),
+    gen_server:call(Pool, {publish, Realm, Topic, Payload, Opts#{seal => Seal}},
+                    Timeout + 500);
+sealed_publish({error, _} = Refused, _Pool, _Realm, _Topic, _Payload, _Opts) ->
+    Refused.
+
+%% The pool's keyring, through its handle.
+group_keyring(Pool) ->
+    gen_server:call(Pool, group_keyring, 5_000).
 
 %% @doc Subscribe `Subscriber' to `(Realm, Topic)'. The pool
 %% subscribes every currently-spawned link and dedupes inbound
@@ -1356,7 +1417,9 @@ publish_checked({error, _} = Rejected, _Pool, _Realm, _Topic, _Payload, _Opts) -
 %% delivered event and `{macula_event_gone, SubRef, Reason}' once
 %% when the pool closes or the subscriber pid dies.
 -spec subscribe(pool(), <<_:256>>, binary(), pid(), map()) ->
-    {ok, reference()} | {error, {text_too_long | invalid_text, topic}}.
+    {ok, reference()}
+    | {error, {text_too_long | invalid_text, topic} | {invalid_option, group}
+              | {group, macula_group_keyring:reason()}}.
 subscribe(Pool, Realm, Topic, Subscriber, Opts)
   when is_pid(Pool),
        is_binary(Realm), byte_size(Realm) =:= 32,
@@ -1366,8 +1429,26 @@ subscribe(Pool, Realm, Topic, Subscriber, Opts)
 
 %% A topic a SUBSCRIBE cannot carry is refused before the pool or its links build anything.
 subscribed(ok, Pool, Realm, Topic, Subscriber, Opts) ->
-    gen_server:call(Pool, {subscribe, Realm, Topic, Subscriber, Opts}, 5_000);
+    group_subscribed(subscribe_group(maps:find(group, Opts), Pool, Realm, Topic, Opts),
+                     Pool, Realm, Topic, Subscriber, Opts);
 subscribed({error, _} = Refused, _Pool, _Realm, _Topic, _Subscriber, _Opts) ->
+    Refused.
+
+%% A subscription under `group' joins the group first, and fails closed with
+%% the join's refusal (plans/DESIGN_E2E_SEALED_PUBSUB.md §6).
+subscribe_group({ok, Prefix}, Pool, Realm, Topic, Opts) ->
+    joined_for(in_group(Topic, Prefix), group_keyring(Pool), Realm, Prefix, Opts);
+subscribe_group(error, _Pool, _Realm, _Topic, _Opts) ->
+    ok.
+
+joined_for(false, _Keyring, _Realm, _Prefix, _Opts) ->
+    {error, {invalid_option, group}};
+joined_for(true, Keyring, Realm, Prefix, Opts) ->
+    group_joined(macula_group_keyring:join(Keyring, Realm, Prefix, join_options(Opts))).
+
+group_subscribed(ok, Pool, Realm, Topic, Subscriber, Opts) ->
+    gen_server:call(Pool, {subscribe, Realm, Topic, Subscriber, Opts}, 5_000);
+group_subscribed({error, _} = Refused, _Pool, _Realm, _Topic, _Subscriber, _Opts) ->
     Refused.
 
 %% @doc Drop a subscription. Idempotent — unknown `SubRef' is a
@@ -1567,6 +1648,9 @@ init_with_keys({ok, #{node_identity := NodeIdentity, issuer := Issuer, issuer_st
     %% One request admission for every link. The pool ends when it ends, and
     %% ends it in terminate.
     {ok, Admission} = macula_request_admission:start_link(admission_start_limits(Opts)),
+    %% The sealed groups' keyring pulls over this pool (macula:call/6); the pool
+    %% reads it only through its handle, never waiting on a pull.
+    {ok, KeyringPid} = macula_group_keyring:start_link((maps:get(group_keyring, Opts, #{}))#{pool => self()}),
     %% No node identity key in the link options: each link start gets a
     %% function that returns it, made at that start, so the pool's state
     %% holds no function over the key that redaction cannot see into.
@@ -1612,7 +1696,7 @@ init_with_keys({ok, #{node_identity := NodeIdentity, issuer := Issuer, issuer_st
                     refused_dials = macula_refusal_report:new(?REFUSAL_REPORT_WINDOW_MS),
                     node_identity = NodeIdentity, issuer = Issuer, issuer_started_at = now_ms(),
                     issuer_backoff_ms = ?ISSUER_RESTART_MIN_MS, issuer_start = Start,
-                    admission = Admission},
+                    admission = Admission, keyring = macula_group_keyring:handle(KeyringPid)},
     State1 = lists:foldl(fun start_link_for_seed/2, State0, Seeds),
     erlang:send_after(DedupSweep, self(), dedup_sweep),
     erlang:send_after(AdmissionSweep, self(), admission_sweep),
@@ -1660,7 +1744,9 @@ schedule_discovery(DelayMs, #state{discovery = D} = S) ->
 cancel_discovery_timer(undefined) -> ok;
 cancel_discovery_timer(Timer)     -> erlang:cancel_timer(Timer).
 
-handle_call({publish, Realm, Topic, Payload, _Opts}, From, S) ->
+handle_call(group_keyring, _From, #state{keyring = Keyring} = S) ->
+    {reply, Keyring, S};
+handle_call({publish, Realm, Topic, Payload, Opts}, From, S) ->
     %% Publish only to links that have completed CONNECT/HELLO. A
     %% frame sent to a still-handshaking link is dropped on the floor, so
     %% selecting the first `replication' *spawned* links could report
@@ -1679,8 +1765,9 @@ handle_call({publish, Realm, Topic, Payload, _Opts}, From, S) ->
     %% One seq per publication, from the node's counter for the pool's key
     %% (macula_publication_seq), reused across every replicated link.
     Seq = macula_publication_seq:next(S#state.node_id),
+    Seal = maps:get(seal, Opts, clear),
     _ = spawn(fun() ->
-        Results = [safe_link_publish(P, Realm, Topic, Payload, Seq)
+        Results = [safe_link_publish(P, Realm, Topic, Payload, Seq, Seal)
                    || P <- Selected],
         gen_server:reply(From, summarize_publish(Results, AllTargets))
     end),
@@ -1689,10 +1776,12 @@ handle_call({publish, Realm, Topic, Payload, _Opts}, From, S) ->
 handle_call({subscribe, Realm, Topic, Subscriber, Opts}, _From, S) ->
     SubRef = make_ref(),
     Mon = erlang:monitor(process, Subscriber),
-    Spec = #sub_spec{realm = Realm, topic = Topic,
-                     subscriber = Subscriber, mon = Mon,
-                     order = macula_pubsub_order:new(delivery_mode(Opts),
-                                                     S#state.order_max_buffer)},
+    Spec = with_opener(maps:find(group, Opts), SubRef,
+                       #sub_spec{realm = Realm, topic = Topic,
+                                 subscriber = Subscriber, mon = Mon,
+                                 order = macula_pubsub_order:new(delivery_mode(Opts),
+                                                                 S#state.order_max_buffer)},
+                       S),
     Key = {Realm, Topic},
     AlreadyTracked = maps:is_key(Key, S#state.topic_index),
     NewS = register_sub(SubRef, Spec, S),
@@ -1938,15 +2027,18 @@ handle_info({'EXIT', _Pid, _Reason}, S) ->
 handle_info(_Other, S) ->
     {noreply, S}.
 
-terminate(_Reason, #state{subs = Subs, admission = Admission}) ->
+terminate(_Reason, #state{subs = Subs, admission = Admission, keyring = Keyring}) ->
     %% Notify every subscriber that the pool is gone.
     maps:foreach(
-      fun(SubRef, #sub_spec{subscriber = Pid, mon = Mon}) ->
+      fun(SubRef, #sub_spec{subscriber = Pid, mon = Mon} = Spec) ->
           erlang:demonitor(Mon, [flush]),
+          ok = opener_stopped(Spec),
           Pid ! {macula_event_gone, SubRef, pool_closed}
       end, Subs),
-    %% The admission is linked to the pool, and a normal exit would not end it.
+    %% The admission and the keyring are linked to the pool, and a normal exit
+    %% would not end them.
     true = exit(Admission, shutdown),
+    true = exit(macula_group_keyring:pid(Keyring), shutdown),
     ok.
 
 code_change(_OldVsn, S, _Extra) -> {ok, S}.
@@ -3478,8 +3570,8 @@ on_down_routed({ok, Seed}, _Mon, Pid, Reason, S0) ->
                  link_subs = maps:remove(Pid, S#state.link_subs),
                  connected = maps:remove(Pid, S#state.connected)},
     {noreply, maybe_rediscover_now(S1)};
-on_down_routed(error, Mon, _Pid, _Reason, S) ->
-    {noreply, on_subscriber_down(Mon, S)}.
+on_down_routed(error, Mon, _Pid, Reason, S) ->
+    {noreply, on_opener_down(Mon, Reason, on_subscriber_down(Mon, S))}.
 
 %% The moment every currently-held link is gone is exactly the moment
 %% "the world changed" is most likely true -- re-discover soon rather
@@ -3537,6 +3629,16 @@ on_subscriber_down(Mon, #state{subs = Subs} = S) ->
                        <- maps:to_list(Subs), M =:= Mon],
     lists:foldl(fun drop_sub/2, S, Found).
 
+%% A group subscription whose opener ended can open nothing more: it ends, and
+%% its subscriber is told why rather than left waiting on a silent stream.
+on_opener_down(Mon, Reason, #state{subs = Subs} = S) ->
+    Found = [{SubRef, Pid} || {SubRef, #sub_spec{opener_mon = M, subscriber = Pid}}
+                              <- maps:to_list(Subs), M =:= Mon],
+    lists:foldl(fun({SubRef, Pid}, Acc) ->
+                        Pid ! {macula_event_gone, SubRef, {group_opener_down, Reason}},
+                        drop_sub(SubRef, Acc)
+                end, S, Found).
+
 %%====================================================================
 %% Internals — subscription bookkeeping
 %%====================================================================
@@ -3561,9 +3663,10 @@ drop_sub(SubRef, #state{subs = Subs} = S) ->
 
 drop_sub_take(error, _SubRef, S) ->
     S;
-drop_sub_take({#sub_spec{realm = R, topic = T, mon = Mon}, NewSubs},
+drop_sub_take({#sub_spec{realm = R, topic = T, mon = Mon} = Spec, NewSubs},
               SubRef, #state{topic_index = Idx} = S) ->
     erlang:demonitor(Mon, [flush]),
+    ok = opener_stopped(Spec),
     Key = {R, T},
     NewSet = sets:del_element(SubRef, maps:get(Key, Idx, sets:new())),
     Empty = sets:is_empty(NewSet),
@@ -3678,10 +3781,13 @@ deliver_to({ok, #sub_spec{subscriber = Pid, order = Order} = Spec}, SubRef,
            Topic, Payload, Meta, S) ->
     %% Run the fact through this subscription's delivery ordering; send
     %% whatever it releases now, and keep the updated per-publisher state.
+    %% Each event keeps its own topic through the ordering: a pattern
+    %% subscription's events are delivered, and opened, under the topic
+    %% they were published to, released now or by a later flush.
     {Events, Order2} = macula_pubsub_order:offer(
                          Order, order_key(Meta), maps:get(seq, Meta),
-                         {Payload, Meta}, now_ms()),
-    send_events(Pid, SubRef, Topic, Events),
+                         {Payload, Meta, Topic}, now_ms()),
+    ok = routed_events(Spec, Pid, SubRef, Events, S#state.keyring),
     S#state{subs = maps:put(SubRef, Spec#sub_spec{order = Order2},
                             S#state.subs)}.
 
@@ -3689,8 +3795,33 @@ deliver_to({ok, #sub_spec{subscriber = Pid, order = Order} = Spec}, SubRef,
 %% so each publisher's ordering state is its own.
 order_key(#{publisher := Pub}) -> Pub.
 
-send_events(Pid, SubRef, Topic, Events) ->
-    _ = [Pid ! {macula_event, SubRef, Topic, P, M} || {P, M} <- Events],
+%% A group subscription's events go to its opener, in the order released. Any
+%% other subscription takes a clear event as every subscription on this node
+%% does (refused under a `required' group this node holds), and is told of a
+%% sealed one that it has no group to open it with.
+routed_events(#sub_spec{opener = Opener}, _Pid, _SubRef, Events, _Keyring) when is_pid(Opener) ->
+    lists:foreach(fun({P, M, T}) -> macula_group_opener:open(Opener, T, P, M) end, Events);
+routed_events(#sub_spec{}, Pid, SubRef, Events, Keyring) ->
+    lists:foreach(fun({P, M, T}) -> plain_event(Pid, SubRef, T, P, M, Keyring) end, Events).
+
+plain_event(Pid, SubRef, Topic, _Payload, #{sealed := #{key_id := Id}, publisher := Publisher}, _Keyring) ->
+    Pid ! {macula_event_unopened, SubRef, Topic, #{publisher => Publisher, seal_key_id => Id, reason => no_group}},
+    ok;
+plain_event(Pid, SubRef, Topic, Payload, Meta, Keyring) ->
+    macula_group_opener:delivered(Keyring, Topic, Meta,
+                                  fun(Clear) -> Pid ! {macula_event, SubRef, Topic, Payload, Clear} end).
+
+with_opener({ok, Prefix}, SubRef, #sub_spec{realm = Realm, subscriber = Subscriber} = Spec, #state{keyring = Keyring}) ->
+    Opener = macula_group_opener:start(#{keyring => Keyring, subscriber => Subscriber, sub_ref => SubRef,
+                                         realm => Realm, prefix => Prefix, pool => self()}),
+    Spec#sub_spec{group = Prefix, opener = Opener, opener_mon = erlang:monitor(process, Opener)};
+with_opener(error, _SubRef, Spec, _S) ->
+    Spec.
+
+opener_stopped(#sub_spec{opener = Opener, opener_mon = Mon}) when is_pid(Opener) ->
+    erlang:demonitor(Mon, [flush]),
+    macula_group_opener:stop(Opener);
+opener_stopped(#sub_spec{}) ->
     ok.
 
 now_ms() -> erlang:monotonic_time(millisecond).
@@ -3731,10 +3862,9 @@ any_buffered(#state{subs = Subs}) ->
 flush_all_subs(#state{subs = Subs, order_timeout = Timeout} = S) ->
     Now = now_ms(),
     Subs2 = maps:map(
-              fun(SubRef, #sub_spec{order = O, subscriber = Pid,
-                                    topic = Topic} = Spec) ->
+              fun(SubRef, #sub_spec{order = O, subscriber = Pid} = Spec) ->
                   {Events, O2} = macula_pubsub_order:flush(O, Now, Timeout),
-                  send_events(Pid, SubRef, Topic, Events),
+                  ok = routed_events(Spec, Pid, SubRef, Events, S#state.keyring),
                   Spec#sub_spec{order = O2}
               end, Subs),
     S#state{subs = Subs2}.
@@ -3756,8 +3886,8 @@ flush_all_subs(#state{subs = Subs, order_timeout = Timeout} = S) ->
 %% fail "after"); raising the default to 2 makes it a real, common-path
 %% risk for the first time. Same idiom as safe_link_advertise/5 below,
 %% which this fan-out should have matched from the start.
-safe_link_publish(Pid, Realm, Topic, Payload, Seq) ->
-    try macula_station_link:publish(Pid, Realm, Topic, Payload, Seq)
+safe_link_publish(Pid, Realm, Topic, Payload, Seq, Seal) ->
+    try macula_station_link:publish(Pid, Realm, Topic, Payload, Seq, Seal)
     catch _:Reason -> {error, Reason}
     end.
 

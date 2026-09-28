@@ -106,7 +106,9 @@ subscribe(Pool, Realm, Topic, Subscriber) ->
 %% subscribe-time options. Future phases (history replay, server-
 %% side filters) will add named keys.
 -spec subscribe(macula_client:pool(), <<_:256>>, binary(), pid(), map()) ->
-    {ok, reference()} | {error, {text_too_long | invalid_text, topic}}.
+    {ok, reference()}
+    | {error, {text_too_long | invalid_text, topic} | {invalid_option, group}
+              | {group, macula_group_keyring:reason()}}.
 subscribe(Pool, Realm, Topic, Subscriber, Opts)
   when is_pid(Pool),
        is_binary(Realm), byte_size(Realm) =:= 32,

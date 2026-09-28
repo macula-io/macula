@@ -281,7 +281,9 @@ subscribe(Pool, Realm, Topic, Subscriber) ->
 %% publisher signature did not verify.
 %% See `macula_pubsub:subscribe/5'.
 -spec subscribe(pool(), realm(), topic(), pid(), map()) ->
-    {ok, reference()} | {error, {text_too_long | invalid_text, topic}}.
+    {ok, reference()}
+    | {error, {text_too_long | invalid_text, topic} | {invalid_option, group}
+              | {group, macula_group_keyring:reason()}}.
 subscribe(Pool, Realm, Topic, Subscriber, Opts) ->
     macula_pubsub:subscribe(Pool, Realm, Topic, Subscriber, Opts).
 

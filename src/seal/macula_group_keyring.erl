@@ -27,7 +27,7 @@
 -module(macula_group_keyring).
 -behaviour(gen_server).
 
--export([start_link/1, handle/1, join/4, leave/3, publish_epoch/3, open_epoch/5, policy/3]).
+-export([start_link/1, handle/1, pid/1, join/4, leave/3, publish_epoch/3, open_epoch/5, policy/3]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2]).
 
 -type policy() :: required | preferred | off.
@@ -57,6 +57,10 @@ start_link(Opts) when is_map(Opts) ->
 -spec handle(pid()) -> keyring().
 handle(Pid) ->
     gen_server:call(Pid, handle).
+
+%% @doc The keyring's process, for its owner to end it.
+-spec pid(keyring()) -> pid().
+pid(#{pid := Pid}) -> Pid.
 
 %% @doc Join the group `Prefix' in `Realm': pull its current epoch and hold it. A group already held is not pulled
 %% again. `ucan_token' is the org's grant, `distributor' pins the distributor's node id.
