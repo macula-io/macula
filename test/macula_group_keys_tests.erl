@@ -70,7 +70,8 @@ epochs(#{epochs := Epochs}) -> Epochs.
 a_member_pulls_the_current_epoch(W) ->
     ?_test(begin
         Reply = call(W, member(W), {text, <<"current">>}),
-        ?assertMatch(#{prefix := ?PREFIX, policy := <<"required">>, epochs := [_]}, Reply),
+        %% Text on the wire is tagged: a bare binary would reach every other SDK as CBOR bytes.
+        ?assertMatch(#{prefix := {text, ?PREFIX}, policy := {text, <<"required">>}, epochs := [_]}, Reply),
         [#{id := Id, key := Key, issued_at := I, publish_until := P, accept_until := A}] = epochs(Reply),
         ?assertEqual({8, 32}, {byte_size(Id), byte_size(Key)}),
         ?assertEqual({1_000_000, 1_000_000 + ?R, 1_000_000 + ?R + 65 * ?MIN}, {I, P, A})
@@ -152,4 +153,4 @@ a_call_without_a_caller_is_refused(#{handler := Handler}) ->
                   Handler(#{{text, <<"prefix">>} => {text, ?PREFIX}, {text, <<"epoch">>} => {text, <<"current">>}})).
 
 the_policy_rides_every_reply(W) ->
-    ?_assertMatch(#{policy := <<"required">>}, call(W, member(W), {text, <<"current">>})).
+    ?_assertMatch(#{policy := {text, <<"required">>}}, call(W, member(W), {text, <<"current">>})).
