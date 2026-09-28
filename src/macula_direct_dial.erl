@@ -238,7 +238,7 @@ call(Pool, Realm, Procedure, Payload, TimeoutMs) ->
 %% other value as `{error, {invalid_option, confidential}}', also before
 %% anything is looked up.
 -spec call(macula:pool(), macula:realm(), macula:procedure(), term(),
-          1..600_000, map()) -> {ok, term()} | {error, term()}.
+          1..600_000, map()) -> {ok, term()} | {ok, term(), macula_station_link:report()} | {error, term()}.
 call(Pool, Realm, Procedure, Payload, TimeoutMs, Opts)
   when is_integer(TimeoutMs), TimeoutMs > 0, TimeoutMs =< 600_000 ->
     call_unless_removed(removed_option(call, Opts), Pool, Realm, Procedure, Payload, TimeoutMs,

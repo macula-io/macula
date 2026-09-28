@@ -9,7 +9,8 @@
 -module(macula_consumer_contracts).
 
 -export([connect_to_a_pinned_seed/1, pool_of_a_pinned_seed/1, call_through_a_pinned_seed/1,
-         pool_with_its_ordering_bounds/0, a_required_call/1]).
+         pool_with_its_ordering_bounds/0, a_required_call/1, a_reported_call/1, a_reported_station_call/1,
+         a_streams_report/1]).
 
 -define(STATION, <<7:256>>).
 
@@ -26,6 +27,25 @@ pool_with_its_ordering_bounds() ->
 %% A resolved call that fails closed without a key, which call/6's spec once did not name (13.0.1).
 a_required_call(Pool) ->
     macula:call(Pool, <<1:256>>, <<"acme/echo_v1">>, #{}, 5_000, #{confidential => required}).
+
+%% A call that asks for its seal report and reads it (13.1.0): the option and the 3-tuple must both be in call/6's spec,
+%% or the call breaks its contract and the match can never succeed.
+a_reported_call(Pool) ->
+    {ok, _Result, #{sealed := Sealed, provider := <<_:256>>}} =
+        macula:call(Pool, <<1:256>>, <<"acme/echo_v1">>, #{}, 5_000, #{report => true}),
+    Sealed.
+
+%% The same through an explicit station, which honours `report' because the pool's own direct dial calls through it.
+a_reported_station_call(Pool) ->
+    {ok, _Result, #{sealed := Sealed}} =
+        macula:call_station(Pool, pinned_seed(), <<9:256>>, <<1:256>>, <<"acme/echo_v1">>, #{}, 5_000,
+                            #{confidential => required, report => true}),
+    Sealed.
+
+%% A stream's seal report, once it has settled.
+a_streams_report(Stream) ->
+    {ok, #{sealed := Sealed, provider := <<_:256>>}} = macula:stream_report(Stream),
+    Sealed.
 
 call_through_a_pinned_seed(Pool) ->
     macula:call_station(Pool, pinned_seed(), <<9:256>>, <<1:256>>, <<"acme/echo_v1">>, #{}, 5_000).

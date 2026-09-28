@@ -40,6 +40,14 @@ refusals() ->
                                             #{expected_node_id => ?NODE, confidential => off, report => yes}))}
      end,
      fun(Pool) ->
+         %% A valid report reaches the pool's station call: from the empty pool, `not_connected', with or without it.
+         {"call_station carries a report down to the pool",
+          ?_assertEqual([{error, not_connected}, {error, not_connected}],
+                        [macula:call_station(Pool, ?SEED, ?NODE, ?REALM, <<"x.y">>, #{}, 300,
+                                             #{expected_node_id => ?NODE, confidential => off, report => Report})
+                         || Report <- [true, false]])}
+     end,
+     fun(Pool) ->
          {"call refuses a report that is not a boolean",
           ?_assertEqual(?REFUSAL, macula:call(Pool, ?REALM, <<"x.y">>, #{}, 300, #{report => 1}))}
      end].

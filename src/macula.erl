@@ -329,9 +329,15 @@ call(Pool, Realm, Procedure, Payload, TimeoutMs) ->
 %% a call, so `confidential => off' is refused as `{error, {confidentiality,
 %% off_needs_explicit_target}}': a clear call is `call_station/8''s, to a
 %% target the application names itself.
+%%
+%% `report => true' asks for the call's seal report (DESIGN_E2E_SEAL_REPORT): a
+%% result then comes back as `{ok, Result, Report}', `Report' saying whether the
+%% request that produced it was sealed and to which key (`sealed' 1 with
+%% `seal_key_id', or 0), and the `provider' it was addressed to. An error comes
+%% back as it is. Any value but a boolean is `{error, {invalid_option, report}}'.
 -spec call(pool(), realm(), procedure(), term(), 1..600_000,
-           #{provider => <<_:256>>, confidential => preferred | required}) ->
-    {ok, term()} | {error, term()}.
+           #{provider => <<_:256>>, confidential => preferred | required, report => boolean()}) ->
+    {ok, term()} | {ok, term(), macula_station_link:report()} | {error, term()}.
 call(Pool, Realm, Procedure, Payload, TimeoutMs, Opts) when is_map(Opts) ->
     macula_direct_dial:call(Pool, Realm, Procedure, Payload, TimeoutMs, Opts).
 
@@ -376,9 +382,14 @@ call_station(Pool, Station, Target, Realm, Procedure, Payload, TimeoutMs) ->
 %% and `verify' in any value with
 %% `{error, {refused, {verify, one_verification_mode}}}' (see
 %% `trust_options_checked/1').
+%%
+%% `report => true' asks for the call's seal report, as `call/6' does: a result then comes back as
+%% `{ok, Result, Report}' (see `macula_station_link:call/9'). It is honoured here because the pool's own direct dial
+%% calls through this function. Any value but a boolean is `{error, {invalid_option, report}}', before anything is
+%% sent.
 -spec call_station(pool(), macula_client:seed(), <<_:256>>, realm(), procedure(),
                    term(), 1..600_000, map()) ->
-    {ok, term()} | {error, term()}.
+    {ok, term()} | {ok, term(), macula_station_link:report()} | {error, term()}.
 call_station(Pool, Station, Target, Realm, Procedure, Payload, TimeoutMs, Opts) ->
     refused(first_error([target_checked(Station, Opts), report_checked(Opts)]),
             fun() -> do_call_station(Pool, Station, Target, Realm, Procedure,
@@ -1367,7 +1378,8 @@ recv(Stream, Timeout) when is_pid(Stream) ->
 %% mechanism ran on this exchange, nothing more. It settles on the provider's first chunk or reply opened under the
 %% stream's key (on a clear stream, its first chunk, reply or end); after a reseal it names the reseal's key. Before
 %% it settles, on a stream that ended first, an error included, and on a local in-process stream it is
-%% `{error, not_settled}'; on a served stream, `{error, not_a_caller}'.
+%% `{error, not_settled}'; on a served stream, `{error, not_a_caller}'. It asks the stream process, so it answers
+%% while that process lives: until its owner ends, or the stream is closed.
 -spec stream_report(stream()) -> {ok, macula_station_link:report()} | {error, not_settled | not_a_caller}.
 stream_report(Stream) when is_pid(Stream) ->
     macula_stream:report(Stream).

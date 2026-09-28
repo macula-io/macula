@@ -104,7 +104,7 @@
 %% Internal API — called by `macula_pubsub' (and future surfaces).
 -export([publish/5, subscribe/5, unsubscribe/2]).
 %% RPC fan-out (since 3.16.0) — called by the `macula' facade.
--export([call_linked_station/5, call_station/11,
+-export([call_linked_station/5, call_station/11, call_station/12,
          advertise/4, advertise/5, advertise/6, advertise/7, unadvertise/3,
          advertise_stream/5, advertise_stream/6, advertise_stream/7, advertise_stream/8,
          unadvertise_stream/3]).
