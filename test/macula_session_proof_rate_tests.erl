@@ -9,8 +9,8 @@
 
 session_proof_rate_test_() ->
     {foreach,
-     fun() -> {ok, Pid} = macula_session_proof_rate:start_link(), Pid end,
-     fun(Pid) -> unlink(Pid), exit(Pid, shutdown), wait_down(Pid) end,
+     fun() -> own_process() end,
+     fun(Pid) -> give_back(Pid) end,
      [{"one client node gets 30 session proofs a minute, then a refusal until the next minute",
        fun per_node_minute/0},
       {"all clients together get 30 session proofs a second, then a refusal until the next second",
@@ -65,19 +65,44 @@ invalid_limits() ->
 
 with_env(Env, Test) ->
     {ok, Pid} = started_with(Env),
-    try Test() after unlink(Pid), exit(Pid, shutdown), wait_down(Pid), unset(Env) end.
+    try Test() after unset(Env), give_back(Pid) end.
 
 started_with(Env) ->
     [ok = application:set_env(macula, Name, Value) || {Name, Value} <- Env],
+    ok = supervised(fun supervisor:terminate_child/2),
     Started = macula_session_proof_rate:start_link(),
     unset_on_error(Started, Env).
 
 unset_on_error({ok, _} = Started, _Env) -> Started;
-unset_on_error(Error, Env) -> unset(Env), Error.
+unset_on_error(Error, Env) ->
+    unset(Env),
+    ok = supervised(fun(Sup, Id) -> restarted(supervisor:restart_child(Sup, Id)) end),
+    Error.
 
 unset(Env) ->
     [ok = application:unset_env(macula, Name) || {Name, _} <- Env],
     ok.
+
+%% A fresh process of this test's own, whether or not the macula application runs one under macula_peering_sup:
+%% the supervised one is stopped for the test and started again after it.
+own_process() ->
+    ok = supervised(fun supervisor:terminate_child/2),
+    {ok, Pid} = macula_session_proof_rate:start_link(),
+    Pid.
+
+give_back(Pid) ->
+    unlink(Pid),
+    exit(Pid, shutdown),
+    ok = wait_down(Pid),
+    supervised(fun(Sup, Id) -> restarted(supervisor:restart_child(Sup, Id)) end).
+
+supervised(Action) ->
+    supervised(whereis(macula_peering_sup), Action).
+
+supervised(undefined, _Action) -> ok;
+supervised(Sup, Action) -> Action(Sup, macula_session_proof_rate).
+
+restarted({ok, _Pid}) -> ok.
 
 wait_down(Pid) ->
     Ref = erlang:monitor(process, Pid),

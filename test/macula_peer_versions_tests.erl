@@ -11,8 +11,8 @@
 
 peer_versions_test_() ->
     {foreach,
-     fun() -> {ok, Pid} = macula_peer_versions:start_link(), Pid end,
-     fun(Pid) -> unlink(Pid), exit(Pid, shutdown), wait_down(Pid) end,
+     fun() -> own_process() end,
+     fun(Pid) -> give_back(Pid) end,
      [{"a node never seen is dialled with version 5", fun never_seen_is_v5/0},
       {"after a fallback a node is dialled with version 4 for 10 minutes, then 5 again", fun fallback_cache/0},
       {"a node seen on version 5 is never dialled with version 4", fun seen_v5_never_v4/0},
@@ -76,6 +76,27 @@ counters() ->
                              session_proof_rate, exporter_unavailable]),
                  lists:sort(maps:keys(Counted))),
     ?assertError(function_clause, macula_peer_versions:count(not_a_counter)).
+
+%% A fresh process of this test's own, whether or not the macula application runs one under macula_peering_sup:
+%% the supervised one is stopped for the test and started again after it.
+own_process() ->
+    ok = supervised(fun supervisor:terminate_child/2),
+    {ok, Pid} = macula_peer_versions:start_link(),
+    Pid.
+
+give_back(Pid) ->
+    unlink(Pid),
+    exit(Pid, shutdown),
+    ok = wait_down(Pid),
+    supervised(fun(Sup, Id) -> restarted(supervisor:restart_child(Sup, Id)) end).
+
+supervised(Action) ->
+    supervised(whereis(macula_peering_sup), Action).
+
+supervised(undefined, _Action) -> ok;
+supervised(Sup, Action) -> Action(Sup, macula_peer_versions).
+
+restarted({ok, _Pid}) -> ok.
 
 wait_down(Pid) ->
     Ref = erlang:monitor(process, Pid),
