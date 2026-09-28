@@ -75,6 +75,7 @@
     peer_leaf/1,
     presented_leaf/1,
     export_keying_material/4,
+    tls_posture/0,
 
     %% Stream
     send/2,
@@ -563,6 +564,19 @@ export_keying_material(Conn, Label, Context, Length)
   when is_binary(Label), is_binary(Context), is_integer(Length), Length > 0 ->
     nif_export_keying_material(Conn, Label, Context, Length).
 
+%% @doc What the TLS configurations this NIF builds actually do: the key
+%% exchange groups the dialler and the listener offer, as IANA code points in
+%% order, whether either end offers or accepts 0-RTT or sends tickets, and
+%% whether a second in-memory handshake between them is `full' or `resumed'.
+%% macula_tls_posture checks it before peering starts.
+-spec tls_posture() ->
+    {ok, #{client_groups := [non_neg_integer()], server_groups := [non_neg_integer()],
+           client_early_data := 0 | 1, server_max_early_data := non_neg_integer(),
+           server_tickets := non_neg_integer(), second_handshake := full | resumed}}
+  | {error, binary()}.
+tls_posture() ->
+    nif_tls_posture().
+
 %%%===================================================================
 %%% Stream API
 %%%===================================================================
@@ -808,6 +822,9 @@ nif_presented_leaf(_Conn) ->
     erlang:nif_error(nif_not_loaded).
 
 nif_export_keying_material(_Conn, _Label, _Context, _Length) ->
+    erlang:nif_error(nif_not_loaded).
+
+nif_tls_posture() ->
     erlang:nif_error(nif_not_loaded).
 
 nif_send(_Stream, _Data, _Ref) ->

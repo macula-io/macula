@@ -13,7 +13,10 @@
 start_link() ->
     supervisor:start_link({local, ?MODULE}, ?MODULE, []).
 
+%% Peering runs handshake v5 only on a TLS posture that holds it up: it
+%% refuses to start otherwise, naming what departed (macula_tls_posture).
 init([]) ->
+    ok = macula_tls_posture:ensure(),
     SupFlags = #{strategy => one_for_one, intensity => 5, period => 10},
     Children = [
         #{

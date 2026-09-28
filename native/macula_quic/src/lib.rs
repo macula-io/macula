@@ -52,6 +52,8 @@ rustler::init!(
         stream::nif_reset_stream,
         stream::nif_setopt_active,
         stream::nif_controlling_process,
+        // What the TLS configurations this NIF builds actually do
+        config::nif_tls_posture,
         // Self-signed pubkey-anchored cert helpers
         cert::nif_generate_self_signed_cert,
     ],
@@ -176,6 +178,11 @@ mod enif_stubs {
     #[no_mangle]
     pub extern "C" fn enif_make_copy() -> ! {
         no_beam("enif_make_copy")
+    }
+
+    #[no_mangle]
+    pub extern "C" fn enif_make_list_from_array() -> ! {
+        no_beam("enif_make_list_from_array")
     }
 
     #[no_mangle]

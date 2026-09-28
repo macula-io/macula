@@ -1,7 +1,11 @@
 use quinn::{ClientConfig, ServerConfig, TransportConfig, VarInt};
 use rustls::crypto::CryptoProvider;
-use rustls::pki_types::{CertificateDer, PrivateKeyDer};
+use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName};
 use rustls::sign::CertifiedKey;
+use rustls::{ClientConnection, Connection, HandshakeKind, ServerConnection};
+use rustler::{Encoder, Env, NifResult, Term};
+
+use crate::{atoms, cert};
 use std::fs;
 use std::net::{IpAddr, SocketAddr, UdpSocket};
 use std::sync::Arc;
@@ -262,16 +266,122 @@ fn load_key(path: &str) -> Result<PrivateKeyDer<'static>, String> {
         .ok_or_else(|| format!("no private key found in {}", path))
 }
 
+// ── TLS posture ────────────────────────────────────────────────
+
+/// What the configurations this NIF builds actually do, for the start check
+/// handshake v5 depends on (plans/DESIGN_NEIGHBOUR_CHANNEL_BINDING.md sections 3
+/// and 6): the key exchange groups each offers, as IANA code points in order,
+/// whether either end offers or accepts 0-RTT or sends tickets, and whether a
+/// second handshake between the same two configurations resumes. rustls has
+/// no reader for its resumption setting, so the posture runs the second
+/// handshake rather than reading a field.
+pub struct Posture {
+    pub client_groups: Vec<u16>,
+    pub server_groups: Vec<u16>,
+    pub client_early_data: bool,
+    pub server_max_early_data: u32,
+    pub server_tickets: usize,
+    pub second_handshake: HandshakeKind,
+}
+
+pub fn posture() -> Result<Posture, String> {
+    let alpn = vec!["macula".to_string()];
+    let (certificate, key) = cert::generate_self_signed(&[0u8; 32], &["localhost".to_string()])?;
+    let server = Arc::new(server_tls_config(vec![certificate], key.into(), &alpn)?);
+    let client = Arc::new(client_tls_config(&alpn));
+    handshake_kind(&client, &server)?;
+    let second_handshake = handshake_kind(&client, &server)?;
+    Ok(Posture {
+        client_groups: groups(client.crypto_provider()),
+        server_groups: groups(server.crypto_provider()),
+        client_early_data: client.enable_early_data,
+        server_max_early_data: server.max_early_data_size,
+        server_tickets: server.send_tls13_tickets,
+        second_handshake,
+    })
+}
+
+fn groups(provider: &CryptoProvider) -> Vec<u16> {
+    provider.kx_groups.iter().map(|group| u16::from(group.name())).collect()
+}
+
+/// One in-memory handshake over shared configurations, so a session one
+/// handshake stores is there for the next, returning whether it was full or
+/// resumed.
+pub(crate) fn handshake_kind(
+    client_cfg: &Arc<rustls::ClientConfig>,
+    server_cfg: &Arc<rustls::ServerConfig>,
+) -> Result<HandshakeKind, String> {
+    let mut client = Connection::Client(
+        ClientConnection::new(client_cfg.clone(), ServerName::try_from("localhost").unwrap())
+            .map_err(|e| format!("client connection: {}", e))?,
+    );
+    let mut server = Connection::Server(
+        ServerConnection::new(server_cfg.clone()).map_err(|e| format!("server connection: {}", e))?,
+    );
+    // Twenty flights is far more than TLS 1.3 needs and bounds a handshake
+    // that stops progressing.
+    for _ in 0..20 {
+        let moved = pump(&mut client, &mut server)? + pump(&mut server, &mut client)?;
+        if moved == 0 && !client.is_handshaking() {
+            break;
+        }
+    }
+    if client.is_handshaking() {
+        return Err("handshake never completed".to_string());
+    }
+    client.handshake_kind().ok_or_else(|| "completed with no handshake kind".to_string())
+}
+
+/// Moves whatever `from` wants to write into `to`, and returns how many
+/// bytes crossed, so the caller can tell a stalled handshake from a
+/// finished one.
+pub(crate) fn pump(from: &mut Connection, to: &mut Connection) -> Result<usize, String> {
+    let mut buf = Vec::new();
+    while from.wants_write() {
+        from.write_tls(&mut buf).map_err(|e| format!("write_tls: {}", e))?;
+    }
+    if buf.is_empty() {
+        return Ok(0);
+    }
+    let mut cursor = std::io::Cursor::new(&buf[..]);
+    while (cursor.position() as usize) < buf.len() {
+        to.read_tls(&mut cursor).map_err(|e| format!("read_tls: {}", e))?;
+        to.process_new_packets().map_err(|e| format!("process_new_packets: {}", e))?;
+    }
+    Ok(buf.len())
+}
+
+/// NIF: tls_posture() -> {ok, #{client_groups, server_groups, client_early_data,
+///     server_max_early_data, server_tickets, second_handshake}} | {error, Reason}
+#[rustler::nif(schedule = "DirtyCpu")]
+fn nif_tls_posture<'a>(env: Env<'a>) -> NifResult<Term<'a>> {
+    Ok(match posture() {
+        Ok(p) => {
+            let second = match p.second_handshake {
+                HandshakeKind::Resumed => atoms::resumed(),
+                _ => atoms::full(),
+            };
+            let map = Term::map_new(env)
+                .map_put(atoms::client_groups(), p.client_groups)?
+                .map_put(atoms::server_groups(), p.server_groups)?
+                .map_put(atoms::client_early_data(), p.client_early_data as u8)?
+                .map_put(atoms::server_max_early_data(), p.server_max_early_data)?
+                .map_put(atoms::server_tickets(), p.server_tickets)?
+                .map_put(atoms::second_handshake(), second)?;
+            (atoms::ok(), map).encode(env)
+        }
+        Err(reason) => (atoms::error(), reason).encode(env),
+    })
+}
+
 // ── Tests ──────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rustls::pki_types::ServerName;
     use rustls::sign::SingleCertAndKey;
-    use rustls::{ClientConnection, Connection, HandshakeKind, NamedGroup, ServerConnection, SignatureScheme};
-
-    use crate::cert;
+    use rustls::{NamedGroup, SignatureScheme};
 
     /// The key exchange groups whose shared secret a quantum computer cannot
     /// recover from the wire: the ML-KEM groups and the hybrids that carry
@@ -599,6 +709,20 @@ mod tests {
         assert_eq!(handshake_kind(&client, &server), Ok(HandshakeKind::Full), "second");
     }
 
+    /// The posture the start check reads is the configurations' own: exactly
+    /// macula-pqc's hybrid groups on both ends, no early data, no tickets, and
+    /// a second handshake that is a full one.
+    #[test]
+    fn the_posture_is_what_handshake_v5_relies_on() {
+        let p = posture().expect("posture");
+        assert_eq!(p.client_groups, vec![0x11ED, 0x11EB], "dialler groups");
+        assert_eq!(p.server_groups, vec![0x11ED, 0x11EB], "listener groups");
+        assert!(!p.client_early_data);
+        assert_eq!(p.server_max_early_data, 0);
+        assert_eq!(p.server_tickets, 0);
+        assert_eq!(p.second_handshake, HandshakeKind::Full);
+    }
+
     /// Neither end offers or accepts 0-RTT early data, which is replayable
     /// by design: v5 drops the per-frame sequence numbers on the strength of
     /// every frame travelling in 1-RTT.
@@ -612,32 +736,6 @@ mod tests {
         assert_eq!(server.send_tls13_tickets, 0, "listener tickets");
         assert!(!server.session_storage.can_cache(), "listener session storage");
         assert!(!client.enable_early_data, "dialler");
-    }
-
-    /// One handshake over shared configurations, so a session one handshake
-    /// stores is there for the next, returning whether it was full or
-    /// resumed.
-    fn handshake_kind(
-        client_cfg: &Arc<rustls::ClientConfig>,
-        server_cfg: &Arc<rustls::ServerConfig>,
-    ) -> Result<HandshakeKind, String> {
-        let mut client = Connection::Client(
-            ClientConnection::new(client_cfg.clone(), ServerName::try_from("localhost").unwrap())
-                .map_err(|e| format!("client connection: {}", e))?,
-        );
-        let mut server = Connection::Server(
-            ServerConnection::new(server_cfg.clone()).map_err(|e| format!("server connection: {}", e))?,
-        );
-        for _ in 0..20 {
-            let moved = pump(&mut client, &mut server)? + pump(&mut server, &mut client)?;
-            if moved == 0 && !client.is_handshaking() {
-                break;
-            }
-        }
-        if client.is_handshaking() {
-            return Err("handshake never completed".to_string());
-        }
-        client.handshake_kind().ok_or_else(|| "completed with no handshake kind".to_string())
     }
 
     /// Runs one handshake between the NIF's own server and client
@@ -737,27 +835,5 @@ mod tests {
             .negotiated_key_exchange_group()
             .map(|g| g.name())
             .ok_or_else(|| "completed with no key exchange group".to_string())
-    }
-
-    /// Moves whatever `from` wants to write into `to`, and returns how many
-    /// bytes crossed, so the caller can tell a stalled handshake from a
-    /// finished one.
-    fn pump(from: &mut Connection, to: &mut Connection) -> Result<usize, String> {
-        let mut buf = Vec::new();
-        while from.wants_write() {
-            from.write_tls(&mut buf)
-                .map_err(|e| format!("write_tls: {}", e))?;
-        }
-        if buf.is_empty() {
-            return Ok(0);
-        }
-        let mut cursor = std::io::Cursor::new(&buf[..]);
-        while (cursor.position() as usize) < buf.len() {
-            to.read_tls(&mut cursor)
-                .map_err(|e| format!("read_tls: {}", e))?;
-            to.process_new_packets()
-                .map_err(|e| format!("process_new_packets: {}", e))?;
-        }
-        Ok(buf.len())
     }
 }

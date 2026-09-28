@@ -65,6 +65,16 @@ rustler::atoms! {
     no_presented_leaf,
     export_failed,
 
+    // TLS posture (config::posture)
+    client_groups,
+    server_groups,
+    client_early_data,
+    server_max_early_data,
+    server_tickets,
+    second_handshake,
+    full,
+    resumed,
+
     // Why a connection closed, as close_reason/1 reports it
     open,
     application_closed,
