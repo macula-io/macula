@@ -163,8 +163,9 @@ held(false, _Prefix, _Now, _State) ->
 acceptable(true, Epoch, Prefix, State) -> reply(Prefix, [Epoch], State);
 acceptable(false, _Epoch, _Prefix, _State) -> {error, epoch_expired}.
 
+%% Text travels tagged, so every SDK reads `prefix' and `policy' as text, not bytes.
 reply(Prefix, Epochs, #{policy := Policy}) ->
-    #{prefix => Prefix, policy => Policy, epochs => Epochs}.
+    #{prefix => {text, Prefix}, policy => {text, Policy}, epochs => Epochs}.
 
 text_field(Payload, Name) ->
     macula_record:payload_field(Payload, Name).
