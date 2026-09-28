@@ -31,17 +31,25 @@ start_link() ->
     gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
 
 %% @doc Whether the station may sign one more session proof for the client NodeId at Now (milliseconds).
+%% A refused request spends nothing: both windows are read first and counted only when the proof will be signed, so
+%% a client refused on the total keeps its own budget (Fable round 2).
 -spec allow(<<_:256>>, integer()) -> ok | {error, {session_proof_rate, per_node_per_minute | per_second}}.
 allow(NodeId, Now) ->
     #{per_node_per_minute := PerNode, per_second := PerSecond} = limits(),
-    within(counted({node, NodeId, Now div 60000}) =< PerNode, per_node_per_minute,
-           fun() -> within(counted({total, Now div 1000}) =< PerSecond, per_second, fun() -> ok end) end).
+    Node = {node, NodeId, Now div 60000},
+    Total = {total, Now div 1000},
+    within([{count(Node) < PerNode, per_node_per_minute}, {count(Total) < PerSecond, per_second}], [Node, Total]).
 
-counted(Key) ->
-    ets:update_counter(?TABLE, Key, 1, {Key, 0}).
+count(Key) ->
+    ets:lookup_element(?TABLE, Key, 2, 0).
 
-within(true, _Limit, Next) -> Next();
-within(false, Limit, _Next) -> {error, {session_proof_rate, Limit}}.
+within([], Keys) ->
+    [ets:update_counter(?TABLE, Key, 1, {Key, 0}) || Key <- Keys],
+    ok;
+within([{true, _Limit} | Rest], Keys) ->
+    within(Rest, Keys);
+within([{false, Limit} | _Rest], _Keys) ->
+    {error, {session_proof_rate, Limit}}.
 
 %% @doc The limits in force, as read at start.
 -spec limits() -> limits().

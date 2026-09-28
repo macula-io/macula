@@ -158,7 +158,7 @@ past_the_session_proof_budget_the_client_is_refused(Ctx) ->
         ok = macula_session_proof_rate:allow(node_id(ClientKey), Now + ?MINUTE),
         Before = macula_peering:handshake_counters(),
         {Client, Station} = connect(World, #{mode => off}),
-        ?assertEqual({refused, not_accepted}, ended(Client)),
+        ?assertEqual({refused, session_proof_rate}, ended(Client)),
         ?assertEqual(session_proof_rate, ended(Station)),
         ?assertEqual(1, counted(session_proof_rate, Before)),
         finish(World, [])

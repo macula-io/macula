@@ -16,6 +16,7 @@ session_proof_rate_test_() ->
       {"all clients together get 30 session proofs a second, then a refusal until the next second",
        fun total_second/0},
       {"windows that ended are purged", fun purged/0},
+      {"a refusal on the total spends none of the client's own budget", fun total_refusal_spends_no_node_budget/0},
       {"the defaults are the limits in force", fun default_limits/0}]}.
 
 %% The limits come from the macula application environment, read once at start.
@@ -36,6 +37,15 @@ total_second() ->
     ?assertEqual(lists:duplicate(30, ok), Allowed),
     ?assertEqual({error, {session_proof_rate, per_second}}, macula_session_proof_rate:allow(<<31:256>>, ?T0 + 999)),
     ?assertEqual(ok, macula_session_proof_rate:allow(<<31:256>>, ?T0 + 1000)).
+
+total_refusal_spends_no_node_budget() ->
+    [ok = macula_session_proof_rate:allow(<<(100 + I):256>>, ?T0 + 500) || I <- lists:seq(1, 30)],
+    [{error, {session_proof_rate, per_second}} = macula_session_proof_rate:allow(?NODE, ?T0 + 600)
+     || _ <- lists:seq(1, 30)],
+    Refused = [{I, Refusal} || I <- lists:seq(0, 29),
+                               Refusal <- [macula_session_proof_rate:allow(?NODE, ?T0 + 1000 + I * 1000)],
+                               Refusal =/= ok],
+    ?assertEqual([], Refused).
 
 purged() ->
     ok = macula_session_proof_rate:allow(?NODE, ?T0),

@@ -10,7 +10,7 @@
 
 good() ->
     #{client_groups => ?GROUPS, server_groups => ?GROUPS, client_early_data => 0, server_max_early_data => 0,
-      server_tickets => 0, second_handshake => full}.
+      server_tickets => 0, second_handshake => full, dialler_second_handshake => full}.
 
 this_build_has_the_posture_test() ->
     ?assertEqual({ok, good()}, macula_quic:tls_posture()),
@@ -26,6 +26,7 @@ each_departure_is_refused_by_name_test() ->
                   {client_early_data, 1},
                   {server_max_early_data, 16#FFFFFFFF},
                   {server_tickets, 2},
-                  {second_handshake, resumed}],
+                  {second_handshake, resumed},
+                  {dialler_second_handshake, resumed}],
     [?assertEqual({error, {tls_posture, Field, Got}}, macula_tls_posture:check((good())#{Field := Got}))
      || {Field, Got} <- Departures].

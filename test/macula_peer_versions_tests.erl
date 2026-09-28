@@ -19,6 +19,7 @@ peer_versions_test_() ->
       {"a node seen on version 5 refuses a fallback, until it is forgotten", fun downgrade_refused_until_forgotten/0},
       {"fallbacks are counted per node, and warned from the second, at most once a minute per node",
        fun fallback_warnings/0},
+      {"a refused downgrade is warned per node with its count, at most once a minute", fun downgrade_warnings/0},
       {"the counters count what happened, node-wide", fun counters/0}]}.
 
 never_seen_is_v5() ->
@@ -56,6 +57,17 @@ fallback_warnings() ->
     ?assertEqual({warn, 3}, macula_peer_versions:fallback_warning(?NODE, ?T0 + 1 + ?MINUTE)),
     ?assertEqual({fall_back, 1}, macula_peer_versions:unsupported_version(?OTHER, ?T0 + 3)),
     ?assertEqual(no_warning, macula_peer_versions:fallback_warning(?OTHER, ?T0 + 3)).
+
+downgrade_warnings() ->
+    ok = macula_peer_versions:completed_v5(?NODE),
+    downgrade_refused = macula_peer_versions:unsupported_version(?NODE, ?T0),
+    ?assertEqual({warn, 1}, macula_peer_versions:downgrade_warning(?NODE, ?T0)),
+    downgrade_refused = macula_peer_versions:unsupported_version(?NODE, ?T0 + 1),
+    ?assertEqual(no_warning, macula_peer_versions:downgrade_warning(?NODE, ?T0 + 1)),
+    ?assertEqual({warn, 2}, macula_peer_versions:downgrade_warning(?NODE, ?T0 + ?MINUTE)),
+    ok = macula_peer_versions:completed_v5(?OTHER),
+    downgrade_refused = macula_peer_versions:unsupported_version(?OTHER, ?T0 + 2),
+    ?assertEqual({warn, 1}, macula_peer_versions:downgrade_warning(?OTHER, ?T0 + 2)).
 
 counters() ->
     Zero = macula_peer_versions:counters(),

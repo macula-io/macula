@@ -72,6 +72,7 @@ rustler::atoms! {
     server_max_early_data,
     server_tickets,
     second_handshake,
+    dialler_second_handshake,
     full,
     resumed,
 

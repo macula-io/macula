@@ -282,6 +282,10 @@ pub struct Posture {
     pub server_max_early_data: u32,
     pub server_tickets: usize,
     pub second_handshake: HandshakeKind,
+    /// The dialler's second handshake against a listener that does keep
+    /// sessions and send tickets: full only if the dialler itself never
+    /// resumes, which `second_handshake` alone cannot show.
+    pub dialler_second_handshake: HandshakeKind,
 }
 
 pub fn posture() -> Result<Posture, String> {
@@ -291,6 +295,12 @@ pub fn posture() -> Result<Posture, String> {
     let client = Arc::new(client_tls_config(&alpn));
     handshake_kind(&client, &server)?;
     let second_handshake = handshake_kind(&client, &server)?;
+    let mut ticketing = (*server).clone();
+    ticketing.session_storage = rustls::server::ServerSessionMemoryCache::new(16);
+    ticketing.send_tls13_tickets = 2;
+    let ticketing = Arc::new(ticketing);
+    handshake_kind(&client, &ticketing)?;
+    let dialler_second_handshake = handshake_kind(&client, &ticketing)?;
     Ok(Posture {
         client_groups: groups(client.crypto_provider()),
         server_groups: groups(server.crypto_provider()),
@@ -298,6 +308,7 @@ pub fn posture() -> Result<Posture, String> {
         server_max_early_data: server.max_early_data_size,
         server_tickets: server.send_tls13_tickets,
         second_handshake,
+        dialler_second_handshake,
     })
 }
 
@@ -358,7 +369,7 @@ pub(crate) fn pump(from: &mut Connection, to: &mut Connection) -> Result<usize, 
 fn nif_tls_posture<'a>(env: Env<'a>) -> NifResult<Term<'a>> {
     Ok(match posture() {
         Ok(p) => {
-            let second = match p.second_handshake {
+            let kind = |k: HandshakeKind| match k {
                 HandshakeKind::Resumed => atoms::resumed(),
                 _ => atoms::full(),
             };
@@ -368,7 +379,8 @@ fn nif_tls_posture<'a>(env: Env<'a>) -> NifResult<Term<'a>> {
                 .map_put(atoms::client_early_data(), p.client_early_data as u8)?
                 .map_put(atoms::server_max_early_data(), p.server_max_early_data)?
                 .map_put(atoms::server_tickets(), p.server_tickets)?
-                .map_put(atoms::second_handshake(), second)?;
+                .map_put(atoms::second_handshake(), kind(p.second_handshake))?
+                .map_put(atoms::dialler_second_handshake(), kind(p.dialler_second_handshake))?;
             (atoms::ok(), map).encode(env)
         }
         Err(reason) => (atoms::error(), reason).encode(env),
@@ -721,6 +733,7 @@ mod tests {
         assert_eq!(p.server_max_early_data, 0);
         assert_eq!(p.server_tickets, 0);
         assert_eq!(p.second_handshake, HandshakeKind::Full);
+        assert_eq!(p.dialler_second_handshake, HandshakeKind::Full, "dialler against a ticketing listener");
     }
 
     /// Neither end offers or accepts 0-RTT early data, which is replayable

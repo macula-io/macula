@@ -16,7 +16,7 @@
 -behaviour(gen_server).
 
 -export([start_link/0, dial_version/2, unsupported_version/2, completed_v5/1, seen_v5/1, forget_v5_peer/1,
-         fallback_warning/2, count/1, counters/0]).
+         fallback_warning/2, downgrade_warning/2, count/1, counters/0]).
 -export([init/1, handle_call/3, handle_cast/2]).
 
 -define(TABLE, ?MODULE).
@@ -32,7 +32,7 @@
 -export_type([counter/0]).
 
 %% Rows: {{seen_v5, NodeId}}, {{v4_until, NodeId}, Ms}, {{fallbacks, NodeId}, Count}, {{warned, NodeId}, Ms},
-%% {{counter, Name}, Count}.
+%% {{downgrades, NodeId}, Count}, {{warned_downgrade, NodeId}, Ms}, {{counter, Name}, Count}.
 
 -spec start_link() -> {ok, pid()}.
 start_link() ->
@@ -52,8 +52,9 @@ version_for(_NoneOrExpired, _Now) -> 5.
 unsupported_version(NodeId, Now) ->
     refused_or_fallen_back(seen_v5(NodeId), NodeId, Now).
 
-refused_or_fallen_back(true, _NodeId, _Now) ->
+refused_or_fallen_back(true, NodeId, _Now) ->
     ok = count(v5_downgrade_refused),
+    _ = ets:update_counter(?TABLE, {downgrades, NodeId}, 1, {{downgrades, NodeId}, 0}),
     downgrade_refused;
 refused_or_fallen_back(false, NodeId, Now) ->
     true = ets:insert(?TABLE, {{v4_until, NodeId}, Now + ?V4_CACHE_MS}),
@@ -84,17 +85,27 @@ fallback_warning(NodeId, Now) ->
     warning_due(fallbacks(NodeId), ets:lookup(?TABLE, {warned, NodeId}), NodeId, Now).
 
 fallbacks(NodeId) ->
-    fallback_count(ets:lookup(?TABLE, {fallbacks, NodeId})).
+    row_count(ets:lookup(?TABLE, {fallbacks, NodeId})).
 
-fallback_count([{_, Count}]) -> Count;
-fallback_count([]) -> 0.
+row_count([{_, Count}]) -> Count;
+row_count([]) -> 0.
 
 warning_due(Count, _Warned, _NodeId, _Now) when Count < 2 ->
     no_warning;
-warning_due(_Count, [{_, At}], _NodeId, Now) when Now - At < ?WARNING_INTERVAL_MS ->
+warning_due(Count, Warned, NodeId, Now) ->
+    once_a_minute(Warned, {warned, NodeId}, Count, Now).
+
+%% @doc Whether to log a warning for NodeId's refused downgrades at Now: from the first, at most once a minute, with
+%% how many there have been.
+-spec downgrade_warning(<<_:256>>, integer()) -> no_warning | {warn, pos_integer()}.
+downgrade_warning(NodeId, Now) ->
+    once_a_minute(ets:lookup(?TABLE, {warned_downgrade, NodeId}), {warned_downgrade, NodeId},
+                  row_count(ets:lookup(?TABLE, {downgrades, NodeId})), Now).
+
+once_a_minute([{_, At}], _Key, _Count, Now) when Now - At < ?WARNING_INTERVAL_MS ->
     no_warning;
-warning_due(Count, _NeverOrLongAgo, NodeId, Now) ->
-    true = ets:insert(?TABLE, {{warned, NodeId}, Now}),
+once_a_minute(_NeverOrLongAgo, Key, Count, Now) ->
+    true = ets:insert(?TABLE, {Key, Now}),
     {warn, Count}.
 
 %% @doc Count one handshake event, node-wide.

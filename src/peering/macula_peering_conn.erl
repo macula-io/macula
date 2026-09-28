@@ -747,13 +747,19 @@ hello_read({error, Reason}, _Rest, Data) ->
 %% one more dial, on a new QUIC connection, with a v4 CONNECT
 %% (plans/DESIGN_NEIGHBOUR_CHANNEL_BINDING.md sections 3 and 4).
 unsupported_v5(downgrade_refused, #data{peer_node_id = NodeId} = Data) ->
-    ok = macula_diagnostics:bounded_event(warning, <<"_macula.peering.v5_downgrade_refused">>,
-                                          #{node_id => binary:encode_hex(NodeId, lowercase),
-                                            remedy => <<"macula_peering:forget_v5_peer/1 after a deliberate rollback">>}),
+    ok = downgrade_warned(macula_peer_versions:downgrade_warning(NodeId, now_ms(Data)), NodeId),
     closed(v5_downgrade_refused, Data);
 unsupported_v5({fall_back, _Count}, #data{peer_node_id = NodeId} = Data) ->
     ok = fallback_warned(macula_peer_versions:fallback_warning(NodeId, now_ms(Data)), NodeId),
     redial(Data).
+
+%% Per node, from the first refusal, at most once a minute, with its count.
+downgrade_warned(no_warning, _NodeId) ->
+    ok;
+downgrade_warned({warn, Count}, NodeId) ->
+    macula_diagnostics:event(warning, <<"_macula.peering.v5_downgrade_refused">>,
+                             #{node_id => binary:encode_hex(NodeId, lowercase), refused => Count,
+                               remedy => <<"macula_peering:forget_v5_peer/1 after a deliberate rollback">>}).
 
 fallback_warned(no_warning, _NodeId) ->
     ok;
@@ -801,6 +807,7 @@ connect_verdict({accepted, #{capabilities := Capabilities, version := Version} =
                                                                     version = Version})),
     hello_sent(send_handshake_bytes(Stream, Hello), Accepted);
 connect_verdict({refused, Reason, Hello}, #data{quic_stream = Stream} = Data) ->
+    ok = counted_refusal(Reason),
     _ = send_handshake_bytes(Stream, Hello),
     {keep_state, Data#data{refusal = Reason, expect = undefined},
      [{state_timeout, ?REFUSAL_LINGER_MS, refusal_sent}]}.

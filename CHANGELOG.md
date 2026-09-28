@@ -27,7 +27,7 @@ dials 5 and falls back to 4 once, only on `unsupported_version`, so no peer is r
 - **Falling back, and refusing a downgrade.** A station never seen on v5 that refuses a v5 CONNECT with
   `unsupported_version` is dialled once more, on a new QUIC connection, with a v4 CONNECT, and with v4 for the next 10
   minutes; from its second fallback a warning names it, at most once a minute. A station seen on v5 in this run that
-  answers v4 is refused (`v5_downgrade_refused`), logged with its node_id, until `macula_peering:forget_v5_peer/1` or
+  answers v4 is refused (`v5_downgrade_refused`), warned per node with its count at most once a minute, until `macula_peering:forget_v5_peer/1` or
   a restart. That includes a station rolled back below its first v5 release: that release is its rollback floor,
   because a third-party client that saw it on v5 refuses it until that client restarts.
 - **Liveness on v5.** The probe is `liveness_ping`/`liveness_pong`, answered and consumed by the peer's connection,
@@ -35,7 +35,8 @@ dials 5 and falls back to 4 once, only on `unsupported_version`, so no peer is r
 - **The station's session proof budget.** At most `session_proofs_per_node_per_minute` (default 30) per client node
   and `session_proofs_per_second` (default 30) in total, macula application environment options read once at start;
   a value that is not an integer of at least 1 refuses the start. Past either limit CONNECT is refused
-  (`session_proof_rate`, logged with the limit). `macula_peering:session_proof_limits/0`.
+  with `session_proof_rate`, on the wire too (only a v5 CONNECT can meet it), logged with the limit. A client refused
+  on the total spends none of its own per-node budget. `macula_peering:session_proof_limits/0`.
 - **Counters.** `macula_peering:handshake_counters/0`: connections by version, control frames on v4 connections (the
   old path, which must read zero fleet-wide before v4 is dropped), v4 fallbacks, refused downgrades, and session proof
   refusals by reason.
@@ -47,8 +48,8 @@ dials 5 and falls back to 4 once, only on `unsupported_version`, so no peer is r
   default and nothing turned it off: a second handshake between the same configurations resumed, and the listener
   sent two tickets. Every connection is now a full handshake.
 - **Peering refuses to start on a TLS posture v5 cannot rely on**: both ends must offer exactly SecP384r1MLKEM1024
-  then SecP256r1MLKEM768, neither may do 0-RTT or send tickets, and a second handshake must be full
-  (`macula_tls_posture`). This proves the configured posture, not each connection's negotiated group.
+  then SecP256r1MLKEM768, neither may do 0-RTT or send tickets, a second handshake must be full, and so must the
+  dialler's second handshake against a listener that does issue tickets (`macula_tls_posture`). This proves the configured posture, not each connection's negotiated group.
 - `macula_handshake:answer_challenge/2` returns `{ok, Connect, Station, ExpectHello}`, and `read_hello/1` is
   `read_hello/2`, taking that `ExpectHello`. `macula_dist_tunnel` stays on v4: its station answers v5 as an old one.
 

@@ -567,12 +567,14 @@ export_keying_material(Conn, Label, Context, Length)
 %% @doc What the TLS configurations this NIF builds actually do: the key
 %% exchange groups the dialler and the listener offer, as IANA code points in
 %% order, whether either end offers or accepts 0-RTT or sends tickets, and
-%% whether a second in-memory handshake between them is `full' or `resumed'.
+%% whether a second in-memory handshake between them is `full' or `resumed', and the same for the dialler against
+%% a listener that does issue tickets, which witnesses the dialler's own setting.
 %% macula_tls_posture checks it before peering starts.
 -spec tls_posture() ->
     {ok, #{client_groups := [non_neg_integer()], server_groups := [non_neg_integer()],
            client_early_data := 0 | 1, server_max_early_data := non_neg_integer(),
-           server_tickets := non_neg_integer(), second_handshake := full | resumed}}
+           server_tickets := non_neg_integer(), second_handshake := full | resumed,
+           dialler_second_handshake := full | resumed}}
   | {error, binary()}.
 tls_posture() ->
     nif_tls_posture().

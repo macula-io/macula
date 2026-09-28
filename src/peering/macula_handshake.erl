@@ -40,7 +40,8 @@
 -type profile()      :: macula_crypto_profile:profile().
 -type envelope()     :: macula_key_bindings:envelope().
 -type puzzle_mode()  :: off | log_only | enforce.
--type refusal_code() :: unsupported_version | puzzle_invalid | not_accepted.
+%% session_proof_rate travels only in a v5 HELLO, so no pre-v5 client reads it.
+-type refusal_code() :: unsupported_version | puzzle_invalid | session_proof_rate | not_accepted.
 -type close_reason() :: unexpected_frame
                       | unsupported_version
                       | malformed_frame
@@ -410,6 +411,7 @@ session_proof_message(E, Challenge, Connect, StationNodeId, ClientNodeId, Capabi
 
 wire_refusal(unsupported_version) -> unsupported_version;
 wire_refusal(puzzle_invalid) -> puzzle_invalid;
+wire_refusal(session_proof_rate) -> session_proof_rate;
 wire_refusal(_Other) -> not_accepted.
 
 %%------------------------------------------------------------------
@@ -604,6 +606,7 @@ envelope(_NotAnEnvelope) ->
 
 refusal_code(<<"unsupported_version">>) -> {ok, unsupported_version};
 refusal_code(<<"puzzle_invalid">>) -> {ok, puzzle_invalid};
+refusal_code(<<"session_proof_rate">>) -> {ok, session_proof_rate};
 refusal_code(<<"not_accepted">>) -> {ok, not_accepted};
 refusal_code(_Unknown) -> error.
 

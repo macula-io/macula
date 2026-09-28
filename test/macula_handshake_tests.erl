@@ -303,6 +303,11 @@ v5_refusal_cases(#{profile := Profile} = World) ->
      ?_assertMatch({refused, unsupported_version, _}, Accept(Version6, #{})),
      %% Past the rate limit the station refuses and signs nothing.
      ?_assertMatch({refused, session_proof_rate, _}, Accept(Connect, #{sign_session_proof => Rated})),
+     %% On the wire the budget refusal says so: only a v5 CONNECT can meet it, so no pre-v5 client reads it.
+     ?_assertEqual({error, {refused, session_proof_rate}},
+                   macula_handshake:read_hello(element(3, Accept(Connect, #{sign_session_proof => Rated})),
+                                               element(4, macula_handshake:answer_challenge(
+                                                             Challenge, client_session_v5(World))))),
      ?_assertEqual(5, field(element(3, Accept(Connect, #{sign_session_proof => Rated})), <<"version">>)),
      ?_test(signs_only_after_every_check(Connect, Accept, Profile))].
 
