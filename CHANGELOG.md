@@ -7,7 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [Unreleased]
+## [13.2.1] - 2026-09-29
+
+A handshake v5 fix and a station setting, no wire change. No ordering of two connections keeps a v4 connection a node
+dialled to a peer it has seen on v5 (macula#53), and a station can set its session proof limits at run time. The
+fleet's floor release (macula-station 0.7.1) builds on this one.
 
 ### Fixed
 
