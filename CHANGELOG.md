@@ -7,7 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [Unreleased]
+## [13.2.2] - 2026-09-29
+
+The frame observer names a pre-v5 liveness probe apart, so a station's idle close can leave probes out
+(macula-station#25).
 
 ### Changed
 
