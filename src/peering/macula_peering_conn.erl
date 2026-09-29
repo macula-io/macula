@@ -350,6 +350,7 @@ initial_state(client) -> connecting;
 initial_state(server) -> awaiting_start.
 
 terminate(_Reason, _State, Data) ->
+    ok = v4_forgotten(Data),
     ok = fail_waiting_opens(Data),
     _ = close_quic(Data),
     ok.
@@ -745,32 +746,49 @@ hello_read({error, Reason}, _Rest, Data) ->
 %% A v4 handshake completes only for a node not seen on v5, checked now, not
 %% only when the version was chosen: another connection may have completed v5
 %% with it meanwhile (macula#53).
-v4_checked(4, #data{peer_node_id = NodeId}) -> macula_peer_versions:v4_completed(NodeId);
+v4_checked(4, #data{peer_node_id = NodeId}) -> macula_peer_versions:v4_completed(NodeId, self());
 v4_checked(5, _Data) -> ok.
 
 hello_completed(ok, Capabilities, Version, Rest, Data) ->
     after_hello(transition_to_connected(Data#data{peer_capabilities = Capabilities, version = Version}), Rest);
 hello_completed(downgrade_refused, _Capabilities, _Version, _Rest, Data) ->
-    unsupported_v5(downgrade_refused, Data).
+    downgraded(v4_completed, Data).
+
+%% A v4 connection this node dialled ends, and no longer needs closing when its
+%% node completes v5 elsewhere.
+v4_forgotten(#data{role = client, version = 4, peer_node_id = NodeId}) when is_binary(NodeId) ->
+    macula_peer_versions:v4_ended(NodeId, self());
+v4_forgotten(_Data) ->
+    ok.
 
 %% A station that refused a v5 CONNECT with unsupported_version. One seen on
 %% v5 in this run is refused as a downgrade, with no retry; any other gets
 %% one more dial, on a new QUIC connection, with a v4 CONNECT
 %% (plans/DESIGN_NEIGHBOUR_CHANNEL_BINDING.md sections 3 and 4).
-unsupported_v5(downgrade_refused, #data{peer_node_id = NodeId} = Data) ->
-    ok = downgrade_warned(macula_peer_versions:downgrade_warning(NodeId, now_ms(Data)), NodeId),
-    closed(v5_downgrade_refused, Data);
+unsupported_v5(downgrade_refused, Data) ->
+    downgraded(unsupported_version, Data);
 unsupported_v5({fall_back, _Count}, #data{peer_node_id = NodeId} = Data) ->
     ok = fallback_warned(macula_peer_versions:fallback_warning(NodeId, now_ms(Data)), NodeId),
     redial(Data).
 
+%% A downgrade refused, and why: the station answered v4 to a v5 CONNECT
+%% (unsupported_version), a v4 handshake completed after the node was seen on
+%% v5 (v4_completed), or the node completed v5 on another connection while this
+%% v4 one was open (v5_completed_elsewhere). Only the first names a rollback.
+downgraded(Cause, #data{peer_node_id = NodeId} = Data) ->
+    ok = downgrade_warned(macula_peer_versions:downgrade_warning(NodeId, now_ms(Data)), NodeId, Cause),
+    closed(v5_downgrade_refused, Data).
+
 %% Per node, from the first refusal, at most once a minute, with its count.
-downgrade_warned(no_warning, _NodeId) ->
+downgrade_warned(no_warning, _NodeId, _Cause) ->
     ok;
-downgrade_warned({warn, Count}, NodeId) ->
+downgrade_warned({warn, Count}, NodeId, Cause) ->
     macula_diagnostics:event(warning, <<"_macula.peering.v5_downgrade_refused">>,
-                             #{node_id => binary:encode_hex(NodeId, lowercase), refused => Count,
-                               remedy => <<"macula_peering:forget_v5_peer/1 after a deliberate rollback">>}).
+                             #{node_id => binary:encode_hex(NodeId, lowercase), refused => Count, cause => Cause,
+                               remedy => downgrade_remedy(Cause)}).
+
+downgrade_remedy(unsupported_version) -> <<"macula_peering:forget_v5_peer/1 after a deliberate rollback">>;
+downgrade_remedy(_OnV5) -> <<"none: the node speaks v5, and this v4 connection was not kept">>.
 
 fallback_warned(no_warning, _NodeId) ->
     ok;
@@ -1126,6 +1144,12 @@ connected({call, From}, peer_identity,
 connected({call, From}, peer_capabilities, Data) ->
     {keep_state, Data,
      [{reply, From, {ok, Data#data.peer_capabilities}}]};
+%% This v4 connection's node completed v5 on another connection: a v4
+%% connection this node dialled to a node seen on v5 is not kept (macula#53).
+connected(cast, {v5_completed_elsewhere, NodeId},
+          #data{role = client, version = 4, peer_node_id = NodeId} = Data) ->
+    downgrade_refused = macula_peer_versions:refuse_downgrade(NodeId),
+    downgraded(v5_completed_elsewhere, Data);
 connected(EventType, Event, Data) ->
     other_event(EventType, Event, connected, Data).
 
@@ -1230,6 +1254,10 @@ peer_binding(#{connect_binding := Binding}) -> Binding.
 %% State: draining
 %%------------------------------------------------------------------
 
+%% A v4 connection already ending is not kept either way: a v5 completion
+%% elsewhere that reaches it now changes nothing, and is not an unexpected event.
+draining(cast, {v5_completed_elsewhere, _NodeId}, Data) ->
+    {keep_state, Data};
 draining(enter, _Old, Data) ->
     {keep_state, Data, [{state_timeout, ?DRAIN_TIMEOUT_MS, drain_done}]};
 draining(state_timeout, drain_done, Data) ->

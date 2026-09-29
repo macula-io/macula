@@ -44,6 +44,8 @@ v5_test_() ->
             {timeout, 60, fun() -> a_station_seen_on_v5_that_answers_v4_is_refused_until_forgotten(Ctx) end}},
            {"a v4 handshake that completes to a node seen on v5 meanwhile is refused (macula#53)",
             {timeout, 60, fun() -> a_v4_handshake_completing_to_a_node_seen_on_v5_is_refused(Ctx) end}},
+           {"a v4 connection kept before the node completes v5 elsewhere is then closed (#53, the other ordering)",
+            {timeout, 60, fun() -> a_v4_connection_open_when_the_node_completes_v5_is_closed(Ctx) end}},
            {"a station still accepts a v4 CONNECT from a node it saw on v5 (#53 governs only its own dials)",
             {timeout, 60, fun() -> a_station_accepts_v4_from_a_node_it_saw_on_v5(Ctx) end}},
            {"control frames on a v4 connection are counted as the old path",
@@ -155,6 +157,23 @@ a_v4_handshake_completing_to_a_node_seen_on_v5_is_refused(Ctx) ->
     ?assertEqual(0, counted(v4_connections, Before)),
     finish(World, []).
 
+%% The other ordering: the v4 connection completes first, then the node completes v5 on another connection. The v4
+%% connection this node dialled is closed then, as a downgrade, so no ordering keeps it.
+a_v4_connection_open_when_the_node_completes_v5_is_closed(Ctx) ->
+    #{station_key := StationKey} = World = world(Ctx, #{}),
+    StationNodeId = node_id(StationKey),
+    Before = macula_peering:handshake_counters(),
+    {Client, Station} = connect(World, #{handshake => 4, mode => off}),
+    _ = {await(Client, connected), await(Station, connected)},
+    ok = macula_peer_versions:completed_v5(StationNodeId),
+    ?assertEqual(v5_downgrade_refused, ended(Client)),
+    ?assertEqual(1, counted(v5_downgrade_refused, Before)),
+    ?assertEqual(5, macula_peer_versions:dial_version(StationNodeId, ?T0 + ?MINUTE)),
+    %% A node seen on v5 is dialled with v5 even with a v4 cache entry for it.
+    true = ets:insert(macula_peer_versions, {{v4_until, StationNodeId}, ?T0 + 2 * ?MINUTE}),
+    ?assertEqual(5, macula_peer_versions:dial_version(StationNodeId, ?T0 + ?MINUTE)),
+    finish(World, [Station]).
+
 %% The seen-on-v5 memory governs only the connections a node dials. A station that saw a node on v5 still accepts
 %% that node's v4 CONNECT, as a rolled-back station's own dials are accepted (Mars's rollback run).
 a_station_accepts_v4_from_a_node_it_saw_on_v5(Ctx) ->
@@ -165,6 +184,9 @@ a_station_accepts_v4_from_a_node_it_saw_on_v5(Ctx) ->
     _ = {await(Client, connected), await(Station, connected)},
     ?assertEqual(2, counted(v4_connections, Before)),
     ?assertEqual(0, counted(v5_downgrade_refused, Before)),
+    %% Marked seen on v5 again with the connection open: the closure reaches no connection a station accepted.
+    ok = macula_peer_versions:completed_v5(node_id(ClientKey)),
+    ?assertEqual(open, still_open(Station, 300)),
     finish(World, [Client, Station]).
 
 control_frames_on_v4_are_counted(Ctx) ->

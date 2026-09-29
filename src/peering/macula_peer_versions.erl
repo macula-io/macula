@@ -15,7 +15,8 @@
 -module(macula_peer_versions).
 -behaviour(gen_server).
 
--export([start_link/0, dial_version/2, unsupported_version/2, completed_v5/1, v4_completed/1, seen_v5/1, forget_v5_peer/1,
+-export([start_link/0, dial_version/2, unsupported_version/2, completed_v5/1, v4_completed/2, v4_ended/2,
+         refuse_downgrade/1, seen_v5/1, forget_v5_peer/1,
          fallback_warning/2, downgrade_warning/2, count/1, counters/0]).
 -export([init/1, handle_call/3, handle_cast/2]).
 
@@ -32,7 +33,8 @@
 -export_type([counter/0]).
 
 %% Rows: {{seen_v5, NodeId}}, {{v4_until, NodeId}, Ms}, {{fallbacks, NodeId}, Count}, {{warned, NodeId}, Ms},
-%% {{downgrades, NodeId}, Count}, {{warned_downgrade, NodeId}, Ms}, {{counter, Name}, Count}.
+%% {{downgrades, NodeId}, Count}, {{warned_downgrade, NodeId}, Ms}, {{v4_conn, NodeId, Pid}} for each v4 connection
+%% this node dialled that is open, {{counter, Name}, Count}.
 
 -spec start_link() -> {ok, pid()}.
 start_link() ->
@@ -41,7 +43,11 @@ start_link() ->
 %% @doc The version to put in CONNECT to NodeId at Now.
 -spec dial_version(<<_:256>>, integer()) -> 4 | 5.
 dial_version(NodeId, Now) ->
-    version_for(ets:lookup(?TABLE, {v4_until, NodeId}), Now).
+    version_for(seen_v5(NodeId), ets:lookup(?TABLE, {v4_until, NodeId}), Now).
+
+%% A node seen on v5 is dialled with v5, whatever the cache holds.
+version_for(true, _Cached, _Now) -> 5;
+version_for(false, Cached, Now) -> version_for(Cached, Now).
 
 version_for([{_, Until}], Now) when Now < Until -> 4;
 version_for(_NoneOrExpired, _Now) -> 5.
@@ -59,22 +65,44 @@ refused_or_fallen_back(false, NodeId, Now) ->
     ok = count(v4_fallbacks),
     {fall_back, ets:update_counter(?TABLE, {fallbacks, NodeId}, 1, {{fallbacks, NodeId}, 0})}.
 
-%% @doc A v5 handshake with NodeId completed: it is never dialled with version 4 again in this run.
+%% @doc A v5 handshake with NodeId completed: it is never dialled with version 4 again in this run, and every v4
+%% connection this node dialled to it that is still open is told to close as a downgrade ({v5_completed_elsewhere,
+%% NodeId}). With v4_completed/2 registering before it reads, no interleaving keeps a v4 connection (macula#53).
 -spec completed_v5(<<_:256>>) -> ok.
 completed_v5(NodeId) ->
     true = ets:insert(?TABLE, {{seen_v5, NodeId}}),
     true = ets:delete(?TABLE, {v4_until, NodeId}),
+    [gen_statem:cast(Pid, {v5_completed_elsewhere, NodeId}) || [Pid] <- ets:match(?TABLE, {{v4_conn, NodeId, '$1'}})],
     ok.
 
-%% @doc A v4 handshake with NodeId completed. When NodeId completed v5 meanwhile, on another connection, it is refused
-%% as a downgrade, as a later unsupported_version would be: the version was chosen before the other handshake
-%% finished, and whichever finished first, no v4 connection to a node seen on v5 is kept (macula#53).
--spec v4_completed(<<_:256>>) -> ok | downgrade_refused.
-v4_completed(NodeId) ->
-    v4_verdict(seen_v5(NodeId), NodeId).
+%% @doc A v4 handshake with NodeId, dialled by Pid, completed. Pid is registered first, then the memory is read: when
+%% NodeId completed v5 meanwhile it is refused as a downgrade; otherwise it stays registered until v4_ended/2, so a v5
+%% completion after it reaches it (completed_v5/1). Each table operation is atomic, so in every interleaving either
+%% this read sees the v5 completion or that completion sees this registration (macula#53). That rests on each table
+%% operation completing before the next one of the same process starts, on the table's own locking, rather than on any
+%% cross-key ordering ETS documents. Only a node's own dials
+%% register: a station's accepted connections are never reached.
+-spec v4_completed(<<_:256>>, pid()) -> ok | downgrade_refused.
+v4_completed(NodeId, Pid) ->
+    true = ets:insert(?TABLE, {{v4_conn, NodeId, Pid}}),
+    v4_verdict(seen_v5(NodeId), NodeId, Pid).
 
-v4_verdict(true, NodeId) -> downgrade_refused(NodeId);
-v4_verdict(false, _NodeId) -> ok.
+v4_verdict(true, NodeId, Pid) ->
+    ok = v4_ended(NodeId, Pid),
+    downgrade_refused(NodeId);
+v4_verdict(false, _NodeId, _Pid) ->
+    ok.
+
+%% @doc The v4 connection Pid dialled to NodeId ended.
+-spec v4_ended(<<_:256>>, pid()) -> ok.
+v4_ended(NodeId, Pid) ->
+    true = ets:delete(?TABLE, {v4_conn, NodeId, Pid}),
+    ok.
+
+%% @doc Count a refused downgrade for NodeId, as the connection that refuses it does.
+-spec refuse_downgrade(<<_:256>>) -> downgrade_refused.
+refuse_downgrade(NodeId) ->
+    downgrade_refused(NodeId).
 
 downgrade_refused(NodeId) ->
     ok = count(v5_downgrade_refused),

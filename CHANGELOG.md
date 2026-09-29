@@ -14,7 +14,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A v4 handshake that completes to a node this node has seen on v5 is refused (`v5_downgrade_refused`), whichever
   connection finished first (macula#53). Before, the check ran only when a dial chose its version, so two
   connections to one node could interleave, one completing v5 while the other's v4 CONNECT, chosen from the v4
-  cache after a fallback, completed, and the v4 connection was kept. `macula_peer_versions:v4_completed/1`.
+  cache after a fallback, completed, and the v4 connection was kept. Both orderings are closed: a v4 completion
+  registers before it reads the memory (`macula_peer_versions:v4_completed/2`), and a v5 completion tells every v4
+  connection this node dialled to that node, still open, to close as a downgrade. A node seen on v5 is always
+  dialled with v5, whatever the v4 cache holds. Only a node's own dials are affected: a station still accepts a v4
+  CONNECT from a node it saw on v5. The `v5_downgrade_refused` warning names its `cause` (`unsupported_version`,
+  `v4_completed` or `v5_completed_elsewhere`), and names the rollback remedy only for the first.
 
 ### Added
 
