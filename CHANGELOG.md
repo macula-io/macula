@@ -36,6 +36,16 @@ fleet's floor release (macula-station 0.7.1) builds on this one.
   the defaults. For a station whose limits
   come from its own configuration, which it reads after macula has started (macula-station 0.7.2).
 
+### Changed
+
+- **The frame observer names a pre-v5 liveness probe apart** (macula-station#25). A CALL claiming the all-zero liveness
+  realm and `_macula.ping` is reported as `liveness_call`, in either direction, and a RESULT or ERROR naming one of
+  those requests as `liveness_result`, so a station's idle close does not count probes as use: before, a dialled
+  connection to a pre-v5 peer stayed "in use" as long as it answered its probe. The typing is for the observer only:
+  no routing, verification or count changes, and a peer that labels real work a probe only makes the connection look
+  idle. The last 4 probe ids each way are kept. `macula_frame:claimed_request/1` reads a CALL's request_id, realm and
+  procedure without verifying it, for this.
+
 ---
 
 ## [13.2.0] - 2026-09-29

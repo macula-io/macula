@@ -52,7 +52,8 @@
     %% Constructors — CALL (Part 6 §5)
     call/2, result/2, provider_error/2, relay_error/2,
     payload_plain/1, plain_payload/1, error_plain/1, plain_error/1,
-    verify_request/2, verify_reply/3, verify_relay_error/4, claimed_reply_ids/1, claimed_publication_realm/1,
+    verify_request/2, verify_reply/3, verify_relay_error/4, claimed_reply_ids/1, claimed_request/1,
+    claimed_publication_realm/1,
     claimed_publication/1,
 
     %% Constructors — HyParView (Part 3 §7.1)
@@ -1313,6 +1314,29 @@ claimed_fields(_NotAMap, _Table) -> error.
 claimed_ids({ok, #{frame_type := Type, request_id := RequestId, request_hash := RequestHash}}, Type) ->
     {ok, #{request_id => RequestId, request_hash => RequestHash}};
 claimed_ids(_NoIds, _Type) ->
+    {error, malformed_frame}.
+
+%% @doc The request_id, realm and procedure a CALL names, read without verifying it. A key for telling what a frame
+%% claims to be, for an observer, and nothing more: it decides no routing, admission or count, which go by the
+%% verified request (verify_request/2). The frame's fields and the signed object's shape are checked as
+%% verify_request/2 checks them, and the tbs is read with the same strict decoding and field table, so fields of
+%% another shape never come back. It checks neither the key nor the signature. Anything else is malformed_frame.
+-spec claimed_request(frame()) ->
+        {ok, #{request_id := <<_:128>>, realm := <<_:256>>, procedure := binary()}} | {error, malformed_frame}.
+claimed_request(#{frame_type := call, request := Object} = Frame) ->
+    request_claimed(only_fields(Frame, [version, frame_type, request, source_route, retry_budget]), Object);
+claimed_request(_Frame) ->
+    {error, malformed_frame}.
+
+request_claimed(true, #{key := Key, tbs := Tbs, signature := Signature} = Object)
+  when map_size(Object) =:= 3, is_binary(Key), is_binary(Tbs), is_binary(Signature) ->
+    request_claims(claimed_fields(macula_record_cbor:decode_strict(Tbs), request_table(call)));
+request_claimed(_OnlyFields, _Object) ->
+    {error, malformed_frame}.
+
+request_claims({ok, #{frame_type := call, request_id := RequestId, realm := Realm, procedure := Procedure}}) ->
+    {ok, #{request_id => RequestId, realm => Realm, procedure => Procedure}};
+request_claims(_NotARequest) ->
     {error, malformed_frame}.
 
 %% @doc The realm a GOSSIP's publication names, read without verifying it. A GOSSIP names its realm only inside its

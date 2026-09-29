@@ -173,6 +173,18 @@
     %% to 64 coalesced frames, and each of them reports it). A frame read
     %% is seen once, `in', with the microseconds decoding and verifying it
     %% took. An observer that raises is logged and dropped.
+    %%
+    %% A pre-v5 liveness probe is typed apart: a CALL claiming the all-zero
+    %% liveness realm and `_macula.ping' is `liveness_call', in either
+    %% direction, and a RESULT or ERROR naming one of those requests is
+    %% `liveness_result' (macula-station#25: a station's idle close must not
+    %% count probes as use). The claim is read without verifying it, so this
+    %% typing is for the observer and NOTHING else: it changes no routing,
+    %% no verification and no count (a station's call caps and charging go
+    %% by the verified request), and a peer that labels real work a probe
+    %% only makes the connection look idle. The last 4 probe ids each way
+    %% are kept, to know an answer when it passes. v5's liveness_ping and
+    %% liveness_pong never reach the observer.
     frame_observer       => frame_observer()
 }.
 
@@ -255,8 +267,15 @@
     %% The `frame_observer' option, and while a read frame is decoded
     %% for it, its size and the microsecond its decoding began.
     frame_observer       :: undefined | frame_observer(),
-    reading              :: undefined | {non_neg_integer(), integer()}
+    reading              :: undefined | {non_neg_integer(), integer()},
+    %% For the observer's typing only: the request ids of the liveness
+    %% probes last sent and last received, the newest first, at most
+    %% ?PROBE_IDS_KEPT each (a peer feeds the received ones).
+    probes_sent = []     :: [<<_:128>>],
+    probes_received = [] :: [<<_:128>>]
 }).
+
+-define(PROBE_IDS_KEPT, 4).
 
 -define(DRAIN_TIMEOUT_MS, 5_000).
 %% How long an open of a dedicated stream may wait for the peer to allow
@@ -1426,8 +1445,9 @@ timed_encode({Frame, QueuedAt}, Taken, {Encoded, Timed, Data}) ->
     Start = now_us(),
     timed_kept(encode_or_drop(Frame, Data), Frame, Taken - QueuedAt, now_us() - Start, Encoded, Timed).
 
-timed_kept({{true, Bytes}, Data}, #{frame_type := Type}, WaitUs, EncodeUs, Encoded, Timed) ->
-    {[Bytes | Encoded], [{Type, byte_size(Bytes), max(0, WaitUs), EncodeUs} | Timed], Data};
+timed_kept({{true, Bytes}, Data}, Frame, WaitUs, EncodeUs, Encoded, Timed) ->
+    {Type, Typed} = observed_type(out, Frame, Data),
+    {[Bytes | Encoded], [{Type, byte_size(Bytes), max(0, WaitUs), EncodeUs} | Timed], Typed};
 timed_kept({false, Data}, _Frame, _WaitUs, _EncodeUs, Encoded, Timed) ->
     {Encoded, Timed, Data}.
 
@@ -1625,8 +1645,41 @@ now_us() ->
 
 read_observed(_Opened, #data{reading = undefined} = Data) ->
     Data;
-read_observed(#{frame_type := Type}, #data{reading = {Size, Start}} = Data) ->
-    observed(in, Type, Size, now_us() - Start, Data#data{reading = undefined}).
+read_observed(Opened, #data{reading = {Size, Start}} = Data) ->
+    {Type, Typed} = observed_type(in, Opened, Data),
+    observed(in, Type, Size, now_us() - Start, Typed#data{reading = undefined}).
+
+%% The type the observer is told a frame has: its own, except for a pre-v5
+%% liveness probe and its answer (see the `frame_observer' option). For the
+%% observer only; nothing routes or counts by it.
+observed_type(Direction, #{frame_type := call} = Frame, Data) ->
+    probe_call(macula_frame:claimed_request(Frame), Direction, Data);
+observed_type(Direction, #{frame_type := Type} = Frame, Data) when Type =:= result; Type =:= error ->
+    probe_reply(macula_frame:claimed_reply_ids(Frame), Type, Direction, Data);
+observed_type(_Direction, #{frame_type := Type}, Data) ->
+    {Type, Data}.
+
+probe_call({ok, #{realm := ?LIVENESS_REALM, procedure := ?LIVENESS_PROCEDURE, request_id := Id}}, out, Data) ->
+    {liveness_call, Data#data{probes_sent = kept_probe(Id, Data#data.probes_sent)}};
+probe_call({ok, #{realm := ?LIVENESS_REALM, procedure := ?LIVENESS_PROCEDURE, request_id := Id}}, in, Data) ->
+    {liveness_call, Data#data{probes_received = kept_probe(Id, Data#data.probes_received)}};
+probe_call(_NotAProbe, _Direction, Data) ->
+    {call, Data}.
+
+%% An answer read is to a probe this connection sent; an answer written is to
+%% one it received.
+probe_reply({ok, #{request_id := Id}}, Type, in, #data{probes_sent = Sent} = Data) ->
+    answered(lists:member(Id, Sent), Type, Data#data{probes_sent = lists:delete(Id, Sent)}, Data);
+probe_reply({ok, #{request_id := Id}}, Type, out, #data{probes_received = Received} = Data) ->
+    answered(lists:member(Id, Received), Type, Data#data{probes_received = lists:delete(Id, Received)}, Data);
+probe_reply({error, malformed_frame}, Type, _Direction, Data) ->
+    {Type, Data}.
+
+answered(true, _Type, Forgotten, _Data) -> {liveness_result, Forgotten};
+answered(false, Type, _Forgotten, Data) -> {Type, Data}.
+
+kept_probe(Id, Ids) ->
+    lists:sublist([Id | lists:delete(Id, Ids)], ?PROBE_IDS_KEPT).
 
 %% The frame observer, called in this connection: one that raises is the
 %% application's bug in a process every producer on the link shares, so it
