@@ -115,8 +115,14 @@ authenticate every frame after it. This is D18's session proof, taken.
   and the count, at most once a minute per node_id. No cap: a cap would refuse a genuinely old station and
   partition the fleet during the roll, the failure §4 exists to avoid.
 - **A rollback meets the same refusal (Mars).** Rolling a station back below v5 (pinning the previous release) looks,
-  to every peer that saw it on v5 in this run, exactly like the downgrade above: they refuse it, no retry, until
-  they restart. The protection stays "for the run"; nothing expires it on a timer, because a timer is also the
+  to every peer that saw it on v5 in this run, exactly like the downgrade above: they refuse it with no v4 fallback,
+  until they restart (their outbound links keep re-dialling on v5 and are refused each time, see below). The refusal is one-directional. Observed (Mars, a six-station test harness on one
+  host, 2026-09-29, 90 s after the rollback): the rolled-back station's own v4 dials are accepted, since a v5
+  station answers v4, and SWIM liveness, routing-table membership and DHT pings keep working both ways over the
+  connections it opens; only its peers' dials are refused, and they keep retrying into that refusal, a small steady
+  handshake load, until `forget_v5_peer/1` or their restart. A rolled-back station that dials no peers is cut off
+  from them, and a client that saw it on v5 cannot reach it, since a station never dials clients (both by design;
+  not measured). The protection stays "for the run"; nothing expires it on a timer, because a timer is also the
   attacker's wait. What keeps this from being a silent partition: every `v5_downgrade_refused` is logged with the
   node_id and the count, bounded like the fallback warning, not only counted; and the remedy is stated here and in
   the deployment guide when v5 ships: rolling a station back below v5 needs its peers restarted, or
@@ -160,9 +166,9 @@ appears in CONNECT:
 - **Rollback floor (Mercurius).** `forget_v5_peer/1` reaches only peers we operate. A third-party SDK client that saw
   a station on v5 refuses it after a rollback below v5 until that client restarts, and no operator can reach it.
   So once a station has run v5, its rollback target must be a release that still speaks v5: the first v5 release a
-  station runs is its rollback floor. Rolling below it partitions that station from every client that saw it on
-  v5, bounded only by their restarts, and needs a stated decision, never a routine pin. The release notes of the
-  first v5 macula and macula-station releases say so.
+  station runs is its rollback floor. Rolling below it cuts that station off from every client that saw it on v5,
+  until each client restarts, and from peers it does not dial itself (by design, §3; not measured), so it needs a
+  stated decision, never a routine pin. The release notes of the first v5 macula and macula-station releases say so.
 - **A later release drops v4**, once the old-path counter (§6) reads zero across the fleet AND `macula_dist_tunnel`
   runs v5 (Mercurius): the tunnel uses `macula_handshake` but has no D17 path, so it never shows in the counter, and
   dropping v4 before it moves would break every dist tunnel. It moves by computing `E` with OTP
