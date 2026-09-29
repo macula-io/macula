@@ -155,7 +155,13 @@ handshake_test_() ->
            {"a frame observer sees each frame queued and written on one side and read on the other",
             {timeout, 30, fun() -> a_frame_observer_sees_each_frame_both_ways(Ctx) end}},
            {"a frame observer that crashes is dropped and the connection serves on",
-            {timeout, 30, fun() -> a_crashing_frame_observer_is_dropped(Ctx) end}}]
+            {timeout, 30, fun() -> a_crashing_frame_observer_is_dropped(Ctx) end}},
+           {"a pre-v5 liveness probe and its answer are typed liveness_call and liveness_result on both sides",
+            {timeout, 30, fun() -> a_probe_and_its_answer_are_typed_liveness_both_ways(Ctx) end}},
+           {"an ordinary CALL and its RESULT are typed call and result, a ping outside the liveness realm too",
+            {timeout, 30, fun() -> an_ordinary_call_is_typed_call(Ctx) end}},
+           {"a connection remembers only its last few probe ids, whatever a peer sends",
+            {timeout, 30, fun() -> the_probe_ids_a_peer_can_feed_are_bounded(Ctx) end}}]
       end}}.
 
 %%====================================================================
@@ -1210,6 +1216,98 @@ observed(Side, Dir) ->
     receive {observed, Side, Dir, Type, Size, Us} -> {Dir, Type, Size, Us}
     after 2_000 -> erlang:error({not_observed, Side, Dir})
     end.
+
+%% Every observation made so far, as {Side, Direction, Type}, after the connections have had Ms to settle.
+observations(Ms) ->
+    timer:sleep(Ms),
+    observations_now([]).
+
+observations_now(Acc) ->
+    receive {observed, Side, Dir, Type, _Size, _Us} -> observations_now([{Side, Dir, Type} | Acc])
+    after 0 -> lists:reverse(Acc)
+    end.
+
+%% The next CALL the connection routes to this controlling process, leaving the observer's messages where they are.
+delivered_call(Conn) ->
+    receive {macula_peering, frame, Conn, #{frame_type := call} = Call} -> Call
+    after 2_000 -> erlang:error(no_call_delivered)
+    end.
+
+typing_observer(Test) ->
+    fun(Side) -> fun(Dir, Type, Size, Us) -> Test ! {observed, Side, Dir, Type, Size, Us}, ok end end.
+
+%% A pre-v5 connection's liveness probe is a signed CALL to `_macula.ping' in the all-zero realm, answered with a
+%% RESULT. It exists to find a dead peer, not to carry work, so the frame observer names it apart: the prober's probe
+%% out and the answer back in, the answerer's probe in and its answer out (macula-station#25, so a station's idle
+%% close does not count it as use). Nothing else changes: the probe still reaches the controlling process, which
+%% answered it here.
+a_probe_and_its_answer_are_typed_liveness_both_ways(Ctx) ->
+    #{station_key := StationKey} = World = world(Ctx, #{}),
+    Observer = typing_observer(self()),
+    {Client, Station} = connect(World, #{handshake => 4, mode => off, liveness_interval_ms => 200,
+                                         liveness_max_misses => 5,
+                                         client_observer => Observer(client), station_observer => Observer(station)}),
+    _ = {await(Client, connected), await(Station, connected)},
+    ok = answer_probes(Station, StationKey, pq_pure, 1),
+    Seen = observations(300),
+    [?assert(lists:member(O, Seen)) || O <- [{client, queued, liveness_call}, {client, out, liveness_call},
+                                              {station, in, liveness_call}, {station, queued, liveness_result},
+                                              {station, out, liveness_result}, {client, in, liveness_result}]],
+    ?assertEqual([], [O || {_, _, T} = O <- Seen, T =:= call orelse T =:= result orelse T =:= error]),
+    cleanup_pair(Client, Station, World).
+
+%% Work is typed as it always was: a CALL and its RESULT are call and result, and so is a `_macula.ping' in a realm
+%% that is not the liveness realm.
+an_ordinary_call_is_typed_call(Ctx) ->
+    #{client_key := ClientKey, station_key := StationKey} = World = world(Ctx, #{}),
+    Observer = typing_observer(self()),
+    {Client, Station} = connect(World, #{handshake => 4, mode => off,
+                                         client_observer => Observer(client), station_observer => Observer(station)}),
+    _ = {await(Client, connected), await(Station, connected)},
+    [begin
+         Call = macula_frame:call(#{request_id => crypto:strong_rand_bytes(16), realm => <<7:256>>,
+                                    procedure => Procedure, target => node_id(StationKey),
+                                    deadline => ?T0 + 2 * ?MINUTE, payload => #{}}, ClientKey),
+         ok = macula_peering:send_frame(Client, Call),
+         Delivered = delivered_call(Station),
+         {ok, Request} = macula_frame:verify_request(Delivered, pq_pure),
+         ok = macula_peering:send_frame(Station, macula_frame:result(#{request => Request, payload => #{ok => 1}},
+                                                                     StationKey))
+     end || Procedure <- [<<"acme/svc.do_v1">>, <<"_macula.ping">>]],
+    Seen = observations(300),
+    ?assertEqual(2, length([x || {client, out, call} <- Seen])),
+    ?assertEqual(2, length([x || {station, in, call} <- Seen])),
+    ?assertEqual(2, length([x || {station, out, result} <- Seen])),
+    ?assertEqual(2, length([x || {client, in, result} <- Seen])),
+    ?assertEqual([], [O || {_, _, T} = O <- Seen, T =:= liveness_call orelse T =:= liveness_result]),
+    cleanup_pair(Client, Station, World).
+
+%% The probe ids a connection remembers, to know an answer when it passes, are fed by the peer: it keeps only the
+%% last few. After five unanswered probes from the peer, an answer to the newest is liveness_result and an answer to
+%% the oldest, forgotten, is typed as the result it looks like.
+the_probe_ids_a_peer_can_feed_are_bounded(Ctx) ->
+    #{client_key := ClientKey, station_key := StationKey} = World = world(Ctx, #{}),
+    Observer = typing_observer(self()),
+    {Client, Station} = connect(World, #{handshake => 4, mode => off, station_observer => Observer(station)}),
+    _ = {await(Client, connected), await(Station, connected)},
+    Requests = [begin
+                    Probe = macula_frame:call(#{request_id => crypto:strong_rand_bytes(16), realm => <<0:256>>,
+                                                procedure => <<"_macula.ping">>, target => node_id(StationKey),
+                                                deadline => ?T0 + 2 * ?MINUTE, payload => #{}}, ClientKey),
+                    ok = macula_peering:send_frame(Client, Probe),
+                    Delivered = delivered_call(Station),
+                    {ok, Request} = macula_frame:verify_request(Delivered, pq_pure),
+                    Request
+                end || _ <- lists:seq(1, 5)],
+    _ = observations(100),
+    Answer = fun(Request) ->
+                 ok = macula_peering:send_frame(Station, macula_frame:result(#{request => Request, payload => #{}},
+                                                                             StationKey)),
+                 [T || {station, out, T} <- observations(200)]
+             end,
+    ?assertEqual([liveness_result], Answer(lists:last(Requests))),
+    ?assertEqual([result], Answer(hd(Requests))),
+    cleanup_pair(Client, Station, World).
 
 %% Answer the first `N' `_macula.ping' CALLs the peer conn delivers to
 %% this controller with a RESULT signed by the peer's own identity,
