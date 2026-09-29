@@ -15,7 +15,7 @@
 -module(macula_peer_versions).
 -behaviour(gen_server).
 
--export([start_link/0, dial_version/2, unsupported_version/2, completed_v5/1, seen_v5/1, forget_v5_peer/1,
+-export([start_link/0, dial_version/2, unsupported_version/2, completed_v5/1, v4_completed/1, seen_v5/1, forget_v5_peer/1,
          fallback_warning/2, downgrade_warning/2, count/1, counters/0]).
 -export([init/1, handle_call/3, handle_cast/2]).
 
@@ -53,9 +53,7 @@ unsupported_version(NodeId, Now) ->
     refused_or_fallen_back(seen_v5(NodeId), NodeId, Now).
 
 refused_or_fallen_back(true, NodeId, _Now) ->
-    ok = count(v5_downgrade_refused),
-    _ = ets:update_counter(?TABLE, {downgrades, NodeId}, 1, {{downgrades, NodeId}, 0}),
-    downgrade_refused;
+    downgrade_refused(NodeId);
 refused_or_fallen_back(false, NodeId, Now) ->
     true = ets:insert(?TABLE, {{v4_until, NodeId}, Now + ?V4_CACHE_MS}),
     ok = count(v4_fallbacks),
@@ -67,6 +65,21 @@ completed_v5(NodeId) ->
     true = ets:insert(?TABLE, {{seen_v5, NodeId}}),
     true = ets:delete(?TABLE, {v4_until, NodeId}),
     ok.
+
+%% @doc A v4 handshake with NodeId completed. When NodeId completed v5 meanwhile, on another connection, it is refused
+%% as a downgrade, as a later unsupported_version would be: the version was chosen before the other handshake
+%% finished, and whichever finished first, no v4 connection to a node seen on v5 is kept (macula#53).
+-spec v4_completed(<<_:256>>) -> ok | downgrade_refused.
+v4_completed(NodeId) ->
+    v4_verdict(seen_v5(NodeId), NodeId).
+
+v4_verdict(true, NodeId) -> downgrade_refused(NodeId);
+v4_verdict(false, _NodeId) -> ok.
+
+downgrade_refused(NodeId) ->
+    ok = count(v5_downgrade_refused),
+    _ = ets:update_counter(?TABLE, {downgrades, NodeId}, 1, {{downgrades, NodeId}, 0}),
+    downgrade_refused.
 
 -spec seen_v5(<<_:256>>) -> boolean().
 seen_v5(NodeId) ->

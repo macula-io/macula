@@ -42,6 +42,8 @@ v5_test_() ->
             {timeout, 60, fun() -> a_version_cap_option_is_not_honoured(Ctx) end}},
            {"a station seen on v5 that answers v4 is refused, until forgotten",
             {timeout, 60, fun() -> a_station_seen_on_v5_that_answers_v4_is_refused_until_forgotten(Ctx) end}},
+           {"a v4 handshake that completes to a node seen on v5 meanwhile is refused (macula#53)",
+            {timeout, 60, fun() -> a_v4_handshake_completing_to_a_node_seen_on_v5_is_refused(Ctx) end}},
            {"control frames on a v4 connection are counted as the old path",
             {timeout, 60, fun() -> control_frames_on_v4_are_counted(Ctx) end}},
            {"past the station's session proof budget the client is refused and nothing is signed",
@@ -137,6 +139,20 @@ a_version_cap_option_is_not_honoured(Ctx) ->
     ?assertEqual(2, counted(v5_connections, Before)),
     finish(World, [Client, Station]).
 
+%% Two dials interleaving: this client is in the v4 cache for the station and sends a v4 CONNECT; before the station
+%% answers, the node completes v5 on another connection. The v4 HELLO is refused, whichever finished first.
+a_v4_handshake_completing_to_a_node_seen_on_v5_is_refused(Ctx) ->
+    #{station_key := StationKey} = World = world(Ctx, #{}),
+    StationNodeId = node_id(StationKey),
+    {fall_back, _} = macula_peer_versions:unsupported_version(StationNodeId, ?T0 + ?MINUTE),
+    Before = macula_peering:handshake_counters(),
+    Client = dial(World),
+    ?assertEqual({accepted, v4}, pre_v5_station(World, fun() -> macula_peer_versions:completed_v5(StationNodeId) end)),
+    ?assertEqual(v5_downgrade_refused, ended(Client)),
+    ?assertEqual(1, counted(v5_downgrade_refused, Before)),
+    ?assertEqual(0, counted(v4_connections, Before)),
+    finish(World, []).
+
 control_frames_on_v4_are_counted(Ctx) ->
     World = world(Ctx, #{}),
     Before = macula_peering:handshake_counters(),
@@ -213,7 +229,11 @@ dial(#{client_key := ClientKey, client_issuer := ClientIssuer, station_key := St
 
 %% One connection answered as a station from before handshake v5 answers it: the station's own challenge material,
 %% and CONNECT checked by macula_handshake with no exporter, which accepts only version 4. Returns how it answered.
-pre_v5_station(#{station_key := StationKey, station_issuer := StationIssuer}) ->
+pre_v5_station(World) ->
+    pre_v5_station(World, fun() -> ok end).
+
+%% BeforeHello runs after the station has read CONNECT and before it answers.
+pre_v5_station(#{station_key := StationKey, station_issuer := StationIssuer}, BeforeHello) ->
     Conn = receive {quic, new_conn, C, _Info} -> C after 5_000 -> erlang:error(no_inbound_conn) end,
     ok = macula_quic:async_accept_stream(Conn),
     Stream = receive {quic, new_stream, S, _} -> S after 5_000 -> erlang:error(no_control_stream) end,
@@ -231,6 +251,7 @@ pre_v5_station(#{station_key := StationKey, station_issuer := StationIssuer}) ->
     Session = #{profile => Profile, challenge => Challenge, leaf => Leaf, capabilities => 5, now => ?T0 + ?MINUTE,
                 puzzle => #{difficulty => macula_node_keys:puzzle_difficulty(), mode => off}},
     {Verdict, Reason, Hello} = answered(macula_handshake:accept_connect(Connect, Session)),
+    ok = BeforeHello(),
     ok = macula_quic:send(Stream, macula_frame:encode_bytes(Hello)),
     timer:sleep(200),
     ok = macula_quic:close_connection(Conn),

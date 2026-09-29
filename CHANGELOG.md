@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- A v4 handshake that completes to a node this node has seen on v5 is refused (`v5_downgrade_refused`), whichever
+  connection finished first (macula#53). Before, the check ran only when a dial chose its version, so two
+  connections to one node could interleave, one completing v5 while the other's v4 CONNECT, chosen from the v4
+  cache after a fallback, completed, and the v4 connection was kept. `macula_peer_versions:v4_completed/1`.
+
 ### Added
 
 - `macula_peering:set_session_proof_limits/2` (and `macula_session_proof_rate:set_limits/2`): replaces a station's

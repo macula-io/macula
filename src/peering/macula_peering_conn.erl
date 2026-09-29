@@ -734,13 +734,24 @@ answered({error, Reason}, _OwnHash, Data) ->
 %% Client: HELLO. Frames that follow it in the same read are the
 %% station's first frames on the open connection.
 hello_read({ok, #{capabilities := Capabilities, version := Version}}, Rest, Data) ->
-    after_hello(transition_to_connected(Data#data{peer_capabilities = Capabilities, version = Version}), Rest);
+    hello_completed(v4_checked(Version, Data), Capabilities, Version, Rest, Data);
 hello_read({error, {refused, unsupported_version}}, _Rest,
            #data{expect_hello = #{version := 5}, peer_node_id = NodeId} = Data) ->
     unsupported_v5(macula_peer_versions:unsupported_version(NodeId, now_ms(Data)), Data);
 hello_read({error, Reason}, _Rest, Data) ->
     ok = counted_refusal(Reason),
     closed(Reason, Data).
+
+%% A v4 handshake completes only for a node not seen on v5, checked now, not
+%% only when the version was chosen: another connection may have completed v5
+%% with it meanwhile (macula#53).
+v4_checked(4, #data{peer_node_id = NodeId}) -> macula_peer_versions:v4_completed(NodeId);
+v4_checked(5, _Data) -> ok.
+
+hello_completed(ok, Capabilities, Version, Rest, Data) ->
+    after_hello(transition_to_connected(Data#data{peer_capabilities = Capabilities, version = Version}), Rest);
+hello_completed(downgrade_refused, _Capabilities, _Version, _Rest, Data) ->
+    unsupported_v5(downgrade_refused, Data).
 
 %% A station that refused a v5 CONNECT with unsupported_version. One seen on
 %% v5 in this run is refused as a downgrade, with no retry; any other gets
