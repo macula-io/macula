@@ -9,10 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [13.2.0] - 2026-09-29
 
-The first handshake v5 release: a station that runs it makes it its rollback floor, and rolling it back below 13.2.0
-partitions it from every client that saw it on v5 until that client restarts (our own nodes:
-`macula_peering:forget_v5_peer/1`), so that is a stated decision, never a routine pin
-(plans/DESIGN_NEIGHBOUR_CHANNEL_BINDING.md §4). It also brings sealed pubsub groups.
+The first handshake v5 release: a station that runs it makes it its rollback floor, so rolling it back below 13.2.0
+is a stated decision, never a routine pin (plans/DESIGN_NEIGHBOUR_CHANNEL_BINDING.md §4). Observed on a six-station
+mesh (2026-09-29): a station rolled back below 13.2.0 stays reachable by the stations it dials itself, since their v5
+peers accept its v4 connections and SWIM, routing and DHT traffic keep working both ways; only the peers' own dials to
+it are refused (`v5_downgrade_refused`, logged with its node id), and they keep retrying into that refusal, a small
+steady load, until `macula_peering:forget_v5_peer/1` on those nodes or their restart. A rolled-back station that dials
+no peers is cut off from them the same way, and a client that saw it on v5 cannot reach it until that client restarts
+(our own nodes: `forget_v5_peer/1`), since a station never dials clients. It also brings sealed pubsub groups.
 
 Handshake version 5: a connection is authenticated once, by hybrid proofs bound to its TLS session, instead of by a
 composite signature on every control frame (plans/DESIGN_NEIGHBOUR_CHANNEL_BINDING.md). A pq_hybrid station stops
