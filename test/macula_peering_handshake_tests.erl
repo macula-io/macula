@@ -1217,13 +1217,14 @@ observed(Side, Dir) ->
     after 2_000 -> erlang:error({not_observed, Side, Dir})
     end.
 
-%% Every observation made so far, as {Side, Direction, Type}, after the connections have had Ms to settle.
-observations(Ms) ->
+%% Every observation this test's observers made so far, as {Side, Direction, Type}, after the connections have had
+%% Ms to settle. Tagged per test: tests share a process, and a finished test's connections may still have reported.
+observations(Tag, Ms) ->
     timer:sleep(Ms),
-    observations_now([]).
+    observations_now(Tag, []).
 
-observations_now(Acc) ->
-    receive {observed, Side, Dir, Type, _Size, _Us} -> observations_now([{Side, Dir, Type} | Acc])
+observations_now(Tag, Acc) ->
+    receive {observed, Tag, Side, Dir, Type} -> observations_now(Tag, [{Side, Dir, Type} | Acc])
     after 0 -> lists:reverse(Acc)
     end.
 
@@ -1233,8 +1234,8 @@ delivered_call(Conn) ->
     after 2_000 -> erlang:error(no_call_delivered)
     end.
 
-typing_observer(Test) ->
-    fun(Side) -> fun(Dir, Type, Size, Us) -> Test ! {observed, Side, Dir, Type, Size, Us}, ok end end.
+typing_observer(Test, Tag) ->
+    fun(Side) -> fun(Dir, Type, _Size, _Us) -> Test ! {observed, Tag, Side, Dir, Type}, ok end end.
 
 %% A pre-v5 connection's liveness probe is a signed CALL to `_macula.ping' in the all-zero realm, answered with a
 %% RESULT. It exists to find a dead peer, not to carry work, so the frame observer names it apart: the prober's probe
@@ -1243,13 +1244,14 @@ typing_observer(Test) ->
 %% answered it here.
 a_probe_and_its_answer_are_typed_liveness_both_ways(Ctx) ->
     #{station_key := StationKey} = World = world(Ctx, #{}),
-    Observer = typing_observer(self()),
+    Tag = make_ref(),
+    Observer = typing_observer(self(), Tag),
     {Client, Station} = connect(World, #{handshake => 4, mode => off, liveness_interval_ms => 200,
                                          liveness_max_misses => 5,
                                          client_observer => Observer(client), station_observer => Observer(station)}),
     _ = {await(Client, connected), await(Station, connected)},
     ok = answer_probes(Station, StationKey, pq_pure, 1),
-    Seen = observations(300),
+    Seen = observations(Tag, 300),
     [?assert(lists:member(O, Seen)) || O <- [{client, queued, liveness_call}, {client, out, liveness_call},
                                               {station, in, liveness_call}, {station, queued, liveness_result},
                                               {station, out, liveness_result}, {client, in, liveness_result}]],
@@ -1260,7 +1262,8 @@ a_probe_and_its_answer_are_typed_liveness_both_ways(Ctx) ->
 %% that is not the liveness realm.
 an_ordinary_call_is_typed_call(Ctx) ->
     #{client_key := ClientKey, station_key := StationKey} = World = world(Ctx, #{}),
-    Observer = typing_observer(self()),
+    Tag = make_ref(),
+    Observer = typing_observer(self(), Tag),
     {Client, Station} = connect(World, #{handshake => 4, mode => off,
                                          client_observer => Observer(client), station_observer => Observer(station)}),
     _ = {await(Client, connected), await(Station, connected)},
@@ -1274,7 +1277,7 @@ an_ordinary_call_is_typed_call(Ctx) ->
          ok = macula_peering:send_frame(Station, macula_frame:result(#{request => Request, payload => #{ok => 1}},
                                                                      StationKey))
      end || Procedure <- [<<"acme/svc.do_v1">>, <<"_macula.ping">>]],
-    Seen = observations(300),
+    Seen = observations(Tag, 300),
     ?assertEqual(2, length([x || {client, out, call} <- Seen])),
     ?assertEqual(2, length([x || {station, in, call} <- Seen])),
     ?assertEqual(2, length([x || {station, out, result} <- Seen])),
@@ -1287,7 +1290,8 @@ an_ordinary_call_is_typed_call(Ctx) ->
 %% the oldest, forgotten, is typed as the result it looks like.
 the_probe_ids_a_peer_can_feed_are_bounded(Ctx) ->
     #{client_key := ClientKey, station_key := StationKey} = World = world(Ctx, #{}),
-    Observer = typing_observer(self()),
+    Tag = make_ref(),
+    Observer = typing_observer(self(), Tag),
     {Client, Station} = connect(World, #{handshake => 4, mode => off, station_observer => Observer(station)}),
     _ = {await(Client, connected), await(Station, connected)},
     Requests = [begin
@@ -1299,11 +1303,11 @@ the_probe_ids_a_peer_can_feed_are_bounded(Ctx) ->
                     {ok, Request} = macula_frame:verify_request(Delivered, pq_pure),
                     Request
                 end || _ <- lists:seq(1, 5)],
-    _ = observations(100),
+    _ = observations(Tag, 100),
     Answer = fun(Request) ->
                  ok = macula_peering:send_frame(Station, macula_frame:result(#{request => Request, payload => #{}},
                                                                              StationKey)),
-                 [T || {station, out, T} <- observations(200)]
+                 [T || {station, out, T} <- observations(Tag, 200)]
              end,
     ?assertEqual([liveness_result], Answer(lists:last(Requests))),
     ?assertEqual([result], Answer(hd(Requests))),
