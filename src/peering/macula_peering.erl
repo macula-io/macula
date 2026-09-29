@@ -52,7 +52,8 @@
     refusals/1,
     forget_v5_peer/1,
     handshake_counters/0,
-    session_proof_limits/0
+    session_proof_limits/0,
+    set_session_proof_limits/2
 ]).
 
 %% Exports with no caller inside macula yet: macula-station's observer relays
@@ -298,6 +299,24 @@ handshake_counters() ->
 -spec session_proof_limits() -> macula_session_proof_rate:limits().
 session_proof_limits() ->
     macula_session_proof_rate:limits().
+
+%% @doc Replace this station's session proof limits at run time: at most
+%% PerNodePerMinute session proofs a minute for one client node, and PerSecond
+%% a second in total. Each must be an integer of at least 1, as the macula
+%% application environment's `session_proofs_per_node_per_minute' and
+%% `session_proofs_per_second' must at start; an invalid value changes neither
+%% and names itself. Call it once macula has started, before any connection
+%% or while connections are live: the next session proof is counted against
+%% the new limits, and `session_proof_limits/0' reports them. They are also
+%% written to the application environment, so a restart of the peering
+%% processes keeps them rather than silently going back to the defaults.
+%% Updating them triggers a node-wide garbage collection scan (a persistent
+%% term update), so call it at boot or on a configuration reload, never per
+%% connection.
+-spec set_session_proof_limits(term(), term()) ->
+    ok | {error, {invalid_limit, atom(), term()}}.
+set_session_proof_limits(PerNodePerMinute, PerSecond) ->
+    macula_session_proof_rate:set_limits(PerNodePerMinute, PerSecond).
 
 %% @doc Close a dedicated stream, one obtained from `open_dedicated_stream/1'
 %% or one the peer opened, gracefully: data already written still goes out,

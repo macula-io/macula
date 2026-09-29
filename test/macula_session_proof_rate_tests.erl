@@ -17,7 +17,27 @@ session_proof_rate_test_() ->
        fun total_second/0},
       {"windows that ended are purged", fun purged/0},
       {"a refusal on the total spends none of the client's own budget", fun total_refusal_spends_no_node_budget/0},
-      {"the defaults are the limits in force", fun default_limits/0}]}.
+      {"the defaults are the limits in force", fun default_limits/0},
+      {"set at run time, the new limits are in force for the next proof", fun set_limits_take_the_next_proof/0},
+      {"set before any proof, the new limits are in force", fun set_limits_before_any_proof/0},
+      {"an invalid value sets neither limit and names itself", fun invalid_set_changes_nothing/0}]}.
+
+%% A station sets its limits once, at boot: a restart of the rate process must not put the defaults back silently.
+set_limits_survive_a_restart_test() ->
+    Pid = own_process(),
+    try
+        ?assertEqual(ok, macula_peering:set_session_proof_limits(7, 11)),
+        unlink(Pid),
+        exit(Pid, kill),
+        ok = wait_down(Pid),
+        {ok, Restarted} = macula_session_proof_rate:start_link(),
+        try ?assertEqual(#{per_node_per_minute => 7, per_second => 11}, macula_peering:session_proof_limits())
+        after give_back(Restarted)
+        end
+    after
+        [ok = application:unset_env(macula, Key)
+         || Key <- [session_proofs_per_node_per_minute, session_proofs_per_second]]
+    end.
 
 %% The limits come from the macula application environment, read once at start.
 configured_test_() ->
@@ -52,6 +72,31 @@ purged() ->
     ?assert(macula_session_proof_rate:windows() > 0),
     ok = macula_session_proof_rate:purge(?T0 + 2 * 60000),
     ?assertEqual(0, macula_session_proof_rate:windows()).
+
+set_limits_take_the_next_proof() ->
+    [ok = macula_session_proof_rate:allow(?NODE, ?T0 + I * 1000) || I <- lists:seq(0, 4)],
+    ?assertEqual(ok, macula_peering:set_session_proof_limits(5, 30)),
+    ?assertEqual(#{per_node_per_minute => 5, per_second => 30}, macula_peering:session_proof_limits()),
+    ?assertEqual({error, {session_proof_rate, per_node_per_minute}},
+                 macula_session_proof_rate:allow(?NODE, ?T0 + 5000)),
+    ?assertEqual(ok, macula_peering:set_session_proof_limits(6, 30)),
+    ?assertEqual(ok, macula_session_proof_rate:allow(?NODE, ?T0 + 6000)).
+
+set_limits_before_any_proof() ->
+    ?assertEqual(ok, macula_peering:set_session_proof_limits(1, 2)),
+    ?assertEqual(#{per_node_per_minute => 1, per_second => 2}, macula_peering:session_proof_limits()),
+    ?assertEqual(ok, macula_session_proof_rate:allow(<<3:256>>, ?T0)),
+    ?assertEqual(ok, macula_session_proof_rate:allow(<<4:256>>, ?T0)),
+    ?assertEqual({error, {session_proof_rate, per_second}}, macula_session_proof_rate:allow(<<5:256>>, ?T0)).
+
+invalid_set_changes_nothing() ->
+    Before = macula_peering:session_proof_limits(),
+    [?assertEqual({error, {invalid_limit, Name, Value}}, macula_peering:set_session_proof_limits(PerNode, PerSecond))
+     || {PerNode, PerSecond, Name, Value} <- [{0, 30, session_proofs_per_node_per_minute, 0},
+                                             {30, -1, session_proofs_per_second, -1},
+                                             {1, <<"30">>, session_proofs_per_second, <<"30">>},
+                                             {1.5, 30, session_proofs_per_node_per_minute, 1.5}]],
+    ?assertEqual(Before, macula_peering:session_proof_limits()).
 
 default_limits() ->
     ?assertEqual(#{per_node_per_minute => 30, per_second => 30}, macula_peering:session_proof_limits()).
@@ -100,7 +145,10 @@ own_process() ->
     {ok, Pid} = macula_session_proof_rate:start_link(),
     Pid.
 
+%% The limits a test set, in the application environment too, are cleared before the supervised process restarts,
+%% so no suite after this one reads them.
 give_back(Pid) ->
+    [ok = application:unset_env(macula, Key) || Key <- [session_proofs_per_node_per_minute, session_proofs_per_second]],
     unlink(Pid),
     exit(Pid, shutdown),
     ok = wait_down(Pid),

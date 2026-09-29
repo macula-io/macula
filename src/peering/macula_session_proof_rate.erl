@@ -7,14 +7,15 @@
 %%
 %% The fleet's CPUs differ several-fold, so both limits are macula application environment options,
 %% `session_proofs_per_node_per_minute' and `session_proofs_per_second', read once when this process starts and never
-%% looked up per handshake. A value that is not an integer of at least 1 refuses the start, naming itself.
+%% looked up per handshake. A value that is not an integer of at least 1 refuses the start, naming itself. set_limits/2
+%% replaces both at run time, under the same rule, for a station whose limits come from its own configuration.
 %%
 %% Fixed windows: the minute and the second a request falls in. This process only owns the table and purges the
 %% windows that ended, once a minute; every count goes to the table directly.
 -module(macula_session_proof_rate).
 -behaviour(gen_server).
 
--export([start_link/0, allow/2, limits/0, purge/1, windows/0]).
+-export([start_link/0, allow/2, limits/0, set_limits/2, purge/1, windows/0]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2]).
 
 -define(TABLE, ?MODULE).
@@ -55,6 +56,24 @@ within([{false, Limit} | _Rest], _Keys) ->
 -spec limits() -> limits().
 limits() ->
     persistent_term:get(?LIMITS).
+
+%% @doc Replace both limits, once macula has started: before any proof or while connections are live, the next proof
+%% is counted against the new limits, and the windows already counted stay. Both are checked first, as at start, so
+%% an invalid value changes neither and names itself. They are also written to the macula application environment, so
+%% a restart of this process rereads them instead of silently putting the defaults back.
+-spec set_limits(term(), term()) -> ok | {error, {invalid_limit, atom(), term()}}.
+set_limits(PerNode, PerSecond) ->
+    set_valid(valid_limit(session_proofs_per_node_per_minute, PerNode),
+              valid_limit(session_proofs_per_second, PerSecond)).
+
+set_valid({ok, PerNode}, {ok, PerSecond}) ->
+    ok = application:set_env(macula, session_proofs_per_node_per_minute, PerNode),
+    ok = application:set_env(macula, session_proofs_per_second, PerSecond),
+    persistent_term:put(?LIMITS, #{per_node_per_minute => PerNode, per_second => PerSecond});
+set_valid({error, _} = Invalid, _PerSecond) ->
+    Invalid;
+set_valid(_PerNode, {error, _} = Invalid) ->
+    Invalid.
 
 %% @doc Delete the windows that ended before Now.
 -spec purge(integer()) -> ok.

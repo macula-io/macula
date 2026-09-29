@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- `macula_peering:set_session_proof_limits/2` (and `macula_session_proof_rate:set_limits/2`): replaces a station's
+  session proof limits at run time, once macula has started, before any connection or while connections are live;
+  the next session proof counts against the new limits, and `session_proof_limits/0` reports them. Each value must be
+  an integer of at least 1, as the application environment's must at start; an invalid value changes neither limit
+  and returns `{error, {invalid_limit, Name, Value}}` with the environment key's name. The values are also written to
+  the application environment, so a restart of the peering processes keeps them rather than silently going back to
+  the defaults. For a station whose limits
+  come from its own configuration, which it reads after macula has started (macula-station 0.7.2).
+
+---
+
 ## [13.2.0] - 2026-09-29
 
 The first handshake v5 release: a station that runs it makes it its rollback floor, so rolling it back below 13.2.0 is a
