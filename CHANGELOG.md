@@ -69,10 +69,14 @@ publication was already a valid one.
 - **`macula_group_keys`**, a sealed group's distributor: epochs of 15 minutes with independent random keys and ids,
   the next handed out in the current's last third, and every pull admitted only with the org's grant (checked by the
   advertise policy) and a live realm membership read from the realm's slot, past epochs included, minus an
-  application's removed set. Refusals are `handler_error` with the reason as detail.
+  application's removed set. Refusals are `handler_error` with the reason as detail. Its procedure is advertised
+  with `macula_group_keys:advertise_opts/1`: the org's grant and sealed calls only, so a clear pull is answered
+  `sealed_required`, and with `kem_advertise` off it refuses to advertise at all.
 - **`macula_group_keyring`**, a node's keys for the groups it joined, one per pool: re-pulls at a random instant in
   every ahead window, retries with backoff, keeps the policy monotonic, bounds unknown-id pulls to three per publisher
-  per epoch, and is read through a handle so that only a pull ever waits. `macula_group_epoch` and
+  per epoch, and is read through a handle so that only a pull ever waits. A group has one re-pull pending at a time.
+  A `distributor` that is not a node id, or a `ucan_token` that is not bytes, is `{error, {invalid_option, _}}`
+  before anything is sent, and a pool whose keyring ends stops with `{shutdown, {group_keyring_down, Reason}}`. `macula_group_epoch` and
   `macula_group_event` are its pure parts.
 - **`macula:call/6` takes `ucan_token`**, presented to every station call it makes, the resealed one included.
 - **`macula_subscriber` takes an optional `handle_unopened/3`**; without it the subscriber logs an unopened event and

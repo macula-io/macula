@@ -51,8 +51,8 @@
 %% is answered `epoch_expired' rather than `unknown_epoch' for that long.
 -define(TOLERANCE_MS, 5 * 60000).
 %% How long the handler waits for the distributor: past a membership lookup's
-%% 5 s and within macula's 30 s handler budget.
--define(HANDLER_WAIT_MS, 25000).
+%% 5 s and within a member's 15 s pull deadline (macula_group_keyring).
+-define(HANDLER_WAIT_MS, 12000).
 
 %% @doc Start a distributor for `org''s groups. `membership' defaults to the
 %% realm slot read over `pool', which then needs `realm', `realm_key_id' and
@@ -65,9 +65,9 @@ start_link(#{org := Org, policy := Policy} = Opts)
     gen_server:start_link(?MODULE, Opts, []).
 
 %% @doc The `<org>/group_keys_v1' handler for a distributor, to advertise. It
-%% waits for the distributor as long as a membership lookup can take and less
-%% than macula's default handler budget (30 s), so a slow lookup answers
-%% `membership_unknown', not a relay failure.
+%% waits for the distributor longer than a membership lookup can take (5 s) and
+%% less than a member's pull deadline (15 s), so a slow lookup answers
+%% `membership_unknown', and no answer is made that no member still waits for.
 -spec handler(pid()) -> fun((map()) -> map() | {error, atom()}).
 handler(Pid) ->
     fun(Payload) -> gen_server:call(Pid, {pull, Payload}, ?HANDLER_WAIT_MS) end.
