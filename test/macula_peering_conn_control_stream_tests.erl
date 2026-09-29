@@ -131,8 +131,22 @@ a_peer_opened_stream_is_closed_and_the_connection_survives(Peer) ->
 %% The pair the fixture started, checked to be where these cases need it: the
 %% peer never answers, so the connection is still handshaking.
 handshaking(#{conn := Conn, server_conn := ServerConn}) ->
-    ?assertEqual(handshaking, state_name(Conn)),
+    ?assertEqual(handshaking, reached(Conn, handshaking, 5_000)),
     {Conn, ServerConn}.
+
+%% The state Conn reaches within Ms: the fixture's accept returns when the
+%% listener side has the connection, which can be before the dialling side has
+%% processed its own connected event and left `connecting' (macula#55).
+reached(Conn, State, Ms) when Ms =< 0 ->
+    {state_name(Conn), State};
+reached(Conn, State, Ms) ->
+    reached_or_wait(state_name(Conn), Conn, State, Ms).
+
+reached_or_wait(State, _Conn, State, _Ms) ->
+    State;
+reached_or_wait(_Other, Conn, State, Ms) ->
+    timer:sleep(10),
+    reached(Conn, State, Ms - 10).
 
 state_name(Conn) ->
     {StateName, _Data} = sys:get_state(Conn),

@@ -81,13 +81,27 @@ a_closed_control_stream_ends_the_drain(#{conn := Conn}) ->
 %% Put the handshaking connection into `draining' and return its control
 %% stream, the one the peer's FIN arrives on.
 draining(Conn) ->
-    ?assertEqual(handshaking, state_name(Conn)),
+    ?assertEqual(handshaking, reached(Conn, handshaking, 5_000)),
     _ = sys:replace_state(Conn, fun({_State, Data}) -> {draining, Data} end),
     ?assertEqual(draining, state_name(Conn)),
     {_State, Data} = sys:get_state(Conn),
     Stream = element(macula_peering_conn:state_field_index(quic_stream), Data),
     ?assertNotEqual(undefined, Stream),
     Stream.
+
+%% The state Conn reaches within Ms: the fixture's accept returns when the
+%% listener side has the connection, which can be before the dialling side has
+%% processed its own connected event and left `connecting' (macula#55).
+reached(Conn, State, Ms) when Ms =< 0 ->
+    {state_name(Conn), State};
+reached(Conn, State, Ms) ->
+    reached_or_wait(state_name(Conn), Conn, State, Ms).
+
+reached_or_wait(State, _Conn, State, _Ms) ->
+    State;
+reached_or_wait(_Other, Conn, State, Ms) ->
+    timer:sleep(10),
+    reached(Conn, State, Ms - 10).
 
 state_name(Conn) ->
     {StateName, _Data} = sys:get_state(Conn),
