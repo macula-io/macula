@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [13.3.0] - 2026-09-30
+
+A station can name the release it runs in its signed endpoint record, so anyone can tell which release a station
+runs from outside the fleet, under the station's signature.
+
+### Added
+
+- **`station_version` in the station endpoint record.** `macula_record:station_endpoint/2` takes a
+  `station_version` option (text of 1 to 64 bytes, the station's app vsn), carried in the payload as the text field
+  `station_version`, and `read_station_endpoint/1` returns it when the record carries one by that rule (bytes, empty
+  text or longer text read as no release). It is self-attested: the signature proves which station claims it, not
+  that the running code matches, and a claim is at most a record's 5-minute lifetime (plus clock tolerance) old. A record without it reads
+  exactly as before (no key), so every endpoint record published before this reads unchanged. Wire compatibility: a
+  station endpoint's payload is accepted whatever its fields, by this library (`payload_ok/2`) and by macula-go, so a
+  reader on an older release verifies a record carrying it and ignores the field. A release outside the rule is refused
+  when the record is made.
+
+---
+
 ## [13.2.2] - 2026-09-29
 
 The frame observer names a pre-v5 liveness probe apart, so a station's idle close can leave probes out

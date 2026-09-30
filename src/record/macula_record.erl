@@ -124,13 +124,20 @@
 -type foundation_realm_trust_list_opts() :: #{ttl_ms => pos_integer()}.
 -type foundation_t3_attestation_opts() :: #{valid_until => pos_integer(), notes => binary(), ttl_ms => pos_integer()}.
 -type tombstone_opts() :: #{detail => binary(), ttl_ms => pos_integer()}.
--type station_endpoint_opts() :: #{host_advertised => [binary()], alpn => binary(), ttl_ms => pos_integer()}.
+%% `station_version' names the release the station runs (its app vsn), text of 1 to ?MAX_STATION_VERSION_BYTES bytes, so a
+%% reader outside the fleet can tell it under the station's signature. It is self-attested: the signature says who
+%% claims it, not that the running code matches.
+-type station_endpoint_opts() :: #{host_advertised => [binary()], alpn => binary(), ttl_ms => pos_integer(),
+                                   station_version => binary()}.
 
 -define(LABEL, <<"MACULA-PQ-RECORD-V1">>).
 -define(STORAGE_KEY_LABEL, "MACULA-PQ-STORAGE-KEY-V1").
 -define(MAX_RECORD_BYTES, 256 * 1024).
 %% The longest coordinate text a node record's reader parses: a coordinate needs far fewer bytes.
 -define(MAX_GEO_TEXT_BYTES, 32).
+%% The longest station release a station endpoint carries: a release is a version, and a reader outside the fleet
+%% renders it, so it gets no room for anything else.
+-define(MAX_STATION_VERSION_BYTES, 64).
 %% How far from zero a latitude and a longitude reach, both inclusive.
 -define(LAT_BOUND, 90).
 -define(LNG_BOUND, 180).
@@ -370,8 +377,14 @@ station_endpoint(QuicPort) ->
 station_endpoint(QuicPort, Opts) when is_integer(QuicPort), QuicPort > 0, QuicPort =< 65535, is_map(Opts) ->
     Payload0 = #{{text, <<"quic_port">>} => QuicPort},
     Payload1 = with_host_list(Payload0, maps:get(host_advertised, Opts, undefined)),
-    Payload = with_text(Payload1, <<"alpn">>, maps:get(alpn, Opts, undefined)),
+    Payload2 = with_text(Payload1, <<"alpn">>, maps:get(alpn, Opts, undefined)),
+    Payload = with_text(Payload2, <<"station_version">>, version_named(maps:get(station_version, Opts, undefined))),
     unsigned(?TYPE_STATION_ENDPOINT, Payload, maps:merge(#{ttl_ms => ?STATION_ENDPOINT_TTL_MS}, Opts)).
+
+%% A release names something, briefly: an empty one, or one past ?MAX_STATION_VERSION_BYTES, is refused.
+version_named(undefined) -> undefined;
+version_named(Release) when is_binary(Release), byte_size(Release) > 0, byte_size(Release) =< ?MAX_STATION_VERSION_BYTES ->
+    Release.
 
 %% @doc A tombstone that withdraws a record: it names the record's type, version and slot fields, takes the record's
 %% slot, and lives until the record has expired plus the clock tolerance, so no replica serves the record again after
@@ -630,10 +643,17 @@ read_procedure_advertisement(#{type := ?TYPE_PROCEDURE_ADVERTISEMENT, payload :=
                                      || {Name, Field} <- [{<<"kem_key">>, kem_key}, {<<"kem_key_id">>, kem_key_id}],
                                         maps:is_key({text, Name}, P)])).
 
--spec read_station_endpoint(m_record()) -> #{quic_port := 1..65535, host_advertised := [binary()]}.
+%% `station_version' only when the record carries one as text of 1 to ?MAX_STATION_VERSION_BYTES bytes, the constructor's own
+%% rule: a record published before it existed reads exactly as it did, and bytes, empty text or text past the bound read
+%% as no release.
+-spec read_station_endpoint(m_record()) ->
+          #{quic_port := 1..65535, host_advertised := [binary()], station_version => binary()}.
 read_station_endpoint(#{type := ?TYPE_STATION_ENDPOINT, payload := P}) ->
-    #{quic_port       => payload_field(P, <<"quic_port">>),
-      host_advertised => host_list(payload_field(P, <<"host_advertised">>))}.
+    Read = #{quic_port       => payload_field(P, <<"quic_port">>),
+             host_advertised => host_list(payload_field(P, <<"host_advertised">>))},
+    maps:merge(Read, maps:from_list([{station_version, Release}
+                                     || {text, Release} <- [maps:get({text, <<"station_version">>}, P, undefined)],
+                                        byte_size(Release) > 0, byte_size(Release) =< ?MAX_STATION_VERSION_BYTES])).
 
 -spec read_tombstone(m_record()) -> map().
 read_tombstone(#{type := ?TYPE_TOMBSTONE, payload := P}) ->
