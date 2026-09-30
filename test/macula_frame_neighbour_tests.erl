@@ -9,7 +9,7 @@
 %% RSA-4096 key generation takes up to about a second per key.
 -define(EU_TIMEOUT, 120).
 -define(LABEL, <<"MACULA-PQ-NEIGHBOUR-V1">>).
--define(CONTROL, [swim_ping, swim_ack, swim_suspect, swim_confirm, ping, pong, find_node, nodes, find_value, value,
+-define(CONTROL, [swim_ping, swim_ack, swim_suspect, swim_confirm, swim_ping_req, ping, pong, find_node, nodes, find_value, value,
                   store, store_ack, advertise, unadvertise, subscribe, unsubscribe,
                   overlay_relay, hyparview_join, hyparview_forward_join, hyparview_neighbor, hyparview_disconnect,
                   hyparview_shuffle, hyparview_shuffle_reply, plumtree_ihave, plumtree_graft, plumtree_prune, goodbye]).

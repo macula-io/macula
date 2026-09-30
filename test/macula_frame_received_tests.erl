@@ -30,8 +30,8 @@
 -define(PROFILE, pq_pure).
 %% Every frame type macula_frame reads.
 -define(FRAME_TYPES,
-        [connect, hello, goodbye, swim_ping, swim_ack, swim_suspect, swim_confirm, ping, pong, find_node, nodes,
-         find_value, value, store, store_ack, call, result, error, hyparview_join, hyparview_forward_join,
+        [connect, hello, goodbye, swim_ping, swim_ack, swim_suspect, swim_confirm, swim_ping_req, ping, pong,
+         find_node, nodes, find_value, value, store, store_ack, call, result, error, hyparview_join, hyparview_forward_join,
          hyparview_neighbor, hyparview_disconnect, hyparview_shuffle, hyparview_shuffle_reply, plumtree_gossip,
          plumtree_ihave, plumtree_graft, plumtree_prune, overlay_relay, publish, subscribe, unsubscribe, event,
          advertise, unadvertise, stream_open, stream_data, stream_end, stream_error, stream_reply, want, have,
@@ -40,7 +40,7 @@
 -define(FIXED_LENGTH, [key, id16, hash48, mcid, country]).
 %% The control frame types a neighbour signature may carry in pq_hybrid.
 -define(NEIGHBOUR_SIGNED,
-        [swim_ping, swim_ack, swim_suspect, swim_confirm, ping, pong, find_node, nodes, find_value, value,
+        [swim_ping, swim_ack, swim_suspect, swim_confirm, swim_ping_req, ping, pong, find_node, nodes, find_value, value,
          store, store_ack, advertise, unadvertise, subscribe, unsubscribe, overlay_relay, hyparview_join,
          hyparview_forward_join, hyparview_neighbor, hyparview_disconnect, hyparview_shuffle,
          hyparview_shuffle_reply, plumtree_ihave, plumtree_graft, plumtree_prune, goodbye]).
@@ -416,6 +416,7 @@ samples() ->
       [round, responder, incarnation], []},
      {swim_suspect, macula_frame:swim_suspect(suspect_spec()), [target, target_incarnation, suspected_by, ttl], []},
      {swim_confirm, macula_frame:swim_confirm(suspect_spec()), [target, target_incarnation, suspected_by, ttl], []},
+     {swim_ping_req, macula_frame:swim_ping_req(#{round => 1, target => key()}), [round, target], []},
      {ping, macula_frame:ping(#{nonce => id()}), [nonce], []},
      {pong, macula_frame:pong(#{nonce => id()}), [nonce], []},
      {find_node, macula_frame:find_node(#{key => key(), origin => key(), depth => 0}), [key, origin, depth], []},

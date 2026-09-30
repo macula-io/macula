@@ -177,6 +177,19 @@ swim_ping_wire_roundtrip_test() ->
     {ok, Decoded, <<>>} = macula_frame:decode(macula_frame:encode(F)),
     ?assertEqual(F, Decoded).
 
+%% PING-REQ (macula#59): the requester's round and the node it wants probed.
+swim_ping_req_carries_round_and_target_test() ->
+    Target = crypto:strong_rand_bytes(32),
+    F = macula_frame:swim_ping_req(#{round => 9, target => Target}),
+    ?assertEqual(swim_ping_req, macula_frame:frame_type(F)),
+    ?assertEqual(9, maps:get(round, F)),
+    ?assertEqual(Target, maps:get(target, F)),
+    {ok, Decoded, <<>>} = macula_frame:decode(macula_frame:encode(F)),
+    ?assertEqual(F, Decoded).
+
+swim_ping_req_refuses_a_short_target_test() ->
+    ?assertError(function_clause, macula_frame:swim_ping_req(#{round => 9, target => <<0:248>>})).
+
 %%------------------------------------------------------------------
 %% Helpers
 %%------------------------------------------------------------------

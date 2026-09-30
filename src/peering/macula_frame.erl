@@ -36,7 +36,7 @@
     connect/1, hello/1, goodbye/2, goodbye/3,
 
     %% Constructors — SWIM
-    swim_ping/1, swim_ack/1, swim_suspect/1, swim_confirm/1,
+    swim_ping/1, swim_ack/1, swim_suspect/1, swim_confirm/1, swim_ping_req/1,
     swim_update/1,
 
     %% Constructors — DHT (Part 6 §7)
@@ -148,6 +148,7 @@
     swim_ping_spec/0,
     swim_ack_spec/0,
     swim_suspect_spec/0,
+    swim_ping_req_spec/0,
     swim_update/0,
     swim_update_spec/0,
     member_state/0,
@@ -226,14 +227,14 @@
 -define(NEIGHBOUR_LABEL, <<"MACULA-PQ-NEIGHBOUR-V1">>).
 %% The control frames, which pq_hybrid neighbour-signs (D17). Data frames carry their own end-to-end signatures.
 -define(NEIGHBOUR_SIGNED,
-        [swim_ping, swim_ack, swim_suspect, swim_confirm, ping, pong, find_node, nodes, find_value, value,
-         store, store_ack, advertise, unadvertise, subscribe, unsubscribe,
+        [swim_ping, swim_ack, swim_suspect, swim_confirm, swim_ping_req, ping, pong, find_node, nodes, find_value,
+         value, store, store_ack, advertise, unadvertise, subscribe, unsubscribe,
          overlay_relay, hyparview_join, hyparview_forward_join, hyparview_neighbor, hyparview_disconnect,
          hyparview_shuffle, hyparview_shuffle_reply, plumtree_ihave, plumtree_graft, plumtree_prune,
          goodbye]).
 
 -type frame_type() :: connect | hello | goodbye
-                    | swim_ping | swim_ack | swim_suspect | swim_confirm
+                    | swim_ping | swim_ack | swim_suspect | swim_confirm | swim_ping_req
                     | ping | pong
                     | liveness_ping | liveness_pong
                     | find_node | nodes
@@ -311,6 +312,14 @@
     responder   := id256(),
     incarnation := non_neg_integer(),
     piggyback   => [swim_update()]
+}.
+
+%% PING-REQ (macula#59): "probe `target' for me", sent by a requester whose direct probe of round `round' timed out.
+%% The helper answers with a `swim_ack' of that round whose `responder' is the target. Sent only to a peer that
+%% declares `macula_peering:capability_bit(swim_indirect)': an older node refuses the type and closes the connection.
+-type swim_ping_req_spec() :: #{
+    round  := non_neg_integer(),
+    target := id256()
 }.
 
 -type swim_suspect_spec() :: #{
@@ -848,6 +857,13 @@ swim_ack(#{round := Round, responder := Responder, incarnation := Inc} = Spec)
         incarnation => Inc,
         piggyback   => maps:get(piggyback, Spec, [])
     }.
+
+-spec swim_ping_req(swim_ping_req_spec()) -> frame().
+swim_ping_req(#{round := Round, target := Target} = Spec)
+  when is_integer(Round), Round >= 0,
+       is_binary(Target), byte_size(Target) =:= 32, map_size(Spec) =:= 2 ->
+    Header = base(swim_ping_req, 0),
+    Header#{round => Round, target => Target}.
 
 -spec swim_suspect(swim_suspect_spec()) -> frame().
 swim_suspect(Spec) ->
@@ -2681,6 +2697,8 @@ received_rules(swim_ping) ->
 received_rules(swim_ack) ->
     base_rules([{round, non_neg}, {responder, key}, {incarnation, non_neg}],
                [{piggyback, {optional, {list_of, swim_update_rule()}}}]);
+received_rules(swim_ping_req) ->
+    base_rules([{round, non_neg}, {target, key}]);
 received_rules(Type) when Type =:= swim_suspect; Type =:= swim_confirm ->
     base_rules([{target, key}, {target_incarnation, non_neg}, {suspected_by, key}, {ttl, non_neg}]);
 received_rules(Type) when Type =:= ping; Type =:= pong; Type =:= liveness_ping; Type =:= liveness_pong ->
@@ -3140,6 +3158,7 @@ frame_type_named(<<"swim_ping">>) -> {ok, swim_ping};
 frame_type_named(<<"swim_ack">>) -> {ok, swim_ack};
 frame_type_named(<<"swim_suspect">>) -> {ok, swim_suspect};
 frame_type_named(<<"swim_confirm">>) -> {ok, swim_confirm};
+frame_type_named(<<"swim_ping_req">>) -> {ok, swim_ping_req};
 frame_type_named(<<"ping">>) -> {ok, ping};
 frame_type_named(<<"pong">>) -> {ok, pong};
 frame_type_named(<<"liveness_ping">>) -> {ok, liveness_ping};
@@ -3296,6 +3315,18 @@ field_table(swim_confirm) ->
       <<"target_incarnation">> => {target_incarnation, uint},
       <<"suspected_by">> => {suspected_by, {bytes, 32}},
       <<"ttl">> => {ttl, uint}};
+field_table(swim_ping_req) ->
+    #{<<"version">> => {version, value},
+      <<"neighbour">> => {neighbour, held_object},
+      <<"frame_type">> => {frame_type, frame_type},
+      <<"frame_id">> => {frame_id, value},
+      <<"sent_at_ms">> => {sent_at_ms, uint},
+      <<"capabilities">> => {capabilities, uint},
+      <<"realm">> => {realm, value},
+      <<"call_id">> => {call_id, value},
+      <<"source_route">> => {source_route, value},
+      <<"round">> => {round, uint},
+      <<"target">> => {target, {bytes, 32}}};
 field_table(ping) ->
     #{<<"version">> => {version, value},
       <<"neighbour">> => {neighbour, held_object},

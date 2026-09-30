@@ -38,6 +38,8 @@
     reject/2,
     send_frame/2,
     peer_capabilities/1,
+    capability_bit/1,
+    has_capability/2,
     peer_identity/1,
     open_dedicated_stream/1,
     async_open_dedicated_stream/1,
@@ -67,6 +69,14 @@
 %% counterpart can tell direct daemon ADVERTISEs apart from station
 %% gossip relays.
 -define(CAP_STATION, 16#0000_0000_0000_0001).
+
+%% Capability bit asserting the peer reads `swim_ping_req' and answers it as
+%% a SWIM helper (macula#59). A node that does not know a frame type closes
+%% the connection over it, so PING-REQ goes only to a peer declaring this bit.
+-define(CAP_SWIM_INDIRECT, 16#0000_0000_0000_0002).
+
+-type capability() :: station | swim_indirect.
+-export_type([capability/0]).
 
 -type opts() :: macula_peering_conn:opts().
 -export_type([opts/0]).
@@ -324,6 +334,18 @@ set_session_proof_limits(PerNodePerMinute, PerSecond) ->
 -spec close_dedicated_stream(reference()) -> ok.
 close_dedicated_stream(Stream) ->
     macula_quic:close_stream(Stream).
+
+%% @doc The bit a capability has in the mask a node declares in CONNECT and
+%% HELLO: `station' (1) and `swim_indirect' (2).
+-spec capability_bit(capability()) -> pos_integer().
+capability_bit(station) -> ?CAP_STATION;
+capability_bit(swim_indirect) -> ?CAP_SWIM_INDIRECT.
+
+%% @doc Whether a capabilities mask, such as `peer_capabilities/1' returns,
+%% declares the capability.
+-spec has_capability(capability(), non_neg_integer()) -> boolean().
+has_capability(Capability, Mask) when is_integer(Mask), Mask >= 0 ->
+    Mask band capability_bit(Capability) =/= 0.
 
 %% @doc Read the peer's capabilities bitmask as observed in their
 %% CONNECT/HELLO frame. Returns `{ok, NegotiatedCaps}' once the
