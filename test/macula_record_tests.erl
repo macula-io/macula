@@ -420,6 +420,44 @@ station_endpoint_payload_and_reader_test() ->
     {ok, V} = macula_record:verify(macula_record:encode(R), pq_pure),
     ?assertEqual(#{quic_port => 4433, host_advertised => [<<"beam00.lab">>]}, macula_record:read_station_endpoint(V)).
 
+%% A station names its own release in its endpoint record, so a reader
+%% outside the fleet can tell which release a station runs, under the
+%% station's signature: read back from the signed, encoded, verified record.
+station_endpoint_carries_the_station_version_test() ->
+    Id = key(identity),
+    R = macula_record:sign(macula_record:station_endpoint(4433, #{station_version => <<"0.7.4">>}), Id),
+    {ok, V} = macula_record:verify(macula_record:encode(R), pq_pure),
+    ?assertMatch(#{quic_port := 4433, station_version := <<"0.7.4">>}, macula_record:read_station_endpoint(V)).
+
+%% A record without it (every one published before) reads as before: no
+%% station_version key at all.
+station_endpoint_without_a_release_reads_as_before_test() ->
+    Id = key(identity),
+    R = macula_record:sign(macula_record:station_endpoint(4433), Id),
+    {ok, V} = macula_record:verify(macula_record:encode(R), pq_pure),
+    ?assertNot(maps:is_key(station_version, macula_record:read_station_endpoint(V))).
+
+%% An empty release names nothing, and a long one is room for more than a version: both refused when the record is
+%% made.
+station_endpoint_refuses_an_empty_or_overlong_release_test() ->
+    ?assertError(function_clause, macula_record:station_endpoint(4433, #{station_version => <<>>})),
+    ?assertError(function_clause, macula_record:station_endpoint(4433, #{station_version => binary:copy(<<"9">>, 65)})),
+    ?assertMatch(#{}, macula_record:station_endpoint(4433, #{station_version => binary:copy(<<"9">>, 64)})).
+
+%% A station can sign a payload the constructor would not make; the reader applies the constructor's rule, so bytes,
+%% empty text and text past the bound read as no release.
+station_endpoint_reader_refuses_what_the_constructor_would_not_make_test() ->
+    Id = key(identity),
+    #{payload := P} = U = macula_record:station_endpoint(4433),
+    [?assertNot(maps:is_key(station_version,
+                            macula_record:read_station_endpoint(
+                              verified(macula_record:sign(U#{payload := P#{{text, <<"station_version">>} => Value}}, Id)))))
+     || Value <- [<<"0.7.4">>, {text, <<>>}, {text, binary:copy(<<"9">>, 65)}]].
+
+verified(Signed) ->
+    {ok, V} = macula_record:verify(macula_record:encode(Signed), pq_pure),
+    V.
+
 foundation_records_sign_with_a_foundation_key_test() ->
     Foundation = key(foundation),
     Records = [macula_record:foundation_seed_list([#{node_id => fill(1), addresses => [], tier => 3}], #{}),
