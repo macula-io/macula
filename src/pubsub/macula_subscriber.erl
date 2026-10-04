@@ -39,7 +39,12 @@
 %%%
 %%% init(_Args) -> {ok, #{count => 0}}.
 %%%
-%%% handle_event(_Topic, #{value := V}, _Meta, State) ->
+%%% %% The payload arrives in WIRE FORM (macula_frame:to_wire/1):
+%%% %% map keys are {text, K} tuples, atom values are {text, V},
+%%% %% undefined is null. Normalize with macula_record:decode_payload/1
+%%% %% (or read single fields with macula_record:payload_field/2).
+%%% handle_event(_Topic, Payload, _Meta, State) ->
+%%%     V = macula_record:decode_payload(Payload),
 %%%     Count = maps:get(count, State) + 1,
 %%%     io:format("reading ~p: ~p~n", [Count, V]),
 %%%     {noreply, State#{count := Count}}.
