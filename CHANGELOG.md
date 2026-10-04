@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [13.5.0] - 2026-10-05
+
+### Added
+
+- **`macula_record:decode_payload/1`** — the tested inverse of the payload wire form. Subscribers and call
+  handlers receive payloads as `macula_frame:to_wire/1` produced them (map keys as `{text, K}` tuples, atom
+  values as `{text, V}`, `undefined` as `null`); `decode_payload/1` deep-normalizes that into binary keys and
+  plain values, recursively, and is idempotent on already-decoded payloads. One shared inverse replaces the
+  per-consumer unwrapping that got it wrong (mcl-sec-guard matched atom keys on the wire form and discarded
+  every fact; macula-services/mcl-sec-guard#2).
+
+### Fixed
+
+- **`macula_subscriber`'s doc example promised decoded delivery** (`handle_event(_, #{value := V}, …)`, from
+  v9.2.0) while the real delivery path hands the handler the wire-form payload. The example and the pubsub
+  guide now state the wire form and point at `decode_payload/1` / `payload_field/2`.
+
 ## [13.4.0] - 2026-09-30
 
 A station can ask other stations to probe a peer for it, so one slow or lossy path no longer makes a live peer look
