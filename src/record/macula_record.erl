@@ -38,6 +38,7 @@
 -export([type/1, key/1, key_id/1, version/1, created_at/1, expires_at/1, payload/1, signature/1]).
 -export([payload_field/2, type_procedure_advertisement/0, procedure_advertisement_max_lifetime_ms/0, clock_tolerance_ms/0,
          own_namespace/1]).
+-export([decode_payload/1]).
 -export([read_node_record/1, read_procedure_advertisement/1, read_station_endpoint/1, read_tombstone/1,
          read_org_directory/1, read_procedure_delegation/1, read_content_announcement/1,
          read_foundation_realm_trust_list/1]).
@@ -608,6 +609,37 @@ type_procedure_advertisement() -> ?TYPE_PROCEDURE_ADVERTISEMENT.
 -spec payload_field(map(), binary()) -> term().
 payload_field(Payload, Name) ->
     unwrap_text(first_present([{text, Name}, Name, safe_atom(Name)], Payload)).
+
+%% @doc Deep normalization of a payload that arrived in wire form, the
+%% exact inverse of `macula_frame:to_wire/1' over the payload term:
+%% `{text, K}' map keys become binary keys, `{text, V}' values become
+%% their binaries, `null' becomes `undefined', and maps and lists are
+%% walked recursively. Binaries and integers are already canonical and
+%% pass through. A term with no wire-form artifacts comes back equal to
+%% itself, so the call is idempotent on already-decoded payloads.
+%%
+%% Handlers receive call args and pubsub facts in wire form
+%% (`macula_subscriber' delivers what the frame carried), and consumers
+%% used to hand-roll this unwrapping — badly: mcl-sec-guard matched atom
+%% keys on the wire form and silently discarded every fact
+%% (macula-services/mcl-sec-guard#2). One shared, tested inverse beats
+%% per-consumer copies that each get it slightly wrong.
+-spec decode_payload(term()) -> term().
+decode_payload(M) when is_map(M) ->
+    maps:fold(fun(K, V, Acc) ->
+                  Acc#{decode_key(K) => decode_payload(V)}
+              end, #{}, M);
+decode_payload(L) when is_list(L) ->
+    [decode_payload(E) || E <- L];
+decode_payload(null) ->
+    undefined;
+decode_payload({text, B}) when is_binary(B) ->
+    B;
+decode_payload(V) ->
+    V.
+
+decode_key({text, K}) when is_binary(K) -> K;
+decode_key(K) -> K.
 
 %%------------------------------------------------------------------
 %% Readers

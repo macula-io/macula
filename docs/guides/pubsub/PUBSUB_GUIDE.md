@@ -48,6 +48,12 @@ for the manual pattern this replaces, if you're building something the
 wrapper doesn't fit). `handle_event/4` receives `Topic`, `Payload`, and
 `Meta` — a map carrying delivery context:
 
+The `Payload` arrives in **wire form** (`macula_frame:to_wire/1`): map
+keys are `{text, K}` tuples, atom values are `{text, V}`, and `undefined`
+is `null`. Normalize it with `macula_record:decode_payload/1` (deep), or
+read single fields with `macula_record:payload_field/2`, before matching
+on business keys.
+
 | Key | Type | Meaning |
 |---|---|---|
 | `realm` | `<<_:256>>` | Realm tag (matches the subscribe call) |
