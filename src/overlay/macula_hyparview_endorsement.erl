@@ -23,8 +23,6 @@
 %%   <li>valid_until is not before valid_from, and at most 30 days after it
 %%       (macula_record:max_endorsement_window_ms/0).</li>
 %% </ul>
-%%
-%% Reference: plans/PLAN_MACULA_V2_PART6_PROTOCOL.md §9.6.
 -module(macula_hyparview_endorsement).
 
 -export([verify_endorsement/3, slot_endorsement/3, slot_endorsement/4, build_join/3]).

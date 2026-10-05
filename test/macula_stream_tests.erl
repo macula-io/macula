@@ -1,6 +1,6 @@
 %%%-------------------------------------------------------------------
 %%% @doc EUnit tests for the streaming RPC SDK (Phase 1, local
-%%% dispatch). See PLAN_MACULA_STREAMING.md.
+%%% dispatch).
 %%% @end
 %%%-------------------------------------------------------------------
 -module(macula_stream_tests).

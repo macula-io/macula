@@ -2,7 +2,7 @@
 %%% @doc End-to-end peering tests against a real Quinn QUIC pair.
 %%%
 %%% Drives the post-quantum handshake of
-%%% plans/DESIGN_PQ_HANDSHAKE_FRAMES.md (opener, challenge, CONNECT,
+%%% docs/design/DESIGN_PQ_HANDSHAKE_FRAMES.md (opener, challenge, CONNECT,
 %%% HELLO) between two `macula_peering_conn' workers (one client-role,
 %%% one server-role) over a loopback Quinn listener, whose self-signed
 %%% leaf the station's statement issuer binds. Pins the public contract:
@@ -699,7 +699,7 @@ connect(#{client_key := ClientKey, client_issuer := ClientIssuer, station_key :=
     %%
     %% `handshake => 4' dials the station with a v4 CONNECT, as a client
     %% does for 10 minutes after the station refused v5
-    %% (plans/DESIGN_NEIGHBOUR_CHANNEL_BINDING.md section 4): the tests of
+    %% (docs/design/DESIGN_NEIGHBOUR_CHANNEL_BINDING.md section 4): the tests of
     %% what v4 alone does (D17's neighbour signatures, the signed CALL
     %% liveness probe) run on a v4 connection.
     ok = dial_version(maps:get(handshake, Options, 5), node_id(StationKey), maps:get(client_clock, Options, ?T0 + ?MINUTE)),

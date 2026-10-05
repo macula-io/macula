@@ -466,7 +466,7 @@ distributor starts a new epoch, and a member that never pulled a lost one
 reports its events `unknown_epoch`.
 
 The full design, with what each guarantee rests on, is
-`plans/DESIGN_E2E_SEALED_PUBSUB.md`; the byte-exact payloads and the org
+`docs/design/DESIGN_E2E_SEALED_PUBSUB.md`; the byte-exact payloads and the org
 grant's verdicts are `test/vectors/E2E_SEAL_V1.md`, "Sealed groups".
 
 ---

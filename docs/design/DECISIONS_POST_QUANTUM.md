@@ -1,7 +1,7 @@
-# Plan: post-quantum security for Macula, decisions
+# Post-quantum security for Macula: decisions
 
-The full text of each decision of [PLAN_POST_QUANTUM_SECURITY.md](PLAN_POST_QUANTUM_SECURITY.md). The decisions
-table there gives each decision's answer in short and its status.
+The full text of each decision taken for Macula's post-quantum security, D1 onwards. The plan that raised them shipped
+in macula 11 to 13 and was removed; its two unfinished work packages are macula#65.
 
 ### D1 Where the profile is chosen
 

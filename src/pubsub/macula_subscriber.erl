@@ -74,7 +74,7 @@
                         State :: term()) ->
     {noreply, NewState :: term()} | {stop, Reason :: term(), NewState :: term()}.
 
-%% A sealed event this subscription could not open (plans/DESIGN_E2E_SEALED_PUBSUB.md §7): `Info' names its
+%% A sealed event this subscription could not open (docs/design/DESIGN_E2E_SEALED_PUBSUB.md §7): `Info' names its
 %% publisher, its epoch (`seal_key_id') and the `reason'. Optional: without it the subscriber logs the event and
 %% serves on.
 -callback handle_unopened(Topic :: binary(),

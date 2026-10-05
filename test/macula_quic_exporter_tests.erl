@@ -3,7 +3,7 @@
 %%% section 7.5).
 %%%
 %%% Handshake v5 binds both proofs to this value
-%%% (plans/DESIGN_NEIGHBOUR_CHANNEL_BINDING.md section 3), so the two ends of
+%%% (docs/design/DESIGN_NEIGHBOUR_CHANNEL_BINDING.md section 3), so the two ends of
 %%% one connection must export the same bytes, and any other connection,
 %%% label or context must export different ones.
 %%%

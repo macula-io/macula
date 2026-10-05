@@ -25,20 +25,20 @@
 > arrives as `macula_event_unopened`, never silently. Like sealed calls it
 > waits for `kem_advertise`. See the
 > [Pub/Sub guide](docs/guides/pubsub/PUBSUB_GUIDE.md) and
-> [the design](https://github.com/macula-io/macula/blob/main/plans/DESIGN_E2E_SEALED_PUBSUB.md).
+> [the design](https://github.com/macula-io/macula/blob/main/docs/design/DESIGN_E2E_SEALED_PUBSUB.md).
 >
 > 13.2.0 is also the **first handshake v5 release**: a connection is
 > authenticated once, by proofs bound to its TLS session, instead of, in
 > pq_hybrid, by a signature on every control frame. A station that runs it makes it its
 > rollback floor. See [CHANGELOG.md](CHANGELOG.md) and
-> [the design](https://github.com/macula-io/macula/blob/main/plans/DESIGN_NEIGHBOUR_CHANNEL_BINDING.md).
+> [the design](https://github.com/macula-io/macula/blob/main/docs/design/DESIGN_NEIGHBOUR_CHANNEL_BINDING.md).
 
 > **13.1.0: knowing a call was sealed.** A caller can ask for the seal
 > report of a call (`report => true` on `macula:call/6` or `call_station/8`)
 > or a stream (`macula:stream_report/1`): `sealed` 1 with the id of the KEM
 > key the exchange was sealed to, or 0 for a clear one, and the provider it
 > was addressed to. It states that sealing ran on that exchange, nothing more.
-> See [the design](https://github.com/macula-io/macula/blob/main/plans/DESIGN_E2E_SEAL_REPORT.md).
+> See [the design](https://github.com/macula-io/macula/blob/main/docs/design/DESIGN_E2E_SEAL_REPORT.md).
 
 > **13.0.0: sealed calls and streams.** A caller can seal a call's or a
 > stream's payload to the provider's KEM key (ML-KEM-1024, plus P-384 in
@@ -48,7 +48,7 @@
 > runs a release on macula 12.11 or later and every caller runs 13. Routing
 > fields, sizes, timing, and a request's UCAN token stay visible to stations.
 > Content (D27) transfers are not sealed. See
-> [the design](https://github.com/macula-io/macula/blob/main/plans/DESIGN_E2E_PAYLOAD_CONFIDENTIALITY.md), §9.
+> [the design](https://github.com/macula-io/macula/blob/main/docs/design/DESIGN_E2E_PAYLOAD_CONFIDENTIALITY.md), §9.
 >
 > **Breaking API:** a call or stream to an explicit station
 > (`macula:call_station/7,8`, `call_stream_station`) needs `advertisement`,

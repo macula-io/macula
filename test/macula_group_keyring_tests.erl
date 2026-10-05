@@ -1,6 +1,6 @@
 %%%-------------------------------------------------------------------
 %%% @doc A node's keyring for the sealed groups it joined
-%%% (plans/DESIGN_E2E_SEALED_PUBSUB.md §4, §6, §7): it pulls a group's epochs
+%%% (docs/design/DESIGN_E2E_SEALED_PUBSUB.md §4, §6, §7): it pulls a group's epochs
 %%% from the org's distributor over a sealed call carrying the org's UCAN,
 %%% re-pulls in every ahead window, retries a failed pull with backoff, keeps
 %%% the group's policy monotonic, and bounds the pulls unknown epoch ids cost.

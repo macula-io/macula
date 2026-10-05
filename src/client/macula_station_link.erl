@@ -14,7 +14,7 @@
 %% marked `@private' so it does not appear in user-facing
 %% documentation indices.
 %%
-%% Per `PLAN_V2_PARITY' Q6: the per-station worker name is
+%% The per-station worker name is
 %% `macula_station_link' (not `macula_station_client') — a station
 %% is an identity bound to one IPv6:port; one relay box hosts many
 %% stations; a "client" name is taken by the pool above.
@@ -43,7 +43,7 @@
 %%
 %% == Realm-per-call ==
 %%
-%% Per `PLAN_V2_PARITY' Q2 sub-decision §2: realm is **per-call**, not
+%% Realm is **per-call**, not
 %% connect-time. Stations are realm-agnostic infrastructure; every
 %% wire frame carries its own 32-byte `realm' tag. The link advertises
 %% an empty realms list in CONNECT and stamps the realm passed to each
@@ -429,7 +429,7 @@
     %% then falls through to `server_streams' (client_stream / bidi
     %% server-receive).
     %% Third element is the dedicated QUIC stream this session's
-    %% frames travel on (see PLAN_PER_STREAM_QUIC_ISOLATION.md) —
+    %% frames travel on —
     %% opened via `macula_peering:open_dedicated_stream/1' on the
     %% outbound (client) side, handed off from a `new_dedicated_stream'
     %% notification on the inbound (server) side. Every session has
@@ -1701,8 +1701,7 @@ handle_info({macula_peering, disconnected, Pid, Reason},
 %% Peer opened a dedicated stream toward us — a streaming RPC session
 %% we didn't initiate. `macula_peering_conn' already handed off
 %% controlling_process and enabled active mode; open this stream's
-%% buffer and wait for its first frame (expected: STREAM_OPEN). See
-%% PLAN_PER_STREAM_QUIC_ISOLATION.md.
+%% buffer and wait for its first frame (expected: STREAM_OPEN).
 handle_info({macula_peering, new_dedicated_stream, Pid, Stream},
             #state{peer_pid = Pid, opening_bufs = Opening} = S) ->
     _ = erlang:send_after(application:get_env(macula, dedicated_stream_open_timeout_ms,
@@ -2075,8 +2074,8 @@ on_frame(#{frame_type := call} = Frame, S) ->
     on_inbound_call(macula_frame:verify_request(Frame, S#state.profile), Frame, S);
 %% STREAM_OPEN / STREAM_DATA / STREAM_END / STREAM_ERROR / STREAM_REPLY
 %% no longer arrive here — every streaming session travels on its
-%% own dedicated QUIC stream (see PLAN_PER_STREAM_QUIC_ISOLATION.md
-%% and `dispatch_dedicated_frame/3'), not the shared control stream
+%% own dedicated QUIC stream (see
+%% `dispatch_dedicated_frame/3'), not the shared control stream
 %% `on_frame/2' decodes. A stream frame reaching this function is a
 %% protocol violation and falls through to the catch-all below.
 %%

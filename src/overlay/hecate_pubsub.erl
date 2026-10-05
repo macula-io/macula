@@ -55,12 +55,7 @@
 %% (patterns are expected to be few — no Bloom-summarization needed,
 %% unlike the exact-topic set) and matches a concrete publish against
 %% every peer's gossiped patterns directly via `macula_topic_pattern:matches/2'
-%% at fan-out time, entirely separate from the Bloom path. See
-%% macula-station/plans/PLAN_ORG_SCOPED_DISPATCH_AND_WILDCARD_DISCOVERY.md,
-%% slice 5.
-%%
-%% Reference: plans/PLAN_MACULA_V2_PART6_PROTOCOL.md §6;
-%% plans/PLAN_PHASE_5_BREAKDOWN.md Session 5.5.
+%% at fan-out time, entirely separate from the Bloom path.
 -module(hecate_pubsub).
 
 -export([
@@ -244,8 +239,7 @@ drop_or_keep(Map, Topic, Set) ->
 %% treats every entry in `topics/1' as local interest worth
 %% re-subscribing on every peer, regardless of whether the original
 %% subscriber was a peer-sourced entry) keeps re-propagating it
-%% mesh-wide forever. See
-%% macula-station/plans/DESIGN_SUBSCRIPTION_LIFECYCLE_GC.md.
+%% mesh-wide forever.
 -spec purge_subscriber(state(), subscriber()) -> state().
 purge_subscriber(#{subscriptions := S, patterns := P} = State, Sub) ->
     State#{subscriptions := purge_from(S, Sub),

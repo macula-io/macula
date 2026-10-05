@@ -1,5 +1,5 @@
 %% EUnit tests for macula_peer_versions: which handshake version a client dials a node with, and what the node-wide
-%% handshake counters say (plans/DESIGN_NEIGHBOUR_CHANNEL_BINDING.md sections 3, 4 and 6).
+%% handshake counters say (docs/design/DESIGN_NEIGHBOUR_CHANNEL_BINDING.md sections 3, 4 and 6).
 -module(macula_peer_versions_tests).
 
 -include_lib("eunit/include/eunit.hrl").

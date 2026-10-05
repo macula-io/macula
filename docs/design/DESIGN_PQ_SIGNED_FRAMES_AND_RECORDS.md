@@ -4,7 +4,7 @@ This exists so every signed object after the handshake, record or frame, verifie
 signer's full key and nothing re-encoded.
 
 By Mercury, 2026-09-11, reviewed by Mars, Neptune and Venus in two rounds. It details D13, D17 as revised on 2026-09-11,
-D24, D25 and the D7 refinement in `PLAN_POST_QUANTUM_SECURITY.md`, for WP 1.3, WP 1.4 and each stack's Stage 4 work
+D24, D25 and the D7 refinement in `DECISIONS_POST_QUANTUM.md`, for WP 1.3, WP 1.4 and each stack's Stage 4 work
 package. The handshake itself is in `DESIGN_PQ_HANDSHAKE_FRAMES.md`, and DHT slots, slot admission and the
 verification budget per connection are in `DESIGN_PQ_DHT_SLOTS_AND_BUDGET.md` (D28).
 

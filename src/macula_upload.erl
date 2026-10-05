@@ -1,6 +1,6 @@
 %%%-------------------------------------------------------------------
 %%% @doc Behaviour for supervised content uploads (the receiver side of
-%%% a push-initiated upload — PLAN_PUSH_UPLOAD.md Phase 6, the
+%%% a push-initiated upload, shipped in 9.13.0, the
 %%% recipient `macula_pusher' pushes at).
 %%%
 %%% `advertise/5,6' registers an upload procedure. Each inbound push

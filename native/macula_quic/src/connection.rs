@@ -615,7 +615,7 @@ fn nif_presented_leaf<'a>(
 /// session. Both ends of one connection export the same bytes for the same
 /// label, context and length; any other session exports different ones.
 /// Handshake v5 binds its session proofs to this value
-/// (plans/DESIGN_NEIGHBOUR_CHANNEL_BINDING.md).
+/// (docs/design/DESIGN_NEIGHBOUR_CHANNEL_BINDING.md).
 #[rustler::nif]
 fn nif_export_keying_material<'a>(
     env: Env<'a>,

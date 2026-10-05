@@ -76,7 +76,7 @@ Profile = fun(P) ->
              <<"stranger">> => #{<<"node_id">> => Hex(Node(Stranger))}},
     #{<<"keys">> => Keys, <<"cases">> => Entries}
 end,
-Doc = #{<<"scheme">> => <<"sealed groups, macula 13.2 (plans/DESIGN_E2E_SEALED_PUBSUB.md)">>,
+Doc = #{<<"scheme">> => <<"sealed groups, macula 13.2 (docs/design/DESIGN_E2E_SEALED_PUBSUB.md)">>,
         <<"spec">> => <<"test/vectors/E2E_SEAL_V1.md">>,
         <<"generator">> => <<"scripts/generate-seal-group-keys-vectors.sh">>,
         <<"realm_name">> => RealmName,

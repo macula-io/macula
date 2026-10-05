@@ -1,5 +1,5 @@
 %%%-------------------------------------------------------------------
-%%% @doc A sealed group's epochs (plans/DESIGN_E2E_SEALED_PUBSUB.md §4):
+%%% @doc A sealed group's epochs (docs/design/DESIGN_E2E_SEALED_PUBSUB.md §4):
 %%% independent random keys, random ids, contiguous times, the ahead
 %%% window, the publisher's choice of epoch and the subscriber's
 %%% acceptance of one.

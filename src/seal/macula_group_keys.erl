@@ -1,4 +1,4 @@
-%% @doc A sealed group's distributor (plans/DESIGN_E2E_SEALED_PUBSUB.md §3, §5):
+%% @doc A sealed group's distributor (docs/design/DESIGN_E2E_SEALED_PUBSUB.md §3, §5):
 %% the handler of `<org>/group_keys_v1' and the epochs of every group it
 %% serves.
 %%

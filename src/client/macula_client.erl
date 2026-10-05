@@ -6,7 +6,7 @@
 %% `macula_client' (or the `macula' facade, which re-exports the
 %% public surface).
 %%
-%% Per `PLAN_V2_PARITY' Q2 §1: pool is the canonical client handle.
+%% The pool is the canonical client handle.
 %% A single-station link is an internal worker only.
 %%
 %% == Lifecycle ==
@@ -25,8 +25,8 @@
 %% `publish/5' fans the PUBLISH frame to `replication_factor' (default
 %% 2 with >=2 connected links, since 10.19.0 -- see `?DEFAULT_REPLICATION''s
 %% own doc for exactly what this does and does not protect against)
-%% currently-connected links. **Partial success counts as success**
-%% per `PLAN_V2_PARITY' §5.1.1: the call returns `ok' as soon as one
+%% currently-connected links. **Partial success counts as success**:
+%% the call returns `ok' as soon as one
 %% link accepts the frame; the others are best-effort. When zero
 %% links are spawned the call returns
 %% `{error, {transient, no_healthy_station}}'.
@@ -268,8 +268,8 @@
     issuer_start       => fun((fun(() -> macula_node_keys:node_key()), pid()) -> {ok, pid()} | {error, term()}),
 
     %% How many of the pool's currently-connected links accept a
-    %% single PUBLISH frame. Partial success counts as success
-    %% (`PLAN_V2_PARITY' §5.1.1). Default 2, since 10.19.0 (was 1) --
+    %% single PUBLISH frame. Partial success counts as success.
+    %% Default 2, since 10.19.0 (was 1) --
     %% see `?DEFAULT_REPLICATION''s own doc for why.
     replication_factor => pos_integer(),
 
@@ -420,7 +420,7 @@
     new_peer_budget => pos_integer(),
 
     %% Limits of the request admission the pool runs for every request its
-    %% links receive (plans/DESIGN_PQ_SIGNED_FRAMES_AND_RECORDS.md,
+    %% links receive (docs/design/DESIGN_PQ_SIGNED_FRAMES_AND_RECORDS.md,
     %% Requests): entries per caller (default 256) and per link's share
     %% (1024), and stored reply bytes per caller (256 KiB) and in total
     %% (16 MiB). A link's share is its normalized seed. A key not given here
@@ -545,7 +545,7 @@
 -define(NEW_PEER_BUDGET_CAP, 256).
 -define(DISCOVERY_MAX_LINKS_CAP, 64).
 %% The request admission limits a pool starts with unless it is given others
-%% (plans/DESIGN_PQ_SIGNED_FRAMES_AND_RECORDS.md, Requests), and the most each
+%% (docs/design/DESIGN_PQ_SIGNED_FRAMES_AND_RECORDS.md, Requests), and the most each
 %% may be set to. The admission's cap is the share times the pool's link
 %% limits summed, the most distinct shares one entry lifetime can see.
 -define(DEFAULT_ADMISSION_LIMITS, #{caller_quota => 256, share => 1024, reply_bytes => 262144,
@@ -1355,7 +1355,7 @@ publish_checked(ok, Pool, Realm, Topic, Payload, Opts) ->
 publish_checked({error, _} = Rejected, _Pool, _Realm, _Topic, _Payload, _Opts) ->
     Rejected.
 
-%% How a publish goes (plans/DESIGN_E2E_SEALED_PUBSUB.md §6): under `group',
+%% How a publish goes (docs/design/DESIGN_E2E_SEALED_PUBSUB.md §6): under `group',
 %% sealed under the group's current epoch, pulling its key first, or failing
 %% closed with the pull's refusal; without one, clear, unless this node holds a
 %% group covering the topic, which it names rather than publish in the clear.
@@ -1438,7 +1438,7 @@ subscribed({error, _} = Refused, _Pool, _Realm, _Topic, _Subscriber, _Opts) ->
     Refused.
 
 %% A subscription under `group' joins the group first, and fails closed with
-%% the join's refusal (plans/DESIGN_E2E_SEALED_PUBSUB.md §6).
+%% the join's refusal (docs/design/DESIGN_E2E_SEALED_PUBSUB.md §6).
 subscribe_group({ok, Prefix}, Pool, Realm, Topic, Opts) ->
     joined_for(in_group(Topic, Prefix), group_keyring(Pool), Realm, Prefix, Opts);
 subscribe_group(error, _Pool, _Realm, _Topic, _Opts) ->

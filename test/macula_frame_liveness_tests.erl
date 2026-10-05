@@ -1,4 +1,4 @@
-%% EUnit tests for the handshake v5 liveness probe's frames (plans/DESIGN_NEIGHBOUR_CHANNEL_BINDING.md section 3,
+%% EUnit tests for the handshake v5 liveness probe's frames (docs/design/DESIGN_NEIGHBOUR_CHANNEL_BINDING.md section 3,
 %% "Liveness on v5"): liveness_ping and liveness_pong carry a 16-byte nonce and nothing else, travel on the control
 %% stream, and never carry a neighbour signature.
 -module(macula_frame_liveness_tests).

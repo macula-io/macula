@@ -107,8 +107,7 @@ init([]) ->
 
         %% Local registry + dispatcher for streaming RPC (v1.5.0+).
         %% In-process pairing of client/server stream halves; the QUIC-
-        %% backed cross-node path lands in Phase 2 of
-        %% PLAN_MACULA_STREAMING.md.
+        %% backed cross-node path is the station link's.
         #{
             id => macula_stream_local,
             start => {macula_stream_local, start_link, []},

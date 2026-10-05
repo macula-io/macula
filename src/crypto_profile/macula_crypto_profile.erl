@@ -20,7 +20,7 @@
 %% got. The map declared a `key_exchange_group' until 12.0.0; see
 %% `definition/1'.
 %%
-%% See plans/PLAN_POST_QUANTUM_SECURITY.md, decisions D1 to D5 and D24.
+%% See docs/design/DECISIONS_POST_QUANTUM.md, decisions D1 to D5 and D24.
 -module(macula_crypto_profile).
 
 -export([

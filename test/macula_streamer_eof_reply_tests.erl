@@ -1,6 +1,6 @@
 %%%-------------------------------------------------------------------
 %%% @doc Tests for macula_streamer's optional `handle_eof/1' callback
-%%% (PLAN_PUSH_UPLOAD.md Phase 6), a `client_stream' provider's last
+%%% (push upload, 9.13.0), a `client_stream' provider's last
 %%% chance to set the stream's terminal reply before it stops. Split
 %%% into its own file/callback module for the same reason
 %%% `macula_streamer_client_stream_tests' is separate from

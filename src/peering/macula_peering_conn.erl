@@ -2,7 +2,7 @@
 %%
 %% Implements the lifecycle from `Part 4 §10' simplified for Phase 1:
 %% no REFRESH phase and no RECONNECTING. The handshake is the post-quantum
-%% one of plans/DESIGN_PQ_HANDSHAKE_FRAMES.md, built and checked by
+%% one of docs/design/DESIGN_PQ_HANDSHAKE_FRAMES.md, built and checked by
 %% `macula_handshake': the client sends an opener, the station a
 %% challenge, the client CONNECT and the station HELLO. After HELLO each
 %% side sends a status frame at every reissue of its statement, and the
@@ -288,7 +288,7 @@
 %% gives up. CONNECT/HELLO is sub-second on a healthy peer; 30s is
 %% generous. Drains workers stuck because the peer speaks the wrong
 %% protocol (e.g. V1 frames against a V2 station) — without this the
-%% sup accumulates stuck workers indefinitely. See PLAN_FLYING_RESTART.
+%% sup accumulates stuck workers indefinitely.
 -define(HANDSHAKE_TIMEOUT_MS, 30_000).
 
 %% App-level liveness probe: the procedure the peer answers (or
@@ -783,7 +783,7 @@ v4_forgotten(_Data) ->
 %% A station that refused a v5 CONNECT with unsupported_version. One seen on
 %% v5 in this run is refused as a downgrade, with no retry; any other gets
 %% one more dial, on a new QUIC connection, with a v4 CONNECT
-%% (plans/DESIGN_NEIGHBOUR_CHANNEL_BINDING.md sections 3 and 4).
+%% (docs/design/DESIGN_NEIGHBOUR_CHANNEL_BINDING.md sections 3 and 4).
 unsupported_v5(downgrade_refused, Data) ->
     downgraded(unsupported_version, Data);
 unsupported_v5({fall_back, _Count}, #data{peer_node_id = NodeId} = Data) ->
@@ -1009,7 +1009,7 @@ connected(internal, drain_buffer, #data{buf = Buf} = Data) ->
     open_frames(macula_frame:parse_stream_bytes(Buf), Data);
 %% Peer opened a new stream on this connection, outside the control
 %% stream — a dedicated stream for a streaming RPC session or a
-%% content transfer (see PLAN_PER_STREAM_QUIC_ISOLATION.md). This
+%% content transfer. This
 %% connection process is not the intended long-term owner: it exists
 %% only to take custody long enough to hand the stream to
 %% `controlling_pid' (`macula_station_link' on the SDK side,

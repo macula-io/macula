@@ -59,8 +59,7 @@
 %% second, and calls `sweep/2' on a timer, so a node remembers a publication hash until the publication expires, and
 %% no longer.
 %%
-%% Reference: plans/PLAN_MACULA_V2_PART3_DISCOVERY.md §7.2; plans/PLAN_PHASE_5_BREAKDOWN.md Session 5.3;
-%% DESIGN_PQ_SIGNED_FRAMES_AND_RECORDS.md, Publications.
+%% Reference: DESIGN_PQ_SIGNED_FRAMES_AND_RECORDS.md, Publications.
 -module(hecate_plumtree).
 
 -export([

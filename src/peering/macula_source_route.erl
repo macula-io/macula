@@ -35,10 +35,6 @@
 %% Fixed overhead is 27 bytes (`1 + 1 + 1 + 8 + 16'). A path of
 %% `N' hops occupies `27 + 16*N' bytes; maximum (`N = 8') is
 %% 155 bytes.
-%%
-%% Reference: plans/PLAN_MACULA_V2_PART6_PROTOCOL.md §11;
-%% plans/PLAN_MACULA_V2_PART3_DISCOVERY.md §6.6;
-%% plans/PLAN_PHASE_4_BREAKDOWN.md Session 4.2.
 -module(macula_source_route).
 
 -export([

@@ -1,5 +1,5 @@
 %% @doc Bindings of a node's TLS and CONNECT keys to its identity key, and the status statements that keep a binding
-%% in force, as plans/DESIGN_PQ_HANDSHAKE_FRAMES.md lays them out (decisions D16 and D22).
+%% in force, as docs/design/DESIGN_PQ_HANDSHAKE_FRAMES.md lays them out (decisions D16 and D22).
 %%
 %% A binding or a statement travels as `#{tbs => Bytes, signature => Signature}'. The identity key signs
 %% Label || 0x00 || tbs. A verifier checks that signature over the tbs bytes it received, and only then decodes them

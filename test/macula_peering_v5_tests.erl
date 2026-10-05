@@ -1,6 +1,6 @@
 %%%-------------------------------------------------------------------
 %%% @doc Handshake v5 between two `macula_peering_conn' workers over a real Quinn loopback pair
-%%% (plans/DESIGN_NEIGHBOUR_CHANNEL_BINDING.md): the connection is authenticated once, by both proofs over the TLS
+%%% (docs/design/DESIGN_NEIGHBOUR_CHANNEL_BINDING.md): the connection is authenticated once, by both proofs over the TLS
 %%% session's exporter, and no frame after HELLO carries a neighbour signature. A client falls back to v4 once, only
 %%% after unsupported_version, from a station never seen on v5; a station seen on v5 that answers v4 is refused as a
 %%% downgrade until forgotten. The liveness probe on v5 is answered by the peer's connection, never by its controller.

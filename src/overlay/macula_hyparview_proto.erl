@@ -59,9 +59,6 @@
 %% SHUFFLE, return a `{refused, Neighbour, Kind}' action, which the
 %% wrapping process reports through `macula_peering:object_refused/2'.
 %% `ctx()' carries `now', in monotonic milliseconds, for both.
-%%
-%% Reference: plans/PLAN_MACULA_V2_PART3_DISCOVERY.md §7.1;
-%% plans/PLAN_PHASE_5_BREAKDOWN.md Session 5.2.
 -module(macula_hyparview_proto).
 
 -export([

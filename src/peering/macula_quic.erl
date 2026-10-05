@@ -556,7 +556,7 @@ presented_leaf(Conn) ->
 %% (RFC 8446 section 7.5): `Length' bytes for `Label' and `Context'. Both ends
 %% of one connection export the same bytes; another connection, label or
 %% context exports different ones. Handshake v5 binds its session proofs to
-%% this value (plans/DESIGN_NEIGHBOUR_CHANNEL_BINDING.md). A closed
+%% this value (docs/design/DESIGN_NEIGHBOUR_CHANNEL_BINDING.md). A closed
 %% connection returns `{error, already_closed}'.
 -spec export_keying_material(reference(), binary(), binary(), pos_integer()) ->
     {ok, binary()} | {error, already_closed | export_failed}.
@@ -743,8 +743,7 @@ async_shutdown_stream(Stream, _Flag, Code) ->
 %% `path{rtt,lost_packets,black_holes_detected}', and
 %% `nif_max_datagram_size' already calls `stats()' and discards all but
 %% `path.current_mtu'. Surfacing the rest is an extension of a working
-%% function — see macula-station `plans/PLAN_WIRE_LIVENESS_TRIPWIRE.md'
-%% commit 5.
+%% function.
 %%
 %% The sole consumer, the getstat callback in `macula_dist', already has an
 %% `{error, _} -> {ok, 0, 0, 0}' branch, so this changes no behaviour

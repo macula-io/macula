@@ -1,6 +1,6 @@
 %% @doc End-to-end payload sealing, scheme 1: what a node needs to seal a
 %% payload so that the stations relaying it cannot read it
-%% (`plans/DESIGN_E2E_PAYLOAD_CONFIDENTIALITY.md'). The byte-exact
+%% (`docs/design/DESIGN_E2E_PAYLOAD_CONFIDENTIALITY.md'). The byte-exact
 %% construction is `test/vectors/E2E_SEAL_V1.md', and every function here
 %% reproduces that file's vectors, which an independent Rust implementation
 %% generated.

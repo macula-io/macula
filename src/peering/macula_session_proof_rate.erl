@@ -1,5 +1,5 @@
 %% @doc How many handshake v5 session proofs this station signs: by default at most 30 a minute for one client node,
-%% and 30 a second for all clients together (plans/DESIGN_NEIGHBOUR_CHANNEL_BINDING.md section 3, "Signing cost as an attack
+%% and 30 a second for all clients together (docs/design/DESIGN_NEIGHBOUR_CHANNEL_BINDING.md section 3, "Signing cost as an attack
 %% surface"). A composite session proof costs 6 to 10 ms of signing, so the total bounds this station's signing to
 %% about a quarter of one core, and a reconnect storm of 1000 clients is admitted in about 30 seconds. The station asks
 %% only after the client's CONNECT proof has verified, so a refusal here costs the client a composite signature of its

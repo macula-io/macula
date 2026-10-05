@@ -20,7 +20,7 @@
 %% </ul>
 %%
 %% `PeerNodeId' is the peer's node_id, derived from the identity key the
-%% handshake verified (plans/DESIGN_PQ_HANDSHAKE_FRAMES.md).
+%% handshake verified (docs/design/DESIGN_PQ_HANDSHAKE_FRAMES.md).
 %%
 %% An optional `accept_owner' pid in opts receives a single
 %% `{macula_peering, handshake_complete, ConnPid, PeerNodeId}'
@@ -177,7 +177,6 @@ cast_checked({error, Reason} = Rejected, _Pid, Frame) ->
 %% `macula_quic:*', and receives the stream's `{quic, Bin, Stream, Flags}'
 %% events straight into its own mailbox — the peering connection
 %% process is not in this stream's path at all once this call returns.
-%% See PLAN_PER_STREAM_QUIC_ISOLATION.md.
 %%
 %% Returns `{error, timeout}' when the peer allows no further stream
 %% within 10 s, and `{error, closed}' when the connection ends first. A
@@ -285,7 +284,7 @@ refusals(Conn) when is_pid(Conn) ->
 %% node, so it is dialled again after it refuses version 5. Until then a
 %% station rolled back below its first v5 release is refused by every peer
 %% that saw it on v5 (`v5_downgrade_refused'), because that refusal is also
-%% what stops a downgrade (plans/DESIGN_NEIGHBOUR_CHANNEL_BINDING.md
+%% what stops a downgrade (docs/design/DESIGN_NEIGHBOUR_CHANNEL_BINDING.md
 %% section 3). An operator action for a deliberate rollback, never
 %% automatic. It reaches only this node: a third-party client that saw the
 %% station on v5 refuses it until that client restarts, which is why a
@@ -296,7 +295,7 @@ forget_v5_peer(<<_:256>> = NodeId) ->
 
 %% @doc This node's handshake counters since it started: connections by
 %% version, the old path's control frames, v4 fallbacks, refused downgrades
-%% and session proof refusals by reason (plans/DESIGN_NEIGHBOUR_CHANNEL_BINDING.md
+%% and session proof refusals by reason (docs/design/DESIGN_NEIGHBOUR_CHANNEL_BINDING.md
 %% section 6).
 -spec handshake_counters() -> #{macula_peer_versions:counter() => non_neg_integer()}.
 handshake_counters() ->

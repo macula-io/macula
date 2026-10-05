@@ -10,9 +10,6 @@
 %% machine (Phase 4 §6.2 / §6.4) is the actual decision point. Codes
 %% are stable across V2 minor versions; new codes append at the next
 %% free integer.
-%%
-%% Reference: plans/PLAN_MACULA_V2_PART4_LIFECYCLE.md §6.1;
-%% plans/PLAN_MACULA_V2_PART6_PROTOCOL.md §13.
 -module(macula_bolt4).
 
 -export([

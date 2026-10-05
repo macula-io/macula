@@ -1,5 +1,5 @@
 {
-  "design": "plans/DESIGN_E2E_PAYLOAD_CONFIDENTIALITY.md, amendment A1",
+  "design": "docs/design/DESIGN_E2E_PAYLOAD_CONFIDENTIALITY.md, amendment A1",
   "generator": "scripts/generate-seal-advertisement-vectors.sh",
   "procedure": "acme/sealed_echo_v1",
   "profiles": {

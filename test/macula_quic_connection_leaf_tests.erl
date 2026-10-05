@@ -5,7 +5,7 @@
 %%% The post-quantum CONNECT proof hashes the station's leaf as the client
 %%% received it, and the station checks that proof against the leaf this
 %%% connection presented, never the certificate configured now
-%%% (plans/DESIGN_PQ_HANDSHAKE_FRAMES.md). So a dialed connection reports
+%%% (docs/design/DESIGN_PQ_HANDSHAKE_FRAMES.md). So a dialed connection reports
 %%% the leaf it received, an accepted connection reports the leaf it
 %%% presented, and a certificate reload on the listener never changes the
 %%% leaf a live connection reports. A reload that cannot load, or whose key

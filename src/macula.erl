@@ -81,7 +81,7 @@
 -export([ensure_station_link/4, overlay_subscribe/3, overlay_unsubscribe/2,
          send_overlay_frame/2, send_overlay_frame/3]).
 
-%% Streaming RPC (LOCAL in-process + V2 pool, see PLAN_MACULA_STREAMING.md)
+%% Streaming RPC (LOCAL in-process + V2 pool)
 -export([
     call_stream/2, call_stream/3, call_stream/5, call_stream_station/7,
     open_stream/3, open_stream/4,
@@ -891,7 +891,7 @@ get_content(Pool, Realm, MCID, Opts)
 %%% Streaming RPC (v1.5.0+)
 %%%===================================================================
 %%%
-%%% Streaming RPC ships in two phases (see PLAN_MACULA_STREAMING.md):
+%%% Streaming RPC ships in two phases:
 %%%
 %%% Phase 1 (this release) — LOCAL dispatch only. Client and server
 %%% halves both live in the same BEAM and are paired in-process. The

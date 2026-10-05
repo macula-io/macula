@@ -36,9 +36,6 @@
 %%
 %% Both produce the same final state given the same total set of
 %% operations — the OR-Set's strong eventual consistency guarantee.
-%%
-%% Reference: plans/PLAN_MACULA_V2_PART3_DISCOVERY.md §7.4;
-%% plans/PLAN_PHASE_5_BREAKDOWN.md Session 5.4.
 -module(hecate_or_set).
 
 -export([

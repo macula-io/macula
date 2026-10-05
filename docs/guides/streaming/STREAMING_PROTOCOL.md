@@ -46,7 +46,7 @@ chunk, reply or end); before that, and on a stream that ended first, an error in
 `{error, not_settled}`. A served stream has none (`{error, not_a_caller}`). `report` in a stream's
 options is refused (`{error, {invalid_option, report}}`): a stream reports only through
 `stream_report/1`. See the
-[design](https://github.com/macula-io/macula/blob/main/plans/DESIGN_E2E_SEAL_REPORT.md), §3.
+[design](https://github.com/macula-io/macula/blob/main/docs/design/DESIGN_E2E_SEAL_REPORT.md), §3.
 
 `Opts` may set `dial_timeout_ms` (default 10_000) for the dial and handshake,
 plus the same per-call TLS trust override as `call_station/8`: `verify` and

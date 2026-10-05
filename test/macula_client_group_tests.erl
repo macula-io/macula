@@ -1,5 +1,5 @@
 %%%-------------------------------------------------------------------
-%%% @doc Sealed groups through a live, link-less pool (plans/DESIGN_E2E_SEALED_PUBSUB.md §6, §7): subscribing and
+%%% @doc Sealed groups through a live, link-less pool (docs/design/DESIGN_E2E_SEALED_PUBSUB.md §6, §7): subscribing and
 %%% publishing with `group => Prefix' join the group, a sealed event is opened for a group's subscriber or reported
 %%% unopened, a node holding `required' refuses clear events under the prefix, and a publish under a held prefix names
 %%% its group. The pool's keyring pulls from the real distributor (macula_group_keys) through a wire that answers as

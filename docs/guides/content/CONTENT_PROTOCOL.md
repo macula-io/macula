@@ -6,7 +6,7 @@ the content procedure, the fetch and its bounds.**
 > **Audience:** SDK authors porting content sharing to another language, and
 > anyone debugging a fetch. Application code uses the calls in the
 > [Content Guide](CONTENT_GUIDE.md). The design and its reasons are in
-> `plans/DESIGN_D27_NODE_SERVED_CONTENT.md`.
+> `docs/design/DESIGN_D27_NODE_SERVED_CONTENT.md`.
 
 A station keeps no content (D27). The node that shares content keeps it,
 serves it on a stream procedure of its own, and announces it in the DHT; a

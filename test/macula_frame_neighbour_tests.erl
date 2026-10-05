@@ -32,7 +32,7 @@ no_frame_is_neighbour_signed_in_pq_pure_test() ->
     [?assertNot(macula_frame:neighbour_signed(pq_pure, Type)) || Type <- ?CONTROL ++ ?DATA ++ ?LIVENESS].
 
 %% On a handshake v5 connection the session proofs authenticate the neighbour once, and no frame carries a neighbour
-%% signature (plans/DESIGN_NEIGHBOUR_CHANNEL_BINDING.md section 3).
+%% signature (docs/design/DESIGN_NEIGHBOUR_CHANNEL_BINDING.md section 3).
 no_frame_is_neighbour_signed_on_a_session_test() ->
     [?assertNot(macula_frame:neighbour_signed(session, Type)) || Type <- ?CONTROL ++ ?DATA ++ ?LIVENESS].
 

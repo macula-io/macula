@@ -28,9 +28,6 @@
 %% Whenever `add_passive/2' or `merge_shuffle/2' would push the
 %% passive view past `passive_cap', a uniformly-random current
 %% passive peer is dropped to make room.
-%%
-%% Reference: plans/PLAN_MACULA_V2_PART3_DISCOVERY.md §7.1;
-%% plans/PLAN_PHASE_5_BREAKDOWN.md Session 5.1.
 -module(macula_hyparview_view).
 
 -export([

@@ -1,4 +1,4 @@
-%% EUnit tests for macula_handshake: the post-quantum connection handshake of plans/DESIGN_PQ_HANDSHAKE_FRAMES.md,
+%% EUnit tests for macula_handshake: the post-quantum connection handshake of docs/design/DESIGN_PQ_HANDSHAKE_FRAMES.md,
 %% built and checked as bytes. The client checks the challenge before it signs the proof. The station checks CONNECT,
 %% the puzzle before any signature, and answers with the HELLO bytes to send.
 -module(macula_handshake_tests).
@@ -237,7 +237,7 @@ status_cases(#{profile := Profile, station_id := StationId, station_public := St
 
 %%------------------------------------------------------------------
 %% Handshake v5: both proofs bound to the TLS session's exporter
-%% (plans/DESIGN_NEIGHBOUR_CHANNEL_BINDING.md section 3)
+%% (docs/design/DESIGN_NEIGHBOUR_CHANNEL_BINDING.md section 3)
 %%------------------------------------------------------------------
 
 v5_cases(#{profile := Profile, station_public := StationPublic} = World) ->

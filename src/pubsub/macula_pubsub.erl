@@ -8,7 +8,7 @@
 %%
 %% == Realm-per-call ==
 %%
-%% Per `PLAN_V2_PARITY' Q2 §2: every call carries its own 32-byte
+%% Every call carries its own 32-byte
 %% realm tag. There is no connect-time default realm. A single pool
 %% can multiplex any number of realms with no extra plumbing.
 %%
@@ -75,7 +75,7 @@ publish(Pool, Realm, Topic, Payload) ->
 %%   <li>`timeout_ms' — gen_server call timeout (default 5_000).
 %%       Most apps leave this as default.</li>
 %%   <li>`group' — a sealed group's prefix, which `Topic' must be under
-%%       (plans/DESIGN_E2E_SEALED_PUBSUB.md): the payload is sealed under
+%%       (docs/design/DESIGN_E2E_SEALED_PUBSUB.md): the payload is sealed under
 %%       the group's current epoch, its key pulled from the org's
 %%       distributor first. A refusal fails the publish closed as
 %%       `{error, {group, Reason}}'; a topic outside the prefix, or a
@@ -89,8 +89,7 @@ publish(Pool, Realm, Topic, Payload) ->
 %% the clear.
 %%
 %% Returns `ok' as soon as one configured station accepts the
-%% PUBLISH frame (partial success = success, per
-%% `PLAN_V2_PARITY' §5.1.1). Returns
+%% PUBLISH frame (partial success = success). Returns
 %% `{error, {transient, no_healthy_station}}' when the pool has no
 %% spawned links; the caller may retry.
 -spec publish(macula_client:pool(), <<_:256>>, binary(), term(), map()) ->

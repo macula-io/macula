@@ -1,4 +1,4 @@
-%% @doc The post-quantum connection handshake, as plans/DESIGN_PQ_HANDSHAKE_FRAMES.md lays it out: the opener,
+%% @doc The post-quantum connection handshake, as docs/design/DESIGN_PQ_HANDSHAKE_FRAMES.md lays it out: the opener,
 %% challenge, CONNECT, HELLO and status frames, built as deterministic CBOR bytes and checked as received.
 %%
 %% The client opens the control stream with an opener. The station answers with a challenge: its carried identity
@@ -8,7 +8,7 @@
 %% both node_ids, the leaf hash and the challenge hash. The station checks CONNECT, the puzzle before any signature,
 %% and answers with HELLO. Status frames renew a peer's statement on the open connection.
 %%
-%% Handshake version 5 (plans/DESIGN_NEIGHBOUR_CHANNEL_BINDING.md) binds both ends to this TLS session. The opener
+%% Handshake version 5 (docs/design/DESIGN_NEIGHBOUR_CHANNEL_BINDING.md) binds both ends to this TLS session. The opener
 %% and the challenge stay version 4; the client picks 4 or 5 in CONNECT, and the station answers HELLO in the same
 %% version. In version 5 the client's proof (V2) also covers E, the session's TLS exporter value, and the client's
 %% capabilities, and HELLO carries the station's session proof, signed by its identity key over E, both frames and

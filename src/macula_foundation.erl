@@ -19,8 +19,7 @@
 %% derives to a placeholder, so no record verifies as signed by one. Callers that must work only against configured
 %% keys use live_key_ids/0, which returns the configured key ids or an empty list, never the placeholders.
 %%
-%% Reference: plans/PLAN_MACULA_V2_PART5_BOOTSTRAP.md §4, §12; plans/PLAN_MACULA_V2_PART6_PROTOCOL.md §9.14 to §9.17;
-%% plans/PLAN_POST_QUANTUM_SECURITY.md.
+%% Reference: docs/design/DECISIONS_POST_QUANTUM.md.
 -module(macula_foundation).
 
 -export([

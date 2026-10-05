@@ -61,6 +61,17 @@ observability, an SDK for another language.
 | Document | Description |
 |----------|-------------|
 | [Glossary](GLOSSARY.md) | Terminology reference |
+| [DECISIONS_POST_QUANTUM](design/DECISIONS_POST_QUANTUM.md) | Post-quantum decisions D1 onwards, the record the code and designs cite |
+| [DESIGN_PQ_HANDSHAKE_FRAMES](design/DESIGN_PQ_HANDSHAKE_FRAMES.md) | The connection handshake, bindings and status statements, byte for byte |
+| [DESIGN_PQ_SIGNED_FRAMES_AND_RECORDS](design/DESIGN_PQ_SIGNED_FRAMES_AND_RECORDS.md) | Signed records and frames after the handshake, and the decoding rule |
+| [DESIGN_PQ_DHT_SLOTS_AND_BUDGET](design/DESIGN_PQ_DHT_SLOTS_AND_BUDGET.md) | DHT slot bounds, slot admission and the verification budget |
+| [DESIGN_NEIGHBOUR_CHANNEL_BINDING](design/DESIGN_NEIGHBOUR_CHANNEL_BINDING.md) | Handshake v5: hop frames authenticated per session |
+| [DESIGN_SWIM_INDIRECT_PROBE](design/DESIGN_SWIM_INDIRECT_PROBE.md) | SWIM indirect probe (PING-REQ) |
+| [DESIGN_E2E_PAYLOAD_CONFIDENTIALITY](design/DESIGN_E2E_PAYLOAD_CONFIDENTIALITY.md) | Sealed calls, streams and events: stations relay payloads they cannot read |
+| [DESIGN_E2E_SEAL_REPORT](design/DESIGN_E2E_SEAL_REPORT.md) | The caller's seal report |
+| [DESIGN_E2E_SEALED_PUBSUB](design/DESIGN_E2E_SEALED_PUBSUB.md) | Sealed pubsub groups and their key distributor |
+| [DESIGN_D27_NODE_SERVED_CONTENT](design/DESIGN_D27_NODE_SERVED_CONTENT.md) | Node-served content (D27) |
+| [DESIGN_ORGLESS_SERVING](design/DESIGN_ORGLESS_SERVING.md) | Serving without an org: the `~<node_id>` namespace |
 
 ---
 

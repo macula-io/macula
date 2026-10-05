@@ -99,7 +99,7 @@ wait_until_dead(_Pid, false) -> ok;
 wait_until_dead(Pid, true) -> timer:sleep(1), wait_until_dead(Pid, erlang:is_process_alive(Pid)).
 
 %% Regression test for a real bug found while building macula_upload
-%% (PLAN_PUSH_UPLOAD.md Phase 6): `advertise_direct/7' used to call
+%% (push upload, 9.13.0): `advertise_direct/7' used to call
 %% `advertise/5' (the arity that always defaults `mode' to
 %% `server_stream'), silently discarding whatever `mode' the caller
 %% passed in `Opts': a `client_stream' provider that advertised

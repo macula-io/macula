@@ -1,6 +1,6 @@
 %% EUnit tests for macula_tls_posture: a node runs handshake v5 only on a TLS configuration that offers exactly the
 %% hybrid ML-KEM groups, neither offers nor accepts 0-RTT, and never resumes a session
-%% (plans/DESIGN_NEIGHBOUR_CHANNEL_BINDING.md sections 3 and 6).
+%% (docs/design/DESIGN_NEIGHBOUR_CHANNEL_BINDING.md sections 3 and 6).
 -module(macula_tls_posture_tests).
 
 -include_lib("eunit/include/eunit.hrl").

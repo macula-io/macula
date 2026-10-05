@@ -1,5 +1,5 @@
 %% EUnit tests for macula_session_proof_rate: how many session proofs a station signs, per client node and in total
-%% (plans/DESIGN_NEIGHBOUR_CHANNEL_BINDING.md section 3, "Signing cost as an attack surface").
+%% (docs/design/DESIGN_NEIGHBOUR_CHANNEL_BINDING.md section 3, "Signing cost as an attack surface").
 -module(macula_session_proof_rate_tests).
 
 -include_lib("eunit/include/eunit.hrl").

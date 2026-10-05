@@ -1,5 +1,5 @@
 %%%-------------------------------------------------------------------
-%%% @doc A sealed group's distributor (plans/DESIGN_E2E_SEALED_PUBSUB.md §3,
+%%% @doc A sealed group's distributor (docs/design/DESIGN_E2E_SEALED_PUBSUB.md §3,
 %%% §5): the `<org>/group_keys_v1' handler, its epochs per group, who it
 %%% admits and how it refuses. The org's UCAN is enforced by the procedure's
 %%% advertise policy before the handler runs; here the handler decides from
@@ -155,7 +155,7 @@ a_call_without_a_caller_is_refused(#{handler := Handler}) ->
 the_policy_rides_every_reply(W) ->
     ?_assertMatch(#{policy := {text, <<"required">>}}, call(W, member(W), {text, <<"current">>})).
 
-%% A key never travels clear (plans/DESIGN_E2E_SEALED_PUBSUB.md §2): the distributor's own advertise options take the
+%% A key never travels clear (docs/design/DESIGN_E2E_SEALED_PUBSUB.md §2): the distributor's own advertise options take the
 %% org's grant AND sealed calls only. With the node's KEM key named they make the spec whose provider link refuses a
 %% clear CALL as sealed_required (macula_station_link_kem_advertise_tests: required_refuses_a_clear_call_test_); with
 %% it unnamed they refuse to advertise at all, rather than advertise a keyless distributor.

@@ -1,5 +1,5 @@
 %% @doc The TLS posture handshake v5 depends on, checked before peering starts
-%% (plans/DESIGN_NEIGHBOUR_CHANNEL_BINDING.md sections 3 and 6). v5 lets QUIC's AEAD authenticate every frame after
+%% (docs/design/DESIGN_NEIGHBOUR_CHANNEL_BINDING.md sections 3 and 6). v5 lets QUIC's AEAD authenticate every frame after
 %% the session proofs, which holds only if the session's keys come from a hybrid ML-KEM exchange and no frame travels
 %% in replayable 0-RTT. So both ends offer exactly SecP384r1MLKEM1024 then SecP256r1MLKEM768, neither offers nor
 %% accepts early data or sends tickets, a second handshake between the same configurations is a full one, and the

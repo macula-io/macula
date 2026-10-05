@@ -1,4 +1,4 @@
-%% @doc A sealed group's epochs (plans/DESIGN_E2E_SEALED_PUBSUB.md §4).
+%% @doc A sealed group's epochs (docs/design/DESIGN_E2E_SEALED_PUBSUB.md §4).
 %%
 %% An epoch is a group key for a stretch of time: a 32-byte key drawn at random,
 %% independent of every other epoch's, so holding one says nothing about the

@@ -1,4 +1,4 @@
-%% @doc The process that opens a sealed group's events for one subscription (plans/DESIGN_E2E_SEALED_PUBSUB.md §6, §7).
+%% @doc The process that opens a sealed group's events for one subscription (docs/design/DESIGN_E2E_SEALED_PUBSUB.md §6, §7).
 %%
 %% The pool hands it every event the subscription's ordering releases, in order, and it answers the subscriber:
 %%

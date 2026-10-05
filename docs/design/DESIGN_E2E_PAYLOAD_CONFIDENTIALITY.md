@@ -5,7 +5,7 @@
 | | |
 |---|---|
 | Kind | CLAIM (a threat model and what defeats it), design only, no code |
-| Closes | `PLAN_MILITARY_GRADE_BASELINE.md` #14, "End-to-end confidentiality" |
+| Closes | the security register's row #14, "End-to-end confidentiality" |
 | Proposes | D33 (this document's decision, for Raf) |
 | Status | Decided (Raf, 2026-09-26): §12 answered; build in §13's order |
 | Written against | macula v12.7.0 (1c78d059) |
@@ -469,7 +469,7 @@ A station on the path still sees:
 | **Group membership**: which nodes pull an org's group keys, when they first join, and the rotation herd | a pull is a call to `<org>/group_keys_v1`, whose caller, target and timing a station sees |
 | **Everything, in the clear, during the mixed-fleet period** toward nodes that publish no key | under `preferred`, clear is the default toward a node that never opted in, not an exception (§8.1) |
 
-This design **makes no anonymity or traffic-flow claim.** `PLAN_MILITARY_GRADE_BASELINE.md` #18, traffic-flow confidentiality, keeps its own row. Public
+This design **makes no anonymity or traffic-flow claim.** Traffic-flow confidentiality keeps its own row (#18) in the security register. Public
 text may say "stations relay payloads they cannot read" only once this is built, tested across SDKs, and measured (D11).
 
 ## 10. Cost summary (the KEM measured, the rest estimates to be measured)

@@ -7,8 +7,8 @@
 # large handshake, and the question is whether OURS completes when a datagram carrying it is dropped.
 #
 # WHAT IT MEASURES: the size of every datagram in each direction, and whether the handshake completes under a
-# deterministic drop policy. Results and caveats are recorded as V21 in
-# plans/PLAN_POST_QUANTUM_SECURITY_PART1.md; the headline is that our client hello spans FIVE datagrams.
+# deterministic drop policy. The headline result (V21 of the post-quantum plan): our client hello spans FIVE
+# datagrams.
 #
 # THE INSTRUMENT: a user-space UDP relay between the client and the listener.
 #   - No root, unlike netem, so it runs anywhere the suite runs.

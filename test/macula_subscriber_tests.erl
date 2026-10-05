@@ -79,7 +79,7 @@ subscriber_test_() ->
                  fun a_module_without_handle_unopened_serves_on/0]].
 
 %% An event the subscriber could not open is its module's to hear about, never
-%% dropped silently (plans/DESIGN_E2E_SEALED_PUBSUB.md §7).
+%% dropped silently (docs/design/DESIGN_E2E_SEALED_PUBSUB.md §7).
 an_unopened_event_reaches_handle_unopened() ->
     {ok, Pid} = start_subscriber(#{}),
     Info = #{publisher => <<1:256>>, seal_key_id => <<2:64>>, reason => no_group},

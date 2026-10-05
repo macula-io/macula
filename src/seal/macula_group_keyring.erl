@@ -1,4 +1,4 @@
-%% @doc A node's keyring for the sealed groups it joined (plans/DESIGN_E2E_SEALED_PUBSUB.md §4, §6, §7).
+%% @doc A node's keyring for the sealed groups it joined (docs/design/DESIGN_E2E_SEALED_PUBSUB.md §4, §6, §7).
 %%
 %% A group is a topic prefix whose second segment is its org. Joining it pulls the group's epochs from the org's
 %% distributor, `<org>/group_keys_v1', over a call sealed to the distributor's KEM key (`confidential => required':

@@ -259,7 +259,7 @@
     "epoch_expired",
     "unknown_group"
   ],
-  "scheme": "sealed groups, macula 13.2 (plans/DESIGN_E2E_SEALED_PUBSUB.md)",
+  "scheme": "sealed groups, macula 13.2 (docs/design/DESIGN_E2E_SEALED_PUBSUB.md)",
   "spec": "test/vectors/E2E_SEAL_V1.md"
 }
 

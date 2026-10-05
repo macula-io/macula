@@ -38,7 +38,7 @@
 %% try makes a new ML-DSA-87 half; a hybrid key keeps its RSA-PSS half across tries, since the node_id covers both
 %% halves.
 %%
-%% See plans/PLAN_POST_QUANTUM_SECURITY.md, decisions D4, D5, D6 and D7.
+%% See docs/design/DECISIONS_POST_QUANTUM.md, decisions D4, D5, D6 and D7.
 -module(macula_node_keys).
 
 -include_lib("public_key/include/public_key.hrl").

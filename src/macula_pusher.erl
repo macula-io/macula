@@ -1,6 +1,6 @@
 %%%-------------------------------------------------------------------
 %%% @doc Behaviour for supervised content pushes (the sender side of a
-%%% push-initiated upload — PLAN_PUSH_UPLOAD.md Phase 6).
+%%% push-initiated upload, shipped in 9.13.0).
 %%%
 %%% `start_link/5,6' returns immediately with a pid, delivers the
 %%% outcome to `Module:handle_pushed/2', and publishes

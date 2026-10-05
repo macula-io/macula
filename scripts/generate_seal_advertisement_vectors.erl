@@ -71,7 +71,7 @@ Profile = fun(P) ->
 end,
 Vectors = #{<<"scheme">> => 1,
             <<"spec">> => <<"test/vectors/E2E_SEAL_V1.md">>,
-            <<"design">> => <<"plans/DESIGN_E2E_PAYLOAD_CONFIDENTIALITY.md, amendment A1">>,
+            <<"design">> => <<"docs/design/DESIGN_E2E_PAYLOAD_CONFIDENTIALITY.md, amendment A1">>,
             <<"generator">> => <<"scripts/generate-seal-advertisement-vectors.sh">>,
             <<"realm_id">> => Hex(Realm),
             <<"procedure">> => Procedure,

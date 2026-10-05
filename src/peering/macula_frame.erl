@@ -10,7 +10,7 @@
 %% object with the signer's key (D13), or, for a control frame in pq_hybrid, a
 %% neighbour signature (D17).
 %%
-%% PLAN_WIRE_CBOR.md migrated this codec from BERT to CBOR so
+%% This codec moved from BERT to CBOR so
 %% hecate-station and the macula 3.x SDK share a wire format. Frame
 %% schemas (atom-keyed maps in process memory) are unchanged. Atoms go out
 %% as text; on decode a frame type's own fields come back through a fixed
@@ -930,7 +930,7 @@ ping(#{nonce := N}) when is_binary(N), byte_size(N) =:= 16 ->
 pong(#{nonce := N}) when is_binary(N), byte_size(N) =:= 16 ->
     (base(pong, 0))#{nonce => N}.
 
-%% @doc The handshake v5 liveness probe (plans/DESIGN_NEIGHBOUR_CHANNEL_BINDING.md section 3): a peering connection
+%% @doc The handshake v5 liveness probe (docs/design/DESIGN_NEIGHBOUR_CHANNEL_BINDING.md section 3): a peering connection
 %% sends it and the peer's peering connection answers it with liveness_pong, the same nonce. Neither is ever passed to
 %% the DHT, whose own ping and pong are different evidence. Session-authenticated, never neighbour-signed, and only on
 %% a v5 connection.
@@ -2236,7 +2236,7 @@ relayed_without_signature(FrameType) ->
 
 %% @doc Whether a connection neighbour-signs a frame type: by its profile on a handshake v4 connection, and never on a
 %% v5 one (`session'), where the session proofs authenticated the neighbour once
-%% (plans/DESIGN_NEIGHBOUR_CHANNEL_BINDING.md section 3).
+%% (docs/design/DESIGN_NEIGHBOUR_CHANNEL_BINDING.md section 3).
 -spec neighbour_signed(macula_crypto_profile:profile() | session, frame_type()) -> boolean().
 neighbour_signed(pq_hybrid, FrameType) -> lists:member(FrameType, ?NEIGHBOUR_SIGNED);
 neighbour_signed(pq_pure, _FrameType) -> false;

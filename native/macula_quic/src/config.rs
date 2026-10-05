@@ -269,7 +269,7 @@ fn load_key(path: &str) -> Result<PrivateKeyDer<'static>, String> {
 // ── TLS posture ────────────────────────────────────────────────
 
 /// What the configurations this NIF builds actually do, for the start check
-/// handshake v5 depends on (plans/DESIGN_NEIGHBOUR_CHANNEL_BINDING.md sections 3
+/// handshake v5 depends on (docs/design/DESIGN_NEIGHBOUR_CHANNEL_BINDING.md sections 3
 /// and 6): the key exchange groups each offers, as IANA code points in order,
 /// whether either end offers or accepts 0-RTT or sends tickets, and whether a
 /// second handshake between the same two configurations resumes. rustls has

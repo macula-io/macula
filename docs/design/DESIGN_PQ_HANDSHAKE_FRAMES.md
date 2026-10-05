@@ -4,7 +4,7 @@ This exists so every Macula node proves who it is on every connection with post-
 that proof byte for byte the same way.
 
 Agreed by Mercury, Mars and Neptune on 2026-09-10, for WP 1.3 (the frame codec) and WP 1.5 (the handshake). It
-specifies the frames of D16 and the status statements of D22 in `PLAN_POST_QUANTUM_SECURITY.md`.
+specifies the frames of D16 and the status statements of D22 in `DECISIONS_POST_QUANTUM.md`.
 
 ## Encoding
 

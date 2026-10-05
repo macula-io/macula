@@ -275,7 +275,7 @@ shutdown_propagates_to_children(Reg) ->
     ?assertNot(is_process_alive(P2)).
 
 %%---------------------------------------------------------------------
-%% Inbound PUBLISH relay (Phase 1 of PLAN_V2_PARITY)
+%% Inbound PUBLISH relay
 %%---------------------------------------------------------------------
 
 relay_publish_unknown_realm_is_not_found(Reg) ->

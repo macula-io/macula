@@ -202,8 +202,6 @@ for the common case — one delta per Plumtree `GOSSIP`.
   push set is built from, and the overlay transport both ride on.
 - [PubSub Guide](../pubsub/PUBSUB_GUIDE.md) — the supervised, client-facing
   PubSub wrapper that already uses this machinery internally.
-- `plans/PLAN_MACULA_V2_PART3_DISCOVERY.md` §7.2 (Plumtree), §7.4 (OR-Set);
-  `plans/PLAN_MACULA_V2_PART6_PROTOCOL.md` §6 (realm PubSub wire format).
 - Leitão, Pereira, Rodrigues, *"Epidemic Broadcast Trees"*, SRDS 2007.
 - Shapiro, Preguiça, Baquero, Zawirski, *"A Comprehensive Study of
   Convergent and Commutative Replicated Data Types"*, INRIA 2011 (the

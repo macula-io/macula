@@ -1,4 +1,4 @@
-%% @doc An event sealed under a sealed group's epoch (plans/DESIGN_E2E_SEALED_PUBSUB.md §7, test/vectors/E2E_SEAL_V1.md).
+%% @doc An event sealed under a sealed group's epoch (docs/design/DESIGN_E2E_SEALED_PUBSUB.md §7, test/vectors/E2E_SEAL_V1.md).
 %%
 %% A publisher seals under its own subkey of the epoch key, `k_pub = event_key(k_g, publisher)', so no two publishers
 %% ever share a key, with a fresh 96-bit random nonce, bound by the AAD to the publication's routing fields (realm,

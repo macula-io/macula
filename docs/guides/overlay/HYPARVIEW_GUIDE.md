@@ -222,6 +222,5 @@ sign with `Ctx`'s `identity`, so give `Ctx` the same key pair as the link.
   general; `realm_member_endorsement` is one instance of the pattern.
 - [Authorization](../shared/AUTHORIZATION_GUIDE.md) — the broader DID/UCAN
   trust model this endorsement mechanism complements.
-- `plans/PLAN_MACULA_V2_PART3_DISCOVERY.md` §7.1 — the original design doc.
 - Leitão, Pereira, Rodrigues, *"HyParView: A Membership Protocol for
   Reliable Gossip-Based Broadcast"*, DSN 2007.

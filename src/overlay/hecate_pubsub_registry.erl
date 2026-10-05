@@ -30,9 +30,9 @@
 %% Realm tags are opaque 32-byte namespace keys. The registry does
 %% NOT validate authenticity — multi-tenancy is structural (one
 %% server per tag, no cross-realm leakage). Realm authority lives
-%% outside the station per `PLAN_DEFERRED_WORK' §6.
+%% outside the station.
 %%
-%% == Multi-identity (PLAN_MULTI_IDENTITY_RELAY §Phase 2) ==
+%% == Multi-identity ==
 %%
 %% N identities run inside one BEAM. Each identity has its OWN
 %% pubsub_registry, owning its OWN per-realm pubsub_server pool.

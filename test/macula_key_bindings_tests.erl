@@ -1,5 +1,5 @@
 %% EUnit tests for macula_key_bindings: TLS and CONNECT key bindings and their status statements, laid out in
-%% plans/DESIGN_PQ_HANDSHAKE_FRAMES.md (decisions D16 and D22).
+%% docs/design/DESIGN_PQ_HANDSHAKE_FRAMES.md (decisions D16 and D22).
 -module(macula_key_bindings_tests).
 
 -include_lib("eunit/include/eunit.hrl").

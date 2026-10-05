@@ -1,5 +1,5 @@
 %%%-------------------------------------------------------------------
-%%% @doc An event sealed under a group epoch (plans/DESIGN_E2E_SEALED_PUBSUB.md §7; test/vectors/E2E_SEAL_V1.md): the
+%%% @doc An event sealed under a group epoch (docs/design/DESIGN_E2E_SEALED_PUBSUB.md §7; test/vectors/E2E_SEAL_V1.md): the
 %%% publisher's subkey of the epoch key, a fresh random nonce, the event AAD over the publication's routing fields,
 %%% and the epoch id as `key_id'. A PUBLISH carries `sealed' in place of `payload', signed like any publication.
 %%% @end

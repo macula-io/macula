@@ -102,7 +102,7 @@ direct-dial wraps](RPC_GUIDE.md#direct-dial-start_link_direct-advertise_direct).
 > and fails closed. `confidential => off` sends in the clear, as your own decision. With
 > none of these, including `call_station/7`, the call is
 > `{error, {confidentiality, no_signed_state}}`. A lookup can deny a call but never
-> downgrade it. See the [design](https://github.com/macula-io/macula/blob/main/plans/DESIGN_E2E_PAYLOAD_CONFIDENTIALITY.md), §8.1.
+> downgrade it. See the [design](https://github.com/macula-io/macula/blob/main/docs/design/DESIGN_E2E_PAYLOAD_CONFIDENTIALITY.md), §8.1.
 
 ### Knowing a call was sealed (13.1.0)
 
@@ -121,7 +121,7 @@ under the same key, with that key's id; 0, with no key, for a clear call. After 
 node the call was addressed to. An error comes back as it is, with no report. A `report` that
 is not a boolean is `{error, {invalid_option, report}}` before anything is sent. The report
 states that sealing ran on this exchange, and nothing more: see the
-[design](https://github.com/macula-io/macula/blob/main/plans/DESIGN_E2E_SEAL_REPORT.md).
+[design](https://github.com/macula-io/macula/blob/main/docs/design/DESIGN_E2E_SEAL_REPORT.md).
 
 > **`pin_tls_cert => true` and `verify` are REFUSED.** They return
 > `{error, {refused, {pin_tls_cert, no_pin_primitive_for_mldsa87_identity}}}` and
