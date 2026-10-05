@@ -1,4 +1,4 @@
-%% Live-boot check for hecate-om's mesh-wrappers plan (piece D): does a
+%% Live-boot check: does a
 %% subscription actually survive a link respawn, end to end, the way
 %% `macula_client'/`macula_client_replay' claim in their moduledocs —
 %% not just "the code reads that way"?

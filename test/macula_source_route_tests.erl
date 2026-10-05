@@ -1,4 +1,4 @@
-%% EUnit tests for hecate_source_route.
+%% EUnit tests for macula_source_route.
 -module(macula_source_route_tests).
 
 -include_lib("eunit/include/eunit.hrl").

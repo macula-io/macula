@@ -511,8 +511,7 @@
 %% own `?DHT_RECORD_TIMEOUT_MS' internally.
 -define(DISCOVERY_CALL_TIMEOUT_MS, 5_000).
 %% The station directory's procedure, unless `station_discovery''s
-%% `procedure' names another: mcl-stations serves it (hecate_stations,
-%% which served `hecate_stations.list_stations', is retired).
+%% `procedure' names another: mcl-stations serves it.
 -define(DEFAULT_LIST_STATIONS_PROCEDURE, <<"mcl-stations/list_stations">>).
 
 %% A discovered station nobody chose -- unlike a hand-configured seed,

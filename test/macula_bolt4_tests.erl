@@ -1,4 +1,4 @@
-%% EUnit tests for hecate_bolt4.
+%% EUnit tests for macula_bolt4.
 -module(macula_bolt4_tests).
 
 -include_lib("eunit/include/eunit.hrl").

@@ -47,7 +47,7 @@ empty_pattern_matches_empty_concrete_test() ->
     ?assert(macula_topic_pattern:matches([], [])).
 
 %% A concrete address with more than one dynamic segment (macula_topic's
-%% shape) works identically to hecate_om_capabilities' narrower 2-segment
+%% shape) works identically to mcl_om_capabilities' narrower 2-segment
 %% one -- the whole point of this module being arity-agnostic.
 four_segment_shape_test() ->
     ?assert(macula_topic_pattern:matches(

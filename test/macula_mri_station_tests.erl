@@ -6,9 +6,6 @@
 %%% reverse-domain notation, and the path must be empty.
 %%%
 %%% Form: `mri:station:<52-char-z32-node_id>'.
-%%%
-%%% Required by hecate-daemon's serve_dns_over_mesh slice for
-%%% synthesising station qnames (e.g., `<z32(node_id)>._st.macula.io.').
 %%% @end
 %%%-------------------------------------------------------------------
 -module(macula_mri_station_tests).

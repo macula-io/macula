@@ -81,7 +81,7 @@ reuse_sup_resends_advertise_without_a_new_supervisor() ->
                  macula_scripted_stream:advertised()).
 
 %% Regression test for the identical noproc-on-first-dispatch bug fixed
-%% in `macula_response' (found live 2026-09-01 via hecate-rag): see that
+%% in `macula_response' (found live 2026-09-01 via a RAG service): see that
 %% module's test of the same name for the full incident.
 reuse_sup_with_a_dead_pid_starts_a_fresh_supervisor() ->
     DeadPid = spawn(fun() -> ok end),

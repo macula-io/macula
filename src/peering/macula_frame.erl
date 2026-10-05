@@ -11,7 +11,7 @@
 %% neighbour signature (D17).
 %%
 %% This codec moved from BERT to CBOR so
-%% hecate-station and the macula 3.x SDK share a wire format. Frame
+%% the station and the macula 3.x SDK share a wire format. Frame
 %% schemas (atom-keyed maps in process memory) are unchanged. Atoms go out
 %% as text; on decode a frame type's own fields come back through a fixed
 %% table, and peer-supplied maps keep the one key form (D26).
@@ -465,7 +465,7 @@
     realm      := id256(),
     new_member := id256(),
     %% Signed `realm_member_endorsement' macula_record (see
-    %% hecate_overlay's hecate_realm_join module), proving the realm's
+    %% `macula_hyparview_endorsement'), proving the realm's
     %% admin authorised `new_member' to join. Optional at the type
     %% level since not every realm may require admission-gated JOIN,
     %% but any realm that does MUST reject a JOIN missing it. The record

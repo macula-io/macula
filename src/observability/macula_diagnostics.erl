@@ -11,7 +11,6 @@
 %% Topic namespacing convention:
 %% <ul>
 %%   <li>`_macula.*' — protocol-layer events (SDK)</li>
-%%   <li>`_hecate.*' — station-layer events (Hecate-specific)</li>
 %% </ul>
 -module(macula_diagnostics).
 

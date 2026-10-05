@@ -10,7 +10,7 @@
 %%% and `Concrete' are ordinary lists of binaries (already split on
 %%% whatever delimiter the caller's own address format uses) — this
 %%% module has no opinion on segment count or delimiter, deliberately:
-%%% `hecate_om_capabilities''s capability names are 2 dynamic segments
+%%% `mcl_om_capabilities''s capability names are 2 dynamic segments
 %%% (org, name); `macula_topic''s pubsub/RPC topics are 4
 %%% (org-or-`_org' sentinel, app-or-`_realm' sentinel, domain, name).
 %%% Both fit this same primitive, unmodified — a mismatched segment

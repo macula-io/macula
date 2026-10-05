@@ -97,8 +97,8 @@ ordered_cap_skips_when_buffer_full_test() ->
 %% (macula-station's own hecate_pubsub_server did exactly this before
 %% 10.17.0). Without this clause every fact after such a restart reads
 %% as "past" and is silently dropped until the counter climbs back over
-%% the old watermark -- which is how a live read model (hecate-stations,
-%% 2026-09-02) went deaf for 10+ hours after a fleet rollout while its
+%% the old watermark -- which is how a live read model (the station
+%% directory, 2026-09-02) went deaf for 10+ hours after a fleet rollout while its
 %% link, subscriptions and dedup all looked healthy. Rebase, deliver,
 %% count no skip.
 ordered_rewound_epoch_rebases_test() ->

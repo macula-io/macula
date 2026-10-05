@@ -36,7 +36,7 @@
 %%% otherwise have every fact after the restart dropped as "past" until
 %%% the counter climbed back over the old watermark -- silently, with the
 %%% link, the wire subscription and dedup all healthy. That is how
-%%% hecate-stations went deaf for 10+ hours after a fleet rollout on
+%%% the station directory went deaf for 10+ hours after a fleet rollout on
 %%% 2026-09-02. A backstep within the threshold is still a late duplicate.
 %%%
 %%% Pure and side-effect-free: it returns the events to deliver now, and

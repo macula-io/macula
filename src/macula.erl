@@ -585,7 +585,7 @@ unadvertise(Pool, Realm, Procedure) ->
 %%%                                 as they are stored
 
 %% Procedure + topic shape — hidden from API consumers but exposed
-%% as documentation. The relay backend (hecate-station and successors)
+%% as documentation. The relay backend (macula-station)
 %% MUST advertise these procedures and publish on the per-type
 %% record-stored topic for the SDK to function. DHT traffic travels
 %% under the all-zeros realm tag (protocol-internal infrastructure;

@@ -475,7 +475,7 @@ on_links({error, _} = Error, _Dial, _Realm, _Procedure, _NodeIdentity, _Opts) ->
 %% silently dropping `ttl_ms' too, because an older single-clause match
 %% only ever produced one opt or nothing. Found while wiring a
 %% proportioned `ttl_ms' through `advertise_direct/7' from
-%% `hecate_om_capabilities'; `procedure_advertisement/5' reads `ttl_ms'
+%% `mcl_om_capabilities'; `procedure_advertisement/5' reads `ttl_ms'
 %% from its own Opts, so the bug was purely in this forwarder.
 adv_opts(Opts) ->
     maps:merge(authorization_opt(Opts), ttl_ms_opt(Opts)).

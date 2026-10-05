@@ -1,7 +1,7 @@
 %% EUnit tests for `macula_station_link'.
 %%
-%% A live QUIC handshake against a real V2 station is exercised in
-%% the hecate-station Common Test suites. These tests focus on the
+%% A live QUIC handshake against a real station is exercised in
+%% the macula-station Common Test suites. These tests focus on the
 %% bookkeeping the client owns end-to-end: seed parsing, subscriptions,
 %% overlay frames, inbound calls and content streams. Outbound calls are in
 %% macula_station_link_call_tests, liveness in
@@ -1066,7 +1066,7 @@ subscribe_before_connect_drains_on_connected_test_() ->
 %% SUBSCRIBE frame sent in this exact window landed on the wire while the
 %% peering statem was still in `handshaking' -- which has no clause for
 %% `cast({send_frame, _, _})' and silently drops it via `drop_unexpected'.
-%% Reproduced live: hecate-stations' own logs showed this exact frame
+%% Reproduced live: the station directory's own logs showed this exact frame
 %% (topic _dht.records.N.stored) dropped on every reconnect.
 %%------------------------------------------------------------------
 
@@ -1315,7 +1315,7 @@ flush_mailbox() ->
 %%------------------------------------------------------------------
 %% Inbound CALL handlers run off the link process.
 %%
-%% Found live 2026-09-02 on hecate-rag: a handler that made its own
+%% Found live 2026-09-02 on a RAG service: a handler that made its own
 %% mesh call through the pool waited 30 s and crashed, because the
 %% link that had delivered the inbound CALL was still blocked running
 %% that very handler and so could never read the RESULT of the
@@ -1536,7 +1536,7 @@ inbound_call_handler_calling_back_into_link_does_not_deadlock_test_() ->
     {timeout, 15,
      fun() ->
          %% The handler calls back into the link that is delivering
-         %% the CALL -- what every hecate-om desk does when it
+         %% the CALL -- what every mcl-om desk does when it
          %% publishes rpc.received_v1 or makes a mesh call of its own.
          %% The link is registered under a name because the handler
          %% is advertised before it can know the link's pid.

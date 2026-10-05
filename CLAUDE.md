@@ -47,7 +47,7 @@ Macula SDK is a **64-module client library** for connecting to the Macula relay 
 **Crypto primitives belong in the SDK.** Ed25519 (`macula_identity`),
 BLAKE3 (`macula_blake3_nif`), CBOR (`macula_cbor_nif` for general,
 `macula_record_cbor` for deterministic canonicalization) all live here.
-Consumers (hecate-station, future SDK clients) should never re-implement
+Consumers (macula-station, other SDK clients) should never re-implement
 these — pull them from this repo.
 
 **SDK provides:** client transport, wire protocol, identity (Ed25519/UCAN/DID NIFs), MRI resource identifiers, cert system, Erlang distribution over mesh, LAN clustering, peer connection state machine (`macula_peering*`), structured diagnostics (`macula_diagnostics`).
@@ -68,7 +68,7 @@ been fully absorbed into this SDK as of 3.7.0:
 | `macula_frame` | SDK `src/macula_frame.erl` + `macula_bolt4` + `macula_source_route` (3.6.0) |
 | `macula_peering` | SDK `src/macula_peering*.erl` (3.7.0) |
 | `macula_diagnostics` | SDK `src/macula_diagnostics.erl` (3.7.0) |
-| `macula_transport` | DEAD — superseded by SDK's `macula_quic` (Quinn-based NIF). hecate-station keeps a thin `hecate_transport` option-map adapter for its own listener / server modules. |
+| `macula_transport` | DEAD — superseded by SDK's `macula_quic` (Quinn-based NIF). macula-station keeps a thin `macula_transport` option-map adapter for its own listener / server modules. |
 
 The v2 umbrella tree can be retired wholesale; nothing in the active
 codebase references it.

@@ -140,7 +140,7 @@ process_subscribe_frame_records_test() ->
 
 %% A subscription is recorded, not logged: this runs for every SUBSCRIBE a
 %% station relays. A temporary per-topic info trace for the retired
-%% beam-campus/hecate mpong topics logged about 400 lines an hour at each
+%% mpong topics logged about 400 lines an hour at each
 %% station, long after anything published there.
 process_subscribe_logs_nothing_test() ->
     R = realm(),

@@ -2949,7 +2949,7 @@ fan_event({ok, {_R, _T, Subscriber, _Mon}}, SubRef, Topic, Payload, Meta) ->
 %% pool over this same link, nor answer the pool's advertise and
 %% publish calls (5 s), so a handler that touches the mesh at all
 %% deadlocks against itself until its own timeout fires. Found live
-%% 2026-09-02 on hecate-rag: every semantic search waited 30 s on its
+%% 2026-09-02 on a RAG service: every semantic search waited 30 s on its
 %% embedder call and crashed, and the link's advertise republishes
 %% timed out meanwhile, so the service flickered out of the station's
 %% registry. The worker is a plain spawn, matching
@@ -2961,7 +2961,7 @@ fan_event({ok, {_R, _T, Subscriber, _Mon}}, SubRef, Topic, Payload, Meta) ->
 %% A handler crash maps to BOLT#4 `temporary_relay_failure' (0x02);
 %% an unknown `(realm, procedure)' (no handler registered on this
 %% link) maps to `unknown_next_peer'
-%% (0x01) — same taxonomy as `hecate_handler_dispatch'.
+%% (0x01) — same taxonomy as macula-station's `macula_handler_dispatch'.
 handle_inbound_call({ok, #{realm := <<0:256>>, procedure := ?LIVENESS_PROCEDURE, caller := Station,
                            target := Target} = Request},
                     #state{peer_node_id = Station, node_identity = Id, peer_pid = Pid} = S) when is_pid(Pid) ->
@@ -3118,12 +3118,12 @@ reply_bytes(Reply) ->
 %% The CALL frame carries `caller' (a required, wire-authenticated field,
 %% see `macula_frame''s CALL spec) but no application handler ever saw
 %% it: `handle_request/2''s contract is fixed at 2-arity across every
-%% existing provider (`macula_response', and every hecate-om desk built
+%% existing provider (`macula_response', and every mcl-om desk built
 %% on it), so threading it as a new function argument would be a
 %% breaking change to all of them. Merging it into `Payload' instead
 %% needs no arity change anywhere downstream — a handler that wants
 %% provenance reads `caller' the same way it reads any other field
-%% (`hecate_om_wire:field/2,3'); one that doesn't, ignores an extra map
+%% (`mcl_om_wire:field/2,3'); one that doesn't, ignores an extra map
 %% key exactly as it already ignores fields it doesn't ask for.
 %%
 %% The merge happens here, not earlier, specifically so it happens AFTER

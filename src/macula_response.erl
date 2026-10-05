@@ -159,7 +159,7 @@ handler_timeout(Other) -> {error, {invalid_handler_timeout_ms, Other}}.
 
 %% A `reuse_sup' pid from a caller's prior `advertise/6' call can have
 %% died since (e.g. the caller itself crashed and, being linked to the
-%% factory sup it started, took it down too — see `hecate_om_capabilities'
+%% factory sup it started, took it down too — see `mcl_om_capabilities'
 %% for a real periodic-republish caller that does exactly this on a
 %% timed-out advertise). Reusing a dead pid unconditionally used to hand
 %% `dispatch/7' a `Sup' that would `noproc' on its very first

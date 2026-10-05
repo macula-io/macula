@@ -116,7 +116,7 @@ build_nif "macula_mri_nif"
 #    NIF-load time is the right behavior." A soft-skip here produced
 #    exactly the opposite: a clean build that fails every caller at
 #    test/runtime with an opaque nif_not_loaded, found live in
-#    hecate-om's CI (erlang:28 container, no Rust toolchain installed).
+#    a consumer's CI (erlang:28 container, no Rust toolchain installed).
 # ============================================================
 build_nif "macula_cbor_nif" "true"
 

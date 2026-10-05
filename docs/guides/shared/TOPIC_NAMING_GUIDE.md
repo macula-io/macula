@@ -18,7 +18,7 @@ The two `{publisher}` slots carry different values depending on the **ownership 
 | Segment | Source | Example |
 |---------|--------|---------|
 | `realm` | Runtime config (which mesh) | `io.macula` |
-| `publisher` × 2 | Tier-dependent (see below) | `beam-campus` + `hecate`, or `_realm`+`_realm`, etc. |
+| `publisher` × 2 | Tier-dependent (see below) | `beam-campus` + `demo`, or `_realm`+`_realm`, etc. |
 | `domain` | Bounded context | `mpong`, `licenses`, `membership` |
 | `name_vN` | Topic name + version suffix | `lobby_opened_v1`, `chat_to_model_v1` |
 
@@ -38,7 +38,7 @@ A topic's tier answers one question: **who owns its schema and authority?**
 
 Each builder takes the realm name as its first argument; org-tier additionally takes the org; app-tier takes both org and app. The underlying `build/6` always emits 5 tokens. Sentinels (`_realm`, `_org`) fill elided publisher slots so the parser never branches on length.
 
-**Per-app convenience wrappers** (e.g. `hecate_topics`) typically pre-fill realm + org + app constants and expose 3-arg variants — see the Hecate practical guide for the wrapper pattern.
+**Per-app convenience wrappers** (e.g. a `myapp_topics` module) typically pre-fill realm + org + app constants and expose 3-arg variants.
 
 ### Picking a tier
 
@@ -85,8 +85,8 @@ io.macula/beam-campus/_org/licenses/issued_batch_v1
 io.macula/beam-campus/_org/licenses/revoked_v1
 
 %% app tier
-io.macula/beam-campus/hecate/mpong/lobby_opened_v1
-io.macula/beam-campus/hecate/llm/model_detected_v1
+io.macula/beam-campus/demo/mpong/lobby_opened_v1
+io.macula/beam-campus/demo/llm/model_detected_v1
 io.macula/acme-org/trader/portfolio/position_closed_v1
 ```
 
@@ -103,8 +103,8 @@ io.macula/_realm/_realm/auth/verify_api_key_v1
 io.macula/beam-campus/_org/billing/get_quota_v1
 
 %% app tier
-io.macula/beam-campus/hecate/llm/chat_to_model_v1
-io.macula/beam-campus/hecate/mpong/join_game_v1
+io.macula/beam-campus/demo/llm/chat_to_model_v1
+io.macula/beam-campus/demo/mpong/join_game_v1
 io.macula/acme-org/trader/portfolio/open_position_v1
 ```
 
@@ -145,13 +145,13 @@ macula_topic:org_fact(<<"io.macula">>, <<"beam-campus">>,
 %% → <<"io.macula/beam-campus/_org/licenses/issued_batch_v1">>
 
 %% App tier — fully qualified
-macula_topic:app_fact(<<"io.macula">>, <<"beam-campus">>, <<"hecate">>,
+macula_topic:app_fact(<<"io.macula">>, <<"beam-campus">>, <<"demo">>,
                       <<"mpong">>, <<"lobby_opened">>, 1).
-%% → <<"io.macula/beam-campus/hecate/mpong/lobby_opened_v1">>
+%% → <<"io.macula/beam-campus/demo/mpong/lobby_opened_v1">>
 
-macula_topic:app_hope(<<"io.macula">>, <<"beam-campus">>, <<"hecate">>,
+macula_topic:app_hope(<<"io.macula">>, <<"beam-campus">>, <<"demo">>,
                       <<"llm">>, <<"chat_to_model">>, 1).
-%% → <<"io.macula/beam-campus/hecate/llm/chat_to_model_v1">>
+%% → <<"io.macula/beam-campus/demo/llm/chat_to_model_v1">>
 
 %% Parse a topic — returns the inferred tier
 {ok, #{tier := realm,
@@ -164,14 +164,14 @@ macula_topic:app_hope(<<"io.macula">>, <<"beam-campus">>, <<"hecate">>,
 {ok, #{tier := app,
        realm := <<"io.macula">>,
        org := <<"beam-campus">>,
-       app := <<"hecate">>,
+       app := <<"demo">>,
        domain := <<"mpong">>,
        name := <<"lobby_opened">>,
        version := 1}} =
-    macula_topic:parse(<<"io.macula/beam-campus/hecate/mpong/lobby_opened_v1">>).
+    macula_topic:parse(<<"io.macula/beam-campus/demo/mpong/lobby_opened_v1">>).
 
 %% Validate a topic
-ok = macula_topic:validate(<<"io.macula/beam-campus/hecate/mpong/lobby_opened_v1">>).
+ok = macula_topic:validate(<<"io.macula/beam-campus/demo/mpong/lobby_opened_v1">>).
 {error, _} = macula_topic:validate(<<"io.macula.mpong.lobby_opened">>).
 ```
 
@@ -201,7 +201,7 @@ never match if they disagree on the string. Validation is available, not
 automatic:
 
 ```erlang
-ok      = macula_topic:validate(<<"io.macula/beam-campus/hecate/mpong/lobby_opened_v1">>),
+ok      = macula_topic:validate(<<"io.macula/beam-campus/demo/mpong/lobby_opened_v1">>),
 {error, _} = macula_topic:validate(<<"io.macula.mpong.lobby_opened">>).
 ```
 
@@ -221,13 +221,13 @@ dot-separated infrastructure topics, out of scope for this validator.
 
 | Wrong | Why | Correct |
 |-------|-----|---------|
-| `io.macula.hecate.mpong.lobby_opened` | Dots, no version, no structure | `io.macula/beam-campus/hecate/mpong/lobby_opened_v1` |
+| `io.macula.demo.mpong.lobby_opened` | Dots, no version, no structure | `io.macula/beam-campus/demo/mpong/lobby_opened_v1` |
 | `"#{realm}.membership.revoked"` (Elixir interpolation) | Inline, dot-form, no tier, no version | `:macula_topic.realm_fact(realm, "membership", "revoked", 1)` |
 | `<<Realm/binary, "/foo/bar/baz_v1">>` (Erlang interpolation) | Inline, no validator, no tier | `macula_topic:app_fact(Realm, Org, App, "foo", "bar", 1)` |
 | `app_fact("membership", "revoked", 1)` for a realm-owned event | Wrong tier — realm authority owns this | `realm_fact("membership", "revoked", 1)` |
-| `io.macula/beam-campus/hecate/mpong/game.available_v1` | "available" is neither past nor present tense | Pick a tense. Past for fact, present for hope. |
-| `io.macula/beam-campus/hecate/mpong/join.{game_id}_v1` | ID in topic | Put `game_id` in payload |
-| `io.macula/_realm/hecate/membership/revoked_v1` | Mismatched tier sentinels — `_realm` requires `_realm` in both publisher slots | Either fully realm (`_realm/_realm`) or fully app |
+| `io.macula/beam-campus/demo/mpong/game.available_v1` | "available" is neither past nor present tense | Pick a tense. Past for fact, present for hope. |
+| `io.macula/beam-campus/demo/mpong/join.{game_id}_v1` | ID in topic | Put `game_id` in payload |
+| `io.macula/_realm/demo/membership/revoked_v1` | Mismatched tier sentinels — `_realm` requires `_realm` in both publisher slots | Either fully realm (`_realm/_realm`) or fully app |
 | `mpong.games.created_v1` | CRUD verb | `mpong/lobby_opened_v1` |
 
 ---
@@ -236,4 +236,4 @@ dot-separated infrastructure topics, out of scope for this validator.
 
 - `docs/guides/pubsub/PUBSUB_GUIDE.md` — pub/sub usage, payload conventions
 - `docs/guides/rpc/RPC_GUIDE.md` — RPC usage, error handling
-- `hecate-social/hecate-corpus/skills/MESH_TOPIC_TIERING.md` — Hecate-specific guidance, audit history, anti-patterns from real bugs
+- [`macula-services/mcl-corpus/skills/MESH_TOPIC_TIERING.md`](https://github.com/macula-services/mcl-corpus/blob/main/skills/MESH_TOPIC_TIERING.md) — tiering guidance, audit history, anti-patterns from real bugs

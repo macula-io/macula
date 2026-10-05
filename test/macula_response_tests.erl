@@ -119,7 +119,7 @@ reuse_sup_resends_advertise_without_a_new_supervisor() ->
     ?assertMatch({_, #{reuse_sup := Sup1}}, next_advertised()).
 
 %% Regression test for the noproc-on-first-dispatch bug (found live
-%% 2026-09-01 via hecate-rag): a caller that reuses a `reuse_sup' pid
+%% 2026-09-01 via a RAG service): a caller that reuses a `reuse_sup' pid
 %% across republish ticks can find that pid already dead -- e.g. the
 %% caller itself crashed between ticks and, being linked to the sup it
 %% started, took it down too. Reusing a dead pid unconditionally used to
