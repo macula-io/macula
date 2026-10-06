@@ -2847,13 +2847,32 @@ node_identity({error, _} = Refusal, _Profile) ->
 %% stores it, and the supplied-key clauses below are untouched so an application can still run a
 %% deliberately separate participant on the same machine.
 node_identity(error, Profile) ->
-    macula_node_keys:node_identity(Profile);
+    Path = macula_node_keys:node_identity_path(),
+    stored_identity(macula_node_keys:node_identity(Path, Profile), Path, Profile);
 node_identity({ok, #{purpose := identity, profile := Profile} = Key}, Profile) ->
     {ok, Key};
 node_identity({ok, #{purpose := identity, profile := Other}}, _Profile) ->
     {error, {node_identity, {wrong_profile, Other}}};
 node_identity({ok, _NotAnIdentityKey}, _Profile) ->
     {error, {node_identity, not_an_identity_key}}.
+
+%% The node's stored identity, or a refusal that says what to fix (macula#40):
+%% the file that was read, and for a key in another profile both the profile it
+%% holds and the one this node runs. Wrapped like a supplied key's refusal, and
+%% logged once at error level, because the node starts no pool at all without it.
+%% The file itself is never touched (see macula_node_keys:node_identity/2).
+stored_identity({ok, _Key} = Stored, _Path, _Profile) ->
+    Stored;
+stored_identity({error, Reason}, Path, Profile) ->
+    Refusal = {node_identity, {stored_key, Path, stored_refusal(Reason, Profile)}},
+    logger:error("[macula_client] the node's stored identity key ~ts was refused: ~0p. Move it aside, or pass "
+                 "node_identity explicitly, to start a pool.", [Path, Refusal]),
+    {error, Refusal}.
+
+stored_refusal({wrong_profile, Found}, Profile) ->
+    {wrong_profile, #{found => Found, expected => Profile}};
+stored_refusal(Reason, _Profile) ->
+    Reason.
 
 %% First-success across the pool's healthy links. Tries each link in
 %% turn; the first non-error reply wins. Which errors it walks past is

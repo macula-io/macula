@@ -60,6 +60,11 @@ node_identity_test_() ->
       fun(Ctx) ->
           {"an existing key that will not load is REFUSED, never replaced",
            {timeout, 60, fun() -> an_unreadable_key_is_never_overwritten(Ctx) end}}
+      end,
+      fun(Ctx) ->
+          {"a stored key in another profile is refused naming the file and both "
+           "profiles (macula#40)",
+           {timeout, 60, fun() -> a_stored_key_in_another_profile_names_the_file(Ctx) end}}
       end]}.
 
 setup() ->
@@ -197,6 +202,24 @@ an_unreadable_key_is_never_overwritten(#{path := Path}) ->
 
     ?assertMatch({error, _}, macula_node_keys:node_identity(Path, profile())),
     ?assertEqual({ok, Garbage}, file:read_file(Path)).
+
+%% macula#40: a host that runs tools in both profiles can hold a stored
+%% identity of the other one. The refusal used to be a bare
+%% `{wrong_profile, Found}': no file, no expected profile, and not the
+%% `{node_identity, _}' wrapper a supplied key's refusal carries. It now says
+%% what to fix: which file, which profile it holds, which the node runs. The
+%% file is left exactly as it was.
+a_stored_key_in_another_profile_names_the_file(#{path := Path}) ->
+    Profile = profile(),
+    [Other] = macula_crypto_profile:profiles() -- [Profile],
+    {ok, Key} = macula_node_keys:generate(identity, Other),
+    ok = macula_node_keys:save(Path, Key),
+    {ok, Before} = file:read_file(Path),
+
+    ?assertEqual({error, {node_identity,
+                          {stored_key, Path, {wrong_profile, #{found => Other, expected => Profile}}}}},
+                 macula_client:connect([], #{})),
+    ?assertEqual({ok, Before}, file:read_file(Path)).
 
 %%%===================================================================
 %%% Helpers

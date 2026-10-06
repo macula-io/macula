@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### Changed
+
+- **A refused stored identity says what to fix** (macula#40). Without `node_identity`, `connect/2` loads the node's
+  stored identity key; when that key was in another profile the pool refused with a bare `{wrong_profile, Found}`,
+  naming no file and not wrapped like a supplied key's refusal. It is now
+  `{error, {node_identity, {stored_key, Path, {wrong_profile, #{found => F, expected => P}}}}}` (any other refusal of
+  the stored key keeps its reason under the same `{node_identity, {stored_key, Path, _}}` wrapper), logged once at
+  error level. The file is still never touched. `macula_node_keys:node_identity_path/0` is exported.
+
 ## [13.6.0] - 2026-10-06
 
 ### Security

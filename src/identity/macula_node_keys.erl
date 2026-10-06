@@ -52,6 +52,7 @@
     generate/3,
     node_identity/1,
     node_identity/2,
+    node_identity_path/0,
     save/2,
     load/3,
     redacted/1,
@@ -220,9 +221,11 @@ linked({error, _} = Failed, Tmp, _Path) ->
     _ = file:delete(Tmp),
     Failed.
 
-%% Where the node's identity lives: the `node_identity_path' macula application env, or the platform's per-user data
-%% directory. `filename:basedir/2' rather than a path of our own invention, so the file lands where the platform says
-%% a user's application data belongs and an operator does not have to learn a macula-specific convention.
+%% @doc Where the node's identity lives: the `node_identity_path' macula application env, or the platform's per-user
+%% data directory. `filename:basedir/2' rather than a path of our own invention, so the file lands where the platform
+%% says a user's application data belongs and an operator does not have to learn a macula-specific convention.
+%% Exported so a refusal of the stored key can name the file it read (macula#40).
+-spec node_identity_path() -> file:name_all().
 node_identity_path() ->
     application:get_env(macula, node_identity_path,
                         filename:join(filename:basedir(user_data, "macula"), "identity.key")).
