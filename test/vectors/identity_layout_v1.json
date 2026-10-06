@@ -1,0 +1,89 @@
+{
+  "version": 1,
+  "issue": "macula-io/macula#76",
+  "identity_dir": "identity",
+  "old_key_file": "identity.key",
+  "default_name": "default",
+  "name_pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+  "profiles": [
+    "pq_pure",
+    "pq_hybrid"
+  ],
+  "paths": [
+    {
+      "name": "default",
+      "profile": "pq_pure",
+      "file": "identity/default.pq_pure.key"
+    },
+    {
+      "name": "default",
+      "profile": "pq_hybrid",
+      "file": "identity/default.pq_hybrid.key"
+    },
+    {
+      "name": "agent-venus",
+      "profile": "pq_pure",
+      "file": "identity/agent-venus.pq_pure.key"
+    },
+    {
+      "name": "weather_station",
+      "profile": "pq_hybrid",
+      "file": "identity/weather_station.pq_hybrid.key"
+    },
+    {
+      "name": "0",
+      "profile": "pq_pure",
+      "file": "identity/0.pq_pure.key"
+    },
+    {
+      "name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "profile": "pq_pure",
+      "file": "identity/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.pq_pure.key"
+    }
+  ],
+  "refused_names": [
+    "",
+    "a.pq_pure",
+    "../evil",
+    "a/b",
+    "a\\b",
+    "Upper",
+    "-lead",
+    "_lead",
+    "sp ace",
+    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "café"
+  ],
+  "old_key_cases": [
+    {
+      "name": "an old key in the node's profile moves to default.<profile>.key",
+      "old_key": "own_profile",
+      "in_place": "nothing",
+      "outcome": "moved"
+    },
+    {
+      "name": "an old key in the other profile moves under that profile",
+      "old_key": "other_profile",
+      "in_place": "nothing",
+      "outcome": "moved"
+    },
+    {
+      "name": "the same file already in place finishes the move",
+      "old_key": "own_profile",
+      "in_place": "same_file",
+      "outcome": "moved"
+    },
+    {
+      "name": "another key in place refuses the move, both files untouched",
+      "old_key": "own_profile",
+      "in_place": "another_key",
+      "outcome": "place_taken"
+    },
+    {
+      "name": "an old key that will not load is refused, untouched",
+      "old_key": "not_a_key",
+      "in_place": "nothing",
+      "outcome": "bad_key_file"
+    }
+  ]
+}

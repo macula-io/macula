@@ -257,12 +257,17 @@
     %% The node identity key that every link in the pool shares: an
     %% identity key in the node's crypto profile. Stations see the pool
     %% as a single peer (one node_id across N links). When absent, the
-    %% node's one stored identity (macula_node_keys:node_identity/1). Given as the key, or
+    %% identity this account stores for identity_name in the node's profile
+    %% (macula_node_keys:stored_identity/2). Given as the key, or
     %% as a loader {Module, Function, Args} that returns {ok, Key}, which a
     %% child spec must use so the spec holds no key. A loader's Args say
     %% where the key is and never hold it, because a supervisor logs them
     %% when a start fails.
     node_identity      => macula_node_keys:node_key() | {module(), atom(), [term()]},
+    %% Which of this account's stored identities the pool uses when no
+    %% node_identity is given: <identity_dir>/<name>.<profile>.key. Defaults
+    %% to the identity_name macula application env, then <<"default">>.
+    identity_name      => binary(),
     %% The function the pool starts its statement issuer with, of the
     %% shape of macula_statement_issuer_sup:start_issuer/2. For tests.
     issuer_start       => fun((fun(() -> macula_node_keys:node_key()), pid()) -> {ok, pid()} | {error, term()}),
@@ -2742,8 +2747,9 @@ pool_keys(Opts) ->
     keys_in_profile(macula_crypto_profile:configured(), Opts).
 
 keys_in_profile({ok, Profile}, Opts) ->
-    keys_with_identity(node_identity(identity_opt(maps:find(node_identity, Opts)), Profile), Profile,
-                       issuer_start(Opts));
+    keys_with_identity(logged_identity(node_identity(identity_opt(maps:find(node_identity, Opts)),
+                                                     identity_name(Opts), Profile), Profile),
+                       Profile, issuer_start(Opts));
 keys_in_profile({error, _} = Refusal, _Opts) ->
     Refusal.
 
@@ -2837,40 +2843,60 @@ keys_with_issuer({error, Reason}, _NodeIdentity, _Profile, _Start) ->
 %% pool started with no options showed five healthy links and delivered
 %% no event for over an hour). `maps:find/2' keeps the puzzle from being
 %% ground when the caller did pass a key.
-node_identity({error, _} = Refusal, _Profile) ->
+node_identity({error, _} = Refusal, _Name, _Profile) ->
     Refusal;
 %% ⚠ NO KEY SUPPLIED MEANS THE NODE'S IDENTITY, NOT A NEW ONE. This clause used to call
 %% `macula_node_keys:generate/3' and grind a fresh puzzle per pool, so two pools on one machine were two
 %% different nodes and every restart made a stranger of anything not handed a key: its (org, node_id)
 %% grants stopped matching a node that no longer existed. Raf's ruling, 2026-09-23: one identity per node,
-%% stored, shared by pools and the distribution tunnel. `node_identity/1' loads it or grinds it ONCE and
+%% stored, shared by pools and the distribution tunnel. Refined 2026-10-06 (macula#76): stored per
+%% account by name and profile, `macula_node_keys:stored_identity/2' loads it or grinds it ONCE and
 %% stores it, and the supplied-key clauses below are untouched so an application can still run a
 %% deliberately separate participant on the same machine.
-node_identity(error, Profile) ->
-    Path = macula_node_keys:node_identity_path(),
-    stored_identity(macula_node_keys:node_identity(Path, Profile), Path, Profile);
-node_identity({ok, #{purpose := identity, profile := Profile} = Key}, Profile) ->
-    {ok, Key};
-node_identity({ok, #{purpose := identity, profile := Other}}, _Profile) ->
+node_identity(error, Name, Profile) ->
+    stored_identity(macula_node_keys:stored_identity(Name, Profile), Profile);
+node_identity({ok, #{purpose := identity, profile := Profile} = Key}, _Name, Profile) ->
+    {ok, Key, supplied};
+node_identity({ok, #{purpose := identity, profile := Other}}, _Name, _Profile) ->
     {error, {node_identity, {wrong_profile, Other}}};
-node_identity({ok, _NotAnIdentityKey}, _Profile) ->
+node_identity({ok, _NotAnIdentityKey}, _Name, _Profile) ->
     {error, {node_identity, not_an_identity_key}}.
 
-%% The node's stored identity, or a refusal that says what to fix (macula#40):
-%% the file that was read, and for a key in another profile both the profile it
-%% holds and the one this node runs. Wrapped like a supplied key's refusal, and
-%% logged once at error level, because the node starts no pool at all without it.
-%% The file itself is never touched (see macula_node_keys:node_identity/2).
-stored_identity({ok, _Key} = Stored, _Path, _Profile) ->
+identity_name(Opts) ->
+    maps:get(identity_name, Opts, application:get_env(macula, identity_name, <<"default">>)).
+
+%% The account's stored identity and its file, or a refusal that says what to fix
+%% (macula#40, macula#76): the file that was read, and for a key in another profile
+%% both the profile it holds and the one this node runs; an old identity.key that
+%% could not be moved into the layout, naming both places; a name no file can carry.
+%% Wrapped like a supplied key's refusal, and logged once at error level, because
+%% the node starts no pool at all without it. No file is ever replaced (see
+%% macula_node_keys:stored_identity/2).
+stored_identity({ok, _Key, _Path} = Stored, _Profile) ->
     Stored;
-stored_identity({error, Reason}, Path, Profile) ->
-    Refusal = {node_identity, {stored_key, Path, stored_refusal(Reason, Profile)}},
-    logger:error("[macula_client] the node's stored identity key ~ts was refused: ~0p. Move it aside, or pass "
-                 "node_identity explicitly, to start a pool.", [Path, Refusal]),
+stored_identity({error, Reason}, Profile) ->
+    Refusal = {node_identity, stored_refusal(Reason, Profile)},
+    logger:error("[macula_client] the node's stored identity was refused: ~0p. Fix or move the file it names, or "
+                 "pass node_identity explicitly, to start a pool.", [Refusal]),
     {error, Refusal}.
 
-stored_refusal({wrong_profile, Found}, Profile) ->
-    {wrong_profile, #{found => Found, expected => Profile}};
+%% ⚠ THE LOG LINE IS THE GUARD AGAINST A SILENT IDENTITY CHANGE (macula#76). A tool that switches profile or
+%% name becomes another node, and every grant pinned to the old node_id stops matching with no error. So every
+%% pool says, at notice level, which key file it uses (or that its key was supplied) and the node_id it is.
+logged_identity({ok, Key, Source}, Profile) ->
+    {ok, NodeId} = macula_node_keys:node_id(Key),
+    Hex = binary:encode_hex(NodeId, lowercase),
+    logger:notice("[macula_client] node identity ~ts, node_id ~ts, profile ~ts", [source_text(Source), Hex, Profile],
+                  #{macula_identity => #{key_file => Source, node_id => Hex, profile => Profile}}),
+    {ok, Key};
+logged_identity({error, _} = Refusal, _Profile) ->
+    Refusal.
+
+source_text(supplied) -> "supplied by the application";
+source_text(Path) -> Path.
+
+stored_refusal({stored_key, Path, {wrong_profile, Found}}, Profile) ->
+    {stored_key, Path, {wrong_profile, #{found => Found, expected => Profile}}};
 stored_refusal(Reason, _Profile) ->
     Reason.
 

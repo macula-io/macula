@@ -222,6 +222,14 @@ signs the IETF LAMPS composite `id-MLDSA87-RSA4096-PSS-SHA512`. ML-DSA is
 NIST's ACVP vectors, in a Rust NIF with no Erlang fallback, and new keys are
 stored as their 32-byte seed. The node_id is SHA-256 over the identity key.
 
+A node identity belongs to one program under one user account. `connect/2`
+without a `node_identity` uses the key stored at
+`~/.local/share/macula/identity/<name>.<profile>.key` (on Linux), created the
+first time: `<name>` is `default` unless the program sets `identity_name`, and
+a program that runs in both profiles has a key, and a node_id, for each. Every
+connect logs the key file and the node_id it uses. An `identity.key` from an
+earlier release is moved into this layout under its own profile.
+
 ```erlang
 {ok, Key}    = macula_node_keys:generate(identity, pq_pure),
 {ok, NodeId} = macula_node_keys:node_id(Key),

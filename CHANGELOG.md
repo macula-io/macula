@@ -25,6 +25,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Stored identity keys per user account, by name and by profile** (macula#76). A node identity belongs to one
+  program under one user account. Without `node_identity`, `connect/2` uses the key at
+  `<identity_dir>/<name>.<profile>.key` (`macula_node_keys:stored_identity/2`), created the first time: `<name>` is
+  the new `identity_name` option, else the `identity_name` application env, else `default`, 1 to 64 of `[a-z0-9_-]`
+  (else `{node_identity, {identity_name, invalid}}`); `identity_dir` is the new application env, by default `identity`
+  in the platform's per-user data directory (`~/.local/share/macula/identity` on Linux). A program in both profiles
+  has a key, and a node_id, for each. **Every connect logs, at notice level, the key file it uses (or that the key was
+  supplied) and its node_id**, with the same as `macula_identity` log metadata, so a program that becomes another node
+  by switching profile or name shows it. The old `identity.key` next to the directory is moved to
+  `default.<its profile>.key` on the next connect and is never read in place; when that place holds another key the
+  move is refused as `{node_identity, {old_identity_key, #{from, to}, place_taken}}` and both files stay. A stored key
+  that will not load is refused as `{node_identity, {stored_key, Path, Reason}}`. `join_mesh/1` takes `identity_name`
+  too. Removed: the `node_identity_path` application env, `macula_node_keys:node_identity/1` and
+  `node_identity_path/0`. **A `node_identity_path` still set is refused, never ignored**: the application does not
+  start and a connect without a key fails, both with `{node_identity_path_removed, #{node_identity_path,
+  use_instead => [identity_dir, identity_name]}}` (a connect wraps it in `{node_identity, _}`), because ignoring it
+  would quietly give every node of a harness that set one key per node the account's one shared key. Move such a
+  setup to one `identity_dir` per node. Shared vectors for the other SDKs: `test/vectors/identity_layout_v1.json` and
+  `IDENTITY_LAYOUT_V1.md`.
 - **A refused stored identity says what to fix** (macula#40). Without `node_identity`, `connect/2` loads the node's
   stored identity key; when that key was in another profile the pool refused with a bare `{wrong_profile, Found}`,
   naming no file and not wrapped like a supplied key's refusal. It is now

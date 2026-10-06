@@ -158,11 +158,22 @@
 %% Honored opts (full reference: `macula_client:opts()'):
 %% <ul>
 %%   <li>`node_identity': the pool's node identity key, in the node's crypto
-%%       profile. If absent, the pool uses the node's one stored identity
-%%       (`macula_node_keys:node_identity/1', at the `node_identity_path'
-%%       application env): loaded if stored, ground and stored once if not,
-%%       and refused, never replaced, if the file exists and will not load.
-%%       Every pool on the node, and every restart, is then the same node.</li>
+%%       profile. If absent, the pool uses the identity this user account
+%%       stores for `identity_name' in the node's profile, at
+%%       `<identity_dir>/<name>.<profile>.key'
+%%       (`macula_node_keys:stored_identity/2'): loaded if stored, ground and
+%%       stored once if not, and refused, never replaced, if the file exists
+%%       and will not load. Every pool of the program, and every restart, is
+%%       then the same node. A program in both profiles is two nodes, with a
+%%       key for each. An `identity.key' of an earlier release is moved into
+%%       this layout under its own profile, never read in place.</li>
+%%   <li>`identity_name': which stored identity, 1 to 64 lowercase letters,
+%%       digits, `-' and `_'. Default: the `identity_name' application env,
+%%       then `<<"default">>'. The `identity_dir' application env moves the
+%%       directory (default `identity' in the platform's per-user data
+%%       directory). Every pool logs, at notice level, the key file it uses
+%%       (or that its key was supplied) and its node_id, so a program that
+%%       switches profile or name, and so becomes another node, shows it.</li>
 %%   <li>`realm_trust': the realm keys the pool pins, one per realm id, as
 %%       `#{RealmId => RealmKey}', each realm's public key as carried. A call
 %%       trusts an org namespaced advertisement only through the key pinned
@@ -1472,8 +1483,9 @@ unmonitor_nodes() -> macula_cluster:unmonitor_nodes().
 %%       `{error, {relays, expected_node_id_required}}' before any pool
 %%       starts.</li>
 %%   <li>`node_identity': the V2 pool's node identity key,
-%%       `macula_node_keys:node_key()'. Default: the node's one stored
+%%       `macula_node_keys:node_key()'. Default: the account's stored
 %%       identity, as for `connect/2'.</li>
+%%   <li>`identity_name': which stored identity, as for `connect/2'.</li>
 %% </ul>
 %%
 %% Internally builds a V2 `macula_client:pool()' and registers it
@@ -1490,7 +1502,7 @@ joined({error, _} = Refusal) ->
     Refusal.
 
 %% The seeds and options of the pool a join starts: the relays, when every one names the node_id it expects, and the
-%% node identity key when one is given.
+%% node identity key or the stored identity's name when one is given.
 join_pool_args(#{relays := Relays} = Opts) ->
     joinable(seeds_checked(Relays, Opts), Relays, Opts).
 
@@ -1499,7 +1511,7 @@ join_pool_args(#{relays := Relays} = Opts) ->
 %% seed that can never start.
 joinable(ok, Relays, Opts) ->
     pinned_relays(lists:all(fun pinned_relay/1, Relays), Relays,
-                  maps:with([node_identity], Opts));
+                  maps:with([node_identity, identity_name], Opts));
 joinable({error, _} = Refusal, _Relays, _Opts) ->
     Refusal.
 

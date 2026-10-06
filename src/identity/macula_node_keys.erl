@@ -50,9 +50,11 @@
 -export([
     generate/2,
     generate/3,
-    node_identity/1,
     node_identity/2,
-    node_identity_path/0,
+    stored_identity/2,
+    identity_env_checked/0,
+    identity_dir/0,
+    identity_path/3,
     save/2,
     load/3,
     redacted/1,
@@ -133,23 +135,135 @@ generate(Purpose, Profile, Options) when map_size(Options) =:= 0 ->
 %% Persistence
 %%------------------------------------------------------------------
 
-%% @doc THE NODE'S identity key: one per node, persisted, shared by every pool and by the distribution tunnel.
+%% @doc The identity a program under this account stores for `Name' in `Profile' (macula#76): loaded from
+%% `identity_path(identity_dir(), Name, Profile)', or ground and stored there if there is none, with the path it is
+%% stored at.
 %%
-%% Loads the stored key, or grinds one and stores it if there is none. The path comes from the `node_identity_path'
-%% macula application env, so no caller repeats the convention. Callers hold what they are given; nothing is cached
-%% here.
+%% A node identity belongs to one program running under one user account. A key works in one profile only, so a
+%% program that runs in both profiles is two nodes, and its two keys sit side by side as `<name>.pq_pure.key' and
+%% `<name>.pq_hybrid.key'. `Name' is `<<"default">>' unless the program names itself.
+%%
+%% The single `identity.key' of earlier releases, next to the identity directory, is moved first to
+%% `default.<its profile>.key' and is never read in place. The move only ever creates: when that place holds another
+%% key it is refused as `{old_identity_key, #{from, to}, place_taken}' and both files stay as they are. An old key that
+%% will not load is refused as `{old_identity_key, #{from}, Reason}', untouched. A stored key that will not load is
+%% refused as `{stored_key, Path, Reason}' and never replaced (see `node_identity/2').
 %%
 %% ⚠ THIS RUNS BEFORE THE APPLICATION IS STARTED. `macula_dist' is the `-proto_dist macula' driver, so net_kernel
 %% calls its `listen/1' during KERNEL startup when the node is named on the command line, and it starts no
 %% application: there is no `ensure_all_started' anywhere in `macula_dist_system'. A supervised owner process would
-%% not exist to ask at that moment, which is why the serialisation below is in the FILESYSTEM and not in a process.
--spec node_identity(macula_crypto_profile:profile()) -> {ok, node_key()} | {error, term()}.
-node_identity(Profile) ->
-    node_identity(node_identity_path(), Profile).
+%% not exist to ask at that moment, which is why the serialisation is in the FILESYSTEM and not in a process.
+-spec stored_identity(binary(), macula_crypto_profile:profile()) ->
+        {ok, node_key(), file:filename()} | {error, term()}.
+stored_identity(Name, Profile) ->
+    in_layout(identity_env_checked(), Name, Profile).
 
-%% @doc As `node_identity/1', at an explicit path. Exported so a test can point a node at its own key file instead of
-%% the machine's: a test that used the configured path would read, and on a fresh machine WRITE, the identity of
-%% whatever is running the suite.
+in_layout(ok, Name, Profile) ->
+    Dir = identity_dir(),
+    named(identity_path(Dir, Name, Profile), Dir, Profile);
+in_layout({error, _} = Refusal, _Name, _Profile) ->
+    Refusal.
+
+%% @doc `ok', unless the `node_identity_path' application env that macula#76 removed is still set: then
+%% `{error, {node_identity_path_removed, #{node_identity_path, use_instead}}}', naming the setting and what replaces
+%% it. A consumer that still sets it, as a station harness does with one key per station, would otherwise fall back to
+%% the account's shared directory without a word: several stations, one key, one node_id, the unnoticed identity change
+%% #76 exists to prevent. The application's start and every stored identity refuse with it.
+-spec identity_env_checked() -> ok | {error, {node_identity_path_removed, map()}}.
+identity_env_checked() ->
+    removed_env(application:get_env(macula, node_identity_path)).
+
+removed_env(undefined) ->
+    ok;
+removed_env({ok, Path}) ->
+    {error, {node_identity_path_removed, #{node_identity_path => Path, use_instead => [identity_dir, identity_name]}}}.
+
+named({ok, Path}, Dir, Profile) ->
+    in_place(old_key_moved(filename:join(filename:dirname(Dir), "identity.key"), Dir), Path, Profile);
+named({error, _} = Refusal, _Dir, _Profile) ->
+    Refusal.
+
+in_place(ok, Path, Profile) ->
+    stored_at(node_identity(Path, Profile), Path);
+in_place({error, _} = Refusal, _Path, _Profile) ->
+    Refusal.
+
+stored_at({ok, Key}, Path) -> {ok, Key, Path};
+stored_at({error, Reason}, Path) -> {error, {stored_key, Path, Reason}}.
+
+%% @doc Where identities are stored: the `identity_dir' macula application env, or `identity' in the platform's
+%% per-user data directory. `filename:basedir/2' rather than a path of our own invention, so the files land where the
+%% platform says a user's application data belongs.
+-spec identity_dir() -> file:filename().
+identity_dir() ->
+    application:get_env(macula, identity_dir, filename:join(filename:basedir(user_data, "macula"), "identity")).
+
+%% @doc The file of the identity `Name' in `Profile' under `Dir': `<Name>.<Profile>.key'. A name is 1 to 64 lowercase
+%% letters, digits, `-' and `_', starting with a letter or digit, so it can name no other directory and no other
+%% profile's key; any other is refused as `{identity_name, invalid}'.
+-spec identity_path(file:filename(), term(), macula_crypto_profile:profile()) ->
+        {ok, file:filename()} | {error, {identity_name, invalid}}.
+identity_path(Dir, Name, Profile) when is_binary(Name) ->
+    named_path(re:run(Name, "^[a-z0-9][a-z0-9_-]{0,63}$", [{capture, none}]), Dir, Name, Profile);
+identity_path(_Dir, _Name, _Profile) ->
+    {error, {identity_name, invalid}}.
+
+named_path(match, Dir, Name, Profile) ->
+    {ok, filename:join(Dir, binary_to_list(Name) ++ "." ++ atom_to_list(Profile) ++ ".key")};
+named_path(nomatch, _Dir, _Name, _Profile) ->
+    {error, {identity_name, invalid}}.
+
+%% The old single key file, moved to `default.<its profile>.key' when it is there. Its profile is the one it loads in:
+%% a key that loads in neither is refused, naming it.
+old_key_moved(Old, Dir) ->
+    old_key_found(file:read_file_info(Old), Old, Dir).
+
+old_key_found({error, enoent}, _Old, _Dir) ->
+    ok;
+old_key_found({ok, _Info}, Old, Dir) ->
+    [Profile | _] = macula_crypto_profile:profiles(),
+    old_key_loaded(old_key_profile(load(Old, identity, Profile), Old), Old, Dir);
+old_key_found({error, Reason}, Old, _Dir) ->
+    {error, {old_identity_key, #{from => Old}, Reason}}.
+
+old_key_profile({ok, #{profile := Profile}}, _Old) ->
+    {ok, Profile};
+old_key_profile({error, {wrong_profile, Found}}, Old) ->
+    old_key_profile(load(Old, identity, Found), Old);
+old_key_profile({error, _} = Refusal, _Old) ->
+    Refusal.
+
+old_key_loaded({ok, Profile}, Old, Dir) ->
+    {ok, To} = identity_path(Dir, <<"default">>, Profile),
+    old_key_linked(link_new(Old, To), Old, To);
+old_key_loaded({error, Reason}, Old, _Dir) ->
+    {error, {old_identity_key, #{from => Old}, Reason}}.
+
+%% A link only ever creates, so a key already in the new place is never replaced. The same file already there is a
+%% move cut short between the link and the removal of the old name, and is finished.
+link_new(Old, To) ->
+    linked_into(filelib:ensure_dir(To), Old, To).
+
+linked_into(ok, Old, To) -> file:make_link(Old, To);
+linked_into({error, _} = Failed, _Old, _To) -> Failed.
+
+old_key_linked(ok, Old, _To) ->
+    file:delete(Old);
+old_key_linked({error, eexist}, Old, To) ->
+    same_file(same_contents(file:read_file(Old), file:read_file(To)), Old, To);
+old_key_linked({error, Reason}, Old, To) ->
+    {error, {old_identity_key, #{from => Old, to => To}, Reason}}.
+
+same_contents({ok, Bytes}, {ok, Bytes}) -> true;
+same_contents(_Old, _To) -> false.
+
+same_file(true, Old, _To) -> file:delete(Old);
+same_file(false, Old, To) -> {error, {old_identity_key, #{from => Old, to => To}, place_taken}}.
+
+%% @doc The identity key stored at `Path': loaded, or ground and stored there if there is none. Two callers that find
+%% no file at once end up with the same key (see `claimed/4'), and a file that will not load is refused, never
+%% replaced. Exported so a test can point a node at its own key file instead of the account's: a test that used the
+%% account's would read, and on a fresh machine WRITE, the identity of whatever is running the suite.
 -spec node_identity(file:name_all(), macula_crypto_profile:profile()) -> {ok, node_key()} | {error, term()}.
 node_identity(Path, Profile) ->
     stored_or_ground(load(Path, identity, Profile), Path, Profile).
@@ -220,15 +334,6 @@ linked(ok, Tmp, Path) ->
 linked({error, _} = Failed, Tmp, _Path) ->
     _ = file:delete(Tmp),
     Failed.
-
-%% @doc Where the node's identity lives: the `node_identity_path' macula application env, or the platform's per-user
-%% data directory. `filename:basedir/2' rather than a path of our own invention, so the file lands where the platform
-%% says a user's application data belongs and an operator does not have to learn a macula-specific convention.
-%% Exported so a refusal of the stored key can name the file it read (macula#40).
--spec node_identity_path() -> file:name_all().
-node_identity_path() ->
-    application:get_env(macula, node_identity_path,
-                        filename:join(filename:basedir(user_data, "macula"), "identity.key")).
 
 %% @doc Save a key atomically. The temporary file is restricted to its owner before the key is written into it.
 -spec save(file:name_all(), node_key()) -> ok | {error, term()}.
