@@ -142,16 +142,19 @@ the client you build against.
 Add to `rebar.config`:
 
 ```erlang
-{deps, [{macula, "~> 13.0"}]}.
+{deps, [{macula, "~> 14.0"}]}.
 ```
 
 Or in Elixir `mix.exs`:
 
 ```elixir
 defp deps do
-  [{:macula, "~> 13.0"}]
+  [{:macula, "~> 14.0"}]
 end
 ```
+
+14.0.0 breaks the API, not the wire: the `node_identity_path` setting is gone
+(see "Upgrading from 13" in the [CHANGELOG](CHANGELOG.md)).
 
 12.0.0 breaks on the wire: a node on 11.5.0 or earlier cannot connect to
 it, in either direction, and there is no classical fallback for either key

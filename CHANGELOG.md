@@ -9,6 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [14.0.0] - 2026-10-06
+
+### Upgrading from 13
+
+14.0.0 breaks the API, not the wire: a 14 node and a 13 node connect as before.
+
+- **`node_identity_path` is gone.** Set the `identity_dir` application env (a directory) and, per program, the
+  `identity_name` connect option or application env instead. A node now finds its key at
+  `<identity_dir>/<identity_name>.<profile>.key`.
+- **A `node_identity_path` still set refuses to start**: the application does not start, and a connect without a key
+  fails with `{node_identity_path_removed, _}`. Remove the setting. A harness that gave each node its own key file
+  gives each node its own `identity_dir`.
+- **`macula_node_keys:node_identity(Profile)` is removed**; use `macula_node_keys:stored_identity(Name, Profile)`,
+  with the program's identity name.
+- An `identity.key` left by 13 is moved to `default.<its profile>.key` on the first connect; nothing to do by hand.
+- **BLAKE3 is gone** (`macula_blake3_nif`, `macula_crypto_nif:blake3/1`, `blake3_hex/1`): hash with
+  `crypto:hash(sha384, Bytes)`, or mint a content id with `macula_content_store:added/3`.
+- **The `hecate_*` overlay modules are renamed**: `hecate_plumtree` to `macula_plumtree`, `hecate_or_set` to
+  `macula_or_set`, `hecate_pubsub`, `hecate_pubsub_server` and `hecate_pubsub_registry` to `macula_realm_pubsub`,
+  `macula_realm_pubsub_server` and `macula_realm_pubsub_registry`. Functions and behaviour are unchanged.
+
 ### Security
 
 - **rustls 0.23.45 in the QUIC NIF** (Dependabot alert 11, moderate). rustls before 0.23.45 accepted TLS 1.3
@@ -71,7 +92,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   naming no file and not wrapped like a supplied key's refusal. It is now
   `{error, {node_identity, {stored_key, Path, {wrong_profile, #{found => F, expected => P}}}}}` (any other refusal of
   the stored key keeps its reason under the same `{node_identity, {stored_key, Path, _}}` wrapper), logged once at
-  error level. The file is still never touched. `macula_node_keys:node_identity_path/0` is exported.
+  error level. The file is still never touched.
 
 ### Fixed
 
