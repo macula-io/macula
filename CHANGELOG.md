@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [14.1.0] - 2026-10-07
+
 ### Security
 
 - **`advertise/5` alone makes a provider resolvable, and sealable (#33).** A provider registered through
