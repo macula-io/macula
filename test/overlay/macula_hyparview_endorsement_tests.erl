@@ -27,6 +27,7 @@ cases(Keys) ->
                  fun an_endorsement_window_of_30_days_is_accepted/1,
                  fun an_endorsement_window_over_30_days_is_refused/1,
                  fun an_endorsement_window_that_ends_before_it_starts_is_refused/1,
+                 fun a_check_at_a_time_before_the_record_was_made_refuses/1,
                  fun a_join_frame_carries_no_signature_of_its_own/1,
                  fun a_join_frame_carries_a_verifiable_endorsement/1]].
 
@@ -108,6 +109,18 @@ an_endorsement_window_that_ends_before_it_starts_is_refused(#{realm_key := Key} 
     Record = unsigned(Keys, Member, [], #{valid_from => From, valid_until => From + ?MINUTE}),
     Reversed = Record#{payload := (maps:get(payload, Record))#{{text, <<"valid_until">>} := From - 1}},
     ?assertEqual({error, endorsement_window_reversed}, verify(signed(Reversed, Key), Keys, Member)).
+
+%% The record's own clock rules apply at Now too (macula#56): a time inside the endorsement's window, but more than the
+%% clock tolerance (5 minutes) before the record was created, is refused by the record check.
+a_check_at_a_time_before_the_record_was_made_refuses(#{realm_key := Key, realm := Realm} = Keys) ->
+    Member = id(),
+    Now = erlang:system_time(millisecond),
+    Window = #{valid_from => Now - 60 * ?MINUTE, valid_until => Now + 10 * ?MINUTE},
+    Wire = signed(unsigned(Keys, Member, [], Window), Key),
+    Trust = #{profile => pq_pure, realm => Realm, realm_key_id => macula_node_keys:key_id(Key)},
+    ?assertEqual({error, not_yet_valid},
+                 macula_hyparview_endorsement:verify_endorsement(Wire, Trust, Member, Now - 10 * ?MINUTE)),
+    ?assertEqual({ok, []}, macula_hyparview_endorsement:verify_endorsement(Wire, Trust, Member, Now)).
 
 %%------------------------------------------------------------------
 %% The JOIN frame

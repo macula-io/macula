@@ -60,8 +60,19 @@ verify_endorsement(Signed, Trust, Member) ->
     verify_endorsement(Signed, Trust, Member, erlang:system_time(millisecond)).
 
 %% @doc verify_endorsement/3 at the time Now, in milliseconds: whether the endorsement admitted Member at that time, the
-%% record's own created_at and expires_at checked at Now too. A historical check, such as whether the signer of an
-%% observation was a member when it signed, passes the observation's time.
+%% record's own created_at and expires_at checked at Now too. A historical check asks whether the signer of an
+%% observation was a member when it was made.
+%%
+%% Now is the verifier's own assertion of when the judged record was made: when the verifier received it, or a time it
+%% has evidence for that the signer did not choose. Never take Now from inside the record being judged, such as an
+%% observation's own signed timestamp: the signer wrote that, so a former member could date every later record into
+%% its old window, and it would verify forever.
+%%
+%% It says nothing about revocation. A revocation is the realm's tombstone in the member's slot, which
+%% slot_endorsement/4 reads, and that tombstone lives only until the endorsement's own expiry plus clock tolerance.
+%% After that, a member revoked before Now and a member in good standing at Now look the same, so a revocation cannot
+%% be checked after the fact. A verifier that needs it bounds Now by its own receipt time and reads the slot while the
+%% tombstone lives.
 -spec verify_endorsement(binary() | map(), trust(), node_id(), integer()) -> {ok, [binary()]} | {error, verify_error()}.
 verify_endorsement(Signed, #{profile := Profile, realm := <<_:256>>, realm_key_id := <<_:256>>} = Trust,
                    <<_:256>> = Member, Now) when is_integer(Now) ->

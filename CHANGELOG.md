@@ -16,7 +16,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   too, so an SDK or a tool can check an admission historically, such as whether an observation's signer was a member
   when it signed. `verify_endorsement/3` is it at the system time. Shared vectors:
   `test/vectors/realm_member_endorsement_v1.json` (both profiles, admission at and inside the window, and every
-  refusal after a verified record), from `scripts/generate-realm-member-endorsement-vectors.sh`.
+  refusal after a verified record), from `scripts/generate-realm-member-endorsement-vectors.sh`. `Now` must be the
+  verifier's own time (its receipt time), never a time read from the record being judged: a former member would date
+  its later records into its old window (macula#56). It says nothing about revocation, which only the member's slot
+  shows (`slot_endorsement/4`), and only while the realm's tombstone lives.
 - **App records** (macula#75). An org's signed statement of one of its apps, core record type 0x17, stored under
   `macula_record:app_key/3` of the app's MRI (`mri:app:<realm>/<org>/<app>`): its version and its services, each
   naming the procedures it serves. It carries the realm-signed org directory, so `macula_record:verify_app/3` checks
