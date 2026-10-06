@@ -937,17 +937,31 @@ settled(Result, Remember, Pool, Realm, Procedure, Candidate) ->
 candidate_source(#{dial := _Seed}) -> head_start;
 candidate_source(_Resolved)        -> dht.
 
-outcome({ok, _Answered})            -> answered;
-outcome({ok, _Answered, _Report})   -> answered;
-outcome(_NotAnswered)               -> not_answered.
+%% What the candidate did with the CALL. A provider that replied with an error
+%% answered, and is `refused' with its code: on the fleet a realm answering
+%% `not_admitted' in 230 ms was reported `not_answered' and sent the diagnosis
+%% toward a lost frame (macula#48). A provider's code and detail reach the
+%% caller as binaries, and nothing the link, the pool or a station builds is
+%% one (`macula_station_link:call_result/1'), so a binary is the provider's.
+%% A station's relay error (`unknown_next_peer', an atom) answers for the
+%% route, not the provider: `not_answered', with a timeout and a dropped link.
+outcome({ok, _Answered})                      -> answered;
+outcome({ok, _Answered, _Report})             -> answered;
+outcome({error, {call_error, Code, _Detail}}) when is_binary(Code) -> {refused, Code};
+outcome({error, Detail}) when is_binary(Detail) -> {refused, <<"handler_error">>};
+outcome(_NotAnswered)                         -> not_answered.
 
 %% Agnostic by construction: every outcome of every candidate, no threshold.
 %% Reading the split of head starts to DHT resolutions is the measurement's
 %% job; producing it honestly is this one's.
-report_candidate(Source, Outcome, #{provider := Provider, station := Station}) ->
+report_candidate(Source, {refused, Code}, Candidate) ->
+    candidate_tried(Source, #{outcome => refused, code => Code}, Candidate);
+report_candidate(Source, Outcome, Candidate) ->
+    candidate_tried(Source, #{outcome => Outcome}, Candidate).
+
+candidate_tried(Source, Outcome, #{provider := Provider, station := Station}) ->
     macula_diagnostics:event(<<"_macula.direct_dial.candidate_tried">>,
-                             #{source => Source, outcome => Outcome,
-                               provider => Provider, station => Station}).
+                             Outcome#{source => Source, provider => Provider, station => Station}).
 
 %% Remembers the candidate that ANSWERED, and only a DHT-resolved one.
 %%

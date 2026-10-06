@@ -17,6 +17,9 @@
 
 -include_lib("eunit/include/eunit.hrl").
 
+%% logger handler callback, for the candidate_tried capture.
+-export([log/2]).
+
 
 -define(STATE, macula_direct_dial_resolve_tests_state).
 -define(REALM, <<16#11:256>>).
@@ -71,7 +74,12 @@ teardown(_) ->
 
 resolve_test_() ->
     {foreach, fun setup/0, fun teardown/1,
-     [{timeout, 30, fun call_to_a_provider_dials_only_that_providers_station/0},
+     [{timeout, 30, fun a_candidate_that_answered_is_reported_answered/0},
+      {timeout, 30, fun a_provider_error_reply_is_reported_refused_with_its_code/0},
+      {timeout, 30, fun a_handler_error_reply_is_reported_refused/0},
+      {timeout, 30, fun a_candidate_that_timed_out_is_reported_not_answered/0},
+      {timeout, 30, fun a_station_relay_error_is_reported_not_answered/0},
+      {timeout, 30, fun call_to_a_provider_dials_only_that_providers_station/0},
       {timeout, 30, fun call_to_a_provider_that_is_not_advertised_says_so/0},
       {timeout, 30, fun call_to_a_provider_skips_another_providers_head_start/0},
       {timeout, 30, fun call_to_a_provider_uses_its_own_head_start/0},
@@ -560,6 +568,34 @@ call_does_not_remember_a_station_whose_call_failed() ->
 %% no fresh evidence about the advertisement, and refreshing on a hit would
 %% let one remembered station live for as long as it kept answering while the
 %% DHT was never asked again.
+%% The candidate_tried event says what happened to the candidate (macula#48):
+%% a provider that answered with an error answered, and is reported `refused'
+%% with its code, apart from a call that got no answer at all. On the fleet a
+%% realm answering `not_admitted' in 230 ms was reported `not_answered' and
+%% sent the diagnosis toward a lost frame.
+a_candidate_that_answered_is_reported_answered() ->
+    ?assertMatch(#{outcome := answered}, candidate_tried_for({ok, <<"from a">>})).
+
+a_provider_error_reply_is_reported_refused_with_its_code() ->
+    Props = candidate_tried_for({error, {call_error, <<"not_admitted">>, undefined}}),
+    ?assertMatch(#{outcome := refused, code := <<"not_admitted">>}, Props).
+
+%% A handler's own `{error, Text}' reaches the caller as `{error, Text}'.
+a_handler_error_reply_is_reported_refused() ->
+    Props = candidate_tried_for({error, <<"not_admitted">>}),
+    ?assertMatch(#{outcome := refused, code := <<"handler_error">>}, Props).
+
+a_candidate_that_timed_out_is_reported_not_answered() ->
+    Props = candidate_tried_for({error, timeout}),
+    ?assertMatch(#{outcome := not_answered}, Props),
+    ?assertNot(maps:is_key(code, Props)).
+
+%% A station that holds no connection to the provider answers for the route,
+%% not for the provider.
+a_station_relay_error_is_reported_not_answered() ->
+    ?assertMatch(#{outcome := not_answered},
+                 candidate_tried_for({error, {call_error, unknown_next_peer, undefined}})).
+
 call_does_not_remember_a_head_start_that_answered() ->
     A = station(<<"a.test">>),
     remember_station(?PROC, A, provider_id()),
@@ -1192,3 +1228,32 @@ authorized_advertisement(#{id := StationId}, #{realm := Realm, org := Org}, OrgN
                macula_record:procedure_advertisement(ProviderId, ?REALM, ?ORG_PROC, StationId,
                                                      #{authorization => Authorization, ttl_ms => 300_000}),
                Provider)).
+
+%% The properties of the one candidate_tried event a call to a single
+%% advertised station emits when that station's call returns `Answer'.
+candidate_tried_for(Answer) ->
+    A = station(<<"a.test">>),
+    set_replies(procedure_key(), [[advertisement(A)]]),
+    set_endpoint(A, endpoint_record(A)),
+    set_answer(dial_url(A), Answer),
+    #{level := Primary} = logger:get_primary_config(),
+    ok = logger:set_primary_config(level, all),
+    ok = logger:add_handler(?MODULE, ?MODULE, #{level => all, config => #{test => self()}}),
+    try
+        _ = call(3000),
+        receive
+            {candidate_tried, Props} -> Props
+        after 1_000 -> error(no_candidate_tried_event)
+        end
+    after
+        _ = logger:remove_handler(?MODULE),
+        ok = logger:set_primary_config(level, Primary)
+    end.
+
+%% logger handler callback: hands the test the candidate_tried events.
+log(#{msg := {report, #{event := <<"_macula.direct_dial.candidate_tried">>,
+                        properties := Props}}}, #{config := #{test := Test}}) ->
+    Test ! {candidate_tried, Props},
+    ok;
+log(_Event, _Config) ->
+    ok.

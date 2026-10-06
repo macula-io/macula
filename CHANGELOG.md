@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Direct dial reports a provider's error reply as `refused`, with its code (#48).** The
+  `_macula.direct_dial.candidate_tried` event said `not_answered` for every result but a success, so a
+  provider that answered `{error, <<"not_admitted">>}` in 230 ms read like a lost frame. A provider error
+  reply is now `outcome => refused` with `code` (the provider's code, or `handler_error` for a handler's
+  own `{error, Text}`). A timeout, a dropped link or a station's relay error (`unknown_next_peer`) stays
+  `not_answered`. Only the diagnostic changes: what `call/5,6` returns, and which candidate is
+  remembered, are as before.
+
 ## [14.0.0] - 2026-10-06
 
 ### Upgrading from 13
