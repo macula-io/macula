@@ -40,6 +40,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **No `unexpected_event` warning for a normal v4 fallback** (macula#51). The refused v5 attempt's stream could
   report after the retry had left `connecting`, and was logged as `_macula.peering.unexpected_event`. The
   connection now remembers that stream and drops its late events in any state.
+- **The v5 downgrade memory lasts the run** (macula#50). The `macula_peer_versions` table, which remembers every node
+  seen on handshake v5 so a later `unsupported_version` from it is refused as a downgrade, is now owned by
+  `macula_peering_sup` instead of a gen_server of its own. A child of that supervisor that exits no longer empties the
+  memory, and no connection can run while the table is missing, so dials no longer raise `badarg` in that window.
 
 ## [13.6.0] - 2026-10-06
 

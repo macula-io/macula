@@ -11,14 +11,14 @@
 %% Fallbacks are counted per node. The first is expected while the fleet rolls; from the second, the caller logs a
 %% warning at most once a minute per node.
 %%
-%% This process only owns the table. Every read and write goes to the table directly, so no connection queues on it.
+%% The table belongs to macula_peering_sup, which creates it with new_table/0 and holds every connection that reads it,
+%% so the memory lasts as long as those connections can, whichever child of that supervisor dies (macula#50). There is
+%% no process here: every read and write goes to the table directly, so no connection queues on it.
 -module(macula_peer_versions).
--behaviour(gen_server).
 
--export([start_link/0, dial_version/2, unsupported_version/2, completed_v5/1, v4_completed/2, v4_ended/2,
+-export([new_table/0, dial_version/2, unsupported_version/2, completed_v5/1, v4_completed/2, v4_ended/2,
          refuse_downgrade/1, seen_v5/1, forget_v5_peer/1,
          fallback_warning/2, downgrade_warning/2, count/1, counters/0]).
--export([init/1, handle_call/3, handle_cast/2]).
 
 -define(TABLE, ?MODULE).
 -define(V4_CACHE_MS, 10 * 60000).
@@ -36,9 +36,11 @@
 %% {{downgrades, NodeId}, Count}, {{warned_downgrade, NodeId}, Ms}, {{v4_conn, NodeId, Pid}} for each v4 connection
 %% this node dialled that is open, {{counter, Name}, Count}.
 
--spec start_link() -> {ok, pid()}.
-start_link() ->
-    gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
+%% @doc Create the table, owned by the calling process: macula_peering_sup, whose life is the run's.
+-spec new_table() -> ok.
+new_table() ->
+    ?TABLE = ets:new(?TABLE, [named_table, public, set, {read_concurrency, true}, {write_concurrency, true}]),
+    ok.
 
 %% @doc The version to put in CONNECT to NodeId at Now.
 -spec dial_version(<<_:256>>, integer()) -> 4 | 5.
@@ -165,17 +167,3 @@ counters() ->
 
 counted([{_, Count}]) -> Count;
 counted([]) -> 0.
-
-%%------------------------------------------------------------------
-%% The table's owner
-%%------------------------------------------------------------------
-
-init([]) ->
-    ?TABLE = ets:new(?TABLE, [named_table, public, set, {read_concurrency, true}, {write_concurrency, true}]),
-    {ok, #{}}.
-
-handle_call(_Request, _From, State) ->
-    {reply, {error, unknown_call}, State}.
-
-handle_cast(_Request, State) ->
-    {noreply, State}.
