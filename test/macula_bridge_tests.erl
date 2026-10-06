@@ -13,6 +13,9 @@
 -export([log/2]).
 
 -define(EVENT_MS, 5_000).
+%% How long a test that floods a stream waits for it on a loaded host: opening
+%% the stream took over 5 s at a quarter of a CPU (macula#55).
+-define(LOADED_MS, 12_000).
 -define(KiB, 1024).
 -define(MiB, (1024 * 1024)).
 
@@ -148,8 +151,7 @@ a_chunk_that_is_not_bridge_bytes_closes_the_connection() ->
                                                         timer:sleep(?EVENT_MS) end),
     {ok, Listener} = macula_bridge:listen_with(local_open(Procedure), #{port => 0}),
     {ok, Port} = macula_bridge:local_port(Listener),
-    {ok, C} = connect(Port),
-    ?assert(closed_by_bridge(C, ?EVENT_MS)).
+    ?assert(closed_at_connect_or_after(Port, ?EVENT_MS)).
 
 %% The service behind the bridge does not answer: the local connection is
 %% closed promptly, not left open with nothing behind it.
@@ -173,8 +175,7 @@ a_refused_connection_is_closed_at_once_and_logged() ->
     try
         {ok, Listener} = macula_bridge:listen_with(local_open(Procedure), #{port => 0}),
         {ok, Port} = macula_bridge:local_port(Listener),
-        {ok, C} = connect(Port),
-        ?assert(closed_by_bridge(C, ?EVENT_MS)),
+        ?assert(closed_at_connect_or_after(Port, ?EVENT_MS)),
         ?assert(logged(<<"unauthorized">>, ?EVENT_MS))
     after
         logger:remove_handler(Handler)
@@ -318,7 +319,8 @@ a_service_reset_reaches_the_client_as_a_reset() ->
 %% configured with.
 the_serving_end_grants_the_credit_it_receives_under() ->
     Max = max_unread_at_the_serving_end(#{window_bytes => 64 * ?KiB, chunk_bytes => 16 * ?KiB},
-                                        #{window_bytes => 8 * ?MiB, chunk_bytes => 4 * ?KiB}),
+                                        #{window_bytes => 8 * ?MiB, chunk_bytes => 4 * ?KiB},
+                                        16 * ?KiB),
     ?assert(Max > 16 * ?KiB),
     ?assert(Max =< 64 * ?KiB).
 
@@ -329,7 +331,8 @@ the_serving_end_grants_no_more_than_its_session_share() ->
     with_env(max_served_inbox_bytes_per_caller, 2 * ?MiB,
              fun() ->
                  Max = max_unread_at_the_serving_end(#{window_bytes => 8 * ?MiB, chunk_bytes => 16 * ?KiB},
-                                                     #{window_bytes => 8 * ?MiB, chunk_bytes => 4 * ?KiB}),
+                                                     #{window_bytes => 8 * ?MiB, chunk_bytes => 4 * ?KiB},
+                                                     64 * ?KiB),
                  ?assert(Max > 64 * ?KiB),
                  ?assert(Max =< 128 * ?KiB)
              end).
@@ -374,8 +377,7 @@ credit_past_any_window_is_malformed() ->
                                                         timer:sleep(?EVENT_MS) end),
     {ok, Listener} = macula_bridge:listen_with(local_open(Procedure), #{port => 0}),
     {ok, Port} = macula_bridge:local_port(Listener),
-    {ok, C} = gen_tcp:connect({127, 0, 0, 1}, Port, [binary, {active, false}, {show_econnreset, true}], ?EVENT_MS),
-    ?assertEqual({error, econnreset}, gen_tcp:recv(C, 0, ?EVENT_MS)).
+    ?assertEqual({error, econnreset}, ended_by_bridge(Port, [{show_econnreset, true}], ?EVENT_MS)).
 
 %% Credit counts what a chunk costs the receiver's stream, not only its
 %% bytes: a receiver that never reads nor grants holds at most the first
@@ -429,16 +431,22 @@ the_serving_end_keeps_the_share_it_started_with() ->
 %%------------------------------------------------------------------
 
 %% The most bytes the serving end's stream holds unread while a client sends
-%% 64 MiB to a service that reads nothing for two seconds, behind a small
+%% 64 MiB to a service that reads nothing until released, behind a small
 %% receive buffer, so the sockets between fill and the stream's inbox is what
 %% holds the rest. Once the serving end blocks writing, its inbox holds the
 %% window less what it wrote since its last grant (under 32 KiB) and the one
 %% chunk it holds (the listening end's chunk size: keep it small to see the
-%% window fill).
-max_unread_at_the_serving_end(ServeOpts, ListenOpts) ->
+%% window fill). Sampling runs until the unread bytes pass `Floor' (bounded)
+%% and a little past it: a fixed sampling time raced the fill on a loaded
+%% host (macula#55).
+max_unread_at_the_serving_end(ServeOpts, ListenOpts, Floor) ->
     Test = self(),
     Procedure = procedure(),
-    Service = service(fun(S) -> timer:sleep(2_000), echo(S) end, [{recbuf, 4096}]),
+    Service = service(fun(S) ->
+                          Test ! {service_holding, self()},
+                          receive release -> ok after 30_000 -> ok end,
+                          echo(S)
+                      end, [{recbuf, 4096}]),
     ok = macula_bridge:serve_with(fun(Handler, _Opts) ->
                                       macula_stream_local:advertise(Procedure, bidi,
                                                                     fun(S, A) -> Test ! {served, S}, Handler(S, A) end)
@@ -448,12 +456,24 @@ max_unread_at_the_serving_end(ServeOpts, ListenOpts) ->
     {ok, C} = connect(Port),
     Sender = spawn(fun() -> gen_tcp:send(C, binary:copy(<<"y">>, 64 * ?MiB)) end),
     try
-        Served = receive {served, S} -> S after ?EVENT_MS -> error(never_served) end,
-        max_unread(Served, 1_800, 0)
+        Served = receive {served, S} -> S after ?LOADED_MS -> error(never_served) end,
+        Max = max_unread_past(Served, Floor, ?LOADED_MS, 0),
+        max_unread(Served, 300, Max)
     after
+        receive {service_holding, Holder} -> Holder ! release after 0 -> ok end,
         exit(Sender, kill),
         gen_tcp:close(C)
     end.
+
+%% Samples until the unread bytes pass `Floor' or `Ms' runs out.
+max_unread_past(_Stream, Floor, _Ms, Max) when Max > Floor ->
+    Max;
+max_unread_past(_Stream, _Floor, Ms, Max) when Ms =< 0 ->
+    Max;
+max_unread_past(Stream, Floor, Ms, Max) ->
+    Unread = unread(catch macula_stream:info(Stream)),
+    timer:sleep(10),
+    max_unread_past(Stream, Floor, Ms - 10, max(Max, Unread)).
 
 max_unread(_Stream, Ms, Max) when Ms =< 0 ->
     Max;
@@ -478,6 +498,22 @@ restore_env(Key, {ok, Value}) -> application:set_env(macula, Key, Value).
 %% reset instead of a FIN: the same closed connection (macula-io/macula#52).
 closed_by_bridge(C, Ms) ->
     lists:member(gen_tcp:recv(C, 0, Ms), [{error, closed}, {error, econnreset}]).
+
+%% The same, for a bridge that ends the connection at once: its reset can land
+%% before connect returns (macula#55).
+closed_at_connect_or_after(Port, Ms) ->
+    closed_after(connect(Port), Ms).
+
+closed_after({error, econnreset}, _Ms) -> true;
+closed_after({ok, C}, Ms) -> closed_by_bridge(C, Ms).
+
+%% How a client's connection to `Port' ends when the bridge ends it at once:
+%% the bridge's reset can land before connect returns (macula#55).
+ended_by_bridge(Port, SocketOpts, Ms) ->
+    ended(gen_tcp:connect({127, 0, 0, 1}, Port, [binary, {active, false} | SocketOpts], ?EVENT_MS), Ms).
+
+ended({error, econnreset} = Reset, _Ms) -> Reset;
+ended({ok, C}, Ms) -> gen_tcp:recv(C, 0, Ms).
 
 %% What a socket reads until its end: `{eof, Bytes}' for a clean close,
 %% `{reset, Bytes}' for a reset (with `show_econnreset').
