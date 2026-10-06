@@ -141,41 +141,27 @@ wait_until_dead(_Pid, false) -> ok;
 wait_until_dead(Pid, true) -> timer:sleep(1), wait_until_dead(Pid, erlang:is_process_alive(Pid)).
 
 %% advertise_direct/7 passes its options on to advertise/6, so `announce'
-%% and `auth' apply to a direct-dial advertised procedure too, and both
-%% the advertise and the DHT record publish get the options without the
-%% three function options.
+%% and `auth' apply to a direct-dial advertised procedure too, without the
+%% function options. It publishes no DHT record of its own: the pool's links
+%% put the advertisement they send (macula#33).
 advertise_direct_forwards_opts_to_advertise() ->
     Test = self(),
-    PublishAdvertisement = fun(_Pool, _Realm, _Procedure, _Identity, Opts) ->
-                                   Test ! {advertisement_published, Opts},
-                                   ok
-                           end,
-    Opts = (functions(Test))#{announce => false, publish_advertisement => PublishAdvertisement},
+    Opts = (functions(Test))#{announce => false},
     {ok, _Sup} = macula_response:advertise_direct(pool, ?REALM, ?PROCEDURE, ?MODULE, [],
                                                   macula_test_identity:key(), Opts),
     {_Handler, Advertised} = next_advertised(),
-    ?assertEqual(#{announce => false}, Advertised),
-    Published = receive
-                    {advertisement_published, PublishedOpts} -> PublishedOpts
-                after 1000 ->
-                    not_published
-                end,
-    ?assertEqual(#{announce => false}, Published).
+    ?assertEqual(#{announce => false}, Advertised).
 
 %% cert_chain is gone in 11.0.0. advertise_direct/7 refuses it by name before it
 %% registers the handler, so no handler is left registered with no advertisement
 %% to reach it; authorization replaces it.
 advertise_direct_with_a_removed_trust_option_registers_and_publishes_nothing() ->
     Test = self(),
-    PublishAdvertisement = fun(_Pool, _Realm, _Procedure, _Identity, _Opts) ->
-                                   Test ! published,
-                                   ok
-                           end,
-    Opts = (functions(Test))#{publish_advertisement => PublishAdvertisement, cert_chain => <<"pem">>},
+    Opts = (functions(Test))#{cert_chain => <<"pem">>},
     ?assertEqual({error, {removed_option, cert_chain}},
                  macula_response:advertise_direct(pool, ?REALM, ?PROCEDURE, ?MODULE, [],
                                                   macula_test_identity:key(), Opts)),
-    ?assertEqual(none, receive {advertised, _, _} -> advertised; published -> published after 0 -> none end).
+    ?assertEqual(none, receive {advertised, _, _} -> advertised after 0 -> none end).
 
 replies_and_publishes_lifecycle() ->
     {ok, _Sup} = advertise(functions(self())),

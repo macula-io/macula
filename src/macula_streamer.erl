@@ -56,27 +56,20 @@
 %%%
 %%% == Direct-dial ==
 %%%
-%%% `advertise/5,6' registers the handler with the pool's advertise-
-%%% gossip mechanism only — nothing published lets a caller on another
-%%% station find this procedure without a route having propagated
-%%% between the two stations first. `advertise_direct/6,7' does that
-%%% AND publishes a signed `procedure_advertisement' DHT record naming
-%%% this pool's currently-connected station as the server — the exact
-%%% same record type and publish function `macula_response:advertise_direct/6,7'
-%%% uses for plain RPC (a `procedure_advertisement' does not distinguish
-%%% RPC from streaming), so a caller using
-%%% `macula_stream_sink:start_link_direct/5,6' can resolve and dial
-%%% here directly, in one hop, regardless of whether the two stations
-%%% have a routing edge between them.
+%%% `advertise/5,6' registers the handler with the pool, and since
+%%% 14.1.0 that alone makes it resolvable: each link sends its station an
+%%% ADVERTISE and puts the same signed `procedure_advertisement' in the
+%%% DHT, signed once by the pool and naming that link's station
+%%% (macula#33). A caller using `macula_stream_sink:start_link_direct/5,6' resolves it and dials in one hop,
+%%% whether or not the two stations have a routing edge between them.
+%%% `advertise_direct/6,7' is the same registration, kept for the 14.x API.
 %%%
 %%% == Stream I/O ==
 %%%
 %%% A streamer advertises its procedure with `advertise_stream', a
 %%% function of arity 6, `macula:advertise_stream/6' by default, which
-%%% gets the procedure's `auth' policy and no other option;
-%%% `advertise_direct/6,7' publishes its DHT record with
-%%% `publish_advertisement', `macula_direct_dial:publish_advertisement/5'
-%%% by default; and each streamer announces its facts with
+%%% gets the procedure's `auth' policy and no other option; and each
+%%% streamer announces its facts with
 %%% `fact_publish', `macula:publish/4' by default. Each streamer runs its
 %%% stream on seven `macula_stream:stream_io()' functions, `recv/2',
 %%% `send/3', `close_send/1', `close/1', `abort/3', `set_reply/2' and
@@ -144,7 +137,7 @@
 -export([start_link/8]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
--export_type([advertise_stream/0, publish_advertisement/0, advertise_opts/0]).
+-export_type([advertise_stream/0, advertise_opts/0]).
 
 -callback init(Args :: term()) ->
     {ok, State :: term()} | {stop, Reason :: term()}.
@@ -172,11 +165,7 @@
 -type advertise_stream() :: fun((macula:pool(), macula:realm(), macula:procedure(),
                                  macula_stream:mode(), fun((pid(), term()) -> ok), map()) ->
                                     ok | {error, term()}).
--type publish_advertisement() :: fun((macula:pool(), macula:realm(), macula:procedure(),
-                                      macula_node_keys:node_key(), map()) ->
-                                         ok | {error, term()}).
 -type advertise_opts() :: #{advertise_stream => advertise_stream(),
-                            publish_advertisement => publish_advertisement(),
                             fact_publish => macula_lifetime_announcer:publish(),
                             stream_io => macula_stream:stream_io(),
                             atom() => term()}.
@@ -255,13 +244,8 @@ default_stream_io() ->
       set_reply => fun macula_stream:set_reply/2,
       set_error => fun macula_stream:set_error/2}.
 
-%% The options the advertisement publish gets: all but the functions.
-without_functions(Opts) ->
-    maps:without([advertise_stream, publish_advertisement, fact_publish, stream_io], Opts).
-
 arity_4(Fun) when is_function(Fun, 4) -> Fun.
 
-arity_5(Fun) when is_function(Fun, 5) -> Fun.
 
 arity_6(Fun) when is_function(Fun, 6) -> Fun.
 
@@ -280,43 +264,21 @@ new_sup() ->
     {ok, Sup} = macula_streamer_sup:start_link(),
     Sup.
 
-%% @doc As `advertise/5', and additionally publishes a signed
-%% `procedure_advertisement' DHT record naming this pool's connected
-%% station as the server, so `macula_stream_sink:start_link_direct/5,6'
-%% can resolve and dial here directly. `NodeIdentity' signs it and must be
-%% the node identity key `Pool' was started with: a caller targets that
-%% node_id, and the station knows the pool's connection by it.
-%%
-%% The DHT publish is best-effort: if it fails, the handler is still
-%% advertised and reachable via the ordinary pooled path — direct-dial
-%% callers just won't be able to resolve it until a later publish
-%% succeeds. "Best-effort" still means the failure is logged, not
-%% silently discarded — a caller that only ever calls this once (never
-%% retries) has no other way to learn its handler is pooled-only, and
-%% "a later publish succeeds" cannot happen if nothing ever tries again.
+%% @doc As `advertise/5'. Since 14.1.0 the pool's links put the stream's
+%% advertisement in the DHT themselves, signed once by the pool (macula#33),
+%% so this publishes nothing of its own. `NodeIdentity' is kept for the 14.x
+%% signature and is not used.
 -spec advertise_direct(macula:pool(), macula:realm(), macula:procedure(),
                        module(), term(), macula_node_keys:node_key()) ->
     {ok, pid()} | {error, term()}.
 advertise_direct(Pool, Realm, Procedure, Module, Args, NodeIdentity) ->
     advertise_direct(Pool, Realm, Procedure, Module, Args, NodeIdentity, #{}).
 
-%% @doc As `advertise_direct/6', with `Opts' forwarded BOTH to
-%% `advertise/6' (so `mode'/`announce'/`reuse_sup' and the functions
-%% apply here too, e.g. `mode => client_stream') and, without the
-%% functions, to the advertisement publish, `publish_advertisement' in
-%% `Opts' or `macula_direct_dial:publish_advertisement/5' (e.g.
-%% `authorization', the provider authorization an org namespaced
-%% procedure needs): each side reads only the keys it recognizes, so one
-%% `Opts' map serves both.
-%% `reuse_sup' matters here specifically: the procedure's DHT record
-%% expires with its TTL, and callers reach the provider only through
-%% that record, so the provider republishes it — a periodic
-%% re-advertise with `reuse_sup => Sup' (the pid this function
-%% returned the first time) registers the handler again and
-%% republishes the DHT record without leaking a new supervisor per
-%% tick. `cert_chain', a 10.x option `authorization' replaces, is refused
-%% with `{error, {removed_option, cert_chain}}' before the handler is
-%% registered.
+%% @doc As `advertise_direct/6', with `Opts' forwarded to `advertise/6'
+%% (so `mode', `announce', `reuse_sup' and the functions apply, e.g.
+%% `mode => client_stream'). `cert_chain', a 10.x option `authorization'
+%% replaces, is refused with `{error, {removed_option, cert_chain}}' before
+%% the handler is registered.
 -spec advertise_direct(macula:pool(), macula:realm(), macula:procedure(),
                        module(), term(), macula_node_keys:node_key(), advertise_opts()) ->
     {ok, pid()} | {error, term()}.
@@ -324,29 +286,11 @@ advertise_direct(Pool, Realm, Procedure, Module, Args, NodeIdentity, Opts) ->
     advertise_direct_unless_removed(macula_direct_dial:removed_option(advertise, Opts), Pool,
                                     Realm, Procedure, Module, Args, NodeIdentity, Opts).
 
-advertise_direct_unless_removed(none, Pool, Realm, Procedure, Module, Args, NodeIdentity, Opts) ->
-    PublishAdvertisement = arity_5(maps:get(publish_advertisement, Opts,
-                                            fun macula_direct_dial:publish_advertisement/5)),
-    case advertise(Pool, Realm, Procedure, Module, Args, Opts) of
-        {ok, Sup} ->
-            log_publish_result(
-              PublishAdvertisement(Pool, Realm, Procedure, NodeIdentity, without_functions(Opts)),
-              Procedure),
-            {ok, Sup};
-        {error, _} = Error ->
-            Error
-    end;
+advertise_direct_unless_removed(none, Pool, Realm, Procedure, Module, Args, _NodeIdentity, Opts) ->
+    advertise(Pool, Realm, Procedure, Module, Args, Opts);
 advertise_direct_unless_removed(Removed, _Pool, _Realm, _Procedure, _Module, _Args, _NodeIdentity,
                                 _Opts) ->
     {error, Removed}.
-
-log_publish_result(ok, _Procedure) ->
-    ok;
-log_publish_result({error, Reason}, Procedure) ->
-    ?LOG_WARNING("[macula_streamer] direct-dial advertisement publish "
-                 "failed for ~s: ~p -- handler stays reachable via the "
-                 "pooled path only until a later publish succeeds",
-                 [Procedure, Reason]).
 
 %% @doc Stop advertising. Does not stop the factory supervisor
 %% returned by `advertise/5,6' — callers that want to tear it down

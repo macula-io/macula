@@ -64,6 +64,50 @@ a_respawned_link_signs_for_the_station_it_reaches_test_() ->
          ok = macula_client:close(Pool)
      end}.
 
+%% macula#33: the advertisement a link sends its station is the record a
+%% resolving caller finds, signed once: each link puts in the DHT exactly the
+%% bytes of the ADVERTISE it sends, naming its own station, so a caller seals
+%% to the key the station admitted.
+each_link_puts_the_advertisement_it_sends_in_the_dht_test_() ->
+    {timeout, 10,
+     fun() ->
+         Pool = pool(),
+         {ok, Links} = macula_client:links(Pool),
+         Stations = [connect_to(Pid, <<(50 + N):256>>)
+                     || {N, #{pid := Pid}} <- lists:enumerate(Links)],
+         ok = macula_client:advertise(Pool, ?REALM, ?PROCEDURE,
+                                      fun(_) -> {ok, counted} end, open, spec()),
+         {Advertised, Put} = advertised_and_put(4),
+         ?assertEqual(2, length(Advertised)),
+         ?assertEqual(lists:sort(Advertised), lists:sort(Put)),
+         ?assertEqual(lists:sort(Stations), lists:sort([serving_station(A) || A <- Put])),
+         ok = macula_client:close(Pool)
+     end}.
+
+%% The withdrawal on unadvertise is put in the DHT too, as the same bytes the
+%% UNADVERTISE carries: signed later than the advertisement, it replaces the
+%% provider's entry (one per signer per slot, D28), so a caller stops resolving
+%% a withdrawn provider at once instead of when its record expires.
+unadvertising_puts_the_withdrawal_in_the_dht_test_() ->
+    {timeout, 10,
+     fun() ->
+         Pool = pool(),
+         {ok, Links} = macula_client:links(Pool),
+         _ = [connect_to(Pid, <<(60 + N):256>>)
+              || {N, #{pid := Pid}} <- lists:enumerate(Links)],
+         ok = macula_client:advertise(Pool, ?REALM, ?PROCEDURE,
+                                      fun(_) -> {ok, counted} end, open, spec()),
+         {[_, _], AdsPut} = advertised_and_put(4),
+         ok = macula_client:unadvertise(Pool, ?REALM, ?PROCEDURE),
+         {Withdrawn, Put} = withdrawn_and_put(4),
+         ?assertEqual(2, length(Withdrawn)),
+         ?assertEqual(lists:sort(Withdrawn), lists:sort(Put)),
+         %% It replaces the advertisement because its version is later: the
+         %% DHT keeps a signer's later version (macula_dht_slots, D28).
+         [?assert(version(W) > version(A)) || W <- Withdrawn, A <- AdsPut],
+         ok = macula_client:close(Pool)
+     end}.
+
 %% Withdrawing a streaming procedure sends each link a withdrawal and
 %% keeps the pool alive.
 unadvertising_a_stream_sends_the_withdrawal_test_() ->
@@ -179,7 +223,11 @@ a_registration_without_an_advertisement_reaches_every_link_test_() ->
 %% Helpers
 %%------------------------------------------------------------------
 
+%% Every test here runs in one process and is its links' peer, so frames an
+%% earlier test's links sent and it did not read (its `_dht.put_record'
+%% CALLs, say) would be read as this one's: each test starts with none.
 pool() ->
+    ok = flushed(),
     {ok, _} = application:ensure_all_started(macula),
     {ok, Profile} = macula_crypto_profile:configured(),
     {ok, Key} = macula_node_keys:generate(identity, Profile),
@@ -190,6 +238,11 @@ spec() ->
     #{authorization => #{org_directory => <<"org directory wire">>,
                          procedure_delegation => <<"delegation wire">>},
       not_after => erlang:system_time(millisecond) + 3_600_000}.
+
+%% An earlier test's links put from workers, so a put can still land after
+%% its pool closed: drained until the mailbox has been quiet for 200 ms.
+flushed() ->
+    receive {'$gen_cast', _} -> flushed() after 200 -> ok end.
 
 %% Make this process the link's peer and complete its handshake as
 %% `Station'.
@@ -233,3 +286,65 @@ wait_for_new_link(Pool, Old, N) ->
         [New | _] -> New;
         [] -> timer:sleep(100), wait_for_new_link(Pool, Old, N - 1)
     end.
+
+%% The advertisement bytes of the next ADVERTISE frames and the record bytes
+%% of the next `_dht.put_record' CALLs, `N' frames in all.
+advertised_and_put(N) ->
+    {ok, Profile} = macula_crypto_profile:configured(),
+    lists:foldl(fun(Frame, {Ads, Puts}) -> sorted_frame(Frame, Profile, Ads, Puts) end,
+                {[], []}, ads_and_puts(N)).
+
+sorted_frame(#{frame_type := advertise, advertisement := Encoded}, _Profile, Ads, Puts) ->
+    {[Encoded | Ads], Puts};
+sorted_frame(#{frame_type := unadvertise, withdrawal := Encoded}, _Profile, Ads, Puts) ->
+    {[Encoded | Ads], Puts};
+sorted_frame(#{frame_type := call} = Frame, Profile, Ads, Puts) ->
+    {ok, #{payload := Wire}} = macula_frame:verify_request(Frame, Profile),
+    {Ads, [Wire | Puts]}.
+
+%% The withdrawal bytes of the next UNADVERTISE frames and the record bytes of
+%% the next `_dht.put_record' CALLs, `N' frames in all.
+withdrawn_and_put(N) ->
+    advertised_and_put(N).
+
+ads_and_puts(0) -> [];
+ads_and_puts(N) ->
+    receive
+        {'$gen_cast', {send_frame, _, #{frame_type := T} = Frame}}
+          when T =:= advertise; T =:= unadvertise ->
+            [Frame | ads_and_puts(N - 1)];
+        {'$gen_cast', {send_frame, _, #{frame_type := call} = Frame}} ->
+            put_call(Frame, N)
+    after 1_000 -> []
+    end.
+
+%% A CALL counts when it is a `_dht.put_record'; a liveness probe does not.
+put_call(Frame, N) ->
+    {ok, Profile} = macula_crypto_profile:configured(),
+    {ok, #{procedure := Procedure}} = macula_frame:verify_request(Frame, Profile),
+    put_call_named(Procedure, Frame, N).
+
+put_call_named(Procedure, Frame, N) when Procedure =:= <<"_dht.put_record">>;
+                                         Procedure =:= {text, <<"_dht.put_record">>} ->
+    [Frame | ads_and_puts(N - 1)];
+put_call_named(_Probe, _Frame, N) ->
+    ads_and_puts(N).
+
+serving_station(Encoded) ->
+    {ok, Profile} = macula_crypto_profile:configured(),
+    {ok, Record} = macula_record:verify(Encoded, Profile),
+    maps:get(serving_station, macula_record:read_procedure_advertisement(Record)).
+
+version(Encoded) ->
+    {ok, Profile} = macula_crypto_profile:configured(),
+    {ok, #{version := Version}} = macula_record:verify(Encoded, Profile),
+    Version.
+
+%% A put is ok when the station answers ok, which crosses the wire as text;
+%% anything else is named.
+a_put_reply_reads_ok_only_when_the_station_says_ok_test() ->
+    ?assertEqual(ok, macula_station_link:wire_put({ok, ok})),
+    ?assertEqual(ok, macula_station_link:wire_put({ok, {text, <<"ok">>}})),
+    ?assertEqual({error, {unexpected_reply, {text, <<"stored 0">>}}},
+                 macula_station_link:wire_put({ok, {text, <<"stored 0">>}})),
+    ?assertEqual({error, timeout}, macula_station_link:wire_put({error, timeout})).

@@ -9,6 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **`advertise/5` alone makes a provider resolvable, and sealable (#33).** A provider registered through
+  the facade sent its stations ADVERTISE frames but put no `procedure_advertisement` in the DHT, so a caller
+  resolving it found nothing to seal to: under `confidential => required` the call failed, otherwise it went
+  in the clear. Each link now puts in the DHT exactly the signed bytes of the ADVERTISE it sends, on every
+  signing (first send, reconnect, respawn, renewal), so the frame a station admits and the record a caller
+  seals to cannot differ. The record lives no longer than the advertisement (its ttl, at most five minutes,
+  and the chain's `not_after`). On `unadvertise` the pool's withdrawal goes in the DHT too and, signed later,
+  replaces the provider's entry at once. The DHT keeps one entry per signer per slot, so a provider on
+  several stations resolves at the one whose link signed last.
+- **Every advertisement is signed in the pool (#33).** `macula_direct_dial:publish_advertisement/4,5`
+  signed with a key its caller passed; it now asks the pool (`macula_client:sign_node_record/3`), and a
+  `NodeIdentity` that is not the pool's is refused as `key_id_mismatch`. The custody test names no
+  exception any more.
+
+### Changed
+
+- **`macula_response:advertise_direct/6,7` and `macula_streamer:advertise_direct/6,7` register as
+  `advertise/5,6` does (#33)** and publish no record of their own: the links put it. Their `NodeIdentity`
+  argument is kept for the 14.x signature and is not used, and the `publish_advertisement` option and type
+  are gone (an unknown option is ignored, as before).
+
 ### Fixed
 
 - **Direct dial reports a provider's error reply as `refused`, with its code (#48).** The

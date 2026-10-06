@@ -61,7 +61,9 @@ published(Opts) ->
     Procedure = <<"~", (binary:encode_hex(NodeId, lowercase))/binary, "/echo">>,
     Test = self(),
     Io = #{links => fun(_Pool) -> {ok, [#{node_id => ?STATION, connected => true}]} end,
-           put_record => fun(_Pool, Record) -> Test ! {put, Record}, ok end},
+           put_record => fun(_Pool, Record) -> Test ! {put, Record}, ok end,
+           %% The pool holding Key signs, as macula_client:sign_node_record/3 does.
+           sign_node_record => fun(_Pool, Unsigned, _Opts) -> {ok, macula_record:sign(Unsigned, Key)} end},
     put_read(macula_direct_dial:publish_advertisement(self(), ?REALM, Procedure, Key, Opts#{dial_io => Io}), NodeId).
 
 put_read(ok, NodeId) ->

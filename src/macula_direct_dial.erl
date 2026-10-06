@@ -143,6 +143,7 @@
 %% "Dial I/O" in the module doc.
 -type dial_io() :: #{links => fun((macula:pool()) -> {ok, [map()]} | {error, term()}),
                      put_record => fun((macula:pool(), map()) -> ok | {error, term()}),
+                     sign_node_record => fun((macula:pool(), map(), map()) -> {ok, map()} | {error, term()}),
                      find_records => fun((macula:pool(), binary(), pos_integer()) ->
                                              {ok, [map()]} | {error, term()}),
                      find_record => fun((macula:pool(), binary(), pos_integer()) ->
@@ -438,7 +439,7 @@ publish_confidential({error, _} = Refused, _Pool, _Realm, _Procedure, _NodeIdent
     Refused.
 
 publish_linked(Pool, Realm, Procedure, NodeIdentity, Opts) ->
-    #{links := Links} = Dial = dial(Pool, [links, put_record], Opts),
+    #{links := Links} = Dial = dial(Pool, [links, put_record, sign_node_record], Opts),
     case Links(Pool) of
         {ok, Linked} -> on_links(connected_station(Linked, maps:get(stations, Opts, all)), Dial,
                                  Realm, Procedure, NodeIdentity, Opts);
@@ -459,16 +460,21 @@ first_given(Keys, Opts) ->
 given([Key | _]) -> {removed_option, Key};
 given([]) -> none.
 
-on_links({ok, Station}, #{pool := Pool, put_record := PutRecord}, Realm, Procedure,
-         NodeIdentity, Opts) ->
+%% The pool signs the advertisement, with the node identity key it holds, as it
+%% signs every record a node makes about itself (macula_record_signing_custody_tests,
+%% macula#33): `NodeIdentity' names the advertiser and its KEM key, and one that is
+%% not the pool's is refused as `key_id_mismatch'.
+on_links({ok, Station}, #{pool := Pool, put_record := PutRecord, sign_node_record := Sign},
+         Realm, Procedure, NodeIdentity, Opts) ->
     Advertiser = macula_node_keys:key_id(NodeIdentity),
-    Ad = macula_record:sign(
-           macula_record:procedure_advertisement(Advertiser, Realm, Procedure, Station,
-                                                  maps:merge(adv_opts(Opts), kem_key_opt(Opts, NodeIdentity))),
-           NodeIdentity),
-    PutRecord(Pool, Ad);
+    Unsigned = macula_record:procedure_advertisement(Advertiser, Realm, Procedure, Station,
+                                                     maps:merge(adv_opts(Opts), kem_key_opt(Opts, NodeIdentity))),
+    signed_put(Sign(Pool, Unsigned, #{}), Pool, PutRecord);
 on_links({error, _} = Error, _Dial, _Realm, _Procedure, _NodeIdentity, _Opts) ->
     Error.
+
+signed_put({ok, Ad}, Pool, PutRecord) -> PutRecord(Pool, Ad);
+signed_put({error, _} = Refused, _Pool, _PutRecord) -> Refused.
 
 %% Forwards each opt `procedure_advertisement/5' actually recognizes,
 %% independently: a caller passing `ttl_ms' alone once got `#{}' back,
@@ -572,6 +578,7 @@ dial_io(Defaults, Given) when is_map(Given) ->
 
 dial_function(links, Fun) when is_function(Fun, 1) -> ok;
 dial_function(put_record, Fun) when is_function(Fun, 2) -> ok;
+dial_function(sign_node_record, Fun) when is_function(Fun, 3) -> ok;
 dial_function(find_records, Fun) when is_function(Fun, 3) -> ok;
 dial_function(find_record, Fun) when is_function(Fun, 3) -> ok;
 dial_function(call_station, Fun) when is_function(Fun, 8) -> ok;
@@ -585,6 +592,7 @@ given_key(Key, Given) when is_map_key(Key, Given) -> ok.
 default_dial_io() ->
     #{links => fun macula:links/1,
       put_record => fun macula:put_record/2,
+      sign_node_record => fun macula_client:sign_node_record/3,
       find_records => fun macula:find_records/3,
       find_record => fun macula:find_record/3,
       call_station => fun macula:call_station/8,

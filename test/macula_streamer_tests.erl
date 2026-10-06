@@ -48,7 +48,7 @@ streamer_test_() ->
                  fun a_stream_ending_for_a_reason_with_data_tells_the_peer_its_name_only/0,
                  fun advertise_direct_forwards_mode_to_advertise_stream/0,
                  fun advertise_forwards_auth_to_advertise_stream/0,
-                 fun the_advertisement_publish_gets_the_options_without_the_functions/0,
+                 fun advertise_direct_registers_as_advertise_does/0,
                  fun advertise_direct_with_a_removed_trust_option_registers_and_publishes_nothing/0,
                  fun functions_of_another_shape_are_refused_before_anything_is_advertised/0,
                  fun without_functions_a_streamer_advertises_through_the_macula_facade/0,
@@ -106,13 +106,10 @@ wait_until_dead(Pid, true) -> timer:sleep(1), wait_until_dead(Pid, erlang:is_pro
 %% directly would have been served as `server_stream' instead, with no
 %% error anywhere to say so.
 advertise_direct_forwards_mode_to_advertise_stream() ->
-    Identity = macula_test_identity:key(),
     Opts = (macula_scripted_stream:options([]))#{mode => client_stream},
     {ok, _Sup} = macula_streamer:advertise_direct(pool, ?REALM, <<"bulk.ingest">>, ?MODULE,
-                                                  self(), Identity, Opts),
-    ?assertMatch([{<<"bulk.ingest">>, client_stream, _, _}], macula_scripted_stream:advertised()),
-    ?assertMatch([{<<"bulk.ingest">>, Identity, _}],
-                 macula_scripted_stream:advertisements_published()).
+                                                  self(), macula_test_identity:key(), Opts),
+    ?assertMatch([{<<"bulk.ingest">>, client_stream, _, _}], macula_scripted_stream:advertised()).
 
 %% A streamer-built procedure is gated like any other: `auth' in `Opts'
 %% reaches the advertise function as the procedure's policy, through
@@ -128,17 +125,17 @@ advertise_forwards_auth_to_advertise_stream() ->
     ?assertEqual([#{auth => Policy}, #{auth => Policy}],
                  [AdvertiseOpts || {_, _, _, AdvertiseOpts} <- Advertised]).
 
-%% advertise_direct/7 publishes its DHT record with the options, such as
-%% ttl_ms, and none of the functions; with no policy among them, the
-%% advertise function gets no options at all.
-the_advertisement_publish_gets_the_options_without_the_functions() ->
+%% advertise_direct/7 registers exactly as advertise/6 does: the links put
+%% the DHT record (macula#33), so it publishes none of its own, and with no
+%% policy among the options the advertise function gets no options at all.
+advertise_direct_registers_as_advertise_does() ->
     Opts = (macula_scripted_stream:options([]))#{ttl_ms => 120_000},
     {ok, _} = macula_streamer:advertise_direct(pool, ?REALM, <<"logs.tail_v1">>, ?MODULE, self(),
                                                macula_test_identity:key(), Opts),
-    ?assertMatch([{_, _, _, AdvertiseOpts}] when map_size(AdvertiseOpts) =:= 0,
-                 macula_scripted_stream:advertised()),
-    [{_, _, Published}] = macula_scripted_stream:advertisements_published(),
-    ?assertEqual(#{ttl_ms => 120_000}, Published).
+    {ok, _} = macula_streamer:advertise(pool, ?REALM, <<"logs.tail_v1">>, ?MODULE, self(), Opts),
+    [{Procedure, Mode, _, DirectOpts}, {Procedure, Mode, _, PlainOpts}] = macula_scripted_stream:advertised(),
+    ?assertEqual(PlainOpts, DirectOpts),
+    ?assertEqual(#{}, DirectOpts).
 
 %% cert_chain is gone in 11.0.0. advertise_direct/7 refuses it by name before it
 %% registers the stream handler, so nothing is left registered with no
@@ -148,8 +145,7 @@ advertise_direct_with_a_removed_trust_option_registers_and_publishes_nothing() -
     ?assertEqual({error, {removed_option, cert_chain}},
                  macula_streamer:advertise_direct(pool, ?REALM, <<"logs.tail_v1">>, ?MODULE, self(),
                                                   macula_test_identity:key(), Opts)),
-    ?assertEqual({[], []}, {macula_scripted_stream:advertised(),
-                            macula_scripted_stream:advertisements_published()}).
+    ?assertEqual([], macula_scripted_stream:advertised()).
 
 %% A function of another arity, or stream functions without one the
 %% streamer calls, are refused with function_clause, and nothing is
@@ -162,15 +158,10 @@ functions_of_another_shape_are_refused_before_anything_is_advertised() ->
     {ok, _} = Advertise(Opts),
     ?assertMatch([{<<"p">>, _, _, _}], macula_scripted_stream:advertised()),
     Three = fun(_, _, _) -> ok end,
-    Four = fun(_, _, _, _) -> ok end,
     Five = fun(_, _, _, _, _) -> ok end,
     ?assertError(function_clause, Advertise(Opts#{advertise_stream := Five})),
     ?assertError(function_clause, Advertise(Opts#{fact_publish := Three})),
     ?assertError(function_clause, Advertise(Opts#{stream_io := maps:remove(set_error, StreamIo)})),
-    ?assertError(function_clause,
-                 macula_streamer:advertise_direct(pool, ?REALM, <<"p">>, ?MODULE, self(),
-                                                  macula_test_identity:key(),
-                                                  Opts#{publish_advertisement := Four})),
     ?assertEqual([], macula_scripted_stream:advertised()).
 
 %% Without functions in its options a streamer advertises with

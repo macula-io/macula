@@ -518,10 +518,12 @@ sealed_by({error, _} = Refused, _Mode) -> Refused.
 %% expiry). The pool renews the chain at a third of its remaining life
 %% (`macula_client:advertise/8', D32): a delegation lives 30 minutes, so
 %% a provider stays advertised while the realm keeps reissuing, and
-%% drops out once it stops. The frame registers the procedure at that station; it
-%% does not put a record in the DHT, which is what a direct-dialling
-%% caller resolves (`macula_response:advertise_direct/6,7' publishes
-%% that one). The
+%% drops out once it stops. The frame registers the procedure at that station,
+%% and the link puts the same signed advertisement in the DHT (macula#33),
+%% which is what a resolving caller finds and seals to; the withdrawal on
+%% `unadvertise/3' replaces it there. The DHT keeps one entry per provider, so
+%% a provider on several stations resolves at the one whose link signed last.
+%% The
 %% procedure must carry an org namespace, and the pool must run a
 %% provisioned identity whose delegation the org has published, and
 %% pin the realm's key (`realm_trust' at connect); a missing piece

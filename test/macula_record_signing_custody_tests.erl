@@ -8,14 +8,10 @@
 
 -include_lib("eunit/include/eunit.hrl").
 
-%% macula_direct_dial:publish_advertisement/5 signs an advertisement, in on_links/6, with a key its caller passes. It
-%% is named here until P2 moves that signing into the pool.
--define(UNTIL_P2, [{macula_direct_dial, on_links, 6}]).
-
 only_the_pool_signs_records_test_() ->
     {timeout, 60, fun() ->
         ?assertEqual(#{{macula_record, sign, 2} => lists:sort([{macula_client, withdrawable, 5},
-                                                              {macula_record, refreshed, 4} | ?UNTIL_P2]),
+                                                              {macula_record, refreshed, 4}]),
                        {macula_record, refresh, 2} => [{macula_client, domain_record_signed, 3},
                                                        {macula_client, node_record_signed, 3}],
                        {macula_record, refresh, 3} => [{macula_client, node_record_signed_bounded, 4}]},

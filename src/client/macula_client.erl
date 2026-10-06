@@ -886,7 +886,9 @@ call_station(Pool, Station, Target, Realm, Procedure, Payload, TimeoutMs, UcanTo
 %% @doc Register a procedure handler on every healthy link. Stored
 %% in pool state so a respawned link registers it again. A caller
 %% reaches this provider only through a `procedure_advertisement'
-%% record that names it; registering the handler publishes none.
+%% record that names it; with an advertisement spec (`advertise/6'),
+%% each link puts the one it sends in the DHT (macula#33), and this
+%% form, which carries none, publishes nothing.
 %% Returns `ok' when at least one link accepted the registration.
 %% A handler that answers `{error, Text}' with a binary or a printable
 %% charlist sends that text to its caller, up to 256 bytes of it; any

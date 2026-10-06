@@ -4,9 +4,8 @@
 %%%
 %%% Each function is made in the test process and sends that process what
 %%% it was called with: a stream function {stream_call, Name, Args}, the
-%%% advertise function {advertised, Procedure, Mode, Handler, Opts}, the
-%%% advertisement publish {advertisement_published, Procedure, Identity,
-%%% Opts}, and the fact publish {published, Topic, Payload}. recv/2
+%%% advertise function {advertised, Procedure, Mode, Handler, Opts}, and
+%%% the fact publish {published, Topic, Payload}. recv/2
 %%% returns the scripted results in order and then waits, as a stream with
 %%% nothing more to read does; call_stream/5 opens the test process as the
 %%% stream, and await_reply/1 answers {error, no_reply}, for a test to give
@@ -18,7 +17,7 @@
 -module(macula_scripted_stream).
 
 -export([options/1, stream_io/1]).
--export([calls/0, advertised/0, advertisements_published/0, published/0]).
+-export([calls/0, advertised/0, published/0]).
 
 %% @doc Every function macula_streamer:advertise/6 and advertise_direct/7
 %% take in their options, with recv/2 returning Results.
@@ -30,10 +29,6 @@ options(Results) ->
                                   Test ! {advertised, Procedure, Mode, Handler, Opts},
                                   ok
                           end,
-      publish_advertisement => fun(_Pool, _Realm, Procedure, Identity, Opts) ->
-                                       Test ! {advertisement_published, Procedure, Identity, Opts},
-                                       ok
-                               end,
       fact_publish => fun(_Pool, _Realm, Topic, Payload) ->
                               Test ! {published, Topic, Payload},
                               ok
@@ -86,16 +81,6 @@ advertised() ->
     receive
         {advertised, Procedure, Mode, Handler, Opts} ->
             [{Procedure, Mode, Handler, Opts} | advertised()]
-    after 0 ->
-        []
-    end.
-
-%% @doc The advertisement publishes in the mailbox, as {Procedure, Identity, Opts}.
--spec advertisements_published() -> [{binary(), term(), map()}].
-advertisements_published() ->
-    receive
-        {advertisement_published, Procedure, Identity, Opts} ->
-            [{Procedure, Identity, Opts} | advertisements_published()]
     after 0 ->
         []
     end.

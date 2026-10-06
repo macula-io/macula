@@ -190,6 +190,9 @@
 
 -ifdef(TEST).
 -export([with_client_stream/3, advertisement_opts/3]).
+%% How a DHT put's reply reads (macula#33), asserted directly: a peer that
+%% answers a CALL needs a station's signed reply.
+-export([wire_put/1]).
 %% The seed gate, exported so a test can assert the refusal directly rather
 %% than infer it from a link that failed to start.
 -export([seed_checked/4]).
@@ -2573,9 +2576,48 @@ on_advertisement_signed(Key, Spec, Station, {ok, Signed},
                         #state{advertisements = Ads, peer_node_id = Station, peer_pid = Pid} = S)
   when is_pid(Pid), map_get(Key, Ads) =:= Spec ->
     send_advertise(Pid, macula_record:encode(Signed)),
+    ok = put_advertisement(Signed),
     renewal_armed(Key, macula_record:expires_at(Signed), S);
 on_advertisement_signed(_Key, _Spec, _Station, {ok, _Signed}, S) ->
     S.
+
+%% The advertisement just sent is also the record a resolving caller finds
+%% (macula#33): this link puts the SAME signed bytes in the DHT through its
+%% station, so the frame the station admitted and the record a caller seals to
+%% can never differ. It is put on exactly the events that sign (first send,
+%% reconnect, respawn, renewal), and it lives no longer than the
+%% advertisement: its ttl is the spec's (at most ?MAX_SPEC_TTL_MS) and its
+%% signing is bounded by the chain's not_after. The DHT holds one entry per
+%% signer per slot (D28), the later version replacing the earlier, so a
+%% provider on several links is resolvable at whichever station signed last,
+%% and the withdrawal on unadvertise, signed later still, replaces it. The
+%% put is a call into this link, so a worker makes it; a failed put is logged
+%% and the renewal puts again.
+put_advertisement(Signed) ->
+    #{procedure := Proc, realm_id := Realm} = macula_record:read_procedure_advertisement(Signed),
+    put_wire_in_dht(macula_record:encode(Signed), Realm, Proc, advertisement).
+
+put_wire_in_dht(Wire, Realm, Proc, What) ->
+    Link = self(),
+    _ = spawn(fun() -> wire_put_logged(put_wire(Link, Wire), Realm, Proc, What) end),
+    ok.
+
+%% The wire form, exactly the ADVERTISE frame's bytes, paced like any put
+%% through this link. The reply's `ok' crosses the wire as text.
+put_wire(Link, Wire) ->
+    ok = macula_store_pacer:await(Link, byte_size(Wire)),
+    wire_put(call(Link, station, ?DHT_REALM, <<"_dht.put_record">>, Wire, ?DEFAULT_DEADLINE_MS)).
+
+wire_put({ok, ok}) -> ok;
+wire_put({ok, {text, <<"ok">>}}) -> ok;
+wire_put({ok, Other}) -> {error, {unexpected_reply, Other}};
+wire_put({error, _} = Refused) -> Refused.
+
+wire_put_logged(ok, _Realm, _Proc, _What) ->
+    ok;
+wire_put_logged({error, Reason}, Realm, Proc, What) ->
+    logger:warning("[macula_station_link] ~ts of ~ts in realm ~ts not put in the DHT: ~p",
+                   [What, Proc, binary:encode_hex(Realm), Reason]).
 
 renewal_armed(Key, ExpiresAt, S) ->
     renewal_in(Key, max(?MIN_RENEWAL_MS, (ExpiresAt - erlang:system_time(millisecond)) div 2), S).
@@ -2621,10 +2663,13 @@ maybe_send_unadvertise(_Realm, _Proc, _Withdrawal, #state{peer_pid = undefined})
     ok;
 maybe_send_unadvertise(_Realm, _Proc, _Withdrawal, #state{peer_node_id = undefined}) ->
     ok;
-maybe_send_unadvertise(_Realm, _Proc, Withdrawal, #state{peer_pid = Pid}) ->
+maybe_send_unadvertise(Realm, Proc, Withdrawal, #state{peer_pid = Pid}) ->
     Frame = macula_frame:unadvertise(#{withdrawal => Withdrawal}),
     try macula_peering:send_frame(Pid, Frame) catch _:_ -> ok end,
-    ok.
+    %% The same withdrawal goes in the DHT (macula#33): signed later than the
+    %% advertisement, it replaces the provider's entry, so a caller stops
+    %% resolving it at once rather than when the record expires.
+    put_wire_in_dht(Withdrawal, Realm, Proc, withdrawal).
 
 %% On handshake completion, send an ADVERTISE frame for every stored
 %% advertisement registered before connect.

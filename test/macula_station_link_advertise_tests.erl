@@ -356,12 +356,29 @@ start_connected_link() ->
     Pid.
 
 %% The first frame the link sent to its peer within `Ms', or none.
+%% A `_dht.put_record' CALL is skipped: the link puts every advertisement and
+%% withdrawal it sends in the DHT (macula#33), which
+%% macula_client_per_link_advertise_tests asserts; here the frames are what the
+%% link advertises.
 sent_frame_within(Ms) ->
     receive
-        {'$gen_cast', {send_frame, _, Frame}} -> {sent, Frame}
+        {'$gen_cast', {send_frame, _, Frame}} -> unless_a_put(Frame, Ms)
     after Ms ->
         none
     end.
+
+unless_a_put(#{frame_type := call} = Frame, Ms) ->
+    {ok, Profile} = macula_crypto_profile:configured(),
+    {ok, #{procedure := Procedure}} = macula_frame:verify_request(Frame, Profile),
+    put_or_sent(Procedure, Frame, Ms);
+unless_a_put(Frame, _Ms) ->
+    {sent, Frame}.
+
+put_or_sent(Procedure, _Frame, Ms) when Procedure =:= <<"_dht.put_record">>;
+                                        Procedure =:= {text, <<"_dht.put_record">>} ->
+    sent_frame_within(Ms);
+put_or_sent(_Procedure, Frame, _Ms) ->
+    {sent, Frame}.
 
 %% A registry of the link's state: `procedures' or `stream_procedures'.
 registered(Field, Pid) ->

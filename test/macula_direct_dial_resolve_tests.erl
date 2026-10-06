@@ -197,6 +197,7 @@ a_dial_io_without_a_function_the_call_uses_is_refused_in_the_caller() ->
 dial_io() ->
     #{links => fun(_Pool) -> {ok, []} end,
       put_record => fun(_Pool, _Record) -> ok end,
+      sign_node_record => fun(_Pool, _Unsigned, _Opts) -> {error, no_key_in_this_fake} end,
       find_records => fun(_Pool, Key, TimeoutMs) -> find_records(Key, TimeoutMs) end,
       find_record => fun(_Pool, Key, TimeoutMs) -> find_record(Key, TimeoutMs) end,
       call_station =>
@@ -655,20 +656,27 @@ resolve_endpoint_timeout_bounds_the_endpoint_lookup() ->
 %%% Records and trust
 %%%===================================================================
 
-%% A provider's advertisement is signed with its node identity key, names the
-%% pool's connected station, and is put as its wire form.
+%% A provider's advertisement is signed by its pool, with the node identity key
+%% the pool holds (macula#33), names the pool's connected station, and is put as
+%% its wire form.
 a_published_advertisement_is_signed_by_the_node_identity_and_put_as_its_wire_form() ->
     Provider = node_key(identity),
     Station = station(<<"s.test">>),
     Test = self(),
     StationId = maps:get(id, Station),
     meck:expect(macula, links, fun(_Pool) -> {ok, [#{connected => true, node_id => StationId}]} end),
+    meck:expect(macula_client, sign_node_record,
+                fun(_Pool, Unsigned, _Opts) ->
+                        Test ! pool_signed,
+                        {ok, macula_record:sign(Unsigned, Provider)}
+                end),
     meck:expect(macula_client, call_linked_station,
                 fun(_Pool, _Realm, Procedure, Payload, _TimeoutMs) ->
                         Test ! {called, Procedure, Payload},
                         {ok, ok}
                 end),
     ?assertEqual(ok, macula_direct_dial:publish_advertisement(self(), ?REALM, ?PROC, Provider)),
+    ?assertEqual(pool_signed, receive pool_signed -> pool_signed after 1000 -> not_signed_by_the_pool end),
     {<<"_dht.put_record">>, Wire} = receive {called, P, W} -> {P, W} after 1000 -> erlang:error(not_put) end,
     {ok, Verified} = macula_record:verify(Wire, profile()),
     ?assertEqual(#{realm_id => ?REALM, procedure => ?PROC, advertiser_node => macula_node_keys:key_id(Provider),
