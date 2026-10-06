@@ -112,7 +112,7 @@
   <text x="34" y="342" font-family="system-ui" font-size="10" font-weight="600" fill="#64748b">SHARED SUBSTRATE — every capability above is built on this</text>
 
   <rect x="32" y="348" width="413" height="34" rx="5" fill="white" stroke="#a78bfa" stroke-width="1.5"/>
-  <text x="238" y="369" text-anchor="middle" font-family="system-ui" font-size="10" font-weight="600" fill="#6d28d9">Identity &amp; Crypto (Rust NIFs) — Ed25519 · UCAN · DID · BLAKE3</text>
+  <text x="238" y="369" text-anchor="middle" font-family="system-ui" font-size="10" font-weight="600" fill="#6d28d9">Identity &amp; Crypto (Rust NIFs) — Ed25519 · UCAN · DID</text>
 
   <rect x="455" y="348" width="413" height="34" rx="5" fill="white" stroke="#a78bfa" stroke-width="1.5"/>
   <text x="661" y="369" text-anchor="middle" font-family="system-ui" font-size="10" font-weight="600" fill="#6d28d9">Wire Protocol &amp; Peering — QUIC transport, frame codec, peer state machine</text>

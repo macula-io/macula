@@ -66,11 +66,6 @@ Macula any more.
 The hash behind content addressing: an MCID is tag 2 and a 48-byte SHA-384
 digest, and an id of any other shape is refused (plan decision D24).
 
-### BLAKE3
-Fast cryptographic hash, ~20x SHA-256 through the Rust NIF
-(`macula_blake3_nif`), with an Erlang fallback. No module in macula calls it
-today, and it is not what addresses content: that is SHA-384 above.
-
 ---
 
 ## Resource Identification

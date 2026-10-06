@@ -20,9 +20,6 @@ macula-mldsa = "0.1"
 # SHA-256 hashing
 sha2 = "0.11"
 
-# BLAKE3 hashing (fast, parallel, secure)
-blake3 = "1.5"
-
 # Base64 encoding
 base64 = "0.23"
 

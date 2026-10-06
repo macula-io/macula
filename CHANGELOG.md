@@ -70,6 +70,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `macula_peering_sup` instead of a gen_server of its own. A child of that supervisor that exits no longer empties the
   memory, and no connection can run while the table is missing, so dials no longer raise `badarg` in that window.
 
+### Removed
+
+- **BLAKE3 is gone from the SDK** (macula-io/macula#46, register R10). Content
+  ids have been SHA-384 since 11.0.0 (D24), and the last caller, mcl-tube,
+  mints SHA-384 since its 0.2.0. Removed: the `macula_blake3_nif` module,
+  `macula_crypto_nif:blake3/1` and `blake3_hex/1`, the `nif_blake3*` NIF
+  functions and the `blake3` crate. `macula_crypto_nif`'s Erlang fallback for
+  BLAKE3 went with them; it was not BLAKE3 at all, but SHA-256 in BLAKE3's
+  shape. Upgrading: hash with `crypto:hash(sha384, Bytes)`, or mint a content
+  id with `macula_content_store:added/3`.
+
 ## [13.6.0] - 2026-10-06
 
 ### Security

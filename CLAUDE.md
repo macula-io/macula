@@ -45,7 +45,7 @@ See [CHANGELOG.md](CHANGELOG.md) for version history.
 Macula SDK is a **64-module client library** for connecting to the Macula relay mesh. Nodes connect outbound to relays over QUIC. Relays (in macula-station) handle routing.
 
 **Crypto primitives belong in the SDK.** Ed25519 (`macula_identity`),
-BLAKE3 (`macula_blake3_nif`), CBOR (`macula_cbor_nif` for general,
+CBOR (`macula_cbor_nif` for general,
 `macula_record_cbor` for deterministic canonicalization) all live here.
 Consumers (macula-station, other SDK clients) should never re-implement
 these — pull them from this repo.

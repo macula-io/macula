@@ -3,7 +3,6 @@
 //! This module provides high-performance implementations of:
 //! - ML-DSA (FIPS 204) key generation, signing, and verification, on
 //!   `macula-mldsa`
-//! - BLAKE3 hashing (primary algorithm for content-addressed storage)
 //! - SHA-256 hashing
 //! - Base64 encoding/decoding (URL-safe)
 //! - Constant-time secure comparison
@@ -48,98 +47,6 @@ fn nif_sha256<'a>(env: Env<'a>, data: Binary) -> NifResult<Binary<'a>> {
         "Failed to allocate binary",
     )))?;
     output.as_mut_slice().copy_from_slice(&result);
-
-    Ok(output.release(env))
-}
-
-/// Compute BLAKE3 hash of data.
-///
-/// BLAKE3 is a cryptographic hash function that is:
-/// - Much faster than SHA-256 (especially on modern CPUs)
-/// - Parallelizable for large inputs
-/// - Secure (based on BLAKE2 and ChaCha)
-///
-/// Arguments:
-/// - data: The data to hash (binary)
-///
-/// Returns:
-/// - 32-byte BLAKE3 hash (binary)
-#[rustler::nif]
-fn nif_blake3<'a>(env: Env<'a>, data: Binary) -> NifResult<Binary<'a>> {
-    let hash = blake3::hash(data.as_slice());
-
-    let mut output = OwnedBinary::new(32).ok_or(rustler::Error::Term(Box::new(
-        "Failed to allocate binary",
-    )))?;
-    output.as_mut_slice().copy_from_slice(hash.as_bytes());
-
-    Ok(output.release(env))
-}
-
-/// Compute BLAKE3 hash of multiple chunks (streaming).
-///
-/// This is optimized for content-addressed storage where data
-/// is processed in chunks. The hasher maintains internal state
-/// across all chunks.
-///
-/// Arguments:
-/// - chunks: List of binaries to hash
-///
-/// Returns:
-/// - 32-byte BLAKE3 hash (binary)
-#[rustler::nif]
-fn nif_blake3_streaming<'a>(env: Env<'a>, chunks: Vec<Binary>) -> NifResult<Binary<'a>> {
-    let mut hasher = blake3::Hasher::new();
-    for chunk in chunks {
-        hasher.update(chunk.as_slice());
-    }
-    let hash = hasher.finalize();
-
-    let mut output = OwnedBinary::new(32).ok_or(rustler::Error::Term(Box::new(
-        "Failed to allocate binary",
-    )))?;
-    output.as_mut_slice().copy_from_slice(hash.as_bytes());
-
-    Ok(output.release(env))
-}
-
-/// Verify that data matches a BLAKE3 hash.
-///
-/// Arguments:
-/// - data: The data to verify (binary)
-/// - expected_hash: The expected 32-byte BLAKE3 hash (binary)
-///
-/// Returns:
-/// - `true` if the hash matches
-/// - `false` if the hash doesn't match or expected_hash is wrong length
-#[rustler::nif]
-fn nif_blake3_verify(data: Binary, expected_hash: Binary) -> bool {
-    if expected_hash.len() != 32 {
-        return false;
-    }
-    let computed = blake3::hash(data.as_slice());
-    computed.as_bytes() == expected_hash.as_slice()
-}
-
-/// Compute BLAKE3 hash and encode as hex string.
-///
-/// Optimized for debugging and logging - combines hash + hex encode
-/// in a single NIF call.
-///
-/// Arguments:
-/// - data: The data to hash (binary)
-///
-/// Returns:
-/// - Hex-encoded BLAKE3 hash (64-character binary string)
-#[rustler::nif]
-fn nif_blake3_hex<'a>(env: Env<'a>, data: Binary) -> NifResult<Binary<'a>> {
-    let hash = blake3::hash(data.as_slice());
-    let hex = hash.to_hex();
-
-    let mut output = OwnedBinary::new(64).ok_or(rustler::Error::Term(Box::new(
-        "Failed to allocate binary",
-    )))?;
-    output.as_mut_slice().copy_from_slice(hex.as_bytes());
 
     Ok(output.release(env))
 }

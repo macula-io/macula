@@ -235,10 +235,7 @@ earlier release is moved into this layout under its own profile.
 {ok, NodeId} = macula_node_keys:node_id(Key),
 Sig  = macula_node_keys:sign(<<"hello">>, Key),
 true = macula_node_keys:verify(<<"hello">>, Sig, macula_node_keys:public_key(Key), pq_pure),
-ok   = macula_node_keys:save("identity.key", Key),
-
-%% BLAKE3 hashing
-Hash = macula_blake3_nif:hash(<<"hello">>).
+ok   = macula_node_keys:save("identity.key", Key).
 ```
 
 UCAN capability tokens (`macula_ucan`) are signed by node keys too, with

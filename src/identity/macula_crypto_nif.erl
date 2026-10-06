@@ -1,13 +1,15 @@
 %% @doc Cryptographic operations for Macula mesh.
 %%
-%% This module provides ML-DSA signatures, BLAKE3 and SHA-256 hashing,
-%% base64 encoding and constant-time comparison, in a Rust NIF.
+%% This module provides ML-DSA signatures, SHA-256 hashing, base64
+%% encoding and constant-time comparison, in a Rust NIF. It has no BLAKE3:
+%% content ids are SHA-384 (D24), and the last BLAKE3 caller is gone
+%% (macula-io/macula#46).
 %%
 %% == NIF vs Erlang ==
 %%
 %% Hashing, encoding and comparison fall back to pure Erlang when the NIF
-%% cannot be loaded; the Rust NIF is faster (BLAKE3 about 20x, SHA-256
-%% about 3x). ML-DSA has no fallback, below.
+%% cannot be loaded; the Rust NIF is faster (SHA-256 about 3x). ML-DSA has
+%% no fallback, below.
 %%
 %% == ML-DSA ==
 %%
@@ -24,8 +26,6 @@
 
 %% API
 -export([
-    blake3/1,
-    blake3_hex/1,
     sha256/1,
     sha256_base64/1,
     base64_encode/1,
@@ -45,10 +45,6 @@
 
 %% NIF stubs
 -export([
-    nif_blake3/1,
-    nif_blake3_streaming/1,
-    nif_blake3_verify/2,
-    nif_blake3_hex/1,
     nif_effective_uid/0
 ]).
 
@@ -96,24 +92,6 @@ priv_dir_from_module(_) ->
 -spec is_nif_loaded() -> boolean().
 is_nif_loaded() ->
     persistent_term:get(?NIF_LOADED_KEY, false).
-
-%% @doc Compute BLAKE3 hash.
-%% Returns 32-byte hash binary.
--spec blake3(Data :: binary()) -> Hash :: binary().
-blake3(Data) ->
-    case is_nif_loaded() of
-        true -> nif_blake3(Data);
-        false -> erlang_blake3(Data)
-    end.
-
-%% @doc Compute BLAKE3 hash and return as hex string.
-%% Returns 64-character hex string.
--spec blake3_hex(Data :: binary()) -> HexHash :: binary().
-blake3_hex(Data) ->
-    case is_nif_loaded() of
-        true -> nif_blake3_hex(Data);
-        false -> hex_encode(erlang_blake3(Data))
-    end.
 
 %% @doc Compute SHA-256 hash.
 %% Returns 32-byte hash binary.
@@ -195,18 +173,6 @@ mldsa_verify(Set, PublicKey, Message, Signature, Context) ->
 %% NIF Stubs (replaced when NIF loads)
 %%====================================================================
 
-nif_blake3(_Data) ->
-    erlang:nif_error(nif_not_loaded).
-
-nif_blake3_streaming(_Chunks) ->
-    erlang:nif_error(nif_not_loaded).
-
-nif_blake3_verify(_Data, _ExpectedHash) ->
-    erlang:nif_error(nif_not_loaded).
-
-nif_blake3_hex(_Data) ->
-    erlang:nif_error(nif_not_loaded).
-
 nif_sha256(_Data) ->
     erlang:nif_error(nif_not_loaded).
 
@@ -277,57 +243,6 @@ erlang_base64_decode(Encoded) ->
     catch
         _:_ -> {error, invalid_base64}
     end.
-
-%% @private BLAKE3 hash - pure Erlang implementation
-%% This is a simplified BLAKE3 that uses the core algorithm principles
-%% but may not produce identical output to the reference implementation.
-%% For production, the NIF should be used.
-erlang_blake3(Data) ->
-    %% BLAKE3 IV (same as BLAKE2s)
-    IV = {16#6A09E667, 16#BB67AE85, 16#3C6EF372, 16#A54FF53A,
-          16#510E527F, 16#9B05688C, 16#1F83D9AB, 16#5BE0CD19},
-    ChunkLen = 1024,
-    Chunks = blake3_chunk_data(Data, ChunkLen),
-    ChunkCount = length(Chunks),
-    ChunkHashes = [blake3_compress_chunk(IV, C, I, I =:= 0, I =:= ChunkCount - 1, ChunkCount =:= 1)
-                   || {I, C} <- lists:zip(lists:seq(0, ChunkCount - 1), Chunks)],
-    blake3_finalize(ChunkHashes, IV).
-
-%% @private Split data into chunks
-blake3_chunk_data(<<>>, _ChunkLen) -> [<<>>];
-blake3_chunk_data(Data, ChunkLen) -> blake3_chunk_data(Data, ChunkLen, []).
-
-blake3_chunk_data(<<>>, _ChunkLen, Acc) -> lists:reverse(Acc);
-blake3_chunk_data(Data, ChunkLen, Acc) when byte_size(Data) =< ChunkLen ->
-    lists:reverse([Data | Acc]);
-blake3_chunk_data(Data, ChunkLen, Acc) ->
-    <<Chunk:ChunkLen/binary, Rest/binary>> = Data,
-    blake3_chunk_data(Rest, ChunkLen, [Chunk | Acc]).
-
-%% @private Compress a chunk
-blake3_compress_chunk(IV, Chunk, _ChunkIdx, _IsFirst, _IsLast, _IsSingle) ->
-    %% Simplified compression using SHA-256 core (not true BLAKE3)
-    %% Real BLAKE3 uses a different compression function
-    <<Hash:32/binary, _/binary>> = crypto:hash(sha256, <<(element(1, IV)):32, Chunk/binary>>),
-    Hash.
-
-%% @private Finalize tree hash
-blake3_finalize([Hash], _IV) -> Hash;
-blake3_finalize(Hashes, IV) ->
-    Pairs = blake3_pair_hashes(Hashes),
-    NewHashes = [crypto:hash(sha256, <<L/binary, R/binary>>) || {L, R} <- Pairs],
-    blake3_finalize(NewHashes, IV).
-
-blake3_pair_hashes([]) -> [];
-blake3_pair_hashes([H]) -> [{H, <<0:256>>}];
-blake3_pair_hashes([H1, H2 | Rest]) -> [{H1, H2} | blake3_pair_hashes(Rest)].
-
-%% @private Hex encode binary
-hex_encode(Bin) ->
-    << <<(hex_digit(N))>> || <<N:4>> <= Bin >>.
-
-hex_digit(N) when N < 10 -> $0 + N;
-hex_digit(N) -> $a + N - 10.
 
 %% @private Constant-time comparison
 erlang_secure_compare(A, B) when byte_size(A) =/= byte_size(B) ->

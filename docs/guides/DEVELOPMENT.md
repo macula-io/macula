@@ -153,7 +153,7 @@ The SDK includes Rust NIFs for performance-critical operations. They build from 
 | NIF Crate | Provides |
 |-----------|----------|
 | `native/macula_quic/` | Quinn QUIC transport |
-| `native/macula_crypto_nif/` | ML-DSA ([`macula-mldsa`](https://crates.io/crates/macula-mldsa)), BLAKE3, SHA-256 |
+| `native/macula_crypto_nif/` | ML-DSA ([`macula-mldsa`](https://crates.io/crates/macula-mldsa)), SHA-256 |
 | `native/macula_mri_nif/` | MRI parsing, trie index |
 | `native/macula_cbor_nif/` | CBOR encode/decode |
 
