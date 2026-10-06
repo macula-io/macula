@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **rustls 0.23.45 in the QUIC NIF** (Dependabot alert 11, moderate). rustls before 0.23.45 accepted TLS 1.3
+  handshake messages across encryption level boundaries. `native/macula_quic` now requires 0.23.45 or later, for the
+  NIF and its tests.
+
 ### Added
 
 - **`macula_hyparview_endorsement:verify_endorsement/4`**, the endorsement check at a given time (macula-go#16): whether

@@ -22,7 +22,7 @@ quinn = "0.11"
 macula-pqc = "0.3"
 # TLS 1.3 only: macula-pqc's builders fix it, so rustls is built without
 # TLS 1.2 at all.
-rustls = { version = "0.23", default-features = false, features = ["logging", "std"] }
+rustls = { version = "0.23.45", default-features = false, features = ["logging", "std"] }
 rustls-pemfile = "2"
 tokio = { version = "1", features = ["full"] }
 socket2 = { version = "0.5", features = ["all"] }
@@ -32,7 +32,7 @@ bytes = "1"
 # The tests build the peers this NIF must refuse or still agree with: a
 # classical-only one, and one on the list deployed before macula-pqc. Those
 # come from aws-lc-rs's own groups.
-rustls = { version = "0.23", default-features = false, features = ["aws-lc-rs"] }
+rustls = { version = "0.23.45", default-features = false, features = ["aws-lc-rs"] }
 # An ECDSA certificate, for the station this NIF must refuse. The aws-lc-rs
 # backend, already linked; rcgen spells the feature with underscores.
 rcgen = { version = "0.14", default-features = false, features = ["aws_lc_rs"] }
