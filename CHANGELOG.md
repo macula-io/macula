@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **App records** (macula#75). An org's signed statement of one of its apps, core record type 0x17, stored under
+  `macula_record:app_key/3` of the app's MRI (`mri:app:<realm>/<org>/<app>`): its version and its services, each
+  naming the procedures it serves. It carries the realm-signed org directory, so `macula_record:verify_app/3` checks
+  it without a lookup, as an advertisement's authorization is checked: the directory is signed by the realm key, names
+  the record's realm and org, holds the record's `org_key` (else `org_key_mismatch`), and outlives the record (else
+  `authorization_outlived`). It lives at most 30 minutes, like a procedure delegation. Its payload rules refuse an org
+  outside an org namespace (`_`, `~<node_id>`), and any listed procedure outside the record's own org, so an org cannot
+  present another org's providers as part of its app. `macula:resolve_app/2,3` resolves an app MRI to its services and
+  the providers of each procedure, through the same provider lookup a call uses. Shared vectors:
+  `test/vectors/app_record_v1.json` and `APP_RECORD_V1.md`. Stations need this macula before a realm issues app
+  records: an earlier station refuses an unknown 0x17 at STORE.
+
 ### Changed
 
 - **A refused stored identity says what to fix** (macula#40). Without `node_identity`, `connect/2` loads the node's

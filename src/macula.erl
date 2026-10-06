@@ -5,7 +5,7 @@
 %%%
 %%% Apps connect via `connect/2', which returns a `macula_client'
 %%% pool that internally wraps N peering links to N stations.
-%%% `publish/4,5', `subscribe/4,5', `unsubscribe/2', `call/5,6', `providers/3,4',
+%%% `publish/4,5', `subscribe/4,5', `unsubscribe/2', `call/5,6', `providers/3,4', `resolve_app/2,3',
 %%% `advertise/5', `unadvertise/3', `call_stream/5',
 %%% `advertise_stream/5', and `unadvertise_stream/3' route through
 %%% the pool with realm-per-call semantics. See `macula_pubsub' for
@@ -43,6 +43,8 @@
          call/6,
          providers/3,
          providers/4,
+         resolve_app/2,
+         resolve_app/3,
          call_station/7,
          call_station/8,
          advertise/5,
@@ -365,6 +367,21 @@ providers(Pool, Realm, Procedure) ->
     {ok, [#{provider := <<_:256>>, station := <<_:256>>}]} | {error, term()}.
 providers(Pool, Realm, Procedure, TimeoutMs) ->
     macula_direct_dial:providers(Pool, Realm, Procedure, TimeoutMs).
+
+%% @doc As `resolve_app/3', within 5 seconds.
+-spec resolve_app(pool(), binary()) -> {ok, macula_app_resolve:resolved()} | {error, term()}.
+resolve_app(Pool, AppMri) ->
+    resolve_app(Pool, AppMri, 5_000).
+
+%% @doc Where the app `AppMri' (`mri:app:<realm>/<org>/<app>') runs (macula#75):
+%% the app record its org signed, trusted through the realm-signed org
+%% directory it carries and the realm key the pool pinned, then the providers
+%% of each of its services' procedures, by the same lookup `providers/4'
+%% makes, all within `TimeoutMs'. A procedure nobody serves right now is listed
+%% with no providers and the reason. See `macula_app_resolve:resolve/3'.
+-spec resolve_app(pool(), binary(), 1..600_000) -> {ok, macula_app_resolve:resolved()} | {error, term()}.
+resolve_app(Pool, AppMri, TimeoutMs) ->
+    macula_app_resolve:resolve(Pool, AppMri, TimeoutMs).
 
 %% @doc Issue a CALL to `Target', a provider's node_id, at ONE specific
 %% station, dialing it directly even if it is not in the pool's seed set.

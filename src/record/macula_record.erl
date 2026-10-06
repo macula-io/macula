@@ -22,6 +22,7 @@
     realm_member_endorsement/2, realm_member_endorsement/3, max_endorsement_window_ms/0,
     org_directory/3, org_directory/4,
     procedure_delegation/2, procedure_delegation/3,
+    app_record/5,
     procedure_advertisement/4, procedure_advertisement/5,
     content_announcement/3,
     foundation_seed_list/1, foundation_seed_list/2,
@@ -41,10 +42,11 @@
 -export([decode_payload/1]).
 -export([read_node_record/1, read_procedure_advertisement/1, read_station_endpoint/1, read_tombstone/1,
          read_org_directory/1, read_procedure_delegation/1, read_content_announcement/1,
-         read_foundation_realm_trust_list/1]).
--export([procedure_org/1, verify_authorization/3]).
+         read_foundation_realm_trust_list/1, read_app_record/1]).
+-export([procedure_org/1, verify_authorization/3, verify_app/3]).
 -export([storage_key/1, procedure_key/2, content_key/1, station_endpoint_key/1, org_directory_key/2,
-         procedure_delegation_key/2, realm_member_endorsement_key/2, foundation_realm_trust_list_key/1]).
+         procedure_delegation_key/2, realm_member_endorsement_key/2, foundation_realm_trust_list_key/1,
+         app_key/3]).
 
 -export_type([m_record/0, type_tag/0, version/0, refusal/0, reason/0, authorization/0, trust/0,
               authorization_refusal/0, node_record_opts/0, realm_directory_opts/0, realm_station_entry/0,
@@ -86,7 +88,7 @@
 -type authorization_refusal() :: malformed | no_authorization | authorization_not_allowed
                                | authorization_form_unsupported | no_realm_key | org_directory_invalid
                                | org_directory_wrong_realm | org_directory_wrong_org | delegation_invalid
-                               | delegation_mismatch | authorization_outlived.
+                               | delegation_mismatch | authorization_outlived | org_key_mismatch.
 
 -type node_record_opts() :: #{
     station_id   => <<_:256>>,
@@ -139,6 +141,8 @@
 %% The longest station release a station endpoint carries: a release is a version, and a reader outside the fleet
 %% renders it, so it gets no room for anything else.
 -define(MAX_STATION_VERSION_BYTES, 64).
+%% An app record's own text (app name, version, service names) is 1 to this many bytes (macula#75).
+-define(MAX_APP_TEXT_BYTES, 64).
 %% How far from zero a latitude and a longitude reach, both inclusive.
 -define(LAT_BOUND, 90).
 -define(LNG_BOUND, 180).
@@ -160,6 +164,7 @@
 -define(TYPE_STATION_ENDPOINT,             16#12).
 -define(TYPE_ORG_DIRECTORY,                16#15).
 -define(TYPE_PROCEDURE_DELEGATION,         16#16).
+-define(TYPE_APP_RECORD,                   16#17).
 -define(DOMAIN_TYPE_MIN,                   16#20).
 
 %% station_endpoint record TTL (Part 4 §11): short enough to drop stale
@@ -278,6 +283,30 @@ procedure_delegation(OrgKeyId, Advertiser, Opts)
   when is_binary(OrgKeyId), byte_size(OrgKeyId) =:= 32, is_binary(Advertiser), byte_size(Advertiser) =:= 32 ->
     Payload = #{{text, <<"org_key">>} => OrgKeyId, {text, <<"advertiser">>} => Advertiser},
     unsigned(?TYPE_PROCEDURE_DELEGATION, Payload, Opts).
+
+%% @doc An org's statement of one of its apps (macula#75), signed by the org key OrgKeyId: the app's version and its
+%% services, each naming the procedures it serves, all in the org's own namespace. It carries the realm-signed org
+%% directory that ties the org name to OrgKeyId, so verify_app/3 checks it without a lookup, as an advertisement's
+%% authorization is checked. Stored under app_key/3 of the app's MRI parts; it lives at most 30 minutes, like the
+%% procedure delegations it is issued with.
+-spec app_record(<<_:256>>, <<_:256>>, binary(), binary(),
+                 #{version := binary(), services := [#{name := binary(), procedures := [binary()]}],
+                   org_directory := binary(), ttl_ms => pos_integer()}) -> m_record().
+app_record(OrgKeyId, RealmId, OrgName, AppName,
+           #{version := Version, services := Services, org_directory := Directory} = Opts)
+  when is_binary(OrgKeyId), byte_size(OrgKeyId) =:= 32, is_binary(RealmId), byte_size(RealmId) =:= 32,
+       is_binary(OrgName), is_binary(AppName), is_binary(Version), is_list(Services), is_binary(Directory) ->
+    Payload = #{{text, <<"realm_id">>} => RealmId,
+                {text, <<"org_name">>} => {text, OrgName},
+                {text, <<"app_name">>} => {text, AppName},
+                {text, <<"version">>} => {text, Version},
+                {text, <<"org_key">>} => OrgKeyId,
+                {text, <<"services">>} => [app_service(S) || S <- Services],
+                {text, <<"authorization">>} => #{{text, <<"org_directory">>} => Directory}},
+    unsigned(?TYPE_APP_RECORD, Payload, Opts).
+
+app_service(#{name := Name, procedures := Procedures}) when is_binary(Name), is_list(Procedures) ->
+    #{{text, <<"name">>} => {text, Name}, {text, <<"procedures">>} => [{text, P} || P <- Procedures]}.
 
 %% @doc A provider's advertisement of a procedure in a realm, signed by the provider. For a procedure with an org
 %% namespace the authorization option carries the provider authorization: org_directory and procedure_delegation as
@@ -707,6 +736,22 @@ read_procedure_delegation(#{type := ?TYPE_PROCEDURE_DELEGATION, payload := P}) -
     #{org_key    => payload_field(P, <<"org_key">>),
       advertiser => payload_field(P, <<"advertiser">>)}.
 
+-spec read_app_record(m_record()) ->
+          #{realm_id := <<_:256>>, org_name := binary(), app_name := binary(), version := binary(),
+            org_key := <<_:256>>, services := [#{name := binary(), procedures := [binary()]}],
+            org_directory := binary()}.
+read_app_record(#{type := ?TYPE_APP_RECORD, payload := P}) ->
+    #{{text, <<"org_directory">>} := Directory} = maps:get({text, <<"authorization">>}, P),
+    #{realm_id      => payload_field(P, <<"realm_id">>),
+      org_name      => payload_field(P, <<"org_name">>),
+      app_name      => payload_field(P, <<"app_name">>),
+      version       => payload_field(P, <<"version">>),
+      org_key       => payload_field(P, <<"org_key">>),
+      services      => [#{name => text(N), procedures => [text(Pr) || Pr <- Prs]}
+                        || #{{text, <<"name">>} := N, {text, <<"procedures">>} := Prs}
+                               <- maps:get({text, <<"services">>}, P)],
+      org_directory => Directory}.
+
 -spec read_content_announcement(m_record()) -> map().
 read_content_announcement(#{type := ?TYPE_CONTENT_ANNOUNCEMENT, payload := P}) ->
     #{announcer_node => payload_field(P, <<"announcer_node">>),
@@ -797,6 +842,33 @@ verify_authorization(#{type := ?TYPE_PROCEDURE_ADVERTISEMENT} = Advertisement, #
     #{procedure := Procedure, authorization := Authorization} = read_procedure_advertisement(Advertisement),
     authorization_for(procedure_org(Procedure), Authorization, Advertisement, Trust, Now).
 
+%% @doc The caller's check of a verified app record against the realm trust it holds (macula#75), pure: the org
+%% directory the record carries verifies, is signed by the realm key (carried or named by the trust list's pairs, as for
+%% verify_authorization/3), names the record's realm and org, and holds the org key that signed the record; and the
+%% record expires no later than that directory. The shape rules (an org namespace, every procedure in it) are payload
+%% rules: verify/3 has already refused a record that breaks them.
+-spec verify_app(m_record(), trust(), integer()) -> ok | {error, authorization_refusal()}.
+verify_app(#{type := ?TYPE_APP_RECORD} = App, #{profile := Profile} = Trust, Now) ->
+    #{realm_id := RealmId, org_directory := Directory} = read_app_record(App),
+    app_directory(realm_trust_key(RealmId, Trust), verify(Directory, Profile, Now), App).
+
+app_directory(none, _Directory, _App) ->
+    {error, no_realm_key};
+app_directory(Expected, {ok, #{type := ?TYPE_ORG_DIRECTORY, key := DirectoryKey, key_id := DirectoryKeyId} = Dir},
+              App) ->
+    #{realm_id := DirRealmId, org_name := DirOrg, org_key := DirOrgKey} = read_org_directory(Dir),
+    #{realm_id := RealmId, org_name := OrgName, org_key := OrgKey} = read_app_record(App),
+    app_directory_matched(directory_signer_matches(Expected, DirectoryKey, DirectoryKeyId) andalso
+                              DirRealmId =:= RealmId,
+                          DirOrg =:= OrgName, DirOrgKey =:= OrgKey, expires_at(App) =< expires_at(Dir));
+app_directory(_Expected, _Refused, _App) ->
+    {error, org_directory_invalid}.
+
+app_directory_matched(false, _SameOrg, _SameKey, _Within) -> {error, org_directory_wrong_realm};
+app_directory_matched(true, false, _SameKey, _Within) -> {error, org_directory_wrong_org};
+app_directory_matched(true, true, false, _Within) -> {error, org_key_mismatch};
+app_directory_matched(true, true, true, Within) -> within(Within).
+
 %%------------------------------------------------------------------
 %% Storage keys
 %%------------------------------------------------------------------
@@ -834,6 +906,12 @@ org_directory_key(<<_:256>> = RealmId, OrgName) when is_binary(OrgName) ->
 -spec procedure_delegation_key(<<_:256>>, <<_:256>>) -> <<_:256>>.
 procedure_delegation_key(<<_:256>> = OrgKeyId, <<_:256>> = Advertiser) ->
     derived(?TYPE_PROCEDURE_DELEGATION, [OrgKeyId, Advertiser]).
+
+%% @doc The storage key of an app record, from the parts of the app's MRI `mri:app:<realm>/<org>/<app>': the realm id
+%% (macula_realm:id/1 of the realm name), the org name and the app name.
+-spec app_key(<<_:256>>, binary(), binary()) -> <<_:256>>.
+app_key(<<_:256>> = RealmId, OrgName, AppName) when is_binary(OrgName), is_binary(AppName) ->
+    derived(?TYPE_APP_RECORD, [RealmId, {field, OrgName}, {field, AppName}]).
 
 %% @doc The storage key of a realm member endorsement, from the realm id and the member's node_id: the slot that holds
 %% the realm's endorsement of that member and, once the realm revokes it, the realm's tombstone of it. A lookup of this
@@ -895,7 +973,7 @@ signer_purposes(Type, _Payload) when Type =:= ?TYPE_NODE_RECORD; Type =:= ?TYPE_
 signer_purposes(Type, _Payload) when Type =:= ?TYPE_REALM_DIRECTORY; Type =:= ?TYPE_REALM_STATIONS;
                                      Type =:= ?TYPE_REALM_MEMBER_ENDORSEMENT; Type =:= ?TYPE_ORG_DIRECTORY ->
     [realm];
-signer_purposes(?TYPE_PROCEDURE_DELEGATION, _Payload) ->
+signer_purposes(Type, _Payload) when Type =:= ?TYPE_PROCEDURE_DELEGATION; Type =:= ?TYPE_APP_RECORD ->
     [org];
 signer_purposes(Type, _Payload) when Type >= ?TYPE_FOUNDATION_SEED_LIST, Type =< ?TYPE_FOUNDATION_T3_ATTESTATION ->
     [foundation];
@@ -924,6 +1002,7 @@ signer_field(?TYPE_NODE_RECORD) -> <<"node_id">>;
 signer_field(?TYPE_PROCEDURE_ADVERTISEMENT) -> <<"advertiser_node">>;
 signer_field(?TYPE_CONTENT_ANNOUNCEMENT) -> <<"announcer_node">>;
 signer_field(?TYPE_PROCEDURE_DELEGATION) -> <<"org_key">>;
+signer_field(?TYPE_APP_RECORD) -> <<"org_key">>;
 signer_field(_Type) -> none.
 
 signer_field_holds(none, _Payload, _KeyId) -> true;
@@ -949,7 +1028,8 @@ max_lifetime(?TYPE_PROCEDURE_ADVERTISEMENT, _Payload) -> ?PROCEDURE_ADVERTISEMEN
 max_lifetime(?TYPE_STATION_ENDPOINT, _Payload) -> ?STATION_ENDPOINT_TTL_MS;
 max_lifetime(Type, _Payload) when Type =:= ?TYPE_REALM_STATIONS; Type =:= ?TYPE_ORG_DIRECTORY ->
     ?REALM_AND_ORG_MAX_LIFETIME_MS;
-max_lifetime(?TYPE_PROCEDURE_DELEGATION, _Payload) -> ?PROCEDURE_DELEGATION_MAX_LIFETIME_MS;
+max_lifetime(Type, _Payload) when Type =:= ?TYPE_PROCEDURE_DELEGATION; Type =:= ?TYPE_APP_RECORD ->
+    ?PROCEDURE_DELEGATION_MAX_LIFETIME_MS;
 max_lifetime(?TYPE_REALM_MEMBER_ENDORSEMENT, _Payload) -> ?MAX_ENDORSEMENT_WINDOW_MS;
 max_lifetime(?TYPE_TOMBSTONE, #{{text, <<"withdrawn_type">>} := Withdrawn}) when Withdrawn =/= ?TYPE_TOMBSTONE ->
     max_lifetime(Withdrawn, #{}) + 2 * ?CLOCK_TOLERANCE_MS;
@@ -1125,8 +1205,45 @@ payload_ok(?TYPE_STATION_ENDPOINT, _P) -> true;
 payload_ok(?TYPE_ORG_DIRECTORY, P) ->
     is_id(field(P, <<"realm_id">>)) andalso is_text(field(P, <<"org_name">>)) andalso is_id(field(P, <<"org_key">>));
 payload_ok(?TYPE_PROCEDURE_DELEGATION, P) -> is_id(field(P, <<"org_key">>)) andalso is_id(field(P, <<"advertiser">>));
+payload_ok(?TYPE_APP_RECORD, P) -> app_payload_ok(P);
 payload_ok(Type, _P) when Type >= ?DOMAIN_TYPE_MIN -> true;
 payload_ok(_UnknownType, _P) -> false.
+
+%% An app record holds exactly its seven fields (macula#75). Its org is a real org namespace, not `_' and not a node's
+%% `~<node_id>', and every procedure it lists is in that namespace, so an org cannot present another org's providers, or
+%% a bare node's, as part of its app. Names and version are text of 1 to ?MAX_APP_TEXT_BYTES bytes; service names are
+%% unique; the authorization is the carried org directory, as bytes, and nothing else.
+app_payload_ok(#{{text, <<"realm_id">>} := <<_:256>>, {text, <<"org_name">>} := {text, OrgName},
+                 {text, <<"app_name">>} := {text, AppName}, {text, <<"version">>} := {text, Version},
+                 {text, <<"org_key">>} := <<_:256>>, {text, <<"services">>} := Services,
+                 {text, <<"authorization">>} := #{{text, <<"org_directory">>} := Directory} = Authorization} = P)
+  when map_size(P) =:= 7, map_size(Authorization) =:= 1, is_binary(Directory), is_list(Services) ->
+    app_org(OrgName) andalso app_text(AppName) andalso nomatch =:= binary:match(AppName, <<"/">>)
+        andalso app_text(Version) andalso app_services(Services, OrgName);
+app_payload_ok(_P) ->
+    false.
+
+app_org(<<"_">>) -> false;
+app_org(<<"~", _/binary>>) -> false;
+app_org(OrgName) -> app_text(OrgName) andalso nomatch =:= binary:match(OrgName, <<"/">>).
+
+app_text(Text) -> is_binary(Text) andalso byte_size(Text) > 0 andalso byte_size(Text) =< ?MAX_APP_TEXT_BYTES.
+
+app_services(Services, OrgName) ->
+    Names = [app_service_name(S, OrgName) || S <- Services],
+    not lists:member(invalid, Names) andalso length(lists:usort(Names)) =:= length(Names).
+
+app_service_name(#{{text, <<"name">>} := {text, Name}, {text, <<"procedures">>} := Procedures} = S, OrgName)
+  when map_size(S) =:= 2, is_list(Procedures) ->
+    app_service_named(app_text(Name) andalso lists:all(fun(Pr) -> in_org(Pr, OrgName) end, Procedures), Name);
+app_service_name(_Malformed, _OrgName) ->
+    invalid.
+
+app_service_named(true, Name) -> Name;
+app_service_named(false, _Name) -> invalid.
+
+in_org({text, Procedure}, OrgName) when is_binary(Procedure) -> procedure_org(Procedure) =:= {org, OrgName};
+in_org(_NotText, _OrgName) -> false.
 
 advertisement_payload_ok(#{{text, <<"realm_id">>} := <<_:256>>, {text, <<"procedure">>} := {text, Procedure},
                            {text, <<"advertiser_node">>} := <<_:256>>, {text, <<"serving_station">>} := <<_:256>>} = P)
@@ -1219,7 +1336,8 @@ slot_ok(Type, Slot) ->
     lists:sort(maps:keys(Slot)) =:= lists:sort([{text, Name} || Name <- Names])
         andalso lists:all(fun(Name) -> slot_value_ok(Name, maps:get({text, Name}, Slot)) end, Names).
 
-slot_value_ok(Name, Value) when Name =:= <<"procedure">>; Name =:= <<"param_name">>; Name =:= <<"org_name">> ->
+slot_value_ok(Name, Value) when Name =:= <<"procedure">>; Name =:= <<"param_name">>; Name =:= <<"org_name">>;
+                                 Name =:= <<"app_name">> ->
     is_text(Value);
 slot_value_ok(<<"mcid">>, Value) ->
     is_content_id(Value);
@@ -1254,6 +1372,7 @@ slot_field_names(?TYPE_FOUNDATION_T3_ATTESTATION, _Subject) -> [<<"station_id">>
 slot_field_names(?TYPE_CONTENT_ANNOUNCEMENT, _Subject) -> [<<"mcid">>];
 slot_field_names(?TYPE_ORG_DIRECTORY, _Subject) -> [<<"realm_id">>, <<"org_name">>];
 slot_field_names(?TYPE_PROCEDURE_DELEGATION, _Subject) -> [<<"advertiser">>];
+slot_field_names(?TYPE_APP_RECORD, _Subject) -> [<<"realm_id">>, <<"org_name">>, <<"app_name">>];
 slot_field_names(Type, Subject) when Type >= ?DOMAIN_TYPE_MIN, is_binary(Subject) -> [<<"subject">>];
 slot_field_names(_SignerSlot, _Subject) -> [].
 
@@ -1266,7 +1385,8 @@ slot_value(Name, Payload, _Subject) -> maps:get({text, Name}, Payload).
 slot_field_atoms() ->
     [{<<"realm_id">>, realm_id}, {<<"member_node">>, member_node}, {<<"procedure">>, procedure},
      {<<"param_name">>, param_name}, {<<"station_id">>, station_id}, {<<"mcid">>, mcid},
-     {<<"org_name">>, org_name}, {<<"advertiser">>, advertiser}, {<<"subject">>, subject}].
+     {<<"org_name">>, org_name}, {<<"advertiser">>, advertiser}, {<<"app_name">>, app_name},
+     {<<"subject">>, subject}].
 
 slot(?TYPE_NODE_RECORD, _P, _Subject, <<_:256>> = KeyId) ->
     KeyId;
@@ -1294,6 +1414,8 @@ slot(?TYPE_ORG_DIRECTORY, P, _Subject, _KeyId) ->
     org_directory_key(field(P, <<"realm_id">>), text(field(P, <<"org_name">>)));
 slot(?TYPE_PROCEDURE_DELEGATION, P, _Subject, <<_:256>> = KeyId) ->
     procedure_delegation_key(KeyId, field(P, <<"advertiser">>));
+slot(?TYPE_APP_RECORD, P, _Subject, _KeyId) ->
+    app_key(field(P, <<"realm_id">>), text(field(P, <<"org_name">>)), text(field(P, <<"app_name">>)));
 slot(Type, _P, undefined, <<_:256>> = KeyId) when Type >= ?DOMAIN_TYPE_MIN ->
     derived(Type, [KeyId]);
 slot(Type, _P, Subject, <<_:256>> = KeyId) when Type >= ?DOMAIN_TYPE_MIN, is_binary(Subject) ->

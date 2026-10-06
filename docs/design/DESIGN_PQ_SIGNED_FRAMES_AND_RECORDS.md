@@ -280,6 +280,32 @@ The payload of a procedure advertisement, type tag 0x06, holds exactly these key
   part 2).
 - A consumer takes the realm and the procedure from these fields; no advertisement carries a procedure URI.
 
+### App records
+
+An app record (tag 0x17, macula#75) is an org's signed statement of one of its apps, so a reader can go from an app's
+MRI, `mri:app:<realm>/<org>/<app>`, to where it runs. It is signed by an org key, and its `org_key` field names that
+key. It lives at most 30 minutes, the bound of a procedure delegation, and the realm reissues it with the delegations.
+
+| Key | Type | Content |
+|---|---|---|
+| `realm_id` | bytes, 32 | the realm id, `macula_realm:id/1` of the MRI's realm name |
+| `org_name` | text | the org, an org namespace: not `_`, not `~<node_id>`, no `/` |
+| `app_name` | text | the app, 1 to 64 bytes, no `/` |
+| `version` | text | the app's own version, 1 to 64 bytes |
+| `org_key` | bytes, 32 | the key id of the org key that signs the record |
+| `services` | list | each a map of `name` (text, 1 to 64 bytes, unique in the list) and `procedures` (a list of text) |
+| `authorization` | map | exactly `org_directory`: the realm-signed org directory's wire form, as bytes |
+
+- **Every procedure a service lists is in the record's own org namespace** (`procedure_org/1` gives `{org, OrgName}`),
+  so an org cannot present another org's providers, or a bare node's, as part of its app. A payload that breaks this,
+  or any rule above, is malformed: `sign/2` refuses it and `verify/3` refuses it as `malformed`.
+- **The caller's check**, `verify_app/3`, is pure, as `verify_authorization/3` is: the carried org directory verifies,
+  is signed by the realm key the trust holds (carried, or named by the trust list's pairs), names the record's realm
+  and org, and holds the record's `org_key` (else `org_key_mismatch`); and the record expires no later than the
+  directory (else `authorization_outlived`).
+- A reader resolves an app by its record's services' procedures, each through the existing advertisement lookup and
+  its own provider authorization.
+
 ### Storage keys
 
 Every DHT storage key is 32 bytes.
@@ -302,6 +328,7 @@ Every DHT storage key is 32 bytes.
 | station endpoint | 0x12 | station node_id |
 | org directory | 0x15 | realm id, org name |
 | procedure delegation | 0x16 | org key id, advertiser node_id |
+| app record | 0x17 | realm id, org name, app name |
 | domain type | 0x20 to 0xFF | signer key id, then the subject when present |
 
 - A procedure name is the name within its realm; the realm enters only as the 32-byte realm id.
