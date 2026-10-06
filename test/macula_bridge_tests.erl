@@ -149,7 +149,7 @@ a_chunk_that_is_not_bridge_bytes_closes_the_connection() ->
     {ok, Listener} = macula_bridge:listen_with(local_open(Procedure), #{port => 0}),
     {ok, Port} = macula_bridge:local_port(Listener),
     {ok, C} = connect(Port),
-    ?assertEqual({error, closed}, gen_tcp:recv(C, 0, ?EVENT_MS)).
+    ?assert(closed_by_bridge(C, ?EVENT_MS)).
 
 %% The service behind the bridge does not answer: the local connection is
 %% closed promptly, not left open with nothing behind it.
@@ -159,7 +159,7 @@ an_unreachable_service_closes_the_local_connection() ->
     ok = gen_tcp:close(L),
     #{port := Port} = bridge({{127, 0, 0, 1}, Dead}),
     {ok, C} = connect(Port),
-    ?assertEqual({error, closed}, gen_tcp:recv(C, 0, ?EVENT_MS)).
+    ?assert(closed_by_bridge(C, ?EVENT_MS)).
 
 %% The provider refuses the stream (an unadmitted caller): the local
 %% connection is closed at once, and the refusal is logged by name.
@@ -174,7 +174,7 @@ a_refused_connection_is_closed_at_once_and_logged() ->
         {ok, Listener} = macula_bridge:listen_with(local_open(Procedure), #{port => 0}),
         {ok, Port} = macula_bridge:local_port(Listener),
         {ok, C} = connect(Port),
-        ?assertEqual({error, closed}, gen_tcp:recv(C, 0, ?EVENT_MS)),
+        ?assert(closed_by_bridge(C, ?EVENT_MS)),
         ?assert(logged(<<"unauthorized">>, ?EVENT_MS))
     after
         logger:remove_handler(Handler)
@@ -184,7 +184,7 @@ a_refused_connection_is_closed_at_once_and_logged() ->
 an_idle_connection_is_closed() ->
     #{port := Port} = bridge(echo_service(), #{idle_ms => 300}),
     {ok, C} = connect(Port),
-    ?assertEqual({error, closed}, gen_tcp:recv(C, 0, 3_000)).
+    ?assert(closed_by_bridge(C, 3_000)).
 
 %% The client stops reading while the service writes more than the socket
 %% buffers hold: the bridge's write to the client blocks. That write gives up
@@ -472,6 +472,12 @@ with_env(Key, Value, Fun) ->
 
 restore_env(Key, undefined) -> application:unset_env(macula, Key);
 restore_env(Key, {ok, Value}) -> application:set_env(macula, Key, Value).
+
+%% The bridge ended the connection. A close that races the client's receive,
+%% or a socket closed with unread data, reaches the client as the peer's
+%% reset instead of a FIN: the same closed connection (macula-io/macula#52).
+closed_by_bridge(C, Ms) ->
+    lists:member(gen_tcp:recv(C, 0, Ms), [{error, closed}, {error, econnreset}]).
 
 %% What a socket reads until its end: `{eof, Bytes}' for a clean close,
 %% `{reset, Bytes}' for a reset (with `show_econnreset').
