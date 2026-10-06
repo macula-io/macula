@@ -10,7 +10,7 @@
 %% multicodec and the key. pq_pure uses mldsa-87-pub, 0x1212; pq_hybrid has no multicodec yet and uses Macula's own
 %% key type, 0x300087, from the private-use range. aud is the audience's node_id in lowercase hex, since a token is
 %% presented by the node it names, inside a request that node signed (D7 check 2). Every token has an exp, in
-%% seconds.
+%% seconds, at most max_lifetime/0 past now: UCAN_V1 has no revocation, so a token's exp is the only bound on its life.
 %%
 %% authorize/3 is the provider's check, after the request's own signature and target have verified: the header and
 %% payload are verified over the bytes as received, never as re-encoded JSON, then the issuer, the audience, the
@@ -29,7 +29,7 @@
 %% (D7), so the grant's name is checked against the realm id the request carries, with nothing looked up.
 -module(macula_ucan).
 
--export([create/4, authorize/3, proof_id/1, covers/2, did_key/2, carried_key/2]).
+-export([create/4, authorize/3, proof_id/1, covers/2, did_key/2, carried_key/2, max_lifetime/0]).
 
 -ifdef(TEST).
 -export([base58btc_encode/1, base58btc_decode/1]).
@@ -42,8 +42,8 @@
 -type issuer_id()  :: <<_:256>>.
 -type policy()     :: {ucan_required, issuer_id()} | {realm_member_required, issuer_id(), binary()}.
 -type refusal()    :: malformed | wrong_algorithm | signature_invalid | not_the_issuer | not_the_audience | expired
-                    | not_yet_valid | missing_capability | missing_proof | unreferenced_proof | not_the_delegate
-                    | chain_not_linear | grants_more_than_proof | can_changed | wrong_realm
+                    | exp_beyond_max_lifetime | not_yet_valid | missing_capability | missing_proof | unreferenced_proof
+                    | not_the_delegate | chain_not_linear | grants_more_than_proof | can_changed | wrong_realm
                     | realm_name_not_canonical | procedure_without_org.
 %% What a capability grants, parsed from its `with': a realm, an org of that realm, or one procedure of that realm.
 -type grant()      :: {realm, binary()} | {org, binary(), binary()} | {proc, binary(), binary()}.
@@ -52,20 +52,31 @@
 -define(UCV, <<"0.10.0">>).
 -define(MLDSA87_PUB, 16#1212).
 -define(MLDSA87_RSA4096_PUB, 16#300087).
+%% Ten years of 365.25 days, in seconds.
+-define(MAX_LIFETIME, 315576000).
 -define(BASE58, "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz").
 
 %%------------------------------------------------------------------
 %% Making a token
 %%------------------------------------------------------------------
 
+%% @doc The furthest past now, in seconds, a token's exp may lie: ten years of 365.25 days. An exp in milliseconds lies
+%% far beyond it, so a token minted with one is refused rather than valid for tens of thousands of years.
+-spec max_lifetime() -> pos_integer().
+max_lifetime() -> ?MAX_LIFETIME.
+
 %% @doc A token from the issuer's key, a key of a purpose that signs with the profile's identity algorithms, for the
 %% audience's node_id, granting Capabilities until exp. nbf, nnc, fct and prf are optional.
+%%
+%% A window no verifier accepts is not minted: an exp more than max_lifetime/0 past now raises
+%% {exp_beyond_max_lifetime, #{exp, now, at_most}}, and an nbf not before exp raises {window_never_opens, #{nbf, exp}}.
 -spec create(macula_node_keys:node_key(), macula_node_keys:node_id(), [capability()],
              #{exp := non_neg_integer(), nbf => non_neg_integer(), nnc => binary(), fct => map(), prf => [binary()]}) ->
         binary().
 create(#{purpose := Purpose, profile := Profile} = Key, <<_:256>> = Audience, Capabilities, #{exp := Exp} = Opts)
   when (Purpose =:= identity orelse Purpose =:= realm orelse Purpose =:= org orelse Purpose =:= foundation),
        is_list(Capabilities), is_integer(Exp), Exp >= 0 ->
+    ok = window_opens(Exp, maps:get(nbf, Opts, none), erlang:system_time(second)),
     Header = #{<<"alg">> => alg(Profile), <<"typ">> => ?TYP, <<"ucv">> => ?UCV},
     Claims = maps:merge(optional_claims(Opts),
                         #{<<"iss">> => did_key(macula_node_keys:public_key(Key), Profile),
@@ -75,6 +86,13 @@ create(#{purpose := Purpose, profile := Profile} = Key, <<_:256>> = Audience, Ca
                           <<"exp">> => Exp}),
     Input = <<(base64url(json:encode(Header)))/binary, ".", (base64url(json:encode(Claims)))/binary>>,
     <<Input/binary, ".", (base64url(macula_node_keys:sign(Input, Key)))/binary>>.
+
+window_opens(Exp, _Nbf, Now) when Exp > Now + ?MAX_LIFETIME ->
+    error({exp_beyond_max_lifetime, #{exp => Exp, now => Now, at_most => Now + ?MAX_LIFETIME}});
+window_opens(Exp, Nbf, _Now) when is_integer(Nbf), Nbf >= Exp ->
+    error({window_never_opens, #{nbf => Nbf, exp => Exp}});
+window_opens(_Exp, _Nbf, _Now) ->
+    ok.
 
 optional_claims(Opts) ->
     maps:from_list([{atom_to_binary(Name), Value} || Name := Value <- maps:with([nbf, nnc, fct, prf], Opts)]).
@@ -278,6 +296,8 @@ audience_is(#{caller := Caller}, #{claims := #{<<"aud">> := Aud}} = Checked) ->
 
 valid_at(Now, #{claims := #{<<"exp">> := Exp}}) when Now >= Exp ->
     {error, expired};
+valid_at(Now, #{claims := #{<<"exp">> := Exp}}) when Exp > Now + ?MAX_LIFETIME ->
+    {error, exp_beyond_max_lifetime};
 valid_at(Now, #{claims := #{<<"nbf">> := Nbf}}) when is_integer(Nbf), Now < Nbf ->
     {error, not_yet_valid};
 valid_at(_Now, #{claims := #{<<"nbf">> := Nbf}}) when not is_integer(Nbf) ->

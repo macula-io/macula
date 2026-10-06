@@ -28,7 +28,9 @@ Every refusal `authorize` can reach appears in both profiles.
 
 An SDK that mints tokens checks them by round trip and against macula:
 `macula_ucan:authorize/3` must accept a token the SDK mints for the policies
-and contexts above.
+and contexts above. A minter refuses a window no verifier accepts, naming the
+values it compared: an `exp` more than the max lifetime past the time of
+minting, or an `nbf` not before `exp`.
 
 ## The token
 
@@ -53,7 +55,13 @@ as received, never over re-encoded JSON.
     token. It must equal the request's verified caller: `not_the_audience`
     otherwise.
   - `cap`: a list of `{"with", "can"}`.
-  - `exp`: seconds. At or past `exp` the token is `expired`.
+  - `exp`: seconds. At or past `exp` the token is `expired`. An `exp` more
+    than the max lifetime, 315,576,000 s (ten years of 365.25 days), past
+    `now` is `exp_beyond_max_lifetime`; one exactly at the bound is valid.
+    UCAN_V1 has no revocation, so this is the only bound on a token's life:
+    a token minted with an `exp` in milliseconds authorizes nothing, rather
+    than everything for tens of thousands of years. Every link of a chain
+    is held to it.
   - Optional `nbf` (before it, `not_yet_valid`), `nnc`, `fct`, `prf`.
   - `iss`, `aud`, `cap` and `exp` must have their types before anything is
     verified: `malformed` otherwise. `exp` is required: a token without one
@@ -132,8 +140,8 @@ The first refusal wins, so an SDK takes the checks in this order:
    formed for the profile: `malformed`.
 4. The signature: `signature_invalid`.
 5. `aud` against the verified caller: `not_the_audience`.
-6. `exp` (`expired`), then `nbf` (`not_yet_valid`, or `malformed` when it is
-   not an integer).
+6. `exp` (`expired`, then `exp_beyond_max_lifetime`), then `nbf`
+   (`not_yet_valid`, or `malformed` when it is not an integer).
 7. With a request, the request's procedure: `procedure_without_org`.
 8. The token's own capability (above): `missing_capability`, `wrong_realm`,
    `realm_name_not_canonical`. Where no capability answers, the first

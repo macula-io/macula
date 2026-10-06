@@ -8,6 +8,7 @@
 %% verdict from it on each run, so it cannot drift from macula_ucan.
 Now = 1790000000,
 Hour = 3600,
+MaxLifetime = macula_ucan:max_lifetime(),
 RealmName = <<"io.macula">>,
 Realm = crypto:hash(sha256, RealmName),
 Procedure = <<"acme/count_v1">>,
@@ -34,19 +35,20 @@ Profile = fun(P) ->
         macula_ucan:create(Issuer, Node(Audience), [#{with => W, can => C} || {W, C} <- Caps],
                            maps:merge(#{exp => Now + Hour}, Opts))
     end,
-    %% A token without exp, signed as create/4 signs one: a well-formed signature over claims that lack a required
-    %% claim, which create/4 cannot mint.
-    MintWithoutExp = fun(Issuer, Audience, Caps) ->
+    %% A token signed as create/4 signs one, over claims create/4 will not mint: without exp, or with an exp beyond
+    %% the max lifetime, as another SDK or an older macula could have minted it.
+    MintRaw = fun(Issuer, Audience, Caps, Extra) ->
         B64 = fun(Bin) -> base64:encode(Bin, #{mode => urlsafe, padding => false}) end,
         Header = #{<<"alg">> => case P of pq_pure -> <<"ML-DSA-87">>; pq_hybrid -> <<"ML-DSA-87-PS384">> end,
                    <<"typ">> => <<"JWT">>, <<"ucv">> => <<"0.10.0">>},
-        Claims = #{<<"iss">> => macula_ucan:did_key(macula_node_keys:public_key(Issuer), P),
-                   <<"aud">> => Hex(Node(Audience)),
-                   <<"cap">> => [#{<<"with">> => W, <<"can">> => C} || {W, C} <- Caps]},
+        Claims = Extra#{<<"iss">> => macula_ucan:did_key(macula_node_keys:public_key(Issuer), P),
+                        <<"aud">> => Hex(Node(Audience)),
+                        <<"cap">> => [#{<<"with">> => W, <<"can">> => C} || {W, C} <- Caps]},
         Input = <<(B64(iolist_to_binary(json:encode(Header))))/binary, ".",
                   (B64(iolist_to_binary(json:encode(Claims))))/binary>>,
         <<Input/binary, ".", (B64(macula_node_keys:sign(Input, Issuer)))/binary>>
     end,
+    MintWithoutExp = fun(Issuer, Audience, Caps) -> MintRaw(Issuer, Audience, Caps, #{}) end,
     ProcCap = {Proc(RealmName, Procedure), Can},
     OrgCap = {<<"mri:org:", RealmName/binary, "/acme">>, Can},
     RealmCap = {<<"mri:realm:", RealmName/binary>>, Can},
@@ -61,6 +63,7 @@ Profile = fun(P) ->
     OtherToAlice = Mint(OtherRoot, Alice, [OrgCap], #{}),
     RootToAliceOther = Mint(Root, Alice, [{Proc(RealmName, <<"acme/other_v1">>), Can}], #{}),
     RootToAliceRead = Mint(Root, Alice, [{element(1, OrgCap), <<"read">>}], #{}),
+    RootToAliceInMs = MintRaw(Root, Alice, [OrgCap], #{<<"exp">> => (Now + Hour) * 1000}),
     Cases = [
         {<<"ok_procedure_grant">>, Mint(Root, Alice, [ProcCap], #{}), [], UcanRequired(Root), RequestContext(Alice)},
         {<<"ok_org_grant">>, Mint(Root, Alice, [OrgCap], #{}), [], UcanRequired(Root), RequestContext(Alice)},
@@ -96,6 +99,19 @@ Profile = fun(P) ->
          RequestContext(Alice)},
         {<<"expired_at_exp">>, Mint(Root, Alice, [ProcCap], #{exp => Now}), [], UcanRequired(Root),
          RequestContext(Alice)},
+        %% UCAN_V1 has no revocation: an exp more than the max lifetime (ten years of 365.25 days) past now is
+        %% refused, beside expired in the check order, so a token minted with an exp in milliseconds authorizes
+        %% nothing. An exp exactly at the bound is valid.
+        {<<"ok_exp_at_max_lifetime">>, MintRaw(Root, Alice, [ProcCap], #{<<"exp">> => Now + MaxLifetime}), [],
+         UcanRequired(Root), RequestContext(Alice)},
+        {<<"exp_beyond_max_lifetime">>, MintRaw(Root, Alice, [ProcCap], #{<<"exp">> => Now + MaxLifetime + 1}), [],
+         UcanRequired(Root), RequestContext(Alice)},
+        {<<"exp_beyond_max_lifetime_in_milliseconds">>,
+         MintRaw(Root, Alice, [ProcCap], #{<<"exp">> => (Now + Hour) * 1000}), [], UcanRequired(Root),
+         RequestContext(Alice)},
+        {<<"exp_beyond_max_lifetime_in_a_proof">>,
+         Mint(Alice, Bob, [ProcCap], #{prf => [macula_ucan:proof_id(RootToAliceInMs)]}), [RootToAliceInMs],
+         UcanRequired(Root), RequestContext(Bob)},
         %% The first refusal wins: the validity window is checked before the proofs are, so an expired token with a
         %% proof nothing names is expired, not unreferenced_proof.
         {<<"expired_before_unreferenced_proof">>, Mint(Root, Alice, [ProcCap], #{exp => Now - 1}), [RootToMallory],

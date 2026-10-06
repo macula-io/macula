@@ -79,7 +79,7 @@ covers_checked(Covers) ->
 %% met each one. The list is macula_ucan's refusal() type: a refusal added there is added here and given a case.
 refusals_pinned(Profiles) ->
     Refusals = [malformed, wrong_algorithm, signature_invalid, not_the_issuer, not_the_audience, expired,
-                not_yet_valid, missing_capability, missing_proof, unreferenced_proof, not_the_delegate,
+                exp_beyond_max_lifetime, not_yet_valid, missing_capability, missing_proof, unreferenced_proof, not_the_delegate,
                 chain_not_linear, grants_more_than_proof, can_changed, wrong_realm, realm_name_not_canonical,
                 procedure_without_org],
     [?assertEqual({Profile, []},

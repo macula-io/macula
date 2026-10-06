@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [13.6.0] - 2026-10-06
+
+### Security
+
+- **A UCAN's `exp` is bounded at verification** (macula#68). UCAN_V1 has no revocation, so a token minted with an
+  `exp` in milliseconds stayed valid on every provider for some 50,000 years. `macula_ucan:authorize/3` now refuses,
+  for every link of a chain, an `exp` more than `macula_ucan:max_lifetime/0` (315,576,000 s, ten years of 365.25
+  days) past now, with the new refusal `exp_beyond_max_lifetime`, checked right after `expired`. A provider answers
+  it `unauthorized`. macula-go's `ucan.Authorize` refuses the same tokens under the same name.
+- **`macula_ucan:create/4` refuses a window no verifier accepts**: an `exp` beyond the max lifetime raises
+  `{exp_beyond_max_lifetime, #{exp, now, at_most}}`, and an `nbf` not before `exp` raises
+  `{window_never_opens, #{nbf, exp}}`. It guarded only `exp >= 0` before.
+- `test/vectors/ucan_v1.json` is regenerated with four cases for the bound (at it, one second past it, an `exp` in
+  milliseconds, and a proof whose `exp` is in milliseconds); `UCAN_V1.md` states the bound and its place in the check
+  order. Every earlier case keeps its verdict.
+
 ## [13.5.0] - 2026-10-05
 
 ### Added

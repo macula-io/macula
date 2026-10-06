@@ -78,7 +78,7 @@ LAMPS composite, in `pq_hybrid` (JOSE has no name for it yet). Its claims:
 |-------|-------------|
 | `iss` | **Issuer** - a `did:key` for the issuer's key as carried: multibase base58btc over the multicodec `mldsa-87-pub` (0x1212) in `pq_pure`, or Macula's own key type (0x300087, private use) in `pq_hybrid`, then the key |
 | `aud` | **Audience** - the audience's node_id in lowercase hex |
-| `exp` | **Expiration** - Unix timestamp in seconds; every token has one |
+| `exp` | **Expiration** - Unix timestamp in seconds; every token has one, at most ten years (365.25-day years) past now |
 | `nbf` | **Not Before** (optional) - token valid only from this time |
 | `cap` | **Capabilities** - array of `{with, can}` grants |
 | `prf` | **Proofs** (optional) - parent UCANs, for delegation |

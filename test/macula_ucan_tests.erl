@@ -103,6 +103,46 @@ a_token_not_yet_valid_is_refused_test() ->
     Token = macula_ucan:create(Issuer, Caller, [?CAP], #{exp => later(), nbf => now_s() + 600}),
     ?assertEqual({error, not_yet_valid}, authorize(Token, {ucan_required, IssuerId}, Caller)).
 
+%% UCAN_V1 has no revocation, so the bound on a token's life is its exp. One more than ten years of 365.25 days
+%% (315,576,000 s) past now is refused at verification, whoever minted it: an exp in milliseconds would otherwise
+%% authorize for tens of thousands of years.
+the_max_lifetime_is_ten_years_of_365_25_days_test() ->
+    {Issuer, IssuerId, Caller} = parties(),
+    Now = 1790000000,
+    Authorize = fun(Exp) ->
+        macula_ucan:authorize(claims_signed(Issuer, Caller, #{<<"exp">> => Exp}), {ucan_required, IssuerId},
+                              #{caller => Caller, profile => pq_pure, now => Now})
+    end,
+    ?assertMatch({ok, _}, Authorize(Now + 315576000)),
+    ?assertEqual({error, exp_beyond_max_lifetime}, Authorize(Now + 315576001)).
+
+an_exp_in_milliseconds_is_refused_test() ->
+    {Issuer, IssuerId, Caller} = parties(),
+    Token = claims_signed(Issuer, Caller, #{<<"exp">> => later() * 1000}),
+    ?assertEqual({error, exp_beyond_max_lifetime}, authorize(Token, {ucan_required, IssuerId}, Caller)).
+
+%% The bound sits beside expired in the check order: after exp has passed, before nbf.
+an_exp_beyond_the_max_lifetime_is_refused_before_nbf_test() ->
+    {Issuer, IssuerId, Caller} = parties(),
+    Token = claims_signed(Issuer, Caller, #{<<"exp">> => later() * 1000, <<"nbf">> => later()}),
+    ?assertEqual({error, exp_beyond_max_lifetime}, authorize(Token, {ucan_required, IssuerId}, Caller)).
+
+%% create/4 mints no token a verifier refuses for its window: an exp beyond the max lifetime, or an nbf not before
+%% exp, raises an error naming the values it compared.
+create_refuses_an_exp_beyond_the_max_lifetime_test() ->
+    {Issuer, _IssuerId, Caller} = parties(),
+    Exp = later() * 1000,
+    ?assertError({exp_beyond_max_lifetime, #{exp := Exp, now := _, at_most := _}},
+                 macula_ucan:create(Issuer, Caller, [?CAP], #{exp => Exp})),
+    ?assert(is_binary(macula_ucan:create(Issuer, Caller, [?CAP], #{exp => now_s() + 315576000 - 60}))).
+
+create_refuses_a_window_that_never_opens_test() ->
+    {Issuer, _IssuerId, Caller} = parties(),
+    Exp = later(),
+    [?assertError({window_never_opens, #{nbf := Nbf, exp := Exp}},
+                  macula_ucan:create(Issuer, Caller, [?CAP], #{exp => Exp, nbf => Nbf}))
+     || Nbf <- [Exp, Exp + 1]].
+
 %% D7: every token has an exp. create/4 will not make one without it, and a token signed without one is refused.
 a_token_without_exp_is_refused_test() ->
     {Issuer, IssuerId, Caller} = parties(),
@@ -203,6 +243,14 @@ segments(Token) ->
 signed(Key, Header, Payload) ->
     Input = signing_input(Header, Payload),
     <<Input/binary, ".", (base64url(macula_node_keys:sign(Input, Key)))/binary>>.
+
+%% A pq_pure token from Issuer to Audience with these claims over a realm capability, minted past create/4's checks,
+%% as another SDK or an older macula could have minted it.
+claims_signed(Issuer, Audience, Claims) ->
+    signed(Issuer, #{<<"alg">> => <<"ML-DSA-87">>, <<"typ">> => <<"JWT">>, <<"ucv">> => <<"0.10.0">>},
+           Claims#{<<"iss">> => macula_ucan:did_key(macula_node_keys:public_key(Issuer), pq_pure),
+                   <<"aud">> => binary:encode_hex(Audience, lowercase),
+                   <<"cap">> => [#{<<"with">> => <<"mri:realm:io.example">>, <<"can">> => ?CAN}]}).
 
 signing_input(Header, Payload) ->
     <<(base64url(iolist_to_binary(json:encode(Header))))/binary, ".",
