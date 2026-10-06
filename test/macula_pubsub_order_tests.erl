@@ -94,7 +94,7 @@ ordered_cap_skips_when_buffer_full_test() ->
 
 %% A large BACKWARD jump is also a publisher restart: one whose seq
 %% counter re-seeded from zero instead of wall-clock microseconds
-%% (macula-station's own hecate_pubsub_server did exactly this before
+%% (macula-station's own macula_realm_pubsub_server did exactly this before
 %% 10.17.0). Without this clause every fact after such a restart reads
 %% as "past" and is silently dropped until the counter climbs back over
 %% the old watermark -- which is how a live read model (the station

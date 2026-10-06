@@ -4,7 +4,7 @@
 %% incoming SUBSCRIBE / UNSUBSCRIBE / EVENT frames into local
 %% state mutations + delivery instructions. The wire layer that
 %% actually transmits frames lives elsewhere — typically
-%% `hecate_plumtree' for intra-realm fan-out.
+%% `macula_plumtree' for intra-realm fan-out.
 %%
 %% == Pipeline ==
 %%
@@ -56,7 +56,7 @@
 %% unlike the exact-topic set) and matches a concrete publish against
 %% every peer's gossiped patterns directly via `macula_topic_pattern:matches/2'
 %% at fan-out time, entirely separate from the Bloom path.
--module(hecate_pubsub).
+-module(macula_realm_pubsub).
 
 -export([
     new/2,

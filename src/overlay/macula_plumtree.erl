@@ -60,7 +60,7 @@
 %% no longer.
 %%
 %% Reference: DESIGN_PQ_SIGNED_FRAMES_AND_RECORDS.md, Publications.
--module(hecate_plumtree).
+-module(macula_plumtree).
 
 -export([
     new/2,

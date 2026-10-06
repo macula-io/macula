@@ -5,7 +5,7 @@
 %% first GOSSIP from it delivers and forwards its verified publication but moves no one. A duplicate from it gets no
 %% PRUNE and is refused as not_a_peer too, so the connection counts it. The same frames from a peer still move it, and
 %% charged_refusal/1 classifies every refusal kind Plumtree returns.
--module(hecate_plumtree_non_peer_tests).
+-module(macula_plumtree_non_peer_tests).
 
 -include_lib("eunit/include/eunit.hrl").
 
@@ -15,7 +15,7 @@
 
 a_graft_from_a_non_peer_moves_no_one_and_sends_nothing_test() ->
     Publish = publish_frame(),
-    {S1, _Pushes, _Delivered} = hecate_plumtree:publish(peers(), Publish, erlang:system_time(millisecond)),
+    {S1, _Pushes, _Delivered} = macula_plumtree:publish(peers(), Publish, erlang:system_time(millisecond)),
     {S2, Actions, []} = process(S1, id(9), graft(msg_id_of(Publish))),
     ?assertEqual([{refused, id(9), not_a_peer}], Actions),
     ?assertEqual(sets_of(S1), sets_of(S2)).
@@ -31,7 +31,7 @@ an_ihave_from_a_non_peer_records_nothing_and_sends_no_graft_test() ->
     {S2, Actions, []} = process(S1, id(9), ihave(msg_id_of(publish_frame()))),
     ?assertEqual([{refused, id(9), not_a_peer}], Actions),
     ?assertEqual({sets_of(S1), 0, 0},
-                 {sets_of(S2), hecate_plumtree:missing_count(S2), hecate_plumtree:open_count(id(9), S2)}).
+                 {sets_of(S2), macula_plumtree:missing_count(S2), macula_plumtree:open_count(id(9), S2)}).
 
 a_first_gossip_from_a_non_peer_delivers_and_forwards_but_moves_no_one_test() ->
     S1 = peers(),
@@ -51,7 +51,7 @@ a_duplicate_gossip_from_a_non_peer_gets_no_prune_and_is_refused_test() ->
 
 the_same_frames_from_a_peer_still_move_it_test() ->
     Publish = publish_frame(),
-    {S1, _Pushes, _Delivered} = hecate_plumtree:publish(peers(), Publish, erlang:system_time(millisecond)),
+    {S1, _Pushes, _Delivered} = macula_plumtree:publish(peers(), Publish, erlang:system_time(millisecond)),
     {S2, GraftActions, []} = process(S1, id(2), graft(msg_id_of(Publish))),
     {S3, PruneActions, []} = process(S2, id(1), prune()),
     ?assertMatch([{send, _To, _Gossip}], GraftActions),
@@ -68,16 +68,16 @@ every_refusal_kind_plumtree_returns_is_classified_test() ->
 
 %% A node with id(1) eager and id(2) lazy: both join eager, then id(2)'s PRUNE moves it to lazy.
 peers() ->
-    {ok, S0} = hecate_plumtree:new(id(99), ?REALM),
-    S1 = hecate_plumtree:add_peer(hecate_plumtree:add_peer(S0, id(1)), id(2)),
+    {ok, S0} = macula_plumtree:new(id(99), ?REALM),
+    S1 = macula_plumtree:add_peer(macula_plumtree:add_peer(S0, id(1)), id(2)),
     {S2, [], []} = process(S1, id(2), prune()),
     S2.
 
 process(State, From, Frame) ->
-    hecate_plumtree:process(State, From, Frame, #{wall => erlang:system_time(millisecond), monotonic => 0}).
+    macula_plumtree:process(State, From, Frame, #{wall => erlang:system_time(millisecond), monotonic => 0}).
 
 sets_of(State) ->
-    {lists:sort(hecate_plumtree:eager_peers(State)), lists:sort(hecate_plumtree:lazy_peers(State))}.
+    {lists:sort(macula_plumtree:eager_peers(State)), lists:sort(macula_plumtree:lazy_peers(State))}.
 
 id(N) -> <<N:256>>.
 

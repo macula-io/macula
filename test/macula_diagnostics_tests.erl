@@ -117,13 +117,13 @@ snapshot_returns_all_metrics_test() ->
     fresh(),
     ok = macula_diagnostics:metric(<<"_macula.a">>, counter, 1),
     ok = macula_diagnostics:metric(<<"_macula.b">>, gauge, 42),
-    ok = macula_diagnostics:metric(<<"_hecate.c">>, counter, 3),
+    ok = macula_diagnostics:metric(<<"_demo.c">>, counter, 3),
     Snap = lists:sort(macula_diagnostics:snapshot()),
     ?assertEqual(
         lists:sort([
             {<<"_macula.a">>, counter, 1},
             {<<"_macula.b">>, gauge, 42},
-            {<<"_hecate.c">>, counter, 3}
+            {<<"_demo.c">>, counter, 3}
         ]),
         Snap).
 

@@ -77,6 +77,6 @@
 
   <!-- Footer -->
   <text x="490" y="490" text-anchor="middle" font-family="system-ui" font-size="9.5" fill="#374151">The eager-push tree is never configured — it emerges from duplicate-triggered PRUNE and IHAVE-triggered GRAFT alone</text>
-  <text x="490" y="508" text-anchor="middle" font-family="system-ui" font-size="9.5" fill="#374151">hecate_plumtree:process/3 drives GOSSIP / IHAVE / GRAFT / PRUNE against eager_push / lazy_push / received / missing</text>
+  <text x="490" y="508" text-anchor="middle" font-family="system-ui" font-size="9.5" fill="#374151">macula_plumtree:process/3 drives GOSSIP / IHAVE / GRAFT / PRUNE against eager_push / lazy_push / received / missing</text>
   <text x="490" y="526" text-anchor="middle" font-family="system-ui" font-size="8.5" fill="#9ca3af">eager_push and lazy_push track HyParView's active view — add_peer/2 and remove_peer/2 keep the two in sync</text>
 </svg>

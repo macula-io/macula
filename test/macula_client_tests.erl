@@ -1115,11 +1115,11 @@ a_discovery_procedure_without_an_org_is_refused_test_() ->
      fun() ->
          {ok, _} = application:ensure_all_started(macula),
          process_flag(trap_exit, true),
-         ?assertMatch({error, {station_discovery, {procedure, <<"hecate_stations.list_stations">>}}},
+         ?assertMatch({error, {station_discovery, {procedure, <<"demo_stations.list_stations">>}}},
                       macula_client:connect([], #{realm_trust => realm_trust(),
                                                   station_discovery =>
                                                       #{enabled => true,
-                                                        procedure => <<"hecate_stations.list_stations">>}}))
+                                                        procedure => <<"demo_stations.list_stations">>}}))
      end}.
 
 %% `station_discovery' absent: `connect/2' behaves exactly as before --

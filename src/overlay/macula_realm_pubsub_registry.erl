@@ -1,8 +1,8 @@
-%% @doc Per-identity registry for `hecate_pubsub_server' processes.
+%% @doc Per-identity registry for `macula_realm_pubsub_server' processes.
 %%
 %% Holds a `RealmTag => pid()' map and acts as the dispatch hub for
 %% inbound SUBSCRIBE / UNSUBSCRIBE / EVENT frames. The registry
-%% spawn-links one `hecate_pubsub_server' worker per realm and stores
+%% spawn-links one `macula_realm_pubsub_server' worker per realm and stores
 %% its pid. A linked worker that crashes delivers an `'EXIT'' message
 %% which the registry traps + uses to clear the entry; a later
 %% `register/3' or SUBSCRIBE yields a fresh server.
@@ -39,14 +39,14 @@
 %% No cross-identity leakage — a realm tag X under identity A is
 %% a different overlay than the same realm tag X under identity B.
 %%
-%% Phase 2 also folded the previous `hecate_pubsub_server_sup'
+%% Phase 2 also folded the previous pubsub server supervisor
 %% (`simple_one_for_one' pool) into the registry: the registry
 %% spawn-links pubsub_servers itself. Equivalent semantics — they
 %% are temporary, the registry's monitor was already doing the
 %% bookkeeping that the supervisor would have — minus a module +
 %% the pid-passing coordination that splitting them required under
 %% per-identity supervision.
--module(hecate_pubsub_registry).
+-module(macula_realm_pubsub_registry).
 -behaviour(gen_server).
 
 -compile({no_auto_import, [register/2]}).
@@ -202,7 +202,7 @@ list_realms(RegistryPid) ->
 
 %% @doc Remove `Sub' (a subscriber pubkey) from every topic under
 %% every realm currently materialised on this registry — i.e. from
-%% every live `hecate_pubsub_server' it owns. A dead server pid
+%% every live `macula_realm_pubsub_server' it owns. A dead server pid
 %% (raced against its own `EXIT' cleanup, see `handle_info/2') is
 %% skipped rather than treated as an error; the registry's own
 %% `by_realm'/`by_pid' bookkeeping self-heals on the pending `EXIT'.
@@ -245,7 +245,7 @@ init(Opts) ->
 default_identity(error) ->
     {ok, undefined, undefined};
 default_identity({ok, Load}) when is_function(Load, 0) ->
-    identity_held(hecate_pubsub_server:identity_loaded(Load), Load);
+    identity_held(macula_realm_pubsub_server:identity_loaded(Load), Load);
 default_identity({ok, _NotALoader}) ->
     {error, {identity, not_a_loader}}.
 
@@ -319,7 +319,7 @@ handle_existing(Realm, _Pid, Identity, false, S) ->
 
 do_spawn_server(Realm, Identity, S) ->
     on_server_started(Realm,
-                      hecate_pubsub_server:start_link(
+                      macula_realm_pubsub_server:start_link(
                           #{realm => Realm, identity => Identity}),
                       S).
 
@@ -370,7 +370,7 @@ on_auto_registered({error, Reason, S}, _Realm, _From, _Frame) ->
     {reply, {error, Reason}, S}.
 
 forward_frame(Realm, Pid, From, Frame, S) ->
-    try hecate_pubsub_server:process_frame(Pid, From, Frame) of
+    try macula_realm_pubsub_server:process_frame(Pid, From, Frame) of
         Subs -> {reply, {ok, Subs}, reap_if_empty(is_unsubscribe(Frame), Realm, Pid, S)}
     catch
         exit:{noproc, _} ->
@@ -400,14 +400,14 @@ reap(false, Realm, Pid, S) ->
     drop_realm(Realm, S).
 
 holds_subscriptions(Pid) ->
-    try hecate_pubsub_server:topic_count(Pid) > 0
+    try macula_realm_pubsub_server:topic_count(Pid) > 0
     catch exit:{noproc, _} -> false
     end.
 
 %% The server is linked to this process, which traps exits: its `EXIT'
 %% arrives after the realm is already dropped, and changes nothing.
 stop_server(Pid) ->
-    try hecate_pubsub_server:stop(Pid)
+    try macula_realm_pubsub_server:stop(Pid)
     catch exit:_Gone -> ok
     end.
 
@@ -435,12 +435,12 @@ relay_without_server(Realm, #{frame_type := publish} = Frame, Profile) ->
 relay_without_server(_Realm, _Frame, _Profile) ->
     {error, malformed_frame}.
 
-without_server({ok, #{realm := Realm}}, Realm, Frame) -> {ok, hecate_pubsub:build_event(Frame, direct), []};
+without_server({ok, #{realm := Realm}}, Realm, Frame) -> {ok, macula_realm_pubsub:build_event(Frame, direct), []};
 without_server({ok, _AnotherRealm}, _Realm, _Frame) -> {error, realm_mismatch};
 without_server({error, _} = Refusal, _Realm, _Frame) -> Refusal.
 
 forward_relay_publish(Realm, Pid, Frame, S) ->
-    try hecate_pubsub_server:relay_publish(Pid, Frame) of
+    try macula_realm_pubsub_server:relay_publish(Pid, Frame) of
         {EventFrame, Matched} when is_list(Matched) ->
             {reply, {ok, EventFrame, Matched}, S};
         {error, Reason} ->
@@ -455,7 +455,7 @@ forward_relay_publish(Realm, Pid, Frame, S) ->
 %%====================================================================
 
 ensure_server(Realm, Id, S) ->
-    case hecate_pubsub_server:start_link(
+    case macula_realm_pubsub_server:start_link(
             #{realm => Realm, identity => Id}) of
         {ok, Pid} ->
             {ok, Pid, S#state{
@@ -494,7 +494,7 @@ purge_one(Realm, Pid, Sub, S) ->
 %% Whether the purge reached a live server, which may then hold no
 %% subscription any more.
 purged(Pid, Sub) ->
-    try hecate_pubsub_server:purge_subscriber(Pid, Sub) of
+    try macula_realm_pubsub_server:purge_subscriber(Pid, Sub) of
         ok -> true
     catch exit:{noproc, _} -> false
     end.

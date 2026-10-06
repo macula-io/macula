@@ -36,7 +36,7 @@
 %%
 %% Both produce the same final state given the same total set of
 %% operations — the OR-Set's strong eventual consistency guarantee.
--module(hecate_or_set).
+-module(macula_or_set).
 
 -export([
     new/0,

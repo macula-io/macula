@@ -1,8 +1,8 @@
-%% EUnit tests for hecate_pubsub_server. The server signs its own PUBLISH frames with a node identity key in the node's
+%% EUnit tests for macula_realm_pubsub_server. The server signs its own PUBLISH frames with a node identity key in the node's
 %% configured crypto profile, given as a loader, and refuses to start with any other key or with the key itself; a
 %% relayed PUBLISH is verified once and its EVENT carries the publication bytes unchanged; an inbound EVENT is verified
 %% before it matches subscribers.
--module(hecate_pubsub_server_tests).
+-module(macula_realm_pubsub_server_tests).
 
 -include_lib("eunit/include/eunit.hrl").
 
@@ -30,11 +30,11 @@ loader(Key) ->
     fun() -> Key end.
 
 start() ->
-    {ok, Pid} = hecate_pubsub_server:start_link(#{realm => realm(), identity => loader(key())}),
+    {ok, Pid} = macula_realm_pubsub_server:start_link(#{realm => realm(), identity => loader(key())}),
     Pid.
 
 stop_(Pid) ->
-    hecate_pubsub_server:stop(Pid).
+    macula_realm_pubsub_server:stop(Pid).
 
 %%---------------------------------------------------------------------
 %% Construction + inspection
@@ -42,16 +42,16 @@ stop_(Pid) ->
 
 start_link_creates_empty_state_test() ->
     Pid = start(),
-    ?assertEqual(0, hecate_pubsub_server:topic_count(Pid)),
-    ?assertEqual([], hecate_pubsub_server:topics(Pid)),
-    ?assertEqual(0, hecate_pubsub_server:subscriber_count(Pid)),
+    ?assertEqual(0, macula_realm_pubsub_server:topic_count(Pid)),
+    ?assertEqual([], macula_realm_pubsub_server:topics(Pid)),
+    ?assertEqual(0, macula_realm_pubsub_server:subscriber_count(Pid)),
     stop_(Pid).
 
 realm_returns_configured_realm_test() ->
     R = realm(),
-    {ok, Pid} = hecate_pubsub_server:start_link(#{realm => R, identity => loader(key())}),
-    ?assertEqual(R, hecate_pubsub_server:realm(Pid)),
-    hecate_pubsub_server:stop(Pid).
+    {ok, Pid} = macula_realm_pubsub_server:start_link(#{realm => R, identity => loader(key())}),
+    ?assertEqual(R, macula_realm_pubsub_server:realm(Pid)),
+    macula_realm_pubsub_server:stop(Pid).
 
 a_server_whose_key_is_in_another_profile_does_not_start_test_() ->
     {timeout, ?EU_TIMEOUT, fun() ->
@@ -59,19 +59,19 @@ a_server_whose_key_is_in_another_profile_does_not_start_test_() ->
         [Other] = macula_crypto_profile:profiles() -- [Configured],
         {ok, Key} = macula_node_keys:generate(identity, Other),
         ?assertEqual({error, {identity_profile_mismatch, Other, Configured}},
-                     hecate_pubsub_server:start_link(#{realm => realm(), identity => loader(Key)}))
+                     macula_realm_pubsub_server:start_link(#{realm => realm(), identity => loader(Key)}))
     end}.
 
 a_server_whose_key_is_not_an_identity_key_does_not_start_test() ->
     {ok, Key} = macula_node_keys:generate(connect, profile()),
     ?assertEqual({error, {identity, not_an_identity_key}},
-                 hecate_pubsub_server:start_link(#{realm => realm(), identity => loader(Key)})).
+                 macula_realm_pubsub_server:start_link(#{realm => realm(), identity => loader(Key)})).
 
 %% A server is given its identity only as a loader. One given the key map itself does not start, and the refusal names
 %% the option without carrying the key.
 a_server_given_its_key_instead_of_a_loader_does_not_start_test() ->
     ?assertEqual({error, {identity, not_a_loader}},
-                 hecate_pubsub_server:start_link(#{realm => realm(), identity => key()})).
+                 macula_realm_pubsub_server:start_link(#{realm => realm(), identity => key()})).
 
 %% A server whose loader raises refuses to start by name, as a pool does, with nothing of the error the loader raised.
 %% The start runs in a process of its own that traps exits, so a start that crashes fails only this test.
@@ -81,7 +81,7 @@ a_server_whose_loader_raises_refuses_to_start_by_name_test_() ->
         Key = key(),
         Raising = fun() -> erlang:error({no_key_here, Key}) end,
         ?assertEqual({error, {identity, loader_failed}},
-                     hecate_pubsub_server:start_link(#{realm => realm(), identity => Raising}))
+                     macula_realm_pubsub_server:start_link(#{realm => realm(), identity => Raising}))
     end)}.
 
 %%---------------------------------------------------------------------
@@ -91,50 +91,50 @@ a_server_whose_loader_raises_refuses_to_start_by_name_test_() ->
 subscribe_records_subscriber_test() ->
     Pid = start(),
     Sub = id(1),
-    ok = hecate_pubsub_server:subscribe(Pid, <<"news">>, Sub),
-    ?assert(hecate_pubsub_server:is_subscribed(Pid, <<"news">>, Sub)),
-    ?assertEqual([Sub], hecate_pubsub_server:subscribers(Pid, <<"news">>)),
-    ?assertEqual([<<"news">>], hecate_pubsub_server:topics(Pid)),
-    ?assertEqual(1, hecate_pubsub_server:subscriber_count(Pid)),
+    ok = macula_realm_pubsub_server:subscribe(Pid, <<"news">>, Sub),
+    ?assert(macula_realm_pubsub_server:is_subscribed(Pid, <<"news">>, Sub)),
+    ?assertEqual([Sub], macula_realm_pubsub_server:subscribers(Pid, <<"news">>)),
+    ?assertEqual([<<"news">>], macula_realm_pubsub_server:topics(Pid)),
+    ?assertEqual(1, macula_realm_pubsub_server:subscriber_count(Pid)),
     stop_(Pid).
 
 subscribe_records_a_pattern_separately_from_topics_test() ->
     Pid = start(),
     Sub = id(1),
-    ok = hecate_pubsub_server:subscribe(Pid, <<"acme/svc.do">>, Sub),
-    ok = hecate_pubsub_server:subscribe(Pid, <<"*/svc.do">>, Sub),
-    ?assertEqual([<<"acme/svc.do">>], hecate_pubsub_server:topics(Pid)),
-    ?assertEqual([<<"*/svc.do">>], hecate_pubsub_server:patterns(Pid)),
+    ok = macula_realm_pubsub_server:subscribe(Pid, <<"acme/svc.do">>, Sub),
+    ok = macula_realm_pubsub_server:subscribe(Pid, <<"*/svc.do">>, Sub),
+    ?assertEqual([<<"acme/svc.do">>], macula_realm_pubsub_server:topics(Pid)),
+    ?assertEqual([<<"*/svc.do">>], macula_realm_pubsub_server:patterns(Pid)),
     stop_(Pid).
 
 subscribe_idempotent_test() ->
     Pid = start(),
     Sub = id(1),
-    ok = hecate_pubsub_server:subscribe(Pid, <<"t">>, Sub),
-    ok = hecate_pubsub_server:subscribe(Pid, <<"t">>, Sub),
-    ?assertEqual(1, hecate_pubsub_server:subscriber_count(Pid)),
+    ok = macula_realm_pubsub_server:subscribe(Pid, <<"t">>, Sub),
+    ok = macula_realm_pubsub_server:subscribe(Pid, <<"t">>, Sub),
+    ?assertEqual(1, macula_realm_pubsub_server:subscriber_count(Pid)),
     stop_(Pid).
 
 multiple_subscribers_per_topic_test() ->
     Pid = start(),
-    [ok = hecate_pubsub_server:subscribe(Pid, <<"t">>, id(N)) || N <- [1, 2, 3]],
-    ?assertEqual(3, hecate_pubsub_server:subscriber_count(Pid)),
-    ?assertEqual(3, length(hecate_pubsub_server:subscribers(Pid, <<"t">>))),
+    [ok = macula_realm_pubsub_server:subscribe(Pid, <<"t">>, id(N)) || N <- [1, 2, 3]],
+    ?assertEqual(3, macula_realm_pubsub_server:subscriber_count(Pid)),
+    ?assertEqual(3, length(macula_realm_pubsub_server:subscribers(Pid, <<"t">>))),
     stop_(Pid).
 
 unsubscribe_drops_subscriber_test() ->
     Pid = start(),
     Sub = id(2),
-    ok = hecate_pubsub_server:subscribe(Pid, <<"t">>, Sub),
-    ok = hecate_pubsub_server:unsubscribe(Pid, <<"t">>, Sub),
-    ?assertNot(hecate_pubsub_server:is_subscribed(Pid, <<"t">>, Sub)),
-    ?assertEqual(0, hecate_pubsub_server:subscriber_count(Pid)),
+    ok = macula_realm_pubsub_server:subscribe(Pid, <<"t">>, Sub),
+    ok = macula_realm_pubsub_server:unsubscribe(Pid, <<"t">>, Sub),
+    ?assertNot(macula_realm_pubsub_server:is_subscribed(Pid, <<"t">>, Sub)),
+    ?assertEqual(0, macula_realm_pubsub_server:subscriber_count(Pid)),
     stop_(Pid).
 
 unsubscribe_unknown_topic_is_noop_test() ->
     Pid = start(),
-    ok = hecate_pubsub_server:unsubscribe(Pid, <<"nope">>, id(1)),
-    ?assertEqual(0, hecate_pubsub_server:topic_count(Pid)),
+    ok = macula_realm_pubsub_server:unsubscribe(Pid, <<"nope">>, id(1)),
+    ?assertEqual(0, macula_realm_pubsub_server:topic_count(Pid)),
     stop_(Pid).
 
 %%---------------------------------------------------------------------
@@ -144,19 +144,19 @@ unsubscribe_unknown_topic_is_noop_test() ->
 purge_subscriber_drops_topics_where_it_was_sole_subscriber_test() ->
     Pid = start(),
     Sub = id(1),
-    ok = hecate_pubsub_server:subscribe(Pid, <<"a">>, Sub),
-    ok = hecate_pubsub_server:subscribe(Pid, <<"b">>, Sub),
-    ok = hecate_pubsub_server:purge_subscriber(Pid, Sub),
-    ?assertEqual(0, hecate_pubsub_server:topic_count(Pid)),
+    ok = macula_realm_pubsub_server:subscribe(Pid, <<"a">>, Sub),
+    ok = macula_realm_pubsub_server:subscribe(Pid, <<"b">>, Sub),
+    ok = macula_realm_pubsub_server:purge_subscriber(Pid, Sub),
+    ?assertEqual(0, macula_realm_pubsub_server:topic_count(Pid)),
     stop_(Pid).
 
 purge_subscriber_keeps_topics_that_still_have_other_subscribers_test() ->
     Pid = start(),
-    ok = hecate_pubsub_server:subscribe(Pid, <<"a">>, id(1)),
-    ok = hecate_pubsub_server:subscribe(Pid, <<"a">>, id(2)),
-    ok = hecate_pubsub_server:purge_subscriber(Pid, id(1)),
-    ?assertEqual([<<"a">>], hecate_pubsub_server:topics(Pid)),
-    ?assertEqual([id(2)], hecate_pubsub_server:subscribers(Pid, <<"a">>)),
+    ok = macula_realm_pubsub_server:subscribe(Pid, <<"a">>, id(1)),
+    ok = macula_realm_pubsub_server:subscribe(Pid, <<"a">>, id(2)),
+    ok = macula_realm_pubsub_server:purge_subscriber(Pid, id(1)),
+    ?assertEqual([<<"a">>], macula_realm_pubsub_server:topics(Pid)),
+    ?assertEqual([id(2)], macula_realm_pubsub_server:subscribers(Pid, <<"a">>)),
     stop_(Pid).
 
 %%---------------------------------------------------------------------
@@ -165,23 +165,23 @@ purge_subscriber_keeps_topics_that_still_have_other_subscribers_test() ->
 
 publish_returns_local_matched_subscribers_test() ->
     Pid = start(),
-    [ok = hecate_pubsub_server:subscribe(Pid, <<"t">>, id(N)) || N <- [1, 2]],
-    {Frame, Matched} = hecate_pubsub_server:publish(Pid, <<"t">>, <<"hello">>),
+    [ok = macula_realm_pubsub_server:subscribe(Pid, <<"t">>, id(N)) || N <- [1, 2]],
+    {Frame, Matched} = macula_realm_pubsub_server:publish(Pid, <<"t">>, <<"hello">>),
     ?assertEqual(event, macula_frame:frame_type(Frame)),
     ?assertEqual(lists:sort([id(1), id(2)]), lists:sort(Matched)),
     stop_(Pid).
 
 publish_with_no_subscribers_returns_empty_match_test() ->
     Pid = start(),
-    {_Frame, Matched} = hecate_pubsub_server:publish(Pid, <<"empty">>, <<"x">>),
+    {_Frame, Matched} = macula_realm_pubsub_server:publish(Pid, <<"empty">>, <<"x">>),
     ?assertEqual([], Matched),
     stop_(Pid).
 
 publish_increments_seq_test() ->
     Pid = start(),
-    ok = hecate_pubsub_server:subscribe(Pid, <<"t">>, id(1)),
-    {F1, _} = hecate_pubsub_server:publish(Pid, <<"t">>, <<"a">>),
-    {F2, _} = hecate_pubsub_server:publish(Pid, <<"t">>, <<"b">>),
+    ok = macula_realm_pubsub_server:subscribe(Pid, <<"t">>, id(1)),
+    {F1, _} = macula_realm_pubsub_server:publish(Pid, <<"t">>, <<"a">>),
+    {F2, _} = macula_realm_pubsub_server:publish(Pid, <<"t">>, <<"b">>),
     ?assertNotEqual(seq_of(F1), seq_of(F2)),
     stop_(Pid).
 
@@ -194,21 +194,21 @@ publish_increments_seq_test() ->
 publish_seq_is_seeded_from_wall_clock_microseconds_test() ->
     Before = erlang:system_time(microsecond),
     Pid = start(),
-    {F, _} = hecate_pubsub_server:publish(Pid, <<"t">>, <<"a">>),
+    {F, _} = macula_realm_pubsub_server:publish(Pid, <<"t">>, <<"a">>),
     ?assert(seq_of(F) >= Before),
     stop_(Pid).
 
 publish_signs_the_publication_with_the_server_identity_test() ->
     R = realm(),
     Key = key(),
-    {ok, Pid} = hecate_pubsub_server:start_link(#{realm => R, identity => loader(Key)}),
-    ok = hecate_pubsub_server:subscribe(Pid, <<"t">>, id(1)),
-    {Frame, _} = hecate_pubsub_server:publish(Pid, <<"t">>, <<"hello">>),
+    {ok, Pid} = macula_realm_pubsub_server:start_link(#{realm => R, identity => loader(Key)}),
+    ok = macula_realm_pubsub_server:subscribe(Pid, <<"t">>, id(1)),
+    {Frame, _} = macula_realm_pubsub_server:publish(Pid, <<"t">>, <<"hello">>),
     Publisher = macula_node_keys:key_id(Key),
     ?assertMatch({ok, #{publisher := Publisher, realm := R, topic := <<"t">>, payload := <<"hello">>}},
                  verified(Frame)),
     ?assertNot(maps:is_key(signature, Frame)),
-    hecate_pubsub_server:stop(Pid).
+    macula_realm_pubsub_server:stop(Pid).
 
 %%---------------------------------------------------------------------
 %% deliver_event for inbound frames
@@ -216,27 +216,27 @@ publish_signs_the_publication_with_the_server_identity_test() ->
 
 deliver_event_returns_subscribers_test() ->
     R = realm(),
-    {ok, Pid} = hecate_pubsub_server:start_link(#{realm => R, identity => loader(key())}),
-    ok = hecate_pubsub_server:subscribe(Pid, <<"t">>, id(1)),
+    {ok, Pid} = macula_realm_pubsub_server:start_link(#{realm => R, identity => loader(key())}),
+    ok = macula_realm_pubsub_server:subscribe(Pid, <<"t">>, id(1)),
     %% An event another publisher made, for the same realm.
-    ?assertEqual([id(1)], hecate_pubsub_server:deliver_event(Pid, event_frame(R, <<"t">>))),
-    hecate_pubsub_server:stop(Pid).
+    ?assertEqual([id(1)], macula_realm_pubsub_server:deliver_event(Pid, event_frame(R, <<"t">>))),
+    macula_realm_pubsub_server:stop(Pid).
 
 deliver_event_for_other_realm_returns_empty_test() ->
     R1 = realm(),
     R2 = realm(),
-    {ok, Pid} = hecate_pubsub_server:start_link(#{realm => R1, identity => loader(key())}),
-    ok = hecate_pubsub_server:subscribe(Pid, <<"t">>, id(1)),
+    {ok, Pid} = macula_realm_pubsub_server:start_link(#{realm => R1, identity => loader(key())}),
+    ok = macula_realm_pubsub_server:subscribe(Pid, <<"t">>, id(1)),
     %% A publication for a different realm must NOT deliver.
-    ?assertEqual([], hecate_pubsub_server:deliver_event(Pid, event_frame(R2, <<"t">>))),
-    hecate_pubsub_server:stop(Pid).
+    ?assertEqual([], macula_realm_pubsub_server:deliver_event(Pid, event_frame(R2, <<"t">>))),
+    macula_realm_pubsub_server:stop(Pid).
 
 deliver_event_for_a_publication_that_does_not_verify_returns_empty_test() ->
     R = realm(),
-    {ok, Pid} = hecate_pubsub_server:start_link(#{realm => R, identity => loader(key())}),
-    ok = hecate_pubsub_server:subscribe(Pid, <<"t">>, id(1)),
-    ?assertEqual([], hecate_pubsub_server:deliver_event(Pid, tampered(event_frame(R, <<"t">>)))),
-    hecate_pubsub_server:stop(Pid).
+    {ok, Pid} = macula_realm_pubsub_server:start_link(#{realm => R, identity => loader(key())}),
+    ok = macula_realm_pubsub_server:subscribe(Pid, <<"t">>, id(1)),
+    ?assertEqual([], macula_realm_pubsub_server:deliver_event(Pid, tampered(event_frame(R, <<"t">>)))),
+    macula_realm_pubsub_server:stop(Pid).
 
 %%---------------------------------------------------------------------
 %% relay_publish: the publisher's publication goes end to end
@@ -245,10 +245,10 @@ deliver_event_for_a_publication_that_does_not_verify_returns_empty_test() ->
 relay_publish_carries_the_publication_bytes_unchanged_test() ->
     R = realm(),
     Publisher = key(),
-    {ok, Pid} = hecate_pubsub_server:start_link(#{realm => R, identity => loader(key())}),
-    ok = hecate_pubsub_server:subscribe(Pid, <<"io.macula/x/y/v1">>, id(3)),
+    {ok, Pid} = macula_realm_pubsub_server:start_link(#{realm => R, identity => loader(key())}),
+    ok = macula_realm_pubsub_server:subscribe(Pid, <<"io.macula/x/y/v1">>, id(3)),
     #{publication := Publication} = Publish = publish_frame(R, <<"io.macula/x/y/v1">>, Publisher),
-    {EventFrame, Matched} = hecate_pubsub_server:relay_publish(Pid, Publish),
+    {EventFrame, Matched} = macula_realm_pubsub_server:relay_publish(Pid, Publish),
     ?assertEqual(event, macula_frame:frame_type(EventFrame)),
     ?assertEqual(Publication, maps:get(publication, EventFrame)),
     ?assertEqual(direct, maps:get(delivered_via, EventFrame)),
@@ -257,20 +257,20 @@ relay_publish_carries_the_publication_bytes_unchanged_test() ->
     PublisherId = macula_node_keys:key_id(Publisher),
     ?assertMatch({ok, #{publisher := PublisherId}}, verified(EventFrame)),
     ?assertEqual([id(3)], Matched),
-    hecate_pubsub_server:stop(Pid).
+    macula_realm_pubsub_server:stop(Pid).
 
 relay_publish_refuses_a_publication_that_does_not_verify_test() ->
     R = realm(),
-    {ok, Pid} = hecate_pubsub_server:start_link(#{realm => R, identity => loader(key())}),
+    {ok, Pid} = macula_realm_pubsub_server:start_link(#{realm => R, identity => loader(key())}),
     Publish = tampered(publish_frame(R, <<"t">>, key())),
-    ?assertEqual({error, signature_invalid}, hecate_pubsub_server:relay_publish(Pid, Publish)),
-    hecate_pubsub_server:stop(Pid).
+    ?assertEqual({error, signature_invalid}, macula_realm_pubsub_server:relay_publish(Pid, Publish)),
+    macula_realm_pubsub_server:stop(Pid).
 
 relay_publish_for_another_realm_is_refused_test() ->
-    {ok, Pid} = hecate_pubsub_server:start_link(#{realm => realm(), identity => loader(key())}),
+    {ok, Pid} = macula_realm_pubsub_server:start_link(#{realm => realm(), identity => loader(key())}),
     Publish = publish_frame(realm(), <<"t">>, key()),
-    ?assertEqual({error, realm_mismatch}, hecate_pubsub_server:relay_publish(Pid, Publish)),
-    hecate_pubsub_server:stop(Pid).
+    ?assertEqual({error, realm_mismatch}, macula_realm_pubsub_server:relay_publish(Pid, Publish)),
+    macula_realm_pubsub_server:stop(Pid).
 
 %%---------------------------------------------------------------------
 %% Frame helpers

@@ -1,7 +1,7 @@
-%% @doc PubSub gen_server wrapping `hecate_pubsub' state for one realm
+%% @doc PubSub gen_server wrapping `macula_realm_pubsub' state for one realm
 %% namespace.
 %%
-%% Activates the dormant `hecate_pubsub' pure-state module by giving
+%% Activates the dormant `macula_realm_pubsub' pure-state module by giving
 %% it a process identity. One server instance owns the
 %% topic-to-subscriber index for a single realm tag; the realm is an
 %% opaque 32-byte namespace key, not validated against any authority.
@@ -15,7 +15,7 @@
 %% PUBLISH with the server's node identity key, builds its EVENT and
 %% returns the matched LOCAL subscribers,
 %% but does NOT fan out across the cluster — that requires the
-%% Plumtree wire layer (`hecate_plumtree') and the DHT topic-discovery
+%% Plumtree wire layer (`macula_plumtree') and the DHT topic-discovery
 %% integration which land in subsequent commits.
 %%
 %% == Sequencing ==
@@ -24,13 +24,13 @@
 %%   <li>This commit: server in isolation, no integration with
 %%       station listener or DHT.</li>
 %%   <li>Next: per-realm-namespace registry under
-%%       `hecate_overlay_sup' so the listener can route inbound
+%%       the station's overlay supervisor so the listener can route inbound
 %%       SUBSCRIBE / UNSUBSCRIBE / EVENT frames to the right
 %%       server.</li>
 %%   <li>Then: Plumtree fan-out for cross-station delivery.</li>
 %%   <li>Then: DHT integration for topic-mesh discovery.</li>
 %% </ul>
--module(hecate_pubsub_server).
+-module(macula_realm_pubsub_server).
 -behaviour(gen_server).
 
 -export([
@@ -61,7 +61,7 @@
     realm    :: <<_:256>>,
     identity :: fun(() -> macula_node_keys:node_key()),
     profile  :: macula_crypto_profile:profile(),
-    pubsub   :: hecate_pubsub:state(),
+    pubsub   :: macula_realm_pubsub:state(),
     key_id   :: <<_:256>>
 }).
 
@@ -86,7 +86,7 @@ unsubscribe(Pid, Topic, Sub) ->
 
 %% @doc Remove `Sub' from every topic this server holds, dropping any
 %% topic that empties out as a result. See
-%% `hecate_pubsub:purge_subscriber/2'.
+%% `macula_realm_pubsub:purge_subscriber/2'.
 -spec purge_subscriber(pid(), <<_:256>>) -> ok.
 purge_subscriber(Pid, Sub) ->
     gen_server:call(Pid, {purge_subscriber, Sub}).
@@ -221,33 +221,33 @@ started({ok, Profile, Key}, Realm, Load) ->
         realm    = Realm,
         identity = Load,
         profile  = Profile,
-        pubsub   = hecate_pubsub:new(Realm, Profile),
+        pubsub   = macula_realm_pubsub:new(Realm, Profile),
         %% Each publication's seq comes from the node's counter for this
         %% key, shared with every other publisher signing with it.
         key_id   = macula_node_keys:key_id(Key)
     }}.
 
 handle_call({subscribe, Topic, Sub}, _From, S) ->
-    PS2 = hecate_pubsub:subscribe(S#state.pubsub, Topic, Sub),
+    PS2 = macula_realm_pubsub:subscribe(S#state.pubsub, Topic, Sub),
     {reply, ok, S#state{pubsub = PS2}};
 handle_call({unsubscribe, Topic, Sub}, _From, S) ->
-    PS2 = hecate_pubsub:unsubscribe(S#state.pubsub, Topic, Sub),
+    PS2 = macula_realm_pubsub:unsubscribe(S#state.pubsub, Topic, Sub),
     {reply, ok, S#state{pubsub = PS2}};
 handle_call({purge_subscriber, Sub}, _From, S) ->
-    PS2 = hecate_pubsub:purge_subscriber(S#state.pubsub, Sub),
+    PS2 = macula_realm_pubsub:purge_subscriber(S#state.pubsub, Sub),
     {reply, ok, S#state{pubsub = PS2}};
 handle_call({is_subscribed, Topic, Sub}, _From, S) ->
-    {reply, hecate_pubsub:is_subscribed(S#state.pubsub, Topic, Sub), S};
+    {reply, macula_realm_pubsub:is_subscribed(S#state.pubsub, Topic, Sub), S};
 handle_call({subscribers, Topic}, _From, S) ->
-    {reply, hecate_pubsub:subscribers(S#state.pubsub, Topic), S};
+    {reply, macula_realm_pubsub:subscribers(S#state.pubsub, Topic), S};
 handle_call(topics, _From, S) ->
-    {reply, hecate_pubsub:topics(S#state.pubsub), S};
+    {reply, macula_realm_pubsub:topics(S#state.pubsub), S};
 handle_call(patterns, _From, S) ->
-    {reply, hecate_pubsub:patterns(S#state.pubsub), S};
+    {reply, macula_realm_pubsub:patterns(S#state.pubsub), S};
 handle_call(topic_count, _From, S) ->
-    {reply, hecate_pubsub:topic_count(S#state.pubsub), S};
+    {reply, macula_realm_pubsub:topic_count(S#state.pubsub), S};
 handle_call(subscriber_count, _From, S) ->
-    {reply, hecate_pubsub:subscriber_count(S#state.pubsub), S};
+    {reply, macula_realm_pubsub:subscriber_count(S#state.pubsub), S};
 handle_call(realm, _From, S) ->
     {reply, S#state.realm, S};
 handle_call({publish, Topic, Payload}, _From, S) ->
@@ -256,13 +256,13 @@ handle_call({publish, Topic, Payload}, _From, S) ->
              seq          => macula_publication_seq:next(S#state.key_id),
              published_at => erlang:system_time(millisecond),
              payload      => Payload},
-    Event   = hecate_pubsub:build_event(macula_frame:publish(Spec, (S#state.identity)()), plumtree),
-    Matched = hecate_pubsub:subscribers(S#state.pubsub, Topic),
+    Event   = macula_realm_pubsub:build_event(macula_frame:publish(Spec, (S#state.identity)()), plumtree),
+    Matched = macula_realm_pubsub:subscribers(S#state.pubsub, Topic),
     {reply, {Event, Matched}, S};
 handle_call({deliver_event, Frame}, _From, S) ->
-    {reply, hecate_pubsub:deliver_event(S#state.pubsub, Frame), S};
+    {reply, macula_realm_pubsub:deliver_event(S#state.pubsub, Frame), S};
 handle_call({process_frame, From, Frame}, _From, S) ->
-    {PS2, Subs} = hecate_pubsub:process(S#state.pubsub, From, Frame),
+    {PS2, Subs} = macula_realm_pubsub:process(S#state.pubsub, From, Frame),
     {reply, Subs, S#state{pubsub = PS2}};
 handle_call({relay_publish, Frame}, _From, S) ->
     {reply, do_relay_publish(Frame, S), S};
@@ -281,8 +281,8 @@ do_relay_publish(_Frame, _S) ->
     {error, malformed_frame}.
 
 relayed({ok, #{realm := R, topic := Topic}}, Frame, #state{realm = R} = S) ->
-    Matched = hecate_pubsub:subscribers(S#state.pubsub, Topic),
-    {hecate_pubsub:build_event(Frame, direct), Matched};
+    Matched = macula_realm_pubsub:subscribers(S#state.pubsub, Topic),
+    {macula_realm_pubsub:build_event(Frame, direct), Matched};
 relayed({ok, _AnotherRealm}, _Frame, _S) ->
     {error, realm_mismatch};
 relayed({error, _} = Refusal, _Frame, _S) ->

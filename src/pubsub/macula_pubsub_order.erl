@@ -32,7 +32,7 @@
 %%% restart: the old expected counter is abandoned rather than waited on.
 %%% A large BACKWARD jump is read the same way. A publisher that restarts
 %%% with a counter re-seeded from zero instead of wall-clock (a
-%%% macula-station's own `hecate_pubsub_server' before 10.17.0) would
+%%% macula-station's own `macula_realm_pubsub_server' before 10.17.0) would
 %%% otherwise have every fact after the restart dropped as "past" until
 %%% the counter climbed back over the old watermark -- silently, with the
 %%% link, the wire subscription and dedup all healthy. That is how

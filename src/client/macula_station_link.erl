@@ -1070,7 +1070,7 @@ send_overlay_frame(Client, TargetPeer, Frame)
 
 %% @doc Report that an overlay frame this link delivered was refused for
 %% what it carries. `Meta' is the map the frame was delivered with, and
-%% `Kind' the refusal's kind, as `hecate_plumtree' returns it. The report
+%% `Kind' the refusal's kind, as `macula_plumtree' returns it. The report
 %% goes to the connection, which charges it as
 %% `macula_frame:charged_refusal/1' says, only when the frame provably came
 %% from the link's current peer: `Meta' has no `via' and names that peer as

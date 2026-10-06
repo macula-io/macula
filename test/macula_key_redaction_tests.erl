@@ -131,8 +131,8 @@ every_process_that_holds_a_key_redacts_it_in_each_part_of_its_status_test_() ->
                      postponed => [{cast, Pair}], timeouts => [{state_timeout, Key}], log => [{in, Pair}]},
     [{atom_to_list(Module),
       ?_assertEqual({maps:keys(Status), [], true}, status_seen(Module, Status, Privates, maps:get(public, Pair)))}
-     || {Module, Status} <- [{macula_client, ServerStatus}, {hecate_pubsub_server, ServerStatus},
-                             {hecate_pubsub_registry, ServerStatus}, {macula_statement_issuer, ServerStatus},
+     || {Module, Status} <- [{macula_client, ServerStatus}, {macula_realm_pubsub_server, ServerStatus},
+                             {macula_realm_pubsub_registry, ServerStatus}, {macula_statement_issuer, ServerStatus},
                              {macula_station_link, ServerStatus}, {macula_peering_conn, StatemStatus}]].
 
 the_status_of_a_started_pool_carries_no_private_key_test_() ->
@@ -150,7 +150,7 @@ the_status_of_a_started_pool_carries_no_private_key_test_() ->
 the_status_of_a_pubsub_server_carries_no_private_key_test() ->
     started(),
     Key = key(),
-    {ok, Server} = hecate_pubsub_server:start_link(#{realm => crypto:strong_rand_bytes(32),
+    {ok, Server} = macula_realm_pubsub_server:start_link(#{realm => crypto:strong_rand_bytes(32),
                                                      identity => fun() -> Key end}),
     Status = sys:get_status(Server),
     ok = gen_server:stop(Server),
@@ -161,11 +161,11 @@ the_status_of_a_pubsub_server_carries_no_private_key_test() ->
 the_status_of_a_pubsub_registry_carries_no_private_key_test() ->
     started(),
     Key = key(),
-    {ok, Registry} = hecate_pubsub_registry:start_link(#{identity => fun() -> Key end}),
+    {ok, Registry} = macula_realm_pubsub_registry:start_link(#{identity => fun() -> Key end}),
     %% The registry stops with reason shutdown.
     unlink(Registry),
     Status = sys:get_status(Registry),
-    _ = hecate_pubsub_registry:stop(Registry),
+    _ = macula_realm_pubsub_registry:stop(Registry),
     ?assertEqual({[], false}, {exposed(Status, privates(Key)), holds(Status, macula_node_keys:public_key(Key))}).
 
 the_status_of_a_statement_issuer_carries_no_private_key_test() ->
@@ -439,9 +439,9 @@ a_pubsub_server_or_registry_started_without_the_application_installs_the_filter_
         started(),
         Key = key(),
         Load = fun() -> Key end,
-        Starts = [fun() -> hecate_pubsub_server:start_link(#{realm => crypto:strong_rand_bytes(32), identity => Load})
+        Starts = [fun() -> macula_realm_pubsub_server:start_link(#{realm => crypto:strong_rand_bytes(32), identity => Load})
                   end,
-                  fun() -> hecate_pubsub_registry:start_link(#{identity => Load}) end],
+                  fun() -> macula_realm_pubsub_registry:start_link(#{identity => Load}) end],
         ok = application:stop(macula),
         try
             ?assertEqual([1, 1], [installed_by(Start) || Start <- Starts])
@@ -630,11 +630,11 @@ crashed(Holder, Module, Field, Trigger) ->
     ?assertEqual(ended, Ended).
 
 %% The field a loader holder's crash sets to its state, and the call that then reads it.
-holder_crash(server) -> {pubsub, fun hecate_pubsub_server:topics/1};
-holder_crash(registry) -> {by_realm, fun(Registry) -> hecate_pubsub_registry:lookup(Registry, <<0:256>>) end}.
+holder_crash(server) -> {pubsub, fun macula_realm_pubsub_server:topics/1};
+holder_crash(registry) -> {by_realm, fun(Registry) -> macula_realm_pubsub_registry:lookup(Registry, <<0:256>>) end}.
 
-holder_module(server) -> hecate_pubsub_server;
-holder_module(registry) -> hecate_pubsub_registry.
+holder_module(server) -> macula_realm_pubsub_server;
+holder_module(registry) -> macula_realm_pubsub_registry.
 
 holder_opts(server, Load) -> #{realm => <<0:256>>, identity => Load};
 holder_opts(registry, Load) -> #{identity => Load}.

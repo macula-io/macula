@@ -31,6 +31,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The overlay modules are renamed from `hecate_*` to `macula_*`** (macula#67): `hecate_plumtree` is
+  `macula_plumtree`, `hecate_or_set` is `macula_or_set`, and `hecate_pubsub`, `hecate_pubsub_server` and
+  `hecate_pubsub_registry` are `macula_realm_pubsub`, `macula_realm_pubsub_server` and `macula_realm_pubsub_registry`
+  (`macula_pubsub` is the SDK's pubsub; these hold one realm's pubsub state). Functions and behaviour are unchanged.
+  A caller of the old names, as macula-station is, moves to the new ones with this release. Test data that named
+  Hecate uses `demo`.
+
 - **Stored identity keys per user account, by name and by profile** (macula#76). A node identity belongs to one
   program under one user account. Without `node_identity`, `connect/2` uses the key at
   `<identity_dir>/<name>.<profile>.key` (`macula_node_keys:stored_identity/2`), created the first time: `<name>` is

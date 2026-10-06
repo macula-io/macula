@@ -306,7 +306,7 @@ higher one is still delivered, in order. A publisher's first facts therefore
 reach the subscriber up to one order timeout later than its later facts.
 
 **Publisher restarts.** A publisher's `seq` is seeded from wall-clock
-microseconds at start (`macula_client` for an SDK pool; `hecate_pubsub_server`
+microseconds at start (`macula_client` for an SDK pool; `macula_realm_pubsub_server`
 for a station's own facts, since 10.17.0), so a restart shows up as a jump
 far wider than any reorder window. Both `ordered` and `latest_only` read a
 jump of more than 10 000 in *either* direction as a new epoch: the old

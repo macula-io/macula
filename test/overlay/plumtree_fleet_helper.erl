@@ -1,8 +1,8 @@
 %% @doc CT helper for the Plumtree + PubSub acceptance suite: a fleet of in-VM stations that gossip signed
 %% publications, as a node does in 12.
 %%
-%% Each station is a process with an identity key and, per realm, a `hecate_plumtree' state (eager and lazy push) and
-%% a `hecate_pubsub' state (topic to subscribers). A station publishes a PUBLISH it signs with its identity key; Plumtree
+%% Each station is a process with an identity key and, per realm, a `macula_plumtree' state (eager and lazy push) and
+%% a `macula_realm_pubsub' state (topic to subscribers). A station publishes a PUBLISH it signs with its identity key; Plumtree
 %% verifies every publication, pushes it to eager peers and announces it to lazy ones, and hands each new one over as a
 %% delivery, which reaches the station's local subscribers to its topic. A station logs the payloads it delivered.
 %%
@@ -55,8 +55,8 @@ build_station(Name, Realms, Router) ->
     #station{name = Name, pid = Pid, node_id = NodeId}.
 
 realm_state(NodeId, Realm) ->
-    {ok, Plumtree} = hecate_plumtree:new(NodeId, Realm),
-    #{plumtree => Plumtree, pubsub => hecate_pubsub:new(Realm, ?PROFILE)}.
+    {ok, Plumtree} = macula_plumtree:new(NodeId, Realm),
+    #{plumtree => Plumtree, pubsub => macula_realm_pubsub:new(Realm, ?PROFILE)}.
 
 %%=====================================================================
 %% Test API
@@ -122,15 +122,15 @@ station_loop(State) ->
     end.
 
 handle_call({add_peer, Realm, Peer}, State) ->
-    {ok, update_realm(State, Realm, fun(#{plumtree := P} = R) -> R#{plumtree := hecate_plumtree:add_peer(P, Peer)} end)};
+    {ok, update_realm(State, Realm, fun(#{plumtree := P} = R) -> R#{plumtree := macula_plumtree:add_peer(P, Peer)} end)};
 handle_call({subscribe, Realm, Topic}, #{node_id := Self} = State) ->
-    {ok, update_realm(State, Realm, fun(#{pubsub := S} = R) -> R#{pubsub := hecate_pubsub:subscribe(S, Topic, Self)} end)};
+    {ok, update_realm(State, Realm, fun(#{pubsub := S} = R) -> R#{pubsub := macula_realm_pubsub:subscribe(S, Topic, Self)} end)};
 handle_call({publish, Realm, Topic, Payload}, #{key := Key, realms := Realms} = State) ->
     Now = erlang:system_time(millisecond),
     Publish = macula_frame:publish(#{realm => Realm, topic => Topic, seq => 1, published_at => Now,
                                      payload => Payload}, Key),
     #{plumtree := Plumtree} = maps:get(Realm, Realms),
-    {Plumtree1, Actions, Deliveries} = hecate_plumtree:publish(Plumtree, Publish, Now),
+    {Plumtree1, Actions, Deliveries} = macula_plumtree:publish(Plumtree, Publish, Now),
     {ok, handled(Realm, Plumtree1, Actions, Deliveries, State)};
 handle_call({deliveries, Realm, Topic}, #{delivered := Delivered} = State) ->
     {maps:get({Realm, Topic}, Delivered, []), State};
@@ -143,7 +143,7 @@ handle_frame(From, Realm, Bytes, #{realms := Realms, seen := Seen} = State) ->
     {ok, Frame, <<>>} = macula_frame:decode(Bytes),
     #{plumtree := Plumtree} = maps:get(Realm, Realms),
     Clocks = #{wall => erlang:system_time(millisecond), monotonic => erlang:monotonic_time(millisecond)},
-    {Plumtree1, Actions, Deliveries} = hecate_plumtree:process(Plumtree, From, Frame, Clocks),
+    {Plumtree1, Actions, Deliveries} = macula_plumtree:process(Plumtree, From, Frame, Clocks),
     handled(Realm, Plumtree1, Actions, Deliveries, State#{seen := Seen + 1}).
 
 handled(Realm, Plumtree, Actions, Deliveries, State) ->
@@ -154,7 +154,7 @@ handled(Realm, Plumtree, Actions, Deliveries, State) ->
 %% A delivery reaches the station's own subscribers to its topic, and is logged when there is one.
 delivered(Realm, #{topic := Topic, payload := Payload}, #{realms := Realms, delivered := Delivered} = State) ->
     #{pubsub := PubSub} = maps:get(Realm, Realms),
-    logged(hecate_pubsub:subscribers(PubSub, Topic), {Realm, Topic}, Payload, Delivered, State).
+    logged(macula_realm_pubsub:subscribers(PubSub, Topic), {Realm, Topic}, Payload, Delivered, State).
 
 logged([], _Key, _Payload, _Delivered, State) -> State;
 logged([_ | _], Key, Payload, Delivered, State) ->

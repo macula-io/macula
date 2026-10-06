@@ -268,9 +268,9 @@ connection_report(Ms) ->
 
 %% What Plumtree makes of a GOSSIP from `From', its only peer: the actions and the deliveries.
 plumtree_outcome(From, Frame) ->
-    {ok, S0} = hecate_plumtree:new(<<99:256>>, ?REALM),
+    {ok, S0} = macula_plumtree:new(<<99:256>>, ?REALM),
     Clocks = #{wall => erlang:system_time(millisecond), monotonic => 0},
-    {_S, Actions, Deliveries} = hecate_plumtree:process(hecate_plumtree:add_peer(S0, From), From, Frame, Clocks),
+    {_S, Actions, Deliveries} = macula_plumtree:process(macula_plumtree:add_peer(S0, From), From, Frame, Clocks),
     {Actions, Deliveries}.
 
 stop_links(Pids) ->
