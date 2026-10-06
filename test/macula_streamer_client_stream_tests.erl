@@ -15,6 +15,9 @@
 
 -include_lib("eunit/include/eunit.hrl").
 
+%% A callback's message on a CPU-capped host; the test's own timeout is 30 s.
+-define(WAIT_MS, 10_000).
+
 -behaviour(macula_streamer).
 -export([init/1, handle_open/2, handle_chunk/2, terminate/2]).
 
@@ -46,10 +49,12 @@ stream_stub() -> receive stop -> ok end.
 %%% Tests
 %%%===================================================================
 
-%% Each test runs in a process of its own.
+%% Each test runs in a process of its own, with room for a CPU-capped host
+%% (macula-io/macula#57): a slow callback is waited for, not failed at 1 s.
 client_stream_test_() ->
-    [{spawn, Test} || Test <- [fun pushed_chunks_reach_handle_chunk_then_eof_closes/0,
-                                fun recv_error_aborts_not_closes/0]].
+    [{timeout, 30, {spawn, Test}}
+     || Test <- [fun pushed_chunks_reach_handle_chunk_then_eof_closes/0,
+                 fun recv_error_aborts_not_closes/0]].
 
 pushed_chunks_reach_handle_chunk_then_eof_closes() ->
     process_flag(trap_exit, true),
@@ -58,7 +63,8 @@ pushed_chunks_reach_handle_chunk_then_eof_closes() ->
     ?assertEqual({chunk_seen, <<"a">>}, wait_msg()),
     ?assertEqual({chunk_seen, <<"b">>}, wait_msg()),
     ?assertEqual({terminated, normal}, wait_msg()),
-    ?assertEqual([{close, [StreamPid]}], macula_scripted_stream:calls()).
+    ?assertEqual([{close, [StreamPid]}], macula_scripted_stream:calls()),
+    StreamPid ! stop.
 
 recv_error_aborts_not_closes() ->
     process_flag(trap_exit, true),
@@ -66,7 +72,8 @@ recv_error_aborts_not_closes() ->
     ?assertMatch({opened, _}, wait_msg()),
     ?assertEqual({terminated, boom}, wait_msg()),
     ?assertEqual([{abort, [StreamPid, <<"cancelled">>, <<"boom">>]}],
-                 macula_scripted_stream:calls()).
+                 macula_scripted_stream:calls()),
+    StreamPid ! stop.
 
 %%%===================================================================
 %%% Helpers
@@ -83,11 +90,11 @@ open_client_stream(Results) ->
     ok = Handler(StreamPid, #{}),
     StreamPid.
 
-%% The next message from the streamer's callbacks.
+%% The next message from the streamer's callbacks, within WAIT_MS.
 wait_msg() ->
     receive
         {opened, _} = Msg -> Msg;
         {chunk_seen, _} = Msg -> Msg;
         {terminated, _} = Msg -> Msg
-    after 1000 -> timeout
+    after ?WAIT_MS -> timeout
     end.
