@@ -32,6 +32,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the stored key keeps its reason under the same `{node_identity, {stored_key, Path, _}}` wrapper), logged once at
   error level. The file is still never touched. `macula_node_keys:node_identity_path/0` is exported.
 
+### Fixed
+
+- **Handshake v5 liveness frames reach the frame observer** (macula#51). An inbound `liveness_ping` or
+  `liveness_pong` was answered and consumed before `frame_observer` saw it, so per-frame accounting undercounted
+  liveness traffic; each is now reported `in` like every other frame.
+- **No `unexpected_event` warning for a normal v4 fallback** (macula#51). The refused v5 attempt's stream could
+  report after the retry had left `connecting`, and was logged as `_macula.peering.unexpected_event`. The
+  connection now remembers that stream and drops its late events in any state.
+
 ## [13.6.0] - 2026-10-06
 
 ### Security

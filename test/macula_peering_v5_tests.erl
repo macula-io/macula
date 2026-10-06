@@ -15,6 +15,9 @@
 
 -include_lib("eunit/include/eunit.hrl").
 
+%% The logger handler callback captured/1 installs.
+-export([log/2]).
+
 -import(macula_peering_handshake_tests,
         [world/2, connect/2, await/2, ended/1, still_open/2, finish/2, sent/3, on_control_stream/2, ping/0,
          node_id/1, accept_one/1, station_opts/2, fixed/1]).
@@ -55,7 +58,11 @@ v5_test_() ->
            {"v5 liveness: each connection answers the other's probe, and neither controller sees one",
             {timeout, 60, fun() -> v5_liveness_is_answered_by_the_connections(Ctx) end}},
            {"v5 liveness: a peer whose connection stops answering is reaped",
-            {timeout, 60, fun() -> v5_liveness_reaps_a_peer_whose_connection_stopped(Ctx) end}}]
+            {timeout, 60, fun() -> v5_liveness_reaps_a_peer_whose_connection_stopped(Ctx) end}},
+           {"v5 liveness: each side's frame observer sees the probes it reads",
+            {timeout, 60, fun() -> v5_liveness_frames_reach_the_frame_observer(Ctx) end}},
+           {"v4 fallback: a late event from the refused attempt's stream is not an unexpected event",
+            {timeout, 60, fun() -> a_late_event_from_the_refused_stream_is_dropped_quietly(Ctx) end}}]
       end}}.
 
 %%====================================================================
@@ -235,9 +242,69 @@ v5_liveness_reaps_a_peer_whose_connection_stopped(Ctx) ->
     ok = sys:resume(Station),
     finish(World, [Station]).
 
+%% Every frame a connection reads on its control stream reaches its frame observer, the v5 liveness probe and its
+%% answer included (macula#51). The client probes: the station reads its liveness_ping, the client the liveness_pong.
+v5_liveness_frames_reach_the_frame_observer(Ctx) ->
+    World = world(Ctx, #{}),
+    Test = self(),
+    Observer = fun(Side) -> fun(Dir, Type, _Size, _Us) -> Test ! {liveness_observed, Side, Dir, Type}, ok end end,
+    {Client, Station} = connect(World, #{mode => off, liveness_interval_ms => 200, liveness_max_misses => 2,
+                                         client_observer => Observer(client), station_observer => Observer(station)}),
+    _ = {await(Client, connected), await(Station, connected)},
+    timer:sleep(1_000),
+    Seen = liveness_observed([]),
+    [?assert(lists:member(Read, Seen), {Read, Seen}) || Read <- [{station, in, liveness_ping}, {client, in, liveness_pong}]],
+    finish(World, [Client, Station]).
+
+%% After a v4 fallback the refused attempt's stream can still report, after the retry has moved on to another state.
+%% Such an event belongs to nothing: it is dropped without an unexpected_event warning, and the connection serves on.
+a_late_event_from_the_refused_stream_is_dropped_quietly(Ctx) ->
+    World = world(Ctx, #{}),
+    Client = dial(World),
+    ?assertEqual({refused, unsupported_version}, pre_v5_station(World)),
+    Station = accept_one(station_opts(World, #{mode => off})),
+    _ = {await(Client, connected), await(Station, connected)},
+    {connected, State} = sys:get_state(Client),
+    Refused = element(macula_peering_conn:state_field_index(retired_stream), State),
+    ?assert(is_reference(Refused)),
+    Events = captured(fun() -> Client ! {quic, stream_closed, Refused, closed}, timer:sleep(200) end),
+    ?assertEqual([], [E || #{msg := {report, #{event := <<"_macula.peering.unexpected_event">>}}} = E <- Events]),
+    ?assertEqual(open, still_open(Client, 300)),
+    finish(World, [Client, Station]).
+
 %%====================================================================
 %% Helpers
 %%====================================================================
+
+%% The {Side, Direction, Type} of every liveness frame the observers reported so far.
+liveness_observed(Seen) ->
+    receive {liveness_observed, Side, Dir, Type} when Type =:= liveness_ping; Type =:= liveness_pong ->
+                liveness_observed([{Side, Dir, Type} | Seen]);
+            {liveness_observed, _Side, _Dir, _OtherType} ->
+                liveness_observed(Seen)
+    after 0 -> lists:usort(Seen)
+    end.
+
+%% The log events of every level while Fun runs (as macula_station_link_diagnostics_tests captures them).
+captured(Fun) ->
+    #{level := Primary} = logger:get_primary_config(),
+    ok = logger:set_primary_config(level, all),
+    ok = logger:add_handler(macula_peering_v5_capture, ?MODULE, #{level => all, config => #{test => self()}}),
+    try
+        Fun(),
+        drained([])
+    after
+        _ = logger:remove_handler(macula_peering_v5_capture),
+        ok = logger:set_primary_config(level, Primary)
+    end.
+
+log(Event, #{config := #{test := Test}}) ->
+    Test ! {captured, Event}.
+
+drained(Events) ->
+    receive {captured, Event} -> drained([Event | Events])
+    after 200 -> lists:reverse(Events)
+    end.
 
 %% The budget is read when its process starts, so the test restarts it under the limit and again after.
 with_session_proofs_per_node_per_minute(Limit, Test) ->

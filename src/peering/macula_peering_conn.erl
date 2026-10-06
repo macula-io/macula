@@ -211,6 +211,10 @@
     clock            :: fun(() -> integer()),
     quic_conn        :: undefined | reference(),
     quic_stream      :: undefined | reference(),
+    %% Client, after a v4 fallback: the refused first attempt's control
+    %% stream, whose last events can arrive in any later state and belong
+    %% to nothing (redial/1).
+    retired_stream   :: undefined | reference(),
     %% While `connecting' (client role): the dial in progress, the tag
     %% on its result message, and the monitor on `controlling_pid'.
     dial             :: undefined | macula_quic:dial(),
@@ -816,11 +820,13 @@ fallback_warned({warn, Count}, NodeId) ->
                              #{node_id => binary:encode_hex(NodeId, lowercase), fallbacks => Count}).
 
 %% The refused handshake's QUIC connection closes and the dial starts
-%% again, with nothing of this handshake carried over.
-redial(Data) ->
+%% again, with nothing of this handshake carried over but its stream's
+%% reference: that stream's last events may arrive after the retry has
+%% moved on, and are dropped in any state (other_event/4).
+redial(#data{quic_stream = Refused} = Data) ->
     ok = close_quic(Data),
     {next_state, connecting,
-     Data#data{quic_conn = undefined, quic_stream = undefined, buf = <<>>, expect = undefined,
+     Data#data{quic_conn = undefined, quic_stream = undefined, retired_stream = Refused, buf = <<>>, expect = undefined,
                expect_hello = undefined, leaf = undefined, challenge = undefined, connection = undefined,
                own_binding_hash = undefined, peer = undefined, peer_node_id = undefined}}.
 
@@ -1224,7 +1230,7 @@ status_read({error, Reason}, _Rest, Data, _Actions) ->
 %% refused one closes the connection with the refusal.
 neighbour_read({ok, #{frame_type := Type} = Opened}, _Frame, Rest, Data, Actions)
   when Type =:= liveness_ping; Type =:= liveness_pong ->
-    liveness_read(Opened, Rest, Data, Actions);
+    liveness_read(Opened, Rest, read_observed(Opened, Data), Actions);
 neighbour_read({ok, Opened}, Frame, Rest, Data, Actions) ->
     Read = read_observed(Opened, Data),
     ok = route_frame(Opened, Read),
@@ -1821,6 +1827,11 @@ other_event(cast, {object_refused, Kind, Charged}, _State, #data{refusals = Refu
                            charged = Count + charge(Charged)}};
 other_event({call, From}, refusals, _State, #data{refusals = Refusals, charged = Count}) ->
     {keep_state_and_data, [{reply, From, #{counts => Refusals, charged => Count}}]};
+%% A late event from the stream of a handshake refused before a v4 fallback
+%% belongs to no state this connection can be in, and is not unexpected.
+other_event(info, {quic, _Event, Stream, _Detail}, _State, #data{retired_stream = Stream})
+  when is_reference(Stream) ->
+    keep_state_and_data;
 other_event(EventType, Event, State, Data) ->
     drop_unexpected(EventType, Event, State, Data).
 
