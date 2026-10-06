@@ -25,7 +25,7 @@
 %% </ul>
 -module(macula_hyparview_endorsement).
 
--export([verify_endorsement/3, slot_endorsement/3, slot_endorsement/4, build_join/3]).
+-export([verify_endorsement/3, verify_endorsement/4, slot_endorsement/3, slot_endorsement/4, build_join/3]).
 
 -export_type([trust/0, verify_error/0, slot_error/0]).
 
@@ -56,9 +56,15 @@
 %% Trust names. Returns {ok, Roles} with the endorsed roles, or {error, Reason}; callers treat any error as a refusal
 %% and drop the pending join.
 -spec verify_endorsement(binary() | map(), trust(), node_id()) -> {ok, [binary()]} | {error, verify_error()}.
+verify_endorsement(Signed, Trust, Member) ->
+    verify_endorsement(Signed, Trust, Member, erlang:system_time(millisecond)).
+
+%% @doc verify_endorsement/3 at the time Now, in milliseconds: whether the endorsement admitted Member at that time, the
+%% record's own created_at and expires_at checked at Now too. A historical check, such as whether the signer of an
+%% observation was a member when it signed, passes the observation's time.
+-spec verify_endorsement(binary() | map(), trust(), node_id(), integer()) -> {ok, [binary()]} | {error, verify_error()}.
 verify_endorsement(Signed, #{profile := Profile, realm := <<_:256>>, realm_key_id := <<_:256>>} = Trust,
-                   <<_:256>> = Member) ->
-    Now = erlang:system_time(millisecond),
+                   <<_:256>> = Member, Now) when is_integer(Now) ->
     verified(macula_record:verify(Signed, Profile, Now), Trust, Member, Now).
 
 %% @doc slot_endorsement/4 at the current time.

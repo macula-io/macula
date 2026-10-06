@@ -11,6 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`macula_hyparview_endorsement:verify_endorsement/4`**, the endorsement check at a given time (macula-go#16): whether
+  a realm member endorsement admitted a member at `Now`, the record's own created_at and expires_at checked at `Now`
+  too, so an SDK or a tool can check an admission historically, such as whether an observation's signer was a member
+  when it signed. `verify_endorsement/3` is it at the system time. Shared vectors:
+  `test/vectors/realm_member_endorsement_v1.json` (both profiles, admission at and inside the window, and every
+  refusal after a verified record), from `scripts/generate-realm-member-endorsement-vectors.sh`.
 - **App records** (macula#75). An org's signed statement of one of its apps, core record type 0x17, stored under
   `macula_record:app_key/3` of the app's MRI (`mri:app:<realm>/<org>/<app>`): its version and its services, each
   naming the procedures it serves. It carries the realm-signed org directory, so `macula_record:verify_app/3` checks
