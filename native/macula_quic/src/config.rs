@@ -667,6 +667,40 @@ mod tests {
         }
     }
 
+    /// The cipher suite list's negative control (macula issue #39). A peer
+    /// with our key exchange groups that offers only AES-128-GCM and
+    /// ChaCha20, as a Go client lists them first, MUST FAIL TO AGREE with
+    /// our listener and our dialler alike: the test above reads the list,
+    /// this one shows the handshake enforces it. The positive twin, the same
+    /// peer with AES-256-GCM added at the end of its list, agrees: the
+    /// refusal is the suite's, not the peer's.
+    #[test]
+    fn a_peer_without_aes_256_gcm_cannot_agree_with_us() {
+        let alpn = vec!["macula".to_string()];
+        let offering = |aes_256: bool| {
+            let mut suites = vec![
+                rustls::crypto::aws_lc_rs::cipher_suite::TLS13_AES_128_GCM_SHA256,
+                rustls::crypto::aws_lc_rs::cipher_suite::TLS13_CHACHA20_POLY1305_SHA256,
+            ];
+            if aes_256 {
+                suites.push(rustls::crypto::aws_lc_rs::cipher_suite::TLS13_AES_256_GCM_SHA384);
+            }
+            CryptoProvider { cipher_suites: suites, ..facade_provider() }
+        };
+        let (certs, key) = test_identity();
+        let ours = || server_tls_config(certs.clone(), key.clone_key(), &alpn).expect("ours");
+        let we_dial = |aes_256| {
+            handshake(client_tls_config(&alpn), peer_server(offering(aes_256), certs.clone(), key.clone_key()))
+        };
+        let they_dial = |aes_256| handshake(peer_client(offering(aes_256)), ours());
+
+        let refused = (we_dial(false), they_dial(false));
+        assert!(refused.0.is_err(), "our dialler agreed on a suite other than AES-256-GCM: {:?}", refused.0);
+        assert!(refused.1.is_err(), "our listener agreed on a suite other than AES-256-GCM: {:?}", refused.1);
+        assert_eq!(we_dial(true), Ok(SECP384R1MLKEM1024), "the twin, dialling");
+        assert_eq!(they_dial(true), Ok(SECP384R1MLKEM1024), "the twin, listening");
+    }
+
     /// A QUIC connection completes between the NIF's own listener and
     /// dialler configurations. QUIC protects its Initial packets with
     /// AES-128-GCM (RFC 9001), which the handshake's suite list does not
