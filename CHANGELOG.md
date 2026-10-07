@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [14.2.1] - 2026-10-07
+
 ### Fixed
 
 - **A stream advertised with `confidential => required` refuses a clear open (#85, macula-services/mcl-tube#17).**
