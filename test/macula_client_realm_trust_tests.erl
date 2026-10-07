@@ -14,7 +14,9 @@ realm_trust_test_() ->
     {setup,
      fun() -> {ok, _} = application:ensure_all_started(macula), ok end,
      fun(ok) -> ok end,
-     [{spawn, Test}
+     %% Each case generates a realm key, and a pq_hybrid one carries an RSA-4096 half: on a loaded host that outran
+     %% eunit's 5 s default (#79).
+     [{timeout, 60, {spawn, Test}}
       || Test <- [fun a_pool_keeps_each_realm_key_for_its_realm_id_alone/0,
                   fun a_pool_without_realm_trust_holds_no_realm_key/0,
                   fun a_realm_trust_that_is_not_a_map_of_realm_ids_to_keys_does_not_start_the_pool/0,
