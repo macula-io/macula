@@ -222,7 +222,7 @@ accept_loop(LSock, Open, Opts, Listener) ->
     accepted(gen_tcp:accept(LSock), LSock, Open, Opts, Listener).
 
 accepted({ok, Sock}, LSock, Open, Opts, Listener) ->
-    Pump = spawn(fun() -> receive {socket, S} -> macula_bridge_pump:connect(S, Open, Opts) end end),
+    Pump = spawn(fun() -> pump(Open, Opts) end),
     ok = gen_tcp:controlling_process(Sock, Pump),
     Pump ! {socket, Sock},
     accept_loop(LSock, Open, Opts, Listener);
@@ -233,3 +233,7 @@ accepted({error, Reason}, LSock, Open, Opts, Listener) when Reason =:= emfile; R
     accept_loop(LSock, Open, Opts, Listener);
 accepted({error, Reason}, _LSock, _Open, _Opts, _Listener) ->
     exit({accept, Reason}).
+
+%% The pump waits for its socket, handed over once it controls it.
+pump(Open, Opts) ->
+    receive {socket, S} -> macula_bridge_pump:connect(S, Open, Opts) end.

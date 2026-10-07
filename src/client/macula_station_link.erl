@@ -2539,12 +2539,15 @@ sign_advertisement(Realm, Proc, Spec, Station, #state{pool = Pool, node_identity
                                                      advertisement_opts(Spec, Key, Profile)),
     SignOpts = maps:with([not_after], Spec),
     _ = spawn(fun() ->
-            Signed = try macula_client:sign_node_record(Pool, Unsigned, SignOpts)
-                     catch Class:Why -> {error, {Class, Why}}
-                     end,
-            Link ! {advertisement_signed, {Realm, Proc}, Spec, Station, Signed}
+            Link ! {advertisement_signed, {Realm, Proc}, Spec, Station, signed_or_refused(Pool, Unsigned, SignOpts)}
         end),
     ok.
+
+%% The pool's signature on an advertisement, or why there is none: a pool call that exits is a refusal, not a crash.
+signed_or_refused(Pool, Unsigned, SignOpts) ->
+    try macula_client:sign_node_record(Pool, Unsigned, SignOpts)
+    catch Class:Why -> {error, {Class, Why}}
+    end.
 
 %% What an advertisement is built with from its spec: an org procedure's authorization and its bound (an own-namespace
 %% spec carries neither, see advertisement() above), and, when the spec names the KEM key, the keyring's current key.

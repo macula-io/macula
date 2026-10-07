@@ -425,7 +425,7 @@ call_station(Pool, Station, Target, Realm, Procedure, Payload, TimeoutMs) ->
 %% `trust_options_checked/1').
 %%
 %% `report => true' asks for the call's seal report, as `call/6' does: a result then comes back as
-%% `{ok, Result, Report}' (see `macula_station_link:call/9'). It is honoured here because the pool's own direct dial
+%% `{ok, Result, Report}'. It is honoured here because the pool's own direct dial
 %% calls through this function. Any value but a boolean is `{error, {invalid_option, report}}', before anything is
 %% sent.
 -spec call_station(pool(), macula_client:seed(), <<_:256>>, realm(), procedure(),
@@ -557,17 +557,20 @@ sealed_by({error, _} = Refused, _Mode) -> Refused.
     ok | {error, term()}.
 advertise(Pool, Realm, Procedure, Handler, Opts)
   when is_pid(Pool), is_binary(Realm), byte_size(Realm) =:= 32 ->
-    on_stations(stations_opt(Opts), fun(Stations) ->
-        Policy = maps:get(auth, Opts, open),
-        Advertise = maps:get(advertise, Opts,
-                             fun(P, R, Pr, H, Po, Spec) ->
-                                 macula_client:advertise(P, R, Pr, H, Po, Spec, Stations,
-                                                         renewal(R, Pr, Opts))
-                             end),
-        advertise_authorized(Pool, Realm, Procedure, Opts, fun(Spec) ->
-            Advertise(Pool, Realm, Procedure, Handler, Policy, Spec)
-        end)
-    end).
+    on_stations(stations_opt(Opts),
+                fun(Stations) -> advertise_on(Stations, Pool, Realm, Procedure, Handler, Opts) end).
+
+advertise_on(Stations, Pool, Realm, Procedure, Handler, Opts) ->
+    Policy = maps:get(auth, Opts, open),
+    Advertise = maps:get(advertise, Opts, pool_advertise(Stations, Opts)),
+    advertise_authorized(Pool, Realm, Procedure, Opts,
+                         fun(Spec) -> Advertise(Pool, Realm, Procedure, Handler, Policy, Spec) end).
+
+%% The pool fan-out `advertise/5' uses unless `Opts' carries an `advertise' override.
+pool_advertise(Stations, Opts) ->
+    fun(P, R, Pr, H, Po, Spec) ->
+        macula_client:advertise(P, R, Pr, H, Po, Spec, Stations, renewal(R, Pr, Opts))
+    end.
 
 %% The `stations' an advertisement names, checked before anything is resolved
 %% or registered: `all' when it names none.
@@ -1130,13 +1133,16 @@ advertise_stream(Pool, Realm, Procedure, Mode, Handler, Opts)
        (Mode =:= server_stream orelse Mode =:= client_stream
         orelse Mode =:= bidi),
        is_function(Handler, 2), is_map(Opts) ->
-    on_stations(stations_opt(Opts), fun(Stations) ->
-        Policy = maps:get(auth, Opts, open),
-        advertise_authorized(Pool, Realm, Procedure, Opts, fun(Spec) ->
-            macula_client:advertise_stream(Pool, Realm, Procedure, Mode, Handler,
-                                           Policy, Spec, Stations, renewal(Realm, Procedure, Opts))
-        end)
-    end).
+    on_stations(stations_opt(Opts),
+                fun(Stations) -> advertise_stream_on(Stations, Pool, Realm, Procedure, Mode, Handler, Opts) end).
+
+advertise_stream_on(Stations, Pool, Realm, Procedure, Mode, Handler, Opts) ->
+    Policy = maps:get(auth, Opts, open),
+    advertise_authorized(Pool, Realm, Procedure, Opts,
+                         fun(Spec) ->
+                             macula_client:advertise_stream(Pool, Realm, Procedure, Mode, Handler,
+                                                            Policy, Spec, Stations, renewal(Realm, Procedure, Opts))
+                         end).
 
 %% The provider-authorization resolution behind `advertise' and
 %% `advertise_stream': the pool's own D25 chain, fetched from the DHT,
@@ -1146,10 +1152,14 @@ advertise_stream(Pool, Realm, Procedure, Mode, Handler, Opts)
 %% signs its own advertisement naming the station it is connected to,
 %% bounded by the chain (macula_station_link:advertisement_spec()).
 advertise_authorized(Pool, Realm, Procedure, Opts, Fun) ->
-    confidential(advertise_confidentiality(Opts), fun(Confidentiality) ->
-        signed_provider_advertisement(Pool, Realm, Procedure, provider_io(Opts),
-                                      fun(Spec) -> Fun(maps:merge(Spec, Confidentiality)) end)
-    end).
+    confidential(advertise_confidentiality(Opts),
+                 fun(Confidentiality) ->
+                     signed_provider_advertisement(Pool, Realm, Procedure, provider_io(Opts),
+                                                   confidentiality_merged(Confidentiality, Fun))
+                 end).
+
+confidentiality_merged(Confidentiality, Fun) ->
+    fun(Spec) -> Fun(maps:merge(Spec, Confidentiality)) end.
 
 %% Whether an advertisement names this node's KEM key (E2E design §8.2, Amendment A1), as spec fields: `kem' names
 %% it, and `confidential => required' also refuses every clear call. A key is named only once the node is switched on
@@ -1238,14 +1248,13 @@ provider_authorization(Pool, Realm, Procedure) ->
     {ok, #{org_directory := binary(), procedure_delegation := binary()} | undefined} |
     {error, term()}.
 provider_authorization(Pool, Realm, Procedure, Opts) ->
-    case signed_provider_advertisement(Pool, Realm, Procedure,
-                                       provider_io(Opts),
-                                       fun(#{authorization := A}) -> A;
-                                          (#{}) -> undefined
-                                       end) of
+    case signed_provider_advertisement(Pool, Realm, Procedure, provider_io(Opts), fun authorization_of/1) of
         {error, _} = E -> E;
         Authorization -> {ok, Authorization}
     end.
+
+authorization_of(#{authorization := A}) -> A;
+authorization_of(#{}) -> undefined.
 
 provider_io(Opts) ->
     #{status           => maps:get(status, Opts, fun status/1),
@@ -1261,27 +1270,22 @@ provider_io(Opts) ->
 %% advertisement carrying it may pass. Any missing piece fails fast
 %% under `provider_authorization'.
 signed_provider_advertisement(Pool, Realm, Procedure, Io, Fun) ->
-    case macula_record:procedure_org(Procedure) of
-        none ->
-            {error, {provider_authorization, no_org_namespace}};
-        {error, malformed} ->
-            {error, {provider_authorization, malformed_procedure}};
-        {org, <<"~", _/binary>>} ->
-            case (maps:get(status, Io))(Pool) of
-                {ok, #{self_node_id := NodeId}} ->
-                    own_namespace_spec(Realm, Procedure, NodeId, Fun);
-                {error, _} = E ->
-                    E
-            end;
-        {org, Org} ->
-            case (maps:get(status, Io))(Pool) of
-                {ok, #{self_node_id := NodeId}} ->
-                    resolve_org_directory(Io, Pool, Realm, Org, Procedure,
-                                          NodeId, Fun);
-                {error, _} = E ->
-                    E
-            end
-    end.
+    provider_namespace(macula_record:procedure_org(Procedure), Pool, Realm, Procedure, Io, Fun).
+
+provider_namespace(none, _Pool, _Realm, _Procedure, _Io, _Fun) ->
+    {error, {provider_authorization, no_org_namespace}};
+provider_namespace({error, malformed}, _Pool, _Realm, _Procedure, _Io, _Fun) ->
+    {error, {provider_authorization, malformed_procedure}};
+provider_namespace({org, Org}, Pool, Realm, Procedure, Io, Fun) ->
+    provider_node(Org, (maps:get(status, Io))(Pool), Pool, Realm, Procedure, Io, Fun).
+
+%% The pool's own node id decides nothing about the namespace: `~...' is this node's own, any other org is resolved.
+provider_node(<<"~", _/binary>>, {ok, #{self_node_id := NodeId}}, _Pool, Realm, Procedure, _Io, Fun) ->
+    own_namespace_spec(Realm, Procedure, NodeId, Fun);
+provider_node(Org, {ok, #{self_node_id := NodeId}}, Pool, Realm, Procedure, Io, Fun) ->
+    resolve_org_directory(Io, Pool, Realm, Org, Procedure, NodeId, Fun);
+provider_node(_Org, {error, _} = E, _Pool, _Realm, _Procedure, _Io, _Fun) ->
+    E.
 
 %% A procedure in this node's own namespace, `~<own node_id>/<name>', is
 %% authorized by the advertisement's own signature (D25 item 6, revised
@@ -1349,35 +1353,36 @@ sign_provider_advertisement(Io, Pool, Realm, Procedure, OrgDir, Deleg,
     case (maps:get(sign_node_record, Io))(Pool, Unsigned,
                                           #{not_after => NotAfter}) of
         {ok, Signed} ->
-            trusted_provider_advertisement(
-              Io, Pool, Realm, Signed,
-              fun(Verified) ->
-                  #{authorization := A} =
-                      macula_record:read_procedure_advertisement(Verified),
-                  Fun(#{authorization => A, not_after => NotAfter})
-              end);
+            trusted_provider_advertisement(Io, Pool, Realm, Signed, bounded_spec(NotAfter, Fun));
         {error, _} = E ->
             {error, {provider_authorization, E}}
+    end.
+
+%% The spec handed on once the advertisement verifies: its authorization, and the bound it was signed under.
+bounded_spec(NotAfter, Fun) ->
+    fun(Verified) ->
+        #{authorization := A} = macula_record:read_procedure_advertisement(Verified),
+        Fun(#{authorization => A, not_after => NotAfter})
     end.
 
 %% The advertisement goes out only after its authorization verifies
 %% against the realm key this pool pins — a chain the pool cannot
 %% check never reaches a station.
 trusted_provider_advertisement(Io, Pool, Realm, Signed, Fun) ->
-    case (maps:get(realm_key, Io))(Pool, Realm) of
-        {ok, RealmKey} ->
-            {ok, Profile} = macula_crypto_profile:configured(),
-            Trust = #{profile => Profile, realm_key => RealmKey},
-            case macula_record:verify_authorization(
-                   Signed, Trust, erlang:system_time(millisecond)) of
-                ok ->
-                    Fun(Signed);
-                {error, _} = E ->
-                    {error, {provider_authorization, E}}
-            end;
-        none ->
-            {error, {provider_authorization, no_realm_key}}
-    end.
+    realm_trusted((maps:get(realm_key, Io))(Pool, Realm), Signed, Fun).
+
+realm_trusted({ok, RealmKey}, Signed, Fun) ->
+    {ok, Profile} = macula_crypto_profile:configured(),
+    Trust = #{profile => Profile, realm_key => RealmKey},
+    authorization_verified(macula_record:verify_authorization(Signed, Trust, erlang:system_time(millisecond)),
+                           Signed, Fun);
+realm_trusted(none, _Signed, _Fun) ->
+    {error, {provider_authorization, no_realm_key}}.
+
+authorization_verified(ok, Signed, Fun) ->
+    Fun(Signed);
+authorization_verified({error, _} = E, _Signed, _Fun) ->
+    {error, {provider_authorization, E}}.
 
 %% @doc Stop advertising a LOCAL streaming procedure.
 -spec unadvertise_stream(procedure()) -> ok.

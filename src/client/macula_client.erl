@@ -866,7 +866,7 @@ call_station(Pool, Station, Target, Realm, Procedure, Payload, TimeoutMs, UcanTo
                  Seal, false).
 
 %% @doc As `call_station/11'. `Report' `true' asks for the call's seal report: a result then comes back as
-%% `{ok, Result, Report}' (see `macula_station_link:call/9'); an error is returned as it is.
+%% `{ok, Result, Report}' (see `macula:call/6'); an error is returned as it is.
 -spec call_station(pool(), seed(), <<_:256>>, <<_:256>>, binary(), term(),
                    1..600_000, binary(), map(), pos_integer(), clear | {sealed_to, binary()}, boolean()) ->
     {ok, term()} | {ok, term(), macula_station_link:report()} | {error, term()}.
@@ -3081,17 +3081,11 @@ withdrawal_signed({ok, Authorization}, Realm, Proc, Key) ->
     %% The pool's own custody paths: sign the fresh ad the way
     %% sign_node_record does, then withdraw it the way
     %% withdraw_node_record does.
-    case node_record_signed(macula_record:node_signed(Unsigned),
-                            Unsigned, Key) of
-        {ok, Signed} ->
-            case tombstone_signed({ok, Signed}, macula_node_keys:public_key(Key),
-                                  shutdown, Key) of
-                {ok, Tombstone} -> macula_record:encode(Tombstone);
-                {error, _}      -> undefined
-            end;
-        {error, _} ->
-            undefined
-    end.
+    encoded_tombstone(tombstone_signed(node_record_signed(macula_record:node_signed(Unsigned), Unsigned, Key),
+                                       macula_node_keys:public_key(Key), shutdown, Key)).
+
+encoded_tombstone({ok, Tombstone}) -> macula_record:encode(Tombstone);
+encoded_tombstone({error, _}) -> undefined.
 
 %% Count `(healthy, failed)' links across configured seeds. A seed is
 %% healthy when its link has told the pool it is connected. Anything else

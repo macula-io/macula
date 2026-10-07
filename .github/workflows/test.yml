@@ -87,7 +87,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        check: [eunit, ct, xref, dialyzer]
+        check: [eunit, ct, xref, dialyzer, lint]
     # A GitHub-hosted public runner, deliberately. macula is a public
     # repository and this costs nothing there. Do NOT put `self-hosted` here:
     # the Default runner group is closed to public repositories on purpose,
@@ -242,6 +242,13 @@ jobs:
       - name: xref
         if: matrix.check == 'xref'
         run: rebar3 xref
+
+      # Elvis (rebar.config's macula_min ruleset) as a hard gate. Until this
+      # step nothing ran it, and fifteen nesting violations reached main
+      # without comment (#84).
+      - name: lint
+        if: matrix.check == 'lint'
+        run: rebar3 as lint lint
 
       - name: dialyzer
         if: matrix.check == 'dialyzer'

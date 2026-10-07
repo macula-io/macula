@@ -794,20 +794,26 @@ for_procedure(_OtherProcedure, _Rec, _Realm, _Procedure, _Trust) ->
 %% Sends the CALL to one resolved station. `not_connected' means the link
 %% never came up within the candidate's share, so nothing was sent and the
 %% next candidate may be tried; any other outcome means the CALL went out.
-call_work(#{pool := Pool, call_station := CallStation, remember_resolved := Remember} = Dial,
-          Realm, Procedure, Payload, Deadline, Policy) ->
-    fun(#{provider := Provider} = Candidate) ->
-        fun(Station, DialUrl, Share) ->
-            Call = fun(Ad) ->
-                       CallStation(Pool, DialUrl, Provider, Realm, Procedure, Payload, budget(Deadline),
-                                   maps:merge((pinned(Station))#{dial_timeout_ms => budget(Share)},
-                                              policy_opts(Policy, Ad)))
-                   end,
-            sent_or_not(
-              settled(resealed(Call(maps:get(advertisement, Candidate, undefined)), Call, Dial, Realm, Procedure,
-                               Provider, Deadline),
-                      Remember, Pool, Realm, Procedure, Candidate))
-        end
+call_work(Dial, Realm, Procedure, Payload, Deadline, Policy) ->
+    fun(Candidate) -> candidate_work(Candidate, Dial, Realm, Procedure, Payload, Deadline, Policy) end.
+
+candidate_work(#{provider := Provider} = Candidate,
+               #{pool := Pool, call_station := CallStation, remember_resolved := Remember} = Dial,
+               Realm, Procedure, Payload, Deadline, Policy) ->
+    fun(Station, DialUrl, Share) ->
+        Call = station_call(CallStation, Pool, DialUrl, Provider, Realm, Procedure, Payload, Deadline, Policy,
+                            Station, Share),
+        sent_or_not(
+          settled(resealed(Call(maps:get(advertisement, Candidate, undefined)), Call, Dial, Realm, Procedure,
+                           Provider, Deadline),
+                  Remember, Pool, Realm, Procedure, Candidate))
+    end.
+
+%% The CALL to one station, sealed from the advertisement it is given.
+station_call(CallStation, Pool, DialUrl, Provider, Realm, Procedure, Payload, Deadline, Policy, Station, Share) ->
+    fun(Ad) ->
+        CallStation(Pool, DialUrl, Provider, Realm, Procedure, Payload, budget(Deadline),
+                    maps:merge((pinned(Station))#{dial_timeout_ms => budget(Share)}, policy_opts(Policy, Ad)))
     end.
 
 %% What a station call is told to seal from: the candidate's verified advertisement, and the call's own policy when
@@ -872,23 +878,29 @@ first_keyed([]) -> none.
 %% candidate's verified advertisement to seal from (E2E design §8.1), and the stream's own `confidential', if any.
 %% A stream is refused `sealed_refused' only after it has opened, so the stream itself reseals, once, with the
 %% `reseal' handed here: the lookup and key binding `resealed/7' gives a call.
-stream_work(#{pool := Pool, call_stream_station := CallStreamStation,
-              remember_resolved := Remember} = Dial, Realm, Procedure, Args, StreamOpts) ->
-    fun(#{provider := Provider} = Candidate) ->
-        fun(Station, DialUrl, Share) ->
-            Reseal = fun(Named) ->
-                         stream_resealed(Named, Dial, Realm, Procedure, Provider,
-                                         deadline(maps:get(dial_timeout_ms, StreamOpts, ?DEFAULT_DIAL_TIMEOUT_MS)))
-                     end,
-            sent_or_not(
-              settled(CallStreamStation(Pool, DialUrl, Provider, Realm, Procedure, Args,
-                                        maps:merge(StreamOpts,
-                                                   maps:merge(advertisement_opt(maps:get(advertisement, Candidate,
-                                                                                         undefined)),
-                                                              (pinned(Station))#{dial_timeout_ms => budget(Share),
-                                                                                 reseal => Reseal}))),
-                      Remember, Pool, Realm, Procedure, Candidate))
-        end
+stream_work(Dial, Realm, Procedure, Args, StreamOpts) ->
+    fun(Candidate) -> candidate_stream_work(Candidate, Dial, Realm, Procedure, Args, StreamOpts) end.
+
+candidate_stream_work(#{provider := Provider} = Candidate,
+                      #{pool := Pool, call_stream_station := CallStreamStation, remember_resolved := Remember} = Dial,
+                      Realm, Procedure, Args, StreamOpts) ->
+    fun(Station, DialUrl, Share) ->
+        Reseal = stream_reseal(Dial, Realm, Procedure, Provider, StreamOpts),
+        sent_or_not(
+          settled(CallStreamStation(Pool, DialUrl, Provider, Realm, Procedure, Args,
+                                    maps:merge(StreamOpts,
+                                               maps:merge(advertisement_opt(maps:get(advertisement, Candidate,
+                                                                                     undefined)),
+                                                          (pinned(Station))#{dial_timeout_ms => budget(Share),
+                                                                             reseal => Reseal}))),
+                  Remember, Pool, Realm, Procedure, Candidate))
+    end.
+
+%% The `reseal' a stream is handed: one lookup and key binding, on a call's terms.
+stream_reseal(Dial, Realm, Procedure, Provider, StreamOpts) ->
+    fun(Named) ->
+        stream_resealed(Named, Dial, Realm, Procedure, Provider,
+                        deadline(maps:get(dial_timeout_ms, StreamOpts, ?DEFAULT_DIAL_TIMEOUT_MS)))
     end.
 
 %% The KEM key a refused stream reseals to, on a call's terms (`resealed/7'): the provider's, from ONE fresh lookup,

@@ -194,10 +194,12 @@ manifest({error, _} = Error, _MCID, _Dial, _Ctx) ->
 
 %% Only a manifest that is the one asked for has its sizes read.
 matched(ok, #{size := Size, chunk_count := Count} = Manifest, Dial, #{max_bytes := MaxBytes, max_chunks := MaxChunks} = Ctx) ->
-    within_bytes(Size, MaxBytes,
-                 fun() -> within_chunks(Count, MaxChunks, fun() -> chunks(Manifest, Dial, Ctx) end) end);
+    within_bytes(Size, MaxBytes, fun() -> chunks_within(Count, MaxChunks, Manifest, Dial, Ctx) end);
 matched({error, _} = Error, _Manifest, _Dial, _Ctx) ->
     Error.
+
+chunks_within(Count, MaxChunks, Manifest, Dial, Ctx) ->
+    within_chunks(Count, MaxChunks, fun() -> chunks(Manifest, Dial, Ctx) end).
 
 %% Content of at most one chunk is shared as one raw block, so a larger raw root is not content a sharer made.
 raw_root(MCID, Bytes) when byte_size(Bytes) =< ?CHUNK_SIZE -> block_verified(MCID, Bytes);

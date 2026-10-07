@@ -170,10 +170,11 @@ shared({registered, _Proc}, Realm, Bytes, Opts, S) ->
 %% The realm's procedure serves from the realm's own store.
 advertised(Proc, Realm, #state{pool = Pool, io = #{advertise_stream := Advertise}}) ->
     Sharer = self(),
-    Handler = fun(Stream, Args) ->
-                  macula_content_serve:serve(Stream, Args, fun(Want, MCID) -> lookup(Sharer, Realm, Want, MCID) end)
-              end,
+    Handler = fun(Stream, Args) -> macula_content_serve:serve(Stream, Args, realm_lookup(Sharer, Realm)) end,
     Advertise(Pool, Realm, Proc, server_stream, Handler, #{}).
+
+realm_lookup(Sharer, Realm) ->
+    fun(Want, MCID) -> lookup(Sharer, Realm, Want, MCID) end.
 
 registered(ok, Proc, Realm, Bytes, Opts, #state{procedures = Procs} = S) ->
     kept(Realm, Bytes, Opts, S#state{procedures = Procs#{Realm => Proc}});
