@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [14.2.0] - 2026-10-07
+
 ### Changed
 
 - **A content fetch gives a sharer 2 s to answer the root, not 15 s (#82).** A sharer that accepts the root
@@ -22,6 +24,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`connect/2` says what it waits for (#77).** Its docs and the connecting guide said it returns
   immediately; it is a synchronous start of the pool and one link per seed, which took 1.6 to 3.4 s at half
   a CPU. They now say so, and point long-lived callers at `child_spec/3` under their own supervisor.
+
+### Tests
+
+- **Two eunit cases no longer time out on a loaded host (#78, #79).** The plumtree verified-once case counts
+  `verify_publication` with call_count tracing instead of a meck recompile of `macula_frame`, and each
+  realm_trust case, which generates an RSA-4096 key for pq_hybrid, gets 60 s.
 
 ## [14.1.0] - 2026-10-07
 
