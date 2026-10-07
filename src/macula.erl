@@ -152,8 +152,12 @@
 %% expects, in the seed or in the `expected_node_id' option; otherwise no
 %% pool starts and `{error, {seeds, expected_node_id_required}}' is
 %% returned. The pool spawns one peering link per seed and routes ops with
-%% replication, replay, and event dedup. Returns immediately; link
-%% handshakes complete asynchronously.
+%% replication, replay, and event dedup. It is a synchronous start: it
+%% returns once the pool, its statement issuer, its request admission and
+%% one link per seed have started, before any link handshake completes.
+%% That start costs real time on a slow host (1.6 to 3.4 s measured at half
+%% a CPU), so do not call it from a process others wait on; a long-lived
+%% pool belongs under the caller's own supervisor, see `child_spec/3'.
 %%
 %% Honored opts (full reference: `macula_client:opts()'):
 %% <ul>

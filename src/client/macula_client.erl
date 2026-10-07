@@ -753,8 +753,13 @@
 %% Public API
 %%====================================================================
 
-%% @doc Spawn a pool with one link per seed. Returns immediately;
-%% link handshakes complete asynchronously. Publish/subscribe block
+%% @doc Spawn a pool with one link per seed: a synchronous start_link that
+%% returns once the pool, its statement issuer, its request admission and
+%% every link have started, before any link handshake completes, which
+%% happens asynchronously. That start costs real time on a slow host (1.6 to
+%% 3.4 s at half a CPU), so long-lived callers start the pool from
+%% `child_spec/3' under their own supervisor, off any process others wait
+%% on. Publish/subscribe block
 %% until at least one link is connected (or fail with
 %% `{error, {transient, no_healthy_station}}' on the publish path).
 %% A node with no crypto profile, or a `node_identity' that is not an

@@ -204,7 +204,12 @@ pool publishes to whatever it has.
        Application
 ```
 
-**Boot.** `connect/2` returns immediately. Each link's CONNECT/HELLO
+**Boot.** `connect/2` is a synchronous start: it returns once the pool,
+its statement issuer, its request admission and one link per seed have
+started, before any handshake completes. That costs real time on a slow
+host (1.6 to 3.4 s was measured at half a CPU), so never call it from a
+process other processes wait on; a long-lived pool goes under your own
+supervisor via `macula:child_spec/3`. Each link's CONNECT/HELLO
 handshake completes asynchronously. `publish/4` and `subscribe/4` issued
 before any link finishes handshake will succeed (subscribe is queued)
 or fail with `{error, {transient, no_healthy_station}}` (publish, if

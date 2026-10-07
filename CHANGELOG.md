@@ -17,6 +17,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (default 2 s), after which the next sharer is asked; chunk streams keep `chunk_timeout_ms` (15 s). No wire
   change. macula-go makes the same change with the same number.
 
+### Documentation
+
+- **`connect/2` says what it waits for (#77).** Its docs and the connecting guide said it returns
+  immediately; it is a synchronous start of the pool and one link per seed, which took 1.6 to 3.4 s at half
+  a CPU. They now say so, and point long-lived callers at `child_spec/3` under their own supervisor.
+
 ## [14.1.0] - 2026-10-07
 
 ### Security
