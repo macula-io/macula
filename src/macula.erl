@@ -910,8 +910,8 @@ get_content(Pool, Realm, MCID) ->
 %% next; `{error, {unavailable, [{Sharer, Reason}]}}' when all fail,
 %% `{error, not_shared}' when none announces it, `{error, invalid_mcid}' for
 %% an id that is not tag 2. `Opts': `max_bytes' (256 MiB), `max_chunks',
-%% `chunk_timeout_ms', `parallel'. No realm key is needed: content verifies
-%% itself.
+%% `root_timeout_ms' (2 s, the root ask), `chunk_timeout_ms' (15 s, each
+%% chunk), `parallel'. No realm key is needed: content verifies itself.
 -spec get_content(pool(), realm(), mcid(), map()) -> {ok, binary()} | {error, term()}.
 get_content(Pool, Realm, MCID, Opts)
   when is_pid(Pool), is_binary(Realm), byte_size(Realm) =:= 32, is_map(Opts) ->

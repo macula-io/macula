@@ -29,7 +29,9 @@
 %% == Bounds ==
 %%
 %% `max_bytes' (256 MiB by default) bounds the content, `max_chunks' (16,384, 4 GiB of 256 KiB chunks) a manifest,
-%% `chunk_timeout_ms' (15 s) each stream, dial and answer together, `parallel' (4) the chunk streams open at once.
+%% `root_timeout_ms' (2 s) the root ask, dial and answer together, so a sharer that never answers holds a fetch for that
+%% long and no longer; `chunk_timeout_ms' (15 s) each chunk stream, dial and answer together; `parallel' (4) the chunk
+%% streams open at once.
 %% A raw root larger than a chunk is refused, and every chunk must be exactly the size its manifest declares, so what a
 %% fetch receives never exceeds the manifest's size, which `max_bytes' bounds.
 %%
@@ -45,6 +47,7 @@
 
 -define(MAX_BYTES, 268435456).
 -define(MAX_CHUNKS, 16384).
+-define(ROOT_TIMEOUT_MS, 2_000).
 -define(CHUNK_TIMEOUT_MS, 15_000).
 -define(RESOLVE_TIMEOUT_MS, 5_000).
 -define(PARALLEL, 4).
@@ -61,7 +64,7 @@ io() ->
       call_stream_station => fun macula:call_stream_station/7}.
 
 %% @doc Fetch `MCID' from a node that shares it. `Opts': `realm' (only that realm's announcements), `max_bytes',
-%% `max_chunks', `chunk_timeout_ms', `parallel', and `io' (see `io/0').
+%% `max_chunks', `root_timeout_ms', `chunk_timeout_ms', `parallel', and `io' (see `io/0').
 -spec get(pid(), macula:mcid(), map()) -> {ok, binary()} | {error, term()}.
 get(Pool, <<2, Codec, _:48/binary>> = MCID, Opts)
   when is_pid(Pool), (Codec =:= ?CODEC_RAW orelse Codec =:= ?CODEC_MANIFEST), is_map(Opts) ->
@@ -93,6 +96,7 @@ context(Pool, MCID, Opts) ->
       io => maps:merge(io(), maps:get(io, Opts, #{})),
       max_bytes => maps:get(max_bytes, Opts, ?MAX_BYTES),
       max_chunks => maps:get(max_chunks, Opts, ?MAX_CHUNKS),
+      root_timeout_ms => maps:get(root_timeout_ms, Opts, ?ROOT_TIMEOUT_MS),
       chunk_timeout_ms => maps:get(chunk_timeout_ms, Opts, ?CHUNK_TIMEOUT_MS),
       parallel => maps:get(parallel, Opts, ?PARALLEL)}.
 
@@ -155,7 +159,7 @@ tried({error, Reason}, Rest, Ctx, [Node | Failures], Node) -> from_sharers(Rest,
 
 %% Reaching a sharer and asking for the root runs in a worker, as every chunk ask does, so an io call that exits fails
 %% this sharer only and a gone caller ends the fetch here too.
-from_sharer(Sharer, #{chunk_timeout_ms := Timeout} = Ctx) ->
+from_sharer(Sharer, #{root_timeout_ms := Timeout} = Ctx) ->
     rooted(contained([fun() -> reached(Sharer, Ctx) end], root_worker, ?RESOLVE_TIMEOUT_MS + Timeout, Ctx), Ctx).
 
 rooted({ok, [{Dial, Answer}]}, Ctx) -> root(Answer, Dial, Ctx);
@@ -164,9 +168,9 @@ rooted({error, _} = Error, _Ctx) -> Error.
 reached(#{station := Station} = Sharer, #{pool := Pool, io := #{resolve_station_endpoint := Resolve}} = Ctx) ->
     through(Resolve(Pool, Station, ?RESOLVE_TIMEOUT_MS), Sharer, Ctx).
 
-through({ok, Url}, Sharer, #{mcid := MCID} = Ctx) ->
+through({ok, Url}, Sharer, #{mcid := MCID, root_timeout_ms := Timeout} = Ctx) ->
     Dial = Sharer#{url => Url},
-    {ok, {Dial, asked(Dial, MCID, root, Ctx)}};
+    {ok, {Dial, asked(Dial, MCID, root, Timeout, Ctx)}};
 through({error, Reason}, _Sharer, _Ctx) ->
     {error, {station_unresolved, Reason}}.
 
@@ -255,8 +259,8 @@ stopped(Workers) ->
 ended(Pid) ->
     receive {'EXIT', Pid, _} -> ok end.
 
-chunk({ChunkId, Size}, Dial, Ctx) ->
-    block_of(asked(Dial, ChunkId, block, Ctx), ChunkId, Size).
+chunk({ChunkId, Size}, Dial, #{chunk_timeout_ms := Timeout} = Ctx) ->
+    block_of(asked(Dial, ChunkId, block, Timeout, Ctx), ChunkId, Size).
 
 block_of({ok, #{kind := block, bytes := Bytes}}, ChunkId, Size) when byte_size(Bytes) =:= Size ->
     block_verified(ChunkId, Bytes);
@@ -289,9 +293,9 @@ whole({error, _} = Error, _Bytes) -> Error.
 %%====================================================================
 
 %% Open a stream to the sharer for one content id and read the one DATA body it answers with, the dial and the
-%% answer within one `chunk_timeout_ms'.
-asked(#{url := Url, node := Node, realm := Realm, procedure := Procedure, station := Station}, MCID, Want,
-      #{pool := Pool, io := #{call_stream_station := Open}, chunk_timeout_ms := Timeout}) ->
+%% answer within `Timeout': `root_timeout_ms' for the root, `chunk_timeout_ms' for a chunk.
+asked(#{url := Url, node := Node, realm := Realm, procedure := Procedure, station := Station}, MCID, Want, Timeout,
+      #{pool := Pool, io := #{call_stream_station := Open}}) ->
     Deadline = erlang:monotonic_time(millisecond) + Timeout,
     opened(Open(Pool, Url, Node, Realm, Procedure, #{mcid => MCID, want => Want},
                 #{expected_node_id => Station, dial_timeout_ms => Timeout, timeout_ms => Timeout,

@@ -86,7 +86,9 @@ the fetch to the next. It needs no realm key: content verifies itself.
 | `{error, invalid_mcid}` | not a tag 2 (SHA-384) content id |
 
 `get_content/4` takes bounds: `max_bytes` (256 MiB by default), `max_chunks`,
-`chunk_timeout_ms` (dial and answer of one stream), `parallel`. A fetch holds
+`root_timeout_ms` (2 s, dial and answer of the root ask), `chunk_timeout_ms`
+(15 s, dial and answer of one chunk stream), `parallel`. A sharer that never
+answers the root costs a fetch `root_timeout_ms`, then the next sharer is asked. A fetch holds
 up to twice the content's size while it assembles it: 512 MiB at the default
 bound. It runs in a worker that ends when your process does and leaves nothing
 in your mailbox, and no failure of it takes your process down: a sharer that

@@ -138,7 +138,8 @@ each. Nothing of a failed attempt is kept, and nothing is resumed.
 | content size (`max_bytes`) | 256 MiB |
 | chunks per manifest (`max_chunks`) | 16,384 (4 GiB of 256 KiB chunks) |
 | chunk streams open at once (`parallel`) | 4 |
-| per-stream deadline, dial and answer (`chunk_timeout_ms`) | 15 s |
+| root ask deadline, dial and answer (`root_timeout_ms`) | 2 s |
+| chunk stream deadline, dial and answer (`chunk_timeout_ms`) | 15 s |
 
 ---
 

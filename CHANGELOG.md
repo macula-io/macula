@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **A content fetch gives a sharer 2 s to answer the root, not 15 s (#82).** A sharer that accepts the root
+  ask and never answers, or died without the station noticing yet, held every fetch of that content for a
+  whole `chunk_timeout_ms`. The root ask, dial and answer together, now has its own `root_timeout_ms`
+  (default 2 s), after which the next sharer is asked; chunk streams keep `chunk_timeout_ms` (15 s). No wire
+  change. macula-go makes the same change with the same number.
+
 ## [14.1.0] - 2026-10-07
 
 ### Security
