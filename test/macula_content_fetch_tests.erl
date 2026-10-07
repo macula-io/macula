@@ -40,7 +40,50 @@ fetch_test_() ->
       {"a root manifest body without a manifest is refused", fun a_root_manifest_without_a_manifest_is_refused/0},
       {"a root ask that crashes fails its sharer, and the next sharer serves",
        fun a_crashing_root_ask_moves_to_the_next_sharer/0},
-      {"a killed caller stops its fetch while it asks for the root", fun a_killed_caller_stops_a_root_ask/0}]}.
+      {"a killed caller stops its fetch while it asks for the root", fun a_killed_caller_stops_a_root_ask/0},
+      {"a sharer that never answers the root holds the fetch for root_timeout_ms, not chunk_timeout_ms",
+       {timeout, 30, fun a_silent_sharer_holds_the_fetch_for_the_root_deadline/0}},
+      {"root_timeout_ms is the caller's to set", fun a_caller_sets_the_root_deadline/0},
+      {"a chunk keeps chunk_timeout_ms, longer than the root deadline", fun a_chunk_keeps_its_own_deadline/0}]}.
+
+%% A sharer that accepts the root ask and never answers costs the fetch the root deadline (2 s by default), not the
+%% 15 s chunk deadline, and the next sharer serves.
+a_silent_sharer_holds_the_fetch_for_the_root_deadline() ->
+    {Honest, MCID} = honest_sharer(<<"served after the silent one">>),
+    Silent = sharer(fun(_Stream, _Args) -> receive never -> ok end end),
+    {Ms, Result} = timed(fun() -> fetch([Silent, Honest], MCID, #{order => as_given}) end),
+    ?assertEqual({ok, <<"served after the silent one">>}, Result),
+    ?assert(Ms >= 2_000),
+    ?assert(Ms < 4_000).
+
+a_caller_sets_the_root_deadline() ->
+    MCID = <<2, 16#55, 0:384>>,
+    Silent = sharer(fun(_Stream, _Args) -> receive never -> ok end end),
+    {Ms, Result} = timed(fun() -> fetch([Silent], MCID, #{root_timeout_ms => 200}) end),
+    ?assertMatch({error, {unavailable, [{_, _}]}}, Result),
+    ?assert(Ms < 1_500).
+
+%% Chunks answered after the root deadline has passed still arrive: the root deadline bounds the root ask alone.
+a_chunk_keeps_its_own_deadline() ->
+    {ok, Manifest, Chunks} = macula_manifest:create(crypto:strong_rand_bytes(?CHUNK * 2)),
+    MCID = maps:get(mcid, Manifest),
+    ByMCID = maps:from_list([{<<2, 16#55, (crypto:hash(sha384, C))/binary>>, C} || C <- Chunks]),
+    Slow = sharer(fun(Stream, Args) -> answer_slow_chunks(Stream, macula_record:payload_field(Args, <<"mcid">>),
+                                                           MCID, Manifest, ByMCID) end),
+    ?assertEqual({ok, iolist_to_binary(Chunks)}, fetch([Slow], MCID, #{root_timeout_ms => 200})).
+
+answer_slow_chunks(Stream, MCID, MCID, Manifest, _ByMCID) ->
+    ok = macula:send(Stream, #{kind => manifest, mcid => MCID, manifest => Manifest}, msgpack),
+    macula:close_stream(Stream);
+answer_slow_chunks(Stream, Chunk, _MCID, _Manifest, ByMCID) ->
+    timer:sleep(500),
+    ok = macula:send(Stream, #{kind => block, mcid => Chunk, bytes => maps:get(Chunk, ByMCID)}, msgpack),
+    macula:close_stream(Stream).
+
+timed(Fun) ->
+    T0 = erlang:monotonic_time(millisecond),
+    Result = Fun(),
+    {erlang:monotonic_time(millisecond) - T0, Result}.
 
 a_root_manifest_without_a_manifest_is_refused() ->
     MCID = <<2, 16#56, 0:384>>,
