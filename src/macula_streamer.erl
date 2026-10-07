@@ -197,7 +197,9 @@ advertise(Pool, Realm, Procedure, Module, Args) ->
 
 %% @doc As `advertise/5'. `Opts' may include `announce' (default
 %% `true'), `mode' (default `server_stream'), `auth' (the procedure's
-%% auth policy, default `open', see `macula:advertise_stream/6'), and
+%% auth policy, default `open', see `macula:advertise_stream/6'),
+%% `confidential' (its sealing mode, `preferred' by default, as
+%% `macula:advertise_stream/6' takes it), and
 %% `reuse_sup' — an
 %% existing supervisor pid (as returned by a prior `advertise/5,6'
 %% call) to register the handler again with, without starting a new
@@ -217,10 +219,13 @@ advertise(Pool, Realm, Procedure, Module, Args, Opts) ->
     Handler = fun(StreamPid, StreamArgs) ->
         dispatch(Sup, Module, Pool, Realm, Announce, Args, Functions, StreamPid, StreamArgs)
     end,
-    %% The advertise function gets the procedure's auth policy and the
-    %% stations it registers on, when the options give them, and no other
-    %% option.
-    case AdvertiseStream(Pool, Realm, Procedure, Mode, Handler, maps:with([auth, stations], Opts)) of
+    %% The advertise function gets the procedure's auth policy, the stations
+    %% it registers on and its sealing mode (`confidential'), when the options
+    %% give them, and none of the streamer's own options. Dropping
+    %% `confidential' registered a `required' stream as `preferred'
+    %% (mcl-tube#17).
+    case AdvertiseStream(Pool, Realm, Procedure, Mode, Handler,
+                         maps:with([auth, stations, confidential], Opts)) of
         ok -> {ok, Sup};
         {error, Reason} -> {error, Reason}
     end.

@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A stream advertised with `confidential => required` refuses a clear open (#85, macula-services/mcl-tube#17).**
+  `macula_streamer:advertise/6` (and `advertise_direct/7` through it) handed the advertise function only
+  `auth` and `stations`, so a streamer's `confidential` never reached `macula:advertise_stream/6`: a
+  `required` stream was registered as `preferred` and admitted a clear STREAM_OPEN for about 10 minutes
+  after each start (a keyed advertisement's lifetime plus clock tolerance). It is forwarded now.
+  `macula_response` forwarded it already, so request/reply procedures were not affected. No wire change.
+  A streamer advertised `required` on a node without `kem_advertise` enabled now fails at advertise
+  (`{confidentiality, kem_advertise_disabled}`) instead of serving in the clear, as a request/reply
+  procedure already did.
+
 ## [14.2.0] - 2026-10-07
 
 ### Changed

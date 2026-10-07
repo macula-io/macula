@@ -54,16 +54,31 @@ streamer_test_() ->
                  fun without_functions_a_streamer_advertises_through_the_macula_facade/0,
                  fun reuse_sup_resends_advertise_without_a_new_supervisor/0,
                  fun reuse_sup_with_a_dead_pid_starts_a_fresh_supervisor/0,
-                 fun the_stations_reach_the_stream_advertisement/0]].
+                 fun the_stations_reach_the_stream_advertisement/0,
+                 fun the_confidential_mode_reaches_the_stream_advertisement/0]].
 
 %% `stations' names where the procedure registers, so it reaches the stream
-%% advertisement with the auth policy, and nothing else of the options does.
+%% advertisement with the auth policy, and none of the streamer's own options
+%% does.
 the_stations_reach_the_stream_advertisement() ->
     Stations = [<<1:256>>],
     Opts = (macula_scripted_stream:options([]))#{stations => Stations, auth => open},
     {ok, _Sup} = macula_streamer:advertise(pool, ?REALM, <<"bulk.ingest">>, ?MODULE, self(), Opts),
     [{_, _, _, Given}] = macula_scripted_stream:advertised(),
     ?assertEqual(#{stations => Stations, auth => open}, Given).
+
+%% `confidential' is the provider's sealing mode (macula:advertise_stream/6,
+%% `advertise_confidentiality/1'). Dropped here, a stream advertised with
+%% `required' was registered as `preferred' and took a clear STREAM_OPEN for
+%% about 10 minutes after each start (mcl-tube#17): through both
+%% `advertise/6' and `advertise_direct/7', it reaches the advertisement.
+the_confidential_mode_reaches_the_stream_advertisement() ->
+    Opts = (macula_scripted_stream:options([]))#{confidential => required},
+    {ok, _} = macula_streamer:advertise(pool, ?REALM, <<"tv.watch">>, ?MODULE, self(), Opts),
+    {ok, _} = macula_streamer:advertise_direct(pool, ?REALM, <<"tv.watch">>, ?MODULE, self(),
+                                               macula_test_identity:key(), Opts),
+    ?assertEqual([#{confidential => required}, #{confidential => required}],
+                 [Given || {_, _, _, Given} <- macula_scripted_stream:advertised()]).
 
 %% A station's wire-level registration for a procedure is tied to the
 %% connection that sent it, and does not survive that connection being
