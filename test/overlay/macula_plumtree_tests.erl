@@ -121,16 +121,19 @@ receive_duplicate_gossip_prunes_sender_test() ->
     ?assert(lists:member(Sender, macula_plumtree:lazy_peers(S3))),
     ?assertNot(lists:member(Sender, macula_plumtree:eager_peers(S3))).
 
+%% Counted by call_count tracing rather than a meck of macula_frame: meck recompiles the whole frame module, which
+%% outran eunit's 5 s timeout on a loaded host (#78).
 a_publication_reaching_a_node_twice_is_verified_once_test() ->
     Publish = publish_frame(<<"twice">>),
     S1 = macula_plumtree:add_peer(fresh(id(99)), id(21)),
-    ok = meck:new(macula_frame, [passthrough]),
+    Verify = {macula_frame, verify_publication, 3},
+    1 = erlang:trace_pattern(Verify, true, [call_count]),
     try
         {S2, _, [_]} = process(S1, id(20), gossip_of(Publish, 0)),
         {_S3, _, []} = process(S2, id(21), gossip_of(Publish, 1)),
-        ?assertEqual(1, meck:num_calls(macula_frame, verify_publication, '_'))
+        ?assertEqual({call_count, 1}, erlang:trace_info(Verify, call_count))
     after
-        meck:unload(macula_frame)
+        erlang:trace_pattern(Verify, false, [call_count])
     end.
 
 a_gossip_whose_publication_does_not_verify_is_dropped_test() ->
