@@ -13,3 +13,9 @@ a_peer_declares_swim_indirect_only_with_its_bit_test() ->
     ?assert(macula_peering:has_capability(swim_indirect, 2#10)),
     ?assertNot(macula_peering:has_capability(swim_indirect, 2#01)),
     ?assertNot(macula_peering:has_capability(swim_indirect, 0)).
+
+%% A node that reads the relay code `overloaded' declares bit 4 (macula#54); a station sends the code to no other.
+relay_overloaded_is_bit_four_test() ->
+    ?assertEqual(4, macula_peering:capability_bit(relay_overloaded)),
+    ?assert(macula_peering:has_capability(relay_overloaded, 2#111)),
+    ?assertNot(macula_peering:has_capability(relay_overloaded, 2#011)).

@@ -79,6 +79,8 @@ resolve_test_() ->
       {timeout, 30, fun a_handler_error_reply_is_reported_refused/0},
       {timeout, 30, fun a_candidate_that_timed_out_is_reported_not_answered/0},
       {timeout, 30, fun a_station_relay_error_is_reported_not_answered/0},
+      {timeout, 30, fun an_overloaded_station_is_reported_overloaded/0},
+      {timeout, 30, fun an_overloaded_station_ends_the_call_and_is_not_remembered/0},
       {timeout, 30, fun call_to_a_provider_dials_only_that_providers_station/0},
       {timeout, 30, fun call_to_a_provider_that_is_not_advertised_says_so/0},
       {timeout, 30, fun call_to_a_provider_skips_another_providers_head_start/0},
@@ -596,6 +598,25 @@ a_candidate_that_timed_out_is_reported_not_answered() ->
 a_station_relay_error_is_reported_not_answered() ->
     ?assertMatch(#{outcome := not_answered},
                  candidate_tried_for({error, {call_error, unknown_next_peer, undefined}})).
+
+%% A station at an in-flight bound says so (macula#54): reported apart from a
+%% lost CALL, so a measurement can tell load from loss.
+an_overloaded_station_is_reported_overloaded() ->
+    ?assertMatch(#{outcome := overloaded}, candidate_tried_for({error, overloaded})).
+
+%% The station's word that it did not forward the CALL is not proof (D25 item
+%% 7), so the call ends with {error, overloaded} and is never sent to another
+%% station, where a provider could run it twice.
+an_overloaded_station_ends_the_call_and_is_not_remembered() ->
+    A = station(<<"a.test">>),
+    B = station(<<"b.test">>),
+    set_replies(procedure_key(), [[advertisement(A), advertisement(B)]]),
+    set_endpoint(A, endpoint_record(A)),
+    set_endpoint(B, endpoint_record(B)),
+    set_answer(dial_url(A), {error, overloaded}),
+    set_answer(dial_url(B), {error, overloaded}),
+    ?assertEqual({error, overloaded}, call(3000)),
+    ?assertEqual(none, remembered(?PROC)).
 
 call_does_not_remember_a_head_start_that_answered() ->
     A = station(<<"a.test">>),

@@ -75,7 +75,17 @@
 %% the connection over it, so PING-REQ goes only to a peer declaring this bit.
 -define(CAP_SWIM_INDIRECT, 16#0000_0000_0000_0002).
 
--type capability() :: station | swim_indirect.
+%% Capability bit asserting the peer reads the relay code `overloaded'
+%% (macula#54). A station at an in-flight CALL bound (per peer, total) may
+%% refuse an excess CALL with a signed `overloaded' relay error instead of
+%% dropping it, only toward a peer declaring this bit, and at most once per
+%% peer per window: signing costs a signature, a drop costs nothing, so every
+%% other excess CALL, and any CALL over a rate or payload bound, is dropped
+%% silently as before. A peer without the bit gets the drop, and its call
+%% waits out its deadline (waste, never loss).
+-define(CAP_RELAY_OVERLOADED, 16#0000_0000_0000_0004).
+
+-type capability() :: station | swim_indirect | relay_overloaded.
 -export_type([capability/0]).
 
 -type opts() :: macula_peering_conn:opts().
@@ -335,10 +345,11 @@ close_dedicated_stream(Stream) ->
     macula_quic:close_stream(Stream).
 
 %% @doc The bit a capability has in the mask a node declares in CONNECT and
-%% HELLO: `station' (1) and `swim_indirect' (2).
+%% HELLO: `station' (1), `swim_indirect' (2) and `relay_overloaded' (4).
 -spec capability_bit(capability()) -> pos_integer().
 capability_bit(station) -> ?CAP_STATION;
-capability_bit(swim_indirect) -> ?CAP_SWIM_INDIRECT.
+capability_bit(swim_indirect) -> ?CAP_SWIM_INDIRECT;
+capability_bit(relay_overloaded) -> ?CAP_RELAY_OVERLOADED.
 
 %% @doc Whether a capabilities mask, such as `peer_capabilities/1' returns,
 %% declares the capability.

@@ -142,6 +142,39 @@ a_relay_error_from_the_station_is_final_test_() ->
          macula_station_link:stop(Pid)
      end}}.
 
+%% A station at an in-flight bound refuses the CALL with a signed `overloaded' (macula#54): the call ends at once, long
+%% before its deadline, as {error, overloaded}, apart from a provider's own "overloaded" code. It counts as sent: the
+%% station's word that it did not forward is not proof (D25 item 7).
+an_overloaded_station_ends_the_call_at_once_test_() ->
+    {spawn, {timeout, 5,
+     fun() ->
+         {Pid, StationKey, Profile} = start_link_to_station(),
+         Ref = call_async(Pid, macula_node_keys:key_id(new_key(Profile)), ?PROCEDURE, #{}, 4_000),
+         Request = sent_request(Profile),
+         deliver(Pid, macula_frame:relay_error(#{frame_type => error, request => Request, code => overloaded},
+                                               StationKey)),
+         Answer = answer_within(Ref, 500),
+         ?assertEqual({error, overloaded}, Answer),
+         ?assertEqual(provider, macula_station_link:failure_scope(Answer)),
+         macula_station_link:stop(Pid)
+     end}}.
+
+%% Every link declares that it reads `overloaded', beside the capabilities it was started with.
+a_link_declares_it_reads_overloaded_test_() ->
+    {spawn, {timeout, 5,
+     fun() ->
+         {ok, _} = application:ensure_all_started(macula),
+         Test = self(),
+         Connect = fun(PeeringOpts) -> Test ! {dialled, maps:get(capabilities, PeeringOpts)}, {error, not_dialed_here} end,
+         {ok, Pid} = macula_station_link:start_link(with_link_keys(#{
+             seed => #{host => <<"127.0.0.1">>, port => 1}, connect_timeout_ms => 2000,
+             capabilities => macula_peering:capability_bit(station), connect => Connect})),
+         Caps = receive {dialled, Dialled} -> Dialled after 2_000 -> erlang:error(not_dialled) end,
+         ?assert(macula_peering:has_capability(relay_overloaded, Caps)),
+         ?assert(macula_peering:has_capability(station, Caps)),
+         macula_station_link:stop(Pid)
+     end}}.
+
 %% A reply that does not verify as the answer leaves the call pending and is counted; the genuine reply that follows
 %% answers the caller.
 a_reply_that_does_not_verify_leaves_the_call_pending_test_() ->

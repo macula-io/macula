@@ -44,6 +44,8 @@ cases(Keys) ->
                  fun a_relay_error_carries_no_detail/1,
                  fun a_stream_error_from_a_station_is_a_relay_error/1,
                  fun a_relay_code_outside_the_closed_set_is_refused/1,
+                 fun an_overloaded_relay_error_verifies_for_its_request/1,
+                 fun a_relay_error_is_built_from_the_claimed_ids_of_an_unverified_call/1,
                  fun a_relay_error_for_another_request_is_refused/1,
                  fun a_reported_by_that_is_not_the_key_id_of_key_is_refused/1,
                  fun a_relay_error_from_a_station_other_than_the_connection_is_refused/1,
@@ -276,6 +278,26 @@ a_relay_code_outside_the_closed_set_is_refused(#{station := Station} = Keys) ->
     Frame = crafted(error, relay_error, macula_signed_object:sign(?RELAY_ERROR_LABEL, Tbs, Station)),
     ?assertEqual({error, malformed_frame},
                  macula_frame:verify_relay_error(wire(Frame), Request, pq_pure, macula_node_keys:key_id(Station))).
+
+%% A station at an in-flight bound refuses a CALL with `overloaded' (macula#54), as an ERROR or a STREAM_ERROR.
+an_overloaded_relay_error_verifies_for_its_request(#{station := Station} = Keys) ->
+    Request = verified_call(Keys),
+    [?assertEqual({ok, #{frame_type => Type, reported_by => macula_node_keys:key_id(Station), code => overloaded}},
+                  macula_frame:verify_relay_error(
+                    wire(macula_frame:relay_error(#{frame_type => Type, request => Request, code => overloaded}, Station)),
+                    Request, pq_pure, macula_node_keys:key_id(Station)))
+     || Type <- [error, stream_error]].
+
+%% A station refuses an excess CALL before the expensive verify (macula-station#22), so it names the request by what
+%% the CALL claims: claimed_request/1 gives the request_hash verify_request/2 would, and relay_error/2 needs no more.
+a_relay_error_is_built_from_the_claimed_ids_of_an_unverified_call(#{caller := Caller, station := Station} = Keys) ->
+    Frame = wire(macula_frame:call(call_spec(Keys), Caller)),
+    {ok, Claimed} = macula_frame:claimed_request(Frame),
+    Request = verified_call(Keys),
+    ?assertEqual(maps:get(request_hash, Request), maps:get(request_hash, Claimed)),
+    Relay = wire(macula_frame:relay_error(#{frame_type => error, request => Claimed, code => overloaded}, Station)),
+    ?assertMatch({ok, #{code := overloaded}},
+                 macula_frame:verify_relay_error(Relay, Request, pq_pure, macula_node_keys:key_id(Station))).
 
 a_relay_error_for_another_request_is_refused(#{caller := Caller, station := Station} = Keys) ->
     Request = verified_call(Keys),

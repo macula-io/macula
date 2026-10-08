@@ -581,11 +581,17 @@ The frame is `{version, frame_type, relay_error}`, with the routing field `sourc
 - A station or the caller accepts a relay error only for a pending request whose `request_id` and `request_hash`
   match, arriving on the connection that request was forwarded on, or for the caller on its first-hop connection,
   and only when `reported_by` equals the key id of `key`.
-- The relay codes are a closed set, disjoint from every provider code: `unknown_next_peer`. Each means the outcome
-  is unknown, not that the request failed (D25 item 7), and adding a code changes this design. A station signs no
-  RESULT.
-- A station under load drops the requests it cannot forward. It sends no relay error for them, and the caller's
-  deadline ends the call.
+- The relay codes are a closed set, disjoint from every provider code: `unknown_next_peer` and `overloaded`
+  (macula#54). Each means the outcome is unknown, not that the request failed (D25 item 7), and adding a code changes
+  this design. A station signs no RESULT.
+- A station under load drops the requests it cannot forward. Toward a peer that declares the capability
+  `relay_overloaded` (bit 4), a station at an in-flight bound (per peer, total) may instead refuse an excess request
+  with `overloaded`, at most once per peer per window; every other excess request, and any request over a rate or
+  payload bound, is dropped. A request it drops gets no relay error, and the caller's deadline ends the call. The
+  caller ends a call refused `overloaded` at once with `{error, overloaded}` and never sends it to another station:
+  the station's word that it did not forward is not proof. A station names the refused request by the
+  `request_id` and `request_hash` its CALL claims, so it refuses before verifying. `upstream_congestion` in
+  `macula_bolt4` is a separate, unused taxonomy and not a relay code.
 - `offending_hop` is advisory: a signed claim by `reported_by` that proves nothing about the named hop. A receiver
   logs it, and never lowers the named hop's standing on it.
 

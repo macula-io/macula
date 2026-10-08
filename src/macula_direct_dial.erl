@@ -965,7 +965,10 @@ candidate_source(_Resolved)        -> dht.
 %% one (`macula_station_link:call_result/1'), so a binary is the provider's.
 %% A station's relay error (`unknown_next_peer', an atom) answers for the
 %% route, not the provider: `not_answered', with a timeout and a dropped link.
+%% A station at an in-flight bound says so (macula#54): `overloaded', so a
+%% measurement tells load apart from loss.
 outcome({ok, _Answered})                      -> answered;
+outcome({error, overloaded})                  -> overloaded;
 outcome({ok, _Answered, _Report})             -> answered;
 outcome({error, {call_error, Code, _Detail}}) when is_binary(Code) -> {refused, Code};
 outcome({error, Detail}) when is_binary(Detail) -> {refused, <<"handler_error">>};

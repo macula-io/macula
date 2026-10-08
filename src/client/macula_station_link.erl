@@ -79,6 +79,7 @@
 %%   <tr><td>provider ERROR(code=`handler_error', detail=D)</td><td>`{error, D}' — the handler's own reason</td></tr>
 %%   <tr><td>provider ERROR(code=C, detail=D)</td><td>`{error, {call_error, C, D}}', C and D binaries, D `undefined' when absent</td></tr>
 %%   <tr><td>station ERROR, no such next peer</td><td>`{error, {call_error, unknown_next_peer, undefined}}'</td></tr>
+%%   <tr><td>station ERROR, at an in-flight bound (macula#54)</td><td>`{error, overloaded}'</td></tr>
 %%   <tr><td>(deadline elapses)</td><td>`{error, timeout}'</td></tr>
 %%   <tr><td>(connection drops)</td><td>`{error, {disconnected, Name}}' or `{error, {peering_exit, Name}}'</td></tr>
 %%   <tr><td>(link stops for any other reason, with the call pending or still waiting to reach it)</td><td>`{error, {link_stopped, Name}}'</td></tr>
@@ -571,7 +572,10 @@ stop(Pid) ->
 %% Code, Detail}}' for any other provider error, `Code' a binary and `Detail'
 %% a binary or `undefined'; `{error, {call_error, unknown_next_peer,
 %% undefined}}' when the station reports it holds no connection to the
-%% target; or `{error, Reason}' for a call refused, timed out or lost with
+%% target; `{error, overloaded}' when the station refuses the call at an
+%% in-flight bound (macula#54), at once instead of at the deadline, and, as
+%% the station's word that it did not forward is no proof (D25 item 7), with
+%% the call counted as sent; or `{error, Reason}' for a call refused, timed out or lost with
 %% the connection (see `failure_scope/1').
 -spec call(pid(), station | <<_:256>>, <<_:256>>, binary(), term(), 1..600_000) ->
     {ok, term()} | {error, term()}.
@@ -1382,7 +1386,8 @@ started({ok, Seed, Key, Profile, Issuer}, Opts) ->
     OpenStream   = maps:get(open_stream, Opts, fun macula_peering:open_dedicated_stream/1),
     SendOnStream = maps:get(send_on_stream, Opts, fun macula_peering:send_on_stream/2),
     CloseStream  = maps:get(close_stream, Opts, fun macula_peering:close_dedicated_stream/1),
-    Caps     = maps:get(capabilities, Opts, 0),
+    %% Every link reads the relay code `overloaded', so it says so (macula#54).
+    Caps     = maps:get(capabilities, Opts, 0) bor macula_peering:capability_bit(relay_overloaded),
     Alpn     = maps:get(alpn, Opts, [<<"macula">>]),
     Tmo      = maps:get(connect_timeout_ms, Opts, 30_000),
     WdMs     = maps:get(connect_watchdog_ms, Opts, undefined),
@@ -2220,6 +2225,8 @@ call_result(#{sealed := _}) ->
     {error, {call_error, <<"sealed_refused">>, undefined}};
 call_result(#{frame_type := result, payload := Payload}) ->
     {ok, Payload};
+call_result(#{frame_type := error, reported_by := _, code := overloaded}) ->
+    {error, overloaded};
 call_result(#{frame_type := error, reported_by := _, code := Code}) ->
     {error, {call_error, Code, undefined}};
 call_result(#{frame_type := error, code := ?HANDLER_ERROR_CODE, detail := Detail}) ->

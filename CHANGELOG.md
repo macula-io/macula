@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A station can tell a caller it refused a CALL for overload: the signed relay code `overloaded` (#54, #71).**
+  `macula_frame` relay errors take `overloaded` beside `unknown_next_peer`, signed and verified the same way, with
+  no new field. The new capability `relay_overloaded` (bit 4) says a node reads it; every `macula_station_link`
+  declares it, and a station sends the code to no other peer, so an older peer sees no change. A link ends a CALL
+  refused `overloaded` at once with `{error, overloaded}` (failure scope `provider`: it is never sent to another
+  station), and direct dial reports the candidate as `overloaded`. `relay_error/2` needs only the request's
+  `request_id` and `request_hash`, and `claimed_request/1` now returns `request_hash`, so a station can refuse a
+  CALL before verifying it. Sending the code is the station's part (macula-station).
+
 ## [14.2.1] - 2026-10-07
 
 ### Fixed

@@ -215,8 +215,13 @@
 -define(REQUEST_LABEL, <<"MACULA-PQ-REQUEST-V1">>).
 -define(REPLY_LABEL, <<"MACULA-PQ-REPLY-V1">>).
 -define(RELAY_ERROR_LABEL, <<"MACULA-PQ-RELAY-ERROR-V1">>).
-%% The relay error codes, a closed set disjoint from every provider code (D25 item 7).
--define(RELAY_CODES, [unknown_next_peer]).
+%% The relay error codes, a closed set disjoint from every provider code (D25 item 7). `overloaded' (macula#54) goes
+%% only to a peer that declares macula_peering:capability_bit(relay_overloaded): an older reader refuses the code.
+-define(RELAY_CODES, [unknown_next_peer, overloaded]).
+-type relay_code() :: unknown_next_peer | overloaded.
+%% What a relay error names its request by: the ids a verified request carries, or the ones claimed_request/1 reads
+%% from a CALL a station refuses before verifying it.
+-type relay_request() :: #{request_id := <<_:128>>, request_hash := <<_:384>>, _ => _}.
 -define(STREAM_LABEL, <<"MACULA-PQ-STREAM-V1">>).
 -define(CALLER_STREAM_LABEL, <<"MACULA-PQ-CALLER-STREAM-V1">>).
 -define(PUBLICATION_LABEL, <<"MACULA-PQ-PUBLICATION-V1">>).
@@ -678,8 +683,8 @@
                                    source_route_reverse => binary()}}
                       | {provider_error, #{request := verified_request(), code := binary(), detail => binary(),
                                            source_route_reverse => binary()}}
-                      | {relay_error, #{frame_type := error | stream_error, request := verified_request(),
-                                        code := unknown_next_peer, offending_hop => <<_:256>>,
+                      | {relay_error, #{frame_type := error | stream_error, request := relay_request(),
+                                        code := relay_code(), offending_hop => <<_:256>>,
                                         source_route_partial => binary()}}
                       | {provider_stream | caller_stream, stream_spec(), verified_request() | undefined}.
 
@@ -1247,8 +1252,10 @@ reply_table(Type) ->
       <<"detail">> => {detail, {text_max, ?MAX_ERROR_TEXT_BYTES}}}.
 
 %% @doc Sign a station's relay error, an ERROR or STREAM_ERROR for a pending request, with the station's identity key.
-%% It carries a code from the closed set and no free text, so a spec with a detail raises function_clause.
--spec relay_error(#{frame_type := error | stream_error, request := verified_request(), code := unknown_next_peer,
+%% It carries a code from the closed set and no free text, so a spec with a detail raises function_clause. The request
+%% is named by its request_id and request_hash only, so a station can refuse a CALL it has not verified, by the ids
+%% claimed_request/1 reads (macula#54).
+-spec relay_error(#{frame_type := error | stream_error, request := relay_request(), code := relay_code(),
                     offending_hop => binary(), source_route_partial => binary()},
                   macula_node_keys:node_key()) -> frame().
 relay_error(#{frame_type := Type, request := #{request_id := RequestId, request_hash := RequestHash},
@@ -1332,13 +1339,16 @@ claimed_ids({ok, #{frame_type := Type, request_id := RequestId, request_hash := 
 claimed_ids(_NoIds, _Type) ->
     {error, malformed_frame}.
 
-%% @doc The request_id, realm and procedure a CALL names, read without verifying it. A key for telling what a frame
+%% @doc The request_id, request_hash, realm and procedure a CALL names, read without verifying it. A key for telling what a frame
 %% claims to be, for an observer, and nothing more: it decides no routing, admission or count, which go by the
 %% verified request (verify_request/2). The frame's fields and the signed object's shape are checked as
 %% verify_request/2 checks them, and the tbs is read with the same strict decoding and field table, so fields of
-%% another shape never come back. It checks neither the key nor the signature. Anything else is malformed_frame.
+%% another shape never come back. It checks neither the key nor the signature. Anything else is malformed_frame. The
+%% request_hash is the one verify_request/2 gives a genuine request, so a station refusing a CALL before the verify
+%% names it in a relay error (relay_error/2) the caller verifies against its own request.
 -spec claimed_request(frame()) ->
-        {ok, #{request_id := <<_:128>>, realm := <<_:256>>, procedure := binary()}} | {error, malformed_frame}.
+        {ok, #{request_id := <<_:128>>, request_hash := <<_:384>>, realm := <<_:256>>, procedure := binary()}}
+        | {error, malformed_frame}.
 claimed_request(#{frame_type := call, request := Object} = Frame) ->
     request_claimed(only_fields(Frame, [version, frame_type, request, source_route, retry_budget]), Object);
 claimed_request(_Frame) ->
@@ -1346,13 +1356,13 @@ claimed_request(_Frame) ->
 
 request_claimed(true, #{key := Key, tbs := Tbs, signature := Signature} = Object)
   when map_size(Object) =:= 3, is_binary(Key), is_binary(Tbs), is_binary(Signature) ->
-    request_claims(claimed_fields(macula_record_cbor:decode_strict(Tbs), request_table(call)));
+    request_claims(claimed_fields(macula_record_cbor:decode_strict(Tbs), request_table(call)), Tbs);
 request_claimed(_OnlyFields, _Object) ->
     {error, malformed_frame}.
 
-request_claims({ok, #{frame_type := call, request_id := RequestId, realm := Realm, procedure := Procedure}}) ->
-    {ok, #{request_id => RequestId, realm => Realm, procedure => Procedure}};
-request_claims(_NotARequest) ->
+request_claims({ok, #{frame_type := call, request_id := RequestId, realm := Realm, procedure := Procedure}}, Tbs) ->
+    {ok, #{request_id => RequestId, request_hash => crypto:hash(sha384, Tbs), realm => Realm, procedure => Procedure}};
+request_claims(_NotARequest, _Tbs) ->
     {error, malformed_frame}.
 
 %% @doc The realm a GOSSIP's publication names, read without verifying it. A GOSSIP names its realm only inside its
