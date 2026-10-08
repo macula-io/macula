@@ -95,7 +95,6 @@ start_link(#{caller_quota := Quota, share := Share, cap := Cap, reply_bytes := R
        is_integer(ReplyBytes), ReplyBytes > 0, is_integer(ReplyTotal), ReplyTotal > 0 ->
     gen_server:start_link(?MODULE, Limits, []).
 
-%% @doc Judge a verified request arriving on `Share' at `NowMs'.
 %% @doc When admission releases the entry of a request with this signed
 %% `Deadline' (milliseconds of wall-clock time): the deadline plus the 5
 %% minutes an entry is kept past it. A station link stops a CALL's handler
@@ -104,6 +103,7 @@ start_link(#{caller_quota := Quota, share := Share, cap := Cap, reply_bytes := R
 released_at(Deadline) ->
     Deadline + ?KEPT_PAST_DEADLINE_MS.
 
+%% @doc Judge a verified request arriving on `Share' at `NowMs'.
 -spec admit(pid(), request(), term(), integer()) -> verdict().
 admit(Admission, Request, Share, NowMs) ->
     admit(Admission, Request, Share, NowMs, 5_000).
