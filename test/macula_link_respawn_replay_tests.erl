@@ -6,10 +6,9 @@
 %% No real QUIC station needed: same technique as `macula_client_tests'
 %% (real macula_station_link workers against an unreachable seed) plus
 %% `macula_pubsub_connect_selfheal_tests' (killing a link to force the
-%% pool's DOWN/respawn path). meck traces the underlying
-%% `macula_station_link:subscribe/4' calls to prove `subs_to/2' really
-%% re-issues the subscription against the new link, not just that no
-%% error was raised.
+%% pool's DOWN/respawn path). The new link's own state proves `subs_to/2'
+%% really handed it the subscription, and meck the advertisements, not just
+%% that no error was raised.
 -module(macula_link_respawn_replay_tests).
 
 -include_lib("eunit/include/eunit.hrl").
@@ -22,7 +21,6 @@ subscription_survives_link_respawn_test_() ->
     {timeout, 10,
      fun() ->
          {ok, _} = application:ensure_all_started(macula),
-         ok = meck:new(macula_station_link, [passthrough]),
          {ok, Pool} = macula_client:connect([?SEED], #{}),
 
          {ok, SubRef} = macula_client:subscribe(Pool, ?REALM, ?TOPIC,
@@ -52,11 +50,8 @@ subscription_survives_link_respawn_test_() ->
 
          %% Prove subs_to/2 actually replayed the subscription onto the
          %% NEW link — not just "no crash happened".
-         History = meck:history(macula_station_link),
-         Replayed = [call || {_Pid, {macula_station_link, subscribe,
-                                     [P, ?REALM, ?TOPIC, PP]}, _Res} <- History,
-                              P =:= NewPid, PP =:= Pool],
-         ?assert(length(Replayed) >= 1),
+         Subs = element(macula_station_link:state_field_index(subscriptions), sys:get_state(NewPid)),
+         ?assertEqual([{?REALM, ?TOPIC, Pool}], [{R, T, Sub} || {R, T, Sub, _Mon} <- maps:values(Subs)]),
 
          %% And prove it end-to-end: an event arriving via the new link
          %% still reaches the original subscriber under the same SubRef,
@@ -74,7 +69,6 @@ subscription_survives_link_respawn_test_() ->
          after 2_000 -> erlang:error(event_not_delivered_after_respawn)
          end,
 
-         meck:unload(macula_station_link),
          ok = macula_client:close(Pool),
          ok
      end}.
@@ -102,7 +96,7 @@ stream_advertisement_survives_link_respawn_test_() ->
          after 2_000 -> erlang:error(link_did_not_die)
          end,
          NewPid = wait_for_new_link(Pool, OldPid, 30),
-         ?assertEqual(ok, meck:wait(macula_station_link, advertise_stream,
+         ?assertEqual(ok, meck:wait(macula_station_link, advertise_stream_async,
                                     [NewPid, ?REALM, Proc, server_stream,
                                      Handler, Policy, EncodedAd], 2_000)),
          meck:unload(macula_station_link),
@@ -130,7 +124,7 @@ advertisement_survives_link_respawn_test_() ->
          after 2_000 -> erlang:error(link_did_not_die)
          end,
          NewPid = wait_for_new_link(Pool, OldPid, 30),
-         ?assertEqual(ok, meck:wait(macula_station_link, advertise,
+         ?assertEqual(ok, meck:wait(macula_station_link, advertise_async,
                                     [NewPid, ?REALM, Proc, Handler, open,
                                      EncodedAd], 2_000)),
          meck:unload(macula_station_link),

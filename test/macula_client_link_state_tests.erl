@@ -16,9 +16,6 @@
 
 -include_lib("eunit/include/eunit.hrl").
 
-%% logger handler callback, defined at the foot of this module.
--export([log/2]).
-
 -define(REALM, <<7:256>>).
 -define(STATION_A, <<21:256>>).
 -define(STATION_B, <<22:256>>).
@@ -98,27 +95,75 @@ a_linked_station_call_probes_no_link_test_() ->
          end
      end}.
 
-%% A subscribe while a link is busy past the link's own 5 s answer leaves the
-%% pool running: the link is skipped, loudly, and every other pool call keeps
-%% its answers. Before, the timeout exit took the pool down, and with it every
-%% subscription, advertisement and pending call.
-a_subscribe_past_a_busy_link_keeps_the_pool_test_() ->
-    {timeout, 30,
+%% macula#45: no pool callback waits on a link. A subscribe, an advertise and
+%% their undoing are handed to every link and the pool answers at once, while
+%% a link is busy; the busy link catches up when it resumes. Before, the pool
+%% waited up to 5 s on each busy link inside its own handle_call, and every
+%% other pool call waited behind it.
+a_subscribe_waits_on_no_busy_link_test_() ->
+    {timeout, 20,
      fun() ->
-         {Pool, [_LinkA, LinkB]} = connected_pool(),
-         Self = self(),
-         ok = logger:add_handler(?MODULE, ?MODULE, #{config => #{to => Self}, level => all}),
+         {Pool, [LinkA, LinkB]} = connected_pool(),
          ok = sys:suspend(LinkB),
          try
-             _ = spawn(fun() -> catch macula_client:subscribe(Pool, ?REALM, <<"acme.tick_v1">>, Self, #{}) end),
-             ?assertEqual(LinkB, receive {skipped, #{link := L}} -> L after 8_000 -> not_skipped end),
-             ?assert(is_process_alive(Pool)),
-             ?assertMatch({ok, #{healthy_links := 2}}, macula_client:status(Pool))
+             {SubMs, {ok, _SubRef}} =
+                 timed(fun() -> macula_client:subscribe(Pool, ?REALM, <<"acme.tick_v1">>, self(), #{}) end),
+             ?assert(SubMs < ?PROMPT_MS),
+             {StatusMs, {ok, #{healthy_links := 2}}} = timed(fun() -> macula_client:status(Pool) end),
+             ?assert(StatusMs < ?PROMPT_MS),
+             ?assertEqual([], calls_from(Pool, LinkB)),
+             ?assert(subscribed_within(LinkA, <<"acme.tick_v1">>, 50))
          after
-             _ = logger:remove_handler(?MODULE),
-             ok = sys:resume(LinkB),
-             ok = macula_client:close(Pool)
-         end
+             ok = sys:resume(LinkB)
+         end,
+         ?assert(subscribed_within(LinkB, <<"acme.tick_v1">>, 50)),
+         ok = macula_client:close(Pool)
+     end}.
+
+%% An unsubscribe the pool hands a busy link before the link has taken the
+%% subscribe leaves that link with no subscription once it resumes: the link
+%% takes both in the order the pool sent them.
+an_unsubscribe_before_a_busy_link_resumes_leaves_nothing_test_() ->
+    {timeout, 20,
+     fun() ->
+         {Pool, [_LinkA, LinkB]} = connected_pool(),
+         ok = sys:suspend(LinkB),
+         try
+             {ok, SubRef} = macula_client:subscribe(Pool, ?REALM, <<"acme.tock_v1">>, self(), #{}),
+             {UnsubMs, ok} = timed(fun() -> macula_client:unsubscribe(Pool, SubRef) end),
+             ?assert(UnsubMs < ?PROMPT_MS),
+             ?assertEqual([], calls_from(Pool, LinkB))
+         after
+             ok = sys:resume(LinkB)
+         end,
+         _ = sys:get_state(LinkB),
+         ?assertNot(subscribed_within(LinkB, <<"acme.tock_v1">>, 1)),
+         ok = macula_client:close(Pool)
+     end}.
+
+%% An advertise and an unadvertise wait on no busy link either; the busy link
+%% registers the handler when it resumes, and an unadvertise handed to it
+%% before then leaves it none.
+an_advertise_waits_on_no_busy_link_test_() ->
+    {timeout, 20,
+     fun() ->
+         {Pool, [_LinkA, LinkB]} = connected_pool(),
+         Handler = fun(_Args) -> {ok, pong} end,
+         ok = sys:suspend(LinkB),
+         try
+             {AdMs, ok} = timed(fun() -> macula_client:advertise(Pool, ?REALM, <<"acme.ping_v1">>, Handler) end),
+             ?assert(AdMs < ?PROMPT_MS),
+             ok = macula_client:advertise(Pool, ?REALM, <<"acme.gone_v1">>, Handler),
+             {UnadMs, ok} = timed(fun() -> macula_client:unadvertise(Pool, ?REALM, <<"acme.gone_v1">>) end),
+             ?assert(UnadMs < ?PROMPT_MS),
+             ?assertEqual([], calls_from(Pool, LinkB))
+         after
+             ok = sys:resume(LinkB)
+         end,
+         Procedures = element(macula_station_link:state_field_index(procedures), sys:get_state(LinkB)),
+         ?assert(is_map_key({?REALM, <<"acme.ping_v1">>}, Procedures)),
+         ?assertNot(is_map_key({?REALM, <<"acme.gone_v1">>}, Procedures)),
+         ok = macula_client:close(Pool)
      end}.
 
 %% A link that dies is no longer counted connected: the state goes with the
@@ -184,13 +229,15 @@ queue_of(Pid) ->
     {messages, Q} = process_info(Pid, messages),
     Q.
 
-%% logger handler callback: forwards the pool's skipped-subscribe event.
-log(#{msg := {report, #{event := <<"_macula.client.link_subscribe_skipped">>, properties := Props}}},
-    #{config := #{to := To}}) ->
-    To ! {skipped, Props},
-    ok;
-log(_LogEvent, _Config) ->
-    ok.
+%% Whether the link holds a subscription on Topic, within Tries polls.
+subscribed_within(_Link, _Topic, 0) ->
+    false;
+subscribed_within(Link, Topic, Tries) ->
+    Subs = element(macula_station_link:state_field_index(subscriptions), sys:get_state(Link)),
+    subscribed_or_wait([T || {_Realm, T, _Sub, _Mon} <- maps:values(Subs), T =:= Topic] =/= [], Link, Topic, Tries).
+
+subscribed_or_wait(true, _Link, _Topic, _Tries) -> true;
+subscribed_or_wait(false, Link, Topic, Tries) -> timer:sleep(20), subscribed_within(Link, Topic, Tries - 1).
 
 timed(Fun) ->
     Start = erlang:monotonic_time(millisecond),

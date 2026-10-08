@@ -664,10 +664,6 @@
     %% topic's segments: an inbound event is matched against these alone,
     %% not against every topic in the index.
     wildcard_topics = #{} :: #{{<<_:256>>, binary()} => [binary()]},
-    %% link pid → {realm, topic} → the SubRef that link returned for its
-    %% SUBSCRIBE, from a subscribe or from the replay onto a respawned
-    %% link, so an unsubscribe reaches every link that carried it.
-    link_subs = #{} :: #{pid() => #{{<<_:256>>, binary()} => reference()}},
     %% Advertised procedures, replayed on a link respawn to the links
     %% whose station the registration names: {realm, procedure} →
     %% registration.
@@ -894,7 +890,8 @@ call_station(Pool, Station, Target, Realm, Procedure, Payload, TimeoutMs, UcanTo
 %% record that names it; with an advertisement spec (`advertise/6'),
 %% each link puts the one it sends in the DHT (macula#33), and this
 %% form, which carries none, publishes nothing.
-%% Returns `ok' when at least one link accepted the registration.
+%% Returns `ok' when the registration was handed to at least one live
+%% link, without waiting for any (macula#45).
 %% A handler that answers `{error, Text}' with a binary or a printable
 %% charlist sends that text to its caller, up to 256 bytes of it; any
 %% other error reason reaches the caller as its name only.
@@ -1040,8 +1037,8 @@ call_stream_station(Pool, Station, Target, Realm, Procedure, Args, Opts, Seal)
 
 %% @doc Advertise a streaming procedure handler on every healthy
 %% link. Stored in pool state so links respawned later replay the
-%% advertisement. Returns `ok' when at least one link accepted the
-%% registration. Same as `advertise_stream/6' with policy `open'.
+%% advertisement. Returns `ok' when the registration was handed to at
+%% least one live link, without waiting for any (macula#45). Same as `advertise_stream/6' with policy `open'.
 -spec advertise_stream(pool(), <<_:256>>, binary(),
                         macula_frame:stream_mode(),
                         stream_handler()) ->
@@ -1943,12 +1940,12 @@ handle_info({macula_event, _LinkSubRef, Topic, Payload,
     {noreply, on_inbound_event(matching_subscriptions(Realm, Topic, S),
                                Hash, ExpiresAt, Topic, Payload, Meta, S)};
 
-handle_info({macula_event_gone, LinkSubRef, _Reason}, S) ->
+handle_info({macula_event_gone, _LinkSubRef, _Reason}, S) ->
     %% A link torn down its subscription end. Pool will respawn the
     %% link via the DOWN handler and replay subs. Don't propagate to
-    %% local consumers — they see a continuous stream. The link's SubRef
-    %% is gone, so unsubscribe no longer sends it.
-    {noreply, forget_link_sub(LinkSubRef, S)};
+    %% local consumers — they see a continuous stream. The pool keeps no
+    %% link SubRef: it unsubscribes a link by topic (macula#45).
+    {noreply, S};
 
 handle_info({renew_due, Kind, Key, Ref}, S) ->
     {noreply, renewal_started(renewal_current(registration(Kind, Key, S), Ref), Kind, Key, Ref, S)};
@@ -2954,24 +2951,26 @@ next_in_scope(Settled, E, _Rest, _Connected, _Call)
 %% `is_connected/1' here leaves the link's map out of sync with the
 %% pool's intent.
 fanout_advertise(Pids, {Realm, Proc}, #{handler := Handler, policy := Policy, ad := EncodedAd}) ->
-    Results = [safe_link_advertise(P, Realm, Proc, Handler, Policy, EncodedAd)
-               || P <- Pids, is_process_alive(P)],
-    summarize_advertise([R || R <- Results, R =/= skipped]).
+    handed([safe_link_advertise(P, Realm, Proc, Handler, Policy, EncodedAd)
+            || P <- Pids, is_process_alive(P)]).
 
+%% Handed, not waited on (macula#45): a busy link takes the registration
+%% when it resumes, and every other pool call keeps its answers meanwhile.
+%% A link takes its casts in the order the pool sent them, so an
+%% unadvertise that follows reaches the link after the advertise it undoes.
 safe_link_advertise(Pid, Realm, Proc, Handler, Policy, EncodedAd) ->
-    try macula_station_link:advertise(Pid, Realm, Proc, Handler, Policy,
-                                      EncodedAd)
+    try macula_station_link:advertise_async(Pid, Realm, Proc, Handler, Policy,
+                                            EncodedAd)
     catch _:_ -> skipped
     end.
 
-summarize_advertise([]) ->
-    {error, no_healthy_station};
-summarize_advertise(Results) ->
-    Ok = lists:any(fun(ok) -> true; (_) -> false end, Results),
-    case Ok of
-        true  -> ok;
-        false -> {error, all_stations_failed}
-    end.
+%% `ok' when at least one live link was handed the registration,
+%% `no_healthy_station' when none was: the respawned links replay it.
+handed(Results) ->
+    handed_to_any(lists:member(ok, Results)).
+
+handed_to_any(true) -> ok;
+handed_to_any(false) -> {error, no_healthy_station}.
 
 %% Fan-out unadvertise: best-effort; ignored errors. The local pool
 %% state is dropped regardless.
@@ -2988,7 +2987,7 @@ fanout_unadvertise(Pids, Realm, Proc, Withdrawal) ->
     ok.
 
 safe_link_unadvertise(Pid, Realm, Proc, Withdrawal) ->
-    try macula_station_link:unadvertise(Pid, Realm, Proc, Withdrawal)
+    try macula_station_link:unadvertise_async(Pid, Realm, Proc, Withdrawal)
     catch _:_ -> skipped
     end.
 
@@ -3025,11 +3024,11 @@ fanout_advertise_stream(Pids, {Realm, Proc},
     Results = [safe_link_advertise_stream(P, Realm, Proc, Mode, Handler,
                                           Policy, EncodedAd)
                || P <- Pids, is_process_alive(P)],
-    summarize_advertise([R || R <- Results, R =/= skipped]).
+    handed(Results).
 
 safe_link_advertise_stream(Pid, Realm, Proc, Mode, Handler, Policy, EncodedAd) ->
-    try macula_station_link:advertise_stream(Pid, Realm, Proc, Mode, Handler,
-                                             Policy, EncodedAd)
+    try macula_station_link:advertise_stream_async(Pid, Realm, Proc, Mode, Handler,
+                                                   Policy, EncodedAd)
     catch _:_ -> skipped
     end.
 
@@ -3039,7 +3038,7 @@ fanout_unadvertise_stream(Pids, Realm, Proc, Withdrawal) ->
     ok.
 
 safe_link_unadvertise_stream(Pid, Realm, Proc, Withdrawal) ->
-    try macula_station_link:unadvertise_stream(Pid, Realm, Proc, Withdrawal)
+    try macula_station_link:unadvertise_stream_async(Pid, Realm, Proc, Withdrawal)
     catch _:_ -> skipped
     end.
 
@@ -3193,11 +3192,11 @@ on_respawn_link(Seed, S) ->
 dial_opts_for(Seed, #state{dial_extra_opts = Opts}) -> maps:get(Seed, Opts, #{}).
 
 replay_to_seed(#link_state{seed = Seed, pid = Pid}, S) when is_pid(Pid) ->
-    LinkSubRefs = macula_client_replay:subs_to(Pid, S#state.topic_index),
+    ok = macula_client_replay:subs_to(Pid, S#state.topic_index),
     Station = pinned_station(Seed, S),
     macula_client_replay:advs_to(Pid, Station, S#state.procs),
     macula_client_replay:stream_advs_to(Pid, Station, S#state.stream_procs),
-    S#state{link_subs = (S#state.link_subs)#{Pid => LinkSubRefs}};
+    S;
 replay_to_seed(_, S) ->
     S.
 
@@ -3617,7 +3616,6 @@ on_down_routed({ok, Seed}, _Mon, Pid, Reason, S0) ->
     erlang:send_after(?LINK_RESPAWN_DELAY_MS, self(), {respawn_link, Seed}),
     S = exit_kept(Reason, Seed, S0),
     S1 = S#state{links = maps:remove(Seed, S#state.links),
-                 link_subs = maps:remove(Pid, S#state.link_subs),
                  connected = maps:remove(Pid, S#state.connected)},
     {noreply, maybe_rediscover_now(S1)};
 on_down_routed(error, Mon, _Pid, Reason, S) ->
@@ -3736,44 +3734,23 @@ issue_wire_subs(true, _Realm, _Topic, S) ->
     %% the pool fans out to every local SubRef on inbound EVENT.
     S;
 issue_wire_subs(false, Realm, Topic, S) ->
+    %% Handed to every link, waiting on none (macula#45): a busy link takes
+    %% it when it resumes, and every other pool call keeps its answers.
     PoolPid = self(),
-    Key = {Realm, Topic},
-    lists:foldl(fun(P, Acc) ->
-                        record_link_sub(P, Key, macula_client_replay:link_subscribe(P, Realm, Topic, PoolPid), Acc)
-                end, S, spawned_link_pids(S)).
-
-%% Keeps the SubRef a link returned for Key's SUBSCRIBE, so unsubscribe can
-%% reach that link. A link that did not accept it keeps nothing.
-record_link_sub(LinkPid, Key, {ok, LinkSubRef}, #state{link_subs = LS} = S) ->
-    Keys = maps:get(LinkPid, LS, #{}),
-    S#state{link_subs = LS#{LinkPid => Keys#{Key => LinkSubRef}}};
-record_link_sub(_LinkPid, _Key, _NotAccepted, S) ->
+    _ = [macula_station_link:subscribe_async(P, Realm, Topic, PoolPid) || P <- spawned_link_pids(S)],
     S.
 
-%% When the last local subscriber of Key has left, each link that carried
-%% its SUBSCRIBE is told to send UNSUBSCRIBE. The pool does not wait on the
-%% link, and the request reaches the link ahead of any later subscribe the
-%% pool sends it.
+%% When the last local subscriber of Key has left, every link is told to
+%% drop the pool's subscriptions on Key, by topic, without waiting. The pool
+%% sent each link its subscribe before this, and a link takes one sender's
+%% casts in order, so the unsubscribe finds the subscription even on a link
+%% that was busy for both, and no subscription is left behind.
 unsubscribe_links(false, _Key, S) ->
     S;
-unsubscribe_links(true, Key, #state{link_subs = LS} = S) ->
-    S#state{link_subs = maps:map(fun(LinkPid, Keys) -> unsubscribe_link(LinkPid, Key, Keys) end, LS)}.
-
-unsubscribe_link(LinkPid, Key, Keys) ->
-    unsubscribed_link(maps:take(Key, Keys), LinkPid, Keys).
-
-unsubscribed_link({LinkSubRef, Rest}, LinkPid, _Keys) ->
-    ok = macula_station_link:unsubscribe_async(LinkPid, LinkSubRef),
-    Rest;
-unsubscribed_link(error, _LinkPid, Keys) ->
-    Keys.
-
-%% Drops a SubRef a link reported gone, from whichever link held it.
-forget_link_sub(LinkSubRef, #state{link_subs = LS} = S) ->
-    S#state{link_subs = maps:map(fun(_LinkPid, Keys) -> without_link_sub(LinkSubRef, Keys) end, LS)}.
-
-without_link_sub(LinkSubRef, Keys) ->
-    maps:filter(fun(_Key, Ref) -> Ref =/= LinkSubRef end, Keys).
+unsubscribe_links(true, {Realm, Topic}, S) ->
+    PoolPid = self(),
+    _ = [macula_station_link:unsubscribe_topic_async(P, Realm, Topic, PoolPid) || P <- spawned_link_pids(S)],
+    S.
 
 %%====================================================================
 %% Internals — inbound event fan-out

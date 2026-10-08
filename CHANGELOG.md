@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A busy link no longer stalls the pool behind a subscribe or advertise (#45, #71).** The pool hands a
+  subscribe, an advertise (unary or stream) and their undoing to each link without waiting
+  (`macula_station_link:subscribe_async/4`, `unsubscribe_topic_async/4`, `advertise_async/6`,
+  `advertise_stream_async/7`, `unadvertise_async/4`, `unadvertise_stream_async/4`), as does the replay onto a
+  respawned or discovered link. Before, it waited up to 5 s on each busy link inside its own `handle_call`, and
+  every other pool call (publish, status, links, signing) waited behind it. A link takes the pool's requests in the
+  order sent, so an unsubscribe or unadvertise issued while a link is busy still finds what it undoes: the pool
+  unsubscribes a link by topic and keeps no per-link SubRef. `advertise` answers `ok` when the registration was
+  handed to at least one live link (`{error, no_healthy_station}` when none), so a renewal against a busy link is
+  re-armed rather than retried; `{error, all_stations_failed}`, which no link could produce, is gone. The 12.9.1
+  skip path and its `_macula.client.link_subscribe_skipped` event went with the wait.
+- **Unadvertising a procedure registered without an advertisement now removes its handler from the links.** Its
+  withdrawal is `undefined`, which `macula_station_link:unadvertise/4` refused with `function_clause`; the pool
+  swallowed that, so every link kept dispatching CALLs for a procedure the pool had withdrawn. Found by #45's tests.
+
 ## [14.3.0] - 2026-10-08
 
 ### Added

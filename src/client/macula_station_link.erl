@@ -150,8 +150,14 @@
     find_record/2, find_record/3,
     find_records_by_type/2, find_records_by_type/3,
     subscribe/4,
+    subscribe_async/4,
     unsubscribe/2,
     unsubscribe_async/2,
+    unsubscribe_topic_async/4,
+    advertise_async/6,
+    unadvertise_async/4,
+    advertise_stream_async/7,
+    unadvertise_stream_async/4,
     advertise/4,
     advertise/5,
     advertise/6,
@@ -842,6 +848,36 @@ subscribe(Client, Realm, Topic, Subscriber)
        is_binary(Topic), is_pid(Subscriber) ->
     gen_server:call(Client, {subscribe, Realm, Topic, Subscriber}, 5_000).
 
+%% @doc As `subscribe/4', without waiting for the link, and with no SubRef
+%% back: the subscriber undoes it by topic, with
+%% `unsubscribe_topic_async/4'. For a caller that must not wait on a busy
+%% link, such as the pool (macula#45). One sender's casts reach the link in
+%% the order sent, so an unsubscribe the same caller sends afterwards always
+%% finds the subscription.
+-spec subscribe_async(pid(), <<_:256>>, binary(), pid()) -> ok.
+subscribe_async(Client, Realm, Topic, Subscriber)
+  when is_pid(Client),
+       is_binary(Realm), byte_size(Realm) =:= 32,
+       is_binary(Topic), is_pid(Subscriber) ->
+    registration(Client, {subscribe, Realm, Topic, Subscriber}).
+
+%% @doc Drop every subscription `Subscriber' holds on `(Realm, Topic)',
+%% without waiting for the link, sending UNSUBSCRIBE for each as
+%% `unsubscribe/2' does. Idempotent: with none, nothing is sent.
+-spec unsubscribe_topic_async(pid(), <<_:256>>, binary(), pid()) -> ok.
+unsubscribe_topic_async(Client, Realm, Topic, Subscriber)
+  when is_pid(Client),
+       is_binary(Realm), byte_size(Realm) =:= 32,
+       is_binary(Topic), is_pid(Subscriber) ->
+    gen_server:cast(Client, {unsubscribe_topic, Realm, Topic, Subscriber}).
+
+%% A registration (subscribe, advertise and their undoing) handed to the link
+%% without waiting: the link handles it as the call would and drops the
+%% reply. Built by the same guarded function the call uses, so the cast
+%% refuses in the caller exactly what the call refuses.
+registration(Pid, Request) ->
+    gen_server:cast(Pid, {registration, Request}).
+
 %% @doc Drop a subscription. Sends a best-effort UNSUBSCRIBE frame
 %% to the station and clears local bookkeeping. Always returns `ok',
 %% even when `SubRef' is unknown — unsubscribe is idempotent.
@@ -940,6 +976,20 @@ advertise(Pid, Realm, Procedure, Handler, Policy, EncodedAd)
     gen_server:call(Pid, {advertise, Realm, Procedure, Handler, Policy,
                           EncodedAd}, 5_000).
 
+%% @doc As `advertise/6', without waiting for the link (macula#45).
+-spec advertise_async(pid(), <<_:256>>, binary(), handler(),
+                      macula_client:auth_policy(), advertisement() | undefined) -> ok.
+advertise_async(Pid, Realm, Procedure, Handler, Policy, EncodedAd)
+  when is_pid(Pid),
+       is_binary(Realm), byte_size(Realm) =:= 32,
+       is_binary(Procedure),
+       (is_function(Handler, 1) orelse
+        (is_tuple(Handler) andalso tuple_size(Handler) =:= 2)),
+       (is_binary(EncodedAd) orelse ?IS_ADVERTISEMENT_SPEC(EncodedAd)
+        orelse ?IS_OWN_NAMESPACE_SPEC(Procedure, EncodedAd)
+        orelse EncodedAd =:= undefined) ->
+    registration(Pid, {advertise, Realm, Procedure, Handler, Policy, EncodedAd}).
+
 %% @doc Drop a previously-advertised procedure's handler from this link.
 %% Sends nothing. Idempotent: unknown `(Realm, Procedure)' is a no-op.
 -spec unadvertise(pid(), <<_:256>>, binary()) -> ok | {error, term()}.
@@ -959,6 +1009,22 @@ unadvertise(Pid, Realm, Procedure, EncodedWithdrawal)
        is_binary(EncodedWithdrawal) ->
     gen_server:call(Pid, {unadvertise, Realm, Procedure, EncodedWithdrawal},
                     5_000).
+
+%% @doc As `unadvertise/4', without waiting for the link (macula#45). With
+%% no withdrawal (`undefined', a registration that sent no advertisement), as
+%% `unadvertise/3': the handler goes and nothing is sent.
+-spec unadvertise_async(pid(), <<_:256>>, binary(), binary() | undefined) -> ok.
+unadvertise_async(Pid, Realm, Procedure, undefined)
+  when is_pid(Pid),
+       is_binary(Realm), byte_size(Realm) =:= 32,
+       is_binary(Procedure) ->
+    registration(Pid, {unadvertise, Realm, Procedure});
+unadvertise_async(Pid, Realm, Procedure, EncodedWithdrawal)
+  when is_pid(Pid),
+       is_binary(Realm), byte_size(Realm) =:= 32,
+       is_binary(Procedure),
+       is_binary(EncodedWithdrawal) ->
+    registration(Pid, {unadvertise, Realm, Procedure, EncodedWithdrawal}).
 
 %% @doc Subscribe to overlay-protocol frames for `Realm' — any frame
 %% type the built-in call/event/result/error handling above doesn't
@@ -1230,6 +1296,23 @@ advertise_stream(Pid, Realm, Procedure, Mode, Handler, Policy, EncodedAd)
                      Policy, EncodedAd},
                     5_000).
 
+%% @doc As `advertise_stream/7', without waiting for the link (macula#45).
+-spec advertise_stream_async(pid(), <<_:256>>, binary(),
+                             macula_frame:stream_mode(), stream_handler(),
+                             macula_client:auth_policy(), advertisement() | undefined) -> ok.
+advertise_stream_async(Pid, Realm, Procedure, Mode, Handler, Policy, EncodedAd)
+  when is_pid(Pid),
+       is_binary(Realm), byte_size(Realm) =:= 32,
+       is_binary(Procedure),
+       (Mode =:= server_stream orelse Mode =:= client_stream
+        orelse Mode =:= bidi),
+       is_function(Handler, 2),
+       (is_binary(EncodedAd) orelse ?IS_ADVERTISEMENT_SPEC(EncodedAd)
+        orelse ?IS_OWN_NAMESPACE_SPEC(Procedure, EncodedAd)
+        orelse EncodedAd =:= undefined) ->
+    ok = valid_policy(Policy),
+    registration(Pid, {stream_advertise, Realm, Procedure, Mode, Handler, Policy, EncodedAd}).
+
 %% One clause per valid `macula_client:auth_policy()' shape and no
 %% catch-all, so a malformed policy raises `function_clause' in the caller.
 valid_policy(open) -> ok;
@@ -1260,6 +1343,21 @@ unadvertise_stream(Pid, Realm, Procedure, EncodedWithdrawal)
     gen_server:call(Pid,
                     {stream_unadvertise, Realm, Procedure, EncodedWithdrawal},
                     5_000).
+
+%% @doc As `unadvertise_stream/4', without waiting for the link (macula#45).
+%% With no withdrawal (`undefined'), as `unadvertise_stream/3'.
+-spec unadvertise_stream_async(pid(), <<_:256>>, binary(), binary() | undefined) -> ok.
+unadvertise_stream_async(Pid, Realm, Procedure, undefined)
+  when is_pid(Pid),
+       is_binary(Realm), byte_size(Realm) =:= 32,
+       is_binary(Procedure) ->
+    registration(Pid, {stream_unadvertise, Realm, Procedure});
+unadvertise_stream_async(Pid, Realm, Procedure, EncodedWithdrawal)
+  when is_pid(Pid),
+       is_binary(Realm), byte_size(Realm) =:= 32,
+       is_binary(Procedure),
+       is_binary(EncodedWithdrawal) ->
+    registration(Pid, {stream_unadvertise, Realm, Procedure, EncodedWithdrawal}).
 
 %% @doc Write the bytes of one frame a paired `macula_stream' built,
 %% signed and encoded onto that stream's dedicated QUIC stream. `Last'
@@ -1626,6 +1724,17 @@ handle_cast({send_stream_bytes, Sid, Bytes, Last}, S) ->
 
 handle_cast({unsubscribe, SubRef}, S) ->
     {noreply, on_unsubscribe(SubRef, S)};
+
+%% A registration handed over without waiting (`registration/2'): handled as
+%% its call is, the reply dropped. Only the guarded builders send one.
+handle_cast({registration, Request}, S) ->
+    {reply, _Dropped, NewS} = handle_call(Request, registration, S),
+    {noreply, NewS};
+
+handle_cast({unsubscribe_topic, Realm, Topic, Subscriber}, #state{subscriptions = Subs} = S) ->
+    {noreply, lists:foldl(fun on_unsubscribe/2, S,
+                          [Ref || {Ref, {R, T, Sub, _Mon}} <- maps:to_list(Subs),
+                                  R =:= Realm, T =:= Topic, Sub =:= Subscriber])};
 
 handle_cast({overlay_frame_refused, Meta, Kind}, S) ->
     {noreply, overlay_refusal(macula_frame:refusal_charge(Kind), Meta, Kind, S)};
