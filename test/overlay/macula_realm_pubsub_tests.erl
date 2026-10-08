@@ -4,7 +4,7 @@
 
 -include_lib("eunit/include/eunit.hrl").
 
-%% A logger handler that forwards every event to the test process.
+%% A logger handler that forwards the test process's own events to it.
 -export([log/2]).
 
 %%---------------------------------------------------------------------
@@ -151,7 +151,24 @@ process_subscribe_logs_nothing_test() ->
     end),
     ?assertEqual([], Logged).
 
-log(Event, #{config := #{test := Pid}}) -> Pid ! {logged, Event}.
+%% The capture sees only this test's own events: in a full eunit run another
+%% test's process logs at the same time, and its line is not ours (#86).
+capture_logs_ignores_another_process_test() ->
+    Logged = capture_logs(fun() ->
+        {Pid, Ref} = spawn_monitor(fun() -> logger:warning("a neighbouring test's warning") end),
+        receive {'DOWN', Ref, process, Pid, _} -> ok end
+    end),
+    ?assertEqual([], Logged).
+
+%% ...and still sees a line this process logs, so the assertion above is not vacuous.
+capture_logs_sees_this_process_test() ->
+    Logged = capture_logs(fun() -> logger:info("this test's line") end),
+    ?assertEqual([{string, "this test's line"}], Logged).
+
+%% process/3 is pure and runs in the test process, so an event logged by any
+%% other process belongs to another test and is dropped.
+log(#{meta := #{pid := Pid}} = Event, #{config := #{test := Pid}}) -> Pid ! {logged, Event};
+log(_Event, _Config) -> ok.
 
 capture_logs(Fun) ->
     #{level := Level} = logger:get_primary_config(),
