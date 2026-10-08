@@ -87,7 +87,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        check: [eunit, ct, xref, dialyzer, lint]
+        check: [eunit, ct, xref, dialyzer, lint, docs]
     # A GitHub-hosted public runner, deliberately. macula is a public
     # repository and this costs nothing there. Do NOT put `self-hosted` here:
     # the Default runner group is closed to public repositories on purpose,
@@ -249,6 +249,14 @@ jobs:
       - name: lint
         if: matrix.check == 'lint'
         run: rebar3 as lint lint
+
+      # The package and its docs, as publish-hex.yml builds them on a release
+      # tag. Until this step nothing before the tag built the docs, so an edoc
+      # refusal (two @doc tags on one function) passed every check here and
+      # stopped the 14.4.0 publish dry-run instead.
+      - name: docs
+        if: matrix.check == 'docs'
+        run: rebar3 hex build
 
       - name: dialyzer
         if: matrix.check == 'dialyzer'
