@@ -74,6 +74,8 @@ response_test_() ->
                  fun without_an_advertise_function_it_advertises_through_macula/0,
                  fun an_advertise_option_that_is_not_an_arity_5_fun_is_refused/0,
                  fun a_handler_slower_than_its_timeout_fails/0,
+                 fun a_handler_past_its_timeout_is_stopped/0,
+                 fun a_handler_whose_caller_is_killed_is_stopped/0,
                  fun a_handler_within_a_longer_timeout_answers_its_reply/0,
                  fun the_handler_timeout_stays_with_the_response/0,
                  fun a_handler_timeout_out_of_range_is_refused/0]].
@@ -85,6 +87,26 @@ a_handler_slower_than_its_timeout_fails() ->
     {ok, _Sup} = advertise((functions(self()))#{handler_timeout_ms => 50}),
     {Handler, _} = next_advertised(),
     ?assertExit({timeout, _}, Handler(#{sleep => 300})).
+
+%% #64 F5: the handler process does not outlive the wait on it. Before, the
+%% caller got its timeout and the handler ran on, as a live child, for as long
+%% as it took, or for ever.
+a_handler_past_its_timeout_is_stopped() ->
+    {ok, Sup} = advertise((functions(self()))#{handler_timeout_ms => 50}),
+    {Handler, _} = next_advertised(),
+    ?assertExit({timeout, _}, Handler(#{sleep => infinity})),
+    ?assertEqual(0, active_children_within(Sup, 50)).
+
+%% The process waiting on a handler can itself be stopped, as a station link
+%% stops a CALL's worker at the end of its admission (#64 F6): the handler
+%% goes with it.
+a_handler_whose_caller_is_killed_is_stopped() ->
+    {ok, Sup} = advertise((functions(self()))#{handler_timeout_ms => 60_000}),
+    {Handler, _} = next_advertised(),
+    Caller = spawn(fun() -> Handler(#{sleep => infinity}) end),
+    ok = active_children_reach(Sup, 1, 50),
+    exit(Caller, kill),
+    ?assertEqual(0, active_children_within(Sup, 50)).
 
 a_handler_within_a_longer_timeout_answers_its_reply() ->
     {ok, _Sup} = advertise((functions(self()))#{handler_timeout_ms => 2000}),
@@ -204,6 +226,23 @@ an_advertise_option_that_is_not_an_arity_5_fun_is_refused() ->
 %%%===================================================================
 %%% Helpers
 %%%===================================================================
+
+%% The factory supervisor's active children once they reach 0, or after Tries polls.
+active_children_within(Sup, Tries) ->
+    Active = proplists:get_value(active, supervisor:count_children(Sup)),
+    active_or_wait(Active, Sup, Tries).
+
+active_or_wait(0, _Sup, _Tries) -> 0;
+active_or_wait(Active, _Sup, 0) -> Active;
+active_or_wait(_Active, Sup, Tries) -> timer:sleep(20), active_children_within(Sup, Tries - 1).
+
+active_children_reach(_Sup, _N, 0) ->
+    error(children_not_started);
+active_children_reach(Sup, N, Tries) ->
+    reached(proplists:get_value(active, supervisor:count_children(Sup)) =:= N, Sup, N, Tries).
+
+reached(true, _Sup, _N, _Tries) -> ok;
+reached(false, Sup, N, Tries) -> timer:sleep(20), active_children_reach(Sup, N, Tries - 1).
 
 next_advertised() ->
     receive

@@ -50,7 +50,7 @@
 -behaviour(gen_server).
 
 -export([start_link/1, admit/4, admit/5, store_reply/5, sweep/2, expire/2, refusals/1, refusal_sources/1,
-         refusal_line/3, stop/1]).
+         refusal_line/3, stop/1, released_at/1]).
 -export([init/1, handle_call/3, handle_cast/2]).
 
 -export_type([limits/0, request/0, refusal/0, verdict/0]).
@@ -96,6 +96,14 @@ start_link(#{caller_quota := Quota, share := Share, cap := Cap, reply_bytes := R
     gen_server:start_link(?MODULE, Limits, []).
 
 %% @doc Judge a verified request arriving on `Share' at `NowMs'.
+%% @doc When admission releases the entry of a request with this signed
+%% `Deadline' (milliseconds of wall-clock time): the deadline plus the 5
+%% minutes an entry is kept past it. A station link stops a CALL's handler
+%% then (macula#64 F6), so handler processes never outnumber entries.
+-spec released_at(integer()) -> integer().
+released_at(Deadline) ->
+    Deadline + ?KEPT_PAST_DEADLINE_MS.
+
 -spec admit(pid(), request(), term(), integer()) -> verdict().
 admit(Admission, Request, Share, NowMs) ->
     admit(Admission, Request, Share, NowMs, 5_000).
@@ -262,7 +270,7 @@ first_full_bound([Refusal | _]) -> {refused, Refusal};
 first_full_bound([])            -> room.
 
 admitted(room, {Caller, _RequestId} = Key, #{request_hash := Hash, deadline := Deadline}, Share, S) ->
-    ExpiresAt = Deadline + ?KEPT_PAST_DEADLINE_MS,
+    ExpiresAt = released_at(Deadline),
     Entry = #entry{hash = Hash, expires_at = ExpiresAt, share = Share},
     {new, S#state{entries = maps:put(Key, Entry, S#state.entries),
                   expiry = gb_sets:add_element({ExpiresAt, Key}, S#state.expiry),

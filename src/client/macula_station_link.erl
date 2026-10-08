@@ -3254,11 +3254,35 @@ served_call(Request, Payload, Seal, #state{procedures = Procs, policies = Pols, 
     Verdict = authorize({Realm, Proc}, Request, Pols, Profile),
     Found   = maps:find({Realm, Proc}, Procs),
     PayloadWithCaller = with_caller(Payload, maps:get(caller, Request, undefined)),
-    _ = spawn(fun() ->
-            Reply = inbound_reply(Verdict, Found, Request, PayloadWithCaller, Id, Seal),
-            _ = stored_reply(Admission, Request, Reply),
-            sent_or_faulted(macula_peering:send_frame(Pid, Reply), Pid, Request, Id, Seal)
-        end),
+    Run = fun() -> inbound_reply(Verdict, Found, Request, PayloadWithCaller, Id, Seal) end,
+    _ = spawn(fun() -> serve_worker(Run, Admission, Request, Pid, Id, Seal) end),
+    ok.
+
+serve_worker(Run, Admission, Request, Pid, Id, Seal) ->
+    replied(within_admission(Run, Request), Admission, Request, Pid, Id, Seal).
+
+%% A handler runs in a process of its own, watched by the CALL's worker, and is stopped when admission releases the
+%% request's entry (`macula_request_admission:released_at/1', macula#64 F6). Admission bounds how many requests are
+%% admitted, and this bounds how long each one's handler lives, so a handler that never returns can no longer keep a
+%% process past its entry while new requests take its place. Its caller gave up at the signed deadline, earlier.
+%% A handler that ends any other way than with its reply (an exit, which `inbound_reply' does not catch) is
+%% answered as before: not at all.
+within_admission(Run, #{deadline := Deadline}) ->
+    Worker = self(),
+    {Handler, Mon} = spawn_monitor(fun() -> Worker ! {self(), handler_reply, Run()} end),
+    %% The reply, sent before the handler ends, reaches this worker ahead of its DOWN.
+    receive
+        {Handler, handler_reply, Reply} -> true = erlang:demonitor(Mon, [flush]), {reply, Reply};
+        {'DOWN', Mon, process, Handler, _Ended} -> ended
+    after max(0, macula_request_admission:released_at(Deadline) - erlang:system_time(millisecond)) ->
+        exit(Handler, kill),
+        stopped
+    end.
+
+replied({reply, Reply}, Admission, Request, Pid, Id, Seal) ->
+    _ = stored_reply(Admission, Request, Reply),
+    sent_or_faulted(macula_peering:send_frame(Pid, Reply), Pid, Request, Id, Seal);
+replied(_NoReply, _Admission, _Request, _Pid, _Id, _Seal) ->
     ok.
 
 call_refused(Code, Request, #state{peer_pid = Pid, node_identity = Id}) when is_pid(Pid) ->

@@ -208,8 +208,30 @@ unadvertise(Pool, Realm, Procedure) ->
 dispatch(Sup, Module, Pool, Realm, Announce, FactPublish, Args, Payload, Timeout) ->
     Child = [Module, Pool, Realm, Announce, FactPublish, Args, Payload],
     case supervisor:start_child(Sup, Child) of
-        {ok, Pid} -> gen_server:call(Pid, run, Timeout);
+        {ok, Pid} -> run(Pid, Timeout);
         {error, Reason} -> {error, Reason}
+    end.
+
+%% The handler lives no longer than the wait on it (macula#64 F5). A watcher stops it when the waiting process ends
+%% first (a station link stops a CALL's worker when admission releases the request, F6), and a wait that times out
+%% stops it before the timeout reaches the caller. A watcher rather than a link, so a handler that crashes still
+%% reaches its caller as the call's exit, which the caller can catch, and never as an exit signal.
+run(Pid, Timeout) ->
+    Caller = self(),
+    _ = spawn(fun() -> watch(Caller, Pid) end),
+    try gen_server:call(Pid, run, Timeout)
+    catch exit:{timeout, _} = Reason:Stack ->
+        exit(Pid, kill),
+        erlang:raise(exit, Reason, Stack)
+    end.
+
+%% Stops the handler if its caller ends first, and ends with the handler otherwise.
+watch(Caller, Handler) ->
+    CallerMon = erlang:monitor(process, Caller),
+    HandlerMon = erlang:monitor(process, Handler),
+    receive
+        {'DOWN', CallerMon, process, Caller, _} -> exit(Handler, kill);
+        {'DOWN', HandlerMon, process, Handler, _} -> true
     end.
 
 %% @private

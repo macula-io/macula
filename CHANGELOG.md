@@ -11,6 +11,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A provider's handler no longer outlives its request (#64 F5, F6, #71).** A station link stops a CALL's
+  handler when admission releases the request (its signed deadline plus the 5 minutes admission keeps it,
+  `macula_request_admission:released_at/1`). Admission already bounded how many requests are admitted per caller
+  (`caller_quota`), per link (`share`) and in total (`cap`), and answers the excess by name; a handler that never
+  returned kept its process after its entry was gone, so a caller sending CALLs to a slow procedure piled up live
+  processes window after window. A `macula_response` handler is stopped when the wait on it times out
+  (`handler_timeout_ms`), and with the process waiting on it, instead of running on as a live child. **What a caller
+  sees:** nothing new. It gave up at its deadline (`{error, timeout}`), which comes before admission releases the
+  entry; a handler stopped this way sends no reply, and a provider loses only work whose answer no caller was still
+  waiting for. A copy of the request after release is judged as a new request.
+
 - **A busy link no longer stalls the pool behind a subscribe or advertise (#45, #71).** The pool hands a
   subscribe, an advertise (unary or stream) and their undoing to each link without waiting
   (`macula_station_link:subscribe_async/4`, `unsubscribe_topic_async/4`, `advertise_async/6`,

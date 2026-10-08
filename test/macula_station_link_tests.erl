@@ -1233,6 +1233,39 @@ sealed_event_reaches_the_subscriber_with_its_seal_test_() ->
          macula_station_link:stop(Pid)
      end}.
 
+%% #64 F6: a handler that never returns is stopped when its CALL's admission
+%% entry is released (the signed deadline plus the time admission keeps it),
+%% so handler processes never outnumber admitted requests. The deadline here
+%% lies just inside admission's past tolerance, so the entry ends at once.
+a_handler_that_never_returns_is_stopped_with_its_admission_test_() ->
+    {timeout, 10,
+     fun() ->
+         Test = self(),
+         Handler = fun(_Args) -> Test ! {handler_running, self()}, receive never -> ok end end,
+         {Pid, CallerKey} = inbound_call_fixture([{<<"p">>, Handler}]),
+         Released = macula_request_admission:released_at(0),
+         _ = inject_call_with_deadline(Pid, CallerKey, erlang:system_time(millisecond) - Released + 300),
+         Running = receive {handler_running, H} -> H after 2_000 -> error(handler_not_started) end,
+         Mon = erlang:monitor(process, Running),
+         ?assertEqual(killed, receive {'DOWN', Mon, process, Running, Reason} -> Reason after 3_000 -> alive end),
+         macula_station_link:stop(Pid)
+     end}.
+
+%% #64 F6: a caller flooding CALLs past its quota on this provider gets the
+%% structured refusal `caller_quota' for the excess, through the link, while
+%% the admitted ones run.
+a_flood_past_the_caller_quota_is_refused_by_name_test_() ->
+    {timeout, 10,
+     fun() ->
+         Handler = fun(_Args) -> receive never -> ok end end,
+         {Pid, CallerKey} = inbound_call_fixture([{<<"p">>, Handler}], open, #{caller_quota => 2}),
+         Deadline = erlang:system_time(millisecond) + 5_000,
+         _ = [inject_call_with_deadline(Pid, CallerKey, Deadline) || _ <- [1, 2]],
+         ?assertMatch({error, #{code := <<"caller_quota">>}},
+                      await_result(inject_call_with_deadline(Pid, CallerKey, Deadline), 2_000)),
+         macula_station_link:stop(Pid)
+     end}.
+
 inbound_call_unknown_procedure_returns_error_frame_test_() ->
     {timeout, 5,
      fun() ->
@@ -1442,11 +1475,18 @@ inbound_call_fixture(Handlers) ->
 %% Same, but with an explicit auth policy on every advertised procedure
 %% instead of the `open' default -- for exercising `authorize_policy/2'.
 inbound_call_fixture(Handlers, Policy) ->
+    inbound_call_fixture(Handlers, Policy, #{}).
+
+%% Same, with admission limits of its own over the fixture's defaults.
+inbound_call_fixture(Handlers, Policy, Limits) ->
     {ok, _} = application:ensure_all_started(macula),
-    {ok, Pid} = macula_station_link:start_link(with_link_keys(#{
+    {ok, Admission} = macula_request_admission:start_link(
+                        maps:merge(#{caller_quota => 256, share => 1024, cap => 46080,
+                                     reply_bytes => 262144, reply_bytes_total => 16777216}, Limits)),
+    {ok, Pid} = macula_station_link:start_link((with_link_keys(#{
         seed     => #{host => <<"127.0.0.1">>, port => 1},
         connect_timeout_ms => 2000
-    })),
+    }))#{admission => Admission}),
     FakePeer = self(),
     {ok, Profile} = macula_crypto_profile:configured(),
     {ok, PeerKey} = macula_node_keys:generate(identity, Profile),
