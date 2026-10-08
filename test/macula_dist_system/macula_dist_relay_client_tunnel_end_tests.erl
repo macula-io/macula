@@ -21,13 +21,18 @@
          outbound_tunnel_whose_caller_is_killed/0,
          outbound_tunnel_closed_then_its_caller_ends/0,
          inbound_tunnel_whose_controller_ends/0,
-         inbound_tunnel_whose_setup_dies_before_the_controller/0]).
+         inbound_tunnel_whose_setup_dies_before_the_controller/0,
+         orphan_stream_whose_control_never_comes/0,
+         orphan_stream_the_relay_closes/0]).
 
 -define(RELAY_ALPN, <<"macula-dist">>).
 -define(PEER, <<"peer@127.0.0.1">>).
 %% How long the client may take to drop a tunnel whose holder ended.
 -define(END_MS, 1_000).
 -define(EVENT_TIMEOUT_MS, 15_000).
+%% How long a stream may wait for its tunnel's control message: the
+%% client's tunnel timeout (15 s), with a second to spare.
+-define(ORPHAN_MS, 16_000).
 -define(SCENARIO_TIMEOUT_MS, 60_000).
 
 tunnel_end_test_() ->
@@ -40,7 +45,18 @@ tunnel_end_test_() ->
      {"an inbound tunnel ends with its dist controller",
       {timeout, 90, fun inbound_tunnel_ends_with_its_controller/0}},
      {"an inbound tunnel ends when its setup process dies before naming a controller",
-      {timeout, 90, fun inbound_tunnel_ends_with_its_setup/0}}].
+      {timeout, 90, fun inbound_tunnel_ends_with_its_setup/0}},
+     {"a tunnel stream whose control message never comes is closed and forgotten (#64 F13)",
+      {timeout, 90, fun orphan_stream_is_dropped_after_the_tunnel_timeout/0}},
+     {"a tunnel stream the relay closes before its control message is forgotten (#64 F13)",
+      {timeout, 90, fun orphan_stream_is_forgotten_when_it_closes/0}}].
+
+orphan_stream_is_dropped_after_the_tunnel_timeout() ->
+    ?assertEqual({ok, {orphan_dropped, stream_closed}},
+                 in_peer(orphan_stream_whose_control_never_comes, [])).
+
+orphan_stream_is_forgotten_when_it_closes() ->
+    ?assertEqual({ok, orphan_dropped}, in_peer(orphan_stream_the_relay_closes, [])).
 
 outbound_tunnel_ends_with_its_caller() ->
     ?assertEqual({ok, {tunnel_dropped, one_tunnel_close}},
@@ -88,6 +104,37 @@ inbound_tunnel_whose_controller_ends() ->
 
 inbound_tunnel_whose_setup_dies_before_the_controller() ->
     inbound(fun(SetupPid, _Client) -> exit(SetupPid, kill) end).
+
+%% A relay that opens a tunnel stream and never announces its tunnel: the
+%% client keeps the stream waiting for the control message no longer than a
+%% tunnel request waits, then closes it. Before, it kept it for as long as
+%% the relay connection lived.
+orphan_stream_whose_control_never_comes() ->
+    #{client := Client, conn := Conn} = Relay = identified_client(),
+    Stream = prefixed_stream(Conn, tunnel_id()),
+    ok = macula_quic:setopt(Stream, active, true),
+    ok = status_reaches(Client, orphan_streams, 1, ?EVENT_TIMEOUT_MS),
+    Dropped = dropped(status_reaches(Client, orphan_streams, 0, ?ORPHAN_MS)),
+    kept(Relay, {orphan_dropped(Dropped), stream_closed(Stream)}).
+
+%% A tunnel stream the relay closes while it waits for its control message
+%% leaves the client at once.
+orphan_stream_the_relay_closes() ->
+    #{client := Client, conn := Conn} = Relay = identified_client(),
+    Stream = prefixed_stream(Conn, tunnel_id()),
+    ok = status_reaches(Client, orphan_streams, 1, ?EVENT_TIMEOUT_MS),
+    ok = macula_quic:close_stream(Stream),
+    kept(Relay, orphan_dropped(dropped(status_reaches(Client, orphan_streams, 0, ?END_MS)))).
+
+orphan_dropped(tunnel_dropped) -> orphan_dropped;
+orphan_dropped(NotDropped) -> NotDropped.
+
+stream_closed(Stream) ->
+    receive
+        {quic, Closed, Stream, _} when Closed =:= peer_send_shutdown; Closed =:= stream_closed;
+                                       Closed =:= peer_send_aborted -> stream_closed
+    after ?END_MS -> stream_open
+    end.
 
 %% An outbound tunnel taken by a caller process, then ended by `End'.
 outbound(End) ->

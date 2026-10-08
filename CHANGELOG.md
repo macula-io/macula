@@ -11,6 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A dist relay can no longer park tunnel streams on a client for as long as the connection lives (#64 F13).** A
+  tunnel stream whose control message (`tunnel_ok` / `tunnel_notify`) has not come within the tunnel timeout (15 s,
+  as long as a tunnel request waits) is closed and forgotten, and one the relay closes while it waits is forgotten
+  at once. `macula_dist_relay_client:status/1` reports `orphan_streams`.
+
 - **A provider's handler no longer outlives its request (#64 F5, F6, #71).** A station link stops a CALL's
   handler when admission releases the request (its signed deadline plus the 5 minutes admission keeps it,
   `macula_request_admission:released_at/1`). Admission already bounded how many requests are admitted per caller

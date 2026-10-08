@@ -271,6 +271,12 @@ handle_info({quic, Closed, Ref, _}, State)
   when Closed =:= closed; Closed =:= shutdown; Closed =:= transport_shutdown ->
     handle_closure(Ref, Closed, State);
 
+%% A stream still waiting for its tunnel's control message when the tunnel
+%% timeout passes is closed and forgotten. A timer for a stream that was
+%% matched, closed, or replaced since finds nothing of its own.
+handle_info({orphan_expired, TunnelId, Stream}, #state{orphan_streams = Orphans} = State) ->
+    {noreply, State#state{orphan_streams = orphan_expired(maps:find(TunnelId, Orphans), TunnelId, Stream, Orphans)}};
+
 %% The inbound setup process names the dist controller: the controller holds
 %% the tunnel from now on.
 handle_info({tunnel_controller, TunnelId, Stream, DistCtrl}, State) ->
@@ -617,6 +623,10 @@ match_inbound(error, TunnelId, Stream, Received,
     %% match when tunnel_ok / tunnel_notify arrives.
     ?LOG_INFO("[dist_relay_client] Orphan stream for tunnel ~s — awaiting control",
               [TunnelId]),
+    %% It waits no longer than a tunnel request does (macula#64 F13): a
+    %% relay that never sends the control message no longer parks streams
+    %% here for as long as the connection lives.
+    _ = erlang:send_after(?TUNNEL_TIMEOUT, self(), {orphan_expired, TunnelId, Stream}),
     {noreply, State#state{orphan_streams = Orphans#{TunnelId => {Stream, Received}}}}.
 
 %% When a new tunnel_id appears in pending_outbound or pending_inbound,
@@ -679,7 +689,14 @@ handle_controller_assignment({Client, Kernel}, Stream, {Received, Events}, Tunne
 drop_stream(Stream, State) ->
     Unident = maps:remove(Stream, State#state.unidentified_streams),
     Active = maps:remove(Stream, State#state.active_tunnels),
-    State#state{unidentified_streams = Unident, active_tunnels = Active}.
+    Orphans = maps:filter(fun(_TunnelId, {S, _Received}) -> S =/= Stream end, State#state.orphan_streams),
+    State#state{unidentified_streams = Unident, active_tunnels = Active, orphan_streams = Orphans}.
+
+orphan_expired({ok, {Stream, _Received}}, TunnelId, Stream, Orphans) ->
+    ?LOG_INFO("[dist_relay_client] No control message for tunnel ~s — stream closed", [TunnelId]),
+    without_orphan(maps:take(TunnelId, Orphans), Orphans);
+orphan_expired(_NotThisStream, _TunnelId, _Stream, Orphans) ->
+    Orphans.
 
 %% Whether the client knows `TunnelId': active, pending, or with its stream
 %% waiting for the control message.
@@ -785,5 +802,6 @@ status_map(State) ->
         pending_inbound => maps:size(State#state.pending_inbound),
         active_tunnels => maps:size(State#state.active_tunnels),
         unidentified_streams => maps:size(State#state.unidentified_streams),
+        orphan_streams => maps:size(State#state.orphan_streams),
         held_control_frames => queue:len(State#state.held_control)
     }.
