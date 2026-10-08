@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [14.3.0] - 2026-10-08
+
 ### Added
 
 - **A station can tell a caller it refused a CALL for overload: the signed relay code `overloaded` (#54, #71).**
