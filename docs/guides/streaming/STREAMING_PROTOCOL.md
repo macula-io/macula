@@ -124,6 +124,14 @@ being `closed`, `{error, {Code, Message}}` or `peer_down`. An owner the stream
 is handed to after that is told at once. `macula_streamer` takes its stream
 over this way and stops on that message.
 
+The stream process stays until its owner ends, so the owner can still read
+chunks already received and the reply after the end. **A handler must end once
+its session has ended**: on that message, or when a read returns `eof` or an
+error such as `peer_down`. One that runs on keeps its stream, and its session
+slot (below) is not freed until it ends. A caller that goes away ends the
+session for the provider (`peer_down`), so only the provider's own handler can
+keep a slot this way, never a caller (#64 F1, F3).
+
 The provider verifies each STREAM_OPEN's signature against its `caller` before
 the handler runs; a STREAM_OPEN that does not verify runs no handler.
 `advertise_stream/6` takes an `auth` policy in `Opts`, the same policies as
