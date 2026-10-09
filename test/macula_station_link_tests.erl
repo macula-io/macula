@@ -1169,6 +1169,60 @@ inbound_call_threads_caller_into_payload_test_() ->
          ok
      end}.
 
+%% The same verified caller is readable for whatever shape the payload has
+%% (macula#60): a map payload keeps today's merged `caller' key and the
+%% out-of-band context agrees with it; a bare-text payload, which
+%% `with_caller/2' (a map merge) leaves untouched, reaches its handler with
+%% the same identity readable through `macula_station_link:caller/0'. This
+%% is the shape every SDK README's quickstart sends.
+inbound_call_caller_is_reachable_for_every_payload_shape_test_() ->
+    {timeout, 5,
+     fun() ->
+         Self = self(),
+         Handler = fun(Payload) ->
+             Self ! {handler_saw, Payload, macula_station_link:caller()},
+             {ok, #{ok => true}}
+         end,
+         {Pid, CallerKey} = inbound_call_fixture([{<<"_realm.echo.any">>, Handler}]),
+         Caller = macula_node_keys:key_id(CallerKey),
+         %% A bare-text CALL first: the shape every SDK README's quickstart
+         %% sends. Its reply is matched by shape only -- this fixture hands
+         %% frames to the link as terms, and a non-map payload does not
+         %% survive that path's reply re-verification (pre-existing on
+         %% origin/main; map payloads do) -- so what the test asserts is the
+         %% handler's view, which is what macula#60 changes.
+         _ = inject_call_with_payload(Pid, self(), CallerKey, <<1:128>>,
+                                      <<"_realm.echo.any">>, <<"bare text">>),
+         receive
+             {'$gen_cast', {send_frame, _, #{frame_type := result}}} -> ok
+         after 1_000 ->
+             erlang:error(no_reply)
+         end,
+         receive
+             {handler_saw, <<"bare text">>, TextCaller} ->
+                 ?assertEqual(Caller, TextCaller)
+         after 1_000 ->
+             erlang:error(handler_never_invoked)
+         end,
+         %% Then a map CALL, verified strictly: today's merged `caller' key is
+         %% kept, and the out-of-band context agrees with it.
+         CalledMap = inject_call_with_payload(Pid, self(), CallerKey, <<2:128>>,
+                                               <<"_realm.echo.any">>, #{token => <<"abc">>}),
+         ?assertMatch({ok, _}, await_result(CalledMap, 1_000)),
+         receive
+             {handler_saw, MapPayload, MapCaller} when is_map(MapPayload) ->
+                 ?assertEqual(Caller, MapCaller),
+                 %% The map payload keeps today's merged key: the
+                 %% wire-authenticated id, and the payload's own claim is gone.
+                 ?assertEqual(Caller, maps:get(caller, MapPayload)),
+                 ?assertEqual(<<"abc">>, maps:get({text, <<"token">>}, MapPayload))
+         after 1_000 ->
+             erlang:error(handler_never_invoked)
+         end,
+         macula_station_link:stop(Pid),
+         ok
+     end}.
+
 %% As inject_call/5, with an explicit payload -- for proving the
 %% wire-authenticated caller wins over whatever the payload claims.
 inject_call_with_payload(Pid, FakePeer, CallerKey, CallId, Proc, Payload) ->

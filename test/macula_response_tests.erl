@@ -27,6 +27,8 @@ handle_request(#{boom := true}, _State) ->
     error(boom);
 handle_request(bad, State) ->
     {error, invalid_payload, State};
+handle_request(Binary, State) when is_binary(Binary) ->
+    {reply, #{caller => macula_response:caller()}, State};
 handle_request(#{sleep := Ms}, State) ->
     timer:sleep(Ms),
     {reply, slept, State}.
@@ -78,7 +80,8 @@ response_test_() ->
                  fun a_handler_whose_caller_is_killed_is_stopped/0,
                  fun a_handler_within_a_longer_timeout_answers_its_reply/0,
                  fun the_handler_timeout_stays_with_the_response/0,
-                 fun a_handler_timeout_out_of_range_is_refused/0]].
+                 fun a_handler_timeout_out_of_range_is_refused/0,
+                 fun a_non_map_payload_reads_its_callers_caller_out_of_band/0]].
 
 %% #25: the handler timeout was a fixed 30 s, so a handler that needed longer
 %% had its success reported to the caller as temporary_relay_failure. It is an
@@ -126,6 +129,26 @@ a_handler_timeout_out_of_range_is_refused() ->
                   advertise((functions(self()))#{handler_timeout_ms => V}))
      || V <- [0, -1, 600_001, 1.5, infinity]],
     ?assertEqual(none, receive {advertised, _, _} -> advertised after 0 -> none end).
+
+%% macula#60: the verified caller reaches `handle_request/2' however the
+%% payload arrived. A map payload keeps the merged `caller' key
+%% (`with_caller/2'); a bare-text payload, which a map merge can never
+%% touch, reads the same identity out of band. `dispatch' runs in the
+%% process that invoked the handler fun -- where a station link set the
+%% caller context -- and carries it into the response child, whose own
+%% process `handle_request/2' runs in; `macula_response:caller/0' reads it
+%% there. This test stands in for the link's `safe_invoke_handler/5' by
+%% setting the same context key the link sets (see macula_station_link.erl).
+a_non_map_payload_reads_its_callers_caller_out_of_band() ->
+    {ok, _Sup} = advertise(functions(self())),
+    {Handler, _} = next_advertised(),
+    Caller = crypto:strong_rand_bytes(32),
+    erlang:put('$macula_handler_caller', Caller),
+    try
+        ?assertEqual({ok, #{caller => Caller}}, Handler(<<"bare text">>))
+    after
+        erlang:erase('$macula_handler_caller')
+    end.
 
 %% A station's wire-level registration for a procedure is tied to the
 %% connection that sent it, and does not survive that connection being

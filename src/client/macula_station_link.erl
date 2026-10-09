@@ -208,6 +208,10 @@
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          terminate/2, code_change/3, format_status/1]).
 
+%% The verified caller of the request this process is serving (macula#60):
+%% a handler context every payload shape can read, map or not.
+-export([caller/0]).
+
 -export_type([opts/0]).
 
 -ifdef(TEST).
@@ -300,6 +304,11 @@
 %% The code a provider's ERROR carries for a handler that refused, with the
 %% handler's text as its detail.
 -define(HANDLER_ERROR_CODE, <<"handler_error">>).
+%% Where the wire-authenticated caller of the request a process serves lives,
+%% for processes (handler, stream handler, macula_response child) that
+%% `caller/0' reads from. Set by this link on every inbound CALL and served
+%% STREAM_OPEN, whatever shape the payload has (macula#60).
+-define(CALLER_CONTEXT_KEY, '$macula_handler_caller').
 -define(CONNECT_RETRY_BACKOFF_MS, 1_000).
 
 %% App-level liveness probe. Sends a tiny CALL (`_macula.ping' on the
@@ -3395,6 +3404,27 @@ with_caller(Payload, Caller) when is_map(Payload), Caller =/= undefined ->
 with_caller(Payload, _Caller) ->
     Payload.
 
+%% The same wire-authenticated caller, out of band: `with_caller/2' can
+%% only merge it into a map payload, so a handler serving a non-map CALL
+%% or STREAM_OPEN would otherwise never see it (macula#60). The link sets
+%% it in the process context of the process that runs the handler — and
+%% `macula_response' carries it into its child the same way — so `caller/0'
+%% reads the station-authenticated identity whatever shape the payload
+%% had. A process serving no request, or a caller side, reads `undefined'.
+caller() ->
+    erlang:get(?CALLER_CONTEXT_KEY).
+
+%% Run `Fun' with the request's verified caller in this process's context,
+%% for the duration of the call a handler is running in. `undefined' (no
+%% caller to authenticate, or no request) runs `Fun' with no context.
+caller_context(undefined, Fun) ->
+    Fun();
+caller_context(Caller, Fun) ->
+    erlang:put(?CALLER_CONTEXT_KEY, Caller),
+    try Fun()
+    after erlang:erase(?CALLER_CONTEXT_KEY)
+    end.
+
 %% The handler's reply, or a provider error when the reply frame
 %% refused to build: the unsendable handler result's fault code.
 inbound_reply(Verdict, Found, Request, Payload, Key, Seal) ->
@@ -3519,7 +3549,8 @@ build_inbound_call_reply({ok, Handler}, Request, Payload, Key, Seal) ->
 %%   * handler returns anything else →
 %%     `result(payload = normalise_reply(Reply))'
 safe_invoke_handler(Handler, Payload, Request, Key, Seal) ->
-    try invoke_handler(Handler, Payload) of
+    try caller_context(maps:get(caller, Request, undefined),
+                       fun() -> invoke_handler(Handler, Payload) end) of
         {error, Reason} ->
             reply_error(Seal, Request, ?HANDLER_ERROR_CODE, handler_error_detail(Reason), Key);
         Reply ->
@@ -4079,9 +4110,10 @@ served_with_id(false, _AttachId, _Handler, Open, _Seal, Stream, S) ->
     refuse_open(Stream, Open, <<"unavailable">>, <<"sessions are not being admitted now">>, S);
 served_with_id(true, AttachId, Handler, #{procedure := Proc, payload := Args, caller := Caller, mode := Mode} = Open,
                Seal, Stream, #state{peer_pid = Conn, profile = Profile, node_identity = Key} = S) ->
-    %% The verified caller reaches the handler in its args, as a call's does
-    %% (`with_caller/2'): a handler that decides by identity reads it there.
-    Worker = spawn_stream_handler(Handler, with_caller(Args, Caller), Proc),
+    %% The verified caller reaches the handler as a call's does: merged into
+    %% map args (`with_caller/2'), and in the handler process's context for
+    %% any shape, so a handler that decides by identity reads it either way.
+    Worker = spawn_stream_handler(Handler, with_caller(Args, Caller), Caller, Proc),
     {ok, StreamPid} = macula_stream:start_link(sealed_stream(Seal, #{id => AttachId, role => server, mode => Mode,
                                                                      owner => Worker, key => fun() -> Key end,
                                                                      open => Open, conn => Conn, profile => Profile})),
@@ -4159,23 +4191,30 @@ refusal_built({error, _Unbuildable}, _Stream, _S) ->
 %% try/catch is justified (mirrors `safe_invoke_handler/4' for unary
 %% CALLs): without it a crash would silently leave the caller waiting on
 %% its deadline.
+-ifdef(TEST).
+%% The serving arity the tests spawn a handler with, when there is no caller
+%% to authenticate (they assert spawn/attach/end behaviour, not provenance).
 spawn_stream_handler(Handler, Args, Proc) ->
+    spawn_stream_handler(Handler, Args, undefined, Proc).
+-endif.
+
+spawn_stream_handler(Handler, Args, Caller, Proc) ->
     Link = self(),
-    spawn(fun() -> serve_stream_when_attached(erlang:monitor(process, Link), Handler, Args, Proc) end).
+    spawn(fun() -> serve_stream_when_attached(erlang:monitor(process, Link), Handler, Args, Caller, Proc) end).
 
 %% Once the handler runs, the link's end is no concern of it, so no notice of
 %% it is left in the handler's mailbox.
-serve_stream_when_attached(LinkRef, Handler, Args, Proc) ->
+serve_stream_when_attached(LinkRef, Handler, Args, Caller, Proc) ->
     receive
         {serve, Stream} ->
             true = erlang:demonitor(LinkRef, [flush]),
-            run_stream_handler(Handler, Stream, Args, Proc);
+            run_stream_handler(Handler, Stream, Args, Caller, Proc);
         {'DOWN', LinkRef, process, _Link, _Reason} ->
             ok
     end.
 
-run_stream_handler(Handler, Stream, Args, Proc) ->
-    try Handler(Stream, Args)
+run_stream_handler(Handler, Stream, Args, Caller, Proc) ->
+    try caller_context(Caller, fun() -> Handler(Stream, Args) end)
     catch
         Class:Reason:Stack ->
             logger:warning(

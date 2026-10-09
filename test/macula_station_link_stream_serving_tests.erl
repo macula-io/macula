@@ -37,7 +37,8 @@ stream_serving_test_() ->
                  fun a_sealed_stream_open_is_refused_by_name/0,
                  fun a_served_handler_sees_the_verified_caller/0,
                  fun a_caller_serves_more_stream_opens_than_its_quota/0,
-                 fun a_copy_of_a_live_stream_open_keeps_its_place/0]]
+                 fun a_copy_of_a_live_stream_open_keeps_its_place/0,
+                 fun a_served_handler_sees_the_caller_of_a_non_map_open/0]]
     ++ [{"a served session leaves no process behind: " ++ Name,
          {timeout, 15, {spawn, fun() -> process_flag(trap_exit, true), served_sessions_end(Handler, Ending) end}}}
         || {Name, Handler, Ending} <- [{"the handler closes and returns", fun close_and_return/2, none},
@@ -327,6 +328,26 @@ a_served_handler_sees_the_verified_caller() ->
     %% `caller' still gives the verified one.
     ?assertEqual({caller_seen, Id, Id, Id, Id},
                  receive {caller_seen, _, _, _, _} = Seen -> Seen after ?EVENT_MS -> none end),
+    stop(Link).
+
+%% The verified caller also reaches a served handler whose open carried a
+%% bare-text payload (macula#60): `with_caller/2' is a map merge, so the args
+%% keep their shape, but the same wire-authenticated identity is readable out
+%% of band, in the handler's own process, through `macula_station_link:caller/0'.
+a_served_handler_sees_the_caller_of_a_non_map_open() ->
+    #{link := Link} = World = linked(),
+    Test = self(),
+    Procedure = <<"acme/foo.text">>,
+    ok = macula_station_link:advertise_stream(Link, ?REALM, Procedure, server_stream,
+                                              fun(_Stream, Args) ->
+                                                  Test ! {text_caller_seen, Args, macula_station_link:caller()},
+                                                  ok
+                                              end, open),
+    Caller = key(),
+    _ = opened_by_peer(World, Caller, Procedure, <<"bare text">>),
+    Id = macula_node_keys:key_id(Caller),
+    ?assertEqual({text_caller_seen, <<"bare text">>, Id},
+                 receive {text_caller_seen, _, _} = Seen -> Seen after ?EVENT_MS -> none end),
     stop(Link).
 
 read_to_the_end(Stream, _Args) -> read_until_ended(macula_stream:recv(Stream, 5_000), Stream).

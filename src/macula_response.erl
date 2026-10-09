@@ -63,9 +63,21 @@
 
 -export([advertise/5, advertise/6, advertise_direct/6, advertise_direct/7,
         unadvertise/3]).
--export([start_link/7]).
+-export([start_link/7, start_link/8]).
 -export_type([advertise/0, advertise_opts/0]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
+
+%% The wire-authenticated caller of the request this child is answering
+%% (macula#60): `handle_request/2' reads it for a payload of any shape,
+%% map or not. The link merges it into map payloads too (`with_caller/2'),
+%% so a handler may read either. `undefined' outside a served request.
+-export([caller/0]).
+
+%% The same provenance key `macula_station_link' sets in the process that
+%% runs a handler; this module sets it in its own child's process, where
+%% `handle_request/2' runs. Set by the link before dispatch for every
+%% payload shape (macula#60).
+-define(CALLER_CONTEXT_KEY, '$macula_handler_caller').
 
 -callback init(Args :: term()) ->
     {ok, State :: term()} | {stop, Reason :: term()}.
@@ -206,7 +218,12 @@ unadvertise(Pool, Realm, Procedure) ->
     macula:unadvertise(Pool, Realm, Procedure).
 
 dispatch(Sup, Module, Pool, Realm, Announce, FactPublish, Args, Payload, Timeout) ->
-    Child = [Module, Pool, Realm, Announce, FactPublish, Args, Payload],
+    %% The verified caller of the request this handler fun serves lives in
+    %% this process's context (macula_station_link:caller/0); carry it into
+    %% the response child, which runs `handle_request/2' in its own process
+    %% where the handler fun's context is not visible (macula#60).
+    Child = [Module, Pool, Realm, Announce, FactPublish, Args, Payload,
+             macula_station_link:caller()],
     case supervisor:start_child(Sup, Child) of
         {ok, Pid} -> run(Pid, Timeout);
         {error, Reason} -> {error, Reason}
@@ -239,20 +256,38 @@ watch(Caller, Handler) ->
                  macula_lifetime_announcer:publish(), term(), term()) ->
     {ok, pid()} | {error, term()}.
 start_link(Module, Pool, Realm, Announce, FactPublish, InitArgs, Payload) ->
+    start_link(Module, Pool, Realm, Announce, FactPublish, InitArgs, Payload, undefined).
+
+%% @private
+-spec start_link(module(), macula:pool(), macula:realm(), boolean(),
+                 macula_lifetime_announcer:publish(), term(), term(), term()) ->
+    {ok, pid()} | {error, term()}.
+start_link(Module, Pool, Realm, Announce, FactPublish, InitArgs, Payload, Caller) ->
     gen_server:start_link(?MODULE,
-        {Module, Pool, Realm, Announce, FactPublish, InitArgs, Payload}, []).
+        {Module, Pool, Realm, Announce, FactPublish, InitArgs, Payload, Caller}, []).
+
+%% @doc The verified caller of the request this process is answering, or
+%% `undefined' when it answers none. Set by the link for every payload
+%% shape (macula#60), so `handle_request/2' can attribute a non-map
+%% payload like a map one; a map payload also keeps the merged `caller'
+%% key (`with_caller/2').
+caller() ->
+    erlang:get(?CALLER_CONTEXT_KEY).
 
 %%%===================================================================
 %%% gen_server callbacks
 %%%===================================================================
 
 %% @private
-init({Module, Pool, Realm, Announce, FactPublish, InitArgs, Payload}) ->
+init({Module, Pool, Realm, Announce, FactPublish, InitArgs, Payload, Caller}) ->
     case Module:init(InitArgs) of
         {ok, UserState} ->
             RequestId = crypto:strong_rand_bytes(16),
             publish(FactPublish, Announce, Pool, Realm, ?REQUEST_RECEIVED,
                     #{request_id => RequestId}),
+            %% run in the child's process, where `caller/0' reads it during
+            %% `handle_request/2' (macula#60).
+            erlang:put(?CALLER_CONTEXT_KEY, Caller),
             {ok, #rstate{module = Module, pool = Pool, realm = Realm,
                         announce = Announce, fact_publish = FactPublish,
                         request_id = RequestId,
