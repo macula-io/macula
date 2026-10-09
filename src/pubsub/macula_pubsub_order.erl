@@ -13,11 +13,15 @@
 %%%   <li><strong>ordered</strong> (default) — per-publisher FIFO by
 %%%       seq. Out-of-order arrivals are buffered and released in order;
 %%%       a genuinely missing seq is skipped after a timeout (see
-%%%       `flush/3'), trading a bounded delay for the lost fact. A
-%%%       publisher's first facts, and its first facts after a restart,
-%%%       are held for up to one timeout (or until the buffer cap), and
-%%%       its order starts at the lowest seq held, so a lower seq that
-%%%       arrives second is delivered rather than lost.</li>
+%%%       `flush/3'), trading a bounded delay for the lost fact. The
+%%%       seqs a skip gave up on are remembered (bounded per publisher):
+%%%       a copy that arrives afterwards is delivered late, wrapped
+%%%       `{late, Event}', and counted -- it is no longer mistaken for a
+%%%       duplicate. Only true duplicates are dropped. A publisher's
+%%%       first facts, and its first facts after a restart, are held for
+%%%       up to one timeout (or until the buffer cap), and its order
+%%%       starts at the lowest seq held, so a lower seq that arrives
+%%%       second is delivered rather than lost.</li>
 %%%   <li><strong>latest_only</strong> — deliver only if the seq exceeds
 %%%       the highest already delivered for that publisher (drop stale).
 %%%       No buffering, no head-of-line delay. For state-snapshot
@@ -44,7 +48,8 @@
 %%% timer to release buffers whose gap has timed out.
 -module(macula_pubsub_order).
 
--export([new/1, new/2, offer/5, flush/3, buffered/1, skips/1, publishers/1, idle_prune_ms/0]).
+-export([new/1, new/2, offer/5, flush/3, buffered/1, skips/1, late_delivered/1,
+         past_dropped/1, publishers/1, idle_prune_ms/0]).
 -export_type([t/0, mode/0]).
 
 %% A seq gap wider than this, in EITHER direction, is a publisher
@@ -77,6 +82,12 @@
     next :: seq() | undefined,
     buf  = #{}  :: #{seq() => {event(), integer()}},
     high :: seq() | undefined,
+    %% Seqs this publisher's gaps gave up on (skipped at the flush
+    %% timeout or the buffer cap) and that have not arrived since: a
+    %% later copy of one is delivered late instead of being dropped as
+    %% a duplicate. Bounded to the newest `Max' seqs (see
+    %% `remember_skips/4'), so a wide gap cannot pin memory.
+    skipped = #{} :: #{seq() => true},
     %% When the publisher's last fact arrived, for pruning (see `pruned/3').
     seen = 0 :: integer()
 }).
@@ -84,6 +95,8 @@
 -opaque t() :: #{mode := mode(),
                  pubs := #{publisher_key() => #pub{}},
                  skips := non_neg_integer(),
+                 late := non_neg_integer(),
+                 past := non_neg_integer(),
                  max := pos_integer()}.
 
 %%%===================================================================
@@ -98,7 +111,7 @@ new(Mode) ->
 new(Mode, Max)
   when (Mode =:= ordered orelse Mode =:= latest_only orelse Mode =:= as_arrives),
        is_integer(Max), Max > 0 ->
-    #{mode => Mode, pubs => #{}, skips => 0, max => Max}.
+    #{mode => Mode, pubs => #{}, skips => 0, late => 0, past => 0, max => Max}.
 
 %% @doc Offer an arrived (deduped) event. Returns the events to deliver
 %% now, in order, and the updated state. `NowMs' timestamps buffered
@@ -106,7 +119,8 @@ new(Mode, Max)
 %% `{unverified, Publisher}' for an event whose publisher signature did
 %% not verify; each key has its own ordering state. In `ordered' mode a
 %% publisher's first facts are held until its first order timeout (see
-%% `flush/3') or the buffer cap.
+%% `flush/3') or the buffer cap; a copy of a seq a skip gave up on is
+%% returned wrapped `{late, Event}'.
 -spec offer(t(), publisher_key(), seq(), event(), integer()) -> {[event()], t()}.
 offer(#{mode := as_arrives} = S, _Pub, _Seq, Ev, _Now) ->
     {[Ev], S};
@@ -124,10 +138,12 @@ offer(#{mode := ordered, pubs := P} = S, Pub, Seq, Ev, Now) ->
 %% publisher whose first facts are still held starts its order at the
 %% lowest held seq instead, without a skip.
 %% Returns the events to deliver now and the updated state (skip counter
-%% advanced by one per gap given up on). A no-op for non-ordered modes.
+%% advanced by one per gap given up on). The skipped seqs are remembered
+%% (bounded, see `remember_skips/4') so a copy that arrives later can be
+%% delivered late. A no-op for non-ordered modes.
 -spec flush(t(), integer(), non_neg_integer()) -> {[event()], t()}.
-flush(#{mode := ordered, pubs := P, skips := Sk} = S, Now, Timeout) ->
-    {Evs, Pubs2, Sk2} = flush_pubs(maps:to_list(P), Now, Timeout, [], #{}, Sk),
+flush(#{mode := ordered, pubs := P, skips := Sk, max := Max} = S, Now, Timeout) ->
+    {Evs, Pubs2, Sk2} = flush_pubs(maps:to_list(P), Now, Timeout, Max, [], #{}, Sk),
     {Evs, S#{pubs := Pubs2, skips := Sk2}};
 flush(S, _Now, _Timeout) ->
     {[], S}.
@@ -151,6 +167,18 @@ idle_prune_ms() -> ?IDLE_PRUNE_MS.
 %% the genuine per-publisher loss rate).
 -spec skips(t()) -> non_neg_integer().
 skips(#{skips := N}) -> N.
+
+%% @doc Count of late copies delivered since `new/1': a fact whose gap
+%% was skipped and whose copy then arrived (telemetry: reorders a skip
+%% would previously have misread as loss).
+-spec late_delivered(t()) -> non_neg_integer().
+late_delivered(#{late := N}) -> N.
+
+%% @doc Count of arrivals dropped as already-past since `new/1' -- true
+%% duplicates, not late copies of skipped gaps (those are delivered and
+%% counted by `late_delivered/1').
+-spec past_dropped(t()) -> non_neg_integer().
+past_dropped(#{past := N}) -> N.
 
 %%%===================================================================
 %%% latest_only
@@ -189,10 +217,12 @@ offer_ordered(#pub{next = Next} = Pst, S, Pub, Seq, Ev, _Now)
 %% seq re-based to wall-clock µs, backward when it re-seeded from zero.
 %% Deliver whatever is buffered (old epoch, in seq order), then hold the new
 %% epoch's first facts the same way as a new publisher's.
-offer_ordered(#pub{next = Next, buf = Buf}, S, Pub, Seq, Ev, Now)
+offer_ordered(#pub{next = Next, buf = Buf, skipped = Sk} = _Pst, S, Pub, Seq, Ev, Now)
   when Seq > Next + ?EPOCH_JUMP; Seq + ?EPOCH_JUMP < Next ->
     Old = [E || {_Sq, {E, _Arr}} <- lists:keysort(1, maps:to_list(Buf))],
-    {Held, S2} = hold(#pub{buf = #{}}, S, Pub, Seq, Ev, Now),
+    %% The skipped set survives the restart: those copies are real facts
+    %% and may still arrive.
+    {Held, S2} = hold(#pub{buf = #{}, skipped = Sk}, S, Pub, Seq, Ev, Now),
     {Old ++ Held, S2};
 %% Future within the same epoch: buffer it, then skip the head gap early
 %% if the buffer is now over the count cap.
@@ -200,9 +230,18 @@ offer_ordered(#pub{next = Next, buf = Buf} = Pst, S, Pub, Seq, Ev, Now)
   when Seq > Next ->
     Pst2 = Pst#pub{buf = maps:put(Seq, {Ev, Now}, Buf)},
     cap_buffer(map_size(Pst2#pub.buf) > maps:get(max, S), Pst2, S, Pub);
-%% Past: already delivered or skipped (also a late duplicate). Drop.
-offer_ordered(#pub{}, S, _Pub, _Seq, _Ev, _Now) ->
-    {[], S}.
+%% Past: either a true duplicate (this seq was already delivered) or a
+%% copy of a seq a skip gave up on. A skipped seq is delivered now,
+%% wrapped `{late, Event}' so the caller can flag it, and counted; only
+%% true duplicates are dropped.
+offer_ordered(#pub{skipped = Sk} = Pst, S, Pub, Seq, Ev, _Now) ->
+    case maps:is_key(Seq, Sk) of
+        true ->
+            Pst2 = Pst#pub{skipped = maps:remove(Seq, Sk)},
+            {[{late, Ev}], put_pub(bump(late, S), Pub, Pst2)};
+        false ->
+            {[], put_pub(bump(past, S), Pub, Pst)}
+    end.
 
 %% Hold a fact while this publisher's order has not started. A repeat of a
 %% held seq keeps the first copy. Past the count cap the order starts now
@@ -225,6 +264,24 @@ start_at_cap(true, Pst, S, Pub) ->
 start_order(#pub{buf = Buf} = Pst) ->
     drain(Pst#pub{next = lists:min(maps:keys(Buf))}, []).
 
+%% Remember the seqs a skip gave up on, [From, To), so a copy arriving
+%% later is delivered late rather than mistaken for a duplicate. Bounded
+%% per publisher: at most the newest `Max' seqs are kept, so a wide gap
+%% cannot pin memory. Skip ranges are given up in increasing seq order,
+%% so the smallest keys are the oldest and fall out first.
+remember_skips(#pub{skipped = Sk} = Pst, From, To, Max) when To > From ->
+    From1 = max(From, To - Max),
+    Added = maps:from_list([{Seq, true} || Seq <- lists:seq(From1, To - 1)]),
+    Pst#pub{skipped = prune_skipped(maps:merge(Sk, Added), Max)};
+remember_skips(Pst, _From, _To, _Max) ->
+    Pst.
+
+prune_skipped(Sk, Max) when map_size(Sk) =< Max ->
+    Sk;
+prune_skipped(Sk, Max) ->
+    Keep = lists:nthtail(map_size(Sk) - Max, lists:sort(maps:keys(Sk))),
+    maps:with(Keep, Sk).
+
 %% Under the cap: just hold the buffered fact.
 cap_buffer(false, Pst, S, Pub) ->
     {[], put_pub(S, Pub, Pst)};
@@ -232,7 +289,8 @@ cap_buffer(false, Pst, S, Pub) ->
 %% buffered seq and draining its contiguous run (counts as one skip).
 cap_buffer(true, #pub{buf = Buf} = Pst, #{skips := Sk} = S, Pub) ->
     MinSeq = lists:min(maps:keys(Buf)),
-    {Evs, Pst2} = drain(Pst#pub{next = MinSeq}, []),
+    Pst1 = remember_skips(Pst, Pst#pub.next, MinSeq, maps:get(max, S)),
+    {Evs, Pst2} = drain(Pst1#pub{next = MinSeq}, []),
     {lists:reverse(Evs), put_pub(S#{skips := Sk + 1}, Pub, Pst2)}.
 
 %% Pull contiguous seqs starting at `next' out of the buffer.
@@ -248,33 +306,34 @@ drain_step(error, Pst, Acc) ->
 %%% flush (timeout skip)
 %%%===================================================================
 
-flush_pubs([], _Now, _Timeout, Evs, Acc, Sk) ->
+flush_pubs([], _Now, _Timeout, _Max, Evs, Acc, Sk) ->
     {lists:reverse(Evs), Acc, Sk};
-flush_pubs([{Pub, Pst} | Rest], Now, Timeout, Evs, Acc, Sk) ->
-    {PubEvs, Pst2, Sk2} = flush_pub(Pst, Now, Timeout, [], Sk),
-    flush_pubs(Rest, Now, Timeout, lists:reverse(PubEvs) ++ Evs,
+flush_pubs([{Pub, Pst} | Rest], Now, Timeout, Max, Evs, Acc, Sk) ->
+    {PubEvs, Pst2, Sk2} = flush_pub(Pst, Now, Timeout, Max, [], Sk),
+    flush_pubs(Rest, Now, Timeout, Max, lists:reverse(PubEvs) ++ Evs,
                Acc#{Pub => Pst2}, Sk2).
 
-flush_pub(#pub{buf = Buf} = Pst, _Now, _Timeout, EvAcc, Sk)
+flush_pub(#pub{buf = Buf} = Pst, _Now, _Timeout, _Max, EvAcc, Sk)
   when map_size(Buf) =:= 0 ->
     {lists:reverse(EvAcc), Pst, Sk};
-flush_pub(#pub{buf = Buf} = Pst, Now, Timeout, EvAcc, Sk) ->
+flush_pub(#pub{buf = Buf} = Pst, Now, Timeout, Max, EvAcc, Sk) ->
     Oldest = lists:min([Arr || {_Sq, {_E, Arr}} <- maps:to_list(Buf)]),
-    flush_when_expired(Now - Oldest >= Timeout, Pst, Now, Timeout, EvAcc, Sk).
+    flush_when_expired(Now - Oldest >= Timeout, Pst, Now, Timeout, Max, EvAcc, Sk).
 
-flush_when_expired(false, Pst, _Now, _Timeout, EvAcc, Sk) ->
+flush_when_expired(false, Pst, _Now, _Timeout, _Max, EvAcc, Sk) ->
     {lists:reverse(EvAcc), Pst, Sk};
 %% Held first facts whose order timeout is up: start the order at the lowest
 %% held seq. No skip is counted; any gap after it follows the clause below.
-flush_when_expired(true, #pub{next = undefined} = Pst, Now, Timeout, EvAcc, Sk) ->
+flush_when_expired(true, #pub{next = undefined} = Pst, Now, Timeout, Max, EvAcc, Sk) ->
     {Evs, Pst2} = start_order(Pst),
-    flush_pub(Pst2, Now, Timeout, Evs ++ EvAcc, Sk);
-flush_when_expired(true, #pub{buf = Buf} = Pst, Now, Timeout, EvAcc, Sk) ->
+    flush_pub(Pst2, Now, Timeout, Max, Evs ++ EvAcc, Sk);
+flush_when_expired(true, #pub{buf = Buf} = Pst, Now, Timeout, Max, EvAcc, Sk) ->
     MinSeq = lists:min(maps:keys(Buf)),
+    Pst1 = remember_skips(Pst, Pst#pub.next, MinSeq, Max),
     %% `drain' returns events newest-first; `EvAcc' is kept newest-first
     %% and reversed once in the base clause, so prepend directly.
-    {Evs, Pst2} = drain(Pst#pub{next = MinSeq}, []),
-    flush_pub(Pst2, Now, Timeout, Evs ++ EvAcc, Sk + 1).
+    {Evs, Pst2} = drain(Pst1#pub{next = MinSeq}, []),
+    flush_pub(Pst2, Now, Timeout, Max, Evs ++ EvAcc, Sk + 1).
 
 %%%===================================================================
 %%% helpers
@@ -304,3 +363,6 @@ seen_at(error, S, _Pub, _Now) ->
 
 put_pub(#{pubs := P} = S, Pub, Pst) ->
     S#{pubs := maps:put(Pub, Pst, P)}.
+
+bump(late, #{late := N} = S) -> S#{late := N + 1};
+bump(past, #{past := N} = S) -> S#{past := N + 1}.

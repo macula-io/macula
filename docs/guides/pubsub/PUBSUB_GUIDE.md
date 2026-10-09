@@ -246,8 +246,10 @@ A link dying does **not** end the subscription — the pool logs
 re-issues the subscription against the new link once it's up (see
 [Connecting Guide](../shared/CONNECTING_GUIDE.md#lifecycle)). Neither layer
 sees a gap-signaling message for that case, only a possible gap in
-delivery itself, which `ordered` mode's `order_timeout_ms` skip
-handles the same way it handles any other loss.
+delivery itself, which `ordered` mode handles the same way it handles
+any other gap: the skip is counted (`pubsub_gap_skips`), and a copy of a
+skipped fact that arrives later is delivered late, flagged
+`late => true` (`pubsub_late_delivered`).
 
 After the subscription ends, no further events come for it.
 
@@ -266,7 +268,7 @@ contiguous, which is exactly what makes ordered delivery possible.
 
 | Mode | Behaviour | Use when |
 |---|---|---|
-| `ordered` (**default**) | Per-publisher FIFO by `seq`. Out-of-order arrivals are buffered and released in order; a genuinely missing seq is skipped after `order_timeout_ms`. | Event / delta streams where order matters. |
+| `ordered` (**default**) | Per-publisher FIFO by `seq`. Out-of-order arrivals are buffered and released in order; a genuinely missing seq is skipped after `order_timeout_ms`. A copy that arrives after its gap was skipped is still delivered — late, flagged `late => true` in the meta, and counted (`pubsub_late_delivered`); only true duplicates are dropped (`pubsub_past_dropped`). | Event / delta streams where order matters. |
 | `latest_only` | Deliver only seqs newer than the highest seen for that publisher (drop stale). No buffering, no head-of-line delay. | State snapshots — you want the freshest value, not every value. |
 | `as_arrives` | Raw arrival order. Zero added latency; you order it yourself. | You have your own versioning, or you truly do not care. |
 
@@ -290,11 +292,17 @@ verified publisher's EVENTs.
 
 **Ordered mode and loss.** `ordered` trades a bounded delay for order:
 if `seq 2` never arrives, the buffer holds `3, 4, …` only until
-`order_timeout_ms` elapses, then skips the gap and releases them. That
-skip is the accepted "order-not-guaranteed delivery" trade for a lost
-fact — a reorder buffer cannot invent a message the mesh dropped. Design
-mesh facts to be **idempotent and version-stamped** so an occasional
-skip washes out.
+`order_timeout_ms` elapses, then skips the gap and releases them. A skip
+is not a silent drop: the seqs the skip gave up on are remembered
+(bounded per publisher — the newest `order_max_buffer` of them), and a
+copy of one that arrives afterwards is **delivered late**, with
+`late => true` in the event's meta, and counted as
+`pubsub_late_delivered` in `macula:status/1`. Only true duplicates are
+dropped, counted as `pubsub_past_dropped`. What no buffer can do is
+invent a fact the mesh never delivered: those stay visible as
+`pubsub_gap_skips` — each skip either turns up late or remains missing.
+Design mesh facts to be **idempotent and version-stamped** so an
+occasional late delivery or skip washes out.
 
 **A publisher's first facts.** When an `ordered` subscription first hears
 from a publisher, or hears from it again after a restart, it does not yet
@@ -331,18 +339,27 @@ relate two publishers' events.
 | Option | Default | Meaning |
 |---|---|---|
 | `order_timeout_ms` | `250` | How long an `ordered` sub waits for a missing seq before skipping the gap, and the longest it holds a new publisher's first facts. Bounds head-of-line delay. |
-| `order_max_buffer` | `1024` | Per-publisher reorder-buffer count cap. Over it, the head gap is skipped early (memory guard for a high-rate publisher gapping). |
+| `order_max_buffer` | `1024` | Per-publisher reorder-buffer count cap. Over it, the head gap is skipped early (memory guard for a high-rate publisher gapping). The same count bounds the skipped-seq memory that late delivery uses. |
 
 ### Telemetry — is loss real?
 
-`macula:status/1` reports `pubsub_gap_skips`: the number of per-publisher
-gaps given up on after the timeout, i.e. the genuine loss rate an
-`ordered` subscriber could not fill. A near-zero value means the mesh is
-delivering and `ordered` costs you almost nothing; a rising value is the
-signal to look at delivery, not ordering.
+`macula:status/1` reports the ordered-delivery ledger:
+
+- `pubsub_gap_skips` — per-publisher gaps given up on after the timeout
+  (or at the buffer cap);
+- `pubsub_late_delivered` — copies of those gaps that arrived afterwards
+  and were delivered late (`late => true` in the meta);
+- `pubsub_past_dropped` — arrivals dropped as true duplicates.
+
+Each skip either turns up late or remains genuinely missing, so
+`skips - late_delivered` is the loss an `ordered` subscriber could not
+fill. A near-zero value means the mesh is delivering and `ordered` costs
+you almost nothing; a rising value is the signal to look at delivery,
+not ordering.
 
 ```erlang
-{ok, #{pubsub_gap_skips := Skips}} = macula:status(Pool).
+{ok, #{pubsub_gap_skips := Skips,
+       pubsub_late_delivered := Late}} = macula:status(Pool).
 ```
 
 ---
@@ -363,7 +380,9 @@ seq to order or drop; in `as_arrives` the dedup layer is the only filter.
 - **Per-publisher delivery order** — `ordered` by default at the
   subscriber (see [Delivery ordering](#delivery-ordering) above):
   out-of-order arrivals are buffered and released in `seq` order, with a
-  genuinely missing `seq` skipped after `order_timeout_ms`. The mesh
+  genuinely missing `seq` skipped after `order_timeout_ms` and a copy
+  that arrives after the skip delivered late, flagged `late => true`
+  (only true duplicates are dropped). The mesh
   itself does not guarantee arrival order — a relay spreads one
   publisher's burst across concurrent verify workers, and a receiver may
   admit an event by more than one path — the subscriber-side `ordered`

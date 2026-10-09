@@ -134,8 +134,10 @@ A link dying does **not** send this — the pool logs
 re-issues the subscription against the new link once it's up (see
 [Connecting Guide](../shared/CONNECTING_GUIDE.md#lifecycle)). A subscriber sees
 no gap-signaling message for that case, only a possible gap in
-delivery itself, which `ordered` mode's `order_timeout_ms` skip
-handles the same way it handles any other loss.
+delivery itself, which `ordered` mode handles the same way it handles
+any other gap: the skip is counted (`pubsub_gap_skips`), and a copy of a
+skipped fact that arrives later is delivered late, flagged
+`late => true` (`pubsub_late_delivered`).
 
 After `event_gone` arrives, no further events come for that `SubRef`.
 `macula_subscriber` stops its sink with this same reason — see

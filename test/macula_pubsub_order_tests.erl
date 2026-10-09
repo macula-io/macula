@@ -37,11 +37,16 @@ ordered_first_seq_is_base_test() ->
     {D, _} = then_flush(run(S0, [{?P, 1000, 0}, {?P, 1001, 0}]), ?T),
     ?assertEqual([1000, 1001], D).
 
-%% A late duplicate / already-past seq is dropped, not re-delivered.
+%% A true duplicate (already delivered) is dropped, not re-delivered,
+%% and counted as a past-drop -- distinct from a late copy of a seq the
+%% flush gave up on, which is delivered (see the late-copy tests below).
 ordered_drops_past_test() ->
     S0 = macula_pubsub_order:new(ordered),
-    {D, _} = then_flush(run(S0, [{?P, 5, 0}, {?P, 6, 0}, {?P, 5, 0}, {?P, 6, 0}]), ?T),
-    ?assertEqual([5, 6], D).
+    {D, S1} = then_run(then_flush(run(S0, [{?P, 5, 0}, {?P, 6, 0}]), ?T),
+                       [{?P, 5, 10}, {?P, 6, 11}]),
+    ?assertEqual([5, 6], D),
+    ?assertEqual(2, macula_pubsub_order:past_dropped(S1)),
+    ?assertEqual(0, macula_pubsub_order:late_delivered(S1)).
 
 %% Two publishers are independent seq streams; interleaving one does not
 %% stall the other.
@@ -69,6 +74,59 @@ ordered_flush_skips_gap_test() ->
     ?assertEqual([7, 8], D3),
     ?assertEqual(0, macula_pubsub_order:buffered(S3)),
     ?assertEqual(1, macula_pubsub_order:skips(S3)).
+
+%% A copy of a seq whose gap the flush gave up on is delivered when it
+%% finally arrives -- wrapped `late' so the caller can flag it -- and
+%% counted, not mistaken for a duplicate.
+ordered_late_copy_after_flush_skip_is_delivered_test() ->
+    S0 = macula_pubsub_order:new(ordered),
+    {D1, S1} = then_run(then_flush(run(S0, [{?P, 5, 0}]), 100, 100),
+                        [{?P, 7, 101}, {?P, 8, 102}]),
+    ?assertEqual([5], D1),
+    {D2, S2} = macula_pubsub_order:flush(S1, 300, 100),
+    ?assertEqual([7, 8], D2),
+    ?assertEqual(1, macula_pubsub_order:skips(S2)),
+    %% 6 was skipped at 300; its copy arrives at 400 and is delivered late.
+    {D3, S3} = run(S2, [{?P, 6, 400}]),
+    ?assertEqual([{late, 6}], D3),
+    ?assertEqual(1, macula_pubsub_order:late_delivered(S3)),
+    ?assertEqual(0, macula_pubsub_order:past_dropped(S3)).
+
+%% The buffer-cap path remembers the gap it gave up on too: a copy that
+%% arrives after the early skip is still delivered late.
+ordered_late_copy_after_cap_skip_is_delivered_test() ->
+    S0 = macula_pubsub_order:new(ordered, 3),
+    %% 1 delivered; 3,4,5 buffered (gap at 2); 6 overflows the cap and
+    %% skips the gap early.
+    {D1, S1} = run(S0, [{?P, 1, 0}, {?P, 3, 0}, {?P, 4, 0}, {?P, 5, 0}, {?P, 6, 0}]),
+    ?assertEqual([1, 3, 4, 5, 6], D1),
+    ?assertEqual(1, macula_pubsub_order:skips(S1)),
+    {D2, S2} = run(S1, [{?P, 2, 10}]),
+    ?assertEqual([{late, 2}], D2),
+    ?assertEqual(1, macula_pubsub_order:late_delivered(S2)),
+    ?assertEqual(0, macula_pubsub_order:past_dropped(S2)).
+
+%% The skipped set is bounded per publisher: a wide gap keeps only the
+%% newest `Max' seqs, so a copy of an evicted (ancient) hole is counted
+%% as a past-drop, while a recent one is still delivered late.
+ordered_skipped_set_is_bounded_test() ->
+    S0 = macula_pubsub_order:new(ordered, 5),
+    {D1, S1} = then_flush(run(S0, [{?P, 1, 0}]), ?T),
+    ?assertEqual([1], D1),
+    %% 10..15 buffered behind the wide gap 2..9; the 15th fact trips the
+    %% cap (5): the gap is given up on, keeping only 5..9.
+    {D2, S2} = run(S1, [{?P, 10, 0}, {?P, 11, 0}, {?P, 12, 0}, {?P, 13, 0},
+                        {?P, 14, 0}, {?P, 15, 0}]),
+    ?assertEqual([10, 11, 12, 13, 14, 15], D2),
+    ?assertEqual(1, macula_pubsub_order:skips(S2)),
+    %% 9 is within the bound: late-deliverable.
+    {D3, S3} = run(S2, [{?P, 9, 10}]),
+    ?assertEqual([{late, 9}], D3),
+    %% 4 fell out of the bound: a plain past-drop now.
+    {D4, S4} = run(S3, [{?P, 4, 11}]),
+    ?assertEqual([], D4),
+    ?assertEqual(1, macula_pubsub_order:late_delivered(S4)),
+    ?assertEqual(1, macula_pubsub_order:past_dropped(S4)).
 
 %% A large forward jump is a publisher restart (seq re-based to µs): the
 %% old expected counter is abandoned rather than waited on.

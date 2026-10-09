@@ -215,6 +215,8 @@
     subscriptions      := non_neg_integer(),
     replication_factor := pos_integer(),
     pubsub_gap_skips   := non_neg_integer(),
+    pubsub_late_delivered := non_neg_integer(),
+    pubsub_past_dropped   := non_neg_integer(),
     refused_dials      := #{too_many_direct_links | new_peer_budget_spent | unusable_seed
                             | link_start_waits_for_issuer | seed_without_expected_node_id
                             | pin_tls_cert_refused => pos_integer()},
@@ -1909,6 +1911,13 @@ handle_call(status, _From,
         %% Per-publisher gaps given up on after the reorder timeout —
         %% the genuine loss rate an `ordered' subscriber could not fill.
         pubsub_gap_skips   => total_skips(Subs),
+        %% Copies of such gaps that arrived afterwards and were delivered
+        %% late (flagged `late => true' in their meta).
+        pubsub_late_delivered => total_late(Subs),
+        %% Arrivals dropped as already-past: true duplicates. With the
+        %% two above, the ordered-mode ledger: each skip either delivered
+        %% late or is still missing.
+        pubsub_past_dropped   => total_past(Subs),
         %% Dials and link starts refused, and discovered stations deferred
         %% by the budget or refused, by reason.
         refused_dials      => macula_refusal_report:counts(S#state.refused_dials),
@@ -3834,12 +3843,25 @@ order_key(#{publisher := Pub}) -> Pub.
 %% does (refused under a `required' group this node holds), and is told of a
 %% sealed one that it has no group to open it with.
 routed_events(#sub_spec{opener = Opener}, _Pid, _SubRef, Events, _Keyring) when is_pid(Opener) ->
-    lists:foreach(fun({P, M, T}) -> macula_group_opener:open(Opener, T, P, M) end, Events);
+    lists:foreach(fun(Event) -> open_event(Opener, Event) end, Events);
 routed_events(#sub_spec{}, Pid, SubRef, Events, Keyring) ->
-    lists:foreach(fun({P, M, T}) -> plain_event(Pid, SubRef, T, P, M, Keyring) end, Events).
+    lists:foreach(fun(Event) -> plain_ordered_event(Pid, SubRef, Event, Keyring) end, Events).
 
-plain_event(Pid, SubRef, Topic, _Payload, #{sealed := #{key_id := Id}, publisher := Publisher}, _Keyring) ->
-    Pid ! {macula_event_unopened, SubRef, Topic, #{publisher => Publisher, seal_key_id => Id, reason => no_group}},
+%% A late delivery -- `ordered' mode gave the seq's gap up and its copy
+%% arrived afterwards -- is flagged in the meta, `late => true', so a
+%% subscriber can see which facts came out of order.
+open_event(Opener, {late, {P, M, T}}) -> macula_group_opener:open(Opener, T, P, M#{late => true});
+open_event(Opener, {P, M, T}) -> macula_group_opener:open(Opener, T, P, M).
+
+plain_ordered_event(Pid, SubRef, {late, {P, M, T}}, Keyring) ->
+    plain_event(Pid, SubRef, T, P, M#{late => true}, Keyring);
+plain_ordered_event(Pid, SubRef, {P, M, T}, Keyring) ->
+    plain_event(Pid, SubRef, T, P, M, Keyring).
+
+plain_event(Pid, SubRef, Topic, _Payload, #{sealed := #{key_id := Id}, publisher := Publisher} = Meta, _Keyring) ->
+    Late = case maps:is_key(late, Meta) of true -> #{late => true}; false -> #{} end,
+    Pid ! {macula_event_unopened, SubRef, Topic,
+           maps:merge(#{publisher => Publisher, seal_key_id => Id, reason => no_group}, Late)},
     ok;
 plain_event(Pid, SubRef, Topic, Payload, Meta, Keyring) ->
     macula_group_opener:delivered(Keyring, Topic, Meta,
@@ -3862,6 +3884,14 @@ now_ms() -> erlang:monotonic_time(millisecond).
 
 total_skips(Subs) ->
     lists:sum([macula_pubsub_order:skips(O)
+               || #sub_spec{order = O} <- maps:values(Subs)]).
+
+total_late(Subs) ->
+    lists:sum([macula_pubsub_order:late_delivered(O)
+               || #sub_spec{order = O} <- maps:values(Subs)]).
+
+total_past(Subs) ->
+    lists:sum([macula_pubsub_order:past_dropped(O)
                || #sub_spec{order = O} <- maps:values(Subs)]).
 
 %% Delivery mode from subscribe opts; `ordered' is the default (a
