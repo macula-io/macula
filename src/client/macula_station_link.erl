@@ -131,6 +131,8 @@
                           andalso map_get(ttl_ms, A) =< ?MAX_SPEC_TTL_MS)))).
 -behaviour(gen_server).
 
+-include("macula_caller.hrl").
+
 %% What a call error says about trying the same request somewhere else. See
 %% `failure_scope/1'.
 -type failure_scope() :: candidate | request | provider.
@@ -304,11 +306,6 @@
 %% The code a provider's ERROR carries for a handler that refused, with the
 %% handler's text as its detail.
 -define(HANDLER_ERROR_CODE, <<"handler_error">>).
-%% Where the wire-authenticated caller of the request a process serves lives,
-%% for processes (handler, stream handler, macula_response child) that
-%% `caller/0' reads from. Set by this link on every inbound CALL and served
-%% STREAM_OPEN, whatever shape the payload has (macula#60).
--define(CALLER_CONTEXT_KEY, '$macula_handler_caller').
 -define(CONNECT_RETRY_BACKOFF_MS, 1_000).
 
 %% App-level liveness probe. Sends a tiny CALL (`_macula.ping' on the

@@ -60,6 +60,7 @@
 -behaviour(gen_server).
 
 -include_lib("kernel/include/logger.hrl").
+-include("macula_caller.hrl").
 
 -export([advertise/5, advertise/6, advertise_direct/6, advertise_direct/7,
         unadvertise/3]).
@@ -73,12 +74,8 @@
 %% so a handler may read either. `undefined' outside a served request.
 -export([caller/0]).
 
-%% The same provenance key `macula_station_link' sets in the process that
-%% runs a handler; this module sets it in its own child's process, where
-%% `handle_request/2' runs. Set by the link before dispatch for every
-%% payload shape (macula#60).
--define(CALLER_CONTEXT_KEY, '$macula_handler_caller').
-
+%% The caller context is readable in `handle_request/2'; `init/1' runs
+%% before it is set, so `caller/0' is not for `init/1'.
 -callback init(Args :: term()) ->
     {ok, State :: term()} | {stop, Reason :: term()}.
 
