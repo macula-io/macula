@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [14.5.0] - 2026-10-09
+
 ### Security
 
 - **A UCAN's did:key is length-bounded before it is decoded (#87).** Base58 decodes in time quadratic in its
