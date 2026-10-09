@@ -1,14 +1,17 @@
-%% EUnit tests for `macula_request_admission'. A provider admits each verified request once: it keeps (caller,
-%% request_id) until the request's deadline plus 5 minutes, hands a copy with the same request hash the stored reply,
-%% and refuses a copy with another hash (DESIGN_PQ_SIGNED_FRAMES_AND_RECORDS.md, Requests). The seen entries are
-%% bounded per caller, per share and overall, and a full bound refuses a request rather than evicting an entry.
+%% EUnit tests for `macula_request_admission'. A provider admits each verified request once: the caller and share
+%% slots it takes are in-flight bounds, freed when the reply is sent or the handler ends, while a compact run-once
+%% marker of (caller, request_id) is kept until the deadline plus 5 minutes in a set bounded by `seen_bytes'
+%% (DESIGN_PQ_SIGNED_FRAMES_AND_RECORDS.md, Requests). A copy with the same request hash gets the stored reply until
+%% the deadline, is refused `request_copy' past it, and a copy with another hash is refused `request_id_reused'. A
+%% full bound refuses a request with `retry_after_ms' and never evicts an entry.
 -module(macula_request_admission_tests).
 
 -include_lib("eunit/include/eunit.hrl").
 
 -define(NOW, 1789000000000).
 -define(MINUTE, 60000).
--define(LIMITS, #{caller_quota => 2, share => 3, cap => 5, reply_bytes => 100, reply_bytes_total => 300}).
+-define(LIMITS, #{caller_quota => 2, share => 3, cap => 5, reply_bytes => 100, reply_bytes_total => 300,
+                  seen_bytes => 64 * 1024 * 1024}).
 
 a_first_request_is_new_test() ->
     with_admission(fun(A) ->
@@ -62,14 +65,14 @@ a_deadline_more_than_10_minutes_ahead_is_not_yet_valid_test() ->
 a_caller_over_its_quota_is_refused_while_another_caller_on_the_connection_is_accepted_test() ->
     with_admission(fun(A) ->
         [new = admit(A, request(1, N), link_a) || N <- [1, 2]],
-        ?assertEqual({refused, caller_quota}, admit(A, request(1, 3), link_a)),
+        ?assertMatch({refused, {caller_quota, _}}, admit(A, request(1, 3), link_a)),
         ?assertEqual(new, admit(A, request(2, 1), link_a))
     end).
 
 a_connection_filling_its_share_leaves_another_connection_accepted_test() ->
     with_admission(fun(A) ->
         [new = admit(A, request(C, 1), link_a) || C <- [1, 2, 3]],
-        ?assertEqual({refused, share_full}, admit(A, request(4, 1), link_a)),
+        ?assertMatch({refused, {share_full, _}}, admit(A, request(4, 1), link_a)),
         ?assertEqual(new, admit(A, request(4, 1), link_b))
     end).
 
@@ -78,20 +81,114 @@ a_full_set_refuses_on_every_connection_test() ->
     with_admission(fun(A) ->
         [new = admit(A, request(C, 1), Share)
          || {C, Share} <- [{1, link_a}, {2, link_a}, {3, link_b}, {4, link_b}, {5, link_c}]],
-        ?assertEqual({refused, admission_full}, admit(A, request(6, 1), link_c))
+        ?assertMatch({refused, {admission_full, _}}, admit(A, request(6, 1), link_c))
     end).
 
 %% A refused request takes nothing: not the caller's quota, not the share, not a place in the set.
 a_refused_request_takes_no_place_test() ->
     with_admission(fun(A) ->
         [new = admit(A, request(C, 1), link_a) || C <- [1, 2, 3]],
-        {refused, share_full} = admit(A, request(4, 1), link_a),
-        {refused, share_full} = admit(A, request(4, 2), link_a),
+        ?assertMatch({refused, {share_full, _}}, admit(A, request(4, 1), link_a)),
+        ?assertMatch({refused, {share_full, _}}, admit(A, request(4, 2), link_a)),
         ?assertEqual(new, admit(A, request(4, 3), link_b)),
         ?assertEqual(new, admit(A, request(4, 4), link_b))
     end).
 
-%% Under a controlled clock, an entry keeps its place through its deadline plus 5 minutes and frees it after.
+%% A served request frees its caller slot when the reply is sent: the quota is an in-flight bound, not a rate
+%% limit. With a quota of 2, two more requests fit after the first is served.
+a_served_request_frees_its_caller_slot_test() ->
+    with_admission(fun(A) ->
+        Request = request(1, 1),
+        new = admit(A, Request, link_a),
+        ?assertEqual(kept, store(A, Request, reply, 10)),
+        ?assertEqual([new, new], [admit(A, request(1, I), link_a) || I <- [2, 3]]),
+        ?assertMatch({refused, {caller_quota, _}}, admit(A, request(1, 4), link_b))
+    end).
+
+%% And its share slot: with a share of 1, another caller on the same connection fits once the first request is
+%% served, but not before.
+a_served_request_frees_its_share_slot_test() ->
+    {ok, A} = macula_request_admission:start_link(maps:merge(?LIMITS, #{caller_quota => 1, share => 1})),
+    try
+        Request = request(1, 1),
+        new = admit(A, Request, link_a),
+        ?assertMatch({refused, {share_full, _}}, admit(A, request(2, 1), link_a)),
+        ?assertEqual(kept, store(A, Request, reply, 10)),
+        ?assertEqual(new, admit(A, request(2, 1), link_a))
+    after
+        macula_request_admission:stop(A)
+    end.
+
+%% A handler that ends without a reply frees its slot too: release/2 drops the in-flight entry and keeps the
+%% run-once marker.
+a_handler_that_ends_without_a_reply_frees_its_slot_test() ->
+    with_admission(fun(A) ->
+        Request = request(1, 1),
+        new = admit(A, Request, link_a),
+        ?assertEqual(ok, macula_request_admission:release(A, Request)),
+        ?assertEqual(new, admit(A, request(1, 2), link_a)),
+        %% the run-once marker stayed: a copy is still not admitted again
+        ?assertEqual({refused, request_copy}, admit(A, Request, link_b)),
+        ?assertEqual(gone, macula_request_admission:release(A, Request))
+    end).
+
+%% A replay inside the run-once window is answered or refused as today; past the window it is a new request.
+a_replay_inside_the_window_is_answered_or_refused_and_after_it_is_new_test() ->
+    with_admission(fun(A) ->
+        Deadline = ?NOW + ?MINUTE,
+        Request = (request(1, 1))#{deadline => Deadline},
+        new = admit(A, Request, link_a),
+        ?assertEqual(kept, store(A, Request, reply, 10)),
+        ?assertEqual({copy, {reply, reply}}, admit_at(A, Request, link_b, Deadline)),
+        ?assertEqual({refused, request_copy}, admit_at(A, Request, link_b, Deadline + 1)),
+        ?assertEqual({refused, request_id_reused},
+                     admit_at(A, (Request)#{request_hash => hash(reused)}, link_b, Deadline + 2)),
+        Late = Deadline + 5 * ?MINUTE + 1,
+        ?assertEqual(new, admit_at(A, (Request)#{request_hash => hash(reused),
+                                                 deadline => Late + ?MINUTE}, link_b, Late))
+    end).
+
+%% The run-once markers are bounded by seen_bytes: a full set refuses admission_full, and refuses rather than
+%% evicting -- the markers already held still answer their copies.
+the_marker_set_refuses_when_full_and_never_evicts_test() ->
+    MarkerBytes = macula_request_admission:marker_bytes(),
+    {ok, A} = macula_request_admission:start_link(maps:put(seen_bytes, 3 * MarkerBytes, ?LIMITS)),
+    try
+        [new = admit(A, request(C, 1), Share)
+         || {C, Share} <- [{1, link_a}, {2, link_b}, {3, link_c}]],
+        {refused, {admission_full, Ms}} = admit(A, request(4, 1), link_a),
+        ?assert(is_integer(Ms) andalso Ms >= 0),
+        %% Nothing was evicted: the three markers still answer their copies.
+        ?assertEqual(kept, store(A, request(1, 1), reply_one, 10)),
+        ?assertEqual({copy, {reply, reply_one}}, admit(A, request(1, 1), link_b)),
+        ?assertEqual({copy, pending}, admit(A, request(2, 1), link_b)),
+        %% And once a marker's window ends, its bytes are back.
+        After = ?NOW + ?MINUTE + 5 * ?MINUTE + 1,
+        ?assertEqual(3, macula_request_admission:sweep(A, After)),
+        ?assertEqual(new, macula_request_admission:admit(A, (request(4, 1))#{deadline => After}, link_a, After))
+    after
+        macula_request_admission:stop(A)
+    end.
+
+%% A bound refusal names the nearest in-flight deadline: the soonest the
+%% outstanding work can finish and free a place.
+a_caller_quota_refusal_carries_the_nearest_deadline_test() ->
+    with_admission(fun(A) ->
+        Newer = ?NOW + 9 * ?MINUTE,
+        [new = admit(A, (request(1, N))#{deadline => Newer - N * ?MINUTE}, link_a) || N <- [1, 2]],
+        {refused, {caller_quota, Ms}} = admit(A, (request(1, 3))#{deadline => ?NOW}, link_b),
+        %% the nearer of the two in-flight deadlines
+        ?assertEqual(Newer - 2 * ?MINUTE - ?NOW, Ms)
+    end).
+
+a_share_full_refusal_carries_the_nearest_deadline_test() ->
+    with_admission(fun(A) ->
+        [new = admit(A, (request(C, 1))#{deadline => ?NOW + 2 * ?MINUTE}, link_a) || C <- [1, 2, 3]],
+        {refused, {share_full, Ms}} = admit(A, (request(4, 1))#{deadline => ?NOW}, link_a),
+        ?assertEqual(2 * ?MINUTE, Ms)
+    end).
+
+%% Under a controlled clock, a marker keeps its place through its deadline plus 5 minutes and frees it after.
 an_entry_past_its_deadline_plus_5_minutes_frees_its_place_test() ->
     with_admission(fun(A) ->
         Deadline = ?NOW + ?MINUTE,
@@ -99,7 +196,7 @@ an_entry_past_its_deadline_plus_5_minutes_frees_its_place_test() ->
         [new = admit(A, R, Share) || {R, Share} <- lists:zip(Held, [link_a, link_a, link_a, link_b, link_b])],
         Last = Deadline + 5 * ?MINUTE,
         ?assertEqual(0, macula_request_admission:sweep(A, Last)),
-        ?assertEqual({refused, admission_full},
+        ?assertMatch({refused, {admission_full, _}},
                      macula_request_admission:admit(A, (request(6, 1))#{deadline => Last}, link_c, Last)),
         After = Last + 1,
         ?assertEqual(5, macula_request_admission:sweep(A, After)),
@@ -110,8 +207,8 @@ an_entry_past_its_deadline_plus_5_minutes_frees_its_place_test() ->
                                                      [link_a, link_a, link_a, link_b, link_b])])
     end).
 
-%% Expiry is judged when admission runs: an entry past its deadline plus 5 minutes that no sweep has removed yet does
-%% not keep its request_id.
+%% Expiry is judged when admission runs: a marker past its deadline plus 5 minutes that no sweep has removed yet
+%% does not keep its request_id.
 an_expired_entry_not_yet_swept_does_not_hold_its_request_id_test() ->
     with_admission(fun(A) ->
         Deadline = ?NOW + ?MINUTE,
@@ -121,9 +218,10 @@ an_expired_entry_not_yet_swept_does_not_hold_its_request_id_test() ->
         ?assertEqual(new, macula_request_admission:admit(A, Reused, link_a, After))
     end).
 
-%% A full bound is judged on the entries alive when admission runs: before refusing, the admission drops the entries
-%% past their deadline plus 5 minutes, so a caller whose quota holds only expired entries is admitted without waiting
-%% for a sweep (macula#37: a station's liveness pings held a provider's quota for a caller full for good).
+%% A full bound is judged on the entries alive when admission runs: before refusing, the admission drops the
+%% markers past their deadline plus 5 minutes, so a caller whose quota holds only expired entries is admitted
+%% without waiting for a sweep (macula#37: a station's liveness pings held a provider's quota for a caller full
+%% for good).
 a_caller_whose_quota_holds_only_expired_entries_is_admitted_without_a_sweep_test() ->
     with_admission(fun(A) ->
         Deadline = ?NOW + ?MINUTE,
@@ -131,7 +229,7 @@ a_caller_whose_quota_holds_only_expired_entries_is_admitted_without_a_sweep_test
         After = Deadline + 5 * ?MINUTE + 1,
         ?assertEqual(new, macula_request_admission:admit(A, (request(1, 3))#{deadline => After}, link_a, After)),
         ?assertEqual(new, macula_request_admission:admit(A, (request(1, 4))#{deadline => After}, link_a, After)),
-        ?assertEqual({refused, caller_quota},
+        ?assertMatch({refused, {caller_quota, _}},
                      macula_request_admission:admit(A, (request(1, 5))#{deadline => After}, link_a, After))
     end).
 
@@ -187,9 +285,9 @@ removing_an_entry_releases_its_reply_bytes_test() ->
         ?assertEqual(kept, store(A, Next, reply_two, 100))
     end).
 
-%% The stored reply bytes of all callers together are bounded too, since callers are cheap to make: a reply within its
-%% caller's bound but past the total is not kept, a copy of its request is then refused, and removing entries frees
-%% their bytes for everyone.
+%% The stored reply bytes of all callers together are bounded too, since callers are cheap to make: a reply within
+%% its caller's bound but past the total is not kept, a copy of its request is then refused, and removing entries
+%% frees their bytes for everyone.
 a_reply_past_the_total_byte_bound_is_not_kept_test() ->
     {ok, A} = macula_request_admission:start_link(maps:put(reply_bytes_total, 150, ?LIMITS)),
     try
@@ -208,8 +306,8 @@ a_reply_past_the_total_byte_bound_is_not_kept_test() ->
         macula_request_admission:stop(A)
     end.
 
-%% Many callers, each under its own cap, fill the total: a fresh caller's request is still admitted, its reply is not
-%% stored, a copy of it is refused, and every reply not stored is counted.
+%% Many callers, each under its own cap, fill the total: a fresh caller's request is still admitted, its reply is
+%% not stored, a copy of it is refused, and every reply not stored is counted.
 many_callers_under_their_caps_fill_the_total_and_new_requests_are_still_admitted_test() ->
     {ok, A} = macula_request_admission:start_link(maps:merge(?LIMITS, #{cap => 100, share => 100,
                                                                         reply_bytes_total => 250})),
@@ -229,8 +327,8 @@ many_callers_under_their_caps_fill_the_total_and_new_requests_are_still_admitted
         macula_request_admission:stop(A)
     end.
 
-%% A request is recorded before its handler runs: with the total full, a copy that arrives while the handler runs waits
-%% for its reply, and a copy after it finished is refused; neither is admitted as new.
+%% A request is recorded before its handler runs: with the total full, a copy that arrives while the handler runs
+%% waits for its reply, and a copy after it finished is refused; neither is admitted as new.
 a_copy_during_execution_is_never_admitted_again_when_the_total_is_full_test() ->
     {ok, A} = macula_request_admission:start_link(maps:put(reply_bytes_total, 100, ?LIMITS)),
     try
@@ -246,11 +344,11 @@ a_copy_during_execution_is_never_admitted_again_when_the_total_is_full_test() ->
         macula_request_admission:stop(A)
     end.
 
-%% Refusals are counted by kind; a deadline refusal counts under its kind, whatever its milliseconds.
+%% Refusals are counted by kind; a bound refusal counts under its kind, whatever its retry hint.
 refusals_are_counted_by_kind_test() ->
     with_admission(fun(A) ->
         [new = admit(A, request(1, N), link_a) || N <- [1, 2]],
-        {refused, caller_quota} = admit(A, request(1, 3), link_a),
+        {refused, {caller_quota, _}} = admit(A, request(1, 3), link_a),
         {refused, request_id_reused} = admit(A, (request(1, 1))#{request_hash => hash(other)}, link_b),
         {refused, {expired, _}} = admit(A, (request(2, 1))#{deadline => ?NOW - 6 * ?MINUTE}, link_a),
         {refused, {expired, _}} = admit(A, (request(2, 2))#{deadline => ?NOW - 7 * ?MINUTE}, link_a),
@@ -263,7 +361,7 @@ refusals_are_counted_by_kind_test() ->
 refusals_name_their_caller_and_procedure_test() ->
     with_admission(fun(A) ->
         [new = admit(A, (request(1, N))#{procedure => <<"acme/count_v1">>}, link_a) || N <- [1, 2]],
-        {refused, caller_quota} = admit(A, (request(1, 3))#{procedure => <<"acme/count_v1">>}, link_a),
+        {refused, {caller_quota, _}} = admit(A, (request(1, 3))#{procedure => <<"acme/count_v1">>}, link_a),
         Prefix = binary:encode_hex(binary:part(<<1:256>>, 0, 8), lowercase),
         ?assertEqual(#{caller_quota => [{{Prefix, <<"acme/count_v1">>}, 1}]},
                      macula_request_admission:refusal_sources(A))
@@ -287,7 +385,7 @@ racing_copies_admit_a_request_once_test() ->
         ?assertEqual(1, length([new || new <- Results])),
         ?assertEqual(5, length([copy || {copy, pending} <- Results])),
         ?assertEqual(new, admit(A, request(1, 2), link_a)),
-        ?assertEqual({refused, caller_quota}, admit(A, request(1, 3), link_a))
+        ?assertMatch({refused, {caller_quota, _}}, admit(A, request(1, 3), link_a))
     end).
 
 %% A caller and a request hash are fixed-size ids, never a key or a label.
@@ -307,6 +405,9 @@ with_admission(Test) ->
 
 admit(Admission, Request, Share) ->
     macula_request_admission:admit(Admission, Request, Share, ?NOW).
+
+admit_at(Admission, Request, Share, Now) ->
+    macula_request_admission:admit(Admission, Request, Share, Now).
 
 store(Admission, Request, Reply, Bytes) ->
     macula_request_admission:store_reply(Admission, Request, Reply, Bytes, ?NOW).

@@ -426,18 +426,20 @@
 
     %% Limits of the request admission the pool runs for every request its
     %% links receive (docs/design/DESIGN_PQ_SIGNED_FRAMES_AND_RECORDS.md,
-    %% Requests): entries per caller (default 256) and per link's share
-    %% (1024), and stored reply bytes per caller (256 KiB) and in total
-    %% (16 MiB). A link's share is its normalized seed. A key not given here
-    %% falls back to the `macula' application environment's
+    %% Requests): requests in flight per caller (default 256) and per link's
+    %% share (1024), run-once markers bounded by bytes in total (64 MiB,
+    %% 512 bytes each, measured), and stored reply bytes per caller (256 KiB) and
+    %% in total (16 MiB). A link's share is its normalized seed. A key not
+    %% given here falls back to the `macula' application environment's
     %% `request_admission', then to its default. Each is an integer from 1 to
-    %% a cap (65,536; 65,536; 16 MiB; 1 GiB), with the quota per caller no
-    %% larger than the share and the reply bytes per caller no larger than
+    %% a cap (65,536; 65,536; 1 GiB; 16 MiB; 1 GiB), with the quota per caller
+    %% no larger than the share and the reply bytes per caller no larger than
     %% the total, or the pool does not start: `{error,
     %% {invalid_admission_limit, Key, Value}}' or `{error,
     %% {admission_limit_above, Smaller, Larger}}'.
     request_admission => #{caller_quota => pos_integer(), share => pos_integer(),
-                           reply_bytes => pos_integer(), reply_bytes_total => pos_integer()},
+                           reply_bytes => pos_integer(), reply_bytes_total => pos_integer(),
+                           seen_bytes => pos_integer()},
 
     %% The station node_id every link this pool dials must prove.
     expected_node_id   => <<_:256>>
@@ -551,11 +553,13 @@
 %% The request admission limits a pool starts with unless it is given others
 %% (docs/design/DESIGN_PQ_SIGNED_FRAMES_AND_RECORDS.md, Requests), and the most each
 %% may be set to. The admission's cap is the share times the pool's link
-%% limits summed, the most distinct shares one entry lifetime can see.
+%% limits summed, the most distinct shares one request lifetime can see.
 -define(DEFAULT_ADMISSION_LIMITS, #{caller_quota => 256, share => 1024, reply_bytes => 262144,
-                                    reply_bytes_total => 16777216}).
+                                    reply_bytes_total => 16777216, seen_bytes => 67108864}).
 -define(ADMISSION_LIMIT_CAPS, #{caller_quota => 65536, share => 65536, reply_bytes => 16777216,
-                                reply_bytes_total => 1073741824}).
+                                reply_bytes_total => 1073741824, seen_bytes => 1073741824}).
+%% The caps and defaults above, in the order the docs name them: quota,
+%% share, seen_bytes, reply_bytes, reply_bytes_total.
 
 -record(link_state, {
     seed          :: seed(),

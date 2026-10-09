@@ -448,6 +448,11 @@
                               {pid(), reference(), reference()}},
     server_streams = #{} :: #{macula_frame:stream_id() =>
                               {pid(), reference(), reference()}},
+    %% The admitted request of each served session, by its attach id: a
+    %% session's in-flight place is released when the session ends, so one
+    %% caller serves more stream opens (one per content chunk) than its
+    %% quota (macula#89).
+    server_keys = #{} :: #{macula_frame:stream_id() => {<<_:256>>, <<_:128>>}},
     %% Inbound byte buffer per dedicated QUIC stream, keyed by the
     %% QUIC stream reference itself (stable for the stream's life,
     %% known before any frame — let alone its `stream_id' — has been
@@ -2419,9 +2424,10 @@ fail_all_pending(Reason, #state{pending = P, subscriptions = Subs,
     %% session to abort either.
     maps:foreach(fun(Stream, _Buf) -> close_dedicated_stream(Stream, S) end,
                 S#state.opening_bufs),
+    ok = released_keys(maps:values(S#state.server_keys), S),
     S#state{pending = #{}, subscriptions = #{}, topic_index = #{},
             overlay_subscriptions = #{}, overlay_realm_index = #{},
-            client_streams = #{}, server_streams = #{}, stream_bufs = #{},
+            client_streams = #{}, server_streams = #{}, server_keys = #{}, stream_bufs = #{},
             opening_bufs = #{}}.
 
 abort_stream_process(Pid, Reason) ->
@@ -3181,7 +3187,7 @@ on_call_admission({copy, {reply, Reply}}, Request, #state{peer_pid = Pid, node_i
 on_call_admission({copy, pending}, Request, S) ->
     call_refused(<<"request_copy">>, Request, S);
 on_call_admission({refused, Refusal}, Request, S) ->
-    call_refused(admission_code(Refusal), Request, S);
+    call_refused(admission_code(Refusal), admission_detail(Refusal), Request, S);
 on_call_admission(_Verdict, _Request, _S) ->
     ok.
 
@@ -3282,15 +3288,36 @@ within_admission(Run, #{deadline := Deadline}) ->
 replied({reply, Reply}, Admission, Request, Pid, Id, Seal) ->
     _ = stored_reply(Admission, Request, Reply),
     sent_or_faulted(macula_peering:send_frame(Pid, Reply), Pid, Request, Id, Seal);
-replied(_NoReply, _Admission, _Request, _Pid, _Id, _Seal) ->
+replied(_NoReply, Admission, Request, _Pid, _Id, _Seal) ->
+    _ = released(Admission, Request),
     ok.
 
-call_refused(Code, Request, #state{peer_pid = Pid, node_identity = Id}) when is_pid(Pid) ->
-    Reply = macula_frame:provider_error(#{request => Request, code => Code}, Id),
+call_refused(Code, Request, S) ->
+    call_refused(Code, undefined, Request, S).
+
+call_refused(Code, Detail, Request, #state{peer_pid = Pid, node_identity = Id}) when is_pid(Pid) ->
+    Reply = macula_frame:provider_error(with_detail(Detail, #{request => Request, code => Code}), Id),
     sent_or_faulted(macula_peering:send_frame(Pid, Reply), Pid, Request, Id),
     ok;
-call_refused(_Code, _Request, _S) ->
+call_refused(_Code, _Detail, _Request, _S) ->
     ok.
+
+%% How a bound refusal tells the caller how long to wait before asking again:
+%% the earliest release it can name, in the ERROR frame's existing detail. No
+%% wire change (macula#89).
+admission_detail({Kind, Ms}) when (Kind =:= caller_quota orelse Kind =:= share_full orelse
+                                   Kind =:= admission_full), is_integer(Ms), Ms >= 0 ->
+    <<"retry_after_ms=", (integer_to_binary(Ms))/binary>>;
+admission_detail(_ExpiredOrNotABound) ->
+    undefined.
+
+%% A refusal on a stream says the same in its message, the stream frame's
+%% one text field.
+admission_message(Refusal) ->
+    case admission_detail(Refusal) of
+        undefined -> <<"this request is not admitted">>;
+        Detail    -> <<"this request is not admitted; ", Detail/binary>>
+    end.
 
 %% The reply a copy of this request receives. A reply past the admission's byte bounds is not kept, and a copy of
 %% its request is refused rather than served again.
@@ -3299,6 +3326,45 @@ stored_reply(Admission, Request, Reply) ->
                                              erlang:system_time(millisecond))
     catch exit:_NotAnswered -> gone
     end.
+
+%% A handler that ended without storing a reply (a crash, a kill at the window's
+%% end) frees the request's in-flight place; its run-once marker stays.
+released(Admission, Request) ->
+    try macula_request_admission:release(Admission, Request)
+    catch exit:_NotAnswered -> gone
+    end.
+
+%% The request key an admitted STREAM_OPEN holds its in-flight place under.
+request_key(#{caller := Caller, request_id := RequestId}) -> {Caller, RequestId}.
+
+%% A stored key as `release/2' takes it.
+key_request({Caller, RequestId}) -> #{caller => Caller, request_id => RequestId}.
+
+%% A refused or ended open releases the place its admission gave it; one that
+%% never held a place, or held it already, is a no-op.
+released_open(Open, #state{admission = Admission}) ->
+    _ = released(Admission, Open),
+    ok.
+
+%% A served session that ends takes its key with it, releasing the place.
+released_key(Sid, Keys, S) ->
+    case maps:take(Sid, Keys) of
+        {{Caller, RequestId}, Remaining} ->
+            ok = released_place(Caller, RequestId, S),
+            Remaining;
+        error ->
+            Keys
+    end.
+
+%% Every session the link was serving releases its place: a disconnect ends
+%% all of them at once.
+released_keys(Keys, S) ->
+    _ = [released_place(Caller, RequestId, S) || {Caller, RequestId} <- Keys],
+    ok.
+
+released_place(Caller, RequestId, #state{admission = Admission}) ->
+    _ = released(Admission, key_request({Caller, RequestId})),
+    ok.
 
 reply_bytes(Reply) ->
     byte_size(macula_frame:encode(Reply)).
@@ -3733,7 +3799,7 @@ stream_written({error, Reason}, Pid, Sid, _Last, S) ->
 %% malformed frame ends its routing: its attach id leaves whichever map holds
 %% it, its dedicated stream closes, and the stream's inbound buffer goes with
 %% it, so `stream_bufs' keeps no entry for a finished session.
-drop_stream(Sid, #state{client_streams = CS, server_streams = SS,
+drop_stream(Sid, #state{client_streams = CS, server_streams = SS, server_keys = Keys,
                         stream_bufs = Bufs} = S) ->
     {CS2, ClientMon, ClientStream} = drop_one(Sid, CS),
     {SS2, ServerMon, ServerStream} = drop_one(Sid, SS),
@@ -3743,7 +3809,8 @@ drop_stream(Sid, #state{client_streams = CS, server_streams = SS,
          || Stream <- lists:usort([ClientStream, ServerStream]),
             Stream =/= undefined],
     Bufs2 = drop_bufs([ClientStream, ServerStream], Bufs),
-    S#state{client_streams = CS2, server_streams = SS2, stream_bufs = Bufs2}.
+    S#state{client_streams = CS2, server_streams = SS2,
+            server_keys = released_key(Sid, Keys, S), stream_bufs = Bufs2}.
 
 drop_one(Sid, Map) ->
     case maps:take(Sid, Map) of
@@ -3926,7 +3993,7 @@ on_admission(new, #{realm := Realm, procedure := Proc} = Open, Stream, S) ->
 on_admission({copy, _Reply}, Open, Stream, S) ->
     refuse_open(Stream, Open, <<"request_copy">>, <<"this request is already admitted">>, S);
 on_admission({refused, Refusal}, Open, Stream, S) ->
-    refuse_open(Stream, Open, admission_code(Refusal), <<"this request is not admitted">>, S).
+    refuse_open(Stream, Open, admission_code(Refusal), admission_message(Refusal), S).
 
 %% The code a refusal by the request admission travels as: its kind's name.
 admission_code({Kind, _Ms}) when is_atom(Kind) -> atom_to_binary(Kind);
@@ -3938,6 +4005,7 @@ sealed_open_with_room(ok, #{sealed := Sealed} = Open, Stream, #state{node_identi
     sealed_open_opened(opened_call(macula_kem_keyring:holder(macula_node_keys:key_id(Id)), Profile, Open, Sealed),
                        Open, Stream, S);
 sealed_open_with_room({error, AtACap}, Open, Stream, S) ->
+    ok = released_open(Open, S),
     {Code, Message} = admission_refusal(AtACap),
     refuse_open(Stream, Open, Code, Message, S).
 
@@ -3947,12 +4015,14 @@ sealed_open_with_room({error, AtACap}, Open, Stream, S) ->
 sealed_open_opened({ok, Args, {sealed, Keys, _SealRequest}}, Open, Stream, S) ->
     on_stream_open_on(carries_a_session(Stream, S), (maps:remove(sealed, Open))#{payload => Args}, Keys, Stream, S);
 sealed_open_opened({refused, Why}, Open, Stream, S) ->
+    ok = released_open(Open, S),
     refuse_open(Stream, Open, <<"sealed_refused">>, refused_detail(Why), sealed_refused(sealed_stream_open, S)).
 
 %% A clear STREAM_OPEN is served as it is, unless its procedure takes only sealed ones (§8.1, §8.2).
 clear_open_admitted(true, Open, Stream, S) ->
     on_stream_open_on(carries_a_session(Stream, S), Open, clear, Stream, S);
 clear_open_admitted(false, Open, Stream, S) ->
+    ok = released_open(Open, S),
     refuse_open(Stream, Open, <<"sealed_required">>, <<"this procedure takes sealed opens only">>, S).
 
 close_unless_carrying(true, _Stream, S) ->
@@ -4005,6 +4075,7 @@ dispatch_stream_open({ok, {_OtherMode, _Handler}}, Open, Seal, Stream, S) ->
 %% link's key as a closure, the verified open, the peering connection and the
 %% profile, owned by the process its handler will run in.
 served_with_id(false, _AttachId, _Handler, Open, _Seal, Stream, S) ->
+    ok = released_open(Open, S),
     refuse_open(Stream, Open, <<"unavailable">>, <<"sessions are not being admitted now">>, S);
 served_with_id(true, AttachId, Handler, #{procedure := Proc, payload := Args, caller := Caller, mode := Mode} = Open,
                Seal, Stream, #state{peer_pid = Conn, profile = Profile, node_identity = Key} = S) ->
@@ -4020,13 +4091,15 @@ served_with_id(true, AttachId, Handler, #{procedure := Proc, payload := Args, ca
 %% the session counter could not admit, is refused on its own stream: its
 %% handler process ends before it serves, and the stream process it would
 %% have owned ends with it.
-serve_if_admitted(ok, AttachId, Worker, StreamPid, _Open, Stream, #state{server_streams = SS} = S) ->
+serve_if_admitted(ok, AttachId, Worker, StreamPid, Open, Stream, #state{server_streams = SS} = S) ->
     ok = macula_stream:attach_to_link(StreamPid, self(), AttachId),
     Mon = erlang:monitor(process, StreamPid),
     Worker ! {serve, StreamPid},
-    S#state{server_streams = SS#{AttachId => {StreamPid, Mon, Stream}}};
+    S#state{server_streams = SS#{AttachId => {StreamPid, Mon, Stream}},
+            server_keys = maps:put(AttachId, request_key(Open), S#state.server_keys)};
 serve_if_admitted({error, Refusal}, _AttachId, Worker, _StreamPid, Open, Stream, S) ->
     exit(Worker, kill),
+    ok = released_open(Open, S),
     {Code, Message} = admission_refusal(Refusal),
     refuse_open(Stream, Open, Code, Message, S).
 
@@ -4046,11 +4119,15 @@ refuse_open(Stream, Open, Code, Message, S) ->
 
 %% A refusal decided once a sealed open is opened is about the procedure, so it goes sealed under the stream's k_p2c
 %% with a random nonce, as the provider's first frame (§5.2); a clear open's goes clear. Only the admission refusals,
-%% decided before anything is opened, go clear on a sealed open (`refuse_open/5').
+%% decided before anything is opened, go clear on a sealed open (`refuse_open/5'). A refusal reached on a verdict
+%% `new' releases the place that open took; a copy or a refusal of an already-seen id never gets here, so it cannot
+%% release the original's live place (macula#89).
 refuse_opened(Stream, Open, clear, Code, Message, S) ->
+    ok = released_open(Open, S),
     refuse_open(Stream, Open, Code, Message, S);
 refuse_opened(Stream, #{request_id := RequestId} = Open, #{k_p2c := KP2C, key_id := KeyId}, Code, Message,
               #state{node_identity = Key} = S) ->
+    ok = released_open(Open, S),
     {ok, Plain} = macula_frame:error_plain(#{code => Code, detail => Message}),
     Nonce = macula_seal:random_nonce(),
     Aad = macula_seal:stream_aad(<<"stream_error">>, RequestId, 0, 1),
@@ -4148,12 +4225,13 @@ on_client_stream_down({ok, Sid}, _Pid, Mon, #state{client_streams = CS,
 on_client_stream_down(error, Pid, Mon, #state{server_streams = SS} = S) ->
     on_server_stream_down(find_stream_by_pid(Pid, SS), Mon, S).
 
-on_server_stream_down({ok, Sid}, Mon, #state{server_streams = SS,
+on_server_stream_down({ok, Sid}, Mon, #state{server_streams = SS, server_keys = Keys,
                                              stream_bufs = Bufs} = S) ->
     erlang:demonitor(Mon, [flush]),
     {SS2, Stream} = take_dedicated_stream(Sid, SS),
     close_dedicated_stream(Stream, S),
-    S#state{server_streams = SS2, stream_bufs = drop_bufs([Stream], Bufs)};
+    S#state{server_streams = SS2, server_keys = released_key(Sid, Keys, S),
+            stream_bufs = drop_bufs([Stream], Bufs)};
 on_server_stream_down(error, Mon, S) ->
     on_subscriber_down(Mon, S).
 

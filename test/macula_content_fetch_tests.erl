@@ -44,7 +44,9 @@ fetch_test_() ->
       {"a sharer that never answers the root holds the fetch for root_timeout_ms, not chunk_timeout_ms",
        {timeout, 30, fun a_silent_sharer_holds_the_fetch_for_the_root_deadline/0}},
       {"root_timeout_ms is the caller's to set", fun a_caller_sets_the_root_deadline/0},
-      {"a chunk keeps chunk_timeout_ms, longer than the root deadline", fun a_chunk_keeps_its_own_deadline/0}]}.
+      {"a chunk keeps chunk_timeout_ms, longer than the root deadline", fun a_chunk_keeps_its_own_deadline/0},
+      {"a fetch of more chunks than caller_quota from one sharer completes",
+       {timeout, 60, fun a_fetch_of_more_chunks_than_the_callers_quota_completes/0}}]}.
 
 %% A sharer that accepts the root ask and never answers costs the fetch the root deadline (2 s by default), not the
 %% 15 s chunk deadline, and the next sharer serves.
@@ -343,3 +345,111 @@ announcement(#{node := Node, key := Key, procedure := Procedure}, MCID) ->
                             #{realm_id => ?REALM, serving_station => ?STATION, procedure => Procedure}), Key).
 
 hex(Node) -> binary:encode_hex(Node, lowercase).
+
+%%------------------------------------------------------------------
+%% A fetch over a real station link (macula#89)
+%%------------------------------------------------------------------
+
+%% A fetch from ONE sharer pays one stream per chunk. A stream's admission
+%% place is released when the stream ends, so a fetch of more chunks than
+%% caller_quota completes; before macula#89 the first batch held every place
+%% and the next chunk was refused caller_quota. The other tests here bypass
+%% admission (their sharers are local in-process streams), so this one serves
+%% the sharer over a real station link whose frames this process bridges to
+%% the caller link the fetch dials through.
+a_fetch_of_more_chunks_than_the_callers_quota_completes() ->
+    Bridge = spawn(fun() -> receive {links, P, C} -> bridge(P, C, #{}) end end),
+    #{link := Provider, key := ProviderKey} = served_link(Bridge, #{caller_quota => 4}),
+    #{link := Caller} = calling_link(Bridge),
+    Bridge ! {links, Provider, Caller},
+    Bytes = crypto:strong_rand_bytes(?CHUNK * 10),
+    {MCID, Store} = macula_content_store:added(Bytes, #{}, macula_content_store:new()),
+    Lookup = fun(Want, M) -> macula_content_serve:lookup(Want, M, Store) end,
+    Procedure = <<"~", (hex(macula_node_keys:key_id(ProviderKey)))/binary, "/content_v1">>,
+    ok = macula_station_link:advertise_stream(Provider, ?REALM, Procedure, server_stream,
+                                              fun(Stream, Args) -> macula_content_serve:serve(Stream, Args, Lookup) end),
+    Announcement = announcement(#{node => macula_node_keys:key_id(ProviderKey), key => ProviderKey,
+                                  procedure => Procedure}, MCID),
+    Io = #{find_records => fun(_Pool, Key, _T) ->
+                               Key = macula_record:content_key(MCID),
+                               {ok, [Announcement]}
+                           end,
+           resolve_station_endpoint => fun(_Pool, ?STATION, _T) -> {ok, <<"quic://station.test:4433">>} end,
+           call_stream_station => fun(_Pool, _Url, Target, Realm, Proc, Args, _Seal) ->
+                                      macula_station_link:call_stream(Caller, Target, Realm, Proc, Args,
+                                                                      #{seal => clear, mode => server_stream})
+                                  end},
+    ?assertEqual({ok, Bytes}, macula_content_fetch:get(self(), MCID, #{io => Io})),
+    macula_station_link:stop(Provider),
+    macula_station_link:stop(Caller),
+    exit(Bridge, kill).
+
+%% A station link that serves streams, its peer Bridge, with an admission
+%% whose limits the test chooses.
+served_link(Bridge, Limits) ->
+    Key = key(),
+    {ok, Issuer} = macula_statement_issuer_sup:start_issuer(fun() -> Key end, self()),
+    {ok, Admission} = macula_request_admission:start_link(
+                        maps:merge(#{caller_quota => 256, share => 1024, cap => 46080,
+                                     reply_bytes => 262144, reply_bytes_total => 16777216}, Limits)),
+    {ok, Link} = macula_station_link:start_link(
+                   #{seed => #{host => <<"127.0.0.1">>, port => 1}, expected_node_id => <<1:256>>,
+                     node_identity => fun() -> Key end, issuer => Issuer, admission => Admission,
+                     share => {seed, {<<"127.0.0.1">>, 1}},
+                     connect => fun(_PeeringOpts) -> {error, not_dialed_here} end,
+                     open_stream => fun(_Conn) -> {error, not_a_caller} end,
+                     send_on_stream => fun(Stream, Bytes) -> Bridge ! {p_written, Stream, Bytes}, ok end,
+                     close_stream => fun(Stream) -> Bridge ! {p_closed, Stream}, ok end}),
+    replace_peer(Link, Bridge, <<3:256>>),
+    #{link => Link, key => Key}.
+
+%% A station link that calls streams, its peer Bridge answering its frames.
+calling_link(Bridge) ->
+    Key = key(),
+    {ok, Issuer} = macula_statement_issuer_sup:start_issuer(fun() -> Key end, self()),
+    {ok, Admission} = macula_request_admission:start_link(#{caller_quota => 256, share => 1024, cap => 46080,
+                                                             reply_bytes => 262144, reply_bytes_total => 16777216}),
+    {ok, Link} = macula_station_link:start_link(
+                   #{seed => #{host => <<"127.0.0.1">>, port => 1}, expected_node_id => <<2:256>>,
+                     node_identity => fun() -> Key end, issuer => Issuer, admission => Admission,
+                     share => {seed, {<<"127.0.0.1">>, 1}},
+                     connect => fun(_PeeringOpts) -> {error, not_dialed_here} end,
+                     open_stream => fun(_Conn) -> Opened = make_ref(), Bridge ! {c_opened, Opened}, {ok, Opened} end,
+                     send_on_stream => fun(Stream, Bytes) -> Bridge ! {c_written, Stream, Bytes}, ok end,
+                     close_stream => fun(Stream) -> Bridge ! {c_closed, Stream}, ok end}),
+    replace_peer(Link, Bridge, <<2:256>>),
+    #{link => Link, key => Key}.
+
+key() ->
+    {ok, Profile} = macula_crypto_profile:configured(),
+    {ok, Key} = macula_node_keys:generate(identity, Profile),
+    Key.
+
+replace_peer(Link, Peer, NodeId) ->
+    PidIndex = macula_station_link:state_field_index(peer_pid),
+    IdIndex = macula_station_link:state_field_index(peer_node_id),
+    _ = sys:replace_state(Link, fun(S) -> setelement(IdIndex, setelement(PidIndex, S, Peer), NodeId) end),
+    ok.
+
+%% The frames between the caller link (C) and the link serving it (P),
+%% stream by stream: the caller's dedicated-stream refs on one side, the
+%% provider's on the other.
+bridge(P, C, Streams) ->
+    receive
+        {c_written, CRef, Bytes} ->
+            case maps:find(CRef, Streams) of
+                {ok, PRef} ->
+                    P ! {quic, Bytes, PRef, undefined},
+                    bridge(P, C, Streams);
+                error ->
+                    PRef = make_ref(),
+                    P ! {macula_peering, new_dedicated_stream, self(), PRef},
+                    P ! {quic, Bytes, PRef, undefined},
+                    bridge(P, C, Streams#{CRef => PRef})
+            end;
+        {p_written, PRef, Bytes} ->
+            [C ! {quic, Bytes, CRef, undefined} || {CRef, R} <- maps:to_list(Streams), R =:= PRef],
+            bridge(P, C, Streams);
+        _OpenedOrClosed ->
+            bridge(P, C, Streams)
+    end.

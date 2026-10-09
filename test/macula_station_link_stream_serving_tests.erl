@@ -35,7 +35,9 @@ stream_serving_test_() ->
                  fun a_refused_stream_open_starts_no_process/0,
                  fun a_streamer_served_session_ends_with_its_caller/0,
                  fun a_sealed_stream_open_is_refused_by_name/0,
-                 fun a_served_handler_sees_the_verified_caller/0]]
+                 fun a_served_handler_sees_the_verified_caller/0,
+                 fun a_caller_serves_more_stream_opens_than_its_quota/0,
+                 fun a_copy_of_a_live_stream_open_keeps_its_place/0]]
     ++ [{"a served session leaves no process behind: " ++ Name,
          {timeout, 15, {spawn, fun() -> process_flag(trap_exit, true), served_sessions_end(Handler, Ending) end}}}
         || {Name, Handler, Ending} <- [{"the handler closes and returns", fun close_and_return/2, none},
@@ -365,12 +367,16 @@ key() ->
 %% A link that believes it is connected, with this process as its peering connection, and dedicated-stream functions
 %% that tell this process what the link opens, writes and closes.
 linked() ->
+    linked(#{}).
+
+linked(Limits) ->
     {ok, _} = application:ensure_all_started(macula),
     Test = self(),
     Key = key(),
     {ok, Issuer} = macula_statement_issuer_sup:start_issuer(fun() -> Key end, self()),
-    {ok, Admission} = macula_request_admission:start_link(#{caller_quota => 256, share => 1024, cap => 46080,
-                                                             reply_bytes => 262144, reply_bytes_total => 16777216}),
+    {ok, Admission} = macula_request_admission:start_link(
+                        maps:merge(#{caller_quota => 256, share => 1024, cap => 46080,
+                                     reply_bytes => 262144, reply_bytes_total => 16777216}, Limits)),
     {ok, Link} = macula_station_link:start_link(
                    #{seed => #{host => <<"127.0.0.1">>, port => 1}, expected_node_id => <<1:256>>,
                      node_identity => fun() -> Key end, issuer => Issuer, admission => Admission,
@@ -448,6 +454,68 @@ a_sealed_stream_open_is_refused_by_name() ->
     ?assertEqual(not_served, served_within(200)),
     stop(World).
 
+%% A stream's place in the admission is in flight: the session releases it
+%% when the session ends, so one caller serves more stream opens than its
+%% quota, one at a time. Content fetch asks for each 256 KiB chunk on its own
+%% stream, so before macula#89 it was refused caller_quota after caller_quota
+%% chunks from one sharer even though every stream had ended (macula#89).
+a_caller_serves_more_stream_opens_than_its_quota() ->
+    #{link := Link} = World = linked(#{caller_quota => 2}),
+    Test = self(),
+    Caller = key(),
+    Procedure = <<"foo.chunk">>,
+    ok = macula_station_link:advertise_stream(Link, ?REALM, Procedure, server_stream,
+                                              fun(Stream, _Args) ->
+                                                  Test ! {served_one, self()},
+                                                  ok = macula:close_stream(Stream)
+                                              end),
+    Admission = element(macula_station_link:state_field_index(admission), sys:get_state(Link)),
+    [begin
+         _Session = opened_by_peer(World, Caller, Procedure, #{}),
+         ?assertEqual(served, receive {served_one, _} -> served after ?EVENT_MS -> not_served end),
+         ?assertEqual(0, in_flight_back_to(Admission, 0, 2_000)),
+         ?assert(is_process_alive(Link))
+     end || _ <- lists:seq(1, 5)],
+    stop(Link).
+
+%% A copy of a live stream open, and a reused request id under it, are
+%% refused and must NOT release the original's in-flight place: a caller
+%% resending its own open bytes cannot free the session it already has
+%% running (macula#89, Fable review).
+a_copy_of_a_live_stream_open_keeps_its_place() ->
+    #{link := Link} = World = linked(#{caller_quota => 1}),
+    Test = self(),
+    Caller = key(),
+    Procedure = <<"foo.live">>,
+    ok = macula_station_link:advertise_stream(Link, ?REALM, Procedure, server_stream,
+                                              fun(_Stream, _Args) ->
+                                                  Test ! {served_one, self()},
+                                                  receive go -> ok end
+                                              end),
+    #{frame := OpenFrame} = opened_by_peer(World, Caller, Procedure, #{}),
+    Handler = receive {served_one, H} -> H after ?EVENT_MS -> erlang:error(not_served) end,
+    Admission = element(macula_station_link:state_field_index(admission), sys:get_state(Link)),
+    ?assertEqual(1, in_flight_back_to(Admission, 1, 500)),
+
+    %% The same signed open bytes again on another stream: refused, and the
+    %% original's place is still held.
+    CopyQuic = make_ref(),
+    Link ! {macula_peering, new_dedicated_stream, self(), CopyQuic},
+    Link ! {quic, macula_frame:encode(OpenFrame), CopyQuic, undefined},
+    {ok, CopyRefusal} = written_within(CopyQuic, ?EVENT_MS),
+    ?assertMatch({ok, #{code := <<"request_copy">>}}, provider_fields(OpenFrame, CopyRefusal)),
+    ?assertEqual(1, in_flight_back_to(Admission, 1, 500)),
+
+    %% The same request id under another hash: refused, and still held.
+    #{request_id := RequestId} = verified(OpenFrame),
+    Reused = opened_by_peer(World, Caller, Procedure, #{other => 1}, #{request_id => RequestId}),
+    {ok, ReuseRefusal} = written_within(maps:get(quic, Reused), ?EVENT_MS),
+    ?assertMatch({ok, #{code := <<"request_id_reused">>}}, provider_fields(maps:get(frame, Reused), ReuseRefusal)),
+    ?assertEqual(1, in_flight_back_to(Admission, 1, 500)),
+
+    Handler ! go,
+    stop(Link).
+
 %% A dedicated stream the peer opens with a verified STREAM_OPEN from Caller for Procedure, addressed to the link's
 %% node: the stream and the open frame as sent.
 opened_by_peer(World, Caller, Procedure, Payload) ->
@@ -474,6 +542,17 @@ served(World, Caller, Procedure, Mode) ->
 
 served_within(Ms) ->
     receive {session_served, _} -> served after Ms -> not_served end.
+
+%% The admission's in-flight count, waited on: a stream's place returns once
+%% its session has ended.
+in_flight_back_to(Admission, Want, Ms) ->
+    in_flight_left(maps:get(in_flight, macula_request_admission:held(Admission)), Admission, Want, Ms).
+
+in_flight_left(Want, _Admission, Want, _Ms) -> Want;
+in_flight_left(Count, _Admission, _Want, Ms) when Ms =< 0 -> Count;
+in_flight_left(_Count, Admission, Want, Ms) ->
+    timer:sleep(20),
+    in_flight_back_to(Admission, Want, Ms - 20).
 
 streamer_session(World, Caller, Procedure) ->
     Session = opened_by_peer(World, Caller, Procedure, #{}),

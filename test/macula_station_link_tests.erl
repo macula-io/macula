@@ -1453,6 +1453,35 @@ a_liveness_probe_is_answered_without_an_admission_entry_test_() ->
          ok
      end}.
 
+%% A CALL refused by a bound of the pool's admission carries retry_after_ms in its ERROR detail, so a caller can
+%% pace itself instead of retrying blindly. The bound refusal reaches the caller as `{call_error, Code, Detail}'.
+a_bound_refusal_carries_retry_after_ms_test_() ->
+    {timeout, 10,
+     fun() ->
+         Blocker = fun(_Payload) -> receive go -> ok after 3_000 -> ok end, {ok, #{}} end,
+         {QuotaPid, QuotaKey} = inbound_call_fixture([{<<"p">>, Blocker}], open, #{caller_quota => 1}),
+         _First = inject_call(QuotaPid, self(), QuotaKey, <<1:128>>, <<"p">>),
+         Second = inject_call(QuotaPid, self(), QuotaKey, <<2:128>>, <<"p">>),
+         {error, #{code := <<"caller_quota">>, detail := QuotaDetail}} = await_result(Second, 2_000),
+         ?assert(retry_after_ms(QuotaDetail) > 0),
+         macula_station_link:stop(QuotaPid),
+
+         {SharePid, ShareKeyA} = inbound_call_fixture([{<<"p">>, Blocker}], open, #{share => 1,
+                                                                                   caller_quota => 1024}),
+         {ok, Profile} = macula_crypto_profile:configured(),
+         {ok, ShareKeyB} = macula_node_keys:generate(identity, Profile),
+         _ShareFirst = inject_call(SharePid, self(), ShareKeyA, <<3:128>>, <<"p">>),
+         ShareSecond = inject_call(SharePid, self(), ShareKeyB, <<4:128>>, <<"p">>),
+         {error, #{code := <<"share_full">>, detail := ShareDetail}} = await_result(ShareSecond, 2_000),
+         ?assert(retry_after_ms(ShareDetail) > 0),
+         macula_station_link:stop(SharePid),
+         ok
+     end}.
+
+retry_after_ms(Detail) ->
+    <<"retry_after_ms=", Ms/binary>> = Detail,
+    binary_to_integer(Ms).
+
 ping(CallerKey, Target) ->
     ping(CallerKey, Target, <<0:256>>, <<"_macula.ping">>).
 

@@ -30,7 +30,8 @@ request_admission_test_() ->
 an_admission_limit_outside_its_range_does_not_start_the_pool() ->
     [?assertEqual({error, {invalid_admission_limit, Key, Value}},
                   macula_client:connect([seed(1)], #{request_admission => #{Key => Value}}))
-     || {Key, Cap} <- [{caller_quota, 65536}, {share, 65536}, {reply_bytes, 16777216}, {reply_bytes_total, 1073741824}],
+     || {Key, Cap} <- [{caller_quota, 65536}, {share, 65536}, {reply_bytes, 16777216},
+                       {reply_bytes_total, 1073741824}, {seen_bytes, 1073741824}],
         Value <- [many, 0, -1, Cap + 1]].
 
 %% A quota per caller above the share, or stored reply bytes per caller above the total, would never bind as the design
@@ -66,18 +67,27 @@ a_respawned_link_keeps_the_share_of_its_seed() ->
 
 %% A share of 1 refuses a second caller's request on one share. The pool option sets it, and without the option the
 %% macula application environment does, key by key. Without either, a caller's 257th request is refused over the
-%% default quota of 256.
+%% default quota of 256. A bound refusal carries its retry hint.
 the_limits_come_from_the_option_then_the_environment_then_the_defaults() ->
-    ?assertEqual({new, {refused, share_full}},
-                 two_callers_on_one_share(#{request_admission => #{share => 1, caller_quota => 1}})),
+    ?assertEqual({new, ok}, two_callers_on_one_share_verdicts(#{request_admission => #{share => 1,
+                                                                                        caller_quota => 1}})),
     ok = application:set_env(macula, request_admission, #{share => 1, caller_quota => 1}),
     try
-        ?assertEqual({new, {refused, share_full}}, two_callers_on_one_share(#{})),
-        ?assertEqual({new, new}, two_callers_on_one_share(#{request_admission => #{share => 1024, caller_quota => 256}}))
+        ?assertEqual({new, ok}, two_callers_on_one_share_verdicts(#{})),
+        ?assertEqual({new, new}, two_callers_on_one_share_verdicts(#{request_admission => #{share => 1024,
+                                                                                             caller_quota => 256}}))
     after
         ok = application:unset_env(macula, request_admission)
     end,
-    ?assertEqual({lists:duplicate(256, new), {refused, caller_quota}}, one_caller_past_its_quota(#{})).
+    {Admitted, Over} = one_caller_past_its_quota(#{}),
+    ?assertEqual(lists:duplicate(256, new), Admitted),
+    ?assertMatch({refused, {caller_quota, _}}, Over),
+    %% The pool starts its admission with the default run-once byte budget.
+    {ok, Pool} = macula_client:connect([seed(1)], #{}),
+    [#{pid := Link}] = links(Pool),
+    {Admission, _Share} = held(Link),
+    ?assertMatch(#{seen_bytes := 64 * 1024 * 1024}, element(2, sys:get_state(Admission))),
+    ok = macula_client:close(Pool).
 
 %% A pool whose admission ends stops, rather than go on serving without the requests it has seen.
 a_pool_stops_when_its_admission_ends() ->
@@ -152,6 +162,14 @@ two_callers_on_one_share(Opts) ->
     ok = macula_client:close(Pool),
     Verdicts.
 
+%% The same, with the second verdict normalised to `ok' when it is any share_full refusal.
+two_callers_on_one_share_verdicts(Opts) ->
+    {First, Second} = two_callers_on_one_share(Opts),
+    {First, normalised(Second)}.
+
+normalised({refused, {share_full, _}}) -> ok;
+normalised(Verdict)                     -> Verdict.
+
 %% What the pool's admission answers one caller's 256 requests, and its 257th.
 one_caller_past_its_quota(Opts) ->
     {ok, Pool} = macula_client:connect([seed(1)], Opts),
@@ -168,9 +186,9 @@ request(Caller, I, Now) ->
     #{caller => Caller, request_id => <<I:128>>, request_hash => crypto:hash(sha384, <<I:64>>),
       deadline => Now + 30_000}.
 
-%% How many entries the admission holds once none are left, or after Tries looks 50 ms apart.
+%% How many run-once markers the admission holds once none are left, or after Tries looks 50 ms apart.
 entries_within(Admission, Tries) ->
-    entries_left(map_size(element(3, sys:get_state(Admission))), Admission, Tries).
+    entries_left(maps:get(markers, macula_request_admission:held(Admission)), Admission, Tries).
 
 entries_left(0, _Admission, _Tries) -> 0;
 entries_left(Held, _Admission, 0)   -> Held;

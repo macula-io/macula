@@ -510,35 +510,46 @@ apply. `request` is `{key, tbs, signature}` under `MACULA-PQ-REQUEST-V1`, and `k
   5. (`caller`, `request_id`) not seen before;
   6. the token's `aud` against `caller`;
   7. the token's chain, the costliest check, last.
-- It keeps (`caller`, `request_id`) until `deadline` plus 5 minutes. A copy with the same request hash gets the stored
-  signed reply along the path the copy came from; a copy that arrives while the work is still running is refused
-  `request_copy`, and the caller may ask again once the first attempt has answered or its deadline has passed. A copy
-  with another request hash is refused `request_id_reused`: a retry resends the same signed bytes, so a different hash
-  is a different request under a held id. A provider bounds the stored reply bytes per caller; a reply beyond the
-  bound is not kept, and a copy of its request is then refused.
-- **Decision: request admission limits.** A pool runs one admission for the requests all its links receive. Its entries
-  are bounded by a quota per caller, a limit per share and a cap on the set, and its stored replies by bytes per caller
-  and in total. A full bound refuses a request and never evicts an entry. A share is one incoming connection's place:
-  the normalized seed of its link, which is what the pool's new-peer budget counts peers by, so the shares stay the
-  ones the budget bounds.
-  - Defaults: `caller_quota` 256, `share` 1024, `reply_bytes` 256 KiB, `reply_bytes_total` 16 MiB. Each is a key of the
-    pool option `request_admission`, falling back to the `macula` application environment, and an integer from 1 to a
-    cap: 65,536 for `caller_quota` and `share`, 16 MiB for `reply_bytes`, 1 GiB for `reply_bytes_total`. A pool does
-    not start with `reply_bytes` above `reply_bytes_total`, or `caller_quota` above `share`.
-  - `cap` is `share` times the most distinct shares one entry lifetime can see: `max_seeds` + discovery `max_links` +
-    `max_direct_links` + `new_peer_budget`, 16 + 5 + 8 + 16 = 45 at the pool defaults, so 46,080 entries. It is never
-    set below `share` times that sum, so a few shares cannot fill the set.
-  - Worst case: one entry takes 413 bytes (measured on OTP 28 over 100,000 entries from 1,024 callers and 45 shares),
-    so 46,080 entries take about 18 MiB, and with 16 MiB of stored replies about 34 MiB in all.
-  - Sustained rate before refusals: an entry lives until `deadline` plus 5 minutes, so with a 30 second deadline a
-    share of 1024 allows about 3 requests a second per link and a quota of 256 about 0.8 per caller; with a 10 minute
-    deadline, about 1.1 and 0.3.
+- It keeps a run-once marker of (`caller`, `request_id`) until `deadline` plus 5 minutes, so no copy starts a second
+  handler inside that window. A copy with the same request hash gets the stored signed reply along the path the copy
+  came from while the reply is kept, and waits while the work still runs; the caller may ask again once the first
+  attempt has answered or its deadline has passed. A copy with another request hash is refused `request_id_reused`: a
+  retry resends the same signed bytes, so a different hash is a different request under a held id. A provider bounds
+  the stored reply bytes per caller; a reply beyond the bound is not kept, and a copy of its request is then refused.
+- **Decision: request admission limits.** A pool runs one admission for the requests all its links receive. Its
+  requests in flight are bounded by a quota per caller, a limit per share and a cap on the set; they are
+  concurrency bounds, released when the reply is sent or the handler ends (for a STREAM_OPEN, when its session
+  ends). Its run-once markers are bounded by
+  `seen_bytes`, and its stored replies by bytes per caller and in total. A full bound refuses a request and never
+  evicts a record. Every bound refusal (`caller_quota`, `share_full`, `admission_full`) carries `retry_after_ms=<n>`,
+  the nearest in-flight deadline minus now (the nearest marker expiry for the marker budget), in the ERROR frame's
+  existing `detail`; no wire change. A share is one incoming connection's place: the normalized seed of its link,
+  which is what the pool's new-peer budget counts peers by, so the shares stay the ones the budget bounds.
+  - Defaults: `caller_quota` 256, `share` 1024, `seen_bytes` 64 MiB, `reply_bytes` 256 KiB, `reply_bytes_total`
+    16 MiB. Each is a key of the pool option `request_admission`, falling back to the `macula` application
+    environment, and an integer from 1 to a cap: 65,536 for `caller_quota` and `share`, 1 GiB for `seen_bytes` and
+    `reply_bytes_total`, 16 MiB for `reply_bytes`. A pool does not start with `reply_bytes` above `reply_bytes_total`,
+    or `caller_quota` above `share`.
+  - `cap` is `share` times the most distinct shares one request lifetime can see: `max_seeds` + discovery `max_links` +
+    `max_direct_links` + `new_peer_budget`, 16 + 5 + 8 + 16 = 45 at the pool defaults, so 46,080 in flight. It is
+    never set below `share` times that sum, so a few shares cannot fill the set.
+  - Worst case: one in-flight request takes 413 bytes (measured on OTP 28 over 100,000 entries from 1,024 callers and
+    45 shares), so 46,080 in flight take about 18 MiB; one run-once marker counts as 512 bytes (measured 502.2 and
+    501.5 on OTP 28 over 100,000 and 50,000 markers, including its expiry index), so `seen_bytes` 64 MiB holds about
+    130,000 markers; with 16 MiB of stored replies, about 98 MiB in all.
+  - Sustained rate before refusals: the caller and share limits are in-flight bounds, not rate limits, so a caller
+    polling at any steady rate is refused only while it has `caller_quota` requests outstanding, and a link only
+    while it has `share`; what a steady rate does bound is the marker set. Markers live until `deadline` plus 5
+    minutes, so with a 5 second deadline `seen_bytes` 64 MiB (about 130,000 markers) admits about 430 requests a
+    second from one caller before it refuses `admission_full`, and a caller polling at 1 call/s holds about 305
+    markers, about 150 KiB.
   - `admit` at the full cap of 46,080: 203 µs at the 99.9th percentile while filling, 33 µs refusing at the cap, 14 ms
     at most. The entries stay on the admission process's heap. A link waits at most 1 second for a verdict and refuses
     the request when none comes.
-  - These are starting values: they refuse only sustained high rates, never a burst. A station that serves a busier
-    provider raises `share`, and memory grows by 413 bytes × 45 per unit; the fairness holds because `cap` is always
-    `share` times the sum. `share_full` refusals on a real workload are the evidence to raise it.
+  - These are starting values: they refuse only more work in flight than the provider chose, never a burst on a free
+    link. A station that serves a busier provider raises `share`, and memory grows by 413 bytes × 45 per unit; the
+    fairness holds because `cap` is always `share` times the sum. `share_full` refusals on a real workload are the
+    evidence to raise it; `admission_full` on the marker set is the evidence to raise `seen_bytes`.
 - **A station** checks the signature and `caller`, and routes on `target`. It keeps forwarding state per connection
   the request was forwarded on and request hash, never per `request_id` alone, because past the first hop requests
   from many callers share one upstream connection. Entries per incoming connection have a configured maximum, and a
