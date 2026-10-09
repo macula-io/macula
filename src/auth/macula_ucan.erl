@@ -29,7 +29,7 @@
 %% (D7), so the grant's name is checked against the realm id the request carries, with nothing looked up.
 -module(macula_ucan).
 
--export([create/4, authorize/3, proof_id/1, covers/2, did_key/2, carried_key/2, max_lifetime/0]).
+-export([create/4, authorize/3, proof_id/1, covers/2, did_key/2, carried_key/2, max_lifetime/0, max_did_key_encoded/0]).
 
 -ifdef(TEST).
 -export([base58btc_encode/1, base58btc_decode/1]).
@@ -48,6 +48,8 @@
 %% What a capability grants, parsed from its `with': a realm, an org of that realm, or one procedure of that realm.
 -type grant()      :: {realm, binary()} | {org, binary(), binary()} | {proc, binary(), binary()}.
 
+%% The longest did:key text after its prefix (max_did_key_encoded/0).
+-define(MAX_DID_KEY_ENCODED, 4400).
 -define(TYP, <<"JWT">>).
 -define(UCV, <<"0.10.0">>).
 -define(MLDSA87_PUB, 16#1212).
@@ -469,8 +471,19 @@ canonical_char(_Char) -> false.
 did_key(Carried, Profile) when is_binary(Carried) ->
     <<"did:key:z", (base58btc_encode(<<(varint(codec(Profile)))/binary, Carried/binary>>))/binary>>.
 
-%% @doc The key a did:key carries, when it is a key in its one carried form for the profile (D13).
+%% @doc The longest base58btc text after "did:key:z" that a did:key for a carried key can have (macula#87): a
+%% pq_hybrid key, the longest, is the 3-byte codec varint, the 2,592-byte ML-DSA-87 key and a DER RSA-4096 public key
+%% of about 526 bytes, some 4,270 characters. Base58 decodes in time quadratic in its length, ahead of the signature
+%% check, so a longer did:key is refused before it is decoded. Every SDK holds the same bound (ucan_v1.json,
+%% did_key_length).
+-spec max_did_key_encoded() -> pos_integer().
+max_did_key_encoded() -> ?MAX_DID_KEY_ENCODED.
+
+%% @doc The key a did:key carries, when it is a key in its one carried form for the profile (D13). A did:key longer
+%% than max_did_key_encoded/0 is refused before it is decoded.
 -spec carried_key(binary(), macula_crypto_profile:profile()) -> {ok, binary()} | error.
+carried_key(<<"did:key:z", Encoded/binary>>, _Profile) when byte_size(Encoded) > ?MAX_DID_KEY_ENCODED ->
+    error;
 carried_key(<<"did:key:z", Encoded/binary>>, Profile) ->
     carried_key_of(varint(codec(Profile)), base58btc_decode(Encoded), Profile);
 carried_key(_Other, _Profile) ->

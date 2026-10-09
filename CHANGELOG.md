@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **A UCAN's did:key is length-bounded before it is decoded (#87).** Base58 decodes in time quadratic in its
+  length, and a presented token's `iss` is decoded before its signature is checked, so a caller chose how much CPU
+  a provider spent on it. A did:key whose text after `did:key:z` is longer than 4,400 characters
+  (`macula_ucan:max_did_key_encoded/0`; the longest carried key's, pq_hybrid's, is about 4,270) is now `malformed`
+  at once. `test/vectors/ucan_v1.json` pins the bound and a did:key one past it (`did_key_length`), so every SDK
+  refuses at the same length; macula-rust 0.9.0 already does.
+
 ## [14.4.0] - 2026-10-08
 
 ### Fixed

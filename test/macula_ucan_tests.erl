@@ -59,6 +59,27 @@ eu_token_is_the_lamps_composite_under_ml_dsa_87_ps384_test_() ->
 %% Authorization: ucan_required, a token issued by one known node
 %%------------------------------------------------------------------
 
+%% macula#87: base58 decodes in time quadratic in its length, ahead of the signature check, so a did:key longer than
+%% any carried key's is refused before it is decoded, in both profiles.
+an_overlong_did_key_is_refused_before_it_is_decoded_test() ->
+    Overlong = <<"did:key:z", (binary:copy(<<"2">>, 200_000))/binary>>,
+    [begin
+         {Micros, Refused} = timer:tc(macula_ucan, carried_key, [Overlong, Profile]),
+         ?assertEqual(error, Refused),
+         ?assert(Micros < 100_000)
+     end || Profile <- [pq_pure, pq_hybrid]].
+
+the_longest_valid_did_key_is_within_the_bound_test() ->
+    Max = macula_ucan:max_did_key_encoded(),
+    [begin
+         {ok, NodeKey} = macula_node_keys:generate(identity, Profile),
+         Key = macula_node_keys:public_key(NodeKey),
+         <<"did:key:z", Encoded/binary>> = DidKey = macula_ucan:did_key(Key, Profile),
+         ?assert(byte_size(Encoded) =< Max),
+         ?assertEqual({ok, Key}, macula_ucan:carried_key(DidKey, Profile))
+     end || Profile <- [pq_pure, pq_hybrid]],
+    ?assertEqual(error, macula_ucan:carried_key(<<"did:key:z", (binary:copy(<<"2">>, Max + 1))/binary>>, pq_hybrid)).
+
 a_token_from_the_required_issuer_for_the_caller_is_accepted_test() ->
     {Issuer, IssuerId, Caller} = parties(),
     Token = macula_ucan:create(Issuer, Caller, [?CAP], #{exp => later()}),

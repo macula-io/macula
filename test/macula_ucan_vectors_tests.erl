@@ -17,6 +17,7 @@ vectors_test_() ->
     ++ [{binary_to_list(Profile) ++ " keys", fun() -> keys_checked(profile(Profile), P) end}
         || Profile := P <- Profiles]
     ++ [{"covers", fun() -> covers_checked(maps:get(<<"covers">>, Doc)) end},
+        {"did:key length bound", fun() -> did_key_length_checked(maps:get(<<"did_key_length">>, Doc)) end},
         {"every refusal is pinned", fun() -> refusals_pinned(Profiles) end}].
 
 %% A profile by its name in the file, never through binary_to_existing_atom: whether that atom exists yet depends on
@@ -70,6 +71,13 @@ node_id_checked({ok, NodeId}, Carried, Profile) ->
     ?assertEqual(binary:decode_hex(NodeId), macula_node_keys:node_id(Carried, Profile));
 node_id_checked(error, _Carried, _Profile) ->
     ok.
+
+%% macula#87: the bound is macula_ucan's, and a did:key one past it is refused in both profiles.
+did_key_length_checked(#{<<"max_encoded_chars">> := Max, <<"over_bound">> := Over, <<"verdict">> := <<"malformed">>}) ->
+    ?assertEqual(macula_ucan:max_did_key_encoded(), Max),
+    <<"did:key:z", Encoded/binary>> = Over,
+    ?assertEqual(Max + 1, byte_size(Encoded)),
+    [?assertEqual(error, macula_ucan:carried_key(Over, Profile)) || Profile <- [pq_pure, pq_hybrid]].
 
 covers_checked(Covers) ->
     [?assertEqual({Parent, Child, Covers1}, {Parent, Child, macula_ucan:covers(Parent, Child)})

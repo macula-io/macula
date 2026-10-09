@@ -24,6 +24,14 @@ For each profile (`pq_pure`, `pq_hybrid`) and each case:
 
 And for every entry of `covers`, `covers(parent, child)` is the value given.
 
+And `did_key_length` (macula#87): a did:key whose text after `did:key:z` is
+longer than `max_encoded_chars` (4,400) is `malformed`, refused before it is
+decoded, in both profiles; `over_bound` is one character past it. Base58
+decodes in time quadratic in its length, and a token's `iss` is decoded before
+its signature is checked, so without the bound a caller chooses how much CPU a
+provider spends. The longest did:key of a carried key, pq_hybrid's, is about
+4,270 characters.
+
 Every refusal `authorize` can reach appears in both profiles.
 
 An SDK that mints tokens checks them by round trip and against macula:

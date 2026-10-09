@@ -194,7 +194,12 @@ Doc = #{<<"scheme">> => <<"ucan 0.10.0, macula 12 (D7)">>,
         <<"generator">> => <<"scripts/generate-ucan-vectors.sh">>,
         <<"realm_name">> => RealmName,
         <<"profiles">> => #{<<"pq_pure">> => Profile(pq_pure), <<"pq_hybrid">> => Profile(pq_hybrid)},
-        <<"covers">> => Covers},
+        <<"covers">> => Covers,
+        %% macula#87: the longest did:key text every SDK decodes, and one past it, refused before any decode.
+        <<"did_key_length">> =>
+            #{<<"max_encoded_chars">> => macula_ucan:max_did_key_encoded(),
+              <<"over_bound">> => <<"did:key:z", (binary:copy(<<"2">>, macula_ucan:max_did_key_encoded() + 1))/binary>>,
+              <<"verdict">> => <<"malformed">>}},
 ok = file:write_file("test/vectors/ucan_v1.json", [json:format(Doc), "\n"]),
 io:format("wrote test/vectors/ucan_v1.json~n"),
 halt().
