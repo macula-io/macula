@@ -44,7 +44,7 @@
 %%% timer to release buffers whose gap has timed out.
 -module(macula_pubsub_order).
 
--export([new/1, new/2, offer/5, flush/3, buffered/1, skips/1]).
+-export([new/1, new/2, offer/5, flush/3, buffered/1, skips/1, publishers/1, idle_prune_ms/0]).
 -export_type([t/0, mode/0]).
 
 %% A seq gap wider than this, in EITHER direction, is a publisher
@@ -57,6 +57,10 @@
 %% in TIME; this bounds it in COUNT for a publisher gapping under a high
 %% rate — when exceeded, the head gap is skipped early rather than held.
 -define(DEFAULT_MAX_BUFFER, 1024).
+%% A publisher with nothing buffered and not heard from for this long is
+%% dropped when a new publisher arrives (macula#64 F7): far past any copy's
+%% delay and past the dedup window, so its next fact is simply a first one.
+-define(IDLE_PRUNE_MS, 600000).
 
 -type mode()  :: ordered | latest_only | as_arrives.
 -type seq()   :: non_neg_integer().
@@ -72,7 +76,9 @@
 -record(pub, {
     next :: seq() | undefined,
     buf  = #{}  :: #{seq() => {event(), integer()}},
-    high :: seq() | undefined
+    high :: seq() | undefined,
+    %% When the publisher's last fact arrived, for pruning (see `pruned/3').
+    seen = 0 :: integer()
 }).
 
 -opaque t() :: #{mode := mode(),
@@ -104,10 +110,14 @@ new(Mode, Max)
 -spec offer(t(), publisher_key(), seq(), event(), integer()) -> {[event()], t()}.
 offer(#{mode := as_arrives} = S, _Pub, _Seq, Ev, _Now) ->
     {[Ev], S};
-offer(#{mode := latest_only, pubs := P} = S, Pub, Seq, Ev, _Now) ->
-    offer_latest(maps:get(Pub, P, undefined), S, Pub, Seq, Ev);
+offer(#{mode := latest_only, pubs := P} = S, Pub, Seq, Ev, Now) ->
+    Known = maps:get(Pub, P, undefined),
+    {Evs, S2} = offer_latest(Known, pruned(Known, S, Now), Pub, Seq, Ev),
+    {Evs, seen(S2, Pub, Now)};
 offer(#{mode := ordered, pubs := P} = S, Pub, Seq, Ev, Now) ->
-    offer_ordered(maps:get(Pub, P, undefined), S, Pub, Seq, Ev, Now).
+    Known = maps:get(Pub, P, undefined),
+    {Evs, S2} = offer_ordered(Known, pruned(Known, S, Now), Pub, Seq, Ev, Now),
+    {Evs, seen(S2, Pub, Now)}.
 
 %% @doc Release buffers whose head has waited past `TimeoutMs' for a
 %% missing seq: skip the gap up to the smallest buffered seq and drain. A
@@ -126,6 +136,16 @@ flush(S, _Now, _Timeout) ->
 -spec buffered(t()) -> non_neg_integer().
 buffered(#{pubs := P}) ->
     lists:sum([map_size(B) || #pub{buf = B} <- maps:values(P)]).
+
+%% @doc How many publishers the state holds ordering state for
+%% (introspection).
+-spec publishers(t()) -> non_neg_integer().
+publishers(#{pubs := P}) -> map_size(P).
+
+%% @doc How long a publisher with nothing buffered may stay silent before it
+%% is dropped, when a new publisher arrives.
+-spec idle_prune_ms() -> pos_integer().
+idle_prune_ms() -> ?IDLE_PRUNE_MS.
 
 %% @doc Count of gaps skipped after timeout since `new/1' (telemetry:
 %% the genuine per-publisher loss rate).
@@ -259,6 +279,28 @@ flush_when_expired(true, #pub{buf = Buf} = Pst, Now, Timeout, EvAcc, Sk) ->
 %%%===================================================================
 %%% helpers
 %%%===================================================================
+
+%% A new publisher's first fact drops every publisher with nothing buffered
+%% that has not been heard from for ?IDLE_PRUNE_MS (macula#64 F7): the
+%% state only grows when a publisher is new, so it stays bounded by the
+%% publishers heard from recently, however many a long-lived subscription
+%% has seen.
+pruned(undefined, #{pubs := P} = S, Now) ->
+    S#{pubs := maps:filter(fun(_Pub, Pst) -> kept(Pst, Now) end, P)};
+pruned(#pub{}, S, _Now) ->
+    S.
+
+kept(#pub{buf = Buf, seen = Seen}, Now) ->
+    map_size(Buf) > 0 orelse Now - Seen < ?IDLE_PRUNE_MS.
+
+%% The publisher's last fact arrived at `Now'.
+seen(#{pubs := P} = S, Pub, Now) ->
+    seen_at(maps:find(Pub, P), S, Pub, Now).
+
+seen_at({ok, Pst}, #{pubs := P} = S, Pub, Now) ->
+    S#{pubs := P#{Pub := Pst#pub{seen = Now}}};
+seen_at(error, S, _Pub, _Now) ->
+    S.
 
 put_pub(#{pubs := P} = S, Pub, Pst) ->
     S#{pubs := maps:put(Pub, Pst, P)}.

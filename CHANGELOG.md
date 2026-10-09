@@ -20,6 +20,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A long-lived subscription no longer keeps ordering state for every publisher it ever heard (#64 F7).** In
+  `ordered` and `latest_only` delivery, `macula_pubsub_order` kept a small entry per publisher for the
+  subscription's whole life, so rotating or ephemeral publishers grew it without bound. A new publisher's first fact
+  now drops every publisher with nothing buffered that has been silent for 10 minutes
+  (`macula_pubsub_order:idle_prune_ms/0`); its next fact is then taken as a first one. `publishers/1` reports the
+  count.
+
 - **A stream whose streamer does not start is aborted at once (#64 F10).** When `Module:init/1` refused (or the
   supervisor did), `macula_streamer` left the inbound stream open, and the peer heard nothing until its own `recv`
   timeout. It now gets the same STREAM_ERROR as a refused `handle_open/2`: `cancelled`, naming the reason and none of

@@ -223,6 +223,37 @@ as_arrives_passthrough_test() ->
     ?assertEqual(0, macula_pubsub_order:buffered(S1)).
 
 %%%===================================================================
+%%% idle publishers (macula#64 F7)
+%%%===================================================================
+
+%% A publisher idle for the prune window, with nothing buffered, is dropped
+%% when a new publisher arrives, so a long-lived subscription keeps state
+%% only for publishers heard from recently.
+an_idle_publisher_is_pruned_when_a_new_one_arrives_test() ->
+    Idle = macula_pubsub_order:idle_prune_ms(),
+    [begin
+         S0 = macula_pubsub_order:new(Mode),
+         {_, S1} = then_flush(run(S0, [{?P, 5, 0}, {?P, 6, 0}]), ?T),
+         ?assertEqual(1, macula_pubsub_order:publishers(S1)),
+         {_, S2} = run(S1, [{?Q, 9, Idle + ?T}]),
+         ?assertEqual(1, macula_pubsub_order:publishers(S2), Mode)
+     end || Mode <- [ordered, latest_only]].
+
+%% A publisher heard from within the window is kept, and so is one with
+%% facts still buffered, whatever its age.
+a_recent_or_buffering_publisher_is_kept_test() ->
+    Idle = macula_pubsub_order:idle_prune_ms(),
+    S0 = macula_pubsub_order:new(ordered),
+    {_, S1} = then_flush(run(S0, [{?P, 5, 0}]), ?T),
+    {_, S2} = run(S1, [{?P, 6, Idle - 1}, {?Q, 9, Idle + ?T}]),
+    ?assertEqual(2, macula_pubsub_order:publishers(S2)),
+    %% A gap: 8 is buffered waiting for 7, so the publisher stays however
+    %% long ago it was heard from; the other one, idle by then, does not.
+    {_, S3} = then_run(then_flush({[], S2}, Idle + 2 * ?T),
+                       [{?P, 8, Idle + 2 * ?T}, {<<"publisher-c">>, 1, 3 * Idle}]),
+    ?assertEqual(2, macula_pubsub_order:publishers(S3)).
+
+%%%===================================================================
 %%% helper — feed a list of {Publisher, Seq, ArrivalMs}, event = Seq
 %%%===================================================================
 
