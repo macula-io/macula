@@ -18,6 +18,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   at once. `test/vectors/ucan_v1.json` pins the bound and a did:key one past it (`did_key_length`), so every SDK
   refuses at the same length; macula-rust 0.9.0 already does.
 
+### Fixed
+
+- **A stream whose streamer does not start is aborted at once (#64 F10).** When `Module:init/1` refused (or the
+  supervisor did), `macula_streamer` left the inbound stream open, and the peer heard nothing until its own `recv`
+  timeout. It now gets the same STREAM_ERROR as a refused `handle_open/2`: `cancelled`, naming the reason and none of
+  its terms.
+
 ## [14.4.0] - 2026-10-08
 
 ### Fixed

@@ -20,6 +20,7 @@
 %%% Test callback module
 %%%===================================================================
 
+init({refuse_init, Reason}) -> {stop, Reason};
 init(Parent) -> {ok, Parent}.
 
 handle_open(#{refuse := Reason}, Parent) ->
@@ -45,6 +46,7 @@ streamer_test_() ->
                  fun send_and_close_drive_the_stream/0,
                  fun dead_stream_stops_the_streamer/0,
                  fun a_refused_open_tells_the_peer_its_reasons_name_only/0,
+                 fun a_streamer_that_does_not_start_tells_the_peer_its_reasons_name_only/0,
                  fun a_stream_ending_for_a_reason_with_data_tells_the_peer_its_name_only/0,
                  fun advertise_direct_forwards_mode_to_advertise_stream/0,
                  fun advertise_forwards_auth_to_advertise_stream/0,
@@ -241,6 +243,16 @@ a_refused_open_tells_the_peer_its_reasons_name_only() ->
     ?assertEqual([{abort, [StreamPid, <<"cancelled">>, <<"refused">>]}],
                  macula_scripted_stream:calls()).
 
+%% macula#64 F10: a streamer whose init/1 refuses does not start, and the
+%% peer is told the reason's name at once, not left to its own recv timeout.
+a_streamer_that_does_not_start_tells_the_peer_its_reasons_name_only() ->
+    process_flag(trap_exit, true),
+    Handler = advertised_handler(macula_scripted_stream:options([]), {refuse_init, {refused, ?MARKER}}),
+    StreamPid = spawn(fun stream_stub/0),
+    ok = Handler(StreamPid, #{}),
+    ?assertEqual([{abort, [StreamPid, <<"cancelled">>, <<"refused">>]}],
+                 macula_scripted_stream:calls()).
+
 %% A stream that ends for a reason with data tells the peer the reason's
 %% name, and none of its terms.
 a_stream_ending_for_a_reason_with_data_tells_the_peer_its_name_only() ->
@@ -266,7 +278,10 @@ a_stream_ending_for_a_reason_with_data_tells_the_peer_its_name_only() ->
 %% Advertises this module with Opts and returns the handler the
 %% advertise function got.
 advertised_handler(Opts) ->
-    {ok, _Sup} = macula_streamer:advertise(pool, ?REALM, <<"logs.tail_v1">>, ?MODULE, self(),
+    advertised_handler(Opts, self()).
+
+advertised_handler(Opts, InitArgs) ->
+    {ok, _Sup} = macula_streamer:advertise(pool, ?REALM, <<"logs.tail_v1">>, ?MODULE, InitArgs,
                                            Opts),
     [{<<"logs.tail_v1">>, _, Handler, _}] = macula_scripted_stream:advertised(),
     Handler.

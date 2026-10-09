@@ -304,11 +304,11 @@ advertise_direct_unless_removed(Removed, _Pool, _Realm, _Procedure, _Module, _Ar
 unadvertise(Pool, Realm, Procedure) ->
     macula:unadvertise_stream(Pool, Realm, Procedure).
 
-dispatch(Sup, Module, Pool, Realm, Announce, Args, Functions, StreamPid, StreamArgs) ->
+dispatch(Sup, Module, Pool, Realm, Announce, Args, #{stream_io := StreamIo} = Functions, StreamPid, StreamArgs) ->
     case supervisor:start_child(Sup, [Module, Pool, Realm, Announce, Args,
                                       StreamPid, StreamArgs, Functions]) of
         {ok, Pid} -> hand_stream_to(Functions, StreamPid, Pid);
-        {error, _Reason} -> ok
+        {error, Reason} -> abort_rejected_stream(StreamIo, Reason, StreamPid)
     end.
 
 %% @private The process running this dispatch owns the stream, and the
@@ -366,18 +366,20 @@ open(Module, Pool, Realm, Announce, #{stream_io := StreamIo, fact_publish := Fac
                         stream_id = StreamId, stream = StreamPid, reader = Reader,
                         user = NewUserState}};
         {stop, Reason, _NewUserState} ->
-            abort_rejected_stream(StreamIo, Reason, StreamPid),
             {stop, Reason}
     end.
 
-%% @private A rejected open (`handle_open/2' returning `{stop, Reason, _}')
-%% never links `StreamPid', so `terminate/2' never runs on it and the peer
-%% that opened the stream would otherwise be stranded until its own `recv'
-%% timeout. Abort it explicitly so the peer gets an immediate signal
-%% instead of silence, naming the reason and carrying none of its terms.
+%% @private A streamer that did not start (`init/1' returning `{stop, Reason}',
+%% `handle_open/2' returning `{stop, Reason, _}', or the supervisor refusing
+%% the child, macula#64 F10) never links `StreamPid', so `terminate/2' never
+%% runs on it and the peer that opened the stream would otherwise be stranded
+%% until its own `recv' timeout. Abort it explicitly so the peer gets an
+%% immediate signal instead of silence, naming the reason and carrying none
+%% of its terms. Always `ok', as the dispatch handler answers.
 abort_rejected_stream(#{abort := Abort}, Reason, StreamPid) ->
     Message = macula_reason_name:text(Reason),
-    try Abort(StreamPid, ?CANCEL_CODE, Message) catch _:_ -> ok end.
+    try Abort(StreamPid, ?CANCEL_CODE, Message) catch _:_ -> ok end,
+    ok.
 
 %% @private For `client_stream'-mode providers that export
 %% `handle_chunk/2': spawn the same linked-reader `recv/2' loop
