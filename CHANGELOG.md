@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [14.7.0] - 2026-10-09
+
+### Added
+
+- **A handler can attribute any inbound call to its wire-authenticated caller, whatever shape the payload has (#60).**
+  `macula_station_link:caller/0` reads it in the process serving a CALL or a served STREAM_OPEN, and
+  `macula_response:caller/0` in `handle_request/2`. `with_caller/2` keeps merging the same identity into map
+  payloads, so map handlers see no change, while a bare-text call — the shape every SDK README's quickstart
+  sends — arrives attributed instead of sharing one anonymous bucket. No wire change, no handler-arity change.
+
 ## [14.6.0] - 2026-10-09
 
 ### Fixed
