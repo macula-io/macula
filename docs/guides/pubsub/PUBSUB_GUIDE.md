@@ -517,11 +517,31 @@ processes or `macula_subscriber` sinks. The pool issues exactly one
 wire-level SUBSCRIBE per `(Realm, Topic)`, multiplexes inbound events to
 every local subscriber for that pair, and dedupes across links.
 
-### Backpressure
+### Backpressure: the delivery contract
 
-Events are delivered as Erlang messages. If a subscriber is slow, its
-mailbox grows. The pool itself never blocks. Apply your usual
-mailbox-flow-control patterns (process throttling, batching, etc.).
+Each delivered event is one plain Erlang message,
+`{macula_event, SubRef, Topic, Payload, Meta}`, sent to the subscriber
+pid with `!`. The pool never blocks on a subscriber and never drops an
+event for one, so the subscriber's mailbox is the buffer, and it is
+unbounded: a subscriber slower than its topic holds every event it has
+not read yet, payload included, until it reads them or dies. Nothing in
+the pool bounds this for you (macula#64 F14), on purpose: a pool that
+dropped or waited would lose facts or stall every other subscriber.
+
+What to do on a busy or payload-heavy topic:
+
+- Read the mailbox in a process that does nothing else, and hand the
+  slow work to others (a pool of workers, or a queue you bound and drop
+  from yourself), so the reader keeps up.
+- If only the newest value matters, subscribe with
+  `#{delivery => latest_only}`: a stale event is not delivered at all.
+  It still delivers every newer one, so it does not bound the mailbox on
+  its own.
+- Start the reading process with
+  `process_flag(message_queue_data, off_heap)`, so a long queue does not
+  make its garbage collections slow.
+- Watch `erlang:process_info(Pid, message_queue_len)` if you need an
+  alarm.
 
 ### Idempotent handlers
 

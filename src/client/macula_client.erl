@@ -1426,7 +1426,10 @@ group_keyring(Pool) ->
 %% when a SUBSCRIBE cannot carry it (over 512 bytes, or not UTF-8); `Subscriber'
 %% receives `{macula_event, SubRef, Topic, Payload, Meta}' for each
 %% delivered event and `{macula_event_gone, SubRef, Reason}' once
-%% when the pool closes or the subscriber pid dies.
+%% when the pool closes or the subscriber pid dies. Each event is a plain
+%% message: the pool never blocks on a subscriber or drops an event for it,
+%% so a subscriber slower than its topic holds every unread event in its
+%% mailbox, without bound (PUBSUB_GUIDE.md, Backpressure).
 -spec subscribe(pool(), <<_:256>>, binary(), pid(), map()) ->
     {ok, reference()}
     | {error, {text_too_long | invalid_text, topic} | {invalid_option, group | distributor | ucan_token}

@@ -18,6 +18,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   at once. `test/vectors/ucan_v1.json` pins the bound and a did:key one past it (`did_key_length`), so every SDK
   refuses at the same length; macula-rust 0.9.0 already does.
 
+### Documentation
+
+- **The pubsub delivery contract (#64 F14).** `macula_client:subscribe/5` and the pubsub guide's Backpressure
+  section state that each event is one plain message, never blocked on and never dropped, so a slow subscriber's
+  mailbox is an unbounded buffer, and how to keep up on a busy topic.
+
 ### Fixed
 
 - **A long-lived subscription no longer keeps ordering state for every publisher it ever heard (#64 F7).** In
