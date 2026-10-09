@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [14.8.0] - 2026-10-09
+
+### Added
+
+- **An `ordered` pubsub delivery that arrives after its gap was skipped is delivered late, flagged and counted.**
+  The reorder buffer gives up on a stalled gap after `order_timeout_ms` (or at the `order_max_buffer` cap); every
+  later copy of a given-up seq used to be dropped as "already past", so a fact the mesh delivered out of order
+  read as silent loss on the subscriber (fleet-measured: up to 74% of one publisher's flood reported lost while
+  every fact reached the subscriber). The skipped seqs are now remembered per publisher — bounded to the newest
+  `order_max_buffer` of them — and a later copy is delivered with `late => true` in its meta; only true duplicates
+  are dropped. `macula:status/1` surfaces `pubsub_late_delivered` (late copies delivered) and `pubsub_past_dropped`
+  (true duplicates dropped) next to `pubsub_gap_skips`, and the pubsub guide and protocol docs state the new
+  `ordered` contract.
+
 ## [14.7.0] - 2026-10-09
 
 ### Added
