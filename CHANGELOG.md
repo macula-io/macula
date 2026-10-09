@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [14.6.0] - 2026-10-09
+
+### Fixed
+
+- **A provider frees a request's admission place when it replies, not at deadline + 5 min (#89).** The caller
+  quota (256 per caller) and the share bound (1,024 per station link) held each CALL and STREAM_OPEN until its
+  deadline plus five minutes, so one caller was refused at about 0.85 calls/s sustained, a full link refused every
+  caller for five minutes, and a content fetch from one sharer failed after 256 chunks (64 MiB). Places are now
+  freed when the reply is sent or the stream ends. Run-once (replay) protection moves to a served-marker set kept to
+  deadline + 5 min and bounded by bytes (`seen_bytes`, 64 MiB at about 512 B a marker); when it is full a new
+  request is refused, never an old marker evicted. A copy of a live STREAM_OPEN no longer frees the original's place.
+- **Refusals for an in-flight bound carry `retry_after_ms`** in the ERROR frame's existing detail. No wire change.
+
+### Documentation
+
+- The design doc's admission paragraph describes the in-flight bounds and the marker set's real memory cost.
+
 ## [14.5.0] - 2026-10-09
 
 ### Security
