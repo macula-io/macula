@@ -118,6 +118,33 @@ a_second_call_to_the_same_station_under_another_name_reuses_its_link_test() ->
     ?assertEqual(1, length(element(2, macula_client:links(Pool)))),
     ok = macula_client:close(Pool).
 
+%% mcl-warden#3 (2026-10-10): a fresh pool's configured seed pinning
+%% `Station' has not completed HELLO yet (the pool has been up for
+%% seconds) when a direct-dial call for the SAME station arrives under a
+%% different name — the realm's serving station, resolved to the literal
+%% address its `station_endpoint' advertises. The call must reuse the
+%% pinned, still-handshaking link and wait for it. Dialling a fresh one
+%% creates a duplicate connection to the station; the station holds one
+%% connection per identity and replaces the older one, the replaced link
+%% surfaces that as `peer_closed' and respawns, replaces the other, and
+%% the two flap each other forever (761 `duplicate_replaced' events on
+%% the station's side in mcl-warden#3). Observable without a live
+%% station: with the reuse the pool still holds exactly ONE link (the
+%% configured seed) and the call answers `not_connected' once its wait
+%% deadline passes; without it, a second link is dialled under the
+%% literal name and the pool holds two.
+a_direct_dial_for_the_pinned_station_of_a_still_handshaking_seed_reuses_that_seed_test() ->
+    {ok, _} = application:ensure_all_started(macula),
+    Station = <<9:256>>,
+    %% Nothing listens on this port: the configured link stays in
+    %% `connecting', exactly the state the fresh-pool race happens in.
+    PinSeed = #{host => <<"127.0.0.1">>, port => 39999, expected_node_id => Station},
+    {ok, Pool} = macula_client:connect([PinSeed], #{}),
+    Result = call_pinned(Pool, reuse_seed(2), Station),
+    ?assertEqual({error, not_connected}, Result),
+    ?assertEqual(1, length(element(2, macula_client:links(Pool)))),
+    ok = macula_client:close(Pool).
+
 %% Two seeds that spell different stations to the pool's `links' map.
 reuse_seed(Port) -> #{host => <<"127.0.0.1">>, port => Port}.
 
