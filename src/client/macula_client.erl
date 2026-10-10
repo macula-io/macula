@@ -2465,7 +2465,7 @@ ensure_link_for(_Missing, Station, ExtraOpts, S) ->
 reuse_by_node_id(undefined, Station, ExtraOpts, S) ->
     dial_fresh(Station, ExtraOpts, S);
 reuse_by_node_id(NodeId, Station, ExtraOpts, S) ->
-    reuse_or_dial(find_link_by_node_id(NodeId, known_links(S)), Station, ExtraOpts, S).
+    reuse_or_dial(link_for_node_id(NodeId, S), Station, ExtraOpts, S).
 
 reuse_or_dial(Pid, _Station, _ExtraOpts, S) when is_pid(Pid) ->
     {Pid, S};
@@ -2566,6 +2566,37 @@ logged_refusal({quiet, Report}, _Reason) ->
 %% call to the same resolved URL skips this entirely).
 find_link_by_node_id(NodeId, KnownLinks) ->
     link_pid_of(first_matching_link(KnownLinks, NodeId)).
+
+%% A live link that IS the station `NodeId' — its completed handshake said
+%% so, else its seed pins that identity as the one its handshake must
+%% prove. The pin fallback closes the fresh-pool race: before a link's
+%% first HELLO, `known_links/1' cannot see it, and a direct dial (or a
+%% discovery pass) that resolves the same station in that window would
+%% otherwise dial a duplicate connection to it. The station holds one
+%% connection per identity and replaces the older one; the replaced link
+%% surfaces the replace as `peer_closed', respawns, and replaces the
+%% other in turn — a permanent flap (mcl-warden#3: 761
+%% `duplicate_replaced' events at the station while the two links ping-
+%% ponged). Reusing a still-handshaking link is safe: `call_when_connected/
+%% 2' and `link_when_connected/2' wait for its handshake, and a pin that
+%% does not match the station's real identity never matches a caller's
+%% verified `NodeId', so a stale pin still falls through to a fresh dial.
+link_for_node_id(NodeId, S) ->
+    case find_link_by_node_id(NodeId, known_links(S)) of
+        undefined -> pinned_link_pid(NodeId, live_links(S#state.links), S);
+        Pid       -> Pid
+    end.
+
+pinned_link_pid(NodeId, LiveLinks, S) ->
+    link_pid_of(first_pinned_match(LiveLinks, NodeId, S)).
+
+first_pinned_match([], _NodeId, _S) ->
+    undefined;
+first_pinned_match([{Seed, Pid} | Rest], NodeId, S) ->
+    case pinned_station(Seed, S) of
+        NodeId -> {Seed, Pid};
+        _Other -> first_pinned_match(Rest, NodeId, S)
+    end.
 
 %% The pool's links that have a process, as {seed, pid, station}: the
 %% station each told the pool at handshake, `undefined' before it.
@@ -3258,7 +3289,7 @@ add_usable_discovered_seeds(Stations, #state{discovery = D, links = Links,
     ByStringSet = sets:from_list(ByString, [{version, 2}]),
     Fresh = [Seed || {Seed, NodeId} <- Stations,
                      sets:is_element(Seed, ByStringSet),
-                     not already_connected_to(NodeId, known_links(S))],
+                     not already_connected_to(NodeId, S)],
     lists:foldl(fun add_one_discovered_seed/2, S, Fresh).
 
 %% Pure: which of `NewSeeds' are worth adding, given `ExistingSeeds'
@@ -3355,27 +3386,27 @@ ip_literal({error, _NotAnAddress}, Bare) ->
 %% (aliasing) -- those normalize to two different `{host, port}' pairs,
 %% so the primary pass lets both through. This check asks whether any
 %% currently-held link's actual live peer identity already matches, via
-%% the SAME `find_link_by_node_id/2' the direct-dial literal-key-miss
+%% the SAME `link_for_node_id/2' the direct-dial literal-key-miss
 %% path already uses for exactly this problem (see its own doc).
 %% Without either check, discovery would dial a second connection to a
 %% station already held; the station closes one of the two (one
 %% connection per identity, keyed by `PeerNodeId' --
 %% `macula_station_listener.erl'), the pool's monitor sees that as a
 %% DOWN, respawns after 1s, gets closed again -- a permanent flap that
-%% never self-heals since discovery never removes a seed. Unlike the
-%% primary pass, this one can only see links that have completed HELLO
-%% (a spawned-but-not-yet-connected or respawn-gap link answers
-%% `undefined' here, same as no link at all) -- that gap is exactly why
-%% the primary pass now also checks against `S#state.seeds' rather than
-%% relying on this identity check alone.
-already_connected_to(undefined, _Links) ->
+%% never self-heals since discovery never removes a seed. The primary
+%% pass can only see the seed STRING, and `link_for_node_id/2' also sees
+%% a link that has not completed HELLO yet by its pinned
+%% `expected_node_id' -- the gap a fresh pool's first discovery run used
+%% to fall into, dialling a duplicate of a still-handshaking bootstrap
+%% seed (the same race mcl-warden#3 hit via the direct-dial path).
+already_connected_to(undefined, _S) ->
     %% `list_stations' didn't carry a node_id for this row (defensive;
     %% every row in the real read model does). Can't rule the station
     %% in or out by identity here -- falls through to the host/port
     %% dedup above, no worse than before this check existed.
     false;
-already_connected_to(NodeId, KnownLinks) ->
-    find_link_by_node_id(NodeId, KnownLinks) =/= undefined.
+already_connected_to(NodeId, S) ->
+    link_for_node_id(NodeId, S) =/= undefined.
 
 add_one_discovered_seed(Seed, S) ->
     discovered_within_budget(spend_dial_budget(Seed, S), Seed).
