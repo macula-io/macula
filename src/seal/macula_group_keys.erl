@@ -43,6 +43,9 @@
                      now => fun(() -> integer()),
                      membership => fun((<<_:256>>) -> ok | {error, not_a_member | membership_unknown}),
                      removed => fun((<<_:256>>) -> boolean()),
+                     %% The realm slot lookup behind the DEFAULT membership, injectable for tests
+                     %% (macula#91): answers what `macula:find_records/2' would for the slot key.
+                     lookup => fun((term()) -> {ok, [term()]} | {error, term()}),
                      pool => pid(), realm => <<_:256>>, realm_key_id => <<_:256>>,
                      profile => macula_crypto_profile:profile()}.
 -export_type([options/0, policy/0]).
@@ -194,8 +197,9 @@ text_field(Payload, Name) ->
 %% The default membership read: the realm key's entry in the caller's
 %% endorsement slot, verified now; a tombstone answers withdrawn. A lookup that
 %% fails is `membership_unknown', never `not_a_member'.
-realm_membership(#{pool := Pool, realm := Realm, realm_key_id := RealmKeyId, profile := Profile}, Caller) ->
-    slot_read(macula:find_records(Pool, macula_record:realm_member_endorsement_key(Realm, Caller)),
+realm_membership(#{pool := Pool, realm := Realm, realm_key_id := RealmKeyId, profile := Profile} = Opts, Caller) ->
+    Lookup = maps:get(lookup, Opts, fun(Key) -> macula:find_records(Pool, Key) end),
+    slot_read(Lookup(macula_record:realm_member_endorsement_key(Realm, Caller)),
               #{profile => Profile, realm => Realm, realm_key_id => RealmKeyId}, Caller).
 
 slot_read({ok, Records}, Trust, Caller) ->
