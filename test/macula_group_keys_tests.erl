@@ -25,6 +25,7 @@ distributor_test_() ->
       fun a_removed_member_is_refused_every_epoch/1,
       fun a_past_epoch_is_served_by_id/1,
       fun an_unknown_epoch_id_is_refused/1,
+      fun a_restarted_distributor_answers_a_lost_epoch_unknown_epoch/1,
       fun an_epoch_past_its_acceptance_is_refused/1,
       fun another_orgs_group_is_refused/1,
       fun a_prefix_without_an_org_segment_is_refused/1,
@@ -36,12 +37,13 @@ setup() ->
     counters:put(Now, 1, 1_000_000),
     Members = ets:new(members, [public, set]),
     Removed = ets:new(removed, [public, set]),
-    {ok, Pid} = macula_group_keys:start_link(
-                  #{org => ?ORG, policy => required, rotate_after_ms => ?R,
-                    now => fun() -> counters:get(Now, 1) end,
-                    membership => fun(Caller) -> membership(Members, Caller) end,
-                    removed => fun(Caller) -> ets:member(Removed, Caller) end}),
-    #{pid => Pid, now => Now, members => Members, removed => Removed, handler => macula_group_keys:handler(Pid)}.
+    Opts = #{org => ?ORG, policy => required, rotate_after_ms => ?R,
+             now => fun() -> counters:get(Now, 1) end,
+             membership => fun(Caller) -> membership(Members, Caller) end,
+             removed => fun(Caller) -> ets:member(Removed, Caller) end},
+    {ok, Pid} = macula_group_keys:start_link(Opts),
+    #{pid => Pid, now => Now, members => Members, removed => Removed, opts => Opts,
+      handler => macula_group_keys:handler(Pid)}.
 
 cleanup(#{pid := Pid, members := Members, removed := Removed}) ->
     unlink(Pid),
@@ -129,6 +131,26 @@ a_past_epoch_is_served_by_id(W) ->
 
 an_unknown_epoch_id_is_refused(W) ->
     ?_assertEqual({error, unknown_epoch}, call(W, member(W), crypto:strong_rand_bytes(8))).
+
+%% Epochs live in memory only: a distributor that restarts has lost every
+%% epoch it issued and must answer `unknown_epoch' for an id it handed out
+%% before the restart, never serve a stale key (DESIGN_E2E_SEALED_PUBSUB.md
+%% §10). The member side remembers a refusal rather than retrying the same id
+%% (`macula_group_keyring'), so this refusal is what closes the loop.
+a_restarted_distributor_answers_a_lost_epoch_unknown_epoch(#{pid := Pid, opts := Opts} = W) ->
+    ?_test(begin
+        Node = member(W),
+        [Old] = epochs(call(W, Node, {text, <<"current">>})),
+        %% A system stop, not an exit signal: setup/0 links the distributor to
+        %% the eunit instance process, which is NOT the process this closure
+        %% runs in, so an `exit(Pid, shutdown)' here would ride the link back
+        %% and kill the instance.
+        gen_server:stop(Pid),
+        {ok, Pid2} = macula_group_keys:start_link(Opts),
+        W2 = W#{pid => Pid2, handler => macula_group_keys:handler(Pid2)},
+        ?assertEqual({error, unknown_epoch}, call(W2, Node, maps:get(id, Old))),
+        gen_server:stop(Pid2)
+    end).
 
 an_epoch_past_its_acceptance_is_refused(W) ->
     ?_test(begin

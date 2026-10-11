@@ -33,6 +33,8 @@ keyring_test_() ->
       fun a_failed_re_pull_backs_off_doubling_up_to_a_third_of_an_epoch/1,
       fun a_publisher_whose_epoch_stopped_and_whose_pull_fails_fails_closed/1,
       fun off_after_required_is_ignored/1,
+      fun off_after_preferred_is_ignored/1,
+      fun a_holder_picks_up_required_on_a_quiet_re_pull/1,
       fun a_held_epoch_opens/1,
       fun an_epoch_past_its_acceptance_is_reported_expired/1,
       fun an_unknown_id_is_pulled_by_id/1,
@@ -201,6 +203,32 @@ off_after_required_is_ignored(W) ->
     ?_test(begin
         {ok, required} = join(W),
         queue(W, [{reply, fun(Reply) -> Reply#{policy := {text, <<"off">>}} end}]),
+        advance(W, ?R - ?R div 3),
+        wake(W),
+        ?assertEqual({ok, ?PREFIX, required}, macula_group_keyring:policy(maps:get(keyring, W), ?REALM, ?TOPIC))
+    end).
+
+%% The policy is monotonic per node run: once `preferred' has been seen for a
+%% prefix, a later reply that says `off' is ignored, exactly as after
+%% `required' (DESIGN_E2E_SEALED_PUBSUB.md §10 names the preferred case;
+%% `off' only ever counts when nothing else was seen first).
+off_after_preferred_is_ignored(W) ->
+    ?_test(begin
+        queue(W, [{reply, fun(Reply) -> Reply#{policy := {text, <<"preferred">>}} end}]),
+        {ok, preferred} = join(W),
+        queue(W, [{reply, fun(Reply) -> Reply#{policy := {text, <<"off">>}} end}]),
+        advance(W, ?R - ?R div 3),
+        wake(W),
+        ?assertEqual({ok, ?PREFIX, preferred}, macula_group_keyring:policy(maps:get(keyring, W), ?REALM, ?TOPIC))
+    end).
+
+%% A holder that joined under `preferred' picks up `required' on its next
+%% re-pull, events or no events: the policy follows the distributor's
+%% latest word (the monotonic rule only blocks a downgrade to `off').
+a_holder_picks_up_required_on_a_quiet_re_pull(W) ->
+    ?_test(begin
+        queue(W, [{reply, fun(Reply) -> Reply#{policy := {text, <<"preferred">>}} end}]),
+        {ok, preferred} = join(W),
         advance(W, ?R - ?R div 3),
         wake(W),
         ?assertEqual({ok, ?PREFIX, required}, macula_group_keyring:policy(maps:get(keyring, W), ?REALM, ?TOPIC))
