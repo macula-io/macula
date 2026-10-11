@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [14.8.1] - 2026-10-11
+
+### Fixed
+
+- **A direct dial for a station the pool already holds under a still-handshaking pinned seed now reuses that link.**
+  Before a link's first HELLO, `known_links/1` could not see it, so a fresh pool's first direct dial (a boot
+  claim to the realm's serving station, resolved to the literal address its `station_endpoint` advertises)
+  dialed a second connection to the same station. The station's one-connection-per-identity policy replaced
+  one of the two, the replaced link respawned and replaced the other back — a permanent flap (761
+  `duplicate_replaced` events at the station, proof-rate refusal, `/health` never healthy on a fresh warden
+  box; mcl-warden#3). `link_for_node_id/2` now falls back from the completed-handshake match to the link's
+  pinned `expected_node_id` — the identity its handshake will prove — for both the direct-dial reuse path and
+  the discovery dedup. A stale pin never matches a caller's verified node id, so it still falls through to a
+  fresh dial exactly as before.
+
 ## [14.8.0] - 2026-10-09
 
 ### Added
