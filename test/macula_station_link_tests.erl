@@ -92,6 +92,20 @@ a_failure_of_the_request_itself_is_request_scoped_test() ->
     ?assertEqual(request,
                  macula_station_link:failure_scope({error, {open_too_large, 1048576}})).
 
+%% A REFUSED dial is the station's own limit (session_proof_rate and the
+%% like): retrying it at the fixed 1s cadence hammered the same refusal
+%% forever (macula#95: 74,742 refused dials over 35h, one every ~1.6s).
+%% Each consecutive refusal must back off further, so the limiter's
+%% window can clear, capped so a permanently-refusing seed still gets a
+%% retry every minute.
+a_refused_dial_backs_off_further_each_time_test() ->
+    [?assertEqual(5_000, macula_station_link:refused_backoff(0)),
+     ?assertEqual(10_000, macula_station_link:refused_backoff(1)),
+     ?assertEqual(20_000, macula_station_link:refused_backoff(2)),
+     ?assertEqual(40_000, macula_station_link:refused_backoff(3)),
+     ?assertEqual(60_000, macula_station_link:refused_backoff(4)),
+     ?assertEqual(60_000, macula_station_link:refused_backoff(400))].
+
 %% `provider': it MAY have reached one, so it must never be sent elsewhere. A
 %% timeout and a station's `unknown_next_peer' are here deliberately: neither
 %% tells the caller whether a provider ran the call.
