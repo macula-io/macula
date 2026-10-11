@@ -185,6 +185,7 @@
     send_stream_bytes/4,
     is_connected/1,
     failure_scope/1,
+    refused_backoff/1,
     peer_node_id/1,
     %% Exported for `macula_client''s discovery-seed dedup, which needs
     %% to know whether two differently-spelled seeds (e.g. `https://'
@@ -307,6 +308,13 @@
 %% handler's text as its detail.
 -define(HANDLER_ERROR_CODE, <<"handler_error">>).
 -define(CONNECT_RETRY_BACKOFF_MS, 1_000).
+
+%% A REFUSED dial backs off further with each consecutive refusal
+%% (macula#95): 5s, doubling, capped at a minute, so the station's
+%% proof-rate limiter window clears instead of being hammered forever
+%% at the fixed cadence.
+-define(REFUSED_BACKOFF_BASE_MS, 5_000).
+-define(REFUSED_BACKOFF_CAP_MS, 60_000).
 
 %% App-level liveness probe. Sends a tiny CALL (`_macula.ping' on the
 %% DHT realm, no handler expected — station replies with
@@ -500,6 +508,9 @@
     %% opt `connect_retry_backoff_ms', default `?CONNECT_RETRY_BACKOFF_MS').
     %% A busy pool cycling links raises this to soften reconnect storms.
     connect_retry_backoff_ms :: non_neg_integer(),
+    %% Consecutive REFUSED dials; the refusal backoff grows with it and
+    %% a successful connect clears it (macula#95).
+    refused_streak = 0 :: non_neg_integer(),
     %% Connect/handshake watchdog. Armed the moment the peering worker
     %% is spawned (peer_pid set) and cancelled on `connected'. If it
     %% fires while `peer_node_id' is still undefined the CONNECT/HELLO
@@ -709,6 +720,13 @@ failure_scope({error, {refused, _Reason}})  -> request;
 failure_scope({error, {open_too_large, _}}) -> request;
 failure_scope({error, {confidentiality, _}}) -> request;
 failure_scope({error, _Reason})             -> provider.
+
+%% @doc The backoff a REFUSED dial retries after, for a streak of
+%% consecutive refusals: 5s doubling, capped at a minute (macula#95).
+%% Public for the tests (the pure decision, no clock).
+-spec refused_backoff(non_neg_integer()) -> pos_integer().
+refused_backoff(Streak) ->
+    min(?REFUSED_BACKOFF_CAP_MS, ?REFUSED_BACKOFF_BASE_MS bsl min(Streak, 4)).
 
 %% @doc Send a PUBLISH frame fire-and-forget. The link stamps a
 %% monotonic per-link `seq' onto the frame and the local
@@ -1790,7 +1808,8 @@ handle_info({macula_peering, connected, Pid, PeerNodeId},
     pool_connected(S1#state.pool, PeerNodeId),
     NewS = arm_liveness(S1#state{peer_node_id = PeerNodeId,
                                  liveness_misses = 0,
-                                 liveness_outstanding = undefined}),
+                                 liveness_outstanding = undefined,
+                                 refused_streak = 0}),
     drain_pending_subscribes(NewS),
     drain_pending_advertisements(NewS),
     {noreply, NewS};
@@ -2166,6 +2185,16 @@ after_connect_request({ok, Pid}, S) ->
     %% peering worker's `connected' message. If it never arrives (dial
     %% NIF hangs, handshake stalls) the watchdog recycles the link.
     {noreply, arm_connect_watchdog(S#state{peer_pid = Pid})};
+after_connect_request({error, {refused, _} = Reason}, #state{refused_streak = Streak} = S) ->
+    macula_diagnostics:event(<<"_macula.station_link.connect_failed">>, #{
+        reason => macula_reason_name:text(Reason),
+        seed   => S#state.seed
+    }),
+    %% The station's own limit refused the dial: back off further with
+    %% each consecutive refusal so the limiter's window clears instead
+    %% of being hammered forever at the fixed cadence (macula#95).
+    erlang:send_after(refused_backoff(Streak), self(), attempt_connect),
+    {noreply, S#state{refused_streak = Streak + 1}};
 after_connect_request({error, Reason}, S) ->
     macula_diagnostics:event(<<"_macula.station_link.connect_failed">>, #{
         reason => macula_reason_name:text(Reason),

@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- **A refused dial backs off further each time** (macula#95): 5s doubling capped at a minute, so a station's own refusal (session_proof_rate and the like) clears instead of being hammered forever at the fixed 1s cadence. The mcl-stations node's helsinki link spent 35h in that loop (74,742 refused dials, one every ~1.6s).
+
 ## [14.8.1] - 2026-10-11
 
 ### Fixed
