@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **The realm's station authorization record, `station_authorization` (16#13)** (macula-station#63, slice S1): the realm, with its signing key, states that a node serves it as a station at a hostname, in roles, over a window of at most 30 minutes. Its slot is derived from the realm id and the station's node id, so the realm revokes a station by tombstoning that slot and not reissuing; a thief holding the station's key cannot out-publish it. Two optional fields carry macula-station#62's hardware attestation (`attestation_key_id`, the full 32-byte SHA-256; `attestation_required` = 1, which requires the key id).
+- **A client checks a resolved station's authorization before it dials it** (`macula_station_check`, hook 3): for calls and streams through direct dial, the client reads the station's slot and counts only a record or tombstone signed by the realm key it pinned (`realm_trust`), inside its window. The mode is `station_authorization_mode`: `open` (the default) dials and counts a would-be refusal on the pool's `station_checks` status, `log` also logs it, and `closed` refuses before anything is sent and tries the next candidate. Explicit station-target dials (`call_station/8`, `call_stream_station/7`, `ensure_station_link/4`) and content fetches are not checked yet; they must be before any fleet runs `closed`.
+
 ## [14.8.2] - 2026-10-11
 
 - **A refused dial backs off further each time** (macula#95): 5s doubling capped at a minute, so a station's own refusal (session_proof_rate and the like) clears instead of being hammered forever at the fixed 1s cadence. The mcl-stations node's helsinki link spent 35h in that loop (74,742 refused dials, one every ~1.6s).
