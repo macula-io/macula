@@ -81,8 +81,63 @@ an_enum_value_that_is_not_text_still_refuses_the_frame_test() ->
     ?assertEqual({error, bad_frame}, decode_map(Neighbour#{priority => 3})).
 
 %%------------------------------------------------------------------
+%% Extensions (macula#83 decision 8)
+%%------------------------------------------------------------------
+
+an_unknown_non_critical_extension_is_ignored_test() ->
+    Ping = macula_frame:ping(#{nonce => binary:copy(<<7>>, 16)}),
+    ?assertMatch({ok, [#{frame_type := ping}], <<>>},
+                 macula_frame:parse_received(macula_frame:encode(Ping#{ext => ext(0)}))).
+
+an_unknown_critical_extension_refuses_the_frame_and_the_parse_goes_on_test() ->
+    Ping = macula_frame:ping(#{nonce => binary:copy(<<7>>, 16)}),
+    Bytes = <<(macula_frame:encode(Ping#{ext => ext(1)}))/binary, (ping_wire())/binary>>,
+    ?assertMatch({ok, [{invalid_frame, ping, ext}, #{frame_type := ping}], <<>>}, macula_frame:parse_received(Bytes)).
+
+an_extension_of_another_shape_does_not_decode_test() ->
+    Ping = macula_frame:ping(#{nonce => binary:copy(<<7>>, 16)}),
+    Shapes = [#{a_future_extension => #{crit => 2, v => 1}},
+              #{a_future_extension => #{v => 1}},
+              #{a_future_extension => #{crit => 0, v => 1, more => 1}},
+              #{a_future_extension => 1},
+              [1]],
+    [?assertEqual({malformed, [], bad_frame}, macula_frame:parse_received(macula_frame:encode(Ping#{ext => Ext})))
+     || Ext <- Shapes].
+
+a_per_hop_extension_on_a_signed_frame_leaves_its_signature_valid_test() ->
+    {Call, _Caller} = call(),
+    {ok, Received, <<>>} = macula_frame:decode(macula_frame:encode(Call#{ext => ext(0)})),
+    ?assertMatch({ok, _}, macula_frame:verify_request(Received, pq_pure)).
+
+a_signed_extension_is_read_by_its_criticality_test() ->
+    {Call, Caller} = call(),
+    ?assertMatch({ok, _}, macula_frame:verify_request(with_signed_ext(Call, Caller, 0), pq_pure)),
+    ?assertEqual({error, malformed_frame}, macula_frame:verify_request(with_signed_ext(Call, Caller, 1), pq_pure)).
+
+%%------------------------------------------------------------------
 %% Helpers
 %%------------------------------------------------------------------
+
+%% One extension no node knows yet, critical (1) or not (0).
+ext(Crit) ->
+    #{a_future_extension => #{crit => Crit, v => #{{text, <<"anything">>} => 1}}}.
+
+call() ->
+    {ok, Caller} = macula_node_keys:generate(identity, pq_pure),
+    {ok, Provider} = macula_node_keys:generate(identity, pq_pure),
+    {ok, Target} = macula_node_keys:node_id(Provider),
+    Spec = #{request_id => binary:copy(<<1>>, 16), realm => fill(1), procedure => <<"probe.echo">>, target => Target,
+             deadline => erlang:system_time(millisecond) + 60_000, payload => #{n => 1}},
+    {macula_frame:call(Spec, Caller), Caller}.
+
+%% The CALL's request signed again by its caller with an extension inside the tbs.
+with_signed_ext(#{request := #{tbs := Tbs}} = Call, Caller, Crit) ->
+    {ok, Fields} = macula_record_cbor:decode_strict(Tbs),
+    Ext = #{{text, <<"a_future_extension">>} => #{{text, <<"crit">>} => Crit, {text, <<"v">>} => 1}},
+    Signed = macula_signed_object:sign(<<"MACULA-PQ-REQUEST-V1">>,
+                                       (maps:remove({text, <<"alg">>}, Fields))#{{text, <<"ext">>} => Ext}, Caller),
+    {ok, Received, <<>>} = macula_frame:decode(macula_frame:encode(Call#{request := Signed})),
+    Received.
 
 count(Name) ->
     maps:get(Name, macula_wire_tolerance:counters()).

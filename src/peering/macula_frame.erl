@@ -1164,6 +1164,7 @@ request_fields(_Type, _NotAMap) ->
 request_table(Type) ->
     #{<<"frame_type">> => {frame_type, {enum, [Type]}},
       <<"alg">> => {alg, value},
+      <<"ext">> => {ext, signed_extensions},
       <<"caller">> => {caller, {bytes, 32}},
       <<"request_id">> => {request_id, {bytes, 16}},
       <<"realm">> => {realm, {bytes, 32}},
@@ -1249,6 +1250,7 @@ reply_checked([true, true, true, true], Read) -> {ok, maps:without([alg, request
 reply_table(Type) ->
     #{<<"frame_type">> => {frame_type, {enum, [Type]}},
       <<"alg">> => {alg, value},
+      <<"ext">> => {ext, signed_extensions},
       <<"request_id">> => {request_id, {bytes, 16}},
       <<"request_hash">> => {request_hash, {bytes, 48}},
       <<"responded_by">> => {responded_by, {bytes, 32}},
@@ -1416,6 +1418,7 @@ realm_claimed(_NoRealm) -> {error, no_realm}.
 relay_error_table(Type) ->
     #{<<"frame_type">> => {frame_type, {enum, [Type]}},
       <<"alg">> => {alg, value},
+      <<"ext">> => {ext, signed_extensions},
       <<"request_id">> => {request_id, {bytes, 16}},
       <<"request_hash">> => {request_hash, {bytes, 48}},
       <<"reported_by">> => {reported_by, {bytes, 32}},
@@ -1447,8 +1450,9 @@ routed(Frame, Routing) ->
 routing_value(retry_budget, Budget) when is_integer(Budget), Budget >= 0, Budget < ?MAX_PROTOCOL_INT -> Budget;
 routing_value(_Route, Route) when is_binary(Route) -> Route.
 
+%% Besides the fields a check names, a frame or a signed object may carry its extension map.
 only_fields(Frame, Allowed) ->
-    map_size(maps:without(Allowed, Frame)) =:= 0.
+    map_size(maps:without([ext | Allowed], Frame)) =:= 0.
 
 %%------------------------------------------------------------------
 %% HyParView constructors (Part 3 §7.1)
@@ -1672,6 +1676,7 @@ publication_checked([], Verified) -> {ok, Verified}.
 
 publication_table() ->
     #{<<"alg">> => {alg, value},
+      <<"ext">> => {ext, signed_extensions},
       <<"publisher">> => {publisher, {bytes, 32}},
       <<"realm">> => {realm, {bytes, 32}},
       <<"topic">> => {topic, {text_max, ?MAX_TOPIC_BYTES}},
@@ -2148,6 +2153,7 @@ stream_result([], #{frame_type := Type, seq := Seq} = Read, SideName, Side, Stat
 stream_table(Type, Side) ->
     #{<<"frame_type">> => {frame_type, {enum, [Type]}},
       <<"alg">> => {alg, value},
+      <<"ext">> => {ext, signed_extensions},
       <<"request_id">> => {request_id, {bytes, 16}},
       <<"request_hash">> => {request_hash, {bytes, 48}},
       <<"signer">> => {signer, {bytes, 32}},
@@ -2674,6 +2680,7 @@ value_valid(byte, Value) when is_integer(Value), Value >= 0, Value =< 255 -> tru
 value_valid(tier, Value) when is_integer(Value), Value >= 0, Value =< 4 -> true;
 value_valid(boolean, Value) when is_boolean(Value)                    -> true;
 value_valid(map, Value) when is_map(Value)                            -> true;
+value_valid(extensions, Value) when is_map(Value)                     -> not critical(Value);
 value_valid(list, Value) when is_list(Value)                          -> all_valid(present, Value);
 value_valid({list_of, Rule}, Value) when is_list(Value)               -> all_valid(Rule, Value);
 value_valid({one_of, Atoms}, Value) when is_atom(Value)               -> lists:member(Value, Atoms);
@@ -2822,12 +2829,13 @@ base_rules(Required, Optional) ->
 
 base_header() ->
     [{frame_id, {optional, id16}}, {sent_at_ms, {optional, non_neg}}, {capabilities, {optional, non_neg}},
-     {realm, {optional, key}}, {call_id, {optional, id16}}, {source_route, {optional, binary}}].
+     {realm, {optional, key}}, {call_id, {optional, id16}}, {source_route, {optional, binary}},
+     {ext, {optional, extensions}}].
 
 %% A frame that carries its fields in signed objects: version and frame_type beside those objects, and its routing
 %% fields.
 signed_rules(Required, OneOf, Optional) ->
-    #{required => [{version, version} | Required], one_of => OneOf, optional => Optional}.
+    #{required => [{version, version} | Required], one_of => OneOf, optional => Optional ++ [{ext, {optional, extensions}}]}.
 
 %% A NODES entry, as station_ref/1 builds it.
 station_ref_rule() ->
@@ -3241,7 +3249,12 @@ frame_type_named(_Other) -> error.
 %% key form of peer-supplied maps; an enum takes only the atoms it lists; a
 %% reason takes its listed atoms and keeps any other reason as text; a list
 %% of entries reads each entry through its own table.
-field_table(connect) ->
+%% The fields a frame of each type may carry, by their wire names, and how each is read. Every frame type also carries
+%% one optional extension map, `ext' (macula#83 decision 8).
+field_table(Type) ->
+    (frame_table(Type))#{<<"ext">> => {ext, extensions}}.
+
+frame_table(connect) ->
     #{<<"version">> => {version, value},
       <<"frame_type">> => {frame_type, frame_type},
       <<"frame_id">> => {frame_id, value},
@@ -3257,7 +3270,7 @@ field_table(connect) ->
       <<"site">> => {site, value},
       <<"puzzle_evidence">> => {puzzle_evidence, value},
       <<"endorsements">> => {endorsements, value}};
-field_table(hello) ->
+frame_table(hello) ->
     #{<<"version">> => {version, value},
       <<"frame_type">> => {frame_type, frame_type},
       <<"frame_id">> => {frame_id, value},
@@ -3274,7 +3287,7 @@ field_table(hello) ->
       <<"accepted">> => {accepted, boolean},
       <<"refusal_code">> => {refusal_code, value},
       <<"negotiated_capabilities">> => {negotiated_capabilities, value}};
-field_table(goodbye) ->
+frame_table(goodbye) ->
     #{<<"version">> => {version, value},
       <<"neighbour">> => {neighbour, held_object},
       <<"frame_type">> => {frame_type, frame_type},
@@ -3286,7 +3299,7 @@ field_table(goodbye) ->
       <<"source_route">> => {source_route, value},
       <<"reason">> => {reason, {bounded_text, ?MAX_GOODBYE_REASON_BYTES}},
       <<"detail">> => {detail, value}};
-field_table(swim_ping) ->
+frame_table(swim_ping) ->
     #{<<"version">> => {version, value},
       <<"neighbour">> => {neighbour, held_object},
       <<"frame_type">> => {frame_type, frame_type},
@@ -3303,7 +3316,7 @@ field_table(swim_ping) ->
           <<"incarnation">> => {incarnation, uint},
           <<"observed_at">> => {observed_at, uint},
           <<"by">> => {by, {bytes, 32}}}}}};
-field_table(swim_ack) ->
+frame_table(swim_ack) ->
     #{<<"version">> => {version, value},
       <<"neighbour">> => {neighbour, held_object},
       <<"frame_type">> => {frame_type, frame_type},
@@ -3321,7 +3334,7 @@ field_table(swim_ack) ->
           <<"incarnation">> => {incarnation, uint},
           <<"observed_at">> => {observed_at, uint},
           <<"by">> => {by, {bytes, 32}}}}}};
-field_table(swim_suspect) ->
+frame_table(swim_suspect) ->
     #{<<"version">> => {version, value},
       <<"neighbour">> => {neighbour, held_object},
       <<"frame_type">> => {frame_type, frame_type},
@@ -3335,7 +3348,7 @@ field_table(swim_suspect) ->
       <<"target_incarnation">> => {target_incarnation, uint},
       <<"suspected_by">> => {suspected_by, {bytes, 32}},
       <<"ttl">> => {ttl, uint}};
-field_table(swim_confirm) ->
+frame_table(swim_confirm) ->
     #{<<"version">> => {version, value},
       <<"neighbour">> => {neighbour, held_object},
       <<"frame_type">> => {frame_type, frame_type},
@@ -3349,7 +3362,7 @@ field_table(swim_confirm) ->
       <<"target_incarnation">> => {target_incarnation, uint},
       <<"suspected_by">> => {suspected_by, {bytes, 32}},
       <<"ttl">> => {ttl, uint}};
-field_table(swim_ping_req) ->
+frame_table(swim_ping_req) ->
     #{<<"version">> => {version, value},
       <<"neighbour">> => {neighbour, held_object},
       <<"frame_type">> => {frame_type, frame_type},
@@ -3361,7 +3374,7 @@ field_table(swim_ping_req) ->
       <<"source_route">> => {source_route, value},
       <<"round">> => {round, uint},
       <<"target">> => {target, {bytes, 32}}};
-field_table(ping) ->
+frame_table(ping) ->
     #{<<"version">> => {version, value},
       <<"neighbour">> => {neighbour, held_object},
       <<"frame_type">> => {frame_type, frame_type},
@@ -3372,9 +3385,9 @@ field_table(ping) ->
       <<"call_id">> => {call_id, value},
       <<"source_route">> => {source_route, value},
       <<"nonce">> => {nonce, value}};
-field_table(Type) when Type =:= liveness_ping; Type =:= liveness_pong ->
-    field_table(ping);
-field_table(pong) ->
+frame_table(Type) when Type =:= liveness_ping; Type =:= liveness_pong ->
+    frame_table(ping);
+frame_table(pong) ->
     #{<<"version">> => {version, value},
       <<"neighbour">> => {neighbour, held_object},
       <<"frame_type">> => {frame_type, frame_type},
@@ -3385,7 +3398,7 @@ field_table(pong) ->
       <<"call_id">> => {call_id, value},
       <<"source_route">> => {source_route, value},
       <<"nonce">> => {nonce, value}};
-field_table(find_node) ->
+frame_table(find_node) ->
     #{<<"version">> => {version, value},
       <<"neighbour">> => {neighbour, held_object},
       <<"frame_type">> => {frame_type, frame_type},
@@ -3398,7 +3411,7 @@ field_table(find_node) ->
       <<"key">> => {key, value},
       <<"origin">> => {origin, {bytes, 32}},
       <<"depth">> => {depth, uint}};
-field_table(nodes) ->
+frame_table(nodes) ->
     #{<<"version">> => {version, value},
       <<"neighbour">> => {neighbour, held_object},
       <<"frame_type">> => {frame_type, frame_type},
@@ -3417,7 +3430,7 @@ field_table(nodes) ->
           <<"asn">> => {asn, {optional, uint}},
           <<"country">> => {country, {bytes, 2}},
           <<"last_seen_at">> => {last_seen_at, uint}}}}};
-field_table(find_value) ->
+frame_table(find_value) ->
     #{<<"version">> => {version, value},
       <<"neighbour">> => {neighbour, held_object},
       <<"frame_type">> => {frame_type, frame_type},
@@ -3430,7 +3443,7 @@ field_table(find_value) ->
       <<"key">> => {key, value},
       <<"origin">> => {origin, {bytes, 32}},
       <<"after">> => {'after', bytes}};
-field_table(value) ->
+frame_table(value) ->
     #{<<"version">> => {version, value},
       <<"neighbour">> => {neighbour, held_object},
       <<"frame_type">> => {frame_type, frame_type},
@@ -3443,7 +3456,7 @@ field_table(value) ->
       <<"key">> => {key, value},
       <<"records">> => {records, value},
       <<"next">> => {next, bytes}};
-field_table(store) ->
+frame_table(store) ->
     #{<<"version">> => {version, value},
       <<"neighbour">> => {neighbour, held_object},
       <<"frame_type">> => {frame_type, frame_type},
@@ -3454,7 +3467,7 @@ field_table(store) ->
       <<"call_id">> => {call_id, value},
       <<"source_route">> => {source_route, value},
       <<"record">> => {record, value}};
-field_table(store_ack) ->
+frame_table(store_ack) ->
     #{<<"version">> => {version, value},
       <<"neighbour">> => {neighbour, held_object},
       <<"frame_type">> => {frame_type, frame_type},
@@ -3468,25 +3481,25 @@ field_table(store_ack) ->
       <<"signer">> => {signer, value},
       <<"record_version">> => {record_version, value},
       <<"stored">> => {stored, boolean}};
-field_table(call) ->
+frame_table(call) ->
     #{<<"version">> => {version, value},
       <<"frame_type">> => {frame_type, frame_type},
       <<"request">> => {request, signed_object},
       <<"source_route">> => {source_route, bytes},
       <<"retry_budget">> => {retry_budget, uint}};
-field_table(result) ->
+frame_table(result) ->
     #{<<"version">> => {version, value},
       <<"frame_type">> => {frame_type, frame_type},
       <<"reply">> => {reply, signed_object},
       <<"source_route_reverse">> => {source_route_reverse, bytes}};
-field_table(error) ->
+frame_table(error) ->
     #{<<"version">> => {version, value},
       <<"frame_type">> => {frame_type, frame_type},
       <<"reply">> => {reply, signed_object},
       <<"relay_error">> => {relay_error, signed_object},
       <<"source_route_reverse">> => {source_route_reverse, bytes},
       <<"source_route_partial">> => {source_route_partial, bytes}};
-field_table(hyparview_join) ->
+frame_table(hyparview_join) ->
     #{<<"version">> => {version, value},
       <<"neighbour">> => {neighbour, held_object},
       <<"frame_type">> => {frame_type, frame_type},
@@ -3498,7 +3511,7 @@ field_table(hyparview_join) ->
       <<"source_route">> => {source_route, value},
       <<"new_member">> => {new_member, {bytes, 32}},
       <<"record">> => {record, value}};
-field_table(hyparview_forward_join) ->
+frame_table(hyparview_forward_join) ->
     #{<<"version">> => {version, value},
       <<"neighbour">> => {neighbour, held_object},
       <<"frame_type">> => {frame_type, frame_type},
@@ -3513,7 +3526,7 @@ field_table(hyparview_forward_join) ->
       <<"arwl">> => {arwl, {uint_max, ?HYPARVIEW_MAX_WALK}},
       <<"prwl">> => {prwl, {uint_max, ?HYPARVIEW_MAX_WALK}},
       <<"record">> => {record, value}};
-field_table(hyparview_neighbor) ->
+frame_table(hyparview_neighbor) ->
     #{<<"version">> => {version, value},
       <<"neighbour">> => {neighbour, held_object},
       <<"frame_type">> => {frame_type, frame_type},
@@ -3525,7 +3538,7 @@ field_table(hyparview_neighbor) ->
       <<"source_route">> => {source_route, value},
       <<"priority">> => {priority, {per_hop_enum, [high, low], low, neighbor_priority}},
       <<"record">> => {record, value}};
-field_table(hyparview_disconnect) ->
+frame_table(hyparview_disconnect) ->
     #{<<"version">> => {version, value},
       <<"neighbour">> => {neighbour, held_object},
       <<"frame_type">> => {frame_type, frame_type},
@@ -3535,7 +3548,7 @@ field_table(hyparview_disconnect) ->
       <<"realm">> => {realm, value},
       <<"call_id">> => {call_id, value},
       <<"source_route">> => {source_route, value}};
-field_table(hyparview_shuffle) ->
+frame_table(hyparview_shuffle) ->
     #{<<"version">> => {version, value},
       <<"neighbour">> => {neighbour, held_object},
       <<"frame_type">> => {frame_type, frame_type},
@@ -3548,7 +3561,7 @@ field_table(hyparview_shuffle) ->
       <<"origin">> => {origin, {bytes, 32}},
       <<"ttl">> => {ttl, {uint_max, ?HYPARVIEW_MAX_WALK}},
       <<"peer_sample">> => {peer_sample, {list_of_bytes, 32, ?HYPARVIEW_MAX_SAMPLE}}};
-field_table(hyparview_shuffle_reply) ->
+frame_table(hyparview_shuffle_reply) ->
     #{<<"version">> => {version, value},
       <<"neighbour">> => {neighbour, held_object},
       <<"frame_type">> => {frame_type, frame_type},
@@ -3559,12 +3572,12 @@ field_table(hyparview_shuffle_reply) ->
       <<"call_id">> => {call_id, value},
       <<"source_route">> => {source_route, value},
       <<"peer_sample">> => {peer_sample, {list_of_bytes, 32, ?HYPARVIEW_MAX_SAMPLE}}};
-field_table(plumtree_gossip) ->
+frame_table(plumtree_gossip) ->
     #{<<"version">> => {version, value},
       <<"frame_type">> => {frame_type, frame_type},
       <<"publication">> => {publication, signed_object},
       <<"round">> => {round, uint}};
-field_table(plumtree_ihave) ->
+frame_table(plumtree_ihave) ->
     #{<<"version">> => {version, value},
       <<"neighbour">> => {neighbour, held_object},
       <<"frame_type">> => {frame_type, frame_type},
@@ -3576,7 +3589,7 @@ field_table(plumtree_ihave) ->
       <<"source_route">> => {source_route, value},
       <<"msg_id">> => {msg_id, {bytes, 48}},
       <<"round">> => {round, uint}};
-field_table(plumtree_graft) ->
+frame_table(plumtree_graft) ->
     #{<<"version">> => {version, value},
       <<"neighbour">> => {neighbour, held_object},
       <<"frame_type">> => {frame_type, frame_type},
@@ -3588,7 +3601,7 @@ field_table(plumtree_graft) ->
       <<"source_route">> => {source_route, value},
       <<"msg_id">> => {msg_id, {bytes, 48}},
       <<"round">> => {round, uint}};
-field_table(plumtree_prune) ->
+frame_table(plumtree_prune) ->
     #{<<"version">> => {version, value},
       <<"neighbour">> => {neighbour, held_object},
       <<"frame_type">> => {frame_type, frame_type},
@@ -3598,7 +3611,7 @@ field_table(plumtree_prune) ->
       <<"realm">> => {realm, value},
       <<"call_id">> => {call_id, value},
       <<"source_route">> => {source_route, value}};
-field_table(overlay_relay) ->
+frame_table(overlay_relay) ->
     #{<<"version">> => {version, value},
       <<"neighbour">> => {neighbour, held_object},
       <<"frame_type">> => {frame_type, frame_type},
@@ -3610,11 +3623,11 @@ field_table(overlay_relay) ->
       <<"source_route">> => {source_route, value},
       <<"peer">> => {peer, {bytes, 32}},
       <<"payload">> => {payload, value}};
-field_table(publish) ->
+frame_table(publish) ->
     #{<<"version">> => {version, value},
       <<"frame_type">> => {frame_type, frame_type},
       <<"publication">> => {publication, signed_object}};
-field_table(subscribe) ->
+frame_table(subscribe) ->
     #{<<"version">> => {version, value},
       <<"neighbour">> => {neighbour, held_object},
       <<"frame_type">> => {frame_type, frame_type},
@@ -3627,7 +3640,7 @@ field_table(subscribe) ->
       <<"topic">> => {topic, value},
       <<"subscriber">> => {subscriber, {bytes, 32}},
       <<"options">> => {options, value}};
-field_table(unsubscribe) ->
+frame_table(unsubscribe) ->
     #{<<"version">> => {version, value},
       <<"neighbour">> => {neighbour, held_object},
       <<"frame_type">> => {frame_type, frame_type},
@@ -3639,12 +3652,12 @@ field_table(unsubscribe) ->
       <<"source_route">> => {source_route, value},
       <<"topic">> => {topic, value},
       <<"subscriber">> => {subscriber, {bytes, 32}}};
-field_table(event) ->
+frame_table(event) ->
     #{<<"version">> => {version, value},
       <<"frame_type">> => {frame_type, frame_type},
       <<"publication">> => {publication, signed_object},
       <<"delivered_via">> => {delivered_via, {per_hop_enum, [plumtree, direct], direct, delivered_via}}};
-field_table(advertise) ->
+frame_table(advertise) ->
     #{<<"version">> => {version, value},
       <<"neighbour">> => {neighbour, held_object},
       <<"frame_type">> => {frame_type, frame_type},
@@ -3655,7 +3668,7 @@ field_table(advertise) ->
       <<"call_id">> => {call_id, value},
       <<"source_route">> => {source_route, value},
       <<"advertisement">> => {advertisement, bytes}};
-field_table(unadvertise) ->
+frame_table(unadvertise) ->
     #{<<"version">> => {version, value},
       <<"neighbour">> => {neighbour, held_object},
       <<"frame_type">> => {frame_type, frame_type},
@@ -3666,34 +3679,34 @@ field_table(unadvertise) ->
       <<"call_id">> => {call_id, value},
       <<"source_route">> => {source_route, value},
       <<"withdrawal">> => {withdrawal, bytes}};
-field_table(stream_open) ->
+frame_table(stream_open) ->
     #{<<"version">> => {version, value},
       <<"frame_type">> => {frame_type, frame_type},
       <<"request">> => {request, signed_object},
       <<"source_route">> => {source_route, bytes},
       <<"retry_budget">> => {retry_budget, uint}};
-field_table(stream_data) ->
+frame_table(stream_data) ->
     #{<<"version">> => {version, value},
       <<"frame_type">> => {frame_type, frame_type},
       <<"stream">> => {stream, stream_object},
       <<"caller_stream">> => {caller_stream, held_object}};
-field_table(stream_end) ->
+frame_table(stream_end) ->
     #{<<"version">> => {version, value},
       <<"frame_type">> => {frame_type, frame_type},
       <<"stream">> => {stream, stream_object},
       <<"caller_stream">> => {caller_stream, held_object}};
-field_table(stream_error) ->
+frame_table(stream_error) ->
     #{<<"version">> => {version, value},
       <<"frame_type">> => {frame_type, frame_type},
       <<"stream">> => {stream, stream_object},
       <<"caller_stream">> => {caller_stream, held_object},
       <<"relay_error">> => {relay_error, signed_object},
       <<"source_route_partial">> => {source_route_partial, bytes}};
-field_table(stream_reply) ->
+frame_table(stream_reply) ->
     #{<<"version">> => {version, value},
       <<"frame_type">> => {frame_type, frame_type},
       <<"stream">> => {stream, stream_object}};
-field_table(want) ->
+frame_table(want) ->
     #{<<"version">> => {version, value},
       <<"frame_type">> => {frame_type, frame_type},
       <<"frame_id">> => {frame_id, value},
@@ -3704,7 +3717,7 @@ field_table(want) ->
       <<"source_route">> => {source_route, value},
       <<"blocks">> => {blocks, {list_of, #{<<"mcid">> => {mcid, value},
           <<"priority">> => {priority, value}}}}};
-field_table(have) ->
+frame_table(have) ->
     #{<<"version">> => {version, value},
       <<"frame_type">> => {frame_type, frame_type},
       <<"frame_id">> => {frame_id, value},
@@ -3715,7 +3728,7 @@ field_table(have) ->
       <<"source_route">> => {source_route, value},
       <<"blocks">> => {blocks, {list_of, #{<<"mcid">> => {mcid, value},
           <<"size">> => {size, value}}}}};
-field_table(block) ->
+frame_table(block) ->
     #{<<"version">> => {version, value},
       <<"frame_type">> => {frame_type, frame_type},
       <<"frame_id">> => {frame_id, value},
@@ -3726,7 +3739,7 @@ field_table(block) ->
       <<"source_route">> => {source_route, value},
       <<"mcid">> => {mcid, value},
       <<"payload">> => {payload, value}};
-field_table(manifest_req) ->
+frame_table(manifest_req) ->
     #{<<"version">> => {version, value},
       <<"frame_type">> => {frame_type, frame_type},
       <<"frame_id">> => {frame_id, value},
@@ -3736,7 +3749,7 @@ field_table(manifest_req) ->
       <<"call_id">> => {call_id, value},
       <<"source_route">> => {source_route, value},
       <<"mcid">> => {mcid, value}};
-field_table(manifest_res) ->
+frame_table(manifest_res) ->
     #{<<"version">> => {version, value},
       <<"frame_type">> => {frame_type, frame_type},
       <<"frame_id">> => {frame_id, value},
@@ -3747,7 +3760,7 @@ field_table(manifest_res) ->
       <<"source_route">> => {source_route, value},
       <<"mcid">> => {mcid, value},
       <<"manifest">> => {manifest, manifest}};
-field_table(cancel) ->
+frame_table(cancel) ->
     #{<<"version">> => {version, value},
       <<"frame_type">> => {frame_type, frame_type},
       <<"frame_id">> => {frame_id, value},
@@ -3826,9 +3839,33 @@ read_value({list_of_bytes, Size, Max}, Items) when is_list(Items), length(Items)
     read_value({list_of_bytes, Size}, Items);
 read_value({sealed, Context}, Sealed) when is_map(Sealed) ->
     sealed_read(read_fields(maps:to_list(Sealed), sealed_table(), #{}), Context);
+read_value(extensions, Ext) when is_map(Ext) -> extensions_read(maps:to_list(Ext), #{});
+read_value(signed_extensions, Ext) -> non_critical(read_value(extensions, Ext));
 read_value({optional, _Kind}, null) -> {ok, undefined};
 read_value({optional, Kind}, Value) -> read_value(Kind, Value);
 read_value(_Kind, _Value) -> error.
+
+%% An extension map (macula#83 decision 8): each entry is named by text and holds exactly its criticality, 0 or 1,
+%% and its value. Wire 1.0 defines no extension, so every entry is one this node does not know: a non-critical one is
+%% kept as read and ignored, and a critical one refuses the frame or the object that carries it.
+extensions_read([{{text, Name}, #{{text, <<"crit">>} := Crit, {text, <<"v">>} := Value} = Entry} | Rest], Read)
+  when map_size(Entry) =:= 2, (Crit =:= 0 orelse Crit =:= 1) ->
+    extensions_read(Rest, Read#{Name => #{crit => Crit, v => peer_value(Value)}});
+extensions_read([], Read) ->
+    {ok, Read};
+extensions_read(_NotAnExtension, _Read) ->
+    error.
+
+%% Inside a signed object a critical extension this node does not know refuses the object: the signature covers the
+%% flag, so no hop can have changed it.
+non_critical({ok, Ext} = Read) -> non_critical(critical(Ext), Read);
+non_critical(error) -> error.
+
+non_critical(false, Read) -> Read;
+non_critical(true, _Read) -> error.
+
+critical(Ext) ->
+    lists:any(fun(#{crit := Crit}) -> Crit =:= 1 end, maps:values(Ext)).
 
 %% A sealed payload's fields (test/vectors/E2E_SEAL_V1.md, "The sealed map").
 %% A verifier opens nothing; it holds the shape to the frame it rides in: a
