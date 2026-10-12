@@ -287,4 +287,4 @@ Served in the zero realm by every station. One argument form: a CBOR map with te
 ## 9. Vectors
 
 `priv/vectors/wire_1_0/`, one file per class; the format is on macula#97 (comment 6128214679) and in
-`priv/vectors/wire_1_0/FORMAT.md`. Every stack's CI runs them, pinned by macula commit.
+`priv/vectors/wire_1_0/FORMAT.md`. They ship in the hex package; every stack's CI runs the ones of the macula release it pins, from `code:priv_dir(macula)`.
