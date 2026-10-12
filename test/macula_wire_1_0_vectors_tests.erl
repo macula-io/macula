@@ -1,4 +1,4 @@
-%% The wire 1.0 conformance vectors (test/vectors/wire_1_0/, docs/design/WIRE_1_0.md, macula#97), checked for what
+%% The wire 1.0 conformance vectors (priv/vectors/wire_1_0/, docs/design/WIRE_1_0.md, macula#97), checked for what
 %% holds before any wire 1.0 code exists: every file has the format's shape, every id is unique, every key id derives
 %% from its key, every object and frame meets the decoding rule, every record's signature verifies (or not) as the
 %% file says with the bare primitive, and every custodian case names a reader case. The conformance runner of each
@@ -8,7 +8,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 -define(CLASSES, [<<"verify">>, <<"custodian">>, <<"check_order">>, <<"envelope">>, <<"enums">>,
-                  <<"dht_procedures">>, <<"handshake">>]).
+                  <<"dht_procedures">>, <<"handshake">>, <<"tbs">>, <<"frames">>]).
 -define(OUTCOMES, [<<"accept">>, <<"refuse">>, <<"ignore">>, <<"fallback">>, <<"store">>, <<"abort_stream">>]).
 -define(PROFILES, [<<"pq_pure">>, <<"pq_hybrid">>]).
 -define(RECORD_LABEL, "MACULA-PQ-RECORD-V1").
@@ -31,9 +31,10 @@ cases_shaped_test_() ->
     [{binary_to_list(maps:get(<<"id">>, C)), fun() -> case_shaped(C) end} || Class <- ?CLASSES, C <- cases(Class)].
 
 case_shaped(#{<<"id">> := Id, <<"profile">> := Profile, <<"covers">> := [_ | _] = Covers,
-              <<"lands_with">> := <<"macula#", _/binary>>, <<"input">> := Input,
+              <<"lands_with">> := [_ | _] = Lands, <<"input">> := Input,
               <<"expect">> := #{<<"outcome">> := Outcome} = Expect}) ->
     ?assert(is_binary(Id)),
+    ?assert(lists:all(fun(L) -> binary:match(L, <<"#">>) =/= nomatch end, Lands)),
     ?assert(lists:member(Profile, [<<"both">> | ?PROFILES])),
     ?assert(lists:all(fun covers_known/1, Covers)),
     ?assert(is_map(Input)),
@@ -131,6 +132,41 @@ session_proof_checked(P, #{{text, <<"session_proof">>} := Proof}, #{<<"session_p
 session_proof_checked(_P, _Frame, _Step) ->
     ok.
 
+%% A tbs case's typed fields encode to exactly its tbs, its signing input is the label, a zero byte, the key hash
+%% where the form is keyed, and the tbs, and its signature verifies over that input under the signer's key.
+tbs_test_() ->
+    [{binary_to_list(Id), fun() -> tbs_checked(C) end} || #{<<"id">> := Id} = C <- cases(<<"tbs">>)].
+
+tbs_checked(#{<<"profile">> := P,
+              <<"input">> := #{<<"label">> := Label, <<"signer">> := Role, <<"fields">> := Fields, <<"form">> := Form},
+              <<"expect">> := #{<<"tbs">> := TbsHex, <<"signing_input">> := InputHex, <<"signature">> := SigHex}}) ->
+    Tbs = binary:decode_hex(TbsHex),
+    Key = signer_key(P, Role),
+    ?assertEqual(Tbs, macula_record_cbor:encode(from_tj(Fields))),
+    Input = signing_input(Form, Label, Key, Tbs),
+    ?assertEqual(binary:decode_hex(InputHex), Input),
+    ?assert(macula_node_keys:verify(Input, binary:decode_hex(SigHex), Key, binary_to_atom(P))).
+
+signing_input(<<"keyed">>, Label, Key, Tbs) -> <<Label/binary, 0, (crypto:hash(sha384, Key))/binary, Tbs/binary>>;
+signing_input(<<"unkeyed">>, Label, _Key, Tbs) -> <<Label/binary, 0, Tbs/binary>>.
+
+%% Typed JSON back to the CBOR encoder's terms (FORMAT.md, Values).
+from_tj(#{<<"$hex">> := Hex} = M) when map_size(M) =:= 1 -> binary:decode_hex(Hex);
+from_tj(M) when is_map(M) -> #{{text, K} => from_tj(V) || K := V <- M};
+from_tj(L) when is_list(L) -> [from_tj(V) || V <- L];
+from_tj(B) when is_binary(B) -> {text, B};
+from_tj(V) -> V.
+
+%% Every frame type has one frame: version 5, its own frame_type, no capabilities header.
+frames_test_() ->
+    [{binary_to_list(Type), fun() -> frame_checked(Type, Hex) end}
+     || #{<<"input">> := #{<<"frame_type">> := Type, <<"frame">> := Hex}} <- cases(<<"frames">>)].
+
+frame_checked(Type, Hex) ->
+    {ok, Frame} = macula_record_cbor:decode_strict(binary:decode_hex(Hex)),
+    ?assertMatch(#{{text, <<"version">>} := 5, {text, <<"frame_type">>} := {text, Type}}, Frame),
+    ?assertNot(is_map_key({text, <<"capabilities">>}, Frame)).
+
 dht_values_test_() ->
     [{binary_to_list(Id), fun() -> decodes(maps:get(<<"args">>, Input, maps:get(<<"reply">>, Input, none))) end}
      || #{<<"id">> := Id, <<"input">> := Input} <- cases(<<"dht_procedures">>)].
@@ -144,16 +180,7 @@ vectors(Class) ->
     {ok, Bytes} = file:read_file(vector_file(<<Class/binary, ".json">>)),
     json:decode(Bytes).
 
-%% The source tree's vector file, from the project root eunit runs in, or from the build tree's copy of the
-%% application.
+%% The vectors ship in priv, so a consumer of the hex package reads the same files from code:priv_dir(macula).
 vector_file(Name) ->
-    Rel = filename:join("wire_1_0", Name),
-    first_existing([filename:join("test/vectors", Rel), filename:join("../../test/vectors", Rel)]
-                   ++ [filename:join([Dir, "..", "..", "..", "..", "test", "vectors", Rel])
-                       || Dir <- [code:lib_dir(macula)], is_list(Dir)]).
+    filename:join([code:priv_dir(macula), "vectors", "wire_1_0", Name]).
 
-first_existing([F | Rest]) ->
-    first_existing(filelib:is_regular(F), F, Rest).
-
-first_existing(true, F, _Rest) -> F;
-first_existing(false, _F, Rest) -> first_existing(Rest).
