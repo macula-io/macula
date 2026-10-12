@@ -113,14 +113,16 @@ provider_frame_fields_the_design_does_not_allow_are_malformed(#{provider := Prov
     end,
     Chunk = chunk_tbs(Open, Signer, 0),
     ?assertMatch({ok, _, _}, Verify(stream_data, Chunk)),
+    %% An encoding or role this node does not know is refused by name (docs/design/WIRE_1_0.md section 3.4).
+    ?assertEqual({error, {enum_unknown, encoding}},
+                 Verify(stream_data, Chunk#{{text, <<"encoding">>} := {text, <<"json">>}})),
+    ?assertEqual({error, {enum_unknown, role}}, Verify(stream_end, end_tbs(Open, Signer, 0, <<"recv">>))),
     [?assertEqual({error, malformed_frame}, Verify(FrameType, Tbs))
      || {FrameType, Tbs} <- [{stream_data, maps:remove({text, <<"body">>}, Chunk)},
-                             {stream_data, Chunk#{{text, <<"encoding">>} := {text, <<"json">>}}},
                              {stream_data, Chunk#{{text, <<"body">>} := {text, <<"chunk">>}}},
                              {stream_data, Chunk#{{text, <<"seq">>} := 1 bsl 53}},
                              {stream_data, Chunk#{{text, <<"role">>} => {text, <<"both">>}}},
                              {stream_data, Chunk#{{text, <<"extra">>} => 1}},
-                             {stream_end, end_tbs(Open, Signer, 0, <<"recv">>)},
                              {stream_end, Chunk},
                              {stream_data, Chunk#{{text, <<"frame_type">>} := {text, <<"call">>}}}]].
 

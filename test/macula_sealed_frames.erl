@@ -13,7 +13,7 @@ request(Type, #{request_id := RequestId, realm := Realm, procedure := Procedure,
     Tbs = wire([{<<"frame_type">>, {text, atom_to_binary(Type)}}, {<<"caller">>, macula_node_keys:key_id(Caller)},
                 {<<"request_id">>, RequestId}, {<<"realm">>, Realm}, {<<"procedure">>, {text, Procedure}},
                 {<<"target">>, Target}, {<<"deadline">>, Deadline}, {<<"sealed">>, request_sealed()} | Mode]),
-    #{version => 2, frame_type => Type,
+    #{version => 5, frame_type => Type,
       request => macula_signed_object:sign(<<"MACULA-PQ-REQUEST-V1">>, Tbs, Caller)}.
 
 %% A sealed RESULT for a verified request, from `Provider'.
@@ -21,7 +21,7 @@ result(#{request_id := RequestId, request_hash := RequestHash}, Provider) ->
     Tbs = wire([{<<"frame_type">>, {text, <<"result">>}}, {<<"request_id">>, RequestId},
                 {<<"request_hash">>, RequestHash}, {<<"responded_by">>, macula_node_keys:key_id(Provider)},
                 {<<"sealed">>, nonce_sealed()}]),
-    #{version => 2, frame_type => result, reply => macula_signed_object:sign(<<"MACULA-PQ-REPLY-V1">>, Tbs, Provider)}.
+    #{version => 5, frame_type => result, reply => macula_signed_object:sign(<<"MACULA-PQ-REPLY-V1">>, Tbs, Provider)}.
 
 %% A sealed publication from `Publisher', as the EVENT that carries it.
 publication(Publisher, Realm, Topic, Seq) ->
@@ -36,7 +36,7 @@ provider_stream(Type, Provider, #{request_id := RequestId, request_hash := Reque
     Tbs = wire([{<<"frame_type">>, {text, atom_to_binary(Type)}}, {<<"request_id">>, RequestId},
                 {<<"request_hash">>, RequestHash}, {<<"signer">>, macula_node_keys:key_id(Provider)},
                 {<<"seq">>, 0}, {<<"sealed">>, nonce_sealed()} | Extra]),
-    #{version => 2, frame_type => Type, stream => macula_signed_object:sign(<<"MACULA-PQ-STREAM-V1">>, Tbs, Provider)}.
+    #{version => 5, frame_type => Type, stream => macula_signed_object:sign(<<"MACULA-PQ-STREAM-V1">>, Tbs, Provider)}.
 
 request_sealed() ->
     #{{text, <<"scheme">>} => 1, {text, <<"key_id">>} => <<1:64>>, {text, <<"kem_ct">>} => <<2:12544>>,

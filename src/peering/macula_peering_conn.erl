@@ -1210,16 +1210,20 @@ kind_read(status, Wire, Rest, #data{profile = Profile, peer = Peer} = Data, Acti
     Reader = #{profile => Profile, identity_key => maps:get(identity_key, Peer), binding => peer_binding(Peer),
                now => now_ms(Data)},
     status_read(macula_handshake:read_status_wire(Wire, Reader), Rest, Data, Actions);
-kind_read(handshake, _Wire, _Rest, Data, _Actions) ->
-    closed(malformed_frame, Data);
+%% After HELLO the handshake frame types are not in the frame table: a frame named by one is read like any other, so
+%% the retired connect and hello are unknown frame types, dropped and counted (docs/design/WIRE_1_0.md section 2).
+kind_read(handshake, Wire, Rest, Data, Actions) ->
+    open_frame_read(macula_frame:read_wire(Wire), Rest, Data, Actions);
 kind_read(other, Wire, Rest, Data, Actions) ->
     open_frame_read(macula_frame:read_wire(Wire), Rest, Data, Actions).
 
 open_frame_read({ok, Frame}, Rest, Data, Actions) ->
     neighbour_read(macula_frame:verify_neighbour(Frame, neighbour_reader(Data)), Frame, Rest, Data, Actions);
-%% A frame of a type this node does not know was counted where it was read, and is dropped: the link stays up
-%% (macula#83 decision 5).
+%% A frame of a type this node does not know was counted where it was read, and is dropped, and so is a frame with a
+%% critical extension this node does not know: the link stays up (docs/design/WIRE_1_0.md sections 3.2 and 3.3).
 open_frame_read({error, {unknown_frame_type, _Name}}, Rest, Data, Actions) ->
+    open_frame(Rest, Data, Actions);
+open_frame_read({error, extension_unsupported}, Rest, Data, Actions) ->
     open_frame(Rest, Data, Actions);
 open_frame_read({error, bad_frame}, _Rest, Data, _Actions) ->
     closed(malformed_frame, Data).

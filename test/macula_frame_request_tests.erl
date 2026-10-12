@@ -276,7 +276,7 @@ a_relay_code_outside_the_closed_set_is_refused(#{station := Station} = Keys) ->
                  macula_frame:relay_error(#{frame_type => error, request => Request, code => no_route}, Station)),
     Tbs = (relay_tbs(Request, Station))#{{text, <<"code">>} := {text, <<"no_route">>}},
     Frame = crafted(error, relay_error, macula_signed_object:sign(?RELAY_ERROR_LABEL, Tbs, Station)),
-    ?assertEqual({error, malformed_frame},
+    ?assertEqual({error, {enum_unknown, code}},
                  macula_frame:verify_relay_error(wire(Frame), Request, pq_pure, macula_node_keys:key_id(Station))).
 
 %% A station at an in-flight bound refuses a CALL with `overloaded' (macula#54), as an ERROR or a STREAM_ERROR.

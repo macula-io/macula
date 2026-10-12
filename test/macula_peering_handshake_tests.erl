@@ -144,6 +144,10 @@ handshake_test_() ->
             {timeout, 30, fun() -> a_call_without_its_request_closes_with_malformed_frame(Ctx) end}},
            {"a frame of a type this node does not know is dropped and the connection serves on",
             {timeout, 30, fun() -> a_frame_of_a_type_this_node_does_not_know_is_dropped(Ctx) end}},
+           {"a retired connect after HELLO is dropped and the connection serves on",
+            {timeout, 30, fun() -> a_retired_connect_after_hello_is_dropped(Ctx) end}},
+           {"a frame with a critical extension this node does not know is dropped and the connection serves on",
+            {timeout, 30, fun() -> a_frame_with_an_unknown_critical_extension_is_dropped(Ctx) end}},
            {"a frame_type sent as bytes closes with malformed_frame",
             {timeout, 30, fun() -> a_frame_type_sent_as_bytes_closes_with_malformed_frame(Ctx) end}},
            {"a STORE whose record bytes are not CBOR reaches its recipient and the connection serves on",
@@ -1116,13 +1120,33 @@ a_frame_of_a_type_this_node_does_not_know_is_dropped(Ctx) ->
     Future = #{{text, <<"version">>} => macula_frame:version(ping()),
                {text, <<"frame_type">>} => {text, <<"zz_future_frame">>}, {text, <<"anything">>} => 1},
     Ping = ping(),
-    Before = maps:get(unknown_frame_type, macula_wire_tolerance:counters()),
+    Before = maps:get(wire_unknown_frame_type, macula_wire_tolerance:counters(), 0),
     on_open_connection(Ctx, fun(Client, Station) ->
         ok = on_control_stream(Client, macula_frame:encode_bytes(macula_record_cbor:encode(Future))),
         ok = on_control_stream(Client, macula_frame:encode(Ping)),
         ?assertEqual(wire(Ping), frame_from(Station)),
         ?assertEqual(open, still_open(Station, 500)),
-        ?assertEqual(Before + 1, maps:get(unknown_frame_type, macula_wire_tolerance:counters()))
+        ?assertEqual(Before + 1, maps:get(wire_unknown_frame_type, macula_wire_tolerance:counters(), 0))
+    end).
+
+%% After HELLO the handshake frame types are not in the frame table: the retired v2 connect is an unknown frame type
+%% (docs/design/WIRE_1_0.md section 2).
+a_retired_connect_after_hello_is_dropped(Ctx) ->
+    Connect = #{{text, <<"version">>} => macula_frame:version(ping()), {text, <<"frame_type">>} => {text, <<"connect">>}},
+    served_on_after(Ctx, macula_frame:encode_bytes(macula_record_cbor:encode(Connect))).
+
+%% A critical extension this node does not know refuses its frame, and the link stays up (section 3.2).
+a_frame_with_an_unknown_critical_extension_is_dropped(Ctx) ->
+    Ext = #{a_future_extension => #{critical => 1, value => 1}},
+    served_on_after(Ctx, macula_frame:encode((ping())#{ext => Ext})).
+
+served_on_after(Ctx, Dropped) ->
+    Ping = ping(),
+    on_open_connection(Ctx, fun(Client, Station) ->
+        ok = on_control_stream(Client, Dropped),
+        ok = on_control_stream(Client, macula_frame:encode(Ping)),
+        ?assertEqual(wire(Ping), frame_from(Station)),
+        ?assertEqual(open, still_open(Station, 500))
     end).
 
 %% A frame_type that is not text is not an envelope that decodes.

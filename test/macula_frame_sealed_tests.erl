@@ -129,7 +129,7 @@ a_stream_frames_sealed_nonce_follows_its_side(#{caller := Caller, provider := Pr
 
 a_sealed_publication_verifies_as_gossip(Keys) ->
     #{publication := Publication} = publication(Keys, #{<<"sealed">> => nonce_sealed()}),
-    Gossip = #{version => 2, frame_type => plumtree_gossip, publication => Publication, round => 0},
+    Gossip = #{version => 5, frame_type => plumtree_gossip, publication => Publication, round => 0},
     ?assertMatch({ok, #{sealed := _}}, macula_frame:verify_publication(Gossip, profile(), now_ms())).
 
 bidi_open(Keys) ->
@@ -142,7 +142,7 @@ caller_frame(Caller, #{request_id := RequestId, request_hash := RequestHash}, Se
     Tbs = wire(#{<<"frame_type">> => {text, <<"stream_data">>}, <<"request_id">> => RequestId,
                  <<"request_hash">> => RequestHash, <<"signer">> => macula_node_keys:key_id(Caller), <<"seq">> => 0,
                  <<"encoding">> => {text, <<"raw">>}, <<"sealed">> => Sealed}),
-    #{version => 2, frame_type => stream_data,
+    #{version => 5, frame_type => stream_data,
       caller_stream => macula_signed_object:sign_held(<<"MACULA-PQ-CALLER-STREAM-V1">>, Tbs, Caller)}.
 
 %%%===================================================================
@@ -175,7 +175,7 @@ request(Type, #{caller := Caller, provider := Provider}, Extra) ->
                             <<"procedure">> => {text, <<"acme/count_v1">>},
                             <<"target">> => macula_node_keys:key_id(Provider),
                             <<"deadline">> => now_ms() + 60_000}, Extra)),
-    #{version => 2, frame_type => Type,
+    #{version => 5, frame_type => Type,
       request => macula_signed_object:sign(<<"MACULA-PQ-REQUEST-V1">>, Tbs, Caller)}.
 
 verified_request(Keys) -> verified_request(Keys, call).
@@ -192,14 +192,14 @@ reply(Type, #{provider := Provider}, #{request_id := RequestId, request_hash := 
     Tbs = wire(maps:merge(#{<<"frame_type">> => {text, atom_to_binary(Type)}, <<"request_id">> => RequestId,
                             <<"request_hash">> => RequestHash,
                             <<"responded_by">> => macula_node_keys:key_id(Provider)}, Extra)),
-    #{version => 2, frame_type => Type,
+    #{version => 5, frame_type => Type,
       reply => macula_signed_object:sign(<<"MACULA-PQ-REPLY-V1">>, Tbs, Provider)}.
 
 publication(#{caller := Publisher}, Extra) ->
     Tbs = wire(maps:merge(#{<<"publisher">> => macula_node_keys:key_id(Publisher), <<"realm">> => ?REALM,
                             <<"topic">> => {text, <<"acme/news">>}, <<"seq">> => 1,
                             <<"published_at">> => now_ms()}, Extra)),
-    #{version => 2, frame_type => publish,
+    #{version => 5, frame_type => publish,
       publication => macula_signed_object:sign(<<"MACULA-PQ-PUBLICATION-V1">>, Tbs, Publisher)}.
 
 stream_frame(Type, Seq, Extra, Provider, #{request_id := RequestId, request_hash := RequestHash}) ->
@@ -210,4 +210,4 @@ stream_frame(Type, Seq, Extra, Provider, #{request_id := RequestId, request_hash
                  0 -> macula_signed_object:sign(<<"MACULA-PQ-STREAM-V1">>, Tbs, Provider);
                  _ -> macula_signed_object:sign_held(<<"MACULA-PQ-STREAM-V1">>, Tbs, Provider)
              end,
-    #{version => 2, frame_type => Type, stream => Signed}.
+    #{version => 5, frame_type => Type, stream => Signed}.

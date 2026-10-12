@@ -9,28 +9,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Wire 1.0 frame envelope (macula#99; design of record macula#83).
+Wire 1.0 frame envelope (macula#99; spec `docs/design/WIRE_1_0.md`, design of record macula#83). This is a wire
+break: a node on it no longer reads the frames of an older one.
+
+### Changed
+
+- **Frame version 5.** Every frame after HELLO carries `version` 5, the handshake version; a frame of another version
+  is `malformed_frame`.
+- **The per-frame `capabilities` header is gone.** A frame that carries it is refused as an extra core field.
+- **Inside a signed object an enum value this node does not know is refused by name**, `{enum_unknown, Field}`
+  (STREAM_OPEN `mode`, STREAM_DATA `encoding`, STREAM_END `role`, the relay error `code`), where it was
+  `malformed_frame`.
 
 ### Added
 
 - **A frame of a type this node does not know no longer closes a link.** Its envelope must still decode (length,
-  element budget, `version`, text `frame_type`); its body is not read. It is counted, dropped and never relayed, and
-  the frames after it are read. On a dedicated stream that stream is reset with the new QUIC code 5,
-  `QUIC_CODE_UNKNOWN_FRAME_TYPE`. `parse_received/1,2` and `parse_for_relay/2` yield `{unknown_frame_type, Name}`
-  for it, and `decode/1` and `read_wire/1` return `{error, {unknown_frame_type, Name}}`.
+  element budget, `version` 5, `frame_type` text of 1 to 64 bytes); its body is not read. It is dropped, never
+  relayed, and counted, and the frames after it are read. On a dedicated stream that stream is reset with the new
+  QUIC code 5, `QUIC_CODE_UNKNOWN_FRAME_TYPE`. `parse_received/1,2` and `parse_for_relay/2` yield
+  `{unknown_frame_type, Name}`, and `decode/1` and `read_wire/1` return `{error, {unknown_frame_type, Name}}`. After
+  HELLO the retired `connect` and `hello` are such frames.
 - **Per-hop enum fallbacks.** An unknown HyParView NEIGHBOR `priority` reads as `low`, an unknown EVENT
-  `delivered_via` as `direct`, and a SWIM piggyback update with an unknown `state` is ignored. The same values
-  inside a signed object are still refused.
-- **One extension map per frame and per signed object**, `ext`: text name to `{crit: 0|1, v: any}`. Wire 1.0
-  defines no extension: a non-critical entry is ignored, and a critical one refuses the frame as
-  `{invalid_frame, Type, ext}` or the signed object as `malformed_frame`.
-- `macula_wire_tolerance:counters/0`: how often each of the above happened on this node.
+  `delivered_via` as `direct`, and a SWIM piggyback update with an unknown `state` is ignored.
+- **One extension map per frame and per signed object**, `ext`: 1 to 16 entries, each named by text of 1 to 64 bytes
+  from `[a-z0-9_.]` and holding `{critical: 0|1, value: any}`. Wire 1.0 defines no extension: a non-critical entry is
+  ignored, and a critical one refuses the frame (`read_wire/1` returns `{error, extension_unsupported}` and a
+  connection drops it; `parse_received` yields `{invalid_frame, Type, ext}`) or the signed object (its verifier
+  returns `{error, extension_unsupported}`). The builders of signed objects take an optional `ext`.
+- `macula_wire_tolerance:counters/0`: `wire_unknown_frame_type`, `{wire_ext_ignored, Name}` and
+  `{wire_enum_fallback, Field}` (WIRE_1_0.md section 8); past 64 extension names a new one counts as `<<"other">>`.
 - `macula_peering:reset_dedicated_stream/2`, and the `reset_stream` start option of a station link.
+- The wire 1.0 conformance runner for the envelope, enums, frames and tbs classes
+  (`test/macula_wire_1_0_envelope_runner_tests.erl`).
 
 ### Removed
 
-- The dead v2 `connect`/`hello` frame types and `macula_frame:connect/1` and `hello/1`. The handshake frames are
-  `macula_handshake`'s; after HELLO a frame named `connect` or `hello` already closed the connection.
+- The dead v2 `connect`/`hello` frame types, `macula_frame:connect/1`, `hello/1` and `goodbye/3`.
 
 ## [14.10.0] - 2026-10-13
 

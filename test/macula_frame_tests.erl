@@ -10,7 +10,7 @@
 ping_has_required_header_fields_test() ->
     Frame = build_ping(),
     ?assertEqual(ping, macula_frame:frame_type(Frame)),
-    ?assertEqual(2, macula_frame:version(Frame)),
+    ?assertEqual(5, macula_frame:version(Frame)),
     ?assertEqual(16, byte_size(macula_frame:frame_id(Frame))),
     ?assert(macula_frame:sent_at_ms(Frame) > 0).
 

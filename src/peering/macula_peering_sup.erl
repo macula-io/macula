@@ -20,6 +20,7 @@ start_link() ->
 init([]) ->
     ok = macula_tls_posture:ensure(),
     ok = macula_peer_versions:new_table(),
+    ok = macula_wire_tolerance:new_table(),
     SupFlags = #{strategy => one_for_one, intensity => 5, period => 10},
     Children = [
         #{

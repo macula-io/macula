@@ -120,7 +120,6 @@ integer_cases() ->
     Graft = macula_frame:plumtree_graft(#{realm => ?REALM, msg_id => <<0:384>>, round => 1}),
     PingDht = macula_frame:ping(#{nonce => <<0:128>>}),
     [{sent_at_ms, PingDht, fun(Bad) -> PingDht#{sent_at_ms := Bad} end},
-     {capabilities, PingDht, fun(Bad) -> PingDht#{capabilities := Bad} end},
      {swim_ping_round, Ping, fun(Bad) -> Ping#{round := Bad} end},
      {swim_ping_incarnation, Ping, fun(Bad) -> Ping#{incarnation := Bad} end},
      {swim_piggyback_incarnation, Ping, fun(Bad) -> Ping#{piggyback := [Update#{incarnation := Bad}]} end},
