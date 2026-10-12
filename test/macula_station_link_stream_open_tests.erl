@@ -37,6 +37,7 @@ stream_open_test_() ->
                  fun a_long_chunk_behind_the_open_reaches_its_session/0,
                  fun an_open_missing_a_required_field_ends_its_stream_and_the_next_open_is_served/0,
                  fun a_new_stream_whose_bytes_do_not_decode_is_ended/0,
+                 fun a_stream_whose_first_frame_is_of_an_unknown_type_is_reset/0,
                  fun a_second_open_on_a_stream_that_carries_a_session_is_refused/0,
                  fun an_open_on_a_callers_stream_is_refused/0,
                  fun a_refused_stream_takes_no_frame_behind_its_refusal/0,
@@ -60,7 +61,8 @@ stream_open_test_() ->
          {timeout, 15, {spawn, fun() -> process_flag(trap_exit, true), first_read_that_ends_badly(After) end}}}
         || {Name, After} <- [{"bytes that do not decode follow the open", <<4:32, "junk">>},
                              {"a frame missing a required field follows the open",
-                              macula_frame:encode(#{frame_type => stream_end, role => both})}]].
+                              macula_frame:encode(#{frame_type => stream_end, role => both})},
+                             {"a frame of a type this node does not know follows the open", future_frame()}]].
 
 %%------------------------------------------------------------------
 %% Cases
@@ -277,6 +279,19 @@ a_new_stream_whose_bytes_do_not_decode_is_ended() ->
     ?assertEqual(closed, closed_within(Stream, ?EVENT_MS)),
     ?assertEqual(none, written_within(Stream, 100)),
     ?assertNot(has_stream_buffer(Link, Stream)),
+    stop(World).
+
+%% A frame of a type this node does not know on a dedicated stream resets that stream with the unknown_frame_type code
+%% (QUIC 5), writes nothing, and leaves the link up (macula#83 decision 5).
+a_stream_whose_first_frame_is_of_an_unknown_type_is_reset() ->
+    #{link := Link} = World = link_serving(),
+    Stream = make_ref(),
+    Link ! {macula_peering, new_dedicated_stream, self(), Stream},
+    Link ! {quic, future_frame(), Stream, undefined},
+    ?assertEqual(reset, reset_within(Stream, ?EVENT_MS)),
+    ?assertEqual(none, written_within(Stream, 100)),
+    ?assertNot(has_stream_buffer(Link, Stream)),
+    ?assert(is_process_alive(Link)),
     stop(World).
 
 %% A dedicated stream carries one session. A second verified open on a stream that already carries one is refused under
@@ -509,7 +524,8 @@ link_serving(Handler, Mode) ->
                      connect => fun(_PeeringOpts) -> {error, not_dialed_here} end,
                      open_stream => fun(_Conn) -> Opened = make_ref(), Test ! {opened, Opened}, {ok, Opened} end,
                      send_on_stream => fun(Stream, Bytes) -> Test ! {written, Stream, Bytes}, ok end,
-                     close_stream => fun(Stream) -> Test ! {closed, Stream}, ok end}),
+                     close_stream => fun(Stream) -> Test ! {closed, Stream}, ok end,
+                     reset_stream => fun(Stream, Why) -> Test ! {reset, Stream, Why}, ok end}),
     _ = sys:replace_state(Link, fun(S) -> setelement(?PEER_NODE_ID_INDEX, setelement(?PEER_PID_INDEX, S, Test),
                                                      <<2:256>>) end),
     ok = macula_station_link:advertise_stream(Link, ?REALM, ?PROCEDURE, Mode,
@@ -583,6 +599,20 @@ written_within(Stream, Ms) ->
     after Ms ->
         none
     end.
+
+reset_within(Stream, Ms) ->
+    receive
+        {reset, Stream, unknown_frame_type} -> reset
+    after Ms ->
+        not_reset
+    end.
+
+%% A frame of a type no node knows yet, under this node's frame version.
+future_frame() ->
+    Version = macula_frame:version(macula_frame:ping(#{nonce => <<0:128>>})),
+    Cbor = macula_record_cbor:encode(#{{text, <<"version">>} => Version,
+                                       {text, <<"frame_type">>} => {text, <<"a_future_frame_type">>}}),
+    <<(byte_size(Cbor)):32/big, Cbor/binary>>.
 
 closed_within(Stream, Ms) ->
     receive

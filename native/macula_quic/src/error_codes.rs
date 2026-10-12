@@ -24,3 +24,8 @@ pub const STREAM_PROTOCOL_ERROR: u32 = 3;
 /// handshake slot free, or a relayed stream reset because its reader did not
 /// take data in time. The peer may try again later, or another station.
 pub const REFUSED_BUSY: u32 = 4;
+
+/// A dedicated stream was aborted because a frame on it is of a type this
+/// node does not know: its envelope decoded, so this is not
+/// STREAM_PROTOCOL_ERROR. Sent only by Erlang code.
+pub const UNKNOWN_FRAME_TYPE: u32 = 5;

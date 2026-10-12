@@ -43,19 +43,19 @@ a_field_its_frame_type_does_not_define_is_refused_test() ->
     ?assertMatch({ok, _, <<>>}, decode_map(Ping)),
     ?assertEqual({error, bad_frame}, decode_map(Ping#{payload => 1})).
 
+%% An enum without a per-hop fallback (macula#83 decision 6) keeps a closed set: a NODES address's transport.
 an_enum_value_the_table_does_not_list_is_refused_test() ->
-    Neighbour = macula_frame:hyparview_neighbor(#{realm => fill(1), priority => high}),
-    ?assertEqual({error, bad_frame}, decode_map(Neighbour#{priority => medium})).
+    Address = #{host => <<"192.0.2.1">>, port => 4433, transport => quic},
+    Ref = macula_frame:station_ref(#{node_id => fill(6), station_id => fill(7), tier => 1, country => <<"BE">>,
+                                     last_seen_at => 1, addresses => [Address]}),
+    Nodes = macula_frame:nodes(#{key => fill(4), nodes => [Ref]}),
+    ?assertMatch({ok, #{nodes := [#{addresses := [#{transport := quic}]}]}, <<>>}, decode_map(Nodes)),
+    Carrier = Nodes#{nodes := [Ref#{addresses := [Address#{transport := carrier_pigeon}]}]},
+    ?assertEqual({error, bad_frame}, decode_map(Carrier)).
 
-%% A value no code produces and reads is not in the table: EVENT delivered_via dht, and a MANIFEST_RES not_found.
+%% A value no code produces and reads is not in the table: a MANIFEST_RES not_found. (EVENT's delivered_via is a
+%% per-hop enum with a fallback: macula_frame_wire_tolerance_tests.)
 values_without_a_producer_and_a_reader_are_refused_test() ->
-    {ok, Publisher} = macula_node_keys:generate(identity, pq_pure),
-    #{publication := Publication} =
-        macula_frame:publish(#{realm => fill(1), topic => <<"t">>, seq => 0, published_at => 1, payload => 1},
-                             Publisher),
-    Event = macula_frame:event(#{publication => Publication, delivered_via => direct}),
-    ?assertMatch({ok, #{delivered_via := direct}, <<>>}, decode_map(Event)),
-    ?assertEqual({error, bad_frame}, decode_map(Event#{delivered_via => dht})),
     ManifestRes = macula_frame:manifest_res(#{mcid => <<2, 0, 0:384>>, manifest => #{}}),
     ?assertMatch({ok, #{manifest := #{}}, <<>>}, decode_map(ManifestRes)),
     ?assertEqual({error, bad_frame}, decode_map(ManifestRes#{manifest => not_found})).

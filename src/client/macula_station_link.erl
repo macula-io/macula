@@ -278,6 +278,10 @@
     open_stream => fun((pid()) -> {ok, reference()} | {error, term()}),
     send_on_stream => fun((reference(), binary()) -> ok | {error, term()}),
     close_stream => fun((reference()) -> ok),
+    %% The function that aborts a dedicated stream on which a frame of a
+    %% type this node does not know arrived, by default
+    %% `macula_peering:reset_dedicated_stream/2'.
+    reset_stream => fun((reference(), unknown_frame_type) -> ok | {error, term()}),
     %% Capability bitfield announced in CONNECT (default 0).
     capabilities => non_neg_integer(),
     %% ALPN list passed through to QUIC (default [&lt;&lt;"macula"&gt;&gt;]).
@@ -378,6 +382,7 @@
     open_stream      :: fun((pid()) -> {ok, reference()} | {error, term()}),
     send_on_stream   :: fun((reference(), binary()) -> ok | {error, term()}),
     close_stream     :: fun((reference()) -> ok),
+    reset_stream     :: fun((reference(), unknown_frame_type) -> ok | {error, term()}),
     capabilities     :: non_neg_integer(),
     alpn             :: [binary()],
     connect_timeout_ms :: non_neg_integer(),
@@ -1439,7 +1444,8 @@ admission_checked(_NoAdmission, _Identity, _Issuer, _Opts) ->
 share_checked(true, Identity, Issuer, Opts) ->
     stream_functions_checked(first_refusal([stream_function(open_stream, 1, not_an_opener, Opts),
                                             stream_function(send_on_stream, 2, not_a_writer, Opts),
-                                            stream_function(close_stream, 1, not_a_closer, Opts)]),
+                                            stream_function(close_stream, 1, not_a_closer, Opts),
+                                            stream_function(reset_stream, 2, not_a_resetter, Opts)]),
                              Identity, Issuer, Opts);
 share_checked(false, _Identity, _Issuer, _Opts) ->
     {error, {share, required}}.
@@ -1513,6 +1519,7 @@ started({ok, Seed, Key, Profile, Issuer}, Opts) ->
     OpenStream   = maps:get(open_stream, Opts, fun macula_peering:open_dedicated_stream/1),
     SendOnStream = maps:get(send_on_stream, Opts, fun macula_peering:send_on_stream/2),
     CloseStream  = maps:get(close_stream, Opts, fun macula_peering:close_dedicated_stream/1),
+    ResetStream  = maps:get(reset_stream, Opts, fun macula_peering:reset_dedicated_stream/2),
     %% Every link reads the relay code `overloaded', so it says so (macula#54).
     Caps     = maps:get(capabilities, Opts, 0) bor macula_peering:capability_bit(relay_overloaded),
     Alpn     = maps:get(alpn, Opts, [<<"macula">>]),
@@ -1526,6 +1533,7 @@ started({ok, Seed, Key, Profile, Issuer}, Opts) ->
                       share = maps:get(share, Opts), pool = maps:get(pool, Opts, undefined),
                       connect = Connect, open_stream = OpenStream,
                       send_on_stream = SendOnStream, close_stream = CloseStream,
+                      reset_stream = ResetStream,
                       capabilities = Caps, alpn = Alpn,
                       connect_timeout_ms = Tmo,
                       connect_watchdog_ms = WdMs,
@@ -3896,6 +3904,8 @@ dispatch_dedicated_items([], _Stream, S) ->
     {open, S};
 dispatch_dedicated_items([{invalid_frame, _Type, _Field} = Invalid | _Rest], Stream, S) ->
     {ended, end_sessions_on_stream(Stream, {malformed, Invalid}, S)};
+dispatch_dedicated_items([{unknown_frame_type, _Name} = Unknown | _Rest], Stream, S) ->
+    {ended, unknown_frame_on_stream(Stream, Unknown, S)};
 dispatch_dedicated_items([Frame | Rest], Stream, S) ->
     dispatch_dedicated_items(Rest, Stream, dispatch_while_open(Frame, Stream, S)).
 
@@ -3903,6 +3913,14 @@ end_malformed_dedicated({open, S}, Stream, Reason) ->
     end_sessions_on_stream(Stream, {malformed, Reason}, S);
 end_malformed_dedicated({ended, S}, _Stream, _Reason) ->
     S.
+
+%% A frame of a type this node does not know on a dedicated stream aborts that
+%% stream with QUIC code 5, and the link stays up (macula#83 decision 5): its
+%% sessions end as for a frame that failed validation, and the stream is reset
+%% rather than closed, so the peer reads why.
+unknown_frame_on_stream(Stream, Unknown, #state{reset_stream = Reset} = S) ->
+    _ = Reset(Stream, unknown_frame_type),
+    end_sessions_on_stream(Stream, {malformed, Unknown}, S).
 
 %% End every session carried by `Stream' once a write on it failed, or once
 %% its bytes turned out not to be frames this link accepts: abort each
@@ -4001,6 +4019,8 @@ after_first_item(S, _Parsed, _Stream) ->
 %% and nothing on it is authenticated to answer.
 dispatch_first_frame(#{frame_type := stream_open} = Frame, Stream, S) ->
     dispatch_dedicated_frame(Frame, Stream, S);
+dispatch_first_frame({unknown_frame_type, _Name} = Unknown, Stream, S) ->
+    unknown_frame_on_stream(Stream, Unknown, S);
 dispatch_first_frame(_NotAnOpen, Stream, S) ->
     close_sessionless_stream(Stream, S).
 

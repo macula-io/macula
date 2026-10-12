@@ -31,6 +31,8 @@
 %% prior workers for the same `PeerNodeId'.
 -module(macula_peering).
 
+-include("macula_quic_error_codes.hrl").
+
 -export([
     connect/1,
     accept/2,
@@ -50,6 +52,7 @@
     async_relay_on_stream/2,
     async_relay_on_stream/3,
     close_dedicated_stream/1,
+    reset_dedicated_stream/2,
     object_refused/2,
     refusals/1,
     forget_v5_peer/1,
@@ -343,6 +346,13 @@ set_session_proof_limits(PerNodePerMinute, PerSecond) ->
 -spec close_dedicated_stream(reference()) -> ok.
 close_dedicated_stream(Stream) ->
     macula_quic:close_stream(Stream).
+
+%% @doc Abort a dedicated stream on which a frame of a type this node does not
+%% know arrived (macula#83 decision 5): the stream is reset with QUIC code 5,
+%% `?QUIC_CODE_UNKNOWN_FRAME_TYPE', and the connection stays up.
+-spec reset_dedicated_stream(reference(), unknown_frame_type) -> ok | {error, term()}.
+reset_dedicated_stream(Stream, unknown_frame_type) ->
+    macula_quic:reset_stream(Stream, ?QUIC_CODE_UNKNOWN_FRAME_TYPE).
 
 %% @doc The bit a capability has in the mask a node declares in CONNECT and
 %% HELLO: `station' (1), `swim_indirect' (2) and `relay_overloaded' (4).

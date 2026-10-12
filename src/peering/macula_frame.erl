@@ -143,6 +143,7 @@
     stream_bytes/0,
     received_frame/0,
     item/0,
+    unknown_frame_type/0,
     connect_spec/0,
     hello_spec/0,
     swim_ping_spec/0,
@@ -265,7 +266,11 @@
 
 %% What parse_received/1 yields per complete frame: the frame, or the reason
 %% validate_received/1 refused the fields of a frame whose framing is intact.
--type item() :: frame() | {invalid_frame, frame_type() | unknown, atom()}.
+-type item() :: frame() | {invalid_frame, frame_type() | unknown, atom()} | unknown_frame_type().
+
+%% A frame of a type this node does not know, named by its frame_type text: its envelope decoded and its body was not
+%% read (macula#83 decision 5). It is dropped and counted, and never relayed.
+-type unknown_frame_type() :: {unknown_frame_type, binary()}.
 
 -type connect_spec() :: #{
     node_id          := macula_node_keys:node_id(),
@@ -701,7 +706,8 @@
 -opaque received_frame() :: {macula_received_frame, binary()}.
 
 %% What parse_for_relay/2 gives for each whole frame it read.
--type relay_item() :: {frame(), received_frame()} | {refused, {invalid_frame, frame_type() | unknown, atom()}}.
+-type relay_item() :: {frame(), received_frame()} | {refused, {invalid_frame, frame_type() | unknown, atom()}}
+                    | unknown_frame_type().
 
 %% What a verifier holds for one stream: the verified STREAM_OPEN and, per side, the next sequence number and whether
 %% that side has ended; for the provider also the key and signer its first frame carried.
@@ -2345,8 +2351,10 @@ encode_with_check(Len, Bytes) ->
 %% Returns `{ok, Frame, RestBuffer}', `{more, BytesNeeded}' if the buffer
 %% is short, or `{error, Reason}': `frame_too_large' or `bad_frame' if the
 %% framing is malformed, `bad_frame' as well for a frame without a
-%% `frame_type', of a type this node does not know, or with a field its
-%% type's table cannot read, and `{invalid_frame, Type, Field}' if the frame
+%% `frame_type' or with a field its type's table cannot read,
+%% `{unknown_frame_type, Name}' for a frame of a type this node does not know
+%% whose envelope decodes (its body is not read), and
+%% `{invalid_frame, Type, Field}' if the frame
 %% decodes but `validate_received/1' refuses its shape. There is no decode
 %% without that check: every frame decode/1 returns has passed
 %% `validate_received/1'. A frame with more CBOR items than the decoder's
@@ -2354,23 +2362,26 @@ encode_with_check(Len, Bytes) ->
 -spec decode(binary()) ->
     {ok, frame(), binary()}
   | {more, pos_integer()}
-  | {error, frame_too_large | bad_frame | too_many_elements
+  | {error, frame_too_large | bad_frame | too_many_elements | unknown_frame_type()
           | {invalid_frame, frame_type() | unknown, atom()}}.
 decode(Buf) when is_binary(Buf) ->
     single(decode_item(Buf, ?MAX_FRAME_BYTES)).
 
 single({invalid, Invalid, _Rest}) -> {error, Invalid};
+single({unknown, Unknown, _Rest}) -> {error, Unknown};
 single(Decoded) -> Decoded.
 
 %% @doc Read a frame from its decoded CBOR value, the way decode/1 reads one after decoding its bytes. A connection
 %% decodes each frame once to route it by its frame_type, and passes the value here. A frame whose fields its type
-%% refuses is `bad_frame' here too.
--spec read_wire(term()) -> {ok, frame()} | {error, bad_frame}.
+%% refuses is `bad_frame' here too, and a frame of a type this node does not know is `{unknown_frame_type, Name}', for
+%% the connection to drop.
+-spec read_wire(term()) -> {ok, frame()} | {error, bad_frame | unknown_frame_type()}.
 read_wire(Wire) ->
     whole_frame(fields_checked(frame_read({ok, Wire}, <<>>))).
 
 whole_frame({ok, Frame, <<>>}) -> {ok, Frame};
 whole_frame({invalid, _Invalid, <<>>}) -> {error, bad_frame};
+whole_frame({unknown, Unknown, <<>>}) -> {error, Unknown};
 whole_frame({error, _Refused}) -> {error, bad_frame}.
 
 %% One frame from the head of a buffer, with its fields checked once it
@@ -2409,15 +2420,18 @@ decode_cbor(Bytes, Rest) ->
     frame_read(macula_record_cbor:decode_strict(Bytes), Rest).
 
 frame_read({ok, #{{text, <<"frame_type">>} := {text, TypeName}} = Wire}, Rest) ->
-    typed_frame(frame_type_named(TypeName), Wire, Rest);
+    typed_frame(frame_type_named(TypeName), TypeName, Wire, Rest);
 frame_read({error, too_many_elements}, _Rest) ->
     {error, too_many_elements};
 frame_read(_NotAFrame, _Rest) ->
     {error, bad_frame}.
 
-typed_frame({ok, Type}, Wire, Rest) ->
+typed_frame({ok, Type}, _TypeName, Wire, Rest) ->
     read_frame(read_fields(maps:to_list(Wire), field_table(Type), #{}), Rest);
-typed_frame(error, _Wire, _Rest) ->
+typed_frame(error, TypeName, #{{text, <<"version">>} := ?PROTOCOL_VERSION}, Rest) ->
+    ok = macula_wire_tolerance:count(unknown_frame_type),
+    {unknown, {unknown_frame_type, TypeName}, Rest};
+typed_frame(error, _TypeName, _Wire, _Rest) ->
     {error, bad_frame}.
 
 read_frame({ok, Frame}, Rest) -> {ok, Frame, Rest};
@@ -2429,7 +2443,11 @@ read_frame(error, _Rest) -> {error, bad_frame}.
 %% and `Tail' holding at most one incomplete frame, so a caller that keeps
 %% `Tail' for the next chunk never holds more than the frame cap plus its
 %% 4-byte header. An item is the frame, or `{invalid_frame, Type, Field}'
-%% for a frame that decodes but whose fields `validate_received/1' refuses.
+%% for a frame that decodes but whose fields `validate_received/1' refuses,
+%% or `{unknown_frame_type, Name}' for a frame of a type this node does not
+%% know, whose envelope decodes (version and a text frame_type, within the
+%% cap and the element budget) and whose body is not read; it is counted in
+%% `macula_wire_tolerance', and a caller drops it.
 %% Its bytes were read in full, so parsing goes on after it, and each caller
 %% decides what an invalid frame means on its stream. The first frame that
 %% does not decode ends the parse with `{malformed, ItemsBefore, Reason}':
@@ -2464,6 +2482,8 @@ drain_step({ok, Frame, Rest}, _Buf, Cap, Acc) ->
     drain(Rest, Cap, [Frame | Acc]);
 drain_step({invalid, Invalid, Rest}, _Buf, Cap, Acc) ->
     drain(Rest, Cap, [Invalid | Acc]);
+drain_step({unknown, Unknown, Rest}, _Buf, Cap, Acc) ->
+    drain(Rest, Cap, [Unknown | Acc]);
 drain_step({more, _N}, Buf, _Cap, Acc) ->
     {ok, lists:reverse(Acc), Buf};
 drain_step({error, Reason}, _Buf, _Cap, Acc) ->
@@ -2475,7 +2495,9 @@ drain_step({error, Reason}, _Buf, _Cap, Acc) ->
 %% a unit keeps nothing else of the buffer alive. Only such a unit is written,
 %% by `macula_peering:relay_on_stream/2' and `async_relay_on_stream/2,3',
 %% through `relayed_bytes/1'. A frame whose fields its type refuses comes back
-%% as `{refused, {invalid_frame, Type, Field}}', in its place and with no unit.
+%% as `{refused, {invalid_frame, Type, Field}}', in its place and with no unit,
+%% and a frame of a type this node does not know as
+%% `{unknown_frame_type, Name}', with no unit either: it is never relayed.
 %% A length header above `MaxFrameBytes', or a whole frame that does not
 %% decode, ends the parse as in `parse_received/2', and nothing after it yields
 %% a unit.
@@ -2508,6 +2530,8 @@ relay_item({ok, Frame, Rest}, Received, Cap, Acc) ->
     relay_drain(Rest, Cap, [{Frame, {macula_received_frame, binary:copy(Received)}} | Acc]);
 relay_item({invalid, Invalid, Rest}, _Received, Cap, Acc) ->
     relay_drain(Rest, Cap, [{refused, Invalid} | Acc]);
+relay_item({unknown, Unknown, Rest}, _Received, Cap, Acc) ->
+    relay_drain(Rest, Cap, [Unknown | Acc]);
 relay_item({error, Reason}, _Received, _Cap, Acc) ->
     {malformed, lists:reverse(Acc), Reason}.
 
@@ -3275,7 +3299,7 @@ field_table(swim_ping) ->
       <<"round">> => {round, uint},
       <<"incarnation">> => {incarnation, uint},
       <<"piggyback">> => {piggyback, {list_of, #{<<"target">> => {target, {bytes, 32}},
-          <<"state">> => {state, {enum, [alive, suspect, confirmed_failed]}},
+          <<"state">> => {state, {swim_state, [alive, suspect, confirmed_failed]}},
           <<"incarnation">> => {incarnation, uint},
           <<"observed_at">> => {observed_at, uint},
           <<"by">> => {by, {bytes, 32}}}}}};
@@ -3293,7 +3317,7 @@ field_table(swim_ack) ->
       <<"responder">> => {responder, {bytes, 32}},
       <<"incarnation">> => {incarnation, uint},
       <<"piggyback">> => {piggyback, {list_of, #{<<"target">> => {target, {bytes, 32}},
-          <<"state">> => {state, {enum, [alive, suspect, confirmed_failed]}},
+          <<"state">> => {state, {swim_state, [alive, suspect, confirmed_failed]}},
           <<"incarnation">> => {incarnation, uint},
           <<"observed_at">> => {observed_at, uint},
           <<"by">> => {by, {bytes, 32}}}}}};
@@ -3499,7 +3523,7 @@ field_table(hyparview_neighbor) ->
       <<"realm">> => {realm, value},
       <<"call_id">> => {call_id, value},
       <<"source_route">> => {source_route, value},
-      <<"priority">> => {priority, {enum, [high, low]}},
+      <<"priority">> => {priority, {per_hop_enum, [high, low], low, neighbor_priority}},
       <<"record">> => {record, value}};
 field_table(hyparview_disconnect) ->
     #{<<"version">> => {version, value},
@@ -3619,7 +3643,7 @@ field_table(event) ->
     #{<<"version">> => {version, value},
       <<"frame_type">> => {frame_type, frame_type},
       <<"publication">> => {publication, signed_object},
-      <<"delivered_via">> => {delivered_via, {enum, [plumtree, direct]}}};
+      <<"delivered_via">> => {delivered_via, {per_hop_enum, [plumtree, direct], direct, delivered_via}}};
 field_table(advertise) ->
     #{<<"version">> => {version, value},
       <<"neighbour">> => {neighbour, held_object},
@@ -3747,6 +3771,7 @@ field_read(undefined, _Value, _Rest, _Table, _Frame) ->
     error.
 
 field_value({ok, Read}, Field, Rest, Table, Frame) -> read_fields(Rest, Table, Frame#{Field => Read});
+field_value(ignored, _Field, _Rest, _Table, _Frame) -> ignored;
 field_value(error, _Field, _Rest, _Table, _Frame) -> error.
 
 %% An unordered set of byte strings, bounded in count and in total bytes (D7, chain transport). Every entry is a
@@ -3773,6 +3798,9 @@ read_value({bytes_set, MaxCount, MaxBytes}, Entries) when is_list(Entries) -> by
 read_value(value, Value) -> {ok, peer_value(Value)};
 read_value(frame_type, {text, Name}) -> frame_type_named(Name);
 read_value({enum, Atoms}, {text, Name}) -> enum_value(Name, Atoms);
+read_value({per_hop_enum, Atoms, Fallback, Counter}, {text, Name}) ->
+    fallen_back(enum_value(Name, Atoms), Fallback, Counter);
+read_value({swim_state, Atoms}, {text, Name}) -> swim_state(enum_value(Name, Atoms));
 read_value({bounded_text, Max}, {text, Bin} = Text) when byte_size(Bin) =< Max -> {ok, Text};
 read_value(boolean, 1) -> {ok, true};
 read_value(boolean, 0) -> {ok, false};
@@ -3841,6 +3869,21 @@ enum_value(_Name, []) -> error.
 enum_match(true, Atom, _Name, _Atoms) -> {ok, Atom};
 enum_match(false, _Atom, Name, Atoms) -> enum_value(Name, Atoms).
 
+%% A per-hop enum value this node does not know reads as the enum's fallback, counted, and never closes a link
+%% (macula#83 decision 6). Only text gets there: any other value still refuses the frame.
+fallen_back({ok, Atom}, _Fallback, _Counter) ->
+    {ok, Atom};
+fallen_back(error, Fallback, Counter) ->
+    ok = macula_wire_tolerance:count(Counter),
+    {ok, Fallback}.
+
+%% A SWIM update whose state this node does not know is ignored, counted, and the updates beside it are read.
+swim_state({ok, State}) ->
+    {ok, State};
+swim_state(error) ->
+    ok = macula_wire_tolerance:count(swim_state),
+    ignored.
+
 entries_read([Entry | Rest], Table, Acc) when is_map(Entry) ->
     entry_read(read_fields(maps:to_list(Entry), Table, #{}), Rest, Table, Acc);
 entries_read([], _Table, Acc) ->
@@ -3849,6 +3892,7 @@ entries_read(_NotEntries, _Table, _Acc) ->
     error.
 
 entry_read({ok, Entry}, Rest, Table, Acc) -> entries_read(Rest, Table, [Entry | Acc]);
+entry_read(ignored, Rest, Table, Acc) -> entries_read(Rest, Table, Acc);
 entry_read(error, _Rest, _Table, _Acc) -> error.
 
 %% A peer-supplied value in the one key form (D26): text stays `{text, Bin}',

@@ -1217,6 +1217,10 @@ kind_read(other, Wire, Rest, Data, Actions) ->
 
 open_frame_read({ok, Frame}, Rest, Data, Actions) ->
     neighbour_read(macula_frame:verify_neighbour(Frame, neighbour_reader(Data)), Frame, Rest, Data, Actions);
+%% A frame of a type this node does not know was counted where it was read, and is dropped: the link stays up
+%% (macula#83 decision 5).
+open_frame_read({error, {unknown_frame_type, _Name}}, Rest, Data, Actions) ->
+    open_frame(Rest, Data, Actions);
 open_frame_read({error, bad_frame}, _Rest, Data, _Actions) ->
     closed(malformed_frame, Data).
 

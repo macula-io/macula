@@ -20,11 +20,12 @@ a_stream_function_of_another_shape_refuses_the_start() ->
     process_flag(trap_exit, true),
     Base = with_link_keys(#{seed => #{host => <<"127.0.0.1">>, port => 1}, connect_timeout_ms => 2000}),
     ?assertEqual([{error, {open_stream, not_an_opener}}, {error, {send_on_stream, not_a_writer}},
-                  {error, {close_stream, not_a_closer}}],
+                  {error, {close_stream, not_a_closer}}, {error, {reset_stream, not_a_resetter}}],
                  [macula_station_link:start_link(Base#{Key => OtherShape})
                   || {Key, OtherShape} <- [{open_stream, fun(_Conn, _More) -> {ok, make_ref()} end},
                                            {send_on_stream, fun(_Stream) -> ok end},
-                                           {close_stream, not_a_function}]]).
+                                           {close_stream, not_a_function},
+                                           {reset_stream, fun(_Stream) -> ok end}]]).
 
 the_bytes_are_written_on_the_dedicated_stream() ->
     with_link(ok, fun(Link, QuicStream) ->

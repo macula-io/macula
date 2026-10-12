@@ -23,6 +23,9 @@
 %%%                                       stream reset because its reader did
 %%%                                       not take data in time; the peer may
 %%%                                       try again later, or another station
+%%%   5  QUIC_CODE_UNKNOWN_FRAME_TYPE     a dedicated stream was aborted: a
+%%%                                       frame on it decoded, but is of a
+%%%                                       type this node does not know
 %%%-------------------------------------------------------------------
 -ifndef(MACULA_QUIC_ERROR_CODES_HRL).
 -define(MACULA_QUIC_ERROR_CODES_HRL, true).
@@ -44,5 +47,9 @@
 %% handshake slot free, or a relayed stream reset because its reader did not
 %% take data in time.
 -define(QUIC_CODE_REFUSED_BUSY, 4).
+
+%% A dedicated stream was aborted because a frame on it is of a type this node
+%% does not know: its envelope decoded, so this is not code 3 (macula#83).
+-define(QUIC_CODE_UNKNOWN_FRAME_TYPE, 5).
 
 -endif.

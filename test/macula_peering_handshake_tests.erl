@@ -142,8 +142,10 @@ handshake_test_() ->
             {timeout, 30, fun() -> a_call_a_publish_and_a_stream_open_on_the_control_stream_are_delivered(Ctx) end}},
            {"a CALL without its request closes with malformed_frame",
             {timeout, 30, fun() -> a_call_without_its_request_closes_with_malformed_frame(Ctx) end}},
-           {"a frame of a type this node does not know closes with malformed_frame",
-            {timeout, 30, fun() -> a_frame_of_a_type_this_node_does_not_know_closes_with_malformed_frame(Ctx) end}},
+           {"a frame of a type this node does not know is dropped and the connection serves on",
+            {timeout, 30, fun() -> a_frame_of_a_type_this_node_does_not_know_is_dropped(Ctx) end}},
+           {"a frame_type sent as bytes closes with malformed_frame",
+            {timeout, 30, fun() -> a_frame_type_sent_as_bytes_closes_with_malformed_frame(Ctx) end}},
            {"a STORE whose record bytes are not CBOR reaches its recipient and the connection serves on",
             {timeout, 30, fun() -> a_store_whose_record_is_not_cbor_reaches_its_recipient_and_the_connection_serves_on(Ctx) end}},
            {"liveness probe enabled: a peer that never answers is reaped as peer_liveness_lost",
@@ -1108,16 +1110,28 @@ a_call_without_its_request_closes_with_malformed_frame(Ctx) ->
         ?assertEqual(malformed_frame, ended(Station))
     end).
 
-%% A type name this node does not know, whether sent as text or as bytes.
-a_frame_of_a_type_this_node_does_not_know_closes_with_malformed_frame(Ctx) ->
-    Version = macula_frame:version(ping()),
-    Frames = [#{{text, <<"version">>} => Version, {text, <<"frame_type">>} => {text, <<"zz_future_frame">>}},
-              #{{text, <<"version">>} => Version, {text, <<"frame_type">>} => <<"zz_future_frame">>}],
-    [on_open_connection(Ctx, fun(Client, Station) ->
-         ok = on_control_stream(Client, macula_frame:encode_bytes(macula_record_cbor:encode(Frame))),
-         ?assertEqual(malformed_frame, ended(Station))
-     end) || Frame <- Frames],
-    ok.
+%% A type name this node does not know, sent as text, is a newer peer's frame (macula#83 decision 5): it is counted
+%% and dropped, and the frame after it is read.
+a_frame_of_a_type_this_node_does_not_know_is_dropped(Ctx) ->
+    Future = #{{text, <<"version">>} => macula_frame:version(ping()),
+               {text, <<"frame_type">>} => {text, <<"zz_future_frame">>}, {text, <<"anything">>} => 1},
+    Ping = ping(),
+    Before = maps:get(unknown_frame_type, macula_wire_tolerance:counters()),
+    on_open_connection(Ctx, fun(Client, Station) ->
+        ok = on_control_stream(Client, macula_frame:encode_bytes(macula_record_cbor:encode(Future))),
+        ok = on_control_stream(Client, macula_frame:encode(Ping)),
+        ?assertEqual(wire(Ping), frame_from(Station)),
+        ?assertEqual(open, still_open(Station, 500)),
+        ?assertEqual(Before + 1, maps:get(unknown_frame_type, macula_wire_tolerance:counters()))
+    end).
+
+%% A frame_type that is not text is not an envelope that decodes.
+a_frame_type_sent_as_bytes_closes_with_malformed_frame(Ctx) ->
+    Frame = #{{text, <<"version">>} => macula_frame:version(ping()), {text, <<"frame_type">>} => <<"zz_future_frame">>},
+    on_open_connection(Ctx, fun(Client, Station) ->
+        ok = on_control_stream(Client, macula_frame:encode_bytes(macula_record_cbor:encode(Frame))),
+        ?assertEqual(malformed_frame, ended(Station))
+    end).
 
 %% A record is an object carried for others: the connection passes the
 %% STORE to its recipient, which checks the record, and reads the next
