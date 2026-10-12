@@ -25,6 +25,8 @@ tolerance_test_() ->
       {"an enum value that is not text still refuses the frame", fun an_enum_value_that_is_not_text_still_refuses_the_frame/0},
       {"an unknown non critical extension is ignored", fun an_unknown_non_critical_extension_is_ignored/0},
       {"an unknown critical extension refuses the frame and the parse goes on", fun an_unknown_critical_extension_refuses_the_frame_and_the_parse_goes_on/0},
+      {"a refused critical extension counts by its name", fun a_refused_critical_extension_counts_by_its_name/0},
+      {"refused extension names past 64 count as other", fun refused_extension_names_past_64_count_as_other/0},
       {"an extension of another shape does not decode", fun an_extension_of_another_shape_does_not_decode/0},
       {"a per hop extension on a signed frame leaves its signature valid", fun a_per_hop_extension_on_a_signed_frame_leaves_its_signature_valid/0},
       {"a signed extension is read by its criticality", fun a_signed_extension_is_read_by_its_criticality/0}]}.
@@ -113,6 +115,24 @@ an_unknown_critical_extension_refuses_the_frame_and_the_parse_goes_on() ->
     Ping = macula_frame:ping(#{nonce => binary:copy(<<7>>, 16)}),
     Bytes = <<(macula_frame:encode(Ping#{ext => ext(1)}))/binary, (ping_wire())/binary>>,
     ?assertMatch({ok, [{invalid_frame, ping, ext}, #{frame_type := ping}], <<>>}, macula_frame:parse_received(Bytes)).
+
+a_refused_critical_extension_counts_by_its_name() ->
+    Ping = macula_frame:ping(#{nonce => binary:copy(<<7>>, 16)}),
+    Ignored = count({wire_ext_ignored, ?EXT}),
+    Before = count({wire_ext_refused, ?EXT}),
+    {ok, _, <<>>} = macula_frame:parse_received(macula_frame:encode(Ping#{ext => ext(1)})),
+    ?assertEqual(Before + 1, count({wire_ext_refused, ?EXT})),
+    ?assertEqual(Ignored, count({wire_ext_ignored, ?EXT})).
+
+refused_extension_names_past_64_count_as_other() ->
+    Ping = macula_frame:ping(#{nonce => binary:copy(<<7>>, 16)}),
+    Names = [<<"refused_", (integer_to_binary(N))/binary>> || N <- lists:seq(1, 65)],
+    [{ok, _, <<>>} = macula_frame:parse_received(
+                       macula_frame:encode(Ping#{ext => #{binary_to_atom(Name) => #{critical => 1, value => 1}}}))
+     || Name <- Names],
+    Refused = [Label || {wire_ext_refused, Label} <- maps:keys(macula_wire_tolerance:counters())],
+    ?assert(length(Refused) =< 65),
+    ?assert(count({wire_ext_refused, <<"other">>}) >= 1).
 
 an_extension_of_another_shape_does_not_decode() ->
     Ping = macula_frame:ping(#{nonce => binary:copy(<<7>>, 16)}),

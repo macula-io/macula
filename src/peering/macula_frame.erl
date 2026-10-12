@@ -3779,9 +3779,14 @@ non_critical(true, _Ext) -> extension_unsupported.
 critical(Ext) ->
     lists:any(fun(#{critical := Critical}) -> Critical =:= 1 end, maps:values(Ext)).
 
-%% A frame's per-hop extensions are valid when none is critical, and then each one is ignored and counted.
-extensions_valid(true, _Ext) -> false;
+%% A frame's per-hop extensions are valid when none is critical, and then each one is ignored and counted. A frame
+%% with a critical one is dropped, and each critical name it carries counts as refused.
+extensions_valid(true, Ext) -> refused_counted(Ext);
 extensions_valid(false, Ext) -> is_map(ignored_counted(Ext)).
+
+refused_counted(Ext) ->
+    _ = [ok = macula_wire_tolerance:count(wire_ext_refused, Name) || Name := #{critical := 1} <- Ext],
+    false.
 
 %% Every extension ignored counts by its name.
 ignored_counted(Ext) ->

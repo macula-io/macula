@@ -36,8 +36,9 @@ break: a node on it no longer reads the frames of an older one.
   ignored, and a critical one refuses the frame (`read_wire/1` returns `{error, extension_unsupported}` and a
   connection drops it; `parse_received` yields `{invalid_frame, Type, ext}`) or the signed object (its verifier
   returns `{error, extension_unsupported}`). The builders of signed objects take an optional `ext`.
-- `macula_wire_tolerance:counters/0`: `wire_unknown_frame_type`, `{wire_ext_ignored, Name}` and
-  `{wire_enum_fallback, Field}` (WIRE_1_0.md section 8); past 64 extension names a new one counts as `<<"other">>`.
+- `macula_wire_tolerance:counters/0`: `wire_unknown_frame_type`, `{wire_ext_ignored, Name}`,
+  `{wire_ext_refused, Name}` (a frame dropped for a critical extension) and `{wire_enum_fallback, Field}`
+  (WIRE_1_0.md section 8); past 64 extension names under a counter a new one counts as `<<"other">>`.
 - `macula_peering:reset_dedicated_stream/2`, and the `reset_stream` start option of a station link.
 - The wire 1.0 conformance runner for the envelope, enums, frames and tbs classes
   (`test/macula_wire_1_0_envelope_runner_tests.erl`).
