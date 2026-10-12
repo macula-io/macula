@@ -96,6 +96,9 @@ resolve_test_() ->
       {timeout, 30, fun call_tries_the_next_station_when_a_dial_fails/0},
       {timeout, 30, fun call_never_sends_the_request_twice/0},
       {timeout, 30, fun call_tries_the_next_station_when_a_dial_is_refused/0},
+      {timeout, 30, fun call_under_closed_skips_a_station_with_no_live_authorization/0},
+      {timeout, 30, fun call_under_closed_dials_a_station_holding_a_live_authorization/0},
+      {timeout, 30, fun call_under_open_counts_a_would_refuse_and_dials/0},
       {timeout, 30, fun call_stops_at_a_request_the_wire_cannot_carry/0},
       {timeout, 30, fun call_timeout_bounds_resolution/0},
       {timeout, 30, fun call_timeout_bounds_the_endpoint_lookup/0},
@@ -381,6 +384,61 @@ call_tries_the_next_station_when_a_dial_is_refused() ->
     set_answer(dial_url(B), {ok, <<"from b">>}),
     ?assertEqual({ok, <<"from b">>}, call(3000)),
     ?assertEqual([dial_url(A), dial_url(B)], visits()).
+
+%% Hook 3 (macula-station#63): under `closed', a station without a live
+%% authorization is not dialled — nothing is sent — and the candidate is
+%% passed over like a station with no endpoint; the call ends naming the
+%% refusal when no candidate is left.
+call_under_closed_skips_a_station_with_no_live_authorization() ->
+    A = station(<<"a.test">>),
+    set_replies(procedure_key(), [[advertisement(A)]]),
+    set_endpoint(A, endpoint_record(A)),
+    with_station_mode(closed, fun() ->
+        ?assertEqual({error, {unresolved, {station_not_authorized, none}}}, call(300)),
+        ?assertEqual([], visits())
+    end).
+
+%% The same call under the shipping mode `open': the dial proceeds and the
+%% would-be refusal is counted on the pool's status.
+call_under_open_counts_a_would_refuse_and_dials() ->
+    A = station(<<"a.test">>),
+    set_replies(procedure_key(), [[advertisement(A)]]),
+    set_endpoint(A, endpoint_record(A)),
+    set_answer(dial_url(A), {ok, <<"from a">>}),
+    ?assertEqual({ok, <<"from a">>}, call(3000)),
+    ?assertEqual([dial_url(A)], visits()),
+    ?assertEqual(would_refuse, station_check_cast()).
+
+%% A live authorization for the dialed (realm, station) admits the dial under
+%% `closed'.
+call_under_closed_dials_a_station_holding_a_live_authorization() ->
+    A = station(<<"a.test">>),
+    set_replies(procedure_key(), [[advertisement(A)]]),
+    set_endpoint(A, endpoint_record(A)),
+    set_authorization(A, authorization(A)),
+    set_answer(dial_url(A), {ok, <<"from a">>}),
+    with_station_mode(closed, fun() ->
+        ?assertEqual({ok, <<"from a">>}, call(3000)),
+        ?assertEqual([dial_url(A)], visits())
+    end).
+
+%% A station authorization for the dialed (realm, station), as the check's
+%% slot read hands it back.
+authorization(#{id := Id, host := Host}) ->
+    macula_record:station_authorization(?REALM, #{realm => ?REALM, station_node => Id,
+                                                  hostname => Host, roles => [<<"station">>]}).
+
+set_authorization(#{id := Id}, Authorization) ->
+    ets:insert(?STATE, {{endpoint, macula_record:station_authorization_key(?REALM, Id)}, Authorization}).
+
+with_station_mode(Mode, Fun) ->
+    application:set_env(macula, station_authorization_mode, Mode),
+    try Fun() after application:unset_env(macula, station_authorization_mode) end.
+
+station_check_cast() ->
+    receive {'$gen_cast', {station_check, Outcome}} -> Outcome
+    after 1000 -> no_cast
+    end.
 
 %% THE OTHER HALF, AND THE ONE THAT KEEPS THE FIRST FROM BEING A LICENCE TO
 %% RETRY EVERYTHING. A payload the wire cannot carry is refused identically by

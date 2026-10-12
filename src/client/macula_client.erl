@@ -111,6 +111,9 @@
 %% Direct-dial resolution head start — called by `macula_direct_dial' to
 %% remember which station last answered a procedure, and to get it back.
 -export([resolved_candidate/3, remember_resolved/5]).
+%% Station-authorization checks counted from the dialling process
+%% (macula-station#63, hook 3).
+-export([note_station_check/2]).
 %% Streaming RPC (since 3.17.0) — called by the `macula' facade.
 -export([call_stream_station/8]).
 %% A pool link to one station, for the `macula' facade's
@@ -692,6 +695,12 @@
     %% configured seeds are exempt.
     dial_budget      :: macula_client_peer_budget:t(),
     refused_dials    :: macula_refusal_report:t(),
+    %% Station-authorization checks run by `macula_station_check' before a
+    %% direct dial to a resolved station (macula-station#63, hook 3): how
+    %% many dials ran the check and whether the station held a live
+    %% authorization (`live'), did not and the dial proceeded anyway
+    %% (`would_refuse'), or was refused because of it (`refused').
+    station_checks   :: #{live | would_refuse | refused => non_neg_integer()},
     %% The node identity key, for the next issuer, and the pool's statement
     %% issuer, `undefined' while a new one waits for its backoff.
     node_identity    :: macula_node_keys:node_key(),
@@ -1209,6 +1218,16 @@ remember_resolved(Pool, <<_:256>> = RealmId, Procedure, Candidate, TtlMs)
        is_integer(TtlMs), TtlMs >= 0 ->
     gen_server:cast(Pool, {remember_resolved, RealmId, Procedure, Candidate, TtlMs}).
 
+%% @doc Count one station-authorization check on the pool's status
+%% (`station_checks'): `live' when the station held a live authorization for
+%% the realm the dial names, `would_refuse' when it did not and a mode admitted
+%% the dial anyway, `refused' when the mode refused it. Called from the
+%% dialling process by `macula_station_check' (macula-station#63, hook 3).
+-spec note_station_check(pool(), live | would_refuse | refused) -> ok.
+note_station_check(Pool, Outcome)
+  when is_pid(Pool), (Outcome =:= live orelse Outcome =:= would_refuse orelse Outcome =:= refused) ->
+    gen_server:cast(Pool, {station_check, Outcome}).
+
 %% @doc Sign a record this node signs about itself with the pool's node identity key, in the pool's own process, and
 %% return the signed record: the node record, a procedure advertisement or a content announcement that names this node.
 %% The pool stamps it with a new version and created_at, keeping the lifetime it was built with. The key never leaves
@@ -1714,6 +1733,7 @@ init_with_keys({ok, #{node_identity := NodeIdentity, issuer := Issuer, issuer_st
                                       window_ms => ?NEW_PEER_WINDOW_MS,
                                       exempt => [seed_peer(Seed) || Seed <- Seeds]}),
                     refused_dials = macula_refusal_report:new(?REFUSAL_REPORT_WINDOW_MS),
+                    station_checks = #{live => 0, would_refuse => 0, refused => 0},
                     node_identity = NodeIdentity, issuer = Issuer, issuer_started_at = now_ms(),
                     issuer_backoff_ms = ?ISSUER_RESTART_MIN_MS, issuer_start = Start,
                     admission = Admission, keyring = macula_group_keyring:handle(KeyringPid)},
@@ -1921,6 +1941,11 @@ handle_call(status, _From,
         %% Dials and link starts refused, and discovered stations deferred
         %% by the budget or refused, by reason.
         refused_dials      => macula_refusal_report:counts(S#state.refused_dials),
+        %% Station-authorization checks before a direct dial (hook 3): dials
+        %% that ran the check and the station held a live authorization
+        %% (`live'), did not and the dial proceeded (`would_refuse'), or
+        %% was refused because of it (`refused').
+        station_checks     => S#state.station_checks,
         %% Issuers the pool started after its first, one for each that ended.
         issuer_restarts    => S#state.issuer_restarts,
         %% Issuers the pool lost, whether or not a new one runs yet.
@@ -1947,6 +1972,10 @@ handle_cast({remember_resolved, RealmId, Procedure, Candidate, TtlMs},
                                             Now + TtlMs, Now, Resolved)}};
 handle_cast({discovered_stations, NewSeeds}, S) ->
     {noreply, add_discovered_seeds(NewSeeds, S)};
+
+handle_cast({station_check, Outcome}, #state{station_checks = Checks} = S)
+  when Outcome =:= live; Outcome =:= would_refuse; Outcome =:= refused ->
+    {noreply, S#state{station_checks = maps:update_with(Outcome, fun(N) -> N + 1 end, 1, Checks)}};
 
 handle_cast(_Msg, S) -> {noreply, S}.
 

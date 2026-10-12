@@ -797,16 +797,41 @@ for_procedure(_OtherProcedure, _Rec, _Realm, _Procedure, _Trust) ->
 call_work(Dial, Realm, Procedure, Payload, Deadline, Policy) ->
     fun(Candidate) -> candidate_work(Candidate, Dial, Realm, Procedure, Payload, Deadline, Policy) end.
 
-candidate_work(#{provider := Provider} = Candidate,
-               #{pool := Pool, call_station := CallStation, remember_resolved := Remember} = Dial,
-               Realm, Procedure, Payload, Deadline, Policy) ->
+candidate_work(Candidate, Dial, Realm, Procedure, Payload, Deadline, Policy) ->
     fun(Station, DialUrl, Share) ->
-        Call = station_call(CallStation, Pool, DialUrl, Provider, Realm, Procedure, Payload, Deadline, Policy,
-                            Station, Share),
-        sent_or_not(
-          settled(resealed(Call(maps:get(advertisement, Candidate, undefined)), Call, Dial, Realm, Procedure,
-                           Provider, Deadline),
-                  Remember, Pool, Realm, Procedure, Candidate))
+        candidate_checked(Candidate, Dial, Realm, Procedure, Payload, Deadline, Policy, Station, DialUrl, Share)
+    end.
+
+%% The station check first (hook 3, `macula_station_check'): under `closed',
+%% a station without a live authorization means nothing is sent and the next
+%% candidate may be tried; otherwise the CALL goes out sealed from the
+%% candidate's advertisement.
+candidate_checked(#{provider := Provider} = Candidate,
+                  #{pool := Pool, call_station := CallStation, find_record := FindRecord,
+                    remember_resolved := Remember} = Dial,
+                  Realm, Procedure, Payload, Deadline, Policy, Station, DialUrl, Share) ->
+    case station_checked(Pool, FindRecord, Realm, Station, Share) of
+        ok ->
+            Call = station_call(CallStation, Pool, DialUrl, Provider, Realm, Procedure, Payload, Deadline,
+                                Policy, Station, Share),
+            sent_or_not(
+              settled(resealed(Call(maps:get(advertisement, Candidate, undefined)), Call, Dial, Realm, Procedure,
+                               Provider, Deadline),
+                      Remember, Pool, Realm, Procedure, Candidate));
+        {refused, Error} ->
+            {not_sent, Error}
+    end.
+
+%% Hook 3 (macula-station#63): before a client dials a node as a station it
+%% resolved, the station must hold a live authorization from the realm the
+%% call names (mode-aware; `macula_station_check'). A refusal under `closed'
+%% is a candidate's failure, not the request's: nothing was sent, and another
+%% candidate station may hold one.
+station_checked(Pool, FindRecord, Realm, Station, Share) ->
+    case macula_station_check:authorized(#{pool => Pool, find_record => FindRecord}, Realm, Station,
+                                         lookup_timeout(Share)) of
+        ok -> ok;
+        {error, Reason} -> {refused, {error, {unresolved, Reason}}}
     end.
 
 %% The CALL to one station, sealed from the advertisement it is given.
@@ -881,19 +906,32 @@ first_keyed([]) -> none.
 stream_work(Dial, Realm, Procedure, Args, StreamOpts) ->
     fun(Candidate) -> candidate_stream_work(Candidate, Dial, Realm, Procedure, Args, StreamOpts) end.
 
-candidate_stream_work(#{provider := Provider} = Candidate,
-                      #{pool := Pool, call_stream_station := CallStreamStation, remember_resolved := Remember} = Dial,
-                      Realm, Procedure, Args, StreamOpts) ->
+candidate_stream_work(Candidate, Dial, Realm, Procedure, Args, StreamOpts) ->
     fun(Station, DialUrl, Share) ->
-        Reseal = stream_reseal(Dial, Realm, Procedure, Provider, StreamOpts),
-        sent_or_not(
-          settled(CallStreamStation(Pool, DialUrl, Provider, Realm, Procedure, Args,
-                                    maps:merge(StreamOpts,
-                                               maps:merge(advertisement_opt(maps:get(advertisement, Candidate,
-                                                                                     undefined)),
-                                                          (pinned(Station))#{dial_timeout_ms => budget(Share),
-                                                                             reseal => Reseal}))),
-                  Remember, Pool, Realm, Procedure, Candidate))
+        candidate_stream_checked(Candidate, Dial, Realm, Procedure, Args, StreamOpts, Station, DialUrl, Share)
+    end.
+
+%% The station check first, as `candidate_checked/10': under `closed', a
+%% station without a live authorization means nothing is opened; otherwise the
+%% stream opens sealed from the candidate's advertisement.
+candidate_stream_checked(#{provider := Provider} = Candidate,
+                         #{pool := Pool, call_stream_station := CallStreamStation, find_record := FindRecord,
+                           remember_resolved := Remember} = Dial,
+                         Realm, Procedure, Args, StreamOpts, Station, DialUrl, Share) ->
+    Reseal = stream_reseal(Dial, Realm, Procedure, Provider, StreamOpts),
+    case station_checked(Pool, FindRecord, Realm, Station, Share) of
+        ok ->
+            sent_or_not(
+              settled(CallStreamStation(Pool, DialUrl, Provider, Realm, Procedure, Args,
+                                        maps:merge(StreamOpts,
+                                                   maps:merge(advertisement_opt(maps:get(advertisement, Candidate,
+                                                                                         undefined)),
+                                                              (pinned(Station))#{dial_timeout_ms =>
+                                                                                     budget(Share),
+                                                                                 reseal => Reseal}))),
+                      Remember, Pool, Realm, Procedure, Candidate));
+        {refused, Error} ->
+            {not_sent, Error}
     end.
 
 %% The `reseal' a stream is handed: one lookup and key binding, on a call's terms.
