@@ -49,9 +49,12 @@ Envelope keys, the same for every frame type:
 | `sent_at_ms` | unsigned | optional |
 | `realm` | bytes, 32 | optional, where the frame type routes by realm |
 | `call_id` | bytes, 16 | optional, where the frame type has one |
-| `source_route` | array | optional, where the frame type has one |
+| `source_route` | bytes | optional, where the frame type has one (below) |
 | `ext` | map | optional, section 3.2 |
 
+- **Routing bytes** travel outside every signature, as today, and are per-hop: `source_route` (bytes) and
+  `retry_budget` (unsigned) on CALL and STREAM_OPEN; `source_route_reverse` (bytes) on RESULT and a provider's ERROR;
+  `source_route_partial` (bytes) on a station's relay ERROR and STREAM_ERROR. #83 changes none of them.
 - **The unsigned per-frame `capabilities` header is dropped** (A, clarifications). A frame that carries it is
   `malformed_frame` under the extra-field rule.
 - **Extra core field.** A key that is neither an envelope key nor a field of the frame type is `malformed_frame`.
@@ -138,10 +141,27 @@ without the length prefix. It covers the capabilities (no fixed width), the clie
 `h''` and re-encoding deterministically; a CONNECT whose received bytes are not deterministic CBOR is
 `malformed_frame`, so the rebuild is exact.
 
-### 4.3 Session proof
+### 4.3 Session proof V2 (D2)
 
-Unchanged, `MACULA-PQ-SESSION-PROOF-V1`: its `SHA-384(challenge)` covers the chosen version and profile and the
-station's ranges, and its `SHA-384(CONNECT)` the client's. A tampered negotiation fails one of the two proofs.
+The station's half no longer carries its capabilities as a fixed 64-bit field, so the station's capability set can
+grow as the client's does. HELLO's `session_proof`, by the station's identity key, label
+`MACULA-PQ-SESSION-PROOF-V2`, signs the fixed-width concatenation:
+
+```
+MACULA-PQ-SESSION-PROOF-V2 || 0x00
+|| E, the session exporter value (32)
+|| SHA-384 of the challenge frame's CBOR as sent (48)
+|| SHA-384 of the CONNECT frame's CBOR as received (48)
+|| station node_id (32)
+|| client node_id (32)
+|| SHA-384 of the HELLO tbs (48)
+```
+
+The **HELLO tbs** is the deterministic CBOR of the HELLO frame with `session_proof` set to the zero-length byte
+string, without the length prefix; the client rebuilds it from the HELLO it received, as the station rebuilds the
+CONNECT tbs (4.2). It covers the station's capabilities, with no fixed width, and `accepted`. `SHA-384(challenge)`
+covers the chosen version and profile and the station's ranges, and `SHA-384(CONNECT)` the client's, so a tampered
+negotiation fails one of the two proofs. `MACULA-PQ-SESSION-PROOF-V1` is retired with handshake version 4.
 
 ### 4.4 Refusals before the challenge
 

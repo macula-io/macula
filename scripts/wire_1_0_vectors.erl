@@ -28,7 +28,7 @@
 -define(STREAM_LABEL, <<"MACULA-PQ-STREAM-V1">>).
 -define(PROOF_V3_LABEL, <<"MACULA-PQ-CONNECT-PROOF-V3">>).
 -define(PROOF_V2_LABEL, <<"MACULA-PQ-CONNECT-PROOF-V2">>).
--define(SESSION_PROOF_LABEL, <<"MACULA-PQ-SESSION-PROOF-V1">>).
+-define(SESSION_PROOF_LABEL, <<"MACULA-PQ-SESSION-PROOF-V2">>).
 -define(LEAF, <<"wire 1.0 vector: the station leaf DER as presented (opaque to the handshake)">>).
 -define(EXPORTER, <<16#E5E5E5E5:32, 0:192, 16#0001:32>>).
 -define(NONCE, <<16#A1:8, 0:240, 16#7E:8>>).
@@ -355,6 +355,12 @@ check_order_cases(P, Keys) ->
     [C(<<"alg_before_signature">>, <<"custodian">>, client_identity,
        record(P, Client, 16#01, Node, [{set, <<"alg">>, {text, <<"ML-DSA-65">>}}, corrupt_signature]),
        <<"alg_unsupported">>),
+     C(<<"signature_before_tbs_keys">>, <<"custodian">>, client_identity,
+       record(P, Client, 16#01, Node, [{set, <<"colour">>, 1}, corrupt_signature]), <<"signature_invalid">>),
+     C(<<"signature_before_schema">>, <<"custodian">>, client_identity,
+       record(P, Client, 16#01, Node, [{set, <<"schema">>, 0}, corrupt_signature]), <<"signature_invalid">>),
+     C(<<"signature_before_lifetime_class">>, <<"custodian">>, client_identity,
+       record(P, Client, 16#01, Node, [{set, <<"lifetime_class">>, 9}, corrupt_signature]), <<"signature_invalid">>),
      C(<<"signature_before_clock">>, <<"custodian">>, client_identity,
        record(P, Client, 16#01, Node, Expired ++ [corrupt_signature]), <<"signature_invalid">>),
      C(<<"tbs_keys_before_clock">>, <<"custodian">>, client_identity,
@@ -730,6 +736,9 @@ handshake_cases(P, Keys) ->
        [Step(<<"client">>, Opener, Ok), Step(<<"station">>, Challenge, Closes(<<"version_below_floor">>))]),
      H(<<"hello.session_proof_other_challenge.refused">>, [<<"A2">>], #{}, #{},
        lists:droplast(Full) ++ [Step(<<"station">>, OtherHello, Closes(<<"session_proof_invalid">>))]),
+     H(<<"hello.capabilities_changed_after_signing.refused">>, [<<"D2">>], #{}, #{},
+       lists:droplast(Full) ++ [Step(<<"station">>, Hello#{<<"capabilities">> => ?STATION_CAPS bor (1 bsl 40)},
+                                     Closes(<<"session_proof_invalid">>))]),
      H(<<"hello.session_proof_missing.refused">>, [<<"D2">>], #{}, #{},
        lists:droplast(Full) ++ [Step(<<"station">>, maps:remove(<<"session_proof">>, Hello),
                                      Closes(<<"session_proof_missing">>))]),
@@ -785,11 +794,15 @@ proof_message(v2, StationId, ClientId, Challenge, _ConnectTbs) ->
       (crypto:hash(sha384, ?LEAF))/binary, (crypto:hash(sha384, Challenge))/binary, ?EXPORTER/binary,
       ?CLIENT_CAPS:64>>.
 
+%% An accepted HELLO and the bytes its session proof V2 signs: over SHA-384 of the HELLO tbs (session_proof empty),
+%% which covers the station's capabilities with no fixed width (WIRE_1_0.md 4.3).
 hello_accepted(#{station := Station, station_id := StationId, client_id := ClientId}, Challenge, Connect) ->
+    Fields = frame(<<"hello">>, #{<<"accepted">> => 1, <<"capabilities">> => ?STATION_CAPS}),
+    HelloTbs = encode(Fields#{<<"session_proof">> => <<>>}),
     Msg = <<?SESSION_PROOF_LABEL/binary, 0, ?EXPORTER/binary, (crypto:hash(sha384, encode(Challenge)))/binary,
-            (crypto:hash(sha384, encode(Connect)))/binary, StationId/binary, ClientId/binary, ?STATION_CAPS:64>>,
-    {frame(<<"hello">>, #{<<"accepted">> => 1, <<"capabilities">> => ?STATION_CAPS,
-                          <<"session_proof">> => macula_node_keys:sign(Msg, Station)}), Msg}.
+            (crypto:hash(sha384, encode(Connect)))/binary, StationId/binary, ClientId/binary,
+            (crypto:hash(sha384, HelloTbs))/binary>>,
+    {Fields#{<<"session_proof">> => macula_node_keys:sign(Msg, Station)}, Msg}.
 
 step(From, Frame, Expect) ->
     #{<<"from">> => From, <<"frame">> => hex(encode(Frame)), <<"expect">> => Expect}.
