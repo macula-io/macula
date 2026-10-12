@@ -56,9 +56,9 @@ capped_header_above_the_cap() ->
                  macula_frame:parse_received(<<(?SMALL_CAP + 1):32/big>>, ?SMALL_CAP)).
 
 capped_frame_at_the_cap() ->
-    Wire = wire(connect),
+    Wire = wire(ping),
     <<Len:32/big, _/binary>> = Wire,
-    ?assertMatch({ok, [#{frame_type := connect}], <<>>},
+    ?assertMatch({ok, [#{frame_type := ping}], <<>>},
                  macula_frame:parse_received(Wire, Len)).
 
 %% The element budget of macula_cbor_nif:unpack_deterministic/1.
@@ -98,8 +98,8 @@ record_bytes_test_() ->
       [{"decode/1 delivers them as they came",
         ?_assertMatch({ok, #{frame_type := Type, Field := Sent}, <<>>}, macula_frame:decode(Wire))},
        {"parse_received/1 delivers them and reads the frame after it",
-        ?_assertMatch({ok, [#{frame_type := Type, Field := Sent}, #{frame_type := connect}], <<>>},
-                      macula_frame:parse_received(<<Wire/binary, (wire(connect))/binary>>))},
+        ?_assertMatch({ok, [#{frame_type := Type, Field := Sent}, #{frame_type := ping}], <<>>},
+                      macula_frame:parse_received(<<Wire/binary, (wire(ping))/binary>>))},
        {"macula_record:verify/2 refuses them as malformed",
         ?_assertEqual([{error, malformed}],
                       lists:usort([macula_record:verify(Bytes, pq_pure) || Bytes <- records_in(Field, Sent)]))}]}
@@ -131,9 +131,9 @@ parse_stream_test_() ->
       {timeout, 60, fun stream_tail_stays_within_cap/0}}].
 
 frames_and_partial_tail() ->
-    Partial = binary:part(wire(hello), 0, 6),
-    ?assertMatch({ok, [#{frame_type := connect}], Partial},
-                 macula_frame:parse_received(<<(wire(connect))/binary, Partial/binary>>)).
+    Partial = binary:part(wire(pong), 0, 6),
+    ?assertMatch({ok, [#{frame_type := ping}], Partial},
+                 macula_frame:parse_received(<<(wire(ping))/binary, Partial/binary>>)).
 
 bad_frame() ->
     ?assertEqual({malformed, [], bad_frame}, macula_frame:parse_received(?NOT_CBOR)).
@@ -143,7 +143,7 @@ oversize_header() ->
                  macula_frame:parse_received(<<(?MAX_FRAME_BYTES + 1):32/big>>)).
 
 frames_before_bad_frame() ->
-    ?assertMatch({malformed, [#{frame_type := connect}, #{frame_type := hello}], bad_frame},
+    ?assertMatch({malformed, [#{frame_type := ping}, #{frame_type := pong}], bad_frame},
                  macula_frame:parse_received(stream_with_bad_frame())).
 
 tail_stays_within_cap() ->
@@ -151,21 +151,21 @@ tail_stays_within_cap() ->
                  feed(fun macula_frame:parse_received/1, junk_chunks(), <<>>, 0)).
 
 stream_frames_and_partial_tail() ->
-    Partial = binary:part(wire(hello), 0, 6),
-    ?assertMatch({[#{frame_type := connect}], Partial},
-                 macula_frame:parse_stream(<<(wire(connect))/binary, Partial/binary>>)).
+    Partial = binary:part(wire(pong), 0, 6),
+    ?assertMatch({[#{frame_type := ping}], Partial},
+                 macula_frame:parse_stream(<<(wire(ping))/binary, Partial/binary>>)).
 
 stream_bad_frame_ends_parse() ->
-    ?assertMatch({[#{frame_type := connect}, #{frame_type := hello}], <<>>},
+    ?assertMatch({[#{frame_type := ping}, #{frame_type := pong}], <<>>},
                  macula_frame:parse_stream(stream_with_bad_frame())).
 
 stream_oversize_header() ->
     ?assertEqual({[], <<>>}, macula_frame:parse_stream(<<(?MAX_FRAME_BYTES + 1):32/big>>)).
 
 stream_invalid_frame_dropped() ->
-    Stream = <<(wire(connect))/binary, (wire(connect_without_puzzle_evidence))/binary,
-               (wire(hello))/binary>>,
-    ?assertMatch({[#{frame_type := connect}, #{frame_type := hello}], <<>>},
+    Stream = <<(wire(ping))/binary, (wire(ping_without_nonce))/binary,
+               (wire(pong))/binary>>,
+    ?assertMatch({[#{frame_type := ping}, #{frame_type := pong}], <<>>},
                  macula_frame:parse_stream(Stream)).
 
 stream_tail_stays_within_cap() ->
@@ -178,14 +178,14 @@ stream_tail_stays_within_cap() ->
 
 %% Two frames, one that is not CBOR, then a frame that would decode.
 stream_with_bad_frame() ->
-    <<(wire(connect))/binary, (wire(hello))/binary, ?NOT_CBOR/binary,
-      (wire(connect))/binary>>.
+    <<(wire(ping))/binary, (wire(pong))/binary, ?NOT_CBOR/binary,
+      (wire(ping))/binary>>.
 
 %% Two frames, one that is not CBOR, then zero bytes past the frame cap,
 %% cut into chunks.
 junk_chunks() ->
     Junk = binary:copy(<<0>>, ?MAX_FRAME_BYTES + ?CHUNK_BYTES),
-    Stream = <<(wire(connect))/binary, (wire(hello))/binary, ?NOT_CBOR/binary, Junk/binary>>,
+    Stream = <<(wire(ping))/binary, (wire(pong))/binary, ?NOT_CBOR/binary, Junk/binary>>,
     chunks(Stream, ?CHUNK_BYTES).
 
 %% Parses each chunk after the tail kept from the ones before it, as a
@@ -214,22 +214,9 @@ chunks(Bin, Size) ->
 wire(Type) ->
     macula_frame:encode(frame(Type, macula_test_identity:node_id())).
 
-frame(connect, NodeId) ->
-    macula_frame:connect(#{
-        node_id         => NodeId,
-        station_id      => NodeId,
-        realms          => [crypto:strong_rand_bytes(32)],
-        capabilities    => 0,
-        puzzle_evidence => crypto:hash(sha256, NodeId)
-    });
-frame(connect_without_puzzle_evidence, Pub) ->
-    maps:remove(puzzle_evidence, frame(connect, Pub));
-frame(hello, Pub) ->
-    macula_frame:hello(#{
-        node_id                 => Pub,
-        station_id              => Pub,
-        realms                  => [crypto:strong_rand_bytes(32)],
-        capabilities            => 0,
-        accepted                => true,
-        negotiated_capabilities => 0
-    }).
+frame(ping, _NodeId) ->
+    macula_frame:ping(#{nonce => crypto:strong_rand_bytes(16)});
+frame(ping_without_nonce, NodeId) ->
+    maps:remove(nonce, frame(ping, NodeId));
+frame(pong, _NodeId) ->
+    macula_frame:pong(#{nonce => crypto:strong_rand_bytes(16)}).

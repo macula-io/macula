@@ -7,17 +7,12 @@
 %% Constructors — header invariants
 %%------------------------------------------------------------------
 
-connect_has_required_header_fields_test() ->
-    Frame = build_connect(),
-    ?assertEqual(connect, macula_frame:frame_type(Frame)),
+ping_has_required_header_fields_test() ->
+    Frame = build_ping(),
+    ?assertEqual(ping, macula_frame:frame_type(Frame)),
     ?assertEqual(2, macula_frame:version(Frame)),
     ?assertEqual(16, byte_size(macula_frame:frame_id(Frame))),
     ?assert(macula_frame:sent_at_ms(Frame) > 0).
-
-hello_has_required_header_fields_test() ->
-    Frame = build_hello(),
-    ?assertEqual(hello, macula_frame:frame_type(Frame)),
-    ?assertEqual(2, macula_frame:version(Frame)).
 
 goodbye_has_required_header_fields_test() ->
     F = macula_frame:goodbye(operator_stop, undefined),
@@ -34,18 +29,18 @@ goodbye_with_detail_test() ->
 %%------------------------------------------------------------------
 
 encode_prepends_4_byte_length_test() ->
-    F = build_connect(),
+    F = build_ping(),
     Wire = macula_frame:encode(F),
     <<Len:32/big, Body/binary>> = Wire,
     ?assertEqual(byte_size(Body), Len).
 
-encode_decode_roundtrip_connect_test() ->
-    F = build_connect(),
+encode_decode_roundtrip_ping_test() ->
+    F = build_ping(),
     {ok, Decoded, <<>>} = macula_frame:decode(macula_frame:encode(F)),
     ?assertEqual(F, Decoded).
 
-encode_decode_roundtrip_hello_test() ->
-    F = build_hello(),
+encode_decode_roundtrip_pong_test() ->
+    F = build_pong(),
     {ok, Decoded, <<>>} = macula_frame:decode(macula_frame:encode(F)),
     ?assertEqual(F, Decoded).
 
@@ -64,7 +59,7 @@ decode_returns_more_for_short_length_prefix_test() ->
     ?assertEqual({more, 1}, macula_frame:decode(<<1, 2, 3>>)).
 
 decode_returns_more_for_short_body_test() ->
-    F = build_connect(),
+    F = build_ping(),
     Wire = macula_frame:encode(F),
     %% Truncate to 10 bytes (4-byte len + 6 bytes of body).
     Short = binary:part(Wire, 0, 10),
@@ -84,20 +79,20 @@ decode_rejects_garbage_body_test() ->
 %%------------------------------------------------------------------
 
 parse_received_drains_multiple_frames_test() ->
-    F1 = build_connect(),
-    F2 = build_hello(),
+    F1 = build_ping(),
+    F2 = build_pong(),
     Buf = <<(macula_frame:encode(F1))/binary, (macula_frame:encode(F2))/binary>>,
     {ok, Frames, <<>>} = macula_frame:parse_received(Buf),
     ?assertEqual(2, length(Frames)),
     [D1, D2] = Frames,
-    ?assertEqual(connect, macula_frame:frame_type(D1)),
-    ?assertEqual(hello, macula_frame:frame_type(D2)).
+    ?assertEqual(ping, macula_frame:frame_type(D1)),
+    ?assertEqual(pong, macula_frame:frame_type(D2)).
 
 parse_received_returns_unconsumed_tail_test() ->
-    F1 = build_connect(),
+    F1 = build_ping(),
     Wire1 = macula_frame:encode(F1),
     %% Append a partial second frame: first 6 bytes of length+body.
-    F2 = build_hello(),
+    F2 = build_pong(),
     Wire2Partial = binary:part(macula_frame:encode(F2), 0, 6),
     Buf = <<Wire1/binary, Wire2Partial/binary>>,
     {ok, Frames, Rest} = macula_frame:parse_received(Buf),
@@ -109,33 +104,18 @@ parse_received_returns_unconsumed_tail_test() ->
 %%------------------------------------------------------------------
 
 encode_is_deterministic_test() ->
-    F = build_connect(),
+    F = build_ping(),
     ?assertEqual(macula_frame:encode(F), macula_frame:encode(F)).
 
 %%------------------------------------------------------------------
 %% Helpers
 %%------------------------------------------------------------------
 
-build_connect() ->
-    NodeId = macula_test_identity:node_id(),
-    macula_frame:connect(#{
-        node_id          => NodeId,
-        station_id       => NodeId,
-        realms           => [crypto:strong_rand_bytes(32)],
-        capabilities     => 16#FF,
-        puzzle_evidence  => crypto:hash(sha256, NodeId)
-    }).
+build_ping() ->
+    macula_frame:ping(#{nonce => crypto:strong_rand_bytes(16)}).
 
-build_hello() ->
-    NodeId = macula_test_identity:node_id(),
-    macula_frame:hello(#{
-        node_id                 => NodeId,
-        station_id              => NodeId,
-        realms                  => [crypto:strong_rand_bytes(32)],
-        capabilities            => 16#FF,
-        accepted                => true,
-        negotiated_capabilities => 16#0F
-    }).
+build_pong() ->
+    macula_frame:pong(#{nonce => crypto:strong_rand_bytes(16)}).
 
 %%------------------------------------------------------------------
 %% SWIM frames

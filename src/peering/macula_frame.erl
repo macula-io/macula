@@ -16,7 +16,7 @@
 %% as text; on decode a frame type's own fields come back through a fixed
 %% table, and peer-supplied maps keep the one key form (D26).
 %%
-%% Phase 1 covers CONNECT / HELLO / GOODBYE. Phase 2 adds SWIM. Phase 3
+%% Phase 1 covered GOODBYE (the handshake frames live in macula_handshake). Phase 2 adds SWIM. Phase 3
 %% (Session 3.4) adds the DHT operation frames from Part 6 §7:
 %% PING / PONG, FIND_NODE / NODES, FIND_VALUE / VALUE and STORE / STORE_ACK.
 %% CALL and STREAM_OPEN carry a request signed by the caller, RESULT and
@@ -32,8 +32,8 @@
 -module(macula_frame).
 
 -export([
-    %% Constructors — handshake
-    connect/1, hello/1, goodbye/2, goodbye/3,
+    %% Constructor — GOODBYE
+    goodbye/2, goodbye/3,
 
     %% Constructors — SWIM
     swim_ping/1, swim_ack/1, swim_suspect/1, swim_confirm/1, swim_ping_req/1,
@@ -144,8 +144,6 @@
     received_frame/0,
     item/0,
     unknown_frame_type/0,
-    connect_spec/0,
-    hello_spec/0,
     swim_ping_spec/0,
     swim_ack_spec/0,
     swim_suspect_spec/0,
@@ -239,7 +237,7 @@
          hyparview_shuffle, hyparview_shuffle_reply, plumtree_ihave, plumtree_graft, plumtree_prune,
          goodbye]).
 
--type frame_type() :: connect | hello | goodbye
+-type frame_type() :: goodbye
                     | swim_ping | swim_ack | swim_suspect | swim_confirm | swim_ping_req
                     | ping | pong
                     | liveness_ping | liveness_pong
@@ -271,29 +269,6 @@
 %% A frame of a type this node does not know, named by its frame_type text: its envelope decoded and its body was not
 %% read (macula#83 decision 5). It is dropped and counted, and never relayed.
 -type unknown_frame_type() :: {unknown_frame_type, binary()}.
-
--type connect_spec() :: #{
-    node_id          := macula_node_keys:node_id(),
-    station_id       := macula_node_keys:node_id(),
-    realms           := [macula:realm()],
-    capabilities     := non_neg_integer(),
-    puzzle_evidence  := <<_:256>>,
-    addresses        => [map()],
-    site             => map() | undefined,
-    endorsements     => [map()]
-}.
-
--type hello_spec() :: #{
-    node_id                 := macula_node_keys:node_id(),
-    station_id              := macula_node_keys:node_id(),
-    realms                  := [macula:realm()],
-    capabilities            := non_neg_integer(),
-    accepted                := boolean(),
-    negotiated_capabilities := non_neg_integer(),
-    addresses               => [map()],
-    site                    => map() | undefined,
-    refusal_code            => non_neg_integer() | undefined
-}.
 
 -type swim_update_spec() :: #{
     target      := id256(),
@@ -771,49 +746,6 @@
 %%------------------------------------------------------------------
 %% Constructors
 %%------------------------------------------------------------------
-
--spec connect(connect_spec()) -> frame().
-connect(#{node_id := NodeId, station_id := StationId,
-          realms := Realms, capabilities := Caps,
-          puzzle_evidence := Puzzle} = Spec)
-  when is_binary(NodeId), byte_size(NodeId) =:= 32,
-       is_binary(StationId), byte_size(StationId) =:= 32,
-       is_list(Realms),
-       is_integer(Caps), Caps >= 0,
-       is_binary(Puzzle), byte_size(Puzzle) =:= 32 ->
-    Header = base(connect, Caps),
-    Header#{
-        node_id          => NodeId,
-        station_id       => StationId,
-        realms           => Realms,
-        addresses        => maps:get(addresses, Spec, []),
-        site             => maps:get(site, Spec, undefined),
-        puzzle_evidence  => Puzzle,
-        endorsements     => maps:get(endorsements, Spec, [])
-    }.
-
--spec hello(hello_spec()) -> frame().
-hello(#{node_id := NodeId, station_id := StationId,
-        realms := Realms, capabilities := Caps,
-        accepted := Accepted,
-        negotiated_capabilities := Negotiated} = Spec)
-  when is_binary(NodeId), byte_size(NodeId) =:= 32,
-       is_binary(StationId), byte_size(StationId) =:= 32,
-       is_list(Realms),
-       is_integer(Caps), Caps >= 0,
-       is_boolean(Accepted),
-       is_integer(Negotiated), Negotiated >= 0 ->
-    Header = base(hello, Caps),
-    Header#{
-        node_id                 => NodeId,
-        station_id              => StationId,
-        realms                  => Realms,
-        addresses               => maps:get(addresses, Spec, []),
-        site                    => maps:get(site, Spec, undefined),
-        accepted                => Accepted,
-        refusal_code            => maps:get(refusal_code, Spec, undefined),
-        negotiated_capabilities => Negotiated
-    }.
 
 -spec goodbye(atom(), binary() | undefined) -> frame().
 goodbye(Reason, Detail) ->
@@ -2723,14 +2655,6 @@ entry_valid([{Field, Rule} | Rules], Entry) ->
 -spec received_rules(atom()) ->
     #{required := [{atom(), term()}], one_of := [[{atom(), term()}]], optional := [{atom(), term()}]}
   | unknown_type.
-received_rules(connect) ->
-    base_rules([{node_id, key}, {station_id, key}, {realms, list}, {capabilities, non_neg},
-                {puzzle_evidence, key}],
-               [{addresses, {optional, list}}, {site, {optional, present}}, {endorsements, {optional, list}}]);
-received_rules(hello) ->
-    base_rules([{node_id, key}, {station_id, key}, {realms, list}, {capabilities, non_neg},
-                {accepted, boolean}, {negotiated_capabilities, non_neg}],
-               [{addresses, {optional, list}}, {site, {optional, present}}, {refusal_code, {optional, present}}]);
 received_rules(goodbye) ->
     base_rules([{reason, reason}], [{detail, {optional, {utf8_max, ?MAX_GOODBYE_DETAIL_BYTES}}}]);
 received_rules(swim_ping) ->
@@ -3193,8 +3117,6 @@ wire_key(I) when is_integer(I) -> I.
 %%------------------------------------------------------------------
 
 %% A frame type from its wire name. Only the frame types below exist.
-frame_type_named(<<"connect">>) -> {ok, connect};
-frame_type_named(<<"hello">>) -> {ok, hello};
 frame_type_named(<<"goodbye">>) -> {ok, goodbye};
 frame_type_named(<<"swim_ping">>) -> {ok, swim_ping};
 frame_type_named(<<"swim_ack">>) -> {ok, swim_ack};
@@ -3254,39 +3176,6 @@ frame_type_named(_Other) -> error.
 field_table(Type) ->
     (frame_table(Type))#{<<"ext">> => {ext, extensions}}.
 
-frame_table(connect) ->
-    #{<<"version">> => {version, value},
-      <<"frame_type">> => {frame_type, frame_type},
-      <<"frame_id">> => {frame_id, value},
-      <<"sent_at_ms">> => {sent_at_ms, uint},
-      <<"capabilities">> => {capabilities, uint},
-      <<"realm">> => {realm, value},
-      <<"call_id">> => {call_id, value},
-      <<"source_route">> => {source_route, value},
-      <<"node_id">> => {node_id, value},
-      <<"station_id">> => {station_id, value},
-      <<"realms">> => {realms, value},
-      <<"addresses">> => {addresses, value},
-      <<"site">> => {site, value},
-      <<"puzzle_evidence">> => {puzzle_evidence, value},
-      <<"endorsements">> => {endorsements, value}};
-frame_table(hello) ->
-    #{<<"version">> => {version, value},
-      <<"frame_type">> => {frame_type, frame_type},
-      <<"frame_id">> => {frame_id, value},
-      <<"sent_at_ms">> => {sent_at_ms, uint},
-      <<"capabilities">> => {capabilities, uint},
-      <<"realm">> => {realm, value},
-      <<"call_id">> => {call_id, value},
-      <<"source_route">> => {source_route, value},
-      <<"node_id">> => {node_id, value},
-      <<"station_id">> => {station_id, value},
-      <<"realms">> => {realms, value},
-      <<"addresses">> => {addresses, value},
-      <<"site">> => {site, value},
-      <<"accepted">> => {accepted, boolean},
-      <<"refusal_code">> => {refusal_code, value},
-      <<"negotiated_capabilities">> => {negotiated_capabilities, value}};
 frame_table(goodbye) ->
     #{<<"version">> => {version, value},
       <<"neighbour">> => {neighbour, held_object},

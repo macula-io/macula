@@ -30,7 +30,7 @@
 -define(PROFILE, pq_pure).
 %% Every frame type macula_frame reads.
 -define(FRAME_TYPES,
-        [connect, hello, goodbye, swim_ping, swim_ack, swim_suspect, swim_confirm, swim_ping_req, ping, pong,
+        [goodbye, swim_ping, swim_ack, swim_suspect, swim_confirm, swim_ping_req, ping, pong,
          find_node, nodes, find_value, value, store, store_ack, call, result, error, hyparview_join, hyparview_forward_join,
          hyparview_neighbor, hyparview_disconnect, hyparview_shuffle, hyparview_shuffle_reply, plumtree_gossip,
          plumtree_ihave, plumtree_graft, plumtree_prune, overlay_relay, publish, subscribe, unsubscribe, event,
@@ -404,13 +404,7 @@ samples() ->
     Record = record_bytes(),
     Request = verified_call(),
     Open = verified_open(),
-    [{connect, macula_frame:connect(#{node_id => key(), station_id => key(), realms => [key()],
-                                     capabilities => 0, puzzle_evidence => key()}),
-      [node_id, station_id, realms, capabilities, puzzle_evidence], []},
-     {hello, macula_frame:hello(#{node_id => key(), station_id => key(), realms => [],
-                                 capabilities => 0, accepted => true, negotiated_capabilities => 0}),
-      [node_id, station_id, realms, capabilities, accepted, negotiated_capabilities], []},
-     {goodbye, macula_frame:goodbye(normal, <<"bye">>), [reason], []},
+    [{goodbye, macula_frame:goodbye(normal, <<"bye">>), [reason], []},
      {swim_ping, macula_frame:swim_ping(#{round => 1, incarnation => 0}), [round, incarnation], []},
      {swim_ack, macula_frame:swim_ack(#{round => 1, responder => key(), incarnation => 0}),
       [round, responder, incarnation], []},

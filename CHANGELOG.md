@@ -9,6 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Wire 1.0 frame envelope (macula#99; design of record macula#83).
+
+### Added
+
+- **A frame of a type this node does not know no longer closes a link.** Its envelope must still decode (length,
+  element budget, `version`, text `frame_type`); its body is not read. It is counted, dropped and never relayed, and
+  the frames after it are read. On a dedicated stream that stream is reset with the new QUIC code 5,
+  `QUIC_CODE_UNKNOWN_FRAME_TYPE`. `parse_received/1,2` and `parse_for_relay/2` yield `{unknown_frame_type, Name}`
+  for it, and `decode/1` and `read_wire/1` return `{error, {unknown_frame_type, Name}}`.
+- **Per-hop enum fallbacks.** An unknown HyParView NEIGHBOR `priority` reads as `low`, an unknown EVENT
+  `delivered_via` as `direct`, and a SWIM piggyback update with an unknown `state` is ignored. The same values
+  inside a signed object are still refused.
+- **One extension map per frame and per signed object**, `ext`: text name to `{crit: 0|1, v: any}`. Wire 1.0
+  defines no extension: a non-critical entry is ignored, and a critical one refuses the frame as
+  `{invalid_frame, Type, ext}` or the signed object as `malformed_frame`.
+- `macula_wire_tolerance:counters/0`: how often each of the above happened on this node.
+- `macula_peering:reset_dedicated_stream/2`, and the `reset_stream` start option of a station link.
+
+### Removed
+
+- The dead v2 `connect`/`hello` frame types and `macula_frame:connect/1` and `hello/1`. The handshake frames are
+  `macula_handshake`'s; after HELLO a frame named `connect` or `hello` already closed the connection.
+
 ## [14.10.0] - 2026-10-13
 
 ### Security
