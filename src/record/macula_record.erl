@@ -30,6 +30,7 @@
     foundation_realm_trust_list/1, foundation_realm_trust_list/2,
     foundation_t3_attestation/2, foundation_t3_attestation/3,
     station_endpoint/1, station_endpoint/2,
+    station_authorization/2, station_authorization/3, max_station_authorization_window_ms/0,
     tombstone/2, tombstone/3,
     envelope/3
 ]).
@@ -40,17 +41,20 @@
 -export([payload_field/2, type_procedure_advertisement/0, procedure_advertisement_max_lifetime_ms/0, clock_tolerance_ms/0,
          own_namespace/1]).
 -export([decode_payload/1]).
--export([read_node_record/1, read_procedure_advertisement/1, read_station_endpoint/1, read_tombstone/1,
+-export([read_node_record/1, read_procedure_advertisement/1, read_station_endpoint/1,
+         read_station_authorization/1, read_tombstone/1,
          read_org_directory/1, read_procedure_delegation/1, read_content_announcement/1,
          read_foundation_realm_trust_list/1, read_app_record/1]).
 -export([procedure_org/1, verify_authorization/3, verify_app/3]).
 -export([storage_key/1, procedure_key/2, content_key/1, station_endpoint_key/1, org_directory_key/2,
-         procedure_delegation_key/2, realm_member_endorsement_key/2, foundation_realm_trust_list_key/1,
+         procedure_delegation_key/2, realm_member_endorsement_key/2, station_authorization_key/2,
+         foundation_realm_trust_list_key/1,
          app_key/3]).
 
 -export_type([m_record/0, type_tag/0, version/0, refusal/0, reason/0, authorization/0, trust/0,
               authorization_refusal/0, node_record_opts/0, realm_directory_opts/0, realm_station_entry/0,
-              realm_stations_opts/0, realm_member_endorsement_opts/0, procedure_advertisement_opts/0,
+              realm_stations_opts/0, realm_member_endorsement_opts/0, station_authorization_opts/0,
+              procedure_advertisement_opts/0,
               content_announcement_opts/0, foundation_seed/0, foundation_seed_list_opts/0,
               foundation_parameter_value/0, foundation_parameter_opts/0, foundation_realm_trust_list_entry/0,
               foundation_realm_trust_list_opts/0,
@@ -111,6 +115,9 @@
 -type realm_stations_opts() :: #{ttl_ms => pos_integer()}.
 -type realm_member_endorsement_opts() :: #{valid_from => pos_integer(), valid_until => pos_integer(),
                                            ttl_ms => pos_integer()}.
+-type station_authorization_opts() :: #{valid_from => pos_integer(), valid_until => pos_integer(),
+                                        ttl_ms => pos_integer(), attestation_key_id => <<_:256>>,
+                                        attestation_required => 1}.
 -type procedure_advertisement_opts() :: #{authorization => map(), ttl_ms => pos_integer(), kem_key => binary()}.
 -type content_announcement_opts() :: #{realm_id := <<_:256>>, serving_station := <<_:256>>, procedure := binary(),
                                        name => binary(), size => non_neg_integer(), chunk_count => non_neg_integer(),
@@ -162,6 +169,7 @@
 -define(TYPE_FOUNDATION_T3_ATTESTATION,    16#10).
 -define(TYPE_CONTENT_ANNOUNCEMENT,         16#11).
 -define(TYPE_STATION_ENDPOINT,             16#12).
+-define(TYPE_STATION_AUTHORIZATION,        16#13).
 -define(TYPE_ORG_DIRECTORY,                16#15).
 -define(TYPE_PROCEDURE_DELEGATION,         16#16).
 -define(TYPE_APP_RECORD,                   16#17).
@@ -174,6 +182,13 @@
 %% A realm member endorsement's window, valid_from to valid_until, is at most 30 days, so one endorsement admits its
 %% member for at most that long. A builder given no valid_until takes the whole window.
 -define(MAX_ENDORSEMENT_WINDOW_MS, 30 * 24 * 60 * 60 * 1000).
+%% A station authorization's window, valid_from to valid_until, is at most 30 minutes: a deliberate tightening
+%% for infrastructure identities (macula-station#63; the window bounds the worst-case refusal tail once the realm
+%% stops reissuing). Its lifetime, created_at to expires_at, is the same bound.
+-define(STATION_AUTHORIZATION_MAX_WINDOW_MS, 30 * 60 * 1000).
+%% A station authorization's hostname is text of 1 to 253 bytes (the DNS name bound); a role is text of 1 to 64.
+-define(MAX_STATION_HOSTNAME_BYTES, 253).
+-define(MAX_STATION_ROLE_BYTES, 64).
 -define(DEFAULT_TTL_MS, 48 * 60 * 60 * 1000).
 %% The longest a record of a type lives, created_at to expires_at. A node record and a content announcement 48 hours; a
 %% procedure advertisement 5 minutes, renewed at half that or sooner, so a provider that stops is gone within minutes; a
@@ -258,6 +273,59 @@ endorsement_window(_From, _Until) -> ok.
 -spec max_endorsement_window_ms() -> pos_integer().
 max_endorsement_window_ms() ->
     ?MAX_ENDORSEMENT_WINDOW_MS.
+
+%% @doc A realm's statement, signed by the realm key, that the node StationNode serves it as a station at Hostname,
+%% in Roles, valid over a window from valid_from to valid_until of at most 30 minutes
+%% (`?STATION_AUTHORIZATION_MAX_WINDOW_MS'): a longer one raises a badmatch on
+%% `{error, station_authorization_window_too_long}', a reversed one on `{error, station_authorization_window_reversed}'.
+%%
+%% `attestation_key_id', when carried, is the full 32-byte SHA-256 of the station's hardware attestation public key
+%% (never a prefix of it), and `attestation_required' = 1 says the realm requires a live attestation for this node.
+%% The co-presence bound holds at the builder and at `payload_ok/2' alike: a record that demands an attestation but
+%% names no key is refused; a key id without the flag is a legitimate optional attestation. The attestation statement
+%% and its verification belong to macula-station#62; this record only carries the pair.
+-spec station_authorization(<<_:256>>, #{realm := <<_:256>>, station_node := <<_:256>>, hostname := binary(),
+                                         roles := [binary()]}) -> m_record().
+station_authorization(RealmId, Spec) ->
+    station_authorization(RealmId, Spec, #{}).
+
+-spec station_authorization(<<_:256>>, #{realm := <<_:256>>, station_node := <<_:256>>, hostname := binary(),
+                                         roles := [binary()]}, station_authorization_opts()) -> m_record().
+station_authorization(RealmId, #{realm := RealmId, station_node := Node, hostname := Hostname, roles := Roles},
+                      Opts)
+  when is_binary(RealmId), byte_size(RealmId) =:= 32, is_binary(Node), byte_size(Node) =:= 32,
+       is_binary(Hostname), is_list(Roles) ->
+    Now = erlang:system_time(millisecond),
+    ValidFrom = maps:get(valid_from, Opts, Now),
+    ValidUntil = maps:get(valid_until, Opts, ValidFrom + ?STATION_AUTHORIZATION_MAX_WINDOW_MS),
+    ok = station_authorization_window(ValidFrom, ValidUntil),
+    ok = station_authorization_attestation_options(Opts),
+    unsigned(?TYPE_STATION_AUTHORIZATION,
+             station_authorization_payload(RealmId, Node, Hostname, Roles, ValidFrom, ValidUntil, Opts), Opts).
+
+station_authorization_window(From, Until) when Until < From -> {error, station_authorization_window_reversed};
+station_authorization_window(From, Until) when Until - From > ?STATION_AUTHORIZATION_MAX_WINDOW_MS ->
+    {error, station_authorization_window_too_long};
+station_authorization_window(_From, _Until) -> ok.
+
+station_authorization_attestation_options(Opts) ->
+    case attestation_pair_ok({maps:get(attestation_required, Opts, undefined),
+                              maps:get(attestation_key_id, Opts, undefined)}) of
+        true -> ok;
+        false -> {error, station_authorization_attestation_bound}
+    end.
+
+%% The co-presence bound: refusal when a record demands an attestation but names no key, when the flag is not 1, or
+%% when the key id is not a 32-byte id. Both absent, and a key id without the flag, are legitimate.
+attestation_pair_ok({undefined, undefined}) -> true;
+attestation_pair_ok({undefined, KeyId}) -> is_id(KeyId);
+attestation_pair_ok({1, KeyId}) -> is_id(KeyId);
+attestation_pair_ok(_Pair) -> false.
+
+%% @doc The longest window a station authorization may have, valid_from to valid_until, in milliseconds: 30 minutes.
+-spec max_station_authorization_window_ms() -> pos_integer().
+max_station_authorization_window_ms() ->
+    ?STATION_AUTHORIZATION_MAX_WINDOW_MS.
 
 %% @doc A realm's statement, signed by the realm key, that the org OrgName is held by the key with key id OrgKeyId.
 -spec org_directory(<<_:256>>, binary(), <<_:256>>) -> m_record().
@@ -716,6 +784,23 @@ read_station_endpoint(#{type := ?TYPE_STATION_ENDPOINT, payload := P}) ->
                                      || {text, Release} <- [maps:get({text, <<"station_version">>}, P, undefined)],
                                         byte_size(Release) > 0, byte_size(Release) =< ?MAX_STATION_VERSION_BYTES])).
 
+-spec read_station_authorization(m_record()) ->
+          #{realm_id := <<_:256>>, station_node := <<_:256>>, hostname := binary(), roles := [binary()],
+            valid_from := non_neg_integer(), valid_until := non_neg_integer(),
+            attestation_key_id => <<_:256>>, attestation_required => 1}.
+read_station_authorization(#{type := ?TYPE_STATION_AUTHORIZATION, payload := P}) ->
+    Base = #{realm_id     => payload_field(P, <<"realm_id">>),
+             station_node => payload_field(P, <<"station_node">>),
+             hostname     => payload_field(P, <<"hostname">>),
+             roles        => [Role || {text, Role} <- payload_field(P, <<"roles">>)],
+             valid_from   => payload_field(P, <<"valid_from">>),
+             valid_until  => payload_field(P, <<"valid_until">>)},
+    maps:merge(Base, maps:from_list(
+                       [{Field, maps:get({text, Name}, P)}
+                        || {Name, Field} <- [{<<"attestation_key_id">>, attestation_key_id},
+                                             {<<"attestation_required">>, attestation_required}],
+                           maps:is_key({text, Name}, P)])).
+
 -spec read_tombstone(m_record()) -> map().
 read_tombstone(#{type := ?TYPE_TOMBSTONE, payload := P}) ->
     Base = #{withdrawn_type    => payload_field(P, <<"withdrawn_type">>),
@@ -920,6 +1005,12 @@ app_key(<<_:256>> = RealmId, OrgName, AppName) when is_binary(OrgName), is_binar
 realm_member_endorsement_key(<<_:256>> = RealmId, <<_:256>> = Member) ->
     derived(?TYPE_REALM_MEMBER_ENDORSEMENT, [RealmId, Member]).
 
+%% @doc The storage key of a station's authorization, from the realm id and the station's node_id: the slot that
+%% holds the realm's authorization of that station and, once the realm revokes it, the realm's tombstone of it.
+-spec station_authorization_key(<<_:256>>, <<_:256>>) -> <<_:256>>.
+station_authorization_key(<<_:256>> = RealmId, <<_:256>> = Node) ->
+    derived(?TYPE_STATION_AUTHORIZATION, [RealmId, Node]).
+
 %% @doc The storage key of a foundation's realm trust list, from the foundation key id. The station computes it
 %% to fetch the list without holding its record.
 -spec foundation_realm_trust_list_key(<<_:256>>) -> <<_:256>>.
@@ -971,7 +1062,8 @@ signer_purposes(Type, _Payload) when Type =:= ?TYPE_NODE_RECORD; Type =:= ?TYPE_
                                      Type =:= ?TYPE_CONTENT_ANNOUNCEMENT; Type =:= ?TYPE_STATION_ENDPOINT ->
     [identity];
 signer_purposes(Type, _Payload) when Type =:= ?TYPE_REALM_DIRECTORY; Type =:= ?TYPE_REALM_STATIONS;
-                                     Type =:= ?TYPE_REALM_MEMBER_ENDORSEMENT; Type =:= ?TYPE_ORG_DIRECTORY ->
+                                     Type =:= ?TYPE_REALM_MEMBER_ENDORSEMENT; Type =:= ?TYPE_ORG_DIRECTORY;
+                                     Type =:= ?TYPE_STATION_AUTHORIZATION ->
     [realm];
 signer_purposes(Type, _Payload) when Type =:= ?TYPE_PROCEDURE_DELEGATION; Type =:= ?TYPE_APP_RECORD ->
     [org];
@@ -1031,6 +1123,7 @@ max_lifetime(Type, _Payload) when Type =:= ?TYPE_REALM_STATIONS; Type =:= ?TYPE_
 max_lifetime(Type, _Payload) when Type =:= ?TYPE_PROCEDURE_DELEGATION; Type =:= ?TYPE_APP_RECORD ->
     ?PROCEDURE_DELEGATION_MAX_LIFETIME_MS;
 max_lifetime(?TYPE_REALM_MEMBER_ENDORSEMENT, _Payload) -> ?MAX_ENDORSEMENT_WINDOW_MS;
+max_lifetime(?TYPE_STATION_AUTHORIZATION, _Payload) -> ?STATION_AUTHORIZATION_MAX_WINDOW_MS;
 max_lifetime(?TYPE_TOMBSTONE, #{{text, <<"withdrawn_type">>} := Withdrawn}) when Withdrawn =/= ?TYPE_TOMBSTONE ->
     max_lifetime(Withdrawn, #{}) + 2 * ?CLOCK_TOLERANCE_MS;
 max_lifetime(Type, _Payload) when is_integer(Type), Type >= ?DOMAIN_TYPE_MIN -> ?DOMAIN_RECORD_MAX_LIFETIME_MS;
@@ -1191,6 +1284,7 @@ payload_ok(?TYPE_REALM_DIRECTORY, P) -> is_id(field(P, <<"realm_id">>));
 payload_ok(?TYPE_REALM_STATIONS, P) -> is_id(field(P, <<"realm_id">>));
 payload_ok(?TYPE_REALM_MEMBER_ENDORSEMENT, P) ->
     is_id(field(P, <<"realm_id">>)) andalso is_id(field(P, <<"member_node">>));
+payload_ok(?TYPE_STATION_AUTHORIZATION, P) -> station_authorization_payload_ok(P);
 payload_ok(?TYPE_PROCEDURE_ADVERTISEMENT, P) -> advertisement_payload_ok(P);
 payload_ok(?TYPE_TOMBSTONE, P) -> tombstone_payload_ok(P);
 payload_ok(?TYPE_FOUNDATION_SEED_LIST, _P) -> true;
@@ -1208,6 +1302,37 @@ payload_ok(?TYPE_PROCEDURE_DELEGATION, P) -> is_id(field(P, <<"org_key">>)) anda
 payload_ok(?TYPE_APP_RECORD, P) -> app_payload_ok(P);
 payload_ok(Type, _P) when Type >= ?DOMAIN_TYPE_MIN -> true;
 payload_ok(_UnknownType, _P) -> false.
+
+%% A station authorization holds the fields the design pins: realm_id and station_node (32-byte ids), hostname
+%% (text of 1 to ?MAX_STATION_HOSTNAME_BYTES bytes), roles (texts of 1 to ?MAX_STATION_ROLE_BYTES bytes each), and
+%% valid_from/valid_until (protocol integers, ending at or after they start, within the 30-minute window), plus the
+%% optional attestation pair under the co-presence bound.
+station_authorization_payload_ok(P) ->
+    is_id(field(P, <<"realm_id">>)) andalso is_id(field(P, <<"station_node">>))
+        andalso station_authorization_hostname_ok(field(P, <<"hostname">>))
+        andalso station_authorization_roles_ok(field(P, <<"roles">>))
+        andalso station_authorization_window_ok(field(P, <<"valid_from">>), field(P, <<"valid_until">>))
+        andalso attestation_pair_ok({field(P, <<"attestation_required">>),
+                                     field(P, <<"attestation_key_id">>)}).
+
+station_authorization_hostname_ok({text, Host}) when is_binary(Host), byte_size(Host) > 0,
+                                                     byte_size(Host) =< ?MAX_STATION_HOSTNAME_BYTES ->
+    true;
+station_authorization_hostname_ok(_Other) -> false.
+
+station_authorization_roles_ok(Roles) when is_list(Roles) ->
+    lists:all(fun({text, Role}) when is_binary(Role), byte_size(Role) > 0,
+                                       byte_size(Role) =< ?MAX_STATION_ROLE_BYTES -> true;
+                 (_Other) -> false
+              end, Roles);
+station_authorization_roles_ok(_Other) -> false.
+
+%% The payload's own window: integers in the protocol range, ending at or after they start and inside the maximum.
+station_authorization_window_ok(From, Until)
+  when is_integer(From), From >= 0, From < ?MAX_PROTOCOL_INT,
+       is_integer(Until), Until >= 0, Until < ?MAX_PROTOCOL_INT,
+       Until >= From, Until - From =< ?STATION_AUTHORIZATION_MAX_WINDOW_MS -> true;
+station_authorization_window_ok(_From, _Until) -> false.
 
 %% An app record holds exactly its seven fields (macula#75). Its org is a real org namespace, not `_' and not a node's
 %% `~<node_id>', and every procedure it lists is in that namespace, so an org cannot present another org's providers, or
@@ -1366,6 +1491,7 @@ is_content_id(_Other) -> false.
 slot_field_names(?TYPE_REALM_DIRECTORY, _Subject) -> [<<"realm_id">>];
 slot_field_names(?TYPE_REALM_STATIONS, _Subject) -> [<<"realm_id">>];
 slot_field_names(?TYPE_REALM_MEMBER_ENDORSEMENT, _Subject) -> [<<"realm_id">>, <<"member_node">>];
+slot_field_names(?TYPE_STATION_AUTHORIZATION, _Subject) -> [<<"realm_id">>, <<"station_node">>];
 slot_field_names(?TYPE_PROCEDURE_ADVERTISEMENT, _Subject) -> [<<"realm_id">>, <<"procedure">>];
 slot_field_names(?TYPE_FOUNDATION_PARAMETER, _Subject) -> [<<"param_name">>];
 slot_field_names(?TYPE_FOUNDATION_T3_ATTESTATION, _Subject) -> [<<"station_id">>];
@@ -1383,7 +1509,8 @@ slot_value(<<"subject">>, _Payload, Subject) -> Subject;
 slot_value(Name, Payload, _Subject) -> maps:get({text, Name}, Payload).
 
 slot_field_atoms() ->
-    [{<<"realm_id">>, realm_id}, {<<"member_node">>, member_node}, {<<"procedure">>, procedure},
+    [{<<"realm_id">>, realm_id}, {<<"member_node">>, member_node}, {<<"station_node">>, station_node},
+     {<<"procedure">>, procedure},
      {<<"param_name">>, param_name}, {<<"station_id">>, station_id}, {<<"mcid">>, mcid},
      {<<"org_name">>, org_name}, {<<"advertiser">>, advertiser}, {<<"app_name">>, app_name},
      {<<"subject">>, subject}].
@@ -1396,6 +1523,8 @@ slot(?TYPE_REALM_STATIONS, P, _Subject, _KeyId) ->
     derived(?TYPE_REALM_STATIONS, [field(P, <<"realm_id">>)]);
 slot(?TYPE_REALM_MEMBER_ENDORSEMENT, P, _Subject, _KeyId) ->
     derived(?TYPE_REALM_MEMBER_ENDORSEMENT, [field(P, <<"realm_id">>), field(P, <<"member_node">>)]);
+slot(?TYPE_STATION_AUTHORIZATION, P, _Subject, _KeyId) ->
+    derived(?TYPE_STATION_AUTHORIZATION, [field(P, <<"realm_id">>), field(P, <<"station_node">>)]);
 slot(?TYPE_PROCEDURE_ADVERTISEMENT, P, _Subject, _KeyId) ->
     procedure_key(field(P, <<"realm_id">>), text(field(P, <<"procedure">>)));
 slot(?TYPE_FOUNDATION_SEED_LIST, _P, _Subject, <<_:256>> = KeyId) ->
@@ -1619,6 +1748,16 @@ realm_member_endorsement_payload(RealmId, Member, Roles, ValidFrom, ValidUntil) 
       {text, <<"roles">>}       => [{text, Role} || Role <- Roles, is_binary(Role)],
       {text, <<"valid_from">>}  => ValidFrom,
       {text, <<"valid_until">>} => ValidUntil}.
+
+station_authorization_payload(RealmId, Node, Hostname, Roles, ValidFrom, ValidUntil, Opts) ->
+    Base = #{{text, <<"realm_id">>}     => RealmId,
+             {text, <<"station_node">>} => Node,
+             {text, <<"hostname">>}     => {text, Hostname},
+             {text, <<"roles">>}        => [{text, Role} || Role <- Roles, is_binary(Role)],
+             {text, <<"valid_from">>}   => ValidFrom,
+             {text, <<"valid_until">>}  => ValidUntil},
+    with_id(with_uint(Base, <<"attestation_required">>, maps:get(attestation_required, Opts, undefined)),
+            <<"attestation_key_id">>, maps:get(attestation_key_id, Opts, undefined)).
 
 with_uint(Map, _Key, undefined) -> Map;
 with_uint(Map, Key, N) when is_integer(N), N >= 0 -> Map#{{text, Key} => N}.
