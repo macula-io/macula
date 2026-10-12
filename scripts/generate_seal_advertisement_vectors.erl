@@ -30,7 +30,8 @@ Profile = fun(P) ->
     %% Signed as sign/2 signs, over a payload sign/2 refuses.
     SignedAs = fun(Payload) ->
         #{type := Type, version := Version, expires_at := Expires} = Keyed,
-        Fields = #{{text, <<"type">>} => Type, {text, <<"version">>} => Version, {text, <<"created_at">>} => Created,
+        Fields = #{{text, <<"type">>} => Type, {text, <<"version">>} => Version, {text, <<"schema">>} => 1,
+                   {text, <<"lifetime_class">>} => 1, {text, <<"created_at">>} => Created,
                    {text, <<"expires_at">>} => Expires, {text, <<"payload">>} => Payload},
         macula_record:encode(macula_signed_object:sign(Label, Fields, Provider))
     end,

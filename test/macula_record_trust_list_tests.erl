@@ -66,6 +66,7 @@ the_storage_key_derives_from_the_foundation_key_id_test() ->
 hand_signed(Payload, Key) ->
     Now = now_ms(),
     Fields = #{{text, <<"type">>} => 16#0F, {text, <<"version">>} => macula_record_uuid:v7_monotonic(Now),
+               {text, <<"schema">>} => 1, {text, <<"lifetime_class">>} => 6,
                {text, <<"created_at">>} => Now, {text, <<"expires_at">>} => Now + 5 * ?MINUTE,
                {text, <<"payload">>} => Payload},
     macula_signed_object:sign(?LABEL, Fields, Key).

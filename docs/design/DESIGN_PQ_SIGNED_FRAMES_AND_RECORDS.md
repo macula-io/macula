@@ -149,34 +149,61 @@ A record is the signed object `{key, tbs, signature}`, with `key` the signer's k
 | `type` | unsigned | the record type tag |
 | `alg` | text | `ML-DSA-87` or `ML-DSA-87-PS384` |
 | `version` | bytes, 16 | UUIDv7 |
+| `schema` | unsigned, at least 1 | the version of the type's payload rules: 1 for every built-in type in wire 1.0; a domain type's is its owner's |
+| `lifetime_class` | unsigned | a class of the frozen table below: the type's own where it has one |
 | `created_at`, `expires_at` | unsigned, ms | |
 | `payload` | map | the type's fields, text keys |
-| `subject` | bytes, at least one | domain types (tags 0x20 to 0xFF) only, and optional there; an empty one is refused |
+| `subject` | bytes, at least one | domain types (tags 0x20 to 0xFF), optional there, and every built-in tag wire 1.0 does not define, required there; an empty one is refused |
 
 About 7.3 KB / 8.3 KB before the payload: 2,592 / 3,118 bytes of key and 4,627 / 5,139 bytes of signature.
 
 - **Size.** Every stack refuses a record whose wire form is larger than 256 KiB, before any other check.
-- **Record lifetime.** A record's `expires_at` is after its `created_at` and at most its type's maximum after it: a
-  node record and a content announcement 48 hours; a procedure advertisement and a station endpoint 5 minutes; realm
-  stations, an org directory and a procedure delegation 6 hours; a realm member endorsement 30 days; a domain record 7
-  days (D28); and any other type 30 days, so no record keeps a key trusted without end. A tombstone lives at least
-  until the record it withdraws has expired plus the clock tolerance, and at most the withdrawn type's maximum plus
-  twice that tolerance, since the record it withdraws may be created up to the tolerance ahead. A signer refuses to
-  sign any other record, and every verifier refuses one as `lifetime_too_long`, or as `lifetime_reversed` when it
-  expires before it is created. With `created_at` at most 5 minutes ahead, no domain record a station accepts expires
-  more than 7 days and 5 minutes after it arrives.
+- **Record lifetime (wire 1.0, macula#100).** A record's `expires_at` is after its `created_at` and at most its
+  lifetime class's maximum after it. The table is frozen: it only grows, and under an LTS line a class may tighten,
+  never loosen.
+
+  | class | maximum | types |
+  |---|---|---|
+  | 1 | 5 minutes | procedure advertisement (0x06), station endpoint (0x12) |
+  | 2 | 30 minutes | procedure delegation (0x16, D32), app record (0x17), station authorization (0x13) |
+  | 3 | 6 hours | realm stations (0x04), org directory (0x15) |
+  | 4 | 48 hours | node record (0x01), content announcement (0x11) |
+  | 5 | 7 days | domain types (0x20 to 0xFF, D28) |
+  | 6 | 30 days | realm directory (0x03), realm member endorsement (0x05), foundation types (0x0D to 0x10), successor (0x14) |
+
+  A type in the table names its own class, or is refused as `lifetime_class_mismatch`; a class outside the table is
+  `lifetime_class_unknown`; a built-in tag not in the table is bounded by the class it names. A tombstone names the
+  class of the type it withdraws, lives at least until that record has expired plus the clock tolerance, and at most
+  the class's maximum plus twice that tolerance, since the record it withdraws may be created up to the tolerance
+  ahead. A signer refuses to sign any other record, and every verifier refuses one as `lifetime_too_long`, or as
+  `lifetime_reversed` when it expires before it is created. With `created_at` at most 5 minutes ahead, no domain
+  record a station accepts expires more than 7 days and 5 minutes after it arrives.
+- **Reserved tag.** 0x14 is the successor (key-rotation) record. Its payload is designed later; a reader refuses it
+  as `type_unsupported` and a custodian stores it.
 - **Realm member endorsement window.** Its payload's `valid_until` is not before its `valid_from`, and at most 30 days
   after it. The builder refuses another window, and a verifier of the endorsement refuses a reversed one as
   `endorsement_window_reversed` and a longer one as `endorsement_window_too_long`, before its other window checks, so
   one endorsement admits its member for at most 30 days.
-- **Checks,** after the steps of a signed object:
-  - `tbs` holds exactly these keys, with `subject` only where the type allows it;
+- **Custodian checks** (`macula_record:custodian_verify/3`, what a station runs before it stores a record), after the
+  steps of a signed object, first failure wins:
+  - `tbs` holds exactly these keys, with `subject` only where the type allows it (`malformed`);
   - `created_at` is at most 5 minutes ahead of the verifier's clock, and `expires_at` plus 5 minutes has not passed
-    (D22);
-  - the payload follows its type's rules; the owner of a domain type sets them.
+    (D22: `not_yet_valid`, `expired`);
+  - the lifetime class, then the lifetime, as above;
+  - the record is placeable: a 1.0 type's slot fields are present and typed, a tombstone's are its withdrawn type's,
+    and any other built-in tag carries a `subject` (`malformed`).
+
+  A custodian reads the payload no further than the slot fields, so a type, a schema or a content-id tag it does not
+  know is stored opaquely (macula#83 D4).
+- **Reader checks** (`macula_record:verify/3`): the custodian's checks up to the lifetime, then a type the reader does
+  not know is `type_unsupported`, a built-in type's `schema` other than 1 is `schema_unsupported`, a content
+  announcement whose `mcid` tag is not 2 is `content_id_unsupported`, and the payload follows its type's rules
+  (`malformed`); the owner of a domain type sets them.
 - **Who signed.** A record names no signer beside `key`. Where a payload names the node a record is about, such as
   a node record's own node, that node_id must equal the key id of `key`.
-- **Slot.** A station derives a record's storage key from the verified record on STORE, never from a key a peer
+- **Slot.** A built-in tag wire 1.0 does not define is placed like a domain type with a subject: H(type | signer key
+  id | subject), one entry per slot by construction (macula#83 A3). A content announcement is placed by its `mcid`
+  bytes whatever its tag. A station derives a record's storage key from the verified record on STORE, never from a key a peer
   sends, and refuses a record whose sent key differs. A consumer checks that each record in VALUE derives
   to the key it asked for, and discards one that does not.
 - **Replacement** by `version` compares only records under one storage key and one signer key id, so two signers

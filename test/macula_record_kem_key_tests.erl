@@ -78,7 +78,8 @@ advertisement(Id, Procedure, Opts) ->
 signed_with(#{type := Type, version := Version, created_at := Created, expires_at := Expires, payload := Payload},
             Extra, Key) ->
     Fields = #{{text, <<"type">>} => Type, {text, <<"version">>} => Version, {text, <<"created_at">>} => Created,
-               {text, <<"expires_at">>} => Expires,
+               {text, <<"expires_at">>} => Expires, {text, <<"schema">>} => 1,
+               {text, <<"lifetime_class">>} => macula_record:type_lifetime_class(Type),
                {text, <<"payload">>} => maps:merge(Payload, maps:from_list([{{text, K}, V} || K := V <- Extra]))},
     macula_signed_object:encode(macula_signed_object:sign(?LABEL, Fields, Key)).
 

@@ -30,6 +30,7 @@ Profile = fun(P) ->
     Forged = fun(Changes) ->
         #{payload := P0} = U = App(GoodDir, #{}),
         Fields = #{{text, <<"type">>} => 16#17, {text, <<"version">>} => maps:get(version, U),
+                   {text, <<"schema">>} => 1, {text, <<"lifetime_class">>} => 2,
                    {text, <<"created_at">>} => maps:get(created_at, U),
                    {text, <<"expires_at">>} => maps:get(expires_at, U),
                    {text, <<"payload">>} => maps:merge(P0, Changes)},

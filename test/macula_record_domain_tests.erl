@@ -71,7 +71,9 @@ key() ->
 signed_by_another_stack(#{type := Type, version := Version, created_at := Created, expires_at := Expires,
                           payload := Payload} = Record, Key) ->
     Fields = #{{text, <<"type">>} => Type, {text, <<"version">>} => Version, {text, <<"created_at">>} => Created,
-               {text, <<"expires_at">>} => Expires, {text, <<"payload">>} => Payload},
+               {text, <<"expires_at">>} => Expires, {text, <<"payload">>} => Payload, {text, <<"schema">>} => 1,
+               %% A domain record names class 5, and so does a tombstone of one.
+               {text, <<"lifetime_class">>} => 5},
     macula_signed_object:sign(?LABEL, with_subject(Fields, maps:get(subject, Record, undefined)), Key).
 
 with_subject(Fields, undefined) -> Fields;

@@ -1,10 +1,12 @@
 %% @doc Records in the signed-object format of DESIGN_PQ_SIGNED_FRAMES_AND_RECORDS.md.
 %%
 %% A record is the signed object {key, tbs, signature} under the label MACULA-PQ-RECORD-V1. Its tbs holds type, alg,
-%% version, created_at, expires_at and payload, and subject only on a domain type (tags 0x20 to 0xFF). A constructor
-%% returns an unsigned record. sign/2 takes the signer's key, refuses a key whose purpose does not fit the type, and
-%% adds key, key_id, alg, tbs and signature. verify/2,3 reads a record in the design's order and keeps its tbs bytes,
-%% so encode/1 sends them unchanged.
+%% version, schema, lifetime_class, created_at, expires_at and payload, and subject on a domain type (tags 0x20 to 0xFF)
+%% or a built-in tag wire 1.0 does not define. A constructor returns an unsigned record. sign/2 takes the signer's key,
+%% refuses a key whose purpose does not fit the type, and adds key, key_id, alg, schema, lifetime_class, tbs and
+%% signature. verify/2,3 reads a record as its reader, in the design's order, and keeps its tbs bytes, so encode/1
+%% sends them unchanged; custodian_verify/3 is a station's check before it stores a record, which stores types,
+%% schemas and content-id tags a reader does not know (wire 1.0, macula#100).
 %%
 %% A record is named by the key id of its key: the node_id for node records, procedure advertisements, content
 %% announcements and station endpoints, and the MACULA-KEY-ID-V1 key id for realm, org and foundation records and for
@@ -34,10 +36,11 @@
     tombstone/2, tombstone/3,
     envelope/3
 ]).
--export([sign/2, verify/2, verify/3, signer_entry/3, signer_entry/4, refresh/2, refresh/3, encode/1, node_signed/1,
+-export([sign/2, verify/2, verify/3, custodian_verify/3, signer_entry/3, signer_entry/4, refresh/2, refresh/3, encode/1, node_signed/1,
          payload_bounded/1, wire_bounded/1,
          domain_type/1, domain_record_checked/1]).
 -export([type/1, key/1, key_id/1, version/1, created_at/1, expires_at/1, payload/1, signature/1]).
+-export([lifetime_classes/0, type_lifetime_class/1, type_successor/0]).
 -export([payload_field/2, type_procedure_advertisement/0, procedure_advertisement_max_lifetime_ms/0, clock_tolerance_ms/0,
          own_namespace/1]).
 -export([decode_payload/1]).
@@ -72,6 +75,8 @@
     expires_at := non_neg_integer(),
     payload := map(),
     subject => binary(),
+    schema => pos_integer(),
+    lifetime_class => pos_integer(),
     key => binary(),
     key_id => <<_:256>>,
     alg => binary(),
@@ -80,7 +85,8 @@
 }.
 
 -type refusal() :: record_too_large | malformed | signature_invalid | alg_mismatch | not_yet_valid | expired
-                 | key_id_mismatch | lifetime_too_long | lifetime_reversed.
+                 | key_id_mismatch | lifetime_too_long | lifetime_reversed | lifetime_class_unknown
+                 | lifetime_class_mismatch | type_unsupported | schema_unsupported | content_id_unsupported.
 -type reason() :: shutdown | moved | revoked.
 -type authorization() :: #{org_directory := binary(), procedure_delegation := binary()}.
 %% The realm trust a provider authorization is checked against: the caller's crypto profile, and either the carried
@@ -173,7 +179,12 @@
 -define(TYPE_ORG_DIRECTORY,                16#15).
 -define(TYPE_PROCEDURE_DELEGATION,         16#16).
 -define(TYPE_APP_RECORD,                   16#17).
+%% Reserved for the successor (key-rotation) record (wire 1.0, macula#83). Its design comes later: a reader refuses it
+%% as type_unsupported and a custodian stores it like any built-in tag it does not know.
+-define(TYPE_SUCCESSOR,                    16#14).
 -define(DOMAIN_TYPE_MIN,                   16#20).
+%% The schema version every built-in type signs under wire 1.0. A domain type's schema is its owner's.
+-define(SCHEMA_V1, 1).
 
 %% station_endpoint record TTL (Part 4 §11): short enough to drop stale
 %% stations within minutes, long enough that a one-minute refresh keeps
@@ -190,11 +201,12 @@
 -define(MAX_STATION_HOSTNAME_BYTES, 253).
 -define(MAX_STATION_ROLE_BYTES, 64).
 -define(DEFAULT_TTL_MS, 48 * 60 * 60 * 1000).
-%% The longest a record of a type lives, created_at to expires_at. A node record and a content announcement 48 hours; a
-%% procedure advertisement 5 minutes, renewed at half that or sooner, so a provider that stops is gone within minutes; a
-%% station endpoint 5 minutes; realm stations and an org directory 6 hours; a procedure delegation 30 minutes (D32); a
-%% realm member endorsement 30 days; a domain record 7 days (D28); and any other type 30 days, so no record keeps a key trusted
-%% without end. A tombstone lives at most its withdrawn type's maximum plus twice the clock tolerance.
+%% The maxima of the frozen lifetime-class table (lifetime_classes/0), created_at to expires_at. A node record and a
+%% content announcement 48 hours; a procedure advertisement 5 minutes, renewed at half that or sooner, so a provider
+%% that stops is gone within minutes; a station endpoint 5 minutes; realm stations and an org directory 6 hours; a
+%% procedure delegation 30 minutes (D32); a realm member endorsement 30 days; a domain record 7 days (D28); and the
+%% foundation types and a realm directory 30 days, so no record keeps a key trusted without end. A tombstone lives at
+%% most its withdrawn type's maximum plus twice the clock tolerance.
 -define(NODE_RECORD_MAX_LIFETIME_MS, 48 * 60 * 60 * 1000).
 -define(CONTENT_ANNOUNCEMENT_MAX_LIFETIME_MS, 48 * 60 * 60 * 1000).
 -define(PROCEDURE_ADVERTISEMENT_MAX_LIFETIME_MS, 5 * 60 * 1000).
@@ -507,11 +519,16 @@ tombstone(#{type := Type, version := Version, expires_at := WithdrawnExpiry, pay
                                 WithdrawnExpiry + ?CLOCK_TOLERANCE_MS)}.
 
 %% @doc An unsigned record of a domain type (tags 0x20 to 0xFF). The subject_id option names the record's subject, a
-%% non-empty binary: an empty subject would name a slot apart from no subject.
+%% non-empty binary: an empty subject would name a slot apart from no subject. The schema option names the version of
+%% the owner's payload rules, 1 unless given: a domain type's schema is its owner's to read.
 -spec envelope(type_tag(), map(), map()) -> m_record().
 envelope(Type, Payload, Opts)
   when is_integer(Type), Type >= ?DOMAIN_TYPE_MIN, Type =< 16#FF, is_map(Payload), is_map(Opts) ->
-    with_subject(unsigned(Type, Payload, Opts), maps:get(subject_id, Opts, undefined)).
+    with_schema(with_subject(unsigned(Type, Payload, Opts), maps:get(subject_id, Opts, undefined)),
+                maps:get(schema, Opts, ?SCHEMA_V1)).
+
+with_schema(Record, Schema) when is_integer(Schema), Schema >= 1, Schema < ?MAX_PROTOCOL_INT ->
+    Record#{schema => Schema}.
 
 %%------------------------------------------------------------------
 %% Signing, verifying and the wire form
@@ -537,24 +554,46 @@ sign(#{type := Type, payload := Payload} = Record, #{purpose := Purpose, profile
     Object = macula_signed_object:sign(?LABEL, Fields, Key),
     ok = size_fits(byte_size(macula_signed_object:encode(Object))),
     #{tbs := Tbs, signature := Signature} = Object,
+    #{{text, <<"schema">>} := Schema, {text, <<"lifetime_class">>} := Class} = Fields,
     Record#{key => Carried, key_id => KeyId, alg => macula_signed_object:alg(Profile), tbs => Tbs,
-            signature => Signature}.
+            signature => Signature, schema => Schema, lifetime_class => Class}.
 
-%% @doc Verify a record, given as its wire form or as its {key, tbs, signature} map, under the verifier's profile and
-%% clock. Refusals are returned, never raised.
+%% @doc Verify a record as its reader, given as its wire form or as its {key, tbs, signature} map, under the verifier's
+%% profile and clock. Refusals are returned, never raised. After custodian_verify/3's checks up to the lifetime, a
+%% reader refuses a type it does not know (type_unsupported), a built-in type's schema other than 1
+%% (schema_unsupported), a content announcement whose content id has a tag other than 2 (content_id_unsupported), a
+%% payload that breaks its type's rules (malformed), and a payload that names a signer other than the key
+%% (key_id_mismatch).
 -spec verify(binary() | map(), macula_crypto_profile:profile()) -> {ok, m_record()} | {error, refusal()}.
 verify(Signed, Profile) ->
     verify(Signed, Profile, erlang:system_time(millisecond)).
 
 -spec verify(binary() | map(), macula_crypto_profile:profile(), integer()) -> {ok, m_record()} | {error, refusal()}.
-verify(Bytes, _Profile, _Now) when is_binary(Bytes), byte_size(Bytes) > ?MAX_RECORD_BYTES ->
+verify(Signed, Profile, Now) ->
+    read_checked(envelope_verified(Signed, Profile, Now), Profile).
+
+%% @doc Verify a record as its custodian, a station that stores records it need not understand (wire 1.0, macula#83
+%% D4). In order, first failure wins: the wire form fits 256 KiB (record_too_large); the signed object decodes
+%% (malformed); the signature verifies under the carried key and its alg (signature_invalid, alg_mismatch); the tbs
+%% holds exactly its core fields (malformed); the clock (not_yet_valid, expired); the lifetime class is in the frozen
+%% table and is the type's own for a type with one (lifetime_class_unknown, lifetime_class_mismatch); the lifetime
+%% runs forward within the class (lifetime_reversed, lifetime_too_long); the slot is placeable (malformed): a known
+%% type's slot fields are present and typed, and a built-in tag it does not know carries a subject. The payload is
+%% read no further than the slot fields, so a type, schema or content-id tag a reader does not know is stored. The
+%% record comes back with its key_id, so storage_key/1 places it.
+-spec custodian_verify(binary() | map(), macula_crypto_profile:profile(), integer()) ->
+          {ok, m_record()} | {error, refusal()}.
+custodian_verify(Signed, Profile, Now) ->
+    custodian_checked(envelope_verified(Signed, Profile, Now), Profile).
+
+envelope_verified(Bytes, _Profile, _Now) when is_binary(Bytes), byte_size(Bytes) > ?MAX_RECORD_BYTES ->
     {error, record_too_large};
-verify(Bytes, Profile, Now) when is_binary(Bytes) ->
+envelope_verified(Bytes, Profile, Now) when is_binary(Bytes) ->
     decoded_object(macula_signed_object:decode(Bytes), Profile, Now);
-verify(#{key := Key, tbs := Tbs, signature := Signature} = Object, Profile, Now)
+envelope_verified(#{key := Key, tbs := Tbs, signature := Signature} = Object, Profile, Now)
   when map_size(Object) =:= 3, is_binary(Key), is_binary(Tbs), is_binary(Signature) ->
     sized_object(byte_size(macula_signed_object:encode(Object)), Object, Profile, Now);
-verify(_Other, _Profile, _Now) ->
+envelope_verified(_Other, _Profile, _Now) ->
     {error, malformed}.
 
 %% The most entries a slot holds: 64 places for checked signers and 16 for everyone else
@@ -656,7 +695,7 @@ bounded_refresh(Now, Record, Key, NotAfter) ->
     {ok, refreshed(Record, Key, Now, NotAfter)}.
 
 refreshed(#{created_at := Created, expires_at := Expires} = Record, Key, Now, Bound) ->
-    Fresh = maps:with([type, payload, subject], Record),
+    Fresh = maps:with([type, payload, subject, schema], Record),
     sign(Fresh#{version => macula_record_uuid:v7_monotonic(Now), created_at => Now,
                 expires_at => ends_at(Now + (Expires - Created), Bound)},
          Key).
@@ -1030,9 +1069,14 @@ with_subject(Record, undefined) -> Record;
 with_subject(Record, Subject) when is_binary(Subject), byte_size(Subject) > 0 -> Record#{subject => Subject}.
 
 tbs_fields(#{type := Type, version := Version, created_at := Created, expires_at := Expires, payload := Payload} = R) ->
-    Fields = #{{text, <<"type">>} => Type, {text, <<"version">>} => Version, {text, <<"created_at">>} => Created,
-               {text, <<"expires_at">>} => Expires, {text, <<"payload">>} => Payload},
+    Fields = #{{text, <<"type">>} => Type, {text, <<"version">>} => Version,
+               {text, <<"schema">>} => maps:get(schema, R, ?SCHEMA_V1),
+               {text, <<"lifetime_class">>} => signed_class(record_class(Type, Payload), Type),
+               {text, <<"created_at">>} => Created, {text, <<"expires_at">>} => Expires, {text, <<"payload">>} => Payload},
     with_tbs_subject(Fields, maps:get(subject, R, undefined)).
+
+signed_class(none, Type) -> erlang:error({malformed, Type});
+signed_class(Class, _Type) -> Class.
 
 with_tbs_subject(Fields, undefined) -> Fields;
 with_tbs_subject(Fields, Subject) -> Fields#{{text, <<"subject">>} => Subject}.
@@ -1112,26 +1156,76 @@ node_signed(_NotARecord) ->
 names_its_node(Type) ->
     signer_kind(Type, #{}) =:= node andalso signer_field(Type) =/= none.
 
-%% The longest a record of Type lives. A tombstone's follows the type it withdraws, plus twice the clock tolerance: the
-%% record it withdraws may be created up to the tolerance ahead, and the tombstone outlives it by the tolerance.
-max_lifetime(?TYPE_NODE_RECORD, _Payload) -> ?NODE_RECORD_MAX_LIFETIME_MS;
-max_lifetime(?TYPE_CONTENT_ANNOUNCEMENT, _Payload) -> ?CONTENT_ANNOUNCEMENT_MAX_LIFETIME_MS;
-max_lifetime(?TYPE_PROCEDURE_ADVERTISEMENT, _Payload) -> ?PROCEDURE_ADVERTISEMENT_MAX_LIFETIME_MS;
-max_lifetime(?TYPE_STATION_ENDPOINT, _Payload) -> ?STATION_ENDPOINT_TTL_MS;
-max_lifetime(Type, _Payload) when Type =:= ?TYPE_REALM_STATIONS; Type =:= ?TYPE_ORG_DIRECTORY ->
-    ?REALM_AND_ORG_MAX_LIFETIME_MS;
-max_lifetime(Type, _Payload) when Type =:= ?TYPE_PROCEDURE_DELEGATION; Type =:= ?TYPE_APP_RECORD ->
-    ?PROCEDURE_DELEGATION_MAX_LIFETIME_MS;
-max_lifetime(?TYPE_REALM_MEMBER_ENDORSEMENT, _Payload) -> ?MAX_ENDORSEMENT_WINDOW_MS;
-max_lifetime(?TYPE_STATION_AUTHORIZATION, _Payload) -> ?STATION_AUTHORIZATION_MAX_WINDOW_MS;
-max_lifetime(?TYPE_TOMBSTONE, #{{text, <<"withdrawn_type">>} := Withdrawn}) when Withdrawn =/= ?TYPE_TOMBSTONE ->
-    max_lifetime(Withdrawn, #{}) + 2 * ?CLOCK_TOLERANCE_MS;
-max_lifetime(Type, _Payload) when is_integer(Type), Type >= ?DOMAIN_TYPE_MIN -> ?DOMAIN_RECORD_MAX_LIFETIME_MS;
-max_lifetime(_Type, _Payload) -> ?DEFAULT_MAX_LIFETIME_MS.
+%% @doc The frozen lifetime-class table of wire 1.0 (macula#100): a class names the longest a record lives, created_at
+%% to expires_at, in milliseconds. Every record names its class in its tbs, so a custodian bounds a type it does not
+%% know. The table only grows, and under an LTS line a class may tighten, never loosen.
+-spec lifetime_classes() -> #{pos_integer() => pos_integer()}.
+lifetime_classes() ->
+    #{1 => ?PROCEDURE_ADVERTISEMENT_MAX_LIFETIME_MS, 2 => ?PROCEDURE_DELEGATION_MAX_LIFETIME_MS,
+      3 => ?REALM_AND_ORG_MAX_LIFETIME_MS, 4 => ?NODE_RECORD_MAX_LIFETIME_MS, 5 => ?DOMAIN_RECORD_MAX_LIFETIME_MS,
+      6 => ?DEFAULT_MAX_LIFETIME_MS}.
 
-%% Whether a record's lifetime, created_at to expires_at, runs forward and fits its type's maximum.
+%% @doc The type tag reserved for the successor (key-rotation) record (macula#83). No reader takes it yet.
+-spec type_successor() -> type_tag().
+type_successor() -> ?TYPE_SUCCESSOR.
+
+%% @doc The lifetime class a type's records name in their tbs: one for each 1.0 built-in type other than the tombstone
+%% (which names its withdrawn type's), the reserved successor tag and the domain types; none for any other tag, whose
+%% records are bounded by the class they name.
+-spec type_lifetime_class(type_tag()) -> pos_integer() | none.
+type_lifetime_class(Type) -> type_class(Type).
+
+type_class(Type) when Type =:= ?TYPE_PROCEDURE_ADVERTISEMENT; Type =:= ?TYPE_STATION_ENDPOINT -> 1;
+type_class(Type) when Type =:= ?TYPE_PROCEDURE_DELEGATION; Type =:= ?TYPE_APP_RECORD;
+                      Type =:= ?TYPE_STATION_AUTHORIZATION ->
+    2;
+type_class(Type) when Type =:= ?TYPE_REALM_STATIONS; Type =:= ?TYPE_ORG_DIRECTORY -> 3;
+type_class(Type) when Type =:= ?TYPE_NODE_RECORD; Type =:= ?TYPE_CONTENT_ANNOUNCEMENT -> 4;
+type_class(Type) when is_integer(Type), Type >= ?DOMAIN_TYPE_MIN, Type =< 16#FF -> 5;
+type_class(Type) when Type =:= ?TYPE_REALM_DIRECTORY; Type =:= ?TYPE_REALM_MEMBER_ENDORSEMENT;
+                      Type =:= ?TYPE_SUCCESSOR ->
+    6;
+type_class(Type) when is_integer(Type), Type >= ?TYPE_FOUNDATION_SEED_LIST, Type =< ?TYPE_FOUNDATION_T3_ATTESTATION -> 6;
+type_class(_Other) -> none.
+
+%% A tombstone takes the class of the type it withdraws.
+record_class(?TYPE_TOMBSTONE, #{{text, <<"withdrawn_type">>} := Withdrawn}) when Withdrawn =/= ?TYPE_TOMBSTONE ->
+    type_class(Withdrawn);
+record_class(?TYPE_TOMBSTONE, _Payload) ->
+    none;
+record_class(Type, _Payload) ->
+    type_class(Type).
+
+%% A tombstone outlives its class by twice the clock tolerance: the record it withdraws may be created up to the
+%% tolerance ahead, and the tombstone outlives it by the tolerance.
+class_lifetime(Class, ?TYPE_TOMBSTONE) -> maps:get(Class, lifetime_classes()) + 2 * ?CLOCK_TOLERANCE_MS;
+class_lifetime(Class, _Type) -> maps:get(Class, lifetime_classes()).
+
+%% The longest a record of Type lives, by its type's class. A type with no class takes the longest class.
+max_lifetime(Type, Payload) ->
+    class_lifetime(defined_class(record_class(Type, Payload)), Type).
+
+defined_class(none) -> 6;
+defined_class(Class) -> Class.
+
+%% Whether a record's lifetime, created_at to expires_at, runs forward and fits its class. A record read from a tbs
+%% names its class, which must be in the table and be its type's own where the type has one; a record built here
+%% takes its type's.
+lifetime(#{type := Type, created_at := Created, expires_at := Expires, payload := Payload, lifetime_class := Class}) ->
+    class_lived(class_checked(Class, record_class(Type, Payload)), Type, Expires - Created);
 lifetime(#{type := Type, created_at := Created, expires_at := Expires, payload := Payload}) ->
     lifetime_within(Expires - Created, max_lifetime(Type, Payload)).
+
+class_checked(Class, TypeClass) ->
+    class_known(maps:is_key(Class, lifetime_classes()), Class, TypeClass).
+
+class_known(false, _Class, _TypeClass) -> lifetime_class_unknown;
+class_known(true, Class, none) -> {ok, Class};
+class_known(true, Class, Class) -> {ok, Class};
+class_known(true, _Class, _TypeClass) -> lifetime_class_mismatch.
+
+class_lived({ok, Class}, Type, Lifetime) -> lifetime_within(Lifetime, class_lifetime(Class, Type));
+class_lived(Refusal, _Type, _Lifetime) -> Refusal.
 
 lifetime_within(Lifetime, _Max) when Lifetime =< 0 -> lifetime_reversed;
 lifetime_within(Lifetime, Max) when Lifetime > Max -> lifetime_too_long;
@@ -1229,25 +1323,47 @@ signed_fields({ok, #{key := Key, tbs := Tbs, fields := Fields}}, Signature, Prof
 signed_fields({error, _} = Refused, _Signature, _Profile, _Now) ->
     Refused.
 
+%% A tbs holds exactly type, alg, version, schema, lifetime_class, created_at, expires_at and payload, and subject on a
+%% type that may carry one: a domain type, or a built-in tag that is not a 1.0 type. Any other field is malformed.
 read_tbs(#{{text, <<"type">>} := Type, {text, <<"alg">>} := {text, Alg}, {text, <<"version">>} := Version,
+           {text, <<"schema">>} := Schema, {text, <<"lifetime_class">>} := Class,
            {text, <<"created_at">>} := Created, {text, <<"expires_at">>} := Expires,
            {text, <<"payload">>} := Payload} = Fields)
   when is_integer(Type), Type >= 1, Type =< 16#FF, is_binary(Alg), is_binary(Version), byte_size(Version) =:= 16,
+       is_integer(Schema), Schema >= 1, Schema < ?MAX_PROTOCOL_INT, is_integer(Class), Class >= 1,
+       Class < ?MAX_PROTOCOL_INT,
        is_integer(Created), Created >= 0, Created < ?MAX_PROTOCOL_INT, is_integer(Expires), Expires >= 0,
        Expires < ?MAX_PROTOCOL_INT, is_map(Payload) ->
-    Record = #{type => Type, alg => Alg, version => Version, created_at => Created, expires_at => Expires,
-               payload => Payload},
+    Record = #{type => Type, alg => Alg, version => Version, schema => Schema, lifetime_class => Class,
+               created_at => Created, expires_at => Expires, payload => Payload},
     with_read_subject(map_size(Fields), maps:get({text, <<"subject">>}, Fields, undefined), Record);
 read_tbs(_Fields) ->
     malformed.
 
-with_read_subject(6, undefined, Record) ->
+with_read_subject(8, undefined, Record) ->
     {ok, Record};
-with_read_subject(7, Subject, #{type := Type} = Record)
-  when is_binary(Subject), byte_size(Subject) > 0, Type >= ?DOMAIN_TYPE_MIN ->
-    {ok, Record#{subject => Subject}};
+with_read_subject(9, Subject, #{type := Type} = Record) when is_binary(Subject), byte_size(Subject) > 0 ->
+    subject_carried(subject_type(Type), Record#{subject => Subject});
 with_read_subject(_Size, _Subject, _Record) ->
     malformed.
+
+subject_carried(true, Record) -> {ok, Record};
+subject_carried(false, _Record) -> malformed.
+
+%% The built-in types of wire 1.0: their payload rules and slots are this module's. Every other built-in tag is one a
+%% custodian stores under its signer and subject.
+built_in_1_0(Type) ->
+    lists:member(Type, [?TYPE_NODE_RECORD, ?TYPE_REALM_DIRECTORY, ?TYPE_REALM_STATIONS, ?TYPE_REALM_MEMBER_ENDORSEMENT,
+                        ?TYPE_PROCEDURE_ADVERTISEMENT, ?TYPE_TOMBSTONE, ?TYPE_FOUNDATION_SEED_LIST,
+                        ?TYPE_FOUNDATION_PARAMETER, ?TYPE_FOUNDATION_REALM_TRUST_LIST, ?TYPE_FOUNDATION_T3_ATTESTATION,
+                        ?TYPE_CONTENT_ANNOUNCEMENT, ?TYPE_STATION_ENDPOINT, ?TYPE_ORG_DIRECTORY,
+                        ?TYPE_PROCEDURE_DELEGATION, ?TYPE_APP_RECORD, ?TYPE_STATION_AUTHORIZATION]).
+
+domain_tag(Type) -> is_integer(Type) andalso Type >= ?DOMAIN_TYPE_MIN andalso Type =< 16#FF.
+
+%% A type that may carry a subject: a domain type, or a built-in tag that is not a 1.0 type, whose slot is its
+%% signer's key id and its subject (macula#83 A3).
+subject_type(Type) -> domain_tag(Type) orelse not built_in_1_0(Type).
 
 read_record(malformed, _Key, _Tbs, _Signature, _Profile, _Now) ->
     {error, malformed};
@@ -1263,10 +1379,65 @@ clocked(ok, Record, Profile) ->
 clocked(Refusal, _Record, _Profile) ->
     {error, Refusal}.
 
-lived(ok, #{type := Type, payload := Payload} = Record, Profile) ->
-    payload_checked(payload_ok(Type, Payload), Record, Profile);
+lived(ok, Record, _Profile) ->
+    {ok, Record};
 lived(Refusal, _Record, _Profile) ->
     {error, Refusal}.
+
+%% A reader's checks past the custodian's lifetime: the type, the schema, the content id's tag, the payload rules and
+%% the named signer, in that order.
+read_checked({ok, #{type := Type} = Record}, Profile) ->
+    type_read(built_in_1_0(Type) orelse domain_tag(Type), Record, Profile);
+read_checked({error, _} = Refused, _Profile) ->
+    Refused.
+
+type_read(false, _Record, _Profile) -> {error, type_unsupported};
+type_read(true, #{type := Type, schema := Schema} = Record, Profile) ->
+    schema_read(domain_tag(Type) orelse Schema =:= ?SCHEMA_V1, Record, Profile).
+
+schema_read(false, _Record, _Profile) -> {error, schema_unsupported};
+schema_read(true, #{type := Type, payload := Payload} = Record, Profile) ->
+    content_id_read(content_id_known(Type, field(Payload, <<"mcid">>)), Record, Profile).
+
+%% Content ids are read by their tag byte; tag 2 is the one wire 1.0 knows. A custodian stores the others.
+content_id_known(?TYPE_CONTENT_ANNOUNCEMENT, <<Tag, _/binary>>) -> Tag =:= 2;
+content_id_known(_Type, _Mcid) -> true.
+
+content_id_read(false, _Record, _Profile) -> {error, content_id_unsupported};
+content_id_read(true, #{type := Type, payload := Payload} = Record, Profile) ->
+    payload_checked(payload_ok(Type, Payload), Record, Profile).
+
+%% A custodian's check past the lifetime: the record is placeable, and nothing else in its payload is read.
+custodian_checked({ok, #{type := Type, payload := Payload, key := Key} = Record}, Profile) ->
+    placed(placeable(Type, Payload, maps:get(subject, Record, undefined)),
+           Record#{key_id => key_id_of(signer_kind(Type, Payload), Key, Profile)});
+custodian_checked({error, _} = Refused, _Profile) ->
+    Refused.
+
+placed(true, Record) -> {ok, Record};
+placed(false, _Record) -> {error, malformed}.
+
+%% Whether a custodian can place a record: a 1.0 type's slot fields are present and typed (a tombstone's are the
+%% withdrawn type's), a domain type is placed by its signer and optional subject, and any other built-in tag carries
+%% a subject.
+placeable(?TYPE_TOMBSTONE, #{{text, <<"withdrawn_type">>} := Withdrawn} = Payload, _Subject)
+  when is_integer(Withdrawn), Withdrawn >= 1, Withdrawn =< 16#FF, Withdrawn =/= ?TYPE_TOMBSTONE ->
+    placeable(Withdrawn, Payload, maps:get({text, <<"subject">>}, Payload, undefined));
+placeable(?TYPE_TOMBSTONE, _Payload, _Subject) ->
+    false;
+placeable(Type, Payload, Subject) ->
+    slot_placeable(built_in_1_0(Type), domain_tag(Type), Type, Payload, Subject).
+
+slot_placeable(true, _Domain, Type, Payload, _Subject) ->
+    lists:all(fun(Name) -> custodian_slot_value_ok(Name, field(Payload, Name)) end, slot_field_names(Type, undefined));
+slot_placeable(false, true, _Type, _Payload, Subject) ->
+    Subject =:= undefined orelse non_empty_subject(Subject);
+slot_placeable(false, false, _Type, _Payload, Subject) ->
+    non_empty_subject(Subject).
+
+%% A content id is placed by its bytes whatever its tag, so a tag a reader does not know is still stored.
+custodian_slot_value_ok(<<"mcid">>, Value) -> is_binary(Value) andalso byte_size(Value) > 0;
+custodian_slot_value_ok(Name, Value) -> slot_value_ok(Name, Value).
 
 payload_checked(false, _Record, _Profile) ->
     {error, malformed};
@@ -1536,7 +1707,7 @@ slot(?TYPE_FOUNDATION_REALM_TRUST_LIST, _P, _Subject, <<_:256>> = KeyId) ->
 slot(?TYPE_FOUNDATION_T3_ATTESTATION, P, _Subject, _KeyId) ->
     derived(?TYPE_FOUNDATION_T3_ATTESTATION, [field(P, <<"station_id">>)]);
 slot(?TYPE_CONTENT_ANNOUNCEMENT, P, _Subject, _KeyId) ->
-    content_key(field(P, <<"mcid">>));
+    derived(?TYPE_CONTENT_ANNOUNCEMENT, [{field, field(P, <<"mcid">>)}]);
 slot(?TYPE_STATION_ENDPOINT, _P, _Subject, <<_:256>> = KeyId) ->
     station_endpoint_key(KeyId);
 slot(?TYPE_ORG_DIRECTORY, P, _Subject, _KeyId) ->
@@ -1547,7 +1718,8 @@ slot(?TYPE_APP_RECORD, P, _Subject, _KeyId) ->
     app_key(field(P, <<"realm_id">>), text(field(P, <<"org_name">>)), text(field(P, <<"app_name">>)));
 slot(Type, _P, undefined, <<_:256>> = KeyId) when Type >= ?DOMAIN_TYPE_MIN ->
     derived(Type, [KeyId]);
-slot(Type, _P, Subject, <<_:256>> = KeyId) when Type >= ?DOMAIN_TYPE_MIN, is_binary(Subject) ->
+%% A domain type with a subject, and any built-in tag wire 1.0 does not define: H(type | signer key id | subject).
+slot(Type, _P, Subject, <<_:256>> = KeyId) when is_binary(Subject) ->
     derived(Type, [KeyId, {field, Subject}]).
 
 %% SHA-256 over the storage key label, a zero byte, the type and the fields: a 32-byte id as it is, any other field as

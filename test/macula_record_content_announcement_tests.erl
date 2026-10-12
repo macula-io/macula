@@ -45,8 +45,10 @@ sign_refuses_an_announcement_for_another_announcer_test() ->
     ?assertError({key_id_mismatch, _},
                  macula_record:sign(macula_record:content_announcement(fill(9), mcid(), where()), key())).
 
+%% Wire 1.0 (macula#100): a content id of a tag other than 2 is one this reader does not know, refused by name; a
+%% custodian stores it.
 a_verifier_refuses_a_content_id_that_is_not_tag_2_test() ->
-    ?assertEqual({error, malformed}, verify_crafted((payload_of(key()))#{{text, <<"mcid">>} => <<1, 16#55, 0:384>>})).
+    ?assertEqual({error, content_id_unsupported}, verify_crafted((payload_of(key()))#{{text, <<"mcid">>} => <<1, 16#55, 0:384>>})).
 
 %% A verifier refuses an announcement that does not say where its content is served, as an older one did.
 a_verifier_refuses_an_announcement_without_where_test() ->
@@ -100,6 +102,7 @@ verify_crafted(Payload, Id) ->
     Now = erlang:system_time(millisecond),
     Signer = macula_node_keys:key_id(Id),
     Fields = #{{text, <<"type">>} => 16#11, {text, <<"version">>} => macula_record_uuid:v7_monotonic(Now),
+               {text, <<"schema">>} => 1, {text, <<"lifetime_class">>} => 4,
                {text, <<"created_at">>} => Now, {text, <<"expires_at">>} => Now + ?HOUR,
                {text, <<"payload">>} => Payload#{{text, <<"announcer_node">>} => Signer}},
     macula_record:verify(macula_signed_object:sign(?LABEL, Fields, Id), pq_pure).

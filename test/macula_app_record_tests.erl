@@ -89,6 +89,7 @@ a_hand_built_foreign_procedure_is_refused_at_verify_test() ->
                                                  [#{{text, <<"name">>} => {text, <<"s">>},
                                                     {text, <<"procedures">>} => [{text, <<"globex/x">>}]}]},
     Fields = #{{text, <<"type">>} => 16#17, {text, <<"version">>} => macula_record:version(Good),
+               {text, <<"schema">>} => 1, {text, <<"lifetime_class">>} => 2,
                {text, <<"created_at">>} => macula_record:created_at(Good),
                {text, <<"expires_at">>} => macula_record:expires_at(Good), {text, <<"payload">>} => Payload},
     Signed = macula_signed_object:sign(<<"MACULA-PQ-RECORD-V1">>, Fields, Org),

@@ -160,7 +160,8 @@ hand_signed(Payload, Key) ->
     Now = erlang:system_time(millisecond),
     Fields = #{{text, <<"type">>} => 16#0C, {text, <<"version">>} => macula_record_uuid:v7_monotonic(Now),
                {text, <<"created_at">>} => Now, {text, <<"expires_at">>} => Now + ?DAY,
-               {text, <<"payload">>} => Payload},
+               {text, <<"payload">>} => Payload, {text, <<"schema">>} => 1,
+               {text, <<"lifetime_class">>} => withdrawn_class(Payload)},
     macula_signed_object:sign(?LABEL, Fields, Key).
 
 verify(Record) ->
@@ -171,3 +172,12 @@ mcid() ->
 
 fill(Byte) ->
     binary:copy(<<Byte>>, 32).
+
+%% A tombstone names the class of the type it withdraws; one that withdraws no type with a class names the longest.
+withdrawn_class(#{{text, <<"withdrawn_type">>} := Withdrawn}) when is_integer(Withdrawn) ->
+    class_or_longest(macula_record:type_lifetime_class(Withdrawn));
+withdrawn_class(_Payload) ->
+    6.
+
+class_or_longest(none) -> 6;
+class_or_longest(Class) -> Class.

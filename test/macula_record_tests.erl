@@ -30,7 +30,8 @@ the_tbs_holds_exactly_the_record_fields_test() ->
     Id = key(identity),
     R = macula_record:sign(macula_record:node_record(macula_node_keys:key_id(Id), [], 0), Id),
     {ok, Fields} = macula_record_cbor:decode_strict(maps:get(tbs, R)),
-    ?assertEqual([<<"alg">>, <<"created_at">>, <<"expires_at">>, <<"payload">>, <<"type">>, <<"version">>],
+    ?assertEqual([<<"alg">>, <<"created_at">>, <<"expires_at">>, <<"lifetime_class">>, <<"payload">>, <<"schema">>,
+                  <<"type">>, <<"version">>],
                  lists:sort([Name || {text, Name} <- maps:keys(Fields)])).
 
 an_unsigned_record_has_no_key_and_no_signature_test() ->
@@ -188,7 +189,7 @@ tbs_fields_the_design_does_not_allow_are_malformed_test_() ->
      ?_assertEqual({error, malformed}, Verify(maps:remove({text, <<"version">>}, Fields))),
      ?_assertEqual({error, malformed}, Verify(Fields#{{text, <<"version">>} := <<0:120>>})),
      ?_assertEqual({error, malformed}, Verify(Fields#{{text, <<"subject">>} => <<1, 2>>})),
-     ?_assertEqual({error, malformed}, Verify(Fields#{{text, <<"type">>} := 16#07})),
+     ?_assertEqual({error, type_unsupported}, Verify(Fields#{{text, <<"type">>} := 16#07})),
      ?_assertEqual({error, malformed}, Verify(Fields#{{text, <<"payload">>} := [1]})),
      ?_assertEqual({error, malformed}, Verify(Fields#{{text, <<"created_at">>} := {text, <<"now">>}})),
      ?_assertEqual({error, malformed}, Verify(Fields#{{text, <<"type">>} := 256})),
@@ -272,7 +273,8 @@ a_record_signed_past_its_maximum_lifetime_is_refused_test() ->
     Day = 24 * 60 * ?MINUTE,
     Fields = fun(#{type := Type, version := Version, created_at := Created, payload := Payload}, Lifetime) ->
                  #{{text, <<"type">>} => Type, {text, <<"version">>} => Version, {text, <<"created_at">>} => Created,
-                   {text, <<"expires_at">>} => Created + Lifetime, {text, <<"payload">>} => Payload}
+                   {text, <<"expires_at">>} => Created + Lifetime, {text, <<"payload">>} => Payload,
+                   {text, <<"schema">>} => 1, {text, <<"lifetime_class">>} => macula_record:type_lifetime_class(Type)}
              end,
     Signed = [{Id, macula_record:node_record(macula_node_keys:key_id(Id), [], 0), 2 * Day + 1},
               {Id, macula_record:envelope(16#20, #{}, #{}), 7 * Day + 1},
@@ -292,7 +294,8 @@ a_record_that_expires_before_it_is_created_is_refused_test() ->
         (macula_record:node_record(macula_node_keys:key_id(Id), [], 0))#{created_at := Created, expires_at := Created - 1},
     ?assertError({lifetime_reversed, Type}, macula_record:sign(Reversed, Id)),
     Fields = #{{text, <<"type">>} => Type, {text, <<"version">>} => Version, {text, <<"created_at">>} => Created,
-               {text, <<"expires_at">>} => Created - 1, {text, <<"payload">>} => Payload},
+               {text, <<"expires_at">>} => Created - 1, {text, <<"payload">>} => Payload, {text, <<"schema">>} => 1,
+               {text, <<"lifetime_class">>} => 4},
     ?assertEqual({error, lifetime_reversed},
                  macula_record:verify(macula_signed_object:encode(macula_signed_object:sign(?LABEL, Fields, Id)),
                                       pq_pure)).
@@ -488,6 +491,8 @@ node_fields(Id, Now) ->
     NodeId = macula_node_keys:key_id(Id),
     #{{text, <<"type">>} => 16#01,
       {text, <<"version">>} => macula_record_uuid:v7_monotonic(Now),
+      {text, <<"schema">>} => 1,
+      {text, <<"lifetime_class">>} => 4,
       {text, <<"created_at">>} => Now,
       {text, <<"expires_at">>} => Now + 60 * ?MINUTE,
       {text, <<"payload">>} => #{{text, <<"node_id">>} => NodeId, {text, <<"station_id">>} => NodeId,
