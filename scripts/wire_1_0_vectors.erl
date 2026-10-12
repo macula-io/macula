@@ -22,6 +22,14 @@
 -define(RELAY_ERROR_LABEL, <<"MACULA-PQ-RELAY-ERROR-V1">>).
 -define(CALLER_STREAM_LABEL, <<"MACULA-PQ-CALLER-STREAM-V1">>).
 -define(PUBLICATION_LABEL, <<"MACULA-PQ-PUBLICATION-V1">>).
+-define(PROOF_V3_LABEL, <<"MACULA-PQ-CONNECT-PROOF-V3">>).
+-define(PROOF_V2_LABEL, <<"MACULA-PQ-CONNECT-PROOF-V2">>).
+-define(SESSION_PROOF_LABEL, <<"MACULA-PQ-SESSION-PROOF-V1">>).
+-define(LEAF, <<"wire 1.0 vector: the station leaf DER as presented (opaque to the handshake)">>).
+-define(EXPORTER, <<16#E5E5E5E5:32, 0:192, 16#0001:32>>).
+-define(NONCE, <<16#A1:8, 0:240, 16#7E:8>>).
+-define(STATION_CAPS, 1).
+-define(CLIENT_CAPS, 6).
 -define(PROFILES, [pq_pure, pq_hybrid]).
 -define(ROLES, [station_identity, client_identity, client_connect, org]).
 
@@ -36,6 +44,7 @@ main() ->
     write_cases(<<"envelope">>, envelope_cases()),
     write_cases(<<"enums">>, enum_hop_cases() ++ lists:append([enum_signed_cases(P, Keys) || P <- ?PROFILES])),
     write_cases(<<"dht_procedures">>, dht_cases(Keys)),
+    write_cases(<<"handshake">>, lists:append([handshake_cases(P, Keys) || P <- ?PROFILES])),
     halt(0).
 
 %%------------------------------------------------------------------
@@ -507,6 +516,189 @@ dht_case(Side, Proc, Id, Value, Expect) ->
       <<"covers">> => [<<"D1">>], <<"lands_with">> => <<"macula#102">>,
       <<"input">> => #{<<"procedure">> => Proc, Side => hex(encode(Value)), <<"now_ms">> => ?T0 + 1000},
       <<"expect">> => Expect}.
+
+%%------------------------------------------------------------------
+%% Handshake transcripts (WIRE_1_0.md section 4)
+
+%% Each case is a transcript, opener to HELLO, judged step by step by the receiver of each step. A runner holds no
+%% private key: it plays the receiver with the case's inputs (the TLS leaf and exporter, the fixed nonce, the ranges,
+%% the puzzle and the floor) and the frames it "sent" earlier in the transcript.
+handshake_cases(P, Keys) ->
+    Station = key(Keys, P, station_identity),
+    Client = key(Keys, P, client_identity),
+    Connect = key(Keys, P, client_connect),
+    StationId = key_id(Station),
+    ClientId = key_id(Client),
+    Prof = atom_to_binary(P),
+    Other = atom_to_binary(other_profile(P)),
+    TlsBinding = macula_key_bindings:tls_binding(Station, ?LEAF, ?T0 - ?HOUR, ?T0 + 6 * ?DAY),
+    ConnectBinding = macula_key_bindings:connect_binding(Client, carried(Connect), ?T0 - ?HOUR, ?T0 + ?DAY),
+    W = #{profile => P, prof => Prof, station => Station, client => Client, connect => Connect,
+          station_id => StationId, client_id => ClientId,
+          tls_binding => env(TlsBinding),
+          tls_status => env(macula_key_bindings:status_statement(Station, TlsBinding, ?T0 - ?MIN, ?T0 + 59 * ?MIN)),
+          connect_binding => env(ConnectBinding),
+          connect_status => env(macula_key_bindings:status_statement(Client, ConnectBinding, ?T0 - ?MIN,
+                                                                     ?T0 + 59 * ?MIN))},
+    Opener = opener([5, 5], [Prof]),
+    Challenge = challenge(W, 5, Prof, [5, 5], [Prof]),
+    {ConnectFrame, ProofMsg} = connect(W, Challenge, [5, 5], [Prof], Prof, #{}),
+    {Hello, SessionMsg} = hello_accepted(W, Challenge, ConnectFrame),
+    StationIn = fun(Extra) -> maps:merge(#{<<"versions">> => [5, 5], <<"profiles">> => [Prof],
+                                           <<"capabilities">> => ?STATION_CAPS,
+                                           <<"puzzle">> => #{<<"difficulty">> => 8, <<"mode">> => <<"enforce">>},
+                                           <<"floor">> => []}, Extra) end,
+    ClientIn = fun(Extra) -> maps:merge(#{<<"versions">> => [5, 5], <<"profiles">> => [Prof],
+                                          <<"capabilities">> => ?CLIENT_CAPS,
+                                          <<"expected_station_node_id">> => hex(StationId), <<"floor">> => []},
+                                        Extra) end,
+    Ok = #{<<"outcome">> => <<"accept">>},
+    Refuse = fun(Reason, Wire) -> #{<<"outcome">> => <<"refuse">>, <<"reason">> => Reason,
+                                    <<"wire_refusal">> => Wire} end,
+    Closes = fun(Reason) -> #{<<"outcome">> => <<"refuse">>, <<"reason">> => Reason} end,
+    Step = fun(From, Frame, Expect) -> step(From, Frame, Expect) end,
+    Proof = fun(Msg) -> #{<<"proof_message">> => hex(Msg)} end,
+    Full = [Step(<<"client">>, Opener, Ok), Step(<<"station">>, Challenge, Ok),
+            maps:merge(Step(<<"client">>, ConnectFrame, Ok), Proof(ProofMsg)),
+            (Step(<<"station">>, Hello, Ok))#{<<"session_proof_message">> => hex(SessionMsg)}],
+    Station1 = fun(Frame, Expect) -> [Step(<<"client">>, Opener, Ok), Step(<<"station">>, Challenge, Ok),
+                                      Step(<<"client">>, Frame, Expect)] end,
+    Tampered = fun(Override) -> element(1, connect(W, Challenge, [5, 5], [Prof], Prof, Override)) end,
+    Early = fun(Code) -> frame(<<"hello">>, #{<<"accepted">> => 0, <<"refusal_code">> => {text, Code},
+                                              <<"versions">> => [5, 5], <<"profiles">> => [{text, Prof}]}) end,
+    EarlyExpect = fun(Code) -> (Refuse(Code, Code))#{<<"hello">> => #{<<"versions">> => [5, 5],
+                                                                      <<"profiles">> => [Prof]}} end,
+    H = fun(Id, Covers, Station0, Client0, Steps) -> hs_case(Id, P, Covers, StationIn(Station0), ClientIn(Client0),
+                                                             Steps) end,
+    {OtherHello, _} = hello_accepted(W, challenge(W, 5, Prof, [5, 5], [Prof, <<"example_profile">>]), ConnectFrame),
+    [H(<<"complete">>, [<<"D2">>, <<"D3">>, <<"A1">>, <<"A2">>], #{}, #{}, Full),
+     %% Refused at the opener: the station names its ranges and sends no challenge.
+     H(<<"opener.version_4.refused">>, [<<"D2">>, <<"A2">>], #{}, #{},
+       [Step(<<"client">>, #{<<"version">> => 4, <<"frame_type">> => {text, <<"opener">>}},
+             EarlyExpect(<<"unsupported_version">>))]),
+     H(<<"opener.no_common_version.refused">>, [<<"D3">>, <<"A2">>], #{}, #{<<"versions">> => [6, 7]},
+       [Step(<<"client">>, opener([6, 7], [Prof]), EarlyExpect(<<"unsupported_version">>))]),
+     H(<<"opener.unknown_profile.refused">>, [<<"D7">>, <<"A2">>], #{}, #{<<"profiles">> => [<<"example_profile">>]},
+       [Step(<<"client">>, opener([5, 5], [<<"example_profile">>]), EarlyExpect(<<"profile_unsupported">>))]),
+     H(<<"opener.other_profile_only.refused">>, [<<"D7">>, <<"A2">>], #{}, #{<<"profiles">> => [Other]},
+       [Step(<<"client">>, opener([5, 5], [Other]), EarlyExpect(<<"profile_unsupported">>))]),
+     H(<<"opener.versions_missing.refused">>, [<<"A2">>], #{}, #{},
+       [Step(<<"client">>, frame(<<"opener">>, #{<<"profiles">> => [{text, Prof}]}), Closes(<<"malformed_frame">>))]),
+     H(<<"opener.versions_reversed.refused">>, [<<"A2">>], #{}, #{},
+       [Step(<<"client">>, opener([6, 5], [Prof]), Closes(<<"malformed_frame">>))]),
+     %% The station judges CONNECT.
+     H(<<"connect.ranges_changed.refused">>, [<<"A2">>], #{}, #{},
+       Station1(element(1, connect(W, Challenge, [4, 5], [Prof], Prof, #{})),
+                Refuse(<<"negotiation_mismatch">>, <<"not_accepted">>))),
+     H(<<"connect.profile_not_chosen.refused">>, [<<"D7">>], #{}, #{},
+       Station1(element(1, connect(W, Challenge, [5, 5], [Prof], Other, #{})),
+                Refuse(<<"profile_unsupported">>, <<"not_accepted">>))),
+     H(<<"connect.proof_v2.refused">>, [<<"D2">>, <<"A1">>], #{}, #{},
+       Station1(Tampered(#{proof => v2}), Refuse(<<"proof_invalid">>, <<"not_accepted">>))),
+     H(<<"connect.capabilities_changed_after_signing.refused">>, [<<"D2">>, <<"A1">>], #{}, #{},
+       Station1(Tampered(#{after_signing => #{<<"capabilities">> => 7}}),
+                Refuse(<<"proof_invalid">>, <<"not_accepted">>))),
+     H(<<"connect.endorsement_changed_after_signing.refused">>, [<<"A1">>], #{}, #{},
+       Station1(Tampered(#{after_signing => #{<<"member_endorsement">> => <<"swapped in">>}}),
+                Refuse(<<"proof_invalid">>, <<"not_accepted">>))),
+     H(<<"connect.version_4.refused">>, [<<"D2">>, <<"D3">>], #{}, #{},
+       Station1(Tampered(#{frame_version => 4}), Refuse(<<"unsupported_version">>, <<"unsupported_version">>))),
+     H(<<"connect.capabilities_2_53.refused">>, [<<"D2">>], #{}, #{},
+       Station1(Tampered(#{fields => #{<<"capabilities">> => 1 bsl 53}}),
+                Refuse(<<"malformed_frame">>, <<"not_accepted">>))),
+     (H(<<"connect.capabilities_bit_52.accept">>, [<<"D2">>], #{}, #{},
+        Station1(Tampered(#{fields => #{<<"capabilities">> => 1 bsl 52}}), Ok)))#{<<"bound">> => <<"upper">>},
+     H(<<"connect.puzzle_unsolved.refused">>, [<<"D9">>], #{<<"puzzle">> => #{<<"difficulty">> => 24,
+                                                                            <<"mode">> => <<"enforce">>}}, #{},
+       Station1(ConnectFrame, Refuse(<<"puzzle_invalid">>, <<"puzzle_invalid">>))),
+     H(<<"connect.below_floor.refused">>, [<<"D3">>],
+       #{<<"floor">> => [#{<<"node_id">> => hex(ClientId), <<"version">> => 6}]}, #{},
+       Station1(ConnectFrame, Refuse(<<"version_below_floor">>, <<"not_accepted">>))),
+     %% The client judges the challenge and HELLO.
+     H(<<"challenge.profile_downgrade.refused">>, [<<"A2">>], #{<<"profiles">> => [Other, Prof]},
+       #{<<"profiles">> => [Other, Prof]},
+       [Step(<<"client">>, opener([5, 5], [Other, Prof]), Ok),
+        Step(<<"station">>, challenge(W, 5, Prof, [5, 5], [Other, Prof]), Closes(<<"downgrade_detected">>))]),
+     H(<<"challenge.ranges_missing.refused">>, [<<"A2">>], #{}, #{},
+       [Step(<<"client">>, Opener, Ok),
+        Step(<<"station">>, maps:without([<<"versions">>, <<"profiles">>], Challenge), Closes(<<"malformed_frame">>))]),
+     H(<<"challenge.below_floor.refused">>, [<<"D3">>], #{},
+       #{<<"floor">> => [#{<<"node_id">> => hex(StationId), <<"version">> => 6}]},
+       [Step(<<"client">>, Opener, Ok), Step(<<"station">>, Challenge, Closes(<<"version_below_floor">>))]),
+     H(<<"hello.session_proof_other_challenge.refused">>, [<<"A2">>], #{}, #{},
+       lists:droplast(Full) ++ [Step(<<"station">>, OtherHello, Closes(<<"session_proof_invalid">>))]),
+     H(<<"hello.session_proof_missing.refused">>, [<<"D2">>], #{}, #{},
+       lists:droplast(Full) ++ [Step(<<"station">>, maps:remove(<<"session_proof">>, Hello),
+                                     Closes(<<"session_proof_missing">>))]),
+     H(<<"hello.refusal_code_unknown.reads_not_accepted">>, [<<"D6">>], #{}, #{},
+       lists:droplast(Full) ++ [Step(<<"station">>, frame(<<"hello">>, #{<<"accepted">> => 0, <<"capabilities">> => 0,
+                                                                         <<"refusal_code">> => {text, <<"example_code">>}}),
+                                     Closes(<<"refused:not_accepted">>))]),
+     H(<<"hello.early_refusal_names_ranges">>, [<<"A2">>], #{}, #{<<"versions">> => [6, 7]},
+       [Step(<<"client">>, opener([6, 7], [Prof]), Ok),
+        Step(<<"station">>, Early(<<"unsupported_version">>),
+             (Closes(<<"refused:unsupported_version">>))#{<<"station_ranges">> => #{<<"versions">> => [5, 5],
+                                                                                    <<"profiles">> => [Prof]}})])].
+
+other_profile(pq_pure) -> pq_hybrid;
+other_profile(pq_hybrid) -> pq_pure.
+
+env(#{tbs := Tbs, signature := Sig}) -> #{<<"tbs">> => Tbs, <<"signature">> => Sig}.
+
+opener(Versions, Profiles) ->
+    frame(<<"opener">>, #{<<"versions">> => Versions, <<"profiles">> => [{text, X} || X <- Profiles]}).
+
+challenge(#{station := Station, tls_binding := B, tls_status := S}, Version, Chosen, Versions, Profiles) ->
+    (frame(<<"challenge">>, #{<<"nonce">> => ?NONCE, <<"profile">> => {text, Chosen},
+                              <<"identity_key">> => carried(Station), <<"tls_binding">> => B, <<"tls_status">> => S,
+                              <<"versions">> => Versions, <<"profiles">> => [{text, X} || X <- Profiles]}))
+        #{<<"version">> => Version}.
+
+%% CONNECT and the bytes its proof V3 signs. Override: proof => v2 signs the old V2 message instead;
+%% after_signing => Fields changes fields after the proof is made; fields => Fields changes them before;
+%% frame_version => V sets the frame's version.
+connect(#{station_id := StationId, client_id := ClientId, client := Client, connect := ConnectKey,
+          connect_binding := B, connect_status := S}, Challenge, Versions, Profiles, Chosen, Override) ->
+    Fields0 = maps:merge(frame(<<"connect">>, #{<<"identity_key">> => carried(Client),
+                                                <<"connect_key">> => carried(ConnectKey),
+                                                <<"connect_binding">> => B, <<"connect_status">> => S,
+                                                <<"capabilities">> => ?CLIENT_CAPS,
+                                                <<"member_endorsement">> => <<>>, <<"versions">> => Versions,
+                                                <<"profiles">> => [{text, X} || X <- Profiles],
+                                                <<"profile">> => {text, Chosen}}),
+                         maps:get(fields, Override, #{})),
+    Fields = Fields0#{<<"version">> => maps:get(frame_version, Override, 5)},
+    ConnectTbs = encode(Fields#{<<"proof">> => <<>>}),
+    Msg = proof_message(maps:get(proof, Override, v3), StationId, ClientId, encode(Challenge), ConnectTbs),
+    Signed = Fields#{<<"proof">> => macula_node_keys:sign(Msg, ConnectKey)},
+    {maps:merge(Signed, maps:get(after_signing, Override, #{})), Msg}.
+
+proof_message(v3, StationId, ClientId, Challenge, ConnectTbs) ->
+    <<?PROOF_V3_LABEL/binary, 0, ?NONCE/binary, StationId/binary, ClientId/binary,
+      (crypto:hash(sha384, ?LEAF))/binary, (crypto:hash(sha384, Challenge))/binary, ?EXPORTER/binary,
+      (crypto:hash(sha384, ConnectTbs))/binary>>;
+proof_message(v2, StationId, ClientId, Challenge, _ConnectTbs) ->
+    <<?PROOF_V2_LABEL/binary, 0, ?NONCE/binary, StationId/binary, ClientId/binary,
+      (crypto:hash(sha384, ?LEAF))/binary, (crypto:hash(sha384, Challenge))/binary, ?EXPORTER/binary,
+      ?CLIENT_CAPS:64>>.
+
+hello_accepted(#{station := Station, station_id := StationId, client_id := ClientId}, Challenge, Connect) ->
+    Msg = <<?SESSION_PROOF_LABEL/binary, 0, ?EXPORTER/binary, (crypto:hash(sha384, encode(Challenge)))/binary,
+            (crypto:hash(sha384, encode(Connect)))/binary, StationId/binary, ClientId/binary, ?STATION_CAPS:64>>,
+    {frame(<<"hello">>, #{<<"accepted">> => 1, <<"capabilities">> => ?STATION_CAPS,
+                          <<"session_proof">> => macula_node_keys:sign(Msg, Station)}), Msg}.
+
+step(From, Frame, Expect) ->
+    #{<<"from">> => From, <<"frame">> => hex(encode(Frame)), <<"expect">> => Expect}.
+
+hs_case(Id, P, Covers, Station, Client, Steps) ->
+    Prof = atom_to_binary(P),
+    #{<<"id">> => <<"handshake.", Id/binary, ".", Prof/binary>>, <<"profile">> => Prof, <<"covers">> => Covers,
+      <<"lands_with">> => <<"macula#98">>,
+      <<"input">> => #{<<"tls">> => #{<<"leaf_der">> => hex(?LEAF), <<"exporter">> => hex(?EXPORTER)},
+                       <<"now_ms">> => ?T0 + 1000, <<"station">> => Station, <<"client">> => Client,
+                       <<"steps">> => Steps},
+      <<"expect">> => maps:get(<<"expect">>, lists:last(Steps))}.
 
 %%------------------------------------------------------------------
 %% Encoding and files
