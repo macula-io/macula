@@ -7,10 +7,14 @@
 
 -include_lib("eunit/include/eunit.hrl").
 
--define(CLASSES, [<<"verify">>, <<"custodian">>, <<"check_order">>, <<"envelope">>]).
+-define(CLASSES, [<<"verify">>, <<"custodian">>, <<"check_order">>, <<"envelope">>, <<"enums">>,
+                  <<"dht_procedures">>]).
 -define(OUTCOMES, [<<"accept">>, <<"refuse">>, <<"ignore">>, <<"fallback">>, <<"store">>, <<"abort_stream">>]).
 -define(PROFILES, [<<"pq_pure">>, <<"pq_hybrid">>]).
 -define(RECORD_LABEL, "MACULA-PQ-RECORD-V1").
+-define(SIGNED_FIELDS, [{<<"request">>, <<"MACULA-PQ-REQUEST-V1">>}, {<<"publication">>, <<"MACULA-PQ-PUBLICATION-V1">>},
+                        {<<"relay_error">>, <<"MACULA-PQ-RELAY-ERROR-V1">>},
+                        {<<"caller_stream">>, <<"MACULA-PQ-CALLER-STREAM-V1">>}]).
 
 headers_test_() ->
     [{binary_to_list(C), fun() -> header_checked(C, vectors(C)) end} || C <- ?CLASSES].
@@ -82,6 +86,35 @@ custodian_refs_test() ->
 envelope_frames_test_() ->
     [{binary_to_list(Id), fun() -> ?assertMatch({ok, #{}}, macula_record_cbor:decode_strict(binary:decode_hex(F))) end}
      || #{<<"id">> := Id, <<"input">> := #{<<"frame">> := F}} <- cases(<<"envelope">>)].
+
+%% Every enum frame and its context frames, and every _dht.* argument and reply, meet the decoding rule.
+enum_frames_test_() ->
+    [{binary_to_list(Id), fun() -> [decodes(F) || F <- [Frame | Ctx]] end}
+     || #{<<"id">> := Id, <<"input">> := #{<<"frame">> := Frame, <<"context">> := Ctx}} <- cases(<<"enums">>)].
+
+%% Every signed object inside an enum frame verifies over its tbs as received, under its label: the object's own key,
+%% or for a held caller stream frame the caller's key from keys.json.
+enum_signatures_test_() ->
+    [{binary_to_list(Id), fun() -> [signed_ok(P, F) || F <- [Frame | Ctx]] end}
+     || #{<<"id">> := Id, <<"profile">> := P, <<"input">> := #{<<"frame">> := Frame, <<"context">> := Ctx}}
+            <- cases(<<"enums">>), P =/= <<"both">>].
+
+signed_ok(P, Hex) ->
+    {ok, Frame} = macula_record_cbor:decode_strict(binary:decode_hex(Hex)),
+    [?assert(object_verifies(P, Label, Object)) || {Field, Label} <- ?SIGNED_FIELDS,
+                                                   {ok, Object} <- [maps:find({text, Field}, Frame)]].
+
+object_verifies(P, Label, #{{text, <<"tbs">>} := Tbs, {text, <<"signature">>} := Sig} = Object) ->
+    Key = maps:get({text, <<"key">>}, Object, signer_key(P, <<"client_identity">>)),
+    Message = <<Label/binary, 0, (crypto:hash(sha384, Key))/binary, Tbs/binary>>,
+    macula_node_keys:verify(Message, Sig, Key, binary_to_atom(P)).
+
+dht_values_test_() ->
+    [{binary_to_list(Id), fun() -> decodes(maps:get(<<"args">>, Input, maps:get(<<"reply">>, Input, none))) end}
+     || #{<<"id">> := Id, <<"input">> := Input} <- cases(<<"dht_procedures">>)].
+
+decodes(Hex) ->
+    ?assertMatch({ok, _}, macula_record_cbor:decode_strict(binary:decode_hex(Hex))).
 
 cases(Class) -> maps:get(<<"cases">>, vectors(Class)).
 
