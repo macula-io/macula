@@ -1177,7 +1177,8 @@ status(Pool) when is_pid(Pool) ->
     gen_server:call(Pool, status, 5_000).
 
 %% @doc The realm key the pool pinned for `RealmId' when it started, from its `realm_trust' option, or `none'. Direct
-%% dial checks an org namespaced advertisement's authorization against this key alone.
+%% dial checks an org namespaced advertisement's authorization, and a resolved station's authorization
+%% (`macula_station_check'), against this key alone.
 -spec realm_key(pool(), <<_:256>>) -> {ok, binary()} | none.
 realm_key(Pool, <<_:256>> = RealmId) when is_pid(Pool) ->
     gen_server:call(Pool, {realm_key, RealmId}, 5_000).

@@ -828,8 +828,9 @@ candidate_checked(#{provider := Provider} = Candidate,
 %% is a candidate's failure, not the request's: nothing was sent, and another
 %% candidate station may hold one.
 station_checked(Pool, FindRecord, Realm, Station, Share) ->
-    case macula_station_check:authorized(#{pool => Pool, find_record => FindRecord}, Realm, Station,
-                                         lookup_timeout(Share)) of
+    case macula_station_check:authorized(#{pool => Pool, find_record => FindRecord,
+                                           realm_key => macula_client:realm_key(Pool, Realm)},
+                                         Realm, Station, lookup_timeout(Share)) of
         ok -> ok;
         {error, Reason} -> {refused, {error, {unresolved, Reason}}}
     end.

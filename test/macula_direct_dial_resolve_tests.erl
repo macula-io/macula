@@ -99,6 +99,7 @@ resolve_test_() ->
       {timeout, 30, fun call_under_closed_skips_a_station_with_no_live_authorization/0},
       {timeout, 30, fun call_under_closed_dials_a_station_holding_a_live_authorization/0},
       {timeout, 30, fun call_under_open_counts_a_would_refuse_and_dials/0},
+      {timeout, 30, fun call_under_closed_passes_a_stranger_signed_authorization_for_the_next_station/0},
       {timeout, 30, fun call_stops_at_a_request_the_wire_cannot_carry/0},
       {timeout, 30, fun call_timeout_bounds_resolution/0},
       {timeout, 30, fun call_timeout_bounds_the_endpoint_lookup/0},
@@ -393,6 +394,7 @@ call_under_closed_skips_a_station_with_no_live_authorization() ->
     A = station(<<"a.test">>),
     set_replies(procedure_key(), [[advertisement(A)]]),
     set_endpoint(A, endpoint_record(A)),
+    pin_realm_key(?REALM, authority()),
     with_station_mode(closed, fun() ->
         ?assertEqual({error, {unresolved, {station_not_authorized, none}}}, call(300)),
         ?assertEqual([], visits())
@@ -415,18 +417,42 @@ call_under_closed_dials_a_station_holding_a_live_authorization() ->
     A = station(<<"a.test">>),
     set_replies(procedure_key(), [[advertisement(A)]]),
     set_endpoint(A, endpoint_record(A)),
-    set_authorization(A, authorization(A)),
+    Authority = authority(),
+    pin_realm_key(?REALM, Authority),
+    set_authorization(A, authorization(A, Authority)),
     set_answer(dial_url(A), {ok, <<"from a">>}),
     with_station_mode(closed, fun() ->
         ?assertEqual({ok, <<"from a">>}, call(3000)),
         ?assertEqual([dial_url(A)], visits())
     end).
 
-%% A station authorization for the dialed (realm, station), as the check's
-%% slot read hands it back.
-authorization(#{id := Id, host := Host}) ->
-    macula_record:station_authorization(?REALM, #{realm => ?REALM, station_node => Id,
-                                                  hostname => Host, roles => [<<"station">>]}).
+%% Under `closed' only the pinned realm key's signature counts: A's slot holds
+%% an authorization a stranger signed with a key of purpose `realm', so A is
+%% refused before anything is sent and the call goes to B, which the realm
+%% authorized.
+call_under_closed_passes_a_stranger_signed_authorization_for_the_next_station() ->
+    A = station(<<"a.test">>), B = station(<<"b.test">>),
+    set_replies(procedure_key(), [[advertisement(A), advertisement(B)]]),
+    set_endpoint(A, endpoint_record(A)),
+    set_endpoint(B, endpoint_record(B)),
+    Authority = authority(),
+    pin_realm_key(?REALM, Authority),
+    set_authorization(A, authorization(A, authority())),
+    set_authorization(B, authorization(B, Authority)),
+    set_answer(dial_url(A), {ok, <<"from a">>}),
+    set_answer(dial_url(B), {ok, <<"from b">>}),
+    with_station_mode(closed, fun() ->
+        ?assertEqual({ok, <<"from b">>}, call(3000)),
+        ?assertEqual([dial_url(B)], visits())
+    end).
+
+%% A station authorization for the dialed (realm, station), signed by the
+%% authority's realm key, as the check's slot read hands it back.
+authorization(#{id := Id, host := Host}, #{realm := RealmKey}) ->
+    verified(macula_record:sign(macula_record:station_authorization(?REALM, #{realm => ?REALM, station_node => Id,
+                                                                              hostname => Host,
+                                                                              roles => [<<"station">>]}),
+                                RealmKey)).
 
 set_authorization(#{id := Id}, Authorization) ->
     ets:insert(?STATE, {{endpoint, macula_record:station_authorization_key(?REALM, Id)}, Authorization}).

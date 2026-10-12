@@ -25,9 +25,9 @@
 %%%-------------------------------------------------------------------
 -module(macula_station_check).
 
--export([authorized/4, classify/3, enforce/2, mode/0]).
+-export([authorized/4, classify/2, enforce/2, mode/0]).
 
--export_type([mode/0, verdict/0]).
+-export_type([mode/0, verdict/0, trust/0]).
 
 %% The type tags this check reads: the realm's statement that a node is one of
 %% its stations (`station_authorization', 16#13), and the realm's revocation of
@@ -36,54 +36,79 @@
 -define(TOMBSTONE, 16#0C).
 
 -type mode() :: open | log | closed.
--type verdict() :: live | tombstoned | none | unreadable.
+-type verdict() :: live | tombstoned | stale | none | unanchored | unreadable.
+%% What one slot read is judged against: the dialed pair, the realm key the
+%% pool pinned for the realm (the realm's signing key, the one that signs its
+%% station authorizations and their tombstones), and the verifier's clock.
+-type trust() :: #{realm := <<_:256>>, station := <<_:256>>, realm_key := binary(), now := integer()}.
 
 %% @doc The check: read `Station''s authorization slot for `Realm' — through
-%% `Dial''s `find_record', within `TimeoutMs' — and settle it under the
-%% configured mode. `ok' admits the dial; `{error, {station_not_authorized,
-%% Verdict}}' refuses it (mode `closed' only). Every check is counted on the
-%% pool's `station_checks'.
+%% `Dial''s `find_record', within `TimeoutMs' — judge it against the realm key
+%% the pool pinned for `Realm', and settle it under the configured mode. `ok'
+%% admits the dial; `{error, {station_not_authorized, Verdict}}' refuses it
+%% (mode `closed' only). A pool that pinned no key for `Realm' has nothing to
+%% judge a record by: its verdict is `unanchored' and the slot is not read.
+%% Every check is counted on the pool's `station_checks'.
 -spec authorized(#{pool := macula:pool(),
                    find_record := fun((macula:pool(), binary(), pos_integer()) ->
-                                          {ok, macula_record:m_record()} | {error, term()})},
+                                          {ok, macula_record:m_record()} | {error, term()}),
+                   realm_key := {ok, binary()} | none},
                  <<_:256>>, <<_:256>>, pos_integer()) ->
           ok | {error, {station_not_authorized, verdict()}}.
-authorized(Dial, Realm, Station, TimeoutMs) ->
-    Verdict = classify(read(Dial, Realm, Station, TimeoutMs), Realm, Station),
-    settle(enforce(mode(), Verdict), Dial, Realm, Station, Verdict).
+authorized(#{realm_key := RealmKey} = Dial, Realm, Station, TimeoutMs) ->
+    Mode = mode(),
+    Verdict = judged(RealmKey, Dial, Realm, Station, TimeoutMs),
+    settle(enforce(Mode, Verdict), Mode, Dial, Realm, Station).
 
-settle(admit, Dial, _Realm, _Station, _Verdict) ->
+judged({ok, RealmKey}, Dial, Realm, Station, TimeoutMs) ->
+    classify(read(Dial, Realm, Station, TimeoutMs),
+             #{realm => Realm, station => Station, realm_key => RealmKey,
+               now => erlang:system_time(millisecond)});
+judged(none, _Dial, _Realm, _Station, _TimeoutMs) ->
+    unanchored.
+
+settle(admit, _Mode, Dial, _Realm, _Station) ->
     note(Dial, live),
     ok;
-settle({would_refuse, Verdict}, Dial, Realm, Station, _Verdict) ->
+settle({would_refuse, Verdict}, Mode, Dial, Realm, Station) ->
     note(Dial, would_refuse),
-    log_would_refuse(Verdict, Realm, Station, mode()),
+    log_would_refuse(Verdict, Realm, Station, Mode),
     ok;
-settle({refuse, Verdict}, Dial, _Realm, _Station, _Verdict) ->
+settle({refuse, Verdict}, _Mode, Dial, _Realm, _Station) ->
     note(Dial, refused),
     {error, {station_not_authorized, Verdict}}.
 
-%% @doc What one slot read means: an authorization for exactly `Realm' and
-%% `Station' is `live' (the read verified it); the realm's tombstone over that
-%% type is `tombstoned'; nothing at all is `none'; anything else — a record of
-%% another realm or station, another type, or a failed lookup — is
-%% `unreadable'. So `live' is the only verdict that admits a dial under
-%% `closed'.
--spec classify({ok, macula_record:m_record()} | {error, term()}, <<_:256>>, <<_:256>>) -> verdict().
-classify({ok, #{type := ?STATION_AUTHORIZATION} = Record}, Realm, Station) ->
-    case macula_record:read_station_authorization(Record) of
-        #{realm_id := Realm, station_node := Station} -> live;
-        _AnotherRealmOrStation -> none
-    end;
-classify({ok, #{type := ?TOMBSTONE} = Record}, _Realm, _Station) ->
+%% @doc What one slot read means, judged against `Trust'. A record counts only
+%% when the pinned realm key signed it: the read verified a signature and the
+%% signer's purpose, and any process can mint a key of purpose `realm', so the
+%% signer itself must be the realm's. Then an authorization for exactly the
+%% dialed realm and station is `live' inside its validity window (with the
+%% records' clock tolerance) and `stale' outside it; one for another realm or
+%% station is `none'; the realm's tombstone over the type is `tombstoned';
+%% nothing at all is `none'; anything else — a record or tombstone another key
+%% signed, a record of another type, or a failed lookup — is `unreadable'. So
+%% `live' is the only verdict that admits a dial under `closed'.
+-spec classify({ok, macula_record:m_record()} | {error, term()}, trust()) -> verdict().
+classify({ok, #{key := RealmKey, type := ?STATION_AUTHORIZATION} = Record}, #{realm_key := RealmKey} = Trust) ->
+    for_pair(macula_record:read_station_authorization(Record), Trust);
+classify({ok, #{key := RealmKey, type := ?TOMBSTONE} = Record}, #{realm_key := RealmKey}) ->
     case macula_record:read_tombstone(Record) of
         #{withdrawn_type := ?STATION_AUTHORIZATION} -> tombstoned;
         _AnotherType -> unreadable
     end;
-classify({error, not_found}, _Realm, _Station) ->
+classify({error, not_found}, _Trust) ->
     none;
-classify(_Other, _Realm, _Station) ->
+classify(_Other, _Trust) ->
     unreadable.
+
+for_pair(#{realm_id := Realm, station_node := Station, valid_from := From, valid_until := Until},
+         #{realm := Realm, station := Station, now := Now}) ->
+    in_window(Now, From, Until, macula_record:clock_tolerance_ms());
+for_pair(_AnotherRealmOrStation, _Trust) ->
+    none.
+
+in_window(Now, From, Until, Tolerance) when Now >= From - Tolerance, Now =< Until + Tolerance -> live;
+in_window(_Now, _From, _Until, _Tolerance) -> stale.
 
 %% @doc What a verdict means under a mode: `live' admits under every mode;
 %% anything else is a would-be refusal under `open'/`log' and a refusal under
