@@ -6,12 +6,13 @@ This exists so every stack can run the same wire 1.0 cases and agree on every by
 
 ## Where
 
-`test/vectors/wire_1_0/` in macula, one JSON file per class, plus `docs/design/WIRE_1_0.md` (the spec page: check orders, refusal names, enum fallbacks, the LTS bounds clause). Consumers pin the directory by macula commit sha, as they pin `decoding_rule_v1.json` today.
+`priv/vectors/wire_1_0/` in macula, one JSON file per class, plus `docs/design/WIRE_1_0.md` (the spec page: check orders, refusal names, enum fallbacks, the LTS bounds clause). The directory ships in the hex package: a consumer reads it from `code:priv_dir(macula)` (or the package's `priv/` in another language), so it runs exactly the vectors of the macula release it pins.
 
 | File | Class |
 |---|---|
 | `keys.json` | the fixed public keys, per profile and role, with their node_id / key id |
-| `tbs.json` | canonical tbs bytes and signing inputs, every signed frame and record type |
+| `tbs.json` | canonical tbs bytes and signing inputs, every signed structure and its label |
+| `frames.json` | one valid wire 1.0 frame per frame type, accepted by the envelope and field rules |
 | `verify.json` | signed objects to verify under the fixed keys: accept with fields read, or refuse by name |
 | `check_order.json` | objects with several faults: the refusal is the first in the spec page's check order |
 | `handshake.json` | opener-to-HELLO transcripts: negotiation, proof V3, session proof, persisted floor |
@@ -37,7 +38,7 @@ A JSON number is a CBOR integer (always below 2^53 in magnitude), a string is CB
 {"id": "record.node_record.verify.ok",
  "profile": "pq_pure",
  "covers": ["D4", "A3"],
- "lands_with": "macula#100",
+ "lands_with": ["macula#100"],
  "input": { ... class-specific ... },
  "expect": {"outcome": "refuse", "reason": "lifetime_too_long"}}
 ```
@@ -45,7 +46,7 @@ A JSON number is a CBOR integer (always below 2^53 in magnitude), a string is CB
 - `id`: dotted, stable, never reused or renamed. Runners report by id.
 - `profile`: `pq_pure`, `pq_hybrid`, or `both` when no signature is involved.
 - `covers`: decision numbers from 6127410927 (`D1` to `D10`) and amendments from 6127591849 (`A1` to `A3`).
-- `lands_with`: the issue whose code makes the case pass; the runner for that class arrives with that issue.
+- `lands_with`: a list of the issues whose code makes the case pass (a station behaviour names `macula-station#94` too); the runner for that class arrives with each.
 - `expect.outcome`: one of `accept`, `refuse`, `ignore`, `fallback`, `store`, `abort_stream`.
   - `refuse` carries `reason`, the refusal name as text; in a handshake step also `wire_refusal`, the HELLO `refusal_code` a peer sees.
   - `accept` may carry `fields` (typed JSON) that a reader must get back.
@@ -56,7 +57,8 @@ A JSON number is a CBOR integer (always below 2^53 in magnitude), a string is CB
 
 ## Class inputs, in short
 
-- **tbs:** `label`, `fields` (typed JSON), `tbs` (hex, the canonical encoding), `signing_input` (hex: `label || 0x00 || SHA-384(key as carried) || tbs`, or the handshake form without the key hash). A stack must encode `fields` to exactly `tbs`.
+- **tbs:** `label`, `signer` (role), `fields` (typed JSON) and `form`: `keyed` (signed objects: the signing input is `label || 0x00 || SHA-384(key as carried) || tbs`) or `unkeyed` (the handshake's bindings and status statements: `label || 0x00 || tbs`). `expect` holds `tbs` (hex, the canonical encoding a stack must produce from `fields`), `signing_input` (hex) and one `signature` over it, which verifies under the signer's key.
+- **frames:** one valid wire 1.0 frame per frame type (`frame_type`, `frame` hex), each accepted by the envelope and the frame type's field rules. Signed objects inside are well formed and signed, but their clocks and request context are not part of this class; `verify`, `enums` and `tbs` cover signatures.
 - **verify / check_order:** `object` (hex, the wire bytes as received), `signer` (role in `keys.json`), `now_ms`, and `signature_valid` (1 or 0: whether the signature verifies over the `tbs` as received with the bare primitive, a check any runner can make before reaching wire 1.0 code). A `check_order` case's `expect` carries `role`, `custodian` or `reader`.
 - **custodian:** `object_of`, the id of the `verify` case whose object it stores (the bytes are not repeated), `signer`, `now_ms`.
 - **handshake:** `tls` (`leaf_der`, `exporter` E, both hex: the parts TLS would supply), `now_ms`, `station` and `client` (each: `versions`, `profiles`, `capabilities`, `floor` as a list of `{node_id, version}`; the station adds `puzzle` `{difficulty, mode}`, the client `expected_station_node_id`), and `steps`: `[{"from": "client", "frame": "<hex>", "expect": {...}}, ...]`. The receiver of each step judges it, holding the frames it sent earlier in the transcript as sent (the challenge's nonce is fixed), so a runner needs no private key. A CONNECT step carries `proof_message` and an accepted HELLO `session_proof_message`, the exact bytes signed. A refusal on the station's side carries `wire_refusal`, the HELLO `refusal_code` the client sees; a client's own close reads `refused:<code>` when it is a HELLO refusal. The case's own `expect` repeats the last step's.
@@ -65,7 +67,7 @@ A JSON number is a CBOR integer (always below 2^53 in magnitude), a string is CB
 - **enums / envelope:** `frame` (hex, one frame without the 4-byte length prefix), `position` (`control_stream`, `dedicated_stream`, `per_hop` or `tbs`), `after_hello` 1. A length case carries `length_header` (hex, the 4 bytes) instead of `frame`. A refusal that drops a frame but keeps the link says `"link": "stays_up"`.
 - **Not in the files:** bounds whose vector would be hundreds of KiB of hex (the 256 KiB record cap, the 16 MiB frame cap past its header); each stack tests those itself, as with `decoding_rule_v1.json`.
 
-`keys.json` holds public keys only (carried form) per profile and role (`station_identity`, `client_identity`, `client_connect`, `realm`, `org`, `foundation`). Signatures are randomized, so the files are committed as generated, as the existing vectors are; the generator's test-only private keys sit beside it so the files can be regenerated, and no runner needs them.
+`keys.json` holds public keys only (carried form) per profile and role (`station_identity`, `client_identity`, `client_connect`, `realm`, `org`, `foundation`). Signatures are randomized, so the files are committed as generated, as the existing vectors are; the generator's test-only private keys (`test/fixtures/wire_1_0_private_test_keys.etf`, not in the package) keep the keys fixed across regenerations, and no runner needs them.
 
 ## Red first, and CI
 

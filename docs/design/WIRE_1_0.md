@@ -6,7 +6,7 @@ meets a peer that disagrees on a byte.
 
 Design of record: macula#83 (decisions comment 6127410927, amendments 6127591849), referred to below as D1 to D10 and
 A1 to A3. This page pins the bytes, names and orders those decisions leave to the spec. The conformance vectors in
-`test/vectors/wire_1_0/` are its executable form; where this page and a vector disagree, that is a bug in one of
+`priv/vectors/wire_1_0/` are its executable form; where this page and a vector disagree, that is a bug in one of
 them, reported on macula#97.
 
 Wire 1.0 keeps everything in `DESIGN_PQ_HANDSHAKE_FRAMES.md`, `DESIGN_NEIGHBOUR_CHANNEL_BINDING.md`,
@@ -198,7 +198,8 @@ The record `tbs` of `DESIGN_PQ_SIGNED_FRAMES_AND_RECORDS.md` gains two keys, req
 The table is frozen: rows are only added, and a row's maximum never grows. A known type names exactly its row:
 node and content announcement 3; procedure advertisement and station endpoint 0; realm stations and org directory 2;
 procedure delegation and app record 1; realm member endorsement 5; domain types 4; other built-in types 5. A
-tombstone names the row of the type it withdraws.
+tombstone (0x0C) names the row of the type it withdraws, and a custodian bounds it by that row's maximum plus twice
+the clock tolerance (10 minutes), as `DESIGN_PQ_SIGNED_FRAMES_AND_RECORDS.md` bounds tombstones today.
 
 `ext` (section 3.2) may appear in a record `tbs` like any other signed object.
 
@@ -285,5 +286,5 @@ Served in the zero realm by every station. One argument form: a CBOR map with te
 
 ## 9. Vectors
 
-`test/vectors/wire_1_0/`, one file per class; the format is on macula#97 (comment 6128214679) and in
-`test/vectors/wire_1_0/FORMAT.md`. Every stack's CI runs them, pinned by macula commit.
+`priv/vectors/wire_1_0/`, one file per class; the format is on macula#97 (comment 6128214679) and in
+`priv/vectors/wire_1_0/FORMAT.md`. Every stack's CI runs them, pinned by macula commit.

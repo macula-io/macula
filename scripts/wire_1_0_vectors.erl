@@ -1,17 +1,19 @@
-%% Writes the wire 1.0 conformance vectors in test/vectors/wire_1_0/ (docs/design/WIRE_1_0.md, macula#97). Run through
+%% Writes the wire 1.0 conformance vectors in priv/vectors/wire_1_0/, shipped in the hex package so every stack runs
+%% the vectors of the macula release it pins, (docs/design/WIRE_1_0.md, macula#97). Run through
 %% scripts/generate-wire-1-0-vectors.sh with the compiled tree on the code path.
 %%
 %% This is a reference encoder for wire 1.0, independent of the code that will implement it: it builds every object
 %% from the deterministic CBOR encoder and the bare signing primitive, taking only payloads from today's record
 %% constructors. ML-DSA-87 signing is hedged and pq_hybrid's RSA-PSS half is randomized, so a second run signs other
-%% bytes: the committed files are the vectors, generated once. The keys are fixed (private_test_keys.etf, test only)
+%% bytes: the committed files are the vectors, generated once. The keys are fixed (test/fixtures/wire_1_0_private_test_keys.etf, test only)
 %% so a regeneration keeps keys.json.
 -module(wire_1_0_vectors).
 
 -export([main/0]).
 
--define(DIR, "test/vectors/wire_1_0").
--define(KEYS_FILE, ?DIR "/private_test_keys.etf").
+-define(DIR, "priv/vectors/wire_1_0").
+%% Test-only private keys, kept out of the hex package (priv ships, test does not).
+-define(KEYS_FILE, "test/fixtures/wire_1_0_private_test_keys.etf").
 -define(GENERATOR, <<"scripts/generate-wire-1-0-vectors.sh">>).
 -define(T0, 1791800000000).
 -define(MIN, 60000).
@@ -22,6 +24,8 @@
 -define(RELAY_ERROR_LABEL, <<"MACULA-PQ-RELAY-ERROR-V1">>).
 -define(CALLER_STREAM_LABEL, <<"MACULA-PQ-CALLER-STREAM-V1">>).
 -define(PUBLICATION_LABEL, <<"MACULA-PQ-PUBLICATION-V1">>).
+-define(REPLY_LABEL, <<"MACULA-PQ-REPLY-V1">>).
+-define(STREAM_LABEL, <<"MACULA-PQ-STREAM-V1">>).
 -define(PROOF_V3_LABEL, <<"MACULA-PQ-CONNECT-PROOF-V3">>).
 -define(PROOF_V2_LABEL, <<"MACULA-PQ-CONNECT-PROOF-V2">>).
 -define(SESSION_PROOF_LABEL, <<"MACULA-PQ-SESSION-PROOF-V1">>).
@@ -31,7 +35,8 @@
 -define(STATION_CAPS, 1).
 -define(CLIENT_CAPS, 6).
 -define(PROFILES, [pq_pure, pq_hybrid]).
--define(ROLES, [station_identity, client_identity, client_connect, org]).
+-define(ROLES, [station_identity, client_identity, client_connect, org, realm, foundation]).
+-define(STATION, <<"macula-station#94">>).
 
 main() ->
     {ok, _} = application:ensure_all_started(crypto),
@@ -45,6 +50,8 @@ main() ->
     write_cases(<<"enums">>, enum_hop_cases() ++ lists:append([enum_signed_cases(P, Keys) || P <- ?PROFILES])),
     write_cases(<<"dht_procedures">>, dht_cases(Keys)),
     write_cases(<<"handshake">>, lists:append([handshake_cases(P, Keys) || P <- ?PROFILES])),
+    write_cases(<<"tbs">>, lists:append([tbs_cases(P, Keys) || P <- ?PROFILES])),
+    write_cases(<<"frames">>, frame_cases(Keys)),
     halt(0).
 
 %%------------------------------------------------------------------
@@ -53,16 +60,22 @@ main() ->
 keys() ->
     keys(file:read_file(?KEYS_FILE)).
 
-keys({ok, Bin}) -> binary_to_term(Bin);
-keys({error, enoent}) ->
-    Keys = maps:from_list([{{P, R}, generated(P, R)} || P <- ?PROFILES, R <- ?ROLES]),
+%% Keys already in the file are kept; a role added since is generated once and written back.
+keys({ok, Bin}) -> with_every_role(binary_to_term(Bin));
+keys({error, enoent}) -> with_every_role(#{}).
+
+with_every_role(Known) ->
+    Keys = maps:merge(maps:from_list([{{P, R}, generated(P, R)} || P <- ?PROFILES, R <- ?ROLES,
+                                                                   not is_map_key({P, R}, Known)]), Known),
     ok = file:write_file(?KEYS_FILE, term_to_binary(Keys)),
     Keys.
 
 generated(P, station_identity) -> ok_value(macula_node_keys:generate(identity, P));
 generated(P, client_identity) -> ok_value(macula_node_keys:generate(identity, P, #{puzzle_difficulty => 8}));
 generated(P, client_connect) -> ok_value(macula_node_keys:generate(connect, P));
-generated(P, org) -> ok_value(macula_node_keys:generate(org, P)).
+generated(P, org) -> ok_value(macula_node_keys:generate(org, P));
+generated(P, realm) -> ok_value(macula_node_keys:generate(realm, P));
+generated(P, foundation) -> ok_value(macula_node_keys:generate(foundation, P)).
 
 ok_value({ok, V}) -> V.
 
@@ -114,12 +127,20 @@ signature(<<First, Rest/binary>>, Opts) ->
 signed_bytes(Label, Carried, Tbs) ->
     <<Label/binary, 0, (crypto:hash(sha384, Carried))/binary, Tbs/binary>>.
 
-class_of(16#01) -> 3;
-class_of(16#11) -> 3;
-class_of(16#06) -> 0;
-class_of(16#12) -> 0;
+%% WIRE_1_0.md section 5.1: the row each known type names in the frozen lifetime table.
+class_of(T) when T =:= 16#01; T =:= 16#11 -> 3;
+class_of(T) when T =:= 16#06; T =:= 16#12 -> 0;
+class_of(T) when T =:= 16#04; T =:= 16#15 -> 2;
+class_of(T) when T =:= 16#16; T =:= 16#17 -> 1;
 class_of(T) when T >= 16#20 -> 4;
 class_of(_) -> 5.
+
+class_max(0) -> 5 * ?MIN;
+class_max(1) -> 30 * ?MIN;
+class_max(2) -> 6 * ?HOUR;
+class_max(3) -> 48 * ?HOUR;
+class_max(4) -> 7 * ?DAY;
+class_max(5) -> 30 * ?DAY.
 
 %% Each record case: {Id, Profile, Covers, LandsWith, ObjectBytes, Signer role, NowMs, CustodianExpect, ReaderExpect}.
 record_cases(P, Keys) ->
@@ -191,7 +212,89 @@ record_cases(P, Keys) ->
           record(P, Client, 16#01, Node, [{set, <<"alg">>, {text, <<"ML-DSA-65">>}}]), Both(<<"alg_unsupported">>)),
      Case(<<"content_id_tag_unknown.stored">>, [<<"D7">>], client_identity,
           record(P, Client, 16#11, content_payload(Client, 3), [{set, <<"expires_at">>, ?T0 + ?HOUR}]),
-          {Store, R(<<"mcid_tag_unknown">>)})].
+          {Store, R(<<"mcid_tag_unknown">>)})]
+    ++ lists:append([type_cases(P, Keys, Name, Type, Role, Payload, Case, Store, Accept, R)
+                     || {Name, Type, Role, Payload} <- builtin_payloads(P, Keys)]).
+
+%% Every known built-in type: a valid record, and one naming another lifetime row (stored, refused by a reader).
+type_cases(P, Keys, Name, Type, Role, Payload, Case, Store, Accept, R) ->
+    Signer = key(Keys, P, Role),
+    Row = class_of(row_type(Type, Payload)),
+    Lifetime = min(?HOUR, class_max(Row)),
+    Expires = {set, <<"expires_at">>, ?T0 + Lifetime},
+    Wrong = case Row of 5 -> 4; _ -> 5 end,
+    Covers = [<<"D4">>],
+    ok = accepted_today(P, Signer, Type, Payload, ?T0 + Lifetime, Name),
+    [Case(<<"type.", Name/binary, ".ok">>, Covers, Role,
+          record(P, Signer, Type, Payload, [Expires, {set, <<"lifetime_class">>, Row}]), {Store, Accept}),
+     Case(<<"type.", Name/binary, ".other_row.stored">>, Covers, Role,
+          record(P, Signer, Type, Payload, [Expires, {set, <<"lifetime_class">>, Wrong}]),
+          {Store, R(<<"lifetime_class_mismatch">>)})].
+
+%% The payload passes today's reader (macula_record:verify/3) in today's tbs, without schema and lifetime_class, so an
+%% "accept" here claims nothing about payload rules that wire 1.0 does not inherit unchanged.
+accepted_today(P, Signer, Type, Payload, Expires, Name) ->
+    Tbs = encode(#{<<"type">> => Type, <<"alg">> => {text, macula_signed_object:alg(P)},
+                   <<"version">> => macula_record_uuid:v7(), <<"created_at">> => ?T0, <<"expires_at">> => Expires,
+                   <<"payload">> => Payload}),
+    Bytes = macula_signed_object:encode(#{key => carried(Signer), tbs => Tbs,
+                                          signature => macula_node_keys:sign(signed_bytes(?RECORD_LABEL,
+                                                                                          carried(Signer), Tbs),
+                                                                             Signer)}),
+    accepted(macula_record:verify(Bytes, P, ?T0 + 1000), Name).
+
+accepted({ok, _}, _Name) -> ok;
+accepted(Refused, Name) -> error({today_refuses, Name, Refused}).
+
+%% A tombstone names the row of the type it withdraws.
+row_type(16#0C, #{{text, <<"withdrawn_type">>} := Withdrawn}) -> Withdrawn;
+row_type(Type, _Payload) -> Type.
+
+%% {Name, Type, Signer role, Payload} for each built-in type, payloads from today's constructors; windows inside a
+%% payload are set around the vectors' clock.
+builtin_payloads(P, Keys) ->
+    Id = fun(Role) -> key_id(key(Keys, P, Role)) end,
+    Realm = <<16#AA:256>>,
+    Window = #{valid_from => ?T0 - ?HOUR, valid_until => ?T0 + ?DAY},
+    NodeRecord = macula_record:node_record(Id(client_identity), [Realm], 1),
+    OrgDirectory = record(P, key(Keys, P, realm), 16#15,
+                          payload(macula_record:org_directory(Realm, <<"example-org">>, Id(org))),
+                          [{set, <<"expires_at">>, ?T0 + ?HOUR}]),
+    [{<<"node_record">>, 16#01, client_identity, payload(NodeRecord)},
+     {<<"realm_directory">>, 16#03, realm, payload(macula_record:realm_directory(Realm, <<"example-realm">>, Id(realm)))},
+     {<<"realm_stations">>, 16#04, realm,
+      payload(macula_record:realm_stations(Realm, [#{station_id => Id(station_identity), roles => [<<"seed">>]}]))},
+     {<<"realm_member_endorsement">>, 16#05, realm,
+      payload(macula_record:realm_member_endorsement(Realm, (maps:merge(#{realm => Realm,
+                                                                           member_node => Id(client_identity),
+                                                                           roles => [<<"member">>]}, #{})),
+                                                     Window))},
+     {<<"procedure_advertisement">>, 16#06, client_identity,
+      payload(macula_record:procedure_advertisement(Id(client_identity), Realm, <<"example.procedure">>,
+                                                    Id(station_identity)))},
+     {<<"tombstone">>, 16#0C, client_identity, payload(macula_record:tombstone(NodeRecord, shutdown))},
+     {<<"foundation_seed_list">>, 16#0D, foundation,
+      payload(macula_record:foundation_seed_list([#{node_id => Id(station_identity), tier => 3,
+                                                    addresses => [#{host => <<"2001:db8::1">>, port => 4433}]}],
+                                                 Window))},
+     {<<"foundation_parameter">>, 16#0E, foundation,
+      payload(macula_record:foundation_parameter(<<"example_parameter">>, 7, Window))},
+     {<<"foundation_realm_trust_list">>, 16#0F, foundation,
+      payload(macula_record:foundation_realm_trust_list([#{realm_id => Realm, realm_key_id => Id(realm)}]))},
+     {<<"foundation_t3_attestation">>, 16#10, foundation,
+      payload(macula_record:foundation_t3_attestation(Id(station_identity), ?T0 - ?DAY,
+                                                      #{valid_until => ?T0 + ?DAY}))},
+     {<<"content_announcement">>, 16#11, client_identity, content_payload(key(Keys, P, client_identity), 2)},
+     {<<"station_endpoint">>, 16#12, station_identity, payload(macula_record:station_endpoint(4433))},
+     {<<"org_directory">>, 16#15, realm, payload(macula_record:org_directory(Realm, <<"example-org">>, Id(org)))},
+     {<<"procedure_delegation">>, 16#16, org,
+      payload(macula_record:procedure_delegation(Id(org), Id(client_identity)))},
+     {<<"app_record">>, 16#17, org,
+      payload(macula_record:app_record(Id(org), Realm, <<"example-org">>, <<"example-app">>,
+                                       #{version => <<"1.0.0">>,
+                                         services => [#{name => <<"svc">>,
+                                                        procedures => [<<"example-org/example.procedure">>]}],
+                                         org_directory => OrgDirectory}))}].
 
 payload(#{payload := Payload}) -> Payload.
 
@@ -215,14 +318,14 @@ reader_case({Id, P, Covers, Lands, Bytes, Signer, Now, _Cust, Read}) ->
 custodian_case({Id, P, Covers, Lands, _Bytes, Signer, Now, Cust, _Read}) ->
     Profile = atom_to_binary(P),
     #{<<"id">> => <<Id/binary, ".custodian.", Profile/binary>>, <<"profile">> => Profile,
-      <<"covers">> => Covers, <<"lands_with">> => Lands,
+      <<"covers">> => Covers, <<"lands_with">> => [Lands, ?STATION],
       <<"input">> => #{<<"object_of">> => <<Id/binary, ".reader.", Profile/binary>>,
                        <<"signer">> => atom_to_binary(Signer), <<"now_ms">> => Now},
       <<"expect">> => Cust}.
 
 record_case(Id, P, Covers, Lands, Bytes, Signer, Now, Expect) ->
     #{<<"id">> => <<Id/binary, ".", (atom_to_binary(P))/binary>>, <<"profile">> => atom_to_binary(P),
-      <<"covers">> => Covers, <<"lands_with">> => Lands,
+      <<"covers">> => Covers, <<"lands_with">> => lands(Lands),
       <<"input">> => #{<<"object">> => hex(Bytes), <<"signer">> => atom_to_binary(Signer), <<"now_ms">> => Now,
                        <<"signature_valid">> => signature_valid(Bytes, P)},
       <<"expect">> => Expect}.
@@ -245,7 +348,7 @@ check_order_cases(P, Keys) ->
     Expired = [{set, <<"created_at">>, ?T0 - 2 * ?HOUR}, {set, <<"expires_at">>, ?T0 - 10 * ?MIN}],
     Now = ?T0 + 1000,
     C = fun(Name, Role, Signer, Bytes, Reason) ->
-                record_case(<<"check_order.", Name/binary, ".", Role/binary>>, P, [<<"D9">>], <<"macula#100">>,
+                record_case(<<"check_order.", Name/binary, ".", Role/binary>>, P, [<<"D9">>], station_too(Role),
                             Bytes, Signer, Now, #{<<"outcome">> => <<"refuse">>, <<"reason">> => Reason,
                                                   <<"role">> => Role})
         end,
@@ -337,13 +440,13 @@ envelope_cases() ->
 
 envelope_case(Id, Covers, Position, Frame, Expect) ->
     #{<<"id">> => <<"envelope.", Id/binary>>, <<"profile">> => <<"both">>, <<"covers">> => Covers,
-      <<"lands_with">> => <<"macula#99">>,
+      <<"lands_with">> => envelope_lands(Id),
       <<"input">> => #{<<"frame">> => hex(encode(Frame)), <<"position">> => Position, <<"after_hello">> => 1},
       <<"expect">> => Expect}.
 
 length_case(Id, Header, Expect) ->
     #{<<"id">> => <<"envelope.", Id/binary>>, <<"profile">> => <<"both">>, <<"covers">> => [<<"D5">>],
-      <<"lands_with">> => <<"macula#99">>,
+      <<"lands_with">> => lands(<<"macula#99">>),
       <<"input">> => #{<<"length_header">> => hex(Header), <<"position">> => <<"control_stream">>},
       <<"expect">> => Expect}.
 
@@ -439,7 +542,7 @@ enum_signed_cases(P, Keys) ->
 
 enum_case(Id, Profile, Lands, Frame, Position, AfterHello, Context, Expect) ->
     #{<<"id">> => <<"enum.", Id/binary, ".", Profile/binary>>, <<"profile">> => Profile,
-      <<"covers">> => [<<"D6">>], <<"lands_with">> => Lands,
+      <<"covers">> => [<<"D6">>], <<"lands_with">> => lands(Lands),
       <<"input">> => #{<<"frame">> => hex(encode(Frame)), <<"position">> => Position, <<"after_hello">> => AfterHello,
                        <<"context">> => Context, <<"now_ms">> => ?T0 + 1000},
       <<"expect">> => Expect}.
@@ -513,7 +616,7 @@ dht_cases(Keys) ->
 dht_case(Side, Proc, Id, Value, Expect) ->
     <<"_dht.", Short/binary>> = Proc,
     #{<<"id">> => <<"dht.", Short/binary, ".", Side/binary, ".", Id/binary>>, <<"profile">> => <<"pq_pure">>,
-      <<"covers">> => [<<"D1">>], <<"lands_with">> => <<"macula#102">>,
+      <<"covers">> => [<<"D1">>], <<"lands_with">> => lands(<<"macula#102">>),
       <<"input">> => #{<<"procedure">> => Proc, Side => hex(encode(Value)), <<"now_ms">> => ?T0 + 1000},
       <<"expect">> => Expect}.
 
@@ -694,11 +797,155 @@ step(From, Frame, Expect) ->
 hs_case(Id, P, Covers, Station, Client, Steps) ->
     Prof = atom_to_binary(P),
     #{<<"id">> => <<"handshake.", Id/binary, ".", Prof/binary>>, <<"profile">> => Prof, <<"covers">> => Covers,
-      <<"lands_with">> => <<"macula#98">>,
+      <<"lands_with">> => handshake_lands(Id),
       <<"input">> => #{<<"tls">> => #{<<"leaf_der">> => hex(?LEAF), <<"exporter">> => hex(?EXPORTER)},
                        <<"now_ms">> => ?T0 + 1000, <<"station">> => Station, <<"client">> => Client,
                        <<"steps">> => Steps},
       <<"expect">> => maps:get(<<"expect">>, lists:last(Steps))}.
+
+%%------------------------------------------------------------------
+%% Canonical tbs bytes and signing inputs (WIRE_1_0.md sections 3.2, 5.1; the labels of
+%% DESIGN_PQ_SIGNED_FRAMES_AND_RECORDS.md and DESIGN_PQ_HANDSHAKE_FRAMES.md)
+
+%% A stack encodes `fields' to exactly `tbs' (shortest integers and lengths, keys sorted by their encoded bytes), and
+%% builds exactly `signing_input' from it: label || 0x00 || SHA-384(key as carried) || tbs for signed objects, and
+%% label || 0x00 || tbs for the handshake's bindings and statements.
+tbs_cases(P, Keys) ->
+    Client = key(Keys, P, client_identity),
+    Station = key(Keys, P, station_identity),
+    Hash = crypto:hash(sha384, <<"wire 1.0 vector request tbs">>),
+    Request = fun(Type, Extra) -> maps:merge(#{<<"alg">> => alg(P), <<"caller">> => key_id(Client),
+                                               <<"deadline">> => ?T0 + ?MIN, <<"frame_type">> => {text, Type},
+                                               <<"payload">> => #{{text, <<"n">>} => 1},
+                                               <<"procedure">> => {text, <<"example.procedure">>},
+                                               <<"realm">> => <<1:256>>, <<"request_id">> => <<1:128>>,
+                                               <<"target">> => key_id(Station)}, Extra) end,
+    Stream = fun(Type, Signer, Extra) -> maps:merge(#{<<"alg">> => alg(P), <<"frame_type">> => {text, Type},
+                                                      <<"request_id">> => <<1:128>>, <<"request_hash">> => Hash,
+                                                      <<"signer">> => key_id(Signer), <<"seq">> => 0}, Extra) end,
+    Binding = fun(Use, Label, Subject) ->
+                      #{<<"label">> => {text, Label}, <<"node_id">> => key_id(Station), <<"use">> => {text, Use},
+                        <<"subject_hash">> => crypto:hash(sha384, Subject), <<"binding_id">> => <<16#B1:128>>,
+                        <<"not_before">> => ?T0, <<"not_after">> => ?T0 + 7 * ?DAY,
+                        <<"hash_alg">> => {text, <<"SHA-384">>}, <<"sig_alg">> => alg(P)}
+              end,
+    TlsBinding = Binding(<<"tls">>, <<"MACULA-PQ-BINDING-TLS-V1">>, ?LEAF),
+    Record = fun(Type, Extra) -> maps:merge(#{<<"type">> => Type, <<"alg">> => alg(P),
+                                              <<"version">> => <<16#0190:16, 16#7A:8, 0:104>>,
+                                              <<"created_at">> => ?T0, <<"expires_at">> => ?T0 + ?HOUR,
+                                              <<"schema">> => 1, <<"lifetime_class">> => class_of(Type),
+                                              <<"payload">> => #{{text, <<"quic_port">>} => 4433}}, Extra) end,
+    T = fun(Id, Covers, Label, Role, Fields) -> tbs_case(Id, P, Keys, Covers, Label, Role, Fields, keyed) end,
+    [T(<<"record.station_endpoint">>, [<<"D4">>], ?RECORD_LABEL, station_identity, Record(16#12, #{})),
+     T(<<"record.domain_type.subject_and_ext">>, [<<"D4">>, <<"D8">>], ?RECORD_LABEL, org,
+       Record(16#20, #{<<"subject">> => <<"subject-1">>, <<"lifetime_class">> => 4,
+                       <<"ext">> => ext(<<"example.e">>, 0)})),
+     T(<<"request.call">>, [<<"D1">>], ?REQUEST_LABEL, client_identity, Request(<<"call">>, #{})),
+     T(<<"request.stream_open">>, [<<"D1">>], ?REQUEST_LABEL, client_identity,
+       Request(<<"stream_open">>, #{<<"mode">> => {text, <<"bidi">>}})),
+     T(<<"request.call.with_ext">>, [<<"D8">>], ?REQUEST_LABEL, client_identity,
+       Request(<<"call">>, #{<<"ext">> => ext(<<"example.e">>, 1)})),
+     T(<<"reply.result">>, [<<"D1">>], ?REPLY_LABEL, station_identity,
+       #{<<"alg">> => alg(P), <<"frame_type">> => {text, <<"result">>}, <<"request_id">> => <<1:128>>,
+         <<"request_hash">> => Hash, <<"responded_by">> => key_id(Station),
+         <<"payload">> => #{{text, <<"ok">>} => 1}}),
+     T(<<"reply.error">>, [<<"D1">>], ?REPLY_LABEL, station_identity,
+       #{<<"alg">> => alg(P), <<"frame_type">> => {text, <<"error">>}, <<"request_id">> => <<1:128>>,
+         <<"request_hash">> => Hash, <<"responded_by">> => key_id(Station),
+         <<"code">> => {text, <<"example_code">>}, <<"detail">> => {text, <<"for people">>}}),
+     T(<<"relay_error">>, [<<"D1">>], ?RELAY_ERROR_LABEL, station_identity,
+       #{<<"alg">> => alg(P), <<"frame_type">> => {text, <<"error">>}, <<"request_id">> => <<1:128>>,
+         <<"request_hash">> => Hash, <<"reported_by">> => key_id(Station),
+         <<"code">> => {text, <<"unknown_next_peer">>}}),
+     T(<<"stream.provider.stream_data">>, [<<"D1">>], ?STREAM_LABEL, station_identity,
+       Stream(<<"stream_data">>, Station, #{<<"encoding">> => {text, <<"raw">>}, <<"body">> => <<"chunk">>})),
+     T(<<"stream.caller.stream_end">>, [<<"D1">>], ?CALLER_STREAM_LABEL, client_identity,
+       Stream(<<"stream_end">>, Client, #{<<"role">> => {text, <<"send">>}})),
+     T(<<"publication">>, [<<"D1">>], ?PUBLICATION_LABEL, client_identity,
+       #{<<"alg">> => alg(P), <<"payload">> => #{}, <<"published_at">> => ?T0, <<"publisher">> => key_id(Client),
+         <<"realm">> => <<1:256>>, <<"seq">> => 1, <<"topic">> => {text, <<"example.topic">>}}),
+     tbs_case(<<"handshake.tls_binding">>, P, Keys, [<<"D1">>], <<"MACULA-PQ-BINDING-TLS-V1">>, station_identity, TlsBinding,
+              unkeyed),
+     tbs_case(<<"handshake.connect_binding">>, P, Keys, [<<"D1">>], <<"MACULA-PQ-BINDING-CONNECT-V1">>, client_identity,
+              (Binding(<<"connect">>, <<"MACULA-PQ-BINDING-CONNECT-V1">>, <<"connect key">>))
+                  #{<<"node_id">> => key_id(Client), <<"not_after">> => ?T0 + ?DAY}, unkeyed),
+     tbs_case(<<"handshake.status_statement">>, P, Keys, [<<"D1">>], <<"MACULA-PQ-STATUS-V1">>, station_identity,
+              #{<<"label">> => {text, <<"MACULA-PQ-STATUS-V1">>}, <<"node_id">> => key_id(Station),
+                <<"binding_hash">> => crypto:hash(sha384, encode(TlsBinding)),
+                <<"issued_at">> => ?T0, <<"expires_at">> => ?T0 + ?HOUR, <<"sig_alg">> => alg(P)},
+              unkeyed)].
+
+tbs_case(Id, P, Keys, Covers, Label, Role, Fields, Form) ->
+    Signer = key(Keys, P, Role),
+    Tbs = encode(Fields),
+    Input = signing_input(Form, Label, carried(Signer), Tbs),
+    Prof = atom_to_binary(P),
+    #{<<"id">> => <<"tbs.", Id/binary, ".", Prof/binary>>, <<"profile">> => Prof, <<"covers">> => Covers,
+      <<"lands_with">> => lands(lands_with(Id)),
+      <<"input">> => #{<<"label">> => Label, <<"signer">> => atom_to_binary(Role), <<"fields">> => tj(cbor(Fields)),
+                       <<"form">> => atom_to_binary(Form)},
+      <<"expect">> => #{<<"outcome">> => <<"accept">>, <<"tbs">> => hex(Tbs), <<"signing_input">> => hex(Input),
+                        <<"signature">> => hex(macula_node_keys:sign(Input, Signer))}}.
+
+signing_input(keyed, Label, Carried, Tbs) -> signed_bytes(Label, Carried, Tbs);
+signing_input(unkeyed, Label, _Carried, Tbs) -> <<Label/binary, 0, Tbs/binary>>.
+
+lands_with(<<"record.", _/binary>>) -> <<"macula#100">>;
+lands_with(<<"handshake.", _/binary>>) -> <<"macula#98">>;
+lands_with(_) -> <<"macula#99">>.
+
+%% Typed JSON (FORMAT.md, Values): text as a string, bytes as {"$hex": ...}, maps with text keys as objects.
+tj({text, B}) -> B;
+tj(B) when is_binary(B) -> #{<<"$hex">> => hex(B)};
+tj(L) when is_list(L) -> [tj(V) || V <- L];
+tj(M) when is_map(M) -> maps:from_list([{tj_key(K), tj(V)} || K := V <- M]);
+tj(I) when is_integer(I) -> I;
+tj(null) -> null.
+
+tj_key({text, K}) -> K.
+
+%%------------------------------------------------------------------
+%% One frame per frame type (D9): today's constructors (scripts/wire_1_0_frame_specs.erl) build a valid frame, which
+%% is rewritten to wire 1.0: version 5 and no capabilities header (WIRE_1_0.md sections 2 and 3.1).
+
+frame_cases(Keys) ->
+    [frame_case(Type, Frame) || {Type, Frame} <- wire_1_0_frame_specs:frames(Keys)].
+
+frame_case(Type, Frame) ->
+    <<_Len:32, Cbor/binary>> = iolist_to_binary(macula_frame:encode(Frame)),
+    {ok, Map} = macula_record_cbor:decode_strict(Cbor),
+    Wire = maps:remove({text, <<"capabilities">>}, Map#{{text, <<"version">>} => 5}),
+    #{<<"id">> => <<"frames.", Type/binary>>, <<"profile">> => <<"pq_pure">>, <<"covers">> => [<<"D1">>, <<"D9">>],
+      <<"lands_with">> => lands(<<"macula#99">>),
+      <<"input">> => #{<<"frame_type">> => Type, <<"frame">> => hex(macula_record_cbor:encode(Wire)),
+                       <<"position">> => position(Type), <<"after_hello">> => 1},
+      <<"expect">> => #{<<"outcome">> => <<"accept">>}}.
+
+%% The control stream carries what macula_frame:control_frame/1 names; every other frame type a dedicated stream.
+position(Type) ->
+    case macula_frame:control_frame(binary_to_atom(Type)) of
+        true -> <<"control_stream">>;
+        false -> <<"dedicated_stream">>
+    end.
+
+%% The station's own behaviour (macula-station#94): what a custodian stores, unknown frame types on a station link,
+%% and the persisted floor.
+station_too(<<"custodian">>) -> [<<"macula#100">>, ?STATION];
+station_too(_Reader) -> [<<"macula#100">>].
+
+envelope_lands(<<"unknown_frame_type.", _/binary>>) -> [<<"macula#99">>, ?STATION];
+envelope_lands(<<"retired_", _/binary>>) -> [<<"macula#99">>, ?STATION];
+envelope_lands(_) -> [<<"macula#99">>].
+
+handshake_lands(Id) ->
+    case binary:match(Id, <<"below_floor">>) of
+        nomatch -> [<<"macula#98">>];
+        _ -> [<<"macula#98">>, ?STATION]
+    end.
+
+%% lands_with is a list: the issues whose code makes a case pass.
+lands(L) when is_list(L) -> L;
+lands(B) when is_binary(B) -> [B].
 
 %%------------------------------------------------------------------
 %% Encoding and files
