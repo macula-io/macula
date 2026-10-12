@@ -197,7 +197,7 @@ The record `tbs` of `DESIGN_PQ_SIGNED_FRAMES_AND_RECORDS.md` gains two keys, req
 
 The table is frozen: rows are only added, and a row's maximum never grows. A known type names exactly its row:
 node and content announcement 3; procedure advertisement and station endpoint 0; realm stations and org directory 2;
-procedure delegation and app record 1; realm member endorsement 5; domain types 4; other built-in types 5. A
+procedure delegation, app record and station authorization (0x13) 1; realm member endorsement 5; domain types 4; other built-in types 5. A
 tombstone (0x0C) names the row of the type it withdraws, and a custodian bounds it by that row's maximum plus twice
 the clock tolerance (10 minutes), as `DESIGN_PQ_SIGNED_FRAMES_AND_RECORDS.md` bounds tombstones today.
 
