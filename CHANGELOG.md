@@ -54,17 +54,22 @@ break: a node on it no longer reads the frames of an older one.
 
 - **Breaking: every record's tbs carries `schema` and `lifetime_class`.** `schema` is the version of the type's
   payload rules (1 for every built-in type; a domain type's is its owner's, set with `envelope/3`'s `schema` option);
-  `lifetime_class` is a key into a frozen table (`macula_record:lifetime_classes/0`: 5 min, 30 min, 6 h, 48 h, 7 days,
-  30 days), the type's own where it has one (`type_lifetime_class/1`). A record without them is `malformed`, so a
+  `lifetime_class` is a row of a frozen table (`macula_record:lifetime_classes/0`: rows 0 to 5 are 5 min, 30 min,
+  6 h, 48 h, 7 days, 30 days), the type's own where it has one (`type_lifetime_class/1`). The spec of record is
+  `docs/design/WIRE_1_0.md` section 5. A record without them is `malformed`, so a
   14.x record does not verify under 1.0, and the committed record vectors are regenerated.
-- **`macula_record:custodian_verify/3`**, the check a station runs before it stores a record: envelope, signature,
-  core fields, clock, lifetime class, lifetime and slot, and nothing else in the payload. A type, a schema or a
+- **`macula_record:custodian_verify/3`**, the check a station runs before it stores a record: envelope, `alg`
+  (`alg_unsupported`, read before the signature), signature, core fields, clock, lifetime and slot, and nothing else
+  in the payload. A type, a schema or a
   content-id tag the reader does not know is stored opaquely. A built-in tag wire 1.0 does not define needs a
   `subject` and is placed by H(type | signer key id | subject).
-- **Readers refuse by name** what a custodian stores: `type_unsupported`, `schema_unsupported`,
-  `content_id_unsupported`, and `lifetime_class_unknown` / `lifetime_class_mismatch` for both. A content id of a tag
-  other than 2 was `malformed` and is now `content_id_unsupported`.
-- **Tag 0x14 is reserved** for the successor (key-rotation) record (`type_successor/0`), class 6.
+- **Readers refuse by name** what a custodian stores: `type_unknown`, `schema_unsupported`,
+  `lifetime_class_mismatch`, `extension_unsupported` (a record `ext` entry with `critical` 1; records define none),
+  and `mcid_tag_unknown` (was `malformed`). Both refuse `lifetime_class_unknown` and, for an undefined built-in tag
+  without a subject, `subject_missing`.
+- **Tag 0x14 is reserved** for the successor (key-rotation) record (`type_successor/0`), row 5.
+- **The wire 1.0 record conformance runner** (`macula_record_wire_1_0_conformance_tests`) runs every record case of
+  `test/vectors/wire_1_0/` (verify, custodian, check_order).
 
 ## [14.10.0] - 2026-10-13
 

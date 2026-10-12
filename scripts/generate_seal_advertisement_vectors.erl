@@ -31,7 +31,7 @@ Profile = fun(P) ->
     SignedAs = fun(Payload) ->
         #{type := Type, version := Version, expires_at := Expires} = Keyed,
         Fields = #{{text, <<"type">>} => Type, {text, <<"version">>} => Version, {text, <<"schema">>} => 1,
-                   {text, <<"lifetime_class">>} => 1, {text, <<"created_at">>} => Created,
+                   {text, <<"lifetime_class">>} => 0, {text, <<"created_at">>} => Created,
                    {text, <<"expires_at">>} => Expires, {text, <<"payload">>} => Payload},
         macula_record:encode(macula_signed_object:sign(Label, Fields, Provider))
     end,

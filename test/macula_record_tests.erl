@@ -189,7 +189,8 @@ tbs_fields_the_design_does_not_allow_are_malformed_test_() ->
      ?_assertEqual({error, malformed}, Verify(maps:remove({text, <<"version">>}, Fields))),
      ?_assertEqual({error, malformed}, Verify(Fields#{{text, <<"version">>} := <<0:120>>})),
      ?_assertEqual({error, malformed}, Verify(Fields#{{text, <<"subject">>} => <<1, 2>>})),
-     ?_assertEqual({error, type_unsupported}, Verify(Fields#{{text, <<"type">>} := 16#07})),
+     %% 0x07 is a built-in tag wire 1.0 does not define: placed by its subject, which a node record lacks.
+     ?_assertEqual({error, subject_missing}, Verify(Fields#{{text, <<"type">>} := 16#07})),
      ?_assertEqual({error, malformed}, Verify(Fields#{{text, <<"payload">>} := [1]})),
      ?_assertEqual({error, malformed}, Verify(Fields#{{text, <<"created_at">>} := {text, <<"now">>}})),
      ?_assertEqual({error, malformed}, Verify(Fields#{{text, <<"type">>} := 256})),
@@ -295,7 +296,7 @@ a_record_that_expires_before_it_is_created_is_refused_test() ->
     ?assertError({lifetime_reversed, Type}, macula_record:sign(Reversed, Id)),
     Fields = #{{text, <<"type">>} => Type, {text, <<"version">>} => Version, {text, <<"created_at">>} => Created,
                {text, <<"expires_at">>} => Created - 1, {text, <<"payload">>} => Payload, {text, <<"schema">>} => 1,
-               {text, <<"lifetime_class">>} => 4},
+               {text, <<"lifetime_class">>} => 3},
     ?assertEqual({error, lifetime_reversed},
                  macula_record:verify(macula_signed_object:encode(macula_signed_object:sign(?LABEL, Fields, Id)),
                                       pq_pure)).
@@ -492,7 +493,7 @@ node_fields(Id, Now) ->
     #{{text, <<"type">>} => 16#01,
       {text, <<"version">>} => macula_record_uuid:v7_monotonic(Now),
       {text, <<"schema">>} => 1,
-      {text, <<"lifetime_class">>} => 4,
+      {text, <<"lifetime_class">>} => 3,
       {text, <<"created_at">>} => Now,
       {text, <<"expires_at">>} => Now + 60 * ?MINUTE,
       {text, <<"payload">>} => #{{text, <<"node_id">>} => NodeId, {text, <<"station_id">>} => NodeId,

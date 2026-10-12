@@ -126,7 +126,11 @@ tombstone_payloads_the_design_does_not_allow_are_malformed_test() ->
     ?assertEqual({error, malformed}, Verify(Good#{{text, <<"withdrawn_version">>} := <<0:120>>}, Id)),
     ?assertEqual({error, malformed}, Verify(Good#{{text, <<"replaced_at">>} => 1}, Id)),
     ?assertEqual({error, malformed}, Verify(Good#{{text, <<"withdrawn_type">>} := 16#0C}, Id)),
-    ?assertEqual({error, malformed}, Verify(Good#{{text, <<"withdrawn_type">>} := 16#07}, Id)),
+    %% A tombstone of a tag wire 1.0 does not define is placed by its subject (WIRE_1_0.md 5.2): without one a
+    %% custodian cannot place it; with one, a reader still refuses what it withdraws as no type it knows.
+    ?assertEqual({error, subject_missing}, Verify(Good#{{text, <<"withdrawn_type">>} := 16#07}, Id)),
+    ?assertEqual({error, malformed}, Verify(Good#{{text, <<"withdrawn_type">>} := 16#07,
+                                                  {text, <<"subject">>} => <<"s">>}, Id)),
     ?assertEqual({error, malformed}, Verify(Good#{{text, <<"detail">>} => <<"not text">>}, Id)),
     ?assertEqual({error, malformed}, Verify(Good#{{text, <<"realm_id">>} => fill(16#11)}, Id)),
     Realm = key(realm),
@@ -177,7 +181,7 @@ fill(Byte) ->
 withdrawn_class(#{{text, <<"withdrawn_type">>} := Withdrawn}) when is_integer(Withdrawn) ->
     class_or_longest(macula_record:type_lifetime_class(Withdrawn));
 withdrawn_class(_Payload) ->
-    6.
+    5.
 
-class_or_longest(none) -> 6;
+class_or_longest(none) -> 5;
 class_or_longest(Class) -> Class.

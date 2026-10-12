@@ -149,8 +149,9 @@ A record is the signed object `{key, tbs, signature}`, with `key` the signer's k
 | `type` | unsigned | the record type tag |
 | `alg` | text | `ML-DSA-87` or `ML-DSA-87-PS384` |
 | `version` | bytes, 16 | UUIDv7 |
-| `schema` | unsigned, at least 1 | the version of the type's payload rules: 1 for every built-in type in wire 1.0; a domain type's is its owner's |
-| `lifetime_class` | unsigned | a class of the frozen table below: the type's own where it has one |
+| `schema` | unsigned, 1 to 65535 | the version of the type's payload rules: 1 for every built-in type in wire 1.0; a domain type's is its owner's |
+| `lifetime_class` | unsigned | a row of the frozen table below: the type's own where it has one |
+| `ext` | map, 1 to 16 entries | optional extensions (`WIRE_1_0.md` 3.2); records define none yet |
 | `created_at`, `expires_at` | unsigned, ms | |
 | `payload` | map | the type's fields, text keys |
 | `subject` | bytes, at least one | domain types (tags 0x20 to 0xFF), optional there, and every built-in tag wire 1.0 does not define, required there; an empty one is refused |
@@ -162,47 +163,55 @@ About 7.3 KB / 8.3 KB before the payload: 2,592 / 3,118 bytes of key and 4,627 /
   lifetime class's maximum after it. The table is frozen: it only grows, and under an LTS line a class may tighten,
   never loosen.
 
-  | class | maximum | types |
+  | row | maximum | types |
   |---|---|---|
-  | 1 | 5 minutes | procedure advertisement (0x06), station endpoint (0x12) |
-  | 2 | 30 minutes | procedure delegation (0x16, D32), app record (0x17), station authorization (0x13) |
-  | 3 | 6 hours | realm stations (0x04), org directory (0x15) |
-  | 4 | 48 hours | node record (0x01), content announcement (0x11) |
-  | 5 | 7 days | domain types (0x20 to 0xFF, D28) |
-  | 6 | 30 days | realm directory (0x03), realm member endorsement (0x05), foundation types (0x0D to 0x10), successor (0x14) |
+  | 0 | 5 minutes | procedure advertisement (0x06), station endpoint (0x12) |
+  | 1 | 30 minutes | procedure delegation (0x16, D32), app record (0x17), station authorization (0x13) |
+  | 2 | 6 hours | realm stations (0x04), org directory (0x15) |
+  | 3 | 48 hours | node record (0x01), content announcement (0x11) |
+  | 4 | 7 days | domain types (0x20 to 0xFF, D28) |
+  | 5 | 30 days | realm directory (0x03), realm member endorsement (0x05), foundation types (0x0D to 0x10), successor (0x14) |
 
-  A type in the table names its own class, or is refused as `lifetime_class_mismatch`; a class outside the table is
-  `lifetime_class_unknown`; a built-in tag not in the table is bounded by the class it names. A tombstone names the
+  A row outside the table is `lifetime_class_unknown`; every record is bounded by the row it names. A reader refuses
+  a known type naming another row as `lifetime_class_mismatch`; a custodian stores it within that row. A tombstone names the
   class of the type it withdraws, lives at least until that record has expired plus the clock tolerance, and at most
   the class's maximum plus twice that tolerance, since the record it withdraws may be created up to the tolerance
   ahead. A signer refuses to sign any other record, and every verifier refuses one as `lifetime_too_long`, or as
   `lifetime_reversed` when it expires before it is created. With `created_at` at most 5 minutes ahead, no domain
   record a station accepts expires more than 7 days and 5 minutes after it arrives.
 - **Reserved tag.** 0x14 is the successor (key-rotation) record. Its payload is designed later; a reader refuses it
-  as `type_unsupported` and a custodian stores it.
+  as `type_unknown` and a custodian stores it.
 - **Realm member endorsement window.** Its payload's `valid_until` is not before its `valid_from`, and at most 30 days
   after it. The builder refuses another window, and a verifier of the endorsement refuses a reversed one as
   `endorsement_window_reversed` and a longer one as `endorsement_window_too_long`, before its other window checks, so
   one endorsement admits its member for at most 30 days.
-- **Custodian checks** (`macula_record:custodian_verify/3`, what a station runs before it stores a record), after the
-  steps of a signed object, first failure wins:
-  - `tbs` holds exactly these keys, with `subject` only where the type allows it (`malformed`);
+- **Custodian checks** (`macula_record:custodian_verify/3`, what a station runs before it stores a record;
+  `WIRE_1_0.md` 5.2 is the order of record), first failure wins:
+  - the wire form, the object's shape, then the `tbs` decoded far enough to read a text `alg` (`malformed`), since
+    `alg` selects the verifier; an `alg` with no registered verifier is `alg_unsupported`;
+  - the carried key and the signature, as for any signed object;
+  - `tbs` holds exactly these keys, with `subject` only where the type allows it and `ext` well formed (`malformed`);
   - `created_at` is at most 5 minutes ahead of the verifier's clock, and `expires_at` plus 5 minutes has not passed
     (D22: `not_yet_valid`, `expired`);
-  - the lifetime class, then the lifetime, as above;
-  - the record is placeable: a 1.0 type's slot fields are present and typed, a tombstone's are its withdrawn type's,
-    and any other built-in tag carries a `subject` (`malformed`).
+  - the lifetime: `lifetime_reversed`, then `lifetime_class_unknown`, then `lifetime_too_long` against the row;
+  - the record is placeable: a 1.0 type's slot fields are present and typed (`malformed`), a tombstone's are its
+    withdrawn type's, and any other built-in tag carries a `subject` (`subject_missing`).
 
   A custodian reads the payload no further than the slot fields, so a type, a schema or a content-id tag it does not
   know is stored opaquely (macula#83 D4).
-- **Reader checks** (`macula_record:verify/3`): the custodian's checks up to the lifetime, then a type the reader does
-  not know is `type_unsupported`, a built-in type's `schema` other than 1 is `schema_unsupported`, a content
-  announcement whose `mcid` tag is not 2 is `content_id_unsupported`, and the payload follows its type's rules
-  (`malformed`); the owner of a domain type sets them.
+- **Reader checks** (`macula_record:verify/3`): every custodian check, then a type the reader does not know is
+  `type_unknown`, a built-in type's `schema` other than 1 is `schema_unsupported`, a known type naming another row is
+  `lifetime_class_mismatch`, an `ext` entry with `critical` 1 is `extension_unsupported` (one with `critical` 0 is
+  ignored), the payload follows its type's rules (`malformed`; the owner of a domain type sets them), and a content
+  announcement whose `mcid` tag is not 2 is `mcid_tag_unknown`.
+- **Custodian-accepted is not reader-accepted.** A station that acts on a stored record (dialling a station endpoint,
+  reading realm stations or an org directory) runs `verify/3` on it first.
 - **Who signed.** A record names no signer beside `key`. Where a payload names the node a record is about, such as
   a node record's own node, that node_id must equal the key id of `key`.
 - **Slot.** A built-in tag wire 1.0 does not define is placed like a domain type with a subject: H(type | signer key
-  id | subject), one entry per slot by construction (macula#83 A3). A content announcement is placed by its `mcid`
+  id | subject), one entry per slot by construction (macula#83 A3). The signer key id there is the MACULA-KEY-ID-V1 id
+  of `key` whatever the key's purpose, as for a domain type, never a node_id, so a successor record (0x14) signed by
+  an identity key is placed under its key id. A content announcement is placed by its `mcid`
   bytes whatever its tag. A station derives a record's storage key from the verified record on STORE, never from a key a peer
   sends, and refuses a record whose sent key differs. A consumer checks that each record in VALUE derives
   to the key it asked for, and discards one that does not.

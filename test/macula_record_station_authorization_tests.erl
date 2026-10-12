@@ -175,7 +175,7 @@ a_realm_tombstone_lands_on_the_same_slot_test() ->
 hand_signed(Payload, Key) ->
     Now = now_ms(),
     Fields = #{{text, <<"type">>} => 16#13, {text, <<"version">>} => macula_record_uuid:v7_monotonic(Now),
-               {text, <<"schema">>} => 1, {text, <<"lifetime_class">>} => 2,
+               {text, <<"schema">>} => 1, {text, <<"lifetime_class">>} => 1,
                {text, <<"created_at">>} => Now, {text, <<"expires_at">>} => Now + ?MINUTE,
                {text, <<"payload">>} => Payload},
     macula_signed_object:sign(?LABEL, Fields, Key).
