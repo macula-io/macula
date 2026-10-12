@@ -8,7 +8,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 -define(CLASSES, [<<"verify">>, <<"custodian">>, <<"check_order">>, <<"envelope">>, <<"enums">>,
-                  <<"dht_procedures">>]).
+                  <<"dht_procedures">>, <<"handshake">>]).
 -define(OUTCOMES, [<<"accept">>, <<"refuse">>, <<"ignore">>, <<"fallback">>, <<"store">>, <<"abort_stream">>]).
 -define(PROFILES, [<<"pq_pure">>, <<"pq_hybrid">>]).
 -define(RECORD_LABEL, "MACULA-PQ-RECORD-V1").
@@ -108,6 +108,28 @@ object_verifies(P, Label, #{{text, <<"tbs">>} := Tbs, {text, <<"signature">>} :=
     Key = maps:get({text, <<"key">>}, Object, signer_key(P, <<"client_identity">>)),
     Message = <<Label/binary, 0, (crypto:hash(sha384, Key))/binary, Tbs/binary>>,
     macula_node_keys:verify(Message, Sig, Key, binary_to_atom(P)).
+
+%% Every transcript step decodes; the CONNECT proof verifies over its proof_message under the CONNECT key the frame
+%% carries, and the session proof over its session_proof_message under the station's identity key from keys.json.
+handshake_steps_test_() ->
+    [{binary_to_list(Id), fun() -> [step_checked(binary_to_atom(P), S) || S <- Steps] end}
+     || #{<<"id">> := Id, <<"profile">> := P, <<"input">> := #{<<"steps">> := Steps}} <- cases(<<"handshake">>)].
+
+step_checked(P, #{<<"frame">> := Hex} = Step) ->
+    {ok, Frame} = macula_record_cbor:decode_strict(binary:decode_hex(Hex)),
+    proof_checked(P, Frame, Step),
+    session_proof_checked(P, Frame, Step).
+
+proof_checked(P, #{{text, <<"proof">>} := Proof, {text, <<"connect_key">>} := Key}, #{<<"proof_message">> := Msg}) ->
+    ?assert(macula_node_keys:verify(binary:decode_hex(Msg), Proof, Key, P));
+proof_checked(_P, _Frame, _Step) ->
+    ok.
+
+session_proof_checked(P, #{{text, <<"session_proof">>} := Proof}, #{<<"session_proof_message">> := Msg}) ->
+    Key = signer_key(atom_to_binary(P), <<"station_identity">>),
+    ?assert(macula_node_keys:verify(binary:decode_hex(Msg), Proof, Key, P));
+session_proof_checked(_P, _Frame, _Step) ->
+    ok.
 
 dht_values_test_() ->
     [{binary_to_list(Id), fun() -> decodes(maps:get(<<"args">>, Input, maps:get(<<"reply">>, Input, none))) end}
