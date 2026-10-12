@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [14.9.0] - 2026-10-13
+
 ### Added
 
 - **The realm's station authorization record, `station_authorization` (16#13)** (macula-station#63, slice S1): the realm, with its signing key, states that a node serves it as a station at a hostname, in roles, over a window of at most 30 minutes. Its slot is derived from the realm id and the station's node id, so the realm revokes a station by tombstoning that slot and not reissuing; a thief holding the station's key cannot out-publish it. Two optional fields carry macula-station#62's hardware attestation (`attestation_key_id`, the full 32-byte SHA-256; `attestation_required` = 1, which requires the key id).
