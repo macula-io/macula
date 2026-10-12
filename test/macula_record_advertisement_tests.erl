@@ -15,10 +15,10 @@
 %% The pinned payload
 %%------------------------------------------------------------------
 
-the_payload_holds_realm_id_procedure_advertiser_and_serving_station_test() ->
-    R = macula_record:procedure_advertisement(fill(1), realm_id(), <<"_/posts.get_page">>, fill(16#77)),
+the_payload_holds_realm_id_procedure_advertiser_and_serving_stations_test() ->
+    R = macula_record:procedure_advertisement(fill(1), realm_id(), <<"_/posts.get_page">>, [fill(16#77)]),
     ?assertEqual(#{{text, <<"realm_id">>} => realm_id(), {text, <<"procedure">>} => {text, <<"_/posts.get_page">>},
-                   {text, <<"advertiser_node">>} => fill(1), {text, <<"serving_station">>} => fill(16#77)},
+                   {text, <<"advertiser_node">>} => fill(1), {text, <<"serving_stations">>} => [fill(16#77)]},
                  macula_record:payload(R)).
 
 the_authorization_travels_inside_the_payload_test() ->
@@ -32,17 +32,17 @@ read_procedure_advertisement_returns_the_typed_payload_test() ->
         delegation_bundle(<<"acme/get_forecast_v1">>, #{}),
     {ok, V} = verify(Adv),
     ?assertEqual(#{realm_id => realm_id(), procedure => <<"acme/get_forecast_v1">>,
-                   advertiser_node => macula_node_keys:key_id(A), serving_station => fill(16#77),
+                   advertiser_node => macula_node_keys:key_id(A), serving_stations => [fill(16#77)],
                    authorization => #{org_directory => macula_record:encode(OrgDir),
                                       procedure_delegation => macula_record:encode(Del)}},
                  macula_record:read_procedure_advertisement(V)),
-    Bare = macula_record:procedure_advertisement(fill(1), realm_id(), <<"echo.ping">>, fill(2)),
+    Bare = macula_record:procedure_advertisement(fill(1), realm_id(), <<"echo.ping">>, [fill(2)]),
     ?assertEqual(undefined, maps:get(authorization, macula_record:read_procedure_advertisement(Bare))).
 
 sign_refuses_an_advertisement_for_another_advertiser_test() ->
     A = key(identity),
     ?assertError({key_id_mismatch, _},
-                 macula_record:sign(macula_record:procedure_advertisement(fill(9), realm_id(), <<"x.y">>, fill(2)), A)).
+                 macula_record:sign(macula_record:procedure_advertisement(fill(9), realm_id(), <<"x.y">>, [fill(2)]), A)).
 
 %%------------------------------------------------------------------
 %% A storing verifier checks the record, never the authorization
@@ -51,18 +51,27 @@ sign_refuses_an_advertisement_for_another_advertiser_test() ->
 a_storing_verifier_never_parses_the_authorization_test() ->
     A = key(identity),
     Opaque = #{authorization => #{org_directory => <<"not a record">>, procedure_delegation => <<>>}},
-    R = macula_record:procedure_advertisement(macula_node_keys:key_id(A), realm_id(), <<"_/x">>, fill(2), Opaque),
+    R = macula_record:procedure_advertisement(macula_node_keys:key_id(A), realm_id(), <<"_/x">>, [fill(2)], Opaque),
     ?assertMatch({ok, _}, verify(macula_record:sign(R, A))).
 
 advertisement_payloads_the_design_does_not_allow_are_malformed_test() ->
     A = key(identity),
     Good = #{{text, <<"realm_id">>} => realm_id(), {text, <<"procedure">>} => {text, <<"acme/x">>},
-             {text, <<"advertiser_node">>} => macula_node_keys:key_id(A), {text, <<"serving_station">>} => fill(2)},
+             {text, <<"advertiser_node">>} => macula_node_keys:key_id(A), {text, <<"serving_stations">>} => [fill(2)]},
     Verify = fun(Payload) -> macula_record:verify(hand_signed(Payload, A), pq_pure) end,
     ?assertMatch({ok, _}, Verify(Good)),
     ?assertMatch({ok, _}, Verify(Good#{{text, <<"authorization">>} => #{{text, <<"anything">>} => 1}})),
     ?assertEqual({error, malformed}, Verify(Good#{{text, <<"session_token_hint">>} => {text, <<"h">>}})),
-    ?assertEqual({error, malformed}, Verify(maps:remove({text, <<"serving_station">>}, Good))),
+    ?assertEqual({error, malformed}, Verify(maps:remove({text, <<"serving_stations">>}, Good))),
+    %% macula-station#55: 1 to 8 stations, 32-byte ids, strictly ascending.
+    Stations = fun(List) -> Good#{{text, <<"serving_stations">>} := List} end,
+    ?assertMatch({ok, _}, Verify(Stations([fill(N) || N <- lists:seq(1, 8)]))),
+    ?assertEqual({error, malformed}, Verify(Stations([]))),
+    ?assertEqual({error, malformed}, Verify(Stations([fill(N) || N <- lists:seq(1, 9)]))),
+    ?assertEqual({error, malformed}, Verify(Stations([fill(2), fill(1)]))),
+    ?assertEqual({error, malformed}, Verify(Stations([fill(2), fill(2)]))),
+    ?assertEqual({error, malformed}, Verify(Stations([<<1:248>>]))),
+    ?assertEqual({error, malformed}, Verify(Good#{{text, <<"serving_stations">>} := fill(2)})),
     ?assertEqual({error, malformed}, Verify(Good#{{text, <<"realm_id">>} := <<1:248>>})),
     ?assertEqual({error, malformed}, Verify(Good#{{text, <<"procedure">>} := <<"acme/x">>})),
     ?assertEqual({error, malformed}, Verify(Good#{{text, <<"authorization">>} => [1]})),
@@ -149,13 +158,13 @@ the_pairs_refuse_a_realm_they_do_not_list_test() ->
 
 a_procedure_with_an_org_namespace_needs_an_authorization_test() ->
     A = key(identity),
-    R = macula_record:procedure_advertisement(macula_node_keys:key_id(A), realm_id(), <<"acme/x">>, fill(2)),
+    R = macula_record:procedure_advertisement(macula_node_keys:key_id(A), realm_id(), <<"acme/x">>, [fill(2)]),
     ?assertEqual({error, no_authorization}, authorize(macula_record:sign(R, A), key(realm))).
 
 a_procedure_without_an_org_namespace_needs_none_test() ->
     A = key(identity),
     [?assertEqual(ok, authorize(macula_record:sign(macula_record:procedure_advertisement(
-                                    macula_node_keys:key_id(A), realm_id(), Procedure, fill(2)), A), key(realm)))
+                                    macula_node_keys:key_id(A), realm_id(), Procedure, [fill(2)]), A), key(realm)))
      || Procedure <- [<<"_/posts.get_page">>, <<"echo.ping">>]].
 
 a_procedure_without_an_org_namespace_refuses_an_authorization_test() ->
@@ -203,7 +212,7 @@ delegation_bundle(Procedure, Overrides) ->
     DirBytes = corrupt(maps:get(corrupt_dir, Overrides, false), macula_record:encode(OrgDir)),
     Authorization = #{org_directory => DirBytes, procedure_delegation => macula_record:encode(Del)},
     Adv = macula_record:sign(macula_record:procedure_advertisement(
-                                 macula_node_keys:key_id(A), realm_id(), Procedure, fill(16#77),
+                                 macula_node_keys:key_id(A), realm_id(), Procedure, [fill(16#77)],
                                  #{authorization => Authorization, ttl_ms => 300_000}), A),
     #{realm => Realm, org => Org, advertiser => A, org_dir => OrgDir, delegation => Del, adv => Adv}.
 
@@ -246,7 +255,7 @@ hand_signed(Payload, Key) ->
 %% A provider's advertisement whose payload holds Authorization as written, put in by hand: the builder writes only the
 %% delegation form.
 hand_authorized(A, Procedure, Authorization) ->
-    Unsigned = macula_record:procedure_advertisement(macula_node_keys:key_id(A), realm_id(), Procedure, fill(2),
+    Unsigned = macula_record:procedure_advertisement(macula_node_keys:key_id(A), realm_id(), Procedure, [fill(2)],
                                                      #{ttl_ms => 300_000}),
     Payload = (macula_record:payload(Unsigned))#{{text, <<"authorization">>} => Authorization},
     macula_record:sign(Unsigned#{payload := Payload}, A).

@@ -67,6 +67,12 @@ break: a node on it no longer reads the frames of an older one.
   `lifetime_class_mismatch`, `extension_unsupported` (a record `ext` entry with `critical` 1; records define none),
   and `mcid_tag_unknown` (was `malformed`). Both refuse `lifetime_class_unknown` and, for an undefined built-in tag
   without a subject, `subject_missing`.
+- **Breaking: a procedure advertisement names `serving_stations`** (macula-station#55, K > 1, decided by Raf
+  2026-10-12): 1 to 8 station node_ids, strictly ascending, in place of the single `serving_station`.
+  `procedure_advertisement/4,5` takes the list, and `read_procedure_advertisement/1` returns it. Each link of a pool
+  signs its advertisement naming its own station and every other station the pool holds a connected link to (from
+  `macula_client:links/1`), so the one record per provider and procedure carries the whole set; direct dial makes a
+  candidate of every station named.
 - **Tag 0x14 is reserved** for the successor (key-rotation) record (`type_successor/0`), row 5.
 - **The wire 1.0 record conformance runner** (`macula_record_wire_1_0_conformance_tests`) runs every record case of
   `test/vectors/wire_1_0/` (verify, custodian, check_order).

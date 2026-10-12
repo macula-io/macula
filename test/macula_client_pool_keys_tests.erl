@@ -251,7 +251,7 @@ a_pool_signs_only_records_about_itself_test_() ->
         Minute = 60_000,
         Hour = 3_600_000,
         Advertisement = fun(Advertiser) ->
-                            macula_record:procedure_advertisement(Advertiser, <<1:256>>, <<"acme/echo_v1">>, <<7:256>>)
+                            macula_record:procedure_advertisement(Advertiser, <<1:256>>, <<"acme/echo_v1">>, [<<7:256>>])
                         end,
         Endorsement = macula_record:realm_member_endorsement(<<1:256>>, #{realm => <<1:256>>, member_node => NodeId,
                                                                           roles => []}),
@@ -377,7 +377,7 @@ a_record_created_ahead_at_its_maximum_lifetime_is_withdrawn_test_() ->
         {ok, NodeId} = macula_node_keys:node_id(Key),
         Minute = 60_000,
         Now = erlang:system_time(millisecond),
-        Advertisement = macula_record:procedure_advertisement(NodeId, <<1:256>>, <<"acme/echo_v1">>, <<7:256>>),
+        Advertisement = macula_record:procedure_advertisement(NodeId, <<1:256>>, <<"acme/echo_v1">>, [<<7:256>>]),
         Ahead = macula_record:sign(Advertisement#{created_at := Now + 4 * Minute, expires_at := Now + 9 * Minute}, Key),
         {ok, Pool} = macula_client:connect([], #{node_identity => Key}),
         Withdrawn = macula_client:withdraw_node_record(Pool, Ahead, shutdown),

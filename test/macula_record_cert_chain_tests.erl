@@ -22,7 +22,7 @@ a_certificate_chain_authorization_is_refused_as_an_unsupported_form_test() ->
 %% No builder writes the removed form.
 the_builder_refuses_a_certificate_chain_authorization_test() ->
     ?assertError(function_clause,
-                 macula_record:procedure_advertisement(fill(1), fill(16#11), ?PROCEDURE, fill(16#77),
+                 macula_record:procedure_advertisement(fill(1), fill(16#11), ?PROCEDURE, [fill(16#77)],
                                                        #{authorization => #{certificate_chain => [<<1>>]}})).
 
 %% Nothing in macula's own code validates a certificate path or reads a realm CA. The scan reads every source file
@@ -55,7 +55,7 @@ fixture() ->
 %% The provider's advertisement with a certificate_chain authorization, put into its payload by hand because no builder
 %% writes that form.
 advertisement(A, Chain) ->
-    Unsigned = macula_record:procedure_advertisement(macula_node_keys:key_id(A), fill(16#11), ?PROCEDURE, fill(16#77),
+    Unsigned = macula_record:procedure_advertisement(macula_node_keys:key_id(A), fill(16#11), ?PROCEDURE, [fill(16#77)],
                                                      #{ttl_ms => 300_000}),
     Authorization = #{{text, <<"certificate_chain">>} => Chain},
     Payload = (macula_record:payload(Unsigned))#{{text, <<"authorization">>} => Authorization},

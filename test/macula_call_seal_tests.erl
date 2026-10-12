@@ -39,13 +39,13 @@ an_advertisement_of_another_node_is_refused_test() ->
 
 an_advertisement_of_another_procedure_is_refused_test() ->
     #{target := Target} = F = fixture(),
-    Other = macula_record:sign(macula_record:procedure_advertisement(Target, ?REALM, <<"acme/other_v1">>, <<1:256>>,
+    Other = macula_record:sign(macula_record:procedure_advertisement(Target, ?REALM, <<"acme/other_v1">>, [<<1:256>>],
                                                                      #{}), maps:get(key, F)),
     ?assertEqual({error, {confidentiality, not_the_procedure}}, seal(F, Target, #{advertisement => Other})).
 
 an_advertisement_for_another_realm_is_refused_test() ->
     #{target := Target} = F = fixture(),
-    Other = macula_record:sign(macula_record:procedure_advertisement(Target, <<6:256>>, ?PROC, <<1:256>>, #{}),
+    Other = macula_record:sign(macula_record:procedure_advertisement(Target, <<6:256>>, ?PROC, [<<1:256>>], #{}),
                                maps:get(key, F)),
     ?assertEqual({error, {confidentiality, not_the_realm}}, seal(F, Target, #{advertisement => Other})).
 
@@ -90,11 +90,11 @@ fixture() ->
     #{key => Key, target => macula_node_keys:key_id(Key), kem_key => macula_seal:key_as_carried(Public)}.
 
 keyed_ad(#{key := Key, target := Target, kem_key := KemKey}) ->
-    macula_record:sign(macula_record:procedure_advertisement(Target, ?REALM, ?PROC, <<1:256>>, #{kem_key => KemKey}),
+    macula_record:sign(macula_record:procedure_advertisement(Target, ?REALM, ?PROC, [<<1:256>>], #{kem_key => KemKey}),
                        Key).
 
 keyless_ad(#{key := Key, target := Target}) ->
-    macula_record:sign(macula_record:procedure_advertisement(Target, ?REALM, ?PROC, <<1:256>>, #{}), Key).
+    macula_record:sign(macula_record:procedure_advertisement(Target, ?REALM, ?PROC, [<<1:256>>], #{}), Key).
 
 stranger_ad() ->
     keyed_ad(fixture()).

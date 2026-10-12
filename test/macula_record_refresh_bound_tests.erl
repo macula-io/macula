@@ -71,7 +71,7 @@ aged(#{created_at := Created, expires_at := Expires} = Record, Ms) ->
     Record#{created_at => Created - Ms, expires_at => Expires - Ms}.
 
 advertisement() ->
-    macula_record:procedure_advertisement(node_id(), <<1:256>>, <<"acme/echo_v1">>, <<7:256>>).
+    macula_record:procedure_advertisement(node_id(), <<1:256>>, <<"acme/echo_v1">>, [<<7:256>>]).
 
 lifetime(Record) ->
     macula_record:expires_at(Record) - macula_record:created_at(Record).

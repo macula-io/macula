@@ -1,6 +1,7 @@
 %% #29: a pool of several links sends each station an advertisement
-%% naming THAT station, and a link that comes back connected to another
-%% station signs again naming it. The pool hands its links the unsigned
+%% naming THAT station (among the pool's connected stations, macula-station#55
+%% K > 1), and a link that comes back connected to another station signs again
+%% naming it. The pool hands its links the unsigned
 %% spec; each link signs per send.
 %%
 %% Real macula_station_link workers against unreachable seeds (as in
@@ -26,7 +27,7 @@ each_link_advertises_naming_its_own_station_test_() ->
                      || {N, #{pid := Pid}} <- lists:enumerate(Links)],
          ok = macula_client:advertise(Pool, ?REALM, ?PROCEDURE,
                                       fun(_) -> {ok, counted} end, open, spec()),
-         ?assertEqual(lists:sort(Stations), lists:sort(sent_stations(2))),
+         every_station_named(Stations, sent_stations(2)),
          ok = macula_client:close(Pool)
      end}.
 
@@ -39,7 +40,7 @@ each_link_advertises_a_stream_naming_its_own_station_test_() ->
                      || {N, #{pid := Pid}} <- lists:enumerate(Links)],
          ok = macula_client:advertise_stream(Pool, ?REALM, ?PROCEDURE, bidi,
                                              fun(_, _) -> ok end, open, spec()),
-         ?assertEqual(lists:sort(Stations), lists:sort(sent_stations(2))),
+         every_station_named(Stations, sent_stations(2)),
          ok = macula_client:close(Pool)
      end}.
 
@@ -60,7 +61,8 @@ a_respawned_link_signs_for_the_station_it_reaches_test_() ->
          end,
          NewPid = wait_for_new_link(Pool, [OldPid], 30),
          Station = connect_to(NewPid, <<40:256>>),
-         ?assertEqual([Station], sent_stations(1)),
+         [Named] = sent_stations(1),
+         ?assert(lists:member(Station, Named)),
          ok = macula_client:close(Pool)
      end}.
 
@@ -80,7 +82,7 @@ each_link_puts_the_advertisement_it_sends_in_the_dht_test_() ->
          {Advertised, Put} = advertised_and_put(4),
          ?assertEqual(2, length(Advertised)),
          ?assertEqual(lists:sort(Advertised), lists:sort(Put)),
-         ?assertEqual(lists:sort(Stations), lists:sort([serving_station(A) || A <- Put])),
+         every_station_named(Stations, [serving_station(A) || A <- Put]),
          ok = macula_client:close(Pool)
      end}.
 
@@ -255,13 +257,19 @@ connect_to(Pid, Station) ->
     Station = element(macula_station_link:state_field_index(peer_node_id), sys:get_state(Pid)),
     Station.
 
+%% Every advertisement names only the pool's stations, and every link's station is named by one: which link sent which
+%% frame is not told apart here, since all of them reach this process.
+every_station_named(Stations, Named) ->
+    ?assert(lists:all(fun(List) -> List -- Stations =:= [] end, Named)),
+    ?assertEqual(lists:sort(Stations), lists:usort(lists:append(Named))).
+
 %% The serving stations named by the next `N' ADVERTISE frames.
 sent_stations(N) ->
     {ok, Profile} = macula_crypto_profile:configured(),
     [begin
          #{frame_type := advertise, advertisement := Encoded} = F,
          {ok, Record} = macula_record:verify(Encoded, Profile),
-         maps:get(serving_station, macula_record:read_procedure_advertisement(Record))
+         maps:get(serving_stations, macula_record:read_procedure_advertisement(Record))
      end || F <- sent_frames(N)].
 
 %% Up to `N' ADVERTISE or UNADVERTISE frames sent to this process
@@ -333,7 +341,7 @@ put_call_named(_Probe, _Frame, N) ->
 serving_station(Encoded) ->
     {ok, Profile} = macula_crypto_profile:configured(),
     {ok, Record} = macula_record:verify(Encoded, Profile),
-    maps:get(serving_station, macula_record:read_procedure_advertisement(Record)).
+    maps:get(serving_stations, macula_record:read_procedure_advertisement(Record)).
 
 version(Encoded) ->
     {ok, Profile} = macula_crypto_profile:configured(),

@@ -283,7 +283,7 @@ The payload of a procedure advertisement, type tag 0x06, holds exactly these key
 | `realm_id` | bytes, 32 | the realm id |
 | `procedure` | text | the procedure name within the realm |
 | `advertiser_node` | bytes, 32 | the provider's node_id, equal to the key id of `key` |
-| `serving_station` | bytes, 32 | the node_id of the station that serves the provider |
+| `serving_stations` | array of bytes, 32 | the node_ids of the 1 to 8 stations the provider serves the procedure through, strictly ascending (macula-station#55, K > 1); one record per provider and procedure holds the whole set |
 | `authorization` | map | the provider authorization (D25 item 6); every procedure has one |
 
 - `authorization` holds `org_directory` and `procedure_delegation`, each bytes, the wire form as received of the

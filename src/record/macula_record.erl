@@ -76,7 +76,7 @@
     payload := map(),
     subject => binary(),
     schema => pos_integer(),
-    lifetime_class => pos_integer(),
+    lifetime_class => non_neg_integer(),
     key => binary(),
     key_id => <<_:256>>,
     alg => binary(),
@@ -186,6 +186,8 @@
 -define(DOMAIN_TYPE_MIN,                   16#20).
 %% The schema version every built-in type signs under wire 1.0. A domain type's schema is its owner's.
 -define(SCHEMA_V1, 1).
+%% The most stations one advertisement names (macula-station#55, K > 1).
+-define(MAX_SERVING_STATIONS, 8).
 %% A schema version is 1 to 65535 (WIRE_1_0.md 5.1).
 -define(MAX_SCHEMA, 65535).
 %% The core keys of a record tbs; subject and ext are its only optional ones.
@@ -395,24 +397,28 @@ app_record(OrgKeyId, RealmId, OrgName, AppName,
 app_service(#{name := Name, procedures := Procedures}) when is_binary(Name), is_list(Procedures) ->
     #{{text, <<"name">>} => {text, Name}, {text, <<"procedures">>} => [{text, P} || P <- Procedures]}.
 
-%% @doc A provider's advertisement of a procedure in a realm, signed by the provider. For a procedure with an org
+%% @doc A provider's advertisement of a procedure in a realm, signed by the provider, naming the 1 to 8 stations it
+%% serves the procedure through (macula-station#55, K > 1): one record per provider and procedure, so the slot holds
+%% the provider's whole set, sorted and without repeats. For a procedure with an org
 %% namespace the authorization option carries the provider authorization: org_directory and procedure_delegation as
 %% the records' wire form, the only authorization form. The builder refuses any other. The kem_key option names the
 %% provider's KEM key as carried (E2E design, amendment A1), which the advertisement carries with its kem_key_id: a
 %% caller seals its request to that key.
--spec procedure_advertisement(<<_:256>>, <<_:256>>, binary(), <<_:256>>) -> m_record().
-procedure_advertisement(AdvertiserNode, RealmId, Procedure, ServingStation) ->
-    procedure_advertisement(AdvertiserNode, RealmId, Procedure, ServingStation, #{}).
+-spec procedure_advertisement(<<_:256>>, <<_:256>>, binary(), [<<_:256>>, ...]) -> m_record().
+procedure_advertisement(AdvertiserNode, RealmId, Procedure, ServingStations) ->
+    procedure_advertisement(AdvertiserNode, RealmId, Procedure, ServingStations, #{}).
 
--spec procedure_advertisement(<<_:256>>, <<_:256>>, binary(), <<_:256>>, procedure_advertisement_opts()) ->
+-spec procedure_advertisement(<<_:256>>, <<_:256>>, binary(), [<<_:256>>, ...], procedure_advertisement_opts()) ->
           m_record().
-procedure_advertisement(AdvertiserNode, RealmId, Procedure, ServingStation, Opts)
+procedure_advertisement(AdvertiserNode, RealmId, Procedure, ServingStations, Opts)
   when is_binary(AdvertiserNode), byte_size(AdvertiserNode) =:= 32, is_binary(RealmId), byte_size(RealmId) =:= 32,
-       is_binary(Procedure), is_binary(ServingStation), byte_size(ServingStation) =:= 32, is_map(Opts) ->
+       is_binary(Procedure), is_list(ServingStations), is_map(Opts) ->
+    Stations = lists:usort(ServingStations),
+    true = serving_stations_ok(Stations),
     Payload = #{{text, <<"realm_id">>} => RealmId,
                 {text, <<"procedure">>} => {text, Procedure},
                 {text, <<"advertiser_node">>} => AdvertiserNode,
-                {text, <<"serving_station">>} => ServingStation},
+                {text, <<"serving_stations">>} => Stations},
     unsigned(?TYPE_PROCEDURE_ADVERTISEMENT,
              with_kem_key(with_authorization(Payload, maps:get(authorization, Opts, undefined)),
                           maps:get(kem_key, Opts, undefined)), Opts).
@@ -816,7 +822,7 @@ read_procedure_advertisement(#{type := ?TYPE_PROCEDURE_ADVERTISEMENT, payload :=
     Read = #{realm_id        => payload_field(P, <<"realm_id">>),
       procedure       => payload_field(P, <<"procedure">>),
       advertiser_node => payload_field(P, <<"advertiser_node">>),
-      serving_station => payload_field(P, <<"serving_station">>),
+      serving_stations => payload_field(P, <<"serving_stations">>),
       authorization   => read_authorization(maps:get({text, <<"authorization">>}, P, undefined))},
     maps:merge(Read, maps:from_list([{Field, maps:get({text, Name}, P)}
                                      || {Name, Field} <- [{<<"kem_key">>, kem_key}, {<<"kem_key_id">>, kem_key_id}],
@@ -1170,7 +1176,7 @@ names_its_node(Type) ->
 %% @doc The frozen lifetime-class table of wire 1.0 (macula#100): a class names the longest a record lives, created_at
 %% to expires_at, in milliseconds. Every record names its class in its tbs, so a custodian bounds a type it does not
 %% know. The table only grows, and under an LTS line a class may tighten, never loosen.
--spec lifetime_classes() -> #{pos_integer() => pos_integer()}.
+-spec lifetime_classes() -> #{non_neg_integer() => pos_integer()}.
 lifetime_classes() ->
     #{0 => ?PROCEDURE_ADVERTISEMENT_MAX_LIFETIME_MS, 1 => ?PROCEDURE_DELEGATION_MAX_LIFETIME_MS,
       2 => ?REALM_AND_ORG_MAX_LIFETIME_MS, 3 => ?NODE_RECORD_MAX_LIFETIME_MS, 4 => ?DOMAIN_RECORD_MAX_LIFETIME_MS,
@@ -1183,7 +1189,7 @@ type_successor() -> ?TYPE_SUCCESSOR.
 %% @doc The lifetime class a type's records name in their tbs: one for each 1.0 built-in type other than the tombstone
 %% (which names its withdrawn type's), the reserved successor tag and the domain types; none for any other tag, whose
 %% records are bounded by the class they name.
--spec type_lifetime_class(type_tag()) -> pos_integer() | none.
+-spec type_lifetime_class(type_tag()) -> non_neg_integer() | none.
 type_lifetime_class(Type) -> type_class(Type).
 
 type_class(Type) when Type =:= ?TYPE_PROCEDURE_ADVERTISEMENT; Type =:= ?TYPE_STATION_ENDPOINT -> 0;
@@ -1621,11 +1627,22 @@ in_org({text, Procedure}, OrgName) when is_binary(Procedure) -> procedure_org(Pr
 in_org(_NotText, _OrgName) -> false.
 
 advertisement_payload_ok(#{{text, <<"realm_id">>} := <<_:256>>, {text, <<"procedure">>} := {text, Procedure},
-                           {text, <<"advertiser_node">>} := <<_:256>>, {text, <<"serving_station">>} := <<_:256>>} = P)
+                           {text, <<"advertiser_node">>} := <<_:256>>, {text, <<"serving_stations">>} := Stations} = P)
   when is_binary(Procedure) ->
-    advertisement_size_ok(map_size(P), maps:get({text, <<"authorization">>}, P, absent), kem_key_pair(P));
+    serving_stations_ok(Stations)
+        andalso advertisement_size_ok(map_size(P), maps:get({text, <<"authorization">>}, P, absent), kem_key_pair(P));
 advertisement_payload_ok(_P) ->
     false.
+
+%% An advertisement names 1 to 8 serving stations, 32-byte node_ids in strictly ascending order, so one set of stations
+%% has one encoding and no station is named twice (macula-station#55).
+serving_stations_ok(Stations) when is_list(Stations), Stations =/= [], length(Stations) =< ?MAX_SERVING_STATIONS ->
+    lists:all(fun is_id/1, Stations) andalso strictly_ascending(Stations);
+serving_stations_ok(_NotAStationList) ->
+    false.
+
+strictly_ascending([A, B | Rest]) -> A < B andalso strictly_ascending([B | Rest]);
+strictly_ascending(_ShortList) -> true.
 
 %% The four fields every advertisement carries, then an authorization map and a KEM key pair, each present or not.
 advertisement_size_ok(Size, Authorization, KemKeyPair) when KemKeyPair =/= malformed ->

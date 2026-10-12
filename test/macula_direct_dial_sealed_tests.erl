@@ -276,11 +276,11 @@ kem_or_new(Carried, _N) ->
 kem_id(N) -> macula_seal:key_id(kem(N)).
 
 keyed_ad(#{provider := Key, provider_id := Id, station_id := Station, procedure := Proc}, KemKey) ->
-    verified(macula_record:sign(macula_record:procedure_advertisement(Id, ?REALM, Proc, Station, #{kem_key => KemKey}),
+    verified(macula_record:sign(macula_record:procedure_advertisement(Id, ?REALM, Proc, [Station], #{kem_key => KemKey}),
                                 Key)).
 
 keyless_ad(#{provider := Key, provider_id := Id, station_id := Station, procedure := Proc}) ->
-    verified(macula_record:sign(macula_record:procedure_advertisement(Id, ?REALM, Proc, Station, #{}), Key)).
+    verified(macula_record:sign(macula_record:procedure_advertisement(Id, ?REALM, Proc, [Station], #{}), Key)).
 
 endpoint(#{station := Key}) ->
     verified(macula_record:sign(macula_record:station_endpoint(4433, #{host_advertised => [<<"::1">>]}), Key)).

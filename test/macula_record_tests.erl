@@ -99,7 +99,7 @@ every_builder_record_signs_and_verifies_test() ->
               macula_record:sign(macula_record:tombstone(Node, shutdown), Id),
               macula_record:sign(macula_record:station_endpoint(4433), Id),
               macula_record:sign(macula_record:content_announcement(NodeId, Mcid, #{realm_id => <<7:256>>, serving_station => <<9:256>>, procedure => <<"acme/content_v1_x">>}), Id),
-              macula_record:sign(macula_record:procedure_advertisement(NodeId, RealmId, <<"acme/x">>, fill(2)), Id),
+              macula_record:sign(macula_record:procedure_advertisement(NodeId, RealmId, <<"acme/x">>, [fill(2)]), Id),
               macula_record:sign(macula_record:envelope(16#20, #{}, #{}), Id),
               macula_record:sign(macula_record:envelope(16#20, #{}, #{subject_id => <<"s1">>}), Id),
               macula_record:sign(macula_record:realm_directory(RealmId, <<"io.macula">>, fill(2)), Realm),
@@ -242,7 +242,7 @@ each_type_signs_within_its_maximum_lifetime_test_() ->
               fun(Ttl) -> macula_record:content_announcement(NodeId, Mcid, #{realm_id => <<7:256>>, serving_station => <<9:256>>, procedure => <<"acme/content_v1_x">>, ttl_ms => Ttl})
               end},
              {Id, 5 * ?MINUTE,
-              fun(Ttl) -> macula_record:procedure_advertisement(NodeId, RealmId, <<"acme/echo_v1">>, fill(16#77),
+              fun(Ttl) -> macula_record:procedure_advertisement(NodeId, RealmId, <<"acme/echo_v1">>, [fill(16#77)],
                                                                 #{ttl_ms => Ttl})
               end},
              {Id, 5 * ?MINUTE, fun(Ttl) -> macula_record:station_endpoint(4433, #{ttl_ms => Ttl}) end},
@@ -303,7 +303,7 @@ a_record_that_expires_before_it_is_created_is_refused_test() ->
 
 %% A procedure advertisement built without a ttl lives its type's maximum, five minutes.
 a_procedure_advertisement_defaults_to_its_maximum_lifetime_test() ->
-    Advertisement = macula_record:procedure_advertisement(fill(1), fill(16#11), <<"acme/echo_v1">>, fill(16#77)),
+    Advertisement = macula_record:procedure_advertisement(fill(1), fill(16#11), <<"acme/echo_v1">>, [fill(16#77)]),
     ?assertEqual(5 * ?MINUTE, macula_record:expires_at(Advertisement) - macula_record:created_at(Advertisement)).
 
 %% A payload is refused before anything is encoded when its external size is over 256 KiB, or when it nests past the 63

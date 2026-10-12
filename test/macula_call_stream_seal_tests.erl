@@ -74,11 +74,11 @@ fixture() ->
     #{key => Key, target => macula_node_keys:key_id(Key), kem_key => macula_seal:key_as_carried(Public)}.
 
 keyed_ad(#{key := Key, target := Target, kem_key := KemKey}) ->
-    macula_record:sign(macula_record:procedure_advertisement(Target, ?REALM, ?PROC, <<1:256>>, #{kem_key => KemKey}),
+    macula_record:sign(macula_record:procedure_advertisement(Target, ?REALM, ?PROC, [<<1:256>>], #{kem_key => KemKey}),
                        Key).
 
 keyless_ad(#{key := Key, target := Target}) ->
-    macula_record:sign(macula_record:procedure_advertisement(Target, ?REALM, ?PROC, <<1:256>>, #{}), Key).
+    macula_record:sign(macula_record:procedure_advertisement(Target, ?REALM, ?PROC, [<<1:256>>], #{}), Key).
 
 profile() ->
     {ok, Profile} = macula_crypto_profile:configured(),

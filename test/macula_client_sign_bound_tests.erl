@@ -71,7 +71,7 @@ bound_not_an_integer(#{pool := Pool, node_id := NodeId}) ->
     ?assertError(function_clause, macula_client:sign_node_record(Pool, advertisement(NodeId), #{not_after => soon})).
 
 advertisement(NodeId) ->
-    macula_record:procedure_advertisement(NodeId, <<1:256>>, <<"acme/echo_v1">>, <<7:256>>).
+    macula_record:procedure_advertisement(NodeId, <<1:256>>, <<"acme/echo_v1">>, [<<7:256>>]).
 
 lifetime(Record) ->
     macula_record:expires_at(Record) - macula_record:created_at(Record).

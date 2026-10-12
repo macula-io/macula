@@ -198,8 +198,9 @@ observability, an SDK for another language)? This is the sequence
    org namespace needs an authorization for that org, and a procedure
    without one carries none.
 2. Take the provider from a trusted advertisement: the node_id that signed
-   it, its `key_id`. Read its `serving_station`, then resolve *that*
-   station's own `station_endpoint` record, verified, and its signer
+   it, its `key_id`. Read its `serving_stations` (1 to 8, every station the
+   provider is linked to), pick one, then resolve *that* station's own
+   `station_endpoint` record, verified, and its signer
    checked to be exactly the station it claims (not just anyone).
 3. Dial the resolved `quic://[Host]:Port` (note the brackets — required for
    the IPv6 hosts most stations advertise). The TLS certificate is **not**
@@ -224,7 +225,7 @@ Trusted = fun(#{type := Type} = Record) ->
                              Record, #{profile => Profile}, erlang:system_time(millisecond))
           end,
 [#{key_id := Provider} = Advertisement | _] = lists:filter(Trusted, Records),
-#{serving_station := Station} = macula_record:read_procedure_advertisement(Advertisement),
+#{serving_stations := [Station | _]} = macula_record:read_procedure_advertisement(Advertisement),
 
 {ok, EndpointRecord} = macula:find_record(Pool, macula_record:station_endpoint_key(Station)),
 #{key_id := Station} = EndpointRecord,          %% signer must be the station itself

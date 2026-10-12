@@ -41,7 +41,7 @@ verdict({ok, _Record}) -> <<"accepted">>;
 verdict({error, Refusal}) -> atom_to_binary(Refusal).
 
 accepted_checked({ok, Record}, Doc, Profile, P, C) ->
-    #{realm_id := Realm, procedure := Procedure, serving_station := Station, advertiser_node := Advertiser,
+    #{realm_id := Realm, procedure := Procedure, serving_stations := [Station], advertiser_node := Advertiser,
       kem_key := KemKey, kem_key_id := KemKeyId} = macula_record:read_procedure_advertisement(Record),
     ?assertEqual(maps:get(<<"signer_public_key">>, P), hex(macula_record:key(Record))),
     ?assertEqual(maps:get(<<"signer_node_id">>, P), hex(Advertiser)),

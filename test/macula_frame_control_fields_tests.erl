@@ -177,7 +177,7 @@ swim_update() ->
 advertisement() ->
     {ok, Provider} = macula_node_keys:generate(identity, pq_pure),
     Unsigned = macula_record:procedure_advertisement(macula_node_keys:key_id(Provider), ?REALM, <<"forecast_v1">>,
-                                                     id(9)),
+                                                     [id(9)]),
     {Provider, macula_record:encode(macula_record:sign(Unsigned, Provider))}.
 
 hybrid_key() ->

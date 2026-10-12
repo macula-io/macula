@@ -403,7 +403,7 @@ resolve_app(Pool, AppMri, TimeoutMs) ->
 %% `Station' is a seed URL (e.g. `<<"quic://[::1]:4433">>'). The pool reuses
 %% an existing link or dials and monitors a new one, waits for the
 %% handshake, and calls there. This is the direct-dial data path: resolve a
-%% provider's serving_station and its endpoint, then reach it in one hop.
+%% provider's serving stations and their endpoints, then reach it in one hop.
 %% See `macula_client:call_station/11'. With no options it carries no signed state to decide on sealing from, so it is
 %% refused as `{error, {confidentiality, no_signed_state}}' (macula 13.0.0): use `call_station/8' with
 %% `advertisement', `confidential => required' or `confidential => off' (see `call_seal/5').
@@ -516,8 +516,8 @@ sealed_by({error, _} = Refused, _Mode) -> Refused.
 %% `procedure_delegation' that names the pool's node id, both fetched
 %% from the DHT — verifies it against the pinned realm key, and hands
 %% every link the advertisement spec: for each link the pool signs an
-%% advertisement naming the station that link is connected to as
-%% `serving_station', sent as an ADVERTISE frame (signed again on
+%% advertisement whose `serving_stations' name the station that link is
+%% connected to and the pool's other connected stations, sent as an ADVERTISE frame (signed again on
 %% reconnect and on link respawn, never past the chain's earlier
 %% expiry). The pool renews the chain at a third of its remaining life
 %% (`macula_client:advertise/8', D32): a delegation lives 30 minutes, so
@@ -1296,7 +1296,7 @@ provider_node(_Org, {error, _} = E, _Pool, _Realm, _Procedure, _Io, _Fun) ->
 own_namespace_spec(Realm, Procedure, NodeId, Fun) ->
     own_namespace_checked(
       macula_record:own_namespace(
-        macula_record:procedure_advertisement(NodeId, Realm, Procedure, NodeId)),
+        macula_record:procedure_advertisement(NodeId, Realm, Procedure, [NodeId])),
       Fun).
 
 own_namespace_checked(ok, Fun) ->
@@ -1346,7 +1346,7 @@ sign_provider_advertisement(Io, Pool, Realm, Procedure, OrgDir, Deleg,
     Authorization = #{org_directory        => macula_record:encode(OrgDir),
                       procedure_delegation => macula_record:encode(Deleg)},
     Unsigned = macula_record:procedure_advertisement(
-                 NodeId, Realm, Procedure, NodeId,
+                 NodeId, Realm, Procedure, [NodeId],
                  #{authorization => Authorization}),
     NotAfter = min(macula_record:expires_at(OrgDir),
                    macula_record:expires_at(Deleg)),

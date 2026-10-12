@@ -43,8 +43,11 @@ published(Opts, Links) ->
 
 named(ok) ->
     receive
-        {put, Record} -> {ok, maps:get(serving_station, macula_record:read_procedure_advertisement(Record))}
+        {put, Record} -> {ok, the_one_station(maps:get(serving_stations, macula_record:read_procedure_advertisement(Record)))}
     after 1_000 -> error(nothing_put)
     end;
 named({error, _} = Error) ->
     receive {put, _} -> error(put_on_error) after 100 -> Error end.
+
+%% A direct publish names the one station it published through.
+the_one_station([Station]) -> Station.

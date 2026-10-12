@@ -51,7 +51,7 @@ a_presigned_keyed_advertisement_is_refused_test_() ->
         {Public, _} = macula_seal:generate_key(Profile),
         Proc = <<"~", (binary:encode_hex(NodeId, lowercase))/binary, "/ring">>,
         Ad = macula_record:encode(macula_record:sign(macula_record:procedure_advertisement(
-                 NodeId, <<1:256>>, Proc, <<2:256>>, #{kem_key => macula_seal:key_as_carried(Public)}), Key)),
+                 NodeId, <<1:256>>, Proc, [<<2:256>>], #{kem_key => macula_seal:key_as_carried(Public)}), Key)),
         {ok, Pool} = macula_client:connect([], #{}),
         ?assertEqual({error, {confidentiality, presigned_keyed_advertisement}},
                      macula_client:advertise(Pool, <<1:256>>, Proc, fun(_) -> ok end, open, Ad, all, undefined)),

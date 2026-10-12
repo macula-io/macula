@@ -129,7 +129,7 @@ a_stream_advertisement_sends_the_same_advertise_frame_test_() ->
 %%------------------------------------------------------------------
 
 %% Given the unsigned advertisement spec, the link signs it with its own
-%% node key and names ITS peer station as serving_station.
+%% node key and names ITS peer station among its serving_stations.
 a_spec_is_signed_naming_the_link_s_own_station_test_() ->
     {spawn, {timeout, 5,
      fun() ->
@@ -139,7 +139,7 @@ a_spec_is_signed_naming_the_link_s_own_station_test_() ->
                                             fun unary_handler/1, open,
                                             spec(NotAfter)),
          Ad = advertised_record(sent_frame_within(2_000)),
-         ?assertEqual(<<9:256>>, maps:get(serving_station, Ad)),
+         ?assertEqual(<<9:256>>, stations(Ad)),
          ?assertEqual(?PROCEDURE, maps:get(procedure, Ad)),
          ?assertEqual(authorization(), maps:get(authorization, Ad)),
          ?assert(maps:get(expires_at, Ad) =< NotAfter),
@@ -156,10 +156,10 @@ a_reconnect_to_another_station_re_signs_naming_it_test_() ->
          ok = macula_station_link:advertise(Pid, ?REALM, ?PROCEDURE,
                                             fun unary_handler/1, open,
                                             spec(erlang:system_time(millisecond) + 3_600_000)),
-         ?assertEqual(<<9:256>>, maps:get(serving_station, advertised_record(sent_frame_within(2_000)))),
+         ?assertEqual(<<9:256>>, stations(advertised_record(sent_frame_within(2_000)))),
          Pid ! {macula_peering, connected, self(), <<10:256>>},
          ?assertEqual(<<10:256>>, element(?PEER_NODE_ID_INDEX, sys:get_state(Pid))),
-         ?assertEqual(<<10:256>>, maps:get(serving_station, advertised_record(sent_frame_within(2_000)))),
+         ?assertEqual(<<10:256>>, stations(advertised_record(sent_frame_within(2_000)))),
          macula_station_link:stop(Pid)
      end}}.
 
@@ -175,7 +175,7 @@ a_spec_made_before_connect_names_the_station_that_answered_test_() ->
          ?assertEqual(none, sent_frame_within(200)),
          Pid ! {macula_peering, connected, self(), <<11:256>>},
          ?assertEqual(<<11:256>>, element(?PEER_NODE_ID_INDEX, sys:get_state(Pid))),
-         ?assertEqual(<<11:256>>, maps:get(serving_station, advertised_record(sent_frame_within(2_000)))),
+         ?assertEqual(<<11:256>>, stations(advertised_record(sent_frame_within(2_000)))),
          macula_station_link:stop(Pid)
      end}}.
 
@@ -220,7 +220,7 @@ a_spec_is_signed_again_before_its_advertisement_expires_test_() ->
                                             (spec(erlang:system_time(millisecond) + 60_000))#{ttl_ms => 1_000}),
          First = advertised_record(sent_frame_within(2_000)),
          Second = advertised_record(sent_frame_within(1_500)),
-         ?assertEqual(<<9:256>>, maps:get(serving_station, Second)),
+         ?assertEqual(<<9:256>>, stations(Second)),
          ?assert(maps:get(expires_at, Second) > maps:get(expires_at, First)),
          macula_station_link:stop(Pid)
      end}}.
@@ -267,19 +267,59 @@ a_signing_that_fails_once_is_tried_again_test_() ->
          _ = sys:replace_state(Pid, fun(S) -> setelement(?PEER_NODE_ID_INDEX, S, <<9:256>>) end),
          ok = macula_station_link:advertise(Pid, ?REALM, ?PROCEDURE, fun unary_handler/1, open,
                                             spec(erlang:system_time(millisecond) + 60_000)),
-         ?assertEqual(<<9:256>>, maps:get(serving_station, advertised_record(sent_frame_within(3_000)))),
+         ?assertEqual(<<9:256>>, stations(advertised_record(sent_frame_within(3_000)))),
          macula_station_link:stop(Pid)
      end}}.
 
-%% A pool that refuses its first signing as busy and passes every later call to `Pool'.
+%% macula-station#55 (K > 1): the advertisement names every station the pool holds a connected link to, this link's
+%% included, sorted; a link still connecting, or one without a station yet, is not named.
+a_spec_is_signed_naming_every_station_the_pool_is_connected_to_test_() ->
+    {spawn, {timeout, 10,
+     fun() ->
+         {ok, _} = application:ensure_all_started(macula),
+         Opts = with_link_keys(#{seed => #{host => <<"127.0.0.1">>, port => 1}, connect_timeout_ms => 2000}),
+         Links = [#{connected => true, node_id => <<12:256>>}, #{connected => true, node_id => <<3:256>>},
+                  #{connected => false, node_id => <<4:256>>}, #{connected => true, node_id => undefined}],
+         Pool = with_pool_links(maps:get(pool, Opts), Links),
+         {ok, Pid} = macula_station_link:start_link(Opts#{pool => Pool}),
+         Peer = self(),
+         _ = sys:replace_state(Pid, fun(S) -> setelement(?PEER_PID_INDEX, S, Peer) end),
+         _ = sys:replace_state(Pid, fun(S) -> setelement(?PEER_NODE_ID_INDEX, S, <<9:256>>) end),
+         ok = macula_station_link:advertise(Pid, ?REALM, ?PROCEDURE, fun unary_handler/1, open,
+                                            spec(erlang:system_time(millisecond) + 60_000)),
+         ?assertEqual([<<3:256>>, <<9:256>>, <<12:256>>],
+                      maps:get(serving_stations, advertised_record(sent_frame_within(3_000)))),
+         macula_station_link:stop(Pid)
+     end}}.
+
+%% A pool that answers `links' with `Links' and passes every other call to `Pool'.
+with_pool_links(Pool, Links) ->
+    spawn(fun() -> answering_links(Pool, Links) end).
+
+answering_links(Pool, Links) ->
+    receive
+        {'$gen_call', From, links} -> gen_server:reply(From, {ok, Links});
+        {'$gen_call', From, Msg} -> gen_server:reply(From, gen_server:call(Pool, Msg))
+    end,
+    answering_links(Pool, Links).
+
+%% A pool that refuses its first signing as busy and passes every other call to `Pool'.
 refusing_once(Pool) ->
-    spawn(fun() ->
-              receive {'$gen_call', From, _First} -> gen_server:reply(From, {error, busy}) end,
-              (fun Loop() ->
-                   receive {'$gen_call', From2, Msg} -> gen_server:reply(From2, gen_server:call(Pool, Msg)) end,
-                   Loop()
-               end)()
-          end).
+    spawn(fun() -> forwarding(Pool, refuse_next_signing) end).
+
+forwarding(Pool, Refusal) ->
+    receive
+        {'$gen_call', From, Msg} ->
+            forwarding(Pool, answered(From, Msg, Pool, Refusal))
+    end.
+
+answered(From, Msg, _Pool, refuse_next_signing) when element(1, Msg) =:= sign_node_record;
+                                                      element(1, Msg) =:= sign_node_record_bounded ->
+    gen_server:reply(From, {error, busy}),
+    passed;
+answered(From, Msg, Pool, Refusal) ->
+    gen_server:reply(From, gen_server:call(Pool, Msg)),
+    Refusal.
 
 %% Every frame sent until none arrives for `QuietMs'.
 frames_until_quiet(QuietMs) ->
@@ -296,7 +336,7 @@ a_stream_spec_is_signed_naming_the_link_s_own_station_test_() ->
          ok = macula_station_link:advertise_stream(Pid, ?REALM, ?PROCEDURE,
                                                    bidi, fun stream_handler/2, open,
                                                    spec(erlang:system_time(millisecond) + 3_600_000)),
-         ?assertEqual(<<9:256>>, maps:get(serving_station, advertised_record(sent_frame_within(2_000)))),
+         ?assertEqual(<<9:256>>, stations(advertised_record(sent_frame_within(2_000)))),
          macula_station_link:stop(Pid)
      end}}.
 
@@ -383,3 +423,8 @@ put_or_sent(_Procedure, Frame, _Ms) ->
 %% A registry of the link's state: `procedures' or `stream_procedures'.
 registered(Field, Pid) ->
     element(macula_station_link:state_field_index(Field), sys:get_state(Pid)).
+
+%% The one station an advertisement names when the link's pool holds no other connected link.
+stations(Ad) ->
+    [Station] = maps:get(serving_stations, Ad),
+    Station.

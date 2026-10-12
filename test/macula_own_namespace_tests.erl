@@ -69,7 +69,7 @@ own(Node, Name) ->
     <<"~", (binary:encode_hex(Node, lowercase))/binary, "/", Name/binary>>.
 
 signed(#{key := Key, node := Node}, Procedure, Opts) ->
-    macula_record:refresh(macula_record:procedure_advertisement(Node, ?REALM, Procedure, <<9:256>>, Opts), Key).
+    macula_record:refresh(macula_record:procedure_advertisement(Node, ?REALM, Procedure, [<<9:256>>], Opts), Key).
 
 trust() ->
     {ok, Profile} = macula_crypto_profile:configured(),

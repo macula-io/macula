@@ -21,7 +21,7 @@ Case = fun(Profile) ->
     ok = filelib:ensure_path(filename:join(Dir, atom_to_list(Profile))),
     [begin
          Signed = macula_record:refresh(
-                    macula_record:procedure_advertisement(Node, Realm, Procedure, Station, Opts), Key),
+                    macula_record:procedure_advertisement(Node, Realm, Procedure, [Station], Opts), Key),
          Bytes = macula_record:encode(Signed),
          File = filename:join([Dir, atom_to_list(Profile), <<Name/binary, ".bin">>]),
          ok = file:write_file(File, Bytes),

@@ -58,7 +58,7 @@ records_named_by_their_payload_match_the_vectors_test() ->
               macula_record:realm_member_endorsement(RealmId, #{realm => RealmId, member_node => fill(16#22),
                                                                 roles => []})},
              {"efbcd93463f2cd8c2c00fd481ef4f2ad2948af8476f505d4e3aeb13b9e69e2bc",
-              macula_record:procedure_advertisement(fill(16#55), RealmId, <<"acme/get_forecast_v1">>, fill(16#77))},
+              macula_record:procedure_advertisement(fill(16#55), RealmId, <<"acme/get_forecast_v1">>, [fill(16#77)])},
              {"51c6fc4b520eed65bb556522be043366a888fb7c9a2d0915392378ca0adb8c31",
               macula_record:foundation_t3_attestation(fill(16#77), 1789000000000)},
              {"c3860b4b53a5ad2ab73ec3c26ec8c228e46f2f0c123732b257ea5c8b93351138",

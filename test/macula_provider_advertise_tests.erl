@@ -63,7 +63,7 @@ a_complete_chain_hands_the_pool_a_spec_a_link_signs(
     Decoded = link_signed(Keys, Spec, Station),
     Read = macula_record:read_procedure_advertisement(Decoded),
     ?assertEqual(NodeId, maps:get(advertiser_node, Read)),
-    ?assertEqual(Station, maps:get(serving_station, Read)),
+    ?assertEqual([Station], maps:get(serving_stations, Read)),
     {ok, Profile} = macula_crypto_profile:configured(),
     ?assertEqual(ok,
                  macula_record:verify_authorization(

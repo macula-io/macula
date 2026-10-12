@@ -52,7 +52,7 @@ identity_key() ->
 
 advertisement(Realm, Procedure, Opts) ->
     Key = identity_key(),
-    Unsigned = macula_record:procedure_advertisement(macula_node_keys:key_id(Key), Realm, Procedure, ?STATION, Opts),
+    Unsigned = macula_record:procedure_advertisement(macula_node_keys:key_id(Key), Realm, Procedure, [?STATION], Opts),
     verified(macula_record:sign(Unsigned, Key)).
 
 %% A record as macula:find_records/2 hands it over: verified under the node's profile.

@@ -24,7 +24,7 @@ Profile = fun(P) ->
     KemKeyId = macula_seal:key_id(KemKey),
     {OtherKemPublic, _} = macula_seal:generate_key(P),
     OtherKemKeyId = macula_seal:key_id(macula_seal:key_as_carried(OtherKemPublic)),
-    Keyed = macula_record:procedure_advertisement(NodeId, Realm, Procedure, Station, #{kem_key => KemKey}),
+    Keyed = macula_record:procedure_advertisement(NodeId, Realm, Procedure, [Station], #{kem_key => KemKey}),
     #{payload := KeyedPayload, created_at := Created} = Keyed,
     Now = Created + 1_000,
     %% Signed as sign/2 signs, over a payload sign/2 refuses.

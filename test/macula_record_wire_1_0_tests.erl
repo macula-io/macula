@@ -26,7 +26,7 @@ every_built_in_type_signs_schema_1_and_its_own_lifetime_class_test() ->
     OrgKeyId = macula_node_keys:key_id(Org),
     Signed = [{macula_record:node_record(NodeId, [], 0), Id, 3},
               {macula_record:station_endpoint(4433), Id, 0},
-              {macula_record:procedure_advertisement(NodeId, <<1:256>>, <<"echo">>, <<2:256>>), Id, 0},
+              {macula_record:procedure_advertisement(NodeId, <<1:256>>, <<"echo">>, [<<2:256>>]), Id, 0},
               {macula_record:realm_directory(<<1:256>>, <<"r">>, <<3:256>>), Realm, 5},
               {macula_record:realm_stations(<<1:256>>, []), Realm, 2},
               {macula_record:org_directory(<<1:256>>, <<"org">>, OrgKeyId), Realm, 2},

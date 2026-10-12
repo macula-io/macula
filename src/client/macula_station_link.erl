@@ -991,9 +991,9 @@ advertise(Pid, Realm, Procedure, Handler,
 %% as an ADVERTISE frame. `Ad' is either a pre-signed advertisement's
 %% wire form, sent as it is, or an advertisement spec the link has its
 %% pool sign each time it sends, naming the station it is
-%% connected to as `serving_station' (a pool of several links, and a
-%% reconnect to another station, each get an advertisement naming their
-%% own station). The link stores it (for the handshake drain) and sends
+%% connected to among its `serving_stations' with the pool's other
+%% connected stations (a pool of several links, and a reconnect to another
+%% station, each get an advertisement naming their own station). The link stores it (for the handshake drain) and sends
 %% it at once when connected; `undefined' registers the handler and
 %% sends nothing.
 -spec advertise(pid(), <<_:256>>, binary(), handler(),
@@ -2687,7 +2687,10 @@ send_advertise(Pid, EncodedAd) ->
     ok.
 
 %% The advertisement this link sends for a spec names the station this
-%% link is connected to, and is bounded by the spec's `not_after' (the
+%% link is connected to and every other station its pool is connected to
+%% (macula-station#55, K > 1: one record per provider and procedure, so the
+%% last one any link signs carries the whole set), and is bounded by the
+%% spec's `not_after' (the
 %% earlier expiry of the chain it carries), so it never outlives its
 %% authorization. A record a node signs about itself is signed in its
 %% pool's process only (macula_record_signing_custody_tests), so the
@@ -2700,13 +2703,27 @@ sign_advertisement(Realm, Proc, _Spec, _Station, #state{pool = undefined}) ->
     not_sent(Realm, Proc, no_pool);
 sign_advertisement(Realm, Proc, Spec, Station, #state{pool = Pool, node_identity = Key, profile = Profile}) ->
     Link = self(),
-    Unsigned = macula_record:procedure_advertisement(node_id(Key), Realm, Proc, Station,
-                                                     advertisement_opts(Spec, Key, Profile)),
+    Opts = advertisement_opts(Spec, Key, Profile),
     SignOpts = maps:with([not_after], Spec),
     _ = spawn(fun() ->
+            Unsigned = macula_record:procedure_advertisement(node_id(Key), Realm, Proc,
+                                                             serving_stations(Station, pool_stations(Pool)), Opts),
             Link ! {advertisement_signed, {Realm, Proc}, Spec, Station, signed_or_refused(Pool, Unsigned, SignOpts)}
         end),
     ok.
+
+%% The stations the pool holds a connected link to, from its own state (no link is asked); none when the pool
+%% cannot answer, so the advertisement still names this link's station.
+pool_stations(Pool) ->
+    connected_stations(try macula_client:links(Pool) catch _:_ -> unanswered end).
+
+connected_stations({ok, Links}) -> [NodeId || #{connected := true, node_id := NodeId} <- Links, is_binary(NodeId)];
+connected_stations(_Unanswered) -> [].
+
+%% This link's station and up to 7 more of the pool's, sorted: an advertisement names at most 8 (macula-station#55).
+serving_stations(Station, PoolStations) ->
+    Others = lists:sublist(lists:usort(PoolStations) -- [Station], 7),
+    lists:usort([Station | Others]).
 
 %% The pool's signature on an advertisement, or why there is none: a pool call that exits is a refusal, not a crash.
 signed_or_refused(Pool, Unsigned, SignOpts) ->

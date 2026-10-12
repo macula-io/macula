@@ -785,7 +785,7 @@ a_published_advertisement_is_signed_by_the_node_identity_and_put_as_its_wire_for
     {<<"_dht.put_record">>, Wire} = receive {called, P, W} -> {P, W} after 1000 -> erlang:error(not_put) end,
     {ok, Verified} = macula_record:verify(Wire, profile()),
     ?assertEqual(#{realm_id => ?REALM, procedure => ?PROC, advertiser_node => macula_node_keys:key_id(Provider),
-                   serving_station => StationId, authorization => undefined},
+                   serving_stations => [StationId], authorization => undefined},
                  macula_record:read_procedure_advertisement(Verified)).
 
 %% verify_cert_chain turned a check on in 10.x and is gone. A call that still
@@ -1302,7 +1302,7 @@ advertisement_living(#{id := StationId}, TtlMs) ->
     Provider = node_key(identity),
     verified(macula_record:sign(
                macula_record:procedure_advertisement(macula_node_keys:key_id(Provider), ?REALM,
-                                                     ?PROC, StationId, #{ttl_ms => TtlMs}),
+                                                     ?PROC, [StationId], #{ttl_ms => TtlMs}),
                Provider)).
 
 %% A signed procedure_advertisement for Procedure from a fresh provider naming
@@ -1311,7 +1311,7 @@ advertisement(#{id := StationId}, Procedure) ->
     Provider = node_key(identity),
     verified(macula_record:sign(
                macula_record:procedure_advertisement(macula_node_keys:key_id(Provider), ?REALM, Procedure,
-                                                     StationId),
+                                                     [StationId]),
                Provider)).
 
 %% The realm key and the org key an authorization chains to.
@@ -1338,7 +1338,7 @@ authorized_advertisement(#{id := StationId}, #{realm := Realm, org := Org}, OrgN
     Authorization = #{org_directory => macula_record:encode(OrgDirectory),
                       procedure_delegation => macula_record:encode(Delegation)},
     verified(macula_record:sign(
-               macula_record:procedure_advertisement(ProviderId, ?REALM, ?ORG_PROC, StationId,
+               macula_record:procedure_advertisement(ProviderId, ?REALM, ?ORG_PROC, [StationId],
                                                      #{authorization => Authorization, ttl_ms => 300_000}),
                Provider)).
 

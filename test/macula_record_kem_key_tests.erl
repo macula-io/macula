@@ -72,7 +72,7 @@ a_lone_or_mismatched_field_is_refused_at_verify_test_() ->
 %%------------------------------------------------------------------
 
 advertisement(Id, Procedure, Opts) ->
-    macula_record:procedure_advertisement(macula_node_keys:key_id(Id), fill(5), Procedure, fill(6), Opts).
+    macula_record:procedure_advertisement(macula_node_keys:key_id(Id), fill(5), Procedure, [fill(6)], Opts).
 
 %% The record Base, its payload extended with Extra, signed by hand past what sign/2 would build.
 signed_with(#{type := Type, version := Version, created_at := Created, expires_at := Expires, payload := Payload},

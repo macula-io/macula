@@ -851,7 +851,7 @@ call_linked_station(Pool, Realm, Procedure, Payload, TimeoutMs)
 %% a new one exactly like a seed), waits for the handshake within the
 %% deadline, and calls through that link; the station delivers the CALL to
 %% the provider `Target' names. This is the direct-dial data path: resolve a
-%% provider's serving_station to its endpoint, then reach it in one hop
+%% provider's serving station to its endpoint, then reach it in one hop
 %% here, with no mesh relay.
 %%
 %% `UcanToken' is a capability token for a gated provider (empty: none).
@@ -3152,7 +3152,7 @@ withdrawal_signed(none, _Realm, _Proc, _Key) ->
 withdrawal_signed({ok, Authorization}, Realm, Proc, Key) ->
     {ok, NodeId} = macula_node_keys:node_id(Key),
     Unsigned = macula_record:procedure_advertisement(
-                 NodeId, Realm, Proc, NodeId,
+                 NodeId, Realm, Proc, [NodeId],
                  #{authorization => Authorization}),
     %% The pool's own custody paths: sign the fresh ad the way
     %% sign_node_record does, then withdraw it the way

@@ -43,7 +43,7 @@
 %%% Both starts reach a provider the same way. `macula:call/5' resolves
 %%% the procedure's `procedure_advertisement' from the DHT (published by
 %%% `macula_response:advertise_direct/6' on the provider side), resolves
-%%% that record's `serving_station' to a dialable endpoint via the
+%%% one of that record's `serving_stations' to a dialable endpoint via the
 %%% station's own `station_endpoint' record (every macula-station
 %%% publishes its own automatically), and calls the advertised provider
 %%% there in one hop via `macula:call_station/8'. `start_link_direct'

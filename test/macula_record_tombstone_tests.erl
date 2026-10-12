@@ -53,7 +53,7 @@ a_tombstone_outlives_the_withdrawn_record_by_the_clock_tolerance_test() ->
     Id = key(identity),
     Now = erlang:system_time(millisecond),
     Advertisement = macula_record:procedure_advertisement(macula_node_keys:key_id(Id), fill(16#11), <<"acme/echo_v1">>,
-                                                          fill(16#77)),
+                                                          [fill(16#77)]),
     Withdrawn = macula_record:sign(Advertisement#{created_at := Now + 4 * Minute, expires_at := Now + 9 * Minute}, Id),
     #{created_at := Created} = Tomb = macula_record:tombstone(Withdrawn, shutdown),
     ?assertMatch({ok, _}, verify(Withdrawn)),

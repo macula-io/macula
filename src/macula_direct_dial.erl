@@ -467,7 +467,7 @@ given([]) -> none.
 on_links({ok, Station}, #{pool := Pool, put_record := PutRecord, sign_node_record := Sign},
          Realm, Procedure, NodeIdentity, Opts) ->
     Advertiser = macula_node_keys:key_id(NodeIdentity),
-    Unsigned = macula_record:procedure_advertisement(Advertiser, Realm, Procedure, Station,
+    Unsigned = macula_record:procedure_advertisement(Advertiser, Realm, Procedure, [Station],
                                                      maps:merge(adv_opts(Opts), kem_key_opt(Opts, NodeIdentity))),
     signed_put(Sign(Pool, Unsigned, #{}), Pool, PutRecord);
 on_links({error, _} = Error, _Dial, _Realm, _Procedure, _NodeIdentity, _Opts) ->
@@ -530,7 +530,7 @@ resolve_station_endpoint(Pool, Station) ->
 %% `station_endpoint' record, verifying the record's signer is exactly
 %% `Station' and asking again past an absent, expired or malformed record,
 %% or a failed lookup, until `TimeoutMs' has passed — the same discipline
-%% `call/6' applies once it has a procedure's `serving_station'. The error
+%% `call/6' applies once it has a procedure's serving station. The error
 %% is, in this order, the latest answered lookup's own reason
 %% (`station_endpoint_not_found' for no record at all,
 %% `station_endpoint_expired' for one refused as stale, or the malformed
@@ -717,16 +717,17 @@ qualifying_stations({error, Reason}, _Trust) ->
 candidates_or([], Reason) -> {answered, {error, {unresolved, Reason}}};
 candidates_or(Candidates, _Reason) -> {ok, Candidates}.
 
-%% Every advertisement that passes the trust check, in the order given, as a
-%% candidate: the node_id of the provider that signed it, its record's
-%% version, the station it names, and the advertisement itself, which the call
-%% seals from (E2E design, Amendment A1).
+%% Every advertisement that passes the trust check, in the order given, as
+%% candidates: one per station it names (macula-station#55, K > 1), each with
+%% the node_id of the provider that signed it, its record's version, that
+%% station, and the advertisement itself, which the call seals from (E2E
+%% design, Amendment A1).
 trusted_stations(Recs, Trust, Now) ->
     [#{provider => KeyId, version => Version, station => Station,
        ttl_ms => reusable_for(Rec, Now), advertisement => Rec}
      || #{key_id := KeyId, version := Version} = Rec <- Recs,
         advertisement_trusted(Rec, Trust),
-        Station <- serving_station(Rec)].
+        Station <- serving_stations(Rec)].
 
 %% How long a candidate built from `Rec' may be tried as a head start before
 %% the DHT is asked about it again, as a DURATION from `Now'.
@@ -756,9 +757,9 @@ trusted_stations(Recs, Trust, Now) ->
 reusable_for(#{expires_at := ExpiresAt}, Now) ->
     max(0, ExpiresAt - Now).
 
-serving_station(Rec) ->
+serving_stations(Rec) ->
     try macula_record:read_procedure_advertisement(Rec) of
-        #{serving_station := Station} when is_binary(Station) -> [Station];
+        #{serving_stations := Stations} when is_list(Stations) -> Stations;
         _Unreadable -> []
     catch _:_ -> []
     end.

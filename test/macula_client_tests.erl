@@ -1101,7 +1101,7 @@ the_directory_realm_is_the_realm_of_its_advertisement_test() ->
     ?assertEqual(error, macula_client:find_list_stations_realm([not_a_record, #{}], <<"mcl-stations/list_stations">>)).
 
 advertisement(Realm, Procedure) ->
-    macula_record:procedure_advertisement(<<1:256>>, Realm, Procedure, <<2:256>>).
+    macula_record:procedure_advertisement(<<1:256>>, Realm, Procedure, [<<2:256>>]).
 
 %% The directory's procedure is org-namespaced, so a caller trusts its advertisement only through the realm key it
 %% pins (D25): a discovery pool with no `realm_trust' would resolve `no_trusted_advertisement' on every run and stay on
