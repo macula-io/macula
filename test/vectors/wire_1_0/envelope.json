@@ -1,0 +1,471 @@
+{
+  "cases": [
+    {
+      "covers": [
+        "D5"
+      ],
+      "expect": { "outcome": "accept" },
+      "id": "envelope.known.accept",
+      "input": {
+        "after_hello": 1,
+        "frame": "a3656e6f6e6365500000000000000000000000000000005a6776657273696f6e056a6672616d655f747970656d6c6976656e6573735f70696e67",
+        "position": "control_stream"
+      },
+      "lands_with": "macula#99",
+      "profile": "both"
+    },
+    {
+      "covers": [
+        "D5"
+      ],
+      "expect": { "outcome": "accept" },
+      "id": "envelope.known.optional_header.accept",
+      "input": {
+        "after_hello": 1,
+        "frame": "a5656e6f6e6365500000000000000000000000000000005a6776657273696f6e05686672616d655f696450019000000000000000000000000000006a6672616d655f747970656d6c6976656e6573735f70696e676a73656e745f61745f6d731b000001a12f9a3e00",
+        "position": "control_stream"
+      },
+      "lands_with": "macula#99",
+      "profile": "both"
+    },
+    {
+      "covers": [
+        "D2",
+        "D9"
+      ],
+      "expect": {
+        "outcome": "refuse",
+        "reason": "malformed_frame"
+      },
+      "id": "envelope.version_4.refused",
+      "input": {
+        "after_hello": 1,
+        "frame": "a3656e6f6e6365500000000000000000000000000000005a6776657273696f6e046a6672616d655f747970656d6c6976656e6573735f70696e67",
+        "position": "control_stream"
+      },
+      "lands_with": "macula#99",
+      "profile": "both"
+    },
+    {
+      "covers": [
+        "D3"
+      ],
+      "expect": {
+        "outcome": "refuse",
+        "reason": "malformed_frame"
+      },
+      "id": "envelope.version_2.refused",
+      "input": {
+        "after_hello": 1,
+        "frame": "a3656e6f6e6365500000000000000000000000000000005a6776657273696f6e026a6672616d655f747970656d6c6976656e6573735f70696e67",
+        "position": "control_stream"
+      },
+      "lands_with": "macula#99",
+      "profile": "both"
+    },
+    {
+      "covers": [
+        "D9"
+      ],
+      "expect": {
+        "outcome": "refuse",
+        "reason": "malformed_frame"
+      },
+      "id": "envelope.capabilities_header.refused",
+      "input": {
+        "after_hello": 1,
+        "frame": "a4656e6f6e6365500000000000000000000000000000005a6776657273696f6e056a6672616d655f747970656d6c6976656e6573735f70696e676c6361706162696c697469657300",
+        "position": "control_stream"
+      },
+      "lands_with": "macula#99",
+      "profile": "both"
+    },
+    {
+      "covers": [
+        "D9"
+      ],
+      "expect": {
+        "outcome": "refuse",
+        "reason": "malformed_frame"
+      },
+      "id": "envelope.extra_core_field.refused",
+      "input": {
+        "after_hello": 1,
+        "frame": "a4656e6f6e6365500000000000000000000000000000005a66636f6c6f757264626c75656776657273696f6e056a6672616d655f747970656d6c6976656e6573735f70696e67",
+        "position": "control_stream"
+      },
+      "lands_with": "macula#99",
+      "profile": "both"
+    },
+    {
+      "covers": [
+        "D5",
+        "D9"
+      ],
+      "expect": {
+        "count": "wire_unknown_frame_type",
+        "outcome": "ignore"
+      },
+      "id": "envelope.unknown_frame_type.ignored",
+      "input": {
+        "after_hello": 1,
+        "frame": "a26776657273696f6e056a6672616d655f74797065746578616d706c655f6675747572655f6672616d65",
+        "position": "control_stream"
+      },
+      "lands_with": "macula#99",
+      "profile": "both"
+    },
+    {
+      "covers": [
+        "D5"
+      ],
+      "expect": {
+        "count": "wire_unknown_frame_type",
+        "outcome": "ignore"
+      },
+      "id": "envelope.unknown_frame_type.body_not_validated",
+      "input": {
+        "after_hello": 1,
+        "frame": "a4656e6f6e6365696e6f742062797465736776657273696f6e0568616e797468696e6783016374776f41036a6672616d655f74797065746578616d706c655f6675747572655f6672616d65",
+        "position": "control_stream"
+      },
+      "lands_with": "macula#99",
+      "profile": "both"
+    },
+    {
+      "covers": [
+        "D5"
+      ],
+      "expect": {
+        "outcome": "refuse",
+        "reason": "malformed_frame"
+      },
+      "id": "envelope.unknown_frame_type.version_4.refused",
+      "input": {
+        "after_hello": 1,
+        "frame": "a26776657273696f6e046a6672616d655f74797065746578616d706c655f6675747572655f6672616d65",
+        "position": "control_stream"
+      },
+      "lands_with": "macula#99",
+      "profile": "both"
+    },
+    {
+      "covers": [
+        "D5"
+      ],
+      "expect": {
+        "outcome": "refuse",
+        "reason": "malformed_frame"
+      },
+      "id": "envelope.unknown_frame_type.frame_type_not_text.refused",
+      "input": {
+        "after_hello": 1,
+        "frame": "a26776657273696f6e056a6672616d655f74797065456279746573",
+        "position": "control_stream"
+      },
+      "lands_with": "macula#99",
+      "profile": "both"
+    },
+    {
+      "covers": [
+        "D5"
+      ],
+      "expect": {
+        "outcome": "refuse",
+        "reason": "malformed_frame"
+      },
+      "id": "envelope.unknown_frame_type.frame_type_empty.refused",
+      "input": {
+        "after_hello": 1,
+        "frame": "a26776657273696f6e056a6672616d655f7479706560",
+        "position": "control_stream"
+      },
+      "lands_with": "macula#99",
+      "profile": "both"
+    },
+    {
+      "bound": "upper",
+      "covers": [
+        "D5"
+      ],
+      "expect": {
+        "count": "wire_unknown_frame_type",
+        "outcome": "ignore"
+      },
+      "id": "envelope.unknown_frame_type.frame_type_64.ignored",
+      "input": {
+        "after_hello": 1,
+        "frame": "a26776657273696f6e056a6672616d655f74797065784061616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161",
+        "position": "control_stream"
+      },
+      "lands_with": "macula#99",
+      "profile": "both"
+    },
+    {
+      "covers": [
+        "D5"
+      ],
+      "expect": {
+        "outcome": "refuse",
+        "reason": "malformed_frame"
+      },
+      "id": "envelope.unknown_frame_type.frame_type_65.refused",
+      "input": {
+        "after_hello": 1,
+        "frame": "a26776657273696f6e056a6672616d655f7479706578416161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161",
+        "position": "control_stream"
+      },
+      "lands_with": "macula#99",
+      "profile": "both"
+    },
+    {
+      "covers": [
+        "D9"
+      ],
+      "expect": {
+        "count": "wire_unknown_frame_type",
+        "outcome": "ignore"
+      },
+      "id": "envelope.retired_v2_connect.ignored",
+      "input": {
+        "after_hello": 1,
+        "frame": "a3676e6f64655f6964582000000000000000000000000000000000000000000000000000000000000000006776657273696f6e056a6672616d655f7479706567636f6e6e656374",
+        "position": "control_stream"
+      },
+      "lands_with": "macula#99",
+      "profile": "both"
+    },
+    {
+      "covers": [
+        "D5",
+        "A"
+      ],
+      "expect": {
+        "outcome": "abort_stream",
+        "quic_code": 5
+      },
+      "id": "envelope.unknown_frame_type.dedicated_stream.aborts",
+      "input": {
+        "after_hello": 1,
+        "frame": "a26776657273696f6e056a6672616d655f74797065746578616d706c655f6675747572655f6672616d65",
+        "position": "dedicated_stream"
+      },
+      "lands_with": "macula#99",
+      "profile": "both"
+    },
+    {
+      "covers": [
+        "D8"
+      ],
+      "expect": {
+        "count": "wire_ext_ignored",
+        "outcome": "accept"
+      },
+      "id": "envelope.ext.noncritical_unknown.ignored",
+      "input": {
+        "after_hello": 1,
+        "frame": "a463657874a16f6578616d706c652e756e6b6e6f776ea26576616c7565617868637269746963616c00656e6f6e6365500000000000000000000000000000005a6776657273696f6e056a6672616d655f747970656d6c6976656e6573735f70696e67",
+        "position": "control_stream"
+      },
+      "lands_with": "macula#99",
+      "profile": "both"
+    },
+    {
+      "covers": [
+        "D8",
+        "D9"
+      ],
+      "expect": {
+        "link": "stays_up",
+        "outcome": "refuse",
+        "reason": "extension_unsupported"
+      },
+      "id": "envelope.ext.critical_unknown.refused",
+      "input": {
+        "after_hello": 1,
+        "frame": "a463657874a16f6578616d706c652e756e6b6e6f776ea26576616c7565617868637269746963616c01656e6f6e6365500000000000000000000000000000005a6776657273696f6e056a6672616d655f747970656d6c6976656e6573735f70696e67",
+        "position": "control_stream"
+      },
+      "lands_with": "macula#99",
+      "profile": "both"
+    },
+    {
+      "covers": [
+        "D8"
+      ],
+      "expect": {
+        "outcome": "refuse",
+        "reason": "malformed_frame"
+      },
+      "id": "envelope.ext.empty.refused",
+      "input": {
+        "after_hello": 1,
+        "frame": "a463657874a0656e6f6e6365500000000000000000000000000000005a6776657273696f6e056a6672616d655f747970656d6c6976656e6573735f70696e67",
+        "position": "control_stream"
+      },
+      "lands_with": "macula#99",
+      "profile": "both"
+    },
+    {
+      "covers": [
+        "D8"
+      ],
+      "expect": {
+        "outcome": "refuse",
+        "reason": "malformed_frame"
+      },
+      "id": "envelope.ext.critical_2.refused",
+      "input": {
+        "after_hello": 1,
+        "frame": "a463657874a16f6578616d706c652e756e6b6e6f776ea26576616c7565617868637269746963616c02656e6f6e6365500000000000000000000000000000005a6776657273696f6e056a6672616d655f747970656d6c6976656e6573735f70696e67",
+        "position": "control_stream"
+      },
+      "lands_with": "macula#99",
+      "profile": "both"
+    },
+    {
+      "covers": [
+        "D8"
+      ],
+      "expect": {
+        "outcome": "refuse",
+        "reason": "malformed_frame"
+      },
+      "id": "envelope.ext.entry_not_a_map.refused",
+      "input": {
+        "after_hello": 1,
+        "frame": "a463657874a1696578616d706c652e6501656e6f6e6365500000000000000000000000000000005a6776657273696f6e056a6672616d655f747970656d6c6976656e6573735f70696e67",
+        "position": "control_stream"
+      },
+      "lands_with": "macula#99",
+      "profile": "both"
+    },
+    {
+      "bound": "upper",
+      "covers": [
+        "D8"
+      ],
+      "expect": {
+        "count": "wire_ext_ignored",
+        "outcome": "accept"
+      },
+      "id": "envelope.ext.16_entries.accept",
+      "input": {
+        "after_hello": 1,
+        "frame": "a463657874b06a6578616d706c652e6531a26576616c75650168637269746963616c006a6578616d706c652e6532a26576616c75650268637269746963616c006a6578616d706c652e6533a26576616c75650368637269746963616c006a6578616d706c652e6534a26576616c75650468637269746963616c006a6578616d706c652e6535a26576616c75650568637269746963616c006a6578616d706c652e6536a26576616c75650668637269746963616c006a6578616d706c652e6537a26576616c75650768637269746963616c006a6578616d706c652e6538a26576616c75650868637269746963616c006a6578616d706c652e6539a26576616c75650968637269746963616c006b6578616d706c652e653130a26576616c75650a68637269746963616c006b6578616d706c652e653131a26576616c75650b68637269746963616c006b6578616d706c652e653132a26576616c75650c68637269746963616c006b6578616d706c652e653133a26576616c75650d68637269746963616c006b6578616d706c652e653134a26576616c75650e68637269746963616c006b6578616d706c652e653135a26576616c75650f68637269746963616c006b6578616d706c652e653136a26576616c75651068637269746963616c00656e6f6e6365500000000000000000000000000000005a6776657273696f6e056a6672616d655f747970656d6c6976656e6573735f70696e67",
+        "position": "control_stream"
+      },
+      "lands_with": "macula#99",
+      "profile": "both"
+    },
+    {
+      "covers": [
+        "D8"
+      ],
+      "expect": {
+        "outcome": "refuse",
+        "reason": "malformed_frame"
+      },
+      "id": "envelope.ext.17_entries.refused",
+      "input": {
+        "after_hello": 1,
+        "frame": "a463657874b16a6578616d706c652e6531a26576616c75650168637269746963616c006a6578616d706c652e6532a26576616c75650268637269746963616c006a6578616d706c652e6533a26576616c75650368637269746963616c006a6578616d706c652e6534a26576616c75650468637269746963616c006a6578616d706c652e6535a26576616c75650568637269746963616c006a6578616d706c652e6536a26576616c75650668637269746963616c006a6578616d706c652e6537a26576616c75650768637269746963616c006a6578616d706c652e6538a26576616c75650868637269746963616c006a6578616d706c652e6539a26576616c75650968637269746963616c006b6578616d706c652e653130a26576616c75650a68637269746963616c006b6578616d706c652e653131a26576616c75650b68637269746963616c006b6578616d706c652e653132a26576616c75650c68637269746963616c006b6578616d706c652e653133a26576616c75650d68637269746963616c006b6578616d706c652e653134a26576616c75650e68637269746963616c006b6578616d706c652e653135a26576616c75650f68637269746963616c006b6578616d706c652e653136a26576616c75651068637269746963616c006b6578616d706c652e653137a26576616c75651168637269746963616c00656e6f6e6365500000000000000000000000000000005a6776657273696f6e056a6672616d655f747970656d6c6976656e6573735f70696e67",
+        "position": "control_stream"
+      },
+      "lands_with": "macula#99",
+      "profile": "both"
+    },
+    {
+      "bound": "upper",
+      "covers": [
+        "D8"
+      ],
+      "expect": {
+        "count": "wire_ext_ignored",
+        "outcome": "accept"
+      },
+      "id": "envelope.ext.name_64.accept",
+      "input": {
+        "after_hello": 1,
+        "frame": "a463657874a1784061616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161a26576616c7565617868637269746963616c00656e6f6e6365500000000000000000000000000000005a6776657273696f6e056a6672616d655f747970656d6c6976656e6573735f70696e67",
+        "position": "control_stream"
+      },
+      "lands_with": "macula#99",
+      "profile": "both"
+    },
+    {
+      "covers": [
+        "D8"
+      ],
+      "expect": {
+        "outcome": "refuse",
+        "reason": "malformed_frame"
+      },
+      "id": "envelope.ext.name_65.refused",
+      "input": {
+        "after_hello": 1,
+        "frame": "a463657874a178416161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161a26576616c7565617868637269746963616c00656e6f6e6365500000000000000000000000000000005a6776657273696f6e056a6672616d655f747970656d6c6976656e6573735f70696e67",
+        "position": "control_stream"
+      },
+      "lands_with": "macula#99",
+      "profile": "both"
+    },
+    {
+      "covers": [
+        "D8"
+      ],
+      "expect": {
+        "outcome": "refuse",
+        "reason": "malformed_frame"
+      },
+      "id": "envelope.ext.name_uppercase.refused",
+      "input": {
+        "after_hello": 1,
+        "frame": "a463657874a1674578616d706c65a26576616c7565617868637269746963616c00656e6f6e6365500000000000000000000000000000005a6776657273696f6e056a6672616d655f747970656d6c6976656e6573735f70696e67",
+        "position": "control_stream"
+      },
+      "lands_with": "macula#99",
+      "profile": "both"
+    },
+    {
+      "covers": [
+        "D5"
+      ],
+      "expect": {
+        "outcome": "refuse",
+        "reason": "frame_too_large"
+      },
+      "id": "envelope.length.too_large.refused",
+      "input": {
+        "length_header": "01000000",
+        "position": "control_stream"
+      },
+      "lands_with": "macula#99",
+      "profile": "both"
+    },
+    {
+      "bound": "upper",
+      "covers": [
+        "D5"
+      ],
+      "expect": {
+        "note": "the header alone passes; the body is awaited",
+        "outcome": "accept"
+      },
+      "id": "envelope.length.at_cap.header_accepted",
+      "input": {
+        "length_header": "00ffffff",
+        "position": "control_stream"
+      },
+      "lands_with": "macula#99",
+      "profile": "both"
+    }
+  ],
+  "class": "envelope",
+  "design": "macula#83",
+  "format": 1,
+  "generator": "scripts/generate-wire-1-0-vectors.sh",
+  "spec": "docs/design/WIRE_1_0.md",
+  "wire": "1.0"
+}
+

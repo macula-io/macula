@@ -207,25 +207,31 @@ tombstone names the row of the type it withdraws.
 A **custodian** (a station storing a record) runs, in order:
 
 1. size: the wire form at most 256 KiB, else `record_too_large`;
-2. envelope: `{key, tbs, signature}`, each bytes, `key` in a carried form of a registered profile, else `malformed`;
-3. signature over the `tbs` as received, with the verifier `alg` selects, else `signature_invalid`, or
-   `alg_unsupported` for an `alg` with no registered verifier;
-4. the `tbs` under the decoding rule, with exactly the envelope keys (`type`, `alg`, `version`, `created_at`,
-   `expires_at`, `schema`, `lifetime_class`, `payload`, and `subject` and `ext` where present); `payload` must
-   decode but is not read; else `malformed`;
-5. the clock: `not_yet_valid`, `expired`, with 5 minutes of tolerance;
-6. the lifetime: `lifetime_reversed`, `lifetime_class_unknown`, `lifetime_too_long` (against the table row);
-7. the slot: a known type's own rule; any other type needs `subject`, else `subject_missing`, and is placed at
+2. envelope: `{key, tbs, signature}`, each bytes, else `malformed`;
+3. the `tbs` decodes under the decoding rule and holds a text `alg`, else `malformed`. Because `alg` selects the
+   verifier (D7), the `tbs` is decoded before the signature is checked; nothing in it except `alg` is acted on
+   before step 5;
+4. `alg` names a registered verifier, else `alg_unsupported`; `key` is in that verifier's carried form, else
+   `malformed`;
+5. the signature over the `tbs` bytes as received, else `signature_invalid`;
+6. the `tbs` holds exactly the envelope keys (`type`, `alg`, `version`, `created_at`, `expires_at`, `schema`,
+   `lifetime_class`, `payload`, and `subject` and `ext` where present), each of its type; `payload` is not read;
+   else `malformed`;
+7. the clock: `not_yet_valid`, `expired`, with 5 minutes of tolerance;
+8. the lifetime: `lifetime_reversed`, `lifetime_class_unknown`, `lifetime_too_long` (against the table row);
+9. the slot: a known type's own rule; any other type needs `subject`, else `subject_missing`, and is placed at
    `H(type | signer key id | subject)` (A3).
 
 A custodian stores what passes, opaquely, whatever the type: it never reads a payload and never checks `schema`.
 
 A **reader** (a node acting on a record) runs the custodian checks, then:
 
-8. the type is one it knows, else `type_unknown`; its `schema` is one it reads, else `schema_unsupported`; its
-   `lifetime_class` is the type's row, else `lifetime_class_mismatch`;
-9. the type's payload rules, else `malformed`; the signer named in the payload, else `key_id_mismatch`;
-10. a content id whose tag it does not know: `mcid_tag_unknown` (custodians store such records).
+10. the type is one it knows (domain types 0x20 to 0xFF are known as a class), else `type_unknown`; its `schema` is
+    one it reads, else `schema_unsupported`; its `lifetime_class` is the type's row, else `lifetime_class_mismatch`;
+11. an `ext` entry it does not know with `critical` 1: `extension_unsupported`; with `critical` 0, ignored and
+    counted;
+12. the type's payload rules, else `malformed`; a content id whose tag it does not know, `mcid_tag_unknown`
+    (custodians store such records); the signer named in the payload, else `key_id_mismatch`.
 
 ### 5.3 Tags
 

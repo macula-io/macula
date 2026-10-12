@@ -57,10 +57,12 @@ A JSON number is a CBOR integer (always below 2^53 in magnitude), a string is CB
 ## Class inputs, in short
 
 - **tbs:** `label`, `fields` (typed JSON), `tbs` (hex, the canonical encoding), `signing_input` (hex: `label || 0x00 || SHA-384(key as carried) || tbs`, or the handshake form without the key hash). A stack must encode `fields` to exactly `tbs`.
-- **verify / check_order / custodian:** `object` (hex, the wire bytes as received), `signer` (role in `keys.json`), `now_ms`.
+- **verify / check_order:** `object` (hex, the wire bytes as received), `signer` (role in `keys.json`), `now_ms`, and `signature_valid` (1 or 0: whether the signature verifies over the `tbs` as received with the bare primitive, a check any runner can make before reaching wire 1.0 code). A `check_order` case's `expect` carries `role`, `custodian` or `reader`.
+- **custodian:** `object_of`, the id of the `verify` case whose object it stores (the bytes are not repeated), `signer`, `now_ms`.
 - **handshake:** `tls` (`leaf_der`, `exporter` E, both hex: the parts TLS would supply), `floor` (persisted `{node_id, version}` or none), `steps`: `[{"from": "client", "frame": "opener", "bytes": "<hex>"}, ...]`, and one `expect` per step.
 - **dht_procedures:** `procedure`, `args` or `reply` (hex CBOR), `expect`.
-- **enums / envelope:** `frame` (hex, one frame without the 4-byte length prefix, which has its own cases), `position` (`per_hop` or `tbs`).
+- **enums / envelope:** `frame` (hex, one frame without the 4-byte length prefix), `position` (`control_stream`, `dedicated_stream`, `per_hop` or `tbs`), `after_hello` 1. A length case carries `length_header` (hex, the 4 bytes) instead of `frame`. A refusal that drops a frame but keeps the link says `"link": "stays_up"`.
+- **Not in the files:** bounds whose vector would be hundreds of KiB of hex (the 256 KiB record cap, the 16 MiB frame cap past its header); each stack tests those itself, as with `decoding_rule_v1.json`.
 
 `keys.json` holds public keys only (carried form) per profile and role (`station_identity`, `client_identity`, `client_connect`, `realm`, `org`, `foundation`). Signatures are randomized, so the files are committed as generated, as the existing vectors are; the generator's test-only private keys sit beside it so the files can be regenerated, and no runner needs them.
 
