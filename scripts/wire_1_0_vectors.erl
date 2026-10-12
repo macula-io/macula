@@ -18,6 +18,10 @@
 -define(HOUR, 3600000).
 -define(DAY, 86400000).
 -define(RECORD_LABEL, <<"MACULA-PQ-RECORD-V1">>).
+-define(REQUEST_LABEL, <<"MACULA-PQ-REQUEST-V1">>).
+-define(RELAY_ERROR_LABEL, <<"MACULA-PQ-RELAY-ERROR-V1">>).
+-define(CALLER_STREAM_LABEL, <<"MACULA-PQ-CALLER-STREAM-V1">>).
+-define(PUBLICATION_LABEL, <<"MACULA-PQ-PUBLICATION-V1">>).
 -define(PROFILES, [pq_pure, pq_hybrid]).
 -define(ROLES, [station_identity, client_identity, client_connect, org]).
 
@@ -30,6 +34,8 @@ main() ->
     write_cases(<<"custodian">>, [custodian_case(C) || C <- Records]),
     write_cases(<<"check_order">>, lists:append([check_order_cases(P, Keys) || P <- ?PROFILES])),
     write_cases(<<"envelope">>, envelope_cases()),
+    write_cases(<<"enums">>, enum_hop_cases() ++ lists:append([enum_signed_cases(P, Keys) || P <- ?PROFILES])),
+    write_cases(<<"dht_procedures">>, dht_cases(Keys)),
     halt(0).
 
 %%------------------------------------------------------------------
@@ -330,6 +336,176 @@ length_case(Id, Header, Expect) ->
     #{<<"id">> => <<"envelope.", Id/binary>>, <<"profile">> => <<"both">>, <<"covers">> => [<<"D5">>],
       <<"lands_with">> => <<"macula#99">>,
       <<"input">> => #{<<"length_header">> => hex(Header), <<"position">> => <<"control_stream">>},
+      <<"expect">> => Expect}.
+
+%%------------------------------------------------------------------
+%% Unknown enum values (WIRE_1_0.md section 3.4)
+
+%% Per hop: the field reads as its fallback and the frame is read on; no signature is involved except EVENT's
+%% publication, which is per profile.
+enum_hop_cases() ->
+    Neighbor = fun(P) -> frame(<<"hyparview_neighbor">>, #{<<"realm">> => <<1:256>>, <<"priority">> => {text, P}}) end,
+    Entry = fun(State) -> #{<<"target">> => <<7:256>>, <<"state">> => {text, State}, <<"incarnation">> => 3,
+                             <<"observed_at">> => ?T0, <<"by">> => <<8:256>>} end,
+    Swim = frame(<<"swim_ping">>, #{<<"round">> => 1, <<"incarnation">> => 1,
+                                     <<"piggyback">> => [Entry(<<"alive">>), Entry(<<"example_state">>)]}),
+    Refused = fun(Code) -> frame(<<"hello">>, #{<<"accepted">> => 0, <<"refusal_code">> => {text, Code},
+                                                 <<"capabilities">> => 0}) end,
+    Early = frame(<<"hello">>, #{<<"accepted">> => 0, <<"refusal_code">> => {text, <<"profile_unsupported">>},
+                                  <<"versions">> => [5, 5], <<"profiles">> => [{text, <<"pq_pure">>}]}),
+    H = fun(Id, Lands, Frame, AfterHello, Expect) ->
+                enum_case(Id, <<"both">>, Lands, Frame, <<"per_hop">>, AfterHello, [], Expect)
+        end,
+    [H(<<"priority.known.accept">>, <<"macula#99">>, Neighbor(<<"high">>), 1,
+       #{<<"outcome">> => <<"accept">>, <<"field">> => <<"priority">>, <<"value">> => <<"high">>}),
+     H(<<"priority.unknown.fallback">>, <<"macula#99">>, Neighbor(<<"example_priority">>), 1,
+       fallback(<<"priority">>, <<"low">>)),
+     H(<<"swim_state.unknown.entry_ignored">>, <<"macula#99">>, Swim, 1,
+       (fallback(<<"state">>, <<"entry_ignored">>))#{<<"entries_read">> => 1}),
+     H(<<"refusal_code.unknown.fallback">>, <<"macula#98">>, Refused(<<"example_future_code">>), 0,
+       fallback(<<"refusal_code">>, <<"not_accepted">>)),
+     H(<<"refusal_code.profile_unsupported.accept">>, <<"macula#98">>, Early, 0,
+       #{<<"outcome">> => <<"accept">>, <<"field">> => <<"refusal_code">>, <<"value">> => <<"profile_unsupported">>})].
+
+fallback(Field, Value) ->
+    #{<<"outcome">> => <<"fallback">>, <<"field">> => Field, <<"value">> => Value,
+      <<"count">> => <<"wire_enum_fallback">>}.
+
+%% Signed: EVENT's per-hop delivered_via beside a signed publication, and the enums inside a request, relay error and
+%% caller stream tbs, each refused by name without touching the link. A stream or relay frame carries, as context, the
+%% STREAM_OPEN it belongs to.
+enum_signed_cases(P, Keys) ->
+    Client = key(Keys, P, client_identity),
+    Station = key(Keys, P, station_identity),
+    Publication = signed(?PUBLICATION_LABEL, Client,
+                         #{<<"alg">> => alg(P), <<"payload">> => #{}, <<"published_at">> => ?T0,
+                           <<"publisher">> => key_id(Client), <<"realm">> => <<1:256>>, <<"seq">> => 1,
+                           <<"topic">> => {text, <<"example.topic">>}}),
+    Event = fun(Via) -> frame(<<"event">>, #{<<"publication">> => Publication, <<"delivered_via">> => {text, Via}}) end,
+    OpenTbs = fun(Mode) -> #{<<"alg">> => alg(P), <<"caller">> => key_id(Client), <<"deadline">> => ?T0 + ?MIN,
+                             <<"frame_type">> => {text, <<"stream_open">>}, <<"mode">> => {text, Mode},
+                             <<"payload">> => #{}, <<"procedure">> => {text, <<"example.procedure">>},
+                             <<"realm">> => <<1:256>>, <<"request_id">> => <<1:128>>, <<"target">> => key_id(Station)}
+              end,
+    Open = fun(Mode) -> frame(<<"stream_open">>, #{<<"request">> => signed(?REQUEST_LABEL, Client, OpenTbs(Mode))}) end,
+    RequestHash = crypto:hash(sha384, encode(OpenTbs(<<"bidi">>))),
+    Stream = fun(Type, Fields) ->
+                     Tbs = maps:merge(#{<<"alg">> => alg(P), <<"frame_type">> => {text, Type},
+                                        <<"request_id">> => <<1:128>>, <<"request_hash">> => RequestHash,
+                                        <<"signer">> => key_id(Client), <<"seq">> => 1}, Fields),
+                     frame(Type, #{<<"caller_stream">> => maps:remove(<<"key">>,
+                                                                      signed(?CALLER_STREAM_LABEL, Client, Tbs))})
+             end,
+    Relay = fun(Code) ->
+                    frame(<<"error">>, #{<<"relay_error">> =>
+                                             signed(?RELAY_ERROR_LABEL, Station,
+                                                    #{<<"alg">> => alg(P), <<"frame_type">> => {text, <<"error">>},
+                                                      <<"request_id">> => <<1:128>>, <<"request_hash">> => RequestHash,
+                                                      <<"reported_by">> => key_id(Station),
+                                                      <<"code">> => {text, Code}})})
+            end,
+    Context = [hex(encode(Open(<<"bidi">>)))],
+    Refused = fun(Field) -> #{<<"outcome">> => <<"refuse">>, <<"reason">> => <<"enum_unknown">>,
+                              <<"field">> => Field, <<"link">> => <<"stays_up">>} end,
+    Accept = #{<<"outcome">> => <<"accept">>},
+    S = fun(Id, Lands, Frame, Position, Ctx, Expect) -> enum_case(Id, atom_to_binary(P), Lands, Frame, Position, 1, Ctx,
+                                                                   Expect) end,
+    [S(<<"delivered_via.unknown.fallback">>, <<"macula#99">>, Event(<<"example_via">>), <<"per_hop">>, [],
+       fallback(<<"delivered_via">>, <<"direct">>)),
+     S(<<"mode.known.accept">>, <<"macula#99">>, Open(<<"bidi">>), <<"tbs">>, [], Accept),
+     S(<<"mode.unknown.refused">>, <<"macula#99">>, Open(<<"example_mode">>), <<"tbs">>, [], Refused(<<"mode">>)),
+     S(<<"relay_code.known.accept">>, <<"macula#99">>, Relay(<<"overloaded">>), <<"tbs">>, Context, Accept),
+     S(<<"relay_code.unknown.refused">>, <<"macula#99">>, Relay(<<"example_code">>), <<"tbs">>, Context,
+       Refused(<<"code">>)),
+     S(<<"encoding.known.accept">>, <<"macula#99">>,
+       Stream(<<"stream_data">>, #{<<"encoding">> => {text, <<"raw">>}, <<"body">> => <<"chunk">>}), <<"tbs">>, Context,
+       Accept),
+     S(<<"encoding.unknown.refused">>, <<"macula#99">>,
+       Stream(<<"stream_data">>, #{<<"encoding">> => {text, <<"example_encoding">>}, <<"body">> => <<"chunk">>}),
+       <<"tbs">>, Context, Refused(<<"encoding">>)),
+     S(<<"role.known.accept">>, <<"macula#99">>, Stream(<<"stream_end">>, #{<<"role">> => {text, <<"send">>}}),
+       <<"tbs">>, Context, Accept),
+     S(<<"role.unknown.refused">>, <<"macula#99">>,
+       Stream(<<"stream_end">>, #{<<"role">> => {text, <<"example_role">>}}), <<"tbs">>, Context, Refused(<<"role">>))].
+
+enum_case(Id, Profile, Lands, Frame, Position, AfterHello, Context, Expect) ->
+    #{<<"id">> => <<"enum.", Id/binary, ".", Profile/binary>>, <<"profile">> => Profile,
+      <<"covers">> => [<<"D6">>], <<"lands_with">> => Lands,
+      <<"input">> => #{<<"frame">> => hex(encode(Frame)), <<"position">> => Position, <<"after_hello">> => AfterHello,
+                       <<"context">> => Context, <<"now_ms">> => ?T0 + 1000},
+      <<"expect">> => Expect}.
+
+%% A wire 1.0 frame: version 5, its frame_type, and its fields.
+frame(Type, Fields) ->
+    Fields#{<<"version">> => 5, <<"frame_type">> => {text, Type}}.
+
+%% A signed object {key, tbs, signature} as a map, signed with the bare primitive.
+signed(Label, Signer, TbsFields) ->
+    Tbs = encode(TbsFields),
+    #{<<"key">> => carried(Signer), <<"tbs">> => Tbs,
+      <<"signature">> => macula_node_keys:sign(signed_bytes(Label, carried(Signer), Tbs), Signer)}.
+
+alg(P) -> {text, macula_signed_object:alg(P)}.
+
+%%------------------------------------------------------------------
+%% _dht.* procedures (WIRE_1_0.md section 6)
+
+dht_cases(Keys) ->
+    Client = key(Keys, pq_pure, client_identity),
+    Node = payload(macula_record:node_record(key_id(Client), [], 0)),
+    Record = record(pq_pure, Client, 16#01, Node, []),
+    V1 = fun(M) -> M#{<<"v">> => 1} end,
+    Args = fun(Proc, Id, A, Expect) -> dht_case(<<"args">>, Proc, Id, A, Expect) end,
+    Reply = fun(Proc, Id, R, Expect) -> dht_case(<<"reply">>, Proc, Id, R, Expect) end,
+    Ok = #{<<"outcome">> => <<"accept">>},
+    BadArgs = #{<<"outcome">> => <<"refuse">>, <<"reason">> => <<"malformed_args">>},
+    BadReply = #{<<"outcome">> => <<"refuse">>, <<"reason">> => <<"malformed_reply">>},
+    Res = fun(R) -> V1(#{<<"result">> => {text, R}}) end,
+    Put = <<"_dht.put_record">>, Find = <<"_dht.find_record">>, Many = <<"_dht.find_records">>,
+    ByType = <<"_dht.find_records_by_type">>,
+    [Args(Put, <<"ok">>, V1(#{<<"record">> => Record}), Ok),
+     Args(Put, <<"version_2.refused">>, #{<<"v">> => 2, <<"record">> => Record}, BadArgs),
+     Args(Put, <<"no_version.refused">>, #{<<"record">> => Record}, BadArgs),
+     Args(Put, <<"missing_record.refused">>, V1(#{}), BadArgs),
+     Args(Put, <<"extra_key.refused">>, V1(#{<<"record">> => Record, <<"ttl">> => 5}), BadArgs),
+     Args(Put, <<"record_as_text.refused">>, V1(#{<<"record">> => {text, <<"not bytes">>}}), BadArgs),
+     Args(Find, <<"ok">>, V1(#{<<"key">> => <<9:256>>}), Ok),
+     Args(Find, <<"key_31_bytes.refused">>, V1(#{<<"key">> => <<9:248>>}), BadArgs),
+     Args(Find, <<"key_as_text.refused">>, V1(#{<<"key">> => {text, binary:copy(<<"k">>, 32)}}), BadArgs),
+     Args(Find, <<"integer_map_key.refused">>, V1(#{<<"key">> => <<9:256>>, 1 => 1}), BadArgs),
+     Args(Many, <<"ok">>, V1(#{<<"key">> => <<9:256>>}), Ok),
+     Args(ByType, <<"ok">>, V1(#{<<"type">> => 16#12}), Ok),
+     (Args(ByType, <<"type_255.ok">>, V1(#{<<"type">> => 255}), Ok))#{<<"bound">> => <<"upper">>},
+     Args(ByType, <<"type_256.refused">>, V1(#{<<"type">> => 256}), BadArgs),
+     Args(ByType, <<"type_negative.refused">>, V1(#{<<"type">> => -1}), BadArgs),
+     Reply(Put, <<"ok">>, Res(<<"ok">>), Ok#{<<"result">> => <<"ok">>}),
+     Reply(Put, <<"refused.ok">>, (Res(<<"refused">>))#{<<"reason">> => {text, <<"lifetime_too_long">>}},
+           Ok#{<<"result">> => <<"refused">>, <<"reason">> => <<"lifetime_too_long">>}),
+     (Reply(Put, <<"refused.reason_64.ok">>, (Res(<<"refused">>))#{<<"reason">> => {text, binary:copy(<<"r">>, 64)}},
+            Ok#{<<"result">> => <<"refused">>}))#{<<"bound">> => <<"upper">>},
+     Reply(Put, <<"refused.reason_65.refused">>,
+           (Res(<<"refused">>))#{<<"reason">> => {text, binary:copy(<<"r">>, 65)}}, BadReply),
+     Reply(Put, <<"legacy_bare_ok.refused">>, {text, <<"ok">>}, BadReply),
+     Reply(Find, <<"record.ok">>, (Res(<<"record">>))#{<<"record">> => Record}, Ok#{<<"result">> => <<"record">>}),
+     Reply(Find, <<"not_found.ok">>, Res(<<"not_found">>), Ok#{<<"result">> => <<"not_found">>}),
+     Reply(Find, <<"version_2.refused">>, #{<<"v">> => 2, <<"result">> => {text, <<"not_found">>}},
+           #{<<"outcome">> => <<"refuse">>, <<"reason">> => <<"reply_version_unsupported">>}),
+     Reply(Find, <<"extra_key.refused">>, (Res(<<"not_found">>))#{<<"hint">> => 1}, BadReply),
+     Reply(Find, <<"records_shape.refused">>, (Res(<<"records">>))#{<<"records">> => []}, BadReply),
+     Reply(Find, <<"unknown_result.refused">>, Res(<<"example_result">>), BadReply),
+     Reply(Find, <<"legacy_bare_not_found.refused">>, {text, <<"not_found">>}, BadReply),
+     Reply(Many, <<"empty.ok">>, (Res(<<"records">>))#{<<"records">> => []}, Ok#{<<"result">> => <<"records">>}),
+     Reply(Many, <<"one.ok">>, (Res(<<"records">>))#{<<"records">> => [Record]},
+           Ok#{<<"result">> => <<"records">>, <<"records_kept">> => 1}),
+     Reply(Many, <<"records_not_a_list.refused">>, (Res(<<"records">>))#{<<"records">> => Record}, BadReply),
+     Reply(Many, <<"missing_records.refused">>, Res(<<"records">>), BadReply),
+     Reply(ByType, <<"empty.ok">>, (Res(<<"records">>))#{<<"records">> => []}, Ok#{<<"result">> => <<"records">>})].
+
+dht_case(Side, Proc, Id, Value, Expect) ->
+    <<"_dht.", Short/binary>> = Proc,
+    #{<<"id">> => <<"dht.", Short/binary, ".", Side/binary, ".", Id/binary>>, <<"profile">> => <<"pq_pure">>,
+      <<"covers">> => [<<"D1">>], <<"lands_with">> => <<"macula#102">>,
+      <<"input">> => #{<<"procedure">> => Proc, Side => hex(encode(Value)), <<"now_ms">> => ?T0 + 1000},
       <<"expect">> => Expect}.
 
 %%------------------------------------------------------------------
