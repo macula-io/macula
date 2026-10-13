@@ -3400,7 +3400,6 @@ frame_table(store_ack) ->
       <<"stored">> => {stored, boolean}};
 frame_table(register_ack) ->
     #{<<"version">> => {version, value},
-      <<"neighbour">> => {neighbour, held_object},
       <<"frame_type">> => {frame_type, frame_type},
       <<"frame_id">> => {frame_id, value},
       <<"sent_at_ms">> => {sent_at_ms, uint},
