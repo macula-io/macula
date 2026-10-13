@@ -803,9 +803,6 @@ identity_wrapped(#{node_identity := Key} = Opts) when is_map(Key) ->
 identity_wrapped(Opts) ->
     Opts.
 
-%% @doc Stop the pool. Every subscriber receives a final
-%% `{macula_event_gone, SubRef, pool_closed}' message; every link
-%% terminates with the pool.
 -type registration_key() :: {macula_frame:register_kind(), <<_:256>>, binary()}.
 -type registration_answer() :: #{awaited := [pid()], refusals := [registration_refusal()],
                                  waiters := [{gen_server:from(), reference()}]}
@@ -836,6 +833,9 @@ registration_refused(Station, {Kind, Realm, Name}, Reason) ->
                                      #{station => Station, kind => Kind, realm => Realm, name => Name,
                                        reason => Reason}).
 
+%% @doc Stop the pool. Every subscriber receives a final
+%% `{macula_event_gone, SubRef, pool_closed}' message; every link
+%% terminates with the pool.
 -spec close(pool()) -> ok.
 close(Pool) ->
     gen_server:stop(Pool, normal, 5_000).
