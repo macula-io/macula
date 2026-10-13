@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A station acknowledges each registration** (macula#12): `register_ack` (`macula_frame:register_ack/1`), an
+  unsigned control frame naming the ADVERTISE, UNADVERTISE, SUBSCRIBE or UNSUBSCRIBE it answers by kind, realm, name
+  and the advertisement's `record_version` or the `subscriber`, with `accepted` 0 or 1 and, on a refusal, a `reason`:
+  `too_many_providers`, `advertiser_quota`, `name_too_long`, `record_refused`, `not_authorized`, `too_many_realms` or
+  the generic `refused`. An unknown reason reads as `refused` and an unknown kind as `unknown` (ignored), each counted
+  as `wire_enum_fallback`.
+- **`macula:advertise/5`, `advertise_stream/6`, `subscribe/4,5` and `subscribe_callback/4` return once a station
+  acknowledges the registration**: `{error, {refused, Reason}}` when every station it went to refused it,
+  `{error, {not_sent, Reason}}` when no link could send it, and `{error, {unacknowledged, Station}}` when none
+  accepted within 30 seconds (the HELLO timeout; the pool option `register_ack_timeout_ms` lowers it). A registration
+  that does not hold is withdrawn. `macula_client:await_registration/4` is the wait; a refusal no caller waits on (a
+  replay after a reconnect) is reported as `_macula.client.registration_refused`.
+
 ## [15.0.0-rc.1] - 2026-10-13
 
 Wire 1.0, first release candidate (spec `docs/design/WIRE_1_0.md`, design of record macula#83, conformance vectors
@@ -69,18 +84,6 @@ completes a handshake with it. A pre-release, so other SDKs' interop suites can 
 - `macula_peering:reset_dedicated_stream/2`, and the `reset_stream` start option of a station link.
 - The wire 1.0 conformance runner for the envelope, enums, frames and tbs classes
   (`test/macula_wire_1_0_envelope_runner_tests.erl`).
-- **A station acknowledges each registration** (macula#12): `register_ack` (`macula_frame:register_ack/1`), an
-  unsigned control frame naming the ADVERTISE, UNADVERTISE, SUBSCRIBE or UNSUBSCRIBE it answers by kind, realm, name
-  and the advertisement's `record_version` or the `subscriber`, with `accepted` 0 or 1 and, on a refusal, a `reason`:
-  `too_many_providers`, `advertiser_quota`, `name_too_long`, `record_refused`, `not_authorized`, `too_many_realms` or
-  the generic `refused`. An unknown reason reads as `refused` and an unknown kind as `unknown` (ignored), each counted
-  as `wire_enum_fallback`.
-- **`macula:advertise/5`, `advertise_stream/6`, `subscribe/4,5` and `subscribe_callback/4` return once a station
-  acknowledges the registration**: `{error, {refused, Reason}}` when every station it went to refused it,
-  `{error, {not_sent, Reason}}` when no link could send it, and `{error, {unacknowledged, Station}}` when none
-  accepted within 30 seconds (the HELLO timeout; the pool option `register_ack_timeout_ms` lowers it). A registration
-  that does not hold is withdrawn. `macula_client:await_registration/4` is the wait; a refusal no caller waits on (a
-  replay after a reconnect) is reported as `_macula.client.registration_refused`.
 
 ### Removed
 
