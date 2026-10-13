@@ -108,7 +108,8 @@ connected({error, Reason}, _Options) ->
 %% The leaf of the session inside the tunnel is what the station's TLS binding must be for. Nothing else in view is
 %% a leaf the two nodes share: the carrier's own certificates belong to the carrier.
 with_leaf({ok, Leaf}, Session, Options) ->
-    opened(write(Session, macula_handshake:opener(), Options), Leaf, Session, Options);
+    opened(write(Session, macula_handshake:opener(macula_handshake:ranges(maps:get(profile, Options))), Options), Leaf,
+           Session, Options);
 with_leaf({error, Reason}, _Session, _Options) ->
     {error, {no_peer_certificate, Reason}}.
 
@@ -118,7 +119,7 @@ opened({error, _} = Refusal, _Leaf, _Session, _Options) ->
     Refusal.
 
 challenged({ok, Challenge}, Leaf, Session, Options) ->
-    answered(macula_handshake:answer_challenge(Challenge, client_session(Leaf, Options)), Session, Options);
+    answered(macula_handshake:answer_challenge(Challenge, client_session(Leaf, Session, Options)), Session, Options);
 challenged({error, _} = Refusal, _Leaf, _Session, _Options) ->
     Refusal.
 
@@ -142,14 +143,16 @@ hello_read({ok, _Fields}, #{node_id := NodeId} = Station, Session) ->
 hello_read({error, _} = Refusal, _Station, _Session) ->
     Refusal.
 
-client_session(Leaf, #{profile := Profile, identity := Identity, issuer := Issuer,
-                       expected_node_id := Expected} = Options) ->
+client_session(Leaf, Session, #{profile := Profile, identity := Identity, issuer := Issuer,
+                                expected_node_id := Expected} = Options) ->
     #{connect_key := Key, connect_binding := Binding, connect_status := Status} =
         macula_statement_issuer:connect_material(Issuer),
-    #{profile => Profile, expected_node_id => Expected, leaf => Leaf,
-      identity_key => macula_node_keys:public_key(Identity), connect_key => Key,
-      connect_binding => Binding, connect_status => Status,
-      capabilities => capabilities(Options), now => erlang:system_time(millisecond)}.
+    maps:merge(macula_handshake:ranges(Profile),
+               #{profile => Profile, expected_node_id => Expected, leaf => Leaf,
+                 identity_key => macula_node_keys:public_key(Identity), connect_key => Key,
+                 connect_binding => Binding, connect_status => Status,
+                 capabilities => capabilities(Options), now => erlang:system_time(millisecond),
+                 export => exporter(Session)}).
 
 %%------------------------------------------------------------------
 %% The accepting side
@@ -165,42 +168,48 @@ server_session({ok, Session}, Options) ->
 server_session({error, Reason}, _Options) ->
     {error, {tls_session, Reason}}.
 
-offered({ok, Opener}, Session, Options) ->
-    opener_read(macula_handshake:read_opener(Opener), Session, Options);
+offered({ok, Opener}, Session, #{profile := Profile} = Options) ->
+    opener_read(macula_handshake:read_opener(Opener, macula_handshake:ranges(Profile)), Session, Options);
 offered({error, _} = Refusal, _Session, _Options) ->
     Refusal.
 
-opener_read(ok, Session, #{cert := CertFile} = Options) ->
-    challenge_sent(station_material(leaf_of(CertFile), Options), Session, Options);
+%% An opener the station cannot serve gets its HELLO refusal naming the station's ranges, as on a peering connection.
+opener_read({ok, Choice}, Session, #{cert := CertFile} = Options) ->
+    challenge_sent(station_material(leaf_of(CertFile), Choice, Options), Choice, Session, Options);
+opener_read({refused, Reason, Hello}, Session, Options) ->
+    _ = write(Session, Hello, Options),
+    {error, Reason};
 opener_read({error, _} = Refusal, _Session, _Options) ->
     Refusal.
 
-station_material({ok, Leaf}, #{issuer := Issuer, identity := Identity, profile := Profile}) ->
-    tls_material(macula_statement_issuer:tls_material(Issuer, crypto:hash(sha384, Leaf)), Leaf, Identity, Profile);
-station_material({error, _} = Refusal, _Options) ->
+station_material({ok, Leaf}, Choice, #{issuer := Issuer, identity := Identity, profile := Profile}) ->
+    tls_material(macula_statement_issuer:tls_material(Issuer, crypto:hash(sha384, Leaf)), Leaf, Choice, Identity,
+                 Profile);
+station_material({error, _} = Refusal, _Choice, _Options) ->
     Refusal.
 
-tls_material({ok, #{tls_binding := Binding, tls_status := Status}}, Leaf, Identity, Profile) ->
+tls_material({ok, #{tls_binding := Binding, tls_status := Status}}, Leaf, Choice, Identity, Profile) ->
     Material = #{profile => Profile, identity_key => macula_node_keys:public_key(Identity),
                  tls_binding => Binding, tls_status => Status},
-    {ok, Leaf, macula_handshake:challenge(Material)};
-tls_material({error, Reason}, _Leaf, _Identity, _Profile) ->
+    {ok, Leaf, macula_handshake:challenge(Material, Choice, macula_handshake:ranges(Profile))};
+tls_material({error, Reason}, _Leaf, _Choice, _Identity, _Profile) ->
     {error, {tls_material, Reason}}.
 
-challenge_sent({ok, Leaf, Challenge}, Session, Options) ->
-    written(write(Session, Challenge, Options), Leaf, Challenge, Session, Options);
-challenge_sent({error, _} = Refusal, _Session, _Options) ->
+challenge_sent({ok, Leaf, Challenge}, Choice, Session, Options) ->
+    written(write(Session, Challenge, Options), Leaf, Challenge, Choice, Session, Options);
+challenge_sent({error, _} = Refusal, _Choice, _Session, _Options) ->
     Refusal.
 
-written(ok, Leaf, Challenge, Session, Options) ->
-    connect_read(read(Session, Options), Leaf, Challenge, Session, Options);
-written({error, _} = Refusal, _Leaf, _Challenge, _Session, _Options) ->
+written(ok, Leaf, Challenge, Choice, Session, Options) ->
+    connect_read(read(Session, Options), Leaf, Challenge, Choice, Session, Options);
+written({error, _} = Refusal, _Leaf, _Challenge, _Choice, _Session, _Options) ->
     Refusal.
 
-connect_read({ok, Connect}, Leaf, Challenge, Session, Options) ->
-    connect_checked(macula_handshake:accept_connect(Connect, station_session(Leaf, Challenge, Options)),
+connect_read({ok, Connect}, Leaf, Challenge, Choice, Session, Options) ->
+    connect_checked(macula_handshake:accept_connect(Connect, station_session(Leaf, Challenge, Choice, Session,
+                                                                             Options)),
                     Session, Options);
-connect_read({error, _} = Refusal, _Leaf, _Challenge, _Session, _Options) ->
+connect_read({error, _} = Refusal, _Leaf, _Challenge, _Choice, _Session, _Options) ->
     Refusal.
 
 %% A refused CONNECT still gets its HELLO: the far end learns it was refused and one coarse code, and nothing else.
@@ -215,10 +224,28 @@ admitted(ok, NodeId, Client, Session) ->
 admitted({error, _} = Refusal, _NodeId, _Client, _Session) ->
     Refusal.
 
-station_session(Leaf, Challenge, #{profile := Profile, puzzle := #{mode := Mode}} = Options) ->
-    #{profile => Profile, challenge => Challenge, leaf => Leaf,
+%% The session proof is signed within the same budget a peering connection's is (macula_session_proof_rate).
+station_session(Leaf, Challenge, Choice, Session, #{profile := Profile, identity := Identity,
+                                                    puzzle := #{mode := Mode}} = Options) ->
+    #{profile => Profile, choice => Choice, challenge => Challenge, leaf => Leaf,
       puzzle => #{mode => Mode, difficulty => macula_node_keys:puzzle_difficulty()},
-      capabilities => capabilities(Options), now => erlang:system_time(millisecond)}.
+      capabilities => capabilities(Options), now => erlang:system_time(millisecond),
+      export => exporter(Session),
+      sign_session_proof => fun(ClientNodeId, Message) ->
+                                session_proof(macula_session_proof_rate:allow(ClientNodeId,
+                                                                              erlang:system_time(millisecond)),
+                                              Message, Identity)
+                            end}.
+
+session_proof(ok, Message, Identity) -> {ok, macula_node_keys:sign(Message, Identity)};
+session_proof({error, {session_proof_rate, _Limit}}, _Message, _Identity) -> {error, session_proof_rate}.
+
+%% The TLS 1.3 exporter of the session inside the tunnel (RFC 8446 section 7.5), which binds the handshake to it.
+exporter(Session) ->
+    fun(Label, Context, Length) -> exported(ssl:export_key_materials(Session, [Label], [Context], [Length])) end.
+
+exported({ok, [Value]}) -> {ok, Value};
+exported({error, _} = Error) -> Error.
 
 %% The leaf this side presents, from the certificate its session is configured with. A station's certificate is
 %% strict DER (DESIGN_PQ_HANDSHAKE_FRAMES.md), so these are the bytes the far end received and hashed.

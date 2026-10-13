@@ -108,6 +108,45 @@ refusal_read(Hello, #{<<"outcome">> := <<"accept">>, <<"value">> := Value}) ->
     ?assertEqual({refused, binary_to_atom(Value), known}, macula_handshake:read_refusal(Hello)).
 
 %%------------------------------------------------------------------
+%% STATUS after HELLO is an envelope frame (WIRE_1_0.md 3.1): envelope.json's status cases.
+
+status_test_() ->
+    {setup, fun() -> {ok, _} = application:ensure_all_started(macula) end, fun(_) -> ok end,
+     [{binary_to_list(Id), fun() -> status_read(Case) end}
+      || #{<<"id">> := Id, <<"input">> := #{<<"status_peer">> := _}} = Case <- cases(<<"envelope">>)]}.
+
+status_read(#{<<"profile">> := P, <<"input">> := #{<<"frame">> := Hex, <<"now_ms">> := Now,
+                                                   <<"status_peer">> := #{<<"identity">> := Role,
+                                                                          <<"binding">> := Binding}},
+              <<"expect">> := Expect}) ->
+    Profile = binary_to_atom(P),
+    Peer = #{profile => Profile, identity_key => public_key(Profile, binary_to_atom(Role)), now => Now,
+             binding => #{tbs => hex(maps:get(<<"tbs">>, Binding)), signature => hex(maps:get(<<"signature">>, Binding))}},
+    Before = macula_wire_tolerance:counters(),
+    Read = macula_handshake:read_status(hex(Hex), Peer),
+    status_judged(Read, Expect),
+    counted(maps:get(<<"count">>, Expect, none), Before).
+
+status_judged({ok, _ExpiresAt}, #{<<"outcome">> := <<"accept">>}) -> ok;
+status_judged({error, Reason}, #{<<"outcome">> := <<"refuse">>, <<"reason">> := Expected}) ->
+    ?assertEqual(Expected, atom_to_binary(Reason));
+status_judged(Got, Expect) ->
+    ?assertEqual(Expect, Got).
+
+counted(none, _Before) -> ok;
+counted(Counter, Before) ->
+    Name = binary_to_atom(Counter),
+    Moved = [K || K := V <- macula_wire_tolerance:counters(), counter_named(K, Name), V > maps:get(K, Before, 0)],
+    ?assertNotEqual([], Moved).
+
+counter_named({Name, _Label}, Name) -> true;
+counter_named(Name, Name) -> true;
+counter_named(_Key, _Name) -> false.
+
+public_key(Profile, Role) ->
+    macula_node_keys:public_key(key(private_keys(), Profile, Role)).
+
+%%------------------------------------------------------------------
 %% Sessions from a case's inputs
 
 station(#{<<"station">> := Station}) -> Station.
@@ -119,7 +158,7 @@ ranges(_Profile, #{<<"versions">> := [Min, Max], <<"profiles">> := Profiles}) ->
     #{versions => [Min, Max], profiles => [binary_to_atom(P) || P <- Profiles]}.
 
 json_ranges(#{versions := Versions, profiles := Profiles}) ->
-    #{<<"versions">> => Versions, <<"profiles">> => [atom_to_binary(P) || P <- Profiles]}.
+    #{<<"versions">> => Versions, <<"profiles">> => Profiles}.
 
 client_session(Keys, Profile, #{<<"now_ms">> := Now, <<"tls">> := Tls} = Input) ->
     Client = client(Input),

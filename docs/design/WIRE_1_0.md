@@ -59,8 +59,15 @@ Envelope keys, the same for every frame type:
   `malformed_frame` under the extra-field rule.
 - **Extra core field.** A key that is neither an envelope key nor a field of the frame type is `malformed_frame`.
   New fields arrive only in `ext`.
+- **Handshake frames and STATUS.** The frames before HELLO (opener, challenge, CONNECT, HELLO) have exact layouts,
+  since the proofs and transcripts hash them, and carry none of the optional envelope keys. STATUS, which travels
+  after HELLO, is an envelope frame like any control frame: `frame_id`, `sent_at_ms` and `ext` may appear;
+  `realm`, `call_id` and `source_route` may not.
 - **Absent is omitted.** An optional key is either absent or of its type; CBOR null is not a value of any envelope
-  key or frame field, so a key carrying null is `malformed_frame`. One frame has one encoding.
+  key or frame field at any depth (a field of an entry inside a frame, such as a station in NODES, included), so a
+  key carrying null is `malformed_frame`. One frame has one encoding. Application data is
+  not a protocol field: a `payload`, and an extension entry's `value`, is any CBOR the decoding rule accepts, a
+  top-level null included.
 
 ### 3.2 Extensions (D8)
 
@@ -246,11 +253,17 @@ The record `tbs` of `DESIGN_PQ_SIGNED_FRAMES_AND_RECORDS.md` gains two keys, req
 The table is frozen: rows are only added, and a row's maximum never grows. A known type names exactly its row:
 node and content announcement 3; procedure advertisement and station endpoint 0; realm stations and org directory 2;
 procedure delegation, app record and station authorization (0x13) 1; realm member endorsement 5; domain types 4;
-other built-in types 5. These rows are part of wire 1.0: the types listed here and domain types (0x20 to 0xFF) are
-the **known types** of every wire 1.0 custodian. A tag added after 1.0 is unknown to a 1.0 custodian, which bounds it
+other built-in types 5. These rows are part of wire 1.0: the **known types** of every wire 1.0 custodian are exactly
+0x01, 0x03, 0x04, 0x05, 0x06, 0x0C, 0x0D, 0x0E, 0x0F, 0x10, 0x11, 0x12, 0x13, 0x15, 0x16, 0x17 and the domain types
+0x20 to 0xFF. Every other tag from 0x01 to 0x1F (0x02, 0x07 to 0x0B, the reserved 0x14, 0x18 to 0x1F) is unknown. A tag added after 1.0 is unknown to a 1.0 custodian, which bounds it
 by the row it names. A
 tombstone (0x0C) names the row of the type it withdraws, and a custodian bounds it by that row's maximum plus twice
-the clock tolerance (10 minutes), as `DESIGN_PQ_SIGNED_FRAMES_AND_RECORDS.md` bounds tombstones today.
+the clock tolerance (10 minutes), as `DESIGN_PQ_SIGNED_FRAMES_AND_RECORDS.md` bounds tombstones today. To do so a
+custodian reads one payload field of a tombstone, `withdrawn_type`, and nothing else of it. A tombstone withdrawing a
+tag the custodian does not know is stored as the record it withdraws would be (D4): bounded by the row it names plus
+10 minutes, never `lifetime_class_mismatch`, at the unknown-tag slot of 5.3 with the tombstone's signer and its
+payload's `subject` (else `subject_missing`), so a post-1.0 record can be withdrawn early on a 1.0 station. A reader
+that does not know the withdrawn tag refuses the tombstone as `type_unknown`.
 
 `ext` (section 3.2) may appear in a record `tbs` like any other signed object.
 

@@ -1,6 +1,7 @@
-%% EUnit tests for macula_handshake: the post-quantum connection handshake of docs/design/DESIGN_PQ_HANDSHAKE_FRAMES.md,
-%% built and checked as bytes. The client checks the challenge before it signs the proof. The station checks CONNECT,
-%% the puzzle before any signature, and answers with the HELLO bytes to send.
+%% EUnit tests for macula_handshake: the wire 1.0 connection handshake (docs/design/WIRE_1_0.md section 4), built and
+%% checked as bytes. The client checks the challenge before it signs the proof. The station checks CONNECT, the puzzle
+%% before any signature, and answers with the HELLO bytes to send. The transcripts of the conformance vectors run in
+%% macula_wire_1_0_handshake_tests; these cover what the vectors do not pin.
 -module(macula_handshake_tests).
 
 -include_lib("eunit/include/eunit.hrl").
@@ -12,9 +13,8 @@
 -define(HOUR, 3600000).
 -define(DAY, 86400000).
 -define(LEAF, <<"the strict DER leaf the station presented">>).
--define(PROOF_LABEL, "MACULA-PQ-CONNECT-PROOF-V1").
--define(PROOF_LABEL_V2, "MACULA-PQ-CONNECT-PROOF-V2").
--define(SESSION_PROOF_LABEL, "MACULA-PQ-SESSION-PROOF-V1").
+-define(PROOF_LABEL, "MACULA-PQ-CONNECT-PROOF-V3").
+-define(SESSION_PROOF_LABEL, "MACULA-PQ-SESSION-PROOF-V2").
 -define(EXPORTER_LABEL, <<"EXPORTER-macula-session-v1">>).
 -define(MLDSA87_SIGNATURE_BYTES, 4627).
 -define(STATION_CAPABILITIES, 5).
@@ -28,8 +28,8 @@ pq_hybrid_test_() ->
 
 all_cases(World) ->
     handshake_cases(World) ++ proof_cases(World) ++ client_refusal_cases(World) ++ decoding_cases(World)
-        ++ station_refusal_cases(World) ++ puzzle_cases(World) ++ hello_cases() ++ status_cases(World)
-        ++ v5_cases(World) ++ v5_proof_cases(World) ++ v5_refusal_cases(World) ++ v5_hello_cases(World)
+        ++ station_refusal_cases(World) ++ puzzle_cases(World) ++ hello_cases(World) ++ status_cases(World)
+        ++ negotiation_cases(World) ++ session_refusal_cases(World) ++ session_proof_cases(World)
         ++ ml_dsa_broken_cases(World).
 
 %%------------------------------------------------------------------
@@ -37,10 +37,12 @@ all_cases(World) ->
 %%------------------------------------------------------------------
 
 handshake_cases(#{profile := Profile, station_public := StationPublic, client_public := ClientPublic} = World) ->
-    Challenge = macula_handshake:challenge(station_material(World)),
-    {ok, Connect, Station, _Expect} = macula_handshake:answer_challenge(Challenge, client_session(World)),
+    Challenge = challenge(World),
+    {ok, Connect, Station, Expect} = macula_handshake:answer_challenge(Challenge, client_session(World)),
     {accepted, Client, Hello} = macula_handshake:accept_connect(Connect, station_session(World, Challenge)),
-    [?_assertEqual(ok, macula_handshake:read_opener(macula_handshake:opener())),
+    [?_assertEqual({ok, choice(World)},
+                   macula_handshake:read_opener(macula_handshake:opener(macula_handshake:ranges(Profile)),
+                                                macula_handshake:ranges(Profile))),
      ?_assertEqual(macula_node_keys:node_id(StationPublic, Profile), maps:get(node_id, Station)),
      ?_assertEqual(?NOW + ?HOUR, maps:get(status_expires_at, Station)),
      ?_assertEqual(?NOW + 7 * ?DAY, maps:get(binding_not_after, Station)),
@@ -48,23 +50,40 @@ handshake_cases(#{profile := Profile, station_public := StationPublic, client_pu
      ?_assertEqual(?CLIENT_CAPABILITIES, maps:get(capabilities, Client)),
      ?_assertEqual(?NOW + ?HOUR, maps:get(status_expires_at, Client)),
      ?_assertEqual(?NOW + ?DAY, maps:get(binding_not_after, Client)),
-     ?_assertEqual({ok, #{capabilities => ?STATION_CAPABILITIES, version => 4}},
-                   macula_handshake:read_hello(Hello, #{version => 4})),
+     ?_assertEqual({ok, #{capabilities => ?STATION_CAPABILITIES, version => 5}},
+                   macula_handshake:read_hello(Hello, Expect)),
+     ?_assertEqual(5, maps:get(version, Station)),
+     ?_assertEqual(5, maps:get(version, Client)),
      ?_assertEqual([<<"capabilities">>, <<"connect_binding">>, <<"connect_key">>, <<"connect_status">>,
-                    <<"frame_type">>, <<"identity_key">>, <<"member_endorsement">>, <<"proof">>,
-                    <<"version">>], frame_keys(Connect)),
+                    <<"frame_type">>, <<"identity_key">>, <<"member_endorsement">>, <<"profile">>, <<"profiles">>,
+                    <<"proof">>, <<"version">>, <<"versions">>], frame_keys(Connect)),
+     ?_assertEqual([<<"accepted">>, <<"capabilities">>, <<"frame_type">>, <<"session_proof">>, <<"version">>],
+                   frame_keys(Hello)),
+     %% Every frame carries version 5: the frame version is the handshake version.
+     ?_assertEqual([5, 5, 5, 5], [field(F, <<"version">>) || F <- [macula_handshake:opener(ranges(World)), Challenge,
+                                                                  Connect, Hello]]),
      %% Every challenge carries a fresh nonce.
-     ?_assertNotEqual(Challenge, macula_handshake:challenge(station_material(World)))].
+     ?_assertNotEqual(Challenge, challenge(World))].
 
-%% The proof signs label || 0x00 || nonce || station node_id || client node_id || SHA-384(leaf) || SHA-384(challenge).
+%% Proof V3: label || 0x00 || nonce || station node_id || client node_id || SHA-384(leaf) || SHA-384(challenge) || E
+%% || SHA-384(CONNECT tbs), the CONNECT with its proof empty. Session proof V2: label || 0x00 || E || SHA-384(challenge)
+%% || SHA-384(CONNECT) || station node_id || client node_id || SHA-384(HELLO tbs), the HELLO with its proof empty.
 proof_cases(#{profile := Profile, station_public := StationPublic, client_public := ClientPublic,
               connect_public := ConnectPublic} = World) ->
-    Challenge = macula_handshake:challenge(station_material(World)),
+    Challenge = challenge(World),
     {ok, Connect, _Station, _Expect} = macula_handshake:answer_challenge(Challenge, client_session(World)),
-    Message = [<<?PROOF_LABEL, 0>>, field(Challenge, <<"nonce">>), macula_node_keys:node_id(StationPublic, Profile),
-               macula_node_keys:node_id(ClientPublic, Profile), crypto:hash(sha384, ?LEAF),
-               crypto:hash(sha384, Challenge)],
-    [?_assert(macula_node_keys:verify(Message, field(Connect, <<"proof">>), ConnectPublic, Profile))].
+    {accepted, _Client, Hello} = macula_handshake:accept_connect(Connect, station_session(World, Challenge)),
+    StationId = macula_node_keys:node_id(StationPublic, Profile),
+    ClientId = macula_node_keys:node_id(ClientPublic, Profile),
+    E = exported(session_a, <<ClientId/binary, StationId/binary>>),
+    ConnectMessage = [<<?PROOF_LABEL, 0>>, field(Challenge, <<"nonce">>), StationId, ClientId,
+                      crypto:hash(sha384, ?LEAF), crypto:hash(sha384, Challenge), E,
+                      crypto:hash(sha384, rebuilt(Connect, #{<<"proof">> => <<>>}))],
+    SessionMessage = [<<?SESSION_PROOF_LABEL, 0>>, E, crypto:hash(sha384, Challenge), crypto:hash(sha384, Connect),
+                      StationId, ClientId, crypto:hash(sha384, rebuilt(Hello, #{<<"session_proof">> => <<>>}))],
+    [?_assertEqual(32, byte_size(E)),
+     ?_assert(macula_node_keys:verify(ConnectMessage, field(Connect, <<"proof">>), ConnectPublic, Profile)),
+     ?_assert(macula_node_keys:verify(SessionMessage, field(Hello, <<"session_proof">>), StationPublic, Profile))].
 
 %%------------------------------------------------------------------
 %% The client refuses a challenge, and sends no CONNECT
@@ -72,7 +91,7 @@ proof_cases(#{profile := Profile, station_public := StationPublic, client_public
 
 client_refusal_cases(#{profile := Profile, station_public := StationPublic, connect_public := ConnectPublic,
                        client_id := ClientId} = World) ->
-    Challenge = macula_handshake:challenge(station_material(World)),
+    Challenge = challenge(World),
     Answer = fun(Changes) ->
         macula_handshake:answer_challenge(Challenge, maps:merge(client_session(World), Changes))
     end,
@@ -91,10 +110,13 @@ client_refusal_cases(#{profile := Profile, station_public := StationPublic, conn
      ?_assertEqual({error, binding_key_mismatch},
                    Answer(#{leaf => leaf_with(near_copy(StationPublic, ConnectPublic))})),
      ?_assertEqual({error, unexpected_frame},
-                   macula_handshake:answer_challenge(macula_handshake:opener(), client_session(World)))].
+                   macula_handshake:answer_challenge(macula_handshake:opener(ranges(World)), client_session(World))),
+     %% Its own floor for the station: a station it completed a higher version with is never completed below it.
+     ?_assertEqual({error, version_below_floor}, Answer(#{floor => 6})),
+     ?_assertMatch({ok, _, _, _}, Answer(#{floor => 5}))].
 
 decoding_cases(#{profile := Profile, station_public := StationPublic} = World) ->
-    Challenge = macula_handshake:challenge(station_material(World)),
+    Challenge = challenge(World),
     Answer = fun(Bytes) -> macula_handshake:answer_challenge(Bytes, client_session(World)) end,
     [?_assertEqual({error, malformed_frame}, Answer(<<Challenge/binary, 0>>)),
      ?_assertEqual({error, malformed_frame}, Answer(<<"not cbor">>)),
@@ -102,13 +124,22 @@ decoding_cases(#{profile := Profile, station_public := StationPublic} = World) -
      ?_assertEqual({error, malformed_frame}, Answer(rebuilt(Challenge, #{<<"comment">> => {text, <<"x">>}}))),
      ?_assertEqual({error, malformed_frame}, Answer(without(Challenge, <<"tls_status">>))),
      ?_assertEqual({error, malformed_frame}, Answer(rebuilt(Challenge, #{<<"nonce">> => <<0:248>>}))),
+     ?_assertEqual({error, malformed_frame}, Answer(without(Challenge, <<"versions">>))),
+     ?_assertEqual({error, malformed_frame}, Answer(rebuilt(Challenge, #{<<"versions">> => [5]}))),
+     ?_assertEqual({error, malformed_frame}, Answer(rebuilt(Challenge, #{<<"profiles">> => []}))),
+     ?_assertEqual({error, malformed_frame},
+                   Answer(rebuilt(Challenge, #{<<"profiles">> => [{text, <<"a">>}, {text, <<"a">>}]}))),
+     ?_assertEqual({error, malformed_frame},
+                   Answer(rebuilt(Challenge, #{<<"profiles">> => [{text, integer_to_binary(N)} || N <- lists:seq(1, 9)]}))),
+     %% One encoding: bytes that decode but are not deterministic CBOR are refused.
+     ?_assertEqual({error, malformed_frame}, Answer(non_minimal_length(Challenge))),
      ?_assertEqual({error, malformed_frame}, Answer(rebuilt(Challenge, #{<<"profile">> => atom_to_binary(Profile)}))),
      ?_assertEqual({error, malformed_frame},
                    Answer(rebuilt(Challenge, #{<<"tls_binding">> => #{{text, <<"tbs">>} => <<>>}}))),
      ?_assertEqual({error, malformed_frame},
                    Answer(rebuilt(Challenge, #{<<"identity_key">> => binary:part(StationPublic, 0, 2591)}))),
-     ?_assertEqual({error, unsupported_version}, Answer(rebuilt(Challenge, #{<<"version">> => 2}))),
-     ?_assertEqual({error, profile_mismatch},
+     ?_assertEqual({error, unsupported_version}, Answer(rebuilt(Challenge, #{<<"version">> => 4}))),
+     ?_assertEqual({error, downgrade_detected},
                    Answer(rebuilt(Challenge, #{<<"profile">> => {text, atom_to_binary(other_profile(Profile))}})))]
         ++ carried_key_cases(Challenge, Answer, StationPublic, Profile).
 
@@ -125,13 +156,13 @@ carried_key_cases(_Challenge, _Answer, _StationPublic, pq_pure) ->
 
 station_refusal_cases(#{profile := Profile, client_public := ClientPublic, station_public := StationPublic,
                         connect_public := ConnectPublic} = World) ->
-    Challenge = macula_handshake:challenge(station_material(World)),
+    Challenge = challenge(World),
     {ok, Connect, _Station, _Expect} = macula_handshake:answer_challenge(Challenge, client_session(World)),
     Accept = fun(Bytes, Changes) ->
         macula_handshake:accept_connect(Bytes, maps:merge(station_session(World, Challenge), Changes))
     end,
-    OtherChallenge = macula_handshake:challenge(station_material(World)),
-    Version2 = rebuilt(Connect, #{<<"version">> => 2}),
+    OtherChallenge = challenge(World),
+    Version4 = rebuilt(Connect, #{<<"version">> => 4}),
     [?_assertMatch({refused, proof_invalid, _}, Accept(Connect, #{leaf => <<"a leaf never presented">>})),
      ?_assertMatch({refused, proof_invalid, _}, Accept(Connect, #{challenge => OtherChallenge})),
      ?_assertMatch({refused, binding_key_mismatch, _},
@@ -145,14 +176,17 @@ station_refusal_cases(#{profile := Profile, client_public := ClientPublic, stati
      ?_assertEqual({error, {refused, not_accepted}},
                    hello_of(Accept(rebuilt(Connect, #{<<"connect_key">> => ClientPublic}), #{}))),
      ?_assertMatch({refused, status_expired, _}, Accept(Connect, #{now => ?NOW + 2 * ?HOUR})),
-     ?_assertMatch({refused, unexpected_frame, _}, Accept(macula_handshake:opener(), #{})),
-     ?_assertMatch({refused, unsupported_version, _}, Accept(Version2, #{})),
+     ?_assertMatch({refused, unexpected_frame, _}, Accept(macula_handshake:opener(ranges(World)), #{})),
+     ?_assertMatch({refused, unsupported_version, _}, Accept(Version4, #{})),
+     %% The station's floor for the client.
+     ?_assertMatch({refused, version_below_floor, _}, Accept(Connect, #{floor => fun(_NodeId) -> 6 end})),
+     ?_assertMatch({accepted, _, _}, Accept(Connect, #{floor => fun(_NodeId) -> 5 end})),
      ?_assertMatch({refused, malformed_frame, _}, Accept(<<"not cbor">>, #{})),
      ?_assertMatch({refused, malformed_frame, _}, Accept(rebuilt(Connect, #{<<"proof">> => <<0:64>>}), #{})),
      %% On the wire, one coarse refusal code.
      ?_assertEqual({error, {refused, not_accepted}}, hello_of(Accept(Connect, #{challenge => OtherChallenge}))),
      ?_assertEqual({error, {refused, not_accepted}}, hello_of(Accept(<<"not cbor">>, #{}))),
-     ?_assertEqual({error, {refused, unsupported_version}}, hello_of(Accept(Version2, #{})))]
+     ?_assertEqual({error, {refused, unsupported_version}}, hello_of(Accept(Version4, #{})))]
         ++ missing_key_cases(Accept, Connect)
         ++ shared_half_cases(Accept, Connect, ConnectPublic, ClientPublic, Profile).
 
@@ -176,7 +210,7 @@ shared_half_cases(_Accept, _Connect, _ConnectPublic, _ClientPublic, pq_pure) ->
 %%------------------------------------------------------------------
 
 puzzle_cases(#{profile := Profile, client_public := ClientPublic} = World) ->
-    Challenge = macula_handshake:challenge(station_material(World)),
+    Challenge = challenge(World),
     {ok, Connect, _Station, _Expect} = macula_handshake:answer_challenge(Challenge, client_session(World)),
     Solved = leading_zero_bits(macula_node_keys:node_id(ClientPublic, Profile)),
     Unsolved = Solved + 1,
@@ -199,33 +233,36 @@ puzzle_cases(#{profile := Profile, client_public := ClientPublic} = World) ->
 %% HELLO, read by the client
 %%------------------------------------------------------------------
 
-hello_cases() ->
-    Base = #{{text, <<"version">>} => 4, {text, <<"frame_type">>} => {text, <<"hello">>},
+%% A refusing HELLO, read by the client: an unknown code reads as not_accepted and says it fell back.
+hello_cases(World) ->
+    Challenge = challenge(World),
+    {ok, _Connect, _Station, Expect} = macula_handshake:answer_challenge(Challenge, client_session(World)),
+    Base = #{{text, <<"version">>} => 5, {text, <<"frame_type">>} => {text, <<"hello">>},
              {text, <<"capabilities">>} => 7},
     Hello = fun(Fields) -> macula_record_cbor:encode(maps:merge(Base, Fields)) end,
     Refused = fun(Code) -> #{{text, <<"accepted">>} => 0, {text, <<"refusal_code">>} => {text, Code}} end,
-    [?_assertEqual({ok, #{capabilities => 7, version => 4}}, read_hello4(Hello(#{{text, <<"accepted">>} => 1}))),
-     ?_assertEqual({error, {refused, puzzle_invalid}},
-                   read_hello4(Hello(Refused(<<"puzzle_invalid">>)))),
-     ?_assertEqual({error, malformed_frame}, read_hello4(Hello(Refused(<<"proof_invalid">>)))),
-     ?_assertEqual({error, malformed_frame}, read_hello4(Hello(#{{text, <<"accepted">>} => 0}))),
+    Read = fun(Bytes) -> macula_handshake:read_hello(Bytes, Expect) end,
+    [?_assertEqual({error, {refused, puzzle_invalid}}, Read(Hello(Refused(<<"puzzle_invalid">>)))),
+     ?_assertEqual({refused, puzzle_invalid, known}, macula_handshake:read_refusal(Hello(Refused(<<"puzzle_invalid">>)))),
+     ?_assertEqual({error, {refused, not_accepted}}, Read(Hello(Refused(<<"proof_invalid">>)))),
+     ?_assertEqual({refused, not_accepted, fallback},
+                   macula_handshake:read_refusal(Hello(Refused(<<"proof_invalid">>)))),
+     ?_assertEqual({error, malformed_frame}, Read(Hello(#{{text, <<"accepted">>} => 0}))),
+     ?_assertEqual({error, malformed_frame}, Read(Hello((Refused(<<"not_accepted">>))#{{text, <<"accepted">>} => 1}))),
+     ?_assertEqual({error, malformed_frame}, Read(Hello(#{{text, <<"accepted">>} => 2}))),
+     ?_assertEqual({error, session_proof_missing}, Read(Hello(#{{text, <<"accepted">>} => 1}))),
      ?_assertEqual({error, malformed_frame},
-                   read_hello4(Hello((Refused(<<"not_accepted">>))#{{text, <<"accepted">>} => 1}))),
-     ?_assertEqual({error, malformed_frame}, read_hello4(Hello(#{{text, <<"accepted">>} => 2}))),
-     ?_assertEqual({ok, #{capabilities => (1 bsl 53) - 1, version => 4}},
-                   read_hello4(Hello(#{{text, <<"accepted">>} => 1,
-                                                       {text, <<"capabilities">>} => (1 bsl 53) - 1}))),
-     ?_assertEqual({error, malformed_frame},
-                   read_hello4(Hello(#{{text, <<"accepted">>} => 1,
-                                                       {text, <<"capabilities">>} => 1 bsl 53}))),
-     ?_assertEqual({error, unexpected_frame}, read_hello4(macula_handshake:opener()))].
+                   Read(Hello((Refused(<<"not_accepted">>))#{{text, <<"capabilities">>} => 1 bsl 53}))),
+     ?_assertEqual({error, unsupported_version},
+                   Read(Hello((Refused(<<"not_accepted">>))#{{text, <<"version">>} => 4}))),
+     ?_assertEqual({error, unexpected_frame}, Read(macula_handshake:opener(ranges(World))))].
 
 %%------------------------------------------------------------------
 %% Status frames on an open connection
 %%------------------------------------------------------------------
 
 status_cases(#{profile := Profile, station_id := StationId, station_public := StationPublic,
-               tls_binding := Binding}) ->
+               tls_binding := Binding} = World) ->
     Statement = macula_key_bindings:status_statement(StationId, Binding, ?NOW + 15 * ?MINUTE, ?NOW + 75 * ?MINUTE),
     Frame = macula_handshake:status(Statement),
     Peer = #{profile => Profile, identity_key => StationPublic, binding => Binding, now => ?NOW + 16 * ?MINUTE},
@@ -233,82 +270,70 @@ status_cases(#{profile := Profile, station_id := StationId, station_public := St
     [?_assertEqual({ok, ?NOW + 75 * ?MINUTE}, macula_handshake:read_status(Frame, Peer)),
      ?_assertEqual({error, status_binding_mismatch},
                    macula_handshake:read_status(Frame, Peer#{binding := OtherBinding})),
-     ?_assertEqual({error, unexpected_frame}, macula_handshake:read_status(macula_handshake:opener(), Peer))].
+     ?_assertEqual({error, unexpected_frame}, macula_handshake:read_status(macula_handshake:opener(ranges(World)), Peer)),
+     ?_assertEqual(5, field(Frame, <<"version">>))].
 
 %%------------------------------------------------------------------
-%% Handshake v5: both proofs bound to the TLS session's exporter
-%% (docs/design/DESIGN_NEIGHBOUR_CHANNEL_BINDING.md section 3)
+%% Negotiation (section 4.1): the station chooses, the client checks the choice, CONNECT repeats the ranges
 %%------------------------------------------------------------------
 
-v5_cases(#{profile := Profile, station_public := StationPublic} = World) ->
-    Challenge = macula_handshake:challenge(station_material(World)),
-    {ok, Connect, Station, Expect} = macula_handshake:answer_challenge(Challenge, client_session_v5(World)),
-    {accepted, Client, Hello} = macula_handshake:accept_connect(Connect, station_session_v5(World, Challenge)),
-    [%% The opener and the challenge stay version 4 on the wire; the client picks the version in CONNECT.
-     ?_assertEqual(4, field(macula_handshake:opener(), <<"version">>)),
-     ?_assertEqual(4, field(Challenge, <<"version">>)),
-     ?_assertEqual(5, field(Connect, <<"version">>)),
-     ?_assertEqual(frame_keys(Connect) -- [<<"version">>], v4_connect_keys(World) -- [<<"version">>]),
-     ?_assertEqual(5, maps:get(version, Station)),
-     ?_assertEqual(5, maps:get(version, Client)),
-     ?_assertEqual(macula_node_keys:node_id(StationPublic, Profile), maps:get(node_id, Station)),
-     ?_assertEqual(5, field(Hello, <<"version">>)),
-     ?_assertEqual([<<"accepted">>, <<"capabilities">>, <<"frame_type">>, <<"session_proof">>, <<"version">>],
-                   frame_keys(Hello)),
-     ?_assertEqual({ok, #{capabilities => ?STATION_CAPABILITIES, version => 5}},
-                   macula_handshake:read_hello(Hello, Expect))].
-
-%% The V2 CONNECT proof: label || 0x00 || nonce || station node_id || client node_id || SHA-384(leaf) ||
-%% SHA-384(challenge) || E || client capabilities (8 bytes big-endian). The session proof: label || 0x00 || E ||
-%% SHA-384(challenge) || SHA-384(CONNECT) || station node_id || client node_id || station capabilities.
-v5_proof_cases(#{profile := Profile, station_public := StationPublic, client_public := ClientPublic,
-                 connect_public := ConnectPublic} = World) ->
-    Challenge = macula_handshake:challenge(station_material(World)),
-    {ok, Connect, _Station, _Expect} = macula_handshake:answer_challenge(Challenge, client_session_v5(World)),
-    {accepted, _Client, Hello} = macula_handshake:accept_connect(Connect, station_session_v5(World, Challenge)),
-    StationId = macula_node_keys:node_id(StationPublic, Profile),
-    ClientId = macula_node_keys:node_id(ClientPublic, Profile),
-    E = exported(session_a, <<ClientId/binary, StationId/binary>>),
-    ConnectMessage = [<<?PROOF_LABEL_V2, 0>>, field(Challenge, <<"nonce">>), StationId, ClientId,
-                      crypto:hash(sha384, ?LEAF), crypto:hash(sha384, Challenge), E, <<?CLIENT_CAPABILITIES:64>>],
-    SessionMessage = [<<?SESSION_PROOF_LABEL, 0>>, E, crypto:hash(sha384, Challenge), crypto:hash(sha384, Connect),
-                      StationId, ClientId, <<?STATION_CAPABILITIES:64>>],
-    [?_assertEqual(32, byte_size(E)),
-     ?_assert(macula_node_keys:verify(ConnectMessage, field(Connect, <<"proof">>), ConnectPublic, Profile)),
-     ?_assert(macula_node_keys:verify(SessionMessage, field(Hello, <<"session_proof">>), StationPublic, Profile))].
-
-v5_refusal_cases(#{profile := Profile} = World) ->
-    Challenge = macula_handshake:challenge(station_material(World)),
-    {ok, Connect, _Station, _Expect} = macula_handshake:answer_challenge(Challenge, client_session_v5(World)),
-    {ok, ConnectV4, _, _} = macula_handshake:answer_challenge(Challenge, client_session(World)),
+negotiation_cases(#{profile := Profile} = World) ->
+    Other = atom_to_binary(other_profile(Profile)),
+    Own = atom_to_binary(Profile),
+    Read = fun(Versions, Profiles) ->
+                   macula_handshake:read_opener(opener_frame(Versions, Profiles), macula_handshake:ranges(Profile))
+           end,
+    Challenge = challenge(World),
+    {ok, Connect, _Station, _Expect} = macula_handshake:answer_challenge(Challenge, client_session(World)),
     Accept = fun(Bytes, Changes) ->
-        macula_handshake:accept_connect(Bytes, maps:merge(station_session_v5(World, Challenge), Changes))
+        macula_handshake:accept_connect(Bytes, maps:merge(station_session(World, Challenge), Changes))
     end,
-    NoExporter = maps:remove(export, station_session_v5(World, Challenge)),
+    [%% The highest common version, and the first of the client's profiles the station supports.
+     ?_assertMatch({ok, #{version := 5, profile := Profile}}, Read([4, 7], [<<"example">>, Other, Own])),
+     ?_assertMatch({refused, unsupported_version, _}, Read([6, 7], [Own])),
+     ?_assertMatch({refused, unsupported_version, _}, Read([3, 4], [Own])),
+     ?_assertMatch({refused, profile_unsupported, _}, Read([5, 5], [Other])),
+     ?_assertEqual({error, malformed_frame}, Read([5, 4], [Own])),
+     ?_assertEqual({error, malformed_frame}, Read([5, 5], [])),
+     %% The early refusal names the station's ranges, and its client reads them.
+     ?_assertEqual({error, {refused, unsupported_version, #{versions => [5, 5], profiles => [Own]}}},
+                   macula_handshake:answer_challenge(element(3, Read([6, 7], [Own])), client_session(World))),
+     %% CONNECT repeats the opener's ranges and names the profile chosen.
+     ?_assertMatch({refused, negotiation_mismatch, _},
+                   Accept(Connect, #{choice => (choice(World))#{client_ranges => #{versions => [4, 5],
+                                                                                   profiles => [Own]}}})),
+     ?_assertMatch({refused, profile_unsupported, _},
+                   Accept(rebuilt(Connect, #{<<"profile">> => {text, Other}}), #{})),
+     %% A changed range breaks the proof too: the CONNECT tbs covers it.
+     ?_assertMatch({refused, proof_invalid, _},
+                   Accept(rebuilt(Connect, #{<<"capabilities">> => ?CLIENT_CAPABILITIES + 1}), #{}))].
+
+opener_frame(Versions, Profiles) ->
+    macula_record_cbor:encode(#{{text, <<"version">>} => 5, {text, <<"frame_type">>} => {text, <<"opener">>},
+                                {text, <<"versions">>} => Versions,
+                                {text, <<"profiles">>} => [{text, P} || P <- Profiles]}).
+
+%%------------------------------------------------------------------
+%% Proofs bound to the TLS session's exporter, signed only after every check
+%%------------------------------------------------------------------
+
+session_refusal_cases(#{profile := Profile} = World) ->
+    Challenge = challenge(World),
+    {ok, Connect, _Station, Expect} = macula_handshake:answer_challenge(Challenge, client_session(World)),
+    Accept = fun(Bytes, Changes) ->
+        macula_handshake:accept_connect(Bytes, maps:merge(station_session(World, Challenge), Changes))
+    end,
     Rated = fun(_ClientNodeId, _Message) -> {error, session_proof_rate} end,
-    Version6 = rebuilt(Connect, #{<<"version">> => 6}),
+    Unavailable = fun(_Label, _Context, _Length) -> {error, closed} end,
     [%% A CONNECT proof over another session's exporter is refused.
      ?_assertMatch({refused, proof_invalid, _}, Accept(Connect, #{export => exporter(session_b)})),
-     %% A v5 CONNECT carrying a V1 proof, or a v4 CONNECT relabelled 5, is refused.
-     ?_assertMatch({refused, proof_invalid, _}, Accept(rebuilt(ConnectV4, #{<<"version">> => 5}), #{})),
-     %% The v4 CONNECT still gets a v4 handshake from a station that speaks both.
-     ?_assertMatch({accepted, #{version := 4}, _}, Accept(ConnectV4, #{})),
-     ?_assertEqual(4, field(element(3, Accept(ConnectV4, #{})), <<"version">>)),
-     %% A station with no exporter (the dist tunnel today) answers v5 as an old station does.
-     ?_assertMatch({refused, unsupported_version, _}, macula_handshake:accept_connect(Connect, NoExporter)),
-     ?_assertEqual(4, field(element(3, macula_handshake:accept_connect(Connect, NoExporter)), <<"version">>)),
-     ?_assertEqual({error, {refused, unsupported_version}},
-                   hello_of(macula_handshake:accept_connect(Connect, NoExporter))),
-     %% A version neither 4 nor 5 is refused as now.
-     ?_assertMatch({refused, unsupported_version, _}, Accept(Version6, #{})),
-     %% Past the rate limit the station refuses and signs nothing.
+     ?_assertMatch({refused, exporter_unavailable, _}, Accept(Connect, #{export => Unavailable})),
+     ?_assertEqual({error, exporter_unavailable},
+                   macula_handshake:answer_challenge(Challenge, (client_session(World))#{export => Unavailable})),
+     %% Past the rate limit the station refuses and signs nothing, and says so on the wire.
      ?_assertMatch({refused, session_proof_rate, _}, Accept(Connect, #{sign_session_proof => Rated})),
-     %% On the wire the budget refusal says so: only a v5 CONNECT can meet it, so no pre-v5 client reads it.
      ?_assertEqual({error, {refused, session_proof_rate}},
-                   macula_handshake:read_hello(element(3, Accept(Connect, #{sign_session_proof => Rated})),
-                                               element(4, macula_handshake:answer_challenge(
-                                                             Challenge, client_session_v5(World))))),
-     ?_assertEqual(5, field(element(3, Accept(Connect, #{sign_session_proof => Rated})), <<"version">>)),
+                   macula_handshake:read_hello(element(3, Accept(Connect, #{sign_session_proof => Rated})), Expect)),
      ?_test(signs_only_after_every_check(Connect, Accept, Profile))].
 
 %% Sign after verify: a CONNECT that fails any check never reaches the signer.
@@ -321,62 +346,46 @@ signs_only_after_every_check(Connect, Accept, _Profile) ->
     {refused, session_proof_rate, _} = Accept(Connect, #{sign_session_proof => Watched}),
     ?assertEqual(signed, receive {signed, _} -> signed after 0 -> nothing end).
 
-v5_hello_cases(#{station_id := StationKey} = World) ->
-    Challenge = macula_handshake:challenge(station_material(World)),
-    {ok, Connect, _Station, Expect} = macula_handshake:answer_challenge(Challenge, client_session_v5(World)),
-    {accepted, _Client, Hello} = macula_handshake:accept_connect(Connect, station_session_v5(World, Challenge)),
+session_proof_cases(#{station_id := StationKey} = World) ->
+    Challenge = challenge(World),
+    {ok, Connect, _Station, Expect} = macula_handshake:answer_challenge(Challenge, client_session(World)),
+    {accepted, _Client, Hello} = macula_handshake:accept_connect(Connect, station_session(World, Challenge)),
     Read = fun(Bytes) -> macula_handshake:read_hello(Bytes, Expect) end,
     OtherSession = rebuilt(Hello, #{<<"session_proof">> =>
-                                        macula_node_keys:sign(session_message(World, Challenge, Connect, session_b),
+                                        macula_node_keys:sign(session_message(World, Challenge, Connect, Hello,
+                                                                              session_b),
                                                               StationKey)}),
-    OtherChallenge = macula_handshake:challenge(station_material(World)),
-    {ok, OtherConnect, _, _} = macula_handshake:answer_challenge(OtherChallenge, client_session_v5(World)),
-    {accepted, _, OtherConnection} =
-        macula_handshake:accept_connect(OtherConnect, station_session_v5(World, OtherChallenge)),
+    OtherChallenge = challenge(World),
+    {ok, OtherConnect, _, _} = macula_handshake:answer_challenge(OtherChallenge, client_session(World)),
+    {accepted, _, OtherConnection} = macula_handshake:accept_connect(OtherConnect,
+                                                                     station_session(World, OtherChallenge)),
     {ok, OtherKey} = macula_node_keys:generate(identity, maps:get(profile, World)),
     SignedByOther = rebuilt(Hello, #{<<"session_proof">> =>
-                                         macula_node_keys:sign(session_message(World, Challenge, Connect, session_a), OtherKey)}),
-    {ok, _, _, ExpectV4} = macula_handshake:answer_challenge(Challenge, client_session(World)),
-    {accepted, _, HelloV4} = macula_handshake:accept_connect(
-                               element(2, macula_handshake:answer_challenge(Challenge, client_session(World))),
-                               station_session(World, Challenge)),
-    V4Refused = hello_frame(4, #{<<"accepted">> => 0, <<"refusal_code">> => {text, <<"unsupported_version">>}}),
+                                         macula_node_keys:sign(session_message(World, Challenge, Connect, Hello,
+                                                                               session_a), OtherKey)}),
     [?_assertEqual({error, session_proof_invalid}, Read(OtherSession)),
      ?_assertEqual({error, session_proof_invalid}, Read(OtherConnection)),
      ?_assertEqual({error, session_proof_invalid}, Read(SignedByOther)),
+     %% The HELLO tbs covers the station's capabilities, at no fixed width.
+     ?_assertEqual({error, session_proof_invalid},
+                   Read(rebuilt(Hello, #{<<"capabilities">> => ?STATION_CAPABILITIES bor (1 bsl 40)}))),
      ?_assertEqual({error, session_proof_missing}, Read(without(Hello, <<"session_proof">>))),
-     ?_assertEqual({error, malformed_frame}, Read(rebuilt(Hello, #{<<"session_proof">> => <<0:64>>}))),
-     %% A v4 answer to a v5 CONNECT is never taken as a v4 connection; a v4 refusal is how an old station says so.
-     ?_assertEqual({error, v4_hello_to_v5_connect}, Read(HelloV4)),
-     ?_assertEqual({error, {refused, unsupported_version}}, Read(V4Refused)),
-     %% A v4 CONNECT reads a v4 HELLO as today, and refuses a v5 one.
-     ?_assertEqual({ok, #{capabilities => ?STATION_CAPABILITIES, version => 4}},
-                   macula_handshake:read_hello(HelloV4, ExpectV4)),
-     ?_assertEqual({error, unsupported_version}, macula_handshake:read_hello(Hello, ExpectV4))].
+     ?_assertEqual({error, malformed_frame}, Read(rebuilt(Hello, #{<<"session_proof">> => <<0:64>>})))].
 
 %% The case D17 exists for: an attacker who can forge ML-DSA-87 but not RSA-PSS-4096. A session proof whose
 %% ML-DSA half is the station's own, valid one, and whose RSA half comes from another key, is refused.
 ml_dsa_broken_cases(#{profile := pq_hybrid} = World) ->
-    Challenge = macula_handshake:challenge(station_material(World)),
-    {ok, Connect, _Station, Expect} = macula_handshake:answer_challenge(Challenge, client_session_v5(World)),
-    {accepted, _Client, Hello} = macula_handshake:accept_connect(Connect, station_session_v5(World, Challenge)),
+    Challenge = challenge(World),
+    {ok, Connect, _Station, Expect} = macula_handshake:answer_challenge(Challenge, client_session(World)),
+    {accepted, _Client, Hello} = macula_handshake:accept_connect(Connect, station_session(World, Challenge)),
     {ok, OtherKey} = macula_node_keys:generate(identity, pq_hybrid),
     <<MlDsaHalf:?MLDSA87_SIGNATURE_BYTES/binary, _Rsa/binary>> = field(Hello, <<"session_proof">>),
     <<_:?MLDSA87_SIGNATURE_BYTES/binary, OtherRsa/binary>> =
-        macula_node_keys:sign(session_message(World, Challenge, Connect, session_a), OtherKey),
+        macula_node_keys:sign(session_message(World, Challenge, Connect, Hello, session_a), OtherKey),
     Spliced = rebuilt(Hello, #{<<"session_proof">> => <<MlDsaHalf/binary, OtherRsa/binary>>}),
     [?_assertEqual({error, session_proof_invalid}, macula_handshake:read_hello(Spliced, Expect))];
 ml_dsa_broken_cases(#{profile := pq_pure}) ->
     [].
-
-client_session_v5(World) ->
-    (client_session(World))#{version => 5, export => exporter(session_a)}.
-
-station_session_v5(#{station_id := StationKey} = World, Challenge) ->
-    (station_session(World, Challenge))#{export => exporter(session_a),
-                                         sign_session_proof => fun(_ClientNodeId, Message) ->
-                                                                   {ok, macula_node_keys:sign(Message, StationKey)}
-                                                               end}.
 
 %% A stand-in for one TLS session's exporter: the same label, context and length give the same bytes on both ends
 %% of the session, and another session gives other bytes.
@@ -389,24 +398,14 @@ exported(Session, Context) ->
 exported(Session, Context, Length) ->
     binary:part(crypto:mac(hmac, sha256, atom_to_binary(Session), [?EXPORTER_LABEL, Context]), 0, Length).
 
-%% The session proof's message for this challenge and CONNECT under Session's exporter, as the station signs it.
+%% The session proof's message for this challenge, CONNECT and HELLO under Session's exporter, as the station signs it.
 session_message(#{profile := Profile, station_public := StationPublic, client_public := ClientPublic},
-                Challenge, Connect, Session) ->
+                Challenge, Connect, Hello, Session) ->
     StationId = macula_node_keys:node_id(StationPublic, Profile),
     ClientId = macula_node_keys:node_id(ClientPublic, Profile),
     [<<?SESSION_PROOF_LABEL, 0>>, exported(Session, <<ClientId/binary, StationId/binary>>),
      crypto:hash(sha384, Challenge), crypto:hash(sha384, Connect), StationId, ClientId,
-     <<?STATION_CAPABILITIES:64>>].
-
-hello_frame(Version, Fields) ->
-    macula_record_cbor:encode(maps:merge(#{{text, <<"version">>} => Version, {text, <<"frame_type">>} => {text, <<"hello">>},
-                                           {text, <<"capabilities">>} => 7},
-                                         #{{text, K} => V || K := V <- Fields})).
-
-v4_connect_keys(World) ->
-    Challenge = macula_handshake:challenge(station_material(World)),
-    {ok, Connect, _, _} = macula_handshake:answer_challenge(Challenge, client_session(World)),
-    frame_keys(Connect).
+     crypto:hash(sha384, rebuilt(Hello, #{<<"session_proof">> => <<>>}))].
 
 %%------------------------------------------------------------------
 %% Helpers
@@ -432,19 +431,39 @@ station_material(#{profile := Profile, station_public := StationPublic, tls_bind
                    tls_status := Status}) ->
     #{profile => Profile, identity_key => StationPublic, tls_binding => Binding, tls_status => Status}.
 
+ranges(#{profile := Profile}) -> macula_handshake:ranges(Profile).
+
+%% What the station chooses from this world's opener.
+choice(#{profile := Profile}) ->
+    #{version => 5, profile => Profile, client_ranges => #{versions => [5, 5], profiles => [atom_to_binary(Profile)]}}.
+
+challenge(World) ->
+    macula_handshake:challenge(station_material(World), choice(World), ranges(World)).
+
 client_session(#{profile := Profile, station_public := StationPublic, client_public := ClientPublic,
-                 client_connect := ClientConnect, connect_binding := Binding, connect_status := Status}) ->
-    #{profile => Profile, expected_node_id => macula_node_keys:node_id(StationPublic, Profile), leaf => ?LEAF,
-      identity_key => ClientPublic, connect_key => ClientConnect, connect_binding => Binding,
-      connect_status => Status, capabilities => ?CLIENT_CAPABILITIES, now => ?NOW + ?MINUTE}.
+                 client_connect := ClientConnect, connect_binding := Binding, connect_status := Status} = World) ->
+    maps:merge(ranges(World),
+               #{profile => Profile, expected_node_id => macula_node_keys:node_id(StationPublic, Profile),
+                 leaf => ?LEAF, identity_key => ClientPublic, connect_key => ClientConnect, connect_binding => Binding,
+                 connect_status => Status, capabilities => ?CLIENT_CAPABILITIES, now => ?NOW + ?MINUTE,
+                 export => exporter(session_a)}).
 
-station_session(#{profile := Profile}, Challenge) ->
-    #{profile => Profile, challenge => Challenge, leaf => ?LEAF, puzzle => #{difficulty => 0, mode => enforce},
-      capabilities => ?STATION_CAPABILITIES, now => ?NOW + ?MINUTE}.
+station_session(#{profile := Profile, station_id := StationKey} = World, Challenge) ->
+    #{profile => Profile, choice => choice(World), challenge => Challenge, leaf => ?LEAF,
+      puzzle => #{difficulty => 0, mode => enforce}, capabilities => ?STATION_CAPABILITIES, now => ?NOW + ?MINUTE,
+      export => exporter(session_a),
+      sign_session_proof => fun(_ClientNodeId, Message) -> {ok, macula_node_keys:sign(Message, StationKey)} end}.
 
-read_hello4(Bytes) -> macula_handshake:read_hello(Bytes, #{version => 4}).
+%% What the client reads from a refusing HELLO.
+hello_of({refused, _Reason, Hello}) -> refusal_read(macula_handshake:read_refusal(Hello)).
 
-hello_of({refused, _Reason, Hello}) -> macula_handshake:read_hello(Hello, #{version => 4}).
+refusal_read({refused, Code, _Known}) -> {error, {refused, Code}};
+refusal_read({error, _} = Error) -> Error.
+
+%% The frame with its first map header's length written in two bytes instead of one: it decodes, and is not the
+%% deterministic encoding.
+non_minimal_length(<<Header, Rest/binary>>) when Header >= 16#A0, Header < 16#B8 ->
+    <<16#B8, (Header - 16#A0), Rest/binary>>.
 
 %% A key that differs from Key only in the last byte of its ML-DSA-87 half, with Other's classical half.
 near_copy(<<MlDsa:2591/binary, Last, _/binary>>, <<_:2592/binary, OtherClassical/binary>>) ->

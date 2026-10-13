@@ -9,7 +9,7 @@
 %%% notification message shapes (`connected', `handshake_complete'
 %%% 4-tuple, `disconnected'), the peer's node_id and `peer_identity/1',
 %%% the station's puzzle modes, status frames at every reissue and the
-%%% peer's statement timer, binding expiry, neighbour signatures in
+%%% peer's statement timer, binding expiry, the absence of neighbour signatures in
 %%% pq_hybrid, local close reasons,
 %%% state-machine progression, and graceful close behaviour.
 %%%
@@ -100,26 +100,9 @@ handshake_test_() ->
            {"a binding at its not_after closes the connection with binding_expired",
             {timeout, 30,
              fun() -> a_binding_at_its_not_after_closes_the_connection_with_binding_expired(Ctx) end}},
-           {"control frames verify both ways around a status frame in pq_hybrid",
+           {"control frames flow both ways around a status frame in pq_hybrid",
             {timeout, 120,
              fun() -> control_frames_verify_both_ways_around_a_status_frame_in_pq_hybrid(Ctx) end}},
-           {"a control frame signed by another key closes the connection in pq_hybrid",
-            {timeout, 120,
-             fun() -> a_control_frame_signed_by_another_key_closes_the_connection_in_pq_hybrid(Ctx) end}},
-           {"a control frame without a neighbour signature closes the connection in pq_hybrid",
-            {timeout, 120,
-             fun() ->
-                 a_control_frame_without_a_neighbour_signature_closes_the_connection_in_pq_hybrid(Ctx)
-             end}},
-           {"an overlay relay goes out neighbour-signed and verifies in pq_hybrid",
-            {timeout, 120,
-             fun() -> an_overlay_relay_goes_out_neighbour_signed_and_verifies_in_pq_hybrid(Ctx) end}},
-           {"an overlay relay without a neighbour signature closes and routes nothing in pq_hybrid",
-            {timeout, 120,
-             fun() -> an_overlay_relay_without_a_neighbour_signature_closes_and_routes_nothing_in_pq_hybrid(Ctx) end}},
-           {"an overlay relay neighbour-signed by another key closes and routes nothing in pq_hybrid",
-            {timeout, 120,
-             fun() -> an_overlay_relay_signed_by_another_key_closes_and_routes_nothing_in_pq_hybrid(Ctx) end}},
            {"a frame with a field its table does not name closes with malformed_frame",
             {timeout, 30, fun() -> a_frame_with_a_field_its_table_does_not_name_closes_with_malformed_frame(Ctx) end}},
            {"an application frame on the control stream is delivered",
@@ -152,17 +135,13 @@ handshake_test_() ->
             {timeout, 30, fun() -> a_frame_type_sent_as_bytes_closes_with_malformed_frame(Ctx) end}},
            {"a STORE whose record bytes are not CBOR reaches its recipient and the connection serves on",
             {timeout, 30, fun() -> a_store_whose_record_is_not_cbor_reaches_its_recipient_and_the_connection_serves_on(Ctx) end}},
-           {"liveness probe enabled: a peer that never answers is reaped as peer_liveness_lost",
-            {timeout, 30, fun() -> liveness_probe_reaps_an_unanswering_peer(Ctx) end}},
-           {"liveness probe answered by the peer keeps the connection open",
-            {timeout, 30, fun() -> answered_liveness_probe_keeps_the_connection_open(Ctx) end}},
            {"liveness is opt-in: a conn without the opts sends no probe",
             {timeout, 30, fun() -> liveness_is_opt_in(Ctx) end}},
            {"a frame observer sees each frame queued and written on one side and read on the other",
             {timeout, 30, fun() -> a_frame_observer_sees_each_frame_both_ways(Ctx) end}},
            {"a frame observer that crashes is dropped and the connection serves on",
             {timeout, 30, fun() -> a_crashing_frame_observer_is_dropped(Ctx) end}},
-           {"a pre-v5 liveness probe and its answer are typed liveness_call and liveness_result on both sides",
+           {"an SDK link's liveness probe and its answer are typed liveness_call and liveness_result on both sides",
             {timeout, 30, fun() -> a_probe_and_its_answer_are_typed_liveness_both_ways(Ctx) end}},
            {"an ordinary CALL and its RESULT are typed call and result, a ping outside the liveness realm too",
             {timeout, 30, fun() -> an_ordinary_call_is_typed_call(Ctx) end}},
@@ -702,20 +681,14 @@ connect(#{client_key := ClientKey, client_issuer := ClientIssuer, station_key :=
     %% `target_extra' lets another test module drive a target of its own
     %% shape through a real handshake. Additive and empty by default, so
     %% every test in this module is unaffected.
-    %%
-    %% `handshake => 4' dials the station with a v4 CONNECT, as a client
-    %% does for 10 minutes after the station refused v5
-    %% (docs/design/DESIGN_NEIGHBOUR_CHANNEL_BINDING.md section 4): the tests of
-    %% what v4 alone does (D17's neighbour signatures, the signed CALL
-    %% liveness probe) run on a v4 connection.
-    ok = dial_version(maps:get(handshake, Options, 5), node_id(StationKey), maps:get(client_clock, Options, ?T0 + ?MINUTE)),
     Target = maps:merge(
                #{host => <<"127.0.0.1">>, port => Port, timeout_ms => 5_000,
                  expected_node_id => maps:get(expected, Options, node_id(StationKey))},
                maps:get(target_extra, Options, #{})),
     {ok, Client} = macula_peering:connect(
-                     maps:merge(maps:merge(maps:with([liveness_interval_ms,
-                                                      liveness_max_misses], Options),
+                     maps:merge(maps:merge(maps:merge(maps:with([liveness_interval_ms,
+                                                                 liveness_max_misses], Options),
+                                                      floor_opt(client_version_floor, Options)),
                                            observer_opt(client_observer, Options)),
                                 #{identity => ClientKey, issuer => ClientIssuer,
                                   capabilities => ?CLIENT_CAPABILITIES, controlling_pid => self(),
@@ -723,18 +696,19 @@ connect(#{client_key := ClientKey, client_issuer := ClientIssuer, station_key :=
                                   target => Target})),
     {Client, accept_one(station_opts(World, Options))}.
 
-dial_version(5, _StationNodeId, _Now) ->
-    ok;
-dial_version(4, StationNodeId, Now) ->
-    {fall_back, _} = macula_peer_versions:unsupported_version(StationNodeId, Now),
-    ok.
-
 station_opts(#{station_key := StationKey, station_issuer := StationIssuer}, Options) ->
     Opts = #{identity => StationKey, issuer => StationIssuer, capabilities => ?STATION_CAPABILITIES,
              controlling_pid => self(), puzzle => #{mode => maps:get(mode, Options)},
              clock => fixed(maps:get(station_clock, Options, ?T0 + ?MINUTE))},
-    maps:merge(maps:merge(Opts, maps:with([accept_owner], Options)),
+    maps:merge(maps:merge(maps:merge(Opts, maps:with([accept_owner], Options)),
+                          floor_opt(station_version_floor, Options)),
                observer_opt(station_observer, Options)).
+
+%% A side's `version_floor' store, when the test gives one.
+floor_opt(Key, Options) ->
+    maps:fold(fun(K, Store, Acc) when K =:= Key -> Acc#{version_floor => Store};
+                 (_K, _V, Acc) -> Acc
+              end, #{}, Options).
 
 observer_opt(Key, Options) ->
     maps:fold(fun(K, Observer, Acc) when K =:= Key -> Acc#{frame_observer => Observer};
@@ -869,13 +843,12 @@ flip(<<Head:20/binary, Byte, Tail/binary>>) ->
 %% statement goes out as a status frame between two rounds of them. The
 %% clocks of both connections stand 3 seconds short of the tolerance past
 %% the statements from the handshake, so each side stays open past that
-%% only by reading the other's status frame, and a control frame whose
-%% neighbour signature or seq failed would close the connection.
+%% only by reading the other's status frame.
 control_frames_verify_both_ways_around_a_status_frame_in_pq_hybrid(Ctx) ->
     #{issuer_tab := Tab, client_issuer := ClientIssuer, station_issuer := StationIssuer} = World =
         world(Ctx, #{profile => pq_hybrid}),
     Lapse = ?T0 + ?HOUR + 5 * ?MINUTE - 3_000,
-    {Client, Station} = connect(World, #{handshake => 4, mode => off, client_clock => Lapse, station_clock => Lapse}),
+    {Client, Station} = connect(World, #{mode => off, client_clock => Lapse, station_clock => Lapse}),
     _ = {await(Client, connected), await(Station, connected)},
     ok = sent(Client, Station, [ping() || _ <- lists:seq(1, 3)]),
     ok = sent(Station, Client, [ping() || _ <- lists:seq(1, 3)]),
@@ -886,76 +859,6 @@ control_frames_verify_both_ways_around_a_status_frame_in_pq_hybrid(Ctx) ->
     ok = sent(Station, Client, [ping() || _ <- lists:seq(1, 3)]),
     ?assertEqual({open, open}, {still_open(Client, 4_500), still_open(Station, 0)}),
     finish(World, [Client, Station]).
-
-%% A control frame signed with a key other than the peer's identity key
-%% closes the connection with signature_invalid.
-a_control_frame_signed_by_another_key_closes_the_connection_in_pq_hybrid(Ctx) ->
-    #{station_key := StationKey} = World = world(Ctx, #{profile => pq_hybrid}),
-    {Client, Station} = connect(World, #{handshake => 4, mode => off}),
-    _ = {await(Client, connected), await(Station, connected)},
-    Forged = macula_frame:sign_neighbour(ping(), StationKey,
-                                         #{connection => crypto:hash(sha384, <<"a challenge">>), seq => 0}),
-    ok = on_control_stream(Client, macula_frame:encode(Forged)),
-    ?assertEqual(signature_invalid, ended(Station)),
-    finish(World, [Client, Station]).
-
-%% In pq_hybrid a control frame without a neighbour signature closes the
-%% connection with malformed_frame.
-a_control_frame_without_a_neighbour_signature_closes_the_connection_in_pq_hybrid(Ctx) ->
-    World = world(Ctx, #{profile => pq_hybrid}),
-    {Client, Station} = connect(World, #{handshake => 4, mode => off}),
-    _ = {await(Client, connected), await(Station, connected)},
-    ok = on_control_stream(Client, macula_frame:encode(ping())),
-    ?assertEqual(malformed_frame, ended(Station)),
-    finish(World, [Client, Station]).
-
-%% An OVERLAY_RELAY is a control frame: sent on an open pq_hybrid connection
-%% with no signature of its own, it goes out neighbour-signed, and the other
-%% side verifies it and delivers the frame as its producer built it. A control
-%% frame without a neighbour signature would have closed that side instead.
-an_overlay_relay_goes_out_neighbour_signed_and_verifies_in_pq_hybrid(Ctx) ->
-    World = world(Ctx, #{profile => pq_hybrid}),
-    {Client, Station} = connect(World, #{handshake => 4, mode => off}),
-    _ = {await(Client, connected), await(Station, connected)},
-    Relay = macula_frame:overlay_relay(#{peer => <<9:256>>, payload => macula_frame:encode(ping())}),
-    ok = sent(Client, Station, [Relay]),
-    ?assertEqual({open, open}, {still_open(Client, 500), still_open(Station, 0)}),
-    finish(World, [Client, Station]).
-
-%% A relayed overlay frame is taken unsigned only on the neighbour signature of
-%% the connection it arrives on. In pq_hybrid an OVERLAY_RELAY without one
-%% closes the connection, and nothing reaches the controlling process.
-an_overlay_relay_without_a_neighbour_signature_closes_and_routes_nothing_in_pq_hybrid(Ctx) ->
-    World = world(Ctx, #{profile => pq_hybrid}),
-    {Client, Station} = connect(World, #{handshake => 4, mode => off}),
-    _ = {await(Client, connected), await(Station, connected)},
-    ok = on_control_stream(Client, macula_frame:encode(unsigned_join_relay())),
-    Reason = ended(Station),
-    ?assertEqual(malformed_frame, Reason),
-    ?assertEqual(none, routed(Station)),
-    finish(World, [Client, Station]).
-
-%% One neighbour-signed with a key other than the peer's identity key closes
-%% the connection with signature_invalid, and nothing is routed.
-an_overlay_relay_signed_by_another_key_closes_and_routes_nothing_in_pq_hybrid(Ctx) ->
-    #{station_key := StationKey} = World = world(Ctx, #{profile => pq_hybrid}),
-    {Client, Station} = connect(World, #{handshake => 4, mode => off}),
-    _ = {await(Client, connected), await(Station, connected)},
-    Forged = macula_frame:sign_neighbour(unsigned_join_relay(), StationKey,
-                                         #{connection => crypto:hash(sha384, <<"a challenge">>), seq => 0}),
-    ok = on_control_stream(Client, macula_frame:encode(Forged)),
-    Reason = ended(Station),
-    ?assertEqual(signature_invalid, Reason),
-    ?assertEqual(none, routed(Station)),
-    finish(World, [Client, Station]).
-
-unsigned_join_relay() ->
-    Join = macula_frame:hyparview_join(#{realm => <<9:256>>, new_member => <<8:256>>}),
-    macula_frame:overlay_relay(#{peer => <<9:256>>, payload => macula_frame:encode(Join)}).
-
-%% Whether a frame reached the controlling process of `Pid'.
-routed(Pid) ->
-    receive {macula_peering, frame, Pid, _Frame} -> routed after 0 -> none end.
 
 ping() ->
     macula_frame:ping(#{nonce => crypto:strong_rand_bytes(16)}).
@@ -1174,37 +1077,9 @@ a_store_whose_record_is_not_cbor_reaches_its_recipient_and_the_connection_serves
 %% App-level liveness probe (conn-level dead-peer detection)
 %%====================================================================
 
-liveness_probe_reaps_an_unanswering_peer(Ctx) ->
-    World = world(Ctx, #{}),
-    {Client, Station} = connect(World, #{handshake => 4, mode => off,
-                                         liveness_interval_ms => 200,
-                                         liveness_max_misses => 2}),
-    _ = {await(Client, connected), await(Station, connected)},
-    %% The station conn never answers (its controller is this test,
-    %% which stays silent) — the client must reap it after two
-    %% unanswered probes.
-    ?assertEqual(peer_liveness_lost, ended(Client)),
-    cleanup_pair(Client, Station, World).
-
-answered_liveness_probe_keeps_the_connection_open(Ctx) ->
-    #{station_key := StationKey} = World = world(Ctx, #{}),
-    {Client, Station} = connect(World, #{handshake => 4, mode => off,
-                                         liveness_interval_ms => 200,
-                                         liveness_max_misses => 2}),
-    _ = {await(Client, connected), await(Station, connected)},
-    %% Answer every probe the peer receives, as a station would: any
-    %% verified reply naming the probe's request_id is proof of life.
-    %% Eight answered probes mean eight ticks passed with the reply
-    %% clearing each one; the final check's window is under two tick
-    %% intervals, so at most one unanswered probe can accumulate (never
-    %% the two a reaping takes).
-    ok = answer_probes(Station, StationKey, pq_pure, 8),
-    ?assertEqual(open, still_open(Client, 300)),
-    cleanup_pair(Client, Station, World).
-
 liveness_is_opt_in(Ctx) ->
     World = world(Ctx, #{}),
-    {Client, Station} = connect(World, #{handshake => 4, mode => off}),
+    {Client, Station} = connect(World, #{mode => off}),
     _ = {await(Client, connected), await(Station, connected)},
     ?assertEqual(open, still_open(Client, 1_000)),
     receive
@@ -1275,19 +1150,22 @@ delivered_call(Conn) ->
 typing_observer(Test, Tag) ->
     fun(Side) -> fun(Dir, Type, _Size, _Us) -> Test ! {observed, Tag, Side, Dir, Type}, ok end end.
 
-%% A pre-v5 connection's liveness probe is a signed CALL to `_macula.ping' in the all-zero realm, answered with a
-%% RESULT. It exists to find a dead peer, not to carry work, so the frame observer names it apart: the prober's probe
-%% out and the answer back in, the answerer's probe in and its answer out (macula-station#25, so a station's idle
-%% close does not count it as use). Nothing else changes: the probe still reaches the controlling process, which
-%% answered it here.
+%% An SDK link's liveness probe is a signed CALL to `_macula.ping' in the all-zero realm, answered with a RESULT
+%% (macula_station_link). It exists to find a dead peer, not to carry work, so the frame observer names it apart: the
+%% prober's probe out and the answer back in, the answerer's probe in and its answer out (macula-station#25, so a
+%% station's idle close does not count it as use). Nothing else changes: the probe still reaches the controlling
+%% process, which answered it here.
 a_probe_and_its_answer_are_typed_liveness_both_ways(Ctx) ->
-    #{station_key := StationKey} = World = world(Ctx, #{}),
+    #{client_key := ClientKey, station_key := StationKey} = World = world(Ctx, #{}),
     Tag = make_ref(),
     Observer = typing_observer(self(), Tag),
-    {Client, Station} = connect(World, #{handshake => 4, mode => off, liveness_interval_ms => 200,
-                                         liveness_max_misses => 5,
+    {Client, Station} = connect(World, #{mode => off,
                                          client_observer => Observer(client), station_observer => Observer(station)}),
     _ = {await(Client, connected), await(Station, connected)},
+    Probe = macula_frame:call(#{request_id => crypto:strong_rand_bytes(16), realm => <<0:256>>,
+                                procedure => <<"_macula.ping">>, target => node_id(StationKey),
+                                deadline => ?T0 + 2 * ?MINUTE, payload => #{}}, ClientKey),
+    ok = macula_peering:send_frame(Client, Probe),
     ok = answer_probes(Station, StationKey, pq_pure, 1),
     Seen = observations(Tag, 300),
     [?assert(lists:member(O, Seen)) || O <- [{client, queued, liveness_call}, {client, out, liveness_call},
@@ -1302,7 +1180,7 @@ an_ordinary_call_is_typed_call(Ctx) ->
     #{client_key := ClientKey, station_key := StationKey} = World = world(Ctx, #{}),
     Tag = make_ref(),
     Observer = typing_observer(self(), Tag),
-    {Client, Station} = connect(World, #{handshake => 4, mode => off,
+    {Client, Station} = connect(World, #{mode => off,
                                          client_observer => Observer(client), station_observer => Observer(station)}),
     _ = {await(Client, connected), await(Station, connected)},
     [begin
@@ -1330,7 +1208,7 @@ the_probe_ids_a_peer_can_feed_are_bounded(Ctx) ->
     #{client_key := ClientKey, station_key := StationKey} = World = world(Ctx, #{}),
     Tag = make_ref(),
     Observer = typing_observer(self(), Tag),
-    {Client, Station} = connect(World, #{handshake => 4, mode => off, station_observer => Observer(station)}),
+    {Client, Station} = connect(World, #{mode => off, station_observer => Observer(station)}),
     _ = {await(Client, connected), await(Station, connected)},
     Requests = [begin
                     Probe = macula_frame:call(#{request_id => crypto:strong_rand_bytes(16), realm => <<0:256>>,

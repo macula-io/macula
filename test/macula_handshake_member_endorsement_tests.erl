@@ -14,18 +14,15 @@
 %%
 %% == Two things this pins that are easy to lose ==
 %%
-%% The proof does NOT cover the field, and that is what let WP 1.5 ship before
-%% it. `proof_message/5' signs a fixed-length concatenation ending in the hash
-%% of the CHALLENGE frame, never of the connect frame, so a key added to
-%% `connect' cannot disturb it. `the_proof_does_not_cover_the_field' pins that,
-%% because folding the field into the proof later would look like a tightening
-%% and would silently break every peer that had not.
+%% In wire 1.0 the proof COVERS the field: proof V3 signs the hash of the CONNECT
+%% tbs, the frame with its proof empty, so an endorsement swapped after signing
+%% is refused with proof_invalid (docs/design/WIRE_1_0.md section 4.2).
+%% `the_proof_covers_the_field' pins that.
 %%
-%% And the version is 4, not 3. The field makes the frame's key set differ, and
-%% `frame_type/3' matches key sets EXACTLY, so an older peer would otherwise
-%% answer `malformed_frame' -- which reads as corruption and sends someone
-%% hunting a codec bug. Version 3 already did this to every published client
-%% once. `unsupported_version' says the true thing.
+%% And an older peer is told the version. Frames match key sets EXACTLY, so a
+%% CONNECT of another version would otherwise answer `malformed_frame', which
+%% reads as corruption and sends someone hunting a codec bug.
+%% `unsupported_version' says the true thing.
 -module(macula_handshake_member_endorsement_tests).
 
 -include_lib("eunit/include/eunit.hrl").
@@ -42,12 +39,10 @@
 member_endorsement_test_() ->
     {setup, fun world/0,
      fun(World) ->
-         [{"the handshake version is 4, so an older peer says unsupported_version "
-           "rather than malformed_frame",
-           fun() -> the_version_is_four(World) end},
-          {"a version 3 peer is refused with unsupported_version, which is what "
-           "the bump is FOR",
-           fun() -> a_version_three_peer_is_told_the_version(World) end},
+         [{"the handshake version is 5",
+           fun() -> the_version_is_five(World) end},
+          {"a version 4 peer is refused with unsupported_version, not malformed_frame",
+           fun() -> a_version_four_peer_is_told_the_version(World) end},
           {"a connect frame carries member_endorsement even when the node has none",
            fun() -> the_field_is_always_carried(World) end},
           {"a connect frame carries the endorsement the session was given",
@@ -57,9 +52,8 @@ member_endorsement_test_() ->
           {"a station with no endorsement to check still accepts, because "
            "enforcement is not the SDK's business",
            fun() -> an_empty_endorsement_still_connects(World) end},
-          {"the proof still verifies when the endorsement is swapped after "
-           "signing, so the field is genuinely outside it",
-           fun() -> the_proof_does_not_cover_the_field(World) end},
+          {"an endorsement swapped after signing is refused: the proof covers the field",
+           fun() -> the_proof_covers_the_field(World) end},
           {"a CONNECT carrying a real endorsement fits the 64 KiB handshake "
            "frame cap, with the headroom stated",
            {timeout, 120, fun() -> a_connect_with_an_endorsement_fits_the_frame_cap() end}}]
@@ -69,21 +63,16 @@ member_endorsement_test_() ->
 %%% Test bodies
 %%%===================================================================
 
-the_version_is_four(World) ->
-    ?assertMatch(#{{text, <<"version">>} := 4}, decoded(connect_of(World, <<>>))).
+the_version_is_five(World) ->
+    ?assertMatch(#{{text, <<"version">>} := 5}, decoded(connect_of(World, <<>>))).
 
-%% ⛔ THE POINT OF THE VERSION BUMP, AND THE ONLY TEST THAT SHOWS IT. Without
-%% it the field would still work between two version 4 peers and everything
-%% here would pass; what would differ is what a 12-pre peer HEARS.
-%%
-%% `frame_type/3' matches key sets exactly, so a version 3 CONNECT reaching a
-%% version 4 station would answer `malformed_frame' — which reads as
-%% corruption and sends someone hunting a codec bug. Version 3 already did
-%% exactly this to every published client once. `unsupported_version' names
-%% the cause and tells an operator what to do.
-a_version_three_peer_is_told_the_version(World) ->
-    V3 = as_version(connect_of(World, <<>>), 3),
-    ?assertMatch({refused, unsupported_version, _}, accept(World, V3)).
+%% Frames match key sets exactly, so a version 4 CONNECT, without the fields
+%% wire 1.0 adds, would otherwise answer `malformed_frame', which reads as
+%% corruption. `unsupported_version' names the cause and tells an operator what
+%% to do.
+a_version_four_peer_is_told_the_version(World) ->
+    V4 = as_version(connect_of(World, <<>>), 4),
+    ?assertMatch({refused, unsupported_version, _}, accept(World, V4)).
 
 %% Empty, not absent. A peer must not be able to tell from the wire whether
 %% this node has an endorsement, nor whether the station asks for one.
@@ -104,30 +93,19 @@ an_empty_endorsement_still_connects(World) ->
     {accepted, Client, _Hello} = accept(World, connect_of(World, <<>>)),
     ?assertMatch(#{member_endorsement := <<>>}, Client).
 
-%% ⛔ THE ADDITIVE PROPERTY, PINNED BY SWAPPING THE FIELD AFTER SIGNING. The
-%% proof signs a fixed-length concatenation ending in the hash of the CHALLENGE
-%% frame, never of this one, so replacing the endorsement in a signed connect
-%% leaves the proof valid and the station still accepts.
+%% ⛔ PINNED BY SWAPPING THE FIELD AFTER SIGNING. Proof V3 signs the hash of
+%% the CONNECT tbs, which holds the endorsement, so replacing it in a signed
+%% CONNECT breaks the proof and the station refuses.
 %%
-%% ⚠ COMPARING THE PROOF BYTES OF TWO CONNECTS DOES NOT TEST THIS, and was the
-%% first thing tried here. ML-DSA signing is randomised, so two proofs over the
-%% IDENTICAL message differ anyway; the comparison fails whether or not the
-%% field is covered, and would have "caught" a bug that is not there while
-%% saying nothing about the one that would matter.
-%%
-%% ⚠ AND THE SWAP BEING POSSIBLE IS NOT A HOLE. D31: the endorsement binds
-%% `member_node' to the node_id the proof establishes, so one copied from
-%% another member is useless without that member's CONNECT key. The proof does
-%% not need to cover the field because the field cannot be used out of place.
-%% That is also why the station's check must run AFTER the proof: before it,
-%% there is no established node_id to bind against.
-the_proof_does_not_cover_the_field(World) ->
+%% ⚠ COMPARING THE PROOF BYTES OF TWO CONNECTS DOES NOT TEST THIS. ML-DSA
+%% signing is randomised, so two proofs over the IDENTICAL message differ
+%% anyway; only the station's verdict says whether the field is covered.
+the_proof_covers_the_field(World) ->
     Signed = connect_of(World, ?ENDORSEMENT),
     Swapped = with_endorsement(Signed, <<"a different member's endorsement">>),
     ?assertNotEqual(Signed, Swapped),
-
-    {accepted, Client, _Hello} = accept(World, Swapped),
-    ?assertMatch(#{member_endorsement := <<"a different member's endorsement">>}, Client).
+    ?assertMatch({accepted, _, _}, accept(World, Signed)),
+    ?assertMatch({refused, proof_invalid, _}, accept(World, Swapped)).
 
 %% ⛔ BOTH `macula_dist_tunnel' AND `macula_peering_conn' REFUSE A HANDSHAKE
 %% FRAME OVER 65,536 BYTES, from the length header before the body is read. An
@@ -191,12 +169,12 @@ accept(#{challenge := Challenge} = World, Connect) ->
 %% not about what the decoder makes of it afterwards.
 %% Re-encodes a frame claiming another protocol version, leaving every other
 %% field as it was: what a peer on the older version would actually send,
-%% minus the field it does not know about.
+%% minus the fields it does not know about.
 as_version(FrameBytes, Version) ->
     {ok, Fields} = macula_record_cbor:decode_strict(FrameBytes),
     macula_cbor_nif:pack_deterministic(
-        maps:remove({text, <<"member_endorsement">>},
-                    Fields#{{text, <<"version">>} => Version})).
+        maps:without([{text, <<"versions">>}, {text, <<"profiles">>}, {text, <<"profile">>}],
+                     Fields#{{text, <<"version">>} => Version})).
 
 %% Re-encodes a signed connect frame with a different endorsement in it,
 %% leaving every other field and the proof untouched.
@@ -220,6 +198,7 @@ world_in(Profile) ->
     TlsBinding = macula_key_bindings:tls_binding(StationId, ?LEAF, ?NOW, ?NOW + 7 * ?DAY),
     ConnectBinding = macula_key_bindings:connect_binding(ClientId, ConnectPublic, ?NOW, ?NOW + ?DAY),
     World = #{profile => Profile,
+              station_id => StationId,
               station_public => macula_node_keys:public_key(StationId),
               client_public => macula_node_keys:public_key(ClientId),
               client_connect => ClientConnect,
@@ -228,7 +207,16 @@ world_in(Profile) ->
               connect_binding => ConnectBinding,
               connect_status => macula_key_bindings:status_statement(ClientId, ConnectBinding, ?NOW,
                                                                      ?NOW + ?HOUR)},
-    World#{challenge => macula_handshake:challenge(station_material(World))}.
+    World#{challenge => macula_handshake:challenge(station_material(World), choice(Profile),
+                                                   macula_handshake:ranges(Profile))}.
+
+%% What the station chooses from an opener of this profile.
+choice(Profile) ->
+    #{version => 5, profile => Profile, client_ranges => #{versions => [5, 5], profiles => [atom_to_binary(Profile)]}}.
+
+%% A stand-in for the TLS session's exporter, the same on both ends.
+exporter(_Label, _Context, Length) ->
+    {ok, binary:copy(<<16#E5>>, Length)}.
 
 configured_profile() ->
     {ok, Profile} = macula_crypto_profile:configured(),
@@ -244,13 +232,15 @@ station_material(#{profile := Profile, station_public := StationPublic, tls_bind
 client_session(#{profile := Profile, station_public := StationPublic, client_public := ClientPublic,
                  client_connect := ClientConnect, connect_binding := Binding, connect_status := Status},
                Endorsement) ->
-    #{profile => Profile, expected_node_id => macula_node_keys:node_id(StationPublic, Profile),
-      leaf => ?LEAF, identity_key => ClientPublic, connect_key => ClientConnect,
-      connect_binding => Binding, connect_status => Status,
-      capabilities => ?CLIENT_CAPABILITIES, member_endorsement => Endorsement,
-      now => ?NOW + ?MINUTE}.
+    maps:merge(macula_handshake:ranges(Profile),
+               #{profile => Profile, expected_node_id => macula_node_keys:node_id(StationPublic, Profile),
+                 leaf => ?LEAF, identity_key => ClientPublic, connect_key => ClientConnect,
+                 connect_binding => Binding, connect_status => Status,
+                 capabilities => ?CLIENT_CAPABILITIES, member_endorsement => Endorsement,
+                 now => ?NOW + ?MINUTE, export => fun exporter/3}).
 
-station_session(#{profile := Profile}, Challenge) ->
-    #{profile => Profile, challenge => Challenge, leaf => ?LEAF,
+station_session(#{profile := Profile, station_id := StationKey}, Challenge) ->
+    #{profile => Profile, choice => choice(Profile), challenge => Challenge, leaf => ?LEAF,
       puzzle => #{difficulty => 0, mode => enforce},
-      capabilities => ?STATION_CAPABILITIES, now => ?NOW + ?MINUTE}.
+      capabilities => ?STATION_CAPABILITIES, now => ?NOW + ?MINUTE, export => fun exporter/3,
+      sign_session_proof => fun(_ClientNodeId, Message) -> {ok, macula_node_keys:sign(Message, StationKey)} end}.

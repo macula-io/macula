@@ -23,6 +23,25 @@ break: a node on it no longer reads the frames of an older one.
 - **Inside a signed object an enum value this node does not know is refused by name**, `{enum_unknown, Field}`
   (STREAM_OPEN `mode`, STREAM_DATA `encoding`, STREAM_END `role`, the relay error `code`), where it was
   `malformed_frame`.
+- **The handshake is wire 1.0, version 5 only** (macula#98, docs/design/WIRE_1_0.md section 4). Version 4 and proofs V1
+  and V2 are gone, with the v4 fallback, the 10-minute v4 cache and the downgrade memory that guarded it. The opener
+  carries the client's ranges (`versions`, `profiles`); the station chooses the highest common version and the first
+  of the client's profiles it supports, or answers at once with a HELLO refusal naming its own ranges
+  (`unsupported_version`, `profile_unsupported`). The challenge names the choice and repeats the station's ranges, and
+  the client refuses a choice its ranges and the station's do not give (`downgrade_detected`). CONNECT repeats the
+  client's ranges (`negotiation_mismatch` otherwise) and names the chosen profile. Proof V3 covers the CONNECT tbs, so
+  the capabilities, ranges, profile and `member_endorsement`; session proof V2 covers the HELLO tbs, so the station's
+  capabilities at no fixed width. Every handshake frame carries version 5 and must be deterministic CBOR. An unknown
+  HELLO refusal code reads as `not_accepted` and counts `wire_enum_fallback`. The dist tunnel binds its handshake to
+  the TLS session inside it through the same exporter.
+- **A version floor per peer** (WIRE_1_0.md 4.6): a node never completes below the highest version it completed with
+  that node id (`version_below_floor`), and raises the floor only after a completion, only upward. A connection's
+  `version_floor => {Mod, Arg}` keeps it across restarts (`Mod:floor/2`, `Mod:raise/3`); without it the floor holds
+  for the run. A raise the store fails to persist keeps the connection and counts `version_floor_unpersisted`.
+  `macula_peering:forget_v5_peer/1` is removed; `handshake_counters/0` now counts connections, negotiation refusals,
+  session proof refusals and unpersisted floors.
+- **The connection's own liveness probe is `liveness_ping` only**: the signed `_macula.ping` CALL a v4 connection
+  sent is gone, and no frame after HELLO carries a neighbour signature.
 
 ### Added
 

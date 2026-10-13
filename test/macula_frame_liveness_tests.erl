@@ -23,9 +23,12 @@ a_nonce_of_another_size_is_refused_test() ->
     Short = (macula_frame:liveness_ping(#{nonce => ?NONCE}))#{nonce => <<7:120>>},
     ?assertEqual({error, {invalid_frame, liveness_ping, nonce}}, macula_frame:decode(macula_frame:encode(Short))).
 
+%% No frame carries a neighbour signature: the field is an extra one, and the frame is refused.
 a_liveness_frame_carrying_neighbour_is_refused_test() ->
-    Signed = (macula_frame:liveness_pong(#{nonce => ?NONCE}))#{neighbour => #{tbs => <<>>, signature => <<>>}},
-    ?assertMatch({error, {invalid_frame, liveness_pong, _}}, macula_frame:decode(macula_frame:encode(Signed))).
+    <<_Length:32, Bytes/binary>> = macula_frame:encode(macula_frame:liveness_pong(#{nonce => ?NONCE})),
+    {ok, Map} = macula_record_cbor:decode_strict(Bytes),
+    Signed = Map#{{text, <<"neighbour">>} => #{{text, <<"tbs">>} => <<>>, {text, <<"signature">>} => <<>>}},
+    ?assertMatch({error, _}, macula_frame:read_wire(Signed)).
 
 wire(Frame) ->
     {ok, Decoded, <<>>} = macula_frame:decode(macula_frame:encode(Frame)),

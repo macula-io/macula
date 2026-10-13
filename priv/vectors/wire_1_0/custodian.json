@@ -538,6 +538,69 @@
       "profile": "pq_pure"
     },
     {
+      "bound": "upper",
+      "covers": [
+        "D4",
+        "A3"
+      ],
+      "expect": {
+        "outcome": "store",
+        "slot": "1bf19b3061c94f0f90211575ebfa2ec5b694a5072e70399f4725a48b5fc54023"
+      },
+      "id": "record.tombstone.unknown_tag.at_bound.ok.custodian.pq_pure",
+      "input": {
+        "now_ms": 1791800001000,
+        "object_of": "record.tombstone.unknown_tag.at_bound.ok.reader.pq_pure",
+        "signer": "org"
+      },
+      "lands_with": [
+        "macula#100",
+        "macula-station#94"
+      ],
+      "profile": "pq_pure"
+    },
+    {
+      "covers": [
+        "D4"
+      ],
+      "expect": {
+        "outcome": "refuse",
+        "reason": "lifetime_too_long"
+      },
+      "id": "record.tombstone.unknown_tag.over_bound.refused.custodian.pq_pure",
+      "input": {
+        "now_ms": 1791800001000,
+        "object_of": "record.tombstone.unknown_tag.over_bound.refused.reader.pq_pure",
+        "signer": "org"
+      },
+      "lands_with": [
+        "macula#100",
+        "macula-station#94"
+      ],
+      "profile": "pq_pure"
+    },
+    {
+      "covers": [
+        "D4",
+        "A3"
+      ],
+      "expect": {
+        "outcome": "refuse",
+        "reason": "subject_missing"
+      },
+      "id": "record.tombstone.unknown_tag.no_subject.refused.custodian.pq_pure",
+      "input": {
+        "now_ms": 1791800001000,
+        "object_of": "record.tombstone.unknown_tag.no_subject.refused.reader.pq_pure",
+        "signer": "org"
+      },
+      "lands_with": [
+        "macula#100",
+        "macula-station#94"
+      ],
+      "profile": "pq_pure"
+    },
+    {
       "covers": [
         "D4"
       ],
@@ -1767,6 +1830,69 @@
         "now_ms": 1791800001000,
         "object_of": "record.tombstone.station_authorization.over_bound.refused.reader.pq_hybrid",
         "signer": "realm"
+      },
+      "lands_with": [
+        "macula#100",
+        "macula-station#94"
+      ],
+      "profile": "pq_hybrid"
+    },
+    {
+      "bound": "upper",
+      "covers": [
+        "D4",
+        "A3"
+      ],
+      "expect": {
+        "outcome": "store",
+        "slot": "27a480fad8ca6acafd2ca9fb1078c79e5b182f1f4977e37eeec6e0b643622880"
+      },
+      "id": "record.tombstone.unknown_tag.at_bound.ok.custodian.pq_hybrid",
+      "input": {
+        "now_ms": 1791800001000,
+        "object_of": "record.tombstone.unknown_tag.at_bound.ok.reader.pq_hybrid",
+        "signer": "org"
+      },
+      "lands_with": [
+        "macula#100",
+        "macula-station#94"
+      ],
+      "profile": "pq_hybrid"
+    },
+    {
+      "covers": [
+        "D4"
+      ],
+      "expect": {
+        "outcome": "refuse",
+        "reason": "lifetime_too_long"
+      },
+      "id": "record.tombstone.unknown_tag.over_bound.refused.custodian.pq_hybrid",
+      "input": {
+        "now_ms": 1791800001000,
+        "object_of": "record.tombstone.unknown_tag.over_bound.refused.reader.pq_hybrid",
+        "signer": "org"
+      },
+      "lands_with": [
+        "macula#100",
+        "macula-station#94"
+      ],
+      "profile": "pq_hybrid"
+    },
+    {
+      "covers": [
+        "D4",
+        "A3"
+      ],
+      "expect": {
+        "outcome": "refuse",
+        "reason": "subject_missing"
+      },
+      "id": "record.tombstone.unknown_tag.no_subject.refused.custodian.pq_hybrid",
+      "input": {
+        "now_ms": 1791800001000,
+        "object_of": "record.tombstone.unknown_tag.no_subject.refused.reader.pq_hybrid",
+        "signer": "org"
       },
       "lands_with": [
         "macula#100",

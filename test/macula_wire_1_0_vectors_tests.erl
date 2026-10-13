@@ -91,11 +91,33 @@ unknown_tag_slots_test_() ->
 
 slot_checked(P, #{<<"input">> := #{<<"object">> := Hex}}, Slot) ->
     {ok, #{key := Key, tbs := Tbs}} = macula_signed_object:decode(binary:decode_hex(Hex)),
-    {ok, #{{text, <<"type">>} := Type, {text, <<"subject">>} := Subject}} = macula_record_cbor:decode_strict(Tbs),
+    {ok, Fields} = macula_record_cbor:decode_strict(Tbs),
+    {Type, Subject} = slotted(Fields),
     KeyId = macula_node_keys:key_id(Key, binary_to_atom(P)),
     ?assertEqual(binary:decode_hex(Slot),
                  crypto:hash(sha256, <<"MACULA-PQ-STORAGE-KEY-V1", 0, Type, KeyId/binary, (byte_size(Subject)):32,
                                        Subject/binary>>)).
+
+%% The tag and subject a slot is derived from: the record's own, or for a tombstone the tag it withdraws and the
+%% subject its payload names (WIRE_1_0.md 5.1).
+slotted(#{{text, <<"type">>} := 16#0C, {text, <<"payload">>} := #{{text, <<"withdrawn_type">>} := Type,
+                                                                    {text, <<"subject">>} := Subject}}) ->
+    {Type, Subject};
+slotted(#{{text, <<"type">>} := Type, {text, <<"subject">>} := Subject}) ->
+    {Type, Subject}.
+
+%% Every STATUS case's statement verifies against the sender it names, as the handshake verified it.
+status_statements_test_() ->
+    [{binary_to_list(Id), fun() -> statement_checked(binary_to_atom(P), F, Peer, Now) end}
+     || #{<<"id">> := Id, <<"profile">> := P,
+          <<"input">> := #{<<"frame">> := F, <<"status_peer">> := Peer, <<"now_ms">> := Now}} <- cases(<<"envelope">>)].
+
+statement_checked(P, Hex, #{<<"identity">> := Role, <<"binding">> := #{<<"tbs">> := Tbs, <<"signature">> := Sig}},
+                  Now) ->
+    #{{text, <<"statement">>} := #{{text, <<"tbs">>} := STbs, {text, <<"signature">>} := SSig}} = decoded(Hex),
+    Binding = #{tbs => binary:decode_hex(Tbs), signature => binary:decode_hex(Sig)},
+    ?assertMatch({ok, _}, macula_key_bindings:verify_status(#{tbs => STbs, signature => SSig}, Binding,
+                                                            signer_key(atom_to_binary(P), Role), P, Now)).
 
 %% A caller's stream frames held against their STREAM_OPEN start at seq 0 (macula_frame's open_stream).
 caller_stream_seq_test_() ->
@@ -198,14 +220,21 @@ frame_checked(Type, Hex) ->
     {ok, Frame} = macula_record_cbor:decode_strict(binary:decode_hex(Hex)),
     ?assertMatch(#{{text, <<"version">>} := 5, {text, <<"frame_type">>} := {text, Type}}, Frame),
     ?assertNot(is_map_key({text, <<"capabilities">>}, Frame)),
-    ?assertNot(lists:member(null, maps:values(Frame))).
+    ?assertNot(null_field(Frame)).
 
-%% Absent is omitted (section 3.1): no frame a stack must accept carries null as a value.
+%% Absent is omitted (section 3.1): no frame a stack must accept carries null in a protocol field, at any depth.
 accepted_frames_carry_no_null_test_() ->
-    [{binary_to_list(Id), fun() -> ?assertNot(lists:member(null, maps:values(decoded(F)))) end}
+    [{binary_to_list(Id), fun() -> ?assertNot(null_field(decoded(F))) end}
      || Class <- [<<"envelope">>, <<"enums">>, <<"frames">>],
         #{<<"id">> := Id, <<"input">> := #{<<"frame">> := F}, <<"expect">> := #{<<"outcome">> := <<"accept">>}}
             <- cases(Class)].
+
+null_field(M) when is_map(M) ->
+    lists:any(fun({{text, K}, _V}) when K =:= <<"payload">>; K =:= <<"value">> -> false;
+                 ({_K, V}) -> V =:= null orelse null_field(V)
+              end, maps:to_list(M));
+null_field(L) when is_list(L) -> lists:any(fun(V) -> V =:= null orelse null_field(V) end, L);
+null_field(_V) -> false.
 
 decoded(Hex) ->
     {ok, Frame} = macula_record_cbor:decode_strict(binary:decode_hex(Hex)),

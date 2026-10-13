@@ -1,26 +1,24 @@
 %%%-------------------------------------------------------------------
-%%% @doc Handshake v5 between two `macula_peering_conn' workers over a real Quinn loopback pair
-%%% (docs/design/DESIGN_NEIGHBOUR_CHANNEL_BINDING.md): the connection is authenticated once, by both proofs over the TLS
-%%% session's exporter, and no frame after HELLO carries a neighbour signature. A client falls back to v4 once, only
-%%% after unsupported_version, from a station never seen on v5; a station seen on v5 that answers v4 is refused as a
-%%% downgrade until forgotten. The liveness probe on v5 is answered by the peer's connection, never by its controller.
+%%% @doc The wire 1.0 handshake between two `macula_peering_conn' workers over a real Quinn loopback pair
+%%% (docs/design/WIRE_1_0.md section 4): version 5 only, the connection authenticated once by both proofs over the TLS
+%%% session's exporter, no frame after HELLO carrying a neighbour signature, and each side's version floor for the
+%%% other raised after completion and kept through the connection's `version_floor' store. The liveness probe is
+%%% answered by the peer's connection, never by its controller.
 %%%
-%%% The loopback pair and its helpers are macula_peering_handshake_tests'. A pre-v5 station is stood in for by
-%%% `pre_v5_station/1': the station's own challenge material, and macula_handshake's check of CONNECT with no exporter,
-%%% which answers a v5 CONNECT as an old station does. Nothing in a connection caps the handshake version: such a cap
-%%% would be a configured downgrade.
+%%% The loopback pair and its helpers are macula_peering_handshake_tests'. This module is also the floor store the
+%%% tests hand a connection (floor/2, raise/3).
 %%% @end
 %%%-------------------------------------------------------------------
 -module(macula_peering_v5_tests).
 
 -include_lib("eunit/include/eunit.hrl").
 
-%% The logger handler callback captured/1 installs.
--export([log/2]).
+%% The version_floor store the tests hand a connection.
+-export([floor/2, raise/3]).
 
 -import(macula_peering_handshake_tests,
         [world/2, connect/2, await/2, ended/1, still_open/2, finish/2, sent/3, on_control_stream/2, ping/0,
-         node_id/1, accept_one/1, station_opts/2, fixed/1]).
+         node_id/1]).
 
 -define(T0, 1789000000000).
 -define(MINUTE, 60_000).
@@ -35,55 +33,41 @@ v5_test_() ->
             {timeout, 120, fun() -> both_ends_connect_on_v5(Ctx, pq_hybrid) end}},
            {"pq_pure: both ends connect on v5",
             {timeout, 60, fun() -> both_ends_connect_on_v5(Ctx, pq_pure) end}},
-           {"a control frame without a neighbour signature is delivered on v5",
+           {"a control frame without a neighbour signature is delivered",
             {timeout, 120, fun() -> an_unsigned_control_frame_is_delivered_on_v5(Ctx) end}},
-           {"a neighbour-signed frame on v5 closes with malformed_frame",
+           {"a frame carrying a neighbour field closes with malformed_frame",
             {timeout, 120, fun() -> a_neighbour_signed_frame_on_v5_closes(Ctx) end}},
-           {"a v5 client against a v4-only station falls back once and connects on v4",
-            {timeout, 60, fun() -> a_v5_client_falls_back_to_a_v4_only_station(Ctx) end}},
-           {"a station connection given a version cap still answers v5",
-            {timeout, 60, fun() -> a_version_cap_option_is_not_honoured(Ctx) end}},
-           {"a station seen on v5 that answers v4 is refused, until forgotten",
-            {timeout, 60, fun() -> a_station_seen_on_v5_that_answers_v4_is_refused_until_forgotten(Ctx) end}},
-           {"a v4 handshake that completes to a node seen on v5 meanwhile is refused (macula#53)",
-            {timeout, 60, fun() -> a_v4_handshake_completing_to_a_node_seen_on_v5_is_refused(Ctx) end}},
-           {"a v4 connection kept before the node completes v5 elsewhere is then closed (#53, the other ordering)",
-            {timeout, 60, fun() -> a_v4_connection_open_when_the_node_completes_v5_is_closed(Ctx) end}},
-           {"a station still accepts a v4 CONNECT from a node it saw on v5 (#53 governs only its own dials)",
-            {timeout, 60, fun() -> a_station_accepts_v4_from_a_node_it_saw_on_v5(Ctx) end}},
-           {"control frames on a v4 connection are counted as the old path",
-            {timeout, 60, fun() -> control_frames_on_v4_are_counted(Ctx) end}},
+           {"each side raises its floor for the other in its store after completion",
+            {timeout, 60, fun() -> each_side_raises_its_floor_in_its_store(Ctx) end}},
+           {"a floor above 5 in the client's store refuses the station with version_below_floor",
+            {timeout, 60, fun() -> a_stored_floor_above_the_version_refuses(Ctx) end}},
+           {"a store that fails to persist keeps the connection and counts version_floor_unpersisted",
+            {timeout, 60, fun() -> a_store_that_fails_keeps_the_connection(Ctx) end}},
            {"past the station's session proof budget the client is refused and nothing is signed",
             {timeout, 60, fun() -> past_the_session_proof_budget_the_client_is_refused(Ctx) end}},
-           {"v5 liveness: each connection answers the other's probe, and neither controller sees one",
+           {"liveness: each connection answers the other's probe, and neither controller sees one",
             {timeout, 60, fun() -> v5_liveness_is_answered_by_the_connections(Ctx) end}},
-           {"v5 liveness: a peer whose connection stops answering is reaped",
+           {"liveness: a peer whose connection stops answering is reaped",
             {timeout, 60, fun() -> v5_liveness_reaps_a_peer_whose_connection_stopped(Ctx) end}},
-           {"v5 liveness: each side's frame observer sees the probes it reads",
-            {timeout, 60, fun() -> v5_liveness_frames_reach_the_frame_observer(Ctx) end}},
-           {"v4 fallback: a late event from the refused attempt's stream is not an unexpected event",
-            {timeout, 60, fun() -> a_late_event_from_the_refused_stream_is_dropped_quietly(Ctx) end}}]
+           {"liveness: each side's frame observer sees the probes it reads",
+            {timeout, 60, fun() -> v5_liveness_frames_reach_the_frame_observer(Ctx) end}}]
       end}}.
 
-%%====================================================================
-%% Tests
-%%====================================================================
-
 both_ends_connect_on_v5(Ctx, Profile) ->
-    World = world(Ctx, #{profile => Profile}),
+    #{client_key := ClientKey, station_key := StationKey} = World = world(Ctx, #{profile => Profile}),
     Before = macula_peering:handshake_counters(),
     {Client, Station} = connect(World, #{mode => off}),
     _ = {await(Client, connected), await(Station, connected)},
     ?assertEqual(2, counted(v5_connections, Before)),
-    ?assertEqual(0, counted(v4_connections, Before)),
-    ?assert(macula_peer_versions:seen_v5(node_id(maps:get(station_key, World)))),
+    %% Without a store, each side holds the other's floor for the run.
+    ?assertEqual(5, macula_peer_versions:floor(node_id(StationKey), none)),
+    ?assertEqual(5, macula_peer_versions:floor(node_id(ClientKey), none)),
     ok = sent(Client, Station, [ping() || _ <- lists:seq(1, 3)]),
     ok = sent(Station, Client, [ping() || _ <- lists:seq(1, 3)]),
-    ?assertEqual(0, counted(v4_control_frames, Before)),
     ?assertEqual({open, open}, {still_open(Client, 300), still_open(Station, 0)}),
     finish(World, [Client, Station]).
 
-%% The frame v4 closes a pq_hybrid connection for (a control frame with no neighbour signature) is what v5 carries.
+%% A control frame with no neighbour signature is what every connection carries.
 an_unsigned_control_frame_is_delivered_on_v5(Ctx) ->
     World = world(Ctx, #{profile => pq_hybrid}),
     {Client, Station} = connect(World, #{mode => off}),
@@ -99,112 +83,56 @@ a_neighbour_signed_frame_on_v5_closes(Ctx) ->
     {Client, Station} = connect(World, #{mode => off}),
     _ = {await(Client, connected), await(Station, connected)},
     ?assertEqual(2, counted(v5_connections, Before)),
-    Signed = macula_frame:sign_neighbour(ping(), ClientKey,
-                                         #{connection => crypto:hash(sha384, <<"a challenge">>), seq => 0}),
-    ok = on_control_stream(Client, macula_frame:encode(Signed)),
+    <<_Length:32, Bytes/binary>> = macula_frame:encode(ping()),
+    {ok, Map} = macula_record_cbor:decode_strict(Bytes),
+    Held = macula_signed_object:sign_held(<<"MACULA-PQ-NEIGHBOUR-V1">>, #{{text, <<"seq">>} => 0}, ClientKey),
+    Signed = Map#{{text, <<"neighbour">>} => #{{text, <<"tbs">>} => maps:get(tbs, Held),
+                                               {text, <<"signature">>} => maps:get(signature, Held)}},
+    ok = on_control_stream(Client, macula_frame:encode_bytes(macula_record_cbor:encode(Signed))),
     ?assertEqual(malformed_frame, ended(Station)),
     finish(World, [Client, Station]).
 
-%% The station answers a v5 CONNECT as a pre-v5 station does. The client counts the fallback, redials on a new QUIC
-%% connection with a v4 CONNECT, and connects on v4; its next dial to that station within 10 minutes is v4.
-a_v5_client_falls_back_to_a_v4_only_station(Ctx) ->
-    #{station_key := StationKey} = World = world(Ctx, #{}),
-    Before = macula_peering:handshake_counters(),
-    Client = dial(World),
-    ?assertEqual({refused, unsupported_version}, pre_v5_station(World)),
-    Station = accept_one(station_opts(World, #{mode => off})),
+%% Each side's floor for the other rises to 5 once the handshake completes, in memory and in its store.
+each_side_raises_its_floor_in_its_store(Ctx) ->
+    #{client_key := ClientKey, station_key := StationKey} = World = world(Ctx, #{}),
+    Store = {?MODULE, #{test => self(), floor => none, raise => ok}},
+    {Client, Station} = connect(World, #{mode => off, client_version_floor => Store, station_version_floor => Store}),
     _ = {await(Client, connected), await(Station, connected)},
-    ?assertEqual(1, counted(v4_fallbacks, Before)),
-    ?assertEqual(2, counted(v4_connections, Before)),
-    ?assertEqual(4, macula_peer_versions:dial_version(node_id(StationKey), ?T0 + ?MINUTE)),
-    ?assertNot(macula_peer_versions:seen_v5(node_id(StationKey))),
+    Raised = lists:sort([receive {raised, NodeId, Version} -> {NodeId, Version} after 2_000 -> none end
+                         || _ <- [client, station]]),
+    ?assertEqual(lists:sort([{node_id(StationKey), 5}, {node_id(ClientKey), 5}]), Raised),
     finish(World, [Client, Station]).
 
-%% The same station identity, first on v5 and then answering only v4 (a rollback, or an attacker forcing a
-%% downgrade): the client refuses it without a retry. Once forgotten, the client falls back and connects on v4.
-a_station_seen_on_v5_that_answers_v4_is_refused_until_forgotten(Ctx) ->
-    #{station_key := StationKey} = World = world(Ctx, #{}),
-    {Client1, Station1} = connect(World, #{mode => off}),
-    _ = {await(Client1, connected), await(Station1, connected)},
-    ok = macula_peering:close(Client1),
-    Before = macula_peering:handshake_counters(),
-    Client2 = dial(World),
-    ?assertEqual({refused, unsupported_version}, pre_v5_station(World)),
-    ?assertEqual(v5_downgrade_refused, ended(Client2)),
-    ?assertEqual(1, counted(v5_downgrade_refused, Before)),
-    ?assertEqual(0, counted(v4_fallbacks, Before)),
-    ok = macula_peering:forget_v5_peer(node_id(StationKey)),
-    Client3 = dial(World),
-    ?assertEqual({refused, unsupported_version}, pre_v5_station(World)),
-    Station3 = accept_one(station_opts(World, #{mode => off})),
-    _ = {await(Client3, connected), await(Station3, connected)},
-    finish(World, [Station1, Client3, Station3]).
-
-%% The option a pre-v5 stand-in once took is no part of a connection: given it, a station still answers v5.
-a_version_cap_option_is_not_honoured(Ctx) ->
+%% A floor read from the store, above the only version there is, refuses the station before any CONNECT.
+a_stored_floor_above_the_version_refuses(Ctx) ->
     World = world(Ctx, #{}),
     Before = macula_peering:handshake_counters(),
-    Client = dial(World),
-    Station = accept_one((station_opts(World, #{mode => off}))#{max_handshake_version => 4}),
-    _ = {await(Client, connected), await(Station, connected)},
-    ?assertEqual(2, counted(v5_connections, Before)),
-    finish(World, [Client, Station]).
-
-%% Two dials interleaving: this client is in the v4 cache for the station and sends a v4 CONNECT; before the station
-%% answers, the node completes v5 on another connection. The v4 HELLO is refused, whichever finished first.
-a_v4_handshake_completing_to_a_node_seen_on_v5_is_refused(Ctx) ->
-    #{station_key := StationKey} = World = world(Ctx, #{}),
-    StationNodeId = node_id(StationKey),
-    {fall_back, _} = macula_peer_versions:unsupported_version(StationNodeId, ?T0 + ?MINUTE),
-    Before = macula_peering:handshake_counters(),
-    Client = dial(World),
-    ?assertEqual({accepted, v4}, pre_v5_station(World, fun() -> macula_peer_versions:completed_v5(StationNodeId) end)),
-    ?assertEqual(v5_downgrade_refused, ended(Client)),
-    ?assertEqual(1, counted(v5_downgrade_refused, Before)),
-    ?assertEqual(0, counted(v4_connections, Before)),
-    finish(World, []).
-
-%% The other ordering: the v4 connection completes first, then the node completes v5 on another connection. The v4
-%% connection this node dialled is closed then, as a downgrade, so no ordering keeps it.
-a_v4_connection_open_when_the_node_completes_v5_is_closed(Ctx) ->
-    #{station_key := StationKey} = World = world(Ctx, #{}),
-    StationNodeId = node_id(StationKey),
-    Before = macula_peering:handshake_counters(),
-    {Client, Station} = connect(World, #{handshake => 4, mode => off}),
-    _ = {await(Client, connected), await(Station, connected)},
-    ok = macula_peer_versions:completed_v5(StationNodeId),
-    ?assertEqual(v5_downgrade_refused, ended(Client)),
-    ?assertEqual(1, counted(v5_downgrade_refused, Before)),
-    ?assertEqual(5, macula_peer_versions:dial_version(StationNodeId, ?T0 + ?MINUTE)),
-    %% A node seen on v5 is dialled with v5 even with a v4 cache entry for it.
-    true = ets:insert(macula_peer_versions, {{v4_until, StationNodeId}, ?T0 + 2 * ?MINUTE}),
-    ?assertEqual(5, macula_peer_versions:dial_version(StationNodeId, ?T0 + ?MINUTE)),
+    {Client, Station} = connect(World, #{mode => off,
+                                         client_version_floor => {?MODULE, #{test => self(), floor => 6,
+                                                                             raise => ok}}}),
+    ?assertEqual(version_below_floor, ended(Client)),
+    ?assertEqual(1, counted(version_below_floor, Before)),
     finish(World, [Station]).
 
-%% The seen-on-v5 memory governs only the connections a node dials. A station that saw a node on v5 still accepts
-%% that node's v4 CONNECT, as a rolled-back station's own dials are accepted (Mars's rollback run).
-a_station_accepts_v4_from_a_node_it_saw_on_v5(Ctx) ->
-    #{client_key := ClientKey} = World = world(Ctx, #{}),
-    ok = macula_peer_versions:completed_v5(node_id(ClientKey)),
+%% The store refuses the raise: the completed connection stays up, the floor holds in memory, and the failure is
+%% counted.
+a_store_that_fails_keeps_the_connection(Ctx) ->
+    #{station_key := StationKey} = World = world(Ctx, #{}),
     Before = macula_peering:handshake_counters(),
-    {Client, Station} = connect(World, #{handshake => 4, mode => off}),
+    Store = {?MODULE, #{test => self(), floor => none, raise => {error, read_only}}},
+    {Client, Station} = connect(World, #{mode => off, client_version_floor => Store}),
     _ = {await(Client, connected), await(Station, connected)},
-    ?assertEqual(2, counted(v4_connections, Before)),
-    ?assertEqual(0, counted(v5_downgrade_refused, Before)),
-    %% Marked seen on v5 again with the connection open: the closure reaches no connection a station accepted.
-    ok = macula_peer_versions:completed_v5(node_id(ClientKey)),
-    ?assertEqual(open, still_open(Station, 300)),
+    ?assertEqual(1, counted(version_floor_unpersisted, Before)),
+    ?assertEqual(5, macula_peer_versions:floor(node_id(StationKey), none)),
+    ?assertEqual(open, still_open(Client, 300)),
     finish(World, [Client, Station]).
 
-control_frames_on_v4_are_counted(Ctx) ->
-    World = world(Ctx, #{}),
-    Before = macula_peering:handshake_counters(),
-    {Client, Station} = connect(World, #{handshake => 4, mode => off}),
-    _ = {await(Client, connected), await(Station, connected)},
-    ok = sent(Client, Station, [ping() || _ <- lists:seq(1, 3)]),
-    ?assertEqual(2, counted(v4_connections, Before)),
-    ?assertEqual(3, counted(v4_control_frames, Before)),
-    finish(World, [Client, Station]).
+%% The version_floor store the tests hand a connection: the floor it was given, and each raise told to the test.
+floor(#{floor := Floor}, _NodeId) -> Floor.
+
+raise(#{test := Test, raise := Answer}, NodeId, Version) ->
+    Test ! {raised, NodeId, Version},
+    Answer.
 
 %% With one session proof a minute per client node, the client's is spent before it dials, in this minute and the
 %% next, on the real clock the budget counts on. Its CONNECT proof verifies, the station signs nothing, and both ends
@@ -256,22 +184,6 @@ v5_liveness_frames_reach_the_frame_observer(Ctx) ->
     [?assert(lists:member(Read, Seen), {Read, Seen}) || Read <- [{station, in, liveness_ping}, {client, in, liveness_pong}]],
     finish(World, [Client, Station]).
 
-%% After a v4 fallback the refused attempt's stream can still report, after the retry has moved on to another state.
-%% Such an event belongs to nothing: it is dropped without an unexpected_event warning, and the connection serves on.
-a_late_event_from_the_refused_stream_is_dropped_quietly(Ctx) ->
-    World = world(Ctx, #{}),
-    Client = dial(World),
-    ?assertEqual({refused, unsupported_version}, pre_v5_station(World)),
-    Station = accept_one(station_opts(World, #{mode => off})),
-    _ = {await(Client, connected), await(Station, connected)},
-    {connected, State} = sys:get_state(Client),
-    Refused = element(macula_peering_conn:state_field_index(retired_stream), State),
-    ?assert(is_reference(Refused)),
-    Events = captured(fun() -> Client ! {quic, stream_closed, Refused, closed}, timer:sleep(200) end),
-    ?assertEqual([], [E || #{msg := {report, #{event := <<"_macula.peering.unexpected_event">>}}} = E <- Events]),
-    ?assertEqual(open, still_open(Client, 300)),
-    finish(World, [Client, Station]).
-
 %%====================================================================
 %% Helpers
 %%====================================================================
@@ -283,27 +195,6 @@ liveness_observed(Seen) ->
             {liveness_observed, _Side, _Dir, _OtherType} ->
                 liveness_observed(Seen)
     after 0 -> lists:usort(Seen)
-    end.
-
-%% The log events of every level while Fun runs (as macula_station_link_diagnostics_tests captures them).
-captured(Fun) ->
-    #{level := Primary} = logger:get_primary_config(),
-    ok = logger:set_primary_config(level, all),
-    ok = logger:add_handler(macula_peering_v5_capture, ?MODULE, #{level => all, config => #{test => self()}}),
-    try
-        Fun(),
-        drained([])
-    after
-        _ = logger:remove_handler(macula_peering_v5_capture),
-        ok = logger:set_primary_config(level, Primary)
-    end.
-
-log(Event, #{config := #{test := Test}}) ->
-    Test ! {captured, Event}.
-
-drained(Events) ->
-    receive {captured, Event} -> drained([Event | Events])
-    after 200 -> lists:reverse(Events)
     end.
 
 %% The budget is read when its process starts, so the test restarts it under the limit and again after.
@@ -320,61 +211,6 @@ restart_session_proof_rate() ->
     ok = supervisor:terminate_child(macula_peering_sup, macula_session_proof_rate),
     {ok, _} = supervisor:restart_child(macula_peering_sup, macula_session_proof_rate),
     ok.
-
-%% A client connection dialing the world's listener, whose station connection the test accepts itself.
-dial(#{client_key := ClientKey, client_issuer := ClientIssuer, station_key := StationKey, port := Port}) ->
-    {ok, Client} = macula_peering:connect(
-                     #{identity => ClientKey, issuer => ClientIssuer, capabilities => 3, controlling_pid => self(),
-                       clock => fixed(?T0 + ?MINUTE),
-                       target => #{host => <<"127.0.0.1">>, port => Port, timeout_ms => 5_000,
-                                   expected_node_id => node_id(StationKey)}}),
-    Client.
-
-%% One connection answered as a station from before handshake v5 answers it: the station's own challenge material,
-%% and CONNECT checked by macula_handshake with no exporter, which accepts only version 4. Returns how it answered.
-pre_v5_station(World) ->
-    pre_v5_station(World, fun() -> ok end).
-
-%% BeforeHello runs after the station has read CONNECT and before it answers.
-pre_v5_station(#{station_key := StationKey, station_issuer := StationIssuer}, BeforeHello) ->
-    Conn = receive {quic, new_conn, C, _Info} -> C after 5_000 -> erlang:error(no_inbound_conn) end,
-    ok = macula_quic:async_accept_stream(Conn),
-    Stream = receive {quic, new_stream, S, _} -> S after 5_000 -> erlang:error(no_control_stream) end,
-    ok = macula_quic:setopt(Stream, active, true),
-    [Opener] = frames(Stream, 1),
-    ok = macula_handshake:read_opener(Opener),
-    {ok, Leaf} = macula_quic:presented_leaf(Conn),
-    {ok, #{tls_binding := Binding, tls_status := Status}} =
-        macula_statement_issuer:tls_material(StationIssuer, crypto:hash(sha384, Leaf)),
-    Profile = maps:get(profile, StationKey),
-    Challenge = macula_handshake:challenge(#{profile => Profile, identity_key => macula_node_keys:public_key(StationKey),
-                                             tls_binding => Binding, tls_status => Status}),
-    ok = macula_quic:send(Stream, macula_frame:encode_bytes(Challenge)),
-    [Connect] = frames(Stream, 1),
-    Session = #{profile => Profile, challenge => Challenge, leaf => Leaf, capabilities => 5, now => ?T0 + ?MINUTE,
-                puzzle => #{difficulty => macula_node_keys:puzzle_difficulty(), mode => off}},
-    {Verdict, Reason, Hello} = answered(macula_handshake:accept_connect(Connect, Session)),
-    ok = BeforeHello(),
-    ok = macula_quic:send(Stream, macula_frame:encode_bytes(Hello)),
-    timer:sleep(200),
-    ok = macula_quic:close_connection(Conn),
-    {Verdict, Reason}.
-
-answered({refused, Reason, Hello}) -> {refused, Reason, Hello};
-answered({accepted, _Client, Hello}) -> {accepted, v4, Hello}.
-
-frames(Stream, N) ->
-    frames(Stream, N, <<>>).
-
-frames(Stream, N, Buf) ->
-    enough(macula_frame:parse_stream_bytes(Buf, 64 * 1024), Stream, N, Buf).
-
-enough({ok, Frames, _Tail}, _Stream, N, _Buf) when length(Frames) >= N ->
-    lists:sublist(Frames, N);
-enough(_NotYet, Stream, N, Buf) ->
-    receive {quic, Bin, Stream, _Flags} when is_binary(Bin) -> frames(Stream, N, <<Buf/binary, Bin/binary>>)
-    after 5_000 -> erlang:error(no_handshake_frame)
-    end.
 
 counted(Counter, Before) ->
     maps:get(Counter, macula_peering:handshake_counters()) - maps:get(Counter, Before).

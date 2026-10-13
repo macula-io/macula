@@ -1,16 +1,14 @@
 %% EUnit tests for the typed fields of step 2f (DESIGN_PQ_SIGNED_FRAMES_AND_RECORDS.md: Frame signatures,
 %% Advertisements, the decoding rule). ADVERTISE carries the provider's signed procedure advertisement record and
 %% UNADVERTISE a tombstone for it, both as record bytes. Every field that named an Ed25519 key names a 32-byte key id,
-%% and every protocol integer in a control frame, and so in a neighbour tbs, is an unsigned integer below 2^53.
+%% and every protocol integer in a control frame is an unsigned integer below 2^53.
 -module(macula_frame_control_fields_tests).
 
 -include_lib("eunit/include/eunit.hrl").
 
 %% RSA-4096 key generation takes up to about a second per key.
--define(EU_TIMEOUT, 120).
 -define(REALM, <<1:256>>).
 -define(TOO_BIG, 1 bsl 53).
--define(NEIGHBOUR_LABEL, <<"MACULA-PQ-NEIGHBOUR-V1">>).
 
 %%------------------------------------------------------------------
 %% ADVERTISE and UNADVERTISE
@@ -146,24 +144,6 @@ a_nodes_entry_without_an_asn_reads_test() ->
     ?assertMatch({ok, #{nodes := [#{asn := undefined}]}, <<>>},
                  decode(macula_frame:nodes(#{key => id(4), nodes => [Ref]}))).
 
-%% The neighbour tbs is read through the frame type's table, so the same bound holds inside a neighbour signature.
-a_neighbour_tbs_integer_at_2_pow_53_is_refused_test_() ->
-    {timeout, ?EU_TIMEOUT, {setup, fun hybrid_key/0, fun neighbour_cases/1}}.
-
-neighbour_cases(Key) ->
-    Connection = crypto:hash(sha384, <<"the challenge frame bytes">>),
-    Opts = #{profile => pq_hybrid, peer_key => macula_node_keys:public_key(Key), connection => Connection, seq => 0},
-    Tbs = fun(SentAt) ->
-        #{{text, <<"frame_type">>} => {text, <<"ping">>}, {text, <<"nonce">>} => <<0:128>>,
-          {text, <<"sent_at_ms">>} => SentAt, {text, <<"connection">>} => Connection, {text, <<"seq">>} => 0}
-    end,
-    Frame = fun(SentAt) ->
-        #{version => macula_frame:version(macula_frame:ping(#{nonce => <<0:128>>})), frame_type => ping,
-          neighbour => macula_signed_object:sign_held(?NEIGHBOUR_LABEL, Tbs(SentAt), Key)}
-    end,
-    [?_assertMatch({ok, #{sent_at_ms := 1}}, macula_frame:verify_neighbour(wire(Frame(1)), Opts)),
-     ?_assertEqual({error, malformed_frame}, macula_frame:verify_neighbour(wire(Frame(?TOO_BIG)), Opts))].
-
 %%------------------------------------------------------------------
 %% Helpers
 %%------------------------------------------------------------------
@@ -179,10 +159,6 @@ advertisement() ->
     Unsigned = macula_record:procedure_advertisement(macula_node_keys:key_id(Provider), ?REALM, <<"forecast_v1">>,
                                                      [id(9)]),
     {Provider, macula_record:encode(macula_record:sign(Unsigned, Provider))}.
-
-hybrid_key() ->
-    {ok, Key} = macula_node_keys:generate(identity, pq_hybrid),
-    Key.
 
 decode(Frame) ->
     macula_frame:decode(macula_frame:encode(Frame)).

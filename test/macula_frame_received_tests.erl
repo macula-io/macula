@@ -14,9 +14,8 @@
 %%% fixed-length field in a list entry or in the optional header is checked as
 %%% a top-level one is. A
 %%% frame type that carries one of several signed objects needs exactly one of
-%%% them. A control frame signed for its neighbour holds version, frame_type
-%%% and neighbour and nothing else; its own fields are checked when it is
-%%% opened. A frame type this node does not know, and a frame without a type,
+%%% them. A frame carrying a `neighbour' field is refused: no frame carries a
+%%% neighbour signature. A frame type this node does not know, and a frame without a type,
 %%% are refused. Every field a rule names is a field of the frame type's table
 %%% in macula_frame and the other way round, so the rules and the table cannot
 %%% drift apart. The table in samples/0 states each frame type's required
@@ -38,12 +37,6 @@
          block, manifest_req, manifest_res, cancel]).
 %% The rules that fix the length of a field's bytes.
 -define(FIXED_LENGTH, [key, id16, hash48, mcid, country]).
-%% The control frame types a neighbour signature may carry in pq_hybrid.
--define(NEIGHBOUR_SIGNED,
-        [swim_ping, swim_ack, swim_suspect, swim_confirm, swim_ping_req, ping, pong, find_node, nodes, find_value, value,
-         store, store_ack, advertise, unadvertise, subscribe, unsubscribe, overlay_relay, hyparview_join,
-         hyparview_forward_join, hyparview_neighbor, hyparview_disconnect, hyparview_shuffle,
-         hyparview_shuffle_reply, plumtree_ihave, plumtree_graft, plumtree_prune, goodbye]).
 
 %%------------------------------------------------------------------
 %% Every builder's output passes
@@ -124,30 +117,14 @@ an_error_needs_exactly_one_of_a_reply_and_a_relay_error_test() ->
                  macula_frame:validate_received(Replied#{relay_error => maps:get(relay_error, Relayed)})).
 
 %%------------------------------------------------------------------
-%% A control frame signed for its neighbour
+%% No frame carries a neighbour signature
 %%------------------------------------------------------------------
 
-a_neighbour_signed_control_frame_holds_only_its_neighbour_object_test_() ->
-    Held = #{tbs => <<"the frame's own fields">>, signature => <<"a signature">>},
-    [{atom_to_list(Type),
-      ?_test(begin
-                 Frame = #{version => version(), frame_type => Type, neighbour => Held},
-                 ?assertEqual(ok, macula_frame:validate_received(Frame)),
-                 ?assertEqual({error, {invalid_frame, Type, frame_id}},
-                              macula_frame:validate_received(Frame#{frame_id => <<0:128>>})),
-                 ?assertEqual({error, {invalid_frame, Type, version}},
-                              macula_frame:validate_received(maps:remove(version, Frame))),
-                 ?assertEqual({error, {invalid_frame, Type, version}},
-                              macula_frame:validate_received(Frame#{version => version() + 1})),
-                 ?assertEqual({error, {invalid_frame, Type, neighbour}},
-                              macula_frame:validate_received(Frame#{neighbour => <<"not a held object">>}))
-             end)}
-     || Type <- ?NEIGHBOUR_SIGNED].
-
-a_neighbour_object_on_another_frame_type_is_named_test() ->
+a_neighbour_object_is_refused_on_any_frame_type_test() ->
     Held = #{tbs => <<"fields">>, signature => <<"a signature">>},
-    ?assertEqual({error, {invalid_frame, block, neighbour}},
-                 macula_frame:validate_received((over_the_wire(sample(block)))#{neighbour => Held})).
+    [?assertEqual({error, {invalid_frame, Type, neighbour}},
+                  macula_frame:validate_received((over_the_wire(Frame))#{neighbour => Held}))
+     || {Type, Frame, _Required, _AnyValue} <- samples(), lists:member(Type, [goodbye, swim_ping, block])].
 
 %%------------------------------------------------------------------
 %% Entries, unknown types, and a GOODBYE's reason
@@ -376,7 +353,7 @@ every_rule_field_is_a_field_of_its_table_test_() ->
     [{atom_to_list(Type), ?_assertEqual([], rule_fields(Type) -- table_fields(Type))} || Type <- ?FRAME_TYPES].
 
 every_table_field_has_a_rule_test_() ->
-    [{atom_to_list(Type), ?_assertEqual([], table_fields(Type) -- ([version, frame_type, neighbour] ++ rule_fields(Type)))}
+    [{atom_to_list(Type), ?_assertEqual([], table_fields(Type) -- ([version, frame_type] ++ rule_fields(Type)))}
      || Type <- ?FRAME_TYPES].
 
 rule_fields(Type) ->

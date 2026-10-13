@@ -55,7 +55,6 @@
     reset_dedicated_stream/2,
     object_refused/2,
     refusals/1,
-    forget_v5_peer/1,
     handshake_counters/0,
     session_proof_limits/0,
     set_session_proof_limits/2
@@ -293,23 +292,10 @@ object_refused(Conn, Kind) when is_pid(Conn) ->
 refusals(Conn) when is_pid(Conn) ->
     gen_statem:call(Conn, refusals).
 
-%% @doc Forget that the node NodeId completed a version 5 handshake with this
-%% node, so it is dialled again after it refuses version 5. Until then a
-%% station rolled back below its first v5 release is refused by every peer
-%% that saw it on v5 (`v5_downgrade_refused'), because that refusal is also
-%% what stops a downgrade (docs/design/DESIGN_NEIGHBOUR_CHANNEL_BINDING.md
-%% section 3). An operator action for a deliberate rollback, never
-%% automatic. It reaches only this node: a third-party client that saw the
-%% station on v5 refuses it until that client restarts, which is why a
-%% station's first v5 release is its rollback floor.
--spec forget_v5_peer(<<_:256>>) -> ok.
-forget_v5_peer(<<_:256>> = NodeId) ->
-    macula_peer_versions:forget_v5_peer(NodeId).
-
-%% @doc This node's handshake counters since it started: connections by
-%% version, the old path's control frames, v4 fallbacks, refused downgrades
-%% and session proof refusals by reason (docs/design/DESIGN_NEIGHBOUR_CHANNEL_BINDING.md
-%% section 6).
+%% @doc This node's handshake counters since it started: connections,
+%% negotiation refusals (downgrade_detected, negotiation_mismatch,
+%% version_below_floor), session proof refusals by reason, and floors the
+%% store failed to persist (docs/design/WIRE_1_0.md sections 4 and 8).
 -spec handshake_counters() -> #{macula_peer_versions:counter() => non_neg_integer()}.
 handshake_counters() ->
     macula_peer_versions:counters().

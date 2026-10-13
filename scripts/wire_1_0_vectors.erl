@@ -46,7 +46,7 @@ main() ->
     write_cases(<<"verify">>, [reader_case(C) || C <- Records]),
     write_cases(<<"custodian">>, [custodian_case(C) || C <- Records]),
     write_cases(<<"check_order">>, lists:append([check_order_cases(P, Keys) || P <- ?PROFILES])),
-    write_cases(<<"envelope">>, envelope_cases()),
+    write_cases(<<"envelope">>, envelope_cases() ++ lists:append([status_cases(P, Keys) || P <- ?PROFILES])),
     write_cases(<<"enums">>, enum_hop_cases() ++ lists:append([enum_signed_cases(P, Keys) || P <- ?PROFILES])),
     write_cases(<<"dht_procedures">>, dht_cases(Keys)),
     write_cases(<<"handshake">>, lists:append([handshake_cases(P, Keys) || P <- ?PROFILES])),
@@ -360,7 +360,31 @@ tombstone_bound_cases(P, Keys, Case, Accept, Both) ->
            end,
     RealmId = <<16#AA:256>>,
     Pair(<<"station_endpoint">>, station_identity, Station, macula_record:station_endpoint(4433))
-        ++ Pair(<<"station_authorization">>, realm, Realm, station_authorization(RealmId, key_id(Station))).
+        ++ Pair(<<"station_authorization">>, realm, Realm, station_authorization(RealmId, key_id(Station)))
+        ++ unknown_tag_tombstone_cases(P, Keys, Case, Both).
+
+%% A tombstone withdrawing a post-1.0 tag (0x18, unknown to a 1.0 custodian): stored content-blind, bounded by the
+%% row it names plus 10 minutes, at the unknown-tag slot of its signer and payload subject; a reader that does not
+%% know the tag refuses it (WIRE_1_0.md 5.1).
+unknown_tag_tombstone_cases(P, Keys, Case, Both) ->
+    Org = key(Keys, P, org),
+    Payload = fun(Extra) -> maps:merge(#{{text, <<"withdrawn_type">>} => 16#18,
+                                         {text, <<"withdrawn_version">>} => <<16#0190:16, 0:112>>,
+                                         {text, <<"reason">>} => {text, <<"revoked">>}}, Extra) end,
+    Subject = #{{text, <<"subject">>} => <<"subject-1">>},
+    Rec = fun(Extra, Lifetime) -> record(P, Org, 16#0C, Payload(Extra),
+                                         [{set, <<"lifetime_class">>, 1},
+                                          {set, <<"expires_at">>, ?T0 + Lifetime}]) end,
+    Bound = class_max(1) + 10 * ?MIN,
+    Store = #{<<"outcome">> => <<"store">>,
+              <<"slot">> => hex(unknown_tag_slot(16#18, Org, <<"subject-1">>))},
+    TypeUnknown = #{<<"outcome">> => <<"refuse">>, <<"reason">> => <<"type_unknown">>},
+    [Case(<<"tombstone.unknown_tag.at_bound.ok">>, [<<"D4">>, <<"A3">>], org, Rec(Subject, Bound),
+          {Store, TypeUnknown}),
+     Case(<<"tombstone.unknown_tag.over_bound.refused">>, [<<"D4">>], org, Rec(Subject, Bound + 1),
+          Both(<<"lifetime_too_long">>)),
+     Case(<<"tombstone.unknown_tag.no_subject.refused">>, [<<"D4">>, <<"A3">>], org, Rec(#{}, ?HOUR div 2),
+          Both(<<"subject_missing">>))].
 
 %% K > 1 (5.3): serving_stations holds 1 to 8 node ids, strictly ascending. A custodian never reads the payload.
 serving_stations_cases(P, Keys, Case, Store, Accept, R) ->
@@ -544,6 +568,37 @@ envelope_cases() ->
      (length_case(<<"length.at_cap.header_accepted">>, <<16#00FFFFFF:32>>,
                   #{<<"outcome">> => <<"accept">>, <<"note">> => <<"the header alone passes; the body is awaited">>}))
          #{<<"bound">> => <<"upper">>}].
+
+%% STATUS after HELLO is an envelope frame (section 3.1): the optional envelope keys and ext, but no realm. The
+%% statement verifies under the station's identity key over the TLS binding the case carries, at now_ms.
+status_cases(P, Keys) ->
+    Station = key(Keys, P, station_identity),
+    Binding = macula_key_bindings:tls_binding(Station, ?LEAF, ?T0 - ?HOUR, ?T0 + 6 * ?DAY),
+    Statement = macula_key_bindings:status_statement(Station, Binding, ?T0 - ?MIN, ?T0 + 59 * ?MIN),
+    Status = fun(Extra) -> maps:merge(frame(<<"status">>, #{<<"statement">> => env(Statement)}), Extra) end,
+    Accept = #{<<"outcome">> => <<"accept">>},
+    S = fun(Id, Frame, Expect) ->
+                Prof = atom_to_binary(P),
+                #{<<"id">> => <<"envelope.status.", Id/binary, ".", Prof/binary>>, <<"profile">> => Prof,
+                  <<"covers">> => [<<"D8">>, <<"D9">>], <<"lands_with">> => [<<"macula#98">>],
+                  <<"input">> => #{<<"frame">> => hex(encode(Frame)), <<"position">> => <<"control_stream">>,
+                                   <<"after_hello">> => 1, <<"now_ms">> => ?T0 + 1000,
+                                   <<"status_peer">> => #{<<"identity">> => <<"station_identity">>,
+                                                          <<"binding">> => #{<<"tbs">> => hex(maps:get(tbs, Binding)),
+                                                                             <<"signature">> =>
+                                                                                 hex(maps:get(signature, Binding))}}},
+                  <<"expect">> => Expect}
+        end,
+    [S(<<"plain.accept">>, Status(#{}), Accept),
+     S(<<"optional_header.accept">>, Status(#{<<"frame_id">> => <<16#0190:16, 0:112>>, <<"sent_at_ms">> => ?T0}),
+       Accept),
+     S(<<"ext_noncritical.ignored">>, Status(#{<<"ext">> => ext(<<"example.unknown">>, 0)}),
+       Accept#{<<"count">> => <<"wire_ext_ignored">>}),
+     S(<<"ext_critical_unknown.refused">>, Status(#{<<"ext">> => ext(<<"example.unknown">>, 1)}),
+       #{<<"outcome">> => <<"refuse">>, <<"reason">> => <<"extension_unsupported">>,
+         <<"count">> => <<"wire_ext_refused">>, <<"link">> => <<"stays_up">>}),
+     S(<<"realm.refused">>, Status(#{<<"realm">> => <<1:256>>}),
+       #{<<"outcome">> => <<"refuse">>, <<"reason">> => <<"malformed_frame">>})].
 
 envelope_case(Id, Covers, Position, Frame, Expect) ->
     #{<<"id">> => <<"envelope.", Id/binary>>, <<"profile">> => <<"both">>, <<"covers">> => Covers,
@@ -974,6 +1029,9 @@ tbs_cases(P, Keys) ->
        Request(<<"stream_open">>, #{<<"mode">> => {text, <<"bidi">>}})),
      T(<<"request.call.with_ext">>, [<<"D8">>], ?REQUEST_LABEL, client_identity,
        Request(<<"call">>, #{<<"ext">> => ext(<<"example.e">>, 1)})),
+     %% Application data is no protocol field: a null payload is carried as it is (section 3.1).
+     T(<<"request.call.null_payload">>, [<<"D1">>], ?REQUEST_LABEL, client_identity,
+       Request(<<"call">>, #{<<"payload">> => null})),
      T(<<"reply.result">>, [<<"D1">>], ?REPLY_LABEL, station_identity,
        #{<<"alg">> => alg(P), <<"frame_type">> => {text, <<"result">>}, <<"request_id">> => <<1:128>>,
          <<"request_hash">> => Hash, <<"responded_by">> => key_id(Station),
@@ -1078,14 +1136,25 @@ register_ack_case(Id, Changes, Expect) ->
 frame_case(Type, Frame) ->
     <<_Len:32, Cbor/binary>> = iolist_to_binary(macula_frame:encode(Frame)),
     {ok, Map} = macula_record_cbor:decode_strict(Cbor),
-    %% Today's encoder writes an absent optional key as null; wire 1.0 omits it (section 3.1).
-    Wire = maps:filter(fun(_K, V) -> V =/= null end,
-                       maps:remove({text, <<"capabilities">>}, Map#{{text, <<"version">>} => 5})),
+    %% Today's encoder writes an absent optional key as null; wire 1.0 omits it, at any depth (section 3.1).
+    Wire = without_null(maps:remove({text, <<"capabilities">>}, Map#{{text, <<"version">>} => 5})),
     #{<<"id">> => <<"frames.", Type/binary>>, <<"profile">> => <<"pq_pure">>, <<"covers">> => [<<"D1">>, <<"D9">>],
       <<"lands_with">> => lands(<<"macula#99">>),
       <<"input">> => #{<<"frame_type">> => Type, <<"frame">> => hex(macula_record_cbor:encode(Wire)),
                        <<"position">> => position(Type), <<"after_hello">> => 1},
       <<"expect">> => #{<<"outcome">> => <<"accept">>}}.
+
+%% Null-valued protocol fields dropped at every depth; application data (`payload', an ext entry's `value') is
+%% carried as it is.
+without_null(M) when is_map(M) ->
+    maps:from_list([{K, application_or(K, V)} || K := V <- M, V =/= null]);
+without_null(L) when is_list(L) ->
+    [without_null(V) || V <- L];
+without_null(V) ->
+    V.
+
+application_or({text, K}, V) when K =:= <<"payload">>; K =:= <<"value">> -> V;
+application_or(_K, V) -> without_null(V).
 
 %% The control stream carries what macula_frame:control_frame/1 names; every other frame type a dedicated stream.
 position(Type) ->
