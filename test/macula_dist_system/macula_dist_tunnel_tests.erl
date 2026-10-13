@@ -14,6 +14,9 @@
 
 -include_lib("eunit/include/eunit.hrl").
 
+%% The version_floor store the floor cases hand each end.
+-export([floor/2, raise/3]).
+
 -define(EVENT_MS, 15_000).
 
 tunnel_test_() ->
@@ -27,7 +30,11 @@ tunnel_test_() ->
        {"a real node that is not the one dialled is refused",
         fun a_real_but_different_node_is_refused/0},
        {"the tunnel carries bytes, and only inside its session",
-        fun the_tunnel_carries_bytes/0}]}}.
+        fun the_tunnel_carries_bytes/0},
+       {"each end raises its floor for the other in its store, as a peering connection does",
+        fun each_end_raises_its_floor/0},
+       {"a floor above 5 held for the station refuses the dial with version_below_floor",
+        fun a_floor_above_the_version_refuses_the_dial/0}]}}.
 
 %% The dialling side gets the station's node_id it asked for, the accepting side learns the dialler's, and neither
 %% took the other's word for it: each node_id is derived from the identity key that signed the handshake.
@@ -59,6 +66,29 @@ the_tunnel_carries_bytes() ->
         ok = macula_dist_tunnel:send(Accepted, <<"and its answer">>),
         ?assertEqual({ok, <<"and its answer">>}, macula_dist_tunnel:recv(Dialled, 0, ?EVENT_MS))
     end).
+
+%% The tunnel holds the version floor as a peering connection does (WIRE_1_0.md 4.6): each end raises its floor for
+%% the other after the handshake completes, in its store.
+each_end_raises_its_floor() ->
+    Store = {?MODULE, #{test => self(), floor => none}},
+    with_tunnel(#{dial_floor => Store, accept_floor => Store}, fun(#{world := World}) ->
+        #{station_node_id := StationNodeId, client_node_id := ClientNodeId} = World,
+        Raised = lists:sort([receive {raised, NodeId, Version} -> {NodeId, Version} after ?EVENT_MS -> none end
+                             || _ <- [dialler, acceptor]]),
+        ?assertEqual(lists:sort([{StationNodeId, 5}, {ClientNodeId, 5}]), Raised)
+    end).
+
+%% A floor the dialling node holds for the station, above the only version there is, refuses the dial before any
+%% CONNECT: the tunnel is no way around the floor a peering connection keeps.
+a_floor_above_the_version_refuses_the_dial() ->
+    Refusal = with_tunnel(#{dial_floor => {?MODULE, #{test => self(), floor => 6}}}, fun(Outcome) -> Outcome end),
+    ?assertMatch(#{dialled := {error, version_below_floor}}, Refusal).
+
+floor(#{floor := Floor}, _NodeId) -> Floor.
+
+raise(#{test := Test}, NodeId, Version) ->
+    Test ! {raised, NodeId, Version},
+    ok.
 
 %%%===================================================================
 %%% A tunnel over a loopback stream pair
@@ -109,14 +139,16 @@ tunnel(#{client_stream := ClientStream, server_stream := ServerStream, cert := C
                                                         %% the one a station starts in (D30). What these tests are
                                                         %% about is who the peer is, not the cost of being one.
                                                         puzzle => #{mode => log_only},
-                                                        timeout_ms => ?EVENT_MS})},
+                                                        timeout_ms => ?EVENT_MS,
+                                                        version_floor => maps:get(accept_floor, Options, none)})},
         hold()
     end),
     Dialled = macula_dist_tunnel:dial(ClientStream,
                                       #{profile => Profile, identity => ClientKey, issuer => ClientIssuer,
                                         expected_node_id => expected(maps:get(expected, Options, the_station),
                                                                      StationNodeId, ClientNodeId),
-                                        timeout_ms => ?EVENT_MS}),
+                                        timeout_ms => ?EVENT_MS,
+                                        version_floor => maps:get(dial_floor, Options, none)}),
     Accepted = receive {accepted, A} -> A after ?EVENT_MS -> error(no_accept_result) end,
     #{dialled => unwrapped(Dialled), accepted => unwrapped(Accepted), accepting => Accepting}.
 

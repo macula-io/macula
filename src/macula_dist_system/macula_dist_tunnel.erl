@@ -30,7 +30,8 @@
                           issuer := pid(),
                           expected_node_id := <<_:256>>,
                           capabilities => non_neg_integer(),
-                          timeout_ms => pos_integer()}.
+                          timeout_ms => pos_integer(),
+                          version_floor => macula_peer_versions:store()}.
 
 -type accept_options() :: #{profile := profile(),
                             identity := macula_node_keys:node_key(),
@@ -39,7 +40,8 @@
                             key := file:filename_all(),
                             puzzle := #{mode := macula_handshake:puzzle_mode()},
                             capabilities => non_neg_integer(),
-                            timeout_ms => pos_integer()}.
+                            timeout_ms => pos_integer(),
+                            version_floor => macula_peer_versions:store()}.
 
 %% The handshake's own timeout (DESIGN_PQ_HANDSHAKE_FRAMES.md), for the session and every frame in it.
 -define(TIMEOUT_MS, 30_000).
@@ -133,14 +135,16 @@ sent(ok, Station, Session, Options) ->
 sent({error, _} = Refusal, _Station, _Session, _Options) ->
     Refusal.
 
-welcomed({ok, Hello}, {Station, Expect}, Session, _Options) ->
-    hello_read(macula_handshake:read_hello(Hello, Expect), Station, Session);
+welcomed({ok, Hello}, {Station, Expect}, Session, Options) ->
+    hello_read(macula_handshake:read_hello(Hello, Expect), Station, Session, Options);
 welcomed({error, _} = Refusal, _Station, _Session, _Options) ->
     Refusal.
 
-hello_read({ok, _Fields}, #{node_id := NodeId} = Station, Session) ->
+%% A completed handshake raises the node's floor for its peer, as a peering connection's does (WIRE_1_0.md 4.6).
+hello_read({ok, #{version := Version}}, #{node_id := NodeId} = Station, Session, Options) ->
+    ok = macula_peer_versions:raise(NodeId, Version, floor_store(Options)),
     {ok, #{session => Session, peer_node_id => NodeId, peer => Station}};
-hello_read({error, _} = Refusal, _Station, _Session) ->
+hello_read({error, _} = Refusal, _Station, _Session, _Options) ->
     Refusal.
 
 client_session(Leaf, Session, #{profile := Profile, identity := Identity, issuer := Issuer,
@@ -152,7 +156,7 @@ client_session(Leaf, Session, #{profile := Profile, identity := Identity, issuer
                  identity_key => macula_node_keys:public_key(Identity), connect_key => Key,
                  connect_binding => Binding, connect_status => Status,
                  capabilities => capabilities(Options), now => erlang:system_time(millisecond),
-                 export => exporter(Session)}).
+                 export => exporter(Session), floor => macula_peer_versions:floor(Expected, floor_store(Options))}).
 
 %%------------------------------------------------------------------
 %% The accepting side
@@ -213,15 +217,16 @@ connect_read({error, _} = Refusal, _Leaf, _Challenge, _Choice, _Session, _Option
     Refusal.
 
 %% A refused CONNECT still gets its HELLO: the far end learns it was refused and one coarse code, and nothing else.
-connect_checked({accepted, #{node_id := NodeId} = Client, Hello}, Session, Options) ->
-    admitted(write(Session, Hello, Options), NodeId, Client, Session);
+connect_checked({accepted, #{node_id := NodeId, version := Version} = Client, Hello}, Session, Options) ->
+    admitted(write(Session, Hello, Options), NodeId, Version, Client, Session, Options);
 connect_checked({refused, Reason, Hello}, Session, Options) ->
     _ = write(Session, Hello, Options),
     {error, Reason}.
 
-admitted(ok, NodeId, Client, Session) ->
+admitted(ok, NodeId, Version, Client, Session, Options) ->
+    ok = macula_peer_versions:raise(NodeId, Version, floor_store(Options)),
     {ok, #{session => Session, peer_node_id => NodeId, peer => Client}};
-admitted({error, _} = Refusal, _NodeId, _Client, _Session) ->
+admitted({error, _} = Refusal, _NodeId, _Version, _Client, _Session, _Options) ->
     Refusal.
 
 %% The session proof is signed within the same budget a peering connection's is (macula_session_proof_rate).
@@ -231,6 +236,7 @@ station_session(Leaf, Challenge, Choice, Session, #{profile := Profile, identity
       puzzle => #{mode => Mode, difficulty => macula_node_keys:puzzle_difficulty()},
       capabilities => capabilities(Options), now => erlang:system_time(millisecond),
       export => exporter(Session),
+      floor => fun(NodeId) -> macula_peer_versions:floor(NodeId, floor_store(Options)) end,
       sign_session_proof => fun(ClientNodeId, Message) ->
                                 session_proof(macula_session_proof_rate:allow(ClientNodeId,
                                                                               erlang:system_time(millisecond)),
@@ -239,6 +245,10 @@ station_session(Leaf, Challenge, Choice, Session, #{profile := Profile, identity
 
 session_proof(ok, Message, Identity) -> {ok, macula_node_keys:sign(Message, Identity)};
 session_proof({error, {session_proof_rate, _Limit}}, _Message, _Identity) -> {error, session_proof_rate}.
+
+%% Where this node keeps its floors across restarts, as a peering connection's `version_floor' option says.
+floor_store(Options) ->
+    maps:get(version_floor, Options, none).
 
 %% The TLS 1.3 exporter of the session inside the tunnel (RFC 8446 section 7.5), which binds the handshake to it.
 exporter(Session) ->

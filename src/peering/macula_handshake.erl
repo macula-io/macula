@@ -366,9 +366,9 @@ connect_frame(#{bytes := ChallengeBytes, fields := Fields, station_node_id := St
 
 %% @doc The station's check of CONNECT, and the HELLO bytes to send. The station checks the frame, that the client's
 %% ranges are the ones its opener sent and the profile the one chosen, the carried keys and the proof length, that each
-%% key serves one purpose, its floor for the client, the puzzle on the derived node_id, the CONNECT binding and status
-%% statement, and the proof V3 against the challenge bytes it sent, the leaf this connection presented and the
-%% CONNECT tbs. The puzzle comes before any signature: under enforce an unsolved puzzle is refused with
+%% key serves one purpose, the puzzle on the derived node_id, the CONNECT binding and status statement, the proof V3
+%% against the challenge bytes it sent, the leaf this connection presented and the CONNECT tbs, and then its floor for
+%% the client, so whether it holds one is told only to the node that proved the identity. The puzzle comes before any signature: under enforce an unsolved puzzle is refused with
 %% puzzle_invalid, under log_only it is accepted and reported, and off skips it. A refusal carries a HELLO with
 %% accepted 0 and one coarse refusal code.
 -spec accept_connect(binary(), station_session()) ->
@@ -381,8 +381,8 @@ accept_connect(Bytes, #{profile := _, choice := _, challenge := Challenge, leaf 
     connect_verdict(steps(#{bytes => Bytes, session => Session},
                           [fun decoded_connect/1, fun negotiation_repeated/1, fun profile_chosen/1,
                            fun client_keys/1, fun client_keys_distinct/1, fun client_identity/1,
-                           fun client_floor/1, fun client_puzzle/1, fun client_binding/1, fun client_status/1,
-                           fun connect_exported/1, fun client_proof/1, fun session_proved/1]),
+                           fun client_puzzle/1, fun client_binding/1, fun client_status/1,
+                           fun connect_exported/1, fun client_proof/1, fun client_floor/1, fun session_proved/1]),
                     Capabilities).
 
 connect_verdict({ok, #{hello := Hello} = State}, _Capabilities) ->
