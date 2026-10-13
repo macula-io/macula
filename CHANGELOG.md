@@ -9,8 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Wire 1.0 frame envelope (macula#99; spec `docs/design/WIRE_1_0.md`, design of record macula#83). This is a wire
-break: a node on it no longer reads the frames of an older one.
+## [15.0.0-rc.1] - 2026-10-13
+
+Wire 1.0, first release candidate (spec `docs/design/WIRE_1_0.md`, design of record macula#83, conformance vectors
+in `priv/vectors/wire_1_0/`): the frame envelope (macula#99), the handshake (macula#98), records (macula#100) and the
+`_dht.*` procedures (macula#102). This is a wire break: a node on it neither reads the frames of an older one nor
+completes a handshake with it. A pre-release, so other SDKs' interop suites can pin a released wire 1.0; REGISTER_ACK
+(macula#12) follows in a later candidate.
 
 ### Changed
 
