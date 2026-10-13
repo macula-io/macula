@@ -439,11 +439,8 @@ call_station(Pool, Station, Target, Realm, Procedure, Payload, TimeoutMs) ->
 %% Verdict}}' before the pool dials anything.
 call_station(Pool, Station, Target, Realm, Procedure, Payload, TimeoutMs, Opts) ->
     refused(first_error([target_checked(Station, Opts), report_checked(Opts)]),
-            fun() ->
-                refused(station_authorized(Pool, Realm, Station, Opts, TimeoutMs),
-                        fun() -> do_call_station(Pool, Station, Target, Realm, Procedure,
-                                                 Payload, TimeoutMs, Opts) end)
-            end).
+            fun() -> do_call_station(checked, Pool, Station, Target, Realm, Procedure,
+                                     Payload, TimeoutMs, Opts) end).
 
 %% @private
 %% @doc As `call_station/8', for a station the caller has already checked
@@ -454,11 +451,19 @@ call_station(Pool, Station, Target, Realm, Procedure, Payload, TimeoutMs, Opts) 
     {ok, term()} | {ok, term(), macula_station_link:report()} | {error, term()}.
 call_resolved_station(Pool, Station, Target, Realm, Procedure, Payload, TimeoutMs, Opts) ->
     refused(first_error([target_checked(Station, Opts), report_checked(Opts)]),
-            fun() -> do_call_station(Pool, Station, Target, Realm, Procedure,
+            fun() -> do_call_station(resolved, Pool, Station, Target, Realm, Procedure,
                                      Payload, TimeoutMs, Opts) end).
 
-%% Hook 3 for a station the application names: its node id is the one the
-%% dial pins, in the seed map or in `Opts'.
+%% Hook 3 for a station the application names, after every refusal the
+%% caller's own arguments earn (target, report, seal), before the pool dials:
+%% `checked' reads the station's slot, `resolved' is a station its caller
+%% already checked. Its node id is the one the dial pins, in the seed map or
+%% in `Opts'.
+dialled_if_authorized(checked, Pool, Realm, Station, Opts, TimeoutMs, Dial) ->
+    refused(station_authorized(Pool, Realm, Station, Opts, TimeoutMs), Dial);
+dialled_if_authorized(resolved, _Pool, _Realm, _Station, _Opts, _TimeoutMs, Dial) ->
+    Dial().
+
 station_authorized(Pool, Realm, Station, Opts, TimeoutMs) ->
     macula_station_check:explicit(Pool, Realm, pinned_node_id(Station, Opts), check_timeout(TimeoutMs)).
 
@@ -477,15 +482,18 @@ report_checked(Opts) ->
 report_valid({ok, _Report}) -> ok;
 report_valid({error, _} = Refused) -> Refused.
 
-do_call_station(Pool, Station, Target, Realm, Procedure, Payload, TimeoutMs, Opts) ->
-    Ucan = maps:get(ucan_token, Opts, <<>>),
-    LinkOpts = maps:with([expected_node_id], Opts),
-    DialTimeoutMs = maps:get(dial_timeout_ms, Opts, TimeoutMs),
+do_call_station(Check, Pool, Station, Target, Realm, Procedure, Payload, TimeoutMs, Opts) ->
     Resolve = fun() -> find_records(Pool, macula_record:procedure_key(Realm, Procedure)) end,
     sealed_or_refused(call_seal(Target, Realm, Procedure, Opts, Resolve), fun(Seal) ->
-        macula_client:call_station(Pool, Station, Target, Realm, Procedure, Payload,
-                                   TimeoutMs, Ucan, LinkOpts, DialTimeoutMs, Seal, maps:get(report, Opts, false))
+        dialled_if_authorized(Check, Pool, Realm, Station, Opts, TimeoutMs, fun() ->
+            station_called(Pool, Station, Target, Realm, Procedure, Payload, TimeoutMs, Opts, Seal)
+        end)
     end).
+
+station_called(Pool, Station, Target, Realm, Procedure, Payload, TimeoutMs, Opts, Seal) ->
+    macula_client:call_station(Pool, Station, Target, Realm, Procedure, Payload,
+                               TimeoutMs, maps:get(ucan_token, Opts, <<>>), maps:with([expected_node_id], Opts),
+                               maps:get(dial_timeout_ms, Opts, TimeoutMs), Seal, maps:get(report, Opts, false)).
 
 sealed_or_refused({ok, Seal}, Call) -> Call(Seal);
 sealed_or_refused({error, _} = Refused, _Call) -> Refused.
@@ -1051,10 +1059,7 @@ call_stream_station(Pool, Station, Target, Realm, Procedure, Args, Opts)
        is_binary(Realm), byte_size(Realm) =:= 32,
        is_binary(Procedure), is_map(Opts) ->
     refused(first_error([target_checked(Station, Opts), report_valid(macula_direct_dial:stream_report_option(Opts))]),
-            fun() ->
-                refused(station_authorized(Pool, Realm, Station, Opts, maps:get(dial_timeout_ms, Opts, 10_000)),
-                        fun() -> do_call_stream_station(Pool, Station, Target, Realm, Procedure, Args, Opts) end)
-            end).
+            fun() -> do_call_stream_station(checked, Pool, Station, Target, Realm, Procedure, Args, Opts) end).
 
 %% @private
 %% @doc As `call_stream_station/7', for a station the caller has already
@@ -1066,14 +1071,16 @@ call_resolved_stream_station(Pool, Station, Target, Realm, Procedure, Args, Opts
        is_binary(Realm), byte_size(Realm) =:= 32,
        is_binary(Procedure), is_map(Opts) ->
     refused(first_error([target_checked(Station, Opts), report_valid(macula_direct_dial:stream_report_option(Opts))]),
-            fun() -> do_call_stream_station(Pool, Station, Target, Realm, Procedure, Args, Opts) end).
+            fun() -> do_call_stream_station(resolved, Pool, Station, Target, Realm, Procedure, Args, Opts) end).
 
 %% The pool is handed the seal decided, not the signed state it was decided from.
-do_call_stream_station(Pool, Station, Target, Realm, Procedure, Args, Opts) ->
+do_call_stream_station(Check, Pool, Station, Target, Realm, Procedure, Args, Opts) ->
     Resolve = fun() -> find_records(Pool, macula_record:procedure_key(Realm, Procedure)) end,
     sealed_or_refused(call_seal(Target, Realm, Procedure, Opts, Resolve), fun(Seal) ->
-        macula_client:call_stream_station(Pool, Station, Target, Realm, Procedure, Args,
-                                          maps:without([advertisement, confidential], Opts), Seal)
+        dialled_if_authorized(Check, Pool, Realm, Station, Opts, maps:get(dial_timeout_ms, Opts, 10_000), fun() ->
+            macula_client:call_stream_station(Pool, Station, Target, Realm, Procedure, Args,
+                                              maps:without([advertisement, confidential], Opts), Seal)
+        end)
     end).
 
 %% @doc A pool link to `Station', for a consumer that must address one
@@ -1096,11 +1103,11 @@ do_call_stream_station(Pool, Station, Target, Realm, Procedure, Args, Opts) ->
         {ok, pid()} | {error, term()}.
 ensure_station_link(Pool, Station, Opts, TimeoutMs)
   when is_pid(Pool), is_map(Opts), is_integer(TimeoutMs), TimeoutMs > 0 ->
-    refused(target_checked(Station, Opts),
-            fun() ->
-                refused(station_authorized(Pool, maps:get(realm, Opts, undefined), Station, Opts, TimeoutMs),
-                        fun() -> macula_client:ensure_station_link(Pool, Station, Opts, TimeoutMs) end)
-            end).
+    refused(target_checked(Station, Opts), fun() -> station_linked(Pool, Station, Opts, TimeoutMs) end).
+
+station_linked(Pool, Station, Opts, TimeoutMs) ->
+    dialled_if_authorized(checked, Pool, maps:get(realm, Opts, undefined), Station, Opts, TimeoutMs,
+                          fun() -> macula_client:ensure_station_link(Pool, Station, Opts, TimeoutMs) end).
 
 %% @doc Take the overlay frames for `Realm' arriving on `Link' (from
 %% `ensure_station_link/4'), delivered to `Subscriber' as
