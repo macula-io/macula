@@ -55,11 +55,11 @@ setup() ->
     meck:expect(macula, find_record, fun(_Pool, Key) -> find_record(Key) end),
     meck:expect(macula, find_record,
                 fun(_Pool, Key, TimeoutMs) -> find_record(Key, TimeoutMs) end),
-    meck:expect(macula, call_station,
+    meck:expect(macula, call_resolved_station,
                 fun(_Pool, DialUrl, _Provider, _Realm, _Proc, _Payload, _TimeoutMs, _Opts) ->
                         visit(DialUrl)
                 end),
-    meck:expect(macula, call_stream_station,
+    meck:expect(macula, call_resolved_stream_station,
                 fun(_Pool, DialUrl, Provider, _Realm, _Proc, _Args, _Opts) ->
                         ets:insert(?STATE, {stream_provider, Provider}),
                         visit(DialUrl)
@@ -852,7 +852,7 @@ a_call_dials_the_station_a_trusted_advertisement_names_pinned_to_its_node_id() -
     #{key_id := Provider} = Advertisement = advertisement(A),
     set_replies(procedure_key(), [[Advertisement]]),
     set_endpoint(A, endpoint_record(A)),
-    meck:expect(macula, call_station,
+    meck:expect(macula, call_resolved_station,
                 fun(_Pool, DialUrl, Target, _Realm, _Proc, _Payload, _TimeoutMs, Opts) ->
                         Test ! {dialed, DialUrl, Target, Opts},
                         {ok, answered}

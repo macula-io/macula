@@ -136,7 +136,7 @@
 
 -ifdef(TEST).
 %% Exports for unit tests: pure helpers that are otherwise private.
--export([advertisement_trusted/2, adv_opts/1]).
+-export([advertisement_trusted/2, adv_opts/1, default_dial_io/0]).
 -endif.
 
 %% The functions direct dial looks up, dials and fetches with, by key. See
@@ -595,8 +595,10 @@ default_dial_io() ->
       sign_node_record => fun macula_client:sign_node_record/3,
       find_records => fun macula:find_records/3,
       find_record => fun macula:find_record/3,
-      call_station => fun macula:call_station/8,
-      call_stream_station => fun macula:call_stream_station/7,
+      %% The stations direct dial resolves are checked here, before any call
+      %% (`station_checked/5'), so it calls through the unchecked variants.
+      call_station => fun macula:call_resolved_station/8,
+      call_stream_station => fun macula:call_resolved_stream_station/7,
       resolved_candidate => fun macula_client:resolved_candidate/3,
       remember_resolved => fun macula_client:remember_resolved/5}.
 
