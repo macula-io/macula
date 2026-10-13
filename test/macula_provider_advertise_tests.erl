@@ -173,6 +173,7 @@ an_advertised_chain_is_registered_with_its_renewal(#{key := Key} = Keys) ->
     {ok, Pool} = macula_client:connect([#{host => <<"127.0.0.1">>, port => 1,
                                           expected_node_id => <<1:256>>}],
                                        #{node_identity => Key}),
+    Acks = macula_test_station_acks:start(Pool),
     try
         with_opts(Keys, #{}, Handler, fun(Opts) ->
             Seams = maps:without([advertise], Opts),
@@ -182,6 +183,7 @@ an_advertised_chain_is_registered_with_its_renewal(#{key := Key} = Keys) ->
             ?assertEqual({macula, renew_authorization, [?REALM, ?PROC, Seams]}, Renew)
         end)
     after
+        ok = macula_test_station_acks:stop(Acks),
         macula_client:close(Pool)
     end.
 

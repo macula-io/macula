@@ -2282,10 +2282,46 @@ on_frame(#{frame_type := overlay_relay, peer := Origin, payload := Bytes}, S) ->
     relayed_payload(macula_frame:decode(Bytes), Origin, S);
 on_frame(#{frame_type := plumtree_gossip} = Frame, S) ->
     direct_gossip(macula_frame:claimed_publication_realm(Frame), Frame, S);
+%% REGISTER_ACK -- the station's answer to a registration this link sent (macula#12). It names a realm, so it must
+%% be matched before the overlay clause below.
+on_frame(#{frame_type := register_ack} = Frame, S) ->
+    registration_answered(Frame, S);
 on_frame(#{realm := Realm} = Frame, S) ->
     deliver_overlay_frame(Realm, Frame, S);
 on_frame(_Frame, S) ->
     S.
+
+%% A station's answer to a registration goes to the pool, which waits on it. An ack of a kind this node does not know
+%% was counted when it was read and is ignored here, and so is one for a subscription of another subscriber: this
+%% link registers only its own node.
+registration_answered(#{kind := unknown}, S) ->
+    S;
+registration_answered(#{kind := Kind, subscriber := Subscriber} = Ack, #state{node_identity = Key} = S)
+  when Kind =:= subscribe orelse Kind =:= unsubscribe ->
+    own_subscriber_answered(Subscriber =:= node_id(Key), Ack, S);
+registration_answered(Ack, S) ->
+    registration_told(Ack, S).
+
+own_subscriber_answered(true, Ack, S) -> registration_told(Ack, S);
+own_subscriber_answered(false, _Ack, S) -> S.
+
+registration_told(#{kind := Kind, realm := Realm, name := Name} = Ack,
+                  #state{pool = Pool, peer_node_id = Station} = S) ->
+    pool_told_answer(Pool, Station, {Kind, Realm, Name}, answer(Ack)),
+    S.
+
+answer(#{accepted := true}) -> accepted;
+answer(#{accepted := false, reason := Reason}) -> {refused, Reason}.
+
+%% A link started without a pool (a single link a caller holds itself) has no one waiting on its registrations: a
+%% refusal is reported, and an acceptance needs nothing.
+pool_told_answer(undefined, Station, Registration, {refused, Reason}) ->
+    macula_client:registration_refused(Station, Registration, Reason);
+pool_told_answer(undefined, _Station, _Registration, accepted) ->
+    ok;
+pool_told_answer(Pool, Station, Registration, Answer) ->
+    Pool ! {macula_register_ack, self(), Station, Registration, Answer},
+    ok.
 
 on_claimed_reply({ok, #{request_id := RequestId}}, Frame, S) ->
     answered(held_request(RequestId, S), Frame, S);
@@ -2767,7 +2803,9 @@ not_sent(Realm, Proc, Reason) ->
 %% signing refuses and the chain ends there.
 on_advertisement_signed({Realm, Proc} = Key, Spec, Station, {error, Reason}, S) ->
     not_sent(Realm, Proc, Reason),
-    retried(final_signing_refusal(Reason), Key, Spec, Station, S);
+    Final = final_signing_refusal(Reason),
+    ok = unsent_told(Final, S#state.pool, Realm, Proc, Reason),
+    retried(Final, Key, Spec, Station, S);
 on_advertisement_signed(Key, Spec, Station, {ok, Signed},
                         #state{advertisements = Ads, peer_node_id = Station, peer_pid = Pid} = S)
   when is_pid(Pid), map_get(Key, Ads) =:= Spec ->
@@ -2828,6 +2866,14 @@ retried(false, Key, Spec, Station,
     renewal_in(Key, ?SIGNING_RETRY_MS, S);
 retried(_FinalOrStale, _Key, _Spec, _Station, S) ->
     S.
+
+%% An advertisement whose signing is refused for good is never sent, so no station will answer it: the pool, which
+%% waits on that answer (macula#12), is told instead.
+unsent_told(true, Pool, Realm, Proc, Reason) when is_pid(Pool) ->
+    Pool ! {macula_register_unsent, self(), {advertise, Realm, Proc}, Reason},
+    ok;
+unsent_told(_FinalOrNoPool, _Pool, _Realm, _Proc, _Reason) ->
+    ok.
 
 final_signing_refusal(not_after_passed)        -> true;
 final_signing_refusal(lifetime_too_long)       -> true;

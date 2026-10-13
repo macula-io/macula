@@ -106,10 +106,12 @@ without_stations_every_link_has_it() ->
 with_pool(Test) ->
     {ok, _} = application:ensure_all_started(macula),
     {ok, Pool} = macula_client:connect([?SEED_A, ?SEED_B], #{}),
+    Acks = macula_test_station_acks:start(Pool),
     try
         {ok, #{self_node_id := Me}} = macula:status(Pool),
         Test(Pool, <<"~", (binary:encode_hex(Me, lowercase))/binary, "/echo">>)
     after
+        ok = macula_test_station_acks:stop(Acks),
         ok = macula_client:close(Pool)
     end.
 

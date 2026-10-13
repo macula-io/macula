@@ -122,6 +122,8 @@
 %% Advertising with a renewal (D32): the facade's `advertise/5' and
 %% `advertise_stream/6' pass how to renew the chain they resolved.
 -export([advertise/8, advertise_stream/9]).
+%% A station's answer to a registration (macula#12): the facade waits on it, and a link with no pool reports a refusal.
+-export([await_registration/4, registration_refused/3]).
 
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          terminate/2, code_change/3, format_status/1]).
@@ -494,6 +496,10 @@
 -define(DEFAULT_DEDUP_SWEEP_MS, 30_000).
 -define(DEFAULT_ADMISSION_SWEEP_MS, 30_000).
 -define(DEFAULT_RENEW_BACKOFF_MS, 5_000).
+%% How long a registration waits for its station's REGISTER_ACK (macula#12): the HELLO timeout
+%% (macula_peering_conn's handshake timeout), so a link still handshaking when the caller registers gets its answer
+%% in the time its handshake may take. A pool may wait less (register_ack_timeout_ms), never more.
+-define(REGISTER_ACK_TIMEOUT_MS, 30_000).
 -define(DEFAULT_RENEW_RECHECK_MS, 300_000).
 %% The earliest a renewal is asked for again, so a chain with almost no life
 %% left is not renewed in a tight loop.
@@ -635,7 +641,7 @@
 %% How a registration renews its chain (D32): `apply(M, F, [Pool | A])' answers
 %% `{ok, Spec}' or `{error, Reason}'.
 -type renew() :: {module(), atom(), [term()]}.
--export_type([stations/0, renew/0]).
+-export_type([stations/0, renew/0, registration_error/0]).
 
 -record(state, {
     seeds         :: [seed()],
@@ -660,6 +666,11 @@
     %% it renews and the renewal ref that registration held when it started
     %% (D32).
     renewals = #{} :: #{pid() => {reference(), unary | stream, {<<_:256>>, binary()}, reference()}},
+    %% What each registration's stations answered (macula#12): pending, with the links it went to that have not
+    %% answered, the refusals so far and the callers waiting, or its outcome, kept for a caller that waits after the
+    %% answer came.
+    registrations = #{} :: #{registration_key() => registration_answer()},
+    register_ack_timeout = ?REGISTER_ACK_TIMEOUT_MS :: pos_integer(),
     %% seed → link_state
     links = #{}   :: #{seed() => #link_state{}},
     %% Why each seed's link last went down. Outlives the link entry, which
@@ -795,6 +806,36 @@ identity_wrapped(Opts) ->
 %% @doc Stop the pool. Every subscriber receives a final
 %% `{macula_event_gone, SubRef, pool_closed}' message; every link
 %% terminates with the pool.
+-type registration_key() :: {macula_frame:register_kind(), <<_:256>>, binary()}.
+-type registration_answer() :: #{awaited := [pid()], refusals := [registration_refusal()],
+                                 waiters := [{gen_server:from(), reference()}]}
+                             | accepted | registration_refusal().
+-type registration_refusal() :: {refused, macula_frame:register_refusal()} | {not_sent, term()}.
+%% Why a registration does not hold: a station refused it, no link could send it, no station answered in time, or
+%% the pool does not hold it (never registered, or withdrawn while the caller waited).
+-type registration_error() :: registration_refusal() | {unacknowledged, <<_:256>> | undefined} | not_registered
+                            | withdrawn.
+
+%% @doc Wait for the stations' answer to the last advertisement (`advertise') or subscription (`subscribe') of `Name'
+%% in `Realm' on this pool (macula#12). `ok' once one station it went to accepted it; `{error, {refused, Reason}}'
+%% once every one refused it, with the first station's reason; `{error, {not_sent, Reason}}' when no link could send
+%% it; `{error, {unacknowledged, Station}}' when no station accepted it within the pool's wait (30 seconds by
+%% default), naming one that did not answer. A registration that sends no frame needs no answer, and one the pool
+%% does not hold is `{error, not_registered}'. An answer that came before the wait is kept for it.
+-spec await_registration(pool(), advertise | subscribe, <<_:256>>, binary()) -> ok | {error, registration_error()}.
+await_registration(Pool, Kind, Realm, Name)
+  when is_pid(Pool), (Kind =:= advertise orelse Kind =:= subscribe), is_binary(Realm), byte_size(Realm) =:= 32,
+       is_binary(Name) ->
+    gen_server:call(Pool, {await_registration, {Kind, Realm, Name}}, ?REGISTER_ACK_TIMEOUT_MS + 5_000).
+
+%% @doc Report a station's refusal of a registration that no caller waits on: a link's replay after a reconnect, or
+%% a link without a pool. A station decides what it sends, so the report is bounded.
+-spec registration_refused(<<_:256>> | undefined, registration_key(), macula_frame:register_refusal()) -> ok.
+registration_refused(Station, {Kind, Realm, Name}, Reason) ->
+    macula_diagnostics:bounded_event(warning, <<"_macula.client.registration_refused">>,
+                                     #{station => Station, kind => Kind, realm => Realm, name => Name,
+                                       reason => Reason}).
+
 -spec close(pool()) -> ok.
 close(Pool) ->
     gen_server:stop(Pool, normal, 5_000).
@@ -1724,6 +1765,8 @@ init_with_keys({ok, #{node_identity := NodeIdentity, issuer := Issuer, issuer_st
                     admission_sweep = AdmissionSweep,
                     renew_backoff = maps:get(renew_backoff_ms, Opts, ?DEFAULT_RENEW_BACKOFF_MS),
                     renew_recheck = maps:get(renew_recheck_ms, Opts, ?DEFAULT_RENEW_RECHECK_MS),
+                    register_ack_timeout = register_ack_timeout(maps:get(register_ack_timeout_ms, Opts,
+                                                                         ?REGISTER_ACK_TIMEOUT_MS)),
                     dedup_tab = DedupTab,
                     order_timeout = OrderTimeout, order_max_buffer = OrderMaxBuf,
                     flush_timer = undefined,
@@ -1828,6 +1871,9 @@ handle_call({subscribe, Realm, Topic, Subscriber, Opts}, _From, S) ->
     NewS = register_sub(SubRef, Spec, S),
     {reply, {ok, SubRef}, issue_wire_subs(AlreadyTracked, Realm, Topic, NewS)};
 
+handle_call({await_registration, Key}, From, #state{registrations = Regs} = S) ->
+    awaited(maps:find(Key, Regs), Key, From, S);
+
 handle_call({unsubscribe, SubRef}, _From, S) ->
     {reply, ok, drop_sub(SubRef, S)};
 
@@ -1868,7 +1914,8 @@ handle_call({unadvertise, Realm, Procedure}, _From, S0) ->
     Withdrawal = withdrawal_for(Registered, Realm, Procedure, Key),
     _ = fanout_unadvertise(registered_link_pids(Registered, S), Realm, Procedure,
                            Withdrawal),
-    {reply, ok, S#state{procs = maps:remove({Realm, Procedure}, P)}};
+    {reply, ok, registration_withdrawn({advertise, Realm, Procedure},
+                                       S#state{procs = maps:remove({Realm, Procedure}, P)})};
 
 handle_call({ensure_station_link, Station, LinkOpts, TimeoutMs}, From, S) ->
     %% As call_station: ensure the link, and wait for its handshake in a
@@ -1898,7 +1945,8 @@ handle_call({unadvertise_stream, Realm, Procedure}, _From, S0) ->
     _ = fanout_unadvertise_stream(registered_link_pids(Registered, S), Realm, Procedure,
                                   Withdrawal),
     {reply, ok,
-     S#state{stream_procs = maps:remove({Realm, Procedure}, SP)}};
+     registration_withdrawn({advertise, Realm, Procedure},
+                            S#state{stream_procs = maps:remove({Realm, Procedure}, SP)})};
 
 handle_call({realm_key, RealmId}, _From, #state{realm_keys = Keys} = S) ->
     {reply, pinned_realm_key(maps:find(RealmId, Keys)), S};
@@ -2067,6 +2115,14 @@ handle_info({'EXIT', Admission, Reason}, #state{admission = Admission} = S) ->
     %% requests without the ones it has seen, so it stops, and its owner
     %% starts a fresh one.
     {stop, {shutdown, {admission_down, Reason}}, S};
+%% A station's answer to a registration, through the link that sent it (macula#12).
+handle_info({macula_register_ack, Link, Station, Key, Answer}, S) ->
+    {noreply, station_answered(Link, Station, Key, Answer, S)};
+%% A link could not send an advertisement, so its station will not answer it.
+handle_info({macula_register_unsent, Link, Key, Reason}, #state{registrations = Regs} = S) ->
+    {noreply, link_answered(maps:find(Key, Regs), Link, Key, {not_sent, Reason}, S)};
+handle_info({register_ack_timeout, Key, From}, #state{registrations = Regs} = S) ->
+    {noreply, wait_ended(maps:find(Key, Regs), Key, From, S)};
 %% A link tells the pool its station at handshake.
 handle_info({macula_link_connected, Pid, NodeId}, S) ->
     {noreply, link_connected(find_link_by_pid(Pid, S), Pid, NodeId, S)};
@@ -2284,11 +2340,18 @@ registered(_Kind, _Key, _Registration, {error, _} = Refused, S) ->
 %% same and answered no_healthy_station: the respawned links replay it.
 registered(unary, Key, Registration0, {ok, Pids}, #state{procs = P} = S) ->
     Registration = keyed_since(Registration0, maps:find(Key, P)),
-    {fanout_advertise(Pids, Key, Registration), S#state{procs = P#{Key => Registration}}};
+    {fanout_advertise(Pids, Key, Registration),
+     advertisement_sent(Key, Registration, Pids, S#state{procs = P#{Key => Registration}})};
 registered(stream, Key, Registration0, {ok, Pids}, #state{stream_procs = SP} = S) ->
     Registration = keyed_since(Registration0, maps:find(Key, SP)),
     {fanout_advertise_stream(Pids, Key, Registration),
-     S#state{stream_procs = SP#{Key => Registration}}}.
+     advertisement_sent(Key, Registration, Pids, S#state{stream_procs = SP#{Key => Registration}})}.
+
+%% A registration with no advertisement sends no frame, so no station answers it.
+advertisement_sent({Realm, Proc}, #{ad := undefined}, _Pids, S) ->
+    registration_answered({advertise, Realm, Proc}, accepted, S);
+advertisement_sent({Realm, Proc}, _Registration, Pids, S) ->
+    registration_sent({advertise, Realm, Proc}, Pids, S).
 
 %% When a registration's spec first named the KEM key, kept here in the pool and carried in the spec
 %% (`keyed_since'), so a link respawn or a renewal never reopens the provider's clear-call window (E2E design §8.1,
@@ -3783,6 +3846,97 @@ track_wildcard(true, Key, Segments, #state{wildcard_topics = W} = S) ->
 track_wildcard(false, _Key, _Segments, S) ->
     S.
 
+%%--------------------------------------------------------------------
+%% Waiting for a station's answer to a registration (macula#12)
+%%--------------------------------------------------------------------
+
+register_ack_timeout(Ms) when is_integer(Ms), Ms >= 1, Ms =< ?REGISTER_ACK_TIMEOUT_MS -> Ms.
+
+%% A registration handed to its links waits for their stations. Handed to none (every link respawning), it waits for
+%% the respawned links' replay. Callers already waiting on an earlier registration of the same name wait on this one.
+registration_sent(Key, Pids, #state{registrations = Regs} = S) ->
+    Waiters = waiters_of(maps:find(Key, Regs)),
+    S#state{registrations = Regs#{Key => #{awaited => Pids, refusals => [], waiters => Waiters}}}.
+
+waiters_of({ok, #{waiters := Waiters}}) -> Waiters;
+waiters_of(_AnsweredOrNone) -> [].
+
+%% A withdrawn registration has no answer to wait for.
+registration_withdrawn(Key, #state{registrations = Regs} = S) ->
+    {Answer, Rest} = take_registration(maps:take(Key, Regs)),
+    ok = answered(waiters_of({ok, Answer}), {error, withdrawn}),
+    S#state{registrations = Rest}.
+
+take_registration({Answer, Rest}) -> {Answer, Rest};
+take_registration(error) -> {none, #{}}.
+
+awaited(error, _Key, _From, S) ->
+    {reply, {error, not_registered}, S};
+awaited({ok, #{waiters := Waiters} = Pending}, Key, From, #state{registrations = Regs} = S) ->
+    TRef = erlang:send_after(S#state.register_ack_timeout, self(), {register_ack_timeout, Key, From}),
+    {noreply, S#state{registrations = Regs#{Key => Pending#{waiters := [{From, TRef} | Waiters]}}}};
+awaited({ok, Answer}, _Key, _From, S) ->
+    {reply, reply_of(Answer), S}.
+
+reply_of(accepted) -> ok;
+reply_of(Refusal) -> {error, Refusal}.
+
+%% One station accepting is enough; a refusal no caller waits on is reported.
+station_answered(_Link, _Station, Key, accepted, #state{registrations = Regs} = S) ->
+    accepted_if_held(is_map_key(Key, Regs), Key, S);
+station_answered(Link, Station, Key, {refused, Reason} = Refused, #state{registrations = Regs} = S) ->
+    reported_unless_awaited(maps:find(Key, Regs), Link, Station, Key, Reason),
+    link_answered(maps:find(Key, Regs), Link, Key, Refused, S).
+
+%% A late acceptance of a registration since withdrawn changes nothing.
+accepted_if_held(true, Key, S) -> registration_answered(Key, accepted, S);
+accepted_if_held(false, _Key, S) -> S.
+
+reported_unless_awaited({ok, #{awaited := Awaited}}, Link, Station, Key, Reason) ->
+    reported(lists:member(Link, Awaited), Station, Key, Reason);
+reported_unless_awaited(_AnsweredOrNone, _Link, Station, Key, Reason) ->
+    registration_refused(Station, Key, Reason).
+
+reported(true, _Station, _Key, _Reason) -> ok;
+reported(false, Station, Key, Reason) -> registration_refused(Station, Key, Reason).
+
+%% A pending registration is refused once every link it went to has refused it, or could not send it: the first
+%% station's refusal is the answer, else the first link's.
+link_answered({ok, #{awaited := Awaited, refusals := Refusals} = Pending}, Link, Key, Refusal, S) ->
+    refused_by_all(lists:delete(Link, Awaited), Refusals ++ [Refusal], Pending, Key, S);
+link_answered(_AnsweredOrNone, _Link, _Key, _Refusal, S) ->
+    S.
+
+refused_by_all([], Refusals, _Pending, Key, S) ->
+    registration_answered(Key, first_refusal(Refusals), S);
+refused_by_all(Awaited, Refusals, Pending, Key, #state{registrations = Regs} = S) ->
+    S#state{registrations = Regs#{Key => Pending#{awaited := Awaited, refusals := Refusals}}}.
+
+first_refusal(Refusals) ->
+    hd([R || {refused, _} = R <- Refusals] ++ Refusals).
+
+registration_answered(Key, Answer, #state{registrations = Regs} = S) ->
+    ok = answered(waiters_of(maps:find(Key, Regs)), reply_of(Answer)),
+    S#state{registrations = Regs#{Key => Answer}}.
+
+answered(Waiters, Reply) ->
+    lists:foreach(fun({From, TRef}) -> _ = erlang:cancel_timer(TRef), gen_server:reply(From, Reply) end, Waiters).
+
+%% A caller whose wait ended before any station accepted is told one station that did not answer.
+wait_ended({ok, #{waiters := Waiters, awaited := Awaited} = Pending}, Key, From, #state{registrations = Regs} = S) ->
+    {Ended, Left} = lists:partition(fun({F, _TRef}) -> F =:= From end, Waiters),
+    ok = answered(Ended, {error, {unacknowledged, silent_station(Awaited, S)}}),
+    S#state{registrations = Regs#{Key => Pending#{waiters := Left}}};
+wait_ended(_AnsweredOrNone, _Key, _From, S) ->
+    S.
+
+silent_station([], _S) -> undefined;
+silent_station([Link | _], #state{connected = Connected} = S) ->
+    maps:get(Link, Connected, link_station(find_link_by_pid(Link, S), S)).
+
+link_station({ok, Seed}, S) -> pinned_station(Seed, S);
+link_station(error, _S) -> undefined.
+
 drop_sub(SubRef, #state{subs = Subs} = S) ->
     drop_sub_take(maps:take(SubRef, Subs), SubRef, S).
 
@@ -3814,8 +3968,9 @@ issue_wire_subs(false, Realm, Topic, S) ->
     %% Handed to every link, waiting on none (macula#45): a busy link takes
     %% it when it resumes, and every other pool call keeps its answers.
     PoolPid = self(),
-    _ = [macula_station_link:subscribe_async(P, Realm, Topic, PoolPid) || P <- spawned_link_pids(S)],
-    S.
+    Pids = spawned_link_pids(S),
+    _ = [macula_station_link:subscribe_async(P, Realm, Topic, PoolPid) || P <- Pids],
+    registration_sent({subscribe, Realm, Topic}, Pids, S).
 
 %% When the last local subscriber of Key has left, every link is told to
 %% drop the pool's subscriptions on Key, by topic, without waiting. The pool
@@ -3827,7 +3982,7 @@ unsubscribe_links(false, _Key, S) ->
 unsubscribe_links(true, {Realm, Topic}, S) ->
     PoolPid = self(),
     _ = [macula_station_link:unsubscribe_topic_async(P, Realm, Topic, PoolPid) || P <- spawned_link_pids(S)],
-    S.
+    registration_withdrawn({subscribe, Realm, Topic}, S).
 
 %%====================================================================
 %% Internals — inbound event fan-out

@@ -276,9 +276,9 @@ publish(Pool, Realm, Topic, Payload, Opts) ->
 
 %% @doc Subscribe `Subscriber' to `(Realm, Topic)' on `Pool'.
 %% Equivalent to `subscribe/5' with empty opts.
--spec subscribe(pool(), realm(), topic(), pid()) -> {ok, reference()} | {error, {text_too_long | invalid_text, topic}}.
+-spec subscribe(pool(), realm(), topic(), pid()) -> {ok, reference()} | {error, {text_too_long | invalid_text, topic} | macula_client:registration_error()}.
 subscribe(Pool, Realm, Topic, Subscriber) ->
-    macula_pubsub:subscribe(Pool, Realm, Topic, Subscriber).
+    subscribe(Pool, Realm, Topic, Subscriber, #{}).
 
 %% @doc Subscribe `Subscriber' to `(Realm, Topic)' on `Pool' with
 %% options. The `delivery' option chooses how a single publisher's
@@ -299,22 +299,36 @@ subscribe(Pool, Realm, Topic, Subscriber) ->
 %% publisher signature did not verify. `group' subscribes under a sealed
 %% group, joining it first; its events arrive opened, or once as
 %% `macula_event_unopened'.
+%% It returns once a station acknowledges the subscription (macula#12),
+%% within 30 seconds; a refused or unacknowledged one is dropped and
+%% returned as `macula_client:await_registration/4' names it.
 %% See `macula_pubsub:subscribe/5'.
 -spec subscribe(pool(), realm(), topic(), pid(), map()) ->
     {ok, reference()}
     | {error, {text_too_long | invalid_text, topic} | {invalid_option, group | distributor | ucan_token}
-              | {group, macula_group_keyring:reason()}}.
+              | {group, macula_group_keyring:reason()} | macula_client:registration_error()}.
 subscribe(Pool, Realm, Topic, Subscriber, Opts) ->
-    macula_pubsub:subscribe(Pool, Realm, Topic, Subscriber, Opts).
+    subscribed(macula_pubsub:subscribe(Pool, Realm, Topic, Subscriber, Opts), Pool, Realm, Topic).
 
 %% @doc Subscribe with a callback function. The SDK spawns a small
 %% receiver process internally and invokes the callback once per
-%% inbound event. See `macula_pubsub:subscribe_callback/4'.
+%% inbound event. It returns, as `subscribe/5' does, once a station
+%% acknowledges the subscription. See `macula_pubsub:subscribe_callback/4'.
 -spec subscribe_callback(pool(), realm(), topic(),
                           macula_pubsub:callback()) ->
     {ok, reference()} | {error, term()}.
 subscribe_callback(Pool, Realm, Topic, Callback) ->
-    macula_pubsub:subscribe_callback(Pool, Realm, Topic, Callback).
+    subscribed(macula_pubsub:subscribe_callback(Pool, Realm, Topic, Callback), Pool, Realm, Topic).
+
+%% A subscription holds once a station acknowledges it (macula#12); a refused or unacknowledged one is dropped and
+%% its refusal returned.
+subscribed({ok, SubRef}, Pool, Realm, Topic) ->
+    subscription_acknowledged(macula_client:await_registration(Pool, subscribe, Realm, Topic), Pool, SubRef);
+subscribed(Refused, _Pool, _Realm, _Topic) ->
+    Refused.
+
+subscription_acknowledged(ok, _Pool, SubRef) -> {ok, SubRef};
+subscription_acknowledged({error, _} = Refused, Pool, SubRef) -> ok = macula_pubsub:unsubscribe(Pool, SubRef), Refused.
 
 %% @doc Drop a pool subscription. Idempotent.
 -spec unsubscribe(pool(), reference()) -> ok.
@@ -548,6 +562,10 @@ sealed_by({error, _} = Refused, _Mode) -> Refused.
 %% `{error, {stations, malformed}}'; nothing is registered or kept. Without
 %% it every link registers the procedure.
 %%
+%% It returns once a station acknowledges the advertisement (macula#12),
+%% within 30 seconds; a refused or unacknowledged one is withdrawn and
+%% returned as `macula_client:await_registration/4' names it.
+%%
 %% `Opts' may also carry `advertise', an arity-6 override for the pool
 %% fan-out, which then decides where the procedure registers (see
 %% `macula_response:advertise_opts()'), and the `provider_io/0' seam
@@ -563,8 +581,21 @@ advertise(Pool, Realm, Procedure, Handler, Opts)
 advertise_on(Stations, Pool, Realm, Procedure, Handler, Opts) ->
     Policy = maps:get(auth, Opts, open),
     Advertise = maps:get(advertise, Opts, pool_advertise(Stations, Opts)),
-    advertise_authorized(Pool, Realm, Procedure, Opts,
-                         fun(Spec) -> Advertise(Pool, Realm, Procedure, Handler, Policy, Spec) end).
+    acknowledged(advertise_authorized(Pool, Realm, Procedure, Opts,
+                                      fun(Spec) -> Advertise(Pool, Realm, Procedure, Handler, Policy, Spec) end),
+                 is_map_key(advertise, Opts), Pool, Realm, Procedure,
+                 fun() -> macula_client:unadvertise(Pool, Realm, Procedure) end).
+
+%% A procedure the pool registered is served once a station acknowledges it (macula#12): the call returns then, or
+%% returns the refusal, after withdrawing what it registered. An `advertise' override registers it elsewhere, and
+%% its caller waits on that.
+acknowledged(ok, false, Pool, Realm, Procedure, Withdraw) ->
+    withdrawn_unless_ok(macula_client:await_registration(Pool, advertise, Realm, Procedure), Withdraw);
+acknowledged(Registered, _Overridden, _Pool, _Realm, _Procedure, _Withdraw) ->
+    Registered.
+
+withdrawn_unless_ok(ok, _Withdraw) -> ok;
+withdrawn_unless_ok({error, _} = Refused, Withdraw) -> ok = Withdraw(), Refused.
 
 %% The pool fan-out `advertise/5' uses unless `Opts' carries an `advertise' override.
 pool_advertise(Stations, Opts) ->
@@ -1131,11 +1162,14 @@ advertise_stream(Pool, Realm, Procedure, Mode, Handler, Opts)
 
 advertise_stream_on(Stations, Pool, Realm, Procedure, Mode, Handler, Opts) ->
     Policy = maps:get(auth, Opts, open),
-    advertise_authorized(Pool, Realm, Procedure, Opts,
-                         fun(Spec) ->
-                             macula_client:advertise_stream(Pool, Realm, Procedure, Mode, Handler,
-                                                            Policy, Spec, Stations, renewal(Realm, Procedure, Opts))
-                         end).
+    acknowledged(advertise_authorized(Pool, Realm, Procedure, Opts,
+                                      fun(Spec) ->
+                                          macula_client:advertise_stream(Pool, Realm, Procedure, Mode, Handler,
+                                                                         Policy, Spec, Stations,
+                                                                         renewal(Realm, Procedure, Opts))
+                                      end),
+                 false, Pool, Realm, Procedure,
+                 fun() -> macula_client:unadvertise_stream(Pool, Realm, Procedure) end).
 
 %% The provider-authorization resolution behind `advertise' and
 %% `advertise_stream': the pool's own D25 chain, fetched from the DHT,
