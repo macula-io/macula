@@ -48,6 +48,16 @@ fetch_test_() ->
       {"a fetch of more chunks than caller_quota from one sharer completes",
        {timeout, 60, fun a_fetch_of_more_chunks_than_the_callers_quota_completes/0}}]}.
 
+%% Hook 3 (macula-station#63): a sharer's station is checked for the realm of
+%% its announcement before it is reached; one refused under `closed' is that
+%% sharer's failure, and nothing is asked of it.
+a_sharer_whose_station_is_refused_is_never_asked_test() ->
+    {Honest, MCID} = honest_sharer(<<"refused">>),
+    Node = maps:get(node, Honest),
+    ?assertEqual({error, {unavailable, [{Node, {station_not_authorized, tombstoned}}]}},
+                 fetch([Honest], MCID, #{station_verdict => tombstoned}, self())),
+    ?assertEqual(nothing, receive {asked_root, _} -> asked after 0 -> nothing end).
+
 %% A sharer that accepts the root ask and never answers costs the fetch the root deadline (2 s by default), not the
 %% 15 s chunk deadline, and the next sharer serves.
 a_silent_sharer_holds_the_fetch_for_the_root_deadline() ->
@@ -320,6 +330,7 @@ fetch(Sharers, MCID, Opts, Watcher) ->
                                Key = macula_record:content_key(MCID),
                                {ok, Announced}
                            end,
+           station_check => fun(_Pool, ?REALM, ?STATION, _T) -> station_checked(Opts) end,
            resolve_station_endpoint => fun(_Pool, ?STATION, _T) -> {ok, <<"quic://station.test:4433">>} end,
            %% With no signed advertisement to seal from, the fetch opens in the clear, and says so (§8.1).
            call_stream_station => fun(_Pool, _Url, Target, ?REALM, _Proc, Args,
@@ -327,7 +338,11 @@ fetch(Sharers, MCID, Opts, Watcher) ->
                                       _ = watched(Watcher, Args),
                                       dialed(maps:get(Target, ByNode), Args)
                                   end},
-    macula_content_fetch:get(self(), MCID, maps:merge(#{io => Io}, Opts)).
+    macula_content_fetch:get(self(), MCID, maps:merge(#{io => Io}, maps:remove(station_verdict, Opts))).
+
+%% The hook 3 answer a test asks for (`station_verdict'), admitted otherwise.
+station_checked(#{station_verdict := Refused}) -> {error, {station_not_authorized, Refused}};
+station_checked(_Opts) -> ok.
 
 watched(none, _Args) -> ok;
 watched(Watcher, #{want := block}) -> Watcher ! {asked_chunk, self()};
@@ -374,6 +389,7 @@ a_fetch_of_more_chunks_than_the_callers_quota_completes() ->
                                Key = macula_record:content_key(MCID),
                                {ok, [Announcement]}
                            end,
+           station_check => fun(_Pool, _Realm, ?STATION, _T) -> ok end,
            resolve_station_endpoint => fun(_Pool, ?STATION, _T) -> {ok, <<"quic://station.test:4433">>} end,
            call_stream_station => fun(_Pool, _Url, Target, Realm, Proc, Args, _Seal) ->
                                       macula_station_link:call_stream(Caller, Target, Realm, Proc, Args,
