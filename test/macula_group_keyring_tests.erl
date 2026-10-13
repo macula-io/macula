@@ -48,7 +48,8 @@ keyring_test_() ->
       fun a_held_group_is_answered_while_the_keyring_is_pulling/1,
       fun a_publish_triggered_pull_leaves_one_re_pull_chain/1,
       fun a_distributor_that_is_not_a_node_id_is_an_invalid_option/1,
-      fun a_ucan_token_that_is_not_bytes_is_an_invalid_option/1]}.
+      fun a_ucan_token_that_is_not_bytes_is_an_invalid_option/1,
+      fun no_epoch_key_shows_in_the_keyrings_state_or_status/1]}.
 
 %%--------------------------------------------------------------------
 %% Fixture: a clock, the real distributor behind a fake wire, and a
@@ -131,6 +132,14 @@ wake(#{pid := K} = W) ->
 %%--------------------------------------------------------------------
 %% Cases
 %%--------------------------------------------------------------------
+
+%% The epochs live in the table alone: the keyring's state holds its id and the pull bookkeeping.
+no_epoch_key_shows_in_the_keyrings_state_or_status(#{pid := K} = W) ->
+    ?_test(begin
+        {ok, required} = join(W),
+        {ok, #{key := Key}} = publish_epoch(W),
+        [?assertEqual(nomatch, binary:match(term_to_binary(Shown), Key)) || Shown <- [sys:get_state(K), sys:get_status(K)]]
+    end).
 
 joining_pulls_the_current_epoch_sealed_with_the_org_grant(W) ->
     ?_test(begin

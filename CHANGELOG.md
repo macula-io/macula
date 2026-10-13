@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **No sealed group's epoch key shows in a process's state, status or crash report** (mcl-distributor#1). The distributor (`macula_group_keys`) keeps its epochs in a private ETS table its process owns, and its state holds only the table's id; the keyring (`macula_group_keyring`) keeps them in its table only. Both redact every epoch's key in `format_status/1`, and `macula_node_keys:redacted/1` now redacts the `key` of an epoch wherever one shows. The keyring's table stays readable by the node's publishers and openers, so any code running on the node can read the epoch keys; a crash dump copies process heaps, so a node holding a group's keys runs with crash dumps off (docs/design/DESIGN_E2E_SEALED_PUBSUB.md §4).
+
+### Fixed
+
+- **A distributor survives a restart of its pool** (mcl-distributor#1). `macula_group_keys`'s `pool` option may be the pool's registered name, looked up at every membership read; while no pool holds the name, a pull answers `membership_unknown`. A pid captured once died with a pool restart, and the next pull crashed the distributor.
+
 ## [14.9.0] - 2026-10-13
 
 ### Added

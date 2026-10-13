@@ -763,6 +763,14 @@ label(#{msg := {report, #{event := Topic}}}) -> Topic;
 label(#{msg := {report, _}}) -> report;
 label(#{msg := _}) -> other.
 
+%% A sealed group's epoch key is redacted wherever an epoch shows, and its id and times are kept.
+a_group_epoch_key_is_redacted_test() ->
+    Epoch = macula_group_epoch:new(1_000_000, 15 * 60000),
+    #{key := Key} = Epoch,
+    Redacted = macula_node_keys:redacted({state, #{groups => #{<<"g">> => [Epoch]}}, [Epoch]}),
+    ?assertEqual(nomatch, binary:match(term_to_binary(Redacted), Key)),
+    ?assertEqual({state, #{groups => #{<<"g">> => [Epoch#{key := redacted}]}}, [Epoch#{key := redacted}]}, Redacted).
+
 %% A sealed call's or stream's secrets are redacted by name, in any map at any
 %% depth: its keys and a KEM private key's halves (E2E, macula 13).
 seal_secrets_are_redacted_by_name_test() ->

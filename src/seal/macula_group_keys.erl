@@ -32,18 +32,26 @@
 %% `membership_unknown' (the lookup failed; retry), `unknown_epoch',
 %% `epoch_expired' or `unknown_group' (a prefix this distributor's org does not
 %% own).
+%%
+%% The epochs live in a private table the distributor's process owns, and its
+%% state holds only that table's id: no other process can read the table, and
+%% neither `sys:get_state/1', `sys:get_status/1' nor a crash report shows a key.
+%% format_status/1 redacts every epoch's key as a second line of defence. A
+%% crash dump lists a table's size, never its rows; it does copy every process
+%% heap, where a reply passes on its way out, so a node holding a group's keys
+%% runs with crash dumps off.
 -module(macula_group_keys).
 -behaviour(gen_server).
 
 -export([start_link/1, handler/1, advertise_opts/1]).
--export([init/1, handle_call/3, handle_cast/2]).
+-export([init/1, handle_call/3, handle_cast/2, format_status/1]).
 
 -type policy() :: required | preferred | off.
 -type options() :: #{org := binary(), policy := policy(), rotate_after_ms => pos_integer(),
                      now => fun(() -> integer()),
                      membership => fun((<<_:256>>) -> ok | {error, not_a_member | membership_unknown}),
                      removed => fun((<<_:256>>) -> boolean()),
-                     pool => pid(), realm => <<_:256>>, realm_key_id => <<_:256>>,
+                     pool => pid() | atom(), realm => <<_:256>>, realm_key_id => <<_:256>>,
                      profile => macula_crypto_profile:profile()}.
 -export_type([options/0, policy/0]).
 
@@ -56,7 +64,11 @@
 
 %% @doc Start a distributor for `org''s groups. `membership' defaults to the
 %% realm slot read over `pool', which then needs `realm', `realm_key_id' and
-%% `profile'; `removed' defaults to nobody removed. The application keeps its
+%% `profile'; `removed' defaults to nobody removed. Name the pool: `pool' as
+%% its registered name is looked up at every read, so a pool its supervisor
+%% restarts is found again, and while no pool holds the name a read is
+%% `membership_unknown'. A pid is read as given, and once that pool has died
+%% every read exits the distributor. The application keeps its
 %% removed set across restarts: a set lost to a restart re-admits every removed
 %% member whose grant still verifies.
 -spec start_link(options()) -> {ok, pid()} | {error, term()}.
@@ -87,7 +99,7 @@ init(#{org := Org, policy := Policy} = Opts) ->
            now => maps:get(now, Opts, fun() -> erlang:system_time(millisecond) end),
            membership => maps:get(membership, Opts, fun(Caller) -> realm_membership(Opts, Caller) end),
            removed => maps:get(removed, Opts, fun(_Caller) -> false end),
-           groups => #{}}}.
+           table => ets:new(?MODULE, [private, set])}}.
 
 %% @private
 handle_call({pull, Payload}, _From, State) ->
@@ -98,6 +110,11 @@ handle_call({pull, Payload}, _From, State) ->
 
 %% @private
 handle_cast(_Msg, State) -> {noreply, State}.
+
+%% @private
+%% Status output and crash reports show every epoch with its key redacted.
+format_status(Status) ->
+    macula_node_keys:redacted(Status).
 
 %% A prefix this distributor's org owns: at least two non-empty `/'-segments,
 %% the second of them the org.
@@ -142,11 +159,11 @@ served(_Other, _Prefix, _Now, State) ->
 
 %% The group's current epoch, and the next one inside the current's ahead
 %% window, made when first asked for and kept so every member gets the same.
-current(Prefix, Now, #{rotate_after_ms := R, groups := Groups} = State) ->
+current(Prefix, Now, #{rotate_after_ms := R, table := Table} = State) ->
     Epochs = ahead(advanced(group_epochs(Prefix, Now, State), Now, R), Now, R),
     {ok, Current} = macula_group_epoch:for_publish(Epochs, Now),
-    {[Current | [E || #{issued_at := I} = E <- Epochs, I =:= maps:get(publish_until, Current)]],
-     State#{groups := Groups#{Prefix => Epochs}}}.
+    true = ets:insert(Table, {Prefix, Epochs}),
+    {[Current | [E || #{issued_at := I} = E <- Epochs, I =:= maps:get(publish_until, Current)]], State}.
 
 %% Epochs up to one current at Now: contiguous after the newest, or a fresh one
 %% when the group sat idle for a whole rotation.
@@ -170,8 +187,9 @@ ahead_of(true, Newest, Epochs, R) -> Epochs ++ [macula_group_epoch:next(Newest, 
 ahead_of(false, _Newest, Epochs, _R) -> Epochs.
 
 %% The group's epochs still kept at Now: until acceptance, plus one rotation.
-group_epochs(Prefix, Now, #{groups := Groups, rotate_after_ms := R}) ->
-    [E || #{accept_until := A} = E <- maps:get(Prefix, Groups, []), Now =< A + ?TOLERANCE_MS + R].
+group_epochs(Prefix, Now, #{table := Table, rotate_after_ms := R}) ->
+    [E || {_Prefix, Epochs} <- ets:lookup(Table, Prefix), #{accept_until := A} = E <- Epochs,
+          Now =< A + ?TOLERANCE_MS + R].
 
 past(Id, Epochs, Prefix, Now, State) ->
     held(lists:search(fun(#{id := EId}) -> EId =:= Id end, Epochs), Prefix, Now, State).
@@ -195,8 +213,14 @@ text_field(Payload, Name) ->
 %% endorsement slot, verified now; a tombstone answers withdrawn. A lookup that
 %% fails is `membership_unknown', never `not_a_member'.
 realm_membership(#{pool := Pool, realm := Realm, realm_key_id := RealmKeyId, profile := Profile}, Caller) ->
-    slot_read(macula:find_records(Pool, macula_record:realm_member_endorsement_key(Realm, Caller)),
+    slot_read(found(live_pool(Pool), macula_record:realm_member_endorsement_key(Realm, Caller)),
               #{profile => Profile, realm => Realm, realm_key_id => RealmKeyId}, Caller).
+
+live_pool(Pool) when is_pid(Pool) -> Pool;
+live_pool(Name) when is_atom(Name) -> whereis(Name).
+
+found(undefined, _Key) -> {error, no_pool};
+found(Pool, Key) -> macula:find_records(Pool, Key).
 
 slot_read({ok, Records}, Trust, Caller) ->
     {Outcome, _Stats} = macula_hyparview_endorsement:slot_endorsement([macula_record:encode(R) || R <- Records],

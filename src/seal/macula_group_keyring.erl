@@ -24,11 +24,18 @@
 %% Refusals and failures are named by the closed set of §7: `not_a_member', `membership_unknown', `unknown_epoch',
 %% `epoch_expired', and `no_distributor' for a distributor that cannot be found, reached or understood. Epoch keys are
 %% held in memory only.
+%%
+%% The epochs live in the table alone: the keyring's state holds its id and each group's pull bookkeeping, so neither
+%% `sys:get_state/1', `sys:get_status/1' nor a crash report shows a key, and format_status/1 redacts every epoch's key
+%% as a second line of defence. The table is protected, since publishers and subscribers read it without the keyring's
+%% process: any code running on the node can read the epoch keys. A crash dump lists a table's size, never its rows; it
+%% does copy every process heap, where an epoch passes on its way to a publisher or an opener, so a node holding a
+%% group's keys runs with crash dumps off.
 -module(macula_group_keyring).
 -behaviour(gen_server).
 
 -export([start_link/1, handle/1, pid/1, join/4, leave/3, publish_epoch/3, open_epoch/5, policy/3]).
--export([init/1, handle_call/3, handle_cast/2, handle_info/2]).
+-export([init/1, handle_call/3, handle_cast/2, handle_info/2, format_status/1]).
 
 -type policy() :: required | preferred | off.
 -type reason() :: not_a_member | membership_unknown | unknown_epoch | epoch_expired | no_distributor.
@@ -156,6 +163,11 @@ handle_info({repull, Key, Token}, #{groups := Groups} = State) ->
 handle_info(_Msg, State) ->
     {noreply, State}.
 
+%% @private
+%% Status output and crash reports show every epoch with its key redacted.
+format_status(Status) ->
+    macula_node_keys:redacted(Status).
+
 %%--------------------------------------------------------------------
 %% Joining
 %%--------------------------------------------------------------------
@@ -179,14 +191,14 @@ options_valid({error, _} = Invalid, _Org, _Key, _Opts, State) ->
     {reply, Invalid, State};
 options_valid(ok, Org, Key, Opts, State) ->
     Group = #{org => Org, ucan => maps:get(ucan_token, Opts, none), pin => pin(maps:find(distributor, Opts)),
-              epochs => [], unknown => #{}, budget => #{}, backoff => ?FIRST_BACKOFF_MS, timer => none},
-    first_pull(pull(<<"current">>, Group, Key, State), Key, State).
+              unknown => #{}, budget => #{}, backoff => ?FIRST_BACKOFF_MS, timer => none},
+    first_pull(pull(<<"current">>, [], Group, Key, State), Key, State).
 
 pin({ok, <<_:256>> = Node}) -> {user, Node};
 pin(error) -> none.
 
-first_pull({ok, #{policy := Policy} = Group}, Key, State) ->
-    {reply, {ok, Policy}, scheduled(Group, Key, State)};
+first_pull({ok, #{policy := Policy} = Group, Epochs}, Key, State) ->
+    {reply, {ok, Policy}, scheduled(Group, Epochs, Key, State)};
 first_pull({error, Reason, _Group}, _Key, State) ->
     {reply, {error, Reason}, State}.
 
@@ -208,11 +220,12 @@ no_empty(true, _Org, _Rest) -> {error, {invalid_option, group}}.
 %% Pulling
 %%--------------------------------------------------------------------
 
-%% One pull of `current' or a past epoch by id. Answers `{ok, Group}' with the reply's epochs and policy merged in,
-%% or `{error, Reason, Group}' with the group as it was, save a dropped automatic pin.
-pull(Epoch, #{org := Org} = Group, {Realm, Prefix}, #{call := Call}) ->
+%% One pull of `current' or a past epoch by id, for a group holding `Held'. Answers `{ok, Group, Epochs}' with the
+%% reply's policy merged into the group and its epochs into `Held', or `{error, Reason, Group}' with the group as it
+%% was, save a dropped automatic pin.
+pull(Epoch, Held, #{org := Org} = Group, {Realm, Prefix}, #{call := Call}) ->
     Payload = #{{text, <<"prefix">>} => {text, Prefix}, {text, <<"epoch">>} => epoch_wire(Epoch)},
-    pulled((Call)(Realm, <<Org/binary, "/group_keys_v1">>, Payload, call_opts(Group)), Prefix, Group).
+    pulled((Call)(Realm, <<Org/binary, "/group_keys_v1">>, Payload, call_opts(Group)), Prefix, Held, Group).
 
 epoch_wire(<<"current">>) -> {text, <<"current">>};
 epoch_wire(<<_:64>> = Id) -> Id.
@@ -226,11 +239,11 @@ ucan_opt(Token) -> #{ucan_token => Token}.
 pin_opt({_Kind, Node}) -> #{provider => Node};
 pin_opt(none) -> #{}.
 
-pulled({ok, Reply, Report}, Prefix, Group) ->
-    merged(parsed(Prefix, Reply), maps:get(provider, Report, undefined), Group);
-pulled({error, {unresolved, provider_not_advertised}}, _Prefix, #{pin := {auto, _}} = Group) ->
+pulled({ok, Reply, Report}, Prefix, Held, Group) ->
+    merged(parsed(Prefix, Reply), maps:get(provider, Report, undefined), Held, Group);
+pulled({error, {unresolved, provider_not_advertised}}, _Prefix, _Held, #{pin := {auto, _}} = Group) ->
     {error, no_distributor, Group#{pin := none}};
-pulled({error, Reason}, _Prefix, Group) ->
+pulled({error, Reason}, _Prefix, _Held, Group) ->
     {error, refusal(Reason), Group}.
 
 refusal(<<"not_a_member">>) -> not_a_member;
@@ -239,10 +252,11 @@ refusal(<<"unknown_epoch">>) -> unknown_epoch;
 refusal(<<"epoch_expired">>) -> epoch_expired;
 refusal(_CannotBeFoundReachedOrUnderstood) -> no_distributor.
 
-merged({ok, Policy, [First | _] = Epochs}, Provider, #{epochs := Held} = Group) ->
-    {ok, Group#{epochs := union(Held, Epochs), policy => monotonic(maps:get(policy, Group, undefined), Policy),
-                rotation => rotation(First), pin := kept(maps:get(pin, Group), Provider)}};
-merged({error, malformed_reply}, _Provider, Group) ->
+merged({ok, Policy, [First | _] = Epochs}, Provider, Held, Group) ->
+    {ok, Group#{policy => monotonic(maps:get(policy, Group, undefined), Policy), rotation => rotation(First),
+                pin := kept(maps:get(pin, Group), Provider)},
+     union(Held, Epochs)};
+merged({error, malformed_reply}, _Provider, _Held, Group) ->
     {error, no_distributor, Group}.
 
 kept(none, <<_:256>> = Provider) -> {auto, Provider};
@@ -300,23 +314,24 @@ epoch_fields(_Fields) ->
 %%--------------------------------------------------------------------
 
 repulled({ok, Group}, Key, State) ->
-    after_repull(pull(<<"current">>, live(Group, now(State)), Key, State), Key, State);
+    Live = live(Key, now(State), State),
+    after_repull(pull(<<"current">>, Live, Group, Key, State), Live, Key, State);
 repulled(error, _Key, State) ->
     State.
 
-after_repull({ok, Group}, Key, State) ->
-    scheduled(Group#{backoff := ?FIRST_BACKOFF_MS}, Key, State);
-after_repull({error, _Reason, Group}, Key, State) ->
-    backed_off(Group, Key, State).
+after_repull({ok, Group, Epochs}, _Live, Key, State) ->
+    scheduled(Group#{backoff := ?FIRST_BACKOFF_MS}, Epochs, Key, State);
+after_repull({error, _Reason, Group}, Live, Key, State) ->
+    backed_off(Group, Live, Key, State).
 
 %% The next re-pull: a random instant in the newest epoch's ahead window, or at once if that window has passed.
-scheduled(#{epochs := Epochs, rotation := R} = Group, Key, #{uniform := Uniform} = State) ->
+scheduled(#{rotation := R} = Group, Epochs, Key, #{uniform := Uniform} = State) ->
     At = macula_group_epoch:repull_at(lists:last(Epochs), R, Uniform()),
-    stored(woken_in(max(0, At - now(State)), Group, Key, State), Key, State).
+    stored(woken_in(max(0, At - now(State)), Group, Key, State), Epochs, Key, State).
 
-backed_off(#{backoff := Backoff, rotation := R} = Group, Key, State) ->
+backed_off(#{backoff := Backoff, rotation := R} = Group, Epochs, Key, State) ->
     stored((woken_in(Backoff, Group, Key, State))#{backoff := min(Backoff * 2, max(R div 3, ?FIRST_BACKOFF_MS))},
-           Key, State).
+           Epochs, Key, State).
 
 %% A group has one re-pull pending, whatever asked for it: a new one replaces the pending one, whose wake-up, if it
 %% is already on its way, names a token that is no longer the group's and does nothing (current_wake/2).
@@ -333,10 +348,17 @@ current_wake(_GoneOrReplaced, _Token) -> error.
 
 rotation(#{issued_at := I, publish_until := P}) -> P - I.
 
-%% Every change to a group is stored in the table the handle reads, as it is kept here.
-stored(#{policy := Policy, epochs := Epochs} = Group, Key, #{groups := Groups, table := Table} = State) ->
+%% Every change to a group is stored: its epochs in the table the handle reads, and nowhere else, its bookkeeping here.
+stored(#{policy := Policy} = Group, Epochs, Key, #{groups := Groups, table := Table} = State) ->
     true = ets:insert(Table, {Key, Policy, Epochs}),
     State#{groups := Groups#{Key => Group}}.
+
+%% The epochs held for a group, read from the table.
+held_epochs(Key, #{table := Table}) ->
+    held_list(stored_epochs(Table, Key)).
+
+held_list({ok, Epochs}) -> Epochs;
+held_list(not_joined) -> [].
 
 %%--------------------------------------------------------------------
 %% Publishing and opening
@@ -348,24 +370,25 @@ with_group(Key, #{groups := Groups} = State, Fun) ->
 group_found({ok, Group}, _State, Fun) -> Fun(Group);
 group_found(error, State, _Fun) -> {reply, {error, not_joined}, State}.
 
-publishing(#{epochs := Epochs} = Group, Now, Key, State) ->
-    publishing_from(macula_group_epoch:for_publish(Epochs, Now), Group, Now, Key, State).
+publishing(Group, Now, Key, State) ->
+    publishing_from(macula_group_epoch:for_publish(held_epochs(Key, State), Now), Group, Now, Key, State).
 
 publishing_from({ok, Epoch}, _Group, _Now, _Key, State) ->
     {reply, {ok, Epoch}, State};
 publishing_from({error, no_current_epoch}, Group, Now, Key, State) ->
-    pulled_to_publish(pull(<<"current">>, live(Group, Now), Key, State), Now, Key, State).
+    Live = live(Key, Now, State),
+    pulled_to_publish(pull(<<"current">>, Live, Group, Key, State), Live, Now, Key, State).
 
-pulled_to_publish({ok, #{epochs := Epochs} = Group}, Now, Key, State) ->
-    {reply, closed(macula_group_epoch:for_publish(Epochs, Now)), scheduled(Group, Key, State)};
-pulled_to_publish({error, Reason, Group}, _Now, Key, State) ->
-    {reply, {error, Reason}, backed_off(Group, Key, State)}.
+pulled_to_publish({ok, Group, Epochs}, _Live, Now, Key, State) ->
+    {reply, closed(macula_group_epoch:for_publish(Epochs, Now)), scheduled(Group, Epochs, Key, State)};
+pulled_to_publish({error, Reason, Group}, Live, _Now, Key, State) ->
+    {reply, {error, Reason}, backed_off(Group, Live, Key, State)}.
 
 closed({ok, Epoch}) -> {ok, Epoch};
 closed({error, no_current_epoch}) -> {error, no_distributor}.
 
-opening(Id, Publisher, #{epochs := Epochs} = Group, Now, Key, State) ->
-    held(lists:search(fun(#{id := E}) -> E =:= Id end, Epochs), Id, Publisher, Group, Now, Key, State).
+opening(Id, Publisher, Group, Now, Key, State) ->
+    held(lists:search(fun(#{id := E}) -> E =:= Id end, held_epochs(Key, State)), Id, Publisher, Group, Now, Key, State).
 
 held({value, Epoch}, _Id, _Publisher, _Group, Now, _Key, State) ->
     {reply, acceptable(macula_group_epoch:acceptable(Epoch, Now), Epoch), State};
@@ -401,18 +424,20 @@ charged(Publisher, Entry, #{budget := Budget} = Group) ->
 budgeted(exhausted, _Id, _Now, _Key, State) ->
     {reply, {error, unknown_epoch}, State};
 budgeted({ok, Group}, Id, Now, Key, State) ->
-    by_id(pull(Id, Group, Key, State), Id, Now, Key, State).
+    Held = held_epochs(Key, State),
+    by_id(pull(Id, Held, Group, Key, State), Held, Id, Now, Key, State).
 
-by_id({ok, #{epochs := Epochs} = Group}, Id, Now, Key, State) ->
-    {reply, answered_by_id(lists:search(fun(#{id := E}) -> E =:= Id end, Epochs), Now), stored(Group, Key, State)};
-by_id({error, unknown_epoch, #{unknown := Unknown} = Group}, Id, Now, Key, State) ->
-    {reply, {error, unknown_epoch}, stored(Group#{unknown := Unknown#{Id => Now + ?EVENT_LIFE_MS}}, Key, State)};
-by_id({error, Reason, Group}, _Id, _Now, Key, State) ->
-    {reply, {error, Reason}, stored(Group, Key, State)}.
+by_id({ok, Group, Epochs}, _Held, Id, Now, Key, State) ->
+    {reply, answered_by_id(lists:search(fun(#{id := E}) -> E =:= Id end, Epochs), Now),
+     stored(Group, Epochs, Key, State)};
+by_id({error, unknown_epoch, #{unknown := Unknown} = Group}, Held, Id, Now, Key, State) ->
+    {reply, {error, unknown_epoch}, stored(Group#{unknown := Unknown#{Id => Now + ?EVENT_LIFE_MS}}, Held, Key, State)};
+by_id({error, Reason, Group}, Held, _Id, _Now, Key, State) ->
+    {reply, {error, Reason}, stored(Group, Held, Key, State)}.
 
-%% The held epochs still of use; the others' keys are erased.
-live(#{epochs := Epochs} = Group, Now) ->
-    Group#{epochs := macula_group_epoch:live(Epochs, Now)}.
+%% The group's held epochs still of use; the others' keys are erased when the result is stored.
+live(Key, Now, State) ->
+    macula_group_epoch:live(held_epochs(Key, State), Now).
 
 %%--------------------------------------------------------------------
 %% Covering prefixes

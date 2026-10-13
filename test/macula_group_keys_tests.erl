@@ -10,6 +10,9 @@
 
 -include_lib("eunit/include/eunit.hrl").
 
+%% The logger handler the crash report case captures events with.
+-export([log/2]).
+
 -define(MIN, 60000).
 -define(R, (15 * ?MIN)).
 -define(ORG, <<"acme">>).
@@ -29,7 +32,8 @@ distributor_test_() ->
       fun another_orgs_group_is_refused/1,
       fun a_prefix_without_an_org_segment_is_refused/1,
       fun a_call_without_a_caller_is_refused/1,
-      fun the_policy_rides_every_reply/1]}.
+      fun the_policy_rides_every_reply/1,
+      fun no_epoch_key_shows_in_its_state_or_status_and_no_other_process_reads_its_table/1]}.
 
 setup() ->
     Now = counters:new(1, []),
@@ -154,6 +158,73 @@ a_call_without_a_caller_is_refused(#{handler := Handler}) ->
 
 the_policy_rides_every_reply(W) ->
     ?_assertMatch(#{policy := {text, <<"required">>}}, call(W, member(W), {text, <<"current">>})).
+
+%% The epochs live in a private table: the state holds its id only, so neither sys:get_state/1 nor sys:get_status/1
+%% shows a key, and the table refuses every other process.
+no_epoch_key_shows_in_its_state_or_status_and_no_other_process_reads_its_table(#{pid := Pid} = W) ->
+    ?_test(begin
+        [#{key := Key} | _] = epochs(call(W, member(W), {text, <<"current">>})),
+        ?assertNot(holds(sys:get_state(Pid), Key)),
+        ?assertNot(holds(sys:get_status(Pid), Key)),
+        Tables = [T || T <- ets:all(), ets:info(T, owner) =:= Pid],
+        ?assertEqual([private], lists:usort([ets:info(T, protection) || T <- Tables])),
+        ?assertError(badarg, ets:tab2list(hd(Tables)))
+    end).
+
+%% A pool named rather than given as a pid is looked up at every read: while no pool holds the name, a pull is
+%% membership_unknown and the distributor stays up.
+a_named_pool_that_is_not_running_is_membership_unknown_test() ->
+    {ok, Pid} = macula_group_keys:start_link(#{org => ?ORG, policy => required, pool => macula_group_keys_tests_no_pool,
+                                               realm => <<1:256>>, realm_key_id => <<2:256>>, profile => pq_hybrid}),
+    Handler = macula_group_keys:handler(Pid),
+    Pull = #{{text, <<"prefix">>} => {text, ?PREFIX}, {text, <<"epoch">>} => {text, <<"current">>}, caller => <<3:256>>},
+    ?assertEqual({error, membership_unknown}, Handler(Pull)),
+    ?assert(is_process_alive(Pid)),
+    unlink(Pid),
+    exit(Pid, shutdown).
+
+%% A distributor that crashes after serving a key logs no form of it: not in the report's terms, not in its text.
+a_crash_report_carries_no_epoch_key_test() ->
+    Trapping = process_flag(trap_exit, true),
+    {ok, Pid} = macula_group_keys:start_link(#{org => ?ORG, policy => required, membership => fun(_) -> ok end}),
+    Handler = macula_group_keys:handler(Pid),
+    #{epochs := [#{key := Key} | _]} =
+        Handler(#{{text, <<"prefix">>} => {text, ?PREFIX}, {text, <<"epoch">>} => {text, <<"current">>},
+                  caller => <<1:256>>}),
+    Events = captured(fun() ->
+                          try gen_server:call(Pid, not_a_pull) catch exit:_ -> ok end,
+                          receive {'EXIT', Pid, _} -> ok after 5_000 -> still_running end
+                      end),
+    _ = process_flag(trap_exit, Trapping),
+    ?assertNotEqual([], Events),
+    ?assertEqual([], [E || E <- Events, holds(E, Key) orelse holds(formatted(E), printed(Key))]).
+
+holds(Term, Bytes) when is_binary(Term) -> binary:match(Term, Bytes) =/= nomatch;
+holds(Term, Bytes) -> holds(term_to_binary(Term), Bytes).
+
+%% A key as a report prints it: its bytes as decimal integers, comma separated.
+printed(Key) ->
+    iolist_to_binary(lists:join(",", [integer_to_list(Byte) || <<Byte>> <= Key])).
+
+formatted(Event) ->
+    Config = #{single_line => true, legacy_header => false, chars_limit => unlimited, depth => unlimited,
+               max_size => unlimited},
+    unicode:characters_to_binary(logger_formatter:format(Event, Config)).
+
+%% The events every handler receives while Act runs, through a handler added for the run.
+captured(Act) ->
+    Id = list_to_atom("macula_group_keys_capture_" ++ integer_to_list(erlang:unique_integer([positive]))),
+    ok = logger:add_handler(Id, ?MODULE, #{config => #{test => self()}, level => all, filter_default => log}),
+    _ = Act(),
+    timer:sleep(500),
+    ok = logger:remove_handler(Id),
+    drained([]).
+
+log(Event, #{config := #{test := Test}}) ->
+    Test ! {captured, Event}.
+
+drained(Events) ->
+    receive {captured, Event} -> drained([Event | Events]) after 0 -> lists:reverse(Events) end.
 
 %% A key never travels clear (docs/design/DESIGN_E2E_SEALED_PUBSUB.md §2): the distributor's own advertise options take the
 %% org's grant AND sealed calls only. With the node's KEM key named they make the spec whose provider link refuses a

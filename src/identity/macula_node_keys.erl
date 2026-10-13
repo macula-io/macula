@@ -355,8 +355,9 @@ load(Path, Purpose, Profile) ->
 %% @doc A term with the private half of every key it holds replaced by the atom `redacted', at any depth: the private
 %% value of every map that holds both a public and a private value, as node key components and key pairs do, and every
 %% sealed call's or stream's secret by name, in any map: its keys (`k_req', `k_rep', `k_c2p', `k_p2c') and a KEM
-%% private key's halves (`mlkem_dk', `p384_priv'). A function that captured values is replaced by its printed form,
-%% since what it captured can hold a key.
+%% private key's halves (`mlkem_dk', `p384_priv'); and a sealed group's epoch key (the `key' of a map that is an epoch
+%% of macula_group_epoch). A function that captured values is replaced by its printed form, since what it captured can
+%% hold a key.
 -spec redacted(term()) -> term().
 redacted(Term) ->
     redacted(Term, #{}).
@@ -887,6 +888,8 @@ tag_algorithm(_) -> error.
 
 redacted(#{public := _, private := _} = Map, Modules) ->
     maps:map(redacted_value(Modules), Map#{private := redacted});
+redacted(#{id := <<_:64>>, key := <<_:256>>, accept_until := _} = Epoch, Modules) ->
+    maps:map(redacted_value(Modules), Epoch#{key := redacted});
 redacted(Map, Modules) when is_map(Map) ->
     maps:map(redacted_value(Modules), Map);
 redacted([Head | Tail], Modules) ->

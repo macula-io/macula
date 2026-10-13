@@ -150,6 +150,16 @@ tombstone), and §8's bound runs from then.
   restarted distributor makes a new current epoch at once. Members holding the lost epochs keep reading under them until
   their `accept_until`. A member that never pulled a lost epoch cannot open events sealed under it, and says so (§7).
   At most one rotation's events (about 80 minutes of delivery) are affected, and none silently.
+- **Where a node holds them, and what shows them** (mcl-distributor#1). No epoch key is in a group process's state:
+  the distributor keeps its epochs in a private table only its process reads, and the keyring keeps them in its
+  table only. So `sys:get_state/1`, `sys:get_status/1` and a crash report show no key, and both processes'
+  `format_status/1` redacts every epoch's key (`macula_node_keys:redacted/1`) as a second line of defence. The
+  keyring's state does keep each group's UCAN, which is bound to its audience and is no key. The
+  keyring's table stays protected, because publishers and openers read it without the keyring's process: any code
+  running on the node can read the epoch keys. A crash dump lists a table's size, never its rows, but it copies every
+  process heap, where an epoch passes on its way out, so a node holding a group's keys runs with crash dumps off.
+  The distributor's `pool` may be the pool's registered name, looked up at every membership read: a pid captured once
+  dies with a pool restart, and every read after it would crash the distributor.
 
 ## 5. The procedure: `<org>/group_keys_v1`
 
