@@ -1457,10 +1457,17 @@ rowed(false, _Record) -> {error, lifetime_class_mismatch}.
 
 %% A reader's checks past the custodian's (WIRE_1_0.md 5.2, steps 10 to 12): the type, the schema; an unknown critical
 %% extension; the payload rules, the content id's tag and the named signer, in that order.
-read_checked({ok, #{type := Type} = Record}, Profile) ->
-    type_read(built_in_1_0(Type) orelse domain_tag(Type), Record, Profile);
+read_checked({ok, #{type := Type, payload := Payload} = Record}, Profile) ->
+    type_read(known_type(Type, Payload), Record, Profile);
 read_checked({error, _} = Refused, _Profile) ->
     Refused.
+
+%% A tombstone is known as far as the type it withdraws (WIRE_1_0.md 5.1): a custodian stores one withdrawing a tag it
+%% does not know, and a reader that does not know that tag refuses it.
+known_type(?TYPE_TOMBSTONE, #{{text, <<"withdrawn_type">>} := Withdrawn}) when Withdrawn =/= ?TYPE_TOMBSTONE ->
+    known_type(Withdrawn, #{});
+known_type(Type, _Payload) ->
+    built_in_1_0(Type) orelse domain_tag(Type).
 
 type_read(false, _Record, _Profile) -> {error, type_unknown};
 type_read(true, #{type := Type, schema := Schema} = Record, Profile) ->

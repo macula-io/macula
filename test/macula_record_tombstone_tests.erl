@@ -127,9 +127,10 @@ tombstone_payloads_the_design_does_not_allow_are_malformed_test() ->
     ?assertEqual({error, malformed}, Verify(Good#{{text, <<"replaced_at">>} => 1}, Id)),
     ?assertEqual({error, malformed}, Verify(Good#{{text, <<"withdrawn_type">>} := 16#0C}, Id)),
     %% A tombstone of a tag wire 1.0 does not define is placed by its subject (WIRE_1_0.md 5.2): without one a
-    %% custodian cannot place it; with one, a reader still refuses what it withdraws as no type it knows.
+    %% custodian cannot place it; with one, a reader refuses it as type_unknown, since it does not know what it
+    %% withdraws (WIRE_1_0.md 5.1).
     ?assertEqual({error, subject_missing}, Verify(Good#{{text, <<"withdrawn_type">>} := 16#07}, Id)),
-    ?assertEqual({error, malformed}, Verify(Good#{{text, <<"withdrawn_type">>} := 16#07,
+    ?assertEqual({error, type_unknown}, Verify(Good#{{text, <<"withdrawn_type">>} := 16#07,
                                                   {text, <<"subject">>} => <<"s">>}, Id)),
     ?assertEqual({error, malformed}, Verify(Good#{{text, <<"detail">>} => <<"not text">>}, Id)),
     ?assertEqual({error, malformed}, Verify(Good#{{text, <<"realm_id">>} => fill(16#11)}, Id)),

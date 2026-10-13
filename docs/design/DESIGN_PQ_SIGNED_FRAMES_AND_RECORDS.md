@@ -180,6 +180,11 @@ About 7.3 KB / 8.3 KB before the payload: 2,592 / 3,118 bytes of key and 4,627 /
   ahead. A signer refuses to sign any other record, and every verifier refuses one as `lifetime_too_long`, or as
   `lifetime_reversed` when it expires before it is created. With `created_at` at most 5 minutes ahead, no domain
   record a station accepts expires more than 7 days and 5 minutes after it arrives.
+- **Withdrawing a later tag.** A custodian reads one payload field of a tombstone, `withdrawn_type`. A tombstone
+  withdrawing a tag the custodian does not know is stored content-blind, bounded by the row it names plus 10
+  minutes, never `lifetime_class_mismatch`, at that tag's slot under the signer's key id and the payload's `subject`
+  (`subject_missing` without one), so a record of a later type can be revoked early. A reader that does not know the
+  withdrawn tag refuses the tombstone as `type_unknown`.
 - **Reserved tag.** 0x14 is the successor (key-rotation) record. Its payload is designed later; a reader refuses it
   as `type_unknown` and a custodian stores it.
 - **Realm member endorsement window.** Its payload's `valid_until` is not before its `valid_from`, and at most 30 days

@@ -74,6 +74,9 @@ break: a node on it no longer reads the frames of an older one.
   signs its advertisement naming its own station and every other station the pool holds a connected link to (from
   `macula_client:links/1`), so the one record per provider and procedure carries the whole set; direct dial makes a
   candidate of every station named.
+- **A tombstone withdrawing a tag the custodian does not know is stored** (WIRE_1_0.md 5.1), bounded by the row it
+  names plus 10 minutes, at that tag's slot under the signer's key id and the payload's `subject`, so a later type
+  can be revoked early; a reader that does not know the withdrawn tag refuses it as `type_unknown`.
 - **Tag 0x14 is reserved** for the successor (key-rotation) record (`type_successor/0`), row 5.
 - **The wire 1.0 record conformance runner** (`macula_record_wire_1_0_conformance_tests`) runs every record case of
   `priv/vectors/wire_1_0/` (verify, custodian, check_order, tbs), comparing a custodian case's `slot` with

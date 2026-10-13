@@ -200,6 +200,34 @@ the_custodian_checks_in_the_pinned_order_test() ->
     ?assertEqual({error, signature_invalid}, custodian(Object#{signature := <<(B bxor 1), Rest/binary>>})).
 
 %%------------------------------------------------------------------
+%% A tombstone withdrawing a tag the custodian does not know
+%%------------------------------------------------------------------
+
+%% WIRE_1_0.md 5.1: a custodian stores a tombstone withdrawing a tag it does not know, so a later type can be revoked
+%% early: bounded by the row it names plus 10 minutes, never lifetime_class_mismatch, at the unknown tag's slot under
+%% its signer's key id and the payload's subject. A reader that does not know the withdrawn tag refuses type_unknown.
+a_tombstone_withdrawing_an_unknown_tag_is_stored_under_the_tags_slot_test() ->
+    Id = key(identity),
+    Object = unknown_tag_tombstone(Id, 40 * ?MINUTE, #{{text, <<"subject">>} => <<"subject">>}),
+    {ok, Record} = custodian(Object),
+    KeyId = macula_node_keys:key_id(macula_node_keys:public_key(Id), pq_pure),
+    ?assertEqual(crypto:hash(sha256, [<<?STORAGE_KEY_LABEL, 0:8, 16#18:8>>, KeyId, <<7:32>>, <<"subject">>]),
+                 macula_record:storage_key(Record)),
+    ?assertEqual({error, type_unknown}, verify(Object)).
+
+a_tombstone_withdrawing_an_unknown_tag_is_bounded_by_its_row_test() ->
+    Id = key(identity),
+    Over = unknown_tag_tombstone(Id, 40 * ?MINUTE + 1, #{{text, <<"subject">>} => <<"subject">>}),
+    ?assertEqual({error, lifetime_too_long}, custodian(Over)),
+    ?assertEqual({error, lifetime_too_long}, verify(Over)).
+
+a_tombstone_withdrawing_an_unknown_tag_needs_a_subject_test() ->
+    Id = key(identity),
+    NoSubject = unknown_tag_tombstone(Id, 40 * ?MINUTE, #{}),
+    ?assertEqual({error, subject_missing}, custodian(NoSubject)),
+    ?assertEqual({error, subject_missing}, verify(NoSubject)).
+
+%%------------------------------------------------------------------
 %% The alg allowlist is the verifier's own profile
 %%------------------------------------------------------------------
 
@@ -259,3 +287,14 @@ unknown_fields(Type, Overrides) ->
 
 unknown_tag(Type, Key, Overrides) ->
     macula_signed_object:sign(?LABEL, unknown_fields(Type, Overrides), Key).
+
+%% A tombstone of tag 0x18, which wire 1.0 does not define, in row 1 (30 minutes), living Lifetime.
+unknown_tag_tombstone(Key, Lifetime, Slot) ->
+    Now = erlang:system_time(millisecond),
+    Payload = Slot#{{text, <<"withdrawn_type">>} => 16#18, {text, <<"withdrawn_version">>} => <<1:128>>,
+                    {text, <<"reason">>} => {text, <<"revoked">>}},
+    macula_signed_object:sign(?LABEL, #{{text, <<"type">>} => 16#0C,
+                                        {text, <<"version">>} => macula_record_uuid:v7_monotonic(Now),
+                                        {text, <<"schema">>} => 1, {text, <<"lifetime_class">>} => 1,
+                                        {text, <<"created_at">>} => Now, {text, <<"expires_at">>} => Now + Lifetime,
+                                        {text, <<"payload">>} => Payload}, Key).
