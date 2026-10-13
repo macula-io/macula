@@ -779,11 +779,12 @@ a_published_advertisement_is_signed_by_the_node_identity_and_put_as_its_wire_for
     meck:expect(macula_client, call_linked_station,
                 fun(_Pool, _Realm, Procedure, Payload, _TimeoutMs) ->
                         Test ! {called, Procedure, Payload},
-                        {ok, ok}
+                        {ok, #{{text, <<"v">>} => 1, {text, <<"result">>} => {text, <<"ok">>}}}
                 end),
     ?assertEqual(ok, macula_direct_dial:publish_advertisement(self(), ?REALM, ?PROC, Provider)),
     ?assertEqual(pool_signed, receive pool_signed -> pool_signed after 1000 -> not_signed_by_the_pool end),
-    {<<"_dht.put_record">>, Wire} = receive {called, P, W} -> {P, W} after 1000 -> erlang:error(not_put) end,
+    {<<"_dht.put_record">>, #{v := 1, record := Wire}} =
+        receive {called, P, W} -> {P, W} after 1000 -> erlang:error(not_put) end,
     {ok, Verified} = macula_record:verify(Wire, profile()),
     ?assertEqual(#{realm_id => ?REALM, procedure => ?PROC, advertiser_node => macula_node_keys:key_id(Provider),
                    serving_stations => [StationId], authorization => undefined},

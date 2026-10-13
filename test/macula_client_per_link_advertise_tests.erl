@@ -307,7 +307,8 @@ sorted_frame(#{frame_type := advertise, advertisement := Encoded}, _Profile, Ads
 sorted_frame(#{frame_type := unadvertise, withdrawal := Encoded}, _Profile, Ads, Puts) ->
     {[Encoded | Ads], Puts};
 sorted_frame(#{frame_type := call} = Frame, Profile, Ads, Puts) ->
-    {ok, #{payload := Wire}} = macula_frame:verify_request(Frame, Profile),
+    {ok, #{payload := Args}} = macula_frame:verify_request(Frame, Profile),
+    {ok, Wire} = macula_dht_procedures:read_args(put_record, Args),
     {Ads, [Wire | Puts]}.
 
 %% The withdrawal bytes of the next UNADVERTISE frames and the record bytes of
@@ -348,11 +349,18 @@ version(Encoded) ->
     {ok, #{version := Version}} = macula_record:verify(Encoded, Profile),
     Version.
 
-%% A put is ok when the station answers ok, which crosses the wire as text;
-%% anything else is named.
+%% A put is ok when the station answers {v 1, result ok} (WIRE_1_0.md section
+%% 6); a refusal comes back by the custodian's name, and any other shape is
+%% named, a bare legacy ok among them.
 a_put_reply_reads_ok_only_when_the_station_says_ok_test() ->
-    ?assertEqual(ok, macula_station_link:wire_put({ok, ok})),
-    ?assertEqual(ok, macula_station_link:wire_put({ok, {text, <<"ok">>}})),
-    ?assertEqual({error, {unexpected_reply, {text, <<"stored 0">>}}},
-                 macula_station_link:wire_put({ok, {text, <<"stored 0">>}})),
-    ?assertEqual({error, timeout}, macula_station_link:wire_put({error, timeout})).
+    Reply = fun(Fields) -> {ok, maps:merge(#{{text, <<"v">>} => 1}, Fields)} end,
+    ?assertEqual(ok, macula_station_link:put_replied(Reply(#{{text, <<"result">>} => {text, <<"ok">>}}))),
+    ?assertEqual({error, {store_refused, <<"lifetime_too_long">>}},
+                 macula_station_link:put_replied(Reply(#{{text, <<"result">>} => {text, <<"refused">>},
+                                                         {text, <<"reason">>} => {text, <<"lifetime_too_long">>}}))),
+    ?assertEqual({error, malformed_reply}, macula_station_link:put_replied({ok, {text, <<"ok">>}})),
+    ?assertEqual({error, malformed_reply}, macula_station_link:put_replied({ok, {text, <<"stored 0">>}})),
+    ?assertEqual({error, reply_version_unsupported},
+                 macula_station_link:put_replied({ok, #{{text, <<"v">>} => 2,
+                                                        {text, <<"result">>} => {text, <<"ok">>}}})),
+    ?assertEqual({error, timeout}, macula_station_link:put_replied({error, timeout})).

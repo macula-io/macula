@@ -621,17 +621,13 @@ unadvertise(Pool, Realm, Procedure) ->
 %%%   - `subscribe_records/3'     — receive new records of a type
 %%%                                 as they are stored
 
-%% Procedure + topic shape — hidden from API consumers but exposed
-%% as documentation. The relay backend (macula-station)
-%% MUST advertise these procedures and publish on the per-type
-%% record-stored topic for the SDK to function. DHT traffic travels
+%% The relay backend (macula-station) MUST serve the `_dht.*'
+%% procedures in the shapes of `macula_dht_procedures' (WIRE_1_0.md
+%% section 6) and publish on the per-type record-stored topic for the
+%% SDK to function. DHT traffic travels
 %% under the all-zeros realm tag (protocol-internal infrastructure;
 %% the same convention `macula_dist_pool' uses for tunnel frames).
 -define(DHT_REALM,                     <<0:256>>).
--define(DHT_PUT_RECORD_PROC,           <<"_dht.put_record">>).
--define(DHT_FIND_RECORD_PROC,          <<"_dht.find_record">>).
--define(DHT_FIND_RECORDS_PROC,         <<"_dht.find_records">>).
--define(DHT_FIND_RECORDS_BY_TYPE_PROC, <<"_dht.find_records_by_type">>).
 -define(DHT_RECORD_TIMEOUT_MS,         5_000).
 
 %% @doc Store a signed record in the mesh DHT via a V2 pool.
@@ -650,6 +646,10 @@ unadvertise(Pool, Realm, Procedure) ->
 %% (`macula_record:encode/1'). The record travels as its
 %% wire form; the station verifies it on receipt and stores it under
 %% `macula_record:storage_key/1', propagating to the K-nearest peers.
+%% A station that refuses to store it answers with the custodian's
+%% refusal name, returned as `{error, {store_refused, Reason}}' with
+%% `Reason' that name as text; a reply in another shape is
+%% `{error, reply_version_unsupported}' or `{error, malformed_reply}'.
 -spec put_record(pool(), m_record() | binary()) -> ok | {error, term()}.
 put_record(Pool, #{key := _, tbs := _, signature := _} = Signed) when is_pid(Pool) ->
     put_record(Pool, macula_record:encode(Signed));
@@ -661,16 +661,25 @@ put_record(Pool, Wire) when is_pid(Pool), is_binary(Wire) ->
     %% macula_station_link:put_record/3 paces a caller that writes straight
     %% through a link.
     ok = macula_store_pacer:await(Pool, byte_size(Wire)),
-    classify_put(macula_client:call_linked_station(Pool, ?DHT_REALM,
-                                    ?DHT_PUT_RECORD_PROC,
-                                    Wire, ?DHT_RECORD_TIMEOUT_MS)).
+    classify_put(dht_call(Pool, put_record, Wire, ?DHT_RECORD_TIMEOUT_MS)).
 
 classify_put({ok, ok})                    -> ok;
-%% The reply's atom crossed the wire as text and decoded back to the
-%% codec's {text, _} marker (D26 makes no atom on the wire).
-classify_put({ok, {text, <<"ok">>}})      -> ok;
-classify_put({ok, Reply})                 -> {error, {unexpected_reply, Reply}};
+classify_put({ok, {refused, Reason}})     -> {error, {store_refused, Reason}};
 classify_put({error, _} = E)              -> E.
+
+%% A `_dht.*' call in the 1.0 shapes (WIRE_1_0.md section 6): the
+%% arguments as `{v 1, ...}', the reply read as its procedure answers, an
+%% unknown `v' as reply_version_unsupported and any other shape as
+%% malformed_reply.
+dht_call(Pool, Procedure, Argument, TimeoutMs) ->
+    dht_replied(Procedure,
+                macula_client:call_linked_station(Pool, ?DHT_REALM,
+                                                  macula_dht_procedures:procedure_name(Procedure),
+                                                  macula_dht_procedures:args(Procedure, Argument),
+                                                  TimeoutMs)).
+
+dht_replied(Procedure, {ok, Reply}) -> macula_dht_procedures:read_reply(Procedure, Reply);
+dht_replied(_Procedure, {error, _} = E) -> E.
 
 %% @doc Fetch a record from the mesh DHT by its
 %% `macula_record:storage_key/1'.
@@ -691,17 +700,11 @@ find_record(Pool, Key) ->
 find_record(Pool, Key, TimeoutMs)
   when is_pid(Pool), is_binary(Key), byte_size(Key) =:= 32,
        is_integer(TimeoutMs), TimeoutMs > 0 ->
-    classify_find(macula_client:call_linked_station(Pool, ?DHT_REALM,
-                                     ?DHT_FIND_RECORD_PROC,
-                                     #{key => Key}, TimeoutMs)).
+    classify_find(dht_call(Pool, find_record, Key, TimeoutMs)).
 
-classify_find({ok, Wire}) when is_binary(Wire) ->
+classify_find({ok, {record, Wire}}) ->
     with_profile(fun(Profile) -> macula_record:verify(Wire, Profile) end);
 classify_find({ok, not_found})                -> {error, not_found};
-%% The reply's atom crossed the wire as text and decoded back to the
-%% codec's {text, _} marker (D26 makes no atom on the wire).
-classify_find({ok, {text, <<"not_found">>}}) -> {error, not_found};
-classify_find({ok, Reply})                    -> {error, {unexpected_reply, Reply}};
 classify_find({error, _} = E)                 -> E.
 
 %% @doc Fetch EVERY record stored at `Key' — the full multi-value
@@ -725,13 +728,7 @@ find_records(Pool, Key) ->
 find_records(Pool, Key, TimeoutMs)
   when is_pid(Pool), is_binary(Key), byte_size(Key) =:= 32,
        is_integer(TimeoutMs), TimeoutMs > 0 ->
-    classify_find_list(macula_client:call_linked_station(Pool, ?DHT_REALM,
-                                          ?DHT_FIND_RECORDS_PROC,
-                                          #{key => Key}, TimeoutMs)).
-
-classify_find_list({ok, Wires}) when is_list(Wires) -> verified_records(Wires);
-classify_find_list({ok, Reply})    -> {error, {unexpected_reply, Reply}};
-classify_find_list({error, _} = E) -> E.
+    classify_list(dht_call(Pool, find_records, Key, TimeoutMs)).
 
 %% @doc Return every record of a given type currently visible from
 %% the pool's connected stations, each verified under the node's
@@ -745,13 +742,9 @@ classify_find_list({error, _} = E) -> E.
     {ok, [m_record()]} | {error, term()}.
 find_records_by_type(Pool, Type)
   when is_pid(Pool), is_integer(Type), Type >= 0, Type =< 255 ->
-    classify_list(macula_client:call_linked_station(Pool, ?DHT_REALM,
-                                     ?DHT_FIND_RECORDS_BY_TYPE_PROC,
-                                     #{type => Type},
-                                     ?DHT_RECORD_TIMEOUT_MS)).
+    classify_list(dht_call(Pool, find_records_by_type, Type, ?DHT_RECORD_TIMEOUT_MS)).
 
-classify_list({ok, Wires}) when is_list(Wires) -> verified_records(Wires);
-classify_list({ok, Reply})    -> {error, {unexpected_reply, Reply}};
+classify_list({ok, {records, Wires}}) -> verified_records(Wires);
 classify_list({error, _} = E) -> E.
 
 %% The records among Wires that verify under the node's crypto profile;

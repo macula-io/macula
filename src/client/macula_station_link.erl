@@ -200,9 +200,9 @@
 
 -ifdef(TEST).
 -export([with_client_stream/3, advertisement_opts/3]).
-%% How a DHT put's reply reads (macula#33), asserted directly: a peer that
-%% answers a CALL needs a station's signed reply.
--export([wire_put/1]).
+%% How a DHT put's reply reads (macula#33, WIRE_1_0.md section 6), asserted
+%% directly: a peer that answers a CALL needs a station's signed reply.
+-export([put_replied/1]).
 %% The seed gate, exported so a test can assert the refusal directly rather
 %% than infer it from a link that failed to start.
 -export([seed_checked/4]).
@@ -782,8 +782,10 @@ publish(Pid, Realm, Topic, Payload, Seq, {group, #{id := <<_:64>>, key := <<_:25
 %% @doc Convenience wrapper for `_dht.put_record'. The record must be
 %% a fully-signed `macula_record:m_record()' map (build via
 %% `macula_record:envelope/3,4' + `macula_record:sign/2'). Returns
-%% `ok' on success, `{error, Reason}' on RPC failure or unexpected
-%% reply.
+%% `ok' on success, `{error, {store_refused, Reason}}' when the station
+%% refuses to store it (Reason its refusal name, as text), and
+%% `{error, Reason}' on a call failure or a reply in another shape
+%% (reply_version_unsupported, malformed_reply).
 %%
 %% Stations replicate the put across the K-nearest peers in their
 %% Kademlia routing table, so a single `put_record/2' call against
@@ -799,55 +801,65 @@ put_record(Pid, Record) ->
 put_record(Pid, Record, TimeoutMs) when is_pid(Pid), is_map(Record) ->
     %% Record bytes paced per connection, so a bulk writer stays under the
     %% station's STORE allowance (D28, 3.5) instead of running into stored 0.
-    ok = macula_store_pacer:await(Pid, byte_size(macula_record:encode(Record))),
-    classify_put(call(Pid, station, ?DHT_REALM,<<"_dht.put_record">>,
-                      Record, TimeoutMs)).
+    Wire = macula_record:encode(Record),
+    ok = macula_store_pacer:await(Pid, byte_size(Wire)),
+    put_replied(dht_call(Pid, put_record, Wire, TimeoutMs)).
 
-classify_put({ok, ok})       -> ok;
-classify_put({ok, Other})    -> {error, {unexpected_reply, Other}};
-classify_put({error, _} = E) -> E.
+%% A put's call result: ok, the station's refusal by name, or the call's or
+%% the reply shape's error.
+put_replied(Result) ->
+    classify_put(dht_replied(put_record, Result)).
+
+classify_put({ok, ok})                -> ok;
+classify_put({ok, {refused, Reason}}) -> {error, {store_refused, Reason}};
+classify_put({error, _} = E)          -> E.
+
+%% A `_dht.*' call in the 1.0 shapes (WIRE_1_0.md section 6, macula_dht_procedures).
+dht_call(Pid, Procedure, Argument, TimeoutMs) ->
+    call(Pid, station, ?DHT_REALM, macula_dht_procedures:procedure_name(Procedure),
+         macula_dht_procedures:args(Procedure, Argument), TimeoutMs).
+
+dht_replied(Procedure, {ok, Reply}) -> macula_dht_procedures:read_reply(Procedure, Reply);
+dht_replied(_Procedure, {error, _} = E) -> E.
 
 %% @doc Convenience wrapper for `_dht.find_record'. Looks up a record
 %% by its `macula_record:storage_key/1': 32 bytes, either the record's own
 %% key (for some record types) or a SHA-256 digest (for the rest).
-%% Returns `{error, not_found}' when no record exists at the key.
-%% Callers SHOULD verify the returned record's signature with
-%% `macula_record:verify/1' before trusting its payload.
+%% Returns the record's wire form, or `{error, not_found}' when no
+%% record exists at the key. A caller verifies it as a reader with
+%% `macula_record:verify/3' before acting on it.
 -spec find_record(pid(), <<_:256>>) ->
-    {ok, map()} | {error, not_found | term()}.
+    {ok, binary()} | {error, not_found | term()}.
 find_record(Pid, Key) ->
     find_record(Pid, Key, ?DEFAULT_DEADLINE_MS).
 
 -spec find_record(pid(), <<_:256>>, pos_integer()) ->
-    {ok, map()} | {error, not_found | term()}.
+    {ok, binary()} | {error, not_found | term()}.
 find_record(Pid, Key, TimeoutMs)
   when is_pid(Pid), is_binary(Key), byte_size(Key) =:= 32 ->
-    classify_find(call(Pid, station, ?DHT_REALM,<<"_dht.find_record">>,
-                       #{key => Key}, TimeoutMs)).
+    classify_find(dht_replied(find_record, dht_call(Pid, find_record, Key, TimeoutMs))).
 
-classify_find({ok, #{type := _, payload := _, signature := _} = R}) -> {ok, R};
-classify_find({ok, not_found})   -> {error, not_found};
-classify_find({ok, Other})       -> {error, {unexpected_reply, Other}};
-classify_find({error, _} = E)    -> E.
+classify_find({ok, {record, Wire}}) -> {ok, Wire};
+classify_find({ok, not_found})      -> {error, not_found};
+classify_find({error, _} = E)       -> E.
 
 %% @doc Convenience wrapper for `_dht.find_records_by_type'. Returns
-%% the decoded list of signed records (CBOR-decoded maps as produced
-%% by `macula_record').
+%% the wire forms of the records of that type the station holds,
+%% possibly none, each to verify as a reader with
+%% `macula_record:verify/3' before acting on it.
 -spec find_records_by_type(pid(), 0..255) ->
-    {ok, [map()]} | {error, term()}.
+    {ok, [binary()]} | {error, term()}.
 find_records_by_type(Pid, Type) ->
     find_records_by_type(Pid, Type, ?DEFAULT_DEADLINE_MS).
 
 -spec find_records_by_type(pid(), 0..255, pos_integer()) ->
-    {ok, [map()]} | {error, term()}.
+    {ok, [binary()]} | {error, term()}.
 find_records_by_type(Pid, Type, TimeoutMs)
   when is_integer(Type), Type >= 0, Type =< 255 ->
-    classify_records(call(Pid, station, ?DHT_REALM,<<"_dht.find_records_by_type">>,
-                          #{type => Type}, TimeoutMs)).
+    classify_records(dht_replied(find_records_by_type, dht_call(Pid, find_records_by_type, Type, TimeoutMs))).
 
-classify_records({ok, Records}) when is_list(Records) -> {ok, Records};
-classify_records({ok, Other})                          -> {error, {unexpected_reply, Other}};
-classify_records({error, _} = E)                       -> E.
+classify_records({ok, {records, Wires}}) -> {ok, Wires};
+classify_records({error, _} = E)         -> E.
 
 %% @doc Subscribe to a peering pubsub topic in `Realm'. Sends a
 %% SUBSCRIBE frame to the connected station and registers
@@ -2788,15 +2800,10 @@ put_wire_in_dht(Wire, Realm, Proc, What) ->
     ok.
 
 %% The wire form, exactly the ADVERTISE frame's bytes, paced like any put
-%% through this link. The reply's `ok' crosses the wire as text.
+%% through this link.
 put_wire(Link, Wire) ->
     ok = macula_store_pacer:await(Link, byte_size(Wire)),
-    wire_put(call(Link, station, ?DHT_REALM, <<"_dht.put_record">>, Wire, ?DEFAULT_DEADLINE_MS)).
-
-wire_put({ok, ok}) -> ok;
-wire_put({ok, {text, <<"ok">>}}) -> ok;
-wire_put({ok, Other}) -> {error, {unexpected_reply, Other}};
-wire_put({error, _} = Refused) -> Refused.
+    put_replied(dht_call(Link, put_record, Wire, ?DEFAULT_DEADLINE_MS)).
 
 wire_put_logged(ok, _Realm, _Proc, _What) ->
     ok;

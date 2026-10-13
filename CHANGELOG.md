@@ -82,6 +82,21 @@ break: a node on it no longer reads the frames of an older one.
   `priv/vectors/wire_1_0/` (verify, custodian, check_order, tbs), comparing a custodian case's `slot` with
   `storage_key/1`.
 
+### Wire 1.0: `_dht.*` procedures (macula#102, design macula#83)
+
+- **Breaking: the `_dht.*` procedures take and answer versioned shapes** (`docs/design/WIRE_1_0.md` section 6), so a
+  client of any language keeps reaching the DHT through an LTS station. Arguments are `{v 1, record}`,
+  `{v 1, key}` or `{v 1, type}`; replies are `{v 1, result ok | refused, reason}`, `{v 1, result record, record}`,
+  `{v 1, result not_found}` or `{v 1, result records, records}`. `macula_dht_procedures` builds and reads both
+  sides: a station refuses other arguments as `malformed_args` before any DHT work, and a caller refuses another
+  `v` as `reply_version_unsupported` and any other shape, a pre-1.0 bare `ok` or `not_found` among them, as
+  `malformed_reply`.
+- **`macula:put_record/2` returns a station's refusal by name**, `{error, {store_refused, Reason}}` with the
+  custodian's refusal as text (in place of `{error, {unexpected_reply, _}}`).
+  `macula_station_link:find_record/2,3` and `find_records_by_type/2,3` return wire forms, to verify as a reader.
+- **The `_dht.*` conformance runner** (`macula_dht_procedures_conformance_tests`) runs every case of
+  `priv/vectors/wire_1_0/dht_procedures.json`, and builds the bytes of every shape it accepts.
+
 ## [14.10.0] - 2026-10-13
 
 ### Security
