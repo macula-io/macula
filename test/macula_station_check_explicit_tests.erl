@@ -112,3 +112,75 @@ direct_dial_dials_through_the_unchecked_variants_test() ->
     #{call_station := CallStation, call_stream_station := CallStream} = macula_direct_dial:default_dial_io(),
     ?assertEqual(fun macula:call_resolved_station/8, CallStation),
     ?assertEqual(fun macula:call_resolved_stream_station/7, CallStream).
+
+%%------------------------------------------------------------------
+%% A pool that pinned the realm's key: the slot is read and judged
+%% (macula_station_check:explicit/4 -> authorized/4), and the station the
+%% check reads is the one the link proves, the seed's pin before `Opts''
+%%------------------------------------------------------------------
+
+other_station() -> binary:copy(<<16#54>>, 32).
+
+realm_key() ->
+    case persistent_term:get({?MODULE, realm_key}, undefined) of
+        undefined ->
+            {ok, Key} = macula_node_keys:generate(realm, pq_pure),
+            persistent_term:put({?MODULE, realm_key}, Key),
+            Key;
+        Key ->
+            Key
+    end.
+
+live_authorization() ->
+    macula_record:sign(macula_record:station_authorization(realm(), #{realm => realm(), station_node => station(),
+                                                                     hostname => <<"b.example">>,
+                                                                     roles => [<<"station">>]}),
+                       realm_key()).
+
+%% A stand-in pool that pinned the realm key, and a DHT where only
+%% station()'s slot holds the realm's live authorization.
+with_pinned_pool(Fun) ->
+    Test = self(),
+    Pinned = macula_node_keys:public_key(realm_key()),
+    Pool = spawn_link(fun Loop() ->
+                          receive
+                              {'$gen_call', From, {realm_key, _}} -> gen_server:reply(From, {ok, Pinned}), Loop();
+                              {'$gen_cast', {station_check, _}} -> Loop();
+                              {'$gen_call', From, Msg} -> Test ! {pool_asked, element(1, Msg)},
+                                                          gen_server:reply(From, {error, stand_in}), Loop()
+                          end
+                      end),
+    Live = macula_record:station_authorization_key(realm(), station()),
+    Auth = live_authorization(),
+    ok = meck:new(macula, [passthrough]),
+    ok = meck:expect(macula, find_record, fun(_P, Key, _T) when Key =:= Live -> {ok, Auth};
+                                             (_P, _Key, _T) -> {error, not_found}
+                                          end),
+    try Fun(Pool) after meck:unload(macula) end.
+
+closed_dials_a_station_the_realm_authorized_test() ->
+    with_mode(closed, fun() ->
+        with_pinned_pool(fun(Pool) ->
+            ?assertEqual({error, stand_in},
+                         macula:call_station(Pool, seed(), target(), realm(), <<"acme/p">>, #{}, 2_000,
+                                             #{confidential => off})),
+            ?assertEqual(call_station, asked())
+        end)
+    end).
+
+the_seed_pin_is_the_station_checked_before_the_options_pin_test() ->
+    with_mode(closed, fun() ->
+        with_pinned_pool(fun(Pool) ->
+            %% The link proves the seed's pin (station(), authorized), not the
+            %% options' (other_station(), nothing at its slot).
+            ?assertEqual({error, stand_in},
+                         macula:call_station(Pool, seed(), target(), realm(), <<"acme/p">>, #{}, 2_000,
+                                             #{confidential => off, expected_node_id => other_station()})),
+            ?assertEqual(call_station, asked()),
+            Unauthorized = #{host => <<"2001:db8::6">>, port => 4433, expected_node_id => other_station()},
+            ?assertEqual({error, {station_not_authorized, none}},
+                         macula:call_station(Pool, Unauthorized, target(), realm(), <<"acme/p">>, #{}, 2_000,
+                                             #{confidential => off, expected_node_id => station()})),
+            ?assertEqual(nothing, asked())
+        end)
+    end).
