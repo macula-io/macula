@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [15.0.0-rc.2] - 2026-10-13
+
+Wire 1.0, second release candidate: 15.0.0-rc.1 plus the registration acknowledgement REGISTER_ACK (macula#12) and
+the null rule at every depth of a protocol field (macula#99). Still a pre-release; the wire is the one rc.1 speaks,
+except that a frame with null nested in a protocol field is now refused and a station answers each registration.
+
 ### Added
 
 - **A station acknowledges each registration** (macula#12): `register_ack` (`macula_frame:register_ack/1`), an
