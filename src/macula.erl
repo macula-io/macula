@@ -47,6 +47,7 @@
          resolve_app/3,
          call_station/7,
          call_station/8,
+         call_resolved_station/8,
          advertise/5,
          unadvertise/3]).
 %% The pool's own D25 provider authorization, resolved from the DHT and
@@ -85,7 +86,7 @@
 
 %% Streaming RPC (LOCAL in-process + V2 pool)
 -export([
-    call_stream/2, call_stream/3, call_stream/5, call_stream_station/7,
+    call_stream/2, call_stream/3, call_stream/5, call_stream_station/7, call_resolved_stream_station/7,
     open_stream/3, open_stream/4,
     advertise_stream/2, advertise_stream/3, advertise_stream/5,
     advertise_stream/6,
@@ -445,10 +446,43 @@ call_station(Pool, Station, Target, Realm, Procedure, Payload, TimeoutMs) ->
 -spec call_station(pool(), macula_client:seed(), <<_:256>>, realm(), procedure(),
                    term(), 1..600_000, map()) ->
     {ok, term()} | {ok, term(), macula_station_link:report()} | {error, term()}.
+%%
+%% The station must hold a live authorization from `Realm' (hook 3 of
+%% macula-station#63, `macula_station_check:explicit/4'): under `closed' a
+%% station without one is refused as `{error, {station_not_authorized,
+%% Verdict}}' before the pool dials anything.
 call_station(Pool, Station, Target, Realm, Procedure, Payload, TimeoutMs, Opts) ->
+    refused(first_error([target_checked(Station, Opts), report_checked(Opts)]),
+            fun() ->
+                refused(station_authorized(Pool, Realm, Station, Opts, TimeoutMs),
+                        fun() -> do_call_station(Pool, Station, Target, Realm, Procedure,
+                                                 Payload, TimeoutMs, Opts) end)
+            end).
+
+%% @private
+%% @doc As `call_station/8', for a station the caller has already checked
+%% itself: direct dial checks every station it resolves before it calls
+%% (`macula_station_check:authorized/4'), so it is not checked twice.
+-spec call_resolved_station(pool(), macula_client:seed(), <<_:256>>, realm(), procedure(),
+                            term(), 1..600_000, map()) ->
+    {ok, term()} | {ok, term(), macula_station_link:report()} | {error, term()}.
+call_resolved_station(Pool, Station, Target, Realm, Procedure, Payload, TimeoutMs, Opts) ->
     refused(first_error([target_checked(Station, Opts), report_checked(Opts)]),
             fun() -> do_call_station(Pool, Station, Target, Realm, Procedure,
                                      Payload, TimeoutMs, Opts) end).
+
+%% Hook 3 for a station the application names: its node id is the one the
+%% dial pins, in the seed map or in `Opts'.
+station_authorized(Pool, Realm, Station, Opts, TimeoutMs) ->
+    macula_station_check:explicit(Pool, Realm, pinned_node_id(Station, Opts), check_timeout(TimeoutMs)).
+
+pinned_node_id(_Station, #{expected_node_id := <<_:256>> = NodeId}) -> NodeId;
+pinned_node_id(#{expected_node_id := <<_:256>> = NodeId}, _Opts) -> NodeId;
+pinned_node_id(_Station, _Opts) -> undefined.
+
+%% The slot read takes at most half the caller's budget, and never more than
+%% five seconds.
+check_timeout(TimeoutMs) -> max(1, min(TimeoutMs div 2, 5_000)).
 
 %% `ok', or the refusal of a `report' that is not a boolean, before anything is sent.
 report_checked(Opts) ->
@@ -1041,6 +1075,21 @@ call_stream_station(Pool, Station, Target, Realm, Procedure, Args, Opts)
        is_binary(Realm), byte_size(Realm) =:= 32,
        is_binary(Procedure), is_map(Opts) ->
     refused(first_error([target_checked(Station, Opts), report_valid(macula_direct_dial:stream_report_option(Opts))]),
+            fun() ->
+                refused(station_authorized(Pool, Realm, Station, Opts, maps:get(dial_timeout_ms, Opts, 10_000)),
+                        fun() -> do_call_stream_station(Pool, Station, Target, Realm, Procedure, Args, Opts) end)
+            end).
+
+%% @private
+%% @doc As `call_stream_station/7', for a station the caller has already
+%% checked itself (direct dial, a content fetch's sharer).
+-spec call_resolved_stream_station(pool(), macula_client:seed(), <<_:256>>, realm(), procedure(),
+                                   term(), map()) -> {ok, stream()} | {error, term()}.
+call_resolved_stream_station(Pool, Station, Target, Realm, Procedure, Args, Opts)
+  when is_pid(Pool), is_binary(Target), byte_size(Target) =:= 32,
+       is_binary(Realm), byte_size(Realm) =:= 32,
+       is_binary(Procedure), is_map(Opts) ->
+    refused(first_error([target_checked(Station, Opts), report_valid(macula_direct_dial:stream_report_option(Opts))]),
             fun() -> do_call_stream_station(Pool, Station, Target, Realm, Procedure, Args, Opts) end).
 
 %% The pool is handed the seal decided, not the signed state it was decided from.
@@ -1062,12 +1111,20 @@ do_call_stream_station(Pool, Station, Target, Realm, Procedure, Args, Opts) ->
 %% respawns it and ends it with the pool, so a consumer holds the pid and
 %% never stops it. Drive it with `overlay_subscribe/3' and
 %% `send_overlay_frame/2,3'.
+%%
+%% `Opts' names the realm the link serves, `realm', and the station must hold
+%% a live authorization from it (hook 3 of macula-station#63): under
+%% `closed' a station without one, or a dial that names no realm, is refused
+%% as `{error, {station_not_authorized, Verdict}}' before anything is dialled.
 -spec ensure_station_link(pool(), macula_client:seed(), map(), pos_integer()) ->
         {ok, pid()} | {error, term()}.
 ensure_station_link(Pool, Station, Opts, TimeoutMs)
   when is_pid(Pool), is_map(Opts), is_integer(TimeoutMs), TimeoutMs > 0 ->
     refused(target_checked(Station, Opts),
-            fun() -> macula_client:ensure_station_link(Pool, Station, Opts, TimeoutMs) end).
+            fun() ->
+                refused(station_authorized(Pool, maps:get(realm, Opts, undefined), Station, Opts, TimeoutMs),
+                        fun() -> macula_client:ensure_station_link(Pool, Station, Opts, TimeoutMs) end)
+            end).
 
 %% @doc Take the overlay frames for `Realm' arriving on `Link' (from
 %% `ensure_station_link/4'), delivered to `Subscriber' as

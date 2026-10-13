@@ -18,14 +18,16 @@
 %%%
 %%% The first dial a pool makes is its configured seed, from config trust:
 %%% there is no link yet to read a slot through. Every later dial of a node
-%%% as a station — the stations `macula_direct_dial' resolves — is
-%%% slot-verified here. Nothing is presented on the wire (presentation
+%%% as a station is slot-verified here: the stations `macula_direct_dial'
+%%% resolves (`authorized/4'), and the ones an application names itself
+%%% (`explicit/4': `macula:call_station/8', `call_stream_station/7',
+%%% `ensure_station_link/4' and a content fetch's sharer). Nothing is presented on the wire (presentation
 %%% decision (c), DHT-lookup-only), so the check has no replay surface.
 %%% @end
 %%%-------------------------------------------------------------------
 -module(macula_station_check).
 
--export([authorized/4, classify/2, enforce/2, mode/0]).
+-export([authorized/4, explicit/4, classify/2, enforce/2, mode/0]).
 
 -export_type([mode/0, verdict/0, trust/0]).
 
@@ -59,6 +61,28 @@ authorized(#{realm_key := RealmKey} = Dial, Realm, Station, TimeoutMs) ->
     Mode = mode(),
     Verdict = judged(RealmKey, Dial, Realm, Station, TimeoutMs),
     settle(enforce(Mode, Verdict), Mode, Dial, Realm, Station).
+
+%% @doc The check for a station the application names itself: `Station' is
+%% its node id when the dial names one (`expected_node_id'), read through the
+%% pool's own `find_record' against the realm key the pool pinned for
+%% `Realm'. A dial that names no node id names no slot either: its verdict
+%% is `none'. A dial for no realm at all (`Realm' `undefined', an
+%% `ensure_station_link/4' without one) has nothing to be authorized by: its
+%% verdict is `unanchored'.
+-spec explicit(macula:pool(), <<_:256>> | undefined, <<_:256>> | undefined, pos_integer()) ->
+          ok | {error, {station_not_authorized, verdict()}}.
+explicit(Pool, undefined, Station, _TimeoutMs) ->
+    unread(Pool, undefined, Station, unanchored);
+explicit(Pool, Realm, undefined, _TimeoutMs) ->
+    unread(Pool, Realm, undefined, none);
+explicit(Pool, Realm, Station, TimeoutMs) ->
+    authorized(#{pool => Pool, find_record => fun macula:find_record/3,
+                 realm_key => macula_client:realm_key(Pool, Realm)},
+               Realm, Station, TimeoutMs).
+
+unread(Pool, Realm, Station, Verdict) ->
+    Mode = mode(),
+    settle(enforce(Mode, Verdict), Mode, #{pool => Pool}, Realm, Station).
 
 judged({ok, RealmKey}, Dial, Realm, Station, TimeoutMs) ->
     classify(read(Dial, Realm, Station, TimeoutMs),

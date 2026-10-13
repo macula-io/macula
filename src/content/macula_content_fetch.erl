@@ -60,8 +60,11 @@
 -spec io() -> map().
 io() ->
     #{find_records => fun macula:find_records/3,
+      station_check => fun macula_station_check:explicit/4,
       resolve_station_endpoint => fun macula_direct_dial:resolve_station_endpoint/3,
-      call_stream_station => fun macula:call_stream_station/7}.
+      %% Each sharer's station is checked once, before it is reached
+      %% (`reached/2'), so its root and chunk asks go unchecked.
+      call_stream_station => fun macula:call_resolved_stream_station/7}.
 
 %% @doc Fetch `MCID' from a node that shares it. `Opts': `realm' (only that realm's announcements), `max_bytes',
 %% `max_chunks', `root_timeout_ms', `chunk_timeout_ms', `parallel', and `io' (see `io/0').
@@ -165,8 +168,18 @@ from_sharer(Sharer, #{root_timeout_ms := Timeout} = Ctx) ->
 rooted({ok, [{Dial, Answer}]}, Ctx) -> root(Answer, Dial, Ctx);
 rooted({error, _} = Error, _Ctx) -> Error.
 
-reached(#{station := Station} = Sharer, #{pool := Pool, io := #{resolve_station_endpoint := Resolve}} = Ctx) ->
-    through(Resolve(Pool, Station, ?RESOLVE_TIMEOUT_MS), Sharer, Ctx).
+%% Hook 3 (macula-station#63): the sharer's station holds a live
+%% authorization from the realm of the sharer's announcement, or, under
+%% `closed', this sharer fails and nothing is asked of it.
+reached(#{station := Station, realm := Realm} = Sharer,
+        #{pool := Pool, io := #{station_check := Check}} = Ctx) ->
+    authorized_sharer(Check(Pool, Realm, Station, ?RESOLVE_TIMEOUT_MS), Sharer, Ctx).
+
+authorized_sharer(ok, #{station := Station} = Sharer,
+                  #{pool := Pool, io := #{resolve_station_endpoint := Resolve}} = Ctx) ->
+    through(Resolve(Pool, Station, ?RESOLVE_TIMEOUT_MS), Sharer, Ctx);
+authorized_sharer({error, Refused}, _Sharer, _Ctx) ->
+    {error, Refused}.
 
 through({ok, Url}, Sharer, #{mcid := MCID, root_timeout_ms := Timeout} = Ctx) ->
     Dial = Sharer#{url => Url},
