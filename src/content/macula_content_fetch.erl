@@ -163,7 +163,9 @@ tried({error, Reason}, Rest, Ctx, [Node | Failures], Node) -> from_sharers(Rest,
 %% Reaching a sharer and asking for the root runs in a worker, as every chunk ask does, so an io call that exits fails
 %% this sharer only and a gone caller ends the fetch here too.
 from_sharer(Sharer, #{root_timeout_ms := Timeout} = Ctx) ->
-    rooted(contained([fun() -> reached(Sharer, Ctx) end], root_worker, ?RESOLVE_TIMEOUT_MS + Timeout, Ctx), Ctx).
+    %% The station check and the endpoint resolution each take up to
+    %% ?RESOLVE_TIMEOUT_MS before the root ask.
+    rooted(contained([fun() -> reached(Sharer, Ctx) end], root_worker, 2 * ?RESOLVE_TIMEOUT_MS + Timeout, Ctx), Ctx).
 
 rooted({ok, [{Dial, Answer}]}, Ctx) -> root(Answer, Dial, Ctx);
 rooted({error, _} = Error, _Ctx) -> Error.

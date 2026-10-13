@@ -467,8 +467,10 @@ dialled_if_authorized(resolved, _Pool, _Realm, _Station, _Opts, _TimeoutMs, Dial
 station_authorized(Pool, Realm, Station, Opts, TimeoutMs) ->
     macula_station_check:explicit(Pool, Realm, pinned_node_id(Station, Opts), check_timeout(TimeoutMs)).
 
-pinned_node_id(_Station, #{expected_node_id := <<_:256>> = NodeId}) -> NodeId;
+%% The seed's pin first, then the options', as the link proves it
+%% (`macula_station_link:add_tls_opts/2' lets the seed's pin stand).
 pinned_node_id(#{expected_node_id := <<_:256>> = NodeId}, _Opts) -> NodeId;
+pinned_node_id(_Station, #{expected_node_id := <<_:256>> = NodeId}) -> NodeId;
 pinned_node_id(_Station, _Opts) -> undefined.
 
 %% The slot read takes at most half the caller's budget, and never more than
