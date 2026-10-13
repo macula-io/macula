@@ -3,7 +3,8 @@
 %% `macula:call_seal/5', and hands the pool the seal it decided (`seal' in the
 %% stream's options) and nothing of the signed state it decided from. With no
 %% signed state the open is refused before the pool is asked. This process
-%% stands in for the pool.
+%% stands in for the pool; it pinned no realm key, so the station check
+%% (hook 3, `open' by default) counts and lets the open through.
 -module(macula_call_stream_seal_tests).
 
 -include_lib("eunit/include/eunit.hrl").
@@ -58,7 +59,15 @@ opts_asked(Target, Opts) ->
                             Test ! {opened, macula:call_stream_station(Test, ?STATION, Target, ?REALM, ?PROC, #{},
                                                                        Opts)}
                         end),
+    pool_asked(Target, Caller).
+
+pool_asked(Target, Caller) ->
     receive
+        {'$gen_call', From, {realm_key, ?REALM}} ->
+            gen_server:reply(From, none),
+            pool_asked(Target, Caller);
+        {'$gen_cast', {station_check, _}} ->
+            pool_asked(Target, Caller);
         {'$gen_call', From, {call_stream_station, _Station, Target, ?REALM, ?PROC, #{}, StreamOpts, _LinkOpts}} ->
             gen_server:reply(From, {error, stopped_here}),
             receive {opened, {error, stopped_here}} -> ok after 1000 -> error({no_answer, Caller}) end,
