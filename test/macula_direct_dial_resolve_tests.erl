@@ -152,6 +152,7 @@ resolve_test_() ->
       {timeout, 30, fun resolve_endpoint_ends_the_lookup_at_a_lifetime_refusal/0},
       {timeout, 30, fun resolve_endpoint_ends_the_lookup_at_a_reversed_lifetime/0},
       {timeout, 30, fun resolve_endpoint_ends_the_lookup_at_an_endpoint_record_that_does_not_verify/0},
+      {timeout, 30, fun resolve_endpoint_ends_the_lookup_at_every_wire_1_0_record_refusal/0},
       {timeout, 30, fun a_call_with_a_removed_trust_option_is_refused_before_any_lookup/0},
       {timeout, 30, fun a_stream_with_a_removed_trust_option_is_refused_before_any_lookup/0},
       {timeout, 30, fun a_call_passing_realm_trust_is_refused_before_any_lookup/0},
@@ -1119,6 +1120,19 @@ resolve_endpoint_ends_the_lookup_at_an_endpoint_record_that_does_not_verify() ->
     set_endpoint_replies(S, [{error, signature_invalid}, endpoint_record(S)]),
     ?assertEqual({error, signature_invalid}, resolve_endpoint(S, 1000)),
     ?assertEqual(1, endpoint_lookups(S)),
+    ?assertEqual([], visits()).
+
+%% Wire 1.0's record refusals (WIRE_1_0.md 5.2) are properties of the record too, so each ends the lookup.
+resolve_endpoint_ends_the_lookup_at_every_wire_1_0_record_refusal() ->
+    lists:foreach(
+      fun(Reason) ->
+              S = station(<<(atom_to_binary(Reason))/binary, ".test">>),
+              set_endpoint_replies(S, [{error, Reason}, endpoint_record(S)]),
+              ?assertEqual({error, Reason}, resolve_endpoint(S, 1000)),
+              ?assertEqual(1, endpoint_lookups(S))
+      end,
+      [alg_unsupported, lifetime_class_unknown, lifetime_class_mismatch, type_unknown, schema_unsupported,
+       mcid_tag_unknown, subject_missing, extension_unsupported]),
     ?assertEqual([], visits()).
 
 resolve_endpoint(#{id := Id}, TimeoutMs) ->

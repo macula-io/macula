@@ -59,14 +59,15 @@ break: a node on it no longer reads the frames of an older one.
   `docs/design/WIRE_1_0.md` section 5. A record without them is `malformed`, so a
   14.x record does not verify under 1.0, and the committed record vectors are regenerated.
 - **`macula_record:custodian_verify/3`**, the check a station runs before it stores a record: envelope, `alg`
-  (`alg_unsupported`, read before the signature), signature, core fields, clock, lifetime and slot, and nothing else
-  in the payload. A type, a schema or a
+  (the verifier's own profile's only: the other profile's is `alg_unsupported`, read before the signature, and
+  `alg_mismatch` no longer comes from a record), signature, core fields, clock, lifetime, a known type's own row
+  (`lifetime_class_mismatch`) and slot, and nothing else in the payload. A type, a schema or a
   content-id tag the reader does not know is stored opaquely. A built-in tag wire 1.0 does not define needs a
   `subject` and is placed by H(type | signer key id | subject).
-- **Readers refuse by name** what a custodian stores: `type_unknown`, `schema_unsupported`,
-  `lifetime_class_mismatch`, `extension_unsupported` (a record `ext` entry with `critical` 1; records define none),
-  and `mcid_tag_unknown` (was `malformed`). Both refuse `lifetime_class_unknown` and, for an undefined built-in tag
-  without a subject, `subject_missing`.
+- **Readers refuse by name** what a custodian stores: `type_unknown`, `schema_unsupported`, `extension_unsupported`
+  (a record `ext` entry with `critical` 1; records define none), and `mcid_tag_unknown` (was `malformed`). Both refuse `lifetime_class_unknown`, `lifetime_class_mismatch` and, for
+  an undefined built-in tag without a subject, `subject_missing`. `macula_direct_dial` ends an endpoint lookup at any
+  of these, as at every other record refusal.
 - **Breaking: a procedure advertisement names `serving_stations`** (macula-station#55, K > 1, decided by Raf
   2026-10-12): 1 to 8 station node_ids, strictly ascending, in place of the single `serving_station`.
   `procedure_advertisement/4,5` takes the list, and `read_procedure_advertisement/1` returns it. Each link of a pool
@@ -75,7 +76,8 @@ break: a node on it no longer reads the frames of an older one.
   candidate of every station named.
 - **Tag 0x14 is reserved** for the successor (key-rotation) record (`type_successor/0`), row 5.
 - **The wire 1.0 record conformance runner** (`macula_record_wire_1_0_conformance_tests`) runs every record case of
-  `test/vectors/wire_1_0/` (verify, custodian, check_order).
+  `priv/vectors/wire_1_0/` (verify, custodian, check_order, tbs), comparing a custodian case's `slot` with
+  `storage_key/1`.
 
 ## [14.10.0] - 2026-10-13
 

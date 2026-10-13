@@ -65,14 +65,29 @@ an_extra_core_field_is_malformed_test() ->
 %% Lifetime classes
 %%------------------------------------------------------------------
 
-%% WIRE_1_0.md 5.2: a known type naming another row is the reader's to refuse; the custodian bounds it by the row it
-%% names.
-a_known_type_naming_another_row_is_refused_by_a_reader_test() ->
+%% WIRE_1_0.md 5.2: a known type naming another row is refused by the custodian as by the reader, after the lifetime
+%% step and before the slot; a tag the custodian does not know is bounded by the row it names.
+a_known_type_naming_another_row_is_refused_test() ->
     Id = key(identity),
     Fields = fields(macula_record:station_endpoint(4433), Id),
     Object = macula_signed_object:sign(?LABEL, Fields#{{text, <<"lifetime_class">>} => 3}, Id),
     ?assertEqual({error, lifetime_class_mismatch}, verify(Object)),
-    ?assertMatch({ok, _}, custodian(Object)).
+    ?assertEqual({error, lifetime_class_mismatch}, custodian(Object)).
+
+the_row_is_checked_after_the_lifetime_and_before_the_slot_test() ->
+    Id = key(identity),
+    Fields = fields(macula_record:station_endpoint(4433), Id),
+    #{{text, <<"created_at">>} := Created} = Fields,
+    TooLong = Fields#{{text, <<"lifetime_class">>} => 1, {text, <<"expires_at">>} => Created + 31 * ?MINUTE},
+    ?assertEqual({error, lifetime_too_long}, custodian(macula_signed_object:sign(?LABEL, TooLong, Id))),
+    Announcement = macula_record:content_announcement(macula_node_keys:key_id(Id), <<2, 0, 0:384>>,
+                                                      #{realm_id => <<1:256>>, serving_station => <<2:256>>,
+                                                        procedure => <<"content">>}),
+    #{{text, <<"payload">>} := Payload} = AnnouncementFields = fields(Announcement, Id),
+    NoSlot = AnnouncementFields#{{text, <<"payload">>} := maps:remove({text, <<"mcid">>}, Payload)},
+    ?assertEqual({error, malformed}, custodian(macula_signed_object:sign(?LABEL, NoSlot, Id))),
+    WrongRowNoSlot = NoSlot#{{text, <<"lifetime_class">>} := 4},
+    ?assertEqual({error, lifetime_class_mismatch}, custodian(macula_signed_object:sign(?LABEL, WrongRowNoSlot, Id))).
 
 a_class_outside_the_table_is_refused_test() ->
     Id = key(identity),
@@ -183,6 +198,28 @@ the_custodian_checks_in_the_pinned_order_test() ->
     %% signature before everything in the tbs
     #{signature := <<B, Rest/binary>>} = Object = unknown_tag(16#18, Id, Expired),
     ?assertEqual({error, signature_invalid}, custodian(Object#{signature := <<(B bxor 1), Rest/binary>>})).
+
+%%------------------------------------------------------------------
+%% The alg allowlist is the verifier's own profile
+%%------------------------------------------------------------------
+
+%% WIRE_1_0.md 5.2 step 4: an alg outside the verifier's own profile is alg_unsupported before any crypto, whatever
+%% form the key is in; the verifier's alg with a key in the other profile's form is malformed.
+the_other_profiles_alg_is_unsupported_test_() ->
+    {timeout, 120, fun() ->
+        Pure = key(identity),
+        {ok, Hybrid} = macula_node_keys:generate(identity, pq_hybrid),
+        Fields = fields(macula_record:station_endpoint(4433), Pure),
+        HybridSigned = macula_signed_object:sign(?LABEL, Fields, Hybrid),
+        ?assertEqual({error, alg_unsupported}, custodian(HybridSigned)),
+        ?assertEqual({error, alg_unsupported}, verify(HybridSigned)),
+        PureKey = HybridSigned#{key := macula_node_keys:public_key(Pure)},
+        ?assertEqual({error, alg_unsupported}, custodian(PureKey)),
+        PureSigned = macula_signed_object:sign(?LABEL, Fields, Pure),
+        HybridKey = PureSigned#{key := macula_node_keys:public_key(Hybrid)},
+        ?assertEqual({error, malformed}, custodian(HybridKey)),
+        ?assertEqual({error, malformed}, verify(HybridKey))
+    end}.
 
 %%------------------------------------------------------------------
 %% Helpers

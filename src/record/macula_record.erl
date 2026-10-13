@@ -84,7 +84,7 @@
     signature => binary()
 }.
 
--type refusal() :: record_too_large | malformed | signature_invalid | alg_mismatch | not_yet_valid | expired
+-type refusal() :: record_too_large | malformed | signature_invalid | not_yet_valid | expired
                  | key_id_mismatch | lifetime_too_long | lifetime_reversed | lifetime_class_unknown
                  | lifetime_class_mismatch | type_unknown | schema_unsupported | mcid_tag_unknown | alg_unsupported
                  | subject_missing | extension_unsupported.
@@ -574,7 +574,7 @@ sign(#{type := Type, payload := Payload} = Record, #{purpose := Purpose, profile
 %% @doc Verify a record as its reader, given as its wire form or as its {key, tbs, signature} map, under the verifier's
 %% profile and clock. Refusals are returned, never raised. After every custodian_verify/3 check, a reader refuses, in
 %% order (WIRE_1_0.md 5.2, steps 10 to 12): a type it does not know (type_unknown), a built-in type's schema other than
-%% 1 (schema_unsupported), a lifetime row that is not its type's (lifetime_class_mismatch), an ext entry with critical
+%% 1 (schema_unsupported), an ext entry with critical
 %% 1 (extension_unsupported; records define no extension yet, and a critical 0 one is ignored), a payload that breaks
 %% its type's rules (malformed), a content id with a tag other than 2 (mcid_tag_unknown), and a payload that names a
 %% signer other than the key (key_id_mismatch).
@@ -586,18 +586,18 @@ verify(Signed, Profile) ->
 verify(Signed, Profile, Now) ->
     read_checked(custodian_verify(Signed, Profile, Now), Profile).
 
-%% @doc Verify a record as its custodian, a station that stores records it need not understand (wire 1.0, macula#83
-%% D4, WIRE_1_0.md 5.2 steps 1 to 9). In order, first failure wins: the wire form fits 256 KiB (record_too_large); the
-%% signed object decodes (malformed); its tbs decodes with a text alg (malformed), since alg selects the verifier;
-%% the alg is registered (alg_unsupported); the carried key is in the profile's form (malformed); the signature
-%% verifies (signature_invalid; the other profile's alg is alg_mismatch); the tbs holds exactly its core fields, with
-%% subject and ext where present (malformed); the clock (not_yet_valid, expired); the lifetime (lifetime_reversed, then
-%% lifetime_class_unknown for a row outside the table, then lifetime_too_long against the row); the slot: a known
-%% type's slot fields present and typed (malformed), and a built-in tag it does not know carries a subject
-%% (subject_missing). The payload is read no further than the slot fields, so a type, schema, row or content-id tag a
-%% reader does not know is stored. The record comes back with its key_id: for a built-in tag wire 1.0 does not define,
-%% as for a domain type, the MACULA-KEY-ID-V1 id of its key whatever the key's purpose, never a node_id. storage_key/1
-%% places it.
+%% @doc Verify a record as its custodian, a station that stores records it need not understand (wire 1.0, macula#83 D4,
+%% WIRE_1_0.md 5.2 steps 1 to 9). In order, first failure wins: the wire form fits 256 KiB (record_too_large); the
+%% signed object decodes (malformed); its tbs decodes with a text alg (malformed), since alg selects the verifier; the
+%% alg is the verifier's own profile's (alg_unsupported); the carried key is in that profile's form (malformed); the
+%% signature verifies (signature_invalid); the tbs holds exactly its core fields, with subject and ext where present
+%% (malformed); the clock (not_yet_valid, expired); the lifetime (lifetime_reversed, then lifetime_class_unknown for a
+%% row outside the table, then lifetime_too_long against the row); a known type naming a row other than its own
+%% (lifetime_class_mismatch); the slot: a known type's slot fields present and typed (malformed), and a built-in tag it
+%% does not know carries a subject (subject_missing). The payload is read no further than the slot fields and a
+%% tombstone's withdrawn type, so a type, schema or content-id tag a reader does not know is stored. The record comes
+%% back with its key_id: for a built-in tag wire 1.0 does not define, as for a domain type, the MACULA-KEY-ID-V1 id of
+%% its key whatever the key's purpose, never a node_id. storage_key/1 places it.
 -spec custodian_verify(binary() | map(), macula_crypto_profile:profile(), integer()) ->
           {ok, m_record()} | {error, refusal()}.
 custodian_verify(Signed, Profile, Now) ->
@@ -1234,7 +1234,6 @@ lifetime(#{type := Type, created_at := Created, expires_at := Expires, payload :
     lifetime_within(Expires - Created, max_lifetime(Type, Payload)).
 
 %% WIRE_1_0.md 5.2 step 8: a reversed lifetime, then a row outside the table, then a lifetime past the row's maximum.
-%% Whether the row is the type's own is a reader's check (lifetime_class_mismatch).
 class_lived(Lifetime, _Known, _Class, _Type) when Lifetime =< 0 -> lifetime_reversed;
 class_lived(_Lifetime, false, _Class, _Type) -> lifetime_class_unknown;
 class_lived(Lifetime, true, Class, Type) -> lifetime_within(Lifetime, class_lifetime(Class, Type)).
@@ -1337,9 +1336,10 @@ tbs_alg(_NoTextAlg) -> malformed.
 
 alg_read(malformed, _Object, _Signature, _Profile, _Now) ->
     {error, malformed};
+%% The allowlist is the verifier's own profile's alg: the other profile's is alg_unsupported before any crypto, and a
+%% key not in the profile's carried form is malformed (WIRE_1_0.md 5.2 step 4).
 alg_read({ok, Alg}, Object, Signature, Profile, Now) ->
-    alg_registered(lists:member(Alg, [macula_signed_object:alg(P) || P <- [pq_pure, pq_hybrid]]), Object, Signature,
-                   Profile, Now).
+    alg_registered(Alg =:= macula_signed_object:alg(Profile), Object, Signature, Profile, Now).
 
 alg_registered(false, _Object, _Signature, _Profile, _Now) ->
     {error, alg_unsupported};
@@ -1445,13 +1445,18 @@ clocked(ok, Record, Profile) ->
 clocked(Refusal, _Record, _Profile) ->
     {error, Refusal}.
 
-lived(ok, Record, _Profile) ->
-    {ok, Record};
+lived(ok, #{type := Type, payload := Payload, lifetime_class := Class} = Record, _Profile) ->
+    rowed(row_matches(record_class(Type, Payload), Class), Record);
 lived(Refusal, _Record, _Profile) ->
     {error, Refusal}.
 
-%% A reader's checks past the custodian's (WIRE_1_0.md 5.2, steps 10 to 12): the type, the schema, the lifetime row;
-%% an unknown critical extension; the payload rules, the content id's tag and the named signer, in that order.
+%% WIRE_1_0.md 5.2, after step 8: a known type names exactly its row (lifetime_class_mismatch); a tag with no row is
+%% bounded by the row it names.
+rowed(true, Record) -> {ok, Record};
+rowed(false, _Record) -> {error, lifetime_class_mismatch}.
+
+%% A reader's checks past the custodian's (WIRE_1_0.md 5.2, steps 10 to 12): the type, the schema; an unknown critical
+%% extension; the payload rules, the content id's tag and the named signer, in that order.
 read_checked({ok, #{type := Type} = Record}, Profile) ->
     type_read(built_in_1_0(Type) orelse domain_tag(Type), Record, Profile);
 read_checked({error, _} = Refused, _Profile) ->
@@ -1462,15 +1467,12 @@ type_read(true, #{type := Type, schema := Schema} = Record, Profile) ->
     schema_read(domain_tag(Type) orelse Schema =:= ?SCHEMA_V1, Record, Profile).
 
 schema_read(false, _Record, _Profile) -> {error, schema_unsupported};
-schema_read(true, #{type := Type, payload := Payload, lifetime_class := Class} = Record, Profile) ->
-    row_read(row_matches(record_class(Type, Payload), Class), Record, Profile).
+schema_read(true, Record, Profile) ->
+    ext_read(critical_ext(Record), Record, Profile).
 
 %% A type with a row names exactly that row; a tombstone that withdraws no type with one names any.
 row_matches(none, _Class) -> true;
 row_matches(Row, Class) -> Row =:= Class.
-
-row_read(false, _Record, _Profile) -> {error, lifetime_class_mismatch};
-row_read(true, Record, Profile) -> ext_read(critical_ext(Record), Record, Profile).
 
 ext_read(true, _Record, _Profile) -> {error, extension_unsupported};
 ext_read(false, #{type := Type, payload := Payload} = Record, Profile) ->

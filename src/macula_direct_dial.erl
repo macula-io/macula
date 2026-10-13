@@ -194,9 +194,13 @@
 %% cannot change. Keep this in step with that type.
 -define(RECORD_REFUSAL(Reason),
         (Reason =:= record_too_large orelse Reason =:= malformed orelse
-         Reason =:= signature_invalid orelse Reason =:= alg_mismatch orelse
+         Reason =:= signature_invalid orelse Reason =:= alg_unsupported orelse
          Reason =:= not_yet_valid orelse Reason =:= key_id_mismatch orelse
-         Reason =:= lifetime_too_long orelse Reason =:= lifetime_reversed)).
+         Reason =:= lifetime_too_long orelse Reason =:= lifetime_reversed orelse
+         Reason =:= lifetime_class_unknown orelse Reason =:= lifetime_class_mismatch orelse
+         Reason =:= type_unknown orelse Reason =:= schema_unsupported orelse
+         Reason =:= mcid_tag_unknown orelse Reason =:= subject_missing orelse
+         Reason =:= extension_unsupported)).
 %% Options a call or an advertisement no longer reads. `verify_cert_chain'
 %% turned a trust check on in 10.x, and the realm keys a pool pins replace it;
 %% `realm_trust' on a call is gone because a realm key never arrives with a

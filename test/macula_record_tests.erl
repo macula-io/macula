@@ -137,12 +137,13 @@ a_hybrid_record_verifies_test_() ->
         R = macula_record:sign(macula_record:node_record(macula_node_keys:key_id(Id), [], 0), Id),
         ?assertEqual(<<"ML-DSA-87-PS384">>, maps:get(alg, R)),
         ?assertMatch({ok, _}, macula_record:verify(macula_record:encode(R), pq_hybrid)),
-        ?assertEqual({error, malformed}, macula_record:verify(macula_record:encode(R), pq_pure))
+        ?assertEqual({error, alg_unsupported}, macula_record:verify(macula_record:encode(R), pq_pure))
     end}.
 
-a_record_under_another_profile_is_malformed_test() ->
+%% The allowlist is the verifier's own profile's alg (WIRE_1_0.md 5.2 step 4).
+a_record_under_another_profile_is_unsupported_test() ->
     {_Id, R} = signed_node_record(),
-    ?assertEqual({error, malformed}, macula_record:verify(macula_record:encode(R), pq_hybrid)).
+    ?assertEqual({error, alg_unsupported}, macula_record:verify(macula_record:encode(R), pq_hybrid)).
 
 a_record_signed_under_another_label_is_refused_test() ->
     Id = key(identity),

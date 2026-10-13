@@ -172,8 +172,9 @@ About 7.3 KB / 8.3 KB before the payload: 2,592 / 3,118 bytes of key and 4,627 /
   | 4 | 7 days | domain types (0x20 to 0xFF, D28) |
   | 5 | 30 days | realm directory (0x03), realm member endorsement (0x05), foundation types (0x0D to 0x10), successor (0x14) |
 
-  A row outside the table is `lifetime_class_unknown`; every record is bounded by the row it names. A reader refuses
-  a known type naming another row as `lifetime_class_mismatch`; a custodian stores it within that row. A tombstone names the
+  A row outside the table is `lifetime_class_unknown`; every record is bounded by the row it names. A known type
+  naming another row is `lifetime_class_mismatch` to custodian and reader alike; a tag with no row of its own is
+  stored within the row it names. A tombstone names the
   class of the type it withdraws, lives at least until that record has expired plus the clock tolerance, and at most
   the class's maximum plus twice that tolerance, since the record it withdraws may be created up to the tolerance
   ahead. A signer refuses to sign any other record, and every verifier refuses one as `lifetime_too_long`, or as
@@ -188,20 +189,22 @@ About 7.3 KB / 8.3 KB before the payload: 2,592 / 3,118 bytes of key and 4,627 /
 - **Custodian checks** (`macula_record:custodian_verify/3`, what a station runs before it stores a record;
   `WIRE_1_0.md` 5.2 is the order of record), first failure wins:
   - the wire form, the object's shape, then the `tbs` decoded far enough to read a text `alg` (`malformed`), since
-    `alg` selects the verifier; an `alg` with no registered verifier is `alg_unsupported`;
+    `alg` selects the verifier; an `alg` other than the verifier's own profile's is `alg_unsupported`, before any
+    crypto, and a key not in that profile's carried form is `malformed`;
   - the carried key and the signature, as for any signed object;
   - `tbs` holds exactly these keys, with `subject` only where the type allows it and `ext` well formed (`malformed`);
   - `created_at` is at most 5 minutes ahead of the verifier's clock, and `expires_at` plus 5 minutes has not passed
     (D22: `not_yet_valid`, `expired`);
   - the lifetime: `lifetime_reversed`, then `lifetime_class_unknown`, then `lifetime_too_long` against the row;
+  - a known type names its own row (`lifetime_class_mismatch`);
   - the record is placeable: a 1.0 type's slot fields are present and typed (`malformed`), a tombstone's are its
     withdrawn type's, and any other built-in tag carries a `subject` (`subject_missing`).
 
-  A custodian reads the payload no further than the slot fields, so a type, a schema or a content-id tag it does not
+  A custodian reads the payload no further than the slot fields and a tombstone's withdrawn type, so a type, a schema
+  or a content-id tag it does not
   know is stored opaquely (macula#83 D4).
 - **Reader checks** (`macula_record:verify/3`): every custodian check, then a type the reader does not know is
-  `type_unknown`, a built-in type's `schema` other than 1 is `schema_unsupported`, a known type naming another row is
-  `lifetime_class_mismatch`, an `ext` entry with `critical` 1 is `extension_unsupported` (one with `critical` 0 is
+  `type_unknown`, a built-in type's `schema` other than 1 is `schema_unsupported`, an `ext` entry with `critical` 1 is `extension_unsupported` (one with `critical` 0 is
   ignored), the payload follows its type's rules (`malformed`; the owner of a domain type sets them), and a content
   announcement whose `mcid` tag is not 2 is `mcid_tag_unknown`.
 - **Custodian-accepted is not reader-accepted.** A station that acts on a stored record (dialling a station endpoint,
