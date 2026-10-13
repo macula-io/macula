@@ -1,4 +1,5 @@
-%% The wire 1.0 conformance runner for the cases that land with macula#99 (docs/design/WIRE_1_0.md sections 2, 3 and 8):
+%% The wire 1.0 conformance runner for the cases that land with macula#99 (docs/design/WIRE_1_0.md sections 2, 3 and 8)
+%% and macula#12 (REGISTER_ACK):
 %% the envelope class, the enums class, the frames class and the tbs class, read from priv/vectors/wire_1_0/ as a
 %% consumer of the hex package reads them. Each case is judged the way this node judges those bytes: a control-stream
 %% frame as a connection reads one after HELLO (macula_frame:read_wire/1), a dedicated-stream frame as a station link
@@ -10,7 +11,7 @@
 -include_lib("eunit/include/eunit.hrl").
 -include("macula_quic_error_codes.hrl").
 
--define(ISSUE, <<"macula#99">>).
+-define(ISSUES, [<<"macula#99">>, <<"macula#12">>]).
 
 envelope_test_() ->
     cases_run(<<"envelope">>, fun envelope_checked/1).
@@ -27,7 +28,7 @@ tbs_test_() ->
 cases_run(Class, Check) ->
     {setup, fun() -> {ok, _} = application:ensure_all_started(macula) end, fun(_) -> ok end,
      [{binary_to_list(Id), fun() -> Check(C) end}
-      || #{<<"id">> := Id, <<"lands_with">> := Lands} = C <- cases(Class), lists:member(?ISSUE, Lands)]}.
+      || #{<<"id">> := Id, <<"lands_with">> := Lands} = C <- cases(Class), Lands -- ?ISSUES =/= Lands]}.
 
 %%------------------------------------------------------------------
 %% Envelope and frames: what a receiver does with the bytes
@@ -104,6 +105,15 @@ enum_checked(#{<<"input">> := Input, <<"expect">> := #{<<"outcome">> := <<"fallb
     Counter = binary_to_existing_atom(Name),
     Label = binary_to_existing_atom(Field),
     ?assertEqual(maps:get({Counter, Label}, Before, 0) + 1, maps:get({Counter, Label}, macula_wire_tolerance:counters()));
+%% A REGISTER_ACK of a kind this node does not know: the frame reads with kind unknown, counted, and the station link
+%% that takes it ignores it (macula_client_register_ack_tests holds the link to that).
+enum_checked(#{<<"input">> := Input, <<"expect">> := #{<<"outcome">> := <<"ignore">>, <<"count">> := Name,
+                                                       <<"field">> := Field}}) ->
+    Before = macula_wire_tolerance:counters(),
+    Label = binary_to_existing_atom(Field),
+    {accept, #{Label := unknown}} = judged(Input),
+    Key = {binary_to_existing_atom(Name), Label},
+    ?assertEqual(maps:get(Key, Before, 0) + 1, maps:get(Key, macula_wire_tolerance:counters()));
 enum_checked(#{<<"input">> := Input, <<"expect">> := #{<<"outcome">> := <<"accept">>, <<"field">> := Field,
                                                        <<"value">> := Value}}) ->
     {accept, Frame} = judged(Input),

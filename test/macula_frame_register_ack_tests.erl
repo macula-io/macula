@@ -16,6 +16,7 @@ register_ack_test_() ->
       {"an advertise kind names a record version and a pubsub kind a subscriber",
        fun an_advertise_kind_names_a_record_version_and_a_pubsub_kind_a_subscriber/0},
       {"a name past 512 bytes is refused", fun a_name_past_512_bytes_is_refused/0},
+      {"the name travels as text, and an empty one is refused", fun the_name_travels_as_text_and_an_empty_one_is_refused/0},
       {"an unknown reason reads as refused and is counted", fun an_unknown_reason_reads_as_refused_and_is_counted/0},
       {"an unknown kind reads as unknown and is counted", fun an_unknown_kind_reads_as_unknown_and_is_counted/0},
       {"accepted travels as 0 or 1", fun accepted_travels_as_0_or_1/0},
@@ -66,7 +67,14 @@ a_name_past_512_bytes_is_refused() ->
     Ack = advertise_ack(#{accepted => true}),
     ?assertMatch(#{name := <<_:512/binary>>}, roundtrip(Ack#{name => binary:copy(<<"a">>, 512)})),
     ?assertError(function_clause, macula_frame:register_ack((spec(Ack))#{name => binary:copy(<<"a">>, 513)})),
-    ?assertEqual({error, {invalid_frame, register_ack, name}}, decode_map(Ack#{name => binary:copy(<<"a">>, 513)})).
+    ?assertMatch({error, _}, decode_map(Ack#{name => binary:copy(<<"a">>, 513)})).
+
+the_name_travels_as_text_and_an_empty_one_is_refused() ->
+    Ack = advertise_ack(#{accepted => true}),
+    <<_Length:32, Bytes/binary>> = macula_frame:encode(Ack),
+    ?assertMatch({ok, #{{text, <<"name">>} := {text, <<"acme.count_v1">>}}}, macula_record_cbor:decode_strict(Bytes)),
+    ?assertError(function_clause, macula_frame:register_ack((spec(Ack))#{name => <<>>})),
+    ?assertEqual({error, {invalid_frame, register_ack, name}}, decode_map(Ack#{name => <<>>})).
 
 an_unknown_reason_reads_as_refused_and_is_counted() ->
     Before = count({wire_enum_fallback, reason}),

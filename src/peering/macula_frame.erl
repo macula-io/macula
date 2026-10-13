@@ -958,7 +958,7 @@ store_ack(#{key := K, signer := Signer, record_version := Version, stored := Sto
 -spec register_ack(register_ack_spec()) -> frame().
 register_ack(#{kind := Kind, realm := Realm, name := Name, accepted := Accepted} = Spec)
   when is_binary(Realm), byte_size(Realm) =:= 32,
-       is_binary(Name), byte_size(Name) =< ?MAX_REGISTER_NAME_BYTES,
+       is_binary(Name), byte_size(Name) >= 1, byte_size(Name) =< ?MAX_REGISTER_NAME_BYTES,
        is_boolean(Accepted) ->
     maps:merge(maps:merge((base(register_ack))#{kind => Kind, realm => Realm, name => Name, accepted => Accepted},
                           registration_named(Kind, Spec)),
@@ -2666,6 +2666,8 @@ value_valid(reason, {text, Text})                                     -> is_bina
 value_valid(text, Value) when is_binary(Value); is_atom(Value)        -> true;
 value_valid(text, {text, Text})                                       -> is_binary(Text);
 value_valid({utf8_max, Max}, Value) when is_binary(Value), byte_size(Value) =< Max -> valid_utf8(Value);
+value_valid({utf8_between, Min, Max}, Value)
+  when is_binary(Value), byte_size(Value) >= Min, byte_size(Value) =< Max          -> valid_utf8(Value);
 value_valid(addresses, Value)                                         -> addresses_checked(Value) =:= ok;
 value_valid(_Rule, _Value)                                            -> false.
 
@@ -2721,7 +2723,7 @@ received_rules(store_ack) ->
     base_rules([{key, key}, {signer, key}, {record_version, id16}, {stored, boolean}]);
 received_rules(register_ack) ->
     (base_rules([{realm, key}, {kind, {one_of, [unknown | ?REGISTER_KINDS]}},
-                 {name, {utf8_max, ?MAX_REGISTER_NAME_BYTES}}, {accepted, boolean}],
+                 {name, {utf8_between, 1, ?MAX_REGISTER_NAME_BYTES}}, {accepted, boolean}],
                 [{reason, {optional, {one_of, ?REGISTER_REFUSALS}}}]))#{one_of := [[{record_version, id16}, {subscriber, key}]]};
 received_rules(Type) when Type =:= call; Type =:= stream_open ->
     signed_rules([{request, object}], [], [{source_route, {optional, binary}}, {retry_budget, {optional, non_neg}}]);
@@ -3119,12 +3121,20 @@ wire_form(Frame) ->
 
 %% Absent is omitted (WIRE_1_0.md section 3): a field no one set is left out, never written as null, so a frame has
 %% one encoding.
+%% A field the table reads as text (text_max) goes out as text.
 booleans_on_wire({ok, Type}, Frame) ->
-    Booleans = [Field || {Field, boolean} <- maps:values(field_table(Type))],
-    to_wire(maps:map(fun(Field, Value) -> boolean_on_wire(lists:member(Field, Booleans), Value) end,
+    Table = maps:values(field_table(Type)),
+    Booleans = [Field || {Field, boolean} <- Table],
+    Texts = [Field || {Field, {text_max, _Max}} <- Table],
+    to_wire(maps:map(fun(Field, Value) ->
+                         text_on_wire(lists:member(Field, Texts), boolean_on_wire(lists:member(Field, Booleans), Value))
+                     end,
                      maps:filter(fun(_Field, Value) -> Value =/= undefined end, Frame)));
 booleans_on_wire(error, Frame) ->
     to_wire(Frame).
+
+text_on_wire(true, Value) when is_binary(Value) -> {text, Value};
+text_on_wire(_Text, Value) -> Value.
 
 boolean_on_wire(true, true) -> 1;
 boolean_on_wire(true, false) -> 0;
@@ -3398,7 +3408,7 @@ frame_table(register_ack) ->
       <<"call_id">> => {call_id, value},
       <<"source_route">> => {source_route, value},
       <<"kind">> => {kind, {per_hop_enum, ?REGISTER_KINDS, unknown}},
-      <<"name">> => {name, value},
+      <<"name">> => {name, {text_max, ?MAX_REGISTER_NAME_BYTES}},
       <<"record_version">> => {record_version, value},
       <<"subscriber">> => {subscriber, value},
       <<"accepted">> => {accepted, boolean},
