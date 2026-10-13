@@ -102,6 +102,14 @@ an_optional_key_sent_as_null_is_refused_test() ->
     [?assertMatch({error, _}, decode_wire(Wire#{{text, Key} => null}))
      || Key <- [<<"realm">>, <<"call_id">>, <<"source_route">>]].
 
+%% A payload is application data, and CBOR null is one (WIRE_1_0.md section 3.1): a CALL whose payload is null signs
+%% payload: null, never leaves it out, and its receiver reads the null back.
+a_null_payload_is_carried_not_left_out_test() ->
+    #{request := #{tbs := Tbs}} = Call = signed_call(undefined),
+    {ok, Fields} = macula_record_cbor:decode_strict(Tbs),
+    ?assertEqual(null, maps:get({text, <<"payload">>}, Fields, absent)),
+    ?assertEqual(undefined, request_payload(macula_frame:encode(Call))).
+
 an_envelope_boolean_travels_as_0_or_1_test() ->
     Stored = macula_frame:store_ack(#{key => fill(3), signer => fill(1), record_version => version16(), stored => true}),
     <<_Length:32, Bytes/binary>> = macula_frame:encode(Stored),

@@ -220,7 +220,9 @@ enum_or_text(_K, V) -> binary_to_atom(V).
 relay_code(true, V) -> binary_to_atom(V);
 relay_code(false, V) -> V.
 
-%% A carried value in the encoder's terms: text as {text, Bin}.
+%% A carried value in the encoder's terms: text as {text, Bin}, and JSON null as undefined, which the encoder writes as
+%% CBOR null.
+tj(null) -> undefined;
 tj(#{<<"$hex">> := Hex} = M) when map_size(M) =:= 1 -> binary:decode_hex(Hex);
 tj(M) when is_map(M) -> #{{text, K} => tj(V) || K := V <- M};
 tj(L) when is_list(L) -> [tj(V) || V <- L];
