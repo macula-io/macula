@@ -1164,9 +1164,9 @@ send_overlay_frame(Client, Frame) when is_pid(Client), is_map(Frame) ->
 %% @doc Send a pre-built, pre-signed overlay-protocol frame to a specific
 %% `TargetPeer' (that peer's 32-byte node_id), relayed through whatever
 %% station this connection is dialed into. Wraps `Frame' in an
-%% `overlay_relay' envelope (Part 6 §9.x), a control frame the connection
-%% signs for its neighbour as it sends it, so the station relays it as sent
-%% by this connection's authenticated node_id and a claimed `TargetPeer'
+%% `overlay_relay' envelope (Part 6 §9.x), a control frame on a connection
+%% the handshake's session proofs authenticated, so the station relays it as
+%% sent by this connection's authenticated node_id and a claimed `TargetPeer'
 %% can never be spoofed by an unrelated connection. The station forwards it
 %% to whichever of its OTHER connections authenticates as `TargetPeer'. See `macula_station_peer_observer:dispatch_overlay/5' on
 %% the relay side. The receiving link takes `Frame' only when its type is
@@ -1649,7 +1649,7 @@ handle_call({unsubscribe, SubRef}, _From, S) ->
 
 %% Advertising registers the handler on the link. With a resolved
 %% authorization the encoded advertisement goes out as an ADVERTISE
-%% frame (a control frame the peering layer neighbour-signs) — at once
+%% frame (a control frame on the authenticated connection) — at once
 %% when the link is connected, or drained on handshake completion; the
 %% frame is stored either way for the unadvertise withdrawal.
 handle_call({advertise, Realm, Proc, Handler, Policy}, _From,
@@ -1711,8 +1711,8 @@ handle_call({send_overlay_frame_to, _Target, _Frame}, _From,
     {reply, {error, not_connected}, S};
 handle_call({send_overlay_frame_to, Target, Frame}, _From,
             #state{peer_pid = Pid} = S) ->
-    %% The envelope is a control frame: the connection signs it for its
-    %% neighbour as it sends it, and the station relays it as sent by this
+    %% The envelope is a control frame on the authenticated connection, and
+    %% the station relays it as sent by this
     %% connection's authenticated node_id (see macula_station_peer_observer:
     %% dispatch_overlay/5). `Frame' itself (the wrapped inner frame) is the
     %% caller's own responsibility, same as `send_overlay_frame/2'.
@@ -2271,8 +2271,7 @@ on_frame(#{frame_type := call} = Frame, S) ->
 %% and `Origin' is their sender whatever the frame itself names. A relayed
 %% frame of any other type is dropped and counted as `not_overlay', never
 %% verified and never delivered. The envelope reached this link through its
-%% own connection, which in pq_hybrid checked the station's neighbour
-%% signature on it first.
+%% own connection, whose handshake authenticated the station.
 %% A payload that is not exactly one frame is dropped and counted
 %% (`relayed_payload/3'), and the link carries on.
 %% Must be matched before the bare `#{realm := Realm}' clause below,

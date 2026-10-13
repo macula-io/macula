@@ -8,7 +8,8 @@
 %% by that id, before it delivers or forwards it (`macula_frame:verify_publication/3'), under the node's configured
 %% crypto profile: a publication that does not verify, or names another realm, stops at the first node that sees it,
 %% and a copy that arrives again is recognised by its id without a second verification. Frames leave this module
-%% without a signature of their own: the connection that sends a frame adds its neighbour signature (D17).
+%% without a signature of their own: the connection that carries a frame was authenticated by its handshake's session
+%% proofs.
 %%
 %% == State ==
 %%
