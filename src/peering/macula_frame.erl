@@ -2376,7 +2376,7 @@ frame_read(_NotAFrame, _Rest) ->
     {error, bad_frame}.
 
 typed_frame({ok, Type}, _TypeName, Wire, Rest) ->
-    read_frame(fields_read(lists:member(null, maps:values(Wire)), Wire, Type), Rest);
+    read_frame(fields_read(protocol_null(Wire), Wire, Type), Rest);
 typed_frame(error, TypeName, #{{text, <<"version">>} := ?PROTOCOL_VERSION}, Rest)
   when byte_size(TypeName) >= 1, byte_size(TypeName) =< ?MAX_FRAME_TYPE_BYTES ->
     ok = macula_wire_tolerance:count(wire_unknown_frame_type),
@@ -2384,8 +2384,22 @@ typed_frame(error, TypeName, #{{text, <<"version">>} := ?PROTOCOL_VERSION}, Rest
 typed_frame(error, _TypeName, _Wire, _Rest) ->
     {error, bad_frame}.
 
-%% CBOR null is no frame field's value (WIRE_1_0.md section 3, absent is omitted): a field sent as null refuses the
-%% frame, and one left out is absent.
+%% CBOR null is no protocol field's value at any depth (WIRE_1_0.md section 3.1, absent is omitted): a field sent as
+%% null refuses the frame, and one left out is absent. Application data is opaque, null included: a payload, and the
+%% extension map, whose entries' values are an extension's own.
+protocol_null(Wire) ->
+    lists:any(fun({{text, <<"payload">>}, _Value}) -> false;
+                 ({{text, <<"ext">>}, _Value}) -> false;
+                 ({_Key, Value}) -> null_within(Value)
+              end, maps:to_list(Wire)).
+
+null_within(null) -> true;
+null_within(Map) when is_map(Map) ->
+    lists:any(fun({{text, <<"payload">>}, _Value}) -> false; ({_Key, Value}) -> null_within(Value) end,
+              maps:to_list(Map));
+null_within(List) when is_list(List) -> lists:any(fun null_within/1, List);
+null_within(_Value) -> false.
+
 fields_read(true, _Wire, _Type) -> error;
 fields_read(false, Wire, Type) ->
     Table = field_table(Type),
@@ -3127,7 +3141,8 @@ booleans_on_wire({ok, Type}, Frame) ->
     Booleans = [Field || {Field, boolean} <- Table],
     Texts = [Field || {Field, {text_max, _Max}} <- Table],
     to_wire(maps:map(fun(Field, Value) ->
-                         text_on_wire(lists:member(Field, Texts), boolean_on_wire(lists:member(Field, Booleans), Value))
+                         unset_left_out(Field, text_on_wire(lists:member(Field, Texts),
+                                                            boolean_on_wire(lists:member(Field, Booleans), Value)))
                      end,
                      maps:filter(fun(_Field, Value) -> Value =/= undefined end, Frame)));
 booleans_on_wire(error, Frame) ->
@@ -3135,6 +3150,18 @@ booleans_on_wire(error, Frame) ->
 
 text_on_wire(true, Value) when is_binary(Value) -> {text, Value};
 text_on_wire(_Text, Value) -> Value.
+
+%% Absent is omitted at any depth (WIRE_1_0.md section 3.1): inside a protocol field an unset entry field is left out
+%% too. Application data stays as it is: a payload, and an extension's value.
+unset_left_out(payload, Value) -> Value;
+unset_left_out(ext, Value) -> Value;
+unset_left_out(_Field, Value) -> unset_stripped(Value).
+
+unset_stripped(Map) when is_map(Map) ->
+    maps:map(fun(payload, Value) -> Value; (_Key, Value) -> unset_stripped(Value) end,
+             maps:filter(fun(_Key, Value) -> Value =/= undefined end, Map));
+unset_stripped(List) when is_list(List) -> [unset_stripped(Element) || Element <- List];
+unset_stripped(Value) -> Value.
 
 boolean_on_wire(true, true) -> 1;
 boolean_on_wire(true, false) -> 0;
@@ -3869,11 +3896,15 @@ signed_enum({ok, Atom}) -> {ok, Atom};
 signed_enum(error) -> enum_unknown.
 
 entries_read([Entry | Rest], Table, Acc) when is_map(Entry) ->
-    entry_read(read_fields(maps:to_list(Entry), Table, #{}), Rest, Table, Acc);
+    entry_read(read_fields(maps:to_list(Entry), Table, entry_unset(Table)), Rest, Table, Acc);
 entries_read([], _Table, Acc) ->
     {ok, lists:reverse(Acc)};
 entries_read(_NotEntries, _Table, _Acc) ->
     error.
+
+%% An optional entry field the entry leaves out reads as undefined, as its builder writes it in memory.
+entry_unset(Table) ->
+    maps:from_list([{Field, undefined} || {Field, {optional, _Kind}} <- maps:values(Table)]).
 
 entry_read({ok, Entry}, Rest, Table, Acc) -> entries_read(Rest, Table, [Entry | Acc]);
 entry_read(ignored, Rest, Table, Acc) -> entries_read(Rest, Table, Acc);

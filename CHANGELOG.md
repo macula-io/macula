@@ -24,6 +24,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that does not hold is withdrawn. `macula_client:await_registration/4` is the wait; a refusal no caller waits on (a
   replay after a reconnect) is reported as `_macula.client.registration_refused`.
 
+### Changed
+
+- **Absent is omitted, at any depth** (macula#99, WIRE_1_0.md section 3.1). A frame leaves out a protocol field no
+  one set inside an entry too (a NODES entry's `asn`), where it wrote CBOR null, and a frame with null in a protocol
+  field at any depth is `malformed_frame`. Application data stays opaque, null included: a `payload` and an
+  extension's `value`. A decoded frame reads an absent optional entry field as `undefined`.
+
 ## [15.0.0-rc.1] - 2026-10-13
 
 Wire 1.0, first release candidate (spec `docs/design/WIRE_1_0.md`, design of record macula#83, conformance vectors

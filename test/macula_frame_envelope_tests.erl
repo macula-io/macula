@@ -110,6 +110,33 @@ a_null_payload_is_carried_not_left_out_test() ->
     ?assertEqual(null, maps:get({text, <<"payload">>}, Fields, absent)),
     ?assertEqual(undefined, request_payload(macula_frame:encode(Call))).
 
+%% Absent is omitted at any depth (WIRE_1_0.md section 3.1): a protocol field inside an entry is left out when unset,
+%% and null there refuses the frame. Application data stays opaque: an ext entry's value may be null.
+a_nested_unset_field_is_left_out_test() ->
+    Ref = macula_frame:station_ref(#{node_id => fill(6), station_id => fill(7), tier => 1, country => <<"BE">>,
+                                     last_seen_at => 1}),
+    Nodes = macula_frame:nodes(#{key => fill(4), nodes => [Ref]}),
+    <<_Length:32, Bytes/binary>> = macula_frame:encode(Nodes),
+    {ok, #{{text, <<"nodes">>} := [Entry]}} = macula_record_cbor:decode_strict(Bytes),
+    ?assertNot(is_map_key({text, <<"asn">>}, Entry)),
+    ?assertMatch({ok, #{nodes := [#{asn := undefined}]}, <<>>}, decode_map(Nodes)).
+
+a_nested_null_is_refused_test() ->
+    Ref = macula_frame:station_ref(#{node_id => fill(6), station_id => fill(7), tier => 1, country => <<"BE">>,
+                                     last_seen_at => 1}),
+    <<_Length:32, Bytes/binary>> = macula_frame:encode(macula_frame:nodes(#{key => fill(4), nodes => [Ref]})),
+    {ok, #{{text, <<"nodes">>} := [Entry]} = Wire} = macula_record_cbor:decode_strict(Bytes),
+    ?assertMatch({error, _}, decode_wire(Wire#{{text, <<"nodes">>} := [Entry#{{text, <<"asn">>} => null}]})).
+
+an_ext_value_may_be_null_test() ->
+    {ok, _} = application:ensure_all_started(macula),
+    Ping = macula_frame:ping(#{nonce => version16()}),
+    Ext = #{a_future_extension => #{critical => 0, value => undefined}},
+    <<_Length:32, Bytes/binary>> = macula_frame:encode(Ping#{ext => Ext}),
+    {ok, #{{text, <<"ext">>} := #{{text, <<"a_future_extension">>} := #{{text, <<"value">>} := null}}}} =
+        macula_record_cbor:decode_strict(Bytes),
+    ?assertMatch({ok, #{frame_type := ping}, <<>>}, decode_map(Ping#{ext => Ext})).
+
 an_envelope_boolean_travels_as_0_or_1_test() ->
     Stored = macula_frame:store_ack(#{key => fill(3), signer => fill(1), record_version => version16(), stored => true}),
     <<_Length:32, Bytes/binary>> = macula_frame:encode(Stored),
