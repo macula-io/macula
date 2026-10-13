@@ -124,7 +124,8 @@ other_station() -> binary:copy(<<16#54>>, 32).
 realm_key() ->
     case persistent_term:get({?MODULE, realm_key}, undefined) of
         undefined ->
-            {ok, Key} = macula_node_keys:generate(realm, pq_pure),
+            {ok, Profile} = macula_crypto_profile:configured(),
+            {ok, Key} = macula_node_keys:generate(realm, Profile),
             persistent_term:put({?MODULE, realm_key}, Key),
             Key;
         Key ->
@@ -137,26 +138,28 @@ live_authorization() ->
                                                                      roles => [<<"station">>]}),
                        realm_key()).
 
-%% A stand-in pool that pinned the realm key, and a DHT where only
-%% station()'s slot holds the realm's live authorization.
+%% A stand-in pool that pinned the realm key and whose station answers a
+%% record lookup (`macula:find_record/3' asks the pool's linked station):
+%% only station()'s slot holds the realm's live authorization.
 with_pinned_pool(Fun) ->
     Test = self(),
     Pinned = macula_node_keys:public_key(realm_key()),
+    Live = macula_record:station_authorization_key(realm(), station()),
+    Wire = macula_record:encode(live_authorization()),
     Pool = spawn_link(fun Loop() ->
                           receive
                               {'$gen_call', From, {realm_key, _}} -> gen_server:reply(From, {ok, Pinned}), Loop();
                               {'$gen_cast', {station_check, _}} -> Loop();
+                              {'$gen_call', From, {linked_station_call, _R, _P, #{key := Key}, _T}} ->
+                                  gen_server:reply(From, {ok, found(Key, Live, Wire)}), Loop();
                               {'$gen_call', From, Msg} -> Test ! {pool_asked, element(1, Msg)},
                                                           gen_server:reply(From, {error, stand_in}), Loop()
                           end
                       end),
-    Live = macula_record:station_authorization_key(realm(), station()),
-    Auth = live_authorization(),
-    ok = meck:new(macula, [passthrough]),
-    ok = meck:expect(macula, find_record, fun(_P, Key, _T) when Key =:= Live -> {ok, Auth};
-                                             (_P, _Key, _T) -> {error, not_found}
-                                          end),
-    try Fun(Pool) after meck:unload(macula) end.
+    Fun(Pool).
+
+found(Key, Key, Wire) -> Wire;
+found(_Key, _Live, _Wire) -> not_found.
 
 closed_dials_a_station_the_realm_authorized_test() ->
     with_mode(closed, fun() ->
