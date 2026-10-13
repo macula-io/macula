@@ -45,6 +45,7 @@
     find_node/1, nodes/1,
     find_value/1, value/1,
     store/1, store_ack/1,
+    register_ack/1,
 
     %% DHT helper — build and validate a station_ref entry
     station_ref/1, addresses_checked/1, text_checked/2,
@@ -156,6 +157,7 @@
     find_node_spec/0, nodes_spec/0,
     find_value_spec/0, value_spec/0,
     store_spec/0, store_ack_spec/0,
+    register_ack_spec/0, register_kind/0, register_refusal/0,
     station_ref/0, station_ref_spec/0,
     request_spec/0, verified_request/0,
     call_id/0,
@@ -207,6 +209,11 @@
 -define(MAX_PROOFS, 8).
 -define(MAX_PROOFS_BYTES, 256 * 1024).
 -define(MAX_TOPIC_BYTES, 512).
+%% A REGISTER_ACK names a procedure or a topic, so its name has the topic's bound (macula#12).
+-define(MAX_REGISTER_NAME_BYTES, 512).
+-define(REGISTER_KINDS, [advertise, unadvertise, subscribe, unsubscribe]).
+-define(REGISTER_REFUSALS, [too_many_providers, advertiser_quota, name_too_long, record_refused, not_authorized,
+                            too_many_realms, refused]).
 %% A NODES entry lists at most 4 addresses, one per observation today with room for IPv4 and IPv6 beside a host name,
 %% and a host is a DNS name of at most 253 bytes or a literal address.
 -define(MAX_ADDRESSES, 4).
@@ -239,7 +246,7 @@
 %% handshake. Data frames carry their own end-to-end signatures.
 -define(CONTROL_STREAM,
         [swim_ping, swim_ack, swim_suspect, swim_confirm, swim_ping_req, ping, pong, find_node, nodes, find_value,
-         value, store, store_ack, advertise, unadvertise, subscribe, unsubscribe,
+         value, store, store_ack, register_ack, advertise, unadvertise, subscribe, unsubscribe,
          overlay_relay, hyparview_join, hyparview_forward_join, hyparview_neighbor, hyparview_disconnect,
          hyparview_shuffle, hyparview_shuffle_reply, plumtree_ihave, plumtree_graft, plumtree_prune,
          goodbye]).
@@ -250,7 +257,7 @@
                     | liveness_ping | liveness_pong
                     | find_node | nodes
                     | find_value | value
-                    | store | store_ack
+                    | store | store_ack | register_ack
                     | call | result | error
                     | hyparview_join | hyparview_forward_join
                     | hyparview_neighbor | hyparview_disconnect
@@ -404,6 +411,24 @@
     signer := id256(),
     record_version := <<_:128>>,
     stored := boolean()
+}.
+
+%% What a station did with an ADVERTISE, UNADVERTISE, SUBSCRIBE or UNSUBSCRIBE (macula#12). An advertise kind names the
+%% advertisement's record_version, a pubsub kind its subscriber, so a later registration of the same name is not
+%% taken for this one. A refusal says why, from a closed set; refused is the generic member, and the one a reason
+%% this node does not know reads as. A received kind this node does not know reads as unknown, and the ack
+%% is ignored.
+-type register_kind() :: advertise | unadvertise | subscribe | unsubscribe.
+-type register_refusal() :: too_many_providers | advertiser_quota | name_too_long | record_refused | not_authorized
+                          | too_many_realms | refused.
+-type register_ack_spec() :: #{
+    kind := register_kind(),
+    realm := id256(),
+    name := binary(),
+    record_version => <<_:128>>,
+    subscriber => id256(),
+    accepted := boolean(),
+    reason => register_refusal()
 }.
 
 %%------------------------------------------------------------------
@@ -928,6 +953,30 @@ store_ack(#{key := K, signer := Signer, record_version := Version, stored := Sto
        is_binary(Version), byte_size(Version) =:= 16,
        is_boolean(Stored), not is_map_key(reason, Spec) ->
     (base(store_ack))#{key => K, signer => Signer, record_version => Version, stored => Stored}.
+
+%% @doc A station's answer to a registration (macula#12): accepted, or refused with a reason.
+-spec register_ack(register_ack_spec()) -> frame().
+register_ack(#{kind := Kind, realm := Realm, name := Name, accepted := Accepted} = Spec)
+  when is_binary(Realm), byte_size(Realm) =:= 32,
+       is_binary(Name), byte_size(Name) =< ?MAX_REGISTER_NAME_BYTES,
+       is_boolean(Accepted) ->
+    maps:merge(maps:merge((base(register_ack))#{kind => Kind, realm => Realm, name => Name, accepted => Accepted},
+                          registration_named(Kind, Spec)),
+               ack_reason(Accepted, Spec)).
+
+registration_named(Kind, #{record_version := Version} = Spec)
+  when (Kind =:= advertise orelse Kind =:= unadvertise), byte_size(Version) =:= 16,
+       not is_map_key(subscriber, Spec) ->
+    #{record_version => Version};
+registration_named(Kind, #{subscriber := Subscriber} = Spec)
+  when (Kind =:= subscribe orelse Kind =:= unsubscribe), byte_size(Subscriber) =:= 32,
+       not is_map_key(record_version, Spec) ->
+    #{subscriber => Subscriber}.
+
+ack_reason(true, Spec) when not is_map_key(reason, Spec) -> #{};
+ack_reason(false, #{reason := Reason}) when is_atom(Reason) -> #{reason => refusal_known(lists:member(Reason, ?REGISTER_REFUSALS), Reason)}.
+
+refusal_known(true, Reason) -> Reason.
 
 %%------------------------------------------------------------------
 %% station_ref — validated payload for NODES responses
@@ -2511,7 +2560,28 @@ named(unknown_type, _Type) -> {error, {invalid_frame, unknown, frame_type}}.
 %% The rule between the fields of a frame that has its shape: a FORWARD_JOIN's prwl is at most its arwl. Every path a
 %% received frame takes checks it here.
 agreed(ok, hyparview_forward_join, #{arwl := Arwl, prwl := Prwl}) when Prwl > Arwl -> {refused, prwl};
+agreed(ok, register_ack, #{kind := Kind, accepted := _} = Frame) when Kind =:= advertise; Kind =:= unadvertise ->
+    named_by(is_map_key(record_version, Frame), record_version, Frame);
+agreed(ok, register_ack, #{kind := Kind, accepted := _} = Frame) when Kind =:= subscribe; Kind =:= unsubscribe ->
+    named_by(is_map_key(subscriber, Frame), subscriber, Frame);
+agreed(ok, register_ack, #{accepted := _} = Frame) ->
+    reasoned(Frame);
 agreed(Shaped, _Type, _Frame) -> Shaped.
+
+%% A REGISTER_ACK names its registration the way its kind does, an advertise kind by record_version and a pubsub
+%% kind by subscriber, and carries a reason exactly when it refuses. One of a kind this node does not know is held only
+%% to the second rule.
+named_by(true, _Field, Frame) -> reasoned(Frame);
+named_by(false, Field, _Frame) -> {refused, Field}.
+
+reasoned(#{accepted := true} = Frame) -> no_reason(maps:get(reason, Frame, undefined));
+reasoned(#{accepted := false} = Frame) -> a_reason(maps:get(reason, Frame, undefined)).
+
+no_reason(undefined) -> ok;
+no_reason(_Reason) -> {refused, reason}.
+
+a_reason(undefined) -> {refused, reason};
+a_reason(_Reason) -> ok.
 
 received_shape(unknown_type, _Type, _Frame) ->
     unknown_type;
@@ -2649,6 +2719,10 @@ received_rules(store) ->
     base_rules([{record, binary}]);
 received_rules(store_ack) ->
     base_rules([{key, key}, {signer, key}, {record_version, id16}, {stored, boolean}]);
+received_rules(register_ack) ->
+    (base_rules([{realm, key}, {kind, {one_of, [unknown | ?REGISTER_KINDS]}},
+                 {name, {utf8_max, ?MAX_REGISTER_NAME_BYTES}}, {accepted, boolean}],
+                [{reason, {optional, {one_of, ?REGISTER_REFUSALS}}}]))#{one_of := [[{record_version, id16}, {subscriber, key}]]};
 received_rules(Type) when Type =:= call; Type =:= stream_open ->
     signed_rules([{request, object}], [], [{source_route, {optional, binary}}, {retry_budget, {optional, non_neg}}]);
 received_rules(result) ->
@@ -3104,6 +3178,7 @@ frame_type_named(<<"find_value">>) -> {ok, find_value};
 frame_type_named(<<"value">>) -> {ok, value};
 frame_type_named(<<"store">>) -> {ok, store};
 frame_type_named(<<"store_ack">>) -> {ok, store_ack};
+frame_type_named(<<"register_ack">>) -> {ok, register_ack};
 frame_type_named(<<"call">>) -> {ok, call};
 frame_type_named(<<"result">>) -> {ok, result};
 frame_type_named(<<"error">>) -> {ok, error};
@@ -3313,6 +3388,21 @@ frame_table(store_ack) ->
       <<"signer">> => {signer, value},
       <<"record_version">> => {record_version, value},
       <<"stored">> => {stored, boolean}};
+frame_table(register_ack) ->
+    #{<<"version">> => {version, value},
+      <<"neighbour">> => {neighbour, held_object},
+      <<"frame_type">> => {frame_type, frame_type},
+      <<"frame_id">> => {frame_id, value},
+      <<"sent_at_ms">> => {sent_at_ms, uint},
+      <<"realm">> => {realm, value},
+      <<"call_id">> => {call_id, value},
+      <<"source_route">> => {source_route, value},
+      <<"kind">> => {kind, {per_hop_enum, ?REGISTER_KINDS, unknown}},
+      <<"name">> => {name, value},
+      <<"record_version">> => {record_version, value},
+      <<"subscriber">> => {subscriber, value},
+      <<"accepted">> => {accepted, boolean},
+      <<"reason">> => {reason, {per_hop_enum, ?REGISTER_REFUSALS, refused}}};
 frame_table(call) ->
     #{<<"version">> => {version, value},
       <<"frame_type">> => {frame_type, frame_type},
