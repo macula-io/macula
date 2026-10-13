@@ -2264,7 +2264,8 @@ neighbour_held(Held, #{profile := Profile, peer_key := PeerKey}) ->
     macula_signed_object:verify_held(?NEIGHBOUR_LABEL, Held, PeerKey, Profile).
 
 neighbour_opened({ok, #{fields := Fields}}, #{version := Version, frame_type := Type}, Opts) ->
-    neighbour_frame(read_fields(maps:to_list(Fields), neighbour_tbs_table(Type), #{}), Version, Type, Opts);
+    Table = neighbour_tbs_table(Type),
+    neighbour_frame(header_filled(read_fields(maps:to_list(Fields), Table, #{}), Table), Version, Type, Opts);
 neighbour_opened({error, signature_invalid}, _Frame, _Opts) ->
     {error, signature_invalid};
 neighbour_opened({error, _MalformedOrAlgMismatch}, _Frame, _Opts) ->
@@ -2294,8 +2295,8 @@ opened({error, _Invalid}, _Opened) -> {error, malformed_frame}.
 %%------------------------------------------------------------------
 %%
 %% A frame map is encoded with wire_form/1: a boolean field of the frame
-%% type's table becomes 1 or 0, other atoms become text and undefined
-%% becomes null. A frame is decoded under the decoding rule of
+%% type's table becomes 1 or 0, other atoms become text and a field that is undefined
+%% is left out. A frame is decoded under the decoding rule of
 %% DESIGN_PQ_SIGNED_FRAMES_AND_RECORDS.md, and a frame type's own fields
 %% come back through a fixed table (D26): each field the table defines
 %% takes its atom key, an enum value takes one of the atoms the table
@@ -2401,13 +2402,32 @@ frame_read(_NotAFrame, _Rest) ->
     {error, bad_frame}.
 
 typed_frame({ok, Type}, _TypeName, Wire, Rest) ->
-    read_frame(read_fields(maps:to_list(Wire), field_table(Type), #{}), Rest);
+    read_frame(fields_read(lists:member(null, maps:values(Wire)), Wire, Type), Rest);
 typed_frame(error, TypeName, #{{text, <<"version">>} := ?PROTOCOL_VERSION}, Rest)
   when byte_size(TypeName) >= 1, byte_size(TypeName) =< ?MAX_FRAME_TYPE_BYTES ->
     ok = macula_wire_tolerance:count(wire_unknown_frame_type),
     {unknown, {unknown_frame_type, TypeName}, Rest};
 typed_frame(error, _TypeName, _Wire, _Rest) ->
     {error, bad_frame}.
+
+%% CBOR null is no frame field's value (WIRE_1_0.md section 3, absent is omitted): a field sent as null refuses the
+%% frame, and one left out is absent.
+fields_read(true, _Wire, _Type) -> error;
+fields_read(false, Wire, Type) ->
+    Table = field_table(Type),
+    header_filled(read_fields(maps:to_list(Wire), Table, #{}), Table).
+
+%% A base header key reads as undefined when the frame leaves it out, as base/1 builds it, for the frame types built
+%% on the base header (those with a frame_id). A frame signed for its neighbour holds its fields inside the signed
+%% object, and only there.
+header_filled({ok, #{neighbour := _} = Frame}, _Table) ->
+    {ok, Frame};
+header_filled({ok, Frame}, #{<<"frame_id">> := _} = Table) ->
+    Unset = [{Field, undefined} || Key <- [<<"realm">>, <<"call_id">>, <<"source_route">>],
+                                   {Field, _Kind} <- [maps:get(Key, Table, {none, none})], Field =/= none],
+    {ok, maps:merge(maps:from_list(Unset), Frame)};
+header_filled(NotReadOrUnheadered, _Table) ->
+    NotReadOrUnheadered.
 
 read_frame({ok, Frame}, Rest) -> {ok, Frame, Rest};
 read_frame(error, _Rest) -> {error, bad_frame}.
@@ -3111,9 +3131,12 @@ wire_form(#{frame_type := Type} = Frame) when is_atom(Type) ->
 wire_form(Frame) ->
     to_wire(Frame).
 
+%% Absent is omitted (WIRE_1_0.md section 3): a field no one set is left out, never written as null, so a frame has
+%% one encoding.
 booleans_on_wire({ok, Type}, Frame) ->
     Booleans = [Field || {Field, boolean} <- maps:values(field_table(Type))],
-    to_wire(maps:map(fun(Field, Value) -> boolean_on_wire(lists:member(Field, Booleans), Value) end, Frame));
+    to_wire(maps:map(fun(Field, Value) -> boolean_on_wire(lists:member(Field, Booleans), Value) end,
+                     maps:filter(fun(_Field, Value) -> Value =/= undefined end, Frame)));
 booleans_on_wire(error, Frame) ->
     to_wire(Frame).
 

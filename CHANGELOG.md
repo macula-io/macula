@@ -17,6 +17,9 @@ break: a node on it no longer reads the frames of an older one.
 - **Frame version 5.** Every frame after HELLO carries `version` 5, the handshake version; a frame of another version
   is `malformed_frame`.
 - **The per-frame `capabilities` header is gone.** A frame that carries it is refused as an extra core field.
+- **Absent is omitted.** A frame leaves out an envelope key no one set (`realm`, `call_id`, `source_route`), where it
+  wrote CBOR null, and a frame whose top-level field is null is `malformed_frame`. A decoded frame still reads an
+  absent base header key as `undefined`.
 - **Inside a signed object an enum value this node does not know is refused by name**, `{enum_unknown, Field}`
   (STREAM_OPEN `mode`, STREAM_DATA `encoding`, STREAM_END `role`, the relay error `code`), where it was
   `malformed_frame`.

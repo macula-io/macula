@@ -85,6 +85,23 @@ a_store_ack_carries_no_reason_test() ->
     ?assertNot(maps:is_key(reason, roundtrip(Refused))),
     ?assertEqual({error, bad_frame}, decode_map(Refused#{reason => quota})).
 
+%% Absent is omitted (WIRE_1_0.md section 3): an optional key no one set is left out of the frame, never written as
+%% null, so one frame has one encoding; a key a peer sends as null refuses the frame.
+an_unset_optional_key_is_left_out_test() ->
+    Ping = macula_frame:ping(#{nonce => version16()}),
+    <<_Length:32, Bytes/binary>> = macula_frame:encode(Ping),
+    {ok, Wire} = macula_record_cbor:decode_strict(Bytes),
+    ?assertEqual([], [Key || Key := null <- Wire]),
+    ?assertNot(is_map_key({text, <<"realm">>}, Wire)),
+    ?assertMatch({ok, #{frame_type := ping}, <<>>}, decode_map(Ping)).
+
+an_optional_key_sent_as_null_is_refused_test() ->
+    Ping = macula_frame:ping(#{nonce => version16()}),
+    <<_Length:32, Bytes/binary>> = macula_frame:encode(Ping),
+    {ok, Wire} = macula_record_cbor:decode_strict(Bytes),
+    [?assertMatch({error, _}, decode_wire(Wire#{{text, Key} => null}))
+     || Key <- [<<"realm">>, <<"call_id">>, <<"source_route">>]].
+
 an_envelope_boolean_travels_as_0_or_1_test() ->
     Stored = macula_frame:store_ack(#{key => fill(3), signer => fill(1), record_version => version16(), stored => true}),
     <<_Length:32, Bytes/binary>> = macula_frame:encode(Stored),
@@ -176,6 +193,10 @@ roundtrip(Frame) ->
 
 decode_map(Frame) ->
     macula_frame:decode(macula_frame:encode(Frame)).
+
+decode_wire(Wire) ->
+    Body = macula_record_cbor:encode(Wire),
+    macula_frame:decode(<<(byte_size(Body)):32, Body/binary>>).
 
 text(Bin) ->
     macula_record_cbor:encode({text, Bin}).
