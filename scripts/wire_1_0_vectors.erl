@@ -104,8 +104,10 @@ role_entry(Key) ->
 %% Records (WIRE_1_0.md section 5)
 
 %% A wire 1.0 record: the tbs built field by field, signed with the bare primitive. Opts change the tbs:
-%% {set, Key, Value}, {drop, Key}, and the signature: corrupt_signature.
-record(P, Signer, Type, Payload, Opts) ->
+%% {set, Key, Value}, {drop, Key}, and the signature: corrupt_signature, {sign_with, Key} (carry and sign with Key, such
+%% as a key in the other profile's form, while alg stays the profile's).
+record(P, Signer0, Type, Payload, Opts) ->
+    Signer = proplists:get_value(sign_with, Opts, Signer0),
     Base = #{<<"type">> => Type, <<"alg">> => {text, macula_signed_object:alg(P)},
              <<"version">> => macula_record_uuid:v7(),
              <<"created_at">> => ?T0, <<"expires_at">> => ?T0 + ?HOUR,
@@ -115,6 +117,7 @@ record(P, Signer, Type, Payload, Opts) ->
     macula_signed_object:encode(#{key => carried(Signer), tbs => Tbs, signature => Signature}).
 
 tbs_opt({set, K, V}, M) -> M#{K => V};
+tbs_opt({sign_with, _Key}, M) -> M;
 tbs_opt({drop, K}, M) -> maps:remove(K, M);
 tbs_opt(_Other, M) -> M.
 
@@ -131,7 +134,7 @@ signed_bytes(Label, Carried, Tbs) ->
 class_of(T) when T =:= 16#01; T =:= 16#11 -> 3;
 class_of(T) when T =:= 16#06; T =:= 16#12 -> 0;
 class_of(T) when T =:= 16#04; T =:= 16#15 -> 2;
-class_of(T) when T =:= 16#16; T =:= 16#17 -> 1;
+class_of(T) when T =:= 16#13; T =:= 16#16; T =:= 16#17 -> 1;
 class_of(T) when T >= 16#20 -> 4;
 class_of(_) -> 5.
 
@@ -153,6 +156,7 @@ record_cases(P, Keys) ->
     Subject = {set, <<"subject">>, <<"subject-1">>},
     Now = ?T0 + 1000,
     Store = #{<<"outcome">> => <<"store">>},
+    Slot = fun(Signer, Type) -> Store#{<<"slot">> => hex(unknown_tag_slot(Type, Signer, <<"subject-1">>))} end,
     Accept = #{<<"outcome">> => <<"accept">>},
     R = fun(Reason) -> #{<<"outcome">> => <<"refuse">>, <<"reason">> => Reason} end,
     Both = fun(Reason) -> {R(Reason), R(Reason)} end,
@@ -165,11 +169,13 @@ record_cases(P, Keys) ->
      Case(<<"domain_type.with_subject.ok">>, [<<"D4">>, <<"A3">>], org,
           record(P, Org, 16#20, Domain, [Subject]), {Store, Accept}),
      Case(<<"unknown_builtin_tag.with_subject.stored">>, [<<"D4">>, <<"A3">>], org,
-          record(P, Org, 16#1E, Domain, [Subject]), {Store, R(<<"type_unknown">>)}),
+          record(P, Org, 16#1E, Domain, [Subject]), {Slot(Org, 16#1E), R(<<"type_unknown">>)}),
      Case(<<"unknown_builtin_tag.no_subject.refused">>, [<<"D4">>, <<"A3">>], org,
           record(P, Org, 16#1E, Domain, []), Both(<<"subject_missing">>)),
      Case(<<"reserved_successor_tag.stored">>, [<<"D7">>], org,
-          record(P, Org, 16#14, Domain, [Subject]), {Store, R(<<"type_unknown">>)}),
+          record(P, Org, 16#14, Domain, [Subject]), {Slot(Org, 16#14), R(<<"type_unknown">>)}),
+     Case(<<"reserved_successor_tag.identity_signed.stored">>, [<<"D7">>, <<"A3">>], client_identity,
+          record(P, Client, 16#14, Domain, [Subject]), {Slot(Client, 16#14), R(<<"type_unknown">>)}),
      Case(<<"schema_missing.refused">>, [<<"D4">>], client_identity,
           record(P, Client, 16#01, Node, [{drop, <<"schema">>}]), Both(<<"malformed">>)),
      Case(<<"schema_zero.refused">>, [<<"D4">>], client_identity,
@@ -180,9 +186,8 @@ record_cases(P, Keys) ->
           record(P, Client, 16#01, Node, [{drop, <<"lifetime_class">>}]), Both(<<"malformed">>)),
      Case(<<"lifetime_class_unknown.refused">>, [<<"D4">>], client_identity,
           record(P, Client, 16#01, Node, [{set, <<"lifetime_class">>, 6}]), Both(<<"lifetime_class_unknown">>)),
-     Case(<<"lifetime_class_wrong_row.stored">>, [<<"D4">>], client_identity,
-          record(P, Client, 16#01, Node, [{set, <<"lifetime_class">>, 4}]),
-          {Store, R(<<"lifetime_class_mismatch">>)}),
+     Case(<<"lifetime_class_wrong_row.refused">>, [<<"D4">>], client_identity,
+          record(P, Client, 16#01, Node, [{set, <<"lifetime_class">>, 4}]), Both(<<"lifetime_class_mismatch">>)),
      Case(<<"lifetime_too_long.refused">>, [<<"D4">>], client_identity,
           record(P, Client, 16#01, Node, [{set, <<"expires_at">>, ?T0 + 48 * ?HOUR + 1}]),
           Both(<<"lifetime_too_long">>)),
@@ -213,23 +218,26 @@ record_cases(P, Keys) ->
      Case(<<"content_id_tag_unknown.stored">>, [<<"D7">>], client_identity,
           record(P, Client, 16#11, content_payload(Client, 3), [{set, <<"expires_at">>, ?T0 + ?HOUR}]),
           {Store, R(<<"mcid_tag_unknown">>)})]
+    ++ tombstone_bound_cases(P, Keys, Case, Accept, Both)
+    ++ serving_stations_cases(P, Keys, Case, Store, Accept, R)
     ++ lists:append([type_cases(P, Keys, Name, Type, Role, Payload, Case, Store, Accept, R)
                      || {Name, Type, Role, Payload} <- builtin_payloads(P, Keys)]).
 
 %% Every known built-in type: a valid record, and one naming another lifetime row (stored, refused by a reader).
-type_cases(P, Keys, Name, Type, Role, Payload, Case, Store, Accept, R) ->
+type_cases(P, Keys, Name, Type, Role, TodayPayload, Case, Store, Accept, R) ->
     Signer = key(Keys, P, Role),
+    Payload = wire_1_0_payload(Type, TodayPayload),
     Row = class_of(row_type(Type, Payload)),
     Lifetime = min(?HOUR, class_max(Row)),
     Expires = {set, <<"expires_at">>, ?T0 + Lifetime},
     Wrong = case Row of 5 -> 4; _ -> 5 end,
     Covers = [<<"D4">>],
-    ok = accepted_today(P, Signer, Type, Payload, ?T0 + Lifetime, Name),
+    ok = accepted_today(P, Signer, Type, TodayPayload, ?T0 + Lifetime, Name),
     [Case(<<"type.", Name/binary, ".ok">>, Covers, Role,
           record(P, Signer, Type, Payload, [Expires, {set, <<"lifetime_class">>, Row}]), {Store, Accept}),
-     Case(<<"type.", Name/binary, ".other_row.stored">>, Covers, Role,
+     Case(<<"type.", Name/binary, ".other_row.refused">>, Covers, Role,
           record(P, Signer, Type, Payload, [Expires, {set, <<"lifetime_class">>, Wrong}]),
-          {Store, R(<<"lifetime_class_mismatch">>)})].
+          {R(<<"lifetime_class_mismatch">>), R(<<"lifetime_class_mismatch">>)})].
 
 %% The payload passes today's reader (macula_record:verify/3) in today's tbs, without schema and lifetime_class, so an
 %% "accept" here claims nothing about payload rules that wire 1.0 does not inherit unchanged.
@@ -286,6 +294,7 @@ builtin_payloads(P, Keys) ->
                                                       #{valid_until => ?T0 + ?DAY}))},
      {<<"content_announcement">>, 16#11, client_identity, content_payload(key(Keys, P, client_identity), 2)},
      {<<"station_endpoint">>, 16#12, station_identity, payload(macula_record:station_endpoint(4433))},
+     {<<"station_authorization">>, 16#13, realm, payload(station_authorization(Realm, Id(station_identity)))},
      {<<"org_directory">>, 16#15, realm, payload(macula_record:org_directory(Realm, <<"example-org">>, Id(org)))},
      {<<"procedure_delegation">>, 16#16, org,
       payload(macula_record:procedure_delegation(Id(org), Id(client_identity)))},
@@ -311,17 +320,87 @@ content_payload(Signer, Tag) ->
     <<2, Rest/binary>> = maps:get(McidKey, Payload),
     Payload#{McidKey := <<Tag, Rest/binary>>}.
 
+%% Today's payload in its wire 1.0 shape: a procedure advertisement names its serving stations as a list (5.3).
+wire_1_0_payload(16#06, Payload) ->
+    {Serving, Rest} = maps:take({text, <<"serving_station">>}, Payload),
+    Rest#{{text, <<"serving_stations">>} => [Serving]};
+wire_1_0_payload(_Type, Payload) ->
+    Payload.
+
+station_authorization(Realm, Station) ->
+    macula_record:station_authorization(Realm, #{realm => Realm, station_node => Station,
+                                                 hostname => <<"station.example">>, roles => [<<"seed">>]},
+                                        #{valid_from => ?T0, valid_until => ?T0 + 30 * ?MIN}).
+
+%% The slot a custodian gives a tag it does not know (5.3): the signer key id is MACULA-KEY-ID-V1 over the key as
+%% carried, even for an identity key.
+unknown_tag_slot(Type, Signer, Subject) ->
+    KeyId = macula_node_keys:key_id(carried(Signer), maps:get(profile, Signer)),
+    Slot = fun(T) -> crypto:hash(sha256, <<"MACULA-PQ-STORAGE-KEY-V1", 0, T, KeyId/binary, (byte_size(Subject)):32,
+                                          Subject/binary>>) end,
+    Domain = Slot(16#20),
+    Domain = macula_record:storage_key(#{type => 16#20, payload => #{}, subject => Subject, key_id => KeyId}),
+    Slot(Type).
+
+%% A tombstone is bounded by the withdrawn type's row plus 10 minutes (5.1): at the bound it is stored, a millisecond
+%% over it is refused. Row 0 (station endpoint) and row 1 (station authorization, which revokes a station).
+tombstone_bound_cases(P, Keys, Case, Accept, Both) ->
+    Station = key(Keys, P, station_identity),
+    Realm = key(Keys, P, realm),
+    Store = #{<<"outcome">> => <<"store">>},
+    Pair = fun(Name, Role, Signer, Withdrawn) ->
+                   Payload = payload(macula_record:tombstone(Withdrawn, revoked)),
+                   Bound = class_max(class_of(maps:get(type, Withdrawn))) + 10 * ?MIN,
+                   Rec = fun(Lifetime) -> record(P, Signer, 16#0C, Payload,
+                                                 [{set, <<"lifetime_class">>, class_of(maps:get(type, Withdrawn))},
+                                                  {set, <<"expires_at">>, ?T0 + Lifetime}]) end,
+                   [Case(<<"tombstone.", Name/binary, ".at_bound.ok">>, [<<"D4">>], Role, Rec(Bound), {Store, Accept}),
+                    Case(<<"tombstone.", Name/binary, ".over_bound.refused">>, [<<"D4">>], Role, Rec(Bound + 1),
+                         Both(<<"lifetime_too_long">>))]
+           end,
+    RealmId = <<16#AA:256>>,
+    Pair(<<"station_endpoint">>, station_identity, Station, macula_record:station_endpoint(4433))
+        ++ Pair(<<"station_authorization">>, realm, Realm, station_authorization(RealmId, key_id(Station))).
+
+%% K > 1 (5.3): serving_stations holds 1 to 8 node ids, strictly ascending. A custodian never reads the payload.
+serving_stations_cases(P, Keys, Case, Store, Accept, R) ->
+    Client = key(Keys, P, client_identity),
+    Today = payload(macula_record:procedure_advertisement(key_id(Client), <<16#AA:256>>,
+                                                          <<"example.procedure">>, <<1:256>>)),
+    Base = maps:remove({text, <<"serving_station">>}, Today),
+    Adv = fun(Stations) -> record(P, Client, 16#06, Base#{{text, <<"serving_stations">>} => Stations},
+                                  [{set, <<"expires_at">>, ?T0 + 5 * ?MIN}]) end,
+    Ids = fun(L) -> [<<N:256>> || N <- L] end,
+    Lands = [<<"macula#100">>, <<"macula-station#55">>],
+    C = fun(Name, Stations, Read) ->
+                setelement(4, Case(<<"procedure_advertisement.serving_stations.", Name/binary>>, [<<"D4">>],
+                                   client_identity, Adv(Stations), {Store, Read}), Lands)
+        end,
+    [C(<<"one.ok">>, Ids([1]), Accept),
+     C(<<"eight.ok">>, Ids(lists:seq(1, 8)), Accept),
+     C(<<"nine.refused">>, Ids(lists:seq(1, 9)), R(<<"malformed">>)),
+     C(<<"empty.refused">>, [], R(<<"malformed">>)),
+     C(<<"unsorted.refused">>, Ids([2, 1]), R(<<"malformed">>)),
+     C(<<"duplicate.refused">>, Ids([1, 1]), R(<<"malformed">>))].
+
 reader_case({Id, P, Covers, Lands, Bytes, Signer, Now, _Cust, Read}) ->
-    record_case(<<Id/binary, ".reader">>, P, Covers, Lands, Bytes, Signer, Now, Read).
+    at_bound(Id, record_case(<<Id/binary, ".reader">>, P, Covers, Lands, Bytes, Signer, Now, Read)).
+
+%% A lifetime exactly at its maximum is a bound case: under LTS the maximum may tighten (section 1).
+at_bound(Id, Case) ->
+    case binary:match(Id, [<<".at_bound.">>, <<"at_class_bound">>]) of
+        nomatch -> Case;
+        _ -> Case#{<<"bound">> => <<"upper">>}
+    end.
 
 %% A custodian case names the object of its reader case in verify.json instead of repeating its bytes.
 custodian_case({Id, P, Covers, Lands, _Bytes, Signer, Now, Cust, _Read}) ->
     Profile = atom_to_binary(P),
-    #{<<"id">> => <<Id/binary, ".custodian.", Profile/binary>>, <<"profile">> => Profile,
-      <<"covers">> => Covers, <<"lands_with">> => [Lands, ?STATION],
+    at_bound(Id, #{<<"id">> => <<Id/binary, ".custodian.", Profile/binary>>, <<"profile">> => Profile,
+      <<"covers">> => Covers, <<"lands_with">> => lands(Lands) ++ [?STATION],
       <<"input">> => #{<<"object_of">> => <<Id/binary, ".reader.", Profile/binary>>,
                        <<"signer">> => atom_to_binary(Signer), <<"now_ms">> => Now},
-      <<"expect">> => Cust}.
+      <<"expect">> => Cust}).
 
 record_case(Id, P, Covers, Lands, Bytes, Signer, Now, Expect) ->
     #{<<"id">> => <<Id/binary, ".", (atom_to_binary(P))/binary>>, <<"profile">> => atom_to_binary(P),
@@ -334,10 +413,14 @@ record_case(Id, P, Covers, Lands, Bytes, Signer, Now, Expect) ->
 %% what a runner can check before it reaches any wire 1.0 code.
 signature_valid(Bytes, P) ->
     {ok, #{key := Key, tbs := Tbs, signature := Sig}} = macula_signed_object:decode(Bytes),
-    bit(macula_node_keys:verify(signed_bytes(?RECORD_LABEL, Key, Tbs), Sig, Key, P)).
+    bit(catch macula_node_keys:verify(signed_bytes(?RECORD_LABEL, Key, Tbs), Sig, Key, P)).
 
 bit(true) -> 1;
-bit(false) -> 0.
+bit(_False) -> 0.
+
+%% The case's key is the signer's key of another profile (keys.json), in that profile's carried form.
+key_profile(P, #{<<"input">> := Input} = Case) ->
+    Case#{<<"input">> := Input#{<<"key_profile">> => atom_to_binary(P)}}.
 
 %% Two faults in one object: the refusal is the first in WIRE_1_0.md section 5.2's order.
 check_order_cases(P, Keys) ->
@@ -352,7 +435,21 @@ check_order_cases(P, Keys) ->
                             Bytes, Signer, Now, #{<<"outcome">> => <<"refuse">>, <<"reason">> => Reason,
                                                   <<"role">> => Role})
         end,
-    [C(<<"alg_before_signature">>, <<"custodian">>, client_identity,
+    OtherClient = key(Keys, other_profile(P), client_identity),
+    OtherAlg = {set, <<"alg">>, alg(other_profile(P))},
+    Cross = fun(Role) ->
+                    [key_profile(other_profile(P),
+                                 C(<<"own_alg_other_key_form">>, Role, client_identity,
+                                   record(P, Client, 16#01, Node, [{sign_with, OtherClient}]), <<"malformed">>)),
+                     C(<<"other_profile_alg">>, Role, client_identity,
+                       record(P, Client, 16#01, Node, [OtherAlg]), <<"alg_unsupported">>),
+                     C(<<"other_profile_alg_before_signature">>, Role, client_identity,
+                       record(P, Client, 16#01, Node, [OtherAlg, corrupt_signature]), <<"alg_unsupported">>)]
+            end,
+    Cross(<<"custodian">>) ++ Cross(<<"reader">>) ++
+    [C(<<"lifetime_before_class_row">>, <<"custodian">>, client_identity,
+       record(P, Client, 16#01, Node, [{set, <<"lifetime_class">>, 0}]), <<"lifetime_too_long">>),
+     C(<<"alg_before_signature">>, <<"custodian">>, client_identity,
        record(P, Client, 16#01, Node, [{set, <<"alg">>, {text, <<"ML-DSA-65">>}}, corrupt_signature]),
        <<"alg_unsupported">>),
      C(<<"signature_before_tbs_keys">>, <<"custodian">>, client_identity,
@@ -374,9 +471,9 @@ check_order_cases(P, Keys) ->
        record(P, Org, 16#1E, Domain, [{set, <<"lifetime_class">>, 9}]), <<"lifetime_class_unknown">>),
      C(<<"type_before_schema">>, <<"reader">>, org,
        record(P, Org, 16#1E, Domain, [{set, <<"subject">>, <<"s">>}, {set, <<"schema">>, 7}]), <<"type_unknown">>),
-     C(<<"schema_before_class_row">>, <<"reader">>, client_identity,
+     C(<<"class_row_before_schema">>, <<"reader">>, client_identity,
        record(P, Client, 16#01, Node, [{set, <<"schema">>, 2}, {set, <<"lifetime_class">>, 4}]),
-       <<"schema_unsupported">>),
+       <<"lifetime_class_mismatch">>),
      C(<<"class_row_before_ext">>, <<"reader">>, client_identity,
        record(P, Client, 16#01, Node, [{set, <<"lifetime_class">>, 4}, {set, <<"ext">>, ext(<<"example.unknown">>, 1)}]),
        <<"lifetime_class_mismatch">>),
@@ -405,6 +502,9 @@ envelope_cases() ->
        Ping(#{<<"frame_id">> => <<16#0190:16, 0:112>>, <<"sent_at_ms">> => ?T0}), Accept),
      E(<<"version_4.refused">>, [<<"D2">>, <<"D9">>], (Ping(#{}))#{<<"version">> => 4}, Malformed),
      E(<<"version_2.refused">>, [<<"D3">>], (Ping(#{}))#{<<"version">> => 2}, Malformed),
+     E(<<"optional_key_null.realm.refused">>, [<<"D9">>], Ping(#{<<"realm">> => null}), Malformed),
+     E(<<"optional_key_null.call_id.refused">>, [<<"D9">>], Ping(#{<<"call_id">> => null}), Malformed),
+     E(<<"optional_key_null.source_route.refused">>, [<<"D9">>], Ping(#{<<"source_route">> => null}), Malformed),
      E(<<"capabilities_header.refused">>, [<<"D9">>], Ping(#{<<"capabilities">> => 0}), Malformed),
      E(<<"extra_core_field.refused">>, [<<"D9">>], Ping(#{<<"colour">> => {text, <<"blue">>}}), Malformed),
      E(<<"unknown_frame_type.ignored">>, [<<"D5">>, <<"D9">>], Unknown(#{}), Ignore),
@@ -426,7 +526,8 @@ envelope_cases() ->
      E(<<"ext.noncritical_unknown.ignored">>, [<<"D8">>], Ping(#{<<"ext">> => ext(<<"example.unknown">>, 0)}),
        Accept#{<<"count">> => <<"wire_ext_ignored">>}),
      E(<<"ext.critical_unknown.refused">>, [<<"D8">>, <<"D9">>], Ping(#{<<"ext">> => ext(<<"example.unknown">>, 1)}),
-       #{<<"outcome">> => <<"refuse">>, <<"reason">> => <<"extension_unsupported">>, <<"link">> => <<"stays_up">>}),
+       #{<<"outcome">> => <<"refuse">>, <<"reason">> => <<"extension_unsupported">>, <<"link">> => <<"stays_up">>,
+         <<"count">> => <<"wire_ext_refused">>}),
      E(<<"ext.empty.refused">>, [<<"D8">>], Ping(#{<<"ext">> => #{}}), Malformed),
      E(<<"ext.critical_2.refused">>, [<<"D8">>], Ping(#{<<"ext">> => ext(<<"example.unknown">>, 2)}), Malformed),
      E(<<"ext.entry_not_a_map.refused">>, [<<"D8">>], Ping(#{<<"ext">> => #{{text, <<"example.e">>} => 1}}),
@@ -483,7 +584,21 @@ enum_hop_cases() ->
      H(<<"refusal_code.unknown.fallback">>, <<"macula#98">>, Refused(<<"example_future_code">>), 0,
        fallback(<<"refusal_code">>, <<"not_accepted">>)),
      H(<<"refusal_code.profile_unsupported.accept">>, <<"macula#98">>, Early, 0,
-       #{<<"outcome">> => <<"accept">>, <<"field">> => <<"refusal_code">>, <<"value">> => <<"profile_unsupported">>})].
+       #{<<"outcome">> => <<"accept">>, <<"field">> => <<"refusal_code">>, <<"value">> => <<"profile_unsupported">>}),
+     H(<<"register_ack.reason.known.accept">>, <<"macula#12">>, register_ack(#{}), 1,
+       #{<<"outcome">> => <<"accept">>, <<"field">> => <<"reason">>, <<"value">> => <<"too_many_providers">>}),
+     H(<<"register_ack.reason.unknown.fallback">>, <<"macula#12">>,
+       register_ack(#{<<"reason">> => {text, <<"example_reason">>}}), 1, fallback(<<"reason">>, <<"refused">>)),
+     H(<<"register_ack.kind.unknown.ignored">>, <<"macula#12">>,
+       register_ack(#{<<"kind">> => {text, <<"example_kind">>}}), 1,
+       #{<<"outcome">> => <<"ignore">>, <<"field">> => <<"kind">>, <<"count">> => <<"wire_enum_fallback">>})].
+
+%% A REGISTER_ACK (section 3.5): by default the station refusing an advertise.
+register_ack(Fields) ->
+    frame(<<"register_ack">>, maps:merge(#{<<"kind">> => {text, <<"advertise">>}, <<"realm">> => <<1:256>>,
+                                          <<"name">> => {text, <<"example.procedure">>},
+                                          <<"record_version">> => <<16#0190:16, 0:112>>, <<"accepted">> => 0,
+                                          <<"reason">> => {text, <<"too_many_providers">>}}, Fields)).
 
 fallback(Field, Value) ->
     #{<<"outcome">> => <<"fallback">>, <<"field">> => Field, <<"value">> => Value,
@@ -510,7 +625,7 @@ enum_signed_cases(P, Keys) ->
     Stream = fun(Type, Fields) ->
                      Tbs = maps:merge(#{<<"alg">> => alg(P), <<"frame_type">> => {text, Type},
                                         <<"request_id">> => <<1:128>>, <<"request_hash">> => RequestHash,
-                                        <<"signer">> => key_id(Client), <<"seq">> => 1}, Fields),
+                                        <<"signer">> => key_id(Client), <<"seq">> => 0}, Fields),
                      frame(Type, #{<<"caller_stream">> => maps:remove(<<"key">>,
                                                                       signed(?CALLER_STREAM_LABEL, Client, Tbs))})
              end,
@@ -747,7 +862,7 @@ handshake_cases(P, Keys) ->
                                                                          <<"refusal_code">> => {text, <<"example_code">>}}),
                                      Closes(<<"refused:not_accepted">>))]),
      H(<<"hello.early_refusal_names_ranges">>, [<<"A2">>], #{}, #{<<"versions">> => [6, 7]},
-       [Step(<<"client">>, opener([6, 7], [Prof]), Ok),
+       [Step(<<"client">>, opener([6, 7], [Prof]), EarlyExpect(<<"unsupported_version">>)),
         Step(<<"station">>, Early(<<"unsupported_version">>),
              (Closes(<<"refused:unsupported_version">>))#{<<"station_ranges">> => #{<<"versions">> => [5, 5],
                                                                                     <<"profiles">> => [Prof]}})])].
@@ -849,7 +964,8 @@ tbs_cases(P, Keys) ->
                                               <<"schema">> => 1, <<"lifetime_class">> => class_of(Type),
                                               <<"payload">> => #{{text, <<"quic_port">>} => 4433}}, Extra) end,
     T = fun(Id, Covers, Label, Role, Fields) -> tbs_case(Id, P, Keys, Covers, Label, Role, Fields, keyed) end,
-    [T(<<"record.station_endpoint">>, [<<"D4">>], ?RECORD_LABEL, station_identity, Record(16#12, #{})),
+    [T(<<"record.station_endpoint">>, [<<"D4">>], ?RECORD_LABEL, station_identity,
+       Record(16#12, #{<<"expires_at">> => ?T0 + 5 * ?MIN})),
      T(<<"record.domain_type.subject_and_ext">>, [<<"D4">>, <<"D8">>], ?RECORD_LABEL, org,
        Record(16#20, #{<<"subject">> => <<"subject-1">>, <<"lifetime_class">> => 4,
                        <<"ext">> => ext(<<"example.e">>, 0)})),
@@ -922,12 +1038,49 @@ tj_key({text, K}) -> K.
 %% is rewritten to wire 1.0: version 5 and no capabilities header (WIRE_1_0.md sections 2 and 3.1).
 
 frame_cases(Keys) ->
-    [frame_case(Type, Frame) || {Type, Frame} <- wire_1_0_frame_specs:frames(Keys)].
+    [frame_case(Type, Frame) || {Type, Frame} <- wire_1_0_frame_specs:frames(Keys)] ++ register_ack_cases().
+
+%% REGISTER_ACK has no constructor yet (macula#12): built here from section 3.5.
+register_ack_cases() ->
+    Accepted = #{<<"accepted">> => 1, <<"reason">> => drop},
+    Sub = #{<<"kind">> => {text, <<"subscribe">>}, <<"record_version">> => drop, <<"subscriber">> => <<7:256>>},
+    Ok = #{<<"outcome">> => <<"accept">>},
+    Bad = #{<<"outcome">> => <<"refuse">>, <<"reason">> => <<"malformed_frame">>},
+    Name = fun(Len) -> #{<<"name">> => {text, binary:copy(<<"n">>, Len)}} end,
+    A = fun(Id, Changes, Expect) -> register_ack_case(Id, Changes, Expect) end,
+    [A(<<"advertise.accepted">>, Accepted, Ok),
+     A(<<"advertise.refused">>, #{}, Ok),
+     A(<<"unadvertise.accepted">>, Accepted#{<<"kind">> => {text, <<"unadvertise">>}}, Ok),
+     A(<<"subscribe.accepted">>, maps:merge(Sub, Accepted), Ok),
+     A(<<"subscribe.too_many_realms">>, Sub#{<<"reason">> => {text, <<"too_many_realms">>}}, Ok),
+     A(<<"unsubscribe.refused">>, Sub#{<<"kind">> => {text, <<"unsubscribe">>},
+                                       <<"reason">> => {text, <<"not_authorized">>}}, Ok),
+     (A(<<"name_512.accepted">>, maps:merge(Accepted, Name(512)), Ok))#{<<"bound">> => <<"upper">>},
+     A(<<"name_513.refused">>, maps:merge(Accepted, Name(513)), Bad),
+     A(<<"name_empty.refused">>, maps:merge(Accepted, Name(0)), Bad),
+     A(<<"accepted_with_reason.refused">>, #{<<"accepted">> => 1}, Bad),
+     A(<<"refused_without_reason.refused">>, #{<<"reason">> => drop}, Bad),
+     A(<<"accepted_2.refused">>, #{<<"accepted">> => 2, <<"reason">> => drop}, Bad),
+     A(<<"advertise_with_subscriber.refused">>, Sub#{<<"kind">> => {text, <<"advertise">>}}, Bad),
+     A(<<"subscribe_with_record_version.refused">>, #{<<"kind">> => {text, <<"subscribe">>}}, Bad),
+     A(<<"both_keys.refused">>, #{<<"subscriber">> => <<7:256>>}, Bad),
+     A(<<"realm_31.refused">>, #{<<"realm">> => <<1:248>>}, Bad),
+     A(<<"record_version_15.refused">>, #{<<"record_version">> => <<1:120>>}, Bad)].
+
+register_ack_case(Id, Changes, Expect) ->
+    Frame = maps:filter(fun(_K, V) -> V =/= drop end, maps:merge(register_ack(#{}), Changes)),
+    #{<<"id">> => <<"frames.register_ack.", Id/binary>>, <<"profile">> => <<"both">>, <<"covers">> => [<<"D1">>],
+      <<"lands_with">> => lands(<<"macula#12">>),
+      <<"input">> => #{<<"frame_type">> => <<"register_ack">>, <<"frame">> => hex(encode(Frame)),
+                       <<"position">> => <<"control_stream">>, <<"after_hello">> => 1},
+      <<"expect">> => Expect}.
 
 frame_case(Type, Frame) ->
     <<_Len:32, Cbor/binary>> = iolist_to_binary(macula_frame:encode(Frame)),
     {ok, Map} = macula_record_cbor:decode_strict(Cbor),
-    Wire = maps:remove({text, <<"capabilities">>}, Map#{{text, <<"version">>} => 5}),
+    %% Today's encoder writes an absent optional key as null; wire 1.0 omits it (section 3.1).
+    Wire = maps:filter(fun(_K, V) -> V =/= null end,
+                       maps:remove({text, <<"capabilities">>}, Map#{{text, <<"version">>} => 5})),
     #{<<"id">> => <<"frames.", Type/binary>>, <<"profile">> => <<"pq_pure">>, <<"covers">> => [<<"D1">>, <<"D9">>],
       <<"lands_with">> => lands(<<"macula#99">>),
       <<"input">> => #{<<"frame_type">> => Type, <<"frame">> => hex(macula_record_cbor:encode(Wire)),

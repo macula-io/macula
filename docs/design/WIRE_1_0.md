@@ -59,6 +59,8 @@ Envelope keys, the same for every frame type:
   `malformed_frame` under the extra-field rule.
 - **Extra core field.** A key that is neither an envelope key nor a field of the frame type is `malformed_frame`.
   New fields arrive only in `ext`.
+- **Absent is omitted.** An optional key is either absent or of its type; CBOR null is not a value of any envelope
+  key or frame field, so a key carrying null is `malformed_frame`. One frame has one encoding.
 
 ### 3.2 Extensions (D8)
 
@@ -71,7 +73,8 @@ Envelope keys, the same for every frame type:
   clarifications): the session proof binds the connection, not each frame's `ext`.
 - A receiver that does not know an extension:
   - `critical` 1: refuses the frame, `extension_unsupported`. A signed object is refused by its verifier; an unsigned
-    frame is dropped and counted, and on the control stream the link stays up.
+    frame is dropped and counts `wire_ext_refused` once per unknown critical name it carries, and on the control
+    stream the link stays up.
   - `critical` 0: ignores it and counts `wire_ext_ignored`.
 - An extension is announced by a capability bit; a node sends a critical extension only to a peer that declared the
   bit.
@@ -101,9 +104,30 @@ An unknown value never closes a link.
 | STREAM_DATA `encoding` | in the stream frame `tbs` | refused, `enum_unknown` naming `encoding` |
 | STREAM_END `role` | in the stream frame `tbs` | refused, `enum_unknown` naming `role` |
 | relay error `code` | in the relay error `tbs` | refused, `enum_unknown` naming `code` |
+| REGISTER_ACK `kind` | per-hop | the ack is ignored |
+| REGISTER_ACK `reason` | per-hop | reads as `refused` |
 
 Each per-hop fallback counts `wire_enum_fallback` with the field's name. A refusal inside a `tbs` refuses that
 signed object, by name, never the link.
+
+### 3.5 REGISTER_ACK (macula#12)
+
+The station's answer to an ADVERTISE, UNADVERTISE, SUBSCRIBE or UNSUBSCRIBE, on the control stream, unsigned (per-hop):
+
+| Key | Type | |
+|---|---|---|
+| `kind` | text | `advertise`, `unadvertise`, `subscribe` or `unsubscribe`: the frame answered |
+| `realm` | bytes, 32 | |
+| `name` | text, 1 to 512 bytes | the procedure or topic |
+| `record_version` | bytes, 16 | for `advertise` and `unadvertise`: the advertisement's record version |
+| `subscriber` | bytes, 32 | for `subscribe` and `unsubscribe`: the subscriber's node id |
+| `accepted` | unsigned, 0 or 1 | |
+| `reason` | text | present exactly when `accepted` is 0 |
+
+`reason` is one of `too_many_providers`, `advertiser_quota`, `name_too_long`, `record_refused`, `not_authorized`,
+`too_many_realms` (a subscribe beyond the station's subscribed-realm limit), `refused`; `refused` is the generic one,
+and any other refusal (such as no default identity) is sent as `refused`. A `kind` with the other kind's key (`subscriber` on an advertise, or
+`record_version` on a subscribe), or with both or neither, is `malformed_frame`.
 
 ## 4. Handshake (macula#98)
 
@@ -187,6 +211,10 @@ Added to the close reasons of the handshake design:
 A node records, per peer node id, the highest handshake version it completed with, and never completes below it.
 The record survives restarts. An SDK host with no writable store keeps it for the run (A clarifications).
 
+The floor is raised only after a handshake completes, and only upward. When the store fails to persist a raise, the
+completed connection stays up, the floor holds in memory for the run, and `version_floor_unpersisted` is counted and
+logged; it never crashes the node or closes the link.
+
 ### 4.7 Capabilities
 
 - `capabilities` in CONNECT and HELLO is an unsigned integer below 2^53; bits 0 to 52 are the reserved range.
@@ -217,7 +245,10 @@ The record `tbs` of `DESIGN_PQ_SIGNED_FRAMES_AND_RECORDS.md` gains two keys, req
 
 The table is frozen: rows are only added, and a row's maximum never grows. A known type names exactly its row:
 node and content announcement 3; procedure advertisement and station endpoint 0; realm stations and org directory 2;
-procedure delegation, app record and station authorization (0x13) 1; realm member endorsement 5; domain types 4; other built-in types 5. A
+procedure delegation, app record and station authorization (0x13) 1; realm member endorsement 5; domain types 4;
+other built-in types 5. These rows are part of wire 1.0: the types listed here and domain types (0x20 to 0xFF) are
+the **known types** of every wire 1.0 custodian. A tag added after 1.0 is unknown to a 1.0 custodian, which bounds it
+by the row it names. A
 tombstone (0x0C) names the row of the type it withdraws, and a custodian bounds it by that row's maximum plus twice
 the clock tolerance (10 minutes), as `DESIGN_PQ_SIGNED_FRAMES_AND_RECORDS.md` bounds tombstones today.
 
@@ -232,14 +263,17 @@ A **custodian** (a station storing a record) runs, in order:
 3. the `tbs` decodes under the decoding rule and holds a text `alg`, else `malformed`. Because `alg` selects the
    verifier (D7), the `tbs` is decoded before the signature is checked; nothing in it except `alg` is acted on
    before step 5;
-4. `alg` names a registered verifier, else `alg_unsupported`; `key` is in that verifier's carried form, else
-   `malformed`;
+4. `alg` is in the verifier's allowlist for its own profile, else `alg_unsupported`, before any signature work;
+   `key` is in that alg's carried form, else `malformed` (an `alg` of one profile with a key of the other's form is
+   `malformed`). Nothing falls back to another verifier;
 5. the signature over the `tbs` bytes as received, else `signature_invalid`;
 6. the `tbs` holds exactly the envelope keys (`type`, `alg`, `version`, `created_at`, `expires_at`, `schema`,
    `lifetime_class`, `payload`, and `subject` and `ext` where present), each of its type; `payload` is not read;
    else `malformed`;
 7. the clock: `not_yet_valid`, `expired`, with 5 minutes of tolerance;
-8. the lifetime: `lifetime_reversed`, `lifetime_class_unknown`, `lifetime_too_long` (against the table row);
+8. the lifetime: `lifetime_reversed`, `lifetime_class_unknown`, `lifetime_too_long` (against the row named, for a
+   tombstone that row's maximum plus 10 minutes), then, for a known type (5.1), `lifetime_class_mismatch` when the
+   row named is not the type's own;
 9. the slot: a known type's own rule; any other type needs `subject`, else `subject_missing`, and is placed at
    `H(type | signer key id | subject)` (A3).
 
@@ -248,7 +282,7 @@ A custodian stores what passes, opaquely, whatever the type: it never reads a pa
 A **reader** (a node acting on a record) runs the custodian checks, then:
 
 10. the type is one it knows (domain types 0x20 to 0xFF are known as a class), else `type_unknown`; its `schema` is
-    one it reads, else `schema_unsupported`; its `lifetime_class` is the type's row, else `lifetime_class_mismatch`;
+    one it reads, else `schema_unsupported`;
 11. an `ext` entry it does not know with `critical` 1: `extension_unsupported`; with `critical` 0, ignored and
     counted;
 12. the type's payload rules, else `malformed`; a content id whose tag it does not know, `mcid_tag_unknown`
@@ -257,9 +291,15 @@ A **reader** (a node acting on a record) runs the custodian checks, then:
 ### 5.3 Tags
 
 - **Every post-1.0 built-in tag carries `subject`**, and its slot follows the domain-type rule, H(type | signer key
-  id | subject) (A3). Types that need many signers under one subject are wire 2.0 records or mcl-* services.
+  id | subject) (A3). For a tag the custodian does not know, the signer key id is the MACULA-KEY-ID-V1 key id of the
+  record's `key` as carried, whatever that key's purpose, even an identity key: a record does not carry its key's
+  purpose, so a custodian cannot tell a node_id apart. The slot is SHA-256 over `MACULA-PQ-STORAGE-KEY-V1`, 0x00, the
+  type byte, the key id (32) and the subject as a 4-byte big-endian length and its bytes. Types that need many signers under one subject are wire 2.0 records or mcl-* services.
 - **0x13** `station_authorization` (macula-station#63) and the K > 1 advertisement shape (macula-station#55) land on
   these rules, in 1.0.
+- **Procedure advertisement (0x06), K > 1**: the payload's `serving_station` becomes `serving_stations`, an array of
+  1 to 8 node ids (bytes, 32), strictly ascending by bytes (so no duplicates); anything else is `malformed` to a
+  reader. The slot is unchanged.
 - **0x14 is reserved** for the successor / key-rotation record (D7, A clarifications); its design comes later, and
   until then a custodian stores it like any unknown built-in tag.
 
@@ -301,8 +341,10 @@ Served in the zero realm by every station. One argument form: a CBOR map with te
 | Counter | Labels |
 |---|---|
 | `wire_unknown_frame_type` | none |
-| `wire_ext_ignored` | extension name, truncated to 64 bytes |
+| `wire_ext_ignored` | extension name, truncated to 64 bytes; at most 64 names, the rest counted under `other` |
 | `wire_enum_fallback` | field name |
+| `wire_ext_refused` | extension name, truncated to 64 bytes; at most 64 names, the rest counted under `other` |
+| `version_floor_unpersisted` | none |
 
 ## 9. Vectors
 

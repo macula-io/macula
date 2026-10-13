@@ -79,6 +79,63 @@
         "outcome": "refuse",
         "reason": "malformed_frame"
       },
+      "id": "envelope.optional_key_null.realm.refused",
+      "input": {
+        "after_hello": 1,
+        "frame": "a4656e6f6e6365500000000000000000000000000000005a657265616c6df66776657273696f6e056a6672616d655f747970656d6c6976656e6573735f70696e67",
+        "position": "control_stream"
+      },
+      "lands_with": [
+        "macula#99"
+      ],
+      "profile": "both"
+    },
+    {
+      "covers": [
+        "D9"
+      ],
+      "expect": {
+        "outcome": "refuse",
+        "reason": "malformed_frame"
+      },
+      "id": "envelope.optional_key_null.call_id.refused",
+      "input": {
+        "after_hello": 1,
+        "frame": "a4656e6f6e6365500000000000000000000000000000005a6763616c6c5f6964f66776657273696f6e056a6672616d655f747970656d6c6976656e6573735f70696e67",
+        "position": "control_stream"
+      },
+      "lands_with": [
+        "macula#99"
+      ],
+      "profile": "both"
+    },
+    {
+      "covers": [
+        "D9"
+      ],
+      "expect": {
+        "outcome": "refuse",
+        "reason": "malformed_frame"
+      },
+      "id": "envelope.optional_key_null.source_route.refused",
+      "input": {
+        "after_hello": 1,
+        "frame": "a4656e6f6e6365500000000000000000000000000000005a6776657273696f6e056a6672616d655f747970656d6c6976656e6573735f70696e676c736f757263655f726f757465f6",
+        "position": "control_stream"
+      },
+      "lands_with": [
+        "macula#99"
+      ],
+      "profile": "both"
+    },
+    {
+      "covers": [
+        "D9"
+      ],
+      "expect": {
+        "outcome": "refuse",
+        "reason": "malformed_frame"
+      },
       "id": "envelope.capabilities_header.refused",
       "input": {
         "after_hello": 1,
@@ -317,6 +374,7 @@
         "D9"
       ],
       "expect": {
+        "count": "wire_ext_refused",
         "link": "stays_up",
         "outcome": "refuse",
         "reason": "extension_unsupported"

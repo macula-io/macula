@@ -62,23 +62,55 @@ derived_id(<<"station_identity">>, Key, Profile) -> macula_node_keys:node_id(Key
 derived_id(<<"client_identity">>, Key, Profile) -> macula_node_keys:node_id(Key, Profile);
 derived_id(_Role, Key, Profile) -> macula_node_keys:key_id(Key, Profile).
 
-%% Every record object decodes, its tbs meets the decoding rule, its key is its signer's in keys.json, and its
-%% signature verifies exactly when the case says so.
+%% Every record object decodes, its tbs meets the decoding rule, its key is its signer's in keys.json (of key_profile
+%% where the case names one), and its signature verifies exactly when the case says so; a key in the other profile's
+%% form does not verify under the case's profile.
 records_test_() ->
     [{binary_to_list(maps:get(<<"id">>, C)), fun() -> record_checked(C) end}
      || Class <- [<<"verify">>, <<"check_order">>], C <- cases(Class)].
 
 record_checked(#{<<"profile">> := P,
-                 <<"input">> := #{<<"object">> := Hex, <<"signer">> := Signer, <<"signature_valid">> := Valid}}) ->
+                 <<"input">> := #{<<"object">> := Hex, <<"signer">> := Signer, <<"signature_valid">> := Valid} = In}) ->
     {ok, #{key := Key, tbs := Tbs, signature := Sig}} = macula_signed_object:decode(binary:decode_hex(Hex)),
     ?assertMatch({ok, _}, macula_record_cbor:decode_strict(Tbs)),
-    ?assertEqual(Key, signer_key(P, Signer)),
+    ?assertEqual(Key, signer_key(maps:get(<<"key_profile">>, In, P), Signer)),
     Message = <<?RECORD_LABEL, 0, (crypto:hash(sha384, Key))/binary, Tbs/binary>>,
-    ?assertEqual(Valid =:= 1, macula_node_keys:verify(Message, Sig, Key, binary_to_atom(P))).
+    ?assertEqual(Valid =:= 1, catch macula_node_keys:verify(Message, Sig, Key, binary_to_atom(P))).
 
 signer_key(Profile, Role) ->
     #{Profile := #{Role := #{<<"key">> := Key}}} = maps:get(<<"profiles">>, vectors(<<"keys">>)),
     binary:decode_hex(Key).
+
+%% A custodian's slot for a tag it does not know: SHA-256 over MACULA-PQ-STORAGE-KEY-V1, 0x00, the type, the
+%% MACULA-KEY-ID-V1 key id of the key as carried (even an identity key) and the length-prefixed subject (5.3).
+unknown_tag_slots_test_() ->
+    Objects = #{Id => C || #{<<"id">> := Id} = C <- cases(<<"verify">>)},
+    [{binary_to_list(Id), fun() -> slot_checked(P, maps:get(Ref, Objects), Slot) end}
+     || #{<<"id">> := Id, <<"profile">> := P, <<"input">> := #{<<"object_of">> := Ref},
+          <<"expect">> := #{<<"slot">> := Slot}} <- cases(<<"custodian">>)].
+
+slot_checked(P, #{<<"input">> := #{<<"object">> := Hex}}, Slot) ->
+    {ok, #{key := Key, tbs := Tbs}} = macula_signed_object:decode(binary:decode_hex(Hex)),
+    {ok, #{{text, <<"type">>} := Type, {text, <<"subject">>} := Subject}} = macula_record_cbor:decode_strict(Tbs),
+    KeyId = macula_node_keys:key_id(Key, binary_to_atom(P)),
+    ?assertEqual(binary:decode_hex(Slot),
+                 crypto:hash(sha256, <<"MACULA-PQ-STORAGE-KEY-V1", 0, Type, KeyId/binary, (byte_size(Subject)):32,
+                                       Subject/binary>>)).
+
+%% A caller's stream frames held against their STREAM_OPEN start at seq 0 (macula_frame's open_stream).
+caller_stream_seq_test_() ->
+    [{binary_to_list(Id), fun() -> ?assertEqual(0, caller_seq(Frame)) end}
+     || #{<<"id">> := Id, <<"input">> := #{<<"frame">> := Frame}} <- cases(<<"enums">>), caller_seq(Frame) =/= none].
+
+caller_seq(Hex) ->
+    {ok, Frame} = macula_record_cbor:decode_strict(binary:decode_hex(Hex)),
+    caller_stream_seq(maps:find({text, <<"caller_stream">>}, Frame)).
+
+caller_stream_seq({ok, #{{text, <<"tbs">>} := Tbs}}) ->
+    {ok, #{{text, <<"seq">>} := Seq}} = macula_record_cbor:decode_strict(Tbs),
+    Seq;
+caller_stream_seq(error) ->
+    none.
 
 custodian_refs_test() ->
     ReaderIds = [maps:get(<<"id">>, C) || C <- cases(<<"verify">>)],
@@ -165,7 +197,19 @@ frames_test_() ->
 frame_checked(Type, Hex) ->
     {ok, Frame} = macula_record_cbor:decode_strict(binary:decode_hex(Hex)),
     ?assertMatch(#{{text, <<"version">>} := 5, {text, <<"frame_type">>} := {text, Type}}, Frame),
-    ?assertNot(is_map_key({text, <<"capabilities">>}, Frame)).
+    ?assertNot(is_map_key({text, <<"capabilities">>}, Frame)),
+    ?assertNot(lists:member(null, maps:values(Frame))).
+
+%% Absent is omitted (section 3.1): no frame a stack must accept carries null as a value.
+accepted_frames_carry_no_null_test_() ->
+    [{binary_to_list(Id), fun() -> ?assertNot(lists:member(null, maps:values(decoded(F)))) end}
+     || Class <- [<<"envelope">>, <<"enums">>, <<"frames">>],
+        #{<<"id">> := Id, <<"input">> := #{<<"frame">> := F}, <<"expect">> := #{<<"outcome">> := <<"accept">>}}
+            <- cases(Class)].
+
+decoded(Hex) ->
+    {ok, Frame} = macula_record_cbor:decode_strict(binary:decode_hex(Hex)),
+    Frame.
 
 dht_values_test_() ->
     [{binary_to_list(Id), fun() -> decodes(maps:get(<<"args">>, Input, maps:get(<<"reply">>, Input, none))) end}
