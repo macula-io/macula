@@ -487,9 +487,12 @@ report_valid({error, _} = Refused) -> Refused.
 do_call_station(Check, Pool, Station, Target, Realm, Procedure, Payload, TimeoutMs, Opts) ->
     Resolve = fun() -> find_records(Pool, macula_record:procedure_key(Realm, Procedure)) end,
     sealed_or_refused(call_seal(Target, Realm, Procedure, Opts, Resolve), fun(Seal) ->
-        dialled_if_authorized(Check, Pool, Realm, Station, Opts, TimeoutMs, fun() ->
-            station_called(Pool, Station, Target, Realm, Procedure, Payload, TimeoutMs, Opts, Seal)
-        end)
+        sealed_station_call(Check, Pool, Station, Target, Realm, Procedure, Payload, TimeoutMs, Opts, Seal)
+    end).
+
+sealed_station_call(Check, Pool, Station, Target, Realm, Procedure, Payload, TimeoutMs, Opts, Seal) ->
+    dialled_if_authorized(Check, Pool, Realm, Station, Opts, TimeoutMs, fun() ->
+        station_called(Pool, Station, Target, Realm, Procedure, Payload, TimeoutMs, Opts, Seal)
     end).
 
 station_called(Pool, Station, Target, Realm, Procedure, Payload, TimeoutMs, Opts, Seal) ->
@@ -1079,10 +1082,13 @@ call_resolved_stream_station(Pool, Station, Target, Realm, Procedure, Args, Opts
 do_call_stream_station(Check, Pool, Station, Target, Realm, Procedure, Args, Opts) ->
     Resolve = fun() -> find_records(Pool, macula_record:procedure_key(Realm, Procedure)) end,
     sealed_or_refused(call_seal(Target, Realm, Procedure, Opts, Resolve), fun(Seal) ->
-        dialled_if_authorized(Check, Pool, Realm, Station, Opts, maps:get(dial_timeout_ms, Opts, 10_000), fun() ->
-            macula_client:call_stream_station(Pool, Station, Target, Realm, Procedure, Args,
-                                              maps:without([advertisement, confidential], Opts), Seal)
-        end)
+        sealed_stream_open(Check, Pool, Station, Target, Realm, Procedure, Args, Opts, Seal)
+    end).
+
+sealed_stream_open(Check, Pool, Station, Target, Realm, Procedure, Args, Opts, Seal) ->
+    dialled_if_authorized(Check, Pool, Realm, Station, Opts, maps:get(dial_timeout_ms, Opts, 10_000), fun() ->
+        macula_client:call_stream_station(Pool, Station, Target, Realm, Procedure, Args,
+                                          maps:without([advertisement, confidential], Opts), Seal)
     end).
 
 %% @doc A pool link to `Station', for a consumer that must address one
