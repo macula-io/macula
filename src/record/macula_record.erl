@@ -41,14 +41,14 @@
          domain_type/1, domain_record_checked/1]).
 -export([type/1, key/1, key_id/1, version/1, created_at/1, expires_at/1, payload/1, signature/1]).
 -export([lifetime_classes/0, type_lifetime_class/1, type_successor/0]).
--export([payload_field/2, type_procedure_advertisement/0, procedure_advertisement_max_lifetime_ms/0, clock_tolerance_ms/0,
+-export([payload_field/2, type_procedure_advertisement/0, type_org_directory/0, procedure_advertisement_max_lifetime_ms/0, clock_tolerance_ms/0,
          own_namespace/1]).
 -export([decode_payload/1]).
 -export([read_node_record/1, read_procedure_advertisement/1, read_station_endpoint/1,
          read_station_authorization/1, read_tombstone/1,
          read_org_directory/1, read_procedure_delegation/1, read_content_announcement/1,
          read_foundation_realm_trust_list/1, read_app_record/1]).
--export([procedure_org/1, verify_authorization/3, verify_app/3]).
+-export([procedure_org/1, verify_authorization/3, verify_app/3, verify_membership/5]).
 -export([storage_key/1, procedure_key/2, content_key/1, station_endpoint_key/1, org_directory_key/2,
          procedure_delegation_key/2, realm_member_endorsement_key/2, station_authorization_key/2,
          foundation_realm_trust_list_key/1,
@@ -757,6 +757,11 @@ signature(#{signature := Signature}) -> Signature.
 -spec type_procedure_advertisement() -> type_tag().
 type_procedure_advertisement() -> ?TYPE_PROCEDURE_ADVERTISEMENT.
 
+%% @doc The org directory type tag, for a caller that must tell a directory from the tombstone that withdrew it before
+%% it reads the directory's org key.
+-spec type_org_directory() -> type_tag().
+type_org_directory() -> ?TYPE_ORG_DIRECTORY.
+
 %% @doc A payload field, read whatever key form it arrived in: `{text, Name}', the binary, or an existing atom. A
 %% text value is returned as its binary.
 -spec payload_field(map(), binary()) -> term().
@@ -1009,6 +1014,51 @@ app_directory_matched(false, _SameOrg, _SameKey, _Within) -> {error, org_directo
 app_directory_matched(true, false, _SameKey, _Within) -> {error, org_directory_wrong_org};
 app_directory_matched(true, true, false, _Within) -> {error, org_key_mismatch};
 app_directory_matched(true, true, true, Within) -> within(Within).
+
+%% @doc The caller's check that a node is an admitted member of an org in a realm, pure: the same chain an advertisement
+%% carries (verify_authorization/3), asked about a node instead of an advertisement. The org directory verifies, is
+%% signed by the realm key the trust holds (carried or named by the trust list's pairs), and names the realm and the
+%% org; the delegation verifies, is signed by the org key that directory holds, and names the node. The answer is the
+%% earlier of the two expiries, after which the question must be asked again: that is how a realm's revocation, which
+%% stops reissuing the delegation and tombstones it, reaches a caller that caches the answer.
+%%
+%% It exists for a subscriber: a delivery's publisher is the node that signed the publication, and nothing in the wire
+%% says that node may speak for an org, so a service that must hear only an org's own nodes asks this about it.
+-spec verify_membership(binary(), binary(), #{realm_id := <<_:256>>, org := binary(), node_id := <<_:256>>}, trust(),
+                        integer()) -> {ok, non_neg_integer()} | {error, authorization_refusal()}.
+verify_membership(Directory, Delegation, #{realm_id := RealmId} = Member, #{profile := Profile} = Trust, Now)
+  when is_binary(Directory), is_binary(Delegation) ->
+    member_directory(realm_trust_key(RealmId, Trust), verify(Directory, Profile, Now), Delegation, Member, Profile,
+                     Now).
+
+member_directory(none, _Directory, _Delegation, _Member, _Profile, _Now) ->
+    {error, no_realm_key};
+member_directory(Expected, {ok, #{type := ?TYPE_ORG_DIRECTORY, key := DirectoryKey, key_id := DirectoryKeyId} = Dir},
+                 Delegation, #{realm_id := RealmId, org := Org} = Member, Profile, Now) ->
+    #{realm_id := DirRealmId, org_name := DirOrg, org_key := OrgKeyId} = read_org_directory(Dir),
+    member_org(directory_signer_matches(Expected, DirectoryKey, DirectoryKeyId) andalso DirRealmId =:= RealmId,
+               DirOrg =:= Org, OrgKeyId, Dir, Delegation, Member, Profile, Now);
+member_directory(_Expected, _Refused, _Delegation, _Member, _Profile, _Now) ->
+    {error, org_directory_invalid}.
+
+member_org(false, _SameOrg, _OrgKeyId, _Dir, _Delegation, _Member, _Profile, _Now) ->
+    {error, org_directory_wrong_realm};
+member_org(true, false, _OrgKeyId, _Dir, _Delegation, _Member, _Profile, _Now) ->
+    {error, org_directory_wrong_org};
+member_org(true, true, OrgKeyId, Dir, Delegation, Member, Profile, Now) ->
+    member_delegation(verify(Delegation, Profile, Now), OrgKeyId, Dir, Member).
+
+%% The delegation must be signed by THE org key the directory names, not merely by an org key: any node can mint one.
+member_delegation({ok, #{type := ?TYPE_PROCEDURE_DELEGATION, key_id := DelegationKeyId} = Del}, OrgKeyId, Dir,
+                  #{node_id := NodeId}) ->
+    #{advertiser := Advertiser} = read_procedure_delegation(Del),
+    member_matched(DelegationKeyId =:= OrgKeyId andalso Advertiser =:= NodeId,
+                   min(expires_at(Dir), expires_at(Del)));
+member_delegation(_Refused, _OrgKeyId, _Dir, _Member) ->
+    {error, delegation_invalid}.
+
+member_matched(false, _Earliest) -> {error, delegation_mismatch};
+member_matched(true, Earliest) -> {ok, Earliest}.
 
 %%------------------------------------------------------------------
 %% Storage keys

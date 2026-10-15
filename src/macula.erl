@@ -54,6 +54,7 @@
 %% verified against the realm key the pool pins — the `authorization'
 %% opt a direct-dial record publish needs.
 -export([provider_authorization/3, provider_authorization/4]).
+-export([org_member/4, org_member/5]).
 %% The pool renews an advertised chain through this (D32); internal.
 -export([renew_authorization/4, advertise_confidentiality/1, call_seal/5]).
 
@@ -1354,6 +1355,67 @@ provider_authorization(Pool, Realm, Procedure, Opts) ->
 
 authorization_of(#{authorization := A}) -> A;
 authorization_of(#{}) -> undefined.
+
+%% @doc Whether `NodeId' is an admitted member of `Org' in `Realm': the realm-signed `org_directory' and the
+%% org-signed `procedure_delegation' naming the node, fetched from the DHT and verified against the realm key the pool
+%% pinned for `Realm' at connect (`macula_record:verify_membership/5'). A Providers-desk admission is what makes the
+%% realm publish that chain, and a revocation tombstones it, so the answer is the realm's own.
+%%
+%% macula verifies who SIGNED a publication (`publisher' in the delivery meta), not who may publish on a topic. A
+%% subscriber that must hear only an org's own nodes asks this about the delivery's `publisher'.
+%%
+%% `{ok, ExpiresAt}' is the earlier of the two records' expiries: a caller may cache the answer until then and no
+%% longer. `{error, {not_a_member, Why}}' is a refusal: a missing piece (`{org_directory, not_found}',
+%% `{procedure_delegation, not_found}') or a chain that does not hold (`macula_record:authorization_refusal()').
+%% `{error, {unavailable, Why}}' means the pool could not find out (no pinned realm key, a failed lookup), which a
+%% caller must not read as a refusal: a station roll empties the record stores for a moment.
+-spec org_member(pool(), realm(), binary(), <<_:256>>) ->
+    {ok, non_neg_integer()} | {error, {not_a_member | unavailable, term()}}.
+org_member(Pool, Realm, Org, NodeId) ->
+    org_member(Pool, Realm, Org, NodeId, #{}).
+
+%% @doc As `org_member/4', reading the lookups from the `find_record' and `realm_key' entries in `Opts' (defaults to
+%% the facade's own functions), the same seams `provider_authorization/4' takes.
+-spec org_member(pool(), realm(), binary(), <<_:256>>, provider_io()) ->
+    {ok, non_neg_integer()} | {error, {not_a_member | unavailable, term()}}.
+org_member(Pool, <<_:256>> = Realm, Org, <<_:256>> = NodeId, Opts) when is_binary(Org), is_map(Opts) ->
+    Io = provider_io(Opts),
+    member_trusted((maps:get(realm_key, Io))(Pool, Realm), Pool, #{realm_id => Realm, org => Org, node_id => NodeId},
+                   maps:get(find_record, Io)).
+
+member_trusted(none, _Pool, _Member, _Find) ->
+    {error, {unavailable, no_realm_key}};
+member_trusted({ok, RealmKey}, Pool, #{realm_id := Realm, org := Org} = Member, Find) ->
+    {ok, Profile} = macula_crypto_profile:configured(),
+    Trust = #{profile => Profile, realm_key => RealmKey},
+    member_directory(Find(Pool, macula_record:org_directory_key(Realm, Org)), Pool, Member, Trust, Find).
+
+member_directory({ok, Dir}, Pool, Member, Trust, Find) ->
+    member_directory_typed(macula_record:type(Dir) =:= macula_record:type_org_directory(), Dir, Pool, Member, Trust,
+                           Find);
+member_directory({error, not_found}, _Pool, _Member, _Trust, _Find) ->
+    {error, {not_a_member, {org_directory, not_found}}};
+member_directory({error, Reason}, _Pool, _Member, _Trust, _Find) ->
+    {error, {unavailable, Reason}}.
+
+%% What the slot holds may be the tombstone that withdrew the org's directory: no org, so no member.
+member_directory_typed(false, _Dir, _Pool, _Member, _Trust, _Find) ->
+    {error, {not_a_member, org_directory_invalid}};
+member_directory_typed(true, Dir, Pool, #{node_id := NodeId} = Member, Trust, Find) ->
+    #{org_key := OrgKeyId} = macula_record:read_org_directory(Dir),
+    member_delegation(Find(Pool, macula_record:procedure_delegation_key(OrgKeyId, NodeId)), Dir, Member, Trust).
+
+member_delegation({ok, Deleg}, Dir, Member, Trust) ->
+    member_verified(macula_record:verify_membership(macula_record:encode(Dir), macula_record:encode(Deleg), Member,
+                                                   Trust, erlang:system_time(millisecond)));
+member_delegation({error, not_found}, _Dir, _Member, _Trust) ->
+    {error, {not_a_member, {procedure_delegation, not_found}}};
+member_delegation({error, Reason}, _Dir, _Member, _Trust) ->
+    {error, {unavailable, Reason}}.
+
+member_verified({ok, ExpiresAt}) -> {ok, ExpiresAt};
+member_verified({error, no_realm_key}) -> {error, {unavailable, no_realm_key}};
+member_verified({error, Refusal}) -> {error, {not_a_member, Refusal}}.
 
 provider_io(Opts) ->
     #{status           => maps:get(status, Opts, fun status/1),

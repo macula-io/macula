@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`macula:org_member/4,5`: is this node an admitted member of this org?** It reads the realm-signed `org_directory` and the org-signed `procedure_delegation` naming the node from the DHT and verifies them against the realm key the pool pinned, which is the same chain a provider's advertisement carries. The pure check is `macula_record:verify_membership/5`. It is for a subscriber: macula verifies who signed a publication, not who may publish on a topic, so a service that must hear only an org's own nodes asks this about the delivery's `publisher`. `{ok, ExpiresAt}` is the earlier of the two expiries (cache no longer than that). `{error, {not_a_member, Why}}` is a refusal: a missing piece, a delegation naming another node or signed by any key but the directory's org key, or a directory for another realm or org, not signed by the realm key, or withdrawn. `{error, {unavailable, Why}}` means the pool could not find out (no pinned realm key, a failed lookup) and is not a refusal. `macula_record:type_org_directory/0` lets a caller tell a directory from the tombstone that withdrew it.
+
 ## [15.0.0] - 2026-10-16
 
 Wire 1.0, the first stable wire. 15.0.0 is 15.0.0-rc.3 unchanged; the three candidate entries below are its full changelog. Over 14.x it delivers the wire 1.0 frame set and handshake (spec `docs/design/WIRE_1_0.md`, design of record macula#83, conformance vectors in `priv/vectors/wire_1_0/`): the frame envelope (macula#99), handshake (macula#98), records (macula#100) and the `_dht.*` procedures (macula#102) in rc.1; the registration acknowledgement REGISTER_ACK (macula#12) and the null-at-any-depth refusal (macula#99) in rc.2; the station authorization check on every dial an application names (macula-station#63, hook 3; macula#103) and the removal of the unused `macula_or_set` module (macula#88) in rc.3.
