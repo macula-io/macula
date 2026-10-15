@@ -1365,10 +1365,12 @@ authorization_of(#{}) -> undefined.
 %% subscriber that must hear only an org's own nodes asks this about the delivery's `publisher'.
 %%
 %% `{ok, ExpiresAt}' is the earlier of the two records' expiries: a caller may cache the answer until then and no
-%% longer. `{error, {not_a_member, Why}}' is a refusal: a missing piece (`{org_directory, not_found}',
-%% `{procedure_delegation, not_found}') or a chain that does not hold (`macula_record:authorization_refusal()').
-%% `{error, {unavailable, Why}}' means the pool could not find out (no pinned realm key, a failed lookup), which a
-%% caller must not read as a refusal: a station roll empties the record stores for a moment.
+%% longer. `{error, {not_a_member, Why}}' is a refusal: no delegation for the node
+%% (`{procedure_delegation, not_found}'), a record the lookup found and refused (`{Slot, expired}' and the other
+%% `macula_record:refusal()' reasons), or a chain that does not hold (`macula_record:authorization_refusal()').
+%% `{error, {unavailable, Why}}' means the pool could not find out: no pinned realm key, a lookup that failed in
+%% transport, or no org directory at all, which is what a station roll looks like until the realm republishes it. A
+%% caller must not read it as a refusal.
 -spec org_member(pool(), realm(), binary(), <<_:256>>) ->
     {ok, non_neg_integer()} | {error, {not_a_member | unavailable, term()}}.
 org_member(Pool, Realm, Org, NodeId) ->
@@ -1393,10 +1395,13 @@ member_trusted({ok, RealmKey}, Pool, #{realm_id := Realm, org := Org} = Member, 
 member_directory({ok, Dir}, Pool, Member, Trust, Find) ->
     member_directory_typed(macula_record:type(Dir) =:= macula_record:type_org_directory(), Dir, Pool, Member, Trust,
                            Find);
+%% The org is the caller's own, never a stranger's choice, so an empty
+%% directory slot is not an answer about a node: it is what a station roll
+%% looks like for under a minute, until the realm republishes the chain.
 member_directory({error, not_found}, _Pool, _Member, _Trust, _Find) ->
-    {error, {not_a_member, {org_directory, not_found}}};
+    {error, {unavailable, {org_directory, not_found}}};
 member_directory({error, Reason}, _Pool, _Member, _Trust, _Find) ->
-    {error, {unavailable, Reason}}.
+    {error, {lookup_failed(Reason), {org_directory, Reason}}}.
 
 %% What the slot holds may be the tombstone that withdrew the org's directory: no org, so no member.
 member_directory_typed(false, _Dir, _Pool, _Member, _Trust, _Find) ->
@@ -1411,7 +1416,21 @@ member_delegation({ok, Deleg}, Dir, Member, Trust) ->
 member_delegation({error, not_found}, _Dir, _Member, _Trust) ->
     {error, {not_a_member, {procedure_delegation, not_found}}};
 member_delegation({error, Reason}, _Dir, _Member, _Trust) ->
-    {error, {unavailable, Reason}}.
+    {error, {lookup_failed(Reason), {procedure_delegation, Reason}}}.
+
+%% A record the lookup found and refused (expired, malformed, signed wrong) is
+%% an answer, and the answer is no: a revoked node whose tombstone never landed
+%% reads as its expired delegation. Anything else (a timeout, no station, an
+%% unexpected reply) means the pool could not find out.
+lookup_failed(Reason) when Reason =:= record_too_large; Reason =:= malformed; Reason =:= signature_invalid;
+                           Reason =:= alg_mismatch; Reason =:= not_yet_valid; Reason =:= expired;
+                           Reason =:= key_id_mismatch; Reason =:= lifetime_too_long;
+                           Reason =:= lifetime_reversed; Reason =:= type_unknown;
+                           Reason =:= schema_unsupported; Reason =:= extension_unsupported;
+                           Reason =:= mcid_tag_unknown; Reason =:= subject_missing ->
+    not_a_member;
+lookup_failed(_TransportFailure) ->
+    unavailable.
 
 member_verified({ok, ExpiresAt}) -> {ok, ExpiresAt};
 member_verified({error, no_realm_key}) -> {error, {unavailable, no_realm_key}};
