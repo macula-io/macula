@@ -26,7 +26,8 @@ org_member_test_() ->
          [{spawn, fun() -> Test(K) end}
           || Test <- [fun a_member_is_answered_with_the_chain_expiry/1,
                       fun a_node_without_a_delegation_is_not_a_member/1,
-                      fun an_org_without_a_directory_has_no_members/1,
+                      fun a_missing_org_directory_is_unavailable_not_a_refusal/1,
+                      fun a_delegation_the_lookup_refused_is_not_a_member/1,
                       fun a_delegation_naming_another_node_is_refused/1,
                       fun a_delegation_signed_by_another_org_key_is_refused/1,
                       fun a_directory_for_another_org_is_refused/1,
@@ -70,9 +71,21 @@ a_node_without_a_delegation_is_not_a_member(K) ->
     ?assertEqual({error, {not_a_member, {procedure_delegation, not_found}}},
                  member(K, #{}, <<7:256>>)).
 
-an_org_without_a_directory_has_no_members(#{node_id := NodeId} = K) ->
-    ?assertEqual({error, {not_a_member, {org_directory, not_found}}},
+%% The org is the caller's own, so an empty directory slot is a station roll,
+%% not an answer: a member must not be refused for the minute it lasts.
+a_missing_org_directory_is_unavailable_not_a_refusal(#{node_id := NodeId} = K) ->
+    ?assertEqual({error, {unavailable, {org_directory, not_found}}},
                  member(K#{org_dir => missing}, #{}, NodeId)).
+
+%% A revoked node whose tombstone never landed: the lookup finds its delegation
+%% and refuses it as expired. That is an answer, and it is no.
+a_delegation_the_lookup_refused_is_not_a_member(#{node_id := NodeId} = K) ->
+    Find = find_stub(K),
+    DelegKey = macula_record:procedure_delegation_key(maps:get(org_key_id, K), NodeId),
+    Refusing = fun(_Pool, Key) when Key =:= DelegKey -> {error, expired};
+                  (Pool, Key) -> Find(Pool, Key) end,
+    ?assertEqual({error, {not_a_member, {procedure_delegation, expired}}},
+                 member(K, #{find_record => Refusing}, NodeId)).
 
 %%--------------------------------------------------------------------
 %% The chain comparisons that stop a stranger
@@ -143,7 +156,7 @@ without_a_pinned_realm_key_it_cannot_say(#{node_id := NodeId} = K) ->
                  member(K, #{realm_key => fun(_Pool, _Realm) -> none end}, NodeId)).
 
 a_failed_lookup_is_unavailable_not_a_refusal(#{node_id := NodeId} = K) ->
-    ?assertEqual({error, {unavailable, timeout}},
+    ?assertEqual({error, {unavailable, {org_directory, timeout}}},
                  member(K, #{find_record => fun(_Pool, _Key) -> {error, timeout} end}, NodeId)).
 
 %%--------------------------------------------------------------------
