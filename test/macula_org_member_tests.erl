@@ -79,13 +79,22 @@ a_missing_org_directory_is_unavailable_not_a_refusal(#{node_id := NodeId} = K) -
 
 %% A revoked node whose tombstone never landed: the lookup finds its delegation
 %% and refuses it as expired. That is an answer, and it is no.
+%%
+%% The second refusal is a lifetime-class one, which macula 14's reader could
+%% not return and macula 15's can: every atom of `macula_record:refusal()' must
+%% read as a refusal here, or the ones a 15 node alone can raise answer
+%% "unavailable" and a found-and-refused record is retried as a station roll.
 a_delegation_the_lookup_refused_is_not_a_member(#{node_id := NodeId} = K) ->
     Find = find_stub(K),
     DelegKey = macula_record:procedure_delegation_key(maps:get(org_key_id, K), NodeId),
-    Refusing = fun(_Pool, Key) when Key =:= DelegKey -> {error, expired};
-                  (Pool, Key) -> Find(Pool, Key) end,
+    Refusing = fun(Reason) ->
+                       fun(_Pool, Key) when Key =:= DelegKey -> {error, Reason};
+                          (Pool, Key) -> Find(Pool, Key) end
+               end,
     ?assertEqual({error, {not_a_member, {procedure_delegation, expired}}},
-                 member(K, #{find_record => Refusing}, NodeId)).
+                 member(K, #{find_record => Refusing(expired)}, NodeId)),
+    ?assertEqual({error, {not_a_member, {procedure_delegation, lifetime_class_mismatch}}},
+                 member(K, #{find_record => Refusing(lifetime_class_mismatch)}, NodeId)).
 
 %%--------------------------------------------------------------------
 %% The chain comparisons that stop a stranger

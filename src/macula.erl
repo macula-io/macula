@@ -1422,10 +1422,18 @@ member_delegation({error, Reason}, _Dir, _Member, _Trust) ->
 %% an answer, and the answer is no: a revoked node whose tombstone never landed
 %% reads as its expired delegation. Anything else (a timeout, no station, an
 %% unexpected reply) means the pool could not find out.
+%%
+%% The guards below are every atom of main's `macula_record:refusal()', which
+%% macula 14's list was not: it carried `alg_mismatch', since renamed
+%% `alg_unsupported', and lacked the two lifetime-class refusals. A refusal the
+%% reader can return and this list does not name reads as "the pool could not
+%% find out", which is the wrong answer to a record that was found and refused.
+%% Keep it in step with that type.
 lookup_failed(Reason) when Reason =:= record_too_large; Reason =:= malformed; Reason =:= signature_invalid;
-                           Reason =:= alg_mismatch; Reason =:= not_yet_valid; Reason =:= expired;
+                           Reason =:= alg_unsupported; Reason =:= not_yet_valid; Reason =:= expired;
                            Reason =:= key_id_mismatch; Reason =:= lifetime_too_long;
-                           Reason =:= lifetime_reversed; Reason =:= type_unknown;
+                           Reason =:= lifetime_reversed; Reason =:= lifetime_class_unknown;
+                           Reason =:= lifetime_class_mismatch; Reason =:= type_unknown;
                            Reason =:= schema_unsupported; Reason =:= extension_unsupported;
                            Reason =:= mcid_tag_unknown; Reason =:= subject_missing ->
     not_a_member;
