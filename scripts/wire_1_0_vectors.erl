@@ -239,11 +239,13 @@ type_cases(P, Keys, Name, Type, Role, TodayPayload, Case, Store, Accept, R) ->
           record(P, Signer, Type, Payload, [Expires, {set, <<"lifetime_class">>, Wrong}]),
           {R(<<"lifetime_class_mismatch">>), R(<<"lifetime_class_mismatch">>)})].
 
-%% The payload passes today's reader (macula_record:verify/3) in today's tbs, without schema and lifetime_class, so an
-%% "accept" here claims nothing about payload rules that wire 1.0 does not inherit unchanged.
+%% The payload passes today's reader (macula_record:verify/3) in today's tbs, so an "accept" here claims nothing about
+%% payload rules that wire 1.0 does not inherit unchanged. The tbs carries schema and lifetime_class: a 1.0 reader
+%% requires both, and the vectors' own cases set them the same way.
 accepted_today(P, Signer, Type, Payload, Expires, Name) ->
     Tbs = encode(#{<<"type">> => Type, <<"alg">> => {text, macula_signed_object:alg(P)},
                    <<"version">> => macula_record_uuid:v7(), <<"created_at">> => ?T0, <<"expires_at">> => Expires,
+                   <<"schema">> => 1, <<"lifetime_class">> => class_of(row_type(Type, Payload)),
                    <<"payload">> => Payload}),
     Bytes = macula_signed_object:encode(#{key => carried(Signer), tbs => Tbs,
                                           signature => macula_node_keys:sign(signed_bytes(?RECORD_LABEL,
@@ -279,7 +281,7 @@ builtin_payloads(P, Keys) ->
                                                      Window))},
      {<<"procedure_advertisement">>, 16#06, client_identity,
       payload(macula_record:procedure_advertisement(Id(client_identity), Realm, <<"example.procedure">>,
-                                                    Id(station_identity)))},
+                                                    [Id(station_identity)]))},
      {<<"tombstone">>, 16#0C, client_identity, payload(macula_record:tombstone(NodeRecord, shutdown))},
      {<<"foundation_seed_list">>, 16#0D, foundation,
       payload(macula_record:foundation_seed_list([#{node_id => Id(station_identity), tier => 3,
@@ -320,10 +322,8 @@ content_payload(Signer, Tag) ->
     <<2, Rest/binary>> = maps:get(McidKey, Payload),
     Payload#{McidKey := <<Tag, Rest/binary>>}.
 
-%% Today's payload in its wire 1.0 shape: a procedure advertisement names its serving stations as a list (5.3).
-wire_1_0_payload(16#06, Payload) ->
-    {Serving, Rest} = maps:take({text, <<"serving_station">>}, Payload),
-    Rest#{{text, <<"serving_stations">>} => [Serving]};
+%% Today's payload in its wire 1.0 shape. Today's constructor already names a procedure advertisement's serving
+%% stations as a list (5.3), so that payload is its 1.0 shape as built and nothing here reshapes it.
 wire_1_0_payload(_Type, Payload) ->
     Payload.
 
@@ -389,10 +389,10 @@ unknown_tag_tombstone_cases(P, Keys, Case, Both) ->
 %% K > 1 (5.3): serving_stations holds 1 to 8 node ids, strictly ascending. A custodian never reads the payload.
 serving_stations_cases(P, Keys, Case, Store, Accept, R) ->
     Client = key(Keys, P, client_identity),
+    %% A valid today payload for the rest of the record; the case's own serving-stations set replaces the builder's.
     Today = payload(macula_record:procedure_advertisement(key_id(Client), <<16#AA:256>>,
-                                                          <<"example.procedure">>, <<1:256>>)),
-    Base = maps:remove({text, <<"serving_station">>}, Today),
-    Adv = fun(Stations) -> record(P, Client, 16#06, Base#{{text, <<"serving_stations">>} => Stations},
+                                                          <<"example.procedure">>, [<<1:256>>])),
+    Adv = fun(Stations) -> record(P, Client, 16#06, Today#{{text, <<"serving_stations">>} => Stations},
                                   [{set, <<"expires_at">>, ?T0 + 5 * ?MIN}]) end,
     Ids = fun(L) -> [<<N:256>> || N <- L] end,
     Lands = [<<"macula#100">>, <<"macula-station#55">>],
