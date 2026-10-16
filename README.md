@@ -266,7 +266,7 @@ its audience by node_id, and an EdDSA token is refused (see the
 | [Streaming Guide](docs/guides/streaming/STREAMING_GUIDE.md) | Streaming RPC (server / client / bidi) |
 | [Streaming Protocol](docs/guides/streaming/STREAMING_PROTOCOL.md) | Raw `call_stream`/`advertise_stream` primitives |
 | [HyParView Guide](docs/guides/overlay/HYPARVIEW_GUIDE.md) | Bounded partial-view realm membership |
-| [Plumtree Guide](docs/guides/overlay/PLUMTREE_GUIDE.md) | Epidemic broadcast trees, realm PubSub, OR-Set CRDT |
+| [Plumtree Guide](docs/guides/overlay/PLUMTREE_GUIDE.md) | Epidemic broadcast trees, realm PubSub |
 | [Distribution Over Mesh](docs/guides/DIST_OVER_MESH_GUIDE.md) | Erlang dist through the mesh |
 | [Clustering](docs/guides/CLUSTERING_GUIDE.md) | LAN gossip clustering |
 | [Authorization](docs/guides/shared/AUTHORIZATION_GUIDE.md) | Node keys, UCAN, provider authorization |

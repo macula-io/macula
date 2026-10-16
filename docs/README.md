@@ -37,7 +37,7 @@ Macula SDK is an Erlang/OTP client library for connecting to a **federated relay
 | [Records](guides/shared/RECORDS_GUIDE.md) | Signed, TTL'd facts in the DHT — your own record types |
 | [Streaming](guides/streaming/STREAMING_GUIDE.md) | Streaming RPC (server / client / bidi); direct-dial via `call_stream_station/7` |
 | [HyParView](guides/overlay/HYPARVIEW_GUIDE.md) | Bounded partial-view realm membership |
-| [Plumtree](guides/overlay/PLUMTREE_GUIDE.md) | Epidemic broadcast trees, realm PubSub, OR-Set CRDT |
+| [Plumtree](guides/overlay/PLUMTREE_GUIDE.md) | Epidemic broadcast trees, realm PubSub |
 | [Distribution Over Mesh](guides/DIST_OVER_MESH_GUIDE.md) | Erlang distribution tunneled through relays |
 | [Clustering](guides/CLUSTERING_GUIDE.md) | LAN cluster formation via gossip |
 | [Authorization](guides/shared/AUTHORIZATION_GUIDE.md) | DID identities and UCAN capability tokens |

@@ -13,6 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Every station a client dials is checked against the realm's authorization, not only the ones direct dial resolves** (macula-station#63, hook 3). `call_station/8`, `call_stream_station/7` and a content fetch's sharer read the station's slot for the call's realm (the sharer's announcement's realm) before dialling. `ensure_station_link/4` reads it for the realm named in its options as `realm`; with none, the verdict is `unanchored`. The station is the node id the dial pins, the seed's `expected_node_id` before the one in its options, as the link proves it; a dial that pins none, including one that relies on the pool's own link options for its pin, is `none`, so pass `expected_node_id` per call. Under `closed`, anything but a live authorization is refused as `{error, {station_not_authorized, Verdict}}` before the pool dials, and a refused sharer is that sharer's failure. Under `open` (the default) and `log` the dial proceeds and is counted on the pool's `station_checks`. Direct dial checks each station it resolves once, as before; it now calls through `call_resolved_station/8` and `call_resolved_stream_station/7`, which skip the second check. A consumer of `ensure_station_link/4` that serves a realm passes it as `realm` before its fleet runs `closed`.
 
+### Removed
+
+- **Breaking: the `macula_or_set` module is removed** (macula#88). An observed-remove set keeps one tombstone per removed tag forever, since `remove/2` and `merge/2` only ever add to it, and compaction would need to know that every replica has seen a remove, which the module has no membership view to learn. Nothing in macula called it, so it is removed rather than given a compaction design for a caller that does not exist (Raf, 2026-10-09). The guide's OR-Set section goes with it.
+
 ## [15.0.0-rc.2] - 2026-10-13
 
 Wire 1.0, second release candidate: 15.0.0-rc.1 plus the registration acknowledgement REGISTER_ACK (macula#12) and

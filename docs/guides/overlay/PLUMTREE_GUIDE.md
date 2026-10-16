@@ -1,7 +1,7 @@
 # Macula SDK — Plumtree Guide
 
-**Epidemic broadcast trees, realm-scoped PubSub, and an OR-Set CRDT — all
-riding on HyParView's active view.**
+**Epidemic broadcast trees and realm-scoped PubSub, all riding on
+HyParView's active view.**
 
 ![Plumtree Eager-Push Tree with Lazy Repair](assets/plumtree_broadcast_tree.svg)
 
@@ -34,11 +34,10 @@ duplicates), backed by a **lazy-push gossip layer** that announces
 the tree is damaged. The tree isn't configured anywhere — it emerges purely
 from which peers duplicate-detect a `GOSSIP` and prune themselves to lazy.
 
-This SDK ships the pure protocol (`macula_plumtree`) plus two small
-capabilities built on top of it: realm-scoped PubSub (`macula_realm_pubsub`,
-`macula_realm_pubsub_server`, `macula_realm_pubsub_registry`) and an OR-Set CRDT
-(`macula_or_set`) for realm-shared mutable state. All four are pure or
-GenServer-wrapped state machines — none of them touch the network directly;
+This SDK ships the pure protocol (`macula_plumtree`) plus one small
+capability built on top of it: realm-scoped PubSub (`macula_realm_pubsub`,
+`macula_realm_pubsub_server`, `macula_realm_pubsub_registry`). All four are pure
+or GenServer-wrapped state machines. None of them touch the network directly;
 you drive `macula_plumtree` the same way you drive `macula_hyparview_proto`,
 over [the overlay transport](HYPARVIEW_GUIDE.md#wire-transport-sending-and-receiving-frames).
 
@@ -139,8 +138,8 @@ time it's needed.
 {ok, Registry} = macula_realm_pubsub_registry:start_link(#{identity => MyIdentity}),
 {ok, ServerPid} = macula_realm_pubsub_registry:register(Registry, Realm, MyIdentity),
 
-%% Local subscribe (no network round trip — subscription state is local;
-%% Plumtree/OR-Set propagate WHO is subscribed where separately).
+%% Local subscribe (no network round trip: subscription state is local;
+%% Plumtree propagates WHO is subscribed where separately).
 ok = macula_realm_pubsub_server:subscribe(ServerPid, <<"sensors.temperature">>, SubscriberPubkey),
 
 %% Publish: builds the signed EVENT frame + returns matched LOCAL subscribers.
@@ -166,36 +165,6 @@ gating who gets into the realm's active view in the first place.
 
 ---
 
-## OR-Set CRDT (`macula_or_set`)
-
-Realm-shared *mutable* state — a member list, a chat thread's participant
-set, directory metadata — needs to converge across nodes without
-coordination, including under concurrent add/remove. `macula_or_set` is an
-Observed-Remove Set: `add/2` tags each element with a fresh random tag,
-`remove/2` tombstones every tag *currently observed* for that element. The
-payoff: if Alice adds herself back to a group in the same instant Bob
-removes her, the add wins — Bob's remove could only tombstone the tags he'd
-actually seen.
-
-```erlang
-Set0 = macula_or_set:new(),
-{Set1, AddDelta}    = macula_or_set:add(Set0, <<"alice">>),
-{Set2, RemoveDelta} = macula_or_set:remove(Set1, <<"alice">>),
-macula_or_set:members(Set2).   %% => []
-
-%% Gossip the delta over Plumtree instead of the whole set on every change:
-{_, {send, Peer, Frame}} = {ok, plumtree_frame_for(AddDelta)},
-%% ... on the receiving end ...
-Set3 = macula_or_set:apply_delta(RemoteSet, AddDelta).
-```
-
-Two convergence paths, both associative/commutative/idempotent so any
-delivery order reaches the same final state: `merge/2` for full-state
-catch-up sync (e.g. a node rejoining after a partition), `apply_delta/2`
-for the common case — one delta per Plumtree `GOSSIP`.
-
----
-
 ## See also
 
 - [HyParView Guide](HYPARVIEW_GUIDE.md) — the active view Plumtree's eager
@@ -203,6 +172,3 @@ for the common case — one delta per Plumtree `GOSSIP`.
 - [PubSub Guide](../pubsub/PUBSUB_GUIDE.md) — the supervised, client-facing
   PubSub wrapper that already uses this machinery internally.
 - Leitão, Pereira, Rodrigues, *"Epidemic Broadcast Trees"*, SRDS 2007.
-- Shapiro, Preguiça, Baquero, Zawirski, *"A Comprehensive Study of
-  Convergent and Commutative Replicated Data Types"*, INRIA 2011 (the
-  OR-Set construction `macula_or_set` implements).
