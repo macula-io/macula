@@ -341,13 +341,35 @@ Served in the zero realm by every station. One argument form: a CBOR map with te
 
 ## 7. Algorithm agility (macula#101)
 
-- CONNECT names its `profile` (4.1); the verifier dispatches on it from a registry; an unregistered profile is
-  `profile_unsupported`.
-- `alg` in a signed object selects its verifier; an unregistered `alg` is `alg_unsupported`.
-- The seal `scheme` selects KEM, KDF, AEAD and the ciphertext layout; an unknown scheme is `sealed_refused`.
-- No hash identifier: a new hash arrives under a new alg, profile or scheme name and a -V2 label. Hard-coded: SHA-256
-  in NODE-ID-V1 and STORAGE-KEY-V1, the scheme-1 internals, the ML-DSA-87 sizes under their alg names, the 1-byte
-  record type, the exporter label, the puzzle difficulty and the TLS groups.
+- CONNECT names its `profile` (4.1); the verifier dispatches on it from a registry, `macula_crypto_profile`, and a
+  profile the node cannot serve is refused. Which name a peer sees depends on the step, and the two are not
+  interchangeable: a profile that no station range holds is answered with HELLO `refusal_code` `profile_unsupported`
+  (`handshake.opener.unknown_profile.refused`, 4.4), while a CONNECT naming a profile the station did not choose
+  closes with the close reason `profile_unsupported` (4.5), which reads on the wire as `not_accepted`: of the close
+  reasons only `unsupported_version`, `puzzle_invalid` and `session_proof_rate` travel as themselves
+  (`handshake.connect.profile_not_chosen.refused`, 3.4).
+- `alg` in a signed object names the algorithm of the verifier's own profile, and an algorithm outside it is refused.
+  Where the check sits in the order differs by class, and so does the name a peer sees.
+  - **A record** acts on `alg` before any crypto: the algorithm is checked against the verifier's profile's, and
+    another profile's is `alg_unsupported` (5.2 step 4, `record.alg_unregistered.refused`).
+  - **A signed frame** is the other way round: it verifies the signature first, under the connection's profile, and
+    only then reads `alg`. So a frame carrying a foreign algorithm is `signature_invalid` when the signature does not
+    verify under the key it carries and `malformed_frame` otherwise, **never** `alg_unsupported`. The frame reader's
+    own refusal for it is `alg_mismatch` (`macula_signed_object`), which the frame callers map to `malformed_frame`.
+- The seal `scheme` selects the KEM, KDF, AEAD and ciphertext layout of a sealed object. Scheme 1 is the only one,
+  and a sealed object naming any other scheme is `malformed_frame` when its tbs is read. `sealed_refused` is a
+  different signal and never reports an unknown scheme: it names the key id the opener does not hold, which is what
+  sends a caller to reseal.
+- No hash identifier, and no negotiable hash selector: a new hash arrives under a new alg, profile or scheme name and
+  a -V2 label. What the wire does carry are fixed, signed, self-describing labels, which a reader **checks** rather
+  than selects on, and the fixed MCID tag:
+  - `hash_alg`, `SHA-384`, and `sig_alg`, in the binding and status statements; any other value is `malformed_frame`
+    (`macula_key_bindings`).
+  - the manifest's `hash_algorithm`, the text `sha384` (`macula_manifest`).
+  - the MCID tag byte, tag 2 for SHA-384; any other tag is `mcid_tag_unknown` on a reader (5.4).
+
+  Hard-coded besides: SHA-256 in NODE-ID-V1 and STORAGE-KEY-V1, the scheme-1 internals, the ML-DSA-87 sizes under
+  their alg names, the 1-byte record type, the exporter label, the puzzle difficulty and the TLS groups.
 
 ## 8. Counters
 
