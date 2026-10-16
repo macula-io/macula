@@ -741,7 +741,13 @@ ends_at(Expires, NotAfter) -> min(Expires, NotAfter).
 %% (macula_dht_slots:later/2), applied by the caller as for a full STORE; this function reconstructs and verifies, it
 %% does not place. Held is a verified record the caller looked up by {key, signer}; when the caller holds no base
 %% entry it answers need_full without calling this.
--spec custodian_refresh(m_record(), refresh_delta(), macula_crypto_profile:profile(), integer()) ->
+%%
+%% Held may also be the record's WIRE BYTES, the form a custodian holds in its slot. They are decoded without a
+%% signature step -- they were verified at admission, and the delta's signature is re-verified over the tbs
+%% reconstructed from them, so the forgery bar is a full STORE's and a wrong held record only answers need_full. This
+%% is the only verify-free decode of a record and it never leaves this function: a caller cannot use it to obtain an
+%% unverified m_record(). Held bytes that do not decode to a readable record answer need_full and never raise.
+-spec custodian_refresh(m_record() | binary(), refresh_delta(), macula_crypto_profile:profile(), integer()) ->
           {ok, m_record()} | need_full.
 custodian_refresh(#{key := HeldKey, type := Type, payload := Payload, lifetime_class := Class} = Held,
                   #{version := Version, created_at := Created, expires_at := Expires, signature := Signature},
@@ -762,6 +768,46 @@ custodian_refresh(#{key := _, type := _, payload := _, lifetime_class := _},
                   _Profile, _Now)
   when is_binary(Version), is_integer(Created), Created >= 0, is_integer(Expires), Expires >= 0,
        is_binary(Signature) ->
+    need_full;
+%% Held as the wire bytes the custodian already holds: the form a station applies a store_refresh frame against
+%% (macula-station#107). Decode the held envelope WITHOUT a signature step - these bytes were verified at admission,
+%% and the map clause below re-verifies the delta's signature over the tbs reconstructed from them, so a held record
+%% that is wrong or forged only yields need_full, never an admit. Then refresh the decoded record through the map
+%% clauses, so the tbs reconstruction and the out-of-range-timestamp fallback stay one code path. Held bytes that do
+%% not decode to a readable record answer need_full and never raise: the frame is reachable from the wire on the DHT
+%% receive path. This verify-free decode lives only here, so no caller can mint an unverified m_record() from it.
+custodian_refresh(HeldBytes, Delta, Profile, Now) when is_binary(HeldBytes) ->
+    refresh_held(held_record(HeldBytes), Delta, Profile, Now).
+
+%% Reconstruct a held record from its wire bytes without checking its signature, to the same map custodian_verify
+%% builds minus the crypto: the record read from its tbs with the envelope's key. Total over any binary - decode and
+%% the strict codec answer malformed rather than raise, and bytes past the record size, a held-only object (no key),
+%% or an unreadable tbs all answer need_full.
+-spec held_record(binary()) -> {ok, m_record()} | need_full.
+held_record(Bytes) when byte_size(Bytes) =< ?MAX_RECORD_BYTES ->
+    held_envelope(macula_signed_object:decode(Bytes));
+held_record(_TooLarge) ->
+    need_full.
+
+held_envelope({ok, #{key := Key, tbs := Tbs}}) ->
+    held_fields(macula_record_cbor:decode_strict(Tbs), Key);
+held_envelope(_HeldOrMalformed) ->
+    need_full.
+
+held_fields({ok, Fields}, Key) ->
+    held_keyed(read_tbs(Fields), Key);
+held_fields({error, _Strict}, _Key) ->
+    need_full.
+
+held_keyed({ok, Record}, Key) ->
+    {ok, Record#{key => Key}};
+held_keyed(malformed, _Key) ->
+    need_full.
+
+%% Refresh a held record decoded from bytes through the map clauses, so there is one reconstruction and one totality.
+refresh_held({ok, Held}, Delta, Profile, Now) ->
+    custodian_refresh(Held, Delta, Profile, Now);
+refresh_held(need_full, _Delta, _Profile, _Now) ->
     need_full.
 
 %% The tbs fields of the refreshed record, reconstructed from what the custodian HOLDS: the held type, payload,

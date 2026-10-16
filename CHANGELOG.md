@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [15.3.0] - 2026-10-16
+
+Additive over 15.2.0: `macula_record:custodian_refresh/4` now also takes a record's
+WIRE BYTES, the form a custodian holds in its slot (macula-station#107 lever 1, station
+side). No wire change and no new export; a 15.3.0 node speaks the same wire 1.0 as a
+15.2.0 node.
+
+### Added
+
+- **`macula_record:custodian_refresh/4` accepts held WIRE BYTES, not only a decoded record.** When the station applies a `store_refresh` frame it holds the base record as the bytes it serves, not as a decoded map. Passing those bytes lets the custodian apply the refresh with ONE signature verify (the delta's), the same cost as the full STORE it replaces, instead of re-verifying the held record just to decode it. The bytes are decoded without a signature step and refreshed through the existing decoded-map path, so the tbs reconstruction and the out-of-range-timestamp fallback are one code path; the delta's signature is still verified over the reconstructed tbs, so the forgery bar is unchanged and a wrong or forged held record only answers `need_full`. This verify-free decode lives inside `custodian_refresh/4` and is not exported, so no caller can use it to obtain an unverified record. Held bytes that do not decode to a readable record answer `need_full` and never raise.
+
 ## [15.2.0] - 2026-10-16
 
 Additive over 15.1.0: the DHT record-refresh capability (macula-station#107 lever 1), a

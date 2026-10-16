@@ -31,7 +31,11 @@ cases() ->
      {"a refresh past the lifetime class needs the full record", fun past_lifetime_needs_full/1},
      {"an unknown-builtin-tag held record refreshes, never crashes", fun unknown_tag_held_refreshes/1},
      {"a tombstone of an unknown tag refreshes, never crashes", fun tombstone_held_refreshes/1},
-     {"an out-of-range timestamp needs the full record, never crashes", fun out_of_range_timestamp_needs_full/1}].
+     {"an out-of-range timestamp needs the full record, never crashes", fun out_of_range_timestamp_needs_full/1},
+     {"held WIRE BYTES refresh to the publisher's new version", fun held_bytes_reconstructs/1},
+     {"held bytes refresh identically to the decoded held map", fun held_bytes_equiv_map/1},
+     {"held bytes with an out-of-range delta need the full record", fun held_bytes_out_of_range_needs_full/1},
+     {"undecodable held bytes need the full record, never crash", fun held_garbage_needs_full/1}].
 
 %% The happy path: the publisher refreshes a record it signed; the custodian, holding the original, applies the
 %% delta and ends with the publisher's new version.
@@ -137,6 +141,87 @@ refresh_roundtrip(Profile, Base, Now) ->
 
 signed(Base, Key) ->
     macula_signed_object:encode(macula_signed_object:sign(?RECORD_LABEL, Base, Key)).
+
+%%------------------------------------------------------------------
+%% Held as WIRE BYTES (macula-station#107 lever 1, Fable Design 3): a custodian applies a refresh against the record
+%% bytes it holds in its slot, without first re-verifying them. custodian_refresh/4 decodes them with no signature
+%% step and refreshes through the map clause, so the behaviour is identical to the decoded map and the forgery bar is
+%% unchanged (the delta's signature is still verified over the reconstructed tbs).
+%%------------------------------------------------------------------
+
+%% The happy path through the bytes form: the custodian holds the original's wire bytes and applies the publisher's
+%% refresh delta, ending with a record wire-identical to a full STORE of the refresh.
+held_bytes_reconstructs(Profile) ->
+    Key = key(Profile),
+    {ok, Held} = verified(macula_record:refresh(advertisement(Key), Key), Profile),
+    Refreshed = macula_record:refresh(Held, Key),
+    {ok, Applied} = macula_record:custodian_refresh(macula_record:encode(Held), delta(Refreshed), Profile, now_ms()),
+    ?assertEqual(macula_record:encode(Refreshed), macula_record:encode(Applied)),
+    ?assertMatch({ok, #{}}, macula_record:verify(macula_record:encode(Applied), Profile)).
+
+%% Required equivalence (Fable Design 3, round 1): refreshing the WIRE BYTES equals refreshing the record
+%% custodian_verify decodes from them, for a record WITHOUT a subject (a procedure advertisement) and one WITH a
+%% subject (an unknown builtin tag). Pins that the bytes clause reconstructs the same held fields the verified decode
+%% does, so the only difference is the skipped signature check on bytes already admitted.
+held_bytes_equiv_map(Profile) ->
+    Now = now_ms(),
+    %% Without a subject.
+    Key = key(Profile),
+    {ok, HeldNoSubj} = verified(macula_record:refresh(advertisement(Key), Key), Profile),
+    NoSubjBytes = macula_record:encode(HeldNoSubj),
+    DeltaNoSubj = delta(macula_record:refresh(HeldNoSubj, Key)),
+    assert_bytes_equiv_map(NoSubjBytes, DeltaNoSubj, Profile, Now),
+    %% With a subject (unknown builtin tag 0x18, which carries one).
+    Later = Now + 1000,
+    Base = #{{text, <<"type">>} => 16#18, {text, <<"version">>} => macula_record_uuid:v7_monotonic(Now),
+             {text, <<"schema">>} => 1, {text, <<"lifetime_class">>} => 3, {text, <<"created_at">>} => Now,
+             {text, <<"expires_at">>} => Now + 3_600_000, {text, <<"payload">>} => #{{text, <<"a">>} => 1},
+             {text, <<"subject">>} => <<"subject">>},
+    SubjBytes = signed(Base, Key),
+    Expires = maps:get({text, <<"expires_at">>}, Base) + 1000,
+    Obj = macula_signed_object:sign(?RECORD_LABEL,
+            Base#{{text, <<"version">>} => macula_record_uuid:v7_monotonic(Later),
+                  {text, <<"created_at">>} => Later, {text, <<"expires_at">>} => Expires}, Key),
+    {ok, Fields} = macula_record_cbor:decode_strict(maps:get(tbs, Obj)),
+    DeltaSubj = #{version => maps:get({text, <<"version">>}, Fields), created_at => Later, expires_at => Expires,
+                  signature => maps:get(signature, Obj)},
+    assert_bytes_equiv_map(SubjBytes, DeltaSubj, Profile, Later).
+
+%% custodian_refresh on the bytes equals custodian_refresh on element(2, custodian_verify(bytes)); both must succeed,
+%% so the equivalence is pinned on a reconstruction that actually happened, not on two matching need_fulls.
+assert_bytes_equiv_map(Bytes, Delta, Profile, Now) ->
+    {ok, Decoded} = macula_record:custodian_verify(Bytes, Profile, Now),
+    ?assertMatch({ok, _}, macula_record:custodian_refresh(Bytes, Delta, Profile, Now)),
+    ?assertEqual(macula_record:custodian_refresh(Decoded, Delta, Profile, Now),
+                 macula_record:custodian_refresh(Bytes, Delta, Profile, Now)).
+
+%% A delta whose created_at/expires_at exceed the record range (a wire non_neg reaches 2^64-1) answers need_full
+%% through the bytes form too, by delegating to the map clause's out-of-range fallback rather than crashing.
+held_bytes_out_of_range_needs_full(Profile) ->
+    Key = key(Profile),
+    {ok, Held} = verified(macula_record:refresh(advertisement(Key), Key), Profile),
+    Refreshed = macula_record:refresh(Held, Key),
+    OutOfRange = (1 bsl 64) - 1,
+    Delta = (delta(Refreshed))#{created_at => OutOfRange, expires_at => OutOfRange},
+    ?assertEqual(need_full,
+                 macula_record:custodian_refresh(macula_record:encode(Held), Delta, Profile, now_ms())).
+
+%% Held bytes that do not decode to a readable record answer need_full and never raise: empty, random, oversized, and
+%% a held-only object (tbs+signature, no key). The frame is reachable from the wire on the DHT receive path.
+held_garbage_needs_full(Profile) ->
+    Key = key(Profile),
+    {ok, Held} = verified(macula_record:refresh(advertisement(Key), Key), Profile),
+    Delta = delta(macula_record:refresh(Held, Key)),
+    Now = now_ms(),
+    Oversize = binary:copy(<<0>>, (256 * 1024) + 1),
+    HeldOnly = macula_signed_object:encode(macula_signed_object:sign_held(?RECORD_LABEL, record_tbs(Held), Key)),
+    [?assertEqual(need_full, macula_record:custodian_refresh(Bytes, Delta, Profile, Now))
+     || Bytes <- [<<>>, <<"not a record">>, crypto:strong_rand_bytes(64), Oversize, HeldOnly]].
+
+%% The tbs field map of a held record, to re-sign as a held-only object (no key) for the garbage case.
+record_tbs(Record) ->
+    {ok, Fields} = macula_record_cbor:decode_strict(maps:get(tbs, Record)),
+    maps:without([{text, <<"alg">>}], Fields).
 
 %%------------------------------------------------------------------
 %% Helpers
