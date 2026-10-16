@@ -9,8 +9,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [14.11.0] - 2026-10-15
-
 ### Added
 
 - **`macula:org_member/4,5`: is this node an admitted member of this org?** It reads the realm-signed `org_directory` and the org-signed `procedure_delegation` naming the node from the DHT and verifies them against the realm key the pool pinned, which is the same chain a provider's advertisement carries. The pure check is `macula_record:verify_membership/5`. It is for a subscriber: macula verifies who signed a publication, not who may publish on a topic, so a service that must hear only an org's own nodes asks this about the delivery's `publisher`. `{ok, ExpiresAt}` is the earlier of the two expiries (cache no longer than that). `{error, {not_a_member, Why}}` is a refusal: no delegation for the node, a record the lookup found and refused (expired, malformed, signed wrong), a delegation naming another node or signed by any key but the directory's org key, or a directory for another realm or org, not signed by the realm key, or withdrawn. `{error, {unavailable, Why}}` means the pool could not find out (no pinned realm key, a lookup that failed in transport, or no org directory at all, which is what a station roll looks like until the realm republishes it) and is not a refusal. `macula_record:type_org_directory/0` lets a caller tell a directory from the tombstone that withdrew it.
