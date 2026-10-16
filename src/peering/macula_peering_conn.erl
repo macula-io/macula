@@ -23,7 +23,9 @@
 -export([init/1, callback_mode/0, terminate/3, code_change/4, format_status/1]).
 -export([connecting/3, awaiting_start/3, handshaking/3, connected/3, draining/3]).
 
--export_type([opts/0, connect_opts/0]).
+-export_type([opts/0, connect_opts/0, status_budget_mode/0]).
+
+-type status_budget_mode() :: off | log_only | enforce.
 
 -ifdef(TEST).
 %% Exports for unit tests: private helpers that are otherwise unreachable.
@@ -75,6 +77,15 @@
     %% difficulty of `macula_node_keys:puzzle_difficulty/0'. Required on
     %% the station role.
     puzzle          => #{mode := macula_handshake:puzzle_mode()},
+    %% The STATUS frames the peer may send on the open connection, each
+    %% one taken from a bucket of `burst' that gains one every
+    %% `refill_ms', before anything of the frame is read. Under
+    %% `enforce' (the default) a STATUS with the bucket empty closes the
+    %% connection with `status_over_budget'; under `log_only' it is
+    %% counted and read; `off' keeps no bucket. A peer reissues its
+    %% statement every 15 minutes, so the default of 8 and one a minute
+    %% is far above an honest peer's rate. Either role.
+    status_budget   => #{mode => status_budget_mode(), burst => pos_integer(), refill_ms => pos_integer()},
     %% Wall-clock milliseconds, for tests.
     clock           => fun(() -> integer()),
     %% Where this node keeps each peer's version floor across restarts
@@ -252,6 +263,11 @@
     %% many of them were charged (D28).
     refusals = #{}    :: #{atom() => pos_integer()},
     charged = 0       :: non_neg_integer(),
+    %% The peer's STATUS frames: the bucket they are taken from (`off'
+    %% keeps none), and the issued_at of the last statement accepted on
+    %% this connection, which a STATUS must be newer than to be verified.
+    status_budget = off :: off | status_bucket(),
+    status_issued_at  :: undefined | non_neg_integer(),
     %% App-level liveness probe state (see the opts doc): the outstanding
     %% liveness_ping's nonce, and the consecutive unanswered-probe count.
     liveness_interval_ms :: undefined | pos_integer(),
@@ -270,6 +286,11 @@
 }).
 
 -define(PROBE_IDS_KEPT, 4).
+
+-type status_bucket() :: #{mode := log_only | enforce, burst := pos_integer(), refill_ms := pos_integer(),
+                           tokens := non_neg_integer(), at := integer()}.
+
+-define(STATUS_BUDGET, #{mode => enforce, burst => 8, refill_ms => 60_000}).
 
 -define(DRAIN_TIMEOUT_MS, 5_000).
 %% How long an open of a dedicated stream may wait for the peer to allow
@@ -316,7 +337,7 @@ callback_mode() ->
 
 init(#{role := Role, identity := Identity, issuer := Issuer, controlling_pid := Pid} = Opts)
   when (Role =:= client orelse Role =:= server), is_pid(Issuer), is_pid(Pid) ->
-    started(identity_key(Identity), role_ready(Role, Opts), Opts).
+    started(identity_key(Identity), status_budget_ready(role_ready(Role, Opts), Opts), Opts).
 
 %% A connection starts only with an identity key; a dial only with the
 %% node_id it expects, and a station only with its puzzle mode.
@@ -328,6 +349,24 @@ role_ready(client, #{target := #{expected_node_id := <<_:256>>}}) -> ok;
 role_ready(client, _Opts) -> {error, {target, expected_node_id_required}};
 role_ready(server, #{puzzle := #{mode := Mode}}) when Mode =:= off; Mode =:= log_only; Mode =:= enforce -> ok;
 role_ready(server, _Opts) -> {error, {puzzle, mode_required}}.
+
+status_budget_ready(ok, Opts) -> status_budget_valid(maps:merge(?STATUS_BUDGET, maps:get(status_budget, Opts, #{})));
+status_budget_ready({error, _} = Error, _Opts) -> Error.
+
+status_budget_valid(#{mode := Mode, burst := Burst, refill_ms := RefillMs} = Budget)
+  when map_size(Budget) =:= 3, (Mode =:= off orelse Mode =:= log_only orelse Mode =:= enforce),
+       is_integer(Burst), Burst > 0, is_integer(RefillMs), RefillMs > 0 ->
+    ok;
+status_budget_valid(Budget) ->
+    {error, {status_budget, Budget}}.
+
+%% A full bucket at the start, on the monotonic clock: a rate is about
+%% elapsed time, which a wall clock stepped back would hand out again.
+status_bucket(#{mode := off}) -> off;
+status_bucket(Budget) -> Budget#{tokens => maps:get(burst, Budget), at => monotonic_ms()}.
+
+monotonic_ms() ->
+    erlang:monotonic_time(millisecond).
 
 started({ok, Identity, Profile}, ok, #{role := Role} = Opts) ->
     {ok, NodeId} = macula_node_keys:node_id(Identity),
@@ -352,7 +391,8 @@ started({ok, Identity, Profile}, ok, #{role := Role} = Opts) ->
         buf              = <<>>,
         liveness_interval_ms = maps:get(liveness_interval_ms, Opts, undefined),
         liveness_max_misses  = maps:get(liveness_max_misses, Opts, 2),
-        frame_observer       = observer_opt(maps:get(frame_observer, Opts, undefined))
+        frame_observer       = observer_opt(maps:get(frame_observer, Opts, undefined)),
+        status_budget        = status_bucket(maps:merge(?STATUS_BUDGET, maps:get(status_budget, Opts, #{})))
     },
     {ok, initial_state(Role), Data};
 started({error, Refusal}, _RoleReady, _Opts) ->
@@ -1140,10 +1180,14 @@ routed({ok, Wire}, Rest, Data, Actions) ->
 routed({error, _NotCbor}, _Rest, Data, _Actions) ->
     closed(malformed_frame, Data).
 
-kind_read(status, Wire, Rest, #data{profile = Profile, peer = Peer} = Data, Actions) ->
-    Reader = #{profile => Profile, identity_key => maps:get(identity_key, Peer), binding => peer_binding(Peer),
-               now => now_ms(Data)},
-    status_read(macula_handshake:read_status_wire(Wire, Reader), Rest, Data, Actions);
+%% A STATUS costs its sender an encode and this side an ML-DSA verify
+%% (macula-architecture#22). So each one is first taken from the peer's
+%% STATUS budget, before anything of it is read, a replay too; then one
+%% whose statement is not newer than the last accepted here is dropped
+%% and counted without a verify. The first STATUS after the handshake is
+%% always verified.
+kind_read(status, Wire, Rest, #data{status_budget = Bucket} = Data, Actions) ->
+    status_budgeted(status_taken(Bucket, monotonic_ms()), Wire, Rest, Data, Actions);
 %% After HELLO the handshake frame types are not in the frame table: a frame named by one is read like any other, so
 %% the retired connect and hello are unknown frame types, dropped and counted (docs/design/WIRE_1_0.md section 2).
 kind_read(handshake, Wire, Rest, Data, Actions) ->
@@ -1167,13 +1211,52 @@ open_frame_read({error, extension_unsupported}, Rest, Data, Actions) ->
 open_frame_read({error, bad_frame}, _Rest, Data, _Actions) ->
     closed(malformed_frame, Data).
 
-status_read({ok, ExpiresAt}, Rest, Data, Actions) ->
-    open_frame(Rest, Data, [status_timer(ExpiresAt, Data) | Actions]);
+status_budgeted({taken, Bucket}, Wire, Rest, Data, Actions) ->
+    status_newer(macula_handshake:status_issued_at(Wire), Wire, Rest, Data#data{status_budget = Bucket}, Actions);
+status_budgeted({over, #{mode := enforce}}, _Wire, _Rest, Data, _Actions) ->
+    closed(status_over_budget, refused(status_over_budget, Data));
+status_budgeted({over, #{mode := log_only} = Bucket}, Wire, Rest, Data, Actions) ->
+    status_newer(macula_handshake:status_issued_at(Wire), Wire, Rest,
+                 refused(status_over_budget, Data#data{status_budget = Bucket}), Actions).
+
+%% One token from the bucket, after it gains what the time since it was
+%% last filled earns; `off' always gives one.
+status_taken(off, _Now) ->
+    {taken, off};
+status_taken(Bucket, Now) ->
+    status_token(status_refilled(Bucket, Now)).
+
+status_refilled(#{tokens := Tokens, burst := Burst, at := At, refill_ms := RefillMs} = Bucket, Now) ->
+    Earned = (Now - At) div RefillMs,
+    status_filled(min(Burst, Tokens + Earned), Burst, At + Earned * RefillMs, Now, Bucket).
+
+%% A full bucket earns nothing while it waits.
+status_filled(Burst, Burst, _At, Now, Bucket) -> Bucket#{tokens := Burst, at := Now};
+status_filled(Tokens, _Burst, At, _Now, Bucket) -> Bucket#{tokens := Tokens, at := At}.
+
+status_token(#{tokens := 0} = Bucket) -> {over, Bucket};
+status_token(#{tokens := Tokens} = Bucket) -> {taken, Bucket#{tokens := Tokens - 1}}.
+
+status_newer({ok, IssuedAt}, _Wire, Rest, #data{status_issued_at = Last} = Data, Actions)
+  when is_integer(Last), IssuedAt =< Last ->
+    open_frame(Rest, refused(status_not_newer, Data), Actions);
+status_newer(IssuedAt, Wire, Rest, #data{profile = Profile, peer = Peer} = Data, Actions) ->
+    Reader = #{profile => Profile, identity_key => maps:get(identity_key, Peer), binding => peer_binding(Peer),
+               now => now_ms(Data)},
+    status_read(macula_handshake:read_status_wire(Wire, Reader), IssuedAt, Rest, Data, Actions).
+
+%% A refusal this connection counts itself, uncharged, alongside the
+%% ones reported to it.
+refused(Kind, #data{refusals = Refusals} = Data) ->
+    Data#data{refusals = maps:update_with(Kind, fun(N) -> N + 1 end, 1, Refusals)}.
+
+status_read({ok, ExpiresAt}, {ok, IssuedAt}, Rest, Data, Actions) ->
+    open_frame(Rest, Data#data{status_issued_at = IssuedAt}, [status_timer(ExpiresAt, Data) | Actions]);
 %% A STATUS with a critical extension this node does not know was counted, and is dropped: the link stays up
 %% (docs/design/WIRE_1_0.md section 3.2).
-status_read({error, extension_unsupported}, Rest, Data, Actions) ->
+status_read({error, extension_unsupported}, _IssuedAt, Rest, Data, Actions) ->
     open_frame(Rest, Data, Actions);
-status_read({error, Reason}, _Rest, Data, _Actions) ->
+status_read({error, Reason}, _IssuedAt, _Rest, Data, _Actions) ->
     closed(Reason, Data).
 
 %% The liveness probe, answered and consumed here: never routed.

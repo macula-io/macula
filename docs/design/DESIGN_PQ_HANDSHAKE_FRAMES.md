@@ -84,7 +84,7 @@ fields of `tbs`:
 | `label` | text | `MACULA-PQ-STATUS-V1` |
 | `node_id` | bytes, 32 | the issuer's node_id |
 | `binding_hash` | bytes, 48 | SHA-384 of the binding's `tbs` bytes |
-| `issued_at`, `expires_at` | unsigned, ms | at most 1 hour apart; reissued every 15 minutes |
+| `issued_at`, `expires_at` | unsigned, ms | at most 1 hour apart; reissued every 15 minutes, each `issued_at` for a binding later than the one before it |
 | `sig_alg` | text | as in the binding |
 
 `signature`: 4,627 / 5,139 bytes. About 4.7 KB / 5.2 KB in all.
@@ -210,6 +210,21 @@ A status frame travels only on the control stream. It is not in the neighbour si
 (`DESIGN_PQ_SIGNED_FRAMES_AND_RECORDS.md`), so it carries no neighbour signature in either profile and does not
 count toward `seq`. When the timer fires before a fresh statement arrives, the connection closes with
 `status_expired`; a statement that fails its checks closes it with that check's reason.
+
+A status frame costs its receiver a full signature verification, so a receiver bounds them before reading one
+(macula-architecture#22):
+
+- **Budget first.** Each status frame takes one token from a per-connection bucket before anything of it is read, a
+  replay included. The SDK default is 8 tokens, gaining one a minute, against an honest rate of one per 15 minutes.
+  With the bucket empty a status frame closes the connection with `status_over_budget` under `enforce` (the
+  default), or is counted as `status_over_budget` and read on under `log_only`; `off` keeps no bucket.
+- **Newer only.** The receiver keeps the `issued_at` of the last statement it accepted on the connection. A status
+  frame whose statement's `issued_at`, read from its `tbs` before any verification, is not later than that one is
+  dropped and counted as `status_not_newer`, and the connection stays up. Reading `issued_at` early decides only a
+  drop, never an acceptance; a statement whose `issued_at` cannot be read goes on to the full checks, which refuse it.
+  The first status frame after HELLO is always verified.
+- **Issuer.** So an honest statement is never dropped, an issuer makes each `issued_at` for a binding later than the
+  one before it, a millisecond after it when its clock has stepped back.
 
 ## Order, close reasons and refusal codes
 

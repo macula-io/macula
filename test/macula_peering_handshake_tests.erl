@@ -97,6 +97,14 @@ handshake_test_() ->
             {timeout, 30, fun() -> status_frames_at_each_reissue_keep_the_connection_open(Ctx) end}},
            {"a status frame that fails its checks closes with that check's reason",
             {timeout, 30, fun() -> a_status_frame_that_fails_its_checks_closes_with_that_reason(Ctx) end}},
+           {"a replayed status frame costs no verify and leaves the link up",
+            {timeout, 30, fun() -> a_replayed_status_frame_costs_no_verify(Ctx) end}},
+           {"a flood of replayed status frames closes the connection under enforce",
+            {timeout, 30, fun() -> a_flood_of_replayed_status_frames_closes_the_connection_under_enforce(Ctx) end}},
+           {"status frames over the budget close the connection under enforce",
+            {timeout, 30, fun() -> status_frames_over_the_budget_close_the_connection_under_enforce(Ctx) end}},
+           {"status frames over the budget are counted under log_only and the link stays up",
+            {timeout, 30, fun() -> status_frames_over_the_budget_are_counted_under_log_only(Ctx) end}},
            {"a binding at its not_after closes the connection with binding_expired",
             {timeout, 30,
              fun() -> a_binding_at_its_not_after_closes_the_connection_with_binding_expired(Ctx) end}},
@@ -566,6 +574,12 @@ a_connection_without_what_its_role_needs_does_not_start(_Ctx) ->
                  macula_peering:connect(Client#{identity := ConnectKey,
                                                 target := Target#{expected_node_id => <<0:256>>}})),
     ?assertEqual({error, {puzzle, mode_required}}, macula_peering_conn_sup:start_conn(Station)),
+    ?assertEqual({error, {status_budget, #{mode => sometimes, burst => 8, refill_ms => 60_000}}},
+                 macula_peering_conn_sup:start_conn(Station#{puzzle => #{mode => off},
+                                                             status_budget => #{mode => sometimes}})),
+    ?assertEqual({error, {status_budget, #{mode => enforce, burst => 0, refill_ms => 60_000}}},
+                 macula_peering_conn_sup:start_conn(Station#{puzzle => #{mode => off},
+                                                             status_budget => #{burst => 0}})),
     %% A dial target naming a TLS verification mode asks for a check that no
     %% longer exists: there is one mode, and it is not the caller's to pick.
     [?assertEqual({error, {target, {verify, one_verification_mode}}},
@@ -641,6 +655,102 @@ a_status_frame_that_fails_its_checks_closes_with_that_reason(Ctx) ->
     ?assertEqual(status_signature_invalid, ended(Station)),
     finish(World, [Client, Station]).
 
+%% The client sends the statement the handshake carried five times more.
+%% The first STATUS after the handshake is verified; the rest are not
+%% newer than it, so they are dropped and counted before any verify.
+a_replayed_status_frame_costs_no_verify(Ctx) ->
+    #{client_issuer := ClientIssuer} = World = world(Ctx, #{}),
+    {Client, Station} = connect(World, #{mode => off}),
+    _ = {await(Client, connected), await(Station, connected)},
+    #{connect_binding := #{tbs := Tbs}, connect_status := Statement} =
+        macula_statement_issuer:connect_material(ClientIssuer),
+    Verifies = counting_status_verifies(),
+    try
+        _ = [Client ! {macula_statement, ClientIssuer, crypto:hash(sha384, Tbs), Statement}
+             || _ <- lists:seq(1, 6)],
+        ?assertEqual(5, refused(Station, status_not_newer, 5)),
+        ?assertEqual(1, Verifies()),
+        ?assertEqual(open, still_open(Station, 500))
+    after
+        meck:unload(macula_key_bindings)
+    end,
+    finish(World, [Client, Station]).
+
+%% Every STATUS takes from the budget before anything is read of it, a
+%% replay too: the first verifies, the next is dropped, the third is over.
+a_flood_of_replayed_status_frames_closes_the_connection_under_enforce(Ctx) ->
+    #{client_issuer := ClientIssuer} = World = world(Ctx, #{}),
+    {Client, Station} = connect(World, #{mode => off, status_budget => tight(enforce)}),
+    _ = {await(Client, connected), await(Station, connected)},
+    #{connect_binding := #{tbs := Tbs}, connect_status := Statement} =
+        macula_statement_issuer:connect_material(ClientIssuer),
+    Verifies = counting_status_verifies(),
+    try
+        _ = [Client ! {macula_statement, ClientIssuer, crypto:hash(sha384, Tbs), Statement}
+             || _ <- lists:seq(1, 6)],
+        ?assertEqual(status_over_budget, ended(Station)),
+        ?assertEqual(1, Verifies())
+    after
+        meck:unload(macula_key_bindings)
+    end,
+    finish(World, [Client, Station]).
+
+%% A budget of two STATUS frames that never refills: the client's issuer
+%% reissues three times, each statement newer than the last, and the
+%% third is over the budget.
+status_frames_over_the_budget_close_the_connection_under_enforce(Ctx) ->
+    #{issuer_tab := Tab, client_issuer := ClientIssuer} = World = world(Ctx, #{}),
+    {Client, Station} = connect(World, #{mode => off, status_budget => tight(enforce)}),
+    _ = {await(Client, connected), await(Station, connected)},
+    Verifies = counting_status_verifies(),
+    try
+        _ = [reissued(Tab, ClientIssuer, N) || N <- [1, 2, 3]],
+        ?assertEqual(status_over_budget, ended(Station)),
+        ?assertEqual(2, Verifies())
+    after
+        meck:unload(macula_key_bindings)
+    end,
+    finish(World, [Client, Station]).
+
+status_frames_over_the_budget_are_counted_under_log_only(Ctx) ->
+    #{issuer_tab := Tab, client_issuer := ClientIssuer} = World = world(Ctx, #{}),
+    {Client, Station} = connect(World, #{mode => off, status_budget => tight(log_only)}),
+    _ = {await(Client, connected), await(Station, connected)},
+    _ = [reissued(Tab, ClientIssuer, N) || N <- [1, 2, 3]],
+    ?assertEqual(1, refused(Station, status_over_budget, 1)),
+    ?assertMatch(#{charged := 0}, macula_peering:refusals(Station)),
+    ?assertEqual(open, still_open(Station, 500)),
+    finish(World, [Client, Station]).
+
+tight(Mode) ->
+    #{mode => Mode, burst => 2, refill_ms => ?HOUR}.
+
+%% The client's issuer reissues N seconds after T0, so each statement is
+%% newer than the one before it.
+reissued(Tab, ClientIssuer, N) ->
+    set_time(Tab, ?T0 + N * 1_000),
+    ok = macula_statement_issuer:tick(ClientIssuer).
+
+%% Counts the full checks of status statements from here on.
+counting_status_verifies() ->
+    ok = meck:new(macula_key_bindings, [passthrough, no_link]),
+    fun() -> meck:num_calls(macula_key_bindings, verify_status, '_') end.
+
+%% The connection's count of refusals of Kind, once it reaches Want or
+%% after 3 seconds.
+refused(Conn, Kind, Want) ->
+    refused(Conn, Kind, Want, 30).
+
+refused(Conn, Kind, Want, Tries) ->
+    #{counts := Counts} = macula_peering:refusals(Conn),
+    refused_count(maps:get(Kind, Counts, 0), Conn, Kind, Want, Tries).
+
+refused_count(Count, _Conn, _Kind, Want, _Tries) when Count >= Want -> Count;
+refused_count(Count, _Conn, _Kind, _Want, 0) -> Count;
+refused_count(_Count, Conn, Kind, Want, Tries) ->
+    timer:sleep(100),
+    refused(Conn, Kind, Want, Tries - 1).
+
 %% The station's TLS binding, bound at T0, ends 7 days later. Its issuer
 %% states it again 2 minutes before that, and the client's clock stands
 %% a second before the end.
@@ -700,7 +810,7 @@ station_opts(#{station_key := StationKey, station_issuer := StationIssuer}, Opti
     Opts = #{identity => StationKey, issuer => StationIssuer, capabilities => ?STATION_CAPABILITIES,
              controlling_pid => self(), puzzle => #{mode => maps:get(mode, Options)},
              clock => fixed(maps:get(station_clock, Options, ?T0 + ?MINUTE))},
-    maps:merge(maps:merge(maps:merge(Opts, maps:with([accept_owner], Options)),
+    maps:merge(maps:merge(maps:merge(Opts, maps:with([accept_owner, status_budget], Options)),
                           floor_opt(station_version_floor, Options)),
                observer_opt(station_observer, Options)).
 

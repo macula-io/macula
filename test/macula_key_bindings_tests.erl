@@ -75,7 +75,14 @@ status_cases(#{identity := Id, public := Public, profile := Profile}) ->
      ?_assertEqual({error, status_future_dated}, Verify(Later, Binding, ?NOW)),
      ?_assertEqual({error, status_binding_mismatch}, Verify(Status, Other, ?NOW)),
      ?_assertEqual({error, status_signature_invalid}, Verify(flip_signature(Status), Binding, ?NOW)),
-     ?_assertEqual({error, malformed_frame}, Verify(maps:remove(tbs, Status), Binding, ?NOW))].
+     ?_assertEqual({error, malformed_frame}, Verify(maps:remove(tbs, Status), Binding, ?NOW)),
+     %% Its issued_at, read without verifying it
+     ?_assertEqual({ok, ?NOW}, macula_key_bindings:status_issued_at(Status)),
+     ?_assertEqual({ok, ?NOW + 10 * ?MINUTE}, macula_key_bindings:status_issued_at(Later)),
+     ?_assertEqual({ok, ?NOW}, macula_key_bindings:status_issued_at(flip_signature(Status))),
+     ?_assertEqual(error, macula_key_bindings:status_issued_at(maps:remove(tbs, Status))),
+     ?_assertEqual(error, macula_key_bindings:status_issued_at(Status#{tbs := <<"not a tbs">>})),
+     ?_assertEqual(error, macula_key_bindings:status_issued_at(Binding))].
 
 %%------------------------------------------------------------------
 %% Signed, but not what the design allows

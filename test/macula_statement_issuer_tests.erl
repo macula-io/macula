@@ -24,6 +24,7 @@ cases(Identity) ->
     [{case_name(Case), fun() -> Case(Identity) end}
      || Case <- [fun connect_material_is_bound_and_stated_from_the_start/1,
                  fun a_statement_is_reissued_every_15_minutes_and_valid_for_an_hour/1,
+                 fun a_clock_stepped_back_still_issues_a_newer_statement/1,
                  fun the_connect_key_rotates_every_5_days_with_its_binding_and_statement_first/1,
                  fun a_rotated_out_binding_keeps_its_statements_until_its_not_after_and_none_after/1,
                  fun tls_material_is_found_by_the_hash_of_the_leaf/1,
@@ -69,6 +70,26 @@ a_statement_is_reissued_every_15_minutes_and_valid_for_an_hour(Identity) ->
     ok = reissued_at(Issuer, Tab, Binding, Identity, ?T0 + 15 * ?MINUTE),
     ok = reissued_at(Issuer, Tab, Binding, Identity, ?T0 + 30 * ?MINUTE),
     gen_server:stop(Issuer).
+
+%% A peer drops a statement that is not newer than the last it accepted, so a clock stepped back an hour still issues
+%% one a millisecond after the last.
+a_clock_stepped_back_still_issues_a_newer_statement(Identity) ->
+    {Tab, Clock} = clock(),
+    Issuer = start(Identity, Clock, #{}),
+    #{connect_binding := Binding} = macula_statement_issuer:connect_material(Issuer),
+    ok = macula_statement_issuer:subscribe(Issuer, hash(Binding)),
+    tick_at(Issuer, Tab, ?T0 + 30 * ?MINUTE),
+    Ahead = received_statement(),
+    tick_at(Issuer, Tab, ?T0 - 30 * ?MINUTE),
+    Behind = received_statement(),
+    ?assertEqual({ok, ?T0 + 30 * ?MINUTE}, macula_key_bindings:status_issued_at(Ahead)),
+    ?assertEqual({ok, ?T0 + 30 * ?MINUTE + 1}, macula_key_bindings:status_issued_at(Behind)),
+    ?assertMatch({ok, #{expires_at := ?T0 + 30 * ?MINUTE + 1 + ?HOUR}},
+                 macula_key_bindings:verify_status(Behind, Binding, public(Identity), pq_pure, ?T0 + 30 * ?MINUTE)),
+    gen_server:stop(Issuer).
+
+received_statement() ->
+    receive {macula_statement, _Issuer, _Hash, Statement} -> Statement after 5000 -> none end.
 
 the_connect_key_rotates_every_5_days_with_its_binding_and_statement_first(Identity) ->
     {Tab, Clock} = clock(),

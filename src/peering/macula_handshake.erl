@@ -33,6 +33,7 @@
     status/1,
     read_status/2,
     read_status_wire/2,
+    status_issued_at/1,
     open_frame_kind/1
 ]).
 
@@ -604,6 +605,17 @@ status_expiry({error, _} = Error) -> Error.
 -spec read_status_wire(term(), peer()) -> {ok, non_neg_integer()} | {error, close_reason() | extension_unsupported}.
 read_status_wire(Wire, #{profile := Profile, identity_key := IdentityKey, binding := Binding, now := Now}) ->
     status_verdict(status_frame(text_keyed({ok, Wire})), Binding, IdentityKey, Profile, Now).
+
+%% @doc When the statement in a STATUS frame already decoded from CBOR says it was issued, read WITHOUT verifying it,
+%% so a connection can drop a statement that is not newer than the last it accepted before paying for read_status_wire/2.
+%% A frame that read_status_wire/2 would refuse before verifying, or whose statement has no readable issued_at, is
+%% `error': it goes on to read_status_wire/2, which refuses it.
+-spec status_issued_at(term()) -> {ok, non_neg_integer()} | error.
+status_issued_at(Wire) ->
+    statement_issued_at(status_frame(text_keyed({ok, Wire}))).
+
+statement_issued_at({ok, #{<<"statement">> := Statement}}) -> macula_key_bindings:status_issued_at(Statement);
+statement_issued_at(_Refused) -> error.
 
 %% The optional envelope keys a STATUS may carry are read first, then exactly the frame's own keys.
 status_frame(not_a_frame) ->

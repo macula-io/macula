@@ -271,7 +271,17 @@ status_cases(#{profile := Profile, station_id := StationId, station_public := St
      ?_assertEqual({error, status_binding_mismatch},
                    macula_handshake:read_status(Frame, Peer#{binding := OtherBinding})),
      ?_assertEqual({error, unexpected_frame}, macula_handshake:read_status(macula_handshake:opener(ranges(World)), Peer)),
-     ?_assertEqual(5, field(Frame, <<"version">>))].
+     ?_assertEqual(5, field(Frame, <<"version">>)),
+     %% Its issued_at, read before any verification, so a connection can drop a statement that is not newer than the
+     %% last one it accepted without paying for the check.
+     ?_assertEqual({ok, ?NOW + 15 * ?MINUTE}, macula_handshake:status_issued_at(wire(Frame))),
+     ?_assertEqual(error, macula_handshake:status_issued_at(
+                            wire(macula_handshake:status(Statement#{tbs := <<"not a tbs">>})))),
+     ?_assertEqual(error, macula_handshake:status_issued_at(wire(macula_handshake:opener(ranges(World)))))].
+
+wire(Bytes) ->
+    {ok, Wire} = macula_record_cbor:decode_strict(Bytes),
+    Wire.
 
 %%------------------------------------------------------------------
 %% Negotiation (section 4.1): the station chooses, the client checks the choice, CONNECT repeats the ranges

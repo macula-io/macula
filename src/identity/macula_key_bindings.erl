@@ -15,7 +15,8 @@
     status_statement/4,
     verify_tls_binding/5,
     verify_connect_binding/5,
-    verify_status/5
+    verify_status/5,
+    status_issued_at/1
 ]).
 
 -export_type([envelope/0, refusal/0]).
@@ -205,6 +206,20 @@ well_formed_status(#{<<"label">> := {text, ?STATUS_LABEL}, <<"node_id">> := Node
     expect(SigAlg =:= sig_alg(Profile), malformed_frame);
 well_formed_status(_Fields, _Profile) ->
     {error, malformed_frame}.
+
+%% @doc When a status statement says it was issued, read from its tbs WITHOUT verifying it. A connection compares it
+%% with the last statement it accepted, to drop one that is not newer before paying for verify_status/5; it is never
+%% a reason to accept a statement. Anything other than a statement whose tbs decodes strictly to the status fields with
+%% an integer issued_at is `error'.
+-spec status_issued_at(term()) -> {ok, non_neg_integer()} | error.
+status_issued_at(#{tbs := Tbs, signature := Signature} = Envelope)
+  when map_size(Envelope) =:= 2, is_binary(Tbs), is_binary(Signature) ->
+    issued_at(decode_fields(Tbs, ?STATUS_KEYS));
+status_issued_at(_NotAStatement) ->
+    error.
+
+issued_at({ok, #{<<"issued_at">> := IssuedAt}}) when is_integer(IssuedAt), IssuedAt >= 0 -> {ok, IssuedAt};
+issued_at(_NotIssued) -> error.
 
 %%------------------------------------------------------------------
 %% Internals

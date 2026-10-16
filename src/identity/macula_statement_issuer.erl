@@ -176,8 +176,17 @@ newer(#{issued_at := Newest} = Current, _Hash, #{issued_at := IssuedAt}) when Ne
 newer(_Current, Hash, #{issued_at := IssuedAt, not_after := NotAfter}) ->
     #{hash => Hash, issued_at => IssuedAt, not_after => NotAfter}.
 
-statement(#{binding := Binding}, Now, S) ->
-    macula_key_bindings:status_statement(identity(S), Binding, Now, Now + ?STATEMENT_VALID_MS).
+%% A peer drops a statement that is not newer than the last it accepted on a connection, so each statement for a
+%% binding is issued after the one before it, a millisecond after it when the clock has stepped back.
+statement(#{binding := Binding} = Entry, Now, S) ->
+    IssuedAt = issued_after(maps:find(statement, Entry), Now),
+    macula_key_bindings:status_statement(identity(S), Binding, IssuedAt, IssuedAt + ?STATEMENT_VALID_MS).
+
+issued_after({ok, Previous}, Now) -> later(macula_key_bindings:status_issued_at(Previous), Now);
+issued_after(error, Now) -> Now.
+
+later({ok, PreviousAt}, Now) -> max(Now, PreviousAt + 1);
+later(error, Now) -> Now.
 
 material(error, _S) ->
     {error, unknown_leaf};

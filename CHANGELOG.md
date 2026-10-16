@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [15.5.0] - 2026-10-17
+
+Hardening over 15.4.0: a status frame on an open connection is budgeted, and one that is not newer than the last
+accepted is dropped before its verification (macula-architecture#22, register T15). No wire change; a 15.5.0 node
+speaks the same wire 1.0 as a 15.4.0 node.
+
+### Security
+
+- **Status frames on an open connection are bounded** (macula-architecture#22). Each status frame now takes a token from a per-connection bucket before anything of it is read: 8, gaining one a minute, against an honest peer's one per 15 minutes. With the bucket empty the connection closes with `status_over_budget` under `enforce`, the default; under `log_only` it is counted and read; `off` keeps no bucket. The connection option `status_budget => #{mode, burst, refill_ms}` sets it, on either role; an invalid one refuses to start the connection with `{error, {status_budget, Budget}}`.
+- **A status frame not newer than the last accepted is dropped without a verify.** The connection keeps the `issued_at` of the last statement it accepted, and drops one whose `issued_at` (read from its tbs before verifying) is not later, counted as `status_not_newer` in `macula_peering:refusals/1`, with the connection kept up. A replayed statement no longer costs a signature verification. `status_over_budget` is counted there too; both are uncharged.
+
+### Added
+
+- `macula_handshake:status_issued_at/1` and `macula_key_bindings:status_issued_at/1`: a statement's `issued_at`, read without verifying it, for deciding a drop only.
+
+### Changed
+
+- `macula_statement_issuer` makes each statement's `issued_at` for a binding later than the one before it, a millisecond after it when the clock has stepped back, so a peer that drops not-newer statements never drops an honest one.
+
 ## [15.4.0] - 2026-10-16
 
 Hardening over 15.3.0: a signed frame or object reads its alg before its signature (macula#104). No wire change and no
