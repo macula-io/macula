@@ -294,6 +294,24 @@
         "D9"
       ],
       "expect": { "outcome": "accept" },
+      "id": "frames.store_refresh",
+      "input": {
+        "after_hello": 1,
+        "frame": "aa636b657958200000000000000000000000000000000000000000000000000000000000000004667369676e65725820f8e65a9b9393df4c90d53dd621bab34f6d019734e40adda4f5eae9a953bbd89b6776657273696f6e05686672616d655f69645001a133d7be0d01070000000000000107697369676e617475726558405a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a6a637265617465645f61741b000001a12f9a3e006a657870697265735f61741b000001a12f9ed1e06a6672616d655f747970656d73746f72655f726566726573686a73656e745f61745f6d731b000001a133d7be0d6e7265636f72645f76657273696f6e5000000000000000000000000000000003",
+        "frame_type": "store_refresh",
+        "position": "control_stream"
+      },
+      "lands_with": [
+        "macula#99"
+      ],
+      "profile": "pq_pure"
+    },
+    {
+      "covers": [
+        "D1",
+        "D9"
+      ],
+      "expect": { "outcome": "accept" },
       "id": "frames.call",
       "input": {
         "after_hello": 1,

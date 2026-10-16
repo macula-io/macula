@@ -44,7 +44,7 @@
     liveness_ping/1, liveness_pong/1,
     find_node/1, nodes/1,
     find_value/1, value/1,
-    store/1, store_ack/1,
+    store/1, store_ack/1, store_refresh/1,
     register_ack/1,
 
     %% DHT helper — build and validate a station_ref entry
@@ -156,7 +156,7 @@
     ping_spec/0, pong_spec/0, liveness_spec/0,
     find_node_spec/0, nodes_spec/0,
     find_value_spec/0, value_spec/0,
-    store_spec/0, store_ack_spec/0,
+    store_spec/0, store_ack_spec/0, store_refresh_spec/0,
     register_ack_spec/0, register_kind/0, register_refusal/0,
     station_ref/0, station_ref_spec/0,
     request_spec/0, verified_request/0,
@@ -246,7 +246,7 @@
 %% handshake. Data frames carry their own end-to-end signatures.
 -define(CONTROL_STREAM,
         [swim_ping, swim_ack, swim_suspect, swim_confirm, swim_ping_req, ping, pong, find_node, nodes, find_value,
-         value, store, store_ack, register_ack, advertise, unadvertise, subscribe, unsubscribe,
+         value, store, store_ack, store_refresh, register_ack, advertise, unadvertise, subscribe, unsubscribe,
          overlay_relay, hyparview_join, hyparview_forward_join, hyparview_neighbor, hyparview_disconnect,
          hyparview_shuffle, hyparview_shuffle_reply, plumtree_ihave, plumtree_graft, plumtree_prune,
          goodbye]).
@@ -257,7 +257,7 @@
                     | liveness_ping | liveness_pong
                     | find_node | nodes
                     | find_value | value
-                    | store | store_ack | register_ack
+                    | store | store_ack | store_refresh | register_ack
                     | call | result | error
                     | hyparview_join | hyparview_forward_join
                     | hyparview_neighbor | hyparview_disconnect
@@ -411,6 +411,20 @@
     signer := id256(),
     record_version := <<_:128>>,
     stored := boolean()
+}.
+
+%% A STORE_REFRESH re-stamps a record a custodian already holds for `key' under signer key id `signer', advancing it
+%% to `record_version' with the new `created_at' and `expires_at' and the `signature' that covers them over the held
+%% payload (macula-station#107, D28). It carries no payload: the custodian reconstructs the signed tbs from what it holds and
+%% verifies this signature. The answer is a STORE_ACK, `stored' true when applied, false meaning the custodian needs
+%% the full record. `record_version' on the wire: the base frame header already carries a `version' field.
+-type store_refresh_spec() :: #{
+    key    := id256(),
+    signer := id256(),
+    record_version := <<_:128>>,
+    created_at := non_neg_integer(),
+    expires_at := non_neg_integer(),
+    signature := binary()
 }.
 
 %% What a station did with an ADVERTISE, UNADVERTISE, SUBSCRIBE or UNSUBSCRIBE (macula#12). An advertise kind names the
@@ -953,6 +967,21 @@ store_ack(#{key := K, signer := Signer, record_version := Version, stored := Sto
        is_binary(Version), byte_size(Version) =:= 16,
        is_boolean(Stored), not is_map_key(reason, Spec) ->
     (base(store_ack))#{key => K, signer => Signer, record_version => Version, stored => Stored}.
+
+%% @doc A STORE_REFRESH: the re-signed expiry delta for a record a custodian already holds, carrying no payload
+%% (macula-station#107). The sender uses it only toward a peer that declares the `dht_record_refresh' capability and only
+%% when the payload is unchanged from the one that peer last acked; the answer is a STORE_ACK.
+-spec store_refresh(store_refresh_spec()) -> frame().
+store_refresh(#{key := K, signer := Signer, record_version := Version,
+                created_at := Created, expires_at := Expires, signature := Sig})
+  when is_binary(K), byte_size(K) =:= 32,
+       is_binary(Signer), byte_size(Signer) =:= 32,
+       is_binary(Version), byte_size(Version) =:= 16,
+       is_integer(Created), Created >= 0,
+       is_integer(Expires), Expires >= 0,
+       is_binary(Sig) ->
+    (base(store_refresh))#{key => K, signer => Signer, record_version => Version,
+                           created_at => Created, expires_at => Expires, signature => Sig}.
 
 %% @doc A station's answer to a registration (macula#12): accepted, or refused with a reason.
 -spec register_ack(register_ack_spec()) -> frame().
@@ -2735,6 +2764,9 @@ received_rules(store) ->
     base_rules([{record, binary}]);
 received_rules(store_ack) ->
     base_rules([{key, key}, {signer, key}, {record_version, id16}, {stored, boolean}]);
+received_rules(store_refresh) ->
+    base_rules([{key, key}, {signer, key}, {record_version, id16},
+                {created_at, non_neg}, {expires_at, non_neg}, {signature, binary}]);
 received_rules(register_ack) ->
     (base_rules([{realm, key}, {kind, {one_of, [unknown | ?REGISTER_KINDS]}},
                  {name, {utf8_between, 1, ?MAX_REGISTER_NAME_BYTES}}, {accepted, boolean}],
@@ -3215,6 +3247,7 @@ frame_type_named(<<"find_value">>) -> {ok, find_value};
 frame_type_named(<<"value">>) -> {ok, value};
 frame_type_named(<<"store">>) -> {ok, store};
 frame_type_named(<<"store_ack">>) -> {ok, store_ack};
+frame_type_named(<<"store_refresh">>) -> {ok, store_refresh};
 frame_type_named(<<"register_ack">>) -> {ok, register_ack};
 frame_type_named(<<"call">>) -> {ok, call};
 frame_type_named(<<"result">>) -> {ok, result};
@@ -3425,6 +3458,20 @@ frame_table(store_ack) ->
       <<"signer">> => {signer, value},
       <<"record_version">> => {record_version, value},
       <<"stored">> => {stored, boolean}};
+frame_table(store_refresh) ->
+    #{<<"version">> => {version, value},
+      <<"frame_type">> => {frame_type, frame_type},
+      <<"frame_id">> => {frame_id, value},
+      <<"sent_at_ms">> => {sent_at_ms, uint},
+      <<"realm">> => {realm, value},
+      <<"call_id">> => {call_id, value},
+      <<"source_route">> => {source_route, value},
+      <<"key">> => {key, value},
+      <<"signer">> => {signer, value},
+      <<"record_version">> => {record_version, value},
+      <<"created_at">> => {created_at, uint},
+      <<"expires_at">> => {expires_at, uint},
+      <<"signature">> => {signature, value}};
 frame_table(register_ack) ->
     #{<<"version">> => {version, value},
       <<"frame_type">> => {frame_type, frame_type},

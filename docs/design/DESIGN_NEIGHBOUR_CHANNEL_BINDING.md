@@ -202,6 +202,7 @@ carries an end-to-end signature today, so none loses one. Frames that carry thei
 | value | neighbour | session | each record's own |
 | store | neighbour | session | the record's own (MACULA-PQ-RECORD-V1) |
 | store_ack | neighbour | session | none |
+| store_refresh | neighbour | session | the refreshed record's own (MACULA-PQ-RECORD-V1) |
 | advertise, unadvertise | neighbour | session | the advertisement's / withdrawal's own record signature |
 | subscribe, unsubscribe | neighbour | session | none |
 | overlay_relay | neighbour | session | the inner frame's own, where it has one |

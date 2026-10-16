@@ -1653,6 +1653,7 @@ classify(find_value)     -> dht;
 classify(value)          -> dht;
 classify(store)          -> dht;
 classify(store_ack)      -> dht;
+classify(store_refresh)  -> dht;
 classify(subscribe)      -> pubsub;
 classify(unsubscribe)    -> pubsub;
 classify(publish)        -> pubsub;

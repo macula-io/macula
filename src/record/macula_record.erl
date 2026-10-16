@@ -36,7 +36,7 @@
     tombstone/2, tombstone/3,
     envelope/3
 ]).
--export([sign/2, verify/2, verify/3, custodian_verify/3, signer_entry/3, signer_entry/4, refresh/2, refresh/3, encode/1, node_signed/1,
+-export([sign/2, verify/2, verify/3, custodian_verify/3, custodian_refresh/4, signer_entry/3, signer_entry/4, refresh/2, refresh/3, encode/1, node_signed/1,
          payload_bounded/1, wire_bounded/1,
          domain_type/1, domain_record_checked/1]).
 -export([type/1, key/1, key_id/1, version/1, created_at/1, expires_at/1, payload/1, signature/1]).
@@ -61,10 +61,16 @@
               content_announcement_opts/0, foundation_seed/0, foundation_seed_list_opts/0,
               foundation_parameter_value/0, foundation_parameter_opts/0, foundation_realm_trust_list_entry/0,
               foundation_realm_trust_list_opts/0,
-              foundation_t3_attestation_opts/0, tombstone_opts/0, station_endpoint_opts/0, signer_entry_stats/0]).
+              foundation_t3_attestation_opts/0, tombstone_opts/0, station_endpoint_opts/0, signer_entry_stats/0,
+              refresh_delta/0]).
 
 -type type_tag() :: 1..16#FF.
 -type version() :: <<_:128>>.
+
+%% The re-signed expiry delta a STORE_REFRESH carries (macula-station#107): a new version, created_at and expires_at, and the
+%% signature that covers them over the record's unchanged payload. custodian_refresh/4 applies it to a held record.
+-type refresh_delta() :: #{version := version(), created_at := non_neg_integer(),
+                           expires_at := non_neg_integer(), signature := binary()}.
 
 %% An unsigned record holds type, version, created_at, expires_at, payload and, on a domain type, subject. A signed or
 %% verified record also holds key, key_id, alg, tbs and signature.
@@ -719,6 +725,65 @@ refreshed(#{created_at := Created, expires_at := Expires} = Record, Key, Now, Bo
 
 ends_at(Expires, no_bound) -> Expires;
 ends_at(Expires, NotAfter) -> min(Expires, NotAfter).
+
+%% @doc Apply a STORE_REFRESH to a record a custodian already holds (macula-station#107, D28). A refresh carries only the
+%% re-signed expiry delta the publisher produced with refresh/2,3 -- the new version, created_at, expires_at and
+%% signature -- and NO payload. The custodian reconstructs the signed tbs over the HELD payload with the delta's
+%% version and timestamps, exactly as sign/2 built it, and runs the delta's signature through the same
+%% custodian_verify/3 a full STORE gets. When it verifies, the returned record is byte-for-byte the one a full STORE
+%% of the publisher's refresh would have produced, so encode/1 of it sends the publisher's bytes unchanged.
+%%
+%% ANY failure returns `need_full', never a partial or stale record: a reconstructed tbs that does not verify (the
+%% held payload is not the one the delta was signed over), a signature over timestamps outside the type's lifetime
+%% class, an expired or not-yet-valid clock, or a created_at/expires_at outside the range a record may carry (a wire
+%% integer reaches 2^64-1, a record timestamp is bounded by ?MAX_PROTOCOL_INT, so a decoded frame cannot crash the
+%% custodian). The sender then sends a full STORE. Version monotonicity against the held entry is the slot's concern
+%% (macula_dht_slots:later/2), applied by the caller as for a full STORE; this function reconstructs and verifies, it
+%% does not place. Held is a verified record the caller looked up by {key, signer}; when the caller holds no base
+%% entry it answers need_full without calling this.
+-spec custodian_refresh(m_record(), refresh_delta(), macula_crypto_profile:profile(), integer()) ->
+          {ok, m_record()} | need_full.
+custodian_refresh(#{key := HeldKey, type := Type, payload := Payload, lifetime_class := Class} = Held,
+                  #{version := Version, created_at := Created, expires_at := Expires, signature := Signature},
+                  Profile, Now)
+  when is_binary(HeldKey), is_binary(Version), byte_size(Version) =:= 16,
+       is_integer(Created), Created >= 0, Created < ?MAX_PROTOCOL_INT,
+       is_integer(Expires), Expires >= 0, Expires < ?MAX_PROTOCOL_INT, is_binary(Signature) ->
+    Fields = refresh_tbs_fields(Type, Payload, Class, maps:get(schema, Held, ?SCHEMA_V1),
+                                maps:get(subject, Held, undefined), Version, Created, Expires),
+    Tbs = reconstructed_tbs(Fields, Profile),
+    refresh_outcome(custodian_verify(#{key => HeldKey, tbs => Tbs, signature => Signature}, Profile, Now));
+%% A well-formed delta the first clause cannot admit because a timestamp is outside the record range a wire frame
+%% may still carry (`non_neg' on the wire reaches 2^64-1): no record the publisher could sign has such a timestamp,
+%% so answer need_full rather than crash. Keeps the contract total for every frame the station decodes. A delta of
+%% another shape, or a held record that is not a verified one, is a caller fault and is left to fail.
+custodian_refresh(#{key := _, type := _, payload := _, lifetime_class := _},
+                  #{version := Version, created_at := Created, expires_at := Expires, signature := Signature},
+                  _Profile, _Now)
+  when is_binary(Version), is_integer(Created), Created >= 0, is_integer(Expires), Expires >= 0,
+       is_binary(Signature) ->
+    need_full.
+
+%% The tbs fields of the refreshed record, reconstructed from what the custodian HOLDS: the held type, payload,
+%% lifetime_class, schema and subject, with the delta's version and timestamps. The class is the HELD one, not
+%% re-derived from the type (a custodian stores records whose built-in tag has no class row, and tombstones of them;
+%% re-deriving would error on those, and the held class is what the publisher's signature covers anyway, exact for a
+%% known type by the lifetime_class_mismatch check at store time). A held record carrying an `ext' entry, which this
+%% SDK never signs but a custodian stores, is not reconstructed field-for-field here (as sign/2 does not carry ext),
+%% so a refresh of one fails to verify and answers need_full every cycle: waste, never loss.
+refresh_tbs_fields(Type, Payload, Class, Schema, Subject, Version, Created, Expires) ->
+    Fields = #{{text, <<"type">>} => Type, {text, <<"version">>} => Version, {text, <<"schema">>} => Schema,
+               {text, <<"lifetime_class">>} => Class, {text, <<"created_at">>} => Created,
+               {text, <<"expires_at">>} => Expires, {text, <<"payload">>} => Payload},
+    with_tbs_subject(Fields, Subject).
+
+%% The tbs bytes sign/2 would have produced for these fields: the core fields with the verifier's alg, encoded by the
+%% one deterministic record codec. Must agree with macula_signed_object:sign/3, which builds the tbs the same way.
+reconstructed_tbs(Fields, Profile) ->
+    macula_record_cbor:encode(Fields#{{text, <<"alg">>} => {text, macula_signed_object:alg(Profile)}}).
+
+refresh_outcome({ok, Record}) -> {ok, Record};
+refresh_outcome({error, _Refusal}) -> need_full.
 
 %% @doc The wire form of a signed or verified record: its {key, tbs, signature} map, tbs unchanged.
 -spec encode(m_record()) -> binary().

@@ -225,10 +225,15 @@ logged; it never crashes the node or closes the link.
 ### 4.7 Capabilities
 
 - `capabilities` in CONNECT and HELLO is an unsigned integer below 2^53; bits 0 to 52 are the reserved range.
-- Assigned: bit 0 `station`, bit 1 `swim_indirect`, bit 2 `relay_overloaded`. Bits never retire and are never
-  reassigned.
+- Assigned: bit 0 `station`, bit 1 `swim_indirect`, bit 2 `relay_overloaded`, bit 3 `dht_record_refresh`. Bits never
+  retire and are never reassigned.
 - An unknown bit is ignored. Each capability states its behaviour towards a peer that lacks it and towards one that
   claims it falsely: waste, never loss, both ways (D2).
+- `dht_record_refresh` (bit 3, macula-station#107): a custodian declaring it applies a STORE_REFRESH, re-signing a record it
+  already holds to a new expiry without the payload, and answers STORE_ACK `stored` false (need the full record) on
+  any failure. A sender sends STORE_REFRESH only to a peer declaring the bit, and only when the record's payload is
+  unchanged from that peer's last ack; a peer that lacks the bit, or claims it falsely, gets a full STORE. Waste,
+  never loss, both ways.
 
 ## 5. Records (macula#100)
 

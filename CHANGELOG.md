@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [15.2.0] - 2026-10-16
+
+Additive over 15.1.0: the DHT record-refresh capability (macula-station#107 lever 1), a
+post-1.0 feature under macula#83 behind the `dht_record_refresh` capability bit. No
+wire break; a 15.2.0 node speaks the same wire 1.0 as a 15.0.0 node, and sends the new
+frame only toward a peer that advertises the bit.
+
+### Added
+
+- **`store_refresh`, a DHT frame that refreshes a record's expiry without its payload** (macula-station#107). A custodian that advertises the `dht_record_refresh` capability (CONNECT/HELLO bit 3) may be sent a `store_refresh` instead of a full STORE: `{key, signer, record_version, created_at, expires_at, signature}` and no payload. It exists to cut the steady DHT store traffic a service-hosting node sends, which today re-sends a record's whole ~23 KB payload to each custodian on every expiry refresh though only the expiry changed. A sender uses it only toward a peer declaring the bit and only when the payload is unchanged from that peer's last ack; every other case is a full STORE (waste, never loss).
+- **`macula_record:custodian_refresh/4`: apply a refresh to a held record.** The custodian reconstructs the signed tbs over the payload it already holds with the frame's new version and timestamps, verifies the new signature against the held record's carried key, and runs the same clock, lifetime and class checks a full STORE gets. The result is byte-identical to a full STORE of the publisher's refresh, so it stores exactly what it would have stored the expensive way. On any failure it answers `need_full` and the sender falls back to a full STORE: never a lost or a stale record. No SDK is a custodian, so this is the Erlang station's path; `put_record` and `refresh` are unchanged for publishers.
+- **Conformance vector** for the `store_refresh` frame in `priv/vectors/wire_1_0/frames.json`, and the capability bit recorded in the `WIRE_1_0.md` 4.7 register (bit 3).
+
 ## [15.1.0] - 2026-10-16
 
 Additive over 15.0.0: `macula:org_member/4,5`, the subscriber-side org

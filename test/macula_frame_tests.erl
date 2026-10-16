@@ -339,6 +339,53 @@ store_wire_roundtrip_test() ->
     {ok, D, <<>>} = macula_frame:decode(macula_frame:encode(F)),
     ?assertEqual(F, D).
 
+%% -- STORE_REFRESH (macula-station#107) -----------------------------------
+
+%% A STORE_REFRESH carries only the re-signed expiry delta for a {key, signer} a custodian already holds: the new
+%% version, created_at, expires_at and signature, and no record payload. The answer is an ordinary STORE_ACK.
+store_refresh_carries_delta_only_test() ->
+    Key = crypto:strong_rand_bytes(32),
+    Signer = crypto:strong_rand_bytes(32),
+    Version = crypto:strong_rand_bytes(16),
+    Sig = crypto:strong_rand_bytes(64),
+    F = macula_frame:store_refresh(#{key => Key, signer => Signer, record_version => Version,
+                                     created_at => 1000, expires_at => 301000, signature => Sig}),
+    ?assertEqual(store_refresh, macula_frame:frame_type(F)),
+    ?assertEqual(Key, maps:get(key, F)),
+    ?assertEqual(Signer, maps:get(signer, F)),
+    ?assertEqual(Version, maps:get(record_version, F)),
+    ?assertEqual(1000, maps:get(created_at, F)),
+    ?assertEqual(301000, maps:get(expires_at, F)),
+    ?assertEqual(Sig, maps:get(signature, F)),
+    ?assertNot(maps:is_key(record, F)).
+
+store_refresh_wire_roundtrip_test() ->
+    F = macula_frame:store_refresh(#{key => crypto:strong_rand_bytes(32),
+                                     signer => crypto:strong_rand_bytes(32),
+                                     record_version => crypto:strong_rand_bytes(16),
+                                     created_at => 1000, expires_at => 301000,
+                                     signature => crypto:strong_rand_bytes(64)}),
+    {ok, D, <<>>} = macula_frame:decode(macula_frame:encode(F)),
+    ?assertEqual(F, D).
+
+store_refresh_rejects_bad_key_test() ->
+    ?assertError(function_clause,
+                 macula_frame:store_refresh(#{key => not_a_key, signer => crypto:strong_rand_bytes(32),
+                                              record_version => crypto:strong_rand_bytes(16),
+                                              created_at => 1000, expires_at => 301000,
+                                              signature => crypto:strong_rand_bytes(64)})).
+
+store_refresh_rejects_short_version_test() ->
+    ?assertError(function_clause,
+                 macula_frame:store_refresh(#{key => crypto:strong_rand_bytes(32),
+                                              signer => crypto:strong_rand_bytes(32),
+                                              record_version => crypto:strong_rand_bytes(8),
+                                              created_at => 1000, expires_at => 301000,
+                                              signature => crypto:strong_rand_bytes(64)})).
+
+store_refresh_is_a_control_frame_test() ->
+    ?assert(macula_frame:control_frame(store_refresh)).
+
 %% -- No REPLICATE / REPLICATE_ACK ---------------------------------
 
 %% Replication runs as STOREs, so the codec has no REPLICATE or REPLICATE_ACK.

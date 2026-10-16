@@ -19,3 +19,13 @@ relay_overloaded_is_bit_four_test() ->
     ?assertEqual(4, macula_peering:capability_bit(relay_overloaded)),
     ?assert(macula_peering:has_capability(relay_overloaded, 2#111)),
     ?assertNot(macula_peering:has_capability(relay_overloaded, 2#011)).
+
+%% A custodian that applies a STORE_REFRESH frame in place of a full STORE declares bit 8 (macula-station#107). A refresh
+%% carries no record payload, so a sender uses it only toward a peer declaring this bit; every other peer gets the
+%% full STORE (waste, never loss).
+dht_record_refresh_is_bit_eight_test() ->
+    ?assertEqual(8, macula_peering:capability_bit(dht_record_refresh)),
+    ?assert(macula_peering:has_capability(dht_record_refresh, 2#1111)),
+    ?assert(macula_peering:has_capability(dht_record_refresh, 2#1000)),
+    ?assertNot(macula_peering:has_capability(dht_record_refresh, 2#0111)),
+    ?assertNot(macula_peering:has_capability(dht_record_refresh, 0)).

@@ -87,7 +87,15 @@
 %% waits out its deadline (waste, never loss).
 -define(CAP_RELAY_OVERLOADED, 16#0000_0000_0000_0004).
 
--type capability() :: station | swim_indirect | relay_overloaded.
+%% Capability bit asserting the peer is a custodian that applies a `store_refresh' frame: it reconstructs the signed
+%% tbs over the record payload it already holds with the frame's new version and timestamps, verifies the new
+%% signature, and updates the entry in place, answering `need_full' on any failure (macula-station#107). The frame is a new
+%% type an older custodian would close the connection over, so a sender sends it only toward a peer declaring this
+%% bit, and only when the record's payload is unchanged from what that peer last acked; every other case is a full
+%% STORE (waste, never loss).
+-define(CAP_DHT_RECORD_REFRESH, 16#0000_0000_0000_0008).
+
+-type capability() :: station | swim_indirect | relay_overloaded | dht_record_refresh.
 -export_type([capability/0]).
 
 -type opts() :: macula_peering_conn:opts().
@@ -344,7 +352,8 @@ reset_dedicated_stream(Stream, unknown_frame_type) ->
 -spec capability_bit(capability()) -> pos_integer().
 capability_bit(station) -> ?CAP_STATION;
 capability_bit(swim_indirect) -> ?CAP_SWIM_INDIRECT;
-capability_bit(relay_overloaded) -> ?CAP_RELAY_OVERLOADED.
+capability_bit(relay_overloaded) -> ?CAP_RELAY_OVERLOADED;
+capability_bit(dht_record_refresh) -> ?CAP_DHT_RECORD_REFRESH.
 
 %% @doc Whether a capabilities mask, such as `peer_capabilities/1' returns,
 %% declares the capability.
