@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [15.0.0] - 2026-10-16
+
+Wire 1.0, the first stable wire. 15.0.0 is 15.0.0-rc.3 unchanged; the three candidate entries below are its full changelog. Over 14.x it delivers the wire 1.0 frame set and handshake (spec `docs/design/WIRE_1_0.md`, design of record macula#83, conformance vectors in `priv/vectors/wire_1_0/`): the frame envelope (macula#99), handshake (macula#98), records (macula#100) and the `_dht.*` procedures (macula#102) in rc.1; the registration acknowledgement REGISTER_ACK (macula#12) and the null-at-any-depth refusal (macula#99) in rc.2; the station authorization check on every dial an application names (macula-station#63, hook 3; macula#103) and the removal of the unused `macula_or_set` module (macula#88) in rc.3.
+
+### Upgrading from 14
+
+- **Wire break.** 15.0.0 speaks wire 1.0; a 15 node neither reads a 14 node's frames nor completes a handshake with it (rc.1). Move a fleet across the boundary together, not node by node.
+- **Breaking: `macula_or_set` is removed** (macula#88): an unused observed-remove set whose tombstones grew without bound. See the rc.3 entry.
+- **`advertise/*` and `subscribe/*` now block until a station acknowledges the registration** and return `{error, {refused, Reason}}`, `{error, {not_sent, Reason}}` or `{error, {unacknowledged, Station}}` on failure (macula#12); a registration that does not hold is withdrawn. See the rc.2 entry.
+- **Wire-level, for anything speaking the wire directly rather than through the SDK:** frame version 5, the per-frame `capabilities` header is gone, and an unknown enum value inside a signed object is refused by name (rc.1).
+
 ## [15.0.0-rc.3] - 2026-10-16
 
 Wire 1.0, third release candidate: 15.0.0-rc.2 plus the station authorization check on every dial an application names, carried from 14.11.0 (macula-station#63, hook 3), and the removal of the unused `macula_or_set` module (macula#88). The wire is the one rc.2 speaks, unchanged; this candidate closes the last SDK items before 15.0.0 final.
