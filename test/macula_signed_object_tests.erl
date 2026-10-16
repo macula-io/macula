@@ -1,6 +1,6 @@
 %% EUnit tests for macula_signed_object: the signed objects of DESIGN_PQ_SIGNED_FRAMES_AND_RECORDS.md. A signature
 %% covers Label || 0x00 || SHA-384(key as carried) || tbs, and a verifier reads an object in the design's order: its
-%% shape, the carried key, the signature over tbs as received, tbs under the decoding rule, then alg.
+%% shape, the carried key, tbs under the decoding rule and its alg, then the signature over tbs as received.
 -module(macula_signed_object_tests).
 
 -include_lib("eunit/include/eunit.hrl").
@@ -48,6 +48,11 @@ cases(Keys) ->
                  fun a_tbs_with_trailing_bytes_is_malformed/1,
                  fun a_tbs_without_alg_is_malformed/1,
                  fun alg_naming_the_other_profile_is_refused/1,
+                 fun a_foreign_alg_is_refused_before_the_signature/1,
+                 fun a_held_object_with_a_foreign_alg_is_refused_before_the_signature/1,
+                 fun a_tbs_that_is_not_a_map_is_refused_before_the_signature/1,
+                 fun a_tbs_without_alg_is_refused_before_the_signature/1,
+                 fun a_foreign_alg_costs_no_signature_verification/1,
                  fun a_carried_object_round_trips_through_its_wire_form/1,
                  fun a_held_object_round_trips_through_its_wire_form/1,
                  fun decode_accepts_keys_in_any_order/1,
@@ -107,9 +112,12 @@ a_flipped_signature_is_refused(#{key := Key, profile := Profile}) ->
     ?assertEqual({error, signature_invalid},
                  macula_signed_object:verify(?LABEL, Object#{signature := flip(Signature)}, Profile)).
 
+%% Another well-formed tbs naming the profile's alg passes the cheap read, so the signature refuses it. A tbs altered
+%% into bytes that do not decode is malformed before any signature work (a_tbs_that_is_not_a_map_is_malformed).
 altered_tbs_is_refused(#{key := Key, profile := Profile}) ->
-    #{tbs := Tbs} = Object = object(Key),
-    ?assertEqual({error, signature_invalid}, macula_signed_object:verify(?LABEL, Object#{tbs := flip(Tbs)}, Profile)).
+    Object = object(Key),
+    Altered = macula_record_cbor:encode((expected_fields(Profile))#{{text, <<"type">>} => 2}),
+    ?assertEqual({error, signature_invalid}, macula_signed_object:verify(?LABEL, Object#{tbs := Altered}, Profile)).
 
 another_valid_key_is_refused(#{key := Key, other := Other, profile := Profile}) ->
     Object = object(Key),
@@ -192,6 +200,50 @@ a_tbs_without_alg_is_malformed(#{key := Key, profile := Profile}) ->
 alg_naming_the_other_profile_is_refused(#{key := Key, profile := Profile}) ->
     Tbs = <<16#A1, 16#63, "alg", (cbor_text(alg(other_profile(Profile))))/binary>>,
     ?assertEqual({error, alg_mismatch}, macula_signed_object:verify(?LABEL, raw(Key, Tbs), Profile)).
+
+%%------------------------------------------------------------------
+%% alg before the signature (macula#104)
+%%------------------------------------------------------------------
+
+%% A foreign alg is refused on the cheap read of tbs, so a signature that would not verify never gets the chance to
+%% name the refusal: alg_mismatch, not signature_invalid.
+a_foreign_alg_is_refused_before_the_signature(#{key := Key, profile := Profile}) ->
+    Object = raw(Key, foreign_alg_tbs(Profile)),
+    ?assertEqual({error, alg_mismatch},
+                 macula_signed_object:verify(?LABEL, Object#{signature := not_a_signature(Object)}, Profile)).
+
+a_held_object_with_a_foreign_alg_is_refused_before_the_signature(#{key := Key, profile := Profile}) ->
+    #{key := Carried} = Object = raw(Key, foreign_alg_tbs(Profile)),
+    Held = maps:without([key], Object#{signature := not_a_signature(Object)}),
+    ?assertEqual({error, alg_mismatch}, macula_signed_object:verify_held(?LABEL, Held, Carried, Profile)).
+
+a_tbs_that_is_not_a_map_is_refused_before_the_signature(#{key := Key, profile := Profile}) ->
+    Object = raw(Key, <<16#82, 16#01, 16#02>>),
+    ?assertEqual({error, malformed},
+                 macula_signed_object:verify(?LABEL, Object#{signature := not_a_signature(Object)}, Profile)).
+
+a_tbs_without_alg_is_refused_before_the_signature(#{key := Key, profile := Profile}) ->
+    Object = raw(Key, <<16#A1, 16#64, "type", 16#01>>),
+    ?assertEqual({error, malformed},
+                 macula_signed_object:verify(?LABEL, Object#{signature := not_a_signature(Object)}, Profile)).
+
+%% The point of the order: a peer naming an algorithm outside the profile spends no ML-DSA-87 verification.
+a_foreign_alg_costs_no_signature_verification(#{key := Key, profile := Profile}) ->
+    Object = raw(Key, foreign_alg_tbs(Profile)),
+    ok = meck:new(macula_node_keys, [passthrough]),
+    try
+        ?assertEqual({error, alg_mismatch}, macula_signed_object:verify(?LABEL, Object, Profile)),
+        ?assertEqual(0, meck:num_calls(macula_node_keys, verify, '_'))
+    after
+        meck:unload(macula_node_keys)
+    end.
+
+foreign_alg_tbs(Profile) ->
+    <<16#A1, 16#63, "alg", (cbor_text(alg(other_profile(Profile))))/binary>>.
+
+%% The object's own signature with its first byte flipped: the right length, and it does not verify.
+not_a_signature(#{signature := <<First, Rest/binary>>}) ->
+    <<(First bxor 16#FF), Rest/binary>>.
 
 %%------------------------------------------------------------------
 %% Wire form

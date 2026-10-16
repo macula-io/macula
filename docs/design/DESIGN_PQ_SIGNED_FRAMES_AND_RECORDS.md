@@ -106,10 +106,12 @@ data in one form, whatever a node has loaded.
 - **How a verifier reads one,** in order:
   1. the map holds exactly the keys of its shape, each of type bytes;
   2. `key`, when present, is in the carried form of the verifier's profile;
-  3. the signature verifies over the `tbs` bytes as received, with the verifier's profile algorithm;
-  4. only then is `tbs` decoded, under the decoding rule;
-  5. `alg` in `tbs` names the verifier's profile algorithm, `ML-DSA-87` or `ML-DSA-87-PS384`. It is checked, and it
-     never selects an algorithm.
+  3. `tbs` decodes under the decoding rule to a map holding a text `alg`;
+  4. `alg` names the verifier's profile algorithm, `ML-DSA-87` or `ML-DSA-87-PS384`. It is checked, and it never
+     selects an algorithm;
+  5. only then does the signature verify over the `tbs` bytes as received, with the verifier's profile algorithm.
+     Steps 3 and 4 are the cheap refusal: an object naming another algorithm costs a decode, never a signature
+     verification (macula#104).
 - A frame's `frame_type` equals the `frame_type` inside its `tbs`, wherever the `tbs` holds one.
 - **Nothing is re-encoded.** Stations store and forward a signed object's bytes as received. A verifier that holds a
   key for a stream or a connection may keep that key's SHA-384, so the hash costs nothing per frame.

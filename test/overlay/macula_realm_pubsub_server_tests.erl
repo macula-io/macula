@@ -284,8 +284,11 @@ event_frame(Realm, Topic) ->
     #{publication := Publication} = publish_frame(Realm, Topic, key()),
     macula_frame:event(#{publication => Publication, delivered_via => plumtree}).
 
-tampered(#{publication := #{tbs := <<Head:20/binary, Byte, Tail/binary>>} = Publication} = Frame) ->
-    Frame#{publication := Publication#{tbs := <<Head/binary, (Byte bxor 1), Tail/binary>>}}.
+%% The tbs with one field added: it still decodes and names its alg, so the signature refuses it. A tbs that no longer
+%% decodes, or names another alg, is refused before the signature (macula#104).
+tampered(#{publication := #{tbs := Tbs} = Publication} = Frame) ->
+    {ok, Fields} = macula_record_cbor:decode_strict(Tbs),
+    Frame#{publication := Publication#{tbs := macula_record_cbor:encode(Fields#{{text, <<"tampered">>} => 1})}}.
 
 verified(Frame) ->
     macula_frame:verify_publication(Frame, profile(), erlang:system_time(millisecond)).

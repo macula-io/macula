@@ -343,8 +343,11 @@ ihave(MsgId) ->
 gossip_of(#{publication := Publication}, Round) ->
     macula_frame:plumtree_gossip(#{publication => Publication, round => Round}).
 
-tampered(#{publication := #{tbs := <<Head:20/binary, Byte, Tail/binary>>} = Publication} = Frame) ->
-    Frame#{publication := Publication#{tbs := <<Head/binary, (Byte bxor 1), Tail/binary>>}}.
+%% The tbs with one field added: it still decodes and names its alg, so the signature refuses it. A tbs that no longer
+%% decodes, or names another alg, is refused before the signature (macula#104).
+tampered(#{publication := #{tbs := Tbs} = Publication} = Frame) ->
+    {ok, Fields} = macula_record_cbor:decode_strict(Tbs),
+    Frame#{publication := Publication#{tbs := macula_record_cbor:encode(Fields#{{text, <<"tampered">>} => 1})}}.
 
 wire(Frame) ->
     {ok, Decoded, <<>>} = macula_frame:decode(macula_frame:encode(Frame)),

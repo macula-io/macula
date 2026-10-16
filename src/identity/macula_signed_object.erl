@@ -7,9 +7,11 @@
 %% signs.
 %%
 %% A verifier reads an object in order: the object holds exactly the keys of its shape, each a byte string; a carried
-%% key is in the carried form of the verifier's profile; the signature verifies over tbs as received, with the
-%% profile's algorithm; only then is tbs decoded under the decoding rule, and it must be a map whose alg names the
-%% profile's algorithm. alg is checked and never selects an algorithm. Nothing is re-encoded.
+%% key is in the carried form of the verifier's profile; tbs decodes under the decoding rule to a map whose alg names
+%% the profile's algorithm; only then does the signature verify over tbs as received, with the profile's algorithm.
+%% Reading alg first is the cheap refusal: an object naming another algorithm costs a decode, never a signature
+%% verification (macula#104), as a record's alg already does (WIRE_1_0.md 5.2 step 4). alg is checked and never
+%% selects an algorithm. Nothing is re-encoded.
 -module(macula_signed_object).
 
 -export([sign/3, sign_held/3, verify/3, verify_held/4, encode/1, decode/1, alg/1]).
@@ -102,18 +104,20 @@ with_key({ok, Read}, Key) -> {ok, Read#{key => Key}};
 with_key({error, _} = Error, _Key) -> Error.
 
 fields(Label, Key, Tbs, Signature, Profile) ->
-    signed(macula_node_keys:verify(signed_bytes(Label, Key, Tbs), Signature, Key, Profile), Tbs, Profile).
+    decoded(macula_record_cbor:decode_strict(Tbs), Label, Key, Tbs, Signature, Profile).
 
-signed(true, Tbs, Profile) -> decoded(macula_record_cbor:decode_strict(Tbs), Tbs, Profile);
-signed(false, _Tbs, _Profile) -> {error, signature_invalid}.
-
-decoded({ok, #{?ALG := {text, Alg}} = Fields}, Tbs, Profile) when is_binary(Alg) ->
-    alg_checked(Alg =:= alg(Profile), Tbs, Fields);
-decoded(_NotAMapWithAlg, _Tbs, _Profile) ->
+decoded({ok, #{?ALG := {text, Alg}} = Fields}, Label, Key, Tbs, Signature, Profile) when is_binary(Alg) ->
+    alg_checked(Alg =:= alg(Profile), Label, Key, Tbs, Signature, Profile, Fields);
+decoded(_NotAMapWithAlg, _Label, _Key, _Tbs, _Signature, _Profile) ->
     {error, malformed}.
 
-alg_checked(true, Tbs, Fields) -> {ok, #{tbs => Tbs, fields => Fields}};
-alg_checked(false, _Tbs, _Fields) -> {error, alg_mismatch}.
+alg_checked(true, Label, Key, Tbs, Signature, Profile, Fields) ->
+    signed(macula_node_keys:verify(signed_bytes(Label, Key, Tbs), Signature, Key, Profile), Tbs, Fields);
+alg_checked(false, _Label, _Key, _Tbs, _Signature, _Profile, _Fields) ->
+    {error, alg_mismatch}.
+
+signed(true, Tbs, Fields) -> {ok, #{tbs => Tbs, fields => Fields}};
+signed(false, _Tbs, _Fields) -> {error, signature_invalid}.
 
 shaped({ok, #{{text, <<"key">>} := Key, {text, <<"tbs">>} := Tbs, {text, <<"signature">>} := Signature} = Map})
   when map_size(Map) =:= 3, is_binary(Key), is_binary(Tbs), is_binary(Signature) ->

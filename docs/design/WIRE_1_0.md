@@ -353,14 +353,16 @@ Served in the zero realm by every station. One argument form: a CBOR map with te
   closes with the close reason `profile_unsupported` (4.5), which reads on the wire as `not_accepted`: of the close
   reasons only `unsupported_version`, `puzzle_invalid` and `session_proof_rate` travel as themselves
   (`handshake.connect.profile_not_chosen.refused`, 3.4).
-- `alg` in a signed object names the algorithm of the verifier's own profile, and an algorithm outside it is refused.
-  Where the check sits in the order differs by class, and so does the name a peer sees.
-  - **A record** acts on `alg` before any crypto: the algorithm is checked against the verifier's profile's, and
-    another profile's is `alg_unsupported` (5.2 step 4, `record.alg_unregistered.refused`).
-  - **A signed frame** is the other way round: it verifies the signature first, under the connection's profile, and
-    only then reads `alg`. So a frame carrying a foreign algorithm is `signature_invalid` when the signature does not
-    verify under the key it carries and `malformed_frame` otherwise, **never** `alg_unsupported`. The frame reader's
-    own refusal for it is `alg_mismatch` (`macula_signed_object`), which the frame callers map to `malformed_frame`.
+- `alg` in a signed object names the algorithm of the verifier's own profile, and an algorithm outside it is refused
+  before any signature work. Both classes act on `alg` first; the name a peer sees differs by class.
+  - **A record**: the algorithm is checked against the verifier's profile's, and another profile's is
+    `alg_unsupported` (5.2 step 4, `record.alg_unregistered.refused`).
+  - **A signed frame**: its tbs decodes under the decoding rule and its `alg` is checked against the connection's
+    profile's before the signature is verified, so a frame carrying a foreign algorithm, or a tbs that does not
+    decode, is `malformed_frame` whatever its signature, **never** `alg_unsupported` and never `signature_invalid`.
+    The frame reader's own refusal for it is `alg_mismatch` (`macula_signed_object`), which the frame callers map to
+    `malformed_frame`. Until macula#104 the frame verified the signature first and named a foreign algorithm under a
+    signature that did not verify `signature_invalid`; both names are charged refusals, and no vector pins that case.
 - The seal `scheme` selects the KEM, KDF, AEAD and ciphertext layout of a sealed object. Scheme 1 is the only one,
   and a sealed object naming any other scheme is `malformed_frame` when its tbs is read. `sealed_refused` is a
   different signal and never reports an unknown scheme: it names the key id the opener does not hold, which is what

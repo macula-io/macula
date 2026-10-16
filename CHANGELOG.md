@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [15.4.0] - 2026-10-16
+
+Hardening over 15.3.0: a signed frame or object reads its alg before its signature (macula#104). No wire change and no
+new export; a 15.4.0 node speaks the same wire 1.0 as a 15.3.0 node.
+
+### Security
+
+- **A signed frame or object naming a foreign algorithm is refused before any signature verification** (macula#104, register T15). `macula_signed_object` now decodes tbs and checks its `alg` against the verifier's profile before the ML-DSA-87 verify, as a record already does (WIRE_1_0 5.2 step 4). A peer on an established connection can no longer make a verifier spend a full signature verification on an object whose `alg` would refuse it. The refusal names are the same set (`alg_mismatch` and `malformed` inside, `malformed_frame` and `signature_invalid` on a frame); what moves is which one a doubly bad object gets: a foreign `alg`, or a tbs that does not decode, under a signature that does not verify is now `alg_mismatch` or `malformed` (`malformed_frame` on a frame), where it was `signature_invalid`. Both are charged refusals, and no wire 1.0 vector pins that case. WIRE_1_0.md 7 and DESIGN_PQ_SIGNED_FRAMES_AND_RECORDS.md state the new order.
+
 ## [15.3.0] - 2026-10-16
 
 Additive over 15.2.0: `macula_record:custodian_refresh/4` now also takes a record's
