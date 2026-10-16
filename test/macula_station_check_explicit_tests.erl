@@ -151,14 +151,23 @@ with_pinned_pool(Fun) ->
                               {'$gen_call', From, {realm_key, _}} -> gen_server:reply(From, {ok, Pinned}), Loop();
                               {'$gen_cast', {station_check, _}} -> Loop();
                               {'$gen_call', From, {linked_station_call, _R, _P, #{key := Key}, _T}} ->
-                                  gen_server:reply(From, {ok, found(Key, Live, Wire)}), Loop();
+                                  gen_server:reply(From, {ok, dht_reply(found(Key, Live, Wire))}), Loop();
                               {'$gen_call', From, Msg} -> Test ! {pool_asked, element(1, Msg)},
                                                           gen_server:reply(From, {error, stand_in}), Loop()
                           end
                       end),
     Fun(Pool).
 
-found(Key, Key, Wire) -> Wire;
+%% The station's `_dht.find_record' reply as the caller reads it: `macula:find_record/3'
+%% goes through `dht_call/4' and `macula_dht_procedures:read_reply/2', which reads the one
+%% key form a peer's payload arrives in (D26), so text reads as `{text, Bin}'. Built with
+%% the module's own builder and put through the wire, as the dht conformance test does.
+dht_reply(Result) ->
+    {ok, Bytes} = macula_frame:payload_plain(macula_dht_procedures:reply(find_record, Result)),
+    {ok, Value} = macula_record_cbor:decode_strict(Bytes),
+    Value.
+
+found(Key, Key, Wire) -> {record, Wire};
 found(_Key, _Live, _Wire) -> not_found.
 
 closed_dials_a_station_the_realm_authorized_test() ->
