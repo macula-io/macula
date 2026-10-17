@@ -24,7 +24,10 @@ cases(Identity) ->
     [{case_name(Case), fun() -> Case(Identity) end}
      || Case <- [fun connect_material_is_bound_and_stated_from_the_start/1,
                  fun a_statement_is_reissued_every_15_minutes_and_valid_for_an_hour/1,
-                 fun a_clock_stepped_back_still_issues_a_newer_statement/1,
+                 fun a_clock_stepped_back_within_the_tolerance_still_issues_a_newer_statement/1,
+                 fun a_clock_stepped_back_past_the_tolerance_issues_at_its_clock/1,
+                 fun a_new_dial_after_a_clock_stepped_back_past_the_tolerance_gets_a_statement_at_its_clock/1,
+                 fun a_new_dial_within_the_tolerance_gets_the_held_statement/1,
                  fun the_connect_key_rotates_every_5_days_with_its_binding_and_statement_first/1,
                  fun a_rotated_out_binding_keeps_its_statements_until_its_not_after_and_none_after/1,
                  fun tls_material_is_found_by_the_hash_of_the_leaf/1,
@@ -71,21 +74,73 @@ a_statement_is_reissued_every_15_minutes_and_valid_for_an_hour(Identity) ->
     ok = reissued_at(Issuer, Tab, Binding, Identity, ?T0 + 30 * ?MINUTE),
     gen_server:stop(Issuer).
 
-%% A peer drops a statement that is not newer than the last it accepted, so a clock stepped back an hour still issues
-%% one a millisecond after the last.
-a_clock_stepped_back_still_issues_a_newer_statement(Identity) ->
+%% A peer drops a statement that is not newer than the last it accepted, so a clock stepped back within the 5 minutes
+%% a verifier tolerates still issues one a millisecond after the last.
+a_clock_stepped_back_within_the_tolerance_still_issues_a_newer_statement(Identity) ->
     {Tab, Clock} = clock(),
     Issuer = start(Identity, Clock, #{}),
     #{connect_binding := Binding} = macula_statement_issuer:connect_material(Issuer),
     ok = macula_statement_issuer:subscribe(Issuer, hash(Binding)),
     tick_at(Issuer, Tab, ?T0 + 30 * ?MINUTE),
     Ahead = received_statement(),
-    tick_at(Issuer, Tab, ?T0 - 30 * ?MINUTE),
+    tick_at(Issuer, Tab, ?T0 + 26 * ?MINUTE),
     Behind = received_statement(),
     ?assertEqual({ok, ?T0 + 30 * ?MINUTE}, macula_key_bindings:status_issued_at(Ahead)),
     ?assertEqual({ok, ?T0 + 30 * ?MINUTE + 1}, macula_key_bindings:status_issued_at(Behind)),
     ?assertMatch({ok, #{expires_at := ?T0 + 30 * ?MINUTE + 1 + ?HOUR}},
-                 macula_key_bindings:verify_status(Behind, Binding, public(Identity), pq_pure, ?T0 + 30 * ?MINUTE)),
+                 macula_key_bindings:verify_status(Behind, Binding, public(Identity), pq_pure, ?T0 + 26 * ?MINUTE)),
+    gen_server:stop(Issuer).
+
+%% A statement a millisecond after the last would be dated past the tolerance once the clock stepped back further, and a
+%% peer with a correct clock closes the link on it. The issuer states the binding at its clock instead.
+a_clock_stepped_back_past_the_tolerance_issues_at_its_clock(Identity) ->
+    {Tab, Clock} = clock(),
+    Issuer = start(Identity, Clock, #{}),
+    #{connect_binding := Binding} = macula_statement_issuer:connect_material(Issuer),
+    ok = macula_statement_issuer:subscribe(Issuer, hash(Binding)),
+    tick_at(Issuer, Tab, ?T0 + 30 * ?MINUTE),
+    _Ahead = received_statement(),
+    tick_at(Issuer, Tab, ?T0 - 30 * ?MINUTE),
+    Behind = received_statement(),
+    ?assertEqual({ok, ?T0 - 30 * ?MINUTE}, macula_key_bindings:status_issued_at(Behind)),
+    ?assertMatch({ok, #{expires_at := ?T0 - 30 * ?MINUTE + ?HOUR}},
+                 macula_key_bindings:verify_status(Behind, Binding, public(Identity), pq_pure, ?T0 - 30 * ?MINUTE)),
+    gen_server:stop(Issuer).
+
+%% Between the step and the next reissue a new dial gets a statement issued at the clock, for that dial only: a
+%% subscriber hears nothing of it, and the next reissue is still newer than it.
+a_new_dial_after_a_clock_stepped_back_past_the_tolerance_gets_a_statement_at_its_clock(Identity) ->
+    {Tab, Clock} = clock(),
+    Issuer = start(Identity, Clock, #{}),
+    ok = macula_statement_issuer:register_tls_leaf(Issuer, ?LEAF, tls_key()),
+    #{connect_binding := Binding} = macula_statement_issuer:connect_material(Issuer),
+    ok = macula_statement_issuer:subscribe(Issuer, hash(Binding)),
+    tick_at(Issuer, Tab, ?T0 + 30 * ?MINUTE),
+    _Ahead = received_statement(),
+    Stepped = ?T0 - 30 * ?MINUTE,
+    set_time(Tab, Stepped),
+    #{connect_binding := Binding, connect_status := Dial} = macula_statement_issuer:connect_material(Issuer),
+    ?assertEqual({ok, Stepped}, macula_key_bindings:status_issued_at(Dial)),
+    ?assertMatch({ok, _}, macula_key_bindings:verify_status(Dial, Binding, public(Identity), pq_pure, Stepped)),
+    {ok, #{tls_binding := TlsBinding, tls_status := TlsDial}} =
+        macula_statement_issuer:tls_material(Issuer, crypto:hash(sha384, ?LEAF)),
+    ?assertMatch({ok, _}, macula_key_bindings:verify_status(TlsDial, TlsBinding, public(Identity), pq_pure, Stepped)),
+    ?assertEqual(none, statement_for(Issuer, hash(Binding))),
+    tick_at(Issuer, Tab, Stepped + 15 * ?MINUTE),
+    {statement, Next} = statement_for(Issuer, hash(Binding)),
+    {ok, NextAt} = macula_key_bindings:status_issued_at(Next),
+    ?assert(NextAt > Stepped),
+    ?assertMatch({ok, _}, macula_key_bindings:verify_status(Next, Binding, public(Identity), pq_pure,
+                                                            Stepped + 15 * ?MINUTE)),
+    gen_server:stop(Issuer).
+
+%% Within the tolerance a new dial gets the statement the binding holds.
+a_new_dial_within_the_tolerance_gets_the_held_statement(Identity) ->
+    {Tab, Clock} = clock(),
+    Issuer = start(Identity, Clock, #{}),
+    #{connect_status := Held} = macula_statement_issuer:connect_material(Issuer),
+    set_time(Tab, ?T0 - 5 * ?MINUTE),
+    ?assertMatch(#{connect_status := Held}, macula_statement_issuer:connect_material(Issuer)),
     gen_server:stop(Issuer).
 
 received_statement() ->

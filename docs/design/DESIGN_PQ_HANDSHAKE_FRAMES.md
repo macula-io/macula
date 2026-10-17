@@ -224,7 +224,13 @@ A status frame costs its receiver a full signature verification, so a receiver b
   drop, never an acceptance; a statement whose `issued_at` cannot be read goes on to the full checks, which refuse it.
   The first status frame after HELLO is always verified.
 - **Issuer.** So an honest statement is never dropped, an issuer makes each `issued_at` for a binding later than the
-  one before it, a millisecond after it when its clock has stepped back.
+  one before it, a millisecond after it when its clock has stepped back. A millisecond after the last is never more
+  than the 5-minute tolerance ahead of the issuer's clock: past that, a peer with a correct clock would close the link
+  on it, so the statement is issued at the clock instead. A connection that had accepted the earlier statement drops
+  it as not newer and keeps the one it has.
+- **New connection.** A new connection has no earlier statement to be newer than. It gets the statement the binding
+  holds, or, when that one is dated more than the tolerance ahead of the clock after a step back, a statement issued
+  at the clock for that connection only, never sent to the binding's subscribers.
 
 ## Order, close reasons and refusal codes
 

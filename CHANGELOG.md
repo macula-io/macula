@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [15.6.0] - 2026-10-17
+
+A node whose clock stepped back further than the 5-minute verifier tolerance still opens and keeps peering
+connections (macula#110). No wire change.
+
+### Fixed
+
+- **A new connection after a backward clock step gets a statement a peer accepts.** `connect_material/1` and
+  `tls_material/2` of `macula_statement_issuer` handed a new connection the binding's held status statement, which
+  after a step back of more than 5 minutes was dated in the future, and a peer with a correct clock refused it. A new
+  connection now gets a statement issued at the clock when the held one is more than the tolerance ahead, for that
+  connection only and never sent to subscribers; within the tolerance it still gets the held one.
+- **A reissued statement is never dated past the tolerance.** Each reissue for a binding is still a millisecond after
+  the last when that is within 5 minutes of the clock; past that it is issued at the clock, since a peer with a
+  correct clock closes the link on a status frame dated further ahead. A connection that had accepted the earlier,
+  future-dated statement drops the new one as `status_not_newer` and keeps the one it has.
+
 ## [15.5.0] - 2026-10-17
 
 Hardening over 15.4.0: a status frame on an open connection is budgeted, and one that is not newer than the last

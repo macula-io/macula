@@ -28,6 +28,8 @@
 -define(BINDING_VALID_MS, 7 * 86400000).
 -define(ROTATE_EVERY_MS, 5 * 86400000).
 -define(OVERDUE_WITHIN_MS, 86400000).
+%% How far ahead of its clock a verifier accepts a statement's issued_at (macula_key_bindings).
+-define(TOLERANCE_MS, 5 * 60000).
 -define(OVERDUE_EVENT, <<"_macula.statement_issuer.tls_rotation_overdue">>).
 
 %% `identity' is a function that returns the identity key, so no start argument holds the key. `owner' receives
@@ -49,7 +51,8 @@
 start_link(#{identity := Identity, owner := Owner} = Options) when is_function(Identity, 0), is_pid(Owner) ->
     gen_server:start_link(?MODULE, Options, []).
 
-%% @doc The current CONNECT key with its binding and a fresh status statement, for a new dial.
+%% @doc The current CONNECT key with its binding and a fresh status statement, for a new dial. After the clock stepped
+%% back further than a verifier's 5-minute tolerance, the statement is issued at the clock for this dial only.
 -spec connect_material(pid()) -> connect_material().
 connect_material(Issuer) ->
     gen_server:call(Issuer, connect_material).
@@ -60,7 +63,8 @@ connect_material(Issuer) ->
 register_tls_leaf(Issuer, LeafDer, #{purpose := tls} = TlsKey) when is_binary(LeafDer) ->
     gen_server:call(Issuer, {register_tls_leaf, LeafDer, TlsKey}).
 
-%% @doc The binding and fresh status statement for the leaf whose SHA-384 is `LeafHash'.
+%% @doc The binding and fresh status statement for the leaf whose SHA-384 is `LeafHash', for a new connection, as
+%% connect_material/1 gives one.
 -spec tls_material(pid(), <<_:384>>) -> {ok, tls_material()} | {error, unknown_leaf}.
 tls_material(Issuer, <<_:384>> = LeafHash) ->
     gen_server:call(Issuer, {tls_material, LeafHash}).
@@ -103,8 +107,8 @@ identity_started(_NotAnIdentityKey, _Options) ->
     {stop, {identity, not_an_identity_key}}.
 
 handle_call(connect_material, _From, #{connect := Hash, bindings := Bindings} = S) ->
-    #{key := Key, binding := Binding, statement := Statement} = maps:get(Hash, Bindings),
-    {reply, #{connect_key => Key, connect_binding => Binding, connect_status => Statement}, S};
+    #{key := Key, binding := Binding} = Entry = maps:get(Hash, Bindings),
+    {reply, #{connect_key => Key, connect_binding => Binding, connect_status => dial_statement(Entry, S)}, S};
 handle_call({register_tls_leaf, LeafDer, TlsKey}, _From, #{leaves := Leaves} = S) ->
     {reply, ok, registered(maps:is_key(crypto:hash(sha384, LeafDer), Leaves), LeafDer, TlsKey, S)};
 handle_call({tls_material, LeafHash}, _From, #{leaves := Leaves} = S) ->
@@ -177,22 +181,35 @@ newer(_Current, Hash, #{issued_at := IssuedAt, not_after := NotAfter}) ->
     #{hash => Hash, issued_at => IssuedAt, not_after => NotAfter}.
 
 %% A peer drops a statement that is not newer than the last it accepted on a connection, so each statement for a
-%% binding is issued after the one before it, a millisecond after it when the clock has stepped back.
+%% binding is issued after the one before it, a millisecond after it when the clock has stepped back. A peer with a
+%% correct clock also closes the link on a statement issued more than the tolerance ahead of it, so once the clock has
+%% stepped back further than that the statement is issued at the clock.
 statement(#{binding := Binding} = Entry, Now, S) ->
     IssuedAt = issued_after(maps:find(statement, Entry), Now),
+    stated(Binding, IssuedAt, S).
+
+stated(Binding, IssuedAt, S) ->
     macula_key_bindings:status_statement(identity(S), Binding, IssuedAt, IssuedAt + ?STATEMENT_VALID_MS).
 
 issued_after({ok, Previous}, Now) -> later(macula_key_bindings:status_issued_at(Previous), Now);
 issued_after(error, Now) -> Now.
 
-later({ok, PreviousAt}, Now) -> max(Now, PreviousAt + 1);
-later(error, Now) -> Now.
+later({ok, PreviousAt}, Now) when PreviousAt + 1 =< Now + ?TOLERANCE_MS -> max(Now, PreviousAt + 1);
+later(_PreviousAt, Now) -> Now.
+
+%% A new connection has no earlier statement to be newer than. It gets the statement the binding holds, or one issued
+%% at the clock, for that connection only, when the held one is dated more than the tolerance ahead after a step back.
+dial_statement(#{statement := Held} = Entry, S) ->
+    held_or_fresh(macula_key_bindings:status_issued_at(Held), now_ms(S), Entry, S).
+
+held_or_fresh({ok, HeldAt}, Now, #{statement := Held}, _S) when HeldAt =< Now + ?TOLERANCE_MS -> Held;
+held_or_fresh(_HeldAt, Now, #{binding := Binding}, S) -> stated(Binding, Now, S).
 
 material(error, _S) ->
     {error, unknown_leaf};
-material({ok, Hash}, #{bindings := Bindings}) ->
-    #{binding := Binding, statement := Statement} = maps:get(Hash, Bindings),
-    {ok, #{tls_binding => Binding, tls_status => Statement}}.
+material({ok, Hash}, #{bindings := Bindings} = S) ->
+    #{binding := Binding} = Entry = maps:get(Hash, Bindings),
+    {ok, #{tls_binding => Binding, tls_status => dial_statement(Entry, S)}}.
 
 subscription(true)  -> ok;
 subscription(false) -> {error, unknown_binding}.
