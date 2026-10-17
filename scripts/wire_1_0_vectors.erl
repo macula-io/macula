@@ -280,7 +280,7 @@ builtin_payloads(P, Keys) ->
                           payload(macula_record:org_directory(Realm, <<"example-org">>, Id(org))),
                           [{set, <<"expires_at">>, ?T0 + ?HOUR}]),
     [{<<"node_record">>, 16#01, client_identity, payload(NodeRecord)},
-     {<<"realm_directory">>, 16#03, realm, payload(macula_record:realm_directory(Realm, <<"example-realm">>, Id(realm)))},
+     {<<"realm_directory">>, 16#03, realm, realm_directory_payload(Realm, Id(realm))},
      {<<"realm_stations">>, 16#04, realm,
       payload(macula_record:realm_stations(Realm, [#{station_id => Id(station_identity), roles => [<<"seed">>]}]))},
      {<<"realm_member_endorsement">>, 16#05, realm,
@@ -1108,6 +1108,13 @@ frame_cases(Keys) ->
     Record = embedded_record(Keys),
     [frame_case(Type, Frame) || {Type, Frame} <- wire_1_0_frame_specs:frames(Keys, Record)]
         ++ register_ack_cases().
+
+%% The library builder reads this payload's created_at from the wall clock, which would make the case differ on
+%% every regeneration and carry a lifetime measured from whenever the file was written. Pinned to the vectors'
+%% clock, the same way the frames' embedded record is (macula#109, macula#111).
+realm_directory_payload(Realm, AdminKeyId) ->
+    Payload = payload(macula_record:realm_directory(Realm, <<"example-realm">>, AdminKeyId)),
+    Payload#{{text, <<"created_at">>} := ?T0}.
 
 %% The record the value, store, advertise and unadvertise cases carry: built here by the reference encoder rather
 %% than by macula_record's constructors, so it moves only when the wire moves and never carries a clock read at
