@@ -19,6 +19,14 @@
 -define(KEYS_FILE, "test/fixtures/wire_1_0_private_test_keys.etf").
 -define(GENERATOR, <<"scripts/generate-wire-1-0-vectors.sh">>).
 -define(T0, 1791800000000).
+%% The version every record in the vectors carries: a UUIDv7 at the vectors' clock with no randomness, which is the
+%% `bytes, 16, UUIDv7' the field table names. A version minted at generation time is per-run material, and the drift
+%% check excuses per-run material by construction, so the field would go unchecked; pinned, a change to it is a
+%% difference the check sees (macula#112).
+-define(VERSION, <<?T0:48, 7:4, 0:12, 2:2, 0:62>>).
+%% The version of the record a tombstone withdraws: one millisecond below ?VERSION, so the tombstone is the later of
+%% the two, as the design has it, and ?VERSION still carries every record's own tbs.
+-define(WITHDRAWN_VERSION, <<(?T0 - 1):48, 7:4, 0:12, 2:2, 0:62>>).
 -define(MIN, 60000).
 -define(HOUR, 3600000).
 -define(DAY, 86400000).
@@ -118,7 +126,7 @@ role_entry(Key) ->
 record(P, Signer0, Type, Payload, Opts) ->
     Signer = proplists:get_value(sign_with, Opts, Signer0),
     Base = #{<<"type">> => Type, <<"alg">> => {text, macula_signed_object:alg(P)},
-             <<"version">> => macula_record_uuid:v7(),
+             <<"version">> => ?VERSION,
              <<"created_at">> => ?T0, <<"expires_at">> => ?T0 + ?HOUR,
              <<"schema">> => 1, <<"lifetime_class">> => class_of(Type), <<"payload">> => Payload},
     Tbs = encode(lists:foldl(fun tbs_opt/2, Base, Opts)),
@@ -253,7 +261,7 @@ type_cases(P, Keys, Name, Type, Role, TodayPayload, Case, Store, Accept, R) ->
 %% requires both, and the vectors' own cases set them the same way.
 accepted_today(P, Signer, Type, Payload, Expires, Name) ->
     Tbs = encode(#{<<"type">> => Type, <<"alg">> => {text, macula_signed_object:alg(P)},
-                   <<"version">> => macula_record_uuid:v7(), <<"created_at">> => ?T0, <<"expires_at">> => Expires,
+                   <<"version">> => ?VERSION, <<"created_at">> => ?T0, <<"expires_at">> => Expires,
                    <<"schema">> => 1, <<"lifetime_class">> => class_of(row_type(Type, Payload)),
                    <<"payload">> => Payload}),
     Bytes = macula_signed_object:encode(#{key => carried(Signer), tbs => Tbs,
@@ -291,13 +299,15 @@ builtin_payloads(P, Keys) ->
      {<<"procedure_advertisement">>, 16#06, client_identity,
       payload(macula_record:procedure_advertisement(Id(client_identity), Realm, <<"example.procedure">>,
                                                     [Id(station_identity)]))},
-     {<<"tombstone">>, 16#0C, client_identity, payload(macula_record:tombstone(NodeRecord, shutdown))},
+     {<<"tombstone">>, 16#0C, client_identity,
+      payload(macula_record:tombstone(withdrawn_record(NodeRecord), shutdown))},
      {<<"foundation_seed_list">>, 16#0D, foundation,
-      payload(macula_record:foundation_seed_list([#{node_id => Id(station_identity), tier => 3,
-                                                    addresses => [#{host => <<"2001:db8::1">>, port => 4433}]}],
-                                                 Window))},
+      foundation_payload(macula_record:foundation_seed_list([#{node_id => Id(station_identity), tier => 3,
+                                                               addresses => [#{host => <<"2001:db8::1">>,
+                                                                               port => 4433}]}],
+                                                              Window))},
      {<<"foundation_parameter">>, 16#0E, foundation,
-      payload(macula_record:foundation_parameter(<<"example_parameter">>, 7, Window))},
+      foundation_payload(macula_record:foundation_parameter(<<"example_parameter">>, 7, Window))},
      {<<"foundation_realm_trust_list">>, 16#0F, foundation,
       payload(macula_record:foundation_realm_trust_list([#{realm_id => Realm, realm_key_id => Id(realm)}]))},
      {<<"foundation_t3_attestation">>, 16#10, foundation,
@@ -317,6 +327,20 @@ builtin_payloads(P, Keys) ->
                                          org_directory => OrgDirectory}))}].
 
 payload(#{payload := Payload}) -> Payload.
+
+%% The foundation seed list and parameter builders copy the record's own version into their payload's `version', and
+%% that record comes from a constructor whose version is minted from the wall clock: a payload carrying a generation
+%% time the tbs pin does not reach. Pinned to ?VERSION so the payload agrees with the tbs the generator sets, and so
+%% the field is drift-checked (macula#112).
+foundation_payload(Record) ->
+    Payload = payload(Record),
+    Payload#{{text, <<"version">>} := ?VERSION}.
+
+%% The record a tombstone withdraws: a tombstone names that record's version, so pinning it here is what pins the
+%% tombstone payload's `withdrawn_version', one millisecond below ?VERSION so the tombstone stays the later of the
+%% two (macula#112).
+withdrawn_record(Record) ->
+    Record#{version := ?WITHDRAWN_VERSION}.
 
 ext(Name, Critical) ->
     #{{text, Name} => #{{text, <<"critical">>} => Critical, {text, <<"value">>} => {text, <<"x">>}}}.
@@ -358,7 +382,7 @@ tombstone_bound_cases(P, Keys, Case, Accept, Both) ->
     Realm = key(Keys, P, realm),
     Store = #{<<"outcome">> => <<"store">>},
     Pair = fun(Name, Role, Signer, Withdrawn) ->
-                   Payload = payload(macula_record:tombstone(Withdrawn, revoked)),
+                   Payload = payload(macula_record:tombstone(withdrawn_record(Withdrawn), revoked)),
                    Bound = class_max(class_of(maps:get(type, Withdrawn))) + 10 * ?MIN,
                    Rec = fun(Lifetime) -> record(P, Signer, 16#0C, Payload,
                                                  [{set, <<"lifetime_class">>, class_of(maps:get(type, Withdrawn))},

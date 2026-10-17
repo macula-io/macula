@@ -1,8 +1,8 @@
 %% Checks the committed wire 1.0 conformance vectors against two fresh generations of them.
 %%
 %% The per-run set is DERIVED, never listed. Whatever differs between two runs of the same code is per-run
-%% material by definition, a signature or a v7 version or a frame id or a clock. Anything that differs from the
-%% committed vectors OUTSIDE that set is drift, and this exits non-zero.
+%% material by definition: a signature, a frame's id, a frame's clock. Anything that differs from the committed
+%% vectors OUTSIDE that set is drift, and this exits non-zero.
 %%
 %% The comparison is structural, below the hex leaf. A vector's object is Cbor carried as hex, so comparing
 %% leaf strings would call every frame case per-run (each carries a random frame id and a wall-clock time) and
@@ -15,7 +15,8 @@
 %% The limit worth knowing: a value that is per-run in the CURRENT code cannot be drift-checked, because two runs
 %% disagree about it by construction. That is what pinning a field is for, and it is why the relayed frame's id
 %% and clock are pinned rather than left to the encoder: a payload that moved on every run would hide a
-%% frame-encoder change from this check instead of exposing it.
+%% frame-encoder change from this check instead of exposing it. The record version, minted at generation time until
+%% macula#112, is pinned the same way, and a later reversion of a pin goes back to being invisible here.
 -module(wire_1_0_vectors_drift).
 
 -export([main/1]).
