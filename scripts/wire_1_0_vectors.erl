@@ -12,6 +12,9 @@
 -export([main/0]).
 
 -define(DIR, "priv/vectors/wire_1_0").
+%% The directory the vectors are written to: the repository's on a working run, and a temporary one when CI
+%% regenerates to compare, so a check never reads or writes the committed files.
+-define(DIR_ENV, "WIRE_1_0_VECTOR_DIR").
 %% Test-only private keys, kept out of the hex package (priv ships, test does not).
 -define(KEYS_FILE, "test/fixtures/wire_1_0_private_test_keys.etf").
 -define(GENERATOR, <<"scripts/generate-wire-1-0-vectors.sh">>).
@@ -53,6 +56,12 @@ main() ->
     write_cases(<<"tbs">>, lists:append([tbs_cases(P, Keys) || P <- ?PROFILES])),
     write_cases(<<"frames">>, frame_cases(Keys)),
     halt(0).
+
+out_dir() ->
+    case os:getenv(?DIR_ENV) of
+        false -> ?DIR;
+        Dir -> Dir
+    end.
 
 %%------------------------------------------------------------------
 %% Keys
@@ -1096,7 +1105,19 @@ tj_key({text, K}) -> K.
 %% is rewritten to wire 1.0: version 5 and no capabilities header (WIRE_1_0.md sections 2 and 3.1).
 
 frame_cases(Keys) ->
-    [frame_case(Type, Frame) || {Type, Frame} <- wire_1_0_frame_specs:frames(Keys)] ++ register_ack_cases().
+    Record = embedded_record(Keys),
+    [frame_case(Type, Frame) || {Type, Frame} <- wire_1_0_frame_specs:frames(Keys, Record)]
+        ++ register_ack_cases().
+
+%% The record the value, store, advertise and unadvertise cases carry: built here by the reference encoder rather
+%% than by macula_record's constructors, so it moves only when the wire moves and never carries a clock read at
+%% generation time. A node record's row is lifetime class 3, whose maximum is 48 hours, so the object is valid
+%% inside the vector world and cannot be valid at wall-clock time; the minute inside the bound keeps it off a
+%% boundary the wire may later tighten.
+embedded_record(Keys) ->
+    Station = key(Keys, pq_pure, station_identity),
+    Payload = payload(macula_record:node_record(key_id(Station), [], 0)),
+    record(pq_pure, Station, 16#01, Payload, [{set, <<"expires_at">>, ?T0 + class_max(3) - ?MIN}]).
 
 %% REGISTER_ACK has no constructor yet (macula#12): built here from section 3.5.
 register_ack_cases() ->
@@ -1206,6 +1227,6 @@ write_cases(Class, Cases) ->
                    <<"cases">> => Cases}).
 
 write(Class, Term) ->
-    Path = filename:join(?DIR, <<Class/binary, ".json">>),
+    Path = filename:join(out_dir(), <<Class/binary, ".json">>),
     ok = file:write_file(Path, [json:format(Term), "\n"]),
     io:format("wrote ~s~n", [Path]).

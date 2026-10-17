@@ -10,18 +10,20 @@
 %%%-------------------------------------------------------------------
 -module(wire_1_0_frame_specs).
 
--export([frames/1]).
+-export([frames/2]).
 
 -define(PROFILE, pq_pure).
 -define(NOW_MS, 1791800000000).
 
-%% frames(Keys) -> [{FrameTypeName :: binary(), Frame :: map()}]
--spec frames(#{{atom(), atom()} => macula_node_keys:node_key()}) -> [{binary(), map()}].
-frames(Keys) ->
+%% frames(Keys, RecordBytes) -> [{FrameTypeName :: binary(), Frame :: map()}]
+%% RecordBytes is the wire form of the record the value, store, advertise and unadvertise cases carry. It comes from
+%% the generator's own reference encoder rather than from macula_record's constructors: an embedded record built by
+%% the library moves whenever the library moves, and its clock is stamped at generation, so the frozen bytes rot.
+-spec frames(#{{atom(), atom()} => macula_node_keys:node_key()}, binary()) -> [{binary(), map()}].
+frames(Keys, RecordBytes) ->
     Client = maps:get({pq_pure, client_identity}, Keys),
     Station = maps:get({pq_pure, station_identity}, Keys),
     {ok, StationId} = macula_node_keys:node_id(Station),
-    Record = record_bytes(Station, StationId),
     Request = verified(macula_frame:call(request_spec(StationId, 1), Client)),
     Open = verified(macula_frame:stream_open((request_spec(StationId, 2))#{mode => bidi}, Client)),
     Publish = macula_frame:publish(publish_spec(), Client),
@@ -39,8 +41,8 @@ frames(Keys) ->
      {<<"find_node">>, macula_frame:find_node(#{key => id256(4), origin => id256(1), depth => 0})},
      {<<"nodes">>, macula_frame:nodes(#{key => id256(4), nodes => [station_ref()]})},
      {<<"find_value">>, macula_frame:find_value(#{key => id256(4), origin => id256(1)})},
-     {<<"value">>, macula_frame:value(#{key => id256(4), records => [Record]})},
-     {<<"store">>, macula_frame:store(#{record => Record})},
+     {<<"value">>, macula_frame:value(#{key => id256(4), records => [RecordBytes]})},
+     {<<"store">>, macula_frame:store(#{record => RecordBytes})},
      {<<"store_ack">>, macula_frame:store_ack(#{key => id256(4), signer => StationId, record_version => id128(3),
                                                 stored => true})},
      {<<"store_refresh">>, macula_frame:store_refresh(#{key => id256(4), signer => StationId,
@@ -68,15 +70,15 @@ frames(Keys) ->
      {<<"plumtree_prune">>, macula_frame:plumtree_prune(#{realm => realm()})},
      {<<"overlay_relay">>,
       macula_frame:overlay_relay(#{peer => id256(9),
-                                   payload => macula_frame:encode(macula_frame:plumtree_prune(#{realm => realm()}))})},
+                                   payload => relayed_prune()})},
      {<<"publish">>, Publish},
      {<<"subscribe">>, macula_frame:subscribe(#{topic => <<"example.topic">>, realm => realm(),
                                                 subscriber => id256(1)})},
      {<<"unsubscribe">>, macula_frame:unsubscribe(#{topic => <<"example.topic">>, realm => realm(),
                                                     subscriber => id256(1)})},
      {<<"event">>, macula_frame:event(#{publication => Publication, delivered_via => direct})},
-     {<<"advertise">>, macula_frame:advertise(#{advertisement => Record})},
-     {<<"unadvertise">>, macula_frame:unadvertise(#{withdrawal => Record})},
+     {<<"advertise">>, macula_frame:advertise(#{advertisement => RecordBytes})},
+     {<<"unadvertise">>, macula_frame:unadvertise(#{withdrawal => RecordBytes})},
      {<<"stream_open">>, macula_frame:stream_open((request_spec(StationId, 2))#{mode => bidi}, Client)},
      {<<"stream_data">>,
       macula_frame:provider_stream(#{frame_type => stream_data, seq => 0, encoding => raw, body => <<"chunk">>},
@@ -108,8 +110,11 @@ publish_spec() ->
     #{realm => realm(), topic => <<"example.topic">>, seq => 0, published_at => ?NOW_MS,
       payload => #{<<"n">> => 1}}.
 
-record_bytes(Station, StationId) ->
-    macula_record:encode(macula_record:sign(macula_record:node_record(StationId, [], 0), Station)).
+%% The relayed frame: the same constructor, with the frame id and the clock it stamps pinned to the vectors'
+%% values, so the payload does not move with the frame encoder's own clock on every regeneration.
+relayed_prune() ->
+    Frame = macula_frame:plumtree_prune(#{realm => realm()}),
+    macula_frame:encode(Frame#{frame_id => id128(16#30), sent_at_ms => ?NOW_MS}).
 
 swim_update() ->
     macula_frame:swim_update(#{target => id256(3), state => alive, incarnation => 0, observed_at => ?NOW_MS,

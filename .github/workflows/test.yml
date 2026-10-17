@@ -87,7 +87,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        check: [eunit, ct, xref, dialyzer, lint, docs]
+        check: [eunit, ct, xref, dialyzer, lint, docs, vectors]
     # A GitHub-hosted public runner, deliberately. macula is a public
     # repository and this costs nothing there. Do NOT put `self-hosted` here:
     # the Default runner group is closed to public repositories on purpose,
@@ -263,3 +263,24 @@ jobs:
         # The consumer_contracts profile adds the calls a consumer makes, so a
         # spec that refuses them fails here (rebar.config).
         run: rebar3 as consumer_contracts dialyzer
+
+      # The wire 1.0 vectors are FROZEN: outside a release decision no case
+      # expectation may move. Nothing ran the generator, which is how four
+      # separate drifts stacked up behind macula#107's first crash, and how
+      # five frame cases reached main carrying objects the current reader
+      # refuses (macula#108).
+      #
+      # This regenerates the vectors twice into temporary directories and
+      # compares both against the committed files. It DERIVES the per-run set
+      # rather than trusting a list of it: whatever differs between two runs of
+      # the same code is per-run material by definition, so anything else that
+      # differs from the committed vectors is drift. There is no allow-list in
+      # it to rot, and it compares below the hex leaf, because at leaf level
+      # every frame case looks per-run and none of the drift would be visible.
+      #
+      # It also puts each frame case's embedded record to the reader at the
+      # vectors' clock, so an object whose clock is read at generation time
+      # fails here rather than quietly rotting in a shipped package.
+      - name: wire 1.0 vectors
+        if: matrix.check == 'vectors'
+        run: bash scripts/check-wire-1-0-vectors.sh
