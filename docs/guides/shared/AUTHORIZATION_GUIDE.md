@@ -159,8 +159,12 @@ is refused with `{error, {removed_option, realm_trust}}`, as the 10.x options
 
 A caller checks the authorization from the advertisement alone and looks up
 no tombstone. A delegation its org withdraws is honoured until it expires, so
-the caller-side revocation bound is the delegation's maximum lifetime, six
-hours, and it lengthens if that lifetime does.
+the caller-side revocation bound is the delegation's maximum lifetime, 30
+minutes, capped by the record layer for that type
+(`PROCEDURE_DELEGATION_MAX_LIFETIME_MS`, D32) in the signer and in the
+verifier, plus the 5 minutes of clock tolerance, counted from the realm's
+last issue of it. The realm reissues every 10 minutes, and a revoked provider
+gets no fresh one.
 
 ```erlang
 %% consumer side (the check resolution runs on each verified advertisement)

@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Documentation
+
+- **The authorization guide and the PQ records design give the delegation revocation bound the record layer
+  enforces (D32).** Both said a delegation's lifetime was six hours, and the guide said the bound lengthened with
+  it. It is 30 minutes, capped for that type in the signer and the verifier (`PROCEDURE_DELEGATION_MAX_LIFETIME_MS`),
+  so with the 5 minutes of clock tolerance a revoked provider is refused within 35 minutes of the realm's last
+  issue of its delegation; the realm reissues every 10 minutes, and a revoked provider gets no fresh one.
+
 ## [15.6.0] - 2026-10-17
 
 A node whose clock stepped back further than the 5-minute verifier tolerance still opens and keeps peering

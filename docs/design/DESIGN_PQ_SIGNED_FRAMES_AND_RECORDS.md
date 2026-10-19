@@ -319,8 +319,10 @@ The payload of a procedure advertisement, type tag 0x06, holds exactly these key
 - A caller holds a realm key for each realm it trusts, pinned when its pool starts and keyed by realm id, and checks an
   org directory only against the key pinned for the advertisement's realm.
 - A caller checks the authorization from the advertisement alone and looks up no tombstone. A delegation its org
-  withdraws is honoured until it expires, so the caller-side revocation bound is the delegation's maximum lifetime, six
-  hours, and it lengthens with that lifetime (Jupiter, 2026-09-15).
+  withdraws is honoured until it expires, so the caller-side revocation bound is the delegation's maximum lifetime, 30
+  minutes, capped by the record layer for that type (`PROCEDURE_DELEGATION_MAX_LIFETIME_MS`, D32) in the signer and in
+  the verifier, plus the 5 minutes of clock tolerance, counted from the realm's last issue of it (D32 amends Jupiter's
+  D25 bound, 2026-09-15).
 - A station that stores or forwards an advertisement verifies its embedded org directory and delegation, once per
   hash, to decide a checked place, and never shows that decision to callers (`DESIGN_PQ_DHT_SLOTS_AND_BUDGET.md`,
   part 2).
