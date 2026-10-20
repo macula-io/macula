@@ -3,11 +3,8 @@ name: Test
 # Runs the suite on every push and pull request: eunit, common_test, xref and
 # dialyzer.
 #
-# publish-hex.yml opens by saying "Tests gate the release commit on main, not
-# the publish". Until this workflow existed nothing ran the suite on a change,
-# so that sentence described an intention rather than a fact. This makes it
-# true for the first half. It deliberately does NOT gate the publish: that is
-# a separate decision, and 11.x is mid-flight.
+# It also gates the publish: publish-hex.yml calls it on the release tag and
+# publishes only when it is green (mcl-om#34).
 #
 # A red run here is information, not an inconvenience. Nothing in this file
 # may be weakened to produce a green: no continue-on-error, no suite dropped,
@@ -15,18 +12,17 @@ name: Test
 # something.
 
 on:
+  # publish-hex.yml runs this on the tagged commit and publishes only when it
+  # is green (mcl-om#34).
+  workflow_call:
   push:
     # Branches only. Without this, `push` matches TAG refs too, and every
     # release tag ran a second full job on a tree that had just gone green
     # on main minutes earlier.
     #
-    # The trade, since it is arguable: that duplicate WAS a check of the
-    # exact tagged commit, and publish-hex.yml's own verify job does not run
-    # the suite, only the package build, the NIF load and a publish dry run.
-    # So a tag no longer has the suite run against it directly. What it has
-    # instead is the guarantee that the tag points at a commit on main that
-    # did, which is what a release tag is for. Restore tag matching here if
-    # that stops being true.
+    # The tagged commit still gets the suite, once: publish-hex.yml calls
+    # this workflow (workflow_call above) on the tag and publishes only when
+    # it is green (mcl-om#34).
     branches: ['**']
     paths-ignore:
       - '**.md'

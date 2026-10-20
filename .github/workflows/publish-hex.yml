@@ -2,12 +2,13 @@ name: Publish to hex
 
 # Publishes exactly a pushed release tag to hex.pm.
 #
-# Tests gate the release commit on main, not the publish. This workflow
-# checks that the checkout is the clean, pushed release tag, builds the
+# This workflow checks that the checkout is the clean, pushed release tag, builds the
 # package and docs, publishes, and checks that hex serves the tagged code.
 #
-# - A pushed tag vX.Y.Z runs `verify`, then `publish`, WITH NO FURTHER GATE:
-#   the `hex-publish` environment has no required reviewer, by design. The
+# - A pushed tag vX.Y.Z runs `verify` and `test` (test.yml on the tagged
+#   commit); `publish` runs once BOTH are green, so a red suite leaves the tag
+#   with no package (mcl-om#34). There is no other gate: the `hex-publish`
+#   environment has no required reviewer, by design. The
 #   tag is the release, and pushing it is the approval. Its only rule is that
 #   it admits `v*.*.*` tags and nothing else.
 # - A manual dispatch is a dry run: it runs `verify` for the given tag and
@@ -94,9 +95,17 @@ jobs:
           HEX_API_URL: http://127.0.0.1:9
         run: rebar3 hex publish --repo hexpm --yes --dry-run
 
+  # The whole of test.yml, on the tagged commit (a called workflow checks
+  # out the caller's github.sha, which on a tag push is the tag). A dispatch
+  # is a dry run of `verify' and skips it: it would test the branch, not the tag.
+  test:
+    name: Test the release commit
+    if: github.event_name == 'push'
+    uses: ./.github/workflows/test.yml
+
   publish:
     name: Publish to hex.pm
-    needs: verify
+    needs: [verify, test]
     # Only a pushed release tag publishes, whatever the triggers above say.
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
