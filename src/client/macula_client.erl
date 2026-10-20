@@ -3668,14 +3668,46 @@ station_seed(_) ->
 %% handshake's signed node_id and nothing else. The dial target is the
 %% row's `hostname' when it has one, else its first advertised address
 %% (a bare IP, dialled as a map seed with no URL bracketing: the QUIC dial
-%% takes `host' as a plain literal). A row without a 32-byte `node_id', a
-%% `quic_port' or anything to dial is skipped: there is nothing to pin, or
-%% nowhere to go.
+%% takes `host' as a plain literal). A row without a `node_id' that names a
+%% node, a `quic_port' or anything to dial is skipped: there is nothing to
+%% pin, or nowhere to go.
 seed_from_fields(Hostname, HostAdvertised, Port, NodeId)
-  when is_integer(Port), is_binary(NodeId), byte_size(NodeId) =:= 32 ->
-    pinned_seed(dial_host(unwrap_wire_text(Hostname), HostAdvertised), Port, NodeId);
+  when is_integer(Port), is_binary(NodeId) ->
+    case pinned_node_id(NodeId) of
+        {ok, Pinned} ->
+            pinned_seed(dial_host(unwrap_wire_text(Hostname), HostAdvertised), Port, Pinned);
+        error ->
+            false
+    end;
 seed_from_fields(_Hostname, _HostAdvertised, _Port, _NodeId) ->
     false.
+
+%% The directory's `node_id' arrives in one of two shapes naming the same
+%% node: the 32 raw bytes a link pins against, or -- the form the rest of
+%% the stack uses, and the one mcl-stations/list_stations is moving to
+%% (macula-services/mcl-stations#6) -- 64 lowercase hex characters. Both
+%% are accepted; what the seed carries is always the 32 bytes
+%% (`macula_stations:parse_entry/2' takes the same hex form for a
+%% configured seed). Only the ACCEPTED INPUT widens: 64 bytes that are not
+%% lowercase hex, or any other length, still name nothing and the row is
+%% skipped rather than guessed at (macula#121).
+pinned_node_id(NodeId) when byte_size(NodeId) =:= 32 ->
+    {ok, NodeId};
+pinned_node_id(NodeId) when byte_size(NodeId) =:= 64 ->
+    hex_node_id(NodeId);
+pinned_node_id(_NodeId) ->
+    error.
+
+hex_node_id(Hex) ->
+    case is_lower_hex(Hex) of
+        true  -> {ok, binary:decode_hex(Hex)};
+        false -> error
+    end.
+
+is_lower_hex(<<>>) -> true;
+is_lower_hex(<<C, Rest/binary>>) when C >= $0, C =< $9 -> is_lower_hex(Rest);
+is_lower_hex(<<C, Rest/binary>>) when C >= $a, C =< $f -> is_lower_hex(Rest);
+is_lower_hex(_NotHex) -> false.
 
 dial_host(Hostname, _HostAdvertised) when is_binary(Hostname), byte_size(Hostname) > 0 ->
     Hostname;

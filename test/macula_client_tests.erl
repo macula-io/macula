@@ -1045,6 +1045,40 @@ station_seed_with_an_empty_hostname_dials_its_first_address_test() ->
                         <<1:256>>}},
                  macula_client:station_seed(Station)).
 
+%% A row may name its `node_id' as 64 lowercase hex characters -- the form
+%% the rest of the stack uses, and the form mcl-stations/list_stations is
+%% moving to (macula-services/mcl-stations#6). It names the same 32 bytes a
+%% link pins to, so a row carrying it must be dialled, not silently dropped
+%% (macula#121): dropping every such row leaves a discovering pool with no
+%% stations at all.
+station_seed_accepts_a_node_id_as_64_lowercase_hex_test() ->
+    Hex = binary:encode_hex(<<1:256>>, lowercase),
+    ?assertEqual(64, byte_size(Hex)),
+    Station = #{hostname => <<"station-de-frankfurt.macula.io">>,
+                quic_port => 4433,
+                node_id => Hex},
+    ?assertEqual({true, {#{host => <<"station-de-frankfurt.macula.io">>, port => 4433,
+                          expected_node_id => <<1:256>>}, <<1:256>>}},
+                 macula_client:station_seed(Station)).
+
+%% Widening the accepted input does not widen what counts as a node id: 64
+%% bytes of anything that is not lowercase hex is still refused.
+station_seed_refuses_64_bytes_that_are_not_lowercase_hex_test() ->
+    Station = fun(NodeId) ->
+                  #{hostname => <<"station-de-frankfurt.macula.io">>,
+                    quic_port => 4433, node_id => NodeId}
+              end,
+    %% `binary:encode_hex/1' is uppercase, so this row is 64 hex characters
+    %% that are NOT the lowercase form the directory publishes.
+    ?assertEqual(false, macula_client:station_seed(Station(binary:copy(<<"z">>, 64)))),
+    ?assertEqual(false,
+                 macula_client:station_seed(Station(binary:encode_hex(<<255:256>>)))),
+    %% The same bytes in the lowercase form the directory publishes are a
+    %% node id, so this one IS dialled.
+    ?assertMatch({true, {#{expected_node_id := <<255:256>>}, <<255:256>>}},
+                 macula_client:station_seed(
+                   Station(binary:encode_hex(<<255:256>>, lowercase)))).
+
 %% Without a 32-byte `node_id' there is nothing to pin, so nothing to dial.
 station_seed_without_a_node_id_is_skipped_test() ->
     ?assertEqual(false, macula_client:station_seed(#{hostname => <<"station-ca-toronto">>, quic_port => 4433})),
