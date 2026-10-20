@@ -143,14 +143,14 @@ the client you build against.
 Add to `rebar.config`:
 
 ```erlang
-{deps, [{macula, "~> 14.0"}]}.
+{deps, [{macula, "~> 15.6"}]}.
 ```
 
 Or in Elixir `mix.exs`:
 
 ```elixir
 defp deps do
-  [{:macula, "~> 14.0"}]
+  [{:macula, "~> 15.6"}]
 end
 ```
 
