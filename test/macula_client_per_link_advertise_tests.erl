@@ -44,6 +44,26 @@ each_link_advertises_a_stream_naming_its_own_station_test_() ->
          ok = macula_client:close(Pool)
      end}.
 
+%% A registration pinned to one station names THAT station and no other
+%% (macula#116). The procedure is registered on that link alone, so a
+%% record naming another station would send every caller to a station
+%% that holds no registration and has to forward the call to the one that
+%% does -- and a dial the caller believes is direct is not.
+a_pinned_registration_names_only_its_own_station_test_() ->
+    {timeout, 10,
+     fun() ->
+         Pool = pool(),
+         {ok, Links} = macula_client:links(Pool),
+         %% Each link's peer is the station it is pinned to, as a completed
+         %% handshake leaves it: its seed's node id, <<1:256>> and <<2:256>>.
+         _ = [connect_to(Pid, Pinned) || #{pid := Pid, seed := #{expected_node_id := Pinned}} <- Links],
+         Pinned = <<2:256>>,
+         ok = macula_client:advertise(Pool, ?REALM, ?PROCEDURE,
+                                      fun(_) -> {ok, counted} end, open, spec(), [Pinned], undefined),
+         ?assertEqual([[Pinned]], sent_stations(1)),
+         ok = macula_client:close(Pool)
+     end}.
+
 %% The pool keeps the spec, not a signed advertisement, so a respawned
 %% link connecting to a station none of the others knew signs one
 %% naming it.

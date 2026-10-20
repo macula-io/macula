@@ -579,7 +579,7 @@ sealed_by({error, _} = Refused, _Mode) -> Refused.
 %% from the DHT — verifies it against the pinned realm key, and hands
 %% every link the advertisement spec: for each link the pool signs an
 %% advertisement whose `serving_stations' name the station that link is
-%% connected to and the pool's other connected stations, sent as an ADVERTISE frame (signed again on
+%% connected to and the pool's other connected stations (or, when `stations' pins the registration, exactly those stations), sent as an ADVERTISE frame (signed again on
 %% reconnect and on link respawn, never past the chain's earlier
 %% expiry). The pool renews the chain at a third of its remaining life
 %% (`macula_client:advertise/8', D32): a delegation lives 30 minutes, so
@@ -608,7 +608,10 @@ sealed_by({error, _} = Refused, _Mode) -> Refused.
 %% {station_not_linked, StationNodeId}}', an empty list as `{error,
 %% {stations, empty}}' and anything but a list of 32-byte node ids as
 %% `{error, {stations, malformed}}'; nothing is registered or kept. Without
-%% it every link registers the procedure.
+%% it every link registers the procedure. The advertisement published for
+%% such a registration names those stations and no others, so a caller
+%% resolving it dials a station that holds the procedure rather than one
+%% that has to forward every call (macula#116).
 %%
 %% It returns once a station acknowledges the advertisement (macula#12),
 %% within 30 seconds; a refused or unacknowledged one is withdrawn and

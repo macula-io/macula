@@ -1005,7 +1005,10 @@ advertise(Pid, Realm, Procedure, Handler,
 %% pool sign each time it sends, naming the station it is
 %% connected to among its `serving_stations' with the pool's other
 %% connected stations (a pool of several links, and a reconnect to another
-%% station, each get an advertisement naming their own station). The link stores it (for the handshake drain) and sends
+%% station, each get an advertisement naming their own station). A spec
+%% carrying `serving_stations' -- a registration the pool pinned to
+%% `stations' (see `macula:advertise/5') -- names exactly those instead.
+%% The link stores it (for the handshake drain) and sends
 %% it at once when connected; `undefined' registers the handler and
 %% sends nothing.
 -spec advertise(pid(), <<_:256>>, binary(), handler(),
@@ -2754,7 +2757,7 @@ sign_advertisement(Realm, Proc, Spec, Station, #state{pool = Pool, node_identity
     SignOpts = maps:with([not_after], Spec),
     _ = spawn(fun() ->
             Unsigned = macula_record:procedure_advertisement(node_id(Key), Realm, Proc,
-                                                             serving_stations(Station, pool_stations(Pool)), Opts),
+                                                             serving_stations(Station, pool_stations(Pool), Spec), Opts),
             Link ! {advertisement_signed, {Realm, Proc}, Spec, Station, signed_or_refused(Pool, Unsigned, SignOpts)}
         end),
     ok.
@@ -2768,7 +2771,16 @@ connected_stations({ok, Links}) -> [NodeId || #{connected := true, node_id := No
 connected_stations(_Unanswered) -> [].
 
 %% This link's station and up to 7 more of the pool's, sorted: an advertisement names at most 8 (macula-station#55).
-serving_stations(Station, PoolStations) ->
+%%
+%% A registration pinned to stations (`stations => [...]', which its spec
+%% carries as `serving_stations') names ONLY those, this link's included:
+%% the procedure is registered on those links and on no other, so naming a
+%% station that does not hold it hands the caller a dial target that must
+%% forward every call (macula#116).
+serving_stations(Station, _PoolStations, #{serving_stations := Stations})
+  when is_list(Stations), Stations =/= [] ->
+    lists:usort(lists:sublist([Station | lists:usort(Stations) -- [Station]], 8));
+serving_stations(Station, PoolStations, _Unpinned) ->
     Others = lists:sublist(lists:usort(PoolStations) -- [Station], 7),
     lists:usort([Station | Others]).
 

@@ -2316,8 +2316,22 @@ spawned_link_pids(#state{links = Links}) ->
 %% any link is touched.
 advertised(Kind, Key, #{stations := Stations} = Registration, S) ->
     {ok, Profile} = macula_crypto_profile:configured(),
-    presigned_checked(names_a_key(maps:get(ad, Registration, undefined), Profile), Kind, Key, Registration,
+    Pinned = pinned_stations(Registration),
+    presigned_checked(names_a_key(maps:get(ad, Pinned, undefined), Profile), Kind, Key, Pinned,
                       Stations, S).
+
+%% A registration pinned to `stations' carries the pin in its spec, so the
+%% advertisement each of those links signs names exactly those stations and
+%% no other: the procedure is registered on those links alone, and a record
+%% naming a station that holds no registration sends every caller to it to
+%% be forwarded to one that does (macula#116). Kept in the registration, so
+%% a respawned link and a renewal carry it too. A pre-signed advertisement
+%% already names its stations; there is nothing here to pin.
+pinned_stations(#{stations := Stations, ad := Spec} = Registration)
+  when is_list(Stations), is_map(Spec) ->
+    Registration#{ad := Spec#{serving_stations => Stations}};
+pinned_stations(Registration) ->
+    Registration.
 
 %% A pre-signed advertisement that names a KEM key is refused: no keyless history of it is knowable, so the provider
 %% could not close its clear-call window (E2E design §8.1). A key is named through a spec, `kem => true'.
