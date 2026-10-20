@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The release version names the app's version again.** `rebar.config` declared the relx release as 3.0.0 while
+  `src/macula.app.src` was 15.6.0, so a release built from this tree is labelled 3.0.0 while every other place
+  calls it 15.6.0, and the release guard (macula-ci-images#5) refuses a `v15` tag whose versions disagree.
+  `macula_release_version_tests` now asserts the two are one string, so a one-sided bump fails an eunit run here
+  first. This is the drift mcl-fovea#18 fixed.
+
 ### Documentation
 
 - **The authorization guide and the PQ records design give the delegation revocation bound the record layer
