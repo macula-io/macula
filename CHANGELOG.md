@@ -41,7 +41,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   linked to. A caller resolving that record can dial a station that holds no registration, which then forwards
   every call to the one that does; on a three-station mesh, every provider pinned away from the first station in
   sorted order was reachable only through that forward (macula#116). The registration now carries the pin, so a
-  respawned link and a renewal name it too; an unpinned registration is unchanged.
+  respawned link and a renewal name it too; an unpinned registration is unchanged. A pin longer than one
+  advertisement can name (`macula_record:max_serving_stations/0`, 8) is refused as `{error, {stations, too_many}}`
+  rather than cut to fit.
 - **The release version names the app's version again.** `rebar.config` declared the relx release as 3.0.0 while
   `src/macula.app.src` was 15.6.0, so a release built from this tree is labelled 3.0.0 while every other place
   calls it 15.6.0, and the release guard (macula-ci-images#5) refuses a `v15` tag whose versions disagree.

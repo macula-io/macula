@@ -606,8 +606,10 @@ sealed_by({error, _} = Refused, _Mode) -> Refused.
 %% respawned later registers it again only when its station is one of them.
 %% A station the pool holds no link to is refused as `{error,
 %% {station_not_linked, StationNodeId}}', an empty list as `{error,
-%% {stations, empty}}' and anything but a list of 32-byte node ids as
-%% `{error, {stations, malformed}}'; nothing is registered or kept. Without
+%% {stations, empty}}', anything but a list of 32-byte node ids as
+%% `{error, {stations, malformed}}' and more than
+%% `macula_record:max_serving_stations()' of them as `{error, {stations,
+%% too_many}}'; nothing is registered or kept. Without
 %% it every link registers the procedure. The advertisement published for
 %% such a registration names those stations and no others, so a caller
 %% resolving it dials a station that holds the procedure rather than one
@@ -660,9 +662,20 @@ stations_opt(#{stations := []}) -> {error, {stations, empty}};
 stations_opt(#{stations := Stations}) -> node_ids(Stations, Stations);
 stations_opt(#{}) -> {ok, all}.
 
-node_ids([], Stations) -> {ok, Stations};
+node_ids([], Stations) ->
+    within_the_record_limit(length(Stations), Stations);
 node_ids([<<_:256>> | Rest], Stations) -> node_ids(Rest, Stations);
 node_ids(_NotANodeIdList, _Stations) -> {error, {stations, malformed}}.
+
+%% An advertisement names at most `macula_record:max_serving_stations()'
+%% stations. A longer pin would be cut to fit, leaving stations that hold a
+%% registration the published record never names -- the call to them is
+%% forwarded, which is what the pin exists to avoid -- so it is refused.
+within_the_record_limit(Count, Stations) ->
+    case Count =< macula_record:max_serving_stations() of
+        true  -> {ok, Stations};
+        false -> {error, {stations, too_many}}
+    end.
 
 on_stations({ok, Stations}, Fun) -> Fun(Stations);
 on_stations({error, _} = Refused, _Fun) -> Refused.

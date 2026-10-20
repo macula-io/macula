@@ -70,6 +70,13 @@ an_empty_or_malformed_list_is_refused() ->
         [?assertEqual({error, {stations, malformed}},
                       macula:advertise(Pool, ?REALM, Proc, fun handler/1, #{stations => Bad}))
          || Bad <- [?A, [<<1:8>>], [?A | ?B], all]],
+        %% A record names at most `max_serving_stations/0' stations, so a
+        %% longer pin is refused rather than cut to fit: the stations past
+        %% the cut would hold a registration the record never names, and
+        %% calls to them ride a forward.
+        TooMany = [<<N:256>> || N <- lists:seq(1, macula_record:max_serving_stations() + 1)],
+        ?assertEqual({error, {stations, too_many}},
+                     macula:advertise(Pool, ?REALM, Proc, fun handler/1, #{stations => TooMany})),
         ?assertEqual({false, false}, {holds(Pool, ?A, Proc), holds(Pool, ?B, Proc)})
     end).
 

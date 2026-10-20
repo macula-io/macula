@@ -12,6 +12,9 @@
 
 -include_lib("eunit/include/eunit.hrl").
 
+%% Applied by the pool's renewal worker (it calls {M, F, A} in its own process).
+-export([renewal_spec/2]).
+
 -define(REALM, <<7:256>>).
 -define(PROCEDURE, <<"acme.count_v1">>).
 -define(SEEDS, [#{host => <<"127.0.0.1">>, port => 1, expected_node_id => <<1:256>>},
@@ -63,6 +66,39 @@ a_pinned_registration_names_only_its_own_station_test_() ->
          ?assertEqual([[Pinned]], sent_stations(1)),
          ok = macula_client:close(Pool)
      end}.
+
+%% The pin survives the chain renewal (macula#116). A renewal answers with
+%% a fresh spec built from the chain, which names no stations, so a pin
+%% applied only at the advertise call is gone a third of a delegation
+%% later -- about ten minutes -- and every later record names the pool's
+%% other stations again.
+a_pinned_registration_still_names_only_its_station_after_a_renewal_test_() ->
+    {timeout, 10,
+     fun() ->
+         Pool = pool(),
+         {ok, Links} = macula_client:links(Pool),
+         _ = [connect_to(Pid, Pinned) || #{pid := Pid, seed := #{expected_node_id := Pinned}} <- Links],
+         Pinned = <<2:256>>,
+         Longer = spec(),
+         Renewed = Longer#{not_after => erlang:system_time(millisecond) + 7_200_000},
+         ok = macula_client:advertise(Pool, ?REALM, ?PROCEDURE,
+                                      fun(_) -> {ok, counted} end, open, spec(), [Pinned],
+                                      {?MODULE, renewal_spec, [Renewed]}),
+         ?assertEqual([[Pinned]], sent_stations(1)),
+         renewal_due(Pool, {?REALM, ?PROCEDURE}),
+         ?assertEqual([[Pinned]], sent_stations(1)),
+         ok = macula_client:close(Pool)
+     end}.
+
+%% The chain a renewal resolves here: a fresh spec, naming no stations, as
+%% the facade's own renewal builds one.
+renewal_spec(_Pool, Spec) ->
+    {ok, Spec}.
+
+renewal_due(Pool, Key) ->
+    Procs = element(macula_client:state_field_index(procs), sys:get_state(Pool)),
+    #{renew_ref := Ref} = maps:get(Key, Procs),
+    Pool ! {renew_due, unary, Key, Ref}.
 
 %% The pool keeps the spec, not a signed advertisement, so a respawned
 %% link connecting to a station none of the others knew signs one

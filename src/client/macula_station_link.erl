@@ -565,7 +565,8 @@
                                 ttl_ms        => pos_integer(),
                                 kem           => true,
                                 keyed_since   => integer(),
-                                confidential  => required}.
+                                confidential  => required,
+                                serving_stations => [<<_:256>>, ...]}.
 %% A spec for a procedure in the node's own namespace, `~<node_id>/<name>':
 %% no authorization and no bound, since the advertisement's own signature
 %% authorizes it (D25 item 6, revised 2026-09-24). Only a `~' procedure takes it.

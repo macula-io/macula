@@ -25,7 +25,7 @@
     org_directory/3, org_directory/4,
     procedure_delegation/2, procedure_delegation/3,
     app_record/5,
-    procedure_advertisement/4, procedure_advertisement/5,
+    procedure_advertisement/4, procedure_advertisement/5, max_serving_stations/0,
     content_announcement/3,
     foundation_seed_list/1, foundation_seed_list/2,
     foundation_parameter/2, foundation_parameter/3,
@@ -408,6 +408,11 @@ app_record(OrgKeyId, RealmId, OrgName, AppName,
 
 app_service(#{name := Name, procedures := Procedures}) when is_binary(Name), is_list(Procedures) ->
     #{{text, <<"name">>} => {text, Name}, {text, <<"procedures">>} => [{text, P} || P <- Procedures]}.
+
+%% @doc The most stations one advertisement names (macula-station#55, K > 1): a longer list is refused by the
+%% builder, so a caller that pins a provider to stations can refuse one the record could not carry whole.
+-spec max_serving_stations() -> pos_integer().
+max_serving_stations() -> ?MAX_SERVING_STATIONS.
 
 %% @doc A provider's advertisement of a procedure in a realm, signed by the provider, naming the 1 to 8 stations it
 %% serves the procedure through (macula-station#55, K > 1): one record per provider and procedure, so the slot holds

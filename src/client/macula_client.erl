@@ -2316,22 +2316,8 @@ spawned_link_pids(#state{links = Links}) ->
 %% any link is touched.
 advertised(Kind, Key, #{stations := Stations} = Registration, S) ->
     {ok, Profile} = macula_crypto_profile:configured(),
-    Pinned = pinned_stations(Registration),
-    presigned_checked(names_a_key(maps:get(ad, Pinned, undefined), Profile), Kind, Key, Pinned,
+    presigned_checked(names_a_key(maps:get(ad, Registration, undefined), Profile), Kind, Key, Registration,
                       Stations, S).
-
-%% A registration pinned to `stations' carries the pin in its spec, so the
-%% advertisement each of those links signs names exactly those stations and
-%% no other: the procedure is registered on those links alone, and a record
-%% naming a station that holds no registration sends every caller to it to
-%% be forwarded to one that does (macula#116). Kept in the registration, so
-%% a respawned link and a renewal carry it too. A pre-signed advertisement
-%% already names its stations; there is nothing here to pin.
-pinned_stations(#{stations := Stations, ad := Spec} = Registration)
-  when is_list(Stations), is_map(Spec) ->
-    Registration#{ad := Spec#{serving_stations => Stations}};
-pinned_stations(Registration) ->
-    Registration.
 
 %% A pre-signed advertisement that names a KEM key is refused: no keyless history of it is knowable, so the provider
 %% could not close its clear-call window (E2E design §8.1). A key is named through a spec, `kem => true'.
@@ -2353,11 +2339,11 @@ registered(_Kind, _Key, _Registration, {error, _} = Refused, S) ->
 %% With no link up (every link respawning), the registration is kept all the
 %% same and answered no_healthy_station: the respawned links replay it.
 registered(unary, Key, Registration0, {ok, Pids}, #state{procs = P} = S) ->
-    Registration = keyed_since(Registration0, maps:find(Key, P)),
+    Registration = pinned_stations(keyed_since(Registration0, maps:find(Key, P))),
     {fanout_advertise(Pids, Key, Registration),
      advertisement_sent(Key, Registration, Pids, S#state{procs = P#{Key => Registration}})};
 registered(stream, Key, Registration0, {ok, Pids}, #state{stream_procs = SP} = S) ->
-    Registration = keyed_since(Registration0, maps:find(Key, SP)),
+    Registration = pinned_stations(keyed_since(Registration0, maps:find(Key, SP))),
     {fanout_advertise_stream(Pids, Key, Registration),
      advertisement_sent(Key, Registration, Pids, S#state{stream_procs = SP#{Key => Registration}})}.
 
@@ -2366,6 +2352,18 @@ advertisement_sent({Realm, Proc}, #{ad := undefined}, _Pids, S) ->
     registration_answered({advertise, Realm, Proc}, accepted, S);
 advertisement_sent({Realm, Proc}, _Registration, Pids, S) ->
     registration_sent({advertise, Realm, Proc}, Pids, S).
+
+%% A registration pinned to `stations' carries the pin in its spec, so the advertisement each of those links
+%% signs names exactly those stations and no other: the procedure is registered on those links alone, and a
+%% record naming a station that holds no registration sends every caller to it to be forwarded to one that
+%% does (macula#116). Applied here and not at the advertise call alone, because a renewal answers with a fresh
+%% spec from the chain (`renewal_answered/5') that names no stations; kept in the registration, so a respawned
+%% link replays the pinned one too. A pre-signed advertisement already names its stations; there is nothing to pin.
+pinned_stations(#{stations := Stations, ad := Spec} = Registration)
+  when is_list(Stations), is_map(Spec) ->
+    Registration#{ad := Spec#{serving_stations => Stations}};
+pinned_stations(Registration) ->
+    Registration.
 
 %% When a registration's spec first named the KEM key, kept here in the pool and carried in the spec
 %% (`keyed_since'), so a link respawn or a renewal never reopens the provider's clear-call window (E2E design §8.1,
