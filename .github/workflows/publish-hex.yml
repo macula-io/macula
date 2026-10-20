@@ -103,9 +103,19 @@ jobs:
     if: github.event_name == 'push'
     uses: ./.github/workflows/test.yml
 
+
+  # The release guard (macula-ci-images#5): the tagged commit must be an
+  # ancestor of the default branch, and the tag's version must be the version
+  # this repository publishes. No `if:` on purpose: a skipped job skips the
+  # publish that needs it, and the guard exits 0 by itself for a ref that is not
+  # a release tag.
+  guard:
+    name: The release guard
+    uses: macula-io/macula-ci-images/.github/workflows/release-guard.yml@2660ee4ce1c51ce3d2bf14043ebc8a2784065cd9
+
   publish:
     name: Publish to hex.pm
-    needs: [verify, test]
+    needs: [verify, test, guard]
     # Only a pushed release tag publishes, whatever the triggers above say.
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
