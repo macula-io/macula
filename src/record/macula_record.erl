@@ -278,7 +278,8 @@ realm_stations(RealmId, Entries, Opts) when is_binary(RealmId), byte_size(RealmI
 %% valid_until, is at most 24 hours and never ends before it starts: a longer one raises a badmatch on
 %% `{error, endorsement_window_too_long}', and a reversed one on `{error, endorsement_window_reversed}'. Without a
 %% valid_from the window starts one clock tolerance (clock_tolerance_ms/0) before now; without a valid_until it ends
-%% 24 hours after valid_from.
+%% 24 hours after valid_from. A caller that sets valid_until sets valid_from too: a valid_until 24 hours from now with
+%% the default valid_from is a window 5 minutes too long.
 -spec realm_member_endorsement(<<_:256>>, #{realm := <<_:256>>, member_node := <<_:256>>, roles := [binary()]}) ->
           m_record().
 realm_member_endorsement(RealmId, Spec) ->

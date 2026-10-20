@@ -113,11 +113,19 @@ slot_endorsement(Entries, #{profile := Profile, realm := <<_:256>>, realm_key_id
 %% @doc The standing check that reads a member's slot through Lookup, typically
 %% `fun(Key) -> macula:find_records(Pool, Key) end': ok while the realm key's entry there is an endorsement that admits
 %% the member now (slot_endorsement/3), {error, withdrawn} while the realm key's tombstone of it lives, the slot's other
-%% refusals by name, and {error, lookup_failed} when the lookup fails, so an admission gated on it fails closed.
+%% refusals by name, and {error, lookup_failed} when the lookup fails or exits (a pool that is down or restarting, a
+%% call that times out), so an admission gated on it fails closed and never takes the caller's process down.
 -spec slot_standing(slot_lookup(), trust()) -> standing().
 slot_standing(Lookup, #{realm := <<_:256>> = Realm} = Trust) when is_function(Lookup, 1) ->
     fun(<<_:256>> = Member) ->
-        slot_read(Lookup(macula_record:realm_member_endorsement_key(Realm, Member)), Trust, Member)
+        slot_read(looked_up(Lookup, macula_record:realm_member_endorsement_key(Realm, Member)), Trust, Member)
+    end.
+
+%% The catch keeps a lookup's exit a refusal of one frame instead of a crash of the overlay process that asked, which
+%% would lose its whole view (macula#118).
+looked_up(Lookup, Key) ->
+    try Lookup(Key)
+    catch exit:Reason -> {error, {lookup_exited, Reason}}
     end.
 
 slot_read({ok, Records}, Trust, Member) when is_list(Records) ->

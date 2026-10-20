@@ -21,8 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Overlay admission asks the claimed member's standing once its endorsement verifies: a gated
     `macula_hyparview_proto` ctx (one with `realm_key_id`) must carry `member_standing`, and without one it admits
     nobody. `macula_hyparview_endorsement:slot_standing/2` builds the standing check from a slot lookup the caller
-    supplies: the realm key's tombstone refuses the member as `withdrawn`, and a failed lookup refuses, so admission
-    fails closed.
+    supplies: the realm key's tombstone refuses the member as `withdrawn`, and a lookup that fails or exits refuses,
+    so admission fails closed without taking the overlay process down.
   - `test/vectors/realm_member_endorsement_v1.json` is regenerated: `window_over_24_hours` and `window_of_30_days`
     replace `window_over_30_days`, both refused. The wire 1.0 vectors keep their bytes.
   - **Upgrading:** a realm renews its members' endorsements to 24-hour windows before its readers take this version,

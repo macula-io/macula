@@ -23,7 +23,8 @@ cases(Fixture) ->
                  fun slot_standing_admits_the_member_its_slot_endorses/1,
                  fun slot_standing_refuses_a_withdrawn_member/1,
                  fun slot_standing_reads_the_members_own_slot/1,
-                 fun slot_standing_refuses_when_the_lookup_fails/1]].
+                 fun slot_standing_refuses_when_the_lookup_fails/1,
+                 fun slot_standing_refuses_when_the_lookup_exits/1]].
 
 the_realm_keys_endorsement_counts_beside_another_keys_endorsement_and_tombstone(
   #{other_key := Other, endorsement := Endorsement, realm := Realm, member := Member} = Fixture) ->
@@ -80,6 +81,15 @@ slot_standing_reads_the_members_own_slot(#{realm := Realm, endorsement := Endors
 %% A lookup that fails refuses, so an admission gated on it fails closed.
 slot_standing_refuses_when_the_lookup_fails(#{member := Member} = Fixture) ->
     ?assertEqual({error, lookup_failed}, (standing(fun(_Key) -> {error, timeout} end, Fixture))(Member)).
+
+%% A lookup through a pool that is down exits (gen_server:call to a dead pid); the standing check refuses instead of
+%% taking the overlay process down with it.
+slot_standing_refuses_when_the_lookup_exits(#{member := Member} = Fixture) ->
+    Dead = spawn(fun() -> ok end),
+    MRef = monitor(process, Dead),
+    receive {'DOWN', MRef, process, Dead, _} -> ok end,
+    Lookup = fun(Key) -> macula:find_records(Dead, Key) end,
+    ?assertEqual({error, lookup_failed}, (standing(Lookup, Fixture))(Member)).
 
 %%------------------------------------------------------------------
 %% Helpers
