@@ -312,13 +312,6 @@ exit 0
 - **Memory:** 2-4 GB for containers
 - **Disk:** ~1 GB for images
 
-## Related Documentation
-
-- [Project Structure](../../architecture/MACULA_PROJECT_STRUCTURE.md)
-- [Quick Start Guide](../../architecture/macula_http3_mesh_quick_start.md)
-- [Code Review Report](../../CODE_REVIEW_REPORT.md)
-- [Docker Infrastructure](../../docker/README.md)
-
 ## Support
 
 For issues or questions:
