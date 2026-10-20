@@ -101,7 +101,7 @@ removed(CallerNodeId) -> boolean()
    (`verify_endorsement/3` checks the window only at the current time and consults no tombstone).
    **What the tombstone bounds, honestly:** the lookup returns what the stations on its path serve, and a station can
    withhold the tombstone and serve the endorsement it still holds. So the tombstone shortens a revocation when the
-   lookup path is honest; the guaranteed bound is the endorsement's own window (at most 30 days) or the org's removed
+   lookup path is honest; the guaranteed bound is the endorsement's own window (at most 24 hours, macula#118) or the org's removed
    set (below), whichever comes first. The distributor keeps no slot answer longer than one `rotate_after`, and a
    lookup that fails or times out refuses the pull as `membership_unknown` (its own code, not `not_a_member`), so the
    member retries (§4).
@@ -262,7 +262,7 @@ sealing cannot take back what a member has already opened.
 (For the register, one sentence: "A member removed from an org's groups keeps reading their events for at most 85
 minutes after the org's distributor starts refusing it, and keeps what it already read. The org's removal takes
 effect at once; a realm revocation takes effect when the distributor reads the realm's tombstone, and at the latest
-when the member's endorsement expires (at most 30 days).")
+when the member's endorsement expires (at most 24 hours).")
 
 ## 9. Stations, and what is claimed when
 
@@ -357,17 +357,19 @@ clock skew in the removal bound (§8), the pinning note (§2), and the register 
 ## 14. Membership checks outside groups (Raf's rule, 2026-09-29)
 
 **A node that enables endorsement admission must pass a membership check before it acts on a JOIN, FORWARD_JOIN or
-NEIGHBOR.** `macula_hyparview_proto:check_admission/3` verifies a presented endorsement (`verify_endorsement/3`),
-which checks its window at the time of the call and reads no tombstone, so on its own it admits a revoked member
-until its endorsement expires (at most 30 days).
+NEIGHBOR.** A presented endorsement (`verify_endorsement/3`) is checked against its window at the time of the call
+and reads no tombstone, so on its own it would admit a revoked member until its endorsement expires (at most 24
+hours). `macula_hyparview_proto:check_admission/3` therefore also asks the ctx's `member_standing` for the claimed
+member once the endorsement verifies, and a gated ctx without one admits nobody (macula#118).
 
 Today the only node that runs the overlay is the realm, and its `Overlay.Dispatcher` already refuses every gated
 frame whose claimed member is not a live admitted row in its own read model, before `process/4` runs (macula-realm
 b5e08e8, `apps/macula_realm/lib/macula_realm/overlay/dispatcher.ex`, `dispatch_gated/3` → `member_still_admitted?/2`).
 That check is the authority's own and no station can withhold it. No station runs the overlay.
 
-The check for any other node is built with the first such caller: an optional membership function in the admission
-context, and for a node that is not the realm a slot read (`find_records` of
-`macula_record:realm_member_endorsement_key/2` and `slot_endorsement/4`, as the distributor's default membership
-reads it, §3), with the same limit: a station on the lookup path can withhold a tombstone, so the guaranteed bound
-is the endorsement's own window.
+For a node that is not the realm, `macula_hyparview_endorsement:slot_standing/2` builds that check from a slot
+lookup the caller supplies (`find_records` of `macula_record:realm_member_endorsement_key/2`, read through
+`slot_endorsement/3` as the distributor's default membership reads it, §3): the realm key's tombstone refuses the
+member as `withdrawn`, and a failed lookup refuses, so admission fails closed. Its limit is the distributor's: a
+station on the lookup path can withhold a tombstone, so the guaranteed bound is the endorsement's own window, at
+most 24 hours.

@@ -61,7 +61,10 @@ Profile = fun(P) ->
             Case(<<"another_record_type">>,
                  Signed(macula_record:org_directory(Realm, <<"acme">>, Id(<<"org key">>)), RealmKey), Member,
                  G + 2 * Hour),
-            Case(<<"window_over_30_days">>, Signed(Forged(<<"valid_until">>, G + Hour + 30 * Day + 1), RealmKey),
+            %% The window is at most 24 hours (macula#118), so a 30-day one, the longest issued before, is refused too.
+            Case(<<"window_over_24_hours">>, Signed(Forged(<<"valid_until">>, G + Hour + Day + 1), RealmKey),
+                 Member, G + 2 * Hour),
+            Case(<<"window_of_30_days">>, Signed(Forged(<<"valid_until">>, G + Hour + 30 * Day), RealmKey),
                  Member, G + 2 * Hour),
             Case(<<"window_reversed">>, Signed(Forged(<<"valid_until">>, G + Hour - 1), RealmKey), Member,
                  G + 2 * Hour),

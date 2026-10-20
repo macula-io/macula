@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security (breaking)
+
+- **A revoked member's realm endorsement stops admitting it: at once where the realm's tombstone is stored, within
+  24 hours where it is withheld (macula#118).** An endorsement used to admit its holder for up to 30 days, revoked or
+  not. Following the removal bound in `DECISIONS_POST_QUANTUM.md`:
+  - `macula_record:max_endorsement_window_ms/0` is 24 hours. The builder refuses a longer window and every
+    endorsement verifier refuses one as `endorsement_window_too_long`, so an endorsement issued under the 30-day cap
+    admits nobody. The builder's default window starts one clock tolerance (5 minutes) before now, so a verifier
+    whose clock is behind the realm's does not refuse a fresh endorsement as `not_yet_valid`.
+  - Overlay admission asks the claimed member's standing once its endorsement verifies: a gated
+    `macula_hyparview_proto` ctx (one with `realm_key_id`) must carry `member_standing`, and without one it admits
+    nobody. `macula_hyparview_endorsement:slot_standing/2` builds the standing check from a slot lookup the caller
+    supplies: the realm key's tombstone refuses the member as `withdrawn`, and a failed lookup refuses, so admission
+    fails closed.
+  - `test/vectors/realm_member_endorsement_v1.json` is regenerated: `window_over_24_hours` and `window_of_30_days`
+    replace `window_over_30_days`, both refused. The wire 1.0 vectors keep their bytes.
+  - **Upgrading:** a realm renews its members' endorsements to 24-hour windows before its readers take this version,
+    and any caller that gates overlay admission passes `member_standing`.
+
 ### Fixed
 
 - **The release version names the app's version again.** `rebar.config` declared the relx release as 3.0.0 while

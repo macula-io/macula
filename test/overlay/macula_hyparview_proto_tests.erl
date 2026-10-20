@@ -299,6 +299,66 @@ gated_neighbor_high_without_endorsement_is_dropped_test() ->
     ?assertNot(macula_hyparview_view:is_active(Sender, View1)),
     ?assertEqual([], Actions).
 
+%% An endorsement proves the realm admitted a member, not that it still is one (macula#118): a member whose standing
+%% is refused is dropped at JOIN, FORWARD_JOIN and NEIGHBOR while its endorsement still verifies.
+gated_join_from_a_withdrawn_member_is_dropped_test() ->
+    {RealmKey, RealmId} = realm(),
+    Joiner = id(1),
+    Frame = macula_frame:hyparview_join(#{realm => RealmId, new_member => Joiner,
+                                          record => endorsement(RealmKey, RealmId, Joiner)}),
+    {View1, Actions} = macula_hyparview_proto:process(macula_hyparview_view:new(?SELF), Joiner, Frame,
+                                                      withdrawn_ctx(RealmKey, RealmId)),
+    ?assertNot(macula_hyparview_view:is_active(Joiner, View1)),
+    ?assertEqual([], Actions).
+
+gated_forward_join_of_a_withdrawn_member_is_dropped_test() ->
+    {RealmKey, RealmId} = realm(),
+    NewMember = id(3),
+    Frame = macula_frame:hyparview_forward_join(#{realm => RealmId, new_member => NewMember, ttl => 0, arwl => 6,
+                                                  prwl => 3, record => endorsement(RealmKey, RealmId, NewMember)}),
+    {View1, Actions} = macula_hyparview_proto:process(macula_hyparview_view:new(?SELF), id(1), Frame,
+                                                      withdrawn_ctx(RealmKey, RealmId)),
+    ?assertNot(macula_hyparview_view:is_active(NewMember, View1)),
+    ?assertEqual([], Actions).
+
+gated_neighbor_from_a_withdrawn_member_is_dropped_test() ->
+    {RealmKey, RealmId} = realm(),
+    Sender = id(4),
+    [begin
+         Frame = macula_frame:hyparview_neighbor(#{realm => RealmId, priority => Priority,
+                                                   record => endorsement(RealmKey, RealmId, Sender)}),
+         {View1, Actions} = macula_hyparview_proto:process(macula_hyparview_view:new(?SELF), Sender, Frame,
+                                                           withdrawn_ctx(RealmKey, RealmId)),
+         ?assertNot(macula_hyparview_view:is_active(Sender, View1)),
+         ?assertNot(macula_hyparview_view:is_passive(Sender, View1)),
+         ?assertEqual([], Actions)
+     end || Priority <- [high, low]].
+
+%% Standing is asked of the member the frame claims, and only once its endorsement verifies.
+gated_standing_is_asked_of_the_claimed_member_after_its_endorsement_verifies_test() ->
+    {RealmKey, RealmId} = realm(),
+    Joiner = id(1),
+    Self = self(),
+    Ctx = (gated_ctx(RealmKey, RealmId))#{member_standing => fun(M) -> Self ! {asked, M}, ok end},
+    Valid = macula_frame:hyparview_join(#{realm => RealmId, new_member => Joiner,
+                                          record => endorsement(RealmKey, RealmId, Joiner)}),
+    _ = macula_hyparview_proto:process(macula_hyparview_view:new(?SELF), Joiner, Valid, Ctx),
+    ?assertEqual([Joiner], asked()),
+    Unendorsed = macula_frame:hyparview_join(#{realm => RealmId, new_member => Joiner}),
+    _ = macula_hyparview_proto:process(macula_hyparview_view:new(?SELF), Joiner, Unendorsed, Ctx),
+    ?assertEqual([], asked()).
+
+%% A gated ctx without a standing check admits nobody, so no caller gates on the endorsement alone.
+gated_ctx_without_member_standing_admits_nobody_test() ->
+    {RealmKey, RealmId} = realm(),
+    Joiner = id(1),
+    Ctx = maps:remove(member_standing, gated_ctx(RealmKey, RealmId)),
+    Frame = macula_frame:hyparview_join(#{realm => RealmId, new_member => Joiner,
+                                          record => endorsement(RealmKey, RealmId, Joiner)}),
+    {View1, Actions} = macula_hyparview_proto:process(macula_hyparview_view:new(?SELF), Joiner, Frame, Ctx),
+    ?assertNot(macula_hyparview_view:is_active(Joiner, View1)),
+    ?assertEqual([], Actions).
+
 %% neighbor/3 (the outbound builder used for JOIN/FORWARD_JOIN's own acks) attaches self_endorsement when ctx() carries
 %% one, so a gated receiver on the other end doesn't drop our own ack.
 neighbor_builder_attaches_self_endorsement_test() ->
@@ -316,11 +376,19 @@ neighbor_builder_attaches_self_endorsement_test() ->
 
 id(N) -> <<N:256>>.
 
+asked() ->
+    receive {asked, M} -> [M | asked()] after 0 -> [] end.
+
 ctx(Self) ->
     #{self_id => Self, realm => crypto:strong_rand_bytes(32), now => 0}.
 
 gated_ctx(RealmKey, RealmId) ->
-    (ctx(?SELF))#{realm => RealmId, realm_key_id => macula_node_keys:key_id(RealmKey), profile => pq_pure}.
+    (ctx(?SELF))#{realm => RealmId, realm_key_id => macula_node_keys:key_id(RealmKey), profile => pq_pure,
+                  member_standing => fun(_Member) -> ok end}.
+
+%% A gated ctx whose standing check refuses every member as the realm key's tombstone would.
+withdrawn_ctx(RealmKey, RealmId) ->
+    (gated_ctx(RealmKey, RealmId))#{member_standing => fun(_Member) -> {error, withdrawn} end}.
 
 %% A realm key and the realm id it signs endorsements for.
 realm() ->

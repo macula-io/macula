@@ -24,8 +24,10 @@ cases(Keys) ->
                  fun an_endorsement_for_another_realm_is_refused/1,
                  fun an_endorsement_not_yet_valid_is_refused/1,
                  fun an_endorsement_past_its_window_is_refused/1,
-                 fun an_endorsement_window_of_30_days_is_accepted/1,
-                 fun an_endorsement_window_over_30_days_is_refused/1,
+                 fun an_endorsement_window_of_24_hours_is_accepted/1,
+                 fun an_endorsement_window_over_24_hours_is_refused/1,
+                 fun a_fresh_endorsement_is_valid_at_a_verifier_5_minutes_behind/1,
+                 fun an_endorsement_window_of_30_days_is_refused/1,
                  fun an_endorsement_window_that_ends_before_it_starts_is_refused/1,
                  fun a_check_at_a_time_before_the_record_was_made_refuses/1,
                  fun a_join_frame_carries_no_signature_of_its_own/1,
@@ -85,21 +87,39 @@ an_endorsement_past_its_window_is_refused(#{realm_key := Key} = Keys) ->
     Wire = signed(unsigned(Keys, Member, [], Window), Key),
     ?assertEqual({error, endorsement_expired}, verify(Wire, Keys, Member)).
 
-%% An endorsement's window, valid_from to valid_until, is at most 30 days.
-an_endorsement_window_of_30_days_is_accepted(#{realm_key := Key} = Keys) ->
+%% An endorsement's window, valid_from to valid_until, is at most 24 hours (macula#118).
+an_endorsement_window_of_24_hours_is_accepted(#{realm_key := Key} = Keys) ->
     Member = id(),
     From = erlang:system_time(millisecond) - ?MINUTE,
-    Wire = signed(unsigned(Keys, Member, [], #{valid_from => From, valid_until => From + 30 * 24 * 60 * ?MINUTE}), Key),
+    Wire = signed(unsigned(Keys, Member, [], #{valid_from => From, valid_until => From + 24 * 60 * ?MINUTE}), Key),
     ?assertEqual({ok, []}, verify(Wire, Keys, Member)).
 
 %% The builder refuses a longer window, so the test lengthens the record's window before signing it.
-an_endorsement_window_over_30_days_is_refused(#{realm_key := Key} = Keys) ->
+an_endorsement_window_over_24_hours_is_refused(#{realm_key := Key} = Keys) ->
     Member = id(),
     From = erlang:system_time(millisecond) - ?MINUTE,
-    Until = From + 30 * 24 * 60 * ?MINUTE,
+    Until = From + 24 * 60 * ?MINUTE,
     Record = unsigned(Keys, Member, [], #{valid_from => From, valid_until => Until}),
     Longer = Record#{payload := (maps:get(payload, Record))#{{text, <<"valid_until">>} := Until + 1}},
     ?assertEqual({error, endorsement_window_too_long}, verify(signed(Longer, Key), Keys, Member)).
+
+%% A 30-day endorsement, the longest any realm issued before macula#118, is refused: a revoked member's old one
+%% admits nobody once its verifier runs this code. The builder refuses one, so the test lengthens the record's window.
+an_endorsement_window_of_30_days_is_refused(#{realm_key := Key} = Keys) ->
+    Member = id(),
+    From = erlang:system_time(millisecond) - ?MINUTE,
+    Record = unsigned(Keys, Member, [], #{valid_from => From, valid_until => From + ?MINUTE}),
+    Longer = Record#{payload := (maps:get(payload, Record))#{{text, <<"valid_until">>} := From + 30 * 24 * 60 * ?MINUTE}},
+    ?assertEqual({error, endorsement_window_too_long}, verify(signed(Longer, Key), Keys, Member)).
+
+%% The builder's default window starts one clock tolerance back, so a verifier whose clock is 5 minutes behind the
+%% issuer's admits the member the moment the endorsement is made.
+a_fresh_endorsement_is_valid_at_a_verifier_5_minutes_behind(#{realm_key := Key, realm := Realm} = Keys) ->
+    Member = id(),
+    Wire = signed(unsigned(Keys, Member, [], #{}), Key),
+    Trust = #{profile => pq_pure, realm => Realm, realm_key_id => macula_node_keys:key_id(Key)},
+    Behind = erlang:system_time(millisecond) - 5 * ?MINUTE + 1000,
+    ?assertEqual({ok, []}, macula_hyparview_endorsement:verify_endorsement(Wire, Trust, Member, Behind)).
 
 %% A window that ends before it starts is refused by its own name. The builder refuses one, so the test reverses the
 %% record's window before signing it.

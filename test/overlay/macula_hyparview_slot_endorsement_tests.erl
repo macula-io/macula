@@ -19,7 +19,11 @@ cases(Fixture) ->
                  fun another_keys_tombstone_alone_withdraws_nothing/1,
                  fun the_realm_keys_tombstone_for_another_member_is_refused/1,
                  fun a_tombstone_still_withdraws_at_the_endorsements_last_valid_moment/1,
-                 fun a_slot_without_the_realm_keys_entry_is_not_found/1]].
+                 fun a_slot_without_the_realm_keys_entry_is_not_found/1,
+                 fun slot_standing_admits_the_member_its_slot_endorses/1,
+                 fun slot_standing_refuses_a_withdrawn_member/1,
+                 fun slot_standing_reads_the_members_own_slot/1,
+                 fun slot_standing_refuses_when_the_lookup_fails/1]].
 
 the_realm_keys_endorsement_counts_beside_another_keys_endorsement_and_tombstone(
   #{other_key := Other, endorsement := Endorsement, realm := Realm, member := Member} = Fixture) ->
@@ -54,6 +58,30 @@ a_slot_without_the_realm_keys_entry_is_not_found(Fixture) ->
     ?assertMatch({{error, not_found}, #{matching := 0, verified := 0}}, slot([], Fixture)).
 
 %%------------------------------------------------------------------
+%% slot_standing/2: the standing check an overlay's admission makes (macula#118)
+%%------------------------------------------------------------------
+
+slot_standing_admits_the_member_its_slot_endorses(#{endorsement := Endorsement, member := Member} = Fixture) ->
+    ?assertEqual(ok, (standing(fun(_Key) -> {ok, [Endorsement]} end, Fixture))(Member)).
+
+%% The endorsement still verifies on its own; the slot's tombstone is what refuses the member.
+slot_standing_refuses_a_withdrawn_member(#{realm_key := Key, endorsement := Endorsement, member := Member} = Fixture) ->
+    Tombstone = macula_record:sign(macula_record:tombstone(Endorsement, revoked), Key),
+    ?assertEqual({error, withdrawn}, (standing(fun(_Key) -> {ok, [Endorsement, Tombstone]} end, Fixture))(Member)).
+
+slot_standing_reads_the_members_own_slot(#{realm := Realm, endorsement := Endorsement, member := Member} = Fixture) ->
+    Slot = macula_record:realm_member_endorsement_key(Realm, Member),
+    Lookup = fun(Key) when Key =:= Slot -> {ok, [Endorsement]};
+                (_OtherKey) -> {ok, []}
+             end,
+    ?assertEqual(ok, (standing(Lookup, Fixture))(Member)),
+    ?assertEqual({error, not_found}, (standing(Lookup, Fixture))(crypto:strong_rand_bytes(32))).
+
+%% A lookup that fails refuses, so an admission gated on it fails closed.
+slot_standing_refuses_when_the_lookup_fails(#{member := Member} = Fixture) ->
+    ?assertEqual({error, lookup_failed}, (standing(fun(_Key) -> {error, timeout} end, Fixture))(Member)).
+
+%%------------------------------------------------------------------
 %% Helpers
 %%------------------------------------------------------------------
 
@@ -72,6 +100,10 @@ slot(Entries, Fixture) ->
 slot(Entries, #{realm_key := Key, realm := Realm, member := Member}, Now) ->
     Trust = #{profile => pq_pure, realm => Realm, realm_key_id => macula_node_keys:key_id(Key)},
     macula_hyparview_endorsement:slot_endorsement(Entries, Trust, Member, Now).
+
+standing(Lookup, #{realm_key := Key, realm := Realm}) ->
+    macula_hyparview_endorsement:slot_standing(
+      Lookup, #{profile => pq_pure, realm => Realm, realm_key_id => macula_node_keys:key_id(Key)}).
 
 wire(Record) ->
     macula_record:encode(Record).

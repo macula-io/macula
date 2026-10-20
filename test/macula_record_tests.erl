@@ -395,18 +395,32 @@ realm_records_name_the_realm_by_realm_id_test() ->
     ?assertEqual(#{realm_id => RealmId, org_name => <<"acme">>, org_key => fill(4)},
                  macula_record:read_org_directory(Org)).
 
-%% A realm member endorsement's window, valid_from to valid_until, is at most 30 days and never ends before it starts:
-%% the builder refuses a longer or a reversed one.
-a_realm_member_endorsement_window_is_at_most_30_days_test() ->
+%% A realm member endorsement's window, valid_from to valid_until, is at most 24 hours and never ends before it starts:
+%% the builder refuses a longer or a reversed one (macula#118).
+a_realm_member_endorsement_window_is_at_most_24_hours_test() ->
     RealmId = fill(16#11),
     Spec = #{realm => RealmId, member_node => fill(2), roles => [<<"member">>]},
     From = now_ms(),
-    Window = 30 * 24 * 60 * ?MINUTE,
+    Window = 24 * 60 * ?MINUTE,
     Endorse = fun(Until) -> macula_record:realm_member_endorsement(RealmId, Spec, #{valid_from => From,
                                                                                     valid_until => Until}) end,
     ?assertEqual(From + Window, maps:get({text, <<"valid_until">>}, macula_record:payload(Endorse(From + Window)))),
     ?assertError({badmatch, {error, endorsement_window_too_long}}, Endorse(From + Window + 1)),
-    ?assertError({badmatch, {error, endorsement_window_reversed}}, Endorse(From - 1)).
+    ?assertError({badmatch, {error, endorsement_window_reversed}}, Endorse(From - 1)),
+    ?assertEqual(24 * 60 * ?MINUTE, macula_record:max_endorsement_window_ms()).
+
+%% Without a valid_from the window starts one clock tolerance before now, so a verifier whose clock is behind the
+%% realm's does not refuse a fresh endorsement as not yet valid; without a valid_until it is the whole 24 hours.
+a_realm_member_endorsement_window_starts_one_clock_tolerance_back_test() ->
+    RealmId = fill(16#11),
+    Before = now_ms(),
+    Payload = macula_record:payload(macula_record:realm_member_endorsement(
+                                      RealmId, #{realm => RealmId, member_node => fill(2), roles => []})),
+    After = now_ms(),
+    From = maps:get({text, <<"valid_from">>}, Payload),
+    ?assert(From >= Before - macula_record:clock_tolerance_ms()),
+    ?assert(From =< After - macula_record:clock_tolerance_ms()),
+    ?assertEqual(From + 24 * 60 * ?MINUTE, maps:get({text, <<"valid_until">>}, Payload)).
 
 procedure_delegation_names_org_key_and_advertiser_test() ->
     Org = key(org),

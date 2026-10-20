@@ -189,10 +189,13 @@ About 7.3 KB / 8.3 KB before the payload: 2,592 / 3,118 bytes of key and 4,627 /
   withdrawn tag refuses the tombstone as `type_unknown`.
 - **Reserved tag.** 0x14 is the successor (key-rotation) record. Its payload is designed later; a reader refuses it
   as `type_unknown` and a custodian stores it.
-- **Realm member endorsement window.** Its payload's `valid_until` is not before its `valid_from`, and at most 30 days
-  after it. The builder refuses another window, and a verifier of the endorsement refuses a reversed one as
-  `endorsement_window_reversed` and a longer one as `endorsement_window_too_long`, before its other window checks, so
-  one endorsement admits its member for at most 30 days.
+- **Realm member endorsement window.** Its payload's `valid_until` is not before its `valid_from`, and at most 24 hours
+  after it (macula#118; the removal bound in `DECISIONS_POST_QUANTUM.md`). The builder refuses another window, and a
+  verifier of the endorsement refuses a reversed one as `endorsement_window_reversed` and a longer one as
+  `endorsement_window_too_long`, before its other window checks, so one endorsement admits its member for at most 24
+  hours, even where the realm's tombstone never arrives. The builder's default window starts one clock tolerance
+  before now, so a verifier behind the issuer's clock does not refuse a fresh endorsement as `not_yet_valid`. The
+  record's own lifetime class (30 days) is unchanged.
 - **Custodian checks** (`macula_record:custodian_verify/3`, what a station runs before it stores a record;
   `WIRE_1_0.md` 5.2 is the order of record), first failure wins:
   - the wire form, the object's shape, then the `tbs` decoded far enough to read a text `alg` (`malformed`), since

@@ -22,11 +22,19 @@
 %%       of a `realm_member_endorsement' that verifies under the ctx
 %%       `profile', signed by the realm key with that key id, for this
 %%       exact (realm, joiner) pair (`macula_hyparview_endorsement:
-%%       verify_endorsement/3'). A missing or invalid endorsement is
-%%       dropped silently (no ack, no forward, view unchanged), never
-%%       admitted. Without `realm_key_id' in `ctx()', admission is
-%%       unconditional (opt-in gating, matching the frame spec's own
-%%       "endorsement is optional" design).</li>
+%%       verify_endorsement/3'), and on the claimed member's standing:
+%%       the ctx `member_standing' answers `ok' for it. An endorsement
+%%       proves the realm admitted the member, not that it still is one,
+%%       so standing is what refuses a revoked member whose endorsement
+%%       is still inside its window (macula#118); `macula_hyparview_endorsement:
+%%       slot_standing/2' builds the standing check that reads the
+%%       member's slot for the realm key's tombstone. A gated ctx without
+%%       `member_standing' admits nobody. A missing or invalid
+%%       endorsement, or a refused standing, is dropped silently (no ack,
+%%       no forward, view unchanged), never admitted. Without
+%%       `realm_key_id' in `ctx()', admission is unconditional (opt-in
+%%       gating, matching the frame spec's own "endorsement is optional"
+%%       design).</li>
 %%   <li><strong>FORWARD_JOIN</strong> — if ttl=0 or active view
 %%       is empty: add_active(new_member) + reply NEIGHBOR(high).
 %%       Otherwise: if ttl equals this node's own PRWL, also place
@@ -97,6 +105,10 @@
     %% admission.
     realm_key_id         => <<_:256>>,
     profile              => macula_crypto_profile:profile(),
+    %% The claimed member's standing, asked after its endorsement
+    %% verifies: `ok' admits, anything else drops. A gated ctx()
+    %% requires it; see `macula_hyparview_endorsement:slot_standing/2'.
+    member_standing      => macula_hyparview_endorsement:standing(),
     %% This peer's OWN endorsement, as its wire form, attached to every outgoing
     %% NEIGHBOR frame (`neighbor/3') this peer sends -- a NEIGHBOR is
     %% itself an admission event on the receiving end (see
@@ -180,10 +192,12 @@ admit_join({error, _Reason}, View, _FromId, _Frame, _Ctx) ->
     %% same as any other frame this module doesn't recognise.
     {View, []}.
 
-%% @doc `ok' when `ctx()' carries no `realm_key_id' (ungated) or
+%% @doc `ok' when `ctx()' carries no `realm_key_id' (ungated), or when
 %% `Frame' presents an endorsement for (realm(Ctx), ClaimedMember) that
 %% verifies under the ctx `profile', signed by the realm key with that
-%% key id. `{error, Reason}' otherwise.
+%% key id, and the ctx `member_standing' then answers `ok' for
+%% ClaimedMember. `{error, Reason}' otherwise; a gated ctx without
+%% `member_standing' gives `{error, no_member_standing}'.
 -spec check_admission(macula_frame:frame(), peer(), ctx()) ->
         ok | {error, term()}.
 check_admission(Frame, ClaimedMember, Ctx) ->
@@ -193,7 +207,14 @@ verify_admission(error, _Frame, _ClaimedMember, _Ctx) ->
     ok;
 verify_admission({ok, RealmKeyId}, Frame, ClaimedMember, #{profile := Profile} = Ctx) ->
     Trust = #{profile => Profile, realm => realm(Ctx), realm_key_id => RealmKeyId},
-    verify_record(maps:find(record, Frame), Trust, ClaimedMember).
+    standing(verify_record(maps:find(record, Frame), Trust, ClaimedMember), maps:find(member_standing, Ctx),
+             ClaimedMember).
+
+%% Standing is asked only of a member whose endorsement verified, so a
+%% refused frame never costs a slot lookup.
+standing(ok, {ok, Standing}, ClaimedMember) -> Standing(ClaimedMember);
+standing(ok, error, _ClaimedMember) -> {error, no_member_standing};
+standing({error, _} = Refusal, _Standing, _ClaimedMember) -> Refusal.
 
 verify_record(error, _Trust, _ClaimedMember) ->
     {error, missing_endorsement};

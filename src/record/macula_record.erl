@@ -205,9 +205,12 @@
 %% stations within minutes, long enough that a one-minute refresh keeps
 %% it live.
 -define(STATION_ENDPOINT_TTL_MS, 5 * 60 * 1000).
-%% A realm member endorsement's window, valid_from to valid_until, is at most 30 days, so one endorsement admits its
-%% member for at most that long. A builder given no valid_until takes the whole window.
--define(MAX_ENDORSEMENT_WINDOW_MS, 30 * 24 * 60 * 60 * 1000).
+%% A realm member endorsement's window, valid_from to valid_until, is at most 24 hours, so one endorsement admits its
+%% member for at most that long even where the realm's tombstone never arrives (macula#118; the removal bound of
+%% DECISIONS_POST_QUANTUM.md, decided 2026-09-22). A builder given no valid_from starts the window one clock
+%% tolerance in the past, so a verifier whose clock is behind the realm's does not refuse a fresh endorsement as not
+%% yet valid; given no valid_until it takes the whole window.
+-define(MAX_ENDORSEMENT_WINDOW_MS, 24 * 60 * 60 * 1000).
 %% A station authorization's window, valid_from to valid_until, is at most 30 minutes: a deliberate tightening
 %% for infrastructure identities (macula-station#63; the window bounds the worst-case refusal tail once the realm
 %% stops reissuing). Its lifetime, created_at to expires_at, is the same bound.
@@ -272,8 +275,10 @@ realm_stations(RealmId, Entries, Opts) when is_binary(RealmId), byte_size(RealmI
     unsigned(?TYPE_REALM_STATIONS, realm_stations_payload(RealmId, Entries), Opts).
 
 %% @doc A realm's statement, signed by the realm key, that a node is a member with roles. Its window, valid_from to
-%% valid_until, is at most 30 days and never ends before it starts: a longer one raises a badmatch on
-%% `{error, endorsement_window_too_long}', and a reversed one on `{error, endorsement_window_reversed}'.
+%% valid_until, is at most 24 hours and never ends before it starts: a longer one raises a badmatch on
+%% `{error, endorsement_window_too_long}', and a reversed one on `{error, endorsement_window_reversed}'. Without a
+%% valid_from the window starts one clock tolerance (clock_tolerance_ms/0) before now; without a valid_until it ends
+%% 24 hours after valid_from.
 -spec realm_member_endorsement(<<_:256>>, #{realm := <<_:256>>, member_node := <<_:256>>, roles := [binary()]}) ->
           m_record().
 realm_member_endorsement(RealmId, Spec) ->
@@ -285,7 +290,7 @@ realm_member_endorsement(RealmId, #{realm := RealmId, member_node := Member, rol
   when is_binary(RealmId), byte_size(RealmId) =:= 32, is_binary(Member), byte_size(Member) =:= 32,
        is_list(Roles) ->
     Now = erlang:system_time(millisecond),
-    ValidFrom = maps:get(valid_from, Opts, Now),
+    ValidFrom = maps:get(valid_from, Opts, Now - ?CLOCK_TOLERANCE_MS),
     ValidUntil = maps:get(valid_until, Opts, ValidFrom + ?MAX_ENDORSEMENT_WINDOW_MS),
     ok = endorsement_window(ValidFrom, ValidUntil),
     unsigned(?TYPE_REALM_MEMBER_ENDORSEMENT,
@@ -295,7 +300,7 @@ endorsement_window(From, Until) when Until < From -> {error, endorsement_window_
 endorsement_window(From, Until) when Until - From > ?MAX_ENDORSEMENT_WINDOW_MS -> {error, endorsement_window_too_long};
 endorsement_window(_From, _Until) -> ok.
 
-%% @doc The longest window a realm member endorsement may have, valid_from to valid_until, in milliseconds: 30 days.
+%% @doc The longest window a realm member endorsement may have, valid_from to valid_until, in milliseconds: 24 hours.
 %% Its builder refuses a longer one, and macula_hyparview_endorsement:verify_endorsement/3 refuses one it receives.
 -spec max_endorsement_window_ms() -> pos_integer().
 max_endorsement_window_ms() ->

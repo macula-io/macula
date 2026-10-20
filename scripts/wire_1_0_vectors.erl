@@ -291,11 +291,7 @@ builtin_payloads(P, Keys) ->
      {<<"realm_directory">>, 16#03, realm, realm_directory_payload(Realm, Id(realm))},
      {<<"realm_stations">>, 16#04, realm,
       payload(macula_record:realm_stations(Realm, [#{station_id => Id(station_identity), roles => [<<"seed">>]}]))},
-     {<<"realm_member_endorsement">>, 16#05, realm,
-      payload(macula_record:realm_member_endorsement(Realm, (maps:merge(#{realm => Realm,
-                                                                           member_node => Id(client_identity),
-                                                                           roles => [<<"member">>]}, #{})),
-                                                     Window))},
+     {<<"realm_member_endorsement">>, 16#05, realm, endorsement_payload(Realm, Id(client_identity))},
      {<<"procedure_advertisement">>, 16#06, client_identity,
       payload(macula_record:procedure_advertisement(Id(client_identity), Realm, <<"example.procedure">>,
                                                     [Id(station_identity)]))},
@@ -327,6 +323,16 @@ builtin_payloads(P, Keys) ->
                                          org_directory => OrgDirectory}))}].
 
 payload(#{payload := Payload}) -> Payload.
+
+%% The realm member endorsement vector pins the record's encoding, not the window rule, and its 25-hour window
+%% (?T0 - ?HOUR to ?T0 + ?DAY) predates the 24-hour maximum (macula#118). The builder now refuses that window, so the
+%% payload is built inside it and its valid_until put back: the committed bytes, which every SDK reads, stay as they
+%% are. An endorsement verifier refuses this window as endorsement_window_too_long; a record verifier does not read it.
+endorsement_payload(Realm, Member) ->
+    Payload = payload(macula_record:realm_member_endorsement(Realm, #{realm => Realm, member_node => Member,
+                                                                      roles => [<<"member">>]},
+                                                             #{valid_from => ?T0 - ?HOUR, valid_until => ?T0})),
+    Payload#{{text, <<"valid_until">>} := ?T0 + ?DAY}.
 
 %% The foundation seed list and parameter builders copy the record's own version into their payload's `version', and
 %% that record comes from a constructor whose version is minted from the wall clock: a payload carrying a generation

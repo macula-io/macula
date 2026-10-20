@@ -9,6 +9,11 @@
 %% slot is shared among signers, so slot_endorsement/3,4 reads it from the entries a lookup of that slot returns and
 %% takes only the realm key's entry: an endorsement or a tombstone under any other key changes nothing.
 %%
+%% An endorsement a peer presents proves the realm admitted it, not that it still is a member: revocation does not
+%% invalidate an issued endorsement. slot_standing/2 builds the standing check an overlay's admission makes after the
+%% presented endorsement verifies (macula_hyparview_proto, the member_standing of its ctx), from a lookup the caller
+%% supplies: the realm key's tombstone in the member's slot refuses it as withdrawn (macula#118).
+%%
 %% == Acceptance rules ==
 %%
 %% <ul>
@@ -20,14 +25,15 @@
 %%   <li>The payload member_node equals the node_id the joining peer claims, so no peer can present another member's
 %%       endorsement.</li>
 %%   <li>valid_from is at most now and valid_until at least now: the endorsement is active.</li>
-%%   <li>valid_until is not before valid_from, and at most 30 days after it
+%%   <li>valid_until is not before valid_from, and at most 24 hours after it
 %%       (macula_record:max_endorsement_window_ms/0).</li>
 %% </ul>
 -module(macula_hyparview_endorsement).
 
--export([verify_endorsement/3, verify_endorsement/4, slot_endorsement/3, slot_endorsement/4, build_join/3]).
+-export([verify_endorsement/3, verify_endorsement/4, slot_endorsement/3, slot_endorsement/4, slot_standing/2,
+         build_join/3]).
 
--export_type([trust/0, verify_error/0, slot_error/0]).
+-export_type([trust/0, verify_error/0, slot_error/0, slot_lookup/0, standing/0]).
 
 -define(TYPE_REALM_MEMBER_ENDORSEMENT, 16#05).
 -define(TYPE_TOMBSTONE, 16#0C).
@@ -51,6 +57,12 @@
 %% What a slot's entries give instead of an endorsement: no entry under the realm key, the realm key's tombstone of
 %% this member's endorsement, or a refusal of the realm key's entry.
 -type slot_error() :: not_found | withdrawn | verify_error().
+
+%% A lookup of a member's endorsement slot by its storage key: the records it holds, as macula:find_records/2 answers.
+-type slot_lookup() :: fun((binary()) -> {ok, [macula_record:m_record()]} | {error, term()}).
+
+%% A member's standing in the realm, as an overlay's admission asks it: ok, or why not.
+-type standing() :: fun((node_id()) -> ok | {error, slot_error() | lookup_failed}).
 
 %% @doc Verify that an endorsement, as its wire form or its {key, tbs, signature} map, admits Member to the realm that
 %% Trust names. Returns {ok, Roles} with the endorsed roles, or {error, Reason}; callers treat any error as a refusal
@@ -97,6 +109,25 @@ slot_endorsement(Entries, #{profile := Profile, realm := <<_:256>>, realm_key_id
                  <<_:256>> = Member, Now) when is_list(Entries), is_integer(Now) ->
     {Entry, Stats} = macula_record:signer_entry(Entries, {key_id, RealmKeyId}, Profile, Now),
     {slot_entry(Entry, Trust, Member, Now), Stats}.
+
+%% @doc The standing check that reads a member's slot through Lookup, typically
+%% `fun(Key) -> macula:find_records(Pool, Key) end': ok while the realm key's entry there is an endorsement that admits
+%% the member now (slot_endorsement/3), {error, withdrawn} while the realm key's tombstone of it lives, the slot's other
+%% refusals by name, and {error, lookup_failed} when the lookup fails, so an admission gated on it fails closed.
+-spec slot_standing(slot_lookup(), trust()) -> standing().
+slot_standing(Lookup, #{realm := <<_:256>> = Realm} = Trust) when is_function(Lookup, 1) ->
+    fun(<<_:256>> = Member) ->
+        slot_read(Lookup(macula_record:realm_member_endorsement_key(Realm, Member)), Trust, Member)
+    end.
+
+slot_read({ok, Records}, Trust, Member) when is_list(Records) ->
+    {Outcome, _Stats} = slot_endorsement([macula_record:encode(R) || R <- Records], Trust, Member),
+    standing_of(Outcome);
+slot_read(_Failed, _Trust, _Member) ->
+    {error, lookup_failed}.
+
+standing_of({ok, _Roles}) -> ok;
+standing_of({error, _} = Refusal) -> Refusal.
 
 slot_entry({ok, #{type := ?TYPE_TOMBSTONE} = Tombstone}, Trust, Member, _Now) ->
     withdrawn(macula_record:read_tombstone(Tombstone), Trust, Member);

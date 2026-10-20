@@ -57,6 +57,7 @@ build_station(Name, Realms, Router) ->
 gated_ctx(Realm, RealmKey, NodeId) ->
     #{self_id => NodeId, realm => Realm, now => 0,
       realm_key_id => macula_node_keys:key_id(RealmKey), profile => ?PROFILE,
+      member_standing => fun(_Member) -> ok end,
       self_endorsement => endorsement(Realm, RealmKey, NodeId)}.
 
 %%=====================================================================

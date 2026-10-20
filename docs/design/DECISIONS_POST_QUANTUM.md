@@ -1021,8 +1021,10 @@ before its wire checks are green.
     would make every member refresh from the realm every 15 minutes and turn the realm's availability into every
     member's availability. That is the failure the fleet already has with `org_directory`, where a realm roll left
     services unable to advertise for up to two hours.
-  - The 30-day cap in `macula_record:max_endorsement_window_ms/0` stays as the record layer's outer limit; 24 hours
-    is this use's limit and the issuer's rule.
+  - The 24-hour limit is enforced in `macula_record:max_endorsement_window_ms/0` since macula#118, at the builder and
+    at every endorsement verifier, so an endorsement issued under the old 30-day cap admits nobody. Overlay admission
+    asks the member's standing after the endorsement verifies (`macula_hyparview_endorsement:slot_standing/2` reads
+    the slot), so a stored tombstone refuses at once and a withheld one at the endorsement's end.
 - **Consequences when `enforce` is on:** the all-zero realm demo path stops working, and with it `macula-mcp` device
   auto-join out of the box, the `mcl-*` services and `macula-e2e`, each of which needs an invite first. The other
   SDKs follow in tier 2.
