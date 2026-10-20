@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [16.0.0] - 2026-10-20
+
+A revoked realm member stops being admitted within 24 hours, even where the realm's tombstone never arrives
+(macula#118). Major: a gated overlay context must now pass `member_standing`, or it admits nobody, and a
+realm member endorsement whose window is longer than 24 hours no longer verifies.
+
 ### Security (breaking)
 
 - **A revoked member's realm endorsement stops admitting it: at once where the realm's tombstone is stored, within
