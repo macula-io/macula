@@ -30,6 +30,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A discovered station whose `node_id` arrives as 64 lowercase hex characters is dialled, not dropped.**
+  `macula_client:seed_from_fields/4` accepted a directory row's `node_id` only as 32 raw bytes, so a
+  `mcl-stations/list_stations` row carrying the hex form the rest of the stack uses was skipped row by row, with
+  no error, and a pool that discovers its stations through `list_stations` found none (macula#121). Both shapes
+  name the same node and are accepted; what a seed pins is always the 32 bytes, and 64 bytes that are not
+  lowercase hex are still refused.
+- **A provider pinned to stations advertises only those.** With `stations => [S]` the procedure is registered on
+  the link to `S` and on no other, but the signed `procedure_advertisement` listed every station the pool was
+  linked to. A caller resolving that record can dial a station that holds no registration, which then forwards
+  every call to the one that does; on a three-station mesh, every provider pinned away from the first station in
+  sorted order was reachable only through that forward (macula#116). The registration now carries the pin, so a
+  respawned link and a renewal name it too; an unpinned registration is unchanged.
 - **The release version names the app's version again.** `rebar.config` declared the relx release as 3.0.0 while
   `src/macula.app.src` was 15.6.0, so a release built from this tree is labelled 3.0.0 while every other place
   calls it 15.6.0, and the release guard (macula-ci-images#5) refuses a `v15` tag whose versions disagree.
