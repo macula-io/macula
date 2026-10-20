@@ -671,6 +671,9 @@ node_ids(_NotANodeIdList, _Stations) -> {error, {stations, malformed}}.
 %% stations. A longer pin would be cut to fit, leaving stations that hold a
 %% registration the published record never names -- the call to them is
 %% forwarded, which is what the pin exists to avoid -- so it is refused.
+%% Checked here, before the chain is resolved and any DHT call is made, and
+%% again by `macula_client:advertise/8', which a caller may reach without
+%% this facade.
 within_the_record_limit(Count, Stations) ->
     case Count =< macula_record:max_serving_stations() of
         true  -> {ok, Stations};

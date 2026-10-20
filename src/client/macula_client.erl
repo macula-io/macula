@@ -1037,10 +1037,12 @@ advertise(Pool, Realm, Procedure, Handler, Policy, EncodedAd, Stations, Renew)
         orelse EncodedAd =:= undefined),
        (Stations =:= all orelse (is_list(Stations) andalso Stations =/= [])),
        ?IS_RENEW(Renew) ->
-    gen_server:call(Pool, {advertise, Realm, Procedure,
-                           #{handler => Handler, policy => Policy, ad => EncodedAd,
-                             stations => Stations, renew => Renew}},
-                    5_000).
+    pinned_registration(Stations, fun(Pinned) ->
+        gen_server:call(Pool, {advertise, Realm, Procedure,
+                               #{handler => Handler, policy => Policy, ad => EncodedAd,
+                                 stations => Pinned, renew => Renew}},
+                        5_000)
+    end).
 
 %% @doc Drop a previously-advertised procedure on every healthy link
 %% and remove it from the pool's replay state. Idempotent.
@@ -1180,11 +1182,13 @@ advertise_stream(Pool, Realm, Procedure, Mode, Handler, Policy, EncodedAd, Stati
         orelse EncodedAd =:= undefined),
        (Stations =:= all orelse (is_list(Stations) andalso Stations =/= [])),
        ?IS_RENEW(Renew) ->
-    gen_server:call(Pool,
-                    {advertise_stream, Realm, Procedure,
-                     #{mode => Mode, handler => Handler, policy => Policy, ad => EncodedAd,
-                       stations => Stations, renew => Renew}},
-                    5_000).
+    pinned_registration(Stations, fun(Pinned) ->
+        gen_server:call(Pool,
+                        {advertise_stream, Realm, Procedure,
+                         #{mode => Mode, handler => Handler, policy => Policy, ad => EncodedAd,
+                           stations => Pinned, renew => Renew}},
+                        5_000)
+    end).
 
 %% @doc Drop a streaming procedure on every healthy link and remove
 %% it from the pool's replay state. Idempotent.
@@ -2352,6 +2356,20 @@ advertisement_sent({Realm, Proc}, #{ad := undefined}, _Pids, S) ->
     registration_answered({advertise, Realm, Proc}, accepted, S);
 advertisement_sent({Realm, Proc}, _Registration, Pids, S) ->
     registration_sent({advertise, Realm, Proc}, Pids, S).
+
+%% A pin is deduped and bounded as it comes in, on every path that carries one: an advertisement names at most
+%% `macula_record:max_serving_stations()' stations, and a longer pin is refused rather than cut to fit, since the
+%% stations past the cut would hold a registration the published record never names and every call to them would
+%% ride a forward -- the very thing the pin exists to avoid (macula#116). The link keeps its own bound for what
+%% reaches it without this door: a pre-signed advertisement already names its stations and is not pinned.
+pinned_registration(all, Register) ->
+    Register(all);
+pinned_registration(Stations, Register) ->
+    Pinned = lists:usort(Stations),
+    case length(Pinned) =< macula_record:max_serving_stations() of
+        true  -> Register(Pinned);
+        false -> {error, {stations, too_many}}
+    end.
 
 %% A registration pinned to `stations' carries the pin in its spec, so the advertisement each of those links
 %% signs names exactly those stations and no other: the procedure is registered on those links alone, and a

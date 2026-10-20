@@ -59,8 +59,8 @@ a_pinned_registration_names_only_its_own_station_test_() ->
          {ok, Links} = macula_client:links(Pool),
          %% Each link's peer is the station it is pinned to, as a completed
          %% handshake leaves it: its seed's node id, <<1:256>> and <<2:256>>.
-         _ = [connect_to(Pid, Pinned) || #{pid := Pid, seed := #{expected_node_id := Pinned}} <- Links],
          Pinned = <<2:256>>,
+         _ = [connect_to(Pid, Station) || #{pid := Pid, seed := #{expected_node_id := Station}} <- Links],
          ok = macula_client:advertise(Pool, ?REALM, ?PROCEDURE,
                                       fun(_) -> {ok, counted} end, open, spec(), [Pinned], undefined),
          ?assertEqual([[Pinned]], sent_stations(1)),
@@ -77,8 +77,8 @@ a_pinned_registration_still_names_only_its_station_after_a_renewal_test_() ->
      fun() ->
          Pool = pool(),
          {ok, Links} = macula_client:links(Pool),
-         _ = [connect_to(Pid, Pinned) || #{pid := Pid, seed := #{expected_node_id := Pinned}} <- Links],
          Pinned = <<2:256>>,
+         _ = [connect_to(Pid, Station) || #{pid := Pid, seed := #{expected_node_id := Station}} <- Links],
          Longer = spec(),
          Renewed = Longer#{not_after => erlang:system_time(millisecond) + 7_200_000},
          ok = macula_client:advertise(Pool, ?REALM, ?PROCEDURE,
@@ -86,6 +86,27 @@ a_pinned_registration_still_names_only_its_station_after_a_renewal_test_() ->
                                       {?MODULE, renewal_spec, [Renewed]}),
          ?assertEqual([[Pinned]], sent_stations(1)),
          renewal_due(Pool, {?REALM, ?PROCEDURE}),
+         ?assertEqual([[Pinned]], sent_stations(1)),
+         ok = macula_client:close(Pool)
+     end}.
+
+%% A pin is deduped and bounded at the client too, not only in the
+%% facade: [A, A] is one station, and a pin longer than an advertisement
+%% can name is refused rather than cut to fit (macula#116).
+a_pin_is_deduped_and_bounded_test_() ->
+    {timeout, 10,
+     fun() ->
+         Pool = pool(),
+         {ok, Links} = macula_client:links(Pool),
+         Pinned = <<2:256>>,
+         _ = [connect_to(Pid, Station) || #{pid := Pid, seed := #{expected_node_id := Station}} <- Links],
+         Handler = fun(_) -> {ok, counted} end,
+         TooMany = [<<N:256>> || N <- lists:seq(1, macula_record:max_serving_stations() + 1)],
+         ?assertEqual({error, {stations, too_many}},
+                      macula_client:advertise(Pool, ?REALM, ?PROCEDURE, Handler, open, spec(),
+                                              TooMany, undefined)),
+         ok = macula_client:advertise(Pool, ?REALM, ?PROCEDURE, Handler, open, spec(),
+                                      [Pinned, Pinned], undefined),
          ?assertEqual([[Pinned]], sent_stations(1)),
          ok = macula_client:close(Pool)
      end}.
