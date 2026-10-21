@@ -321,3 +321,27 @@ jobs:
           cargo clippy --manifest-path native/macula_mri_nif/Cargo.toml --all-targets --locked -- -D warnings
           cargo clippy --manifest-path native/macula_quic/Cargo.toml --all-targets --locked -- -D warnings
           cargo clippy --manifest-path scripts/e2e_seal_vectors/Cargo.toml --all-targets --locked -- -D warnings
+
+  # A dependency this package ships with a published advisory fails the build
+  # (macula-codebase-checks#11). Erlang reads the resolved rebar.lock: a rebar3
+  # project commits none, so the build's own lock is what the scanner receives.
+  advisories-erlang:
+    name: Dependency advisories (erlang)
+    permissions:
+      contents: read
+    uses: macula-io/macula-ci-images/.github/workflows/dependency-advisories.yml@dbc9533eb409c2118f45110613160060cc582f5d
+    with:
+      ecosystem: erlang
+      otp-version: '28.4.3'
+      rebar3-version: '3.27.0'
+
+  # The same for the four Rust NIF crates, which build from source and ship in
+  # the package: each has its own Cargo.lock, so each is its own job.
+  advisories-rust:
+    name: Dependency advisories (rust)
+    permissions:
+      contents: read
+    uses: macula-io/macula-ci-images/.github/workflows/dependency-advisories.yml@dbc9533eb409c2118f45110613160060cc582f5d
+    with:
+      ecosystem: rust
+      working-directories: '["native/macula_cbor_nif","native/macula_crypto_nif","native/macula_mri_nif","native/macula_quic"]'
