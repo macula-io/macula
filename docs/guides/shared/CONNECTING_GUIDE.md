@@ -252,12 +252,14 @@ init([]) ->
     {ok, Seeds} = application:get_env(my_app, relay_seeds),
     {ok, KeyPath} = application:get_env(my_app, node_key_path),
     {ok, Profile} = macula_crypto_profile:configured(),
-    {ok, NodeIdentity} = macula_node_keys:load(KeyPath, identity, Profile),
 
+    %% A loader, never the key: a supervisor logs the child spec when a start
+    %% fails, so the spec says where the key is and the pool loads it.
     Pool = macula:child_spec(
              mesh_pool,
              Seeds,
-             #{node_identity => NodeIdentity, replication_factor => 2}),
+             #{node_identity => {macula_node_keys, load, [KeyPath, identity, Profile]},
+               replication_factor => 2}),
 
     {ok, {#{strategy => one_for_one,
             intensity => 5,

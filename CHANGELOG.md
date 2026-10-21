@@ -16,7 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (macula-codebase-checks#8). The check found, and this fixes: three example MRIs the validator refuses
   (`counter-v1.2.0`, `events.orders.created`, `api.users.get`: a segment holds no dot), `macula_mri:validate/1`'s
   unknown-type error and `macula_mri:type/1` of a service MRI shown wrongly, a supervisor example passing
-  `identity` where the client takes `node_identity`, store and graph behaviour listings missing callbacks the
+  `identity` where the client takes `node_identity` (now a loader, as `child_spec/3` requires, never the key), store and graph behaviour listings missing callbacks the
   behaviours have (`list_by_realm`, `import`, `export`, `all_related`, `get_relationship`, the taxonomy
   queries), and RPC spec listings whose types did not exist. Every fence now names its language.
 
