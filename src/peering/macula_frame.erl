@@ -2739,98 +2739,122 @@ entry_valid([{Field, Rule} | Rules], Entry) ->
 -spec received_rules(atom()) ->
     #{required := [{atom(), term()}], one_of := [[{atom(), term()}]], optional := [{atom(), term()}]}
   | unknown_type.
-received_rules(goodbye) ->
+received_rules(Type) ->
+    membership_rules(Type).
+
+%% Membership and liveness.
+membership_rules(goodbye) ->
     base_rules([{reason, reason}], [{detail, {optional, {utf8_max, ?MAX_GOODBYE_DETAIL_BYTES}}}]);
-received_rules(swim_ping) ->
+membership_rules(swim_ping) ->
     base_rules([{round, non_neg}, {incarnation, non_neg}], [{piggyback, {optional, {list_of, swim_update_rule()}}}]);
-received_rules(swim_ack) ->
+membership_rules(swim_ack) ->
     base_rules([{round, non_neg}, {responder, key}, {incarnation, non_neg}],
                [{piggyback, {optional, {list_of, swim_update_rule()}}}]);
-received_rules(swim_ping_req) ->
+membership_rules(swim_ping_req) ->
     base_rules([{round, non_neg}, {target, key}]);
-received_rules(Type) when Type =:= swim_suspect; Type =:= swim_confirm ->
+membership_rules(Type) when Type =:= swim_suspect; Type =:= swim_confirm ->
     base_rules([{target, key}, {target_incarnation, non_neg}, {suspected_by, key}, {ttl, non_neg}]);
-received_rules(Type) when Type =:= ping; Type =:= pong; Type =:= liveness_ping; Type =:= liveness_pong ->
+membership_rules(Type) when Type =:= ping; Type =:= pong; Type =:= liveness_ping; Type =:= liveness_pong ->
     base_rules([{nonce, id16}]);
-received_rules(find_node) ->
+membership_rules(Type) ->
+    dht_rules(Type).
+
+%% The DHT.
+dht_rules(find_node) ->
     base_rules([{key, key}, {origin, key}, {depth, non_neg}]);
-received_rules(nodes) ->
+dht_rules(nodes) ->
     base_rules([{key, key}, {nodes, {list_of, station_ref_rule()}}]);
-received_rules(find_value) ->
+dht_rules(find_value) ->
     base_rules([{key, key}, {origin, key}], [{'after', {optional, key}}]);
-received_rules(value) ->
+dht_rules(value) ->
     base_rules([{key, key}, {records, {list_of, binary}}], [{next, {optional, key}}]);
-received_rules(store) ->
+dht_rules(store) ->
     base_rules([{record, binary}]);
-received_rules(store_ack) ->
+dht_rules(store_ack) ->
     base_rules([{key, key}, {signer, key}, {record_version, id16}, {stored, boolean}]);
-received_rules(store_refresh) ->
+dht_rules(store_refresh) ->
     base_rules([{key, key}, {signer, key}, {record_version, id16},
                 {created_at, non_neg}, {expires_at, non_neg}, {signature, binary}]);
-received_rules(register_ack) ->
+dht_rules(register_ack) ->
     (base_rules([{realm, key}, {kind, {one_of, [unknown | ?REGISTER_KINDS]}},
                  {name, {utf8_between, 1, ?MAX_REGISTER_NAME_BYTES}}, {accepted, boolean}],
                 [{reason, {optional, {one_of, ?REGISTER_REFUSALS}}}]))#{one_of := [[{record_version, id16}, {subscriber, key}]]};
-received_rules(Type) when Type =:= call; Type =:= stream_open ->
+dht_rules(Type) ->
+    call_rules(Type).
+
+%% Calls and streams.
+call_rules(Type) when Type =:= call; Type =:= stream_open ->
     signed_rules([{request, object}], [], [{source_route, {optional, binary}}, {retry_budget, {optional, non_neg}}]);
-received_rules(result) ->
+call_rules(result) ->
     signed_rules([{reply, object}], [], [{source_route_reverse, {optional, binary}}]);
-received_rules(error) ->
+call_rules(error) ->
     signed_rules([], [[{reply, object}, {relay_error, object}]],
                  [{source_route_reverse, {optional, binary}}, {source_route_partial, {optional, binary}}]);
-received_rules(hyparview_join) ->
-    base_rules([{realm, key}, {new_member, key}], [{record, {optional, binary}}]);
-received_rules(hyparview_forward_join) ->
-    base_rules([{realm, key}, {new_member, key}, {ttl, non_neg}, {arwl, non_neg}, {prwl, non_neg}],
-               [{record, {optional, binary}}]);
-received_rules(hyparview_neighbor) ->
-    base_rules([{realm, key}, {priority, {one_of, [high, low]}}], [{record, {optional, binary}}]);
-received_rules(hyparview_disconnect) ->
-    base_rules([{realm, key}]);
-received_rules(hyparview_shuffle) ->
-    base_rules([{realm, key}, {origin, key}, {ttl, non_neg}, {peer_sample, list}]);
-received_rules(hyparview_shuffle_reply) ->
-    base_rules([{realm, key}, {peer_sample, list}]);
-received_rules(plumtree_gossip) ->
-    signed_rules([{publication, object}, {round, non_neg}], [], []);
-received_rules(Type) when Type =:= plumtree_ihave; Type =:= plumtree_graft ->
-    base_rules([{realm, key}, {msg_id, hash48}, {round, non_neg}]);
-received_rules(plumtree_prune) ->
-    base_rules([{realm, key}]);
-received_rules(overlay_relay) ->
-    base_rules([{peer, key}, {payload, binary}]);
-received_rules(publish) ->
-    signed_rules([{publication, object}], [], []);
-received_rules(subscribe) ->
-    base_rules([{realm, key}, {topic, {utf8_max, ?MAX_TOPIC_BYTES}}, {subscriber, key}], [{options, {optional, map}}]);
-received_rules(unsubscribe) ->
-    base_rules([{realm, key}, {topic, {utf8_max, ?MAX_TOPIC_BYTES}}, {subscriber, key}]);
-received_rules(event) ->
-    signed_rules([{publication, object}, {delivered_via, {one_of, [plumtree, direct]}}], [], []);
-received_rules(advertise) ->
-    base_rules([{advertisement, binary}]);
-received_rules(unadvertise) ->
-    base_rules([{withdrawal, binary}]);
-received_rules(Type) when Type =:= stream_data; Type =:= stream_end ->
+call_rules(Type) when Type =:= stream_data; Type =:= stream_end ->
     signed_rules([], [[{stream, object}, {caller_stream, object}]], []);
-received_rules(stream_error) ->
+call_rules(stream_error) ->
     signed_rules([], [[{stream, object}, {caller_stream, object}, {relay_error, object}]],
                  [{source_route_partial, {optional, binary}}]);
-received_rules(stream_reply) ->
+call_rules(stream_reply) ->
     signed_rules([{stream, object}], [], []);
-received_rules(want) ->
+call_rules(Type) ->
+    overlay_rules(Type).
+
+%% The overlay.
+overlay_rules(hyparview_join) ->
+    base_rules([{realm, key}, {new_member, key}], [{record, {optional, binary}}]);
+overlay_rules(hyparview_forward_join) ->
+    base_rules([{realm, key}, {new_member, key}, {ttl, non_neg}, {arwl, non_neg}, {prwl, non_neg}],
+               [{record, {optional, binary}}]);
+overlay_rules(hyparview_neighbor) ->
+    base_rules([{realm, key}, {priority, {one_of, [high, low]}}], [{record, {optional, binary}}]);
+overlay_rules(hyparview_disconnect) ->
+    base_rules([{realm, key}]);
+overlay_rules(hyparview_shuffle) ->
+    base_rules([{realm, key}, {origin, key}, {ttl, non_neg}, {peer_sample, list}]);
+overlay_rules(hyparview_shuffle_reply) ->
+    base_rules([{realm, key}, {peer_sample, list}]);
+overlay_rules(plumtree_gossip) ->
+    signed_rules([{publication, object}, {round, non_neg}], [], []);
+overlay_rules(Type) when Type =:= plumtree_ihave; Type =:= plumtree_graft ->
+    base_rules([{realm, key}, {msg_id, hash48}, {round, non_neg}]);
+overlay_rules(plumtree_prune) ->
+    base_rules([{realm, key}]);
+overlay_rules(overlay_relay) ->
+    base_rules([{peer, key}, {payload, binary}]);
+overlay_rules(Type) ->
+    pubsub_rules(Type).
+
+%% Pubsub and advertisements.
+pubsub_rules(publish) ->
+    signed_rules([{publication, object}], [], []);
+pubsub_rules(subscribe) ->
+    base_rules([{realm, key}, {topic, {utf8_max, ?MAX_TOPIC_BYTES}}, {subscriber, key}], [{options, {optional, map}}]);
+pubsub_rules(unsubscribe) ->
+    base_rules([{realm, key}, {topic, {utf8_max, ?MAX_TOPIC_BYTES}}, {subscriber, key}]);
+pubsub_rules(event) ->
+    signed_rules([{publication, object}, {delivered_via, {one_of, [plumtree, direct]}}], [], []);
+pubsub_rules(advertise) ->
+    base_rules([{advertisement, binary}]);
+pubsub_rules(unadvertise) ->
+    base_rules([{withdrawal, binary}]);
+pubsub_rules(Type) ->
+    content_rules(Type).
+
+%% Content exchange.
+content_rules(want) ->
     base_rules([{blocks, {list_of, {entry, [{mcid, mcid}, {priority, {optional, byte}}]}}}]);
-received_rules(have) ->
+content_rules(have) ->
     base_rules([{blocks, {list_of, {entry, [{mcid, mcid}, {size, non_neg}]}}}]);
-received_rules(block) ->
+content_rules(block) ->
     base_rules([{mcid, mcid}, {payload, binary}]);
-received_rules(manifest_req) ->
+content_rules(manifest_req) ->
     base_rules([{mcid, mcid}]);
-received_rules(manifest_res) ->
+content_rules(manifest_res) ->
     base_rules([{mcid, mcid}, {manifest, map}]);
-received_rules(cancel) ->
+content_rules(cancel) ->
     base_rules([{blocks, {list_of, mcid}}]);
-received_rules(_Unknown) ->
+content_rules(_Unknown) ->
     unknown_type.
 
 %% A frame base/2 builds: its own fields, and the header base/2 writes, each optional unless the type requires it.
@@ -3292,455 +3316,224 @@ frame_type_named(_Other) -> error.
 field_table(Type) ->
     (frame_table(Type))#{<<"ext">> => {ext, extensions}}.
 
-frame_table(goodbye) ->
+%% A frame of each type carries one of two headers and its own fields.
+%% Header `hop' is the per-hop envelope (frame id, time sent, realm, call id,
+%% source route); `envelope' is only the version and the frame type, for the
+%% frames whose payload is a signed object that carries the rest.
+frame_table(Type) ->
+    {Header, Fields} = membership_fields(Type),
+    maps:merge(header_fields(Header), Fields).
+
+header_fields(envelope) ->
+    #{<<"version">> => {version, value},
+      <<"frame_type">> => {frame_type, frame_type}};
+header_fields(hop) ->
     #{<<"version">> => {version, value},
       <<"frame_type">> => {frame_type, frame_type},
       <<"frame_id">> => {frame_id, value},
       <<"sent_at_ms">> => {sent_at_ms, uint},
       <<"realm">> => {realm, value},
       <<"call_id">> => {call_id, value},
-      <<"source_route">> => {source_route, value},
-      <<"reason">> => {reason, {bounded_text, ?MAX_GOODBYE_REASON_BYTES}},
-      <<"detail">> => {detail, value}};
-frame_table(swim_ping) ->
-    #{<<"version">> => {version, value},
-      <<"frame_type">> => {frame_type, frame_type},
-      <<"frame_id">> => {frame_id, value},
-      <<"sent_at_ms">> => {sent_at_ms, uint},
-      <<"realm">> => {realm, value},
-      <<"call_id">> => {call_id, value},
-      <<"source_route">> => {source_route, value},
-      <<"round">> => {round, uint},
-      <<"incarnation">> => {incarnation, uint},
-      <<"piggyback">> => {piggyback, {list_of, #{<<"target">> => {target, {bytes, 32}},
-          <<"state">> => {state, {swim_state, [alive, suspect, confirmed_failed]}},
-          <<"incarnation">> => {incarnation, uint},
-          <<"observed_at">> => {observed_at, uint},
-          <<"by">> => {by, {bytes, 32}}}}}};
-frame_table(swim_ack) ->
-    #{<<"version">> => {version, value},
-      <<"frame_type">> => {frame_type, frame_type},
-      <<"frame_id">> => {frame_id, value},
-      <<"sent_at_ms">> => {sent_at_ms, uint},
-      <<"realm">> => {realm, value},
-      <<"call_id">> => {call_id, value},
-      <<"source_route">> => {source_route, value},
-      <<"round">> => {round, uint},
-      <<"responder">> => {responder, {bytes, 32}},
-      <<"incarnation">> => {incarnation, uint},
-      <<"piggyback">> => {piggyback, {list_of, #{<<"target">> => {target, {bytes, 32}},
-          <<"state">> => {state, {swim_state, [alive, suspect, confirmed_failed]}},
-          <<"incarnation">> => {incarnation, uint},
-          <<"observed_at">> => {observed_at, uint},
-          <<"by">> => {by, {bytes, 32}}}}}};
-frame_table(swim_suspect) ->
-    #{<<"version">> => {version, value},
-      <<"frame_type">> => {frame_type, frame_type},
-      <<"frame_id">> => {frame_id, value},
-      <<"sent_at_ms">> => {sent_at_ms, uint},
-      <<"realm">> => {realm, value},
-      <<"call_id">> => {call_id, value},
-      <<"source_route">> => {source_route, value},
-      <<"target">> => {target, {bytes, 32}},
-      <<"target_incarnation">> => {target_incarnation, uint},
-      <<"suspected_by">> => {suspected_by, {bytes, 32}},
-      <<"ttl">> => {ttl, uint}};
-frame_table(swim_confirm) ->
-    #{<<"version">> => {version, value},
-      <<"frame_type">> => {frame_type, frame_type},
-      <<"frame_id">> => {frame_id, value},
-      <<"sent_at_ms">> => {sent_at_ms, uint},
-      <<"realm">> => {realm, value},
-      <<"call_id">> => {call_id, value},
-      <<"source_route">> => {source_route, value},
-      <<"target">> => {target, {bytes, 32}},
-      <<"target_incarnation">> => {target_incarnation, uint},
-      <<"suspected_by">> => {suspected_by, {bytes, 32}},
-      <<"ttl">> => {ttl, uint}};
-frame_table(swim_ping_req) ->
-    #{<<"version">> => {version, value},
-      <<"frame_type">> => {frame_type, frame_type},
-      <<"frame_id">> => {frame_id, value},
-      <<"sent_at_ms">> => {sent_at_ms, uint},
-      <<"realm">> => {realm, value},
-      <<"call_id">> => {call_id, value},
-      <<"source_route">> => {source_route, value},
-      <<"round">> => {round, uint},
-      <<"target">> => {target, {bytes, 32}}};
-frame_table(ping) ->
-    #{<<"version">> => {version, value},
-      <<"frame_type">> => {frame_type, frame_type},
-      <<"frame_id">> => {frame_id, value},
-      <<"sent_at_ms">> => {sent_at_ms, uint},
-      <<"realm">> => {realm, value},
-      <<"call_id">> => {call_id, value},
-      <<"source_route">> => {source_route, value},
-      <<"nonce">> => {nonce, value}};
-frame_table(Type) when Type =:= liveness_ping; Type =:= liveness_pong ->
-    frame_table(ping);
-frame_table(pong) ->
-    #{<<"version">> => {version, value},
-      <<"frame_type">> => {frame_type, frame_type},
-      <<"frame_id">> => {frame_id, value},
-      <<"sent_at_ms">> => {sent_at_ms, uint},
-      <<"realm">> => {realm, value},
-      <<"call_id">> => {call_id, value},
-      <<"source_route">> => {source_route, value},
-      <<"nonce">> => {nonce, value}};
-frame_table(find_node) ->
-    #{<<"version">> => {version, value},
-      <<"frame_type">> => {frame_type, frame_type},
-      <<"frame_id">> => {frame_id, value},
-      <<"sent_at_ms">> => {sent_at_ms, uint},
-      <<"realm">> => {realm, value},
-      <<"call_id">> => {call_id, value},
-      <<"source_route">> => {source_route, value},
-      <<"key">> => {key, value},
-      <<"origin">> => {origin, {bytes, 32}},
-      <<"depth">> => {depth, uint}};
-frame_table(nodes) ->
-    #{<<"version">> => {version, value},
-      <<"frame_type">> => {frame_type, frame_type},
-      <<"frame_id">> => {frame_id, value},
-      <<"sent_at_ms">> => {sent_at_ms, uint},
-      <<"realm">> => {realm, value},
-      <<"call_id">> => {call_id, value},
-      <<"source_route">> => {source_route, value},
-      <<"key">> => {key, value},
-      <<"nodes">> => {nodes, {list_of, #{<<"node_id">> => {node_id, {bytes, 32}},
-          <<"station_id">> => {station_id, {bytes, 32}},
-          <<"addresses">> => {addresses, {list_of, #{<<"host">> => {host, bytes}, <<"port">> => {port, uint},
-                                                     <<"transport">> => {transport, {enum, [quic]}}}}},
-          <<"tier">> => {tier, uint},
-          <<"asn">> => {asn, {optional, uint}},
-          <<"country">> => {country, {bytes, 2}},
-          <<"last_seen_at">> => {last_seen_at, uint}}}}};
-frame_table(find_value) ->
-    #{<<"version">> => {version, value},
-      <<"frame_type">> => {frame_type, frame_type},
-      <<"frame_id">> => {frame_id, value},
-      <<"sent_at_ms">> => {sent_at_ms, uint},
-      <<"realm">> => {realm, value},
-      <<"call_id">> => {call_id, value},
-      <<"source_route">> => {source_route, value},
-      <<"key">> => {key, value},
-      <<"origin">> => {origin, {bytes, 32}},
-      <<"after">> => {'after', bytes}};
-frame_table(value) ->
-    #{<<"version">> => {version, value},
-      <<"frame_type">> => {frame_type, frame_type},
-      <<"frame_id">> => {frame_id, value},
-      <<"sent_at_ms">> => {sent_at_ms, uint},
-      <<"realm">> => {realm, value},
-      <<"call_id">> => {call_id, value},
-      <<"source_route">> => {source_route, value},
-      <<"key">> => {key, value},
-      <<"records">> => {records, value},
-      <<"next">> => {next, bytes}};
-frame_table(store) ->
-    #{<<"version">> => {version, value},
-      <<"frame_type">> => {frame_type, frame_type},
-      <<"frame_id">> => {frame_id, value},
-      <<"sent_at_ms">> => {sent_at_ms, uint},
-      <<"realm">> => {realm, value},
-      <<"call_id">> => {call_id, value},
-      <<"source_route">> => {source_route, value},
-      <<"record">> => {record, value}};
-frame_table(store_ack) ->
-    #{<<"version">> => {version, value},
-      <<"frame_type">> => {frame_type, frame_type},
-      <<"frame_id">> => {frame_id, value},
-      <<"sent_at_ms">> => {sent_at_ms, uint},
-      <<"realm">> => {realm, value},
-      <<"call_id">> => {call_id, value},
-      <<"source_route">> => {source_route, value},
-      <<"key">> => {key, value},
-      <<"signer">> => {signer, value},
-      <<"record_version">> => {record_version, value},
-      <<"stored">> => {stored, boolean}};
-frame_table(store_refresh) ->
-    #{<<"version">> => {version, value},
-      <<"frame_type">> => {frame_type, frame_type},
-      <<"frame_id">> => {frame_id, value},
-      <<"sent_at_ms">> => {sent_at_ms, uint},
-      <<"realm">> => {realm, value},
-      <<"call_id">> => {call_id, value},
-      <<"source_route">> => {source_route, value},
-      <<"key">> => {key, value},
-      <<"signer">> => {signer, value},
-      <<"record_version">> => {record_version, value},
-      <<"created_at">> => {created_at, uint},
-      <<"expires_at">> => {expires_at, uint},
-      <<"signature">> => {signature, value}};
-frame_table(register_ack) ->
-    #{<<"version">> => {version, value},
-      <<"frame_type">> => {frame_type, frame_type},
-      <<"frame_id">> => {frame_id, value},
-      <<"sent_at_ms">> => {sent_at_ms, uint},
-      <<"realm">> => {realm, value},
-      <<"call_id">> => {call_id, value},
-      <<"source_route">> => {source_route, value},
-      <<"kind">> => {kind, {per_hop_enum, ?REGISTER_KINDS, unknown}},
-      <<"name">> => {name, {text_max, ?MAX_REGISTER_NAME_BYTES}},
-      <<"record_version">> => {record_version, value},
-      <<"subscriber">> => {subscriber, value},
-      <<"accepted">> => {accepted, boolean},
-      <<"reason">> => {reason, {per_hop_enum, ?REGISTER_REFUSALS, refused}}};
-frame_table(call) ->
-    #{<<"version">> => {version, value},
-      <<"frame_type">> => {frame_type, frame_type},
-      <<"request">> => {request, signed_object},
-      <<"source_route">> => {source_route, bytes},
-      <<"retry_budget">> => {retry_budget, uint}};
-frame_table(result) ->
-    #{<<"version">> => {version, value},
-      <<"frame_type">> => {frame_type, frame_type},
-      <<"reply">> => {reply, signed_object},
-      <<"source_route_reverse">> => {source_route_reverse, bytes}};
-frame_table(error) ->
-    #{<<"version">> => {version, value},
-      <<"frame_type">> => {frame_type, frame_type},
-      <<"reply">> => {reply, signed_object},
-      <<"relay_error">> => {relay_error, signed_object},
-      <<"source_route_reverse">> => {source_route_reverse, bytes},
-      <<"source_route_partial">> => {source_route_partial, bytes}};
-frame_table(hyparview_join) ->
-    #{<<"version">> => {version, value},
-      <<"frame_type">> => {frame_type, frame_type},
-      <<"frame_id">> => {frame_id, value},
-      <<"sent_at_ms">> => {sent_at_ms, uint},
-      <<"realm">> => {realm, value},
-      <<"call_id">> => {call_id, value},
-      <<"source_route">> => {source_route, value},
-      <<"new_member">> => {new_member, {bytes, 32}},
-      <<"record">> => {record, value}};
-frame_table(hyparview_forward_join) ->
-    #{<<"version">> => {version, value},
-      <<"frame_type">> => {frame_type, frame_type},
-      <<"frame_id">> => {frame_id, value},
-      <<"sent_at_ms">> => {sent_at_ms, uint},
-      <<"realm">> => {realm, value},
-      <<"call_id">> => {call_id, value},
-      <<"source_route">> => {source_route, value},
-      <<"new_member">> => {new_member, {bytes, 32}},
-      <<"ttl">> => {ttl, {uint_max, ?HYPARVIEW_MAX_WALK}},
-      <<"arwl">> => {arwl, {uint_max, ?HYPARVIEW_MAX_WALK}},
-      <<"prwl">> => {prwl, {uint_max, ?HYPARVIEW_MAX_WALK}},
-      <<"record">> => {record, value}};
-frame_table(hyparview_neighbor) ->
-    #{<<"version">> => {version, value},
-      <<"frame_type">> => {frame_type, frame_type},
-      <<"frame_id">> => {frame_id, value},
-      <<"sent_at_ms">> => {sent_at_ms, uint},
-      <<"realm">> => {realm, value},
-      <<"call_id">> => {call_id, value},
-      <<"source_route">> => {source_route, value},
-      <<"priority">> => {priority, {per_hop_enum, [high, low], low}},
-      <<"record">> => {record, value}};
-frame_table(hyparview_disconnect) ->
-    #{<<"version">> => {version, value},
-      <<"frame_type">> => {frame_type, frame_type},
-      <<"frame_id">> => {frame_id, value},
-      <<"sent_at_ms">> => {sent_at_ms, uint},
-      <<"realm">> => {realm, value},
-      <<"call_id">> => {call_id, value},
-      <<"source_route">> => {source_route, value}};
-frame_table(hyparview_shuffle) ->
-    #{<<"version">> => {version, value},
-      <<"frame_type">> => {frame_type, frame_type},
-      <<"frame_id">> => {frame_id, value},
-      <<"sent_at_ms">> => {sent_at_ms, uint},
-      <<"realm">> => {realm, value},
-      <<"call_id">> => {call_id, value},
-      <<"source_route">> => {source_route, value},
-      <<"origin">> => {origin, {bytes, 32}},
-      <<"ttl">> => {ttl, {uint_max, ?HYPARVIEW_MAX_WALK}},
-      <<"peer_sample">> => {peer_sample, {list_of_bytes, 32, ?HYPARVIEW_MAX_SAMPLE}}};
-frame_table(hyparview_shuffle_reply) ->
-    #{<<"version">> => {version, value},
-      <<"frame_type">> => {frame_type, frame_type},
-      <<"frame_id">> => {frame_id, value},
-      <<"sent_at_ms">> => {sent_at_ms, uint},
-      <<"realm">> => {realm, value},
-      <<"call_id">> => {call_id, value},
-      <<"source_route">> => {source_route, value},
-      <<"peer_sample">> => {peer_sample, {list_of_bytes, 32, ?HYPARVIEW_MAX_SAMPLE}}};
-frame_table(plumtree_gossip) ->
-    #{<<"version">> => {version, value},
-      <<"frame_type">> => {frame_type, frame_type},
-      <<"publication">> => {publication, signed_object},
-      <<"round">> => {round, uint}};
-frame_table(plumtree_ihave) ->
-    #{<<"version">> => {version, value},
-      <<"frame_type">> => {frame_type, frame_type},
-      <<"frame_id">> => {frame_id, value},
-      <<"sent_at_ms">> => {sent_at_ms, uint},
-      <<"realm">> => {realm, value},
-      <<"call_id">> => {call_id, value},
-      <<"source_route">> => {source_route, value},
-      <<"msg_id">> => {msg_id, {bytes, 48}},
-      <<"round">> => {round, uint}};
-frame_table(plumtree_graft) ->
-    #{<<"version">> => {version, value},
-      <<"frame_type">> => {frame_type, frame_type},
-      <<"frame_id">> => {frame_id, value},
-      <<"sent_at_ms">> => {sent_at_ms, uint},
-      <<"realm">> => {realm, value},
-      <<"call_id">> => {call_id, value},
-      <<"source_route">> => {source_route, value},
-      <<"msg_id">> => {msg_id, {bytes, 48}},
-      <<"round">> => {round, uint}};
-frame_table(plumtree_prune) ->
-    #{<<"version">> => {version, value},
-      <<"frame_type">> => {frame_type, frame_type},
-      <<"frame_id">> => {frame_id, value},
-      <<"sent_at_ms">> => {sent_at_ms, uint},
-      <<"realm">> => {realm, value},
-      <<"call_id">> => {call_id, value},
-      <<"source_route">> => {source_route, value}};
-frame_table(overlay_relay) ->
-    #{<<"version">> => {version, value},
-      <<"frame_type">> => {frame_type, frame_type},
-      <<"frame_id">> => {frame_id, value},
-      <<"sent_at_ms">> => {sent_at_ms, uint},
-      <<"realm">> => {realm, value},
-      <<"call_id">> => {call_id, value},
-      <<"source_route">> => {source_route, value},
-      <<"peer">> => {peer, {bytes, 32}},
-      <<"payload">> => {payload, value}};
-frame_table(publish) ->
-    #{<<"version">> => {version, value},
-      <<"frame_type">> => {frame_type, frame_type},
-      <<"publication">> => {publication, signed_object}};
-frame_table(subscribe) ->
-    #{<<"version">> => {version, value},
-      <<"frame_type">> => {frame_type, frame_type},
-      <<"frame_id">> => {frame_id, value},
-      <<"sent_at_ms">> => {sent_at_ms, uint},
-      <<"realm">> => {realm, value},
-      <<"call_id">> => {call_id, value},
-      <<"source_route">> => {source_route, value},
-      <<"topic">> => {topic, value},
-      <<"subscriber">> => {subscriber, {bytes, 32}},
-      <<"options">> => {options, value}};
-frame_table(unsubscribe) ->
-    #{<<"version">> => {version, value},
-      <<"frame_type">> => {frame_type, frame_type},
-      <<"frame_id">> => {frame_id, value},
-      <<"sent_at_ms">> => {sent_at_ms, uint},
-      <<"realm">> => {realm, value},
-      <<"call_id">> => {call_id, value},
-      <<"source_route">> => {source_route, value},
-      <<"topic">> => {topic, value},
-      <<"subscriber">> => {subscriber, {bytes, 32}}};
-frame_table(event) ->
-    #{<<"version">> => {version, value},
-      <<"frame_type">> => {frame_type, frame_type},
-      <<"publication">> => {publication, signed_object},
-      <<"delivered_via">> => {delivered_via, {per_hop_enum, [plumtree, direct], direct}}};
-frame_table(advertise) ->
-    #{<<"version">> => {version, value},
-      <<"frame_type">> => {frame_type, frame_type},
-      <<"frame_id">> => {frame_id, value},
-      <<"sent_at_ms">> => {sent_at_ms, uint},
-      <<"realm">> => {realm, value},
-      <<"call_id">> => {call_id, value},
-      <<"source_route">> => {source_route, value},
-      <<"advertisement">> => {advertisement, bytes}};
-frame_table(unadvertise) ->
-    #{<<"version">> => {version, value},
-      <<"frame_type">> => {frame_type, frame_type},
-      <<"frame_id">> => {frame_id, value},
-      <<"sent_at_ms">> => {sent_at_ms, uint},
-      <<"realm">> => {realm, value},
-      <<"call_id">> => {call_id, value},
-      <<"source_route">> => {source_route, value},
-      <<"withdrawal">> => {withdrawal, bytes}};
-frame_table(stream_open) ->
-    #{<<"version">> => {version, value},
-      <<"frame_type">> => {frame_type, frame_type},
-      <<"request">> => {request, signed_object},
-      <<"source_route">> => {source_route, bytes},
-      <<"retry_budget">> => {retry_budget, uint}};
-frame_table(stream_data) ->
-    #{<<"version">> => {version, value},
-      <<"frame_type">> => {frame_type, frame_type},
-      <<"stream">> => {stream, stream_object},
-      <<"caller_stream">> => {caller_stream, held_object}};
-frame_table(stream_end) ->
-    #{<<"version">> => {version, value},
-      <<"frame_type">> => {frame_type, frame_type},
-      <<"stream">> => {stream, stream_object},
-      <<"caller_stream">> => {caller_stream, held_object}};
-frame_table(stream_error) ->
-    #{<<"version">> => {version, value},
-      <<"frame_type">> => {frame_type, frame_type},
-      <<"stream">> => {stream, stream_object},
-      <<"caller_stream">> => {caller_stream, held_object},
-      <<"relay_error">> => {relay_error, signed_object},
-      <<"source_route_partial">> => {source_route_partial, bytes}};
-frame_table(stream_reply) ->
-    #{<<"version">> => {version, value},
-      <<"frame_type">> => {frame_type, frame_type},
-      <<"stream">> => {stream, stream_object}};
-frame_table(want) ->
-    #{<<"version">> => {version, value},
-      <<"frame_type">> => {frame_type, frame_type},
-      <<"frame_id">> => {frame_id, value},
-      <<"sent_at_ms">> => {sent_at_ms, uint},
-      <<"realm">> => {realm, value},
-      <<"call_id">> => {call_id, value},
-      <<"source_route">> => {source_route, value},
-      <<"blocks">> => {blocks, {list_of, #{<<"mcid">> => {mcid, value},
-          <<"priority">> => {priority, value}}}}};
-frame_table(have) ->
-    #{<<"version">> => {version, value},
-      <<"frame_type">> => {frame_type, frame_type},
-      <<"frame_id">> => {frame_id, value},
-      <<"sent_at_ms">> => {sent_at_ms, uint},
-      <<"realm">> => {realm, value},
-      <<"call_id">> => {call_id, value},
-      <<"source_route">> => {source_route, value},
-      <<"blocks">> => {blocks, {list_of, #{<<"mcid">> => {mcid, value},
-          <<"size">> => {size, value}}}}};
-frame_table(block) ->
-    #{<<"version">> => {version, value},
-      <<"frame_type">> => {frame_type, frame_type},
-      <<"frame_id">> => {frame_id, value},
-      <<"sent_at_ms">> => {sent_at_ms, uint},
-      <<"realm">> => {realm, value},
-      <<"call_id">> => {call_id, value},
-      <<"source_route">> => {source_route, value},
-      <<"mcid">> => {mcid, value},
-      <<"payload">> => {payload, value}};
-frame_table(manifest_req) ->
-    #{<<"version">> => {version, value},
-      <<"frame_type">> => {frame_type, frame_type},
-      <<"frame_id">> => {frame_id, value},
-      <<"sent_at_ms">> => {sent_at_ms, uint},
-      <<"realm">> => {realm, value},
-      <<"call_id">> => {call_id, value},
-      <<"source_route">> => {source_route, value},
-      <<"mcid">> => {mcid, value}};
-frame_table(manifest_res) ->
-    #{<<"version">> => {version, value},
-      <<"frame_type">> => {frame_type, frame_type},
-      <<"frame_id">> => {frame_id, value},
-      <<"sent_at_ms">> => {sent_at_ms, uint},
-      <<"realm">> => {realm, value},
-      <<"call_id">> => {call_id, value},
-      <<"source_route">> => {source_route, value},
-      <<"mcid">> => {mcid, value},
-      <<"manifest">> => {manifest, manifest}};
-frame_table(cancel) ->
-    #{<<"version">> => {version, value},
-      <<"frame_type">> => {frame_type, frame_type},
-      <<"frame_id">> => {frame_id, value},
-      <<"sent_at_ms">> => {sent_at_ms, uint},
-      <<"realm">> => {realm, value},
-      <<"call_id">> => {call_id, value},
-      <<"source_route">> => {source_route, value},
-      <<"blocks">> => {blocks, value}}.
+      <<"source_route">> => {source_route, value}}.
+
+%% Membership and liveness: goodbye, SWIM and ping/pong.
+membership_fields(goodbye) ->
+    {hop, #{<<"reason">> => {reason, {bounded_text, ?MAX_GOODBYE_REASON_BYTES}},
+            <<"detail">> => {detail, value}}};
+membership_fields(swim_ping) ->
+    {hop, #{<<"round">> => {round, uint},
+            <<"incarnation">> => {incarnation, uint},
+            <<"piggyback">> => {piggyback, {list_of, #{<<"target">> => {target, {bytes, 32}},
+                <<"state">> => {state, {swim_state, [alive, suspect, confirmed_failed]}},
+                <<"incarnation">> => {incarnation, uint},
+                <<"observed_at">> => {observed_at, uint},
+                <<"by">> => {by, {bytes, 32}}}}}}};
+membership_fields(swim_ack) ->
+    {hop, #{<<"round">> => {round, uint},
+            <<"responder">> => {responder, {bytes, 32}},
+            <<"incarnation">> => {incarnation, uint},
+            <<"piggyback">> => {piggyback, {list_of, #{<<"target">> => {target, {bytes, 32}},
+                <<"state">> => {state, {swim_state, [alive, suspect, confirmed_failed]}},
+                <<"incarnation">> => {incarnation, uint},
+                <<"observed_at">> => {observed_at, uint},
+                <<"by">> => {by, {bytes, 32}}}}}}};
+membership_fields(swim_suspect) ->
+    {hop, #{<<"target">> => {target, {bytes, 32}},
+            <<"target_incarnation">> => {target_incarnation, uint},
+            <<"suspected_by">> => {suspected_by, {bytes, 32}},
+            <<"ttl">> => {ttl, uint}}};
+membership_fields(swim_confirm) ->
+    {hop, #{<<"target">> => {target, {bytes, 32}},
+            <<"target_incarnation">> => {target_incarnation, uint},
+            <<"suspected_by">> => {suspected_by, {bytes, 32}},
+            <<"ttl">> => {ttl, uint}}};
+membership_fields(swim_ping_req) ->
+    {hop, #{<<"round">> => {round, uint},
+            <<"target">> => {target, {bytes, 32}}}};
+membership_fields(ping) ->
+    {hop, #{<<"nonce">> => {nonce, value}}};
+membership_fields(Type) when Type =:= liveness_ping; Type =:= liveness_pong ->
+    membership_fields(ping);
+membership_fields(pong) ->
+    {hop, #{<<"nonce">> => {nonce, value}}};
+membership_fields(Type) ->
+    dht_fields(Type).
+
+%% The DHT: lookups, stores and registrations.
+dht_fields(find_node) ->
+    {hop, #{<<"key">> => {key, value},
+            <<"origin">> => {origin, {bytes, 32}},
+            <<"depth">> => {depth, uint}}};
+dht_fields(nodes) ->
+    {hop, #{<<"key">> => {key, value},
+            <<"nodes">> => {nodes, {list_of, #{<<"node_id">> => {node_id, {bytes, 32}},
+                <<"station_id">> => {station_id, {bytes, 32}},
+                <<"addresses">> => {addresses, {list_of, #{<<"host">> => {host, bytes}, <<"port">> => {port, uint},
+                                                           <<"transport">> => {transport, {enum, [quic]}}}}},
+                <<"tier">> => {tier, uint},
+                <<"asn">> => {asn, {optional, uint}},
+                <<"country">> => {country, {bytes, 2}},
+                <<"last_seen_at">> => {last_seen_at, uint}}}}}};
+dht_fields(find_value) ->
+    {hop, #{<<"key">> => {key, value},
+            <<"origin">> => {origin, {bytes, 32}},
+            <<"after">> => {'after', bytes}}};
+dht_fields(value) ->
+    {hop, #{<<"key">> => {key, value},
+            <<"records">> => {records, value},
+            <<"next">> => {next, bytes}}};
+dht_fields(store) ->
+    {hop, #{<<"record">> => {record, value}}};
+dht_fields(store_ack) ->
+    {hop, #{<<"key">> => {key, value},
+            <<"signer">> => {signer, value},
+            <<"record_version">> => {record_version, value},
+            <<"stored">> => {stored, boolean}}};
+dht_fields(store_refresh) ->
+    {hop, #{<<"key">> => {key, value},
+            <<"signer">> => {signer, value},
+            <<"record_version">> => {record_version, value},
+            <<"created_at">> => {created_at, uint},
+            <<"expires_at">> => {expires_at, uint},
+            <<"signature">> => {signature, value}}};
+dht_fields(register_ack) ->
+    {hop, #{<<"kind">> => {kind, {per_hop_enum, ?REGISTER_KINDS, unknown}},
+            <<"name">> => {name, {text_max, ?MAX_REGISTER_NAME_BYTES}},
+            <<"record_version">> => {record_version, value},
+            <<"subscriber">> => {subscriber, value},
+            <<"accepted">> => {accepted, boolean},
+            <<"reason">> => {reason, {per_hop_enum, ?REGISTER_REFUSALS, refused}}}};
+dht_fields(Type) ->
+    call_fields(Type).
+
+%% Calls and streams: signed requests and replies.
+call_fields(call) ->
+    {envelope, #{<<"request">> => {request, signed_object},
+            <<"source_route">> => {source_route, bytes},
+            <<"retry_budget">> => {retry_budget, uint}}};
+call_fields(result) ->
+    {envelope, #{<<"reply">> => {reply, signed_object},
+            <<"source_route_reverse">> => {source_route_reverse, bytes}}};
+call_fields(error) ->
+    {envelope, #{<<"reply">> => {reply, signed_object},
+            <<"relay_error">> => {relay_error, signed_object},
+            <<"source_route_reverse">> => {source_route_reverse, bytes},
+            <<"source_route_partial">> => {source_route_partial, bytes}}};
+call_fields(stream_open) ->
+    {envelope, #{<<"request">> => {request, signed_object},
+            <<"source_route">> => {source_route, bytes},
+            <<"retry_budget">> => {retry_budget, uint}}};
+call_fields(stream_data) ->
+    {envelope, #{<<"stream">> => {stream, stream_object},
+            <<"caller_stream">> => {caller_stream, held_object}}};
+call_fields(stream_end) ->
+    {envelope, #{<<"stream">> => {stream, stream_object},
+            <<"caller_stream">> => {caller_stream, held_object}}};
+call_fields(stream_error) ->
+    {envelope, #{<<"stream">> => {stream, stream_object},
+            <<"caller_stream">> => {caller_stream, held_object},
+            <<"relay_error">> => {relay_error, signed_object},
+            <<"source_route_partial">> => {source_route_partial, bytes}}};
+call_fields(stream_reply) ->
+    {envelope, #{<<"stream">> => {stream, stream_object}}};
+call_fields(Type) ->
+    overlay_fields(Type).
+
+%% The overlay: HyParView, Plumtree and relays.
+overlay_fields(hyparview_join) ->
+    {hop, #{<<"new_member">> => {new_member, {bytes, 32}},
+            <<"record">> => {record, value}}};
+overlay_fields(hyparview_forward_join) ->
+    {hop, #{<<"new_member">> => {new_member, {bytes, 32}},
+            <<"ttl">> => {ttl, {uint_max, ?HYPARVIEW_MAX_WALK}},
+            <<"arwl">> => {arwl, {uint_max, ?HYPARVIEW_MAX_WALK}},
+            <<"prwl">> => {prwl, {uint_max, ?HYPARVIEW_MAX_WALK}},
+            <<"record">> => {record, value}}};
+overlay_fields(hyparview_neighbor) ->
+    {hop, #{<<"priority">> => {priority, {per_hop_enum, [high, low], low}},
+            <<"record">> => {record, value}}};
+overlay_fields(hyparview_disconnect) ->
+    {hop, #{}};
+overlay_fields(hyparview_shuffle) ->
+    {hop, #{<<"origin">> => {origin, {bytes, 32}},
+            <<"ttl">> => {ttl, {uint_max, ?HYPARVIEW_MAX_WALK}},
+            <<"peer_sample">> => {peer_sample, {list_of_bytes, 32, ?HYPARVIEW_MAX_SAMPLE}}}};
+overlay_fields(hyparview_shuffle_reply) ->
+    {hop, #{<<"peer_sample">> => {peer_sample, {list_of_bytes, 32, ?HYPARVIEW_MAX_SAMPLE}}}};
+overlay_fields(plumtree_gossip) ->
+    {envelope, #{<<"publication">> => {publication, signed_object},
+            <<"round">> => {round, uint}}};
+overlay_fields(plumtree_ihave) ->
+    {hop, #{<<"msg_id">> => {msg_id, {bytes, 48}},
+            <<"round">> => {round, uint}}};
+overlay_fields(plumtree_graft) ->
+    {hop, #{<<"msg_id">> => {msg_id, {bytes, 48}},
+            <<"round">> => {round, uint}}};
+overlay_fields(plumtree_prune) ->
+    {hop, #{}};
+overlay_fields(overlay_relay) ->
+    {hop, #{<<"peer">> => {peer, {bytes, 32}},
+            <<"payload">> => {payload, value}}};
+overlay_fields(Type) ->
+    pubsub_fields(Type).
+
+%% Pubsub and advertisements.
+pubsub_fields(publish) ->
+    {envelope, #{<<"publication">> => {publication, signed_object}}};
+pubsub_fields(subscribe) ->
+    {hop, #{<<"topic">> => {topic, value},
+            <<"subscriber">> => {subscriber, {bytes, 32}},
+            <<"options">> => {options, value}}};
+pubsub_fields(unsubscribe) ->
+    {hop, #{<<"topic">> => {topic, value},
+            <<"subscriber">> => {subscriber, {bytes, 32}}}};
+pubsub_fields(event) ->
+    {envelope, #{<<"publication">> => {publication, signed_object},
+            <<"delivered_via">> => {delivered_via, {per_hop_enum, [plumtree, direct], direct}}}};
+pubsub_fields(advertise) ->
+    {hop, #{<<"advertisement">> => {advertisement, bytes}}};
+pubsub_fields(unadvertise) ->
+    {hop, #{<<"withdrawal">> => {withdrawal, bytes}}};
+pubsub_fields(Type) ->
+    content_fields(Type).
+
+%% Content exchange: wants, haves, blocks and manifests.
+content_fields(want) ->
+    {hop, #{<<"blocks">> => {blocks, {list_of, #{<<"mcid">> => {mcid, value},
+                <<"priority">> => {priority, value}}}}}};
+content_fields(have) ->
+    {hop, #{<<"blocks">> => {blocks, {list_of, #{<<"mcid">> => {mcid, value},
+                <<"size">> => {size, value}}}}}};
+content_fields(block) ->
+    {hop, #{<<"mcid">> => {mcid, value},
+            <<"payload">> => {payload, value}}};
+content_fields(manifest_req) ->
+    {hop, #{<<"mcid">> => {mcid, value}}};
+content_fields(manifest_res) ->
+    {hop, #{<<"mcid">> => {mcid, value},
+            <<"manifest">> => {manifest, manifest}}};
+content_fields(cancel) ->
+    {hop, #{<<"blocks">> => {blocks, value}}}.
 
 read_fields([{{text, Name}, Value} | Rest], Table, Frame) ->
     field_read(maps:get(Name, Table, undefined), Value, Rest, Table, Frame);

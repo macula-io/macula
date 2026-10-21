@@ -469,10 +469,7 @@ handle_call(close_send, _From, State) ->
 %% --- close -------------------------------------------------------------
 
 handle_call(close, _From, State) ->
-    {_Sent, State0} = forward_to_peer(State, {end_stream, both}),
-    State1 = State0#state{closed_send = true, closed_recv = true},
-    State2 = drain_waiters(eof, State1),
-    {reply, ok, session_ended(closed, State2)};
+    {reply, ok, close_both(State)};
 
 %% --- await_reply -------------------------------------------------------
 
@@ -481,12 +478,7 @@ handle_call({await_reply, _Timeout}, _From, #state{reply = {ok, _} = R} = State)
 handle_call({await_reply, _Timeout}, _From, #state{reply = {error, _} = R} = State) ->
     {reply, R, State};
 handle_call({await_reply, Timeout}, From, State) ->
-    Ref = case Timeout of
-              infinity -> undefined;
-              N -> erlang:send_after(N, self(), {reply_timeout, From})
-          end,
-    Waiters = [{From, Ref} | State#state.reply_waiters],
-    {noreply, State#state{reply_waiters = Waiters}};
+    {noreply, park_reply_waiter(Timeout, From, State)};
 
 %% --- set_reply ---------------------------------------------------------
 
@@ -514,7 +506,29 @@ handle_call(report, _From, State) ->
 %% --- info --------------------------------------------------------------
 
 handle_call(info, _From, State) ->
-    Map = #{
+    {reply, stream_info(State), State};
+
+handle_call(_Msg, _From, State) ->
+    {reply, {error, unknown}, State}.
+
+%% Close both directions: tell the peer, wake every waiter with eof, end the session.
+close_both(State) ->
+    {_Sent, State0} = forward_to_peer(State, {end_stream, both}),
+    State1 = State0#state{closed_send = true, closed_recv = true},
+    State2 = drain_waiters(eof, State1),
+    session_ended(closed, State2).
+
+%% Park a caller until the reply is set, with a timer unless it waits forever.
+park_reply_waiter(Timeout, From, State) ->
+    Ref = case Timeout of
+              infinity -> undefined;
+              N -> erlang:send_after(N, self(), {reply_timeout, From})
+          end,
+    Waiters = [{From, Ref} | State#state.reply_waiters],
+    State#state{reply_waiters = Waiters}.
+
+stream_info(State) ->
+    #{
         id => State#state.id,
         role => State#state.role,
         mode => State#state.mode,
@@ -528,11 +542,7 @@ handle_call(info, _From, State) ->
         seq_in => State#state.seq_in,
         reply => State#state.reply,
         caller => opened_by(State#state.open)
-    },
-    {reply, Map, State};
-
-handle_call(_Msg, _From, State) ->
-    {reply, {error, unknown}, State}.
+    }.
 
 %% The node whose signed STREAM_OPEN opened a link-carried stream, as its
 %% signature verified it: for a served stream the caller, the identity a

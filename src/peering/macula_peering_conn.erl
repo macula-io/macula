@@ -974,20 +974,8 @@ notify_handshake_complete(#data{accept_owner = Pid, peer_node_id = NodeId})
 
 connected(enter, _Old, Data) ->
     {keep_state, Data, liveness_tick_actions(Data)};
-connected(state_timeout, liveness_tick, #data{liveness_interval_ms = undefined} = Data) ->
-    {keep_state, Data};
-connected(state_timeout, liveness_tick, #data{liveness_outstanding = undefined} = Data) ->
-    {keep_state, send_liveness_probe(Data), [liveness_tick_action(Data)]};
-connected(state_timeout, liveness_tick,
-          #data{liveness_outstanding = _Probe, liveness_misses = Misses,
-                liveness_max_misses = Max} = Data) ->
-    case Misses + 1 >= Max of
-        true ->
-            closed(peer_liveness_lost, Data#data{liveness_misses = Misses + 1});
-        false ->
-            {keep_state, send_liveness_probe(Data#data{liveness_misses = Misses + 1}),
-             [liveness_tick_action(Data)]}
-    end;
+connected(state_timeout, liveness_tick, Data) ->
+    liveness_tick(Data);
 connected(info, {quic, Bin, Stream, _Flags},
           #data{quic_stream = Stream, buf = Buf} = Data) when is_binary(Bin) ->
     open_frames(macula_frame:parse_stream_bytes(<<Buf/binary, Bin/binary>>), Data);
@@ -1106,9 +1094,7 @@ connected(info, {quic, peer_send_shutdown, Stream, _Detail},
     notify(draining, peer_closed, Data),
     {next_state, draining, Data};
 connected(cast, {close, Reason}, Data) ->
-    {_Sent, Signed} = send_goodbye(Data#data.quic_stream, Reason, Data),
-    notify(draining, Reason, Signed),
-    {next_state, draining, Signed};
+    start_closing(Reason, Data);
 %% `reject/2''s reason for existing: `close/2' transitions through
 %% `draining' for up to `?DRAIN_TIMEOUT_MS' (5s), during which further
 %% inbound data is silently accepted and discarded by design
@@ -1137,20 +1123,43 @@ connected(info, {macula_statement, Issuer, Hash, Statement},
           #data{issuer = Issuer, own_binding_hash = Hash, quic_stream = Stream} = Data) ->
     _ = send_handshake_bytes(Stream, macula_handshake:status(Statement)),
     {keep_state, Data};
-connected({timeout, status_expired}, status_expired, Data) ->
-    closed(status_expired, Data);
-connected({timeout, binding_expired}, binding_expired, Data) ->
-    closed(binding_expired, Data);
-connected({call, From}, peer_identity,
-          #data{profile = Profile, peer = #{node_id := NodeId, identity_key := Key},
-                peer_capabilities = Capabilities} = Data) ->
-    Identity = #{node_id => NodeId, identity_key => Key, profile => Profile, capabilities => Capabilities},
-    {keep_state, Data, [{reply, From, {ok, Identity}}]};
+connected({timeout, Expired}, Expired, Data)
+  when Expired =:= status_expired; Expired =:= binding_expired ->
+    closed(Expired, Data);
+connected({call, From}, peer_identity, #data{peer = #{node_id := _, identity_key := _}} = Data) ->
+    {keep_state, Data, [{reply, From, {ok, peer_answer(peer_identity, Data)}}]};
 connected({call, From}, peer_capabilities, Data) ->
-    {keep_state, Data,
-     [{reply, From, {ok, Data#data.peer_capabilities}}]};
+    {keep_state, Data, [{reply, From, {ok, peer_answer(peer_capabilities, Data)}}]};
 connected(EventType, Event, Data) ->
     other_event(EventType, Event, connected, Data).
+
+%% A liveness tick: no probing configured, a first probe, or one more
+%% unanswered probe, which closes the connection once it reaches the cap.
+liveness_tick(#data{liveness_interval_ms = undefined} = Data) ->
+    {keep_state, Data};
+liveness_tick(#data{liveness_outstanding = undefined} = Data) ->
+    {keep_state, send_liveness_probe(Data), [liveness_tick_action(Data)]};
+liveness_tick(#data{liveness_outstanding = _Probe, liveness_misses = Misses,
+                    liveness_max_misses = Max} = Data) ->
+    case Misses + 1 >= Max of
+        true ->
+            closed(peer_liveness_lost, Data#data{liveness_misses = Misses + 1});
+        false ->
+            {keep_state, send_liveness_probe(Data#data{liveness_misses = Misses + 1}),
+             [liveness_tick_action(Data)]}
+    end.
+
+%% Our own close: say GOODBYE, tell the controlling process, and drain.
+start_closing(Reason, Data) ->
+    {_Sent, Signed} = send_goodbye(Data#data.quic_stream, Reason, Data),
+    notify(draining, Reason, Signed),
+    {next_state, draining, Signed}.
+
+peer_answer(peer_identity, #data{profile = Profile, peer = #{node_id := NodeId, identity_key := Key},
+                                 peer_capabilities = Capabilities}) ->
+    #{node_id => NodeId, identity_key => Key, profile => Profile, capabilities => Capabilities};
+peer_answer(peer_capabilities, Data) ->
+    Data#data.peer_capabilities.
 
 
 %% On the open connection every frame is an application frame or a

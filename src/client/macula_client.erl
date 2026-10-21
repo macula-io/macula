@@ -1835,45 +1835,10 @@ cancel_discovery_timer(Timer)     -> erlang:cancel_timer(Timer).
 handle_call(group_keyring, _From, #state{keyring = Keyring} = S) ->
     {reply, Keyring, S};
 handle_call({publish, Realm, Topic, Payload, Opts}, From, S) ->
-    %% Publish only to links that have completed CONNECT/HELLO. A
-    %% frame sent to a still-handshaking link is dropped on the floor, so
-    %% selecting the first `replication' *spawned* links could report
-    %% `{error, not_connected}' while other links are healthy. The links
-    %% the pool holds connected are the candidates, as for a linked-station
-    %% call.
-    %%
-    %% Dispatch via a one-shot worker so concurrent publishes don't
-    %% serialise through this gen_server (the per-link `publish/4'
-    %% calls are sync 5s timeouts; under load they pile up at the pool
-    %% and the harness's `multi_publisher_pubsub' case fails with
-    %% empty receives).
-    Targets = ordered_for_selection(connected_link_pids(S), S#state.link_selection),
-    Selected = select_publish_targets(Targets, S#state.replication),
-    AllTargets = Targets,
-    %% One seq per publication, from the node's counter for the pool's key
-    %% (macula_publication_seq), reused across every replicated link.
-    Seq = macula_publication_seq:next(S#state.node_id),
-    Seal = maps:get(seal, Opts, clear),
-    _ = spawn(fun() ->
-        Results = [safe_link_publish(P, Realm, Topic, Payload, Seq, Seal)
-                   || P <- Selected],
-        gen_server:reply(From, summarize_publish(Results, AllTargets))
-    end),
-    {noreply, S};
+    start_publish(Realm, Topic, Payload, Opts, From, S);
 
 handle_call({subscribe, Realm, Topic, Subscriber, Opts}, _From, S) ->
-    SubRef = make_ref(),
-    Mon = erlang:monitor(process, Subscriber),
-    Spec = with_opener(maps:find(group, Opts), SubRef,
-                       #sub_spec{realm = Realm, topic = Topic,
-                                 subscriber = Subscriber, mon = Mon,
-                                 order = macula_pubsub_order:new(delivery_mode(Opts),
-                                                                 S#state.order_max_buffer)},
-                       S),
-    Key = {Realm, Topic},
-    AlreadyTracked = maps:is_key(Key, S#state.topic_index),
-    NewS = register_sub(SubRef, Spec, S),
-    {reply, {ok, SubRef}, issue_wire_subs(AlreadyTracked, Realm, Topic, NewS)};
+    add_subscription(Realm, Topic, Subscriber, Opts, S);
 
 handle_call({await_registration, Key}, From, #state{registrations = Regs} = S) ->
     awaited(maps:find(Key, Regs), Key, From, S);
@@ -1882,20 +1847,7 @@ handle_call({unsubscribe, SubRef}, _From, S) ->
     {reply, ok, drop_sub(SubRef, S)};
 
 handle_call({linked_station_call, Realm, Procedure, Payload, TimeoutMs}, From, S) ->
-    %% Worker-spawn so concurrent CALLs don't serialise through the
-    %% pool gen_server. Each per-link `macula_station_link:call/6'
-    %% is a sync gen_server:call to the link; with the old
-    %% `{reply, ..., S}' shape every caller blocked the pool until
-    %% the link replied, capping concurrent CALL throughput at 1.
-    %% The candidates are the links the pool holds connected: the worker asks
-    %% none of them first, as a busy link would hold it (macula#44).
-    Pids = ordered_for_selection(connected_link_pids(S), S#state.link_selection),
-    _ = spawn(fun() ->
-        Reply = call_first_success(Pids, Realm, Procedure, Payload,
-                                    TimeoutMs),
-        gen_server:reply(From, Reply)
-    end),
-    {noreply, S};
+    start_linked_call(Realm, Procedure, Payload, TimeoutMs, From, S);
 
 handle_call({call_station, Station, Target, Realm, Procedure, Payload, TimeoutMs,
              DialTimeoutMs, Ucan, LinkOpts, Seal, Report}, From, S) ->
@@ -1913,13 +1865,7 @@ handle_call({advertise, Realm, Procedure, Registration}, _From, S) ->
     {reply, Reply, renewal_armed(unary, {Realm, Procedure}, NewS)};
 
 handle_call({unadvertise, Realm, Procedure}, _From, S0) ->
-    #state{procs = P, node_identity = Key} = S = renewal_cancelled(unary, {Realm, Procedure}, S0),
-    Registered = maps:find({Realm, Procedure}, P),
-    Withdrawal = withdrawal_for(Registered, Realm, Procedure, Key),
-    _ = fanout_unadvertise(registered_link_pids(Registered, S), Realm, Procedure,
-                           Withdrawal),
-    {reply, ok, registration_withdrawn({advertise, Realm, Procedure},
-                                       S#state{procs = maps:remove({Realm, Procedure}, P)})};
+    {reply, ok, withdraw_unary(Realm, Procedure, S0)};
 
 handle_call({ensure_station_link, Station, LinkOpts, TimeoutMs}, From, S) ->
     %% As call_station: ensure the link, and wait for its handshake in a
@@ -1943,14 +1889,7 @@ handle_call({advertise_stream, Realm, Procedure, Registration}, _From, S) ->
     {reply, Reply, renewal_armed(stream, {Realm, Procedure}, NewS)};
 
 handle_call({unadvertise_stream, Realm, Procedure}, _From, S0) ->
-    #state{stream_procs = SP, node_identity = Key} = S = renewal_cancelled(stream, {Realm, Procedure}, S0),
-    Registered = maps:find({Realm, Procedure}, SP),
-    Withdrawal = withdrawal_for(Registered, Realm, Procedure, Key),
-    _ = fanout_unadvertise_stream(registered_link_pids(Registered, S), Realm, Procedure,
-                                  Withdrawal),
-    {reply, ok,
-     registration_withdrawn({advertise, Realm, Procedure},
-                            S#state{stream_procs = maps:remove({Realm, Procedure}, SP)})};
+    {reply, ok, withdraw_stream(Realm, Procedure, S0)};
 
 handle_call({realm_key, RealmId}, _From, #state{realm_keys = Keys} = S) ->
     {reply, pinned_realm_key(maps:find(RealmId, Keys)), S};
@@ -1966,11 +1905,19 @@ handle_call({sign_domain_record, Record}, _From, #state{node_identity = Key} = S
     {reply, domain_record_signed(macula_record:domain_record_checked(Record), Record, Key), S};
 handle_call({withdraw_node_record, Withdrawn, Reason}, _From, #state{node_identity = Key} = S) ->
     {reply, tombstone_signed(verified_record(Withdrawn, Key), macula_node_keys:public_key(Key), Reason, Key), S};
-handle_call(status, _From,
-            #state{seeds = Seeds, links = Links, subs = Subs,
+handle_call(status, _From, S) ->
+    {reply, {ok, pool_status(S)}, S};
+
+handle_call(links, _From, #state{links = Links, last_disconnects = Last} = S) ->
+    {reply, {ok, link_infos(Links, Last, S#state.connected)}, S};
+
+handle_call(_Req, _From, S) ->
+    {reply, {error, unknown_call}, S}.
+
+pool_status(#state{seeds = Seeds, links = Links, subs = Subs,
                    node_id = NodeId, replication = Replication} = S) ->
     {Healthy, Failed} = count_link_health(Seeds, Links, S#state.connected),
-    Status = #{
+    #{
         seeds              => Seeds,
         healthy_links      => Healthy,
         failed_links       => Failed,
@@ -2003,14 +1950,84 @@ handle_call(status, _From,
         issuer_restarts    => S#state.issuer_restarts,
         %% Issuers the pool lost, whether or not a new one runs yet.
         issuer_losses      => S#state.issuer_losses
-    },
-    {reply, {ok, Status}, S};
+    }.
 
-handle_call(links, _From, #state{links = Links, last_disconnects = Last} = S) ->
-    {reply, {ok, link_infos(Links, Last, S#state.connected)}, S};
+start_publish(Realm, Topic, Payload, Opts, From, S) ->
+    %% Publish only to links that have completed CONNECT/HELLO. A
+    %% frame sent to a still-handshaking link is dropped on the floor, so
+    %% selecting the first `replication' *spawned* links could report
+    %% `{error, not_connected}' while other links are healthy. The links
+    %% the pool holds connected are the candidates, as for a linked-station
+    %% call.
+    %%
+    %% Dispatch via a one-shot worker so concurrent publishes don't
+    %% serialise through this gen_server (the per-link `publish/4'
+    %% calls are sync 5s timeouts; under load they pile up at the pool
+    %% and the harness's `multi_publisher_pubsub' case fails with
+    %% empty receives).
+    Targets = ordered_for_selection(connected_link_pids(S), S#state.link_selection),
+    Selected = select_publish_targets(Targets, S#state.replication),
+    AllTargets = Targets,
+    %% One seq per publication, from the node's counter for the pool's key
+    %% (macula_publication_seq), reused across every replicated link.
+    Seq = macula_publication_seq:next(S#state.node_id),
+    Seal = maps:get(seal, Opts, clear),
+    _ = spawn(fun() ->
+        Results = [safe_link_publish(P, Realm, Topic, Payload, Seq, Seal)
+                   || P <- Selected],
+        gen_server:reply(From, summarize_publish(Results, AllTargets))
+    end),
+    {noreply, S}.
 
-handle_call(_Req, _From, S) ->
-    {reply, {error, unknown_call}, S}.
+add_subscription(Realm, Topic, Subscriber, Opts, S) ->
+    SubRef = make_ref(),
+    Mon = erlang:monitor(process, Subscriber),
+    Spec = with_opener(maps:find(group, Opts), SubRef,
+                       #sub_spec{realm = Realm, topic = Topic,
+                                 subscriber = Subscriber, mon = Mon,
+                                 order = macula_pubsub_order:new(delivery_mode(Opts),
+                                                                 S#state.order_max_buffer)},
+                       S),
+    Key = {Realm, Topic},
+    AlreadyTracked = maps:is_key(Key, S#state.topic_index),
+    NewS = register_sub(SubRef, Spec, S),
+    {reply, {ok, SubRef}, issue_wire_subs(AlreadyTracked, Realm, Topic, NewS)}.
+
+%% Withdraw a unary or a stream procedure: stop renewing it, send the
+%% withdrawal to the links that carried it, and forget it.
+withdraw_unary(Realm, Procedure, S0) ->
+    #state{procs = P, node_identity = Key} = S = renewal_cancelled(unary, {Realm, Procedure}, S0),
+    Registered = maps:find({Realm, Procedure}, P),
+    Withdrawal = withdrawal_for(Registered, Realm, Procedure, Key),
+    _ = fanout_unadvertise(registered_link_pids(Registered, S), Realm, Procedure,
+                           Withdrawal),
+    registration_withdrawn({advertise, Realm, Procedure},
+                           S#state{procs = maps:remove({Realm, Procedure}, P)}).
+
+withdraw_stream(Realm, Procedure, S0) ->
+    #state{stream_procs = SP, node_identity = Key} = S = renewal_cancelled(stream, {Realm, Procedure}, S0),
+    Registered = maps:find({Realm, Procedure}, SP),
+    Withdrawal = withdrawal_for(Registered, Realm, Procedure, Key),
+    _ = fanout_unadvertise_stream(registered_link_pids(Registered, S), Realm, Procedure,
+                                  Withdrawal),
+    registration_withdrawn({advertise, Realm, Procedure},
+                           S#state{stream_procs = maps:remove({Realm, Procedure}, SP)}).
+
+start_linked_call(Realm, Procedure, Payload, TimeoutMs, From, S) ->
+    %% Worker-spawn so concurrent CALLs don't serialise through the
+    %% pool gen_server. Each per-link `macula_station_link:call/6'
+    %% is a sync gen_server:call to the link; with the old
+    %% `{reply, ..., S}' shape every caller blocked the pool until
+    %% the link replied, capping concurrent CALL throughput at 1.
+    %% The candidates are the links the pool holds connected: the worker asks
+    %% none of them first, as a busy link would hold it (macula#44).
+    Pids = ordered_for_selection(connected_link_pids(S), S#state.link_selection),
+    _ = spawn(fun() ->
+        Reply = call_first_success(Pids, Realm, Procedure, Payload,
+                                    TimeoutMs),
+        gen_server:reply(From, Reply)
+    end),
+    {noreply, S}.
 
 %% Delivered by the discovery worker (`run_station_discovery/1') after a
 %% successful `list_stations' call, as raw
@@ -2050,18 +2067,14 @@ handle_info({renew_due, Kind, Key, Ref}, S) ->
 
 handle_info({renewal_answer, Worker, Answer}, #state{renewals = Renewals} = S)
   when is_map_key(Worker, Renewals) ->
-    {Mon, Kind, Key, Ref} = map_get(Worker, Renewals),
+    {Mon, _Kind, _Key, _Ref} = map_get(Worker, Renewals),
     true = erlang:demonitor(Mon, [flush]),
-    Rest = S#state{renewals = maps:remove(Worker, Renewals)},
-    {noreply, renewal_answered(renewal_current(registration(Kind, Key, Rest), Ref), {renewed, Answer},
-                               Kind, Key, Rest)};
+    {noreply, renewal_ended(Worker, {renewed, Answer}, S)};
 
 %% A worker that died before answering: its renewal failed.
 handle_info({'DOWN', _Mon, process, Worker, Reason}, #state{renewals = Renewals} = S)
   when is_map_key(Worker, Renewals) ->
-    {_Monitor, Kind, Key, Ref} = map_get(Worker, Renewals),
-    Rest = S#state{renewals = maps:remove(Worker, Renewals)},
-    {noreply, renewal_answered(renewal_current(registration(Kind, Key, Rest), Ref), Reason, Kind, Key, Rest)};
+    {noreply, renewal_ended(Worker, Reason, S)};
 
 handle_info({'DOWN', Mon, process, Pid, Reason}, S) ->
     on_down(Mon, Pid, Reason, S);
@@ -2079,23 +2092,17 @@ handle_info(run_discovery, #state{discovery = undefined} = S) ->
     %% Disabled after being scheduled (should not happen -- discovery
     %% is fixed at connect/2 time today) or a stray message. No-op.
     {noreply, S};
-handle_info(run_discovery, #state{discovery = #discovery_state{procedure = Procedure} = D} = S) ->
-    Self = self(),
-    _ = spawn(fun() -> run_station_discovery(Self, Procedure) end),
-    {noreply, schedule_discovery(D#discovery_state.refresh_ms, S)};
+handle_info(run_discovery, #state{discovery = D} = S) ->
+    {noreply, discovery_ran(D, S)};
 
 handle_info(dedup_sweep, S) ->
-    _ = macula_client_dedup:sweep(S#state.dedup_tab, erlang:system_time(millisecond)),
-    erlang:send_after(S#state.dedup_sweep, self(), dedup_sweep),
-    {noreply, S};
+    {noreply, dedup_swept(S)};
 
 %% The admission removes the expired entries of callers that never ask
 %% again; a caller that does ask finds its own gone already
 %% (`macula_request_admission'). A cast, so the pool never waits on it.
-handle_info(admission_sweep, #state{admission = Admission} = S) ->
-    ok = macula_request_admission:expire(Admission, erlang:system_time(millisecond)),
-    erlang:send_after(S#state.admission_sweep, self(), admission_sweep),
-    {noreply, S};
+handle_info(admission_sweep, S) ->
+    {noreply, admission_swept(S)};
 
 handle_info(discovery_giveup_sweep, #state{discovery = undefined} = S) ->
     %% Defensive only -- `arm_giveup_sweep/1' never arms this timer
@@ -2103,10 +2110,7 @@ handle_info(discovery_giveup_sweep, #state{discovery = undefined} = S) ->
     %% today can disable it afterwards. Dropped, not re-armed.
     {noreply, S};
 handle_info(discovery_giveup_sweep, #state{discovery = D} = S) ->
-    S1 = sweep_stale_discovered_links(D#discovery_state.giveup_after_ms, S),
-    erlang:send_after(D#discovery_state.giveup_sweep_ms, self(),
-                      discovery_giveup_sweep),
-    {noreply, S1};
+    {noreply, giveup_swept(D, S)};
 
 handle_info(order_flush, S) ->
     %% Release timed-out gaps, then re-arm only if something is still
@@ -2145,6 +2149,33 @@ handle_info({'EXIT', Pid, Reason}, #state{keyring = Keyring} = S) ->
 
 handle_info(_Other, S) ->
     {noreply, S}.
+
+%% A renewal worker answered or died: drop it and record the outcome.
+renewal_ended(Worker, Outcome, #state{renewals = Renewals} = S) ->
+    {_Mon, Kind, Key, Ref} = map_get(Worker, Renewals),
+    Rest = S#state{renewals = maps:remove(Worker, Renewals)},
+    renewal_answered(renewal_current(registration(Kind, Key, Rest), Ref), Outcome, Kind, Key, Rest).
+
+discovery_ran(#discovery_state{procedure = Procedure} = D, S) ->
+    Self = self(),
+    _ = spawn(fun() -> run_station_discovery(Self, Procedure) end),
+    schedule_discovery(D#discovery_state.refresh_ms, S).
+
+dedup_swept(S) ->
+    _ = macula_client_dedup:sweep(S#state.dedup_tab, erlang:system_time(millisecond)),
+    erlang:send_after(S#state.dedup_sweep, self(), dedup_sweep),
+    S.
+
+admission_swept(#state{admission = Admission} = S) ->
+    ok = macula_request_admission:expire(Admission, erlang:system_time(millisecond)),
+    erlang:send_after(S#state.admission_sweep, self(), admission_sweep),
+    S.
+
+giveup_swept(D, S) ->
+    S1 = sweep_stale_discovered_links(D#discovery_state.giveup_after_ms, S),
+    erlang:send_after(D#discovery_state.giveup_sweep_ms, self(),
+                      discovery_giveup_sweep),
+    S1.
 
 terminate(_Reason, #state{subs = Subs, admission = Admission, keyring = Keyring}) ->
     %% Notify every subscriber that the pool is gone.

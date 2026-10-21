@@ -1589,36 +1589,6 @@ handle_call({call, Target, Realm, Proc, Payload, DeadlineMs, Token, Seal, Report
     call_in_time(DeadlineMs - erlang:system_time(millisecond),
                  {Target, Realm, Proc, Payload, DeadlineMs, Token, Seal, Report}, From, S);
 
-handle_call({publish, _Realm, _Topic, _Payload}, _From,
-            #state{peer_node_id = undefined} = S) ->
-    %% Require the full HELLO handshake before publishing — the
-    %% peering worker may exist mid-handshake while the wire is not
-    %% yet ready for application frames. Matches `is_connected/1'.
-    {reply, {error, not_connected}, S};
-handle_call({publish, _Realm, _Topic, _Payload, _Seq}, _From,
-            #state{peer_node_id = undefined} = S) ->
-    {reply, {error, not_connected}, S};
-handle_call({publish, _Realm, _Topic, _Payload, _Seq, _Seal}, _From,
-            #state{peer_node_id = undefined} = S) ->
-    {reply, {error, not_connected}, S};
-handle_call({publish, Realm, Topic, Payload}, _From,
-            #state{publish_seq = Seq} = S) ->
-    %% Standalone (pool-less) publish: fall back to the per-link
-    %% counter. Pool-driven publishes use `publish/5' with the pool's
-    %% own monotone seq (see `macula_client').
-    %% NOT `ok = ...'. send_publish_frame/5 returns the seam's verdict,
-    %% so a hard match here kills this link's gen_server — subscriptions,
-    %% pending calls and streams with it — over one caller's bad payload.
-    %% A refused frame also does NOT consume a seq: nothing reached the
-    %% wire, and burning the number would fake a gap in the
-    %% (publisher, seq) sequence the station dedup keys on.
-    publish_reply(send_publish_frame(Realm, Topic, Payload, Seq, S), Seq, S);
-handle_call({publish, Realm, Topic, Payload, Seq}, _From, S) ->
-    %% Pool-driven: the pool owns the seq, so there is none to advance.
-    {reply, send_publish_frame(Realm, Topic, Payload, Seq, S), S};
-handle_call({publish, Realm, Topic, Payload, Seq, {group, Epoch}}, _From, S) ->
-    {reply, send_sealed_publish_frame(Realm, Topic, Payload, Seq, Epoch, S), S};
-
 handle_call(is_connected, _From, #state{peer_pid = undefined} = S) ->
     {reply, false, S};
 handle_call(is_connected, _From, #state{peer_node_id = undefined} = S) ->
@@ -1683,9 +1653,46 @@ handle_call({unadvertise, Realm, Proc, EncodedWithdrawal}, _From,
                         advertisements = maps:remove({Realm, Proc},
                                                      S#state.advertisements)}};
 
+%% The publish, overlay and stream requests, which answer from the link's
+%% state alone: publish_call/2, then overlay_call/2, then stream_call/2.
+handle_call(Request, _From, S) ->
+    publish_call(Request, S).
+
+publish_call({publish, _Realm, _Topic, _Payload},
+            #state{peer_node_id = undefined} = S) ->
+    %% Require the full HELLO handshake before publishing — the
+    %% peering worker may exist mid-handshake while the wire is not
+    %% yet ready for application frames. Matches `is_connected/1'.
+    {reply, {error, not_connected}, S};
+publish_call({publish, _Realm, _Topic, _Payload, _Seq},
+            #state{peer_node_id = undefined} = S) ->
+    {reply, {error, not_connected}, S};
+publish_call({publish, _Realm, _Topic, _Payload, _Seq, _Seal},
+            #state{peer_node_id = undefined} = S) ->
+    {reply, {error, not_connected}, S};
+publish_call({publish, Realm, Topic, Payload},
+            #state{publish_seq = Seq} = S) ->
+    %% Standalone (pool-less) publish: fall back to the per-link
+    %% counter. Pool-driven publishes use `publish/5' with the pool's
+    %% own monotone seq (see `macula_client').
+    %% NOT `ok = ...'. send_publish_frame/5 returns the seam's verdict,
+    %% so a hard match here kills this link's gen_server — subscriptions,
+    %% pending calls and streams with it — over one caller's bad payload.
+    %% A refused frame also does NOT consume a seq: nothing reached the
+    %% wire, and burning the number would fake a gap in the
+    %% (publisher, seq) sequence the station dedup keys on.
+    publish_reply(send_publish_frame(Realm, Topic, Payload, Seq, S), Seq, S);
+publish_call({publish, Realm, Topic, Payload, Seq}, S) ->
+    %% Pool-driven: the pool owns the seq, so there is none to advance.
+    {reply, send_publish_frame(Realm, Topic, Payload, Seq, S), S};
+publish_call({publish, Realm, Topic, Payload, Seq, {group, Epoch}}, S) ->
+    {reply, send_sealed_publish_frame(Realm, Topic, Payload, Seq, Epoch, S), S};
+publish_call(Request, S) ->
+    overlay_call(Request, S).
+
 %%-- Overlay-protocol frame transport --------------------------------
 
-handle_call({overlay_subscribe, Realm, Subscriber}, _From,
+overlay_call({overlay_subscribe, Realm, Subscriber},
             #state{overlay_subscriptions = Subs, overlay_realm_index = Idx} = S) ->
     SubRef  = make_ref(),
     Mon     = erlang:monitor(process, Subscriber),
@@ -1694,26 +1701,26 @@ handle_call({overlay_subscribe, Realm, Subscriber}, _From,
     {reply, {ok, SubRef}, S#state{overlay_subscriptions = NewSubs,
                                   overlay_realm_index   = NewIdx}};
 
-handle_call({overlay_unsubscribe, SubRef}, _From, S) ->
+overlay_call({overlay_unsubscribe, SubRef}, S) ->
     {reply, ok, on_overlay_unsubscribe(SubRef, S)};
 
 %% An overlay frame goes out only once the handshake has completed, which
 %% `peer_node_id' marks: `peer_pid' is set while the connection is still
 %% handshaking, when the peering connection drops an application frame as
 %% an unexpected event and the caller would be told `ok'.
-handle_call({send_overlay_frame, _Frame}, _From,
+overlay_call({send_overlay_frame, _Frame},
             #state{peer_node_id = undefined} = S) ->
     {reply, {error, not_connected}, S};
-handle_call({send_overlay_frame, Frame}, _From, #state{peer_pid = Pid} = S) ->
+overlay_call({send_overlay_frame, Frame}, #state{peer_pid = Pid} = S) ->
     Result = try macula_peering:send_frame(Pid, Frame)
              catch C:R -> {error, {C, R}}
              end,
     {reply, Result, S};
 
-handle_call({send_overlay_frame_to, _Target, _Frame}, _From,
+overlay_call({send_overlay_frame_to, _Target, _Frame},
             #state{peer_node_id = undefined} = S) ->
     {reply, {error, not_connected}, S};
-handle_call({send_overlay_frame_to, Target, Frame}, _From,
+overlay_call({send_overlay_frame_to, Target, Frame},
             #state{peer_pid = Pid} = S) ->
     %% The envelope is a control frame on the authenticated connection, and
     %% the station relays it as sent by this
@@ -1726,27 +1733,29 @@ handle_call({send_overlay_frame_to, Target, Frame}, _From,
              catch C:R -> {error, {C, R}}
              end,
     {reply, Result, S};
+overlay_call(Request, S) ->
+    stream_call(Request, S).
 
 %%-- Streaming RPC ---------------------------------------------------
 
-handle_call({stream_open, _Target, _R, _P, _A, _O, _Caller}, _From,
+stream_call({stream_open, _Target, _R, _P, _A, _O, _Caller},
             #state{peer_node_id = undefined} = S) ->
     %% Mirror the gating used for `call' / `publish' — STREAM_OPEN
     %% frames sent before HELLO completes hit `drop_unexpected' in
     %% the peering statem and never make it to the wire.
     {reply, {error, not_connected}, S};
-handle_call({stream_open, Target, Realm, Proc, Args, Opts, Caller}, _From, S) ->
+stream_call({stream_open, Target, Realm, Proc, Args, Opts, Caller}, S) ->
     {reply_value, Reply, NewS} = open_client_stream(Target, Realm, Proc, Args, Opts, Caller, S),
     {reply, Reply, NewS};
-handle_call({reopen_stream, StreamPid, OldSid, Open, Args, KemKey}, _From, S) ->
+stream_call({reopen_stream, StreamPid, OldSid, Open, Args, KemKey}, S) ->
     {reply_value, Reply, NewS} = reopened_client_stream(StreamPid, Open, Args, KemKey, drop_stream(OldSid, S)),
     {reply, Reply, NewS};
 
-handle_call({stream_advertise, Realm, Proc, Mode, Handler, Policy}, _From,
+stream_call({stream_advertise, Realm, Proc, Mode, Handler, Policy},
             #state{stream_procedures = SP, stream_policies = SPols} = S) ->
     {reply, ok, S#state{stream_procedures = SP#{{Realm, Proc} => {Mode, Handler}},
                         stream_policies   = set_policy({Realm, Proc}, Policy, SPols)}};
-handle_call({stream_advertise, Realm, Proc, Mode, Handler, Policy, EncodedAd}, _From,
+stream_call({stream_advertise, Realm, Proc, Mode, Handler, Policy, EncodedAd},
             #state{stream_procedures = SP, stream_policies = SPols} = S) ->
     S1 = S#state{stream_procedures = SP#{{Realm, Proc} => {Mode, Handler}},
                  stream_policies   = set_policy({Realm, Proc}, Policy, SPols),
@@ -1754,20 +1763,19 @@ handle_call({stream_advertise, Realm, Proc, Mode, Handler, Policy, EncodedAd}, _
     maybe_send_advertise(Realm, Proc, EncodedAd, S1),
     {reply, ok, S1};
 
-handle_call({stream_unadvertise, Realm, Proc}, _From,
+stream_call({stream_unadvertise, Realm, Proc},
             #state{stream_procedures = SP, stream_policies = SPols, advertisements = Ads} = S) ->
     {reply, ok, S#state{stream_procedures = maps:remove({Realm, Proc}, SP),
                         stream_policies   = maps:remove({Realm, Proc}, SPols),
                         advertisements    = maps:remove({Realm, Proc}, Ads)}};
-handle_call({stream_unadvertise, Realm, Proc, EncodedWithdrawal}, _From,
+stream_call({stream_unadvertise, Realm, Proc, EncodedWithdrawal},
             #state{stream_procedures = SP, stream_policies = SPols} = S) ->
     maybe_send_unadvertise(Realm, Proc, EncodedWithdrawal, S),
     {reply, ok, S#state{stream_procedures = maps:remove({Realm, Proc}, SP),
                         stream_policies   = maps:remove({Realm, Proc}, SPols),
                         advertisements    = maps:remove({Realm, Proc},
                                                         S#state.advertisements)}};
-
-handle_call(_Req, _From, S) ->
+stream_call(_Request, S) ->
     {reply, {error, unknown_call}, S}.
 
 %%-- Outbound STREAM_* bytes from a paired macula_stream -------------
@@ -1822,67 +1830,10 @@ handle_info({renew_advertisement, Key, Ref}, #state{renewals = Renewals} = S)
 handle_info({renew_advertisement, _Key, _Ref}, S) ->
     {noreply, S};
 
-handle_info({macula_peering, connected, Pid, PeerNodeId},
-            #state{peer_pid = Pid} = S) ->
-    %% Handshake completed — cancel the connect watchdog and hand over
-    %% to the steady-state app-liveness probe.
-    S1 = cancel_connect_watchdog(S),
-    %% The pool keeps each link's connectedness and station from this notice
-    %% and never asks the link (macula#44).
-    pool_connected(S1#state.pool, PeerNodeId),
-    NewS = arm_liveness(S1#state{peer_node_id = PeerNodeId,
-                                 liveness_misses = 0,
-                                 liveness_outstanding = undefined,
-                                 refused_streak = 0}),
-    drain_pending_subscribes(NewS),
-    drain_pending_advertisements(NewS),
-    {noreply, NewS};
-
-handle_info({macula_peering, frame, Pid, Frame},
-            #state{peer_pid = Pid} = S) ->
-    {noreply, fold_frames(drain_frames(Pid, [Frame]), S)};
-
-%% 5-tuple variant: peering_conn opted into `timing_enabled', appended
-%% the monotonic-microsecond timestamp captured the instant the frame
-%% finished decoding. station_link does not act on it yet (Phase 1
-%% telemetry is station-side); kept for forward compatibility.
-handle_info({macula_peering, frame, Pid, Frame, _RecvAtUs},
-            #state{peer_pid = Pid} = S) ->
-    {noreply, fold_frames(drain_frames(Pid, [Frame]), S)};
-
-handle_info({macula_peering, disconnected, Pid, Reason},
-            #state{peer_pid = Pid, seed = Seed, pool = Pool} = S) ->
-    %% The one place the PEER-SIDE disconnect reason (e.g. `peer_closed'
-    %% detail, `drained') is ever known. Everything downstream of this
-    %% -- `fail_all_pending' and the eventual `{stop, normal, ...}' --
-    %% discards it in favor of a uniform `normal' exit, which is all
-    %% `macula_client:on_down_routed/5' has left to log. Without this,
-    %% a station-initiated close is indistinguishable from any other
-    %% disconnect in every log this link ever produces.
-    Summary = disconnect_summary(Reason),
-    macula_diagnostics:event(notice, <<"_macula.station_link.disconnected">>,
-                             maps:merge(#{seed => Seed, peer_pid => Pid}, Summary)),
-    pool_told(Pool, Summary#{at_ms => erlang:system_time(millisecond)}),
-    NewS = fail_all_pending({disconnected, macula_reason_name:text(Reason)}, cancel_liveness(S)),
-    %% Stop normally — the supervisor (or owning gen_server) decides
-    %% whether to restart us.
-    {stop, normal, NewS#state{peer_pid = undefined,
-                              peer_node_id = undefined}};
-
-%% Peer opened a dedicated stream toward us — a streaming RPC session
-%% we didn't initiate. `macula_peering_conn' already handed off
-%% controlling_process and enabled active mode; open this stream's
-%% buffer and wait for its first frame (expected: STREAM_OPEN).
-handle_info({macula_peering, new_dedicated_stream, Pid, Stream},
-            #state{peer_pid = Pid, opening_bufs = Opening} = S) ->
-    _ = erlang:send_after(application:get_env(macula, dedicated_stream_open_timeout_ms,
-                                              ?DEDICATED_STREAM_OPEN_TIMEOUT_MS),
-                          self(), {dedicated_stream_open_deadline, Stream}),
-    {noreply, S#state{opening_bufs = Opening#{Stream => <<>>}}};
-handle_info({macula_peering, new_dedicated_stream, _OtherPid, _Stream}, S) ->
-    %% Stale notification from a link that is no longer `peer_pid'
-    %% (respawned mid-flight) — nothing to attach it to.
-    {noreply, S};
+%% Every peering connection event (connected, frames, disconnected, a
+%% dedicated stream the peer opened): peering_event/2.
+handle_info(Msg, S) when is_tuple(Msg), element(1, Msg) =:= macula_peering ->
+    peering_event(Msg, S);
 
 %% A dedicated stream the peer opened that brought no whole first frame
 %% within `dedicated_stream_open_timeout_ms' closes without a word.
@@ -1893,54 +1844,9 @@ handle_info({dedicated_stream_open_deadline, Stream}, #state{opening_bufs = Open
 handle_info({dedicated_stream_open_deadline, _Stream}, S) ->
     {noreply, S};
 
-%% Bytes on a dedicated stream the peer opened, before its first whole
-%% frame. That frame is read with a cap of `max_stream_open_bytes', the way
-%% the handshake reads its frames, so a longer length header closes the
-%% stream as soon as it arrives (`opening_parse/2'). Once a whole first
-%% frame has come, the stream's buffer moves on to `stream_bufs' and the
-%% first item decides whether the stream stays open; the items after it go
-%% the way of any dedicated stream's (`opening_items/3').
-handle_info({quic, Bin, Stream, _Flags}, #state{opening_bufs = Opening} = S)
-        when is_binary(Bin), is_map_key(Stream, Opening) ->
-    Bytes = <<(maps:get(Stream, Opening))/binary, Bin/binary>>,
-    {noreply, opening_items(opening_parse(macula_frame:parse_received(Bytes, stream_open_limit()), Bytes),
-                            Stream, S)};
-
-%% Bytes on one of our dedicated streams. Decode whatever complete
-%% frames are available and dispatch each; the tail (a partial frame)
-%% stays buffered for the next chunk, same as the shared-stream case
-%% in `macula_peering_conn:connected/3'. Bytes that do not decode, or a
-%% frame missing a field its type requires, end this stream only
-%% (`dedicated_items/3').
-handle_info({quic, Bin, Stream, _Flags}, #state{stream_bufs = Bufs} = S)
-        when is_binary(Bin), is_map_key(Stream, Bufs) ->
-    Buf = maps:get(Stream, Bufs),
-    {noreply, dedicated_items(macula_frame:parse_received(<<Buf/binary, Bin/binary>>), Stream, S)};
-
-%% A write on one of our dedicated streams failed: the sessions it carries
-%% can send nothing more, so they end as they do when the link is lost.
-handle_info({quic, send_failed, Stream, Reason}, #state{stream_bufs = Bufs} = S)
-        when is_map_key(Stream, Bufs) ->
-    {noreply, end_sessions_on_stream(Stream, {send_failed, Reason}, S)};
-
-%% A dedicated stream QUIC closed, or the peer finished, under open sessions:
-%% nothing more can arrive on it, so they end as for a failed write. The
-%% station relay closes a session's streams only once both sides have ended,
-%% or when it gives the session up (its lifetime, a lost relay), and a
-%% half-close is a STREAM_END frame, never a QUIC close. Before these clauses
-%% the event fell to the catch-all, and a reader waited for ever.
-handle_info({quic, stream_closed, Stream, Flags}, #state{stream_bufs = Bufs} = S)
-        when is_map_key(Stream, Bufs) ->
-    {noreply, end_sessions_on_stream(Stream, {stream_closed, Flags}, S)};
-handle_info({quic, peer_send_shutdown, Stream, _}, #state{stream_bufs = Bufs} = S)
-        when is_map_key(Stream, Bufs) ->
-    {noreply, end_sessions_on_stream(Stream, peer_send_shutdown, S)};
-%% A stream that closes before its STREAM_OPEN completed carries no session.
-handle_info({quic, Closed, Stream, _}, #state{opening_bufs = Opening} = S)
-        when (Closed =:= stream_closed orelse Closed =:= peer_send_shutdown),
-             is_map_key(Stream, Opening) ->
-    ok = close_dedicated_stream(Stream, S),
-    {noreply, S#state{opening_bufs = maps:remove(Stream, Opening)}};
+%% Every QUIC event on a dedicated stream: quic_event/2.
+handle_info(Msg, S) when is_tuple(Msg), element(1, Msg) =:= quic ->
+    quic_event(Msg, S);
 
 handle_info({call_timeout, RequestId}, #state{pending = P} = S) ->
     on_timeout(maps:take(RequestId, P), S);
@@ -1954,25 +1860,11 @@ handle_info(liveness_tick, S) ->
 handle_info(connect_watchdog, #state{peer_node_id = NodeId} = S)
         when NodeId =/= undefined ->
     {noreply, S#state{connect_watchdog = undefined}};
-handle_info(connect_watchdog, #state{peer_pid = Pid, seed = Seed} = S) ->
-    macula_diagnostics:event(<<"_macula.station_link.connect_watchdog">>, #{
-        seed          => Seed,
-        peer_pid      => Pid,
-        timeout_ms    => connect_watchdog_ms(S)
-    }),
-    %% Best-effort kill of the wedged peering worker. If it is blocked
-    %% in a non-yielding dirty NIF the kill is deferred until the NIF
-    %% returns, but stopping here still frees the owner to respawn a
-    %% fresh link (fresh dial) immediately — the bounded self-heal.
-    kill_peer(Pid),
-    {stop, normal, fail_all_pending(connect_timeout,
-                                    cancel_liveness(
-                                      S#state{connect_watchdog = undefined,
-                                              peer_pid = undefined,
-                                              peer_node_id = undefined}))};
+handle_info(connect_watchdog, S) ->
+    connect_watchdog_fired(S);
 
 handle_info({'EXIT', Pid, Reason}, #state{peer_pid = Pid, seed = Seed} = S) ->
-    %% Same swallowed-reason gap as the `disconnected' clause above, for
+    %% Same swallowed-reason gap as peering_event/2's `disconnected' clause, for
     %% the case where the peering worker itself exits (crash or
     %% deliberate stop) rather than sending a `disconnected' notification.
     macula_diagnostics:event(notice, <<"_macula.station_link.peering_exit">>, #{
@@ -1998,6 +1890,140 @@ handle_info({'DOWN', Mon, process, Pid, _Reason}, S) ->
     {noreply, on_monitor_down(Pid, Mon, S)};
 
 handle_info(_Other, S) ->
+    {noreply, S}.
+
+%% The handshake never completed: recycle the link.
+connect_watchdog_fired(#state{peer_pid = Pid, seed = Seed} = S) ->
+    macula_diagnostics:event(<<"_macula.station_link.connect_watchdog">>, #{
+        seed          => Seed,
+        peer_pid      => Pid,
+        timeout_ms    => connect_watchdog_ms(S)
+    }),
+    %% Best-effort kill of the wedged peering worker. If it is blocked
+    %% in a non-yielding dirty NIF the kill is deferred until the NIF
+    %% returns, but stopping here still frees the owner to respawn a
+    %% fresh link (fresh dial) immediately — the bounded self-heal.
+    kill_peer(Pid),
+    {stop, normal, fail_all_pending(connect_timeout,
+                                    cancel_liveness(
+                                      S#state{connect_watchdog = undefined,
+                                              peer_pid = undefined,
+                                              peer_node_id = undefined}))}.
+
+peering_event({macula_peering, connected, Pid, PeerNodeId},
+            #state{peer_pid = Pid} = S) ->
+    %% Handshake completed — cancel the connect watchdog and hand over
+    %% to the steady-state app-liveness probe.
+    S1 = cancel_connect_watchdog(S),
+    %% The pool keeps each link's connectedness and station from this notice
+    %% and never asks the link (macula#44).
+    pool_connected(S1#state.pool, PeerNodeId),
+    NewS = arm_liveness(S1#state{peer_node_id = PeerNodeId,
+                                 liveness_misses = 0,
+                                 liveness_outstanding = undefined,
+                                 refused_streak = 0}),
+    drain_pending_subscribes(NewS),
+    drain_pending_advertisements(NewS),
+    {noreply, NewS};
+
+peering_event({macula_peering, frame, Pid, Frame},
+            #state{peer_pid = Pid} = S) ->
+    {noreply, fold_frames(drain_frames(Pid, [Frame]), S)};
+
+%% 5-tuple variant: peering_conn opted into `timing_enabled', appended
+%% the monotonic-microsecond timestamp captured the instant the frame
+%% finished decoding. station_link does not act on it yet (Phase 1
+%% telemetry is station-side); kept for forward compatibility.
+peering_event({macula_peering, frame, Pid, Frame, _RecvAtUs},
+            #state{peer_pid = Pid} = S) ->
+    {noreply, fold_frames(drain_frames(Pid, [Frame]), S)};
+
+peering_event({macula_peering, disconnected, Pid, Reason},
+            #state{peer_pid = Pid, seed = Seed, pool = Pool} = S) ->
+    %% The one place the PEER-SIDE disconnect reason (e.g. `peer_closed'
+    %% detail, `drained') is ever known. Everything downstream of this
+    %% -- `fail_all_pending' and the eventual `{stop, normal, ...}' --
+    %% discards it in favor of a uniform `normal' exit, which is all
+    %% `macula_client:on_down_routed/5' has left to log. Without this,
+    %% a station-initiated close is indistinguishable from any other
+    %% disconnect in every log this link ever produces.
+    Summary = disconnect_summary(Reason),
+    macula_diagnostics:event(notice, <<"_macula.station_link.disconnected">>,
+                             maps:merge(#{seed => Seed, peer_pid => Pid}, Summary)),
+    pool_told(Pool, Summary#{at_ms => erlang:system_time(millisecond)}),
+    NewS = fail_all_pending({disconnected, macula_reason_name:text(Reason)}, cancel_liveness(S)),
+    %% Stop normally — the supervisor (or owning gen_server) decides
+    %% whether to restart us.
+    {stop, normal, NewS#state{peer_pid = undefined,
+                              peer_node_id = undefined}};
+
+%% Peer opened a dedicated stream toward us — a streaming RPC session
+%% we didn't initiate. `macula_peering_conn' already handed off
+%% controlling_process and enabled active mode; open this stream's
+%% buffer and wait for its first frame (expected: STREAM_OPEN).
+peering_event({macula_peering, new_dedicated_stream, Pid, Stream},
+            #state{peer_pid = Pid, opening_bufs = Opening} = S) ->
+    _ = erlang:send_after(application:get_env(macula, dedicated_stream_open_timeout_ms,
+                                              ?DEDICATED_STREAM_OPEN_TIMEOUT_MS),
+                          self(), {dedicated_stream_open_deadline, Stream}),
+    {noreply, S#state{opening_bufs = Opening#{Stream => <<>>}}};
+peering_event({macula_peering, new_dedicated_stream, _OtherPid, _Stream}, S) ->
+    %% Stale notification from a link that is no longer `peer_pid'
+    %% (respawned mid-flight) — nothing to attach it to.
+    {noreply, S};
+peering_event(_Msg, S) ->
+    {noreply, S}.
+
+
+%% Bytes on a dedicated stream the peer opened, before its first whole
+%% frame. That frame is read with a cap of `max_stream_open_bytes', the way
+%% the handshake reads its frames, so a longer length header closes the
+%% stream as soon as it arrives (`opening_parse/2'). Once a whole first
+%% frame has come, the stream's buffer moves on to `stream_bufs' and the
+%% first item decides whether the stream stays open; the items after it go
+%% the way of any dedicated stream's (`opening_items/3').
+quic_event({quic, Bin, Stream, _Flags}, #state{opening_bufs = Opening} = S)
+        when is_binary(Bin), is_map_key(Stream, Opening) ->
+    Bytes = <<(maps:get(Stream, Opening))/binary, Bin/binary>>,
+    {noreply, opening_items(opening_parse(macula_frame:parse_received(Bytes, stream_open_limit()), Bytes),
+                            Stream, S)};
+
+%% Bytes on one of our dedicated streams. Decode whatever complete
+%% frames are available and dispatch each; the tail (a partial frame)
+%% stays buffered for the next chunk, same as the shared-stream case
+%% in `macula_peering_conn:connected/3'. Bytes that do not decode, or a
+%% frame missing a field its type requires, end this stream only
+%% (`dedicated_items/3').
+quic_event({quic, Bin, Stream, _Flags}, #state{stream_bufs = Bufs} = S)
+        when is_binary(Bin), is_map_key(Stream, Bufs) ->
+    Buf = maps:get(Stream, Bufs),
+    {noreply, dedicated_items(macula_frame:parse_received(<<Buf/binary, Bin/binary>>), Stream, S)};
+
+%% A write on one of our dedicated streams failed: the sessions it carries
+%% can send nothing more, so they end as they do when the link is lost.
+quic_event({quic, send_failed, Stream, Reason}, #state{stream_bufs = Bufs} = S)
+        when is_map_key(Stream, Bufs) ->
+    {noreply, end_sessions_on_stream(Stream, {send_failed, Reason}, S)};
+
+%% A dedicated stream QUIC closed, or the peer finished, under open sessions:
+%% nothing more can arrive on it, so they end as for a failed write. The
+%% station relay closes a session's streams only once both sides have ended,
+%% or when it gives the session up (its lifetime, a lost relay), and a
+%% half-close is a STREAM_END frame, never a QUIC close. Before these clauses
+%% the event fell to the catch-all, and a reader waited for ever.
+quic_event({quic, stream_closed, Stream, Flags}, #state{stream_bufs = Bufs} = S)
+        when is_map_key(Stream, Bufs) ->
+    {noreply, end_sessions_on_stream(Stream, {stream_closed, Flags}, S)};
+quic_event({quic, peer_send_shutdown, Stream, _}, #state{stream_bufs = Bufs} = S)
+        when is_map_key(Stream, Bufs) ->
+    {noreply, end_sessions_on_stream(Stream, peer_send_shutdown, S)};
+%% A stream that closes before its STREAM_OPEN completed carries no session.
+quic_event({quic, Closed, Stream, _}, #state{opening_bufs = Opening} = S)
+        when (Closed =:= stream_closed orelse Closed =:= peer_send_shutdown),
+             is_map_key(Stream, Opening) ->
+    ok = close_dedicated_stream(Stream, S),
+    {noreply, S#state{opening_bufs = maps:remove(Stream, Opening)}};
+quic_event(_Msg, S) ->
     {noreply, S}.
 
 %% Drain consecutive frame messages from the peering process so they

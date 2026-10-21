@@ -37,146 +37,79 @@ init([]) ->
     ChildSpecs = [
         %% The seq counter every publication a node signs draws from, one per
         %% key. First, so it runs before any pool or pubsub server publishes.
-        #{
-            id => macula_publication_seq,
-            start => {macula_publication_seq, start_link, []},
-            restart => permanent,
-            shutdown => 5000,
-            type => worker
-        },
+        worker_child(macula_publication_seq),
 
         %% The counts table behind macula_diagnostics:bounded_event/3, which
         %% callers update themselves. Before any connection logs through it.
-        #{
-            id => macula_diagnostics_bound,
-            start => {macula_diagnostics_bound, start_link, []},
-            restart => permanent,
-            shutdown => 5000,
-            type => worker
-        },
+        worker_child(macula_diagnostics_bound),
 
         %% The last record version this node issued, which callers of
         %% macula_record_uuid:v7_monotonic/1 advance themselves. Before any
         %% record is signed.
-        #{
-            id => macula_record_uuid,
-            start => {macula_record_uuid, start_link, []},
-            restart => permanent,
-            shutdown => 5000,
-            type => worker
-        },
+        worker_child(macula_record_uuid),
 
         %% The KEM keys this node's advertisements name and its sealed calls
         %% open with, one current key per node identity (E2E design,
         %% Amendment A1). Before any pool advertises or serves.
-        #{
-            id => macula_kem_keyring,
-            start => {macula_kem_keyring, start_link, []},
-            restart => permanent,
-            shutdown => 5000,
-            type => worker
-        },
+        worker_child(macula_kem_keyring),
 
         %% MRI Type Registry (type validation, custom type registration)
-        #{
-            id => macula_mri_registry,
-            start => {macula_mri_registry, start_link, [[]]},
-            restart => permanent,
-            shutdown => 5000,
-            type => worker
-        },
+        worker_child(macula_mri_registry, [[]]),
 
         %% MRI ETS Storage (in-memory store/graph adapter)
-        #{
-            id => macula_mri_ets,
-            start => {macula_mri_ets, start_link, [[]]},
-            restart => permanent,
-            shutdown => 5000,
-            type => worker
-        },
+        worker_child(macula_mri_ets, [[]]),
 
         %% The content sharers, one per pool (D27): the content a node
         %% shares, kept, served and announced by the node itself.
-        #{
-            id => macula_content_sharer_sup,
-            start => {macula_content_sharer_sup, start_link, []},
-            restart => permanent,
-            shutdown => infinity,
-            type => supervisor
-        },
+        supervisor_child(macula_content_sharer_sup),
 
         %% Local registry + dispatcher for streaming RPC (v1.5.0+).
         %% In-process pairing of client/server stream halves; the QUIC-
         %% backed cross-node path is the station link's.
-        #{
-            id => macula_stream_local,
-            start => {macula_stream_local, start_link, []},
-            restart => permanent,
-            shutdown => 5000,
-            type => worker
-        },
+        worker_child(macula_stream_local),
 
         %% Holds the table of served stream sessions, so the sessions kept
         %% there outlive a restart of the counter below. Starts first.
-        #{
-            id => macula_stream_sessions_keeper,
-            start => {macula_stream_sessions_keeper, start_link, []},
-            restart => permanent,
-            shutdown => 5000,
-            type => worker
-        },
+        worker_child(macula_stream_sessions_keeper),
 
         %% The node's count of served stream sessions: each station link
         %% asks it before serving a session, against the caps per verified
         %% caller and node-wide, and a session's place frees when its stream
         %% ends.
-        #{
-            id => macula_stream_sessions,
-            start => {macula_stream_sessions, start_link, []},
-            restart => permanent,
-            shutdown => 5000,
-            type => worker
-        },
+        worker_child(macula_stream_sessions),
 
         %% Distribution-over-mesh bridge supervisor.
         %% Started here (under the application supervisor) so it survives
         %% shell crashes and other transient process deaths in user code.
-        #{
-            id => macula_dist_bridge_sup,
-            start => {macula_dist_bridge_sup, start_link, []},
-            restart => permanent,
-            shutdown => infinity,
-            type => supervisor,
-            modules => [macula_dist_bridge_sup]
-        },
+        supervisor_child(macula_dist_bridge_sup),
 
         %% The statement issuers of this node's pools, one for each pool,
         %% which every connection a pool's links make draws its CONNECT
         %% material and status statements from. Before peering.
-        #{
-            id => macula_statement_issuer_sup,
-            start => {macula_statement_issuer_sup, start_link, []},
-            restart => permanent,
-            shutdown => infinity,
-            type => supervisor,
-            modules => [macula_statement_issuer_sup]
-        },
+        supervisor_child(macula_statement_issuer_sup),
 
         %% Peering — per-peer connection state machines (CONNECT/HELLO
         %% handshake + frame send/receive). One macula_peering_conn
         %% gen_statem per peer, supervised by macula_peering_conn_sup
         %% under the macula_peering_sup top supervisor.
-        #{
-            id => macula_peering_sup,
-            start => {macula_peering_sup, start_link, []},
-            restart => permanent,
-            shutdown => infinity,
-            type => supervisor,
-            modules => [macula_peering_sup]
-        }
+        supervisor_child(macula_peering_sup)
     ],
 
     {ok, {SupFlags, ChildSpecs}}.
+
+%% A permanent worker started as Mod:start_link(Args...).
+worker_child(Mod) ->
+    worker_child(Mod, []).
+
+worker_child(Mod, Args) ->
+    #{id => Mod, start => {Mod, start_link, Args},
+      restart => permanent, shutdown => 5000, type => worker}.
+
+%% A permanent supervisor, given all the time it needs to stop its children.
+supervisor_child(Mod) ->
+    #{id => Mod, start => {Mod, start_link, []},
+      restart => permanent, shutdown => infinity, type => supervisor,
+      modules => [Mod]}.
 
 %% @private
 get_app_version() ->
