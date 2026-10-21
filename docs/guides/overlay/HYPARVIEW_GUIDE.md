@@ -94,10 +94,12 @@ transmit. It never blocks and never touches the network itself.
 A minimal dispatcher loop looks like:
 
 ```erlang
+-record(state, {view, ctx}).
+
 handle_info({macula_overlay_frame, _Ref, Frame, #{sender := From}}, State) ->
     {View1, Actions} = macula_hyparview_proto:process(State#state.view, From, Frame, State#state.ctx),
     lists:foreach(fun({send, Target, F}) -> send_to(Target, F, State) end, Actions),
-    {noreply, State#state{view = View1}};
+    {noreply, State#state{view = View1}}.
 ```
 
 `send_to/3` is your own responsibility — resolve `Target` (a NodeId) to a

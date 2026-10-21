@@ -103,6 +103,13 @@ jobs:
     if: github.event_name == 'push'
     uses: ./.github/workflows/test.yml
 
+  # The docs check (docs.yml) on the tagged commit: a release whose README or
+  # guides carry a block that no longer compiles does not publish.
+  docs:
+    name: Check the release commit's docs
+    if: github.event_name == 'push'
+    uses: ./.github/workflows/docs.yml
+
 
   # The release guard (macula-ci-images#5): the tagged commit must be an
   # ancestor of the default branch, and the tag's version must be the version
@@ -115,7 +122,7 @@ jobs:
 
   publish:
     name: Publish to hex.pm
-    needs: [verify, test, release-guard]
+    needs: [verify, test, docs, release-guard]
     # Only a pushed release tag publishes, whatever the triggers above say.
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest

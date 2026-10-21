@@ -4,7 +4,7 @@ This directory contains all tests for the peer subsystem.
 
 ## Test Files
 
-```
+```text
 - macula_peer_system_tests.erl
 - macula_peer_tests.erl
 ```

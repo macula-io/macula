@@ -17,7 +17,7 @@ MRI provides a unified identification scheme that is:
 
 ## Format
 
-```
+```text
 mri:{type}:{realm}/{path}
 ```
 
@@ -30,7 +30,7 @@ mri:{type}:{realm}/{path}
 
 ### Path Segment Rules
 
-```
+```text
 segment = 1-63 characters
         = lowercase alphanumeric, hyphen, underscore
         = no leading/trailing hyphen
@@ -43,31 +43,34 @@ path    = segment *("/" segment)
 ### Examples
 
 ```erlang
-%% Realms and organizations
-<<"mri:realm:io.macula">>
-<<"mri:org:io.macula/acme">>
+Examples = [
+    %% Realms and organizations
+    <<"mri:realm:io.macula">>,
+    <<"mri:org:io.macula/acme">>,
 
-%% Users and apps
-<<"mri:user:io.macula/acme/alice">>
-<<"mri:app:io.macula/acme/counter">>
-<<"mri:service:io.macula/acme/counter/api">>
+    %% Users and apps
+    <<"mri:user:io.macula/acme/alice">>,
+    <<"mri:app:io.macula/acme/counter">>,
+    <<"mri:service:io.macula/acme/counter/api">>,
 
-%% Physical infrastructure
-<<"mri:device:io.macula/citypower/cabinet-ams-42">>
-<<"mri:location:io.macula/citypower/nl/amsterdam/centrum">>
-<<"mri:cluster:io.macula/citypower/amsterdam-grid">>
+    %% Physical infrastructure
+    <<"mri:device:io.macula/citypower/cabinet-ams-42">>,
+    <<"mri:location:io.macula/citypower/nl/amsterdam/centrum">>,
+    <<"mri:cluster:io.macula/citypower/amsterdam-grid">>,
 
-%% Artifacts and security
-<<"mri:artifact:io.macula/acme/counter-v1.2.0">>
-<<"mri:license:io.macula/acme/counter/lic-001">>
-<<"mri:cert:io.macula/acme/cert-2026-001">>
+    %% Artifacts and security
+    <<"mri:artifact:io.macula/acme/counter-v1-2-0">>,
+    <<"mri:license:io.macula/acme/counter/lic-001">>,
+    <<"mri:cert:io.macula/acme/cert-2026-001">>,
 
-%% Messaging
-<<"mri:topic:io.macula/acme/events.orders.created">>
-<<"mri:proc:io.macula/acme/api.users.get">>
+    %% Messaging
+    <<"mri:topic:io.macula/acme/orders/order-placed">>,
+    <<"mri:proc:io.macula/acme/users/get-user">>,
 
-%% Taxonomy
-<<"mri:class:io.macula/device/edge-device/street-cabinet">>
+    %% Taxonomy
+    <<"mri:class:io.macula/device/edge-device/street-cabinet">>
+],
+[ok = macula_mri:validate(Example) || Example <- Examples].
 ```
 
 ## Type Registry
@@ -86,7 +89,7 @@ path    = segment *("/" segment)
 
 | Type | Path Schema | Example |
 |------|-------------|---------|
-| `artifact` | `{org}/{id}` | `mri:artifact:io.macula/acme/counter-v1.2.0` |
+| `artifact` | `{org}/{id}` | `mri:artifact:io.macula/acme/counter-v1-2-0` |
 | `license` | `{org}/{app}/{id}` | `mri:license:io.macula/acme/counter/lic-001` |
 | `cert` | `{org}/{id}` | `mri:cert:io.macula/acme/cert-2026-001` |
 | `key` | `{org}/{id}` | `mri:key:io.macula/acme/signing-key-001` |
@@ -95,8 +98,8 @@ path    = segment *("/" segment)
 
 | Type | Path Schema | Example |
 |------|-------------|---------|
-| `topic` | `{org}/{path}` | `mri:topic:io.macula/acme/events.orders` |
-| `proc` | `{org}/{path}` | `mri:proc:io.macula/acme/api.users.get` |
+| `topic` | `{org}/{path}` | `mri:topic:io.macula/acme/orders/order-placed` |
+| `proc` | `{org}/{path}` | `mri:proc:io.macula/acme/users/get-user` |
 | `content` | `{mcid}` | `mri:content:io.macula/Qm...abc` |
 
 ### Physical Infrastructure
@@ -154,7 +157,7 @@ paths, malformed encoding, wrong-length payloads, and uppercase characters
 
 %% Validation
 ok = macula_mri:validate(<<"mri:app:io.macula/acme/counter">>).
-{error, invalid_type} = macula_mri:validate(<<"mri:unknown:io.macula/x">>).
+{error, {unknown_type, <<"unknown">>}} = macula_mri:validate(<<"mri:unknown:io.macula/x">>).
 ```
 
 ### Component Access
@@ -162,7 +165,7 @@ ok = macula_mri:validate(<<"mri:app:io.macula/acme/counter">>).
 ```erlang
 MRI = <<"mri:service:io.macula/acme/counter/api">>,
 
-app = macula_mri:type(MRI),
+service = macula_mri:type(MRI),
 <<"io.macula">> = macula_mri:realm(MRI),
 [<<"acme">>, <<"counter">>, <<"api">>] = macula_mri:path(MRI).
 ```
@@ -210,6 +213,7 @@ All = [
 
 ### Construction
 
+<!-- doc_snippets: run -->
 ```erlang
 %% Type-specific constructors
 <<"mri:realm:io.macula">> = macula_mri:new_realm(<<"io.macula">>).
@@ -232,7 +236,7 @@ All = [
 
 MRIs encode ownership through path structure:
 
-```
+```text
 mri:realm:io.macula
 ├── mri:org:io.macula/acme
 │   ├── mri:user:io.macula/acme/alice
@@ -281,10 +285,10 @@ Beyond hierarchy, MRIs support cross-cutting relationships:
 
 ```erlang
 %% Built-in predicates are atoms
-{depends_on, <<"mri:app:...">>}
+{depends_on, <<"mri:app:io.macula/acme/counter">>}.
 
-%% Custom predicates use tagged tuple
-{{custom, <<"powered_by">>}, <<"mri:device:...">>}
+%% Custom predicates use a tagged tuple
+{{custom, <<"powered_by">>}, <<"mri:device:io.macula/citypower/cabinet-ams-42">>}.
 ```
 
 ## Storage Behaviours
@@ -294,24 +298,42 @@ The core library defines behaviours; storage is pluggable.
 ### `macula_mri_store` Behaviour
 
 ```erlang
--callback register(mri(), metadata()) -> ok | {error, term()}.
--callback lookup(mri()) -> {ok, metadata()} | {error, not_found}.
--callback update(mri(), metadata()) -> ok | {error, term()}.
--callback delete(mri()) -> ok | {error, term()}.
--callback exists(mri()) -> boolean().
--callback list_children(mri()) -> [mri()].
--callback list_descendants(mri()) -> [mri()].
--callback list_by_type(mri_type(), realm()) -> [mri()].
+-callback register(macula_mri:mri(), Metadata :: map()) -> ok | {error, term()}.
+-callback lookup(macula_mri:mri()) -> {ok, Metadata :: map()} | {error, not_found | term()}.
+-callback update(macula_mri:mri(), Metadata :: map()) -> ok | {error, term()}.
+-callback delete(macula_mri:mri()) -> ok | {error, term()}.
+-callback exists(macula_mri:mri()) -> boolean().
+-callback list_children(macula_mri:mri()) -> [macula_mri:mri()].
+-callback list_descendants(macula_mri:mri()) -> [macula_mri:mri()].
+-callback list_by_type(macula_mri:mri_type(), macula_mri:realm()) -> [macula_mri:mri()].
+-callback list_by_realm(macula_mri:realm()) -> [macula_mri:mri()].
+-callback import([{macula_mri:mri(), map()}]) -> ok | {error, term()}.
+-callback export() -> {ok, [{macula_mri:mri(), map()}]} | {error, term()}.
 ```
 
 ### `macula_mri_graph` Behaviour
 
 ```erlang
--callback create_relationship(mri(), predicate(), mri()) -> ok | {error, term()}.
--callback delete_relationship(mri(), predicate(), mri()) -> ok | {error, term()}.
--callback related_to(mri(), predicate()) -> [mri()].
--callback related_from(mri(), predicate()) -> [mri()].
--callback traverse_transitive(mri(), predicate(), direction()) -> [mri()].
+-callback create_relationship(macula_mri:mri(), macula_mri_graph:predicate(), macula_mri:mri()) ->
+    ok | {error, term()}.
+-callback create_relationship(macula_mri:mri(), macula_mri_graph:predicate(), macula_mri:mri(),
+                              Metadata :: map()) -> ok | {error, term()}.
+-callback delete_relationship(macula_mri:mri(), macula_mri_graph:predicate(), macula_mri:mri()) ->
+    ok | {error, term()}.
+-callback related_to(macula_mri:mri(), macula_mri_graph:predicate()) -> [macula_mri:mri()].
+-callback related_from(macula_mri:mri(), macula_mri_graph:predicate()) -> [macula_mri:mri()].
+-callback all_related(macula_mri:mri()) -> [{macula_mri_graph:predicate(), macula_mri:mri()}].
+-callback traverse_transitive(macula_mri:mri(), macula_mri_graph:predicate(),
+                              macula_mri_graph:direction()) -> [macula_mri:mri()].
+-callback get_relationship(macula_mri:mri(), macula_mri_graph:predicate(), macula_mri:mri()) ->
+    {ok, macula_mri_graph:relationship()} | {error, not_found | term()}.
+
+%% Optional, for taxonomies
+-callback instances_of(Class :: macula_mri:mri()) -> [macula_mri:mri()].
+-callback instances_of_transitive(Class :: macula_mri:mri()) -> [macula_mri:mri()].
+-callback classes_of(Instance :: macula_mri:mri()) -> [macula_mri:mri()].
+-callback subclasses(Class :: macula_mri:mri()) -> [macula_mri:mri()].
+-callback superclasses(Class :: macula_mri:mri()) -> [macula_mri:mri()].
 ```
 
 ### Available Adapters

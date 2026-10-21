@@ -54,13 +54,13 @@ A **seed** is a relay endpoint. Three accepted shapes:
 
 ```erlang
 %% URL binary (preferred)
-<<"quic://relay-1.example.com:4433">>
+<<"quic://relay-1.example.com:4433">>.
 
 %% URL string
-"quic://relay-1.example.com:4433"
+"quic://relay-1.example.com:4433".
 
 %% Map form (when you already have host + port)
-#{host => <<"relay-1.example.com">>, port => 4433}
+#{host => <<"relay-1.example.com">>, port => 4433}.
 ```
 
 The URL scheme is a label, not a switch — the seed parser in macula_station_link
@@ -190,7 +190,7 @@ pool publishes to whatever it has.
 
 ## Lifecycle
 
-```
+```text
                    start_link_for_seed
        ┌──────────┐    every seed          ┌─────────────────┐
        │  Pool    │ ────────────────────▶  │ macula_station_ │
@@ -249,13 +249,15 @@ Use `child_spec/3` to drop the pool under your application's supervisor:
 start_link() -> supervisor:start_link({local, ?MODULE}, ?MODULE, []).
 
 init([]) ->
-    Seeds = my_config:relay_seeds(),
-    Identity = my_keystore:load_identity(),
+    {ok, Seeds} = application:get_env(my_app, relay_seeds),
+    {ok, KeyPath} = application:get_env(my_app, node_key_path),
+    {ok, Profile} = macula_crypto_profile:configured(),
+    {ok, NodeIdentity} = macula_node_keys:load(KeyPath, identity, Profile),
 
     Pool = macula:child_spec(
              mesh_pool,
              Seeds,
-             #{identity => Identity, replication_factor => 2}),
+             #{node_identity => NodeIdentity, replication_factor => 2}),
 
     {ok, {#{strategy => one_for_one,
             intensity => 5,
@@ -272,14 +274,17 @@ simplest pattern is a wrapping function:
 
 ```erlang
 -module(my_app_mesh).
--export([pool/0, publish/2]).
+-export([pool/0, realm/0, publish/2]).
 
 pool() ->
     [{_, Pool, _, _}] = supervisor:which_children(my_app_sup),
     Pool.
 
+realm() ->
+    macula_realm:id(<<"io.example">>).
+
 publish(Topic, Payload) ->
-    macula:publish(pool(), my_app_realm(), Topic, Payload).
+    macula:publish(pool(), realm(), Topic, Payload).
 ```
 
 For higher-volume code paths, use `gproc` or register the pool by name.

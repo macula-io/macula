@@ -35,7 +35,7 @@ Macula SDK is a single Erlang/OTP library, vertical-sliced by capability
 rather than by technical layer — most `src/` subdirectories are one small
 feature, not a horizontal `services/`/`utils/` split:
 
-```
+```text
 macula/
 ├── src/
 │   ├── macula.erl               # Public facade (connect, subscribe, publish, call, advertise, ...)
@@ -100,6 +100,7 @@ Macula follows **Idiomatic Erlang** principles:
 ### Example: Good vs. Bad
 
 ❌ **Bad:**
+<!-- doc_snippets: skip a counter-example: the nesting this section warns against -->
 ```erlang
 process_message(Msg, State) ->
     if
@@ -118,6 +119,8 @@ process_message(Msg, State) ->
 
 ✅ **Good:**
 ```erlang
+-record(data, {type :: request | response}).
+
 %% Guard ensures binary input
 process_message(Msg, State) when is_binary(Msg) ->
     case decode_message(Msg) of

@@ -1,0 +1,27 @@
+# Every Erlang block in the README and the guides compiles against this tree and
+# calls only functions that exist, and the run-marked parts of a guide execute
+# (macula-codebase-checks#8). A reader who copies an example gets code that works.
+#
+# ⚠ NO paths-ignore HERE, on purpose. test.yml ignores **.md and docs/**, which is
+# right for the suite and wrong for this check: a doc change is exactly what this
+# has to see. publish-hex.yml calls this workflow on the tagged commit and
+# publishes only when it is green.
+#
+# `branches: ['**']' keeps a release tag from running it twice, as in test.yml.
+name: docs
+
+on:
+  workflow_call:
+  push:
+    branches: ['**']
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  erlang-blocks:
+    name: Erlang blocks in the docs
+    permissions:
+      contents: read
+    uses: macula-io/macula-ci-images/.github/workflows/doc-snippets-erlang.yml@01ff631fa400545bad9adef522465524ee8fa6a4

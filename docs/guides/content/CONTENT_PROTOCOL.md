@@ -81,7 +81,7 @@ only when its `procedure` is one of these two forms for its own
 
 The stream's open-time args name one content id and what is wanted:
 
-```
+```text
 #{mcid => MCID, want => root | block}
 ```
 

@@ -4,7 +4,7 @@ This directory contains all tests for the rpc subsystem.
 
 ## Test Files
 
-```
+```text
 - macula_rpc_handler_tests.erl
 - macula_rpc_routing_tests.erl
 - macula_rpc_server_tests.erl

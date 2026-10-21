@@ -4,7 +4,7 @@ This directory contains all tests for the pubsub subsystem.
 
 ## Test Files
 
-```
+```text
 - macula_pubsub_dht_tests.erl
 - macula_pubsub_handler_comprehensive_tests.erl
 - macula_pubsub_handler_tests.erl

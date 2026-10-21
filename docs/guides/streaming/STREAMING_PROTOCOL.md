@@ -69,7 +69,9 @@ building something the wrapper doesn't fit.
 ```erlang
 {ok, Stream} = macula:call_stream(Pool, Realm, <<"live.feed">>, Request, #{}),
 loop(Stream).
+```
 
+```erlang
 loop(Stream) ->
     case macula:recv(Stream) of
         {chunk, Bin}  -> handle(Bin), loop(Stream);   %% raw bytes
@@ -115,7 +117,7 @@ ok = macula:advertise_stream(
        fun(Stream, _Args) ->
            Feeder = spawn(fun() -> feed(Stream) end),
            ok = macula_stream:controlling_process(Stream, Feeder)
-       end),
+       end).
 ```
 
 When a session ends (both sides closed, an abort, or the link lost), the
@@ -157,8 +159,10 @@ ok = macula:advertise_stream(
        fun(Stream, _Args) ->
            N = drain(Stream, 0),
            macula:set_reply(Stream, #{ingested => N})
-       end),
+       end).
+```
 
+```erlang
 drain(Stream, N) ->
     case macula:recv(Stream) of
         {chunk, Bin} -> store(Bin), drain(Stream, N + 1);

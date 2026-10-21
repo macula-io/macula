@@ -103,7 +103,7 @@ bash test/e2e/run-all-e2e-tests.sh
 ## Test Output
 
 ### Success Output
-```
+```text
 ✓ TEST PASSED
   - Publisher successfully published 11 messages
   - Subscriber1 received 11 messages
@@ -112,7 +112,7 @@ bash test/e2e/run-all-e2e-tests.sh
 ```
 
 ### Failure Output
-```
+```text
 ✗ TEST FAILED
   - No messages were published
   - Check logs at: /tmp/pubsub-test-logs.txt

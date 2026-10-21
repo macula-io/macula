@@ -118,7 +118,7 @@ the `secret` option or in `MACULA_GOSSIP_SECRET`. `start_link/1` then returns
 
 Every gossip packet carries an HMAC-SHA256 tag over the node name:
 
-```
+```text
 MACULA_GOSSIP:node_name|<HMAC-SHA256 in hex>
 ```
 

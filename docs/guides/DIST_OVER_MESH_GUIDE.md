@@ -14,7 +14,7 @@ and your node is part of the world-wide BEAM computer.
 
 Start your node with Macula as the distribution protocol:
 
-```
+```sh
 erl -proto_dist macula -no_epmd -start_epmd false \
     -kernel net_ticktime 120 \
     -name mynode@myhost -setcookie MYSECRET
@@ -182,7 +182,7 @@ Node B is on a different, peered Relay B, the relays forward tunnel
 traffic through their peering connection — see
 [macula.io/stations](https://macula.io/stations) for the live topology.
 
-```
+```text
 Node A → Relay A ──peering──► Relay B → Node B
 ```
 
@@ -197,7 +197,7 @@ Each tunnel is managed by a supervised `macula_dist_bridge` gen_server.
 The bridge owns a `gen_tcp` loopback socket pair — one end goes to
 OTP's `dist_util`, the other is bridged to the relay mesh.
 
-```
+```text
 macula_root (one_for_one, the macula application supervisor)
   ├── ... (other SDK children)
   ├── macula_dist_bridge_sup (simple_one_for_one)
@@ -219,7 +219,7 @@ the [Clustering Guide](CLUSTERING_GUIDE.md).
 All tunnel bytes are encrypted with AES-256-GCM. The key is derived
 from the Erlang distribution cookie:
 
-```
+```text
 Key = SHA-256("macula-dist-tunnel:" ++ cookie)
 ```
 

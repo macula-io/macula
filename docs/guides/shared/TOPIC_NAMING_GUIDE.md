@@ -9,7 +9,7 @@ enforced by the SDK — see "Validation" below.
 
 Every mesh topic (pub/sub) and RPC procedure name follows a single 5-segment format:
 
-```
+```text
 {realm}/{publisher}/{publisher}/{domain}/{name}_v{N}
 ```
 
@@ -75,7 +75,7 @@ The name segment reveals intent through verb tense:
 
 ### Facts (pub/sub — things that happened)
 
-```
+```text
 %% realm tier
 io.macula/_realm/_realm/membership/revoked_v1
 io.macula/_realm/_realm/identity/public_key_announced_v1
@@ -94,7 +94,7 @@ Published via `macula:publish/5`. Subscribed via `macula:subscribe/5`.
 
 ### Hopes (RPC — things we want to happen)
 
-```
+```text
 %% realm tier
 io.macula/_realm/_realm/auth/check_health_v1
 io.macula/_realm/_realm/auth/verify_api_key_v1

@@ -25,8 +25,8 @@ Erlang distribution over the Macula mesh: three transports, one goal — `net_ad
 
 ### Pool-tunneled (most common — works through NATs/firewalls)
 
-```erlang
-%% vm.args
+```text
+## vm.args
 -proto_dist macula -no_epmd -start_epmd false -kernel net_ticktime 120
 ```
 
@@ -40,7 +40,7 @@ See `docs/guides/DIST_OVER_MESH_GUIDE.md` for the full guide, options, architect
 
 ### Direct QUIC (same LAN, lowest latency)
 
-```erlang
+```text
 -proto_dist macula -no_epmd -start_epmd false
 ```
 

@@ -135,7 +135,7 @@ record per licensee. Without one, a signer's second `put_record/2` for the same 
 one slot for them at that type. An empty subject is refused, since it would name a slot apart from no subject.
 
 ```erlang
-Record0 = macula_record:envelope(16#20, Payload, #{subject_id => <<"licensee-42">>}),
+Record0 = macula_record:envelope(16#20, Payload, #{subject_id => <<"licensee-42">>}).
 ```
 
 The lifetime is also an `Opts` field, `ttl_ms`. Without it a domain record lives 48 hours, and it lives at most 7

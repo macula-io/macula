@@ -54,7 +54,7 @@ Every peer in `macula_plumtree`'s state is in exactly one of two sets:
 
 ```erlang
 State0 = macula_plumtree:new(MyIdentity, Realm),
-State1 = macula_plumtree:add_peer(State0, PeerA),   %% starts eager — full GOSSIP
+State1 = macula_plumtree:add_peer(State0, PeerA).   %% starts eager — full GOSSIP
 %% ... time passes, PeerA turns out to duplicate a GOSSIP it already had ...
 ```
 
@@ -79,8 +79,12 @@ The healing loop, end to end:
 
 ```erlang
 {State1, Actions, Deliveries} = macula_plumtree:publish(State0, MsgId, Payload),
-lists:foreach(fun({send, Peer, Frame}) -> send_to(Peer, Frame) end, Actions),
+lists:foreach(fun({send, Peer, Frame}) -> send_to(Peer, Frame) end, Actions).
 %% Deliveries == [{MsgId, Payload}] -- your own local copy, handle it here.
+```
+
+```erlang
+-record(state, {plumtree, link}).
 
 handle_info({macula_overlay_frame, _Ref, Frame, #{sender := From} = Meta}, State) ->
     Clocks = #{wall => erlang:system_time(millisecond), monotonic => erlang:monotonic_time(millisecond)},
@@ -89,7 +93,7 @@ handle_info({macula_overlay_frame, _Ref, Frame, #{sender := From} = Meta}, State
                      ({refused, _Peer, Kind}) -> macula_station_link:overlay_frame_refused(State#state.link, Meta, Kind)
                   end, Actions),
     lists:foreach(fun({MsgId, Publication}) -> deliver_locally(MsgId, Publication) end, Deliveries),
-    {noreply, State#state{plumtree = PT1}};
+    {noreply, State#state{plumtree = PT1}}.
 ```
 
 A frame a station relays arrives with `via`, the station that relayed it, in

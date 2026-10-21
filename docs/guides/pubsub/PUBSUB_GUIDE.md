@@ -72,7 +72,7 @@ on business keys.
 init(_Args) -> {ok, #{}}.
 
 handle_event(_Topic, Payload, _Meta, State) ->
-    on_order_placed(Payload),
+    logger:notice(#{order_placed => Payload}),
     {noreply, State}.
 ```
 
@@ -176,7 +176,7 @@ human-readable realm name) or your own realm registry to derive them.
 
 > **Non-negotiable for scalable pub/sub.**
 
-```
+```text
 Topic   = WHAT happened (event type, immutable)
 Payload = WHO/WHERE/WHEN it happened (entity details)
 ```
@@ -497,7 +497,7 @@ Quick reference. Full specification:
 
 Every topic is exactly five slash-separated segments:
 
-```
+```text
 {realm}/{publisher_org}/{publisher_app}/{domain}/{name}_v{N}
 ```
 

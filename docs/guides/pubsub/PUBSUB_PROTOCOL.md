@@ -97,9 +97,7 @@ something the wrapper doesn't fit.
 -module(my_orders_listener).
 -behaviour(gen_server).
 
-init(_Args) ->
-    Pool  = my_app_mesh:pool(),
-    Realm = my_app_mesh:realm(),
+init(#{pool := Pool, realm := Realm}) ->
     Topic = macula_topic:app_fact(Realm, my_org, my_app,
                                   <<"orders">>, <<"placed">>, 1),
     {ok, Sub} = macula:subscribe(Pool, Realm, Topic, self()),
@@ -107,7 +105,7 @@ init(_Args) ->
 
 handle_info({macula_event, Sub, _Topic, Payload, _Meta},
             #{sub := Sub} = S) ->
-    on_order_placed(Payload),
+    logger:notice(#{order_placed => Payload}),
     {noreply, S};
 handle_info({macula_event_gone, Sub, Reason},
             #{sub := Sub} = S) ->

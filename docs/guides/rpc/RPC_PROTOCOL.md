@@ -15,7 +15,8 @@
 This is the raw primitive [`macula_response` wraps](RPC_GUIDE.md#supervised-wrappers-macula_response-macula_request).
 
 ```erlang
--spec advertise(pool(), realm(), procedure(), Handler, opts()) -> ok | {error, term()}.
+-spec advertise(macula:pool(), macula:realm(), macula:procedure(),
+                macula_client:handler(), map()) -> ok | {error, term()}.
 ```
 
 Build the procedure name via `macula_topic` — inline strings are rejected by
@@ -24,7 +25,7 @@ the client validator:
 ```erlang
 ProcApp   = macula_topic:app_hope(Realm, Org, App, Domain, Verb, Version),
 ProcOrg   = macula_topic:org_hope(Realm, Org, Domain, Verb, Version),
-ProcRealm = macula_topic:realm_hope(Realm, Domain, Verb, Version),
+ProcRealm = macula_topic:realm_hope(Realm, Domain, Verb, Version).
 ```
 
 Pick a tier by who owns the schema: `app_hope` for an app-specific procedure,
@@ -85,10 +86,12 @@ This is the raw primitive [`macula_request`/`macula_response`'s own
 direct-dial wraps](RPC_GUIDE.md#direct-dial-start_link_direct-advertise_direct).
 
 ```erlang
--spec call_station(pool(), seed(), node_id(), realm(), procedure(), term(), timeout_ms()) ->
+-spec call_station(macula:pool(), macula_client:seed(), NodeId :: <<_:256>>, macula:realm(),
+                   macula:procedure(), term(), TimeoutMs :: 1..600_000) ->
     {ok, term()} | {error, term()}.
--spec call_station(pool(), seed(), node_id(), realm(), procedure(), term(), timeout_ms(), opts()) ->
-    {ok, term()} | {error, term()}.
+-spec call_station(macula:pool(), macula_client:seed(), NodeId :: <<_:256>>, macula:realm(),
+                   macula:procedure(), term(), TimeoutMs :: 1..600_000, map()) ->
+    {ok, term()} | {ok, term(), macula_station_link:report()} | {error, term()}.
 %% opts: #{ucan_token => Token,
 %%         expected_node_id => NodeId,     %% the station's node_id, required
 %%         advertisement => Advertisement, %% the provider's verified advertisement
