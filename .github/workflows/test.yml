@@ -280,3 +280,44 @@ jobs:
       - name: wire 1.0 vectors
         if: matrix.check == 'vectors'
         run: bash scripts/check-wire-1-0-vectors.sh
+
+  # The structural floor for the native crates (macula-codebase-checks#9):
+  # a function that nests past three blocks, goes past cognitive complexity
+  # 15 or runs past 60 lines fails here, against each crate's own
+  # clippy.toml and [lints.clippy].
+  #
+  # Its own job, not a matrix entry above: that job runs in the pinned OTP
+  # image, whose Rust carries no clippy component, and a plain runner with
+  # dtolnay/rust-toolchain is what a clippy run needs. The toolchain is
+  # pinned to the same version the image ships, so the two cannot disagree
+  # about Rust.
+  rust-lint:
+    name: rust (clippy, deny warnings)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.CI_RUST_VERSION }}
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            native/macula_cbor_nif
+            native/macula_crypto_nif
+            native/macula_mri_nif
+            native/macula_quic
+            scripts/e2e_seal_vectors
+      # One line per crate, named rather than globbed: the sweep reads these
+      # lines, and a crate that is skipped by a glob cannot be seen to be
+      # skipped.
+      - name: clippy, every native crate
+        run: |
+          cargo clippy --manifest-path native/macula_cbor_nif/Cargo.toml --all-targets --locked -- -D warnings
+          cargo clippy --manifest-path native/macula_crypto_nif/Cargo.toml --all-targets --locked -- -D warnings
+          cargo clippy --manifest-path native/macula_mri_nif/Cargo.toml --all-targets --locked -- -D warnings
+          cargo clippy --manifest-path native/macula_quic/Cargo.toml --all-targets --locked -- -D warnings
+          cargo clippy --manifest-path scripts/e2e_seal_vectors/Cargo.toml --all-targets --locked -- -D warnings
