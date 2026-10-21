@@ -22,6 +22,7 @@ group_test_() ->
      [fun subscribing_under_a_group_pulls_its_key_with_the_org_grant/1,
       fun a_sealed_event_opens_for_the_groups_subscriber/1,
       fun a_clear_event_under_a_required_group_is_refused/1,
+      fun a_clear_event_under_a_required_group_is_counted/1,
       fun a_clear_event_elsewhere_is_delivered_as_clear/1,
       fun a_sealed_event_without_a_group_is_reported_no_group/1,
       fun a_sealed_event_that_does_not_open_is_reported_tag_invalid/1,
@@ -137,6 +138,33 @@ a_clear_event_under_a_required_group_is_refused(W) ->
         ?assertEqual(none, next_message(Ref)),
         ?assertEqual(none, next_message(Plain))
     end).
+
+%% The refusal is counted, not just dropped: each clear event under a held
+%% `required' prefix lands in the diagnostics bound's node-wide count
+%% (`macula_group_opener:delivered/4'), so a quiet drop is observable in
+%% operations (DESIGN_E2E_SEALED_PUBSUB.md §10).
+a_clear_event_under_a_required_group_is_counted(W) ->
+    ?_test(begin
+        Ref = group_subscribe(W),
+        Before = clear_refusal_count(),
+        ok = inject_clear(W, ?TOPIC, 1, <<"clear">>),
+        ok = inject_clear(W, ?TOPIC, 2, <<"clear">>),
+        ok = wait_until(fun() -> clear_refusal_count() > Before end, 100),
+        ?assertEqual(none, next_message(Ref))
+    end).
+
+clear_refusal_count() ->
+    case ets:lookup(macula_diagnostics_bound, {topic, <<"_macula.group.clear_event_refused">>}) of
+        [{{topic, _Topic}, _Start, Suppressed, _Level, _Latest}] -> Suppressed;
+        [] -> -1
+    end.
+
+wait_until(_Fun, 0) -> error(counted_timeout);
+wait_until(Fun, Tries) ->
+    case Fun() of
+        true -> ok;
+        false -> timer:sleep(10), wait_until(Fun, Tries - 1)
+    end.
 
 a_clear_event_elsewhere_is_delivered_as_clear(W) ->
     ?_test(begin
