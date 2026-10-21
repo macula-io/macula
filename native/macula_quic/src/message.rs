@@ -1,4 +1,4 @@
-use rustler::{Encoder, LocalPid, OwnedEnv, ResourceArc};
+use rustler::{Encoder, LocalPid, OwnedEnv};
 
 use crate::atoms;
 
@@ -8,13 +8,15 @@ pub fn send_new_conn<T: Encoder + Send + 'static>(
     conn_ref: T,
     remote_addr: String,
 ) {
-    let pid = pid.clone();
+    let pid = *pid;
     let mut env = OwnedEnv::new();
     let _ = env.send_and_clear(&pid, |env| {
         let info = rustler::Term::map_new(env);
         let info = info
             .map_put(
-                rustler::Atom::from_str(env, "remote_addr").unwrap().encode(env),
+                rustler::Atom::from_str(env, "remote_addr")
+                    .unwrap()
+                    .encode(env),
                 remote_addr.encode(env),
             )
             .unwrap();
@@ -29,7 +31,7 @@ pub fn send_new_stream<S: Encoder + Send + 'static, C: Encoder + Send + 'static>
     conn_ref: C,
     flags: u32,
 ) {
-    let pid = pid.clone();
+    let pid = *pid;
     let mut env = OwnedEnv::new();
     let _ = env.send_and_clear(&pid, |env| {
         let props = rustler::Term::map_new(env);
@@ -45,13 +47,19 @@ pub fn send_new_stream<S: Encoder + Send + 'static, C: Encoder + Send + 'static>
                 flags.encode(env),
             )
             .unwrap();
-        (atoms::quic(), atoms::new_stream(), stream_ref.encode(env), props).encode(env)
+        (
+            atoms::quic(),
+            atoms::new_stream(),
+            stream_ref.encode(env),
+            props,
+        )
+            .encode(env)
     });
 }
 
 /// Send `{quic, Data, StreamRef, Flags}` to an Erlang process.
 pub fn send_data(pid: &LocalPid, data: Vec<u8>, stream_ref: impl Encoder + Send + 'static) {
-    let pid = pid.clone();
+    let pid = *pid;
     let mut env = OwnedEnv::new();
     let _ = env.send_and_clear(&pid, |env| {
         let binary = {
@@ -71,7 +79,7 @@ pub fn send_event(
     handle: impl Encoder + Send + 'static,
     detail: impl Encoder + Send + 'static,
 ) {
-    let pid = pid.clone();
+    let pid = *pid;
     let mut env = OwnedEnv::new();
     let _ = env.send_and_clear(&pid, |env| {
         (atoms::quic(), event, handle.encode(env), detail.encode(env)).encode(env)

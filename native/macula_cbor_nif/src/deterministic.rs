@@ -11,18 +11,18 @@
 //!   - negative integer      -> major 1, encoded count = `-1 - N`
 //!   - binary                -> byte string (major 2)
 //!   - `{text, Binary}`      -> UTF-8 text string (major 3), bytes used
-//!                              AS-IS, no UTF-8 validation (matches the
-//!                              Erlang encoder exactly)
+//!     AS-IS, no UTF-8 validation (matches the
+//!     Erlang encoder exactly)
 //!   - atom (not `null`)     -> UTF-8 text string (major 3) via the
-//!                              atom's own utf8 name — ENCODE ONLY;
-//!                              decode never produces a bare atom here
+//!     atom's own utf8 name — ENCODE ONLY;
+//!     decode never produces a bare atom here
 //!   - list                  -> array (major 4)
 //!   - map                   -> map (major 5), keys sorted by the
-//!                              bytewise order of their OWN encoded
-//!                              bytes
+//!     bytewise order of their OWN encoded
+//!     bytes
 //!   - atom `null`           -> simple null (major 7, 0xF6)
 //!   - float                 -> ALWAYS binary64 (major 7, AI 27) on
-//!                              encode; decode accepts binary16/32/64
+//!     encode; decode accepts binary16/32/64
 //!
 //! Every function here is on the hot path for untrusted,
 //! network-received bytes (`nif_unpack_deterministic` decodes bytes a
@@ -84,6 +84,18 @@ fn encode_value<'a>(env: Env<'a>, term: Term<'a>, out: &mut Vec<u8>) -> NifResul
     }
 }
 
+/// Major-1 count for a negative integer, i.e. `-1 - i`, when it fits the
+/// wire's unsigned 64-bit count. `None` for a non-negative `i` (which only
+/// reaches the caller's decode above `u64::MAX`) and for one below
+/// `-(2^64)`; both fall through to the bignum-error case.
+fn negative_count(i: i128) -> Option<u64> {
+    if i >= 0 {
+        return None;
+    }
+    // i in -(2^64)..=-1 -> count in 0..=2^64-1
+    u64::try_from(-1i128 - i).ok()
+}
+
 fn encode_number(term: Term, out: &mut Vec<u8>) -> NifResult<()> {
     // rustler's numeric decoders are exact and tag-based, not coercive:
     // an integer term never succeeds `decode::<f64>()` (there is no
@@ -103,12 +115,9 @@ fn encode_number(term: Term, out: &mut Vec<u8>) -> NifResult<()> {
     // which plain i64 does not (i64::MIN is only -2^63, one bit short
     // of the declared -2^64 floor).
     if let Ok(i) = term.decode::<i128>() {
-        if i < 0 {
-            let count = -1i128 - i; // i in -(2^64)..=-1 -> count in 0..=2^64-1
-            if let Ok(count_u64) = u64::try_from(count) {
-                encode_head(1, count_u64, out);
-                return Ok(());
-            }
+        if let Some(count_u64) = negative_count(i) {
+            encode_head(1, count_u64, out);
+            return Ok(());
         }
         // i >= 0 here only if it exceeds u64::MAX (the u64 branch above
         // would have already caught it otherwise) — falls through to
@@ -144,7 +153,9 @@ fn encode_atom<'a>(env: Env<'a>, term: Term<'a>, out: &mut Vec<u8>) -> NifResult
 
 fn encode_tuple<'a>(env: Env<'a>, term: Term<'a>, out: &mut Vec<u8>) -> NifResult<()> {
     let elems = get_tuple(term)?;
-    if elems.len() == 2 && elems[0].get_type() == TermType::Atom && elems[0] == atoms::text().to_term(env)
+    if elems.len() == 2
+        && elems[0].get_type() == TermType::Atom
+        && elems[0] == atoms::text().to_term(env)
     {
         let bin: Binary = elems[1].decode().map_err(|_| {
             rustler::Error::RaiseTerm(Box::new("cbor: {text, _} second element must be a binary"))
@@ -553,16 +564,15 @@ fn decode_map<'a>(
 ) -> NifResult<(Term<'a>, Vec<u8>, usize)> {
     budget.claim(count.saturating_mul(2))?;
     let capacity = count.min(1024) as usize;
-    let mut pairs: Vec<(Term<'a>, Term<'a>)> = Vec::with_capacity(capacity);
-    // Owns each distinct key's canonical bytes -> its slot index into
-    // `pairs`/`vals_canon`.
-    let mut index_of_key: std::collections::HashMap<Vec<u8>, usize> =
-        std::collections::HashMap::with_capacity(capacity);
-    // Per-slot VALUE canon, kept in step with `pairs` (same index, same
-    // last-write-wins updates) — only populated when `need_canon`, since
-    // a key's canon (owned by `index_of_key` above) is the only one ever
-    // needed just to make dedup itself work.
-    let mut vals_canon: Vec<Vec<u8>> = Vec::with_capacity(if need_canon { capacity } else { 0 });
+    let mut entries = MapEntries {
+        pairs: Vec::with_capacity(capacity),
+        index_of_key: std::collections::HashMap::with_capacity(capacity),
+        // Per-slot VALUE canon, only populated when `need_canon`, since a
+        // key's canon (owned by `index_of_key`) is the only one ever
+        // needed just to make dedup itself work.
+        vals_canon: Vec::with_capacity(if need_canon { capacity } else { 0 }),
+        need_canon,
+    };
     for _ in 0..count {
         // A key ALWAYS needs its canon bytes — that's the dedup identity
         // itself, independent of whether this map's OWN canon bytes
@@ -570,26 +580,10 @@ fn decode_map<'a>(
         let (k, key_canon, next1) = decode_one(env, orig, pos, depth, true, budget)?;
         let (v, val_canon, next2) = decode_one(env, orig, next1, depth, need_canon, budget)?;
         pos = next2;
-        use std::collections::hash_map::Entry;
-        match index_of_key.entry(key_canon) {
-            Entry::Occupied(e) => {
-                let i = *e.get();
-                pairs[i].1 = v;
-                if need_canon {
-                    vals_canon[i] = val_canon;
-                }
-            }
-            Entry::Vacant(e) => {
-                e.insert(pairs.len());
-                pairs.push((k, v));
-                if need_canon {
-                    vals_canon.push(val_canon);
-                }
-            }
-        }
+        record_pair(&mut entries, k, key_canon, v, val_canon);
     }
-    let keys: Vec<Term<'a>> = pairs.iter().map(|(k, _)| *k).collect();
-    let vals: Vec<Term<'a>> = pairs.iter().map(|(_, v)| *v).collect();
+    let keys: Vec<Term<'a>> = entries.pairs.iter().map(|(k, _)| *k).collect();
+    let vals: Vec<Term<'a>> = entries.pairs.iter().map(|(_, v)| *v).collect();
     let map_term = Term::map_from_arrays(env, &keys, &vals)
         .map_err(|_| err("cbor: map_from_arrays failed"))?;
     if !need_canon {
@@ -597,15 +591,55 @@ fn decode_map<'a>(
     }
     // Matches `encode_map`'s own rule exactly: sort entries by the key's
     // encoded bytes, plain lexicographic `Ord` on `Vec<u8>`.
-    let mut order: Vec<(&Vec<u8>, usize)> = index_of_key.iter().map(|(k, &i)| (k, i)).collect();
+    let mut order: Vec<(&Vec<u8>, usize)> =
+        entries.index_of_key.iter().map(|(k, &i)| (k, i)).collect();
     order.sort_by(|a, b| a.0.cmp(b.0));
     let mut canon = Vec::new();
     encode_head(5, order.len() as u64, &mut canon);
     for (k, i) in order {
         canon.extend_from_slice(k);
-        canon.extend_from_slice(&vals_canon[i]);
+        canon.extend_from_slice(&entries.vals_canon[i]);
     }
     Ok((map_term, canon, pos))
+}
+
+/// A map's entries as they are decoded: `pairs` holds the terms in
+/// last-write-wins order, `index_of_key` owns each distinct key's canonical
+/// bytes and maps them to their slot in `pairs`, and `vals_canon` keeps the
+/// per-slot VALUE canon in step with `pairs`.
+struct MapEntries<'a> {
+    pairs: Vec<(Term<'a>, Term<'a>)>,
+    index_of_key: std::collections::HashMap<Vec<u8>, usize>,
+    vals_canon: Vec<Vec<u8>>,
+    need_canon: bool,
+}
+
+/// Records one decoded pair, overwriting in place on a duplicate key.
+fn record_pair<'a>(
+    entries: &mut MapEntries<'a>,
+    k: Term<'a>,
+    key_canon: Vec<u8>,
+    v: Term<'a>,
+    val_canon: Vec<u8>,
+) {
+    use std::collections::hash_map::Entry;
+    match entries.index_of_key.entry(key_canon) {
+        Entry::Occupied(e) => {
+            let i = *e.get();
+            entries.pairs[i].1 = v;
+            if entries.need_canon {
+                entries.vals_canon[i] = val_canon;
+            }
+        }
+        Entry::Vacant(e) => {
+            let i = entries.pairs.len();
+            e.insert(i);
+            entries.pairs.push((k, v));
+            if entries.need_canon {
+                entries.vals_canon.push(val_canon);
+            }
+        }
+    }
 }
 
 // IEEE 754 binary16 -> f64, mirroring `macula_record_cbor:half_to_float/1`

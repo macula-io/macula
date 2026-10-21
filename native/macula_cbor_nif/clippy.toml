@@ -1,0 +1,5 @@
+# Hard limits on a function's shape, denied in Cargo.toml's [lints.clippy]
+# and so gated by the clippy job in .github/workflows/test.yml.
+excessive-nesting-threshold = 3
+cognitive-complexity-threshold = 15
+too-many-lines-threshold = 60

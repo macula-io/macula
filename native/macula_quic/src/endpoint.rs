@@ -1,4 +1,4 @@
-use std::net::{IpAddr, SocketAddr};
+use std::net::IpAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
@@ -27,7 +27,6 @@ impl CertificateGeneration {
 /// Opaque listener handle exposed to Erlang via ResourceArc.
 pub struct ListenerResource {
     pub endpoint: quinn::Endpoint,
-    pub local_addr: SocketAddr,
     pub owner: RwLock<LocalPid>,
     accept_task: Mutex<Option<JoinHandle<()>>>,
     pub closed: AtomicBool,
@@ -35,17 +34,17 @@ pub struct ListenerResource {
     generation: RwLock<Arc<CertificateGeneration>>,
 }
 
+impl rustler::Resource for ListenerResource {}
+
 impl ListenerResource {
     pub fn new(
         endpoint: quinn::Endpoint,
-        local_addr: SocketAddr,
         owner: LocalPid,
         settings: config::ServerSettings,
         generation: CertificateGeneration,
     ) -> Self {
         Self {
             endpoint,
-            local_addr,
             owner: RwLock::new(owner),
             accept_task: Mutex::new(None),
             closed: AtomicBool::new(false),
@@ -85,6 +84,10 @@ impl Drop for ListenerResource {
 }
 
 /// NIF: listen(BindAddr, Port, Opts) -> {ok, ListenerRef} | {error, Reason}
+///
+/// The arity is the NIF export's, not ours to group: `macula_quic:listen/3`
+/// unrolls its options into these eleven positions.
+#[allow(clippy::too_many_arguments)]
 #[rustler::nif(schedule = "DirtyCpu")]
 fn nif_listen<'a>(
     env: Env<'a>,
@@ -134,12 +137,8 @@ fn nif_listen<'a>(
     )
     .map_err(|e| rustler::Error::Term(Box::new(format!("endpoint create: {}", e))))?;
 
-    let local_addr = endpoint
-        .local_addr()
-        .map_err(|e| rustler::Error::Term(Box::new(format!("local_addr: {}", e))))?;
-
     let resource = ResourceArc::new(ListenerResource::new(
-        endpoint, local_addr, caller, settings, generation,
+        endpoint, caller, settings, generation,
     ));
 
     Ok((atoms::ok(), resource).encode(env))

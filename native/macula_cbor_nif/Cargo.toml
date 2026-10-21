@@ -12,3 +12,10 @@ crate-type = ["cdylib"]
 rustler = "0.34"
 ciborium = "0.2"
 ciborium-io = "0.2"
+
+[lints.clippy]
+# The structural floor (macula-codebase-checks#9): clippy.toml holds the
+# thresholds these are measured against.
+excessive_nesting = "deny"
+cognitive_complexity = "deny"
+too_many_lines = "deny"

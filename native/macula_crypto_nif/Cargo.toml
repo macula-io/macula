@@ -30,3 +30,10 @@ libc = "0.2"
 [profile.release]
 lto = true
 opt-level = 3
+
+[lints.clippy]
+# The structural floor (macula-codebase-checks#9): clippy.toml holds the
+# thresholds these are measured against.
+excessive_nesting = "deny"
+cognitive_complexity = "deny"
+too_many_lines = "deny"

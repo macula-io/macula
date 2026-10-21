@@ -57,7 +57,11 @@ impl Reply {
     fn new(pid: LocalPid, reference: Term) -> Self {
         let env = OwnedEnv::new();
         let reference = Some(env.save(reference));
-        Self { env, reference, pid }
+        Self {
+            env,
+            reference,
+            pid,
+        }
     }
 
     /// Sends the answer, once. A thread the VM manages cannot send it, so on
@@ -72,12 +76,11 @@ impl Reply {
         let pid = self.pid;
         let _ = self.env.send_and_clear(&pid, |env| {
             let reference = reference.load(env);
-            match result {
-                Ok(()) => (atoms::quic(), atoms::sent(), reference, atoms::ok()).encode(env),
-                Err(failure) => {
-                    (atoms::quic(), atoms::sent(), reference, (atoms::error(), failure)).encode(env)
-                }
-            }
+            let outcome = match result {
+                Ok(()) => atoms::ok().encode(env),
+                Err(failure) => (atoms::error(), failure).encode(env),
+            };
+            (atoms::quic(), atoms::sent(), reference, outcome).encode(env)
         });
     }
 
@@ -193,6 +196,8 @@ pub struct StreamResource {
     pub closed: AtomicBool,
 }
 
+impl rustler::Resource for StreamResource {}
+
 impl StreamResource {
     pub fn new(
         send: quinn::SendStream,
@@ -225,75 +230,14 @@ impl StreamResource {
     /// Must be called after the ResourceArc is created.
     pub fn start_recv_loop(self_arc: ResourceArc<Self>) {
         let mut recv_opt = self_arc.recv.lock().unwrap();
-        let mut recv = match recv_opt.take() {
+        let recv = match recv_opt.take() {
             Some(r) => r,
             None => return, // Already started or no recv stream
         };
         drop(recv_opt);
         let stream_arc = self_arc.clone();
 
-        let handle = runtime::rt().spawn(async move {
-            let mut buf = vec![0u8; 65536];
-            loop {
-                if stream_arc.closed.load(Ordering::Relaxed) {
-                    break;
-                }
-
-                // Wait for active mode
-                if !stream_arc.active.load(Ordering::Relaxed) {
-                    stream_arc.active_notify.notified().await;
-                    continue;
-                }
-
-                match recv.read(&mut buf).await {
-                    Ok(Some(n)) => {
-                        let data = buf[..n].to_vec();
-                        // Held until the message is sent, so a
-                        // controlling_process that returns has no delivery
-                        // to the former owner in flight.
-                        let owner = stream_arc.owner.read().unwrap();
-                        message::send_data(&owner, data, stream_arc.clone());
-                    }
-                    Ok(None) => {
-                        // Peer finished sending
-                        let owner = stream_arc.owner.read().unwrap();
-                        message::send_event(
-                            &owner,
-                            atoms::peer_send_shutdown(),
-                            stream_arc.clone(),
-                            atoms::none(),
-                        );
-                        break;
-                    }
-                    Err(quinn::ReadError::Reset(code)) => {
-                        // Peer called reset() on their send side (see
-                        // `nif_reset_stream` below) — a deliberate,
-                        // peer-visible abort with an application error
-                        // code, distinct from every other read error
-                        // (connection loss, zero-RTT rejection, ...),
-                        // which stay collapsed into `none()` below.
-                        let owner = stream_arc.owner.read().unwrap();
-                        message::send_event(
-                            &owner,
-                            atoms::stream_closed(),
-                            stream_arc.clone(),
-                            (atoms::reset(), code.into_inner()),
-                        );
-                        break;
-                    }
-                    Err(e) => {
-                        let owner = stream_arc.owner.read().unwrap();
-                        message::send_event(
-                            &owner,
-                            atoms::stream_closed(),
-                            stream_arc.clone(),
-                            format!("{}", e),
-                        );
-                        break;
-                    }
-                }
-            }
-        });
+        let handle = runtime::rt().spawn(recv_loop(stream_arc, recv));
 
         let mut task = self_arc.recv_task.lock().unwrap();
         *task = Some(handle);
@@ -332,7 +276,12 @@ impl StreamResource {
         reply: Option<Reply>,
         tagged: Option<Tagged>,
     ) -> Term<'a> {
-        let command = Command { bytes, charged, reply, tagged };
+        let command = Command {
+            bytes,
+            charged,
+            reply,
+            tagged,
+        };
         let refused = match self.commands.lock().unwrap().as_ref() {
             Some(sender) => sender.send(command).err().map(|refused| refused.0),
             None => Some(command),
@@ -345,12 +294,8 @@ impl StreamResource {
                 tagged,
                 ..
             }) => {
-                if let Some(reply) = reply {
-                    reply.disarm();
-                }
-                if let Some(tagged) = tagged {
-                    tagged.disarm();
-                }
+                let _ = reply.map(Reply::disarm);
+                let _ = tagged.map(Tagged::disarm);
                 self.budget.add_permits(charged);
                 self.pending.fetch_sub(1, Ordering::SeqCst);
                 (atoms::error(), atoms::already_closed()).encode(env)
@@ -379,6 +324,71 @@ impl Drop for StreamResource {
         self.closed.store(true, Ordering::SeqCst);
         if let Some(task) = self.recv_task.lock().unwrap().take() {
             task.abort();
+        }
+    }
+}
+
+/// Reads until the stream closes, the peer finishes sending or resets, or a
+/// read fails, delivering each outcome to the owner.
+async fn recv_loop(stream_arc: ResourceArc<StreamResource>, mut recv: quinn::RecvStream) {
+    let mut buf = vec![0u8; 65536];
+    loop {
+        if stream_arc.closed.load(Ordering::Relaxed) {
+            break;
+        }
+
+        // Wait for active mode
+        if !stream_arc.active.load(Ordering::Relaxed) {
+            stream_arc.active_notify.notified().await;
+            continue;
+        }
+
+        match recv.read(&mut buf).await {
+            Ok(Some(n)) => {
+                let data = buf[..n].to_vec();
+                // Held until the message is sent, so a
+                // controlling_process that returns has no delivery
+                // to the former owner in flight.
+                let owner = stream_arc.owner.read().unwrap();
+                message::send_data(&owner, data, stream_arc.clone());
+            }
+            Ok(None) => {
+                // Peer finished sending
+                let owner = stream_arc.owner.read().unwrap();
+                message::send_event(
+                    &owner,
+                    atoms::peer_send_shutdown(),
+                    stream_arc.clone(),
+                    atoms::none(),
+                );
+                break;
+            }
+            Err(quinn::ReadError::Reset(code)) => {
+                // Peer called reset() on their send side (see
+                // `nif_reset_stream` below) — a deliberate,
+                // peer-visible abort with an application error
+                // code, distinct from every other read error
+                // (connection loss, zero-RTT rejection, ...),
+                // which stay collapsed into `none()` below.
+                let owner = stream_arc.owner.read().unwrap();
+                message::send_event(
+                    &owner,
+                    atoms::stream_closed(),
+                    stream_arc.clone(),
+                    (atoms::reset(), code.into_inner()),
+                );
+                break;
+            }
+            Err(e) => {
+                let owner = stream_arc.owner.read().unwrap();
+                message::send_event(
+                    &owner,
+                    atoms::stream_closed(),
+                    stream_arc.clone(),
+                    format!("{}", e),
+                );
+                break;
+            }
         }
     }
 }
@@ -413,18 +423,35 @@ async fn write_loop(
     };
     let failure = stream.stop_writes(ended);
     commands.close();
-    while let Ok(Command { charged, mut reply, mut tagged, .. }) = commands.try_recv() {
+    while let Ok(Command {
+        charged,
+        mut reply,
+        mut tagged,
+        ..
+    }) = commands.try_recv()
+    {
         answer(&mut reply, Err(failure.clone()));
         tell_tagged(&mut tagged, Err(failure.clone()));
         written(&stream, charged);
     }
-    tell_ready(&stream, std::mem::take(&mut *stream.waiting.lock().unwrap()));
+    tell_ready(
+        &stream,
+        std::mem::take(&mut *stream.waiting.lock().unwrap()),
+    );
 }
 
 /// Writes one command's data and answers its send/2 or async_send/3 caller.
 /// Returns the reason all writes stop, when this write ends them.
-async fn write_command(stream: &ResourceArc<StreamResource>, command: Command) -> Result<(), Failure> {
-    let Command { bytes, charged, mut reply, mut tagged } = command;
+async fn write_command(
+    stream: &ResourceArc<StreamResource>,
+    command: Command,
+) -> Result<(), Failure> {
+    let Command {
+        bytes,
+        charged,
+        mut reply,
+        mut tagged,
+    } = command;
     let result = write_all(stream, &bytes).await;
     written(stream, charged);
     match result {
@@ -469,11 +496,7 @@ async fn write_all(stream: &ResourceArc<StreamResource>, bytes: &[u8]) -> Result
             wrote = poll_fn(|cx| poll_write(stream, cx, &bytes[offset..])) => Step::Wrote(wrote),
         };
         match step {
-            Step::Recheck => {
-                if let Some(failure) = stream.failure() {
-                    return Err(failure);
-                }
-            }
+            Step::Recheck => stream.failure().map_or(Ok(()), Err)?,
             Step::LingerPassed => {
                 reset_send_half(stream, error_codes::LINGER_EXPIRED);
                 return Err(Failure::Closed);
@@ -540,7 +563,12 @@ fn written(stream: &ResourceArc<StreamResource>, charged: usize) {
 
 fn tell_ready(stream: &ResourceArc<StreamResource>, pids: Vec<LocalPid>) {
     for pid in pids {
-        message::send_event(&pid, atoms::send_ready(), stream.clone(), atoms::undefined());
+        message::send_event(
+            &pid,
+            atoms::send_ready(),
+            stream.clone(),
+            atoms::undefined(),
+        );
     }
 }
 

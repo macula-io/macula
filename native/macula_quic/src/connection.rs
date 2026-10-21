@@ -2,7 +2,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
 use rustler::env::SavedTerm;
-use rustler::{Binary, Encoder, Env, LocalPid, NifResult, OwnedBinary, OwnedEnv, ResourceArc, Term};
+use rustler::{
+    Binary, Encoder, Env, LocalPid, NifResult, OwnedBinary, OwnedEnv, ResourceArc, Term,
+};
 use rustls::pki_types::CertificateDer;
 use tokio::task::{AbortHandle, JoinHandle};
 
@@ -21,6 +23,8 @@ pub struct ConnectionResource {
     /// handshake. Only an accepted connection has one.
     presented_leaf: Option<Arc<[u8]>>,
 }
+
+impl rustler::Resource for ConnectionResource {}
 
 impl ConnectionResource {
     /// A connection this side dialed, with the leaf the other side sent.
@@ -123,9 +127,13 @@ impl Drop for PendingResult {
 /// reference, as when the owning process exits, cancels the dial.
 pub struct DialResource(PendingResult);
 
+impl rustler::Resource for DialResource {}
+
 /// Opaque stream open handle exposed to Erlang via ResourceArc. Dropping the
 /// last reference, as when the owning process exits, cancels the open.
 pub struct StreamOpenResource(PendingResult);
+
+impl rustler::Resource for StreamOpenResource {}
 
 /// NIF: async_connect(Tag, Host, Port, Alpn, IdleTimeoutMs, KeepAliveMs,
 ///                    TimeoutMs)
@@ -140,6 +148,10 @@ pub struct StreamOpenResource(PendingResult);
 /// (`config::client_tls_config`): its handshake signature under the key of
 /// the ML-DSA-87 certificate it presents. Who it is, the caller checks
 /// against that certificate afterwards (`nif_peer_leaf`).
+///
+/// The arity is the NIF export's, not ours to group: `macula_quic:async_connect/4`
+/// unrolls its options into these seven positions.
+#[allow(clippy::too_many_arguments)]
 #[rustler::nif]
 fn nif_async_connect<'a>(
     env: Env<'a>,
@@ -178,10 +190,7 @@ fn nif_async_connect<'a>(
 /// Cancels a dial. `delivered` means its result was sent before the cancel
 /// and is in the owner's mailbox; `cancelled` means no result will be sent.
 #[rustler::nif]
-fn nif_cancel_connect<'a>(
-    env: Env<'a>,
-    dial: ResourceArc<DialResource>,
-) -> NifResult<Term<'a>> {
+fn nif_cancel_connect<'a>(env: Env<'a>, dial: ResourceArc<DialResource>) -> NifResult<Term<'a>> {
     let outcome = if dial.0.cancel() {
         atoms::delivered()
     } else {
@@ -209,11 +218,10 @@ async fn dial(
 
         // Two-arg lookup_host avoids the bracket+colon parsing the
         // single-string form requires for IPv6.
-        let addrs: Vec<std::net::SocketAddr> =
-            tokio::net::lookup_host((host_str, port as u16))
-                .await
-                .map_err(|e| format!("resolve {}:{}: {}", host_str, port, e))?
-                .collect();
+        let addrs: Vec<std::net::SocketAddr> = tokio::net::lookup_host((host_str, port as u16))
+            .await
+            .map_err(|e| format!("resolve {}:{}: {}", host_str, port, e))?
+            .collect();
 
         let remote_addr = *addrs
             .first()
@@ -352,8 +360,7 @@ fn deliver_open_result(
         let tag = tag.load(env);
         match result {
             Ok((send, recv)) => {
-                let stream =
-                    ResourceArc::new(stream::StreamResource::new(send, recv, conn, owner));
+                let stream = ResourceArc::new(stream::StreamResource::new(send, recv, conn, owner));
                 stream::StreamResource::start_recv_loop(stream.clone());
                 stream::StreamResource::start_writer(stream.clone());
                 (atoms::quic(), atoms::stream_opened(), tag, stream).encode(env)
@@ -509,10 +516,7 @@ fn nif_controlling_process_conn<'a>(
 
 /// NIF: peername(ConnRef) -> {ok, {IP, Port}} | {error, Reason}
 #[rustler::nif]
-fn nif_peername<'a>(
-    env: Env<'a>,
-    conn: ResourceArc<ConnectionResource>,
-) -> NifResult<Term<'a>> {
+fn nif_peername<'a>(env: Env<'a>, conn: ResourceArc<ConnectionResource>) -> NifResult<Term<'a>> {
     let addr = conn.connection.remote_address();
     let ip = addr.ip().to_string();
     let port = addr.port() as u32;
@@ -581,10 +585,7 @@ fn nif_lost_packets<'a>(
 /// handshake, exactly as received. A dialed connection has the station's;
 /// an accepted connection has none, since clients send no certificate.
 #[rustler::nif]
-fn nif_peer_leaf<'a>(
-    env: Env<'a>,
-    conn: ResourceArc<ConnectionResource>,
-) -> NifResult<Term<'a>> {
+fn nif_peer_leaf<'a>(env: Env<'a>, conn: ResourceArc<ConnectionResource>) -> NifResult<Term<'a>> {
     Ok(match conn.peer_leaf.as_deref() {
         Some(leaf) => (atoms::ok(), der_binary(env, leaf)).encode(env),
         None => (atoms::error(), atoms::no_peer_leaf()).encode(env),
@@ -627,8 +628,7 @@ fn nif_export_keying_material<'a>(
     if conn.closed.load(Ordering::Relaxed) {
         return Ok((atoms::error(), atoms::already_closed()).encode(env));
     }
-    let mut output =
-        OwnedBinary::new(length).ok_or(rustler::Error::BadArg)?;
+    let mut output = OwnedBinary::new(length).ok_or(rustler::Error::BadArg)?;
     Ok(
         match conn.connection.export_keying_material(
             output.as_mut_slice(),

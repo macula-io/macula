@@ -90,10 +90,6 @@ struct TrieNode {
 }
 
 impl TrieNode {
-    fn new() -> Self {
-        Self::default()
-    }
-
     /// Insert a path into the trie, storing the MRI at the leaf.
     fn insert(&mut self, path: &[String], mri: Vec<u8>) {
         if path.is_empty() {
@@ -101,9 +97,7 @@ impl TrieNode {
             return;
         }
 
-        let child = self.children
-            .entry(path[0].clone())
-            .or_insert_with(TrieNode::new);
+        let child = self.children.entry(path[0].clone()).or_default();
         child.insert(&path[1..], mri);
     }
 
@@ -111,22 +105,18 @@ impl TrieNode {
     /// Returns true if the path was found and removed.
     fn remove(&mut self, path: &[String]) -> bool {
         if path.is_empty() {
-            if self.mri.is_some() {
-                self.mri = None;
-                return true;
-            }
-            return false;
+            return self.mri.take().is_some();
         }
 
-        if let Some(child) = self.children.get_mut(&path[0]) {
-            let removed = child.remove(&path[1..]);
-            // Clean up empty nodes
-            if child.is_empty() {
-                self.children.remove(&path[0]);
-            }
-            return removed;
+        let Some(child) = self.children.get_mut(&path[0]) else {
+            return false;
+        };
+        let removed = child.remove(&path[1..]);
+        // Clean up empty nodes
+        if child.is_empty() {
+            self.children.remove(&path[0]);
         }
-        false
+        removed
     }
 
     /// Check if this node has no children and no MRI.
@@ -143,13 +133,10 @@ impl TrieNode {
         };
 
         // Collect MRIs from immediate children
-        let mut results = Vec::new();
-        for child in node.children.values() {
-            if let Some(ref mri) = child.mri {
-                results.push(mri.as_slice());
-            }
-        }
-        results
+        node.children
+            .values()
+            .filter_map(|child| child.mri.as_deref())
+            .collect()
     }
 
     /// Find all descendants of a path (all nodes deeper in the tree).
@@ -172,16 +159,15 @@ impl TrieNode {
             return Some(self);
         }
 
-        self.children.get(&path[0])
+        self.children
+            .get(&path[0])
             .and_then(|child| child.navigate(&path[1..]))
     }
 
     /// Recursively collect all MRIs in this subtree (excluding self).
     fn collect_descendants<'a>(&'a self, results: &mut Vec<&'a [u8]>) {
         for child in self.children.values() {
-            if let Some(ref mri) = child.mri {
-                results.push(mri.as_slice());
-            }
+            results.extend(child.mri.as_deref());
             child.collect_descendants(results);
         }
     }
@@ -216,38 +202,39 @@ impl MriIndex {
 
     /// Insert an MRI into the index.
     fn insert(&mut self, realm: &str, path: Vec<String>, mri: Vec<u8>) {
-        let trie = self.realms
-            .entry(realm.to_string())
-            .or_insert_with(TrieNode::new);
+        let trie = self.realms.entry(realm.to_string()).or_default();
         trie.insert(&path, mri);
         self.total_count += 1;
     }
 
     /// Remove an MRI from the index.
     fn remove(&mut self, realm: &str, path: &[String]) -> bool {
-        if let Some(trie) = self.realms.get_mut(realm) {
-            if trie.remove(path) {
-                self.total_count -= 1;
-                // Clean up empty realm tries
-                if trie.is_empty() {
-                    self.realms.remove(realm);
-                }
-                return true;
-            }
+        let Some(trie) = self.realms.get_mut(realm) else {
+            return false;
+        };
+        if !trie.remove(path) {
+            return false;
         }
-        false
+        self.total_count -= 1;
+        // Clean up empty realm tries
+        if trie.is_empty() {
+            self.realms.remove(realm);
+        }
+        true
     }
 
     /// Find direct children of a path in a realm.
     fn find_children(&self, realm: &str, path: &[String]) -> Vec<&[u8]> {
-        self.realms.get(realm)
+        self.realms
+            .get(realm)
             .map(|trie| trie.find_children(path))
             .unwrap_or_default()
     }
 
     /// Find all descendants of a path in a realm.
     fn find_descendants(&self, realm: &str, path: &[String]) -> Vec<&[u8]> {
-        self.realms.get(realm)
+        self.realms
+            .get(realm)
             .map(|trie| trie.find_descendants(path))
             .unwrap_or_default()
     }
@@ -263,6 +250,8 @@ impl MriIndex {
 /// This allows the index to be passed to/from Erlang as an opaque reference.
 /// RwLock provides concurrent read access with exclusive write access.
 pub struct MriIndexResource(RwLock<MriIndex>);
+
+impl rustler::Resource for MriIndexResource {}
 
 impl MriIndexResource {
     fn new() -> Self {
@@ -428,19 +417,17 @@ fn nif_is_builtin_type(type_bin: Binary) -> bool {
 #[rustler::nif]
 fn nif_join_path_segments<'a>(env: Env<'a>, segments: Vec<Binary>) -> NifResult<Binary<'a>> {
     if segments.is_empty() {
-        let empty = OwnedBinary::new(0).ok_or(rustler::Error::Term(Box::new(
-            "Failed to allocate binary",
-        )))?;
+        let empty = OwnedBinary::new(0)
+            .ok_or(rustler::Error::Term(Box::new("Failed to allocate binary")))?;
         return Ok(empty.release(env));
     }
 
     // Calculate total size
-    let total_size: usize = segments.iter().map(|s| s.len()).sum::<usize>()
-        + segments.len().saturating_sub(1); // separators
+    let total_size: usize =
+        segments.iter().map(|s| s.len()).sum::<usize>() + segments.len().saturating_sub(1); // separators
 
-    let mut output = OwnedBinary::new(total_size).ok_or(rustler::Error::Term(Box::new(
-        "Failed to allocate binary",
-    )))?;
+    let mut output = OwnedBinary::new(total_size)
+        .ok_or(rustler::Error::Term(Box::new("Failed to allocate binary")))?;
 
     let mut offset = 0;
     for (i, segment) in segments.iter().enumerate() {
@@ -483,9 +470,8 @@ fn nif_format_mri<'a>(
         size += 1 + seg.len(); // "/" + segment
     }
 
-    let mut output = OwnedBinary::new(size).ok_or(rustler::Error::Term(Box::new(
-        "Failed to allocate binary",
-    )))?;
+    let mut output = OwnedBinary::new(size)
+        .ok_or(rustler::Error::Term(Box::new("Failed to allocate binary")))?;
 
     let mut offset = 0;
     let slice = output.as_mut_slice();
@@ -645,9 +631,10 @@ fn nif_build_path_index<'a>(
     let resource = MriIndexResource::new();
 
     {
-        let mut index = resource.0.write().map_err(|_| {
-            rustler::Error::Term(Box::new("Failed to acquire write lock"))
-        })?;
+        let mut index = resource
+            .0
+            .write()
+            .map_err(|_| rustler::Error::Term(Box::new("Failed to acquire write lock")))?;
 
         for (realm_bin, path_bins, mri_bin) in mris {
             // Convert realm to string
@@ -700,9 +687,10 @@ fn nif_index_find_children<'a>(
         .filter_map(|b| std::str::from_utf8(b.as_slice()).ok().map(String::from))
         .collect();
 
-    let guard = index.0.read().map_err(|_| {
-        rustler::Error::Term(Box::new("Failed to acquire read lock"))
-    })?;
+    let guard = index
+        .0
+        .read()
+        .map_err(|_| rustler::Error::Term(Box::new("Failed to acquire read lock")))?;
 
     let results = guard.find_children(realm, &path);
 
@@ -746,9 +734,10 @@ fn nif_index_find_descendants<'a>(
         .filter_map(|b| std::str::from_utf8(b.as_slice()).ok().map(String::from))
         .collect();
 
-    let guard = index.0.read().map_err(|_| {
-        rustler::Error::Term(Box::new("Failed to acquire read lock"))
-    })?;
+    let guard = index
+        .0
+        .read()
+        .map_err(|_| rustler::Error::Term(Box::new("Failed to acquire read lock")))?;
 
     let results = guard.find_descendants(realm, &path);
 
@@ -795,9 +784,10 @@ fn nif_index_insert<'a>(
 
     let mri = mri_bin.as_slice().to_vec();
 
-    let mut guard = index.0.write().map_err(|_| {
-        rustler::Error::Term(Box::new("Failed to acquire write lock"))
-    })?;
+    let mut guard = index
+        .0
+        .write()
+        .map_err(|_| rustler::Error::Term(Box::new("Failed to acquire write lock")))?;
 
     guard.insert(realm, path, mri);
 
@@ -831,9 +821,10 @@ fn nif_index_remove<'a>(
         .filter_map(|b| std::str::from_utf8(b.as_slice()).ok().map(String::from))
         .collect();
 
-    let mut guard = index.0.write().map_err(|_| {
-        rustler::Error::Term(Box::new("Failed to acquire write lock"))
-    })?;
+    let mut guard = index
+        .0
+        .write()
+        .map_err(|_| rustler::Error::Term(Box::new("Failed to acquire write lock")))?;
 
     if guard.remove(realm, &path) {
         Ok(atoms::ok().encode(env))
@@ -849,13 +840,11 @@ fn nif_index_remove<'a>(
 ///
 /// Returns: `{ok, Count}`
 #[rustler::nif]
-fn nif_index_size<'a>(
-    env: Env<'a>,
-    index: ResourceArc<MriIndexResource>,
-) -> NifResult<Term<'a>> {
-    let guard = index.0.read().map_err(|_| {
-        rustler::Error::Term(Box::new("Failed to acquire read lock"))
-    })?;
+fn nif_index_size<'a>(env: Env<'a>, index: ResourceArc<MriIndexResource>) -> NifResult<Term<'a>> {
+    let guard = index
+        .0
+        .read()
+        .map_err(|_| rustler::Error::Term(Box::new("Failed to acquire read lock")))?;
 
     Ok((atoms::ok(), guard.len()).encode(env))
 }
@@ -869,9 +858,8 @@ fn is_valid_realm_chars(s: &str) -> bool {
     if s.is_empty() {
         return false;
     }
-    s.bytes().all(|c| {
-        (c >= b'a' && c <= b'z') || (c >= b'0' && c <= b'9') || c == b'.'
-    })
+    s.bytes()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'.')
 }
 
 /// Check if string contains only valid segment characters (a-z, 0-9, -, _)
@@ -879,25 +867,22 @@ fn is_valid_segment_chars(s: &str) -> bool {
     if s.is_empty() {
         return false;
     }
-    s.bytes().all(|c| {
-        (c >= b'a' && c <= b'z') || (c >= b'0' && c <= b'9') || c == b'-' || c == b'_'
-    })
+    s.bytes()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'-' || c == b'_')
 }
 
 /// Convert a string slice to an OwnedBinary
 fn string_to_binary<'a>(env: Env<'a>, s: &str) -> NifResult<Binary<'a>> {
-    let mut output = OwnedBinary::new(s.len()).ok_or(rustler::Error::Term(Box::new(
-        "Failed to allocate binary",
-    )))?;
+    let mut output = OwnedBinary::new(s.len())
+        .ok_or(rustler::Error::Term(Box::new("Failed to allocate binary")))?;
     output.as_mut_slice().copy_from_slice(s.as_bytes());
     Ok(output.release(env))
 }
 
 /// Convert a byte slice to an OwnedBinary
 fn bytes_to_binary<'a>(env: Env<'a>, bytes: &[u8]) -> NifResult<Binary<'a>> {
-    let mut output = OwnedBinary::new(bytes.len()).ok_or(rustler::Error::Term(Box::new(
-        "Failed to allocate binary",
-    )))?;
+    let mut output = OwnedBinary::new(bytes.len())
+        .ok_or(rustler::Error::Term(Box::new("Failed to allocate binary")))?;
     output.as_mut_slice().copy_from_slice(bytes);
     Ok(output.release(env))
 }
@@ -905,6 +890,6 @@ fn bytes_to_binary<'a>(env: Env<'a>, bytes: &[u8]) -> NifResult<Binary<'a>> {
 rustler::init!("macula_mri_nif", load = on_load);
 
 fn on_load(env: Env, _info: Term) -> bool {
-    let _ = rustler::resource!(MriIndexResource, env);
+    let _ = env.register::<MriIndexResource>();
     true
 }

@@ -12,53 +12,15 @@ use rustler::{Env, Term};
 
 fn on_load(env: Env, _info: Term) -> bool {
     runtime::init();
-    rustler::resource!(endpoint::ListenerResource, env);
-    rustler::resource!(connection::ConnectionResource, env);
-    rustler::resource!(connection::DialResource, env);
-    rustler::resource!(connection::StreamOpenResource, env);
-    rustler::resource!(stream::StreamResource, env);
+    let _ = env.register::<endpoint::ListenerResource>();
+    let _ = env.register::<connection::ConnectionResource>();
+    let _ = env.register::<connection::DialResource>();
+    let _ = env.register::<connection::StreamOpenResource>();
+    let _ = env.register::<stream::StreamResource>();
     true
 }
 
-rustler::init!(
-    "macula_quic",
-    [
-        // Listener
-        endpoint::nif_listen,
-        endpoint::nif_close_listener,
-        endpoint::nif_async_accept,
-        endpoint::nif_reload_certificate,
-        // Connection
-        connection::nif_async_connect,
-        connection::nif_cancel_connect,
-        connection::nif_async_open_stream,
-        connection::nif_cancel_open_stream,
-        connection::nif_close_connection,
-        connection::nif_close_connection_with_code,
-        connection::nif_close_reason,
-        connection::nif_async_accept_stream,
-        connection::nif_controlling_process_conn,
-        connection::nif_peername,
-        connection::nif_max_datagram_size,
-        connection::nif_lost_packets,
-        connection::nif_peer_leaf,
-        connection::nif_presented_leaf,
-        connection::nif_export_keying_material,
-        // Stream
-        stream::nif_send,
-        stream::nif_async_send,
-        stream::nif_async_send_tagged,
-        stream::nif_close_stream,
-        stream::nif_reset_stream,
-        stream::nif_setopt_active,
-        stream::nif_controlling_process,
-        // What the TLS configurations this NIF builds actually do
-        config::nif_tls_posture,
-        // Self-signed pubkey-anchored cert helpers
-        cert::nif_generate_self_signed_cert,
-    ],
-    load = on_load
-);
+rustler::init!("macula_quic", load = on_load);
 
 /// The BEAM provides every `enif_*` symbol at NIF load time, so the cdylib
 /// this crate ships links with them undefined and the emulator resolves them

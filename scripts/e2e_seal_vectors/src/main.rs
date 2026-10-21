@@ -6,7 +6,7 @@
 //! file is reproducible and anyone can regenerate it.
 
 use aes_gcm::aead::{Aead, KeyInit, Payload};
-use aes_gcm::{Aes256Gcm, Nonce};
+use aes_gcm::Aes256Gcm;
 use ciborium::value::Value;
 use hkdf::Hkdf;
 use macula_mlkem::{internal, ML_KEM_1024};
@@ -57,14 +57,17 @@ fn extract(salt: &[u8], ikm: &[u8]) -> Vec<u8> {
 
 fn expand(prk: &[u8], info: &[u8], len: usize) -> Vec<u8> {
     let mut okm = vec![0u8; len];
-    Hkdf::<Sha384>::from_prk(prk).expect("prk").expand(info, &mut okm).expect("expand");
+    Hkdf::<Sha384>::from_prk(prk)
+        .expect("prk")
+        .expand(info, &mut okm)
+        .expect("expand");
     okm
 }
 
 fn seal(key: &[u8], nonce: &[u8], aad: &[u8], pt: &[u8]) -> Vec<u8> {
     Aes256Gcm::new_from_slice(key)
         .expect("key")
-        .encrypt(Nonce::from_slice(nonce), Payload { msg: pt, aad })
+        .encrypt(nonce.into(), Payload { msg: pt, aad })
         .expect("seal")
 }
 
@@ -107,7 +110,13 @@ fn recipient(profile: &str) -> Recipient {
     json["key_as_carried"] = json!(h(&carried));
     json["key_hash"] = json!(h(&key_hash));
     json["key_id"] = json!(h(&key_id));
-    Recipient { json, ek, p384_pub, key_hash, key_id }
+    Recipient {
+        json,
+        ek,
+        p384_pub,
+        key_hash,
+        key_id,
+    }
 }
 
 /// The shared secret for one encapsulation, and the vector's record of it.
@@ -135,7 +144,13 @@ fn shared(profile: &str, r: &Recipient, name: &str) -> (Vec<u8>, Vec<u8>, Json) 
             out["ss_ecdh"] = json!(h(&ss_ecdh));
             (
                 "MACULA-E2E-HYBRID-V1",
-                cbor(vec![b(&*ss_mlkem), b(&ss_ecdh), b(&mlkem_ct), b(&eph_pub), b(&r.key_hash)]),
+                cbor(vec![
+                    b(&*ss_mlkem),
+                    b(&ss_ecdh),
+                    b(&mlkem_ct),
+                    b(&eph_pub),
+                    b(&r.key_hash),
+                ]),
                 [mlkem_ct.as_slice(), eph_pub.as_slice()].concat(),
             )
         }
@@ -148,6 +163,70 @@ fn shared(profile: &str, r: &Recipient, name: &str) -> (Vec<u8>, Vec<u8>, Json) 
     (ss, kem_ct, out)
 }
 
+/// The coordinates every call frame's AAD is built from.
+struct CallCoords<'a> {
+    realm: &'a [u8],
+    procedure: &'a str,
+    caller: &'a [u8],
+    target: &'a [u8],
+    request_id: &'a [u8],
+    deadline: u64,
+}
+
+impl CallCoords<'_> {
+    /// The AAD items every call frame seals under: the scheme tag, the frame
+    /// type, the frame's coordinates and the deadline. A reply appends its
+    /// request hash and respondent.
+    fn aad_items(&self, frame_type: &str) -> Vec<Value> {
+        vec![
+            t("MACULA-E2E-AAD-V1"),
+            t(frame_type),
+            b(self.realm),
+            t(self.procedure),
+            b(self.caller),
+            b(self.target),
+            b(self.request_id),
+            u(self.deadline),
+        ]
+    }
+}
+
+/// The sealed reply and error reply of a `call` vector.
+fn call_replies(
+    name: &str,
+    k_rep: &[u8],
+    coords: &CallCoords,
+    request_hash: &[u8],
+) -> (Json, Json) {
+    let reply_nonce = fixed(&format!("{name} reply nonce"), 12);
+    let reply_plain = fixed(&format!("{name} reply payload"), 23);
+    let reply_type = "result";
+    let mut reply_items = coords.aad_items(reply_type);
+    reply_items.push(b(request_hash));
+    reply_items.push(b(coords.target));
+    let reply_aad = cbor(reply_items);
+    let reply_ct = seal(k_rep, &reply_nonce, &reply_aad, &reply_plain);
+    let reply = json!({
+        "frame_type": reply_type, "request_hash": h(request_hash), "responded_by": h(coords.target),
+        "plain": h(&reply_plain), "aad": h(&reply_aad), "nonce": h(&reply_nonce), "ct": h(&reply_ct),
+    });
+    // A provider ERROR seals its code and detail: the plaintext is the CBOR array [code, detail], both text,
+    // detail empty when there is none. The AAD is the reply's, with frame type "error".
+    let error_nonce = fixed(&format!("{name} error nonce"), 12);
+    let error_plain = cbor(vec![t("not_found"), t("no such city")]);
+    let mut error_items = coords.aad_items("error");
+    error_items.push(b(request_hash));
+    error_items.push(b(coords.target));
+    let error_aad = cbor(error_items);
+    let error_ct = seal(k_rep, &error_nonce, &error_aad, &error_plain);
+    let error_reply = json!({
+        "frame_type": "error", "request_hash": h(request_hash), "responded_by": h(coords.target),
+        "code": "not_found", "detail": "no such city",
+        "plain": h(&error_plain), "aad": h(&error_aad), "nonce": h(&error_nonce), "ct": h(&error_ct),
+    });
+    (reply, error_reply)
+}
+
 fn call_vector(profile: &str, r: &Recipient, frame_type: &str) -> Json {
     let name = format!("{profile} {frame_type}");
     let (ss, _kem_ct, mut v) = shared(profile, r, &name);
@@ -157,22 +236,30 @@ fn call_vector(profile: &str, r: &Recipient, frame_type: &str) -> Json {
     let realm = fixed(&format!("{name} realm"), 32);
     let procedure = "acme/count_v1";
     let deadline: u64 = 1_790_000_000_000;
-    let okm = expand(&ss, &cbor(vec![t("MACULA-E2E-CALL-V1"), t(frame_type), b(&request_id), b(&caller), b(&target)]), 64);
+    let coords = CallCoords {
+        realm: &realm,
+        procedure,
+        caller: &caller,
+        target: &target,
+        request_id: &request_id,
+        deadline,
+    };
+    let okm = expand(
+        &ss,
+        &cbor(vec![
+            t("MACULA-E2E-CALL-V1"),
+            t(frame_type),
+            b(&request_id),
+            b(&caller),
+            b(&target),
+        ]),
+        64,
+    );
     let (k_req, k_rep) = okm.split_at(32);
     let request_plain = fixed(&format!("{name} request payload"), 41);
-    let request_aad = cbor(vec![
-        t("MACULA-E2E-AAD-V1"), t(frame_type), b(&realm), t(procedure), b(&caller), b(&target), b(&request_id), u(deadline),
-    ]);
+    let request_aad = cbor(coords.aad_items(frame_type));
     let request_ct = seal(k_req, &[0u8; 12], &request_aad, &request_plain);
     let request_hash = fixed(&format!("{name} request_hash"), 48);
-    let reply_nonce = fixed(&format!("{name} reply nonce"), 12);
-    let reply_plain = fixed(&format!("{name} reply payload"), 23);
-    let reply_type = "result";
-    let reply_aad = cbor(vec![
-        t("MACULA-E2E-AAD-V1"), t(reply_type), b(&realm), t(procedure), b(&caller), b(&target), b(&request_id), u(deadline),
-        b(&request_hash), b(&target),
-    ]);
-    let reply_ct = seal(k_rep, &reply_nonce, &reply_aad, &reply_plain);
     v["frame_type"] = json!(frame_type);
     v["key_id"] = json!(h(&r.key_id));
     v["request_id"] = json!(h(&request_id));
@@ -185,51 +272,69 @@ fn call_vector(profile: &str, r: &Recipient, frame_type: &str) -> Json {
     v["k_rep"] = json!(h(k_rep));
     v["request"] = json!({"plain": h(&request_plain), "aad": h(&request_aad), "nonce": h(&[0u8; 12]), "ct": h(&request_ct)});
     if frame_type == "call" {
-        v["reply"] = json!({
-        "frame_type": reply_type, "request_hash": h(&request_hash), "responded_by": h(&target),
-        "plain": h(&reply_plain), "aad": h(&reply_aad), "nonce": h(&reply_nonce), "ct": h(&reply_ct),
-        });
-        // A provider ERROR seals its code and detail: the plaintext is the CBOR array [code, detail], both text,
-        // detail empty when there is none. The AAD is the reply's, with frame type "error".
-        let error_nonce = fixed(&format!("{name} error nonce"), 12);
-        let error_plain = cbor(vec![t("not_found"), t("no such city")]);
-        let error_aad = cbor(vec![
-            t("MACULA-E2E-AAD-V1"), t("error"), b(&realm), t(procedure), b(&caller), b(&target), b(&request_id),
-            u(deadline), b(&request_hash), b(&target),
-        ]);
-        let error_ct = seal(k_rep, &error_nonce, &error_aad, &error_plain);
-        v["error_reply"] = json!({
-        "frame_type": "error", "request_hash": h(&request_hash), "responded_by": h(&target),
-        "code": "not_found", "detail": "no such city",
-        "plain": h(&error_plain), "aad": h(&error_aad), "nonce": h(&error_nonce), "ct": h(&error_ct),
-        });
+        let (reply, error_reply) = call_replies(&name, k_rep, &coords, &request_hash);
+        v["reply"] = reply;
+        v["error_reply"] = error_reply;
     }
     if frame_type == "stream_open" {
-        let okm = expand(&ss, &cbor(vec![t("MACULA-E2E-STREAM-V1"), b(&request_id), b(&caller), b(&target)]), 64);
-        let (k_c2p, k_p2c) = okm.split_at(32);
-        let mut frames = Vec::new();
-        for (dir, seq, ftype) in [(0u64, 0u64, "stream_data"), (0, 1, "stream_data"), (1, 0, "stream_data"), (1, 1, "stream_reply")] {
-            let key = if dir == 0 { k_c2p } else { k_p2c };
-            let nonce = if dir == 0 {
-                let mut n = vec![0u8; 12];
-                n[4..].copy_from_slice(&seq.to_be_bytes());
-                n
-            } else {
-                fixed(&format!("{name} p2c nonce {seq}"), 12)
-            };
-            let plain = fixed(&format!("{name} frame {dir} {seq}"), 17 + seq as usize);
-            let aad = cbor(vec![t("MACULA-E2E-STREAM-AAD-V1"), t(ftype), b(&request_id), u(seq), u(dir)]);
-            let ct = seal(key, &nonce, &aad, &plain);
-            frames.push(json!({
-                "direction": dir, "seq": seq, "frame_type": ftype,
-                "plain": h(&plain), "aad": h(&aad), "nonce": h(&nonce), "ct": h(&ct),
-            }));
-        }
-        v["k_c2p"] = json!(h(k_c2p));
-        v["k_p2c"] = json!(h(k_p2c));
-        v["frames"] = json!(frames);
+        let (k_c2p, k_p2c, frames) = stream_frames(&name, &ss, &request_id, &caller, &target);
+        v["k_c2p"] = k_c2p;
+        v["k_p2c"] = k_p2c;
+        v["frames"] = frames;
     }
     v
+}
+
+/// The stream_open vector's per-direction keys and its four sealed frames,
+/// keyed from the call's shared secret.
+fn stream_frames(
+    name: &str,
+    ss: &[u8],
+    request_id: &[u8],
+    caller: &[u8],
+    target: &[u8],
+) -> (Json, Json, Json) {
+    let okm = expand(
+        ss,
+        &cbor(vec![
+            t("MACULA-E2E-STREAM-V1"),
+            b(request_id),
+            b(caller),
+            b(target),
+        ]),
+        64,
+    );
+    let (k_c2p, k_p2c) = okm.split_at(32);
+    let mut frames = Vec::new();
+    for (dir, seq, ftype) in [
+        (0u64, 0u64, "stream_data"),
+        (0, 1, "stream_data"),
+        (1, 0, "stream_data"),
+        (1, 1, "stream_reply"),
+    ] {
+        let key = if dir == 0 { k_c2p } else { k_p2c };
+        let nonce = if dir == 0 {
+            let mut n = vec![0u8; 12];
+            n[4..].copy_from_slice(&seq.to_be_bytes());
+            n
+        } else {
+            fixed(&format!("{name} p2c nonce {seq}"), 12)
+        };
+        let plain = fixed(&format!("{name} frame {dir} {seq}"), 17 + seq as usize);
+        let aad = cbor(vec![
+            t("MACULA-E2E-STREAM-AAD-V1"),
+            t(ftype),
+            b(request_id),
+            u(seq),
+            u(dir),
+        ]);
+        let ct = seal(key, &nonce, &aad, &plain);
+        frames.push(json!({
+            "direction": dir, "seq": seq, "frame_type": ftype,
+            "plain": h(&plain), "aad": h(&aad), "nonce": h(&nonce), "ct": h(&ct),
+        }));
+    }
+    (json!(h(k_c2p)), json!(h(k_p2c)), json!(frames))
 }
 
 fn event_vector() -> Json {
@@ -240,10 +345,21 @@ fn event_vector() -> Json {
     let seq: u64 = 1_790_000_000_123;
     let published_at: u64 = 1_790_000_000_456;
     let prk_g = extract(b"MACULA-E2E-EVENT-V1", &k_g);
-    let k_pub = expand(&prk_g, &cbor(vec![t("MACULA-E2E-EVENT-V1"), b(&publisher)]), 32);
+    let k_pub = expand(
+        &prk_g,
+        &cbor(vec![t("MACULA-E2E-EVENT-V1"), b(&publisher)]),
+        32,
+    );
     let nonce = fixed("event nonce", 12);
     let plain = fixed("event payload", 29);
-    let aad = cbor(vec![t("MACULA-E2E-EVENT-AAD-V1"), b(&realm), t(topic), b(&publisher), u(seq), u(published_at)]);
+    let aad = cbor(vec![
+        t("MACULA-E2E-EVENT-AAD-V1"),
+        b(&realm),
+        t(topic),
+        b(&publisher),
+        u(seq),
+        u(published_at),
+    ]);
     let ct = seal(&k_pub, &nonce, &aad, &plain);
     json!({
         "k_g": h(&k_g), "publisher": h(&publisher), "prk_g": h(&prk_g),
@@ -261,7 +377,10 @@ fn zero_ecdh_refusal(hybrid_call: &Json, hybrid: &Json) -> Json {
     let sk = SecretKey::from_slice(&d).expect("scalar");
     let point = PublicKey::from_sec1_bytes(&e).expect("on the curve");
     let shared = ecdh::diffie_hellman(sk.to_nonzero_scalar(), point.as_affine());
-    assert!(shared.raw_secret_bytes().iter().all(|b| *b == 0), "the refusal vector must reach a zero ECDH output");
+    assert!(
+        shared.raw_secret_bytes().iter().all(|b| *b == 0),
+        "the refusal vector must reach a zero ECDH output"
+    );
     let mlkem_ct = hex::decode(hybrid_call["mlkem_ct"].as_str().unwrap()).unwrap();
     json!({
         "why": "the ephemeral point makes the recipient's P-384 ECDH output 48 zero bytes",

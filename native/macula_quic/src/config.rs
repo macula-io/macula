@@ -1,9 +1,9 @@
 use quinn::{ClientConfig, ServerConfig, TransportConfig, VarInt};
+use rustler::{Encoder, Env, NifResult, Term};
 use rustls::crypto::CryptoProvider;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName};
 use rustls::sign::CertifiedKey;
 use rustls::{ClientConnection, Connection, HandshakeKind, ServerConnection};
-use rustler::{Encoder, Env, NifResult, Term};
 
 use crate::{atoms, cert};
 use std::fs;
@@ -74,7 +74,10 @@ pub fn build_server_config(
 /// unless it is handed one. `macula-pqc`'s list holds AES-256-GCM alone, so
 /// both configurations here take the Initial suite from
 /// `macula_pqc::quic_initial_suite()`.
-pub fn quic_server_config(server_crypto: rustls::ServerConfig, settings: &ServerSettings) -> Result<ServerConfig, String> {
+pub fn quic_server_config(
+    server_crypto: rustls::ServerConfig,
+    settings: &ServerSettings,
+) -> Result<ServerConfig, String> {
     let mut transport = TransportConfig::default();
     transport.max_idle_timeout(Some(
         quinn::IdleTimeout::try_from(Duration::from_millis(settings.idle_timeout_ms))
@@ -83,16 +86,19 @@ pub fn quic_server_config(server_crypto: rustls::ServerConfig, settings: &Server
     transport.keep_alive_interval(Some(Duration::from_millis(settings.keep_alive_ms)));
     transport.max_concurrent_bidi_streams(settings.bidi_streams.into());
     transport.max_concurrent_uni_streams(settings.uni_streams.into());
-    apply_flow_control(&mut transport, settings.stream_receive_window, settings.receive_window)?;
+    apply_flow_control(
+        &mut transport,
+        settings.stream_receive_window,
+        settings.receive_window,
+    )?;
 
-    let mut config =
-        ServerConfig::with_crypto(Arc::new(
-            quinn::crypto::rustls::QuicServerConfig::with_initial(
-                Arc::new(server_crypto),
-                macula_pqc::quic_initial_suite(),
-            )
-            .map_err(|e| format!("QUIC server config: {}", e))?,
-        ));
+    let mut config = ServerConfig::with_crypto(Arc::new(
+        quinn::crypto::rustls::QuicServerConfig::with_initial(
+            Arc::new(server_crypto),
+            macula_pqc::quic_initial_suite(),
+        )
+        .map_err(|e| format!("QUIC server config: {}", e))?,
+    ));
     config.transport_config(Arc::new(transport));
 
     Ok(config)
@@ -204,11 +210,18 @@ pub fn build_client_config(
             .map_err(|e| format!("idle_timeout: {}", e))?,
     ));
     transport.keep_alive_interval(Some(Duration::from_millis(keep_alive_ms)));
-    apply_flow_control(&mut transport, DEFAULT_STREAM_RECEIVE_WINDOW, DEFAULT_RECEIVE_WINDOW)?;
+    apply_flow_control(
+        &mut transport,
+        DEFAULT_STREAM_RECEIVE_WINDOW,
+        DEFAULT_RECEIVE_WINDOW,
+    )?;
 
     let mut config = ClientConfig::new(Arc::new(
-        quinn::crypto::rustls::QuicClientConfig::with_initial(Arc::new(crypto), macula_pqc::quic_initial_suite())
-            .map_err(|e| format!("QUIC client config: {}", e))?,
+        quinn::crypto::rustls::QuicClientConfig::with_initial(
+            Arc::new(crypto),
+            macula_pqc::quic_initial_suite(),
+        )
+        .map_err(|e| format!("QUIC client config: {}", e))?,
     ));
     config.transport_config(Arc::new(transport));
 
@@ -313,7 +326,11 @@ pub fn posture() -> Result<Posture, String> {
 }
 
 fn groups(provider: &CryptoProvider) -> Vec<u16> {
-    provider.kx_groups.iter().map(|group| u16::from(group.name())).collect()
+    provider
+        .kx_groups
+        .iter()
+        .map(|group| u16::from(group.name()))
+        .collect()
 }
 
 /// One in-memory handshake over shared configurations, so a session one
@@ -324,11 +341,15 @@ pub(crate) fn handshake_kind(
     server_cfg: &Arc<rustls::ServerConfig>,
 ) -> Result<HandshakeKind, String> {
     let mut client = Connection::Client(
-        ClientConnection::new(client_cfg.clone(), ServerName::try_from("localhost").unwrap())
-            .map_err(|e| format!("client connection: {}", e))?,
+        ClientConnection::new(
+            client_cfg.clone(),
+            ServerName::try_from("localhost").unwrap(),
+        )
+        .map_err(|e| format!("client connection: {}", e))?,
     );
     let mut server = Connection::Server(
-        ServerConnection::new(server_cfg.clone()).map_err(|e| format!("server connection: {}", e))?,
+        ServerConnection::new(server_cfg.clone())
+            .map_err(|e| format!("server connection: {}", e))?,
     );
     // Twenty flights is far more than TLS 1.3 needs and bounds a handshake
     // that stops progressing.
@@ -341,7 +362,9 @@ pub(crate) fn handshake_kind(
     if client.is_handshaking() {
         return Err("handshake never completed".to_string());
     }
-    client.handshake_kind().ok_or_else(|| "completed with no handshake kind".to_string())
+    client
+        .handshake_kind()
+        .ok_or_else(|| "completed with no handshake kind".to_string())
 }
 
 /// Moves whatever `from` wants to write into `to`, and returns how many
@@ -350,15 +373,18 @@ pub(crate) fn handshake_kind(
 pub(crate) fn pump(from: &mut Connection, to: &mut Connection) -> Result<usize, String> {
     let mut buf = Vec::new();
     while from.wants_write() {
-        from.write_tls(&mut buf).map_err(|e| format!("write_tls: {}", e))?;
+        from.write_tls(&mut buf)
+            .map_err(|e| format!("write_tls: {}", e))?;
     }
     if buf.is_empty() {
         return Ok(0);
     }
     let mut cursor = std::io::Cursor::new(&buf[..]);
     while (cursor.position() as usize) < buf.len() {
-        to.read_tls(&mut cursor).map_err(|e| format!("read_tls: {}", e))?;
-        to.process_new_packets().map_err(|e| format!("process_new_packets: {}", e))?;
+        to.read_tls(&mut cursor)
+            .map_err(|e| format!("read_tls: {}", e))?;
+        to.process_new_packets()
+            .map_err(|e| format!("process_new_packets: {}", e))?;
     }
     Ok(buf.len())
 }
@@ -380,7 +406,10 @@ fn nif_tls_posture<'a>(env: Env<'a>) -> NifResult<Term<'a>> {
                 .map_put(atoms::server_max_early_data(), p.server_max_early_data)?
                 .map_put(atoms::server_tickets(), p.server_tickets)?
                 .map_put(atoms::second_handshake(), kind(p.second_handshake))?
-                .map_put(atoms::dialler_second_handshake(), kind(p.dialler_second_handshake))?;
+                .map_put(
+                    atoms::dialler_second_handshake(),
+                    kind(p.dialler_second_handshake),
+                )?;
             (atoms::ok(), map).encode(env)
         }
         Err(reason) => (atoms::error(), reason).encode(env),
@@ -443,8 +472,16 @@ mod tests {
         let (certs, key) = test_identity();
         let server = server_tls_config(certs, key, &alpn).expect("server config");
         let client = client_tls_config(&alpn);
-        assert_eq!(offered(server.crypto_provider()), macula_pqc_groups(), "listener");
-        assert_eq!(offered(client.crypto_provider()), macula_pqc_groups(), "dialler");
+        assert_eq!(
+            offered(server.crypto_provider()),
+            macula_pqc_groups(),
+            "listener"
+        );
+        assert_eq!(
+            offered(client.crypto_provider()),
+            macula_pqc_groups(),
+            "dialler"
+        );
     }
 
     /// And every configuration signs and verifies ML-DSA-87 alone, the
@@ -456,9 +493,14 @@ mod tests {
         let (certs, key) = test_identity();
         let server = server_tls_config(certs, key, &alpn).expect("server config");
         let client = client_tls_config(&alpn);
-        for (side, provider) in [("listener", server.crypto_provider()), ("dialler", client.crypto_provider())] {
+        for (side, provider) in [
+            ("listener", server.crypto_provider()),
+            ("dialler", client.crypto_provider()),
+        ] {
             assert_eq!(
-                provider.signature_verification_algorithms.supported_schemes(),
+                provider
+                    .signature_verification_algorithms
+                    .supported_schemes(),
                 vec![SignatureScheme::ML_DSA_87],
                 "{side}"
             );
@@ -548,15 +590,27 @@ mod tests {
 
         let we_dial = handshake(
             client_tls_config(&alpn),
-            peer_server(aws_lc_rs_post_quantum_list(), certs.clone(), key.clone_key()),
+            peer_server(
+                aws_lc_rs_post_quantum_list(),
+                certs.clone(),
+                key.clone_key(),
+            ),
         );
         let they_dial = handshake(
             peer_client(aws_lc_rs_post_quantum_list()),
             server_tls_config(certs, key, &alpn).expect("ours"),
         );
 
-        assert_eq!(we_dial, Ok(NamedGroup::secp256r1MLKEM768), "we dial an aws-lc-rs peer");
-        assert_eq!(they_dial, Ok(NamedGroup::secp256r1MLKEM768), "an aws-lc-rs peer dials us");
+        assert_eq!(
+            we_dial,
+            Ok(NamedGroup::secp256r1MLKEM768),
+            "we dial an aws-lc-rs peer"
+        );
+        assert_eq!(
+            they_dial,
+            Ok(NamedGroup::secp256r1MLKEM768),
+            "an aws-lc-rs peer dials us"
+        );
     }
 
     /// THE NEGATIVE CONTROL, and without it the two tests above are worth
@@ -588,7 +642,10 @@ mod tests {
             client_tls_config(&alpn),
             peer_server(classical(), certs.clone(), key.clone_key()),
         );
-        let they_dial = handshake(peer_client(classical()), server_tls_config(certs, key, &alpn).expect("ours"));
+        let they_dial = handshake(
+            peer_client(classical()),
+            server_tls_config(certs, key, &alpn).expect("ours"),
+        );
 
         assert!(
             we_dial.is_err(),
@@ -614,9 +671,13 @@ mod tests {
     fn the_dialler_refuses_a_station_that_cannot_sign_for_its_certificate() {
         let alpn = vec!["macula".to_string()];
         let (certs, key) = test_identity();
-        let (_other_certs, other_key) = cert::generate_self_signed(&[3u8; 32], &["localhost".to_string()])
-            .expect("another identity");
-        let wrong_key = handshake(client_tls_config(&alpn), presenting(certs.clone(), other_key.into()));
+        let (_other_certs, other_key) =
+            cert::generate_self_signed(&[3u8; 32], &["localhost".to_string()])
+                .expect("another identity");
+        let wrong_key = handshake(
+            client_tls_config(&alpn),
+            presenting(certs.clone(), other_key.into()),
+        );
         assert!(
             wrong_key.is_err(),
             "a station signing with a key other than its certificate's was accepted: {wrong_key:?}"
@@ -649,7 +710,10 @@ mod tests {
         )
         .expect("classical station");
         let agreed = handshake(client_tls_config(&alpn), classical_station);
-        assert!(agreed.is_err(), "a station with an ECDSA certificate was accepted: {agreed:?}");
+        assert!(
+            agreed.is_err(),
+            "a station with an ECDSA certificate was accepted: {agreed:?}"
+        );
     }
 
     /// The one TLS 1.3 cipher suite this NIF's handshakes may agree on,
@@ -661,9 +725,17 @@ mod tests {
         let (certs, key) = test_identity();
         let server = server_tls_config(certs, key, &alpn).expect("server config");
         let client = client_tls_config(&alpn);
-        for (name, provider) in [("listener", server.crypto_provider()), ("dialler", client.crypto_provider())] {
-            let suites: Vec<rustls::CipherSuite> = provider.cipher_suites.iter().map(|s| s.suite()).collect();
-            assert_eq!(suites, vec![rustls::CipherSuite::TLS13_AES_256_GCM_SHA384], "{name}");
+        for (name, provider) in [
+            ("listener", server.crypto_provider()),
+            ("dialler", client.crypto_provider()),
+        ] {
+            let suites: Vec<rustls::CipherSuite> =
+                provider.cipher_suites.iter().map(|s| s.suite()).collect();
+            assert_eq!(
+                suites,
+                vec![rustls::CipherSuite::TLS13_AES_256_GCM_SHA384],
+                "{name}"
+            );
         }
     }
 
@@ -682,23 +754,53 @@ mod tests {
                 rustls::crypto::aws_lc_rs::cipher_suite::TLS13_AES_128_GCM_SHA256,
                 rustls::crypto::aws_lc_rs::cipher_suite::TLS13_CHACHA20_POLY1305_SHA256,
             ];
-            if aes_256 {
-                suites.push(rustls::crypto::aws_lc_rs::cipher_suite::TLS13_AES_256_GCM_SHA384);
+            suites.extend(
+                aes_256
+                    .then_some(rustls::crypto::aws_lc_rs::cipher_suite::TLS13_AES_256_GCM_SHA384),
+            );
+            CryptoProvider {
+                cipher_suites: suites,
+                ..facade_provider()
             }
-            CryptoProvider { cipher_suites: suites, ..facade_provider() }
         };
         let (certs, key) = test_identity();
         let ours = || server_tls_config(certs.clone(), key.clone_key(), &alpn).expect("ours");
         let we_dial = |aes_256| {
-            handshake(client_tls_config(&alpn), peer_server(offering(aes_256), certs.clone(), key.clone_key()))
+            handshake(
+                client_tls_config(&alpn),
+                peer_server(offering(aes_256), certs.clone(), key.clone_key()),
+            )
         };
         let they_dial = |aes_256| handshake(peer_client(offering(aes_256)), ours());
 
         let refused = (we_dial(false), they_dial(false));
-        assert!(refused.0.is_err(), "our dialler agreed on a suite other than AES-256-GCM: {:?}", refused.0);
-        assert!(refused.1.is_err(), "our listener agreed on a suite other than AES-256-GCM: {:?}", refused.1);
+        assert!(
+            refused.0.is_err(),
+            "our dialler agreed on a suite other than AES-256-GCM: {:?}",
+            refused.0
+        );
+        assert!(
+            refused.1.is_err(),
+            "our listener agreed on a suite other than AES-256-GCM: {:?}",
+            refused.1
+        );
         assert_eq!(we_dial(true), Ok(SECP384R1MLKEM1024), "the twin, dialling");
-        assert_eq!(they_dial(true), Ok(SECP384R1MLKEM1024), "the twin, listening");
+        assert_eq!(
+            they_dial(true),
+            Ok(SECP384R1MLKEM1024),
+            "the twin, listening"
+        );
+    }
+
+    /// Accepts one incoming connection and yields the handshake's result.
+    async fn accept_one(server: quinn::Endpoint) -> Result<(), String> {
+        server
+            .accept()
+            .await
+            .expect("incoming")
+            .await
+            .map(|_| ())
+            .map_err(|e| e.to_string())
     }
 
     /// A QUIC connection completes between the NIF's own listener and
@@ -719,20 +821,24 @@ mod tests {
             stream_receive_window: DEFAULT_STREAM_RECEIVE_WINDOW,
             receive_window: DEFAULT_RECEIVE_WINDOW,
         };
-        let server_config = quic_server_config(server_tls_config(certs, key, &alpn).expect("tls"), &settings)
-            .expect("the listener's QUIC configuration");
-        let client_config = build_client_config(&alpn, 10_000, 1_000).expect("the dialler's QUIC configuration");
+        let server_config = quic_server_config(
+            server_tls_config(certs, key, &alpn).expect("tls"),
+            &settings,
+        )
+        .expect("the listener's QUIC configuration");
+        let client_config =
+            build_client_config(&alpn, 10_000, 1_000).expect("the dialler's QUIC configuration");
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .expect("runtime");
         runtime.block_on(async move {
-            let server = quinn::Endpoint::server(server_config, "127.0.0.1:0".parse().unwrap()).expect("listener");
+            let server = quinn::Endpoint::server(server_config, "127.0.0.1:0".parse().unwrap())
+                .expect("listener");
             let addr = server.local_addr().expect("address");
-            let accepted = tokio::spawn(async move {
-                server.accept().await.expect("incoming").await.map(|_| ()).map_err(|e| e.to_string())
-            });
-            let mut client = quinn::Endpoint::client("127.0.0.1:0".parse().unwrap()).expect("dialler");
+            let accepted = tokio::spawn(accept_one(server));
+            let mut client =
+                quinn::Endpoint::client("127.0.0.1:0".parse().unwrap()).expect("dialler");
             client.set_default_client_config(client_config);
             let connected = client.connect(addr, "localhost").expect("connect").await;
             assert!(connected.is_ok(), "{:?}", connected.err());
@@ -751,8 +857,16 @@ mod tests {
         let (certs, key) = test_identity();
         let server = Arc::new(server_tls_config(certs, key, &alpn).expect("server config"));
         let client = Arc::new(client_tls_config(&alpn));
-        assert_eq!(handshake_kind(&client, &server), Ok(HandshakeKind::Full), "first");
-        assert_eq!(handshake_kind(&client, &server), Ok(HandshakeKind::Full), "second");
+        assert_eq!(
+            handshake_kind(&client, &server),
+            Ok(HandshakeKind::Full),
+            "first"
+        );
+        assert_eq!(
+            handshake_kind(&client, &server),
+            Ok(HandshakeKind::Full),
+            "second"
+        );
     }
 
     /// The posture the start check reads is the configurations' own: exactly
@@ -767,7 +881,11 @@ mod tests {
         assert_eq!(p.server_max_early_data, 0);
         assert_eq!(p.server_tickets, 0);
         assert_eq!(p.second_handshake, HandshakeKind::Full);
-        assert_eq!(p.dialler_second_handshake, HandshakeKind::Full, "dialler against a ticketing listener");
+        assert_eq!(
+            p.dialler_second_handshake,
+            HandshakeKind::Full,
+            "dialler against a ticketing listener"
+        );
     }
 
     /// Neither end offers or accepts 0-RTT early data, which is replayable
@@ -781,7 +899,10 @@ mod tests {
         let client = client_tls_config(&alpn);
         assert_eq!(server.max_early_data_size, 0, "listener");
         assert_eq!(server.send_tls13_tickets, 0, "listener tickets");
-        assert!(!server.session_storage.can_cache(), "listener session storage");
+        assert!(
+            !server.session_storage.can_cache(),
+            "listener session storage"
+        );
         assert!(!client.enable_early_data, "dialler");
     }
 
@@ -798,8 +919,8 @@ mod tests {
     /// A station identity, made by the NIF's own generator so the
     /// certificate under test is the kind it really issues.
     fn test_identity() -> (Vec<CertificateDer<'static>>, PrivateKeyDer<'static>) {
-        let (certificate, key) =
-            cert::generate_self_signed(&[9u8; 32], &["localhost".to_string()]).expect("self-signed cert");
+        let (certificate, key) = cert::generate_self_signed(&[9u8; 32], &["localhost".to_string()])
+            .expect("self-signed cert");
         (vec![certificate], key.into())
     }
 
@@ -834,14 +955,20 @@ mod tests {
     /// A station on `macula-pqc`'s builder presenting `certs` and signing
     /// with `key`, whatever the two are: a resolver skips the check
     /// `with_single_cert` makes that the key is the certificate's.
-    fn presenting(certs: Vec<CertificateDer<'static>>, key: PrivateKeyDer<'static>) -> rustls::ServerConfig {
+    fn presenting(
+        certs: Vec<CertificateDer<'static>>,
+        key: PrivateKeyDer<'static>,
+    ) -> rustls::ServerConfig {
         let signing_key = facade_provider()
             .key_provider
             .load_private_key(key)
             .expect("an ML-DSA-87 key");
         let mut config = macula_pqc::server_builder()
             .with_no_client_auth()
-            .with_cert_resolver(Arc::new(SingleCertAndKey::from(CertifiedKey::new(certs, signing_key))));
+            .with_cert_resolver(Arc::new(SingleCertAndKey::from(CertifiedKey::new(
+                certs,
+                signing_key,
+            ))));
         config.alpn_protocols = vec![b"macula".to_vec()];
         config
     }
@@ -867,12 +994,13 @@ mod tests {
 
         // Twenty flights is far more than TLS 1.3 needs and bounds a
         // handshake that stops progressing.
-        for _ in 0..20 {
+        let mut progressing = true;
+        let mut flights = 0;
+        while progressing && flights < 20 {
             let client_moved = pump(&mut client, &mut server)?;
             let server_moved = pump(&mut server, &mut client)?;
-            if client_moved + server_moved == 0 && !client.is_handshaking() {
-                break;
-            }
+            progressing = client_moved + server_moved > 0 || client.is_handshaking();
+            flights += 1;
         }
 
         if client.is_handshaking() {
