@@ -10,14 +10,21 @@ mod stream;
 
 use rustler::{Env, Term};
 
+/// Registers every resource type the NIFs hand out. A resource that cannot be
+/// registered fails the load here, where the emulator reports which NIF it
+/// was: answering true and failing at the first accepted connection would put
+/// the error far from its cause.
 fn on_load(env: Env, _info: Term) -> bool {
     runtime::init();
-    let _ = env.register::<endpoint::ListenerResource>();
-    let _ = env.register::<connection::ConnectionResource>();
-    let _ = env.register::<connection::DialResource>();
-    let _ = env.register::<connection::StreamOpenResource>();
-    let _ = env.register::<stream::StreamResource>();
-    true
+    [
+        env.register::<endpoint::ListenerResource>(),
+        env.register::<connection::ConnectionResource>(),
+        env.register::<connection::DialResource>(),
+        env.register::<connection::StreamOpenResource>(),
+        env.register::<stream::StreamResource>(),
+    ]
+    .into_iter()
+    .all(|registered| registered.is_ok())
 }
 
 rustler::init!("macula_quic", load = on_load);

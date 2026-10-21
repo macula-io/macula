@@ -889,7 +889,8 @@ fn bytes_to_binary<'a>(env: Env<'a>, bytes: &[u8]) -> NifResult<Binary<'a>> {
 
 rustler::init!("macula_mri_nif", load = on_load);
 
+/// A resource that cannot be registered fails the load, rather than answering
+/// true and failing at the first index built.
 fn on_load(env: Env, _info: Term) -> bool {
-    let _ = env.register::<MriIndexResource>();
-    true
+    env.register::<MriIndexResource>().is_ok()
 }

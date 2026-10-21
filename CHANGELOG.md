@@ -24,6 +24,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `docs.yml`: the docs check, on every change including doc-only ones; `publish-hex.yml` waits on it.
 
+### Changed
+
+- **`macula_quic:listen/3` no longer fails when the endpoint cannot report its own local address.** The listener
+  resource carried that address as a field no NIF ever read, so the field is gone, and with it the `{error, _}`
+  that a `local_addr()` failure used to return. A listener is created as before on a socket that is already bound;
+  what is no longer reported is the failure of a call whose result nobody could see.
+- **The QUIC and MRI NIFs fail their load when a resource type cannot be registered.** `on_load` ignored
+  `env.register`'s result and answered `true`, so a registration failure surfaced later, at the first accepted
+  connection or the first index built. It now fails the load, where the emulator names the NIF.
+
 ## [16.0.0] - 2026-10-20
 
 A revoked realm member stops being admitted within 24 hours, even where the realm's tombstone never arrives
