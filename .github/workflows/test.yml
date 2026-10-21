@@ -329,7 +329,7 @@ jobs:
     name: Dependency advisories (erlang)
     permissions:
       contents: read
-    uses: macula-io/macula-ci-images/.github/workflows/dependency-advisories.yml@dbc9533eb409c2118f45110613160060cc582f5d
+    uses: macula-io/macula-ci-images/.github/workflows/dependency-advisories.yml@83a76a358456bf2f7d6c919ad5e8fe7fd2162ce3
     with:
       ecosystem: erlang
       otp-version: '28.4.3'
@@ -341,7 +341,7 @@ jobs:
     name: Dependency advisories (rust)
     permissions:
       contents: read
-    uses: macula-io/macula-ci-images/.github/workflows/dependency-advisories.yml@dbc9533eb409c2118f45110613160060cc582f5d
+    uses: macula-io/macula-ci-images/.github/workflows/dependency-advisories.yml@83a76a358456bf2f7d6c919ad5e8fe7fd2162ce3
     with:
       ecosystem: rust
       working-directories: '["native/macula_cbor_nif","native/macula_crypto_nif","native/macula_mri_nif","native/macula_quic"]'
