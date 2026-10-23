@@ -1774,20 +1774,20 @@ stream_call({stream_advertise, Realm, Proc, Mode, Handler, Policy, EncodedAd},
                  stream_policies   = set_policy({Realm, Proc}, Policy, SPols),
                  advertisements    = store_advertisement({Realm, Proc}, EncodedAd, S)},
     maybe_send_advertise(Realm, Proc, EncodedAd, S1),
-    {reply, ok, S1};
+    {reply, ok, renewal_advertised(Realm, Policy, EncodedAd, S1)};
 
 stream_call({stream_unadvertise, Realm, Proc},
             #state{stream_procedures = SP, stream_policies = SPols, advertisements = Ads} = S) ->
-    {reply, ok, S#state{stream_procedures = maps:remove({Realm, Proc}, SP),
-                        stream_policies   = maps:remove({Realm, Proc}, SPols),
-                        advertisements    = maps:remove({Realm, Proc}, Ads)}};
+    {reply, ok, renewal_kept(Realm, S#state{stream_procedures = maps:remove({Realm, Proc}, SP),
+                                            stream_policies   = maps:remove({Realm, Proc}, SPols),
+                                            advertisements    = maps:remove({Realm, Proc}, Ads)})};
 stream_call({stream_unadvertise, Realm, Proc, EncodedWithdrawal},
             #state{stream_procedures = SP, stream_policies = SPols} = S) ->
     maybe_send_unadvertise(Realm, Proc, EncodedWithdrawal, S),
-    {reply, ok, S#state{stream_procedures = maps:remove({Realm, Proc}, SP),
-                        stream_policies   = maps:remove({Realm, Proc}, SPols),
-                        advertisements    = maps:remove({Realm, Proc},
-                                                        S#state.advertisements)}};
+    {reply, ok, renewal_kept(Realm, S#state{stream_procedures = maps:remove({Realm, Proc}, SP),
+                                            stream_policies   = maps:remove({Realm, Proc}, SPols),
+                                            advertisements    = maps:remove({Realm, Proc},
+                                                                            S#state.advertisements)})};
 stream_call(_Request, S) ->
     {reply, {error, unknown_call}, S}.
 
@@ -2754,6 +2754,33 @@ maybe_send_subscribe(Realm, Topic, #state{peer_pid = Pid, node_identity = Id}) -
                                       subscriber => SubKey}),
     try macula_peering:send_frame(Pid, Frame) catch _:_ -> ok end,
     ok.
+
+%% A gated stream advertised from a spec makes the node's own stream_renew findable in that realm, so a caller can
+%% renew the token its session there was opened with (macula#120). It is a procedure in the node's own namespace, so
+%% its spec carries no authorization and no bound, only the gated spec's lifetime and keying; it is signed and renewed
+%% like any spec, and sent once for the realm however many gated streams are advertised in it.
+renewal_advertised(Realm, Policy, Spec, #state{node_identity = Id, advertisements = Ads} = S)
+  when Policy =/= open, is_map(Spec) ->
+    Key = {Realm, stream_renewal_procedure(macula_node_keys:key_id(Id))},
+    renewal_registered(maps:is_key(Key, Ads), Key, maps:with([ttl_ms, kem, keyed_since, confidential], Spec), S);
+renewal_advertised(_Realm, _OpenOrSigned, _Ad, S) ->
+    S.
+
+renewal_registered(true, _Key, _RenewalSpec, S) ->
+    S;
+renewal_registered(false, {Realm, Proc} = Key, RenewalSpec, #state{advertisements = Ads} = S) ->
+    S1 = S#state{advertisements = Ads#{Key => RenewalSpec}},
+    maybe_send_advertise(Realm, Proc, RenewalSpec, S1),
+    S1.
+
+%% The node's stream_renew in a realm is kept while a gated stream is still registered there; with the last one gone
+%% it is no longer renewed, and its advertisement lapses at its expiry.
+renewal_kept(Realm, #state{stream_policies = SPols, node_identity = Id, advertisements = Ads} = S) ->
+    Gated = [P || {R, _} = P <- maps:keys(SPols), R =:= Realm],
+    renewal_dropped(Gated, {Realm, stream_renewal_procedure(macula_node_keys:key_id(Id))}, Ads, S).
+
+renewal_dropped([], Key, Ads, S) -> S#state{advertisements = maps:remove(Key, Ads)};
+renewal_dropped(_StillGated, _Key, _Ads, S) -> S.
 
 %% Store the advertisement bytes under its (realm, procedure); a
 %% `undefined' registration sends nothing and stores nothing.

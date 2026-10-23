@@ -340,6 +340,65 @@ a_stream_spec_is_signed_naming_the_link_s_own_station_test_() ->
          macula_station_link:stop(Pid)
      end}}.
 
+%%------------------------------------------------------------------
+%% macula#120: a node serving a gated stream advertises its own stream_renew
+%%------------------------------------------------------------------
+
+%% A caller renews the token of a gated stream through `~<node>/stream_renew' in the stream's realm, which the link
+%% answers itself; it can only find that procedure if the node advertises it there, signed by the node alone.
+a_gated_stream_spec_also_advertises_the_node_s_own_stream_renew_test_() ->
+    {spawn, {timeout, 5,
+     fun() ->
+         Pid = start_connected_link(),
+         ok = macula_station_link:advertise_stream(Pid, ?REALM, ?PROCEDURE, bidi, fun stream_handler/2,
+                                                   {ucan_required, <<5:256>>},
+                                                   spec(erlang:system_time(millisecond) + 3_600_000)),
+         Ads = [advertised_record(F) || F <- frames_until_quiet(1_000)],
+         [Renew] = [Ad || #{procedure := <<"~", _/binary>>} = Ad <- Ads],
+         ?assertEqual(macula_station_link:stream_renewal_procedure(maps:get(advertiser_node, Renew)),
+                      maps:get(procedure, Renew)),
+         ?assertEqual(?REALM, maps:get(realm_id, Renew)),
+         ?assertEqual(undefined, maps:get(authorization, Renew)),
+         ?assertEqual([?PROCEDURE], [P || #{procedure := P} <- Ads, P =/= maps:get(procedure, Renew)]),
+         macula_station_link:stop(Pid)
+     end}}.
+
+%% An open stream needs no token, so nothing is renewed and no stream_renew is advertised for it.
+an_open_stream_spec_advertises_no_stream_renew_test_() ->
+    {spawn, {timeout, 5,
+     fun() ->
+         Pid = start_connected_link(),
+         ok = macula_station_link:advertise_stream(Pid, ?REALM, ?PROCEDURE, bidi, fun stream_handler/2, open,
+                                                   spec(erlang:system_time(millisecond) + 3_600_000)),
+         ?assertEqual([?PROCEDURE], [maps:get(procedure, advertised_record(F)) || F <- frames_until_quiet(1_000)]),
+         macula_station_link:stop(Pid)
+     end}}.
+
+%% stream_renew stays registered for renewal while any gated stream in the realm is, and is dropped with the realm's
+%% last one, so its advertisement is no longer renewed and lapses.
+stream_renew_ends_with_the_realm_s_last_gated_stream_test_() ->
+    {spawn, {timeout, 5,
+     fun() ->
+         Pid = start_connected_link(),
+         Spec = spec(erlang:system_time(millisecond) + 3_600_000),
+         Other = <<"acme.tally_v1">>,
+         [ok = macula_station_link:advertise_stream(Pid, ?REALM, P, bidi, fun stream_handler/2,
+                                                    {ucan_required, <<5:256>>}, Spec) || P <- [?PROCEDURE, Other]],
+         ?assertEqual([?PROCEDURE, Other, renewal], advertised_procedures(Pid)),
+         ok = macula_station_link:unadvertise_stream(Pid, ?REALM, ?PROCEDURE),
+         ?assertEqual([Other, renewal], advertised_procedures(Pid)),
+         ok = macula_station_link:unadvertise_stream(Pid, ?REALM, Other, <<7, 8, 9>>),
+         ?assertEqual([], advertised_procedures(Pid)),
+         macula_station_link:stop(Pid)
+     end}}.
+
+%% The procedures the link keeps an advertisement of in ?REALM, in registration order, its own stream_renew as
+%% `renewal'.
+advertised_procedures(Pid) ->
+    Procs = [P || {?REALM, P} <- maps:keys(registered(advertisements, Pid))],
+    [P || P <- [?PROCEDURE, <<"acme.tally_v1">>], lists:member(P, Procs)]
+        ++ [renewal || <<"~", _/binary>> <- Procs].
+
 authorization() ->
     #{org_directory => <<"org directory wire">>, procedure_delegation => <<"delegation wire">>}.
 
