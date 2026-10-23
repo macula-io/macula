@@ -19,7 +19,11 @@ follower_test_() ->
                           {"a lookup that fails keeps the end where it was",
                            fun a_failed_lookup_keeps_the_end/0},
                           {"the follower ends with its stream",
-                           fun the_follower_ends_with_its_stream/0}]].
+                           fun the_follower_ends_with_its_stream/0},
+                          {"a delegation the org withdrew ends the stream within one re-check",
+                           fun a_withdrawn_delegation_ends_the_stream/0},
+                          {"any other standing keeps the stream to its end",
+                           fun another_standing_keeps_the_stream/0}]].
 
 a_stream_is_ended_at_its_end() ->
     Stream = stream(),
@@ -56,6 +60,30 @@ the_follower_ends_with_its_stream() ->
     Mon = erlang:monitor(process, Follower),
     exit(Stream, kill),
     ?assertMatch({'DOWN', Mon, process, Follower, _}, receive Down -> Down after 1_000 -> none end).
+
+%% M2 (macula#120): the provider's delegation slot is read every re-check; the org's tombstone of the delegation
+%% (withdrawn) ends the stream at once, long before the authorization's end.
+a_withdrawn_delegation_ends_the_stream() ->
+    Stream = stream(),
+    Started = now_ms(),
+    _ = macula_provider_authority_follower:follow(Stream, Started + 60_000, fun(_Deadline) -> [] end,
+                                                  #{standing => fun() -> {error, withdrawn} end, recheck_ms => 200}),
+    ?assertMatch({aborted, <<"unauthorized">>, _}, aborted_within(1_000)),
+    ?assert(now_ms() - Started < 1_000).
+
+%% A failed or stale read is no evidence of revocation: only withdrawn ends a stream early.
+another_standing_keeps_the_stream() ->
+    Stream = stream(),
+    Outcomes = [{error, lookup_failed}, {error, not_found}, {error, wrong_member}, ok],
+    Counter = counters:new(1, []),
+    Standing = fun() ->
+                   ok = counters:add(Counter, 1, 1),
+                   lists:nth(min(counters:get(Counter, 1), length(Outcomes)), Outcomes)
+               end,
+    _ = macula_provider_authority_follower:follow(Stream, now_ms() + 60_000, fun(_Deadline) -> [] end,
+                                                  #{standing => Standing, recheck_ms => 200}),
+    ?assertEqual(none, aborted_within(1_500)),
+    ?assert(counters:get(Counter, 1) >= length(Outcomes)).
 
 %%------------------------------------------------------------------
 %% Helpers
