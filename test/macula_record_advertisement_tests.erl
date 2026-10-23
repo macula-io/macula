@@ -214,6 +214,34 @@ an_authorization_that_no_longer_verifies_has_ended_test() ->
     #{adv := Adv} = delegation_bundle(<<"acme/get_forecast_v1">>, #{corrupt_dir => true}),
     ?assertEqual(0, macula_record:authorization_ends_at(verified(Adv), pq_pure, now_ms())).
 
+%% The org key that delegates to the provider, read from the delegation its advertisement carries: the key whose
+%% delegation slot for the provider a caller re-reads.
+an_authorizations_org_key_is_the_delegating_key_test() ->
+    #{adv := Adv, org := Org} = delegation_bundle(<<"acme/get_forecast_v1">>, #{}),
+    ?assertEqual({ok, macula_node_keys:key_id(Org)}, macula_record:authorization_org_key(verified(Adv), pq_pure, now_ms())).
+
+%% A provider's delegation slot, read under the org key: the org's delegation stands, the org's tombstone of it is
+%% withdrawn, a tombstone of the org's delegation to another provider is wrong_member, and an entry under any other
+%% key does not count (not_found).
+a_delegation_slot_reads_the_org_keys_entry_test() ->
+    #{org := Org, advertiser := A, delegation := Del} = delegation_bundle(<<"acme/get_forecast_v1">>, #{}),
+    OrgKeyId = macula_node_keys:key_id(Org),
+    Provider = macula_node_keys:key_id(A),
+    Tomb = macula_record:sign(macula_record:tombstone(Del, revoked), Org),
+    #{delegation := OtherDel} = delegation_bundle(<<"acme/get_forecast_v1">>, #{}),
+    Stranger = key(org),
+    ForeignDel = macula_record:sign(macula_record:procedure_delegation(macula_node_keys:key_id(Stranger), Provider,
+                                                                       #{ttl_ms => 30 * ?MINUTE}), Stranger),
+    Read = fun(Records) -> macula_record:delegation_standing(Records, OrgKeyId, Provider, pq_pure, now_ms()) end,
+    ?assertEqual(ok, Read([Del])),
+    ?assertEqual({error, withdrawn}, Read([Tomb])),
+    ?assertEqual({error, not_found}, Read([ForeignDel])),
+    ?assertEqual({error, not_found}, Read([])),
+    OrgTombOfOther = macula_record:sign(macula_record:tombstone(OtherDel, revoked), maps:get(org, delegation_bundle(
+                                                                                       <<"acme/x">>, #{}))),
+    ?assertEqual({error, not_found}, Read([OrgTombOfOther])),
+    ?assertEqual({error, wrong_member}, macula_record:delegation_standing([Tomb], OrgKeyId, fill(5), pq_pure, now_ms())).
+
 %%------------------------------------------------------------------
 %% Helpers
 %%------------------------------------------------------------------
