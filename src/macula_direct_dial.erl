@@ -930,17 +930,42 @@ candidate_stream_checked(#{provider := Provider} = Candidate,
     case station_checked(Pool, FindRecord, Realm, Station, Share) of
         ok ->
             sent_or_not(
-              settled(CallStreamStation(Pool, DialUrl, Provider, Realm, Procedure, Args,
-                                        maps:merge(StreamOpts,
-                                                   maps:merge(advertisement_opt(maps:get(advertisement, Candidate,
-                                                                                         undefined)),
-                                                              (pinned(Station))#{dial_timeout_ms =>
-                                                                                     budget(Share),
-                                                                                 reseal => Reseal}))),
-                      Remember, Pool, Realm, Procedure, Candidate));
+              followed(settled(CallStreamStation(Pool, DialUrl, Provider, Realm, Procedure, Args,
+                                                 maps:merge(StreamOpts,
+                                                            maps:merge(advertisement_opt(maps:get(advertisement,
+                                                                                                  Candidate,
+                                                                                                  undefined)),
+                                                                       (pinned(Station))#{dial_timeout_ms =>
+                                                                                              budget(Share),
+                                                                                          reseal => Reseal}))),
+                               Remember, Pool, Realm, Procedure, Candidate),
+                       Candidate, Dial, Realm, Procedure));
         {refused, Error} ->
             {not_sent, Error}
     end.
+
+%% A stream opened under a provider's authorization holds no longer than it, following the provider's renewed
+%% advertisements, verified and trusted as the one it was opened under (macula#120). A provider with no
+%% authorization (no org namespace, or its own) has no such end.
+followed({ok, Stream} = Opened, #{advertisement := Ad, provider := Provider}, Dial, Realm, Procedure)
+  when is_pid(Stream) ->
+    {ok, Profile} = macula_crypto_profile:configured(),
+    ok = following(macula_record:authorization_ends_at(Ad, Profile, erlang:system_time(millisecond)), Stream,
+                   fun(Deadline) -> renewed_ends(Dial, Realm, Procedure, Provider, Profile, Deadline) end),
+    Opened;
+followed(Result, _Candidate, _Dial, _Realm, _Procedure) ->
+    Result.
+
+following(none, _Stream, _Renewed) ->
+    ok;
+following(EndsAt, Stream, Renewed) ->
+    _ = macula_provider_authority_follower:follow(Stream, EndsAt, Renewed),
+    ok.
+
+renewed_ends(Dial, Realm, Procedure, Provider, Profile, Deadline) ->
+    Now = erlang:system_time(millisecond),
+    [End || Ad <- providers_ads(Dial, Realm, Procedure, Provider, Deadline),
+            End <- [macula_record:authorization_ends_at(Ad, Profile, Now)], is_integer(End)].
 
 %% The `reseal' a stream is handed: one lookup and key binding, on a call's terms.
 stream_reseal(Dial, Realm, Procedure, Provider, StreamOpts) ->

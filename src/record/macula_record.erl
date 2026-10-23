@@ -48,7 +48,7 @@
          read_station_authorization/1, read_tombstone/1,
          read_org_directory/1, read_procedure_delegation/1, read_content_announcement/1,
          read_foundation_realm_trust_list/1, read_app_record/1]).
--export([procedure_org/1, verify_authorization/3, verify_app/3, verify_membership/5]).
+-export([procedure_org/1, verify_authorization/3, authorization_ends_at/3, verify_app/3, verify_membership/5]).
 -export([storage_key/1, procedure_key/2, content_key/1, station_endpoint_key/1, org_directory_key/2,
          procedure_delegation_key/2, realm_member_endorsement_key/2, station_authorization_key/2,
          foundation_realm_trust_list_key/1,
@@ -1109,6 +1109,24 @@ procedure_org(Procedure) when is_binary(Procedure) ->
 verify_authorization(#{type := ?TYPE_PROCEDURE_ADVERTISEMENT} = Advertisement, #{profile := _} = Trust, Now) ->
     #{procedure := Procedure, authorization := Authorization} = read_procedure_advertisement(Advertisement),
     authorization_for(procedure_org(Procedure), Authorization, Advertisement, Trust, Now).
+
+%% @doc The millisecond a verified advertisement's provider authorization ends: the earlier expiry of the org directory
+%% and the procedure delegation it carries, which is how long a caller may hold a stream opened under it (macula#120).
+%% It is longer than the advertisement's own life, which the provider renews within it. An advertisement without an
+%% authorization (no org namespace, or the advertiser's own) has none, and one whose directory or delegation no longer
+%% verifies has ended: 0. It is meaningful for an advertisement verify_authorization/3 accepted.
+-spec authorization_ends_at(m_record(), macula_crypto_profile:profile(), integer()) -> non_neg_integer() | none.
+authorization_ends_at(#{type := ?TYPE_PROCEDURE_ADVERTISEMENT} = Advertisement, Profile, Now) ->
+    #{authorization := Authorization} = read_procedure_advertisement(Advertisement),
+    authorization_end(Authorization, Profile, Now).
+
+authorization_end(#{org_directory := Directory, procedure_delegation := Delegation}, Profile, Now) ->
+    earliest_expiry(verify(Directory, Profile, Now), verify(Delegation, Profile, Now));
+authorization_end(_None, _Profile, _Now) ->
+    none.
+
+earliest_expiry({ok, Directory}, {ok, Delegation}) -> min(expires_at(Directory), expires_at(Delegation));
+earliest_expiry(_Directory, _Delegation) -> 0.
 
 %% @doc The caller's check of a verified app record against the realm trust it holds (macula#75), pure: the org
 %% directory the record carries verifies, is signed by the realm key (carried or named by the trust list's pairs, as for

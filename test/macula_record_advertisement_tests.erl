@@ -191,6 +191,30 @@ an_authorization_in_another_form_is_unsupported_test() ->
     ?assertEqual({error, malformed}, authorize(hand_authorized(A, <<"acme/x">>, Wires#{Delegation := 7}), Realm)).
 
 %%------------------------------------------------------------------
+%% macula#120: where a provider's authorization ends
+%%------------------------------------------------------------------
+
+%% A caller's stream to a provider holds no longer than the provider's authorization: the earlier end of the org
+%% directory and the procedure delegation the advertisement carries, not the advertisement's own few minutes.
+an_authorization_ends_at_the_earlier_of_its_directory_and_delegation_test() ->
+    #{adv := Adv, org_dir := OrgDir, delegation := Del} = delegation_bundle(<<"acme/get_forecast_v1">>, #{}),
+    Ends = macula_record:authorization_ends_at(verified(Adv), pq_pure, now_ms()),
+    ?assertEqual(min(macula_record:expires_at(OrgDir), macula_record:expires_at(Del)), Ends),
+    ?assert(Ends > macula_record:expires_at(Adv)).
+
+%% An advertisement that carries no authorization (no org namespace, or the advertiser's own) has no such end.
+an_advertisement_without_an_authorization_has_no_end_test() ->
+    A = key(identity),
+    Adv = macula_record:sign(macula_record:procedure_advertisement(macula_node_keys:key_id(A), realm_id(),
+                                                                   <<"echo.ping">>, [fill(2)]), A),
+    ?assertEqual(none, macula_record:authorization_ends_at(verified(Adv), pq_pure, now_ms())).
+
+%% An authorization that no longer verifies has ended.
+an_authorization_that_no_longer_verifies_has_ended_test() ->
+    #{adv := Adv} = delegation_bundle(<<"acme/get_forecast_v1">>, #{corrupt_dir => true}),
+    ?assertEqual(0, macula_record:authorization_ends_at(verified(Adv), pq_pure, now_ms())).
+
+%%------------------------------------------------------------------
 %% Helpers
 %%------------------------------------------------------------------
 
