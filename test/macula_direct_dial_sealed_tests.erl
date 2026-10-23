@@ -46,7 +46,11 @@ cases() ->
      {"a report that is not a boolean is an invalid option", fun a_non_boolean_report_is_invalid/0},
      {"a call's ucan_token reaches the station call", fun a_calls_ucan_token_reaches_the_station_call/0},
      {"a call without a ucan_token passes none down", fun a_call_without_a_ucan_token_passes_none/0},
-     {"a ucan_token that is not bytes is an invalid option", fun a_non_binary_ucan_token_is_invalid/0}].
+     {"a ucan_token that is not bytes is an invalid option", fun a_non_binary_ucan_token_is_invalid/0},
+     {"a stream to an org's provider ends at that provider's authorization end",
+      fun a_stream_to_an_org_provider_ends_at_its_authorization_end/0},
+     {"a stream to a provider with no authorization is not ended by one",
+      fun a_stream_without_an_authorization_is_not_ended_by_one/0}].
 
 the_call_carries_the_advertisement() ->
     F = fixture(),
@@ -366,3 +370,59 @@ a_non_binary_ucan_token_is_invalid() ->
     ?assertEqual({error, {invalid_option, ucan_token}}, call(F, #{ucan_token => "token"})),
     ?assertEqual([], calls()),
     ?assertEqual([[keyed_ad_marker]], lookups_left()).
+
+%% macula#120: a caller's stream holds no longer than its provider's authorization. With no renewed advertisement
+%% found before then, the stream is ended at the earlier end of the org directory and delegation it was opened under.
+a_stream_to_an_org_provider_ends_at_its_authorization_end() ->
+    F = fixture(),
+    {ok, RealmKey} = macula_node_keys:generate(realm, profile()),
+    {ok, OrgKey} = macula_node_keys:generate(org, profile()),
+    Procedure = <<"acme/echo">>,
+    Stream = abort_reporting_stream(),
+    script(F, [[org_ad(F, RealmKey, OrgKey, Procedure, 2_500)]], [{ok, Stream}]),
+    Started = erlang:system_time(millisecond),
+    ?assertEqual({ok, Stream}, macula_direct_dial:call_stream(realm_pool(RealmKey), ?REALM, Procedure, #{}, #{},
+                                                              #{dial_io => dial_io()})),
+    ?assertMatch({aborted, <<"unauthorized">>}, receive {aborted, _} = A -> A after 4_000 -> none end),
+    ?assert(erlang:system_time(millisecond) - Started >= 1_500).
+
+a_stream_without_an_authorization_is_not_ended_by_one() ->
+    F = fixture(),
+    Stream = abort_reporting_stream(),
+    script(F, [[keyless_ad(F)]], [{ok, Stream}]),
+    ?assertEqual({ok, Stream}, stream(F, #{})),
+    ?assertEqual(none, receive {aborted, _} = A -> A after 1_500 -> none end).
+
+%% A provider's advertisement of an org procedure, carrying the realm-signed org directory and an org-signed
+%% delegation that ends in DelegationMs; the advertisement itself lives a second.
+org_ad(#{provider := Key, provider_id := Id, station_id := Station}, RealmKey, OrgKey, Procedure, DelegationMs) ->
+    Dir = macula_record:sign(macula_record:org_directory(?REALM, <<"acme">>, macula_node_keys:key_id(OrgKey)),
+                             RealmKey),
+    Del = macula_record:sign(macula_record:procedure_delegation(macula_node_keys:key_id(OrgKey), Id,
+                                                                #{ttl_ms => DelegationMs}), OrgKey),
+    Authorization = #{org_directory => macula_record:encode(Dir), procedure_delegation => macula_record:encode(Del)},
+    verified(macula_record:sign(macula_record:procedure_advertisement(Id, ?REALM, Procedure, [Station],
+                                                                      #{authorization => Authorization,
+                                                                        ttl_ms => 1_000}), Key)).
+
+%% A pool that pins RealmKey for every realm.
+realm_pool(RealmKey) ->
+    Carried = macula_node_keys:public_key(RealmKey),
+    spawn(fun RealmPool() ->
+              receive {'$gen_call', From, {realm_key, _Realm}} -> gen_server:reply(From, {ok, Carried}), RealmPool()
+              after 10_000 -> ok
+              end
+          end).
+
+%% A stream that answers an abort, as macula_stream does, and tells this process its code.
+abort_reporting_stream() ->
+    Test = self(),
+    spawn(fun Stream() ->
+              receive
+                  {'$gen_call', From, {abort, Code, _Message}} ->
+                      Test ! {aborted, Code},
+                      gen_server:reply(From, ok),
+                      Stream()
+              after 10_000 -> ok
+              end
+          end).
