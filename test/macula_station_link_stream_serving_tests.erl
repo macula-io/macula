@@ -30,6 +30,9 @@ stream_serving_test_() ->
                  fun a_stream_procedures_policy_is_enforced_before_its_handler/0,
                  fun a_stream_procedures_ucan_policy_binds_its_token_to_the_caller/0,
                  fun a_gated_session_ends_when_its_token_expires/0,
+                 fun a_renewed_gated_session_outlives_its_first_token/0,
+                 fun an_older_renewal_does_not_pull_a_sessions_end_back/0,
+                 fun a_renewal_from_another_caller_or_for_another_audience_is_refused/0,
                  fun an_upload_advertised_with_a_policy_refuses_a_caller_without_a_token/0,
                  fun a_stream_open_past_the_callers_session_cap_is_refused/0,
                  fun a_stream_open_without_the_session_counter_is_refused/0,
@@ -182,6 +185,33 @@ a_gated_session_ends_when_its_token_expires() ->
     {ok, Ended} = written_within(Quic, ?EVENT_MS),
     ?assertMatch({ok, #{code := <<"unauthorized">>}}, provider_fields(Open, Ended)),
     stop(Link).
+
+%% A caller renews its gated session with a fresh token, sent as a CALL to the provider's own stream_renew: the session
+%% then ends at the new token's exp, not the first one's (macula#120).
+a_renewed_gated_session_outlives_its_first_token() ->
+    #{world := World, caller := Caller, issuer := Issuer, open := Open} = expiring_session(2),
+    Renewal = renew(World, Caller, token(Issuer, Caller, 60), [Open]),
+    ?assertEqual({ok, renewed_only(Open)}, await_renewal(Renewal)),
+    ?assertEqual(not_ended, how_it_ended(3_500)),
+    stop(maps:get(link, World)).
+
+%% A renewal carrying an older token than one already applied, arriving late, leaves the session's end where it is.
+an_older_renewal_does_not_pull_a_sessions_end_back() ->
+    #{world := World, caller := Caller, issuer := Issuer, open := Open} = expiring_session(2),
+    ?assertEqual({ok, renewed_only(Open)}, await_renewal(renew(World, Caller, token(Issuer, Caller, 60), [Open]))),
+    ?assertEqual({ok, renewed_only(Open)}, await_renewal(renew(World, Caller, token(Issuer, Caller, 3), [Open]))),
+    ?assertEqual(not_ended, how_it_ended(4_500)),
+    stop(maps:get(link, World)).
+
+%% A renewal signed by another node than the session's caller, or carrying a token for another audience, renews
+%% nothing: the session still ends at its first token's exp.
+a_renewal_from_another_caller_or_for_another_audience_is_refused() ->
+    #{world := World, caller := Caller, issuer := Issuer, open := Open} = expiring_session(2),
+    Other = key(),
+    ?assertEqual({ok, refused_only(Open)}, await_renewal(renew(World, Other, token(Issuer, Other, 60), [Open]))),
+    ?assertEqual({ok, refused_only(Open)}, await_renewal(renew(World, Caller, token(Issuer, Other, 60), [Open]))),
+    ?assertMatch({ended, _}, how_it_ended(3_500)),
+    stop(maps:get(link, World)).
 
 %% A gated upload advertised through macula_upload:advertise/6 answers an open that carries no token with a verified
 %% STREAM_ERROR unauthorized on its own stream, and starts no receiver for it.
@@ -648,3 +678,56 @@ written_within(Stream, Ms) ->
 
 closed_within(Stream, Ms) ->
     receive {closed, Stream} -> closed after Ms -> open end.
+
+%% A gated server_stream session served for a fresh caller, opened with a token that expires in Seconds.
+expiring_session(Seconds) ->
+    #{link := Link} = World = linked(),
+    Procedure = <<"acme/foo.renewable">>,
+    Issuer = macula_test_identity:key(),
+    {ok, IssuerNodeId} = macula_node_keys:node_id(Issuer),
+    ok = macula_station_link:advertise_stream(Link, ?REALM, Procedure, server_stream, telling_how_it_ended(self()),
+                                              {ucan_required, IssuerNodeId}),
+    Caller = key(),
+    #{frame := Open} = opened_by_peer(World, Caller, Procedure, #{}, #{token => token(Issuer, Caller, Seconds)}),
+    receive {session_served, _} -> ok after ?EVENT_MS -> erlang:error(session_not_served) end,
+    #{world => World, caller => Caller, issuer => Issuer, open => Open}.
+
+%% A token the issuer grants Audience's node, expiring in Seconds.
+token(Issuer, Audience, Seconds) ->
+    macula_ucan:create(Issuer, macula_node_keys:key_id(Audience), [#{with => <<"mri:realm:test">>, can => <<"call">>}],
+                       #{exp => erlang:system_time(second) + Seconds}).
+
+%% A CALL from Caller to the link's own stream_renew, carrying Token and naming the streams Opens started.
+renew(#{link := Link} = World, Caller, Token, Opens) ->
+    Frame = macula_frame:call(#{request_id => crypto:strong_rand_bytes(16), realm => ?REALM,
+                                procedure => macula_station_link:stream_renewal_procedure(node_id(World)),
+                                target => node_id(World), deadline => erlang:system_time(millisecond) + 5_000,
+                                payload => #{streams => [request_id_of(Open) || Open <- Opens]}, token => Token},
+                              Caller),
+    Link ! {macula_peering, frame, self(), Frame},
+    Frame.
+
+%% The verified reply to a renewal CALL: its payload, or the error's fields.
+await_renewal(CallFrame) ->
+    {ok, Request} = macula_frame:verify_request(CallFrame, profile()),
+    RequestId = maps:get(request_id, Request),
+    receive
+        {'$gen_cast', {send_frame, _, #{frame_type := Type} = Frame}} when Type =:= result; Type =:= error ->
+            {ok, #{request_id := RequestId}} = macula_frame:claimed_reply_ids(Frame),
+            {ok, Fields} = macula_frame:verify_reply(Frame, Request, profile()),
+            reply_of(Type, Fields)
+    after ?EVENT_MS ->
+        timeout
+    end.
+
+reply_of(result, #{payload := Payload}) -> {ok, Payload};
+reply_of(error, Fields) -> {error, Fields}.
+
+request_id_of(Open) ->
+    maps:get(request_id, verified(Open)).
+
+renewed_only(Open) ->
+    #{{text, <<"renewed">>} => [request_id_of(Open)], {text, <<"refused">>} => []}.
+
+refused_only(Open) ->
+    #{{text, <<"renewed">>} => [], {text, <<"refused">>} => [request_id_of(Open)]}.
