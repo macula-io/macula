@@ -100,6 +100,12 @@
 -define(MIN_RENEWAL_MS, 100).
 %% A signing refused for a reason that can pass is tried again after this.
 -define(SIGNING_RETRY_MS, 1_000).
+%% A caller's renewal of its gated streams that does not go through is tried again after this, doubling to at most
+%% ?CALLER_RENEWAL_BACKOFF_MAX_MS, never past half the time left to the streams' end (macula#120).
+-define(CALLER_RENEWAL_RETRY_MS, 1_000).
+-define(CALLER_RENEWAL_BACKOFF_MAX_MS, 60_000).
+%% A renewal CALL waits at most this long, and never past the streams' end.
+-define(CALLER_RENEWAL_CALL_MS, 10_000).
 
 %% A spec's ttl_ms is at least a second, and at most the advertisement type's
 %% own maximum lifetime (macula_record:procedure_advertisement_max_lifetime_ms/0,
@@ -546,7 +552,12 @@
     %% its authority (ends_at, in seconds: the earliest exp of the token and
     %% proofs it was last authorized with), and what a renewal is authorized
     %% against. The session is ended at ends_at (macula#120).
-    served_until = #{} :: #{macula_frame:stream_id() => served_authority()}
+    served_until = #{} :: #{macula_frame:stream_id() => served_authority()},
+    %% The caller's gated streams this link renews, by provider, realm and
+    %% the token source they were opened with: the stream processes, the
+    %% second their authority ends, the timer of the next renewal and how
+    %% many in a row did not go through (macula#120).
+    caller_renewals = #{} :: #{{<<_:256>>, <<_:256>>, fun(() -> term())} => caller_renewal()}
 }).
 
 -type subscription() :: {Realm     :: <<_:256>>,
@@ -581,6 +592,10 @@
 -type own_namespace_spec() :: #{ttl_ms => pos_integer(), kem => true, keyed_since => integer(),
                                 confidential => required}.
 -type advertisement() :: binary() | advertisement_spec() | own_namespace_spec().
+
+%% A caller's streams renewed together, and where their renewal stands (macula#120).
+-type caller_renewal() :: #{streams := [pid()], ends_at := integer(), ref := reference(),
+                            tries := non_neg_integer()}.
 
 %% What a gated served session was authorized for, and until when (macula#120).
 -type served_authority() :: #{ends_at := integer(), realm := <<_:256>>, procedure := binary(),
@@ -1241,6 +1256,21 @@ overlay_frame_refused(Client, Meta, Kind) when is_pid(Client) ->
 %%                 advertised with an auth policy
 %%                 (`advertise_stream/6'). Absent or empty sends
 %%                 none.</li>
+%%   <li>`ucan_renewal' — a function of no arguments the link asks
+%%                 for the caller's next token, answering `{ok, Token}'
+%%                 or anything else for none. A stream to a provider
+%%                 opened with a `ucan_token' and a source is renewed
+%%                 before that token ends, by a signed CALL to the
+%%                 provider's own `stream_renewal_procedure/1' (macula#120):
+%%                 at a third of the token's remaining life, one CALL for
+%%                 all the provider's streams opened with the same source
+%%                 in the realm, carrying the token the source answers
+%%                 then. A provider-signed `unknown_next_peer' (a provider
+%%                 that serves no renewal) ends it; any other answer that
+%%                 renews nothing is tried again on a backoff, never past
+%%                 the streams' end. Absent: the stream is not
+%%                 renewed, and a gated provider ends it at the token's
+%%                 end.</li>
 %%   <li>`seal' (required) — `clear', or `{sealed_to, KemKey}': the
 %%                 STREAM_OPEN is sealed to the provider's KEM key and
 %%                 the stream seals every frame under the keys it
@@ -1276,6 +1306,7 @@ call_stream(Pid, Target, Realm, Procedure, Args, Opts)
 valid_stream_opts(#{seal := Seal} = Opts) ->
     ok = valid_stream_mode(maps:get(mode, Opts, server_stream)),
     ok = valid_stream_token(maps:get(ucan_token, Opts, <<>>)),
+    ok = valid_stream_renewal(maps:get(ucan_renewal, Opts, none)),
     ok = valid_stream_seal(Seal),
     ok = valid_stream_reseal(maps:get(reseal, Opts, none)),
     valid_stream_deadline(maps:get(deadline_ms, Opts, 0)).
@@ -1283,6 +1314,8 @@ valid_stream_opts(#{seal := Seal} = Opts) ->
 valid_stream_mode(Mode) when Mode =:= server_stream; Mode =:= client_stream; Mode =:= bidi -> ok.
 
 valid_stream_token(Token) when is_binary(Token) -> ok.
+valid_stream_renewal(none) -> ok;
+valid_stream_renewal(Source) when is_function(Source, 0) -> ok.
 valid_stream_reseal(none) -> ok;
 valid_stream_reseal(Reseal) when is_function(Reseal, 1) -> ok.
 valid_stream_seal(clear) -> ok;
@@ -1900,6 +1933,12 @@ handle_info({served_authority_ended, AttachId, EndsAt}, #state{served_until = Un
 
 handle_info({served_authority_renewed, Renewed}, S) ->
     {noreply, lists:foldl(fun authority_renewed/2, S, Renewed)};
+
+handle_info({renew_caller_streams, Key, Ref}, #state{caller_renewals = Renewals} = S) ->
+    {noreply, caller_renewal_due(maps:find(Key, Renewals), Key, Ref, S)};
+
+handle_info({caller_streams_renewal, Key, Ref, Answer}, #state{caller_renewals = Renewals} = S) ->
+    {noreply, caller_renewal_answered(maps:find(Key, Renewals), Key, Ref, Answer, S)};
 
 handle_info({'DOWN', Mon, process, Pid, _Reason}, S) ->
     %% Two monitor sources land here: subscriber pids paired by
@@ -3923,7 +3962,12 @@ open_client_stream(Target, Realm, Proc, Args, Opts, Caller, #state{node_identity
                         deadline => maps:get(deadline_ms, Opts, erlang:system_time(millisecond) + 30_000),
                         mode => maps:get(mode, Opts, server_stream)},
                       open_token(maps:get(ucan_token, Opts, <<>>))),
-    open_carried(carried_open(maps:get(seal, Opts), Spec, Args, Key, Profile), Opts#{args => Args}, Caller, S).
+    open_carried(carried_open(maps:get(seal, Opts), Spec, Args, Key, Profile), renewable(Target, Opts#{args => Args}),
+                 Caller, S).
+
+%% Only a stream to a provider is renewed: the station this link is connected to serves no stream_renew.
+renewable(station, Opts) -> maps:remove(ucan_renewal, Opts);
+renewable(_Provider, Opts) -> Opts.
 
 %% A STREAM_OPEN carries its args in the clear, or sealed to the provider's KEM key with the stream keys its stream
 %% then seals under (E2E design §5.2).
@@ -3969,7 +4013,109 @@ client_session(true, Bytes, #{request_id := AttachId, mode := Mode} = Open, Opts
                                                                profile => Profile, station => Station}))),
     ok = macula_stream:attach_to_link(StreamPid, self(), AttachId),
     Mon = erlang:monitor(process, StreamPid),
-    {reply_value, {ok, StreamPid}, client_stream_opened(opened_stream(S), Bytes, AttachId, StreamPid, Mon, S)}.
+    {reply_value, {ok, StreamPid},
+     caller_renewing(caller_renewal_of(Open, Opts), StreamPid,
+                     client_stream_opened(opened_stream(S), Bytes, AttachId, StreamPid, Mon, S))}.
+
+%%-------------------------------------------------------------------
+%% Streaming RPC — renewing a caller's gated streams (macula#120)
+%%-------------------------------------------------------------------
+
+%% A stream opened with a token and a source is renewed with the provider's other streams of that realm and source,
+%% by the earliest end among them. A token whose end cannot be read is not renewed: the provider would refuse it too.
+caller_renewal_of(#{target := Provider, realm := Realm, token := Token}, #{ucan_renewal := Source}) ->
+    caller_renewal_end({Provider, Realm, Source}, token_end(Token));
+caller_renewal_of(_Open, _Opts) ->
+    none.
+
+caller_renewal_end(_Key, undefined) -> none;
+caller_renewal_end(Key, EndsAt) -> {Key, EndsAt}.
+
+token_end(Token) ->
+    try macula_ucan:authorized_until(Token, [])
+    catch error:_ -> undefined
+    end.
+
+caller_renewing(none, _StreamPid, S) ->
+    S;
+caller_renewing({Key, EndsAt}, StreamPid, #state{caller_renewals = Renewals} = S) ->
+    caller_stream_joined(maps:find(Key, Renewals), Key, EndsAt, StreamPid, S).
+
+%% A stream joining streams that end no earlier than it renews with them as they are; one ending earlier brings their
+%% renewal forward to its own third.
+caller_stream_joined({ok, #{streams := Pids, ends_at := Ends} = Renewal}, Key, EndsAt, StreamPid,
+                     #state{caller_renewals = Renewals} = S) when EndsAt >= Ends ->
+    S#state{caller_renewals = Renewals#{Key := Renewal#{streams := [StreamPid | Pids]}}};
+caller_stream_joined({ok, #{streams := Pids}}, Key, EndsAt, StreamPid, S) ->
+    caller_renewal_armed(Key, #{streams => [StreamPid | Pids], ends_at => EndsAt, tries => 0}, S);
+caller_stream_joined(error, Key, EndsAt, StreamPid, S) ->
+    caller_renewal_armed(Key, #{streams => [StreamPid], ends_at => EndsAt, tries => 0}, S).
+
+%% The next renewal at a third of the time left to the end.
+caller_renewal_armed(Key, #{ends_at := EndsAt} = Renewal, S) ->
+    caller_renewal_in(max(?MIN_RENEWAL_MS, (EndsAt * 1000 - erlang:system_time(millisecond)) div 3), Key, Renewal, S).
+
+caller_renewal_in(In, Key, Renewal, #state{caller_renewals = Renewals} = S) ->
+    Ref = make_ref(),
+    _ = erlang:send_after(In, self(), {renew_caller_streams, Key, Ref}),
+    S#state{caller_renewals = Renewals#{Key => Renewal#{ref => Ref}}}.
+
+%% A renewal names the streams still open, under the attach id each holds now (a reopened stream holds a new one);
+%% with none left there is nothing to renew. The CALL is made from a worker, since it is a call into this link.
+caller_renewal_due({ok, #{ref := Ref, streams := Pids} = Renewal}, Key, Ref, #state{client_streams = CS} = S) ->
+    Open = [{Pid, Sid} || Sid := {Pid, _Mon, _Stream} <- CS, lists:member(Pid, Pids)],
+    caller_renewal_asked(Open, Key, Renewal, S);
+caller_renewal_due(_EndedOrStale, _Key, _Ref, S) ->
+    S.
+
+caller_renewal_asked([], Key, _Renewal, #state{caller_renewals = Renewals} = S) ->
+    S#state{caller_renewals = maps:remove(Key, Renewals)};
+caller_renewal_asked(Open, {Provider, Realm, Source} = Key, #{ends_at := EndsAt, ref := Ref} = Renewal,
+                     #state{caller_renewals = Renewals} = S) ->
+    Link = self(),
+    Sids = [Sid || {_Pid, Sid} <- Open],
+    TimeoutMs = max(1, min(?CALLER_RENEWAL_CALL_MS, EndsAt * 1000 - erlang:system_time(millisecond))),
+    _ = spawn(fun() ->
+            Link ! {caller_streams_renewal, Key, Ref, renewal_called(sourced(Source), Link, Provider, Realm, Sids,
+                                                                     TimeoutMs)}
+        end),
+    S#state{caller_renewals = Renewals#{Key := Renewal#{streams := [Pid || {Pid, _Sid} <- Open]}}}.
+
+%% The source's next token; a source that raises hands out none.
+sourced(Source) ->
+    try Source()
+    catch _:_ -> none
+    end.
+
+renewal_called({ok, Token}, Link, Provider, Realm, Sids, TimeoutMs) when is_binary(Token), Token =/= <<>> ->
+    {Token, call(Link, Provider, Realm, stream_renewal_procedure(Provider), #{streams => Sids}, TimeoutMs, Token)};
+renewal_called(_None, _Link, _Provider, _Realm, _Sids, _TimeoutMs) ->
+    no_token.
+
+caller_renewal_answered({ok, #{ref := Ref} = Renewal}, Key, Ref, Answer, S) ->
+    renewal_outcome(Answer, Key, Renewal, S);
+caller_renewal_answered(_EndedOrStale, _Key, _Ref, _Answer, S) ->
+    S.
+
+%% A renewal the provider answers with streams renewed moves their end to the new token's, never earlier, and the next
+%% one to a third of what is left of it. A provider-signed unknown_next_peer is definite: that provider serves no
+%% stream_renew, and its streams end at their token's end. Anything else renewed nothing and is tried again: a
+%% station's relay error (its code an atom, the station's own), a timeout, a link or pool down, a refusal (the next
+%% token may pass) or no token from the source.
+renewal_outcome({Token, {ok, #{{text, <<"renewed">>} := [_ | _]}}}, Key, #{ends_at := EndsAt} = Renewal, S) ->
+    caller_renewal_armed(Key, Renewal#{ends_at := max(EndsAt, token_end(Token)), tries := 0}, S);
+renewal_outcome({_Token, {error, {call_error, <<"unknown_next_peer">>, _Detail}}}, Key, _Renewal,
+                #state{caller_renewals = Renewals} = S) ->
+    S#state{caller_renewals = maps:remove(Key, Renewals)};
+renewal_outcome(_RenewedNothing, Key, #{ends_at := EndsAt} = Renewal, S) ->
+    caller_renewal_retried(EndsAt * 1000 - erlang:system_time(millisecond), Key, Renewal, S).
+
+%% Past the end there is nothing left to renew: the provider has ended the streams.
+caller_renewal_retried(LeftMs, Key, #{tries := Tries} = Renewal, S) when LeftMs > 0 ->
+    Backoff = min(?CALLER_RENEWAL_BACKOFF_MAX_MS, ?CALLER_RENEWAL_RETRY_MS bsl min(Tries, 6)),
+    caller_renewal_in(max(1, min(Backoff, LeftMs div 2)), Key, Renewal#{tries := Tries + 1}, S);
+caller_renewal_retried(_Passed, Key, _Renewal, #state{caller_renewals = Renewals} = S) ->
+    S#state{caller_renewals = maps:remove(Key, Renewals)}.
 
 %% A stream whose open was sealed starts with the keys that open agreed.
 sealed_stream(clear, StreamOpts) -> StreamOpts;
