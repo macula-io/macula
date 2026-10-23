@@ -195,6 +195,9 @@
     parse_seed/1
 ]).
 
+%% The procedure a caller renews its gated streams' token through (macula#120).
+-export([stream_renewal_procedure/1]).
+
 -export_type([handler/0, stream_handler/0, overlay_subscription/0,
               advertisement/0, advertisement_spec/0, own_namespace_spec/0]).
 
@@ -539,10 +542,11 @@
     %% `open'.
     stream_policies = #{} :: #{{<<_:256>>, binary()} =>
                                    macula_client:auth_policy()},
-    %% When each served session of a gated procedure loses its authority, by
-    %% attach id, in seconds: the earliest exp of the token and proofs its
-    %% STREAM_OPEN was authorized with. The session is ended then (macula#120).
-    served_until = #{} :: #{macula_frame:stream_id() => integer()}
+    %% Each served session of a gated procedure, by attach id: when it loses
+    %% its authority (ends_at, in seconds: the earliest exp of the token and
+    %% proofs it was last authorized with), and what a renewal is authorized
+    %% against. The session is ended at ends_at (macula#120).
+    served_until = #{} :: #{macula_frame:stream_id() => served_authority()}
 }).
 
 -type subscription() :: {Realm     :: <<_:256>>,
@@ -577,6 +581,11 @@
 -type own_namespace_spec() :: #{ttl_ms => pos_integer(), kem => true, keyed_since => integer(),
                                 confidential => required}.
 -type advertisement() :: binary() | advertisement_spec() | own_namespace_spec().
+
+%% What a gated served session was authorized for, and until when (macula#120).
+-type served_authority() :: #{ends_at := integer(), realm := <<_:256>>, procedure := binary(),
+                              policy := macula_client:auth_policy(), caller := <<_:256>>,
+                              request_id := <<_:128>>}.
 
 %%====================================================================
 %% Public API
@@ -1888,6 +1897,9 @@ handle_info({'DOWN', _Mon, process, Issuer, Reason}, #state{issuer = Issuer} = S
     {stop, {shutdown, {issuer_down, Reason}}, S};
 handle_info({served_authority_ended, AttachId, EndsAt}, #state{served_until = Until} = S) ->
     {noreply, authority_ended(maps:find(AttachId, Until), AttachId, EndsAt, S)};
+
+handle_info({served_authority_renewed, Renewed}, S) ->
+    {noreply, lists:foldl(fun authority_renewed/2, S, Renewed)};
 
 handle_info({'DOWN', Mon, process, Pid, _Reason}, S) ->
     %% Two monitor sources land here: subscriber pids paired by
@@ -3412,7 +3424,26 @@ seal_request(#{frame_type := Type, realm := Realm, procedure := Procedure, calle
 %% A CALL served: the gate first (Slice 7b), where an `open' procedure serves any identified caller and a gated one
 %% requires a valid `token', else `unauthorized' instead of invoking the handler; then its handler, on the payload
 %% with the verified caller. Its answer is built clear, or sealed when the request was.
-served_call(Request, Payload, Seal, #state{procedures = Procs, policies = Pols, node_identity = Id, peer_pid = Pid,
+served_call(#{procedure := Proc} = Request, Payload, Seal, #state{node_identity = Id} = S) ->
+    served_call(Proc =:= stream_renewal_procedure(macula_node_keys:key_id(Id)), Request, Payload, Seal, S).
+
+%% @doc The procedure in the own namespace of the node NodeId through which a caller renews the token its gated
+%% streams to that node were opened with (macula#120).
+-spec stream_renewal_procedure(<<_:256>>) -> binary().
+stream_renewal_procedure(<<_:256>> = NodeId) ->
+    <<"~", (binary:encode_hex(NodeId, lowercase))/binary, "/stream_renew">>.
+
+%% A CALL to this node's own stream_renew is the link's own to answer: no handler sees a request's token, and a `~'
+%% procedure's policy is open, which reads none (macula#120). The token is authorized for each stream it names under
+%% that stream's own policy, realm and procedure, as its STREAM_OPEN was, and only for the caller that opened it.
+served_call(true, Request, Payload, Seal, #state{served_until = Until, node_identity = Id, peer_pid = Pid,
+                                                 profile = Profile, admission = Admission}) ->
+    Link = self(),
+    Named = renewal_targets(maps:get(caller, Request), streams_named(Payload), Until),
+    Run = fun() -> renewal_reply(Link, Named, Request, Profile, Id, Seal) end,
+    _ = spawn(fun() -> serve_worker(Run, Admission, Request, Pid, Id, Seal) end),
+    ok;
+served_call(false, Request, Payload, Seal, #state{procedures = Procs, policies = Pols, node_identity = Id, peer_pid = Pid,
                                            profile = Profile, admission = Admission}) ->
     #{procedure := Proc, realm := Realm} = Request,
     Verdict = authorize({Realm, Proc}, Request, Pols, Profile),
@@ -3421,6 +3452,40 @@ served_call(Request, Payload, Seal, #state{procedures = Procs, policies = Pols, 
     Run = fun() -> inbound_reply(Verdict, Found, Request, PayloadWithCaller, Id, Seal) end,
     _ = spawn(fun() -> serve_worker(Run, Admission, Request, Pid, Id, Seal) end),
     ok.
+
+%% The request ids a renewal names: a list of 16-byte ids, anything else naming none.
+streams_named(#{{text, <<"streams">>} := Ids}) when is_list(Ids) ->
+    [Id || <<_:128>> = Id <- Ids];
+streams_named(_Payload) ->
+    [].
+
+%% Each named request id with the gated session the renewal's caller opened under it, or none.
+renewal_targets(Caller, RequestIds, Until) ->
+    [{RequestId, opened_by(Caller, RequestId, Until)} || RequestId <- lists:usort(RequestIds)].
+
+opened_by(Caller, RequestId, Until) ->
+    first_session([{AttachId, A} || AttachId := #{caller := C, request_id := R} = A <- Until,
+                                   C =:= Caller, R =:= RequestId]).
+
+first_session([Session | _Rest]) -> Session;
+first_session([]) -> none.
+
+%% The renewal's answer, once the link has been told the new ends: the request ids renewed and refused.
+renewal_reply(Link, Named, Request, Profile, Key, Seal) ->
+    Verdicts = [{RequestId, renewed_until(Session, Request, Profile)} || {RequestId, Session} <- Named],
+    Link ! {served_authority_renewed, [{AttachId, NewEnd} || {_RequestId, {ok, AttachId, NewEnd}} <- Verdicts]},
+    reply_result(Seal, Request, #{renewed => [RequestId || {RequestId, {ok, _, _}} <- Verdicts],
+                                  refused => [RequestId || {RequestId, refused} <- Verdicts]}, Key).
+
+renewed_until(none, _Request, _Profile) ->
+    refused;
+renewed_until({AttachId, #{policy := Policy, realm := Realm, procedure := Proc}}, Request, Profile) ->
+    renewal_verdict(authorize_policy(Policy, Request#{realm := Realm, procedure := Proc}, Profile), AttachId, Request).
+
+renewal_verdict(ok, AttachId, #{token := Token} = Request) ->
+    {ok, AttachId, macula_ucan:authorized_until(Token, maps:get(proofs, Request, []))};
+renewal_verdict(_Refused, _AttachId, _Request) ->
+    refused.
 
 serve_worker(Run, Admission, Request, Pid, Id, Seal) ->
     replied(within_admission(Run, Request), Admission, Request, Pid, Id, Seal).
@@ -4257,15 +4322,33 @@ on_stream_open_verdict(malformed_frame, Open, Seal, Stream, S) ->
 %% carries a token, since a gated procedure serves no open without one.
 watch_authority(open, _Open, _AttachId, S) ->
     S;
-watch_authority(_Gated, #{token := Token} = Open, AttachId, #state{served_until = Until} = S) ->
+watch_authority(Policy, #{token := Token, realm := Realm, procedure := Proc, caller := Caller,
+                          request_id := RequestId} = Open, AttachId, #state{served_until = Until} = S) ->
     EndsAt = macula_ucan:authorized_until(Token, maps:get(proofs, Open, [])),
+    ok = end_authority_at(AttachId, EndsAt),
+    S#state{served_until = Until#{AttachId => #{ends_at => EndsAt, realm => Realm, procedure => Proc,
+                                                policy => Policy, caller => Caller, request_id => RequestId}}}.
+
+end_authority_at(AttachId, EndsAt) ->
     _ = erlang:send_after(max(0, EndsAt * 1000 - erlang:system_time(millisecond)), self(),
                           {served_authority_ended, AttachId, EndsAt}),
-    S#state{served_until = Until#{AttachId => EndsAt}}.
+    ok.
+
+%% A renewal only ever moves a session's end later: one that carried an older token than the last one applied, or
+%% that names a session already ended, changes nothing. An earlier timer finds the end moved and does nothing.
+authority_renewed({AttachId, NewEnd}, #state{served_until = Until} = S) ->
+    moved_on(maps:find(AttachId, Until), AttachId, NewEnd, S).
+
+moved_on({ok, #{ends_at := EndsAt} = Authority}, AttachId, NewEnd, #state{served_until = Until} = S)
+  when NewEnd > EndsAt ->
+    ok = end_authority_at(AttachId, NewEnd),
+    S#state{served_until = Until#{AttachId := Authority#{ends_at := NewEnd}}};
+moved_on(_EndedOrNotLater, _AttachId, _NewEnd, S) ->
+    S.
 
 %% The session still ends where this timer was set for: it is aborted with a STREAM_ERROR unauthorized. The abort runs
 %% in a process of its own, since a stream sends its last frame through this link.
-authority_ended({ok, EndsAt}, AttachId, EndsAt, #state{server_streams = SS, served_until = Until} = S) ->
+authority_ended({ok, #{ends_at := EndsAt}}, AttachId, EndsAt, #state{server_streams = SS, served_until = Until} = S) ->
     ok = authority_lost(maps:find(AttachId, SS)),
     S#state{served_until = maps:remove(AttachId, Until)};
 authority_ended(_EndedOrMoved, _AttachId, _EndsAt, S) ->
