@@ -38,7 +38,7 @@
 %% a prefix.
 -module(macula_ucan).
 
--export([create/4, authorize/3, proof_id/1, covers/2, did_key/2, carried_key/2, max_lifetime/0, max_did_key_encoded/0]).
+-export([create/4, authorize/3, authorized_until/2, proof_id/1, covers/2, did_key/2, carried_key/2, max_lifetime/0, max_did_key_encoded/0]).
 
 -ifdef(TEST).
 -export([base58btc_encode/1, base58btc_decode/1]).
@@ -135,6 +135,15 @@ authorize(Token, Policy, #{caller := <<_:256>>, profile := Profile, now := Now} 
                    fun(Checked) -> grants(Policy, Context, Checked) end,
                    fun(Checked) -> chained(Policy, Context, Checked) end,
                    fun(#{claims := Claims}) -> {ok, Claims} end], Token).
+
+%% @doc The second from which a token that authorize/3 accepted stops authorizing: the earliest exp of the token and
+%% of its proofs. authorize/3 spends every proof that travelled with the request, so every one of them counts. It reads
+%% the claims and verifies nothing, so it is only meaningful for a token and proofs authorize/3 has accepted.
+-spec authorized_until(binary(), [binary()]) -> integer().
+authorized_until(Token, Proofs) when is_binary(Token), is_list(Proofs) ->
+    lists:min([exp_of(parsed(T)) || T <- [Token | Proofs]]).
+
+exp_of({ok, #{claims := #{<<"exp">> := Exp}}}) when is_integer(Exp) -> Exp.
 
 %%------------------------------------------------------------------
 %% The chain
