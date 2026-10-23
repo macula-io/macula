@@ -106,6 +106,8 @@
 -define(CALLER_RENEWAL_BACKOFF_MAX_MS, 60_000).
 %% A renewal CALL waits at most this long, and never past the streams' end.
 -define(CALLER_RENEWAL_CALL_MS, 10_000).
+%% How often the standing of each member served under a realm member policy is read again (macula#120, M2).
+-define(STANDING_RECHECK_MS, 60_000).
 
 %% A spec's ttl_ms is at least a second, and at most the advertisement type's
 %% own maximum lifetime (macula_record:procedure_advertisement_max_lifetime_ms/0,
@@ -305,7 +307,16 @@
     liveness_max_misses  => non_neg_integer(),
     %% Backoff in ms before re-dialling after a failed connect (default
     %% 1_000). Raise on a pool that cycles links to soften reconnect storms.
-    connect_retry_backoff_ms => non_neg_integer()
+    connect_retry_backoff_ms => non_neg_integer(),
+    %% How often a served session under a realm member policy has its
+    %% caller's standing in that realm read again, in ms (default 60_000,
+    %% or the `standing_recheck_ms' application env), and the reader:
+    %% `fun(Realm, RealmKeyId, Member)' answering a standing as
+    %% macula_hyparview_endorsement:slot_standing/2 does. Default: that
+    %% reader over the pool's find_records, so a link without a pool reads
+    %% none (macula#120).
+    standing_recheck_ms => pos_integer(),
+    member_standing => fun((<<_:256>>, <<_:256>>, <<_:256>>) -> ok | {error, term()})
     %% QUIC transport knobs (`idle_timeout_ms' default 300_000,
     %% `keep_alive_interval_ms' default 15_000, `peer_bidi_stream_count',
     %% `peer_unidi_stream_count') may additionally be carried in the `seed'
@@ -557,7 +568,15 @@
     %% the token source they were opened with: the stream processes, the
     %% second their authority ends, the timer of the next renewal and how
     %% many in a row did not go through (macula#120).
-    caller_renewals = #{} :: #{{<<_:256>>, <<_:256>>, fun(() -> term())} => caller_renewal()}
+    caller_renewals = #{} :: #{{<<_:256>>, <<_:256>>, fun(() -> term())} => caller_renewal()},
+    %% M2 (macula#120): the standing of each distinct member this link
+    %% serves under a realm member policy is read every
+    %% `standing_recheck_ms' while one is served; a member the realm
+    %% withdrew is no longer served. Every outcome read is counted by name.
+    member_standing :: fun((<<_:256>>, <<_:256>>, <<_:256>>) -> ok | {error, term()}) | undefined,
+    standing_recheck_ms = ?STANDING_RECHECK_MS :: pos_integer(),
+    standing_armed = false :: boolean(),
+    standing_outcomes = #{} :: #{atom() => pos_integer()}
 }).
 
 -type subscription() :: {Realm     :: <<_:256>>,
@@ -1604,7 +1623,11 @@ started({ok, Seed, Key, Profile, Issuer}, Opts) ->
                       refused_replies = macula_refusal_report:new(?REFUSED_REPLIES_WINDOW_MS),
                       sealed_refusals = macula_refusal_report:new(?REFUSED_REPLIES_WINDOW_MS),
                       refused_relays = macula_refusal_report:new(?REFUSED_RELAYS_WINDOW_MS),
-                      connect_retry_backoff_ms = RetryMs},
+                      connect_retry_backoff_ms = RetryMs,
+                      member_standing = maps:get(member_standing, Opts,
+                                                 pool_standing(maps:get(pool, Opts, undefined), Profile)),
+                      standing_recheck_ms = maps:get(standing_recheck_ms, Opts,
+                                                     app_env(standing_recheck_ms, ?STANDING_RECHECK_MS))},
     process_flag(trap_exit, true),
     self() ! attempt_connect,
     {ok, State}.
@@ -1617,6 +1640,18 @@ started({ok, Seed, Key, Profile, Issuer}, Opts) ->
 %% through every link-creation site. The `?DEFINE' stays the ground default.
 app_env(Key, Default) ->
     application:get_env(macula, Key, Default).
+
+%% A member's standing in a realm, read from its endorsement slot through the pool (macula#118): only the entry under
+%% the realm key the policy names counts. A link without a pool reads none.
+pool_standing(undefined, _Profile) ->
+    undefined;
+pool_standing(Pool, Profile) ->
+    fun(Realm, RealmKeyId, Member) ->
+        Standing = macula_hyparview_endorsement:slot_standing(fun(Key) -> macula:find_records(Pool, Key) end,
+                                                              #{profile => Profile, realm => Realm,
+                                                                realm_key_id => RealmKeyId}),
+        Standing(Member)
+    end.
 
 handle_call({call, _Target, _Realm, _Proc, _Payload, _DeadlineMs, _Token, _Seal, _Report}, _From,
             #state{peer_node_id = undefined} = S) ->
@@ -1933,6 +1968,12 @@ handle_info({served_authority_ended, AttachId, EndsAt}, #state{served_until = Un
 
 handle_info({served_authority_renewed, Renewed}, S) ->
     {noreply, lists:foldl(fun authority_renewed/2, S, Renewed)};
+
+handle_info(recheck_member_standing, S) ->
+    {noreply, standing_rechecked(S#state{standing_armed = false})};
+
+handle_info({member_standings, Standings}, S) ->
+    {noreply, lists:foldl(fun standing_read/2, S, Standings)};
 
 handle_info({renew_caller_streams, Key, Ref}, #state{caller_renewals = Renewals} = S) ->
     {noreply, caller_renewal_due(maps:find(Key, Renewals), Key, Ref, S)};
@@ -4499,8 +4540,71 @@ watch_authority(Policy, #{token := Token, realm := Realm, procedure := Proc, cal
                           request_id := RequestId} = Open, AttachId, #state{served_until = Until} = S) ->
     EndsAt = macula_ucan:authorized_until(Token, maps:get(proofs, Open, [])),
     ok = end_authority_at(AttachId, EndsAt),
-    S#state{served_until = Until#{AttachId => #{ends_at => EndsAt, realm => Realm, procedure => Proc,
-                                                policy => Policy, caller => Caller, request_id => RequestId}}}.
+    standing_watched(Policy, S#state{served_until = Until#{AttachId => #{ends_at => EndsAt, realm => Realm,
+                                                                         procedure => Proc, policy => Policy,
+                                                                         caller => Caller,
+                                                                         request_id => RequestId}}}).
+
+%% M2 (macula#120): a session served under a realm member policy has its member's standing read again every
+%% standing_recheck_ms, as long as one is served. A session gated on one node's tokens has no realm to be withdrawn
+%% from, and a link with no standing reader reads none.
+standing_watched({realm_member_required, _KeyId, _Can}, #state{member_standing = Standing, standing_armed = false,
+                                                              standing_recheck_ms = Every} = S)
+  when is_function(Standing, 3) ->
+    _ = erlang:send_after(Every, self(), recheck_member_standing),
+    S#state{standing_armed = true};
+standing_watched(_PolicyOrArmed, S) ->
+    S.
+
+%% Each distinct member served under a realm member policy, in its realm and under the realm key its policy names, is
+%% read once, however many sessions it holds there. The reads run in a worker, and the next re-check is armed at once.
+standing_rechecked(#state{served_until = Until, member_standing = Standing, standing_recheck_ms = Every} = S) ->
+    Members = lists:usort([{Caller, Realm, KeyId}
+                           || _AttachId := #{policy := {realm_member_required, KeyId, _Can}, caller := Caller,
+                                             realm := Realm} <- Until]),
+    standing_asked(Members, Standing, Every, S).
+
+standing_asked([], _Standing, _Every, S) ->
+    S;
+standing_asked(Members, Standing, Every, S) ->
+    Link = self(),
+    _ = spawn(fun() -> Link ! {member_standings, [{M, standing_of(Standing, M)} || M <- Members]} end),
+    _ = erlang:send_after(Every, self(), recheck_member_standing),
+    S#state{standing_armed = true}.
+
+%% A reader that raises reads as a lookup that failed: it keeps the session.
+standing_of(Standing, {Caller, Realm, KeyId}) ->
+    try Standing(Realm, KeyId, Caller)
+    catch _:_ -> {error, lookup_failed}
+    end.
+
+%% Only withdrawn ends a member's sessions early: the realm's tombstone of its endorsement. Any other outcome keeps
+%% them up to their token's end, since a failed or stale read is no evidence of revocation and must not take a
+%% service down; each is counted by name, and one that says the slot does not fit the member is logged.
+standing_read({{Caller, Realm, KeyId}, {error, withdrawn}}, #state{served_until = Until, server_streams = SS} = S) ->
+    Withdrawn = [AttachId || AttachId := #{policy := {realm_member_required, K, _Can}, caller := C, realm := R}
+                                 <- Until, C =:= Caller, R =:= Realm, K =:= KeyId],
+    [ok = authority_lost(maps:find(AttachId, SS), <<"the realm withdrew this member">>) || AttachId <- Withdrawn],
+    counted(withdrawn, S#state{served_until = maps:without(Withdrawn, Until)});
+standing_read({{Caller, Realm, _KeyId}, Outcome}, S) ->
+    Name = outcome_name(Outcome),
+    ok = standing_logged(Name, Caller, Realm),
+    counted(Name, S).
+
+outcome_name(ok) -> ok;
+outcome_name({error, Reason}) when is_atom(Reason) -> Reason;
+outcome_name(_Other) -> other.
+
+standing_logged(Name, _Caller, _Realm)
+  when Name =:= ok; Name =:= lookup_failed; Name =:= not_found; Name =:= endorsement_expired;
+       Name =:= not_yet_valid ->
+    ok;
+standing_logged(Name, Caller, Realm) ->
+    logger:warning("[macula_station_link] standing of member ~ts in realm ~ts read ~p: session kept to its token's end",
+                   [binary:encode_hex(Caller, lowercase), binary:encode_hex(Realm, lowercase), Name]).
+
+counted(Name, #state{standing_outcomes = Outcomes} = S) ->
+    S#state{standing_outcomes = maps:update_with(Name, fun(N) -> N + 1 end, 1, Outcomes)}.
 
 end_authority_at(AttachId, EndsAt) ->
     _ = erlang:send_after(max(0, EndsAt * 1000 - erlang:system_time(millisecond)), self(),
@@ -4522,16 +4626,15 @@ moved_on(_EndedOrNotLater, _AttachId, _NewEnd, S) ->
 %% The session still ends where this timer was set for: it is aborted with a STREAM_ERROR unauthorized. The abort runs
 %% in a process of its own, since a stream sends its last frame through this link.
 authority_ended({ok, #{ends_at := EndsAt}}, AttachId, EndsAt, #state{server_streams = SS, served_until = Until} = S) ->
-    ok = authority_lost(maps:find(AttachId, SS)),
+    ok = authority_lost(maps:find(AttachId, SS), <<"the token this stream was opened with has expired">>),
     S#state{served_until = maps:remove(AttachId, Until)};
 authority_ended(_EndedOrMoved, _AttachId, _EndsAt, S) ->
     S.
 
-authority_lost({ok, {StreamPid, _Mon, _Stream}}) ->
-    _ = spawn(fun() -> macula_stream:abort(StreamPid, <<"unauthorized">>,
-                                           <<"the token this stream was opened with has expired">>) end),
+authority_lost({ok, {StreamPid, _Mon, _Stream}}, Why) ->
+    _ = spawn(fun() -> macula_stream:abort(StreamPid, <<"unauthorized">>, Why) end),
     ok;
-authority_lost(error) ->
+authority_lost(error, _Why) ->
     ok.
 
 %% A procedure this link does not advertise is refused `not_found'. The open's

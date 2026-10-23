@@ -21,6 +21,8 @@
 -define(LOGGED_BYTES, 8192).
 -define(SESSIONS, 3).
 -define(EVENT_MS, 1_000).
+-define(RECHECK_MS, 200).
+-define(MEMBER_CAN, <<"member/email-verified">>).
 
 stream_serving_test_() ->
     [{case_name(Case), {timeout, 15, {spawn, fun() -> process_flag(trap_exit, true), Case() end}}}
@@ -33,6 +35,10 @@ stream_serving_test_() ->
                  fun a_renewed_gated_session_outlives_its_first_token/0,
                  fun an_older_renewal_does_not_pull_a_sessions_end_back/0,
                  fun a_renewal_from_another_caller_or_for_another_audience_is_refused/0,
+                 fun a_member_the_realm_withdrew_is_no_longer_served/0,
+                 fun a_member_standing_that_is_not_withdrawn_keeps_the_session/0,
+                 fun a_members_standing_is_read_once_per_recheck_however_many_sessions/0,
+                 fun a_session_gated_on_one_node_is_not_rechecked_against_a_realm/0,
                  fun an_upload_advertised_with_a_policy_refuses_a_caller_without_a_token/0,
                  fun a_stream_open_past_the_callers_session_cap_is_refused/0,
                  fun a_stream_open_without_the_session_counter_is_refused/0,
@@ -212,6 +218,65 @@ a_renewal_from_another_caller_or_for_another_audience_is_refused() ->
     ?assertEqual({ok, refused_only(Open)}, await_renewal(renew(World, Caller, token(Issuer, Other, 60), [Open]))),
     ?assertMatch({ended, _}, how_it_ended(3_500)),
     stop(maps:get(link, World)).
+
+%% M2 (macula#120): every re-check, the link reads the standing of each distinct caller it serves under a realm member
+%% policy, in that realm, under the realm key the policy names. A member the realm withdrew is no longer served: each of
+%% its sessions there ends with a verified STREAM_ERROR unauthorized, within one re-check.
+a_member_the_realm_withdrew_is_no_longer_served() ->
+    #{world := World, quic := Quic, open := Open} = member_session(fun(_Realm, _KeyId, _Member) -> {error, withdrawn} end),
+    ?assertMatch({ended, _}, how_it_ended(1_500)),
+    {ok, Ended} = written_within(Quic, ?EVENT_MS),
+    ?assertMatch({ok, #{code := <<"unauthorized">>}}, provider_fields(Open, Ended)),
+    stop(maps:get(link, World)).
+
+%% Only withdrawn ends a session early. A lookup that fails, an empty slot, an endorsement past its window and a slot
+%% that does not fit the member keep it, up to its token's end, and each outcome is counted by name.
+a_member_standing_that_is_not_withdrawn_keeps_the_session() ->
+    Outcomes = [{error, lookup_failed}, {error, not_found}, {error, endorsement_expired}, {error, untrusted_signer}, ok],
+    Counter = counters:new(1, []),
+    Standing = fun(_Realm, _KeyId, _Member) ->
+                   ok = counters:add(Counter, 1, 1),
+                   lists:nth(min(counters:get(Counter, 1), length(Outcomes)), Outcomes)
+               end,
+    #{world := #{link := Link}} = member_session(Standing),
+    ?assertEqual(not_ended, how_it_ended(2_000)),
+    Counted = element(macula_station_link:state_field_index(standing_outcomes), sys:get_state(Link)),
+    ?assertMatch(#{lookup_failed := 1, not_found := 1, endorsement_expired := 1, untrusted_signer := 1}, Counted),
+    ?assertNot(maps:is_key(withdrawn, Counted)),
+    stop(Link).
+
+%% The re-check reads each distinct caller once, however many sessions it holds.
+a_members_standing_is_read_once_per_recheck_however_many_sessions() ->
+    Test = self(),
+    Standing = fun(_Realm, _KeyId, Member) -> Test ! {standing_read, Member}, ok end,
+    #{world := World, caller := Caller, issuer := Issuer, procedure := Procedure} = member_session(Standing),
+    _ = opened_by_peer(World, Caller, Procedure, #{}, #{token => member_token(Issuer, Caller)}),
+    receive {session_served, _} -> ok after ?EVENT_MS -> erlang:error(session_not_served) end,
+    flush_standing_reads(),
+    timer:sleep(1_000),
+    Reads = flush_standing_reads(),
+    Rechecks = 1_000 div ?RECHECK_MS,
+    ?assert(length(Reads) >= Rechecks - 1 andalso length(Reads) =< Rechecks + 1),
+    stop(maps:get(link, World)).
+
+%% A session gated on one node's tokens has no realm to be withdrawn from: it is not re-checked.
+a_session_gated_on_one_node_is_not_rechecked_against_a_realm() ->
+    Test = self(),
+    #{link := Link} = World = linked(#{}, #{standing_recheck_ms => ?RECHECK_MS,
+                                            member_standing => fun(_Realm, _KeyId, Member) ->
+                                                                   Test ! {standing_read, Member}, {error, withdrawn}
+                                                               end}),
+    Issuer = macula_test_identity:key(),
+    {ok, IssuerNodeId} = macula_node_keys:node_id(Issuer),
+    Procedure = <<"acme/foo.node_gated">>,
+    ok = macula_station_link:advertise_stream(Link, ?REALM, Procedure, server_stream, telling_how_it_ended(self()),
+                                              {ucan_required, IssuerNodeId}),
+    Caller = key(),
+    _ = opened_by_peer(World, Caller, Procedure, #{}, #{token => token(Issuer, Caller, 60)}),
+    receive {session_served, _} -> ok after ?EVENT_MS -> erlang:error(session_not_served) end,
+    ?assertEqual(not_ended, how_it_ended(1_000)),
+    ?assertEqual([], flush_standing_reads()),
+    stop(Link).
 
 %% A gated upload advertised through macula_upload:advertise/6 answers an open that carries no token with a verified
 %% STREAM_ERROR unauthorized on its own stream, and starts no receiver for it.
@@ -444,6 +509,9 @@ linked() ->
     linked(#{}).
 
 linked(Limits) ->
+    linked(Limits, #{}).
+
+linked(Limits, LinkOpts) ->
     {ok, _} = application:ensure_all_started(macula),
     Test = self(),
     Key = key(),
@@ -451,14 +519,14 @@ linked(Limits) ->
     {ok, Admission} = macula_request_admission:start_link(
                         maps:merge(#{caller_quota => 256, share => 1024, cap => 46080,
                                      reply_bytes => 262144, reply_bytes_total => 16777216}, Limits)),
-    {ok, Link} = macula_station_link:start_link(
+    {ok, Link} = macula_station_link:start_link(maps:merge(
                    #{seed => #{host => <<"127.0.0.1">>, port => 1}, expected_node_id => <<1:256>>,
                      node_identity => fun() -> Key end, issuer => Issuer, admission => Admission,
                      share => {seed, {<<"127.0.0.1">>, 1}},
                      connect => fun(_PeeringOpts) -> {error, not_dialed_here} end,
                      open_stream => fun(_Conn) -> Opened = make_ref(), Test ! {opened, Opened}, {ok, Opened} end,
                      send_on_stream => fun(Stream, Bytes) -> Test ! {written, Stream, Bytes}, ok end,
-                     close_stream => fun(Stream) -> Test ! {closed, Stream}, ok end}),
+                     close_stream => fun(Stream) -> Test ! {closed, Stream}, ok end}, LinkOpts)),
     _ = sys:replace_state(Link, fun(S) -> setelement(?PEER_NODE_ID_INDEX, setelement(?PEER_PID_INDEX, S, Test),
                                                      <<2:256>>) end),
     #{link => Link, key => Key}.
@@ -731,3 +799,25 @@ renewed_only(Open) ->
 
 refused_only(Open) ->
     #{{text, <<"renewed">>} => [], {text, <<"refused">>} => [request_id_of(Open)]}.
+
+%% A session served under a realm member policy, on a link that re-checks every ?RECHECK_MS through Standing.
+member_session(Standing) ->
+    #{link := Link} = World = linked(#{}, #{standing_recheck_ms => ?RECHECK_MS, member_standing => Standing}),
+    {ok, Issuer} = macula_node_keys:generate(realm, profile()),
+    RealmKeyId = macula_node_keys:key_id(Issuer),
+    Procedure = <<"acme/foo.members_only">>,
+    ok = macula_station_link:advertise_stream(Link, ?REALM, Procedure, server_stream, telling_how_it_ended(self()),
+                                              {realm_member_required, RealmKeyId, ?MEMBER_CAN}),
+    Caller = key(),
+    #{quic := Quic, frame := Open} = opened_by_peer(World, Caller, Procedure, #{},
+                                                    #{token => member_token(Issuer, Caller)}),
+    receive {session_served, _} -> ok after ?EVENT_MS -> erlang:error(session_not_served) end,
+    #{world => World, caller => Caller, issuer => Issuer, procedure => Procedure, quic => Quic, open => Open}.
+
+member_token(Issuer, Caller) ->
+    mint_ucan(Issuer, macula_node_keys:key_id(Caller), ?MEMBER_CAN).
+
+flush_standing_reads() ->
+    receive {standing_read, Member} -> [Member | flush_standing_reads()]
+    after 0 -> []
+    end.
