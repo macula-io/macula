@@ -29,6 +29,7 @@ stream_serving_test_() ->
                  fun a_served_session_past_its_inbox_budget_sends_its_stream_error/0,
                  fun a_stream_procedures_policy_is_enforced_before_its_handler/0,
                  fun a_stream_procedures_ucan_policy_binds_its_token_to_the_caller/0,
+                 fun a_gated_session_ends_when_its_token_expires/0,
                  fun an_upload_advertised_with_a_policy_refuses_a_caller_without_a_token/0,
                  fun a_stream_open_past_the_callers_session_cap_is_refused/0,
                  fun a_stream_open_without_the_session_counter_is_refused/0,
@@ -158,6 +159,28 @@ a_stream_procedures_ucan_policy_binds_its_token_to_the_caller() ->
     ?assertMatch({ok, #{code := <<"unauthorized">>}}, provider_fields(ForSomeoneOpen, Refusal)),
     ?assertEqual({handler_ran, OwnTag}, receive {handler_ran, OwnTag} = Ran -> Ran after ?EVENT_MS -> none end),
     ?assertEqual(none, receive {handler_ran, ForSomeoneTag} = Unauthorized -> Unauthorized after 300 -> none end),
+    stop(Link).
+
+%% A session a gated procedure serves ends when the token it was opened with expires: its caller gets a verified
+%% STREAM_ERROR unauthorized and its handler sees the session end. An open stream holds no authority its token no
+%% longer gives (macula#120).
+a_gated_session_ends_when_its_token_expires() ->
+    #{link := Link} = World = linked(),
+    Procedure = <<"acme/foo.expiring">>,
+    Issuer = macula_test_identity:key(),
+    {ok, IssuerNodeId} = macula_node_keys:node_id(Issuer),
+    ok = macula_station_link:advertise_stream(Link, ?REALM, Procedure, server_stream, telling_how_it_ended(self()),
+                                              {ucan_required, IssuerNodeId}),
+    Caller = key(),
+    Token = macula_ucan:create(Issuer, macula_node_keys:key_id(Caller),
+                               [#{with => <<"mri:realm:test">>, can => <<"call">>}],
+                               #{exp => erlang:system_time(second) + 2}),
+    #{quic := Quic, frame := Open} = opened_by_peer(World, Caller, Procedure, #{}, #{token => Token}),
+    receive {session_served, _} -> ok after ?EVENT_MS -> erlang:error(session_not_served) end,
+    ?assertEqual(not_ended, how_it_ended(500)),
+    ?assertMatch({ended, _}, how_it_ended(3_500)),
+    {ok, Ended} = written_within(Quic, ?EVENT_MS),
+    ?assertMatch({ok, #{code := <<"unauthorized">>}}, provider_fields(Open, Ended)),
     stop(Link).
 
 %% A gated upload advertised through macula_upload:advertise/6 answers an open that carries no token with a verified

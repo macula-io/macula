@@ -538,7 +538,11 @@
     %% the policy of a stream advertised under the same name. Absent means
     %% `open'.
     stream_policies = #{} :: #{{<<_:256>>, binary()} =>
-                                   macula_client:auth_policy()}
+                                   macula_client:auth_policy()},
+    %% When each served session of a gated procedure loses its authority, by
+    %% attach id, in seconds: the earliest exp of the token and proofs its
+    %% STREAM_OPEN was authorized with. The session is ended then (macula#120).
+    served_until = #{} :: #{macula_frame:stream_id() => integer()}
 }).
 
 -type subscription() :: {Realm     :: <<_:256>>,
@@ -1882,6 +1886,9 @@ handle_info({'EXIT', Pid, Reason}, #state{peer_pid = Pid, seed = Seed} = S) ->
 %% again with the pool's next issuer.
 handle_info({'DOWN', _Mon, process, Issuer, Reason}, #state{issuer = Issuer} = S) ->
     {stop, {shutdown, {issuer_down, Reason}}, S};
+handle_info({served_authority_ended, AttachId, EndsAt}, #state{served_until = Until} = S) ->
+    {noreply, authority_ended(maps:find(AttachId, Until), AttachId, EndsAt, S)};
+
 handle_info({'DOWN', Mon, process, Pid, _Reason}, S) ->
     %% Two monitor sources land here: subscriber pids paired by
     %% `subscribe/4', and stream pids tracked in `streams'. Probe
@@ -3983,7 +3990,8 @@ drop_stream(Sid, #state{client_streams = CS, server_streams = SS, server_keys = 
             Stream =/= undefined],
     Bufs2 = drop_bufs([ClientStream, ServerStream], Bufs),
     S#state{client_streams = CS2, server_streams = SS2,
-            server_keys = released_key(Sid, Keys, S), stream_bufs = Bufs2}.
+            server_keys = released_key(Sid, Keys, S), stream_bufs = Bufs2,
+            served_until = maps:remove(Sid, S#state.served_until)}.
 
 drop_one(Sid, Map) ->
     case maps:take(Sid, Map) of
@@ -4244,6 +4252,32 @@ on_stream_open_verdict(unauthorized, Open, Seal, Stream, S) ->
 on_stream_open_verdict(malformed_frame, Open, Seal, Stream, S) ->
     refuse_opened(Stream, Open, Seal, <<"malformed_frame">>, <<"a proof no token in the chain names">>, S).
 
+%% A served session of a gated procedure holds its authority only while the token it was opened with does: it ends at
+%% the earliest exp of that token and its proofs (macula#120). An open procedure's session has no such end. The open
+%% carries a token, since a gated procedure serves no open without one.
+watch_authority(open, _Open, _AttachId, S) ->
+    S;
+watch_authority(_Gated, #{token := Token} = Open, AttachId, #state{served_until = Until} = S) ->
+    EndsAt = macula_ucan:authorized_until(Token, maps:get(proofs, Open, [])),
+    _ = erlang:send_after(max(0, EndsAt * 1000 - erlang:system_time(millisecond)), self(),
+                          {served_authority_ended, AttachId, EndsAt}),
+    S#state{served_until = Until#{AttachId => EndsAt}}.
+
+%% The session still ends where this timer was set for: it is aborted with a STREAM_ERROR unauthorized. The abort runs
+%% in a process of its own, since a stream sends its last frame through this link.
+authority_ended({ok, EndsAt}, AttachId, EndsAt, #state{server_streams = SS, served_until = Until} = S) ->
+    ok = authority_lost(maps:find(AttachId, SS)),
+    S#state{served_until = maps:remove(AttachId, Until)};
+authority_ended(_EndedOrMoved, _AttachId, _EndsAt, S) ->
+    S.
+
+authority_lost({ok, {StreamPid, _Mon, _Stream}}) ->
+    _ = spawn(fun() -> macula_stream:abort(StreamPid, <<"unauthorized">>,
+                                           <<"the token this stream was opened with has expired">>) end),
+    ok;
+authority_lost(error) ->
+    ok.
+
 %% A procedure this link does not advertise is refused `not_found'. The open's
 %% signed mode binds both sides' verifiers, so an open in a mode other than the
 %% one its procedure is advertised in is refused `mode_mismatch', not served.
@@ -4277,12 +4311,14 @@ served_with_id(true, AttachId, Handler, #{procedure := Proc, payload := Args, ca
 %% the session counter could not admit, is refused on its own stream: its
 %% handler process ends before it serves, and the stream process it would
 %% have owned ends with it.
-serve_if_admitted(ok, AttachId, Worker, StreamPid, Open, Stream, #state{server_streams = SS} = S) ->
+serve_if_admitted(ok, AttachId, Worker, StreamPid, #{realm := Realm, procedure := Proc} = Open, Stream,
+                  #state{server_streams = SS, stream_policies = SPols} = S) ->
     ok = macula_stream:attach_to_link(StreamPid, self(), AttachId),
     Mon = erlang:monitor(process, StreamPid),
     Worker ! {serve, StreamPid},
-    S#state{server_streams = SS#{AttachId => {StreamPid, Mon, Stream}},
-            server_keys = maps:put(AttachId, request_key(Open), S#state.server_keys)};
+    watch_authority(maps:get({Realm, Proc}, SPols, open), Open, AttachId,
+                    S#state{server_streams = SS#{AttachId => {StreamPid, Mon, Stream}},
+                            server_keys = maps:put(AttachId, request_key(Open), S#state.server_keys)});
 serve_if_admitted({error, Refusal}, _AttachId, Worker, _StreamPid, Open, Stream, S) ->
     exit(Worker, kill),
     ok = released_open(Open, S),
