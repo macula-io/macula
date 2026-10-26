@@ -22,6 +22,8 @@ stream_renewal_caller_test_() ->
                            fun an_answered_renewal_starts_the_next_third/1},
                           {"a provider-signed unknown_next_peer ends the renewing",
                            fun a_provider_without_stream_renew_is_not_asked_again/1},
+                          {"a renewal that moves no end takes the backoff",
+                           fun a_renewal_that_moves_no_end_takes_the_backoff/1},
                           {"a station's relay error is tried again before the end",
                            fun a_relay_error_is_tried_again/1},
                           {"a refused renewal is tried again with the next token",
@@ -56,6 +58,23 @@ an_answered_renewal_starts_the_next_third(#{link := Link, provider_id := Provide
     Second = renewal_call(3_000),
     ?assert(erlang:system_time(millisecond) - Answered >= 1_000),
     ?assertEqual(source_token(2), maps:get(token, Second)).
+
+%% A source that hands back the token the stream already holds renews nothing, however the provider answers: each
+%% such renewal takes the backoff, so over the token's 6 seconds the link sends a handful of CALLs, not one every
+%% MIN_RENEWAL_MS as the end nears.
+a_renewal_that_moves_no_end_takes_the_backoff(#{link := Link, provider_id := Provider} = W) ->
+    Token = token(W, 6),
+    A = open(Link, Provider, Token, fun() -> {ok, Token} end),
+    ?assert(answered_all(W, A, erlang:system_time(millisecond) + 6_500, 0) =< 5).
+
+answered_all(W, A, Until, Calls) ->
+    answered_one(renewal_call_within(max(0, Until - erlang:system_time(millisecond))), W, A, Until, Calls).
+
+answered_one(none, _W, _A, _Until, Calls) ->
+    Calls;
+answered_one(Request, W, A, Until, Calls) ->
+    answer(W, Request, #{renewed => [A], refused => []}),
+    answered_all(W, A, Until, Calls + 1).
 
 a_provider_without_stream_renew_is_not_asked_again(#{link := Link, provider_id := Provider,
                                                      provider := ProviderKey} = W) ->

@@ -38,6 +38,9 @@ stream_serving_test_() ->
                  fun a_member_the_realm_withdrew_is_no_longer_served/0,
                  fun a_member_standing_that_is_not_withdrawn_keeps_the_session/0,
                  fun a_members_standing_is_read_once_per_recheck_however_many_sessions/0,
+                 fun a_withdrawn_members_reopen_is_refused_until_its_token_ends/0,
+                 fun a_member_the_realm_admits_again_is_served_again/0,
+                 fun a_recheck_due_while_the_last_one_reads_is_skipped/0,
                  fun a_session_gated_on_one_node_is_not_rechecked_against_a_realm/0,
                  fun an_upload_advertised_with_a_policy_refuses_a_caller_without_a_token/0,
                  fun a_stream_open_past_the_callers_session_cap_is_refused/0,
@@ -258,6 +261,51 @@ a_members_standing_is_read_once_per_recheck_however_many_sessions() ->
     Rechecks = 1_000 div ?RECHECK_MS,
     ?assert(length(Reads) >= Rechecks - 1 andalso length(Reads) =< Rechecks + 1),
     stop(maps:get(link, World)).
+
+%% A withdrawn member's tokens stay valid to their exp, so ending its sessions is not enough: it is held, and a fresh
+%% STREAM_OPEN under the same realm member policy, with a valid token, is refused unauthorized and runs no handler.
+a_withdrawn_members_reopen_is_refused_until_its_token_ends() ->
+    #{world := World, caller := Caller, issuer := Issuer, procedure := Procedure} =
+        member_session(fun(_Realm, _KeyId, _Member) -> {error, withdrawn} end),
+    ?assertMatch({ended, _}, how_it_ended(1_500)),
+    #{quic := Quic, frame := Reopen} = opened_by_peer(World, Caller, Procedure, #{},
+                                                      #{token => member_token(Issuer, Caller)}),
+    {ok, Refusal} = written_within(Quic, ?EVENT_MS),
+    ?assertMatch({ok, #{code := <<"unauthorized">>}}, provider_fields(Reopen, Refusal)),
+    ?assertEqual(none, receive {session_served, _} = Served -> Served after 300 -> none end),
+    Held = element(macula_station_link:state_field_index(withdrawn_members), sys:get_state(maps:get(link, World))),
+    ?assertEqual([macula_node_keys:key_id(Caller)], [C || {C, _Realm, _KeyId} <- maps:keys(Held)]),
+    stop(maps:get(link, World)).
+
+%% A re-check that reads a held member in standing again, the realm's fresh endorsement, lifts the hold.
+a_member_the_realm_admits_again_is_served_again() ->
+    Counter = counters:new(1, []),
+    Standing = fun(_Realm, _KeyId, _Member) ->
+                   ok = counters:add(Counter, 1, 1),
+                   withdrawn_once(counters:get(Counter, 1))
+               end,
+    #{world := World, caller := Caller, issuer := Issuer, procedure := Procedure} = member_session(Standing),
+    ?assertMatch({ended, _}, how_it_ended(1_500)),
+    timer:sleep(3 * ?RECHECK_MS),
+    _ = opened_by_peer(World, Caller, Procedure, #{}, #{token => member_token(Issuer, Caller)}),
+    receive {session_served, _} -> ok after ?EVENT_MS -> erlang:error(session_not_served) end,
+    stop(maps:get(link, World)).
+
+withdrawn_once(1) -> {error, withdrawn};
+withdrawn_once(_Later) -> ok.
+
+%% The re-check runs in one worker at a time: one due while the last still reads, a slow DHT, is skipped and counted,
+%% so the workers never pile up.
+a_recheck_due_while_the_last_one_reads_is_skipped() ->
+    Test = self(),
+    Standing = fun(_Realm, _KeyId, Member) -> timer:sleep(3 * ?RECHECK_MS), Test ! {standing_read, Member}, ok end,
+    #{world := #{link := Link}} = member_session(Standing),
+    timer:sleep(1_500),
+    Reads = flush_standing_reads(),
+    ?assert(length(Reads) =< 1_500 div (3 * ?RECHECK_MS) + 1),
+    Counted = element(macula_station_link:state_field_index(standing_outcomes), sys:get_state(Link)),
+    ?assertMatch(#{skipped := N} when N >= 1, Counted),
+    stop(Link).
 
 %% A session gated on one node's tokens has no realm to be withdrawn from: it is not re-checked.
 a_session_gated_on_one_node_is_not_rechecked_against_a_realm() ->
