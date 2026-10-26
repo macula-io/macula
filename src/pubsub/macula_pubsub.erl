@@ -125,7 +125,7 @@ subscribe(Pool, Realm, Topic, Subscriber) ->
 %% arrives opened, its meta saying `sealed => 1' and `seal_key_id'; one
 %% that cannot be opened arrives once as `{macula_event_unopened, SubRef,
 %% Topic, #{publisher, seal_key_id, reason}}', and nothing of its payload.
-%% `reason' is one of `unknown_epoch', `epoch_expired', `not_a_member',
+%% `reason' is one of `unknown_epoch', `epoch_expired', `not_authorized', `not_a_member',
 %% `membership_unknown', `no_distributor', `no_group' (a sealed event on
 %% a subscription that named no group) and `tag_invalid'. A clear event
 %% carries `sealed => 0', and one under a prefix this node holds as

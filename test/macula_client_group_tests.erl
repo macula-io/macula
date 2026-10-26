@@ -15,7 +15,8 @@
 -define(TOPIC, <<"io.macula/acme/chat/room/said_v1">>).
 -define(ELSEWHERE, <<"io.macula/other/news/said_v1">>).
 -define(PUB, <<4:256>>).
--define(TOKEN, <<"org-grant">>).
+-define(TOKEN, persistent_term:get({?MODULE, token})).
+-define(WIRE_CALLER, <<5:256>>).
 
 group_test_() ->
     {foreach, fun setup/0, fun cleanup/1,
@@ -38,12 +39,11 @@ setup() ->
     {ok, _} = application:ensure_all_started(macula),
     Log = ets:new(log, [public, bag]),
     Script = ets:new(script, [public, ordered_set]),
-    {ok, Distributor} = macula_group_keys:start_link(#{org => <<"acme">>, policy => required,
-                                                       membership => fun(_Caller) -> ok end}),
+    {ok, Distributor} = macula_group_keys:start_link((distributor_options())#{membership => fun(_Caller) -> ok end}),
     Handler = macula_group_keys:handler(Distributor),
     Call = fun(Realm, Procedure, Payload, Opts) ->
                ets:insert(Log, {call, erlang:unique_integer([monotonic]), {Realm, Procedure, Payload, Opts}}),
-               answer(Script, Handler, Payload)
+               answer(Script, Handler, on_link(Payload, Opts))
            end,
     {ok, Pool} = macula_client:connect([], #{group_keyring => #{call => Call}}),
     #{pool => Pool, distributor => Distributor, handler => Handler, log => Log, script => Script}.
@@ -59,14 +59,36 @@ answer(Script, Handler, Payload) ->
     scripted(ets:first(Script), Script, Handler, Payload).
 
 scripted('$end_of_table', _Script, Handler, Payload) ->
-    on_the_wire(Handler(Payload#{caller => <<5:256>>}));
+    on_the_wire(Handler(Payload));
 scripted(Key, Script, _Handler, _Payload) ->
     [{_, Answer}] = ets:lookup(Script, Key),
     ets:delete(Script, Key),
     Answer.
 
+on_the_wire({error, Reason}) when is_binary(Reason) -> {error, Reason};
 on_the_wire({error, Reason}) -> {error, atom_to_binary(Reason)};
 on_the_wire(Reply) -> {ok, Reply, #{sealed => 1, provider => <<9:256>>}}.
+
+%% The distributor checks the call's own token on the org's grant (macula#129), so the fake wire hands it the token
+%% the pull carried, as the provider link does, and ?TOKEN is a real grant for the caller the wire names.
+distributor_options() ->
+    {ok, OrgKey} = macula_node_keys:generate(org, pq_pure),
+    persistent_term:put({?MODULE, org_key}, OrgKey),
+    persistent_term:put({?MODULE, token}, org_grant(?WIRE_CALLER)),
+    #{org => <<"acme">>, policy => required, org_key_id => macula_node_keys:key_id(OrgKey),
+      realm => crypto:hash(sha256, <<"io.macula">>), profile => pq_pure}.
+
+org_grant(Caller) ->
+    macula_ucan:create(persistent_term:get({?MODULE, org_key}), Caller,
+                       [#{with => <<"mri:org:io.macula/acme">>, can => <<"group_keys">>}], #{exp => 100_000}).
+
+%% A pull as the provider link hands it to the distributor's handler.
+on_link(Payload, Opts) ->
+    Payload#{caller => ?WIRE_CALLER, ucan_token => maps:get(ucan_token, Opts, <<>>), proofs => []}.
+
+%% A pull made straight to the handler, as Caller with its own grant.
+direct(Payload, Caller) ->
+    Payload#{caller => Caller, ucan_token => org_grant(Caller), proofs => []}.
 
 calls(#{log := Log}) -> [C || {_, C} <- lists:keysort(1, [{I, C} || {call, I, C} <- ets:tab2list(Log)])].
 
@@ -79,8 +101,8 @@ group_subscribe(W) ->
 
 %% The epoch the distributor hands out now, as a member pulling it would get it.
 current_epoch(#{handler := Handler}) ->
-    #{epochs := [Epoch | _]} = Handler(#{{text, <<"prefix">>} => {text, ?PREFIX},
-                                         {text, <<"epoch">>} => {text, <<"current">>}, caller => <<6:256>>}),
+    #{epochs := [Epoch | _]} = Handler(direct(#{{text, <<"prefix">>} => {text, ?PREFIX},
+                                                {text, <<"epoch">>} => {text, <<"current">>}}, <<6:256>>)),
     Epoch.
 
 fields(Topic, Seq) ->
@@ -116,7 +138,7 @@ subscribing_under_a_group_pulls_its_key_with_the_org_grant(W) ->
     ?_test(begin
         _Ref = group_subscribe(W),
         [{?REALM, <<"acme/group_keys_v1">>, _Payload, Opts}] = calls(W),
-        ?assertMatch(#{confidential := required, ucan_token := ?TOKEN}, Opts)
+        ?assertEqual({required, ?TOKEN}, {maps:get(confidential, Opts), maps:get(ucan_token, Opts)})
     end).
 
 a_sealed_event_opens_for_the_groups_subscriber(W) ->
@@ -186,7 +208,8 @@ a_publish_under_a_group_pulls_its_key_first(#{pool := Pool} = W) ->
         %% A link-less pool has no station to send to: the publish gets that far, sealed.
         ?assertEqual({error, {transient, no_healthy_station}},
                      macula_client:publish(Pool, ?REALM, ?TOPIC, <<"x">>, #{group => ?PREFIX, ucan_token => ?TOKEN})),
-        ?assertMatch([{?REALM, <<"acme/group_keys_v1">>, _, #{ucan_token := ?TOKEN}}], calls(W))
+        [{?REALM, <<"acme/group_keys_v1">>, _, #{ucan_token := Token}}] = calls(W),
+        ?assertEqual(?TOKEN, Token)
     end).
 
 a_clear_publish_under_a_held_prefix_names_the_group(#{pool := Pool} = W) ->

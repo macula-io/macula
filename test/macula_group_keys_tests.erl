@@ -1,9 +1,10 @@
 %%%-------------------------------------------------------------------
 %%% @doc A sealed group's distributor (docs/design/DESIGN_E2E_SEALED_PUBSUB.md §3,
 %%% §5): the `<org>/group_keys_v1' handler, its epochs per group, who it
-%%% admits and how it refuses. The org's UCAN is enforced by the procedure's
-%%% advertise policy before the handler runs; here the handler decides from
-%%% realm membership and the application's removed set.
+%%% admits and how it refuses. A group not listed keeps the org's grant, which
+%%% the handler checks on the call's own token (macula_group_keys_access_tests
+%%% has the per-group policies); then it decides from realm membership and the
+%%% application's removed set.
 %%% @end
 %%%-------------------------------------------------------------------
 -module(macula_group_keys_tests).
@@ -17,6 +18,9 @@
 -define(R, (15 * ?MIN)).
 -define(ORG, <<"acme">>).
 -define(PREFIX, <<"io.macula/acme/chat">>).
+-define(REALM, crypto:hash(sha256, <<"io.macula">>)).
+%% Every token here is valid from the distributor's clock at 1,000 s far past any test's advance.
+-define(EXP_S, 100_000).
 
 distributor_test_() ->
     {foreach, fun setup/0, fun cleanup/1,
@@ -40,12 +44,27 @@ setup() ->
     counters:put(Now, 1, 1_000_000),
     Members = ets:new(members, [public, set]),
     Removed = ets:new(removed, [public, set]),
+    OrgKey = org_key(),
     {ok, Pid} = macula_group_keys:start_link(
-                  #{org => ?ORG, policy => required, rotate_after_ms => ?R,
-                    now => fun() -> counters:get(Now, 1) end,
-                    membership => fun(Caller) -> membership(Members, Caller) end,
-                    removed => fun(Caller) -> ets:member(Removed, Caller) end}),
-    #{pid => Pid, now => Now, members => Members, removed => Removed, handler => macula_group_keys:handler(Pid)}.
+                  (options(OrgKey))#{rotate_after_ms => ?R,
+                                     now => fun() -> counters:get(Now, 1) end,
+                                     membership => fun(Caller) -> membership(Members, Caller) end,
+                                     removed => fun(Caller) -> ets:member(Removed, Caller) end}),
+    #{pid => Pid, now => Now, members => Members, removed => Removed, org_key => OrgKey,
+      handler => macula_group_keys:handler(Pid)}.
+
+options(OrgKey) ->
+    #{org => ?ORG, policy => required, org_key_id => macula_node_keys:key_id(OrgKey), realm => ?REALM,
+      profile => pq_pure}.
+
+org_key() ->
+    {ok, OrgKey} = macula_node_keys:generate(org, pq_pure),
+    OrgKey.
+
+%% The org's grant for Caller, as the link hands the call's token to the handler.
+org_grant(OrgKey, Caller) ->
+    macula_ucan:create(OrgKey, Caller, [#{with => <<"mri:org:io.macula/acme">>, can => <<"group_keys">>}],
+                       #{exp => ?EXP_S}).
 
 cleanup(#{pid := Pid, members := Members, removed := Removed}) ->
     unlink(Pid),
@@ -64,8 +83,9 @@ member(#{members := Members}) ->
     true = ets:insert(Members, {Node, ok}),
     Node.
 
-call(#{handler := Handler}, Caller, Epoch) ->
-    Handler(#{{text, <<"prefix">>} => {text, ?PREFIX}, {text, <<"epoch">>} => Epoch, caller => Caller}).
+call(#{handler := Handler, org_key := OrgKey}, Caller, Epoch) ->
+    Handler(#{{text, <<"prefix">>} => {text, ?PREFIX}, {text, <<"epoch">>} => Epoch, caller => Caller,
+              ucan_token => org_grant(OrgKey, Caller), proofs => []}).
 
 advance(#{now := Now}, Ms) -> counters:add(Now, 1, Ms).
 
@@ -174,10 +194,13 @@ no_epoch_key_shows_in_its_state_or_status_and_no_other_process_reads_its_table(#
 %% A pool named rather than given as a pid is looked up at every read: while no pool holds the name, a pull is
 %% membership_unknown and the distributor stays up.
 a_named_pool_that_is_not_running_is_membership_unknown_test() ->
-    {ok, Pid} = macula_group_keys:start_link(#{org => ?ORG, policy => required, pool => macula_group_keys_tests_no_pool,
-                                               realm => <<1:256>>, realm_key_id => <<2:256>>, profile => pq_hybrid}),
+    OrgKey = org_key(),
+    {ok, Pid} = macula_group_keys:start_link((options(OrgKey))#{pool => macula_group_keys_tests_no_pool,
+                                                                realm_key_id => <<2:256>>,
+                                                                now => fun() -> 1_000_000 end}),
     Handler = macula_group_keys:handler(Pid),
-    Pull = #{{text, <<"prefix">>} => {text, ?PREFIX}, {text, <<"epoch">>} => {text, <<"current">>}, caller => <<3:256>>},
+    Pull = #{{text, <<"prefix">>} => {text, ?PREFIX}, {text, <<"epoch">>} => {text, <<"current">>}, caller => <<3:256>>,
+             ucan_token => org_grant(OrgKey, <<3:256>>)},
     ?assertEqual({error, membership_unknown}, Handler(Pull)),
     ?assert(is_process_alive(Pid)),
     unlink(Pid),
@@ -186,11 +209,13 @@ a_named_pool_that_is_not_running_is_membership_unknown_test() ->
 %% A distributor that crashes after serving a key logs no form of it: not in the report's terms, not in its text.
 a_crash_report_carries_no_epoch_key_test() ->
     Trapping = process_flag(trap_exit, true),
-    {ok, Pid} = macula_group_keys:start_link(#{org => ?ORG, policy => required, membership => fun(_) -> ok end}),
+    OrgKey = org_key(),
+    {ok, Pid} = macula_group_keys:start_link((options(OrgKey))#{membership => fun(_) -> ok end,
+                                                                now => fun() -> 1_000_000 end}),
     Handler = macula_group_keys:handler(Pid),
     #{epochs := [#{key := Key} | _]} =
         Handler(#{{text, <<"prefix">>} => {text, ?PREFIX}, {text, <<"epoch">>} => {text, <<"current">>},
-                  caller => <<1:256>>}),
+                  caller => <<1:256>>, ucan_token => org_grant(OrgKey, <<1:256>>)}),
     Events = captured(fun() ->
                           try gen_server:call(Pid, not_a_pull) catch exit:_ -> ok end,
                           receive {'EXIT', Pid, _} -> ok after 5_000 -> still_running end
@@ -226,24 +251,23 @@ log(Event, #{config := #{test := Test}}) ->
 drained(Events) ->
     receive {captured, Event} -> drained([Event | Events]) after 0 -> lists:reverse(Events) end.
 
-%% A key never travels clear (docs/design/DESIGN_E2E_SEALED_PUBSUB.md §2): the distributor's own advertise options take the
-%% org's grant AND sealed calls only. With the node's KEM key named they make the spec whose provider link refuses a
-%% clear CALL as sealed_required (macula_station_link_kem_advertise_tests: required_refuses_a_clear_call_test_); with
-%% it unnamed they refuse to advertise at all, rather than advertise a keyless distributor.
-advertise_opts_take_the_org_grant_and_sealed_calls_only_test() ->
-    OrgKeyId = <<3:256>>,
-    ?assertEqual(#{auth => {realm_member_required, OrgKeyId, <<"group_keys">>}, confidential => required},
-                 macula_group_keys:advertise_opts(OrgKeyId)).
+%% A key never travels clear (docs/design/DESIGN_E2E_SEALED_PUBSUB.md §2): the distributor's own advertise options take
+%% sealed calls only, AND hand the handler the call's token, which it checks per group (macula#129). With the node's KEM
+%% key named they make the spec whose provider link refuses a clear CALL as sealed_required
+%% (macula_station_link_kem_advertise_tests: required_refuses_a_clear_call_test_); with it unnamed they refuse to
+%% advertise at all, rather than advertise a keyless distributor.
+advertise_opts_take_the_calls_token_and_sealed_calls_only_test() ->
+    ?assertEqual(#{auth => handler_authorizes, confidential => required}, macula_group_keys:advertise_opts()).
 
 advertise_opts_make_a_sealed_only_spec_or_none_test() ->
     Prev = application:get_env(macula, kem_advertise),
     try
         ok = application:set_env(macula, kem_advertise, enabled),
         ?assertEqual({ok, #{kem => true, confidential => required}},
-                     macula:advertise_confidentiality(macula_group_keys:advertise_opts(<<3:256>>))),
+                     macula:advertise_confidentiality(macula_group_keys:advertise_opts())),
         ok = application:set_env(macula, kem_advertise, disabled),
         ?assertEqual({error, {confidentiality, kem_advertise_disabled}},
-                     macula:advertise_confidentiality(macula_group_keys:advertise_opts(<<3:256>>)))
+                     macula:advertise_confidentiality(macula_group_keys:advertise_opts()))
     after
         restore_env(Prev)
     end.

@@ -3,8 +3,11 @@
 %% A group is a topic prefix whose second segment is its org. Joining it pulls the group's epochs from the org's
 %% distributor, `<org>/group_keys_v1', over a call sealed to the distributor's KEM key (`confidential => required':
 %% a keyless advertisement is never a distributor, since a clear pull would hand the key to every station on the
-%% path) and carrying the org's UCAN as the call's own `ucan_token'. The first trusted distributor that answers is
-%% kept for the group, or the one `distributor' pins.
+%% path) and carrying the join's `ucan_token' as the call's own token: the org's `group_keys' grant for a group the
+%% distributor admits on it, or the member's membership UCAN from its realm, carrying `pubsub/subscribe' on the
+%% group's prefix and everything below it, for a group the distributor restricts to the realm's capability
+%% (macula_group_keys, macula#129). The first trusted distributor that answers is kept for the group, or the one
+%% `distributor' pins.
 %%
 %% Every held group is pulled again at a uniformly random instant in its newest epoch's ahead window, event or no
 %% event, so the rotation is spread over a third of an epoch and the policy a node holds is at most one epoch old. A
@@ -21,8 +24,9 @@
 %% (`handle/1'): publishing under a current epoch, opening under a held one and reading a group's policy never wait on
 %% a pull, which can take the distributor's whole deadline, for this group or another.
 %%
-%% Refusals and failures are named by the closed set of §7: `not_a_member', `membership_unknown', `unknown_epoch',
-%% `epoch_expired', and `no_distributor' for a distributor that cannot be found, reached or understood. Epoch keys are
+%% Refusals and failures are named by the closed set of §7: `not_authorized' (the token does not admit this group),
+%% `not_a_member', `membership_unknown', `unknown_epoch', `epoch_expired', and `no_distributor' for a distributor that
+%% cannot be found, reached or understood. Epoch keys are
 %% held in memory only.
 %%
 %% The epochs live in the table alone: the keyring's state holds its id and each group's pull bookkeeping, so neither
@@ -38,7 +42,7 @@
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, format_status/1]).
 
 -type policy() :: required | preferred | off.
--type reason() :: not_a_member | membership_unknown | unknown_epoch | epoch_expired | no_distributor.
+-type reason() :: not_authorized | not_a_member | membership_unknown | unknown_epoch | epoch_expired | no_distributor.
 -type options() :: #{pool => pid(), now => fun(() -> integer()),
                      call => fun((binary(), binary(), map(), map()) -> {ok, term(), map()} | {error, term()}),
                      schedule => fun((non_neg_integer(), term()) -> term()),
@@ -71,7 +75,8 @@ handle(Pid) ->
 pid(#{pid := Pid}) -> Pid.
 
 %% @doc Join the group `Prefix' in `Realm': pull its current epoch and hold it. A group already held is not pulled
-%% again. `ucan_token' is the org's grant, `distributor' pins the distributor's node id.
+%% again. `ucan_token' is the token the distributor admits for this group (the org's grant, or the member's membership
+%% UCAN for a restricted group), `distributor' pins the distributor's node id.
 -spec join(keyring(), binary(), binary(), join_options()) ->
           {ok, policy()} | {error, reason() | {invalid_option, group}}.
 join(#{pid := Pid}, Realm, Prefix, Opts) ->
@@ -246,6 +251,7 @@ pulled({error, {unresolved, provider_not_advertised}}, _Prefix, _Held, #{pin := 
 pulled({error, Reason}, _Prefix, _Held, Group) ->
     {error, refusal(Reason), Group}.
 
+refusal(<<"not_authorized", _WhatItLacked/binary>>) -> not_authorized;
 refusal(<<"not_a_member">>) -> not_a_member;
 refusal(<<"membership_unknown">>) -> membership_unknown;
 refusal(<<"unknown_epoch">>) -> unknown_epoch;

@@ -4,16 +4,46 @@
 %%
 %% The application advertises the handler as any provider advertises one (its
 %% mcl_om capability, or `macula_response:advertise_direct/7' kept alive with
-%% `reuse_sup'), with `advertise_opts/1' merged into its options: the policy
-%% `{realm_member_required, OrgKeyId, <<"group_keys">>}', so the org's
-%% `group_keys' UCAN is checked by macula before the handler runs, matched to
-%% the org key by its key id, AND `confidential => required', so the provider's
-%% link answers a clear call `sealed_required' and a key never travels clear.
+%% `reuse_sup'), with `advertise_opts/0' merged into its options:
+%% `confidential => required', so the provider's link answers a clear call
+%% `sealed_required' and a key never travels clear, AND `auth =>
+%% handler_authorizes', so the link hands the handler the call's own verified
+%% `ucan_token' and `proofs' and the handler checks them. The check cannot sit
+%% in an advertise gate: the group a pull names travels inside the sealed
+%% payload, where no gate sees it (macula#129).
 %% With the node's `kem_advertise' switched off those options refuse to
 %% advertise at all (`kem_advertise_disabled'), rather than advertise a keyless
 %% distributor. The member side refuses a keyless distributor too
 %% (`macula_group_keyring' pulls with `confidential => required'): each side
-%% enforces it on its own. The handler then
+%% enforces it on its own.
+%%
+%% Each group has one access policy, chosen at start (`groups'):
+%% <ul>
+%%   <li>`org_grant', the default for a group not listed: the org's
+%%   `group_keys' grant, `{realm_member_required, OrgKeyId, <<"group_keys">>}'
+%%   on `<org>/group_keys_v1', the check the advertise gate made before;</li>
+%%   <li>`{realm_capability, RealmKeyId, Mode}': the realm key's
+%%   `pubsub/subscribe', issued to the caller, covering the whole group, its
+%%   prefix `mri:topic:P' and everything below it `mri:topic:P/*'
+%%   (`macula_ucan:authorize/3' with a `group'). A role the realm grants on
+%%   `P/*' alone does not admit: a group key opens `P' too. `Mode' is
+%%   `refusing', which admits on the realm capability alone, or `counting',
+%%   the default, which counts a pull the realm capability would refuse and
+%%   admits it when the same token passes the org grant. Counting is
+%%   therefore fail-open by design, the union of two policies, and must show
+%%   as counting, never as protected, until its would-be refusals read zero.
+%%   A `realm_capability' group needs the distributor's seal policy
+%%   `required': its events must never travel clear.</li>
+%% </ul>
+%% Either check verifies the token's audience against the caller, its
+%% validity window at the time of the pull (a past epoch's pull too), and its
+%% chain of proofs up to the key the policy names. A refused pull answers
+%% `not_authorized: <can> on <resource>', naming what it lacked. Every pull of
+%% a `realm_capability' group is counted per realm, group and outcome
+%% (`admitted', `would_refuse', `refused'), read by `counts/1', and a refusal
+%% or would-be refusal is logged at most once a minute per group and outcome.
+%%
+%% The handler then
 %% decides from the caller's wire-authenticated node id: a node in the
 %% application's removed set is refused every epoch, and so is a node that is
 %% not a live realm member, read from the realm's slot for its endorsement
@@ -28,7 +58,8 @@
 %% the current one, and the next one too inside the current's ahead window
 %% (`macula_group_epoch'). Epoch keys are kept in memory only. A refusal is
 %% `{error, Reason}', which macula answers as a sealed provider error with code
-%% `handler_error' and the reason as its detail: `not_a_member',
+%% `handler_error' and the reason as its detail: `not_authorized: ...' (above),
+%% `not_a_member',
 %% `membership_unknown' (the lookup failed; retry), `unknown_epoch',
 %% `epoch_expired' or `unknown_group' (a prefix this distributor's org does not
 %% own).
@@ -43,17 +74,26 @@
 -module(macula_group_keys).
 -behaviour(gen_server).
 
--export([start_link/1, handler/1, advertise_opts/1]).
+-export([start_link/1, handler/1, advertise_opts/0, counts/1]).
 -export([init/1, handle_call/3, handle_cast/2, format_status/1]).
 
 -type policy() :: required | preferred | off.
--type options() :: #{org := binary(), policy := policy(), rotate_after_ms => pos_integer(),
+-type mode() :: counting | refusing.
+-type access() :: org_grant | {realm_capability, <<_:256>>} | {realm_capability, <<_:256>>, mode()}.
+-type outcome() :: admitted | would_refuse | refused.
+-type options() :: #{org := binary(), policy := policy(), org_key_id := <<_:256>>, realm := <<_:256>>,
+                     profile := macula_crypto_profile:profile(), groups => #{binary() => access()},
+                     rotate_after_ms => pos_integer(),
                      now => fun(() -> integer()),
                      membership => fun((<<_:256>>) -> ok | {error, not_a_member | membership_unknown}),
                      removed => fun((<<_:256>>) -> boolean()),
-                     pool => pid() | atom(), realm => <<_:256>>, realm_key_id => <<_:256>>,
-                     profile => macula_crypto_profile:profile()}.
--export_type([options/0, policy/0]).
+                     pool => pid() | atom(), realm_key_id => <<_:256>>}.
+-export_type([options/0, policy/0, access/0, mode/0, outcome/0]).
+
+-define(GROUP_KEYS_CAN, <<"group_keys">>).
+-define(SUBSCRIBE_CAN, <<"pubsub/subscribe">>).
+%% A refusal and a would-be refusal are logged at most once a window per group and outcome.
+-define(REPORT_WINDOW_MS, 60000).
 
 %% How long a group's epochs are kept past their acceptance, so a pull of one
 %% is answered `epoch_expired' rather than `unknown_epoch' for that long.
@@ -62,9 +102,18 @@
 %% 5 s and within a member's 15 s pull deadline (macula_group_keyring).
 -define(HANDLER_WAIT_MS, 12000).
 
-%% @doc Start a distributor for `org''s groups. `membership' defaults to the
-%% realm slot read over `pool', which then needs `realm', `realm_key_id' and
-%% `profile'; `removed' defaults to nobody removed. Name the pool: `pool' as
+%% @doc Start a distributor for `org''s groups in `realm' (the realm id),
+%% checking tokens in `profile'. `org_key_id' names the org key whose
+%% `group_keys' grant an `org_grant' group admits; `groups' maps a group's
+%% prefix to its access policy, `{realm_capability, RealmKeyId}' meaning
+%% counting mode. A listed prefix the org does not own is refused as
+%% `{error, {unknown_group, Prefix}}', an access of another shape as
+%% `{error, {invalid_group_access, Prefix}}', and a `realm_capability' group
+%% under a seal policy other than `required' as
+%% `{error, {restricted_group_not_required, Prefix}}': nothing is started.
+%% `membership' defaults to the
+%% realm slot read over `pool', which then needs `realm_key_id' too;
+%% `removed' defaults to nobody removed. Name the pool: `pool' as
 %% its registered name is looked up at every read, so a pool its supervisor
 %% restarts is found again, and while no pool holds the name a read is
 %% `membership_unknown'. A pid is read as given, and once that pool has died
@@ -72,9 +121,44 @@
 %% removed set across restarts: a set lost to a restart re-admits every removed
 %% member whose grant still verifies.
 -spec start_link(options()) -> {ok, pid()} | {error, term()}.
-start_link(#{org := Org, policy := Policy} = Opts)
+start_link(#{org := Org, policy := Policy, org_key_id := <<_:256>>, realm := <<_:256>>, profile := _} = Opts)
   when is_binary(Org), (Policy =:= required orelse Policy =:= preferred orelse Policy =:= off) ->
-    gen_server:start_link(?MODULE, Opts, []).
+    started(checked_groups(maps:to_list(maps:get(groups, Opts, #{})), Org, Policy), Opts).
+
+started({ok, Groups}, Opts) -> gen_server:start_link(?MODULE, Opts#{groups => Groups}, []);
+started({error, _} = Refused, _Opts) -> Refused.
+
+%% Every listed group: one the org owns, under an access of a known shape, and a restricted one only under `required'.
+checked_groups(Listed, Org, Policy) ->
+    checked_groups(Listed, Org, Policy, #{}).
+
+checked_groups([], _Org, _Policy, Groups) ->
+    {ok, Groups};
+checked_groups([{Prefix, Access} | Rest], Org, Policy, Groups) ->
+    next_group(group_access(owned_group(Prefix, Org), access(Access), Policy), Rest, Org, Policy, Groups).
+
+next_group({ok, Prefix, Access}, Rest, Org, Policy, Groups) ->
+    checked_groups(Rest, Org, Policy, Groups#{Prefix => Access});
+next_group({error, _} = Refused, _Rest, _Org, _Policy, _Groups) ->
+    Refused.
+
+owned_group(Prefix, Org) ->
+    listed(group_of(Prefix, #{org => Org}), Prefix).
+
+listed({ok, Prefix}, _Listed) -> {ok, Prefix};
+listed({error, unknown_group}, Listed) -> {error, {unknown_group, Listed}}.
+
+access(org_grant) -> {ok, org_grant};
+access({realm_capability, <<_:256>> = KeyId}) -> {ok, {realm_capability, KeyId, counting}};
+access({realm_capability, <<_:256>> = KeyId, Mode}) when Mode =:= counting; Mode =:= refusing ->
+    {ok, {realm_capability, KeyId, Mode}};
+access(_Other) -> error.
+
+group_access({error, _} = Refused, _Access, _Policy) -> Refused;
+group_access({ok, Prefix}, error, _Policy) -> {error, {invalid_group_access, Prefix}};
+group_access({ok, Prefix}, {ok, {realm_capability, _, _}}, Policy) when Policy =/= required ->
+    {error, {restricted_group_not_required, Prefix}};
+group_access({ok, Prefix}, {ok, Access}, _Policy) -> {ok, Prefix, Access}.
 
 %% @doc The `<org>/group_keys_v1' handler for a distributor, to advertise. It
 %% waits for the distributor longer than a membership lookup can take (5 s) and
@@ -85,16 +169,23 @@ handler(Pid) ->
     fun(Payload) -> gen_server:call(Pid, {pull, Payload}, ?HANDLER_WAIT_MS) end.
 
 %% @doc The options the distributor's procedure is advertised with, merged into
-%% the application's own: the org's grant, checked before the handler runs, and
-%% sealed calls only.
--spec advertise_opts(<<_:256>>) ->
-          #{auth := {realm_member_required, <<_:256>>, binary()}, confidential := required}.
-advertise_opts(<<_:256>> = OrgKeyId) ->
-    #{auth => {realm_member_required, OrgKeyId, <<"group_keys">>}, confidential => required}.
+%% the application's own: the call's own token handed to the handler, which
+%% checks it per group, and sealed calls only.
+-spec advertise_opts() -> #{auth := handler_authorizes, confidential := required}.
+advertise_opts() ->
+    #{auth => handler_authorizes, confidential => required}.
+
+%% @doc The pulls of every `realm_capability' group so far, by realm, group and outcome.
+-spec counts(pid()) -> #{{<<_:256>>, binary(), outcome()} => pos_integer()}.
+counts(Pid) ->
+    gen_server:call(Pid, counts).
 
 %% @private
-init(#{org := Org, policy := Policy} = Opts) ->
+init(#{org := Org, policy := Policy, org_key_id := OrgKeyId, realm := Realm, profile := Profile,
+       groups := Groups} = Opts) ->
     {ok, #{org => Org, policy => atom_to_binary(Policy),
+           org_key_id => OrgKeyId, realm => Realm, profile => Profile, groups => Groups,
+           counts => #{}, report => macula_refusal_report:new(?REPORT_WINDOW_MS),
            rotate_after_ms => maps:get(rotate_after_ms, Opts, macula_group_epoch:default_rotate_after_ms()),
            now => maps:get(now, Opts, fun() -> erlang:system_time(millisecond) end),
            membership => maps:get(membership, Opts, fun(Caller) -> realm_membership(Opts, Caller) end),
@@ -105,8 +196,11 @@ init(#{org := Org, policy := Policy} = Opts) ->
 handle_call({pull, Payload}, _From, State) ->
     Now = (maps:get(now, State))(),
     {Reply, NewState} = pulled(group_of(text_field(Payload, <<"prefix">>), State), maps:get(caller, Payload, undefined),
-                               macula_record:payload_field(Payload, <<"epoch">>), Now, State),
-    {reply, Reply, NewState}.
+                               macula_record:payload_field(Payload, <<"epoch">>), Now,
+                               presented(Payload), State),
+    {reply, Reply, NewState};
+handle_call(counts, _From, #{counts := Counts} = State) ->
+    {reply, Counts, State}.
 
 %% @private
 handle_cast(_Msg, State) -> {noreply, State}.
@@ -131,12 +225,88 @@ owned(_Segments, _Org, _Prefix) ->
 no_empty_segment(false, Prefix) -> {ok, Prefix};
 no_empty_segment(true, _Prefix) -> {error, unknown_group}.
 
-pulled({error, _} = Refused, _Caller, _Epoch, _Now, State) ->
+pulled({error, _} = Refused, _Caller, _Epoch, _Now, _Presented, State) ->
     {Refused, State};
-pulled({ok, _Prefix}, Caller, _Epoch, _Now, State) when not is_binary(Caller) ->
+pulled({ok, _Prefix}, Caller, _Epoch, _Now, _Presented, State) when not is_binary(Caller) ->
     {{error, not_a_member}, State};
-pulled({ok, Prefix}, Caller, Epoch, Now, State) ->
-    admitted(admits(Caller, State), Prefix, Epoch, Now, State).
+pulled({ok, Prefix}, Caller, Epoch, Now, Presented, State) ->
+    {Verdict, Counted} = authorized(access_of(Prefix, State), Prefix, Caller, Presented, Now, State),
+    granted(Verdict, Caller, Prefix, Epoch, Now, Counted).
+
+granted(ok, Caller, Prefix, Epoch, Now, State) ->
+    admitted(admits(Caller, State), Prefix, Epoch, Now, State);
+granted({error, _} = Refused, _Caller, _Prefix, _Epoch, _Now, State) ->
+    {Refused, State}.
+
+%% The call's own token and proofs, as the provider link hands them to a `handler_authorizes' handler.
+presented(Payload) ->
+    #{token => maps:get(ucan_token, Payload, <<>>), proofs => proofs_by_id(maps:get(proofs, Payload, []))}.
+
+proofs_by_id(Proofs) when is_list(Proofs) ->
+    maps:from_list([{macula_ucan:proof_id(Proof), Proof} || Proof <- Proofs, is_binary(Proof)]);
+proofs_by_id(_NotAList) ->
+    #{}.
+
+access_of(Prefix, #{groups := Groups}) ->
+    maps:get(Prefix, Groups, org_grant).
+
+%% An `org_grant' group: the check the advertise gate made, uncounted. A `realm_capability' group: the realm's
+%% capability on the whole group; refusing stops there, counting lets a would-be refusal through on the org grant.
+authorized(org_grant, _Prefix, Caller, Presented, Now, State) ->
+    {verdict(org_check(Caller, Presented, Now, State), ?GROUP_KEYS_CAN, org_procedure(State)), State};
+authorized({realm_capability, KeyId, Mode}, Prefix, Caller, Presented, Now, State) ->
+    realm_checked(realm_check(KeyId, Prefix, Caller, Presented, Now, State), Mode, Prefix, Caller, Presented, Now,
+                  State).
+
+realm_checked({ok, _Claims}, _Mode, Prefix, _Caller, _Presented, Now, State) ->
+    {ok, counted(Prefix, admitted, Now, State)};
+realm_checked({error, _}, refusing, Prefix, _Caller, _Presented, Now, State) ->
+    {lacking(?SUBSCRIBE_CAN, topic_resource(Prefix)), counted(Prefix, refused, Now, State)};
+realm_checked({error, _}, counting, Prefix, Caller, Presented, Now, State) ->
+    org_fallback(org_check(Caller, Presented, Now, State), Prefix, Now, State).
+
+org_fallback({ok, _Claims}, Prefix, Now, State) ->
+    {ok, counted(Prefix, would_refuse, Now, State)};
+org_fallback({error, _}, Prefix, Now, State) ->
+    {lacking(?SUBSCRIBE_CAN, topic_resource(Prefix)), counted(Prefix, refused, Now, State)}.
+
+org_check(Caller, #{token := Token, proofs := Proofs}, Now, #{org_key_id := OrgKeyId, realm := Realm} = State) ->
+    macula_ucan:authorize(Token, {realm_member_required, OrgKeyId, ?GROUP_KEYS_CAN},
+                          (context(Caller, Proofs, Now, State))#{realm => Realm, procedure => org_procedure(State)}).
+
+realm_check(KeyId, Prefix, Caller, #{token := Token, proofs := Proofs}, Now, #{realm := Realm} = State) ->
+    macula_ucan:authorize(Token, {realm_member_required, KeyId, ?SUBSCRIBE_CAN},
+                          (context(Caller, Proofs, Now, State))#{realm => Realm, group => Prefix}).
+
+context(Caller, Proofs, Now, #{profile := Profile}) ->
+    #{caller => Caller, profile => Profile, now => Now div 1000, proofs => Proofs}.
+
+org_procedure(#{org := Org}) -> <<Org/binary, "/group_keys_v1">>.
+
+verdict({ok, _Claims}, _Can, _Procedure) -> ok;
+verdict({error, _}, Can, Procedure) -> lacking(Can, <<"mri:proc:", Procedure/binary>>).
+
+topic_resource(Prefix) -> <<"mri:topic:", Prefix/binary>>.
+
+%% A refusal names the capability and the resource it lacked, as the realm's other checks do. It crosses as the
+%% handler's own text.
+lacking(Can, Resource) ->
+    {error, <<"not_authorized: ", Can/binary, " on ", Resource/binary>>}.
+
+counted(Prefix, Outcome, Now, #{realm := Realm, counts := Counts} = State) ->
+    reported(Outcome, Prefix, Now, State#{counts => maps:update_with({Realm, Prefix, Outcome}, fun(N) -> N + 1 end, 1,
+                                                                    Counts)}).
+
+reported(admitted, _Prefix, _Now, State) ->
+    State;
+reported(Outcome, Prefix, Now, #{report := Report} = State) ->
+    State#{report => logged(macula_refusal_report:refused(Report, {Prefix, Outcome}, Now), Prefix, Outcome)}.
+
+logged({report, Count, Report}, Prefix, Outcome) ->
+    logger:warning("[macula_group_keys] ~b ~ts on group ~ts", [Count, Outcome, Prefix]),
+    Report;
+logged({quiet, Report}, _Prefix, _Outcome) ->
+    Report.
 
 admits(Caller, #{removed := Removed, membership := Membership}) ->
     not_removed(Removed(Caller), Caller, Membership).

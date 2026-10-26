@@ -6,7 +6,7 @@
 %%   <li>a sealed event under an epoch the keyring holds, or pulls by id, and that opens: `{macula_event, SubRef,
 %%       Topic, Payload, Meta}' with `sealed => 1' and `seal_key_id' in the meta;</li>
 %%   <li>a sealed event that cannot be opened: `{macula_event_unopened, SubRef, Topic, #{publisher, seal_key_id,
-%%       reason}}' once, and nothing of the payload. `reason' is `unknown_epoch', `epoch_expired', `not_a_member',
+%%       reason}}' once, and nothing of the payload. `reason' is `unknown_epoch', `epoch_expired', `not_authorized', `not_a_member',
 %%       `membership_unknown', `no_distributor', `no_group' (the group was left) or `tag_invalid';</li>
 %%   <li>a clear event: delivered with `sealed => 0', unless this node holds `required' for a prefix covering its
 %%       topic, when it is refused, counted and logged naming its publisher.</li>

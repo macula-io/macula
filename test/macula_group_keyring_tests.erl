@@ -21,7 +21,8 @@
 -define(TOPIC, <<"io.macula/acme/chat/room/said_v1">>).
 -define(DISTRIBUTOR, <<9:256>>).
 -define(ME, <<5:256>>).
--define(TOKEN, <<"org-grant">>).
+-define(TOKEN, persistent_term:get({?MODULE, token})).
+-define(WIRE_CALLER, ?ME).
 
 keyring_test_() ->
     {foreach, fun setup/0, fun cleanup/1,
@@ -42,6 +43,7 @@ keyring_test_() ->
       fun a_distributor_that_cannot_be_reached_is_no_distributor/1,
       fun the_distributor_that_answered_is_kept/1,
       fun a_pinned_distributor_is_the_only_one_asked/1,
+      fun a_pull_the_distributor_does_not_authorize_is_not_authorized/1,
       fun a_reply_whose_acceptance_is_not_the_protocols_is_refused/1,
       fun a_reply_for_another_prefix_is_refused/1,
       fun the_policy_covering_a_topic_is_its_longest_joined_prefix/1,
@@ -63,15 +65,15 @@ setup() ->
     Log = ets:new(log, [public, bag]),
     Script = ets:new(script, [public, ordered_set]),
     {ok, Distributor} = macula_group_keys:start_link(
-                          #{org => <<"acme">>, policy => required, rotate_after_ms => ?R, now => Clock,
-                            membership => fun(_Caller) -> ok end}),
+                          (distributor_options())#{rotate_after_ms => ?R, now => Clock,
+                                                   membership => fun(_Caller) -> ok end}),
     Handler = macula_group_keys:handler(Distributor),
     {ok, KeyringPid} = macula_group_keyring:start_link(
                       #{now => Clock,
                         call => fun(Realm, Procedure, Payload, Opts) ->
                                     ets:insert(Log, {call, erlang:unique_integer([monotonic]),
                                                      {Realm, Procedure, Payload, Opts}}),
-                                    answer(Script, Handler, Payload)
+                                    answer(Script, Handler, on_link(Payload, Opts))
                                 end,
                         schedule => fun(DelayMs, Msg) ->
                                         ets:insert(Log, {schedule, erlang:unique_integer([monotonic]),
@@ -93,18 +95,40 @@ answer(Script, Handler, Payload) ->
     scripted(ets:first(Script), Script, Handler, Payload).
 
 scripted('$end_of_table', _Script, Handler, Payload) ->
-    on_the_wire(Handler(Payload#{caller => ?ME}));
+    on_the_wire(Handler(Payload));
 scripted(Key, Script, Handler, Payload) ->
     [{_, Answer}] = ets:lookup(Script, Key),
     ets:delete(Script, Key),
     from_script(Answer, Handler, Payload).
 
-from_script(distributor, Handler, Payload) -> on_the_wire(Handler(Payload#{caller => ?ME}));
-from_script({reply, Fun}, Handler, Payload) -> on_the_wire(Fun(Handler(Payload#{caller => ?ME})));
+from_script(distributor, Handler, Payload) -> on_the_wire(Handler(Payload));
+from_script({reply, Fun}, Handler, Payload) -> on_the_wire(Fun(Handler(Payload)));
 from_script(Answer, _Handler, _Payload) -> Answer.
 
+on_the_wire({error, Reason}) when is_binary(Reason) -> {error, Reason};
 on_the_wire({error, Reason}) -> {error, atom_to_binary(Reason)};
 on_the_wire(Reply) -> {ok, Reply, #{sealed => 1, provider => ?DISTRIBUTOR}}.
+
+%% The distributor checks the call's own token on the org's grant (macula#129), so the fake wire hands it the token
+%% the pull carried, as the provider link does, and ?TOKEN is a real grant for the caller the wire names.
+distributor_options() ->
+    {ok, OrgKey} = macula_node_keys:generate(org, pq_pure),
+    persistent_term:put({?MODULE, org_key}, OrgKey),
+    persistent_term:put({?MODULE, token}, org_grant(?WIRE_CALLER)),
+    #{org => <<"acme">>, policy => required, org_key_id => macula_node_keys:key_id(OrgKey),
+      realm => crypto:hash(sha256, <<"io.macula">>), profile => pq_pure}.
+
+org_grant(Caller) ->
+    macula_ucan:create(persistent_term:get({?MODULE, org_key}), Caller,
+                       [#{with => <<"mri:org:io.macula/acme">>, can => <<"group_keys">>}], #{exp => 100_000}).
+
+%% A pull as the provider link hands it to the distributor's handler.
+on_link(Payload, Opts) ->
+    Payload#{caller => ?WIRE_CALLER, ucan_token => maps:get(ucan_token, Opts, <<>>), proofs => []}.
+
+%% A pull made straight to the handler, as Caller with its own grant.
+direct(Payload, Caller) ->
+    Payload#{caller => Caller, ucan_token => org_grant(Caller), proofs => []}.
 
 queue(#{script := Script}, Answers) ->
     [ets:insert(Script, {erlang:unique_integer([monotonic]), A}) || A <- Answers],
@@ -148,7 +172,8 @@ joining_pulls_the_current_epoch_sealed_with_the_org_grant(W) ->
         ?assertEqual({?REALM, <<"acme/group_keys_v1">>}, {Realm, Procedure}),
         ?assertEqual(#{{text, <<"prefix">>} => {text, ?PREFIX}, {text, <<"epoch">>} => {text, <<"current">>}},
                      Payload),
-        ?assertMatch(#{confidential := required, ucan_token := ?TOKEN, report := true}, Opts),
+        ?assertMatch(#{confidential := required, ucan_token := _, report := true}, Opts),
+        ?assertEqual(?TOKEN, maps:get(ucan_token, Opts)),
         ?assertNot(maps:is_key(provider, Opts))
     end).
 
@@ -235,8 +260,8 @@ an_epoch_past_its_acceptance_is_reported_expired(W) ->
 an_unknown_id_is_pulled_by_id(#{distributor := D} = W) ->
     ?_test(begin
         Other = macula_group_keys:handler(D),
-        Reply = Other(#{{text, <<"prefix">>} => {text, ?PREFIX}, {text, <<"epoch">>} => {text, <<"current">>},
-                        caller => <<1:256>>}),
+        Reply = Other(direct(#{{text, <<"prefix">>} => {text, ?PREFIX}, {text, <<"epoch">>} => {text, <<"current">>}},
+                             <<1:256>>)),
         [#{id := Missed}] = maps:get(epochs, Reply),
         %% The group sits idle a whole rotation, so this node's join gets a fresh epoch.
         advance(W, 2 * ?R),
@@ -291,10 +316,18 @@ the_distributor_that_answered_is_kept(W) ->
         ?assertEqual(?DISTRIBUTOR, maps:get(provider, Opts))
     end).
 
+%% A distributor that refuses the pull's token answers `not_authorized' with what it lacked (macula#129); the keyring
+%% names it so, not as a distributor it cannot reach.
+a_pull_the_distributor_does_not_authorize_is_not_authorized(#{keyring := K}) ->
+    ?_test(begin
+        ?assertEqual({error, not_authorized}, macula_group_keyring:join(K, ?REALM, ?PREFIX, #{})),
+        ?assertEqual(none, macula_group_keyring:policy(K, ?REALM, ?TOPIC))
+    end).
+
 a_pinned_distributor_is_the_only_one_asked(#{keyring := K} = W) ->
     ?_test(begin
         Pinned = <<3:256>>,
-        {ok, _} = macula_group_keyring:join(K, ?REALM, ?PREFIX, #{distributor => Pinned}),
+        {ok, _} = macula_group_keyring:join(K, ?REALM, ?PREFIX, #{distributor => Pinned, ucan_token => ?TOKEN}),
         [{_, _, _, Opts}] = calls(W),
         ?assertEqual(Pinned, maps:get(provider, Opts))
     end).
@@ -304,20 +337,20 @@ a_reply_whose_acceptance_is_not_the_protocols_is_refused(#{keyring := K} = W) ->
         queue(W, [{reply, fun(#{epochs := [E]} = Reply) ->
                                   Reply#{epochs := [E#{accept_until := maps:get(accept_until, E) + ?MIN}]}
                           end}]),
-        ?assertEqual({error, no_distributor}, macula_group_keyring:join(K, ?REALM, ?PREFIX, #{})),
+        ?assertEqual({error, no_distributor}, macula_group_keyring:join(K, ?REALM, ?PREFIX, #{ucan_token => ?TOKEN})),
         ?assertEqual(none, macula_group_keyring:policy(K, ?REALM, ?TOPIC))
     end).
 
 a_reply_for_another_prefix_is_refused(#{keyring := K} = W) ->
     ?_test(begin
         queue(W, [{reply, fun(Reply) -> Reply#{prefix := {text, <<"io.macula/acme/other">>}} end}]),
-        ?assertEqual({error, no_distributor}, macula_group_keyring:join(K, ?REALM, ?PREFIX, #{}))
+        ?assertEqual({error, no_distributor}, macula_group_keyring:join(K, ?REALM, ?PREFIX, #{ucan_token => ?TOKEN}))
     end).
 
 the_policy_covering_a_topic_is_its_longest_joined_prefix(#{keyring := K} = W) ->
     ?_test(begin
         {ok, _} = join(W),
-        {ok, _} = macula_group_keyring:join(K, ?REALM, <<?PREFIX/binary, "/room">>, #{}),
+        {ok, _} = macula_group_keyring:join(K, ?REALM, <<?PREFIX/binary, "/room">>, #{ucan_token => ?TOKEN}),
         ?assertEqual({ok, <<?PREFIX/binary, "/room">>, required}, macula_group_keyring:policy(K, ?REALM, ?TOPIC)),
         ?assertEqual({ok, ?PREFIX, required},
                      macula_group_keyring:policy(K, ?REALM, <<?PREFIX/binary, "/lobby/said_v1">>)),
@@ -333,7 +366,7 @@ a_held_group_is_answered_while_the_keyring_is_pulling(#{keyring := K} = W) ->
         {ok, #{id := Id}} = publish_epoch(W),
         Parent = self(),
         queue(W, [{reply, fun(Reply) -> Parent ! pulling, receive release -> Reply end end}]),
-        _Joiner = spawn(fun() -> Parent ! {joined, macula_group_keyring:join(K, ?REALM, <<?PREFIX/binary, "/room">>, #{})} end),
+        _Joiner = spawn(fun() -> Parent ! {joined, macula_group_keyring:join(K, ?REALM, <<?PREFIX/binary, "/room">>, #{ucan_token => ?TOKEN})} end),
         receive pulling -> ok after 5000 -> error(never_pulled) end,
         T0 = erlang:monotonic_time(millisecond),
         Answers = {publish_epoch(W), open_epoch(W, Id, <<1:256>>), macula_group_keyring:policy(K, ?REALM, ?TOPIC)},
