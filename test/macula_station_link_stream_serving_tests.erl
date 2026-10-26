@@ -264,12 +264,14 @@ a_members_standing_is_read_once_per_recheck_however_many_sessions() ->
     ?assert(length(Reads) >= Rechecks - 1 andalso length(Reads) =< Rechecks + 1),
     stop(maps:get(link, World)).
 
-%% A withdrawn member's tokens stay valid to their exp, so ending its sessions is not enough: it is held, and a fresh
-%% STREAM_OPEN under the same realm member policy, with a valid token, is refused unauthorized and runs no handler.
+%% A withdrawn member's tokens stay valid to their exp, so ending its sessions is not enough: it is held, its renewal
+%% renews nothing, and a fresh STREAM_OPEN under the same realm member policy, with a valid token, is refused
+%% unauthorized and runs no handler.
 a_withdrawn_members_reopen_is_refused_until_its_token_ends() ->
-    #{world := World, caller := Caller, issuer := Issuer, procedure := Procedure} =
+    #{world := World, caller := Caller, issuer := Issuer, procedure := Procedure, open := Open} =
         member_session(fun(_Realm, _KeyId, _Member) -> {error, withdrawn} end),
     ?assertMatch({ended, _}, how_it_ended(1_500)),
+    ?assertEqual({ok, refused_only(Open)}, await_renewal(renew(World, Caller, member_token(Issuer, Caller), [Open]))),
     #{quic := Quic, frame := Reopen} = opened_by_peer(World, Caller, Procedure, #{},
                                                       #{token => member_token(Issuer, Caller)}),
     {ok, Refusal} = written_within(Quic, ?EVENT_MS),
