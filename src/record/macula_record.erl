@@ -48,7 +48,8 @@
          read_station_authorization/1, read_tombstone/1,
          read_org_directory/1, read_procedure_delegation/1, read_content_announcement/1,
          read_foundation_realm_trust_list/1, read_app_record/1]).
--export([procedure_org/1, verify_authorization/3, authorization_ends_at/3, verify_app/3, verify_membership/5]).
+-export([procedure_org/1, verify_authorization/3, authorization_ends_at/3, authorization_org_key/3,
+         delegation_standing/5, verify_app/3, verify_membership/5]).
 -export([storage_key/1, procedure_key/2, content_key/1, station_endpoint_key/1, org_directory_key/2,
          procedure_delegation_key/2, realm_member_endorsement_key/2, station_authorization_key/2,
          foundation_realm_trust_list_key/1,
@@ -1127,6 +1128,57 @@ authorization_end(_None, _Profile, _Now) ->
 
 earliest_expiry({ok, Directory}, {ok, Delegation}) -> min(expires_at(Directory), expires_at(Delegation));
 earliest_expiry(_Directory, _Delegation) -> 0.
+
+%% @doc The org key that delegates a verified advertisement's procedure to its provider: the org_key of the procedure
+%% delegation the advertisement carries, when that delegation verifies. Under that key and the provider's node_id sits
+%% the delegation slot (procedure_delegation_key/2) a caller re-reads to learn that the org withdrew it (macula#120).
+%% An advertisement without an authorization, or whose delegation no longer verifies, has none.
+-spec authorization_org_key(m_record(), macula_crypto_profile:profile(), integer()) -> {ok, <<_:256>>} | none.
+authorization_org_key(#{type := ?TYPE_PROCEDURE_ADVERTISEMENT} = Advertisement, Profile, Now) ->
+    #{authorization := Authorization} = read_procedure_advertisement(Advertisement),
+    delegating_key(Authorization, Profile, Now).
+
+delegating_key(#{procedure_delegation := Delegation}, Profile, Now) ->
+    delegation_org_key(verify(Delegation, Profile, Now));
+delegating_key(_None, _Profile, _Now) ->
+    none.
+
+delegation_org_key({ok, #{type := ?TYPE_PROCEDURE_DELEGATION} = Delegation}) ->
+    #{org_key := OrgKeyId} = read_procedure_delegation(Delegation),
+    {ok, OrgKeyId};
+delegation_org_key(_Refused) ->
+    none.
+
+%% @doc A provider's standing in its delegation slot, read from the records a lookup of
+%% procedure_delegation_key(OrgKeyId, Advertiser) returns (macula#120). Only the entry under the org key counts
+%% (signer_entry/4), so an entry under any other key is not_found and costs no verify. The org's delegation to the
+%% advertiser stands: ok. The org's tombstone of it gives withdrawn while the tombstone lives, which lasts past the
+%% delegation's own expiry; a tombstone of the org's delegation to another advertiser is wrong_member, as is a
+%% delegation naming another advertiser, and any other type is wrong_type. A refused entry gives its refusal.
+-spec delegation_standing([m_record()], <<_:256>>, <<_:256>>, macula_crypto_profile:profile(), integer()) ->
+        ok | {error, withdrawn | wrong_member | wrong_type | not_found | refusal()}.
+delegation_standing(Records, <<_:256>> = OrgKeyId, <<_:256>> = Advertiser, Profile, Now) when is_list(Records) ->
+    {Entry, _Stats} = signer_entry([encode(R) || R <- Records], {key_id, OrgKeyId}, Profile, Now),
+    delegation_entry(Entry, Advertiser).
+
+delegation_entry({ok, #{type := ?TYPE_PROCEDURE_DELEGATION} = Delegation}, Advertiser) ->
+    delegation_names(read_procedure_delegation(Delegation), Advertiser);
+delegation_entry({ok, #{type := ?TYPE_TOMBSTONE} = Tombstone}, Advertiser) ->
+    delegation_withdrawn(read_tombstone(Tombstone), Advertiser);
+delegation_entry({ok, _OtherType}, _Advertiser) ->
+    {error, wrong_type};
+delegation_entry({error, _} = Refusal, _Advertiser) ->
+    Refusal.
+
+delegation_names(#{advertiser := Advertiser}, Advertiser) -> ok;
+delegation_names(_Other, _Advertiser) -> {error, wrong_member}.
+
+delegation_withdrawn(#{withdrawn_type := ?TYPE_PROCEDURE_DELEGATION, advertiser := Advertiser}, Advertiser) ->
+    {error, withdrawn};
+delegation_withdrawn(#{withdrawn_type := ?TYPE_PROCEDURE_DELEGATION}, _Advertiser) ->
+    {error, wrong_member};
+delegation_withdrawn(_OtherType, _Advertiser) ->
+    {error, wrong_type}.
 
 %% @doc The caller's check of a verified app record against the realm trust it holds (macula#75), pure: the org
 %% directory the record carries verifies, is signed by the realm key (carried or named by the trust list's pairs, as for

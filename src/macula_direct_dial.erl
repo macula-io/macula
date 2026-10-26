@@ -946,21 +946,40 @@ candidate_stream_checked(#{provider := Provider} = Candidate,
 
 %% A stream opened under a provider's authorization holds no longer than it, following the provider's renewed
 %% advertisements, verified and trusted as the one it was opened under (macula#120). A provider with no
-%% authorization (no org namespace, or its own) has no such end.
+%% authorization (no org namespace, or its own) has no such end. Between renewals the follower re-reads the provider's
+%% delegation slot under the org key that delegated it, so the org's tombstone of the delegation ends the stream
+%% within one re-check rather than at the authorization's end.
 followed({ok, Stream} = Opened, #{advertisement := Ad, provider := Provider}, Dial, Realm, Procedure)
   when is_pid(Stream) ->
     {ok, Profile} = macula_crypto_profile:configured(),
-    ok = following(macula_record:authorization_ends_at(Ad, Profile, erlang:system_time(millisecond)), Stream,
-                   fun(Deadline) -> renewed_ends(Dial, Realm, Procedure, Provider, Profile, Deadline) end),
+    Now = erlang:system_time(millisecond),
+    ok = following(macula_record:authorization_ends_at(Ad, Profile, Now), Stream,
+                   fun(Deadline) -> renewed_ends(Dial, Realm, Procedure, Provider, Profile, Deadline) end,
+                   standing(macula_record:authorization_org_key(Ad, Profile, Now), Dial, Provider, Profile)),
     Opened;
 followed(Result, _Candidate, _Dial, _Realm, _Procedure) ->
     Result.
 
-following(none, _Stream, _Renewed) ->
+following(none, _Stream, _Renewed, _Standing) ->
     ok;
-following(EndsAt, Stream, Renewed) ->
-    _ = macula_provider_authority_follower:follow(Stream, EndsAt, Renewed),
+following(EndsAt, Stream, Renewed, Standing) ->
+    _ = macula_provider_authority_follower:follow(Stream, EndsAt, Renewed, Standing),
     ok.
+
+%% The follower's standing re-check of the provider's delegation slot: none without an org key to read it under.
+standing({ok, OrgKeyId}, #{pool := Pool, find_records := Find}, Provider, Profile) ->
+    Key = macula_record:procedure_delegation_key(OrgKeyId, Provider),
+    #{standing => fun() ->
+                      delegation_read(Find(Pool, Key, budget(deadline(?DEFAULT_DIAL_TIMEOUT_MS))), OrgKeyId,
+                                      Provider, Profile)
+                  end};
+standing(none, _Dial, _Provider, _Profile) ->
+    #{}.
+
+delegation_read({ok, Recs}, OrgKeyId, Provider, Profile) when is_list(Recs) ->
+    macula_record:delegation_standing(Recs, OrgKeyId, Provider, Profile, erlang:system_time(millisecond));
+delegation_read(_Failed, _OrgKeyId, _Provider, _Profile) ->
+    {error, lookup_failed}.
 
 renewed_ends(Dial, Realm, Procedure, Provider, Profile, Deadline) ->
     Now = erlang:system_time(millisecond),

@@ -157,14 +157,15 @@ procedure. A realm key never arrives with a request: `realm_trust` on a call
 is refused with `{error, {removed_option, realm_trust}}`, as the 10.x options
 `verify_cert_chain` and `cert_chain` are.
 
-A caller checks the authorization from the advertisement alone and looks up
-no tombstone. A delegation its org withdraws is honoured until it expires, so
-the caller-side revocation bound is the delegation's maximum lifetime, 30
-minutes, capped by the record layer for that type
+A caller checks a call's authorization from the advertisement alone and looks
+up no tombstone. A delegation its org withdraws is honoured until it expires,
+so the caller-side revocation bound for a new call is the delegation's maximum
+lifetime, 30 minutes, capped by the record layer for that type
 (`PROCEDURE_DELEGATION_MAX_LIFETIME_MS`, D32) in the signer and in the
 verifier, plus the 5 minutes of clock tolerance, counted from the realm's
 last issue of it. The realm reissues every 10 minutes, and a revoked provider
-gets no fresh one.
+gets no fresh one. A stream already open to the provider does better: see
+[Open streams and revocation](#open-streams-and-revocation).
 
 ```erlang
 %% consumer side (the check resolution runs on each verified advertisement)
@@ -242,6 +243,52 @@ The provider first verifies the STREAM_OPEN's signature against its `caller`,
 then applies the policy before the handler runs. A refused STREAM_OPEN gets a
 STREAM_ERROR with code `unauthorized` on its stream, and the handler never
 runs.
+
+### Open streams and revocation
+
+A stream is authorized when it opens, and it can stay open for hours. Since
+macula#120 it holds no longer than the authority it was opened under, on both
+ends, and a revocation reaches it without waiting for that authority to
+expire.
+
+**On the provider's side**, a gated session ends when the token it was opened
+with expires (the earliest `exp` of the token and its proofs). A caller keeps
+its stream past that by renewing: give `call_stream`'s options a
+`ucan_renewal => fun() -> {ok, Token} | _ end`, and the caller's link calls the
+provider's `~<node_id>/stream_renew` at a third of the token's remaining life,
+once per provider, realm and token source, naming the streams it covers. A
+provider-signed `unknown_next_peer` stops the renewal; any other failure
+retries on a backoff that stays short of the end. For a
+`realm_member_required` session the provider also re-reads the member's
+endorsement slot every `standing_recheck_ms` (60 seconds by default, link
+option or `macula` application env): the realm's tombstone of the endorsement
+(`withdrawn`) ends every session of that member, with a STREAM_ERROR
+`unauthorized`.
+
+**On the caller's side**, a stream opened to an org procedure ends when the
+provider's authorization ends (`macula_record:authorization_ends_at/3`, the
+earlier expiry of the org directory and the delegation), moved forward only
+by the provider's renewed advertisements. Every `standing_recheck_ms` the
+caller re-reads the provider's delegation slot under the org key that
+delegated it (`macula_record:authorization_org_key/3`,
+`macula_record:delegation_standing/5`): the org's tombstone of the delegation
+aborts the stream `unauthorized` at once.
+
+Only a tombstone ends a stream early. A failed lookup, an empty slot or an
+entry under any other key is no evidence of revocation, so the stream runs to
+its end.
+
+The bound: an open stream to a revoked member or provider ends within 60
+seconds of the DHT replicas holding the tombstone. Without a tombstone, when
+the realm or org only stops reissuing, it ends when the authority does: at
+most 1 hour plus 5 minutes of clock tolerance for a member (the life the realm
+gives its membership tokens), 35 minutes for a provider.
+
+This covers streams. A subscription is not yet bounded this way: it lasts as
+long as its link.
+
+Not covered: `macula:call_stream_station` given an `advertisement` by the app
+gets no follower on the caller's side, since no resolution produced it.
 
 ---
 
