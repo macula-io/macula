@@ -25,7 +25,9 @@
 %%       verify reaches no one. The wrapper notifies each via the
 %%       application channel.</li>
 %%   <li><strong>Receive SUBSCRIBE / UNSUBSCRIBE</strong> —
-%%       `process/3' updates local state.</li>
+%%       `process/3' updates local state for the node on the
+%%       authenticated link, and refuses a frame naming any other
+%%       subscriber (`names_its_sender/2').</li>
 %% </ul>
 %%
 %% State is per realm: an instance handles one realm's topics
@@ -72,7 +74,8 @@
     subscriber_count/1,
     deliver_event/2,
     build_event/2,
-    process/3
+    process/3,
+    names_its_sender/2
 ]).
 
 -export_type([state/0, topic/0, subscriber/0]).
@@ -290,15 +293,35 @@ build_event(#{frame_type := publish, publication := Publication}, Via) ->
 
 -spec process(state(), <<_:256>>,
               macula_frame:frame()) ->
-        {state(), [subscriber()]}.
-process(State, _From, #{frame_type := subscribe} = F) ->
-    on_subscribe(State, F);
-process(State, _From, #{frame_type := unsubscribe} = F) ->
-    on_unsubscribe(State, F);
+        {state(), [subscriber()]} | {error, not_authorized}.
+process(State, From, #{frame_type := Type} = F)
+  when Type =:= subscribe; Type =:= unsubscribe ->
+    registration(names_its_sender(From, F), State, F);
 process(State, _From, #{frame_type := event} = F) ->
     {State, deliver_event(State, F)};
 process(State, _From, _Frame) ->
     {State, []}.
+
+%% @doc Whether a frame from the node `From' on an authenticated link may
+%% be taken. A SUBSCRIBE or UNSUBSCRIBE is an unsigned control frame, so
+%% the only identity it carries that anyone vouched for is the link's:
+%% it registers or removes `From' itself, and one naming any other
+%% subscriber is refused. A station subscribing on its peers for the
+%% subscribers it relays names itself, so it is `From' there too. Every
+%% other frame passes; an EVENT carries its publisher's own signature.
+-spec names_its_sender(<<_:256>>, macula_frame:frame()) -> boolean().
+names_its_sender(From, #{frame_type := Type} = F)
+  when Type =:= subscribe; Type =:= unsubscribe ->
+    maps:get(subscriber, F, undefined) =:= From;
+names_its_sender(_From, _Frame) ->
+    true.
+
+registration(false, _State, _F) ->
+    {error, not_authorized};
+registration(true, State, #{frame_type := subscribe} = F) ->
+    on_subscribe(State, F);
+registration(true, State, #{frame_type := unsubscribe} = F) ->
+    on_unsubscribe(State, F).
 
 -spec on_subscribe(state(), macula_frame:frame()) ->
         {state(), []}.

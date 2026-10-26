@@ -139,8 +139,10 @@ deliver_event(Pid, Frame) ->
 
 %% @doc Generic frame dispatch — handles subscribe / unsubscribe /
 %% event uniformly. Returns the matched subscribers for event frames,
-%% empty list for subscribe / unsubscribe.
--spec process_frame(pid(), <<_:256>>, macula_frame:frame()) -> [<<_:256>>].
+%% empty list for subscribe / unsubscribe, and `{error, not_authorized}'
+%% for a SUBSCRIBE or UNSUBSCRIBE naming a subscriber other than `From'
+%% (see `macula_realm_pubsub:names_its_sender/2').
+-spec process_frame(pid(), <<_:256>>, macula_frame:frame()) -> [<<_:256>>] | {error, not_authorized}.
 process_frame(Pid, From, Frame) ->
     gen_server:call(Pid, {process_frame, From, Frame}).
 
@@ -262,12 +264,16 @@ handle_call({publish, Topic, Payload}, _From, S) ->
 handle_call({deliver_event, Frame}, _From, S) ->
     {reply, macula_realm_pubsub:deliver_event(S#state.pubsub, Frame), S};
 handle_call({process_frame, From, Frame}, _From, S) ->
-    {PS2, Subs} = macula_realm_pubsub:process(S#state.pubsub, From, Frame),
-    {reply, Subs, S#state{pubsub = PS2}};
+    processed(macula_realm_pubsub:process(S#state.pubsub, From, Frame), S);
 handle_call({relay_publish, Frame}, _From, S) ->
     {reply, do_relay_publish(Frame, S), S};
 handle_call(_Request, _From, S) ->
     {reply, {error, unknown_call}, S}.
+
+processed({error, not_authorized} = Refusal, S) ->
+    {reply, Refusal, S};
+processed({PS2, Subs}, S) ->
+    {reply, Subs, S#state{pubsub = PS2}}.
 
 %%====================================================================
 %% Internals — publish relay

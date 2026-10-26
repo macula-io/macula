@@ -41,7 +41,9 @@ unsubscribe_test_() ->
        {"a busy link does not hold up unsubscribe, and sends UNSUBSCRIBE once free",
         {timeout, 10, fun busy_link_does_not_block/0}},
        {"an unsubscribe and a new subscribe reach the link in that order, and its events reach the new subscriber",
-        {timeout, 10, fun unsubscribe_then_subscribe_in_order/0}}]}}.
+        {timeout, 10, fun unsubscribe_then_subscribe_in_order/0}},
+       {"SUBSCRIBE and UNSUBSCRIBE name the node itself, the only subscriber a station takes from it",
+        {timeout, 10, fun registrations_name_the_node_itself/0}}]}}.
 
 %%%===================================================================
 %%% Scenarios
@@ -106,6 +108,19 @@ unsubscribe_then_subscribe_in_order() ->
         ?assertEqual({event, Again}, event_through(Link))
     end).
 
+%% A station registers a SUBSCRIBE or UNSUBSCRIBE only for the node on the
+%% authenticated link (GHSA-pcmc-p999-h2m9), so the link names its own node id.
+registrations_name_the_node_itself() ->
+    {ok, Profile} = macula_crypto_profile:configured(),
+    {ok, Key} = macula_node_keys:generate(identity, Profile),
+    {ok, NodeId} = macula_node_keys:node_id(Key),
+    with_pool(#{node_identity => fun() -> Key end}, fun(Pool, _Link, Frames) ->
+        {ok, Sub} = macula_client:subscribe(Pool, ?REALM, ?TOPIC, self(), #{}),
+        ?assertEqual({subscribe, NodeId}, next_registration(Frames)),
+        ok = macula_client:unsubscribe(Pool, Sub),
+        ?assertEqual({unsubscribe, NodeId}, next_registration(Frames))
+    end).
+
 %%%===================================================================
 %%% Fixture
 %%%===================================================================
@@ -121,7 +136,10 @@ cleanup(_) ->
 %% and the tag of the frames a fake peer planted in the link passes on. The
 %% fake peer goes before the pool closes, so the link never waits on it.
 with_pool(Scenario) ->
-    {ok, Pool} = macula_client:connect([?SEED], #{}),
+    with_pool(#{}, Scenario).
+
+with_pool(Opts, Scenario) ->
+    {ok, Pool} = macula_client:connect([?SEED], Opts),
     {ok, [#{pid := Link}]} = macula_client:links(Pool),
     {Frames, Peer} = plant_fake_peer(Link),
     try
@@ -172,6 +190,14 @@ next_unsubscribe(Tag) ->
             {unsubscribe, Realm, Topic};
         {Tag, #{frame_type := Other}} ->
             {other_frame, Other}
+    after ?FRAME_MS ->
+        none
+    end.
+
+%% The next frame the fake peer passed on, as {Type, Subscriber}.
+next_registration(Tag) ->
+    receive
+        {Tag, #{frame_type := Type, subscriber := Subscriber}} -> {Type, Subscriber}
     after ?FRAME_MS ->
         none
     end.

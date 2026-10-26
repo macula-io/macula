@@ -160,8 +160,13 @@ lookup(RegistryPid, <<_:256>> = Realm) ->
 %%
 %% An UNSUBSCRIBE that takes the last subscription of a realm a
 %% SUBSCRIBE materialised stops that realm's server.
+%%
+%% `From' is the node id the authenticated link verified. A SUBSCRIBE or
+%% UNSUBSCRIBE whose `subscriber' is any other node gets
+%% `{error, not_authorized}' and changes nothing, so a peer subscribes and
+%% unsubscribes only itself (`macula_realm_pubsub:names_its_sender/2').
 -spec dispatch_frame(pid(), realm(), <<_:256>>, macula_frame:frame()) ->
-        {ok, [<<_:256>>]} | {error, not_found | too_many_realms}.
+        {ok, [<<_:256>>]} | {error, not_found | too_many_realms | not_authorized}.
 dispatch_frame(RegistryPid, <<_:256>> = Realm, From, Frame) ->
     gen_server:call(RegistryPid, {dispatch_frame, Realm, From, Frame}).
 
@@ -272,7 +277,7 @@ handle_call({register, Realm, Identity}, _From, S) ->
 handle_call({lookup, Realm}, _From, S) ->
     {reply, lookup_reply(maps:find(Realm, S#state.by_realm)), S};
 handle_call({dispatch_frame, Realm, From, Frame}, _From, S) ->
-    do_dispatch(Realm, From, Frame, maps:find(Realm, S#state.by_realm), S);
+    authorized_dispatch(macula_realm_pubsub:names_its_sender(From, Frame), Realm, From, Frame, S);
 handle_call({relay_publish, Realm, Frame}, _From, S) ->
     do_relay_publish(Realm, Frame, maps:find(Realm, S#state.by_realm), S);
 handle_call(list_realms, _From, S) ->
@@ -335,6 +340,13 @@ pin(Realm, #state{pinned = Pinned} = S) ->
 
 lookup_reply({ok, Pid}) -> {ok, Pid};
 lookup_reply(error)     -> {error, not_found}.
+
+%% A SUBSCRIBE or UNSUBSCRIBE naming a subscriber other than the node on
+%% the link is refused before anything else, so it materialises no realm.
+authorized_dispatch(false, _Realm, _From, _Frame, S) ->
+    {reply, {error, not_authorized}, S};
+authorized_dispatch(true, Realm, From, Frame, S) ->
+    do_dispatch(Realm, From, Frame, maps:find(Realm, S#state.by_realm), S).
 
 do_dispatch(_Realm, _From, _Frame, error,
             #state{default_identity = undefined} = S) ->

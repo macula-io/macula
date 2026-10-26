@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **A peer subscribes and unsubscribes only itself (GHSA-pcmc-p999-h2m9).** A SUBSCRIBE or UNSUBSCRIBE registered
+  or removed whichever `subscriber` the frame named, ignoring the node on the authenticated link, so a peer could
+  unsubscribe another node from a topic or subscribe a node in its place. `macula_realm_pubsub_registry:dispatch_frame/4`
+  and `macula_realm_pubsub:process/3` now refuse one whose `subscriber` is not the link's node with
+  `{error, not_authorized}`, the existing REGISTER_ACK refusal, and the registry does so before a SUBSCRIBE
+  materialises a realm. The rule is `macula_realm_pubsub:names_its_sender/2`. Every client link already names its
+  own node id, and a station subscribing on its peers names itself, so no honest sender is refused.
+
 ### Fixed
 
 - **The guides' Erlang examples are what the code does.** Every Erlang block in the README and the guides now
