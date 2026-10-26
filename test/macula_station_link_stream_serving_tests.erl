@@ -41,6 +41,7 @@ stream_serving_test_() ->
                  fun a_withdrawn_members_reopen_is_refused_until_its_token_ends/0,
                  fun a_held_member_is_not_lifted_by_an_ok_read/0,
                  fun a_withdrawn_org_ends_its_delegates_sessions/0,
+                 fun a_renewal_on_a_chain_from_another_root_is_refused/0,
                  fun a_recheck_due_while_the_last_one_reads_is_skipped/0,
                  fun a_session_gated_on_one_node_is_not_rechecked_against_a_realm/0,
                  fun an_upload_advertised_with_a_policy_refuses_a_caller_without_a_token/0,
@@ -293,6 +294,7 @@ a_held_member_is_not_lifted_by_an_ok_read() ->
                                                       #{token => member_token(Issuer, Caller)}),
     {ok, Refusal} = written_within(Quic, ?EVENT_MS),
     ?assertMatch({ok, #{code := <<"unauthorized">>}}, provider_fields(Reopen, Refusal)),
+    ?assertEqual(none, receive {session_served, _} = Served -> Served after 300 -> none end),
     stop(maps:get(link, World)).
 
 %% Under a realm member policy the member is the chain root's audience: an org the realm endorsed may hand its rights
@@ -322,6 +324,29 @@ a_withdrawn_org_ends_its_delegates_sessions() ->
     #{quic := Quic, frame := Reopen} = opened_by_peer(World, Delegate, Procedure, #{}, Chain),
     {ok, Refusal} = written_within(Quic, ?EVENT_MS),
     ?assertMatch({ok, #{code := <<"unauthorized">>}}, provider_fields(Reopen, Refusal)),
+    ?assertEqual(none, receive {session_served, _} = Served -> Served after 300 -> none end),
+    stop(Link).
+
+%% A session's member is fixed at its open: the chain root its re-check reads. A renewal on a chain from another root
+%% would keep the session alive on a member the re-check never reads, so a withdrawal of that root would not end it;
+%% it is refused, and a renewal on a fresh chain from the same root renews.
+a_renewal_on_a_chain_from_another_root_is_refused() ->
+    {ok, OrgKey} = macula_node_keys:generate(org, profile()),
+    OrgId = macula_node_keys:node_id(macula_node_keys:public_key(OrgKey), profile()),
+    #{link := Link} = World = linked(#{}, #{standing_recheck_ms => 60_000,
+                                           member_standing => fun(_Realm, _KeyId, _Member) -> ok end}),
+    {ok, Realm} = macula_node_keys:generate(realm, profile()),
+    Procedure = <<"acme/foo.members_only">>,
+    ok = macula_station_link:advertise_stream(Link, ?REALM, Procedure, server_stream, telling_how_it_ended(self()),
+                                              {realm_member_required, macula_node_keys:key_id(Realm), ?MEMBER_CAN}),
+    Delegate = key(),
+    Chain = delegated_chain(Realm, OrgKey, OrgId, Delegate),
+    #{frame := Open} = opened_by_peer(World, Delegate, Procedure, #{}, Chain),
+    receive {session_served, _} -> ok after ?EVENT_MS -> erlang:error(session_not_served) end,
+    ?assertEqual({ok, refused_only(Open)},
+                 await_renewal(renew_on(World, Delegate, #{token => member_token(Realm, Delegate)}, [Open]))),
+    ?assertEqual({ok, renewed_only(Open)},
+                 await_renewal(renew_on(World, Delegate, delegated_chain(Realm, OrgKey, OrgId, Delegate), [Open]))),
     stop(Link).
 
 org_withdrawn(OrgId, OrgId) -> {error, withdrawn};
@@ -850,11 +875,15 @@ token(Issuer, Audience, Seconds) ->
                        #{exp => erlang:system_time(second) + Seconds}).
 
 %% A CALL from Caller to the link's own stream_renew, carrying Token and naming the streams Opens started.
-renew(#{link := Link} = World, Caller, Token, Opens) ->
-    Frame = macula_frame:call(#{request_id => crypto:strong_rand_bytes(16), realm => ?REALM,
-                                procedure => macula_station_link:stream_renewal_procedure(node_id(World)),
-                                target => node_id(World), deadline => erlang:system_time(millisecond) + 5_000,
-                                payload => #{streams => [request_id_of(Open) || Open <- Opens]}, token => Token},
+renew(World, Caller, Token, Opens) ->
+    renew_on(World, Caller, #{token => Token}, Opens).
+
+%% The same, carrying a chain: its token and, when delegated, its proofs.
+renew_on(#{link := Link} = World, Caller, Chain, Opens) ->
+    Frame = macula_frame:call(Chain#{request_id => crypto:strong_rand_bytes(16), realm => ?REALM,
+                                     procedure => macula_station_link:stream_renewal_procedure(node_id(World)),
+                                     target => node_id(World), deadline => erlang:system_time(millisecond) + 5_000,
+                                     payload => #{streams => [request_id_of(Open) || Open <- Opens]}},
                               Caller),
     Link ! {macula_peering, frame, self(), Frame},
     Frame.
@@ -900,6 +929,15 @@ member_session(Standing) ->
 
 member_token(Issuer, Caller) ->
     mint_ucan(Issuer, macula_node_keys:key_id(Caller), ?MEMBER_CAN).
+
+%% A chain the realm grants an org and the org hands on to Delegate: the token and its one proof.
+delegated_chain(Realm, OrgKey, OrgId, Delegate) ->
+    OrgToken = mint_ucan(Realm, OrgId, ?MEMBER_CAN),
+    #{token => macula_ucan:create(OrgKey, macula_node_keys:key_id(Delegate),
+                                  [#{with => <<"mri:realm:test">>, can => ?MEMBER_CAN}],
+                                  #{exp => erlang:system_time(second) + 3_600,
+                                    prf => [macula_ucan:proof_id(OrgToken)]}),
+      proofs => [OrgToken]}.
 
 flush_standing_reads() ->
     receive {standing_read, Member} -> [Member | flush_standing_reads()]
