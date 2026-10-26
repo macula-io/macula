@@ -9,6 +9,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Read control for sealed groups (macula#129).** A distributor (`macula_group_keys`) takes one access policy per
+  group at start (`groups`): `org_grant`, the earlier check and the default for a group not listed, or
+  `{realm_capability, RealmKeyId, Mode}`, which admits a member on its realm's `pubsub/subscribe` covering the whole
+  group, `mri:topic:P` and `mri:topic:P/*`. `Mode` is `counting` (the default: a pull the realm capability would
+  refuse is counted and let through on the org grant, fail-open by design) or `refusing`. Pulls of a restricted group
+  are counted per realm, group and outcome (`counts/1`). A restricted group under a seal policy other than `required`
+  does not start (`{error, {restricted_group_not_required, Prefix}}`). A refused pull answers
+  `not_authorized: <can> on <resource>`, which the member's keyring names `not_authorized` (a new reason in its
+  closed set, and in `macula_event_unopened`).
+- **`handler_authorizes`, an advertise policy for a handler that decides who it serves.** The provider link runs no
+  gate and hands the handler the `ucan_token` the caller signed into the request (empty when none; the handler
+  verifies it) and `proofs` beside `caller`, a
+  payload's own fields of those names removed first. Unary procedures only; a streaming procedure refuses it.
+- **A group request in `macula_ucan:authorize/3`:** a context naming `group => P` is answered only when the token's
+  grants cover both `mri:topic:P` and `mri:topic:P/*`, and every grant that answers is checked up the chain. A
+  context naming more than one of `procedure`, `topic` and `group` is `malformed`.
+
+### Changed
+
+- **Breaking: a sealed group's distributor checks the token itself (macula#129).** `macula_group_keys:advertise_opts/1`
+  is now `advertise_opts/0` (`auth => handler_authorizes`, `confidential => required`), and `start_link/1` requires
+  `org_key_id`, `realm` and `profile`, which the handler's org-grant check needs. A distributor advertised with the
+  old options would have its handler refuse every pull as `not_authorized`, so every distributor (mcl-distributor)
+  moves to the new options with this release.
+
 ## [16.1.0] - 2026-10-26
 
 ### Security
@@ -42,30 +69,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is now a prefix over the org (no minter uses `*`), and a context naming a procedure or a topic without a 32-byte
   realm is now `malformed` instead of a check of the token alone.
   `test/vectors/ucan_v1.json` is regenerated with the topic and prefix cases.
-- **Read control for sealed groups (macula#129).** A distributor (`macula_group_keys`) takes one access policy per
-  group at start (`groups`): `org_grant`, the earlier check and the default for a group not listed, or
-  `{realm_capability, RealmKeyId, Mode}`, which admits a member on its realm's `pubsub/subscribe` covering the whole
-  group, `mri:topic:P` and `mri:topic:P/*`. `Mode` is `counting` (the default: a pull the realm capability would
-  refuse is counted and let through on the org grant, fail-open by design) or `refusing`. Pulls of a restricted group
-  are counted per realm, group and outcome (`counts/1`). A restricted group under a seal policy other than `required`
-  does not start (`{error, {restricted_group_not_required, Prefix}}`). A refused pull answers
-  `not_authorized: <can> on <resource>`, which the member's keyring names `not_authorized` (a new reason in its
-  closed set, and in `macula_event_unopened`).
-- **`handler_authorizes`, an advertise policy for a handler that decides who it serves.** The provider link runs no
-  gate and hands the handler the `ucan_token` the caller signed into the request (empty when none; the handler
-  verifies it) and `proofs` beside `caller`, a
-  payload's own fields of those names removed first. Unary procedures only; a streaming procedure refuses it.
-- **A group request in `macula_ucan:authorize/3`:** a context naming `group => P` is answered only when the token's
-  grants cover both `mri:topic:P` and `mri:topic:P/*`, and every grant that answers is checked up the chain. A
-  context naming more than one of `procedure`, `topic` and `group` is `malformed`.
-
-### Changed
-
-- **Breaking: a sealed group's distributor checks the token itself (macula#129).** `macula_group_keys:advertise_opts/1`
-  is now `advertise_opts/0` (`auth => handler_authorizes`, `confidential => required`), and `start_link/1` requires
-  `org_key_id`, `realm` and `profile`, which the handler's org-grant check needs. A distributor advertised with the
-  old options would have its handler refuse every pull as `not_authorized`, so every distributor (mcl-distributor)
-  moves to the new options with this release.
 
 ## [16.0.1] - 2026-10-26
 
