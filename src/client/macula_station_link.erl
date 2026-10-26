@@ -3563,12 +3563,15 @@ stream_renewal_procedure(<<_:256>> = NodeId) ->
 
 %% A CALL to this node's own stream_renew is the link's own to answer: no handler sees a request's token, and a `~'
 %% procedure's policy is open, which reads none (macula#120). The token is authorized for each stream it names under
-%% that stream's own policy, realm and procedure, as its STREAM_OPEN was, and only for the caller that opened it.
+%% that stream's own policy, realm and procedure, as its STREAM_OPEN was, and only for the caller that opened it. The
+%% verdicts are reached here, on the link, so a held member's refusal reaches this link's hold (held_refused/4).
 served_call(true, Request, Payload, Seal, #state{served_until = Until, node_identity = Id, peer_pid = Pid,
-                                                 profile = Profile, admission = Admission}) ->
+                                                 profile = Profile, admission = Admission,
+                                                 withdrawn_members = Withdrawn}) ->
     Link = self(),
     Named = renewal_targets(maps:get(caller, Request), streams_named(Payload), Until),
-    Run = fun() -> renewal_reply(Link, Named, Request, Profile, Id, Seal) end,
+    Verdicts = [{RequestId, renewed_until(Session, Request, Profile, Withdrawn)} || {RequestId, Session} <- Named],
+    Run = fun() -> renewal_reply(Link, Verdicts, Request, Id, Seal) end,
     _ = spawn(fun() -> serve_worker(Run, Admission, Request, Pid, Id, Seal) end),
     ok;
 served_call(false, Request, Payload, Seal, #state{procedures = Procs, policies = Pols, node_identity = Id, peer_pid = Pid,
@@ -3600,20 +3603,31 @@ first_session([Session | _Rest]) -> Session;
 first_session([]) -> none.
 
 %% The renewal's answer, once the link has been told the new ends: the request ids renewed and refused.
-renewal_reply(Link, Named, Request, Profile, Key, Seal) ->
-    Verdicts = [{RequestId, renewed_until(Session, Request, Profile)} || {RequestId, Session} <- Named],
+renewal_reply(Link, Verdicts, Request, Key, Seal) ->
     Link ! {served_authority_renewed, [{AttachId, NewEnd} || {_RequestId, {ok, AttachId, NewEnd}} <- Verdicts]},
     reply_result(Seal, Request, #{renewed => [RequestId || {RequestId, {ok, _, _}} <- Verdicts],
                                   refused => [RequestId || {RequestId, refused} <- Verdicts]}, Key).
 
-renewed_until(none, _Request, _Profile) ->
+%% A renewal is authorized as an open is, a held member refused with it (withdrawn_refused/4), and only on a chain
+%% from the session's own member: the root its re-check reads, fixed at the open. A chain from another root would keep
+%% the session alive on a member no re-check reads, so that root's withdrawal would not end it.
+renewed_until(none, _Request, _Profile, _Withdrawn) ->
     refused;
-renewed_until({AttachId, #{policy := Policy, realm := Realm, procedure := Proc}}, Request, Profile) ->
-    renewal_verdict(authorize_policy(Policy, Request#{realm := Realm, procedure := Proc}, Profile), AttachId, Request).
+renewed_until({AttachId, #{policy := Policy, realm := Realm, procedure := Proc, member := Member}}, Request, Profile,
+              Withdrawn) ->
+    Frame = Request#{realm := Realm, procedure := Proc},
+    renewal_verdict(withdrawn_refused(authorize_policy(Policy, Frame, Profile), Policy, Frame, Withdrawn), Member,
+                    AttachId, Frame).
 
-renewal_verdict(ok, AttachId, #{token := Token} = Request) ->
-    {ok, AttachId, macula_ucan:authorized_until(Token, maps:get(proofs, Request, []))};
-renewal_verdict(_Refused, _AttachId, _Request) ->
+renewal_verdict(ok, Member, AttachId, #{token := Token} = Frame) ->
+    Proofs = maps:get(proofs, Frame, []),
+    same_member(macula_ucan:root_audience(Token, Proofs) =:= Member, AttachId, Token, Proofs);
+renewal_verdict(_Refused, _Member, _AttachId, _Frame) ->
+    refused.
+
+same_member(true, AttachId, Token, Proofs) ->
+    {ok, AttachId, macula_ucan:authorized_until(Token, Proofs)};
+same_member(false, _AttachId, _Token, _Proofs) ->
     refused.
 
 serve_worker(Run, Admission, Request, Pid, Id, Seal) ->
@@ -3819,8 +3833,8 @@ authorize(Key, Frame, Pols, Profile, Withdrawn) ->
 %% so the hold lasts as long as any token the member still holds (member_refused/3).
 withdrawn_refused(ok, {realm_member_required, KeyId, _Can}, #{realm := Realm, token := Token} = Frame, Withdrawn) ->
     Proofs = maps:get(proofs, Frame, []),
-    held_refused(maps:is_key({macula_ucan:root_audience(Token, Proofs), Realm, KeyId}, Withdrawn),
-                 {macula_ucan:root_audience(Token, Proofs), Realm, KeyId}, Token, Proofs);
+    Member = {macula_ucan:root_audience(Token, Proofs), Realm, KeyId},
+    held_refused(maps:is_key(Member, Withdrawn), Member, Token, Proofs);
 withdrawn_refused(Verdict, _Policy, _Frame, _Withdrawn) ->
     Verdict.
 

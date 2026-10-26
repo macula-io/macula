@@ -3,9 +3,10 @@
 %% times.
 %%
 %% A follower asks read/3 with its key, {Provider, OrgKeyId}, the read it would make and its re-check interval. A
-%% reading younger than half the interval is answered as it is, so what a follower acts on is never older than one
-%% interval at its next ask: the withdrawal reaches it within one re-check plus a lookup. A missing or older one is
-%% claimed by the first asker, atomically, and that asker makes the one read and stores its answer; every other asker
+%% reading younger than half the interval is answered as it is, and the follower asks again one interval later, so
+%% the withdrawal reaches it within one and a half re-checks plus a lookup: the worst case is a reading taken just
+%% before the tombstone landed and answered when almost half an interval old. A missing or older one is claimed by
+%% the first asker, atomically, and that asker makes the one read and stores its answer; every other asker
 %% meanwhile waits for that answer rather than taking the last one, so no follower learns of a withdrawal later than
 %% the one that read it. A read that raises is stored as lookup_failed, and an asker that waits longer than a lookup can
 %% take answers lookup_failed: neither is evidence of revocation. A claim older than that wait, its claimant gone

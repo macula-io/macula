@@ -64,8 +64,8 @@ a_raising_read_answers_lookup_failed() ->
     timer:sleep(150),
     ?assertEqual(ok, macula_provider_standing:read(Key, fun() -> ok end, 100)).
 
-%% A reading is served only while younger than half the re-check, so a follower acts on a reading at most one
-%% re-check old when it reads again: the withdrawal reaches it within one re-check, not two.
+%% A reading is served only while younger than half the re-check, so a follower asking every re-check learns of a
+%% withdrawal within one and a half re-checks, not two.
 a_reading_past_half_the_recheck_is_read_again() ->
     Key = key(),
     Counter = counters:new(1, []),

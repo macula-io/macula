@@ -293,15 +293,20 @@ delegated it (`macula_record:authorization_org_key/3`,
 aborts the stream `unauthorized` at once. A node's streams to one provider
 under one org key share that reading, so they cost one lookup per re-check
 however many there are. A shared reading is used only while it is younger than
-half the re-check, so no stream acts on one older than a re-check.
+half the re-check, so no stream acts on one older than half a re-check when
+it reads.
 
 Only a tombstone ends a stream early. A failed lookup, an empty slot or an
 entry under any other key is no evidence of revocation, so the stream runs to
 its end.
 
-The bound: an open stream to a revoked member or provider ends within one
-re-check, 60 seconds by default, plus the lookup that reads it, after the DHT
-replicas hold the tombstone. A withdrawn member that opens again through
+The bound, after the DHT replicas hold the tombstone: on the provider's side,
+a stream to a withdrawn member ends within one re-check, 60 seconds by
+default, plus the lookup that reads it. On the caller's side, a stream to a
+provider whose delegation the org tombstoned ends within one and a half
+re-checks, 90 seconds by default, plus the lookup: its last answer may be a
+shared reading just under half a re-check old, and its next ask is one
+re-check later. A withdrawn member that opens again through
 another station link, or after a link restarts, is ended within one more
 re-check on that link. Without a tombstone, when the realm or org only stops
 reissuing, a stream ends when the authority does: at most 1 hour plus 5
