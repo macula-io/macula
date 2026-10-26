@@ -43,6 +43,18 @@ a_chain_of_two_authorizes_the_caller_test() ->
     #{world := World} = chain(#{}),
     ?assertMatch({ok, #{<<"cap">> := [_]}}, authorize(World)).
 
+%% The member a chain's authority belongs to is its root's audience, not the caller at its leaf: here the org the realm
+%% delegated to, which handed one procedure on to the caller (macula#120).
+a_chains_root_audience_is_the_member_test() ->
+    #{world := #{token := Leaf}, proof := Proof} = Chain = chain(#{}),
+    #{world := #{parties := #{org_id := OrgId}}} = Chain,
+    ?assertEqual(OrgId, macula_ucan:root_audience(Leaf, [Proof])).
+
+%% A token with no prf is its own root: its audience, the caller.
+a_single_tokens_root_audience_is_its_own_test() ->
+    #{realm_key := RealmKey, caller_id := CallerId} = parties(),
+    ?assertEqual(CallerId, macula_ucan:root_audience(mint(RealmKey, CallerId, ?REALM_GRANT, #{}), [])).
+
 %% A token with no prf still authorizes when its own issuer is the policy's, as it did before chains existed.
 a_single_token_still_authorizes_test() ->
     #{realm_key := RealmKey, caller_id := CallerId} = Parties = parties(),

@@ -39,7 +39,8 @@ stream_serving_test_() ->
                  fun a_member_standing_that_is_not_withdrawn_keeps_the_session/0,
                  fun a_members_standing_is_read_once_per_recheck_however_many_sessions/0,
                  fun a_withdrawn_members_reopen_is_refused_until_its_token_ends/0,
-                 fun a_member_the_realm_admits_again_is_served_again/0,
+                 fun a_held_member_is_not_lifted_by_an_ok_read/0,
+                 fun a_withdrawn_org_ends_its_delegates_sessions/0,
                  fun a_recheck_due_while_the_last_one_reads_is_skipped/0,
                  fun a_session_gated_on_one_node_is_not_rechecked_against_a_realm/0,
                  fun an_upload_advertised_with_a_policy_refuses_a_caller_without_a_token/0,
@@ -277,8 +278,9 @@ a_withdrawn_members_reopen_is_refused_until_its_token_ends() ->
     ?assertEqual([macula_node_keys:key_id(Caller)], [C || {C, _Realm, _KeyId} <- maps:keys(Held)]),
     stop(maps:get(link, World)).
 
-%% A re-check that reads a held member in standing again, the realm's fresh endorsement, lifts the hold.
-a_member_the_realm_admits_again_is_served_again() ->
+%% A stale or withholding replica answers ok too, so a read of ok after a withdrawal lifts nothing: the hold ends only
+%% by time, and a re-open after later ok reads is still refused.
+a_held_member_is_not_lifted_by_an_ok_read() ->
     Counter = counters:new(1, []),
     Standing = fun(_Realm, _KeyId, _Member) ->
                    ok = counters:add(Counter, 1, 1),
@@ -287,9 +289,43 @@ a_member_the_realm_admits_again_is_served_again() ->
     #{world := World, caller := Caller, issuer := Issuer, procedure := Procedure} = member_session(Standing),
     ?assertMatch({ended, _}, how_it_ended(1_500)),
     timer:sleep(3 * ?RECHECK_MS),
-    _ = opened_by_peer(World, Caller, Procedure, #{}, #{token => member_token(Issuer, Caller)}),
-    receive {session_served, _} -> ok after ?EVENT_MS -> erlang:error(session_not_served) end,
+    #{quic := Quic, frame := Reopen} = opened_by_peer(World, Caller, Procedure, #{},
+                                                      #{token => member_token(Issuer, Caller)}),
+    {ok, Refusal} = written_within(Quic, ?EVENT_MS),
+    ?assertMatch({ok, #{code := <<"unauthorized">>}}, provider_fields(Reopen, Refusal)),
     stop(maps:get(link, World)).
+
+%% Under a realm member policy the member is the chain root's audience: an org the realm endorsed may hand its rights
+%% on to a delegate. The re-check reads the org's slot, not the delegate's, so the realm withdrawing the org ends the
+%% delegate's session, and the delegate's re-open under the org's still valid token is refused.
+a_withdrawn_org_ends_its_delegates_sessions() ->
+    Test = self(),
+    {ok, OrgKey} = macula_node_keys:generate(org, profile()),
+    OrgId = macula_node_keys:node_id(macula_node_keys:public_key(OrgKey), profile()),
+    Standing = fun(_Realm, _KeyId, Member) -> Test ! {standing_read, Member}, org_withdrawn(Member, OrgId) end,
+    #{link := Link} = World = linked(#{}, #{standing_recheck_ms => ?RECHECK_MS, member_standing => Standing}),
+    {ok, Realm} = macula_node_keys:generate(realm, profile()),
+    Procedure = <<"acme/foo.members_only">>,
+    ok = macula_station_link:advertise_stream(Link, ?REALM, Procedure, server_stream, telling_how_it_ended(self()),
+                                              {realm_member_required, macula_node_keys:key_id(Realm), ?MEMBER_CAN}),
+    Delegate = key(),
+    OrgToken = mint_ucan(Realm, OrgId, ?MEMBER_CAN),
+    Chain = #{token => macula_ucan:create(OrgKey, macula_node_keys:key_id(Delegate),
+                                          [#{with => <<"mri:realm:test">>, can => ?MEMBER_CAN}],
+                                          #{exp => erlang:system_time(second) + 3_600,
+                                            prf => [macula_ucan:proof_id(OrgToken)]}),
+              proofs => [OrgToken]},
+    _ = opened_by_peer(World, Delegate, Procedure, #{}, Chain),
+    receive {session_served, _} -> ok after ?EVENT_MS -> erlang:error(session_not_served) end,
+    ?assertMatch({ended, _}, how_it_ended(1_500)),
+    ?assertEqual([OrgId], lists:usort(flush_standing_reads())),
+    #{quic := Quic, frame := Reopen} = opened_by_peer(World, Delegate, Procedure, #{}, Chain),
+    {ok, Refusal} = written_within(Quic, ?EVENT_MS),
+    ?assertMatch({ok, #{code := <<"unauthorized">>}}, provider_fields(Reopen, Refusal)),
+    stop(Link).
+
+org_withdrawn(OrgId, OrgId) -> {error, withdrawn};
+org_withdrawn(_Delegate, _OrgId) -> {error, not_found}.
 
 withdrawn_once(1) -> {error, withdrawn};
 withdrawn_once(_Later) -> ok.

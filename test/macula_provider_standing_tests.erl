@@ -17,6 +17,10 @@ provider_standing_test_() ->
        fun followers_asking_during_a_read_get_its_answer/0},
       {"a read that raises answers lookup_failed",
        fun a_raising_read_answers_lookup_failed/0},
+      {"a reading older than half the re-check is read again",
+       fun a_reading_past_half_the_recheck_is_read_again/0},
+      {"a claim whose reader died is claimed again after the await",
+       fun an_orphaned_claim_is_claimed_again/0},
       {"another provider or org key has its own reading",
        fun another_key_has_its_own_reading/0}]}.
 
@@ -59,6 +63,26 @@ a_raising_read_answers_lookup_failed() ->
     ?assertEqual({error, lookup_failed}, macula_provider_standing:read(Key, fun() -> error(dht_down) end, 100)),
     timer:sleep(150),
     ?assertEqual(ok, macula_provider_standing:read(Key, fun() -> ok end, 100)).
+
+%% A reading is served only while younger than half the re-check, so a follower acts on a reading at most one
+%% re-check old when it reads again: the withdrawal reaches it within one re-check, not two.
+a_reading_past_half_the_recheck_is_read_again() ->
+    Key = key(),
+    Counter = counters:new(1, []),
+    Read = counted_read(Counter, ok),
+    ok = macula_provider_standing:read(Key, Read, 400),
+    timer:sleep(250),
+    ok = macula_provider_standing:read(Key, Read, 400),
+    ?assertEqual(2, counters:get(Counter, 1)).
+
+%% A claimant that dies mid-read leaves its claim behind; once it is older than an asker would wait, the next asker
+%% claims it and reads, instead of waiting on it until the sweep.
+an_orphaned_claim_is_claimed_again() ->
+    Key = key(),
+    true = ets:insert(macula_provider_standing, {Key, erlang:system_time(millisecond) - 20_000, reading}),
+    Started = erlang:monotonic_time(millisecond),
+    ?assertEqual({error, withdrawn}, macula_provider_standing:read(Key, fun() -> {error, withdrawn} end, 60_000)),
+    ?assert(erlang:monotonic_time(millisecond) - Started < 1_000).
 
 another_key_has_its_own_reading() ->
     {Provider, OrgKey} = key(),
