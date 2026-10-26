@@ -54,6 +54,13 @@
 %% `withdrawn' for the realm's tombstone). Membership is checked at the time of
 %% the call, for a past epoch too: a subscriber catching up on one it missed is
 %% still a member, and one that is not has no business reading the group.
+%% Each lookup runs in a process of its own, so a slow one holds up only the
+%% pull that waits on it: every other pull, of any group, is answered
+%% meanwhile. A lookup gets `lookup_wait_ms' (default 10 s), and at most
+%% `max_lookups' (default 64) run at once; a pull past either is
+%% `membership_unknown', so its member retries. A lookup that fails in any
+%% other way, a pool given as a pid that has died included, is
+%% `membership_unknown' too, and the distributor stays up.
 %%
 %% A call names the group (`prefix') and the epoch it wants: `current', or a
 %% past one by id. The reply carries the group's policy and the epochs:
@@ -64,7 +71,15 @@
 %% `not_a_member',
 %% `membership_unknown' (the lookup failed; retry), `unknown_epoch',
 %% `epoch_expired', `unknown_group' (a prefix this distributor's org does not
-%% own) or `malformed_pull' (a payload that is not a map).
+%% own), `too_many_groups' (below) or `malformed_pull' (a payload that is not a map).
+%%
+%% A group not listed is served on its first pull, and kept as a row of the
+%% table. At most `max_groups' (default 1024) unlisted groups are kept: past
+%% that, the rows whose epochs are all past their keeping are dropped, and if
+%% none is, the current epoch of a new unlisted group is refused
+%% `too_many_groups'. A listed group, and a group already kept, is always
+%% served, so a caller asking for prefix after prefix cannot grow the table
+%% past the bound or push out a group its members use.
 %%
 %% The epochs live in a private table the distributor's process owns, and its
 %% state holds only that table's id: no other process can read the table, and
@@ -77,7 +92,7 @@
 -behaviour(gen_server).
 
 -export([start_link/1, handler/1, advertise_opts/0, counts/1]).
--export([init/1, handle_call/3, handle_cast/2, format_status/1]).
+-export([init/1, handle_call/3, handle_cast/2, handle_info/2, format_status/1]).
 
 -type policy() :: required | preferred | off.
 -type mode() :: counting | refusing.
@@ -89,7 +104,9 @@
                      now => fun(() -> integer()),
                      membership => fun((<<_:256>>) -> ok | {error, not_a_member | membership_unknown}),
                      removed => fun((<<_:256>>) -> boolean()),
-                     pool => pid() | atom(), realm_key_id => <<_:256>>}.
+                     pool => pid() | atom(), realm_key_id => <<_:256>>,
+                     max_groups => pos_integer(), max_lookups => pos_integer(),
+                     lookup_wait_ms => pos_integer()}.
 -export_type([options/0, policy/0, access/0, mode/0, outcome/0]).
 
 -define(GROUP_KEYS_CAN, <<"group_keys">>).
@@ -101,8 +118,13 @@
 %% is answered `epoch_expired' rather than `unknown_epoch' for that long.
 -define(TOLERANCE_MS, 5 * 60000).
 %% How long the handler waits for the distributor: past a membership lookup's
-%% 5 s and within a member's 15 s pull deadline (macula_group_keyring).
+%% wait and within a member's 15 s pull deadline (macula_group_keyring).
 -define(HANDLER_WAIT_MS, 12000).
+%% How long a membership lookup may take before its pull is answered
+%% `membership_unknown': past the realm read's 5 s, short of the handler's wait.
+-define(LOOKUP_WAIT_MS, 10000).
+-define(MAX_LOOKUPS, 64).
+-define(MAX_GROUPS, 1024).
 
 %% @doc Start a distributor for `org''s groups in `realm' (the realm id),
 %% checking tokens in `profile'. `org_key_id' names the org key whose
@@ -119,7 +141,8 @@
 %% its registered name is looked up at every read, so a pool its supervisor
 %% restarts is found again, and while no pool holds the name a read is
 %% `membership_unknown'. A pid is read as given, and once that pool has died
-%% every read exits the distributor. The application keeps its
+%% every read is `membership_unknown'. `max_groups', `max_lookups' and
+%% `lookup_wait_ms' bound what pulls can cost (above). The application keeps its
 %% removed set across restarts: a set lost to a restart re-admits every removed
 %% member whose grant still verifies.
 -spec start_link(options()) -> {ok, pid()} | {error, term()}.
@@ -163,7 +186,7 @@ group_access({ok, Prefix}, {ok, {realm_capability, _, _}}, Policy) when Policy =
 group_access({ok, Prefix}, {ok, Access}, _Policy) -> {ok, Prefix, Access}.
 
 %% @doc The `<org>/group_keys_v1' handler for a distributor, to advertise. It
-%% waits for the distributor longer than a membership lookup can take (5 s) and
+%% waits for the distributor longer than a membership lookup may take (10 s) and
 %% less than a member's pull deadline (15 s), so a slow lookup answers
 %% `membership_unknown', and no answer is made that no member still waits for.
 -spec handler(pid()) -> fun((term()) -> map() | {error, atom() | binary()}).
@@ -192,15 +215,18 @@ init(#{org := Org, policy := Policy, org_key_id := OrgKeyId, realm := Realm, pro
            now => maps:get(now, Opts, fun() -> erlang:system_time(millisecond) end),
            membership => maps:get(membership, Opts, fun(Caller) -> realm_membership(Opts, Caller) end),
            removed => maps:get(removed, Opts, fun(_Caller) -> false end),
+           max_groups => maps:get(max_groups, Opts, ?MAX_GROUPS),
+           max_lookups => maps:get(max_lookups, Opts, ?MAX_LOOKUPS),
+           lookup_wait_ms => maps:get(lookup_wait_ms, Opts, ?LOOKUP_WAIT_MS),
+           lookups => #{},
            table => ets:new(?MODULE, [private, set])}}.
 
 %% @private
-handle_call({pull, Payload}, _From, State) when is_map(Payload) ->
+handle_call({pull, Payload}, From, State) when is_map(Payload) ->
     Now = (maps:get(now, State))(),
-    {Reply, NewState} = pulled(group_of(text_field(Payload, <<"prefix">>), State), maps:get(caller, Payload, undefined),
-                               macula_record:payload_field(Payload, <<"epoch">>), Now,
-                               presented(Payload), State),
-    {reply, Reply, NewState};
+    answered(pulled(group_of(text_field(Payload, <<"prefix">>), State), maps:get(caller, Payload, undefined),
+                    macula_record:payload_field(Payload, <<"epoch">>), Now, presented(Payload), State),
+             From);
 %% A sealed CALL's payload is any CBOR, and the link merges the caller and the token into a map only: anything else
 %% is refused here, never matched on, so no caller can stop the distributor and lose its epochs.
 handle_call({pull, _NotAMap}, _From, State) ->
@@ -210,6 +236,15 @@ handle_call(counts, _From, #{counts := Counts} = State) ->
 
 %% @private
 handle_cast(_Msg, State) -> {noreply, State}.
+
+%% @private
+%% A membership lookup ended, or overran its wait: its pull is answered here.
+handle_info({'DOWN', Ref, process, _Pid, Ended}, #{lookups := Lookups} = State) ->
+    looked_up(maps:take(Ref, Lookups), member_verdict(Ended), State);
+handle_info({lookup_overdue, Ref}, #{lookups := Lookups} = State) ->
+    overdue(maps:take(Ref, Lookups), Ref, State);
+handle_info(_Msg, State) ->
+    {noreply, State}.
 
 %% @private
 %% Status output and crash reports show every epoch with its key redacted.
@@ -239,10 +274,50 @@ pulled({ok, Prefix}, Caller, Epoch, Now, Presented, State) ->
     {Verdict, Counted} = authorized(access_of(Prefix, State), Prefix, Caller, Presented, Now, State),
     granted(Verdict, Caller, Prefix, Epoch, Now, Counted).
 
-granted(ok, Caller, Prefix, Epoch, Now, State) ->
-    admitted(admits(Caller, State), Prefix, Epoch, Now, State);
+granted(ok, Caller, Prefix, Epoch, _Now, #{removed := Removed} = State) ->
+    not_removed(Removed(Caller), Caller, Prefix, Epoch, State);
 granted({error, _} = Refused, _Caller, _Prefix, _Epoch, _Now, State) ->
     {Refused, State}.
+
+%% A removed node is refused before its membership is read; any other waits on the lookup.
+not_removed(true, _Caller, _Prefix, _Epoch, State) -> {{error, not_a_member}, State};
+not_removed(false, Caller, Prefix, Epoch, State) -> {{membership, Caller, Prefix, Epoch}, State}.
+
+answered({{membership, Caller, Prefix, Epoch}, State}, From) ->
+    lookup(Caller, Prefix, Epoch, From, State);
+answered({Reply, State}, _From) ->
+    {reply, Reply, State}.
+
+%% The lookup runs in a process of its own and ends with its verdict, so the distributor answers other pulls meanwhile.
+lookup(_Caller, _Prefix, _Epoch, _From, #{lookups := Lookups, max_lookups := Max} = State)
+  when map_size(Lookups) >= Max ->
+    {reply, {error, membership_unknown}, State};
+lookup(Caller, Prefix, Epoch, From, #{membership := Membership, lookups := Lookups, lookup_wait_ms := Wait} = State) ->
+    {Pid, Ref} = spawn_monitor(fun() -> exit({membership, Membership(Caller)}) end),
+    Timer = erlang:send_after(Wait, self(), {lookup_overdue, Ref}),
+    {noreply, State#{lookups := Lookups#{Ref => #{from => From, pid => Pid, timer => Timer,
+                                                  prefix => Prefix, epoch => Epoch}}}}.
+
+member_verdict({membership, ok}) -> ok;
+member_verdict({membership, {error, not_a_member}}) -> {error, not_a_member};
+member_verdict(_FailedOrUnknown) -> {error, membership_unknown}.
+
+%% Served at the time the verdict came: the epochs current then.
+looked_up({#{from := From, timer := Timer, prefix := Prefix, epoch := Epoch}, Lookups}, Verdict, State) ->
+    _ = erlang:cancel_timer(Timer, [{async, true}, {info, false}]),
+    {Reply, NewState} = admitted(Verdict, Prefix, Epoch, (maps:get(now, State))(), State#{lookups := Lookups}),
+    gen_server:reply(From, Reply),
+    {noreply, NewState};
+looked_up(error, _Verdict, State) ->
+    {noreply, State}.
+
+overdue({#{from := From, pid := Pid}, Lookups}, Ref, State) ->
+    true = erlang:demonitor(Ref, [flush]),
+    exit(Pid, kill),
+    gen_server:reply(From, {error, membership_unknown}),
+    {noreply, State#{lookups := Lookups}};
+overdue(error, _Ref, State) ->
+    {noreply, State}.
 
 %% The call's own token and proofs, as the provider link hands them to a `handler_authorizes' handler.
 presented(Payload) ->
@@ -314,24 +389,38 @@ logged({report, Count, Report}, Prefix, Outcome) ->
 logged({quiet, Report}, _Prefix, _Outcome) ->
     Report.
 
-admits(Caller, #{removed := Removed, membership := Membership}) ->
-    not_removed(Removed(Caller), Caller, Membership).
-
-not_removed(true, _Caller, _Membership) -> {error, not_a_member};
-not_removed(false, Caller, Membership) -> Membership(Caller).
-
 admitted(ok, Prefix, Epoch, Now, State) ->
     served(Epoch, Prefix, Now, State);
 admitted({error, _} = Refused, _Prefix, _Epoch, _Now, State) ->
     {Refused, State}.
 
 served(<<"current">>, Prefix, Now, State) ->
-    {Epochs, NewState} = current(Prefix, Now, State),
-    {reply(Prefix, Epochs, NewState), NewState};
+    kept(room(Prefix, Now, State), Prefix, Now, State);
 served(<<_:64>> = Id, Prefix, Now, State) ->
     {past(Id, group_epochs(Prefix, Now, State), Prefix, Now, State), State};
 served(_Other, _Prefix, _Now, State) ->
     {{error, unknown_epoch}, State}.
+
+kept(true, Prefix, Now, State) ->
+    {Epochs, NewState} = current(Prefix, Now, State),
+    {reply(Prefix, Epochs, NewState), NewState};
+kept(false, _Prefix, _Now, State) ->
+    {{error, too_many_groups}, State}.
+
+%% A row for the group: a listed or kept one has its own, a new unlisted one takes one while fewer than max_groups
+%% unlisted are kept, the rows whose epochs are all past their keeping dropped first when not.
+room(Prefix, Now, #{groups := Groups, table := Table} = State) ->
+    is_map_key(Prefix, Groups) orelse ets:member(Table, Prefix) orelse free_row(State)
+        orelse (pruned(Now, State) andalso free_row(State)).
+
+free_row(#{groups := Groups, table := Table, max_groups := Max}) ->
+    ets:info(Table, size) - length([P || P <- maps:keys(Groups), ets:member(Table, P)]) < Max.
+
+pruned(Now, #{table := Table} = State) ->
+    Idle = [Prefix || Prefix <- ets:select(Table, [{{'$1', '_'}, [], ['$1']}]),
+                      group_epochs(Prefix, Now, State) =:= []],
+    lists:foreach(fun(Prefix) -> ets:delete(Table, Prefix) end, Idle),
+    true.
 
 %% The group's current epoch, and the next one inside the current's ahead
 %% window, made when first asked for and kept so every member gets the same.

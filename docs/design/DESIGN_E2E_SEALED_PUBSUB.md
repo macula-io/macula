@@ -411,3 +411,14 @@ most 24 hours.
    symmetric, so whoever may read a sealed topic may also seal events on it. Stations still see who pulls from which
    distributor and when; the pull itself is sealed. The distributor is trusted for its groups (§2). Counting mode is
    fail-open by design (§3).
+
+## 16. What a pull may cost the distributor (macula#130, 2026-10-27)
+
+1. The membership lookup (§3) runs in a process of its own per pull, so a slow lookup holds up only the pull waiting
+   on it. A lookup gets `lookup_wait_ms` (default 10 s, inside the handler's 12 s and the member's 15 s), at most
+   `max_lookups` (default 64) run at once, and a pull past either, or whose lookup fails, is `membership_unknown`
+   (§5), so the member retries. The order of checks stays: token, removed set, membership, epoch.
+2. A group not listed is kept as a row from its first pull. At most `max_groups` (default 1024) unlisted groups are
+   kept; past that, rows whose epochs are all past their keeping are dropped, and a new unlisted group's current epoch
+   is otherwise refused `too_many_groups`, which a member reads as `no_distributor` (§7's closed set is unchanged).
+   Listed and already kept groups are always served.
