@@ -26,14 +26,21 @@ the_builder_refuses_a_certificate_chain_authorization_test() ->
                                                        #{authorization => #{certificate_chain => [<<1>>]}})).
 
 %% Nothing in macula's own code validates a certificate path or reads a realm CA. The scan reads every source file
-%% under src/, found from macula_record's own compile information.
+%% under src/, found from macula_record's own compile information. Each needle is a whole word, so `realm_ca' is found
+%% as a key, a variable part or a function name, and `realm_capability' (macula_group_keys) is not it.
 no_source_validates_a_certificate_path_or_reads_a_realm_ca_test() ->
     Record = proplists:get_value(source, macula_record:module_info(compile)),
     Sources = filelib:wildcard(filename:join([filename:dirname(filename:dirname(Record)), "**", "*.erl"])),
     ?assert(length(Sources) > 50),
     ?assertEqual([], [{filename:basename(File), Needle} || File <- Sources, {ok, Text} <- [file:read_file(File)],
                                                          Needle <- [<<"pkix_path_validation">>, <<"realm_ca">>],
-                                                         binary:match(Text, Needle) =/= nomatch]).
+                                                         re:run(Text, <<"\\b", Needle/binary, "\\b">>) =/= nomatch]).
+
+%% The scan's whole-word match still finds a realm CA read in any of its shapes.
+the_scan_finds_a_realm_ca_however_it_is_written_test() ->
+    [?assertNotEqual(nomatch, re:run(Text, <<"\\brealm_ca\\b">>))
+     || Text <- [<<"#{realm_ca := Ca}">>, <<"maps:get(realm_ca, Opts)">>, <<"realm_ca(Opts) ->">>, <<"x realm_ca">>]],
+    ?assertEqual(nomatch, re:run(<<"{realm_capability, Key, refusing}">>, <<"\\brealm_ca\\b">>)).
 
 %%------------------------------------------------------------------
 %% Fixtures

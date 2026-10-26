@@ -70,7 +70,8 @@ on_the_wire({error, Reason}) -> {error, atom_to_binary(Reason)};
 on_the_wire(Reply) -> {ok, Reply, #{sealed => 1, provider => <<9:256>>}}.
 
 %% The distributor checks the call's own token on the org's grant (macula#129), so the fake wire hands it the token
-%% the pull carried, as the provider link does, and ?TOKEN is a real grant for the caller the wire names.
+%% the pull carried, as the provider link does, and ?TOKEN is a real grant for the caller the wire names. The
+%% distributor here runs on the real clock, and so does the grant's expiry.
 distributor_options() ->
     {ok, OrgKey} = macula_node_keys:generate(org, pq_pure),
     persistent_term:put({?MODULE, org_key}, OrgKey),
@@ -80,7 +81,8 @@ distributor_options() ->
 
 org_grant(Caller) ->
     macula_ucan:create(persistent_term:get({?MODULE, org_key}), Caller,
-                       [#{with => <<"mri:org:io.macula/acme">>, can => <<"group_keys">>}], #{exp => 100_000}).
+                       [#{with => <<"mri:org:io.macula/acme">>, can => <<"group_keys">>}],
+                       #{exp => erlang:system_time(second) + 3600}).
 
 %% A pull as the provider link hands it to the distributor's handler.
 on_link(Payload, Opts) ->
