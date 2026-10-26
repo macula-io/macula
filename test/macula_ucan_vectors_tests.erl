@@ -49,12 +49,10 @@ context(Profile, Context, Proofs) ->
              proofs => maps:from_list([{macula_ucan:proof_id(P), P} || P <- Proofs])},
     request(Context, Base).
 
-request(#{<<"realm">> := Realm, <<"procedure">> := Procedure}, Base) ->
-    Base#{realm => binary:decode_hex(Realm), procedure => Procedure};
-request(#{<<"realm">> := Realm, <<"topic">> := Topic}, Base) ->
-    Base#{realm => binary:decode_hex(Realm), topic => Topic};
-request(_NoRequest, Base) ->
-    Base.
+request(Context, Base) ->
+    maps:merge(Base, maps:from_list([{realm, binary:decode_hex(R)} || #{<<"realm">> := R} <- [Context]]
+                                    ++ [{procedure, P} || #{<<"procedure">> := P} <- [Context]]
+                                    ++ [{topic, T} || #{<<"topic">> := T} <- [Context]])).
 
 proof_ids_checked(ProofIds) ->
     [?assertEqual(Id, macula_ucan:proof_id(Token)) || #{<<"token">> := Token, <<"proof_id">> := Id} <- ProofIds].

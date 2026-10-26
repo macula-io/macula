@@ -141,6 +141,14 @@ a_request_naming_a_procedure_and_a_topic_is_malformed_test() ->
     ?assertEqual({error, malformed},
                  authorize(<<"mri:realm:io.example">>, (topic(?TOPIC))#{procedure => ?PROCEDURE})).
 
+%% A request without its realm is malformed, never a context with no request, which would check the token alone.
+a_request_without_a_realm_is_malformed_test() ->
+    ?assertEqual({error, malformed}, authorize(<<"mri:realm:io.example">>, #{topic => ?TOPIC})),
+    ?assertEqual({error, malformed}, authorize(<<"mri:realm:io.example">>, #{procedure => ?PROCEDURE})),
+    ?assertEqual({error, malformed},
+                 authorize(<<"mri:realm:io.example">>, #{topic => ?TOPIC, procedure => ?PROCEDURE})),
+    ?assertEqual({error, malformed}, authorize(<<"mri:realm:io.example">>, #{topic => ?TOPIC, realm => <<1, 2>>})).
+
 a_procedure_prefix_answers_a_procedure_below_it_test() ->
     ?assertMatch({ok, _}, authorize(?PROC_PREFIX, procedure(?PROCEDURE))),
     ?assertEqual({error, missing_capability},

@@ -174,6 +174,9 @@ Profile = fun(P) ->
          (TopicContext(Alice))#{<<"topic">> => <<"other.realm/acme/_org/orders/placed_v1">>}},
         {<<"topic_without_realm">>, Mint(Root, Alice, [RealmCap], #{}), [], UcanRequired(Root),
          (TopicContext(Alice))#{<<"topic">> => <<"_mesh.presence">>}},
+        %% A request without its realm is malformed, never taken for a context with no request.
+        {<<"malformed_request_without_realm">>, Mint(Root, Alice, [RealmCap], #{}), [], UcanRequired(Root),
+         maps:remove(<<"realm">>, TopicContext(Alice))},
         {<<"malformed_topic_request_names_a_prefix">>, Mint(Root, Alice, [RealmCap], #{}), [], UcanRequired(Root),
          (TopicContext(Alice))#{<<"topic">> => <<RealmName/binary, "/acme/*">>}},
         {<<"grants_more_than_proof_wider_prefix">>,
@@ -192,11 +195,9 @@ Profile = fun(P) ->
     Context = fun(Ctx, Proofs) ->
         Base = #{caller => binary:decode_hex(maps:get(<<"caller">>, Ctx)), profile => P, now => maps:get(<<"now">>, Ctx),
                  proofs => maps:from_list([{macula_ucan:proof_id(Pr), Pr} || Pr <- Proofs])},
-        case Ctx of
-            #{<<"realm">> := R, <<"procedure">> := Pc} -> Base#{realm => binary:decode_hex(R), procedure => Pc};
-            #{<<"realm">> := R, <<"topic">> := Tp} -> Base#{realm => binary:decode_hex(R), topic => Tp};
-            _ -> Base
-        end
+        maps:merge(Base, maps:from_list([{realm, binary:decode_hex(R)} || #{<<"realm">> := R} <- [Ctx]]
+                                        ++ [{procedure, Pc} || #{<<"procedure">> := Pc} <- [Ctx]]
+                                        ++ [{topic, Tp} || #{<<"topic">> := Tp} <- [Ctx]]))
     end,
     Entries = [#{<<"name">> => Name, <<"token">> => Token, <<"proofs">> => Proofs,
                  <<"policy">> => Pol, <<"context">> => Ctx,

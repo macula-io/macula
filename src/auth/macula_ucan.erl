@@ -322,13 +322,18 @@ valid_at(_Now, Checked) ->
 %% The capability the request needs: one the token grants, whose `can' is the policy's where it names one, and whose
 %% `with' covers the request's realm and procedure or topic. The realm id a request carries is SHA-256 over the
 %% grant's realm name (D7), so a grant is checked against a request with nothing looked up. A context with no request
-%% checks the `can' alone, as before. A request is for one procedure or one topic: a context naming both is malformed.
-grants(_Policy, #{realm := <<_:256>>, procedure := _, topic := _}, _Checked) ->
+%% checks the `can' alone, as before. A request is for one procedure or one topic, in a realm: a context naming both,
+%% or naming either without a realm id, is malformed, never a context with no request.
+grants(_Policy, #{procedure := _, topic := _}, _Checked) ->
     {error, malformed};
 grants(Policy, #{realm := <<_:256>> = Realm, procedure := Procedure}, #{claims := #{<<"cap">> := Caps}} = Checked) ->
     requested(request_grant(Realm, Procedure), can_of(Policy), Caps, Checked);
 grants(Policy, #{realm := <<_:256>> = Realm, topic := Topic}, #{claims := #{<<"cap">> := Caps}} = Checked) ->
     requested(request_topic(Realm, Topic), can_of(Policy), Caps, Checked);
+grants(_Policy, #{procedure := _}, _Checked) ->
+    {error, malformed};
+grants(_Policy, #{topic := _}, _Checked) ->
+    {error, malformed};
 grants({ucan_required, _NodeId}, _Context, #{claims := #{<<"cap">> := Caps}} = Checked) ->
     {ok, Checked#{granted => Caps}};
 grants({realm_member_required, _KeyId, Can}, _Context, #{claims := #{<<"cap">> := Caps}} = Checked) ->

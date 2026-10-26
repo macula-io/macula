@@ -120,7 +120,10 @@ with them on either side. A `*` inside a longer segment is a literal.
 
 A request is for one procedure or one topic. A topic request's context names
 `topic`, in full, instead of `procedure`; a context naming both is
-`malformed`, and so is a request that names a prefix.
+`malformed`, and so is a request that names a prefix, and a context naming a
+procedure or a topic without a 32-byte `realm`
+(`malformed_request_without_realm`): it is never taken for a context with no
+request.
 
 A context with no realm and no procedure or topic checks the token alone.
 
@@ -173,7 +176,8 @@ The first refusal wins, so an SDK takes the checks in this order:
    realm segment and path below it (a system topic, `_mesh.presence`), then
    as a grant (`realm_name_not_canonical`, `malformed` for a prefix), then
    `wrong_realm` when its realm is not the one whose id the request carries.
-   A context naming both a procedure and a topic is `malformed` here.
+   A context naming both a procedure and a topic, or either without a
+   realm, is `malformed` here.
 8. The token's own capability (above): `missing_capability`, `wrong_realm`,
    `realm_name_not_canonical`. Where no capability answers, the first
    capability in `cap` order with a text `with` gives the reason, whatever
