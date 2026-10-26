@@ -1047,6 +1047,13 @@ advertise(Pid, Realm, Procedure, Handler, open = Policy)
        (is_function(Handler, 1) orelse
         (is_tuple(Handler) andalso tuple_size(Handler) =:= 2)) ->
     gen_server:call(Pid, {advertise, Realm, Procedure, Handler, Policy}, 5_000);
+advertise(Pid, Realm, Procedure, Handler, handler_authorizes = Policy)
+  when is_pid(Pid),
+       is_binary(Realm), byte_size(Realm) =:= 32,
+       is_binary(Procedure),
+       (is_function(Handler, 1) orelse
+        (is_tuple(Handler) andalso tuple_size(Handler) =:= 2)) ->
+    gen_server:call(Pid, {advertise, Realm, Procedure, Handler, Policy}, 5_000);
 advertise(Pid, Realm, Procedure, Handler, {ucan_required, Issuer} = Policy)
   when is_pid(Pid),
        is_binary(Realm), byte_size(Realm) =:= 32,
@@ -3580,7 +3587,8 @@ served_call(false, Request, Payload, Seal, #state{procedures = Procs, policies =
     #{procedure := Proc, realm := Realm} = Request,
     Verdict = authorize({Realm, Proc}, Request, Pols, Profile, Withdrawn),
     Found   = maps:find({Realm, Proc}, Procs),
-    PayloadWithCaller = with_caller(Payload, maps:get(caller, Request, undefined)),
+    PayloadWithCaller = with_call_token(maps:get({Realm, Proc}, Pols, open),
+                                        with_caller(Payload, maps:get(caller, Request, undefined)), Request),
     Run = fun() -> inbound_reply(Verdict, Found, Request, PayloadWithCaller, Id, Seal) end,
     _ = spawn(fun() -> serve_worker(Run, Admission, Request, Pid, Id, Seal) end),
     ok.
@@ -3761,6 +3769,20 @@ with_caller(Payload, Caller) when is_map(Payload), Caller =/= undefined ->
 with_caller(Payload, _Caller) ->
     Payload.
 
+%% A `handler_authorizes' procedure's handler decides who it serves itself
+%% (macula#129: a sealed group's distributor, whose group travels inside the
+%% sealed payload where no gate sees it), so it gets the request's own token
+%% and proofs beside `caller': `ucan_token', empty when the request carried
+%% none, and `proofs', the list as the caller signed it. A payload's own
+%% fields of those names are removed first, as `with_caller/2' removes
+%% `caller', so what the handler reads is what the caller signed into the
+%% request. Any other procedure's payload is left as the caller wrote it.
+with_call_token(handler_authorizes, Payload, Request) when is_map(Payload) ->
+    (maps:without([{text, <<"ucan_token">>}, {text, <<"proofs">>}], Payload))#{
+        ucan_token => maps:get(token, Request, <<>>), proofs => maps:get(proofs, Request, [])};
+with_call_token(_Policy, Payload, _Request) ->
+    Payload.
+
 %% The same wire-authenticated caller, out of band: `with_caller/2' can
 %% only merge it into a map payload, so a handler serving a non-map CALL
 %% or STREAM_OPEN would otherwise never see it (macula#60). The link sets
@@ -3854,6 +3876,8 @@ held_refused(false, _Member, _Token, _Proofs) ->
 %% macula_ucan:proof_id/1 here. A proof no token in the chain names is a malformed request rather than an
 %% unauthorized one: what is wrong is what the caller sent, not the authority it claims (D7, chain transport).
 authorize_policy(open, _Frame, _Profile) ->
+    ok;
+authorize_policy(handler_authorizes, _Frame, _Profile) ->
     ok;
 authorize_policy(Policy, #{token := Token, caller := <<_:256>> = Caller, realm := Realm, procedure := Procedure}
                  = Frame, Profile) when is_binary(Token) ->

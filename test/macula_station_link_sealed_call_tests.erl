@@ -106,6 +106,71 @@ a_node_without_a_key_refuses_a_sealed_call_test_() ->
         macula_station_link:stop(Pid)
     end}.
 
+%% A procedure advertised `handler_authorizes' runs its handler on every
+%% identified caller, and hands it the call's own verified `ucan_token' and
+%% `proofs' beside `caller' (macula#129): a payload's own fields of those names
+%% are dropped first, so the handler reads what the caller signed into the
+%% request, never what it wrote in the payload.
+a_handler_authorizes_procedure_sees_the_calls_token_and_proofs_test_() ->
+    {timeout, 10, fun() ->
+        Echo = fun(Args) -> #{token => {text, macula:field(ucan_token, Args)}, proofs => macula:field(proofs, Args)} end,
+        {Pid, CallerKey} = fixture([]),
+        ok = macula_station_link:advertise(Pid, ?REALM, <<"_test.echo">>, Echo, handler_authorizes),
+        Proofs = [<<"proof-one">>, <<"proof-two">>],
+        {Frame, Call} = sealed_call(Pid, CallerKey, <<"_test.echo">>,
+                                    #{ucan_token => {text, <<"forged">>}, proofs => [<<"forged">>]},
+                                    #{token => <<"the-calls-token">>, proofs => Proofs}),
+        Pid ! {macula_peering, frame, self(), Frame},
+        {result, Fields} = await_reply(Frame),
+        {ok, Payload} = opened(result, Fields, Call),
+        ?assertEqual({text, <<"the-calls-token">>}, maps:get({text, <<"token">>}, Payload)),
+        ?assertEqual(Proofs, maps:get({text, <<"proofs">>}, Payload)),
+        macula_station_link:stop(Pid)
+    end}.
+
+%% A call that carries no token reaches a `handler_authorizes' handler with an
+%% empty one and no proofs, whatever its payload says, for the handler to refuse.
+a_handler_authorizes_call_without_a_token_hands_an_empty_one_test_() ->
+    {timeout, 10, fun() ->
+        Echo = fun(Args) -> #{token => {text, macula:field(ucan_token, Args)}, proofs => macula:field(proofs, Args)} end,
+        {Pid, CallerKey} = fixture([]),
+        ok = macula_station_link:advertise(Pid, ?REALM, <<"_test.echo">>, Echo, handler_authorizes),
+        {Frame, Call} = sealed_call(Pid, CallerKey, <<"_test.echo">>,
+                                    #{ucan_token => {text, <<"forged">>}, proofs => [<<"forged">>]}),
+        Pid ! {macula_peering, frame, self(), Frame},
+        {result, Fields} = await_reply(Frame),
+        {ok, Payload} = opened(result, Fields, Call),
+        ?assertEqual({text, <<>>}, maps:get({text, <<"token">>}, Payload)),
+        ?assertEqual([], maps:get({text, <<"proofs">>}, Payload)),
+        macula_station_link:stop(Pid)
+    end}.
+
+%% Any other procedure gets the payload's own fields of those names as the
+%% caller wrote them, and nothing of the call's token.
+an_open_procedure_sees_no_token_of_the_call_test_() ->
+    {timeout, 10, fun() ->
+        Echo = fun(Args) -> #{token => macula:field(ucan_token, Args), atom => held(is_map_key(ucan_token, Args))} end,
+        {Pid, CallerKey} = fixture([{<<"_test.echo">>, Echo}]),
+        {Frame, Call} = sealed_call(Pid, CallerKey, <<"_test.echo">>, #{ucan_token => {text, <<"app data">>}},
+                                    #{token => <<"the-calls-token">>}),
+        Pid ! {macula_peering, frame, self(), Frame},
+        {result, Fields} = await_reply(Frame),
+        {ok, Payload} = opened(result, Fields, Call),
+        ?assertEqual({text, <<"app data">>}, maps:get({text, <<"token">>}, Payload)),
+        ?assertEqual(0, maps:get({text, <<"atom">>}, Payload)),
+        macula_station_link:stop(Pid)
+    end}.
+
+held(true) -> 1;
+held(false) -> 0.
+
+%% A stream's handler has no payload map to carry a token in, so a streaming
+%% procedure is never advertised `handler_authorizes': that would serve it open.
+a_stream_is_never_advertised_handler_authorizes_test() ->
+    ?assertError(function_clause,
+                 macula_station_link:advertise_stream(self(), ?REALM, <<"_test.s">>, server_stream,
+                                                      fun(_, _) -> ok end, handler_authorizes)).
+
 %%------------------------------------------------------------------
 %% Helpers
 %%------------------------------------------------------------------
@@ -145,13 +210,20 @@ link_node_id(Pid) ->
 %% A CALL sealed to the link node's current key, and what the caller keeps to
 %% open the reply.
 sealed_call(Pid, CallerKey, Procedure, Payload) ->
+    sealed_call(Pid, CallerKey, Procedure, Payload, #{}).
+
+%% Extra carries the request's own `token' and `proofs', or is the KEM key pair to seal to.
+sealed_call(Pid, CallerKey, Procedure, Payload, Extra) when is_map(Extra) ->
     {ok, #{key := Carried}} = macula_kem_keyring:current(link_node_id(Pid)),
     {ok, _Profile, Public} = macula_seal:public_key(Carried),
-    sealed_call(Pid, CallerKey, Procedure, Payload, {Public, unused}).
+    sealed_call(Pid, CallerKey, Procedure, Payload, {Public, unused}, Extra);
+sealed_call(Pid, CallerKey, Procedure, Payload, KeyPair) ->
+    sealed_call(Pid, CallerKey, Procedure, Payload, KeyPair, #{}).
 
-sealed_call(Pid, CallerKey, Procedure, Payload, {Public, _Private}) ->
-    Spec = #{request_id => crypto:strong_rand_bytes(16), realm => ?REALM, procedure => Procedure,
-             target => link_node_id(Pid), deadline => erlang:system_time(millisecond) + 5_000},
+sealed_call(Pid, CallerKey, Procedure, Payload, {Public, _Private}, Extra) ->
+    Spec = maps:merge(maps:with([token, proofs], Extra),
+                      #{request_id => crypto:strong_rand_bytes(16), realm => ?REALM, procedure => Procedure,
+                        target => link_node_id(Pid), deadline => erlang:system_time(millisecond) + 5_000}),
     SealRequest = #{frame_type => <<"call">>, realm => ?REALM, procedure => Procedure,
                     caller => macula_node_keys:key_id(CallerKey), target => link_node_id(Pid),
                     request_id => maps:get(request_id, Spec), deadline => maps:get(deadline, Spec)},

@@ -195,7 +195,16 @@
 %% purpose: a caller must name the tier it actually requires (typically
 %% the realm's citizen/human-confirmed capability string) rather than
 %% inherit a guess that might be wrong for its threat model.
--type auth_policy() :: open | macula_ucan:policy().
+%%
+%% `handler_authorizes' runs no gate: the handler decides who it serves, and
+%% gets the request's own verified `ucan_token' (empty when it carried none)
+%% and `proofs' beside `caller' in its map payload, any payload fields of
+%% those names removed first. It is for a handler whose decision needs what
+%% only the sealed payload names (macula#129: a sealed group's distributor
+%% checks the token per group). A handler advertised with it that reads no
+%% token serves every identified caller. Unary procedures only: a streaming
+%% procedure refuses it.
+-type auth_policy() :: open | handler_authorizes | macula_ucan:policy().
 
 -type pool() :: pid().
 
