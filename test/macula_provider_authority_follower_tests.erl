@@ -59,7 +59,8 @@ the_follower_ends_with_its_stream() ->
     Follower = macula_provider_authority_follower:follow(Stream, now_ms() + 60_000, fun(_Deadline) -> [] end),
     Mon = erlang:monitor(process, Follower),
     exit(Stream, kill),
-    ?assertMatch({'DOWN', Mon, process, Follower, _}, receive Down -> Down after 1_000 -> none end).
+    ?assertMatch({'DOWN', Mon, process, Follower, _},
+                 receive {'DOWN', Mon, _, _, _} = Down -> Down after 1_000 -> none end).
 
 %% M2 (macula#120): the provider's delegation slot is read every re-check; the org's tombstone of the delegation
 %% (withdrawn) ends the stream at once, long before the authorization's end.

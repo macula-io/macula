@@ -108,6 +108,10 @@
 -define(CALLER_RENEWAL_CALL_MS, 10_000).
 %% How often the standing of each member served under a realm member policy is read again (macula#120, M2).
 -define(STANDING_RECHECK_MS, 60_000).
+%% The info messages of a stream's authority (macula#120), handled by stream_authority_info/2.
+-define(STREAM_AUTHORITY_INFO(Tag),
+        (Tag =:= served_authority_ended orelse Tag =:= served_authority_renewed orelse Tag =:= member_standings
+         orelse Tag =:= renew_caller_streams orelse Tag =:= caller_streams_renewal)).
 
 %% A spec's ttl_ms is at least a second, and at most the advertisement type's
 %% own maximum lifetime (macula_record:procedure_advertisement_max_lifetime_ms/0,
@@ -1646,12 +1650,13 @@ app_env(Key, Default) ->
 pool_standing(undefined, _Profile) ->
     undefined;
 pool_standing(Pool, Profile) ->
-    fun(Realm, RealmKeyId, Member) ->
-        Standing = macula_hyparview_endorsement:slot_standing(fun(Key) -> macula:find_records(Pool, Key) end,
-                                                              #{profile => Profile, realm => Realm,
-                                                                realm_key_id => RealmKeyId}),
-        Standing(Member)
-    end.
+    fun(Realm, RealmKeyId, Member) -> pool_member_standing(Pool, Profile, Realm, RealmKeyId, Member) end.
+
+pool_member_standing(Pool, Profile, Realm, RealmKeyId, Member) ->
+    Lookup = fun(Key) -> macula:find_records(Pool, Key) end,
+    Standing = macula_hyparview_endorsement:slot_standing(Lookup, #{profile => Profile, realm => Realm,
+                                                                    realm_key_id => RealmKeyId}),
+    Standing(Member).
 
 handle_call({call, _Target, _Realm, _Proc, _Payload, _DeadlineMs, _Token, _Seal, _Report}, _From,
             #state{peer_node_id = undefined} = S) ->
@@ -1963,23 +1968,11 @@ handle_info({'EXIT', Pid, Reason}, #state{peer_pid = Pid, seed = Seed} = S) ->
 %% again with the pool's next issuer.
 handle_info({'DOWN', _Mon, process, Issuer, Reason}, #state{issuer = Issuer} = S) ->
     {stop, {shutdown, {issuer_down, Reason}}, S};
-handle_info({served_authority_ended, AttachId, EndsAt}, #state{served_until = Until} = S) ->
-    {noreply, authority_ended(maps:find(AttachId, Until), AttachId, EndsAt, S)};
-
-handle_info({served_authority_renewed, Renewed}, S) ->
-    {noreply, lists:foldl(fun authority_renewed/2, S, Renewed)};
-
+%% A stream's authority, served or called (macula#120): stream_authority_info/2.
 handle_info(recheck_member_standing, S) ->
     {noreply, standing_rechecked(S#state{standing_armed = false})};
-
-handle_info({member_standings, Standings}, S) ->
-    {noreply, lists:foldl(fun standing_read/2, S, Standings)};
-
-handle_info({renew_caller_streams, Key, Ref}, #state{caller_renewals = Renewals} = S) ->
-    {noreply, caller_renewal_due(maps:find(Key, Renewals), Key, Ref, S)};
-
-handle_info({caller_streams_renewal, Key, Ref, Answer}, #state{caller_renewals = Renewals} = S) ->
-    {noreply, caller_renewal_answered(maps:find(Key, Renewals), Key, Ref, Answer, S)};
+handle_info(Msg, S) when is_tuple(Msg), ?STREAM_AUTHORITY_INFO(element(1, Msg)) ->
+    {noreply, stream_authority_info(Msg, S)};
 
 handle_info({'DOWN', Mon, process, Pid, _Reason}, S) ->
     %% Two monitor sources land here: subscriber pids paired by
@@ -1990,6 +1983,17 @@ handle_info({'DOWN', Mon, process, Pid, _Reason}, S) ->
 
 handle_info(_Other, S) ->
     {noreply, S}.
+
+stream_authority_info({served_authority_ended, AttachId, EndsAt}, #state{served_until = Until} = S) ->
+    authority_ended(maps:find(AttachId, Until), AttachId, EndsAt, S);
+stream_authority_info({served_authority_renewed, Renewed}, S) ->
+    lists:foldl(fun authority_renewed/2, S, Renewed);
+stream_authority_info({member_standings, Standings}, S) ->
+    lists:foldl(fun standing_read/2, S, Standings);
+stream_authority_info({renew_caller_streams, Key, Ref}, #state{caller_renewals = Renewals} = S) ->
+    caller_renewal_due(maps:find(Key, Renewals), Key, Ref, S);
+stream_authority_info({caller_streams_renewal, Key, Ref, Answer}, #state{caller_renewals = Renewals} = S) ->
+    caller_renewal_answered(maps:find(Key, Renewals), Key, Ref, Answer, S).
 
 %% The handshake never completed: recycle the link.
 connect_watchdog_fired(#state{peer_pid = Pid, seed = Seed} = S) ->
