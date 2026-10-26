@@ -119,12 +119,15 @@ optional_claims(Opts) ->
 %% claims when it does, or the first reason it does not. Never raises on the token.
 %%
 %% The context names the caller, the profile and the time, and, for a request, the realm id and the procedure or
-%% topic it is for and the proofs that travelled with it. A topic is named in full, its realm's name first. A context
-%% with no realm and no procedure or topic checks the token alone, as a gate that has no request in front of it.
+%% topic it is for and the proofs that travelled with it. A topic is named in full, its realm's name first. A `group'
+%% names a sealed group's prefix the same way, and asks for the whole group: the prefix and every topic below it, so
+%% the grants must cover both `mri:topic:P' and `mri:topic:P/*' (macula#129). A context names at most one of
+%% procedure, topic and group. A context with no realm and none of them checks the token alone, as a gate that has no
+%% request in front of it.
 -spec authorize(term(), policy(), #{caller := macula_node_keys:node_id(),
                                     profile := macula_crypto_profile:profile(), now := integer(),
                                     realm => <<_:256>>, procedure => binary(), topic => binary(),
-                                    proofs => #{binary() => binary()}}) ->
+                                    group => binary(), proofs => #{binary() => binary()}}) ->
         {ok, map()} | {error, refusal()}.
 authorize(Token, Policy, #{caller := <<_:256>>, profile := Profile, now := Now} = Context) when is_integer(Now) ->
     first_refusal([fun(T) -> parsed(T) end,
@@ -351,19 +354,25 @@ valid_at(_Now, Checked) ->
 %% grant's realm name (D7), so a grant is checked against a request with nothing looked up. A context with no request
 %% checks the `can' alone, as before. A request is for one procedure or one topic, in a realm: a context naming both,
 %% or naming either without a realm id, is malformed, never a context with no request.
-grants(_Policy, #{procedure := _, topic := _}, _Checked) ->
+grants(Policy, Context, Checked) ->
+    named_request(maps:with([procedure, topic, group], Context), Policy, Context, Checked).
+
+named_request(Named, _Policy, _Context, _Checked) when map_size(Named) > 1 ->
     {error, malformed};
-grants(Policy, #{realm := <<_:256>> = Realm, procedure := Procedure}, #{claims := #{<<"cap">> := Caps}} = Checked) ->
+named_request(#{procedure := Procedure}, Policy, #{realm := <<_:256>> = Realm}, #{claims := #{<<"cap">> := Caps}} = Checked) ->
     requested(request_grant(Realm, Procedure), can_of(Policy), Caps, Checked);
-grants(Policy, #{realm := <<_:256>> = Realm, topic := Topic}, #{claims := #{<<"cap">> := Caps}} = Checked) ->
+named_request(#{topic := Topic}, Policy, #{realm := <<_:256>> = Realm}, #{claims := #{<<"cap">> := Caps}} = Checked) ->
     requested(request_topic(Realm, Topic), can_of(Policy), Caps, Checked);
-grants(_Policy, #{procedure := _}, _Checked) ->
+named_request(#{group := Group}, Policy, #{realm := <<_:256>> = Realm}, #{claims := #{<<"cap">> := Caps}} = Checked) ->
+    requested_group(request_topic(Realm, Group), can_of(Policy), Caps, Checked);
+named_request(Named, _Policy, _Context, _Checked) when map_size(Named) =:= 1 ->
     {error, malformed};
-grants(_Policy, #{topic := _}, _Checked) ->
-    {error, malformed};
-grants({ucan_required, _NodeId}, _Context, #{claims := #{<<"cap">> := Caps}} = Checked) ->
+named_request(_None, Policy, _Context, Checked) ->
+    unrequested(Policy, Checked).
+
+unrequested({ucan_required, _NodeId}, #{claims := #{<<"cap">> := Caps}} = Checked) ->
     {ok, Checked#{granted => Caps}};
-grants({realm_member_required, _KeyId, Can}, _Context, #{claims := #{<<"cap">> := Caps}} = Checked) ->
+unrequested({realm_member_required, _KeyId, Can}, #{claims := #{<<"cap">> := Caps}} = Checked) ->
     granted([Cap || #{<<"can">> := Granted} = Cap <- Caps, Granted =:= Can], no_request, Checked).
 
 can_of({ucan_required, _NodeId}) -> any;
@@ -379,6 +388,25 @@ requested({ok, Realm, Target}, Can, Caps, Checked) ->
                     is_binary(With), can_matches(Can, Granted),
                     realm_matches(With, Realm), covers(With, target_grant(Target, With))],
             Realm, Checked).
+
+%% A group's key opens its prefix and every topic below it, so a group request needs both `mri:topic:P' and
+%% `mri:topic:P/*' covered, by one grant or by two. Every grant that answers is kept, so the chain checks each of them:
+%% a delegate cannot add the half its proof never granted.
+requested_group({error, _} = Refusal, _Can, _Caps, _Checked) ->
+    Refusal;
+requested_group({ok, Realm, {topic, Group}}, Can, Caps, Checked) ->
+    Answering = [answering(Realm, Can, Caps, {topic, Target}) || Target <- [Group, <<Group/binary, "/*">>]],
+    group_granted(Answering, Realm, Checked).
+
+answering(Realm, Can, Caps, Target) ->
+    [Cap || #{<<"with">> := With, <<"can">> := Granted} = Cap <- Caps,
+            is_binary(With), can_matches(Can, Granted),
+            realm_matches(With, Realm), covers(With, target_grant(Target, With))].
+
+group_granted([[Exact | _], [Below | _]], _Realm, Checked) ->
+    {ok, Checked#{granted => lists:usort([Exact, Below])}};
+group_granted(_Missing, Realm, Checked) ->
+    granted([], Realm, Checked).
 
 target_grant({procedure, Procedure}, With) -> procedure_grant(With, Procedure);
 target_grant({topic, Topic}, _With) -> <<"mri:topic:", Topic/binary>>.
