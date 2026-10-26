@@ -52,7 +52,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `not_authorized: <can> on <resource>`, which the member's keyring names `not_authorized` (a new reason in its
   closed set, and in `macula_event_unopened`).
 - **`handler_authorizes`, an advertise policy for a handler that decides who it serves.** The provider link runs no
-  gate and hands the handler the call's own verified `ucan_token` (empty when none) and `proofs` beside `caller`, a
+  gate and hands the handler the `ucan_token` the caller signed into the request (empty when none; the handler
+  verifies it) and `proofs` beside `caller`, a
   payload's own fields of those names removed first. Unary procedures only; a streaming procedure refuses it.
 - **A group request in `macula_ucan:authorize/3`:** a context naming `group => P` is answered only when the token's
   grants cover both `mri:topic:P` and `mri:topic:P/*`, and every grant that answers is checked up the chain. A

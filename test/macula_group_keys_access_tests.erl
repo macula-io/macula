@@ -27,6 +27,7 @@ refusing_test_() ->
       fun no_grant_is_refused/1,
       fun a_grant_on_another_group_is_refused/1,
       fun a_grant_below_the_group_only_is_refused/1,
+      fun a_grant_on_the_group_topic_only_is_refused/1,
       fun a_grant_sharing_part_of_a_segment_is_refused/1,
       fun a_parent_prefix_admits/1,
       fun a_token_for_another_node_is_refused/1,
@@ -41,6 +42,7 @@ refusing_test_() ->
 counting_test_() ->
     {foreach, fun() -> setup(counting) end, fun cleanup/1,
      [fun counting_admits_the_role/1,
+      fun counting_refuses_a_grant_on_the_group_topic_only/1,
       fun counting_admits_the_org_grant_and_counts_a_would_be_refusal/1,
       fun counting_refuses_a_caller_with_neither/1,
       fun counting_refuses_a_token_for_another_node/1,
@@ -84,6 +86,11 @@ a_grant_on_another_group_is_refused(W) ->
 a_grant_below_the_group_only_is_refused(W) ->
     ?_assertMatch({error, <<"not_authorized", _/binary>>},
                   pull(W, ?GROUP, role(W, [<<"mri:topic:io.macula/acme/orders/*">>]))).
+
+%% A group key opens every topic below P too, so a grant on the topic P alone is not the group.
+a_grant_on_the_group_topic_only_is_refused(W) ->
+    ?_assertMatch({error, <<"not_authorized", _/binary>>},
+                  pull(W, ?GROUP, role(W, [<<"mri:topic:io.macula/acme/orders">>]))).
 
 a_grant_sharing_part_of_a_segment_is_refused(W) ->
     ?_assertMatch({error, <<"not_authorized", _/binary>>},
@@ -162,6 +169,13 @@ counting_admits_the_role(#{pid := Pid} = W) ->
         ?assertEqual(#{{?REALM, ?GROUP, admitted} => 1}, macula_group_keys:counts(Pid))
     end).
 
+counting_refuses_a_grant_on_the_group_topic_only(#{pid := Pid} = W) ->
+    ?_test(begin
+        ?assertMatch({error, <<"not_authorized", _/binary>>},
+                     pull(W, ?GROUP, role(W, [<<"mri:topic:io.macula/acme/orders">>]))),
+        ?assertEqual(#{{?REALM, ?GROUP, refused} => 1}, macula_group_keys:counts(Pid))
+    end).
+
 counting_admits_the_org_grant_and_counts_a_would_be_refusal(#{pid := Pid} = W) ->
     ?_test(begin
         ?assertMatch(#{epochs := [_]}, pull(W, ?GROUP, org_grant(W))),
@@ -189,6 +203,21 @@ counting_refuses_a_pull_after_exp(W) ->
         advance(W, 3600 * 1000),
         ?assertMatch({error, <<"not_authorized", _/binary>>}, pull(W, ?GROUP, Role))
     end).
+
+%%------------------------------------------------------------------
+%% A payload that is not a map
+%%------------------------------------------------------------------
+
+%% A sealed CALL's payload is any CBOR, and the link merges caller and token into map payloads only, so any caller that
+%% can seal a CALL can hand the handler a list or a number. It is refused, and the distributor, with its epochs, counts
+%% and the group's state, stays up.
+a_payload_that_is_not_a_map_is_refused_and_the_distributor_stays_up_test() ->
+    {ok, Pid} = macula_group_keys:start_link(options(required, #{})),
+    Handler = macula_group_keys:handler(Pid),
+    [?assertEqual({error, malformed_pull}, Handler(Payload)) || Payload <- [[1, 2, 3], 42, {text, <<"x">>}, <<"x">>]],
+    ?assert(is_process_alive(Pid)),
+    unlink(Pid),
+    exit(Pid, shutdown).
 
 %%------------------------------------------------------------------
 %% Start

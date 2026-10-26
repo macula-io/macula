@@ -197,8 +197,9 @@
 %% inherit a guess that might be wrong for its threat model.
 %%
 %% `handler_authorizes' runs no gate: the handler decides who it serves, and
-%% gets the request's own verified `ucan_token' (empty when it carried none)
-%% and `proofs' beside `caller' in its map payload, any payload fields of
+%% gets the `ucan_token' the caller signed into the request (empty when it
+%% carried none; unverified, for the handler to check) and `proofs' beside
+%% `caller' in its map payload, any payload fields of
 %% those names removed first. It is for a handler whose decision needs what
 %% only the sealed payload names (macula#129: a sealed group's distributor
 %% checks the token per group). A handler advertised with it that reads no

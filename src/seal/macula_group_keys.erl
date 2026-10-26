@@ -7,8 +7,8 @@
 %% `reuse_sup'), with `advertise_opts/0' merged into its options:
 %% `confidential => required', so the provider's link answers a clear call
 %% `sealed_required' and a key never travels clear, AND `auth =>
-%% handler_authorizes', so the link hands the handler the call's own verified
-%% `ucan_token' and `proofs' and the handler checks them. The check cannot sit
+%% handler_authorizes', so the link hands the handler the token and proofs the
+%% caller signed into the request, and the handler verifies them. The check cannot sit
 %% in an advertise gate: the group a pull names travels inside the sealed
 %% payload, where no gate sees it (macula#129).
 %% With the node's `kem_advertise' switched off those options refuse to
@@ -35,6 +35,8 @@
 %%   A `realm_capability' group needs the distributor's seal policy
 %%   `required': its events must never travel clear.</li>
 %% </ul>
+%% Each listed prefix is its own group: listing `P' restricts the group `P',
+%% not a group `P/sub' pulled under its own prefix, which needs its own entry.
 %% Either check verifies the token's audience against the caller, its
 %% validity window at the time of the pull (a past epoch's pull too), and its
 %% chain of proofs up to the key the policy names. A refused pull answers
@@ -61,8 +63,8 @@
 %% `handler_error' and the reason as its detail: `not_authorized: ...' (above),
 %% `not_a_member',
 %% `membership_unknown' (the lookup failed; retry), `unknown_epoch',
-%% `epoch_expired' or `unknown_group' (a prefix this distributor's org does not
-%% own).
+%% `epoch_expired', `unknown_group' (a prefix this distributor's org does not
+%% own) or `malformed_pull' (a payload that is not a map).
 %%
 %% The epochs live in a private table the distributor's process owns, and its
 %% state holds only that table's id: no other process can read the table, and
@@ -193,12 +195,16 @@ init(#{org := Org, policy := Policy, org_key_id := OrgKeyId, realm := Realm, pro
            table => ets:new(?MODULE, [private, set])}}.
 
 %% @private
-handle_call({pull, Payload}, _From, State) ->
+handle_call({pull, Payload}, _From, State) when is_map(Payload) ->
     Now = (maps:get(now, State))(),
     {Reply, NewState} = pulled(group_of(text_field(Payload, <<"prefix">>), State), maps:get(caller, Payload, undefined),
                                macula_record:payload_field(Payload, <<"epoch">>), Now,
                                presented(Payload), State),
     {reply, Reply, NewState};
+%% A sealed CALL's payload is any CBOR, and the link merges the caller and the token into a map only: anything else
+%% is refused here, never matched on, so no caller can stop the distributor and lose its epochs.
+handle_call({pull, _NotAMap}, _From, State) ->
+    {reply, {error, malformed_pull}, State};
 handle_call(counts, _From, #{counts := Counts} = State) ->
     {reply, Counts, State}.
 

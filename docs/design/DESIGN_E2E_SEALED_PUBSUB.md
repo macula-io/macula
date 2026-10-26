@@ -85,7 +85,7 @@ removed(CallerNodeId) -> boolean()
 1. **The group's access policy**, one per group, chosen when the distributor starts (`groups`, macula#129). The group
    a pull names travels inside the sealed payload, where no advertise gate sees it, so the handler checks it: the
    distributor is advertised `auth => handler_authorizes` (`macula_group_keys:advertise_opts/0`), and the provider
-   link hands the handler the call's own verified `ucan_token` and `proofs` beside `caller`, a payload's own fields of
+   link hands the handler the `ucan_token` and `proofs` the caller signed into the request beside `caller`, a payload's own fields of
    those names removed first. Either policy runs `macula_ucan:authorize/3`, so the token's audience must be the
    verified caller, its validity window must hold at the time of the pull (a past epoch's pull too), and its chain
    must run up to the key the policy names:
@@ -103,7 +103,9 @@ removed(CallerNodeId) -> boolean()
      passes the org grant. Counting is fail-open by design, the union of two policies, and must show as counting,
      never as protected, until its would-be refusals read zero. A restricted group needs the distributor's seal
      policy `required` (`start_link/1` refuses otherwise): its events must never travel clear. Its pulls are counted
-     per realm, group and outcome (`admitted`, `would_refuse`, `refused`), read by `macula_group_keys:counts/1`.
+     per realm, group and outcome (`admitted`, `would_refuse`, `refused`), read by `macula_group_keys:counts/1`. Each
+     listed prefix is its own group: listing `P` restricts `P`, not a group `P/sub` pulled under its own prefix,
+     which needs its own entry.
 
    A refused pull answers `not_authorized: <can> on <resource>`, naming what it lacked.
 2. **Live realm membership** (the default `membership`): the caller's realm endorsement, read from the mesh, never
@@ -397,7 +399,8 @@ most 24 hours.
    group. This replaces §3's earlier "a grant admits its holder to every group of the org" for restricted groups; the
    UCAN grammar has topic and topic prefix grants since macula#127.
 2. The check moved from the advertise gate into the handler, wire unchanged: the distributor is advertised
-   `handler_authorizes`, and the provider link hands its handler the call's verified token and proofs. Item 1 of §13
+   `handler_authorizes`, and the provider link hands its handler the token and proofs the caller signed into the
+   request, which the handler verifies. Item 1 of §13
    (the org UCAN checked before the handler runs) no longer holds; the token still rides the call's own `ucan_token`.
 3. A group request in `macula_ucan:authorize/3` (`group => P`) needs `mri:topic:P` and `mri:topic:P/*` both covered,
    and keeps every grant that answers, so the chain checks each: a delegate cannot add the half its proof lacks.
