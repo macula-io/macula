@@ -90,9 +90,11 @@ its own against the `keys` table.
 
 ## Capabilities
 
-A `with` is an MRI: `mri:realm:<realm>`, `mri:org:<realm>/<org>` or
-`mri:proc:<realm>/<procedure>`, where a procedure's org is the text before its
-first `/`. A realm name is at least one segment, segments joined by single
+A `with` is an MRI: `mri:realm:<realm>`, `mri:org:<realm>/<org>`,
+`mri:proc:<realm>/<procedure>` or `mri:topic:<realm>/<path>`, where a
+procedure's org is the text before its first `/`. A topic grant is the topic
+in full behind `mri:topic:`, since a topic's first segment is its realm's
+name (`<realm>/<org>/<app>/<domain>/<name>_v<N>`). A realm name is at least one segment, segments joined by single
 dots, each of `a-z`, `0-9`, `-`, `_`; case is never folded
 (`realm_name_not_canonical`). A procedure grant without an org is
 `procedure_without_org`, and so is a request whose procedure has none.
@@ -100,11 +102,27 @@ dots, each of `a-z`, `0-9`, `-`, `_`; case is never folded
 A request's realm id is SHA-256 over a grant's realm name, so a grant is
 checked against the request's realm id with nothing looked up
 (`wrong_realm` when it names another realm). Narrowing (`covers`): a realm
-grant covers its realm, an org grant covers that org and its procedures, a
-procedure grant covers only itself. No capability that covers the request is
+grant covers its realm, its topics included; an org grant covers that org,
+its procedures and its procedure prefixes, and no topic; a procedure or topic
+grant covers only itself. A procedure grant never covers a topic, nor a topic
+grant a procedure. No capability that covers the request is
 `missing_capability`.
 
-A context with no realm and procedure checks the token alone.
+A procedure or topic grant whose last segment is `*` is a prefix (macula#127):
+`mri:proc:<realm>/acme/*`, `mri:topic:<realm>/acme/_org/orders/*`. It covers
+every name below the segments before the `*`, and every prefix at or below
+them, in whole segments: `acme/_org/ord/*` covers nothing under
+`acme/_org/orders/`, and `acme/*` does not cover `acme` itself. A procedure
+prefix's org is its first segment, as a procedure's is. A `*` segment
+anywhere but last, a prefix with an empty segment, and a prefix with no
+segment before its `*` (`mri:proc:<realm>/*`) are no grant: `covers` is false
+with them on either side. A `*` inside a longer segment is a literal.
+
+A request is for one procedure or one topic. A topic request's context names
+`topic`, in full, instead of `procedure`; a context naming both is
+`malformed`, and so is a request that names a prefix.
+
+A context with no realm and no procedure or topic checks the token alone.
 
 ## Chains
 
@@ -150,7 +168,12 @@ The first refusal wins, so an SDK takes the checks in this order:
 5. `aud` against the verified caller: `not_the_audience`.
 6. `exp` (`expired`, then `exp_beyond_max_lifetime`), then `nbf`
    (`not_yet_valid`, or `malformed` when it is not an integer).
-7. With a request, the request's procedure: `procedure_without_org`.
+7. With a request, the request's procedure (`procedure_without_org`, or
+   `malformed` for a prefix) or topic: `topic_without_realm` when it has no
+   realm segment and path below it (a system topic, `_mesh.presence`), then
+   as a grant (`realm_name_not_canonical`, `malformed` for a prefix), then
+   `wrong_realm` when its realm is not the one whose id the request carries.
+   A context naming both a procedure and a topic is `malformed` here.
 8. The token's own capability (above): `missing_capability`, `wrong_realm`,
    `realm_name_not_canonical`. Where no capability answers, the first
    capability in `cap` order with a text `with` gives the reason, whatever

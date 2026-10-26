@@ -24,9 +24,18 @@
 %% capability is covered by one of its parent's (covers/2, D7's narrowing matrix). A token names at most one parent,
 %% and every proof that travelled must be referenced, so an unused one is refused rather than ignored.
 %%
-%% A capability's `with' is an MRI: `mri:realm:<realm>', `mri:org:<realm>/<org>' or `mri:proc:<realm>/<procedure>',
-%% where a procedure's org is the text before its first `/'. A realm id is SHA-256 over the normalised realm name
-%% (D7), so the grant's name is checked against the realm id the request carries, with nothing looked up.
+%% A capability's `with' is an MRI: `mri:realm:<realm>', `mri:org:<realm>/<org>', `mri:proc:<realm>/<procedure>' or
+%% `mri:topic:<realm>/<path>', where a procedure's org is the text before its first `/'. A topic's grant is the topic
+%% itself behind `mri:topic:', since a topic's first segment is its realm's name (macula_topic). A realm id is SHA-256
+%% over the normalised realm name (D7), so the grant's name is checked against the realm id the request carries, with
+%% nothing looked up.
+%%
+%% A procedure or topic grant whose last segment is `*' is a prefix: it covers every name below the segments before
+%% the `*', never that name itself, and only whole segments, so `mri:proc:<realm>/acme/*' covers `acme/api.users.get'
+%% and `mri:topic:<realm>/acme/orders/*' covers `<realm>/acme/orders/placed_v1', but `acme/ord/*' covers nothing of
+%% `acme/orders/'. A `*' segment anywhere else, a prefix with an empty segment, and a prefix with no segment before
+%% its `*' are not grants; a `*' inside a longer segment is a literal. A request names one procedure or one topic, never
+%% a prefix.
 -module(macula_ucan).
 
 -export([create/4, authorize/3, proof_id/1, covers/2, did_key/2, carried_key/2, max_lifetime/0, max_did_key_encoded/0]).
@@ -44,9 +53,12 @@
 -type refusal()    :: malformed | wrong_algorithm | signature_invalid | not_the_issuer | not_the_audience | expired
                     | exp_beyond_max_lifetime | not_yet_valid | missing_capability | missing_proof | unreferenced_proof
                     | not_the_delegate | chain_not_linear | grants_more_than_proof | can_changed | wrong_realm
-                    | realm_name_not_canonical | procedure_without_org.
-%% What a capability grants, parsed from its `with': a realm, an org of that realm, or one procedure of that realm.
--type grant()      :: {realm, binary()} | {org, binary(), binary()} | {proc, binary(), binary()}.
+                    | realm_name_not_canonical | procedure_without_org | topic_without_realm.
+%% What a capability grants, parsed from its `with': a realm, an org of that realm, one procedure or topic of that
+%% realm, or a prefix of procedures or of topics, held as the segments before its `*'.
+-type grant()      :: {realm, binary()} | {org, binary(), binary()} | {proc, binary(), binary()}
+                    | {proc_prefix, binary(), binary()} | {topic, binary(), binary()}
+                    | {topic_prefix, binary(), binary()}.
 
 %% The longest did:key text after its prefix (max_did_key_encoded/0).
 -define(MAX_DID_KEY_ENCODED, 4400).
@@ -106,12 +118,12 @@ optional_claims(Opts) ->
 %% @doc Whether Token authorizes the verified caller under Policy, in the provider's profile at Now in seconds: its
 %% claims when it does, or the first reason it does not. Never raises on the token.
 %%
-%% The context names the caller, the profile and the time, and, for a request, the realm id and procedure it is for
-%% and the proofs that travelled with it. A context with no realm and procedure checks the token alone, as a gate
-%% that has no request in front of it.
+%% The context names the caller, the profile and the time, and, for a request, the realm id and the procedure or
+%% topic it is for and the proofs that travelled with it. A topic is named in full, its realm's name first. A context
+%% with no realm and no procedure or topic checks the token alone, as a gate that has no request in front of it.
 -spec authorize(term(), policy(), #{caller := macula_node_keys:node_id(),
                                     profile := macula_crypto_profile:profile(), now := integer(),
-                                    realm => <<_:256>>, procedure => binary(),
+                                    realm => <<_:256>>, procedure => binary(), topic => binary(),
                                     proofs => #{binary() => binary()}}) ->
         {ok, map()} | {error, refusal()}.
 authorize(Token, Policy, #{caller := <<_:256>>, profile := Profile, now := Now} = Context) when is_integer(Now) ->
@@ -308,11 +320,15 @@ valid_at(_Now, Checked) ->
     {ok, Checked}.
 
 %% The capability the request needs: one the token grants, whose `can' is the policy's where it names one, and whose
-%% `with' covers the request's realm and procedure. The realm id a request carries is SHA-256 over the grant's realm
-%% name (D7), so a grant is checked against a request with nothing looked up. A context with no request checks the
-%% `can' alone, as before.
+%% `with' covers the request's realm and procedure or topic. The realm id a request carries is SHA-256 over the
+%% grant's realm name (D7), so a grant is checked against a request with nothing looked up. A context with no request
+%% checks the `can' alone, as before. A request is for one procedure or one topic: a context naming both is malformed.
+grants(_Policy, #{realm := <<_:256>>, procedure := _, topic := _}, _Checked) ->
+    {error, malformed};
 grants(Policy, #{realm := <<_:256>> = Realm, procedure := Procedure}, #{claims := #{<<"cap">> := Caps}} = Checked) ->
     requested(request_grant(Realm, Procedure), can_of(Policy), Caps, Checked);
+grants(Policy, #{realm := <<_:256>> = Realm, topic := Topic}, #{claims := #{<<"cap">> := Caps}} = Checked) ->
+    requested(request_topic(Realm, Topic), can_of(Policy), Caps, Checked);
 grants({ucan_required, _NodeId}, _Context, #{claims := #{<<"cap">> := Caps}} = Checked) ->
     {ok, Checked#{granted => Caps}};
 grants({realm_member_required, _KeyId, Can}, _Context, #{claims := #{<<"cap">> := Caps}} = Checked) ->
@@ -321,15 +337,19 @@ grants({realm_member_required, _KeyId, Can}, _Context, #{claims := #{<<"cap">> :
 can_of({ucan_required, _NodeId}) -> any;
 can_of({realm_member_required, _KeyId, Can}) -> Can.
 
-%% The grant a request asks for: one procedure of the realm whose id it carries. Its realm name comes from the
-%% token's own grants, since a realm id is a hash and cannot be read back into a name.
+%% The grant a request asks for: one procedure or one topic of the realm whose id it carries. A procedure's realm
+%% name comes from the token's own grants, since a realm id is a hash and cannot be read back into a name; a topic
+%% names its realm itself.
 requested({error, _} = Refusal, _Can, _Caps, _Checked) ->
     Refusal;
-requested({ok, Realm, Procedure}, Can, Caps, Checked) ->
+requested({ok, Realm, Target}, Can, Caps, Checked) ->
     granted([Cap || #{<<"with">> := With, <<"can">> := Granted} = Cap <- Caps,
                     is_binary(With), can_matches(Can, Granted),
-                    realm_matches(With, Realm), covers(With, procedure_grant(With, Procedure))],
+                    realm_matches(With, Realm), covers(With, target_grant(Target, With))],
             Realm, Checked).
+
+target_grant({procedure, Procedure}, With) -> procedure_grant(With, Procedure);
+target_grant({topic, Topic}, _With) -> <<"mri:topic:", Topic/binary>>.
 
 can_matches(any, _Granted) -> true;
 can_matches(Can, Granted) -> Can =:= Granted.
@@ -366,14 +386,38 @@ grant_refusal({ok, _Grant}, no_request) -> missing_capability.
 realm_verdict(true) -> missing_capability;
 realm_verdict(false) -> wrong_realm.
 
-%% The request's realm and procedure, refused when the procedure has no org namespace (D25).
+%% The request's realm and procedure, refused when the procedure has no org namespace (D25), or names a prefix: a
+%% request is for one procedure.
 request_grant(Realm, Procedure) when is_binary(Procedure) ->
-    request_org(macula_record:procedure_org(Procedure), Realm, Procedure);
+    request_org(macula_record:procedure_org(Procedure), name_form(Procedure), Realm, Procedure);
 request_grant(_Realm, _Procedure) ->
     {error, malformed}.
 
-request_org({org, _Org}, Realm, Procedure) -> {ok, Realm, Procedure};
-request_org(_None, _Realm, _Procedure) -> {error, procedure_without_org}.
+request_org({org, _Org}, {exact, _Name}, Realm, Procedure) -> {ok, Realm, {procedure, Procedure}};
+request_org({org, _Org}, _NotExact, _Realm, _Procedure) -> {error, malformed};
+request_org(_None, _Form, _Realm, _Procedure) -> {error, procedure_without_org}.
+
+%% The request's topic, named in full: refused when it has no realm segment and a path below it (a system topic, say),
+%% when it names a prefix, and when its realm is not the one whose id the request carries.
+request_topic(Realm, Topic) when is_binary(Topic) ->
+    topic_request(binary:split(Topic, <<"/">>), Realm, Topic);
+request_topic(_Realm, _Topic) ->
+    {error, malformed}.
+
+topic_request([_RealmName, Path], Realm, Topic) when Path =/= <<>> ->
+    topic_in_realm(grant(<<"mri:topic:", Topic/binary>>), Realm, Topic);
+topic_request(_NoPath, _Realm, _Topic) ->
+    {error, topic_without_realm}.
+
+topic_in_realm({ok, {topic, _Name, _Path} = Grant}, Realm, Topic) ->
+    topic_realm_verdict(realm_hash({ok, Grant}) =:= Realm, Realm, Topic);
+topic_in_realm({ok, {topic_prefix, _Name, _Base}}, _Realm, _Topic) ->
+    {error, malformed};
+topic_in_realm({error, _} = Refusal, _Realm, _Topic) ->
+    Refusal.
+
+topic_realm_verdict(true, Realm, Topic) -> {ok, Realm, {topic, Topic}};
+topic_realm_verdict(false, _Realm, _Topic) -> {error, wrong_realm}.
 
 verdict(true, Checked, _Refusal) -> {ok, Checked};
 verdict(false, _Checked, Refusal) -> {error, Refusal}.
@@ -389,8 +433,11 @@ proof_id(Token) when is_binary(Token) ->
     binary:encode_hex(crypto:hash(sha384, Token), lowercase).
 
 %% @doc Whether a grant covers another grant or a request, by D7's narrowing matrix: a realm grant covers its realm,
-%% an org grant covers that org and its procedures, and a procedure grant covers only itself. False for a grant that
-%% is not an MRI of the three forms, whose realm name is not canonical, or whose procedure has no org namespace.
+%% an org grant covers that org, its procedures and their prefixes, a prefix covers every name and prefix below it
+%% and itself, and a procedure or topic grant covers only itself. A procedure grant never covers a topic, nor a topic
+%% grant a procedure, and an org grant covers no topic: a topic's org slot carries macula_topic's tier sentinels, so
+%% topics are granted by realm, topic or topic prefix. False for a grant that is not an MRI of the four forms, whose
+%% realm name is not canonical, whose procedure has no org namespace, or whose `*' is not a prefix's last segment.
 -spec covers(binary(), binary()) -> boolean().
 covers(Parent, Child) ->
     covered(grant(Parent), grant(Child)).
@@ -401,14 +448,37 @@ covered({ok, {org, Realm, Org}}, {ok, {org, Realm, Org}}) ->
     true;
 covered({ok, {org, Realm, Org}}, {ok, {proc, Realm, Procedure}}) ->
     {org, Org} =:= macula_record:procedure_org(Procedure);
+covered({ok, {org, Realm, Org}}, {ok, {proc_prefix, Realm, Base}}) ->
+    hd(binary:split(Base, <<"/">>)) =:= Org;
 covered({ok, {proc, Realm, Procedure}}, {ok, {proc, Realm, Procedure}}) ->
     true;
+covered({ok, {proc_prefix, Realm, Base}}, {ok, {proc, Realm, Procedure}}) ->
+    below(Base, Procedure);
+covered({ok, {proc_prefix, Realm, Base}}, {ok, {proc_prefix, Realm, Child}}) ->
+    Base =:= Child orelse below(Base, Child);
+covered({ok, {topic, Realm, Path}}, {ok, {topic, Realm, Path}}) ->
+    true;
+covered({ok, {topic_prefix, Realm, Base}}, {ok, {topic, Realm, Path}}) ->
+    below(Base, Path);
+covered({ok, {topic_prefix, Realm, Base}}, {ok, {topic_prefix, Realm, Child}}) ->
+    Base =:= Child orelse below(Base, Child);
 covered(_Parent, _Child) ->
+    false.
+
+%% A name below a prefix's segments: those segments, a `/', and at least one byte more. Matching whole segments is
+%% what the `/' does: `acme/ord' is not below `acme/orders'.
+below(Base, Name) when byte_size(Name) > byte_size(Base) + 1 ->
+    Size = byte_size(Base),
+    binary:part(Name, 0, Size + 1) =:= <<Base/binary, "/">>;
+below(_Base, _Name) ->
     false.
 
 grant_realm({realm, Realm}) -> Realm;
 grant_realm({org, Realm, _Org}) -> Realm;
-grant_realm({proc, Realm, _Procedure}) -> Realm.
+grant_realm({proc, Realm, _Procedure}) -> Realm;
+grant_realm({proc_prefix, Realm, _Base}) -> Realm;
+grant_realm({topic, Realm, _Path}) -> Realm;
+grant_realm({topic_prefix, Realm, _Base}) -> Realm.
 
 %% A `with' parsed into its grant, or why it is not one.
 -spec grant(term()) -> {ok, grant()} | {error, refusal()}.
@@ -418,6 +488,8 @@ grant(<<"mri:org:", Rest/binary>>) ->
     org_grant(binary:split(Rest, <<"/">>));
 grant(<<"mri:proc:", Rest/binary>>) ->
     proc_grant(binary:split(Rest, <<"/">>));
+grant(<<"mri:topic:", Rest/binary>>) ->
+    topic_grant(binary:split(Rest, <<"/">>));
 grant(_Other) ->
     {error, malformed}.
 
@@ -427,13 +499,44 @@ org_grant(_Split) ->
     {error, malformed}.
 
 proc_grant([Realm, Procedure]) ->
-    named_realm(Realm, fun(Name) -> with_org(macula_record:procedure_org(Procedure), Name, Procedure) end);
+    named_realm(Realm, fun(Name) -> with_org(macula_record:procedure_org(Procedure), Name, name_form(Procedure)) end);
 proc_grant(_Split) ->
     {error, malformed}.
 
-with_org({org, _Org}, Realm, Procedure) -> {proc, Realm, Procedure};
-with_org(none, _Realm, _Procedure) -> {error, procedure_without_org};
-with_org({error, malformed}, _Realm, _Procedure) -> {error, procedure_without_org}.
+%% A prefix's org is its first segment, as an exact procedure's is: `acme/*' is in org acme, and `_/*' in none.
+with_org(_Org, _Realm, malformed) -> {error, malformed};
+with_org({org, _Org}, Realm, {exact, Procedure}) -> {proc, Realm, Procedure};
+with_org({org, _Org}, Realm, {prefix, Base}) -> {proc_prefix, Realm, Base};
+with_org(none, _Realm, _Form) -> {error, procedure_without_org};
+with_org({error, malformed}, _Realm, _Form) -> {error, procedure_without_org}.
+
+%% A topic grant names its realm and at least a path below it.
+topic_grant([Realm, Path]) when Path =/= <<>> ->
+    named_realm(Realm, fun(Name) -> topic_of(name_form(Path), Name) end);
+topic_grant(_Split) ->
+    {error, malformed}.
+
+topic_of({exact, Path}, Realm) -> {topic, Realm, Path};
+topic_of({prefix, Base}, Realm) -> {topic_prefix, Realm, Base};
+topic_of(malformed, _Realm) -> {error, malformed}.
+
+%% A procedure name or a topic path, exact or a prefix: a `*' is only ever a whole last segment, after at least one
+%% segment, none of them empty. Elsewhere it is no grant at all, never a literal.
+name_form(Name) ->
+    prefix_or_exact(lists:reverse(binary:split(Name, <<"/">>, [global])), Name).
+
+prefix_or_exact([<<"*">> | [_ | _] = Before], _Name) ->
+    prefix_of(lists:all(fun prefix_segment/1, Before), lists:reverse(Before));
+prefix_or_exact(Segments, Name) ->
+    exact_of(lists:member(<<"*">>, Segments), Name).
+
+prefix_of(true, Segments) -> {prefix, iolist_to_binary(lists:join(<<"/">>, Segments))};
+prefix_of(false, _Segments) -> malformed.
+
+prefix_segment(Segment) -> Segment =/= <<>> andalso Segment =/= <<"*">>.
+
+exact_of(false, Name) -> {exact, Name};
+exact_of(true, _Name) -> malformed.
 
 %% A realm name is the bytes a realm id hashes (D7): at least one segment, segments separated by single dots, each
 %% of a-z, 0-9, hyphen or underscore. Case is never folded, so a name outside the form is refused, not normalised.

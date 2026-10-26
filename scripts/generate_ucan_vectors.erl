@@ -12,6 +12,7 @@ MaxLifetime = macula_ucan:max_lifetime(),
 RealmName = <<"io.macula">>,
 Realm = crypto:hash(sha256, RealmName),
 Procedure = <<"acme/count_v1">>,
+Topic = <<RealmName/binary, "/acme/_org/orders/placed_v1">>,
 Can = <<"invoke">>,
 Proc = fun(Name, P) -> <<"mri:proc:", Name/binary, "/", P/binary>> end,
 Hex = fun(Bin) -> binary:encode_hex(Bin, lowercase) end,
@@ -56,6 +57,14 @@ Profile = fun(P) ->
     RequestContext = fun(Caller) ->
         #{<<"caller">> => Hex(Node(Caller)), <<"now">> => Now, <<"realm">> => Hex(Realm), <<"procedure">> => Procedure}
     end,
+    %% A topic request names the topic in full, its realm's name first, and no procedure.
+    TopicContext = fun(Caller) ->
+        maps:remove(<<"procedure">>, (RequestContext(Caller))#{<<"topic">> => Topic})
+    end,
+    TopicCap = {<<"mri:topic:", Topic/binary>>, Can},
+    TopicPrefixCap = {<<"mri:topic:", RealmName/binary, "/acme/_org/orders/*">>, Can},
+    ProcPrefixCap = {Proc(RealmName, <<"acme/*">>), Can},
+    RootToAliceTopics = Mint(Root, Alice, [TopicPrefixCap], #{}),
     %% A chain: Root grants Alice the org, Alice hands Bob the procedure.
     RootToAlice = Mint(Root, Alice, [OrgCap], #{}),
     AliceToBob = Mint(Alice, Bob, [ProcCap], #{prf => [macula_ucan:proof_id(RootToAlice)]}),
@@ -141,6 +150,36 @@ Profile = fun(P) ->
         {<<"grants_more_than_proof">>,
          Mint(Alice, Bob, [ProcCap], #{prf => [macula_ucan:proof_id(RootToAliceOther)]}), [RootToAliceOther],
          UcanRequired(Root), RequestContext(Bob)},
+        {<<"ok_topic_grant">>, Mint(Root, Alice, [TopicCap], #{}), [], UcanRequired(Root), TopicContext(Alice)},
+        {<<"ok_topic_prefix_grant">>, Mint(Root, Alice, [TopicPrefixCap], #{}), [], UcanRequired(Root),
+         TopicContext(Alice)},
+        {<<"ok_topic_realm_grant">>, Mint(Root, Alice, [RealmCap], #{}), [], UcanRequired(Root), TopicContext(Alice)},
+        {<<"ok_procedure_prefix_grant">>, Mint(Root, Alice, [ProcPrefixCap], #{}), [], UcanRequired(Root),
+         RequestContext(Alice)},
+        {<<"ok_delegated_topic_prefix">>, Mint(Alice, Bob, [TopicCap], #{prf => [macula_ucan:proof_id(RootToAliceTopics)]}),
+         [RootToAliceTopics], UcanRequired(Root), TopicContext(Bob)},
+        %% A procedure grant never answers a topic, an org grant answers no topic, and a prefix matches whole
+        %% segments only.
+        {<<"missing_capability_procedure_grant_for_a_topic">>, Mint(Root, Alice, [ProcPrefixCap], #{}), [],
+         UcanRequired(Root), TopicContext(Alice)},
+        {<<"missing_capability_org_grant_for_a_topic">>, Mint(Root, Alice, [OrgCap], #{}), [], UcanRequired(Root),
+         TopicContext(Alice)},
+        {<<"missing_capability_topic_grant_for_a_procedure">>,
+         Mint(Root, Alice, [{<<"mri:topic:", RealmName/binary, "/acme/*">>, Can}], #{}), [], UcanRequired(Root),
+         RequestContext(Alice)},
+        {<<"missing_capability_partial_segment_prefix">>,
+         Mint(Root, Alice, [{<<"mri:topic:", RealmName/binary, "/acme/_org/ord/*">>, Can}], #{}), [],
+         UcanRequired(Root), TopicContext(Alice)},
+        {<<"wrong_realm_topic">>, Mint(Root, Alice, [RealmCap], #{}), [], UcanRequired(Root),
+         (TopicContext(Alice))#{<<"topic">> => <<"other.realm/acme/_org/orders/placed_v1">>}},
+        {<<"topic_without_realm">>, Mint(Root, Alice, [RealmCap], #{}), [], UcanRequired(Root),
+         (TopicContext(Alice))#{<<"topic">> => <<"_mesh.presence">>}},
+        {<<"malformed_topic_request_names_a_prefix">>, Mint(Root, Alice, [RealmCap], #{}), [], UcanRequired(Root),
+         (TopicContext(Alice))#{<<"topic">> => <<RealmName/binary, "/acme/*">>}},
+        {<<"grants_more_than_proof_wider_prefix">>,
+         Mint(Alice, Bob, [{<<"mri:topic:", RealmName/binary, "/acme/*">>, Can}],
+              #{prf => [macula_ucan:proof_id(RootToAliceTopics)]}),
+         [RootToAliceTopics], UcanRequired(Root), TopicContext(Bob)},
         {<<"can_changed">>,
          Mint(Alice, Bob, [ProcCap], #{prf => [macula_ucan:proof_id(RootToAliceRead)]}), [RootToAliceRead],
          UcanRequired(Root), RequestContext(Bob)}
@@ -155,6 +194,7 @@ Profile = fun(P) ->
                  proofs => maps:from_list([{macula_ucan:proof_id(Pr), Pr} || Pr <- Proofs])},
         case Ctx of
             #{<<"realm">> := R, <<"procedure">> := Pc} -> Base#{realm => binary:decode_hex(R), procedure => Pc};
+            #{<<"realm">> := R, <<"topic">> := Tp} -> Base#{realm => binary:decode_hex(R), topic => Tp};
             _ -> Base
         end
     end,
@@ -187,7 +227,14 @@ end,
 Grants = [<<"mri:realm:io.macula">>, <<"mri:org:io.macula/acme">>, <<"mri:proc:io.macula/acme/count_v1">>,
           <<"mri:proc:io.macula/acme/other_v1">>, <<"mri:org:io.macula/beta">>, <<"mri:proc:io.macula/beta/count_v1">>,
           <<"mri:realm:other.realm">>, <<"mri:proc:other.realm/acme/count_v1">>, <<"mri:realm:IO.macula">>,
-          <<"mri:proc:io.macula/count_v1">>, <<"mri:org:io.macula/">>, <<"https://io.macula">>],
+          <<"mri:proc:io.macula/count_v1">>, <<"mri:org:io.macula/">>, <<"https://io.macula">>,
+          %% macula#127: topics and prefixes.
+          <<"mri:proc:io.macula/acme/*">>, <<"mri:proc:io.macula/acme/billing/*">>, <<"mri:proc:io.macula/*">>,
+          <<"mri:proc:io.macula/acme/*/get">>, <<"mri:proc:io.macula/acme/count/*">>,
+          <<"mri:topic:io.macula/acme/_org/orders/placed_v1">>, <<"mri:topic:io.macula/acme/_org/orders/*">>,
+          <<"mri:topic:io.macula/acme/*">>, <<"mri:topic:io.macula/acme/_org/ord/*">>,
+          <<"mri:topic:io.macula/acme/count_v1">>, <<"mri:topic:other.realm/acme/_org/orders/placed_v1">>,
+          <<"mri:topic:io.macula/*">>, <<"mri:topic:io.macula">>],
 Covers = [#{<<"parent">> => A, <<"child">> => B, <<"covers">> => macula_ucan:covers(A, B)} || A <- Grants, B <- Grants],
 Doc = #{<<"scheme">> => <<"ucan 0.10.0, macula 12 (D7)">>,
         <<"spec">> => <<"test/vectors/UCAN_V1.md">>,

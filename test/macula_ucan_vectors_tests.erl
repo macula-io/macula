@@ -41,7 +41,7 @@ policy(#{<<"kind">> := <<"ucan_required">>, <<"issuer">> := Issuer}) ->
 policy(#{<<"kind">> := <<"realm_member_required">>, <<"key_id">> := KeyId, <<"can">> := Can}) ->
     {realm_member_required, binary:decode_hex(KeyId), Can}.
 
-%% A context names the caller and the time, and for a request its realm and procedure; the proofs that travelled
+%% A context names the caller and the time, and for a request its realm and procedure or topic; the proofs that travelled
 %% are keyed by proof id, as the station link keys them.
 context(Profile, Context, Proofs) ->
     Base = #{caller => binary:decode_hex(maps:get(<<"caller">>, Context)), profile => Profile,
@@ -51,6 +51,8 @@ context(Profile, Context, Proofs) ->
 
 request(#{<<"realm">> := Realm, <<"procedure">> := Procedure}, Base) ->
     Base#{realm => binary:decode_hex(Realm), procedure => Procedure};
+request(#{<<"realm">> := Realm, <<"topic">> := Topic}, Base) ->
+    Base#{realm => binary:decode_hex(Realm), topic => Topic};
 request(_NoRequest, Base) ->
     Base.
 
@@ -89,7 +91,7 @@ refusals_pinned(Profiles) ->
     Refusals = [malformed, wrong_algorithm, signature_invalid, not_the_issuer, not_the_audience, expired,
                 exp_beyond_max_lifetime, not_yet_valid, missing_capability, missing_proof, unreferenced_proof, not_the_delegate,
                 chain_not_linear, grants_more_than_proof, can_changed, wrong_realm, realm_name_not_canonical,
-                procedure_without_org],
+                procedure_without_org, topic_without_realm],
     [?assertEqual({Profile, []},
                   {Profile, [R || R <- Refusals,
                                   not lists:member(atom_to_binary(R),

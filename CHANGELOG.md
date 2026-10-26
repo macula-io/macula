@@ -29,6 +29,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Topic grants and prefix grants in `macula_ucan` (macula#127).** A capability can now name a pub/sub topic,
+  `mri:topic:<realm>/<path>` (the topic in full, its realm's name first), and a procedure or topic grant ending in a
+  `*` segment covers every name below that prefix, in whole segments only. `authorize/3`'s context takes a `topic`
+  in place of a `procedure`, and refuses a topic with no realm segment as `topic_without_realm`. A procedure grant
+  never covers a topic, nor a topic grant a procedure; an org grant covers its procedure prefixes but no topic. No
+  enforcement and no wire change: this is the grant realm RBAC (macula-realm#97) will enforce.
+  `test/vectors/ucan_v1.json` is regenerated with the topic and prefix cases.
 - `docs.yml`: the docs check, on every change including doc-only ones; `publish-hex.yml` waits on it.
 
 ### Changed
