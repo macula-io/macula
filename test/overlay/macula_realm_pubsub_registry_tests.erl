@@ -610,6 +610,30 @@ end_exact_subscription(unsubscribe, Reg, R, ExactId) ->
 end_exact_subscription(purge, Reg, _R, ExactId) ->
     macula_realm_pubsub_registry:purge_subscriber(Reg, ExactId).
 
+%% GHSA-pcmc-p999-h2m9: a SUBSCRIBE naming a node other than the one on the
+%% authenticated link is refused, and materialises no realm.
+a_subscribe_naming_another_node_is_refused_test() ->
+    with_station_registry(fun(Reg, _Station) ->
+        R     = realm(),
+        Links = registry_links(Reg),
+        ?assertEqual({error, not_authorized},
+                     macula_realm_pubsub_registry:dispatch_frame(Reg, R, id(7), subscribe_frame(R, <<"news">>, id(8)))),
+        ?assertEqual({error, not_found}, macula_realm_pubsub_registry:lookup(Reg, R)),
+        ?assertEqual(Links, registry_links(Reg))
+    end).
+
+%% ...and an UNSUBSCRIBE naming another node leaves that node subscribed.
+an_unsubscribe_naming_another_node_is_refused_test() ->
+    with_station_registry(fun(Reg, _Station) ->
+        R      = realm(),
+        Victim = id(8),
+        {ok, []} = macula_realm_pubsub_registry:dispatch_frame(Reg, R, Victim, subscribe_frame(R, <<"news">>, Victim)),
+        ?assertEqual({error, not_authorized},
+                     macula_realm_pubsub_registry:dispatch_frame(Reg, R, id(7), unsubscribe_frame(R, <<"news">>, Victim))),
+        {ok, Server} = macula_realm_pubsub_registry:lookup(Reg, R),
+        ?assertEqual([Victim], macula_realm_pubsub_server:subscribers(Server, <<"news">>))
+    end).
+
 %% A registry that auto-materialises realms with the station's identity, as
 %% the station starts it, stopped after Test.
 with_station_registry(Test) ->

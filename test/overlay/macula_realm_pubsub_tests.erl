@@ -199,6 +199,29 @@ process_unsubscribe_drops_subscription_test() ->
     {S1, []} = macula_realm_pubsub:process(S0, Sub, unsubscribe_frame(R, <<"t">>, Sub)),
     ?assertNot(macula_realm_pubsub:is_subscribed(S1, <<"t">>, Sub)).
 
+%% GHSA-pcmc-p999-h2m9: a SUBSCRIBE or UNSUBSCRIBE registers the node on the
+%% authenticated link, never another node the frame names.
+process_subscribe_naming_another_node_is_refused_test() ->
+    R = realm(),
+    ?assertEqual({error, not_authorized},
+                 macula_realm_pubsub:process(new(R), id(7), subscribe_frame(R, <<"t">>, id(8)))).
+
+process_unsubscribe_naming_another_node_is_refused_test() ->
+    R = realm(),
+    Victim = id(8),
+    S0 = macula_realm_pubsub:subscribe(new(R), <<"t">>, Victim),
+    ?assertEqual({error, not_authorized},
+                 macula_realm_pubsub:process(S0, id(7), unsubscribe_frame(R, <<"t">>, Victim))),
+    ?assert(macula_realm_pubsub:is_subscribed(S0, <<"t">>, Victim)).
+
+names_its_sender_test_() ->
+    R = realm(),
+    [?_assert(macula_realm_pubsub:names_its_sender(id(7), subscribe_frame(R, <<"t">>, id(7)))),
+     ?_assert(macula_realm_pubsub:names_its_sender(id(7), unsubscribe_frame(R, <<"t">>, id(7)))),
+     ?_assertNot(macula_realm_pubsub:names_its_sender(id(7), subscribe_frame(R, <<"t">>, id(8)))),
+     ?_assertNot(macula_realm_pubsub:names_its_sender(id(7), unsubscribe_frame(R, <<"t">>, id(8)))),
+     ?_assert(macula_realm_pubsub:names_its_sender(id(99), event_frame(R, <<"t">>)))].
+
 process_event_returns_local_subscribers_test() ->
     R = realm(),
     S0 = macula_realm_pubsub:subscribe(new(R), <<"t">>, id(1)),
