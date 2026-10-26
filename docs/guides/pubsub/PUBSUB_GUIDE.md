@@ -421,7 +421,9 @@ keys to its members.
 
 ```erlang
 %% A member: publish and subscribe under the group. The pool joins it first,
-%% pulling the group's key with the org's grant.
+%% pulling the group's key with the token its distributor admits: the org's
+%% grant here, or the member's membership UCAN from its realm for a
+%% restricted group (below).
 Opts = #{group => <<"io.macula/acme/chat">>, ucan_token => OrgGrant},
 ok = macula:publish(Pool, Realm, <<"io.macula/acme/chat/room/said_v1">>, Payload, Opts),
 {ok, Sub} = macula:subscribe(Pool, Realm, <<"io.macula/acme/chat/room/said_v1">>, self(), Opts),
@@ -446,9 +448,9 @@ on.
   its advertisement verifies under the chain the realm operator signed (the
   org directory, then the org's delegation of the node), for exactly
   `<org>/group_keys_v1`. `distributor => NodeId` pins one.
-- **Membership is checked on every pull.** The distributor admits a caller
-  only with the org's grant (the call's own UCAN, checked by macula before the
-  handler runs) and a live realm membership, read from the realm's slot at
+- **Who may read is checked on every pull.** The distributor admits a caller
+  only with the token its group's access policy names (the call's own UCAN,
+  below) and a live realm membership, read from the realm's slot at
   the time of the call, past epochs included. An application keeps a
   **removed set** for members it expels: they are refused every epoch at once.
 - **Keys rotate.** An epoch publishes for 15 minutes (`rotate_after_ms`), and
@@ -468,17 +470,45 @@ subscription, and logs the publisher.
 **An event that cannot be opened is never silent.** The subscriber gets
 `{macula_event_unopened, SubRef, Topic, #{publisher, seal_key_id, reason}}`
 once, and nothing of the payload. `reason` is one of `unknown_epoch`,
-`epoch_expired`, `not_a_member`, `membership_unknown`, `no_distributor`,
+`epoch_expired`, `not_authorized`, `not_a_member`, `membership_unknown`, `no_distributor`,
 `no_group` (a sealed event on a subscription that named no group) and
 `tag_invalid`. A subscriber that missed an epoch (offline across a rotation)
 pulls it by id, at most three unknown ids per publisher per epoch.
 
+**Who may read a group.** Each group has one access policy, chosen when its
+distributor starts:
+
+- `org_grant` (the default for a group not listed): the org's `group_keys`
+  grant. It admits its holder to every such group of the org.
+- `{realm_capability, RealmKeyId, Mode}`, a restricted group: the realm's
+  `pubsub/subscribe`, in the member's membership UCAN, covering the whole
+  group: `mri:topic:P` and `mri:topic:P/*`. A role on `P/*` alone does not
+  admit, since the group key opens `P` too. `Mode` is `refusing`, or
+  `counting` (the default), which counts a pull the realm capability would
+  refuse and lets it through when the same token carries the org's grant, so
+  a realm can move members over one by one and flip once the would-be
+  refusals read zero. Counting lets those pulls through: treat a counting
+  group as unprotected until it is flipped. A restricted group needs the
+  `required` seal policy.
+
+Either policy checks the token's audience against the caller, its expiry at
+the pull, past epochs included, and its chain. A refusal reaches the member
+as `{error, {group, not_authorized}}`. What it bounds, honestly: a member
+whose role is withdrawn may pull until its membership token expires (the
+realm caps it at an hour), then reads with the key it already holds for one
+more rotation; whoever may read a sealed topic may also seal events on it,
+since the group key is shared; and stations still see who pulls from which
+distributor, never the keys.
+
 **Running a distributor.** The org's application starts
-`macula_group_keys:start_link(#{org => <<"acme">>, policy => required, ...})`
+`macula_group_keys:start_link(#{org => <<"acme">>, policy => required,
+org_key_id => OrgKeyId, realm => Realm, profile => Profile, groups =>
+#{<<"io.macula/acme/orders">> => {realm_capability, RealmKeyId, counting}}, ...})`
 and advertises its `handler/1` as `acme/group_keys_v1` with
-`macula_group_keys:advertise_opts(OrgKeyId)` merged into its options: the
-org's grant, checked before the handler runs, and sealed calls only, so a
-clear pull is answered `sealed_required`. With `kem_advertise` off those
+`macula_group_keys:advertise_opts/0` merged into its options: the call's own
+token handed to the handler, which checks it per group, and sealed calls
+only, so a clear pull is answered `sealed_required`. `macula_group_keys:counts/1`
+reads a restricted group's pulls by realm, group and outcome. With `kem_advertise` off those
 options refuse to advertise at all, rather than advertise a keyless
 distributor. Epoch keys live in memory only: a restarted
 distributor starts a new epoch, and a member that never pulled a lost one

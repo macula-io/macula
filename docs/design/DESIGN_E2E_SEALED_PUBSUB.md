@@ -82,15 +82,30 @@ removed(CallerNodeId) -> boolean()
 
 **A pull is admitted only with both:**
 
-1. **An org grant:** a UCAN issued by the org key, or delegated from it, carrying `can = "group_keys"` and
-   `with = mri:proc:<realm>/<org>/group_keys_v1` (or `mri:org:<realm>/<org>`, which covers it), valid at the time of
-   the call. The application advertises the procedure with the advertise policy `{realm_member_required, OrgKeyId,
-   <<"group_keys">>}`, so macula checks the call's `ucan_token` with `macula_ucan:authorize/3` before the handler
-   runs, and the handler never sees an unauthorized call: that form matches the issuer by key id, which is what an org key has
-   (`macula_node_keys:key_id/2`); `{ucan_required, _}` matches identity keys by node id only and would refuse every
-   org-issued token as `not_the_issuer`. The UCAN grammar has no topic prefix resource (`macula_ucan:grant/1` knows
-   `mri:realm`, `mri:org` and `mri:proc`), so **in this release a grant admits its holder to every group of the org.** A
-   per-prefix resource is its own later item, in every SDK's verifier at once.
+1. **The group's access policy**, one per group, chosen when the distributor starts (`groups`, macula#129). The group
+   a pull names travels inside the sealed payload, where no advertise gate sees it, so the handler checks it: the
+   distributor is advertised `auth => handler_authorizes` (`macula_group_keys:advertise_opts/0`), and the provider
+   link hands the handler the call's own verified `ucan_token` and `proofs` beside `caller`, a payload's own fields of
+   those names removed first. Either policy runs `macula_ucan:authorize/3`, so the token's audience must be the
+   verified caller, its validity window must hold at the time of the pull (a past epoch's pull too), and its chain
+   must run up to the key the policy names:
+   - **`org_grant`**, the default for a group not listed: a UCAN issued by the org key, or delegated from it, carrying
+     `can = "group_keys"` and `with = mri:proc:<realm>/<org>/group_keys_v1` (or `mri:org:<realm>/<org>`, which covers
+     it), checked as `{realm_member_required, OrgKeyId, <<"group_keys">>}`, the check the advertise gate made before:
+     that form matches the issuer by key id, which is what an org key has (`macula_node_keys:key_id/2`). **An org
+     grant admits its holder to every `org_grant` group of the org.**
+   - **`{realm_capability, RealmKeyId, Mode}`**, a restricted group: the realm key's `pubsub/subscribe`, issued to
+     the caller (the member's membership UCAN), whose grants cover the whole group: the prefix `mri:topic:P` and
+     everything below it `mri:topic:P/*`, by one grant (a parent prefix, the realm) or two. `mri:topic:P/*` alone
+     does not admit, since a group key opens `P` itself too, and whole segments count only, so a grant on
+     `acme/ord/*` covers nothing of `acme/orders`. `Mode` is `refusing` (the realm capability alone) or `counting`,
+     the default: a pull the realm capability would refuse is counted, logged, and admitted only when the same token
+     passes the org grant. Counting is fail-open by design, the union of two policies, and must show as counting,
+     never as protected, until its would-be refusals read zero. A restricted group needs the distributor's seal
+     policy `required` (`start_link/1` refuses otherwise): its events must never travel clear. Its pulls are counted
+     per realm, group and outcome (`admitted`, `would_refuse`, `refused`), read by `macula_group_keys:counts/1`.
+
+   A refused pull answers `not_authorized: <can> on <resource>`, naming what it lacked.
 2. **Live realm membership** (the default `membership`): the caller's realm endorsement, read from the mesh, never
    from anything the caller presents: a lookup of
    `macula_record:realm_member_endorsement_key(Realm, CallerNodeId)` and
@@ -179,10 +194,11 @@ The RESULT (sealed under `k_rep`, signed by the distributor):
 | `policy` | `required`, `preferred` or `off` (text) | §6 |
 | `epochs` | list | the asked epoch, and the next one inside the ahead window; each `#{id, key, issued_at, publish_until, accept_until}` |
 
-Under `off` the reply still carries epochs: `off` only means clear events are accepted too (§6). A call without a valid org
-grant is refused by macula before the handler (§3). The handler refuses with `{error, Reason}`, which macula answers
+Under `off` the reply still carries epochs: `off` only means clear events are accepted too (§6). The handler refuses
+with `{error, Reason}`, which macula answers
 as a provider error with code `handler_error` and the reason as its detail, sealed like any provider error on a sealed
-call: `not_a_member`, `membership_unknown` (the membership lookup failed or timed out; retry), `unknown_epoch` (an id
+call: `not_authorized: <can> on <resource>` (the call's token does not admit this group under its access policy, §3;
+the member's keyring names it `not_authorized`), `not_a_member`, `membership_unknown` (the membership lookup failed or timed out; retry), `unknown_epoch` (an id
 the distributor does not hold, including one lost to a restart), `epoch_expired` (past its `accept_until`) and
 `unknown_group` (a prefix whose second segment is not the distributor's org). The CBOR shape of both
 payloads is pinned as a vector (§10).
@@ -373,3 +389,22 @@ lookup the caller supplies (`find_records` of `macula_record:realm_member_endors
 member as `withdrawn`, and a failed lookup refuses, so admission fails closed. Its limit is the distributor's: a
 station on the lookup path can withhold a tombstone, so the guaranteed bound is the endorsement's own window, at
 most 24 hours.
+
+## 15. Read control per group (macula#129, 2026-10-26)
+
+1. Each group has one access policy (§3): `org_grant`, the earlier behaviour and the default, or
+   `{realm_capability, RealmKeyId, Mode}`, which admits a member on its realm's `pubsub/subscribe` covering the whole
+   group. This replaces §3's earlier "a grant admits its holder to every group of the org" for restricted groups; the
+   UCAN grammar has topic and topic prefix grants since macula#127.
+2. The check moved from the advertise gate into the handler, wire unchanged: the distributor is advertised
+   `handler_authorizes`, and the provider link hands its handler the call's verified token and proofs. Item 1 of §13
+   (the org UCAN checked before the handler runs) no longer holds; the token still rides the call's own `ucan_token`.
+3. A group request in `macula_ucan:authorize/3` (`group => P`) needs `mri:topic:P` and `mri:topic:P/*` both covered,
+   and keeps every grant that answers, so the chain checks each: a delegate cannot add the half its proof lacks.
+4. The member joins a restricted group with its membership UCAN as `ucan_token`; nothing else changes on its side, and
+   a refusal reaches it as `not_authorized`.
+5. Stated limits: a withdrawn member may pull until its membership token's `exp`, then reads with the last key it
+   holds for one rotation plus the ahead window (faster needs a withdrawal list, macula#46). The group key is
+   symmetric, so whoever may read a sealed topic may also seal events on it. Stations still see who pulls from which
+   distributor and when; the pull itself is sealed. The distributor is trusted for its groups (§2). Counting mode is
+   fail-open by design (§3).

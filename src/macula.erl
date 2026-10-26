@@ -597,9 +597,11 @@ sealed_by({error, _} = Refused, _Mode) -> Refused.
 %%
 %% `Opts' `auth' sets the procedure's policy: `open' (default, serve
 %% any identified caller), `{ucan_required, IssuerNodeId}' (gated to
-%% tokens from one known node), or `{realm_member_required, RealmKeyId,
-%% RequiredCan}' (gated to realm membership at a specific tier) -- see
-%% `macula_client:auth_policy()' for the full set.
+%% tokens from one known node), `{realm_member_required, RealmKeyId,
+%% RequiredCan}' (gated to realm membership at a specific tier), or
+%% `handler_authorizes' (no gate: the handler gets the call's own token
+%% and proofs and decides) -- see `macula_client:auth_policy()' for the
+%% full set.
 %%
 %% `stations => [StationNodeId]' registers the procedure on the links to
 %% those stations only, each named by the node_id its link pins, and a link
