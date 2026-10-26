@@ -263,7 +263,12 @@ retries on a backoff that stays short of the end. For a
 endorsement slot every `standing_recheck_ms` (60 seconds by default, link
 option or `macula` application env): the realm's tombstone of the endorsement
 (`withdrawn`) ends every session of that member, with a STREAM_ERROR
-`unauthorized`.
+`unauthorized`. Its tokens stay valid to their `exp`, so the provider then
+holds it: its STREAM_OPENs and CALLs under that realm's member policy are
+refused `unauthorized` until the latest end of any token it was served or
+refused under, and at least 1 hour and 5 minutes. A later re-check that finds
+it endorsed again lifts the hold. The re-checks run one at a time; one due
+while the last is still reading is skipped.
 
 **On the caller's side**, a stream opened to an org procedure ends when the
 provider's authorization ends (`macula_record:authorization_ends_at/3`, the
@@ -272,7 +277,9 @@ by the provider's renewed advertisements. Every `standing_recheck_ms` the
 caller re-reads the provider's delegation slot under the org key that
 delegated it (`macula_record:authorization_org_key/3`,
 `macula_record:delegation_standing/5`): the org's tombstone of the delegation
-aborts the stream `unauthorized` at once.
+aborts the stream `unauthorized` at once. A node's streams to one provider
+under one org key share that reading, so they cost one lookup per re-check
+however many there are.
 
 Only a tombstone ends a stream early. A failed lookup, an empty slot or an
 entry under any other key is no evidence of revocation, so the stream runs to

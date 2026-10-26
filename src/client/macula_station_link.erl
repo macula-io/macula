@@ -108,10 +108,13 @@
 -define(CALLER_RENEWAL_CALL_MS, 10_000).
 %% How often the standing of each member served under a realm member policy is read again (macula#120, M2).
 -define(STANDING_RECHECK_MS, 60_000).
+%% How long past its withdrawal a member stays refused at least, in seconds: the life a realm gives its membership
+%% tokens, an hour, plus the clock tolerance (macula#120).
+-define(WITHDRAWN_HOLD_S, 3_900).
 %% The info messages of a stream's authority (macula#120), handled by stream_authority_info/2.
 -define(STREAM_AUTHORITY_INFO(Tag),
         (Tag =:= served_authority_ended orelse Tag =:= served_authority_renewed orelse Tag =:= member_standings
-         orelse Tag =:= renew_caller_streams orelse Tag =:= caller_streams_renewal)).
+         orelse Tag =:= renew_caller_streams orelse Tag =:= caller_streams_renewal orelse Tag =:= member_refused)).
 
 %% A spec's ttl_ms is at least a second, and at most the advertisement type's
 %% own maximum lifetime (macula_record:procedure_advertisement_max_lifetime_ms/0,
@@ -580,7 +583,16 @@
     member_standing :: fun((<<_:256>>, <<_:256>>, <<_:256>>) -> ok | {error, term()}) | undefined,
     standing_recheck_ms = ?STANDING_RECHECK_MS :: pos_integer(),
     standing_armed = false :: boolean(),
-    standing_outcomes = #{} :: #{atom() => pos_integer()}
+    %% A re-check's worker is still reading: the next one is skipped and
+    %% counted as `skipped', so a slow DHT never piles workers up.
+    standing_in_flight = false :: boolean(),
+    standing_outcomes = #{} :: #{atom() => pos_integer()},
+    %% Each member the realm withdrew, in its realm under the realm key its
+    %% policy names, and the second until which its STREAM_OPENs and CALLs
+    %% under that policy are refused: the latest end of a token it was
+    %% served or refused under, and at least the hold past the withdrawal.
+    %% A later re-check that reads it in standing again lifts it.
+    withdrawn_members = #{} :: #{{<<_:256>>, <<_:256>>, <<_:256>>} => non_neg_integer()}
 }).
 
 -type subscription() :: {Realm     :: <<_:256>>,
@@ -1989,11 +2001,13 @@ stream_authority_info({served_authority_ended, AttachId, EndsAt}, #state{served_
 stream_authority_info({served_authority_renewed, Renewed}, S) ->
     lists:foldl(fun authority_renewed/2, S, Renewed);
 stream_authority_info({member_standings, Standings}, S) ->
-    lists:foldl(fun standing_read/2, S, Standings);
+    lists:foldl(fun standing_read/2, S#state{standing_in_flight = false}, Standings);
 stream_authority_info({renew_caller_streams, Key, Ref}, #state{caller_renewals = Renewals} = S) ->
     caller_renewal_due(maps:find(Key, Renewals), Key, Ref, S);
 stream_authority_info({caller_streams_renewal, Key, Ref, Answer}, #state{caller_renewals = Renewals} = S) ->
-    caller_renewal_answered(maps:find(Key, Renewals), Key, Ref, Answer, S).
+    caller_renewal_answered(maps:find(Key, Renewals), Key, Ref, Answer, S);
+stream_authority_info({member_refused, Member, TokenEnd}, S) ->
+    member_refused(Member, TokenEnd, S).
 
 %% The handshake never completed: recycle the link.
 connect_watchdog_fired(#state{peer_pid = Pid, seed = Seed} = S) ->
@@ -3555,9 +3569,10 @@ served_call(true, Request, Payload, Seal, #state{served_until = Until, node_iden
     _ = spawn(fun() -> serve_worker(Run, Admission, Request, Pid, Id, Seal) end),
     ok;
 served_call(false, Request, Payload, Seal, #state{procedures = Procs, policies = Pols, node_identity = Id, peer_pid = Pid,
-                                           profile = Profile, admission = Admission}) ->
+                                           profile = Profile, admission = Admission,
+                                           withdrawn_members = Withdrawn}) ->
     #{procedure := Proc, realm := Realm} = Request,
-    Verdict = authorize({Realm, Proc}, Request, Pols, Profile),
+    Verdict = authorize({Realm, Proc}, Request, Pols, Profile, Withdrawn),
     Found   = maps:find({Realm, Proc}, Procs),
     PayloadWithCaller = with_caller(Payload, maps:get(caller, Request, undefined)),
     Run = fun() -> inbound_reply(Verdict, Found, Request, PayloadWithCaller, Id, Seal) end,
@@ -3791,8 +3806,20 @@ sealed_reply({ok, Plain}, ReplyType, Keys, SealRequest, #{request_hash := Reques
 sealed_reply({error, Reason}, _ReplyType, _Keys, _SealRequest, _Request, _Key) ->
     erlang:error(Reason).
 
-authorize(Key, Frame, Pols, Profile) ->
-    authorize_policy(maps:get(Key, Pols, open), Frame, Profile).
+authorize(Key, Frame, Pols, Profile, Withdrawn) ->
+    Policy = maps:get(Key, Pols, open),
+    withdrawn_refused(authorize_policy(Policy, Frame, Profile), Policy, Frame, Withdrawn).
+
+%% M2 (macula#120): a member the realm withdrew is refused under a realm member policy of that realm key while it is
+%% held, whatever token it presents, since its tokens stay valid to their exp. The refusal tells this link the token's
+%% end, so the hold lasts as long as any token the member still holds (member_refused/2).
+withdrawn_refused(ok, {realm_member_required, KeyId, _Can},
+                  #{caller := Caller, realm := Realm, token := Token} = Frame, Withdrawn)
+  when is_map_key({Caller, Realm, KeyId}, Withdrawn) ->
+    self() ! {member_refused, {Caller, Realm, KeyId}, macula_ucan:authorized_until(Token, maps:get(proofs, Frame, []))},
+    unauthorized;
+withdrawn_refused(Verdict, _Policy, _Frame, _Withdrawn) ->
+    Verdict.
 
 %% A gated procedure serves a request whose token macula_ucan:authorize/3 accepts for the request's verified caller:
 %% the token verifies over its bytes as received, its audience is the caller, it is inside its validity window, it
@@ -4147,16 +4174,24 @@ caller_renewal_answered(_EndedOrStale, _Key, _Ref, _Answer, S) ->
 %% stream_renew, and its streams end at their token's end. Anything else renewed nothing and is tried again: a
 %% station's relay error (its code an atom, the station's own), a timeout, a link or pool down, a refusal (the next
 %% token may pass) or no token from the source.
-renewal_outcome({Token, {ok, #{{text, <<"renewed">>} := [_ | _]}}}, Key, #{ends_at := EndsAt} = Renewal, S) ->
-    caller_renewal_armed(Key, Renewal#{ends_at := max(EndsAt, token_end(Token)), tries := 0}, S);
+renewal_outcome({Token, {ok, #{{text, <<"renewed">>} := [_ | _]}}}, Key, Renewal, S) ->
+    renewed_to(token_end(Token), Key, Renewal, S);
 renewal_outcome({_Token, {error, {call_error, <<"unknown_next_peer">>, _Detail}}}, Key, _Renewal,
                 #state{caller_renewals = Renewals} = S) ->
     S#state{caller_renewals = maps:remove(Key, Renewals)};
 renewal_outcome(_RenewedNothing, Key, #{ends_at := EndsAt} = Renewal, S) ->
     caller_renewal_retried(EndsAt * 1000 - erlang:system_time(millisecond), Key, Renewal, S).
 
-%% Past the end there is nothing left to renew: the provider has ended the streams.
-caller_renewal_retried(LeftMs, Key, #{tries := Tries} = Renewal, S) when LeftMs > 0 ->
+%% A renewal that moved no end, the same token handed back or one ending no later, renewed nothing: it takes the
+%% backoff, so a source that keeps handing it back costs one CALL per backoff, not one per MIN_RENEWAL_MS.
+renewed_to(NewEnd, Key, #{ends_at := EndsAt} = Renewal, S) when NewEnd > EndsAt ->
+    caller_renewal_armed(Key, Renewal#{ends_at := NewEnd, tries := 0}, S);
+renewed_to(_NoLater, Key, #{ends_at := EndsAt} = Renewal, S) ->
+    caller_renewal_retried(EndsAt * 1000 - erlang:system_time(millisecond), Key, Renewal, S).
+
+%% With no more than one CALLER_RENEWAL_RETRY_MS left there is nothing left worth renewing: the provider ends the
+%% streams at their end, and a retry would only halve towards it.
+caller_renewal_retried(LeftMs, Key, #{tries := Tries} = Renewal, S) when LeftMs > ?CALLER_RENEWAL_RETRY_MS ->
     Backoff = min(?CALLER_RENEWAL_BACKOFF_MAX_MS, ?CALLER_RENEWAL_RETRY_MS bsl min(Tries, 6)),
     caller_renewal_in(max(1, min(Backoff, LeftMs div 2)), Key, Renewal#{tries := Tries + 1}, S);
 caller_renewal_retried(_Passed, Key, _Renewal, #state{caller_renewals = Renewals} = S) ->
@@ -4519,8 +4554,8 @@ close_sessionless_stream(Stream, #state{stream_bufs = Bufs} = S) ->
 on_stream_open_on(true, Open, Seal, Stream, S) ->
     refuse_opened(Stream, Open, Seal, <<"refused">>, <<"this stream already carries a session">>, S);
 on_stream_open_on(false, #{realm := Realm, procedure := Proc} = Open, Seal, Stream,
-                  #state{stream_policies = SPols, profile = Profile} = S) ->
-    on_stream_open_verdict(authorize({Realm, Proc}, Open, SPols, Profile), Open, Seal, Stream, S).
+                  #state{stream_policies = SPols, profile = Profile, withdrawn_members = Withdrawn} = S) ->
+    on_stream_open_verdict(authorize({Realm, Proc}, Open, SPols, Profile, Withdrawn), Open, Seal, Stream, S).
 
 carries_a_session(Stream, #state{client_streams = CS, server_streams = SS}) ->
     lists:any(fun({_Pid, _Mon, On}) -> On =:= Stream end, maps:values(CS) ++ maps:values(SS)).
@@ -4561,20 +4596,27 @@ standing_watched(_PolicyOrArmed, S) ->
     S.
 
 %% Each distinct member served under a realm member policy, in its realm and under the realm key its policy names, is
-%% read once, however many sessions it holds there. The reads run in a worker, and the next re-check is armed at once.
-standing_rechecked(#state{served_until = Until, member_standing = Standing, standing_recheck_ms = Every} = S) ->
+%% read once, however many sessions it holds there, and so is each member still held withdrawn, so a member the realm
+%% admits again is lifted. A hold that has passed is dropped first. The reads run in one worker at a time, and the next
+%% re-check is armed at once; one due while the last worker still reads is skipped and counted.
+standing_rechecked(#state{served_until = Until, withdrawn_members = Withdrawn0} = S) ->
+    Now = erlang:system_time(second),
+    Withdrawn = maps:filter(fun(_Member, HeldUntil) -> HeldUntil > Now end, Withdrawn0),
     Members = lists:usort([{Caller, Realm, KeyId}
                            || _AttachId := #{policy := {realm_member_required, KeyId, _Can}, caller := Caller,
-                                             realm := Realm} <- Until]),
-    standing_asked(Members, Standing, Every, S).
+                                             realm := Realm} <- Until] ++ maps:keys(Withdrawn)),
+    standing_asked(Members, S#state{withdrawn_members = Withdrawn}).
 
-standing_asked([], _Standing, _Every, S) ->
+standing_asked([], S) ->
     S;
-standing_asked(Members, Standing, Every, S) ->
+standing_asked(_Members, #state{standing_in_flight = true, standing_recheck_ms = Every} = S) ->
+    _ = erlang:send_after(Every, self(), recheck_member_standing),
+    counted(skipped, S#state{standing_armed = true});
+standing_asked(Members, #state{member_standing = Standing, standing_recheck_ms = Every} = S) ->
     Link = self(),
     _ = spawn(fun() -> Link ! {member_standings, [{M, standing_of(Standing, M)} || M <- Members]} end),
     _ = erlang:send_after(Every, self(), recheck_member_standing),
-    S#state{standing_armed = true}.
+    S#state{standing_armed = true, standing_in_flight = true}.
 
 %% A reader that raises reads as a lookup that failed: it keeps the session.
 standing_of(Standing, {Caller, Realm, KeyId}) ->
@@ -4582,14 +4624,24 @@ standing_of(Standing, {Caller, Realm, KeyId}) ->
     catch _:_ -> {error, lookup_failed}
     end.
 
-%% Only withdrawn ends a member's sessions early: the realm's tombstone of its endorsement. Any other outcome keeps
-%% them up to their token's end, since a failed or stale read is no evidence of revocation and must not take a
-%% service down; each is counted by name, and one that says the slot does not fit the member is logged.
-standing_read({{Caller, Realm, KeyId}, {error, withdrawn}}, #state{served_until = Until, server_streams = SS} = S) ->
-    Withdrawn = [AttachId || AttachId := #{policy := {realm_member_required, K, _Can}, caller := C, realm := R}
-                                 <- Until, C =:= Caller, R =:= Realm, K =:= KeyId],
-    [ok = authority_lost(maps:find(AttachId, SS), <<"the realm withdrew this member">>) || AttachId <- Withdrawn],
-    counted(withdrawn, S#state{served_until = maps:without(Withdrawn, Until)});
+%% Only withdrawn ends a member's sessions early: the realm's tombstone of its endorsement. The member is then held
+%% (withdrawn_members) until the latest end of the tokens those sessions held, and at least WITHDRAWN_HOLD_S past the
+%% first withdrawn read, so it cannot open again on a token that is still valid. A read of ok, a fresh endorsement,
+%% lifts the hold. Any other outcome keeps sessions and holds as they are, since a failed or stale read is no evidence
+%% either way and must not take a service down; each is counted by name, and one that says the slot does not fit the
+%% member is logged.
+standing_read({{Caller, Realm, KeyId} = Member, {error, withdrawn}},
+              #state{served_until = Until, server_streams = SS, withdrawn_members = Held} = S) ->
+    Withdrawn = [{AttachId, EndsAt}
+                 || AttachId := #{policy := {realm_member_required, K, _Can}, caller := C, realm := R,
+                                  ends_at := EndsAt} <- Until, C =:= Caller, R =:= Realm, K =:= KeyId],
+    [ok = authority_lost(maps:find(AttachId, SS), <<"the realm withdrew this member">>) || {AttachId, _} <- Withdrawn],
+    HeldUntil = lists:max([maps:get(Member, Held, erlang:system_time(second) + ?WITHDRAWN_HOLD_S)
+                           | [EndsAt || {_, EndsAt} <- Withdrawn]]),
+    counted(withdrawn, S#state{served_until = maps:without([AttachId || {AttachId, _} <- Withdrawn], Until),
+                               withdrawn_members = Held#{Member => HeldUntil}});
+standing_read({Member, ok}, #state{withdrawn_members = Held} = S) when is_map_key(Member, Held) ->
+    counted(ok, S#state{withdrawn_members = maps:remove(Member, Held)});
 standing_read({{Caller, Realm, _KeyId}, Outcome}, S) ->
     Name = outcome_name(Outcome),
     ok = standing_logged(Name, Caller, Realm),
@@ -4606,6 +4658,12 @@ standing_logged(Name, _Caller, _Realm)
 standing_logged(Name, Caller, Realm) ->
     logger:warning("[macula_station_link] standing of member ~ts in realm ~ts read ~p: session kept to its token's end",
                    [binary:encode_hex(Caller, lowercase), binary:encode_hex(Realm, lowercase), Name]).
+
+%% A held member refused again: the hold lasts to the end of the token it presented, when that is later.
+member_refused(Member, TokenEnd, #state{withdrawn_members = Held} = S) when is_map_key(Member, Held) ->
+    counted(refused_withdrawn, S#state{withdrawn_members = Held#{Member := max(TokenEnd, map_get(Member, Held))}});
+member_refused(_Lifted, _TokenEnd, S) ->
+    S.
 
 counted(Name, #state{standing_outcomes = Outcomes} = S) ->
     S#state{standing_outcomes = maps:update_with(Name, fun(N) -> N + 1 end, 1, Outcomes)}.

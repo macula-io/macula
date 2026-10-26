@@ -182,6 +182,9 @@
 %% `call_stream/6''s budget without `dial_timeout_ms', matching
 %% `macula:call_stream_station/7''s own default.
 -define(DEFAULT_DIAL_TIMEOUT_MS, 10_000).
+%% How often a stream re-reads its provider's delegation slot, unless the `standing_recheck_ms' application env says
+%% otherwise (macula#120).
+-define(STANDING_RECHECK_MS, 60_000).
 -define(TYPE_PROCEDURE_ADVERTISEMENT, 16#06).
 -define(TYPE_STATION_ENDPOINT, 16#12).
 %% A refusal `macula:find_record/3' returns for a record that did not verify
@@ -966,15 +969,19 @@ following(EndsAt, Stream, Renewed, Standing) ->
     _ = macula_provider_authority_follower:follow(Stream, EndsAt, Renewed, Standing),
     ok.
 
-%% The follower's standing re-check of the provider's delegation slot: none without an org key to read it under.
-standing({ok, OrgKeyId}, #{pool := Pool, find_records := Find}, Provider, Profile) ->
-    Key = macula_record:procedure_delegation_key(OrgKeyId, Provider),
-    #{standing => fun() ->
-                      delegation_read(Find(Pool, Key, budget(deadline(?DEFAULT_DIAL_TIMEOUT_MS))), OrgKeyId,
-                                      Provider, Profile)
-                  end};
+%% The follower's standing re-check of the provider's delegation slot: none without an org key to read it under. The
+%% node's streams to one provider under one org key share one reading per re-check (macula_provider_standing).
+standing({ok, OrgKeyId}, Dial, Provider, Profile) ->
+    RecheckMs = application:get_env(macula, standing_recheck_ms, ?STANDING_RECHECK_MS),
+    Read = fun() -> delegation_looked_up(Dial, OrgKeyId, Provider, Profile) end,
+    #{standing => fun() -> macula_provider_standing:read({Provider, OrgKeyId}, Read, RecheckMs) end,
+      recheck_ms => RecheckMs};
 standing(none, _Dial, _Provider, _Profile) ->
     #{}.
+
+delegation_looked_up(#{pool := Pool, find_records := Find}, OrgKeyId, Provider, Profile) ->
+    Key = macula_record:procedure_delegation_key(OrgKeyId, Provider),
+    delegation_read(Find(Pool, Key, budget(deadline(?DEFAULT_DIAL_TIMEOUT_MS))), OrgKeyId, Provider, Profile).
 
 delegation_read({ok, Recs}, OrgKeyId, Provider, Profile) when is_list(Recs) ->
     macula_record:delegation_standing(Recs, OrgKeyId, Provider, Profile, erlang:system_time(millisecond));

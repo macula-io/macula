@@ -53,6 +53,11 @@ init([]) ->
         %% Amendment A1). Before any pool advertises or serves.
         worker_child(macula_kem_keyring),
 
+        %% The last reading of each provider's delegation slot, shared by the
+        %% streams that follow that provider (macula#120). Before any pool
+        %% opens a stream.
+        worker_child(macula_provider_standing),
+
         %% MRI Type Registry (type validation, custom type registration)
         worker_child(macula_mri_registry, [[]]),
 
