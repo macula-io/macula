@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # Set the version this repository declares, in every place it declares it.
 #
-# THIS EXISTS BECAUSE THE VERSION LIVES IN TWO FILES AND MISSING ONE IS SILENT.
+# THIS EXISTS BECAUSE THE VERSION LIVES IN THREE FILES AND MISSING ONE IS SILENT.
 # src/macula.app.src is what rebar3 packages and what hex serves. CLAUDE.md's
-# header is what a reader (and an agent) is told the current version is. A bump
-# that updates only the first leaves the second claiming the previous release
-# indefinitely, and nothing complains.
+# header is what a reader (and an agent) is told the current version is.
+# rebar.config's relx release tuple names the release built from this tree,
+# and the release guard refuses a tag whose versions disagree. A bump that
+# updates only some of them leaves the rest claiming the previous release.
 #
 # It does NOT tag and does NOT publish. A tag is a push, a push goes through
 # the gate, and the tag is what arms .github/workflows/publish-hex.yml, which
@@ -19,6 +20,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 APP_SRC="${REPO_ROOT}/src/macula.app.src"
 CLAUDE_MD="${REPO_ROOT}/CLAUDE.md"
+REBAR_CONFIG="${REPO_ROOT}/rebar.config"
 
 NEW_VERSION="${1:-}"
 if [ -z "${NEW_VERSION}" ]; then
@@ -31,7 +33,7 @@ case "${NEW_VERSION}" in
     *) echo "REFUSED: '${NEW_VERSION}' is not MAJOR.MINOR.PATCH"; exit 1 ;;
 esac
 
-for f in "${APP_SRC}" "${CLAUDE_MD}"; do
+for f in "${APP_SRC}" "${CLAUDE_MD}" "${REBAR_CONFIG}"; do
     [ -f "$f" ] || { echo "REFUSED: no such file: $f"; exit 1; }
 done
 
@@ -46,17 +48,20 @@ sed -i "s/{vsn, \"${CURRENT}\"}/{vsn, \"${NEW_VERSION}\"}/" "${APP_SRC}"
 # behind and read back a truncated version, so a bump from 12.0.0-alpha.2 to
 # 12.0.0 left CLAUDE.md saying alpha.2 and still reported success.
 sed -i "s/^\*\*Current Version\*\*: v[0-9][0-9A-Za-z.+-]*/**Current Version**: v${NEW_VERSION}/" "${CLAUDE_MD}"
+sed -i "s/{release, {macula, \"[^\"]*\"}/{release, {macula, \"${NEW_VERSION}\"}/" "${REBAR_CONFIG}"
 
 # Confirm rather than assume: a sed that matched nothing exits 0.
 WROTE_APP="$(sed -n 's/.*{vsn, "\([^"]*\)".*/\1/p' "${APP_SRC}")"
 WROTE_MD="$(sed -n 's/^\*\*Current Version\*\*: v\([0-9][0-9A-Za-z.+-]*\).*/\1/p' "${CLAUDE_MD}")"
+WROTE_REL="$(sed -n 's/.*{release, {macula, "\([^"]*\)"}.*/\1/p' "${REBAR_CONFIG}")"
 
 FAILED=0
 [ "${WROTE_APP}" = "${NEW_VERSION}" ] || { echo "  FAILED to set ${APP_SRC} (reads ${WROTE_APP:-nothing})"; FAILED=1; }
 [ "${WROTE_MD}" = "${NEW_VERSION}" ] || { echo "  FAILED to set ${CLAUDE_MD} (reads ${WROTE_MD:-nothing})"; FAILED=1; }
+[ "${WROTE_REL}" = "${NEW_VERSION}" ] || { echo "  FAILED to set ${REBAR_CONFIG} (reads ${WROTE_REL:-nothing})"; FAILED=1; }
 [ "${FAILED}" -eq 0 ] || exit 1
 
-echo "  set in $(basename "${APP_SRC}") and $(basename "${CLAUDE_MD}")"
+echo "  set in $(basename "${APP_SRC}"), $(basename "${CLAUDE_MD}") and $(basename "${REBAR_CONFIG}")"
 echo
 echo "Next: CHANGELOG entry, then the release checklist in CLAUDE.md."
 echo "The tag and the publish go through the gate, not from here."
