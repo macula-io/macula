@@ -3,11 +3,13 @@
 %% times.
 %%
 %% A follower asks read/3 with its key, {Provider, OrgKeyId}, the read it would make and its re-check interval. A
-%% reading younger than the interval is answered as it is. A missing or older one is claimed by the first asker,
-%% atomically, and that asker makes the one read and stores its answer; every other asker meanwhile waits for that
-%% answer rather than taking the last one, so no follower learns of a withdrawal later than the one that read it. A
-%% read that raises is stored as lookup_failed, and an asker that waits longer than a lookup can take answers
-%% lookup_failed: neither is evidence of revocation. Callers read and write the table themselves; this process owns
+%% reading younger than half the interval is answered as it is, so what a follower acts on is never older than one
+%% interval at its next ask: the withdrawal reaches it within one re-check plus a lookup. A missing or older one is
+%% claimed by the first asker, atomically, and that asker makes the one read and stores its answer; every other asker
+%% meanwhile waits for that answer rather than taking the last one, so no follower learns of a withdrawal later than
+%% the one that read it. A read that raises is stored as lookup_failed, and an asker that waits longer than a lookup can
+%% take answers lookup_failed: neither is evidence of revocation. A claim older than that wait, its claimant gone
+%% mid-read, is claimed again by the next asker. Callers read and write the table themselves; this process owns
 %% it and sweeps readings older than ten minutes. Without the table, between an owner's exit and its restart, read/3
 %% reads directly.
 -module(macula_provider_standing).
@@ -44,10 +46,12 @@ held(Table, Key, Read, MaxAgeMs) ->
     Now = now_ms(),
     reading(ets:lookup(Table, Key), Table, Key, Read, MaxAgeMs, Now).
 
-%% A row is {Key, ReadAt, Standing}, where Standing is `reading' while its claimant reads.
-reading([{Key, _ReadAt, reading}], Table, Key, _Read, _MaxAgeMs, Now) ->
+%% A row is {Key, ReadAt, Standing}, where Standing is `reading' while its claimant reads, ReadAt then being the claim's
+%% time.
+reading([{Key, ClaimedAt, reading}], Table, Key, _Read, _MaxAgeMs, Now) when Now - ClaimedAt < ?AWAIT_MS ->
     awaited(Table, Key, Now + ?AWAIT_MS);
-reading([{Key, ReadAt, Standing}], _Table, Key, _Read, MaxAgeMs, Now) when Now - ReadAt < MaxAgeMs ->
+reading([{Key, ReadAt, Standing}], _Table, Key, _Read, MaxAgeMs, Now)
+  when Standing =/= reading, Now - ReadAt < MaxAgeMs div 2 ->
     Standing;
 reading([{Key, ReadAt, Standing}], Table, Key, Read, _MaxAgeMs, Now) ->
     claimed(ets:select_replace(Table, [{{Key, ReadAt, Standing}, [], [{{{const, Key}, Now, reading}}]}]), Table, Key,

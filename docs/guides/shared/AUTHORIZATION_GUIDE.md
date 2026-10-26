@@ -261,14 +261,27 @@ provider-signed `unknown_next_peer` stops the renewal; any other failure
 retries on a backoff that stays short of the end. For a
 `realm_member_required` session the provider also re-reads the member's
 endorsement slot every `standing_recheck_ms` (60 seconds by default, link
-option or `macula` application env): the realm's tombstone of the endorsement
-(`withdrawn`) ends every session of that member, with a STREAM_ERROR
-`unauthorized`. Its tokens stay valid to their `exp`, so the provider then
-holds it: its STREAM_OPENs and CALLs under that realm's member policy are
-refused `unauthorized` until the latest end of any token it was served or
-refused under, and at least 1 hour and 5 minutes. A later re-check that finds
-it endorsed again lifts the hold. The re-checks run one at a time; one due
-while the last is still reading is skipped.
+option or `macula` application env). The member is the audience of the token
+chain's root, the node the realm endorsed, which may have handed its rights on
+to the caller (`macula_ucan:root_audience/2`). The realm's tombstone of the
+endorsement (`withdrawn`) ends every session of that member and of its
+delegates, with a STREAM_ERROR `unauthorized`. Their tokens stay valid to
+their `exp`, so the provider's link then holds the member: STREAM_OPENs and
+CALLs under that realm's member policy whose chain roots at it are refused
+`unauthorized` until the latest end of any token it was served or refused
+under, and at least 1 hour and 5 minutes. That floor assumes the realm's
+membership tokens live an hour, which is the realm's policy: this library does
+not cap a token's life. Only time ends a hold, since a stale replica can still
+answer with the endorsement; a member the realm admits again waits it out. The
+re-checks run one at a time; one due while the last is still reading is
+skipped.
+
+The hold belongs to one station link, not to the provider. A provider has one
+link per station it is reached through, and a link that restarts starts with
+no hold, so a withdrawn member can open a new session on another of the
+provider's station links, or on a link that restarted, and is served there
+until that link's own re-check reads the withdrawal: up to one more
+`standing_recheck_ms` per station link and per restart.
 
 **On the caller's side**, a stream opened to an org procedure ends when the
 provider's authorization ends (`macula_record:authorization_ends_at/3`, the
@@ -279,17 +292,21 @@ delegated it (`macula_record:authorization_org_key/3`,
 `macula_record:delegation_standing/5`): the org's tombstone of the delegation
 aborts the stream `unauthorized` at once. A node's streams to one provider
 under one org key share that reading, so they cost one lookup per re-check
-however many there are.
+however many there are. A shared reading is used only while it is younger than
+half the re-check, so no stream acts on one older than a re-check.
 
 Only a tombstone ends a stream early. A failed lookup, an empty slot or an
 entry under any other key is no evidence of revocation, so the stream runs to
 its end.
 
-The bound: an open stream to a revoked member or provider ends within 60
-seconds of the DHT replicas holding the tombstone. Without a tombstone, when
-the realm or org only stops reissuing, it ends when the authority does: at
-most 1 hour plus 5 minutes of clock tolerance for a member (the life the realm
-gives its membership tokens), 35 minutes for a provider.
+The bound: an open stream to a revoked member or provider ends within one
+re-check, 60 seconds by default, plus the lookup that reads it, after the DHT
+replicas hold the tombstone. A withdrawn member that opens again through
+another station link, or after a link restarts, is ended within one more
+re-check on that link. Without a tombstone, when the realm or org only stops
+reissuing, a stream ends when the authority does: at most 1 hour plus 5
+minutes of clock tolerance for a member (the life the realm gives its
+membership tokens), 35 minutes for a provider.
 
 This covers streams. A subscription is not yet bounded this way: it lasts as
 long as its link.

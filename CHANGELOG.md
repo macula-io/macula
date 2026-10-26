@@ -11,18 +11,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
-- **An open stream to a member or provider the realm revoked ends within 60 seconds of the DHT holding the
-  tombstone** (macula#120). Before, a stream was authorized once at STREAM_OPEN and kept no credential: a direct
+- **An open stream to a member or provider the realm revoked ends within one re-check, 60 seconds by default plus a
+  lookup, of the DHT holding the tombstone** (macula#120). Before, a stream was authorized once at STREAM_OPEN and kept no credential: a direct
   stream outlived its token and any revocation without bound. Now, on the provider's side, a gated session ends at
   its token's end, a caller renews it through the provider's `~<node_id>/stream_renew` (new `call_stream` option
   `ucan_renewal`), and a `realm_member_required` session whose member the realm withdrew ends at the next standing
-  re-check (`standing_recheck_ms`, default 60 s); the member is then refused under that policy until its tokens end.
-  A renewal that moves no end takes the backoff. On the caller's side, a stream to an org procedure ends with the
+  re-check (`standing_recheck_ms`, default 60 s), its delegates' sessions with it (the member is the token chain's
+  root audience, new `macula_ucan:root_audience/2`); the member is then refused on that station link under that
+  policy until its tokens end, and only time lifts the hold. A renewal that moves no end takes the backoff. On the caller's side, a stream to an org procedure ends with the
   provider's authorization, follows its renewed advertisements, and ends at once when the org tombstones the
   provider's delegation (new `macula_record:authorization_org_key/3` and `delegation_standing/5`), one lookup per
   provider and org key per re-check however many streams follow it (`macula_provider_standing`). Without a
-  tombstone the ceiling is the credential's end: 1 h + 5 min for a member, 35 min for a provider. Subscriptions are
-  not covered yet. See the authorization guide, "Open streams and revocation".
+  tombstone the ceiling is the credential's end: 1 h + 5 min for a member, 35 min for a provider. The bound is per
+  station link: a withdrawn member re-opening through another station link, or after a link restarts, is ended
+  within one more re-check there. Subscriptions are not covered yet. See the authorization guide, "Open streams and revocation".
 
 ### Added
 

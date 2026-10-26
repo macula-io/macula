@@ -38,7 +38,7 @@
 %% a prefix.
 -module(macula_ucan).
 
--export([create/4, authorize/3, authorized_until/2, proof_id/1, covers/2, did_key/2, carried_key/2, max_lifetime/0, max_did_key_encoded/0]).
+-export([create/4, authorize/3, authorized_until/2, root_audience/2, proof_id/1, covers/2, did_key/2, carried_key/2, max_lifetime/0, max_did_key_encoded/0]).
 
 -ifdef(TEST).
 -export([base58btc_encode/1, base58btc_decode/1]).
@@ -144,6 +144,24 @@ authorized_until(Token, Proofs) when is_binary(Token), is_list(Proofs) ->
     lists:min([exp_of(parsed(T)) || T <- [Token | Proofs]]).
 
 exp_of({ok, #{claims := #{<<"exp">> := Exp}}}) when is_integer(Exp) -> Exp.
+
+%% @doc The node_id a chain's authority belongs to: the audience of its root, the token the policy's issuer issued.
+%% Under a realm member policy that is the member the realm endorsed, which may have handed its rights on to the caller
+%% through the chain (macula#120). A token with no prf is its own root. Like authorized_until/2 it reads the claims,
+%% following each prf to the proof that carries it, and verifies nothing, so it is only meaningful for a token and
+%% proofs authorize/3 has accepted.
+-spec root_audience(binary(), [binary()]) -> <<_:256>>.
+root_audience(Token, Proofs) when is_binary(Token), is_list(Proofs) ->
+    {ok, #{claims := Claims}} = parsed(Token),
+    root_of(Claims, maps:from_list([{proof_id(Proof), Proof} || Proof <- Proofs])).
+
+%% Each proof is taken as it is followed, so a chain that named one twice could not loop.
+root_of(#{<<"prf">> := [Id]}, ById) ->
+    {Proof, Rest} = maps:take(Id, ById),
+    {ok, #{claims := Claims}} = parsed(Proof),
+    root_of(Claims, Rest);
+root_of(#{<<"aud">> := Aud}, _ById) ->
+    binary:decode_hex(Aud).
 
 %%------------------------------------------------------------------
 %% The chain
