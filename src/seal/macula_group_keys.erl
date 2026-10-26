@@ -166,7 +166,7 @@ group_access({ok, Prefix}, {ok, Access}, _Policy) -> {ok, Prefix, Access}.
 %% waits for the distributor longer than a membership lookup can take (5 s) and
 %% less than a member's pull deadline (15 s), so a slow lookup answers
 %% `membership_unknown', and no answer is made that no member still waits for.
--spec handler(pid()) -> fun((map()) -> map() | {error, atom()}).
+-spec handler(pid()) -> fun((term()) -> map() | {error, atom() | binary()}).
 handler(Pid) ->
     fun(Payload) -> gen_server:call(Pid, {pull, Payload}, ?HANDLER_WAIT_MS) end.
 

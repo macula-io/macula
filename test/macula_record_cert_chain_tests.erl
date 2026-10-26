@@ -11,8 +11,8 @@
 -define(ORG, <<"rgfaber">>).
 -define(PROCEDURE, <<"rgfaber/get_forecast_v1">>).
 -define(DAY, 86400000).
-%% A realm CA in any name, but not the realm capability a sealed group's access policy names.
--define(REALM_CA, <<"realm_ca(?!pability)">>).
+%% A realm CA in any name and any case (realm_ca, RealmCa, RealmCA), but not the realm capability a sealed group's access policy names.
+-define(REALM_CA, <<"(?i)realm_?ca(?!pability)">>).
 
 %% A chain that authorized a provider before the form was removed: realm CA, org CA with O = rgfaber, and a leaf for
 %% the advertiser's key. Its advertisement is refused whether or not the caller still passes the realm CA.
@@ -29,7 +29,7 @@ the_builder_refuses_a_certificate_chain_authorization_test() ->
 
 %% Nothing in macula's own code validates a certificate path or reads a realm CA. The scan reads every source file
 %% under src/, found from macula_record's own compile information. `realm_ca' is found in any name it is part of
-%% (`realm_ca_der', `load_realm_ca'), except `realm_capability' (macula_group_keys), which is not a CA.
+%% (`realm_ca_der', `load_realm_ca', `RealmCa'), in any case, except `realm_capability' (macula_group_keys), which is not a CA.
 no_source_validates_a_certificate_path_or_reads_a_realm_ca_test() ->
     Record = proplists:get_value(source, macula_record:module_info(compile)),
     Sources = filelib:wildcard(filename:join([filename:dirname(filename:dirname(Record)), "**", "*.erl"])),
@@ -41,8 +41,9 @@ no_source_validates_a_certificate_path_or_reads_a_realm_ca_test() ->
 the_scan_finds_a_realm_ca_however_it_is_written_test() ->
     [?assertNotEqual(nomatch, re:run(Text, ?REALM_CA))
      || Text <- [<<"#{realm_ca := Ca}">>, <<"maps:get(realm_ca, Opts)">>, <<"realm_ca(Opts) ->">>, <<"x realm_ca">>,
-                 <<"realm_ca_der => X">>, <<"load_realm_ca(Opts)">>, <<"get_realm_ca()">>]],
-    ?assertEqual(nomatch, re:run(<<"{realm_capability, Key, refusing}">>, ?REALM_CA)).
+                 <<"realm_ca_der => X">>, <<"load_realm_ca(Opts)">>, <<"get_realm_ca()">>, <<"RealmCa = X">>, <<"#{realmCA => X}">>]],
+    [?assertEqual(nomatch, re:run(Text, ?REALM_CA))
+     || Text <- [<<"{realm_capability, Key, refusing}">>, <<"RealmCapability = X">>]].
 
 %%------------------------------------------------------------------
 %% Fixtures
