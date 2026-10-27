@@ -4362,9 +4362,10 @@ caller_renewal_retried(_Passed, Key, _Renewal, #state{caller_renewals = Renewals
 sealed_stream(clear, StreamOpts) -> StreamOpts;
 sealed_stream(Keys, StreamOpts) -> StreamOpts#{seal => Keys}.
 
-%% A caller's sealed stream given a reseal may reopen once, with its args, when its open is refused
-%% `sealed_refused' (`reopen_stream/6').
-reopening(#{seal := clear}, _Args, StreamOpts) -> StreamOpts;
+%% A caller's stream given a reseal may reopen once, with its args, when its open is refused `sealed_refused'
+%% (`reopen_stream/6'). A CLEAR stream takes the reseal too and keeps it, unused, until a `sealed_required' refusal
+%% carrying the provider's key has reopened it sealed (DESIGN_E2E_SEALED_BY_DEFAULT §3, release A0): a clear session
+%% that sent nothing starts the new one at seq 0, so it may still take A1's reseal within the same three.
 reopening(#{reseal := Reseal}, Args, StreamOpts) -> StreamOpts#{reopen => #{args => Args, reseal => Reseal}};
 reopening(_NoReseal, _Args, StreamOpts) -> StreamOpts.
 
@@ -4381,7 +4382,8 @@ reopened_client_stream(StreamPid, #{target := Target, realm := Realm, procedure 
                    KemKey, StreamPid, S).
 
 reopen_carried({ok, Spec, {Keys, _SealRequest}}, KemKey, StreamPid, #state{node_identity = Key} = S) ->
-    reopen_built(macula_frame:stream_bytes({stream_open, Spec}, Key), Keys, StreamPid, learnt_by_pool(KemKey, Spec, S));
+    ok = learnt_by_pool(KemKey, Spec, S),
+    reopen_built(macula_frame:stream_bytes({stream_open, Spec}, Key), Keys, StreamPid, S);
 reopen_carried({error, _} = Refused, _KemKey, _StreamPid, S) ->
     {reply_value, Refused, S}.
 

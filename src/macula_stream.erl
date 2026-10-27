@@ -55,6 +55,12 @@
 %% The check of the stream functions a supervised wrapper is given.
 -export([stream_io/2]).
 
+-ifdef(TEST).
+%% A state field's position in the state tuple, by name, for tests that read the state: a test names the field, so a
+%% field added to the record cannot shift what it reads.
+-export([state_field_index/1]).
+-endif.
+
 %% Peer-to-peer protocol — drives inbound deliveries from carrier
 %% modules (`macula_stream_local' for LOCAL pairs, `macula_station_link'
 %% for V2 station-link pairs).
@@ -176,6 +182,14 @@
     %% A reseal and reopen in flight, run by a worker so the stream keeps
     %% answering: its reference, and what the owner sent meanwhile, in order.
     reopening :: {reference(), [term()]} | undefined,
+    %% A caller's CLEAR stream waiting for the provider's first frame
+    %% (DESIGN_E2E_SEALED_BY_DEFAULT §3, release A0): every action it has
+    %% sent, in order, and the bytes of their bodies, kept so a
+    %% `sealed_required' refusal can be answered by replaying them under a
+    %% sealed reopen. `undefined' once that window has closed, which ends the
+    %% copy for good: the provider has answered, the owner ended the stream,
+    %% or the copy reached its bound.
+    replay :: undefined | #{bytes := non_neg_integer(), sent := [term()]},
     %% The most frames a provider seals under its random nonces (GCM's bound).
     max_sealed_frames = ?MAX_SEALED_FRAMES :: pos_integer(),
     %% The caller's seal report once it has settled (DESIGN_E2E_SEAL_REPORT §3), fixed from the stream's seal and
@@ -661,7 +675,33 @@ forward_to_peer(#state{peer = {local, Pid}} = S, {reply, Result}) ->
 forward_to_peer(#state{peer = {remote_via_link, _Link, _Sid}, closed_send = true} = S, _Action) ->
     {{error, send_closed}, S};
 forward_to_peer(#state{peer = {remote_via_link, _Link, _Sid}} = S, Action) ->
-    via_link(Action, S).
+    retained(via_link(Action, S), Action).
+
+%% A chunk, or the owner's own STREAM_END, that went out on a clear stream while the window was open is copied, so a
+%% `sealed_required' refusal can be answered by replaying it under the reopened session. Past the copy's own bound the
+%% copy is dropped and the window closed, which costs only the reopen: the stream is never held up for the copy's sake.
+retained({ok, S}, Action) ->
+    {ok, copied(Action, S)};
+retained(NotSent, _Action) ->
+    NotSent.
+
+copied({chunk, _Encoding, _Body} = Action, #state{replay = #{bytes := Bytes, sent := Sent} = Copy} = S) ->
+    within_copy_bound(Bytes + copy_bytes(Action), Copy#{sent := [Action | Sent]}, S);
+copied({end_stream, _Role} = Action, #state{replay = #{sent := Sent} = Copy} = S) ->
+    within_copy_bound(maps:get(bytes, Copy), Copy#{sent := [Action | Sent]}, S);
+copied(_NotTheOwnersOwnData, S) ->
+    S.
+
+within_copy_bound(Bytes, Copy, #state{max_inbox_bytes = Bound} = S) when Bytes =< Bound ->
+    S#state{replay = Copy#{bytes := Bytes}};
+within_copy_bound(_PastTheBound, _Copy, S) ->
+    S#state{replay = undefined}.
+
+%% What a copied action costs the copy: a chunk's body, in the bytes it took to carry it. The owner's STREAM_END carries
+%% nothing.
+copy_bytes({chunk, raw, Body}) when is_binary(Body) -> byte_size(Body);
+copy_bytes({chunk, msgpack, Body}) -> erlang:external_size(Body);
+copy_bytes(_NoBody) -> 0.
 
 via_link(Action, #state{peer = {remote_via_link, Link, Sid}, role = Role, mode = Mode} = S) ->
     #{frame_type := Type} = Spec = frame_spec(Action, S#state.seq_out),
@@ -773,12 +813,22 @@ replied({_Sent, State}, Result) ->
 %% @private A stream started with the key loader and STREAM_OPEN of a
 %% link-carried stream signs, numbers and verifies its frames; a local
 %% pair has none of these.
-carried(#{key := Key, open := Open, conn := Conn, profile := Profile} = Opts, State) ->
+carried(#{key := Key, open := Open, conn := Conn, profile := Profile} = Opts, #state{role = Role} = State) ->
+    Seal = stream_seal(maps:get(seal, Opts, undefined)),
     State#state{key = Key, open = Open, conn = Conn, profile = Profile, verifier = macula_frame:open_stream(Open),
-                station = maps:get(station, Opts, undefined), seal = stream_seal(maps:get(seal, Opts, undefined)),
-                reopen = maps:get(reopen, Opts, undefined)};
+                station = maps:get(station, Opts, undefined), seal = Seal,
+                reopen = maps:get(reopen, Opts, undefined), replay = retention(Role, Seal, Open)};
 carried(_LocalPair, State) ->
     State.
+
+%% A caller's CLEAR stream may still be refused `sealed_required' by a keyed provider, whose signed refusal names the
+%% key it holds (DESIGN_E2E_SEALED_BY_DEFAULT §3, release A0). It sends every owner action at once, as a clear stream
+%% always has, and keeps an ordered copy of what it sent until the provider's first frame: holding the owner's writes
+%% for the provider to answer would deadlock every clear `client_stream` and bidi stream whose provider waits for the
+%% caller's data first. A sealed stream reseals with its open's args alone (Amendment A1) and keeps no copy, and a
+%% served stream has no open of its own to refuse.
+retention(client, undefined, #{frame_type := stream_open}) -> #{bytes => 0, sent => []};
+retention(_RoleOrSealed, _Seal, _Open) -> undefined.
 
 %% @private Owner DOWN → stop. Otherwise check whether the dead pid
 %% was our peer (or our peer's mesh_client for remote peers) and, if
@@ -975,9 +1025,20 @@ peer_event(#{sealed := _}, #state{seal = undefined} = State) ->
 peer_event(#{sealed := Sealed, frame_type := Type, seq := Seq} = Fields, #state{seal = Keys} = State) ->
     %% A sealed frame from the provider means it opened the open: nothing is resealed any more.
     opened_event(opened(Sealed, Type, Seq, Keys, State), Fields, State#state{reopen = undefined});
+%% A keyed provider refusing a CLEAR caller stream (DESIGN_E2E_SEALED_BY_DEFAULT §3, release A0): the refusal is signed
+%% by the provider for this very open and bound to it, and its non-critical extension names the KEM key the provider
+%% holds now. It is keyed on the provider's FIRST frame, which is what a copy still held means, not on a seq: the stream
+%% reopens sealed once, on a new session, keeping its pid, and replays what it sent in order. A refusal that names no
+%% key, or a key of another profile's size (a provider before release A, or a faulty one), ends the copy and reaches
+%% the owner as the provider sent it.
+peer_event(#{frame_type := stream_error, code := <<"sealed_required">>} = Fields,
+           #state{role = client, seal = undefined} = State) ->
+    clear_open_refused(macula_frame:refused_kem_key(Fields), Fields, State);
 peer_event(Fields, #state{seal = undefined} = State) ->
     %% On a clear stream only: a sealed stream's clear STREAM_END reaches clear_event/2 too, and settles nothing.
-    clear_event(Fields, settled_by(Fields, [stream_data, stream_reply, stream_end], State));
+    %% Any other first frame (data, a reply, an end, or another error) ends the copy: nothing the provider says now
+    %% can make the open a refusal.
+    clear_event(Fields, settled_by(Fields, [stream_data, stream_reply, stream_end], State#state{replay = undefined}));
 peer_event(#{frame_type := stream_end} = Fields, State) ->
     clear_event(Fields, State);
 peer_event(#{frame_type := stream_error, code := <<"sealed_refused">>, message := Detail, seq := 0},
@@ -1027,10 +1088,13 @@ reopened({error, _} = Refused, _Queued, #state{ended = undefined} = State) ->
 reopened({error, _}, _Queued, State) ->
     State.
 
-%% This stream reads and writes on the reopen's session from now on.
+%% This stream reads and writes on the reopen's session from now on, numbering from 0 under its own frame type's keys:
+%% what it replays goes out as the new session's first frames, at its own seqs, whatever the old clear session had
+%% reached (a caller's nonce is derived from the seq, so a session that kept the old count would repeat a nonce). A
+%% session whose replay was empty starts at 0 too, which is what lets a second `sealed_refused' take A1's reseal.
 adopted(#{open := Open, seal := Keys, sid := Sid}, #state{peer = {remote_via_link, Link, _Old}} = State) ->
     State#state{id = Sid, peer = {remote_via_link, Link, Sid}, open = Open, verifier = macula_frame:open_stream(Open),
-                seal = stream_seal(Keys)}.
+                seal = stream_seal(Keys), seq_out = 0, seq_in = 0}.
 
 flushed(Queued, State) ->
     lists:foldl(fun(Action, S) -> {_Sent, S1} = via_link(Action, S), S1 end, State, Queued).
@@ -1042,6 +1106,39 @@ clear_refusal(true, Fields, State) ->
     clear_event(Fields, State);
 clear_refusal(false, _Fields, State) ->
     abort_session(<<"malformed_frame">>, <<"a clear frame on a sealed stream">>, State).
+
+%% A refusal this stream may seal to, while it still holds its copy and has not ended: reopen sealed on a new session
+%% with the copy in hand. The reopen calls the link, which may be delivering a frame here, so it runs in a worker as
+%% A1's reseal does; what the owner writes meanwhile joins the end of the copy, in order.
+clear_open_refused({ok, KemKey}, Fields, #state{profile = Profile} = State) ->
+    clear_open_sealed_to(named_key(KemKey, Profile), Fields, State);
+clear_open_refused(none, Fields, State) ->
+    clear_open_error(Fields, State).
+
+%% The refusal's key is usable only at this stream's own profile's size: another size seals nothing here, and the
+%% provider's own refusal is truer to tell the owner than a failure to seal to it.
+named_key(KemKey, Profile) ->
+    this_profile(macula_seal:public_key(KemKey), KemKey, Profile).
+
+this_profile({ok, Profile, _Public}, KemKey, Profile) -> {ok, KemKey};
+this_profile(_AnotherProfileOrNone, _KemKey, _Profile) -> none.
+
+clear_open_sealed_to({ok, KemKey}, _Fields, #state{ended = undefined, replay = #{sent := Sent},
+                                                  peer = {remote_via_link, Link, Sid}, open = Open} = State) ->
+    Stream = self(),
+    Ref = make_ref(),
+    Args = maps:get(payload, Open),
+    _ = spawn(fun() ->
+              Stream ! {reopened, Ref, macula_station_link:reopen_stream(Link, Stream, Sid, Open, Args, KemKey)}
+          end),
+    State#state{replay = undefined, reopening = {Ref, lists:reverse(Sent)}};
+clear_open_sealed_to(_NoCopyOrEnded, Fields, State) ->
+    clear_open_error(Fields, State).
+
+%% Nothing to seal to, or nothing to reopen with: the refusal reaches the owner as the provider sent it, now, rather
+%% than at its deadline.
+clear_open_error(#{code := Code, message := Message}, State) ->
+    error_arrived(Code, Message, State#state{replay = undefined}).
 
 %% The plaintext of a peer's sealed frame: under the key its key id names, the
 %% provider's with the nonce it carries, the caller's with its seq's.
@@ -1263,3 +1360,11 @@ drop_waiter_and_reply(From, Reply, Q) ->
 cancel_timer(undefined) -> ok;
 cancel_timer(immediate) -> ok;
 cancel_timer(Ref) -> erlang:cancel_timer(Ref), ok.
+
+-ifdef(TEST).
+state_field_index(Field) ->
+    field_index(Field, record_info(fields, state), 2).
+
+field_index(Field, [Field | _Rest], Index) -> Index;
+field_index(Field, [_Other | Rest], Index) -> field_index(Field, Rest, Index + 1).
+-endif.
