@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [17.0.0] - 2026-10-27
+
 ### Added
 
 - **Read control for sealed groups (macula#129).** A distributor (`macula_group_keys`) takes one access policy per
