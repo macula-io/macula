@@ -48,8 +48,10 @@ provider whose operator did not turn one off.
   option, a provider names its key and refuses clear, and a caller refuses a provider that names none (§3).
 - **T7, the start-up downgrade.** For ten minutes after a provider starts naming its key, it still answers clear calls.
   Inside that window a station can serve a caller the provider's previous keyless advertisement: it is still within
-  its lifetime and validly signed, so a `preferred` caller sends in the clear and the provider answers. Defeated: the
-  window is removed (§4), and a default caller refuses a keyless advertisement anyway.
+  its lifetime and validly signed, so a `preferred` caller sends in the clear and the provider answers. **Defeated
+  for `required` callers only**, which refuse a keyless advertisement whatever its age. Removing the window (§4) stops
+  the provider from answering a clear request; it cannot stop a `preferred` caller from sending one, and the relaying
+  station reads that request's payload before the provider refuses it (below, "Still not protected").
 - **T8, a silent opt-out.** An operator turns sealing off and nobody on the path notices. Not defeated, but
   **made visible**: an opt-out must be a written option on both ends (§3), is logged when it takes effect, and is
   counted (§7).
@@ -58,6 +60,10 @@ provider whose operator did not turn one off.
 rows matter to this change:
 
 - **A provider that opted out.** Its payloads are clear to every station, by its operator's decision.
+- **A `preferred` caller's request after a provider flips from `off` to `required`.** For the provider's last keyless
+  advertisement's lifetime plus the clock tolerance (5 + 5 minutes), a `preferred` caller holding it, or served it by
+  a station, sends its request in the clear. The provider refuses it, but the stations on the path have read it. The
+  caller's operator accepted that by choosing `preferred` (§3).
 - **Open pubsub topics.** An open topic has no recipient key, and SUBSCRIBE is unchecked: anyone may subscribe (§5).
 - **D27 content.** It is public to every station through its announcement (§6).
 - **A station's own control procedures** (`find_record`, `put_record`, `find_records`, `find_records_by_type`,
@@ -80,7 +86,8 @@ rows matter to this change:
 
 **Caller (call, stream, explicit target).**
 
-- Call modes become **`required` (the default) and `preferred`** (the opt-out):
+- Call modes become **`required` (the default) and `preferred`** (the opt-out). The caller default ships one
+  release after the provider default (§8, release B):
   - `required` seals to the key the target's verified advertisement names. A keyless advertisement fails the call
     with the new reason `provider_serves_clear` (§7), which is distinct from `no_kem_key` (no usable key, or none
     found).
@@ -101,7 +108,8 @@ does not decide the caller's confidentiality for it.
 Considered and not taken: a default caller that follows the provider (seal when keyed, clear when keyless). Under
 universal keying a keyless advertisement would be an authentic opt-out, since a station cannot strip a signed key.
 But that makes the provider's operator the only one deciding whether the caller's payload is relayed in the clear,
-which is T8 for the caller.
+which is T8 for the caller. And a caller following the provider follows a stale keyless advertisement too, so after
+every `off` to `required` flip it would leak requests by default (§4), not only by opt-out.
 
 ## 4. Point 2: the start-up clear window is removed
 
@@ -110,9 +118,10 @@ which is T8 for the caller.
   remains is one rule: a keyed provider never answers a clear CALL or STREAM_OPEN.
 - **Flipping a provider from `off` to `required`.** Its last keyless advertisement lives up to 5 min plus the 5 min
   clock tolerance at the callers that hold it.
-  - A `preferred` caller that sends clear gets `sealed_required`, re-resolves (§3) and seals.
-  - A `required` caller already refused the keyless advertisement.
-  - Nothing goes out in the clear, and the cost is at most one refused round per caller.
+  - A `required` caller already refused the keyless advertisement: nothing of it goes out in the clear.
+  - A `preferred` caller holding that advertisement sends its request in the clear. The provider answers
+    `sealed_required`, the caller re-resolves (§3) and seals. **That one clear request per caller is read by the
+    stations on its path** (§2, "Still not protected"); no provider answer is ever clear.
 - **Flipping from `required` to `off`.** Sealed calls get `sealed_refused` ("opens no sealed payload"). A `required`
   caller fails, which is correct. A `preferred` caller re-resolves, finds the keyless advertisement and calls clear,
   as both operators chose.
@@ -138,7 +147,15 @@ nothing. **Only a group can be sealed.** A group is an org's topic prefix with a
 3. **What stays clear, stated plainly:** every event published `open => 1`, under any topic. The mesh's public topics
    (`agents.lobby`, presence, the station and realm announcement facts) are open by design, and each of their
    publishers states `open => 1` in code.
-4. Unchanged: SUBSCRIBE frames stay readable (stations route on the topic). Topic names, publishers and epoch key ids
+4. **`open => 1` under a prefix this node holds as a group is refused `group_held`**, for subscribe as for publish
+   today, so `open` never reaches past a group's policy at the node that holds it.
+5. **The SDKs' own publishes and subscribes state their mode too.** Today every internal fact goes through the
+   default publish path: in Erlang the download, feeder, lifetime announcer, publisher, pusher, request, response,
+   streamer and stream sink modules all call `macula:publish/4` with no group. Each internal publish and subscribe in
+   each of the three implementations writes `open => 1` (or names its group), and a test proves a default pool's
+   internal facts still flow. macula-station publishes through the Erlang SDK, so its rebuild on that release writes
+   `open => 1` on its announcement publishes (§8).
+6. Unchanged: SUBSCRIBE frames stay readable (stations route on the topic). Topic names, publishers and epoch key ids
    stay visible (base design §9).
 
 This is the most expensive point in the design: every publish and subscribe call site in every service and client
@@ -181,8 +198,11 @@ today. Each gains:
 - a counter per `(realm, procedure)` of **clear requests refused** and of **clear requests served**. They are read the
   way each SDK exposes counts today: Erlang telemetry plus a `counts` function as `macula_group_keys:counts/1` does,
   Go and Rust a pool method, the bindings through the ABI or FFI.
-- a warning log when a clear request is refused, naming the caller node and procedure, at most once per (caller,
-  procedure) per minute;
+- a warning log when a clear request is refused, **rate-limited per procedure, with no per-caller state**: at most
+  one line per (realm, procedure) per minute, naming the last refused caller and how many refusals the line covers.
+  Any node can be a caller, so a limiter keyed by caller would grow without bound (memory exhaustion on the
+  provider). The limiter's state is bounded by the procedures the provider advertises, and a test floods refusals
+  from many callers and checks that the state stays at one entry per procedure;
 - a warning log once when a procedure is advertised `off`: "serving <procedure> in the clear (confidential => off)".
 
 The served-clear counter is what the fleet measurement in §8 reads: **zero served clear requests on every procedure
@@ -195,28 +215,45 @@ Compatibility across the transition is a concern of order, not of code (no compa
 - An old caller (`preferred`) and a new provider (keyed, `required`): the call is sealed and works.
 - A new caller (`required`) and an old provider (keyless): it fails, `provider_serves_clear`.
 
-So **providers move before callers**. Every service that is both moves both at once, which is safe for its own
-callers.
+So providers must be keyed before any caller defaults to `required`. Most services are both, and the fleet rolls box
+by box, canary first, so "rebuild providers first" cannot be ordered from the build list: a rebuilt service on the
+canary would become a `required` caller of providers that have not rolled, and live paths would fail, the realm's
+first. **Each implementation therefore ships the change in two releases, provider default first:**
 
-1. **The three implementations, one release each, in house order:** Erlang `macula` (major), then `macula-go` and
-   libmacula, then `macula-rust` and its FFI crate. Each lands everything in §3 to §7, with its default-pinning tests
-   rewritten (the inventory lists them per repo). The cross-SDK interop jobs (`sealed-interop.yml`,
-   `scripts/interop/*`) gain three cases: default to default seals; a default caller to an `off` provider is refused
-   `provider_serves_clear`; `preferred` to `off` is clear and counted served-clear.
-2. **The four bindings** re-pin to the new libmacula. They delete their `kemAdvertise` parameters and PHP's written
-   `Preferred` defaults, and add `open` to publish and subscribe. Today they pin v0.27.0 against macula-go v0.28.0, so
-   the re-pin also covers that gap.
-3. **Services are rebuilt on released SDKs only**, providers first: the realm, mcl-* services, the portal; then
-   caller-only clients last (macula-mcp, CLIs). Each rebuild writes `open => 1` on its public topics and `off` only
-   where an operator decides it, each one listed in the service's PR.
-4. **The fleet, canary first**, through macula-fleet digest pins (macula-fleet#14). After the canary and after the
-   rest, read the counters: served-clear is zero on every keyed procedure. That reading is what moves the register
-   rows "Payload sealing for calls and streams" and "Sealed publish/subscribe", and Saturnus is copied.
+- **Release A, the provider default.** Everything in §3 to §7 **except the caller default**: the keyring is always
+  on, `kem_advertise` and advertise-side `preferred` are gone, there is no clear window, publish and subscribe need
+  `group` or `open`, content is `off`, and the counters and logs are in. The caller default stays `preferred` in
+  release A, and `provider_serves_clear` exists but is reached only by a caller that writes `required`.
+- **Release B, the caller default.** It flips the caller default to `required`. It ships only after the fleet has
+  rolled release A everywhere and the measurement below shows that every keyless advertisement left on the fleet is
+  an explicit `off`.
 
-The stations need no release: they verify and relay `sealed` already, and their own control procedures stay clear
-(§2). The SDKs' internal calls to those procedures must not take the new caller default: each implementation's build
-checks that its station-procedure calls state their mode, with a test that a default pool still reads and writes DHT
-records.
+This is ordering, not a compatibility mode: release B deletes the interim default, and nothing negotiates. Between
+the two releases a default caller is a `preferred` caller, so T7 (§2) holds for default callers only from release B
+on, and the docs of release A say so.
+
+1. **Release A of the three implementations, in house order:** Erlang `macula` (major), then `macula-go` and
+   libmacula, then `macula-rust` and its FFI crate. Default-pinning tests are rewritten (the inventory lists them per
+   repo). The cross-SDK interop jobs (`sealed-interop.yml`, `scripts/interop/*`) gain: default provider to default
+   caller seals; a `required` caller to an `off` provider is refused `provider_serves_clear`; `preferred` to `off` is
+   clear and counted served-clear; a clear request to a default provider is refused and counted.
+2. **The four bindings** re-pin to libmacula's release A. They delete their `kemAdvertise` parameters and PHP's
+   written `Preferred` provider defaults, and add `open` to publish and subscribe. Today they pin v0.27.0 against
+   macula-go v0.28.0, so the re-pin also covers that gap.
+3. **Services and macula-station are rebuilt on released SDKs only**, in any order: under release A no rebuilt
+   service refuses an unrolled one. Each rebuild writes `open => 1` on its public topics and `off` only where an
+   operator decides it, each one listed in the service's PR. Before the first rebuild, each service is checked for an
+   Erlang explicit-target `confidential => off`, which release A deletes.
+4. **The fleet, canary first**, through macula-fleet digest pins (macula-fleet#14). Then measure: the keyless
+   advertisements on the fleet (`find_records_by_type` for `procedure_advertisement`), each matched to a written
+   `off`, and the served-clear counters at zero on every keyed procedure.
+5. **Release B** of the three implementations and the bindings, then the same rebuilds and the same canary-first roll.
+   Measured again; that reading moves the register rows "Payload sealing for calls and streams" and "Sealed
+   publish/subscribe", and Saturnus is copied.
+
+The stations relay `sealed` already and need no change for it. Their own control procedures stay clear (§2), and
+the SDKs' internal calls to them must not take the release B caller default: each implementation's build checks that
+those calls state their mode, with a test that a default pool still reads and writes DHT records.
 
 ## 9. Done when
 
@@ -231,10 +268,23 @@ records.
 
 | # | Package | Size |
 |---|---|---|
-| 1 | Erlang macula: §3, §4, §5, §6 (sharer `off`), §7, tests | M |
-| 2 | macula-go + libmacula: the same, plus the ABI reason names and the `open` option | M |
-| 3 | macula-rust + FFI: the same, plus closing the unchecked `Seal::Clear` | M |
+| 1 | Erlang macula release A: §3 (provider side), §4, §5 (internal publishes included), §6 (sharer `off`), §7, tests | M |
+| 2 | macula-go + libmacula release A: the same, plus the ABI reason names and the `open` option | M |
+| 3 | macula-rust + FFI release A: the same, plus closing the unchecked `Seal::Clear` | M |
 | 4 | Four bindings: re-pin, delete `kemAdvertise`, `open`, new reasons | S each |
-| 5 | Interop matrix cases (three) in the existing jobs | S |
-| 6 | Services: rebuild, `open` on public topics, opt-outs listed | S each |
-| 7 | Fleet roll, canary first, and the counter measurement | S |
+| 5 | Interop matrix cases (four) in the existing jobs | S |
+| 6 | Services and macula-station: rebuild, `open` on public topics, opt-outs listed | S each |
+| 7 | Fleet roll, canary first, and the keyless-advertisement measurement | S |
+| 8 | Release B in the three implementations and the bindings, rebuilds, roll, and the served-clear measurement | S each |
+
+## Gate history
+
+- **Round 1 (Uranus, Opus), four required, all folded:**
+  - "nothing goes out in the clear" was false for `preferred` callers after an `off` to `required` flip: T7 is now
+    defeated for `required` callers only, and the exposure is listed under "Still not protected" (§2, §4);
+  - the SDKs' own publishes would all be refused `no_group`: they now state their mode, with a test (§5.5);
+  - "providers before callers" could not be ordered on a fleet of services that are both, rolled box by box: the
+    change now ships in two releases, the provider default first (§8);
+  - the per-caller log limiter grew without bound: it is now per procedure, with a test of its bound (§7).
+  - Observations taken: `open` under a held prefix is refused `group_held` (§5.4); the stale-advertisement leak is a
+    further reason the follow-the-provider default was not taken (§3).
