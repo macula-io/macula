@@ -11,6 +11,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Realm rights: roles for call, serve, publish and subscribe (macula#128; threat model macula-realm#97).**
+  `macula_realm_rights` holds the checks a station and a caller run on a realm's roles, each in a mode per realm
+  (`realm_rights` application env, `off`, `counting` (the default) or `refusing`), counted by realm, check and outcome
+  (`counters/0`). `admit/2` checks a presented token's size (48 KiB, 4 proofs, 128 KiB in all) before verifying it with
+  the link peer as audience. `subscribe/4` and `publish/4` answer from the capabilities it keeps, and `serve/4` from a
+  delegation's procedures list. `macula_ucan:grants/4` says whether capabilities cover a topic, a whole subscription
+  pattern or a procedure.
+- **`macula:present_membership/4`.** The pool presents a realm membership token and its proofs on every link. Each
+  connection's first SUBSCRIBE or PUBLISH in the realm carries it in the new per-hop extension `realm.membership`
+  (WIRE_1_0.md section 3.6), it is sent again on reconnect, and at once when renewed on a subscribed link. A token past
+  the verified sizes is refused `too_large`. A station reads it with `macula_realm_rights:presented/1`.
+- **A delegation names the procedures it delegates.** `macula_record:procedure_delegation/3` takes `procedures`
+  (exact procedures or `<base>/*` prefixes, at most 64, 512 bytes each). `macula_record:verify_serving/3` and
+  `delegated_procedure/3` say whether an advertisement's delegation names its procedure, and a direct dial drops a
+  provider whose delegation does not once the realm runs `refusing`.
+- **REGISTER_ACK `publish` kind.** A station refuses a PUBLISH a realm's rights do not admit with a REGISTER_ACK of
+  kind `publish` naming the publisher. It is only ever a refusal. A node that predates the kind ignores the ack.
+
 - **Read control for sealed groups (macula#129).** A distributor (`macula_group_keys`) takes one access policy per
   group at start (`groups`): `org_grant`, the earlier check and the default for a group not listed, or
   `{realm_capability, RealmKeyId, Mode}`, which admits a member on its realm's `pubsub/subscribe` covering the whole
