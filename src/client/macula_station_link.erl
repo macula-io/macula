@@ -622,18 +622,26 @@
 %% `ttl_ms' is optional: the signed advertisement's own lifetime, from a
 %% second up to the advertisement type's maximum (anything else is refused
 %% with function_clause); renewal keeps it alive in turn.
+%%
+%% `refusal_names_key' (release A0) makes this link name the KEM key it holds
+%% now in a `sealed_required' refusal of a clear request -- the ERROR of a CALL
+%% and the STREAM_ERROR of a STREAM_OPEN -- as the non-critical signed
+%% extension `seal.kem_key', so a caller that does not know the key seals again
+%% to it instead of being turned away (docs/design/DESIGN_E2E_SEALED_BY_DEFAULT.md
+%% §3). A node holding no current key names none.
 -type advertisement_spec() :: #{authorization := map(),
                                 not_after     := integer(),
                                 ttl_ms        => pos_integer(),
                                 kem           => true,
                                 keyed_since   => integer(),
                                 confidential  => required,
+                                refusal_names_key => true,
                                 serving_stations => [<<_:256>>, ...]}.
 %% A spec for a procedure in the node's own namespace, `~<node_id>/<name>':
 %% no authorization and no bound, since the advertisement's own signature
 %% authorizes it (D25 item 6, revised 2026-09-24). Only a `~' procedure takes it.
 -type own_namespace_spec() :: #{ttl_ms => pos_integer(), kem => true, keyed_since => integer(),
-                                confidential => required}.
+                                confidential => required, refusal_names_key => true}.
 -type advertisement() :: binary() | advertisement_spec() | own_namespace_spec().
 
 %% A caller's streams renewed together, and where their renewal stands (macula#120).
@@ -3637,11 +3645,34 @@ clear_by_spec(_KeylessOrLocal) ->
 
 clear_call_admitted(true, Request, Payload, S) ->
     served_call(Request, Payload, clear, S);
-clear_call_admitted(false, Request, _Payload, #state{node_identity = Id, peer_pid = Pid, admission = Admission}) ->
-    Reply = macula_frame:provider_error(#{request => Request, code => <<"sealed_required">>}, Id),
+clear_call_admitted(false, #{realm := Realm, procedure := Proc} = Request, _Payload,
+                    #state{node_identity = Id, peer_pid = Pid, admission = Admission} = S) ->
+    Reply = provider_refusal(<<"sealed_required">>, Request, named_kem_key({Realm, Proc}, S), Id),
     _ = stored_reply(Admission, Request, Reply),
     sent_or_faulted(macula_peering:send_frame(Pid, Reply), Pid, Request, Id),
     ok.
+
+%% A refusal of a clear request, naming the key this node holds now when the
+%% procedure's spec asks for it (`refusal_names_key', release A0): the extension
+%% rides inside the signed tbs, so a relay cannot strip it.
+provider_refusal(Code, Request, Ext, Id) when map_size(Ext) =:= 0 ->
+    macula_frame:provider_error(#{request => Request, code => Code}, Id);
+provider_refusal(Code, Request, Ext, Id) ->
+    macula_frame:provider_error(#{request => Request, code => Code, ext => Ext}, Id).
+
+%% The `seal.kem_key' extension a `sealed_required' refusal carries, or none: the key
+%% is this node's current one, each time the refusal is built, so a rotated key
+%% reaches the next caller.
+named_kem_key({Realm, Proc}, #state{advertisements = Ads, node_identity = Id}) ->
+    named_kem_key(maps:get({Realm, Proc}, Ads, undefined), Id);
+
+named_kem_key(#{refusal_names_key := true}, Id) ->
+    case macula_kem_keyring:current(macula_node_keys:key_id(Id)) of
+        {ok, #{key := Carried}} -> #{macula_frame:kem_key_extension() => #{critical => 0, value => Carried}};
+        error -> #{}
+    end;
+named_kem_key(_KeylessOrPreSigned, _Id) ->
+    #{}.
 
 %% The plaintext of a sealed CALL and its keys, or why it did not open: the id of the key this node holds now, or
 %% `no_key' when it holds none.
@@ -4956,11 +4987,18 @@ refuse_opened(Stream, #{request_id := RequestId} = Open, #{k_p2c := KP2C, key_id
                                                                      sealed => Sealed}, Open}, Key), Stream, S),
     close_unless_carrying(carries_a_session(Stream, S), Stream, S).
 
-%% A refusal this link cannot build is not written.
+%% A refusal this link cannot build is not written. A `sealed_required' refusal
+%% names the KEM key the node holds now when the procedure's spec asks for it
+%% (`refusal_names_key', release A0), on the CALL path's terms.
 send_stream_refusal(Stream, Open, Code, Message, #state{node_identity = Key} = S) ->
-    refusal_built(macula_frame:stream_bytes({provider_stream, #{frame_type => stream_error, seq => 0, code => Code,
-                                                               message => Message}, Open}, Key),
+    Ext = named_kem_key({maps:get(realm, Open), maps:get(procedure, Open)}, S),
+    refusal_built(macula_frame:stream_bytes({provider_stream, stream_refusal(Code, Message, Ext), Open}, Key),
                   Stream, S).
+
+stream_refusal(Code, Message, Ext) when map_size(Ext) =:= 0 ->
+    #{frame_type => stream_error, seq => 0, code => Code, message => Message};
+stream_refusal(Code, Message, Ext) ->
+    #{frame_type => stream_error, seq => 0, code => Code, message => Message, ext => Ext}.
 
 refusal_built({ok, Built}, Stream, S) ->
     _ = written(Stream, macula_frame:written_bytes(Built), S),

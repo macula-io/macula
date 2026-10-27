@@ -52,6 +52,33 @@ required_refuses_a_clear_call_test_() ->
         macula_station_link:stop(Pid)
     end}.
 
+%% A spec that asks for it (`refusal_names_key', release A0) names the key this
+%% node holds now in the refusal, so a caller that does not know the key seals
+%% again to it (DESIGN_E2E_SEALED_BY_DEFAULT §3).
+a_refusal_names_the_key_when_the_spec_asks_test_() ->
+    {timeout, 10, fun() ->
+        {Pid, CallerKey, Proc} = fixture(#{kem => true, confidential => required, refusal_names_key => true},
+                                         fun(_) -> error(must_not_run) end),
+        %% A keyed advertisement is what gives the node a current key; this link
+        %% has no pool, so the test puts it there before the call it serves.
+        ok = macula_kem_keyring:ensure(link_node_id(Pid), profile()),
+        {ok, #{key := Carried}} = macula_kem_keyring:current(link_node_id(Pid)),
+        {error, Fields} = await_reply(clear_call(Pid, CallerKey, Proc)),
+        ?assertMatch(#{code := <<"sealed_required">>}, Fields),
+        ?assertEqual({ok, Carried}, macula_frame:refused_kem_key(Fields)),
+        macula_station_link:stop(Pid)
+    end}.
+
+%% A spec that does not ask for it names no key: the refusal is the one it always was.
+a_refusal_names_no_key_unless_the_spec_asks_test_() ->
+    {timeout, 10, fun() ->
+        {Pid, CallerKey, Proc} = fixture(#{kem => true, confidential => required},
+                                         fun(_) -> error(must_not_run) end),
+        {error, Fields} = await_reply(clear_call(Pid, CallerKey, Proc)),
+        ?assertEqual(none, macula_frame:refused_kem_key(Fields)),
+        macula_station_link:stop(Pid)
+    end}.
+
 %% A procedure that names a key still serves a clear call while its last
 %% keyless advertisement can be served ...
 a_newly_keyed_procedure_still_serves_clear_calls_test_() ->

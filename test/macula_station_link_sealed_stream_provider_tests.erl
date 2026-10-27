@@ -33,6 +33,8 @@ sealed_stream_provider_test_() ->
                           fun a_caller_at_its_cap_is_refused_before_decapsulation/1},
                          {"a clear open to a procedure that takes only sealed ones is refused",
                           fun a_clear_open_to_a_required_procedure_is_refused/1},
+                         {"a clear open's refusal names the key when the spec asks it to",
+                          fun a_clear_open_refusal_names_the_key_when_the_spec_asks/1},
                          {"a rotated KEM key does not break a stream already open",
                           fun a_rotated_key_does_not_break_an_open_stream/1}]].
 
@@ -104,6 +106,24 @@ a_clear_open_to_a_required_procedure_is_refused(#{link := Link} = W) ->
                                 end),
     #{quic := Quic, open := Open} = clear_open(W, bidi, #{}),
     ?assertMatch({ok, #{code := <<"sealed_required">>}}, clear_error(written(Quic), Open)).
+
+%% A spec that asks for it names the key this node holds now in the refusal, as
+%% the CALL path's does, so a caller that does not know the key seals again to
+%% it (release A0, DESIGN_E2E_SEALED_BY_DEFAULT §3).
+a_clear_open_refusal_names_the_key_when_the_spec_asks(#{link := Link} = W) ->
+    ok = advertise(W, bidi, fun(_S, _A) -> error(must_not_run) end),
+    _ = sys:replace_state(Link, fun(S) ->
+                                    Ads = element(?ADVERTISEMENTS_INDEX, S),
+                                    setelement(?ADVERTISEMENTS_INDEX, S,
+                                               Ads#{{?REALM, procedure()} => #{kem => true,
+                                                                               confidential => required,
+                                                                               refusal_names_key => true}})
+                                end),
+    #{quic := Quic, open := Open} = clear_open(W, bidi, #{}),
+    Fields = clear_refusal(written(Quic), Open),
+    ?assertMatch(#{code := <<"sealed_required">>}, Fields),
+    {ok, #{key := Carried}} = macula_kem_keyring:current(node_id(W)),
+    ?assertEqual({ok, Carried}, macula_frame:refused_kem_key(Fields)).
 
 %% After decapsulation the stream keys do not depend on the keyring: a key
 %% rotated mid-stream leaves the stream sealing and opening as before.
@@ -237,6 +257,12 @@ clear_error(Frame, Open) ->
         {ok, #{frame_type := stream_error, code := Code, message := Message}, _} -> {ok, #{code => Code, message => Message}};
         Other -> {not_a_clear_error, Other}
     end.
+
+%% A refusal's verified fields, extension included: what a caller reads the keyed
+%% one from.
+clear_refusal(Frame, Open) ->
+    {ok, Fields, _Verifier} = macula_frame:verify_provider_stream(Frame, macula_frame:open_stream(Open), profile()),
+    Fields.
 
 %% The provider's first frame as a STREAM_ERROR sealed under k_p2c, opened.
 sealed_error(Frame, #{k_p2c := KP2C}, #{request_id := RequestId} = Open) ->
