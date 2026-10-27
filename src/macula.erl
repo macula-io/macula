@@ -36,7 +36,8 @@
 -export([subscribe/4, subscribe/5,
          subscribe_callback/4,
          unsubscribe/2,
-         publish/4, publish/5]).
+         publish/4, publish/5,
+         present_membership/4]).
 
 %% RPC — realm-per-call against a V2 pool
 -export([call/5,
@@ -275,6 +276,17 @@ publish(Pool, Realm, Topic, Payload) ->
     ok | {error, term()}.
 publish(Pool, Realm, Topic, Payload, Opts) ->
     macula_pubsub:publish(Pool, Realm, Topic, Payload, Opts).
+
+%% @doc Present this node's membership of `Realm' to its stations (macula#128): the membership token the realm
+%% issued it and the proofs of its chain. A station whose realm runs its rights checks reads the capabilities it grants
+%% when this node subscribes or publishes in `Realm': without them a station counting would refuse the SUBSCRIBE or
+%% PUBLISH, and one refusing does. The pool keeps the latest for each realm, presents it on every link, again on
+%% each new connection, and at once on a link already subscribed in the realm, so a renewed token reaches the
+%% stations before the old one ends. A token or proofs past the sizes a station verifies are refused here,
+%% `too_large'. See the authorization guide, "Realm rights".
+-spec present_membership(pool(), realm(), binary(), [binary()]) -> ok | {error, too_large}.
+present_membership(Pool, Realm, Token, Proofs) ->
+    macula_client:present_membership(Pool, Realm, Token, Proofs).
 
 %% @doc Subscribe `Subscriber' to `(Realm, Topic)' on `Pool'.
 %% Equivalent to `subscribe/5' with empty opts.
