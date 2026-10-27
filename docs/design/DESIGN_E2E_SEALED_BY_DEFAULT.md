@@ -110,18 +110,39 @@ rows matter to this change:
   explicit target seals from, or is called clear because of, such an advertisement (passed in, or resolved).
   `no_signed_state` remains for none found.
 - **A `sealed_required` refusal carries the provider's key, and the caller seals to it** (release A0, §8):
-  - A keyed provider's `sealed_required` ERROR (to a CALL) or STREAM_ERROR (to a STREAM_OPEN) names, in its
-    `detail`, the KEM key it holds now, as carried (`macula_seal:key_as_carried/1`), in lowercase hex as
-    `sealed_refused` names its key id. `test/vectors/E2E_SEAL_V1.md` gains that refusal per profile, so every SDK
-    reads one shape. The refusal is signed by the
-    provider's identity key and bound to the request by `request_hash` (D25), so the key is the target's own, and
-    fresh. It is the same node, with the same authorization, that the caller already chose from its advertisement.
-  - The caller checks the key's length against its profile, then seals the same payload once more, to that key, under
-    a **new request_id**. It also **replaces the key of the candidate it remembered** for that provider (Erlang
+  - **Where the key travels.** A keyed provider's `sealed_required` ERROR (to a CALL) and its STREAM_ERROR (to a
+    STREAM_OPEN) carry the KEM key it holds now, as carried (`macula_seal:key_as_carried/1`, 1568 or 1665 bytes), as
+    bytes in a **non-critical extension `seal.kem_key`** of the reply's and the stream frame's signed tbs
+    (`docs/design/WIRE_1_0.md` §3.2). It cannot go in the text fields: ERROR `detail` and STREAM_ERROR `message`
+    are capped at 256 bytes in all three implementations, and STREAM_ERROR has no `detail`. Those fields stay text
+    for people. A reader that predates A0 ignores a non-critical extension and counts it
+    (`macula_frame.erl:3630-3676`), so a pre-A0 caller still reads an A0 provider's refusal as today.
+    `test/vectors/E2E_SEAL_V1.md` gains that refusal per profile, so every SDK reads one shape.
+  - **Why it can be trusted.** The refusal is signed by the provider's identity key (`MACULA-PQ-REPLY-V1`,
+    `responded_by` = signer = target), and bound to the request by `request_id` and `request_hash` (D25). So the key
+    is the target's own, and fresh: the same node, with the same authorization, that the caller already chose.
+  - **Where the reseal runs: in the link, under every caller.** The clear call and the clear open of each link
+    (Erlang `macula_station_link` call/9 and its stream open, Go `Link.Call` and `Link.OpenStream`, the Rust
+    equivalents) handle the refusal. Direct dial, pools and explicit-target callers (`call_station`,
+    `dos_calls.erl:77`) all get it. The link checks the key's length against its profile, then seals the same
+    payload once more, to that key, under a **new request_id**. It hands the key up in the seal report
+    (`DESIGN_E2E_SEAL_REPORT.md`).
+  - **What the pool remembers.** The pool writes that key into the candidate it remembered for that provider (Erlang
     `macula_direct_dial`'s remembered answer and `macula_client:resolved_candidate/3`, and the Go and Rust
-    equivalents), so the next call seals at once.
-  - It does this at most once per call, and never answers a `sealed_required` with clear. A refusal naming no
-    key, or a key of the wrong length, fails the call with `no_kem_key`.
+    equivalents). A head-start candidate that answers is not re-remembered today (`macula_direct_dial.erl:1098-1121`),
+    so the write is its own step. In `call_seal`'s precedence, a key learnt from a signed refusal wins over the same
+    candidate's signed keyless advertisement for the advertisement's remaining lifetime, so the next call seals at
+    once.
+  - **Clear streams that already wrote.** A reopen runs only before the owner's first write (`seq_out` 0:
+    `macula_stream.erl:997-1004`, Go `pool/call.go:697` and `stationlink/stream_seal.go:137`, Rust
+    `station_link/stream.rs:138`), and STREAM_OPEN has no ack. So a **clear** open (only a clear one) holds the
+    owner's writes until the provider's first frame, one round trip, queued in order as `forward_to_peer/2` already
+    queues them. A refusal then reopens sealed and sends the held writes under the new open. A sealed open is
+    unchanged.
+  - **Bounds.** The reseal runs at most once per call, and nothing answers a `sealed_required` with clear. A call can
+    now go out at most **three** times: clear, resealed to the refusal's key, and resealed once more on a
+    `sealed_refused` (A1). That replaces A1's "at most twice". A refusal without the extension, or with a key of the
+    wrong length (a pre-A0 provider, or a faulty one), surfaces as the provider's own `sealed_required`, unchanged.
   - Why not re-resolve, as A1 does for `sealed_refused`? A lookup can still return the provider's stale keyless
     advertisement, for up to 5 + 5 minutes. The signed refusal cannot be stale, and it costs no lookup.
   This only ever upgrades.
@@ -231,7 +252,7 @@ So:
 | Reason | When | Message names |
 |---|---|---|
 | `provider_serves_clear` (new) | a `required` caller resolved only a keyless advertisement | the provider node and procedure, and "call with `preferred` to accept clear" |
-| `sealed_required` (provider ERROR, existing; from release A0 its `detail` carries the provider's key) | a clear call or open reached a keyed provider | only when the reseal of §3 is impossible (no key in the refusal, or a key of the wrong length): "the provider seals; it named no usable key" |
+| `sealed_required` (provider ERROR or STREAM_ERROR, existing; from release A0 its signed `seal.kem_key` extension carries the provider's key) | a clear call or open reached a keyed provider | only when the reseal of §3 is impossible (no `seal.kem_key`, or a key of the wrong length, as from a pre-A0 provider), unchanged from today |
 | `no_kem_key`, `key_mismatch`, `no_signed_state` (existing) | unchanged | unchanged |
 | `no_group` (new) | publish or subscribe naming neither `group` nor `open` | both options |
 
@@ -268,7 +289,7 @@ Two hazards follow from these.
   realm's first.
 - **Callers must handle `sealed_required` before any provider requires sealing.** A caller on today's SDK
   remembers a provider's keyless candidate (up to 5 minutes) and may resolve its stale keyless record (up to 5 + 5).
-  It sends clear, and today it ends the call on `sealed_required` (`failure_scope`, `macula_station_link.erl:799`),
+  It sends clear, and today it ends the call on `sealed_required` (`failure_scope`, the provider-scope clause at `macula_station_link.erl:800`),
   re-resolving only on `sealed_refused` (`macula_direct_dial.erl:892-896`). Every provider roll would then break
   every unrolled caller for 5 to 10 minutes. Security must never cause downtime, so this is ordered away, not
   accepted.
@@ -293,8 +314,10 @@ only from release B on, and the docs of release A say so.
 
 1. **Release A0 of the three implementations, in house order:** Erlang `macula`, then `macula-go` and libmacula,
    then `macula-rust` and its FFI crate. Then the four bindings re-pin to libmacula A0. Interop gains: a clear
-   request to a keyed provider is refused `sealed_required` naming the key, and every SDK's caller reseals to it and
-   gets the answer.
+   call and a clear open to a keyed provider are refused `sealed_required` carrying the key, and every SDK's caller
+   reseals to it and gets the answer; a clear client stream that wrote before the refusal delivers its writes under
+   the sealed reopen; an explicit-target clear call reseals; and a pre-A0 caller still reads an A0 provider's
+   refusal.
 2. **Every service, macula-station and every client we ship is rebuilt on A0 and rolled, canary first**, through
    macula-fleet digest pins (macula-fleet#14). Gate to the next step: every fleet digest is an A0-or-later build, and
    the caller-only clients we publish (macula-mcp, the CLIs) have an A0 release. A client outside our releases on an
@@ -336,7 +359,7 @@ its mode, with a test that a default pool on release B still reads and writes DH
 
 | # | Package | Size |
 |---|---|---|
-| 1 | Release A0 in Erlang macula, macula-go + libmacula, macula-rust + FFI: `sealed_required` carries the key; the caller reseals and replaces its remembered candidate; interop case | S each |
+| 1 | Release A0 in Erlang macula, macula-go + libmacula, macula-rust + FFI: `sealed_required` carries the key in `seal.kem_key`; the link reseals (calls, opens, held clear-stream writes) and reports the key; the pool replaces its remembered candidate's key; vectors and interop cases | M each |
 | 2 | Bindings re-pin to A0; every service, station and shipped client rebuilt on A0 and rolled, canary first | S each |
 | 3 | Erlang macula release A: §3 (provider side, every advertise path, the explicit-target rule), §4, §5 (SDK facts and helpers), §6 (sharer `off`, fetch from the sharer's advertisement), §7, tests | M |
 | 4 | macula-go + libmacula release A: the same, closing link-level `Clear: true`, plus the ABI reason names and the `open` option | M |
@@ -372,3 +395,12 @@ its mode, with a test that a default pool on release B still reads and writes DH
   - Observations taken: T7 exists only under advertise-`preferred`; the measurement's real content (§8.6); T8 is
     logged provider-side only; the spec-less `advertise/4` takes the default (§3); Erlang control procedures are DHT
     frames (§2, §8); the subscribe `group_held` refusal is new (§5.4); `dos_calls.erl:77` (§8.5).
+- **Round 3 (Uranus diff-only, Fable diff-only on the A0 hunk), four required, folded on Raf's GO:**
+  - the key does not fit ERROR `detail` or STREAM_ERROR `message` (256-byte text): it travels in a signed
+    non-critical extension `seal.kem_key` (§3);
+  - a clear stream that already wrote could not reopen: a clear open holds writes until the provider's first frame
+    (§3);
+  - the reseal sat in direct dial only: it is in the link's clear call and open, under every caller (§3);
+  - §3 and §7 disagreed on the error without a usable key: the provider's own `sealed_required` surfaces (§3).
+  - Observations folded: the `:800` citation (§8); a call goes out at most three times (§3); the head-start
+    candidate's key write and its precedence in `call_seal` (§3).
