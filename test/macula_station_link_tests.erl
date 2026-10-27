@@ -1869,6 +1869,37 @@ a_delegated_call_is_served_and_an_unreferenced_proof_is_malformed_test_() ->
          ok
      end}.
 
+%% The realm expands a member's roles into its membership token at issue time (macula-realm#97, section 2): a role that
+%% may call a procedure is an `rpc/call' capability on `mri:proc:<realm>/<procedure>', signed by the realm itself.
+%% A provider that gates the procedure on that capability serves the member, and refuses one whose role names
+%% another procedure (macula#128).
+a_realm_issued_call_capability_is_served_test_() ->
+    {timeout, 15,
+     fun() ->
+         UnauthorizedCode = <<"unauthorized">>,
+         RealmIdentity = realm_key(),
+         Handler = fun(_Payload) -> {ok, #{served => true}} end,
+         Policy = {realm_member_required, macula_node_keys:key_id(RealmIdentity), <<"rpc/call">>},
+         {Pid, CallerKp} = inbound_call_fixture([{?GATED_PROCEDURE, Handler}], Policy),
+         Caller = macula_node_keys:key_id(CallerKp),
+         Membership = fun(Procedure) ->
+                          macula_ucan:create(RealmIdentity, Caller,
+                                             [#{with => <<"mri:proc:test/", Procedure/binary>>, can => <<"rpc/call">>}],
+                                             #{exp => erlang:system_time(second) + 3_600})
+                      end,
+
+         Served = inject_call_with_chain(Pid, self(), CallerKp, crypto:strong_rand_bytes(16),
+                                         Membership(?GATED_PROCEDURE), []),
+         ?assertMatch({ok, #{{text, <<"served">>} := {text, <<"true">>}}}, await_result(Served, 2_000)),
+
+         Elsewhere = inject_call_with_chain(Pid, self(), CallerKp, crypto:strong_rand_bytes(16),
+                                            Membership(<<"acme/another.procedure">>), []),
+         ?assertMatch({error, #{code := UnauthorizedCode}}, await_result(Elsewhere, 2_000)),
+
+         macula_station_link:stop(Pid),
+         ok
+     end}.
+
 %% A CALL carrying a delegated token and the proofs that back it.
 inject_call_with_chain(Pid, FakePeer, CallerKey, CallId, Token, Proofs) ->
     Frame = macula_frame:call(
