@@ -19,6 +19,7 @@ link_limits_test_() ->
                   fun a_pool_given_a_seed_that_names_no_node_id_does_not_start/0,
                   fun a_link_limit_outside_its_range_does_not_start_the_pool/0,
                   fun a_fresh_direct_dial_past_the_direct_link_limit_is_refused/0,
+                  fun a_direct_link_that_restarts_still_counts_against_the_limit/0,
                   fun a_fresh_direct_dial_past_the_new_peer_budget_is_refused/0,
                   fun configured_seeds_never_spend_the_new_peer_budget/0,
                   fun discovery_past_the_new_peer_budget_defers_its_additions/0,
@@ -63,6 +64,20 @@ a_fresh_direct_dial_past_the_direct_link_limit_is_refused() ->
     ?assertEqual({error, not_connected}, call_station(Pool, seed(1))),
     ?assertEqual({error, {dial_refused, too_many_direct_links}}, call_station(Pool, seed(2))),
     ?assertEqual({error, not_connected}, call_station(Pool, seed(1))),
+    ok = macula_client:close(Pool).
+
+%% A direct link counts against the limit for its whole life: while it is down waiting to restart, and after.
+a_direct_link_that_restarts_still_counts_against_the_limit() ->
+    {ok, Pool} = macula_client:connect([], #{max_direct_links => 1}),
+    {error, not_connected} = call_station(Pool, seed(1)),
+    {ok, [#{pid := Link}]} = macula_client:links(Pool),
+    Mon = erlang:monitor(process, Link),
+    exit(Link, kill),
+    receive {'DOWN', Mon, process, Link, killed} -> ok end,
+    ?assertEqual({error, {dial_refused, too_many_direct_links}}, call_station(Pool, seed(2))),
+    {ok, [#{pid := Respawned}]} = respawned_links(Pool, Link),
+    ?assertNotEqual(Link, Respawned),
+    ?assertEqual({error, {dial_refused, too_many_direct_links}}, call_station(Pool, seed(3))),
     ok = macula_client:close(Pool).
 
 a_fresh_direct_dial_past_the_new_peer_budget_is_refused() ->
@@ -166,6 +181,20 @@ a_different_port_or_host_is_another_peer_test() ->
 
 call_station(Pool, Seed) ->
     macula_client:call_station(Pool, Seed, <<2:256>>, ?REALM, <<"x.y">>, #{}, ?DIAL_MS, <<>>, #{}, ?DIAL_MS, clear).
+
+%% The pool's links once the one that died has been started again (the respawn waits a second).
+respawned_links(Pool, Dead) ->
+    respawned_links(Pool, Dead, 30).
+
+respawned_links(Pool, Dead, Tries) ->
+    {ok, Links} = macula_client:links(Pool),
+    respawned_or_retry([L || #{pid := P} = L <- Links, P =/= Dead], Pool, Dead, Tries).
+
+respawned_or_retry([_ | _] = Links, _Pool, _Dead, _Tries) -> {ok, Links};
+respawned_or_retry([], _Pool, _Dead, 0) -> {error, no_respawn};
+respawned_or_retry([], Pool, Dead, Tries) ->
+    timer:sleep(100),
+    respawned_links(Pool, Dead, Tries - 1).
 
 seed(Port) ->
     #{host => <<"127.0.0.1">>, port => Port, expected_node_id => <<Port:256>>}.

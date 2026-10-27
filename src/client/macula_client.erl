@@ -588,10 +588,6 @@
     seed          :: seed(),
     pid           :: pid() | undefined,
     mon           :: reference() | undefined,
-    %% `true' for a link a fresh direct dial made (`dial_fresh/3'). It
-    %% counts against `max_direct_links' for its whole life, respawns
-    %% included.
-    direct = false :: boolean(),
     %% The three fields below are meaningless (left at their defaults)
     %% for a bootstrap or direct-dial link -- only
     %% `add_one_discovered_seed/2' ever sets `discovered = true', via
@@ -756,6 +752,12 @@
     %% ?LINK_RESPAWN_DELAY_MS before the respawn would read it back.
     %% Dropped only when a seed goes for good (`give_up_on/4').
     dial_extra_opts = #{} :: #{seed() => map()},
+    %% The seeds a fresh direct dial made (`dial_fresh/3'). Each counts
+    %% against `max_direct_links' for its whole life: while it waits to
+    %% respawn and after. Kept at the pool for the same reason as
+    %% `dial_extra_opts' (the down link's entry is gone), and dropped with
+    %% it in `give_up_on/4'.
+    direct_seeds = #{} :: #{seed() => true},
     %% The request admission in which all the pool's links judge the requests
     %% they receive.
     admission :: pid(),
@@ -2691,12 +2693,11 @@ memberships_to_seed(#link_state{pid = Pid}, S) when is_pid(Pid) ->
 memberships_to_seed(_, _S) ->
     ok.
 
-direct_link_count(#state{links = Links}) ->
-    length([Seed || Seed := #link_state{direct = true} <- Links]).
+direct_link_count(#state{direct_seeds = Direct}) ->
+    map_size(Direct).
 
-%% `start_link_for_seed/3' always leaves an entry for the seed.
-mark_direct(Station, #state{links = Links} = S) ->
-    S#state{links = maps:update_with(Station, fun(L) -> L#link_state{direct = true} end, Links)}.
+mark_direct(Station, #state{direct_seeds = Direct} = S) ->
+    S#state{direct_seeds = Direct#{Station => true}}.
 
 %% A link to work on, or a refused dial: the refusal is the reply, and no
 %% worker starts.
@@ -3676,13 +3677,14 @@ set_ever_connected(Seed, LinkState, #state{links = Links} = S) ->
     S#state{links = Links#{Seed => LinkState#link_state{ever_connected = true}}}.
 
 %% This seed is done, not bouncing, so how it was started goes with it.
-give_up_on(Seed, Pid, Mon, #state{links = Links, dial_extra_opts = Opts} = S) ->
+give_up_on(Seed, Pid, Mon, #state{links = Links, dial_extra_opts = Opts, direct_seeds = Direct} = S) ->
     macula_diagnostics:event(<<"_macula.client.discovery_link_given_up">>,
                              #{seed => Seed}),
     is_reference(Mon) andalso erlang:demonitor(Mon, [flush]),
     macula_station_link:stop(Pid),
     S#state{links = maps:remove(Seed, Links),
-            dial_extra_opts = maps:remove(Seed, Opts)}.
+            dial_extra_opts = maps:remove(Seed, Opts),
+            direct_seeds = maps:remove(Seed, Direct)}.
 
 %% Runs in a spawned worker (never the pool gen_server — the DHT lookup
 %% + `list_stations' call are ordinary blocking RPCs with real network
