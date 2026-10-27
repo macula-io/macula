@@ -109,14 +109,20 @@ rows matter to this change:
   when it carries a verified advertisement that the target signed and that names no key. Under either mode an
   explicit target seals from, or is called clear because of, such an advertisement (passed in, or resolved).
   `no_signed_state` remains for none found.
-- **A `sealed_required` refusal carries the provider's key, and the caller seals to it** (release A0, §8):
+- **A `sealed_required` refusal carries the provider's key, and the caller seals to it** (the caller's side in release A0, the provider's in release A, §8):
   - **Where the key travels.** A keyed provider's `sealed_required` ERROR (to a CALL) and its STREAM_ERROR (to a
     STREAM_OPEN) carry the KEM key it holds now, as carried (`macula_seal:key_as_carried/1`, 1568 or 1665 bytes), as
     bytes in a **non-critical extension `seal.kem_key`** of the reply's and the stream frame's signed tbs
     (`docs/design/WIRE_1_0.md` §3.2). It cannot go in the text fields: ERROR `detail` and STREAM_ERROR `message`
     are capped at 256 bytes in all three implementations, and STREAM_ERROR has no `detail`. Those fields stay text
-    for people. A reader that predates A0 ignores a non-critical extension and counts it
-    (`macula_frame.erl:3630-3676`), so a pre-A0 caller still reads an A0 provider's refusal as today.
+    for people. **Not every reader takes it today.** Erlang and Rust read a signed tbs `ext` and ignore and count a
+    non-critical entry (`macula_frame.erl:3630-3676`). macula-go does not: `readFields`
+    (`frame/signed_frames.go:171-186`) refuses any key its reply, stream and request tables do not name, and none
+    names `ext`. That is a wire 1.0 §3.2 conformance bug, macula-go#42. A pre-#42 Go or libmacula caller (the four
+    bindings too) would read a refusal carrying the key as `malformed_frame` and wait out its deadline. So **A0 only
+    reads and reseals; no provider sends `seal.kem_key` before release A**, which runs only once every caller is on
+    A0 (§8). An A0 reader adds `seal.kem_key` to its known extensions, so it is not counted as ignored. Erlang's
+    `stream_bytes/2` build-key lists for `provider_error` and `stream_error` gain `ext`.
     `test/vectors/E2E_SEAL_V1.md` gains that refusal per profile, so every SDK reads one shape.
   - **Why it can be trusted.** The refusal is signed by the provider's identity key (`MACULA-PQ-REPLY-V1`,
     `responded_by` = signer = target), and bound to the request by `request_id` and `request_hash` (D25). So the key
@@ -142,7 +148,9 @@ rows matter to this change:
   - **Bounds.** The reseal runs at most once per call, and nothing answers a `sealed_required` with clear. A call can
     now go out at most **three** times: clear, resealed to the refusal's key, and resealed once more on a
     `sealed_refused` (A1). That replaces A1's "at most twice". A refusal without the extension, or with a key of the
-    wrong length (a pre-A0 provider, or a faulty one), surfaces as the provider's own `sealed_required`, unchanged.
+    wrong length (a provider before release A, or a faulty one), surfaces as the provider's own `sealed_required`,
+    unchanged. A station cannot strip the extension from a refusal that carries it: the signature covers it, so a
+    stripped refusal fails as a tampered reply (`signature_invalid`, to the call's deadline), never as clear.
   - Why not re-resolve, as A1 does for `sealed_refused`? A lookup can still return the provider's stale keyless
     advertisement, for up to 5 + 5 minutes. The signed refusal cannot be stale, and it costs no lookup.
   This only ever upgrades.
@@ -296,11 +304,12 @@ Two hazards follow from these.
 
 **Each implementation therefore ships the change in three releases, caller handling first:**
 
-- **Release A0, the caller's reseal.** §3's `sealed_required` handling on both sides: a keyed provider's refusal
-  carries its key, and a caller reseals to it and replaces its remembered candidate's key. Nothing else changes:
-  defaults stay as they are today. A0 is rolled to the whole fleet, and every service and client is rebuilt on it,
-  before any release A provider runs anywhere.
-- **Release A, the provider default.** Everything else in §3 to §7 **except the caller default**: the keyring is always
+- **Release A0, the caller's reseal.** The reading side of §3: every caller reads a refusal's `seal.kem_key`
+  (Go via macula-go#42), reseals to it and replaces its remembered candidate's key. Nothing else changes: no
+  provider sends the key yet, and defaults stay as they are today. A0 is rolled to the whole fleet, and every
+  service and client is rebuilt on it, before any release A provider runs anywhere.
+- **Release A, the provider default.** A keyed provider's `sealed_required` starts carrying `seal.kem_key`, and
+  everything else in §3 to §7 **except the caller default**: the keyring is always
   on, `kem_advertise` and advertise-side `preferred` are gone, there is no clear window, publish and subscribe need
   `group` or `open`, content is `off`, and the counters and logs are in. The caller default stays `preferred` in
   release A, and `provider_serves_clear` exists but is reached only by a caller that writes `required`.
@@ -312,12 +321,16 @@ This is ordering, not a compatibility mode: no release negotiates, and release B
 default. Between releases A and B a default caller is a `preferred` caller, so T7 (§2) holds for default callers
 only from release B on, and the docs of release A say so.
 
-1. **Release A0 of the three implementations, in house order:** Erlang `macula`, then `macula-go` and libmacula,
-   then `macula-rust` and its FFI crate. Then the four bindings re-pin to libmacula A0. Interop gains: a clear
-   call and a clear open to a keyed provider are refused `sealed_required` carrying the key, and every SDK's caller
-   reseals to it and gets the answer; a clear client stream that wrote before the refusal delivers its writes under
-   the sealed reopen; an explicit-target clear call reseals; and a pre-A0 caller still reads an A0 provider's
-   refusal.
+1. **Release A0 of the three implementations**, the reading and resealing side only: Erlang `macula`, `macula-go`
+   and libmacula, and `macula-rust` and its FFI crate, in any order. Go's A0 includes macula-go#42: a signed tbs
+   `ext` in the reply, stream and request tables, a non-critical entry ignored and counted, a critical one refused.
+   Then the four bindings re-pin to libmacula A0. No A0 node sends `seal.kem_key`, so no A0 build can hang a caller
+   that does not read it; the safety argument is that gate, not the release order. Interop gains, with a provider
+   built to send the extension in the test only: a clear call and a clear open to a keyed provider are refused
+   `sealed_required` carrying the key, and every SDK's caller, Go included, reseals to it and gets the answer; a
+   clear client stream that wrote before the refusal delivers its writes under the sealed reopen; an
+   explicit-target clear call reseals; and an A0 caller that is handed an extension it does not know ignores and
+   counts it.
 2. **Every service, macula-station and every client we ship is rebuilt on A0 and rolled, canary first**, through
    macula-fleet digest pins (macula-fleet#14). Gate to the next step: every fleet digest is an A0-or-later build, and
    the caller-only clients we publish (macula-mcp, the CLIs) have an A0 release. A client outside our releases on an
@@ -404,3 +417,8 @@ its mode, with a test that a default pool on release B still reads and writes DH
   - §3 and §7 disagreed on the error without a usable key: the provider's own `sealed_required` surfaces (§3).
   - Observations folded: the `:800` citation (§8); a call goes out at most three times (§3); the head-start
     candidate's key write and its precedence in `call_seal` (§3).
+- **Round 4 (Uranus diff-only, Fable diff-only on the extension hunk), one required, folded:** macula-go refuses a
+  signed tbs `ext` (macula-go#42), so a pre-A0 Go caller would hang on a refusal carrying the key. A0 now only reads
+  and reseals, Go's A0 carries #42, and providers send the key from release A, after every caller is on A0 (§3,
+  §8). Observations folded: a stripped extension fails as a tampered reply, never clear; `stream_bytes/2` gains
+  `ext`; an A0 reader knows `seal.kem_key`.
