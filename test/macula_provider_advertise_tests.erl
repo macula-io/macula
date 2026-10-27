@@ -39,7 +39,8 @@ cases(Keys) ->
                  fun an_own_namespace_procedure_needs_no_chain/1,
                  fun another_nodes_namespace_is_refused/1,
                  fun renewing_resolves_the_chain_the_dht_holds_now/1,
-                 fun an_advertised_chain_is_registered_with_its_renewal/1]].
+                 fun an_advertised_chain_is_registered_with_its_renewal/1,
+                 fun a_spec_that_asks_for_it_forwards_the_key_naming/1]].
 
 %%------------------------------------------------------------------
 %% Happy path
@@ -231,6 +232,21 @@ link_signed(#{key := Key}, Spec, Station, Procedure) ->
 %%------------------------------------------------------------------
 %% A node's own namespace (D25 item 6, revised 2026-09-24)
 %%------------------------------------------------------------------
+
+%% A served procedure asks, in the advertise's own `Opts', to name its KEM key in a `sealed_required' refusal
+%% (release A0, review round 2): the option has to reach the spec the links sign from, or the refusal names no key
+%% and a caller that does not know it can never reseal. Off unless the caller says so.
+a_spec_that_asks_for_it_forwards_the_key_naming(Keys) ->
+    Handler = fun(_Payload) -> {ok, counted} end,
+    with_opts(Keys, #{}, Handler, fun(Opts) ->
+        ?assertEqual(ok, macula:advertise(self(), ?REALM, ?PROC, Handler, Opts))
+    end),
+    ?assertEqual(false, is_map_key(refusal_names_key, advertise_sent())),
+    with_opts(Keys, #{}, Handler, fun(Opts) ->
+        ?assertEqual(ok, macula:advertise(self(), ?REALM, ?PROC, Handler,
+                                          Opts#{refusal_names_key => true}))
+    end),
+    ?assertEqual(true, maps:get(refusal_names_key, advertise_sent())).
 
 %% `~<own node_id>/<name>' resolves no org directory and no delegation: the pool gets a spec with no authorization and
 %% no bound, and what a link signs from it verifies with no realm key.

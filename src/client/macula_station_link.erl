@@ -1998,14 +1998,10 @@ handle_info({dedicated_stream_open_deadline, _Stream}, S) ->
 handle_info(Msg, S) when is_tuple(Msg), element(1, Msg) =:= quic ->
     quic_event(Msg, S);
 
-%% A stream could not adopt the session a reopen opened for it (the link went first): the link forgets that session
-%% and its dedicated stream, so it is not left to its own timeout.
-handle_info({session_dropped, Sid}, S) ->
-    {noreply, drop_stream(Sid, S)};
-
-%% The bound on a refused open's drain: the caller did not finish in time, so the stream closes.
-handle_info({drain_expired, Stream}, S) ->
-    {noreply, drain_done(Stream, S)};
+%% A session the link opened for a reopen this stream could not adopt (the link went first), and the bound on a
+%% refused open's drain: both end at the stream's own bookkeeping, never at its timeout.
+handle_info({session_dropped, Sid}, S) -> {noreply, drop_stream(Sid, S)};
+handle_info({drain_expired, Stream}, S) -> {noreply, drain_done(Stream, S)};
 
 handle_info({call_timeout, RequestId}, #state{pending = P} = S) ->
     on_timeout(maps:take(RequestId, P), S);
