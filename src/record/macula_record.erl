@@ -48,7 +48,7 @@
          read_station_authorization/1, read_tombstone/1,
          read_org_directory/1, read_procedure_delegation/1, read_content_announcement/1,
          read_foundation_realm_trust_list/1, read_app_record/1]).
--export([procedure_org/1, verify_authorization/3, authorization_ends_at/3, authorization_org_key/3,
+-export([procedure_org/1, verify_authorization/3, verify_serving/3, delegated_procedure/3, authorization_ends_at/3, authorization_org_key/3,
          delegation_standing/5, verify_app/3, verify_membership/5]).
 -export([storage_key/1, procedure_key/2, content_key/1, station_endpoint_key/1, org_directory_key/2,
          procedure_delegation_key/2, realm_member_endorsement_key/2, station_authorization_key/2,
@@ -219,6 +219,9 @@
 %% A station authorization's hostname is text of 1 to 253 bytes (the DNS name bound); a role is text of 1 to 64.
 -define(MAX_STATION_HOSTNAME_BYTES, 253).
 -define(MAX_STATION_ROLE_BYTES, 64).
+%% A delegation names at most 64 procedures or prefixes (macula#128), each as long as a procedure name may be.
+-define(MAX_DELEGATED_PROCEDURES, 64).
+-define(MAX_DELEGATED_PROCEDURE_BYTES, 512).
 -define(DEFAULT_TTL_MS, 48 * 60 * 60 * 1000).
 %% The maxima of the frozen lifetime-class table (lifetime_classes/0), created_at to expires_at. A node record and a
 %% content announcement 48 hours; a procedure advertisement 5 minutes, renewed at half that or sooner, so a provider
@@ -375,7 +378,11 @@ org_directory(RealmId, OrgName, OrgKeyId, Opts)
                 {text, <<"org_key">>} => OrgKeyId},
     unsigned(?TYPE_ORG_DIRECTORY, Payload, Opts).
 
-%% @doc An org's grant, signed by its org key, that the node Advertiser may serve procedures under the org.
+%% @doc An org's grant, signed by its org key, that the node Advertiser may serve procedures under the org. Opts may
+%% name the procedures it may serve (`procedures', macula#128): each an exact procedure of the org or a prefix ending
+%% in `/*', at most ?MAX_DELEGATED_PROCEDURES of them, each text of 1 to ?MAX_DELEGATED_PROCEDURE_BYTES bytes. A
+%% delegation without the list lets its node serve any procedure of the org; callers and stations count it, and refuse
+%% it once the realm runs refusing (macula_realm_rights:serve/4).
 -spec procedure_delegation(<<_:256>>, <<_:256>>) -> m_record().
 procedure_delegation(OrgKeyId, Advertiser) ->
     procedure_delegation(OrgKeyId, Advertiser, #{}).
@@ -383,8 +390,16 @@ procedure_delegation(OrgKeyId, Advertiser) ->
 -spec procedure_delegation(<<_:256>>, <<_:256>>, map()) -> m_record().
 procedure_delegation(OrgKeyId, Advertiser, Opts)
   when is_binary(OrgKeyId), byte_size(OrgKeyId) =:= 32, is_binary(Advertiser), byte_size(Advertiser) =:= 32 ->
-    Payload = #{{text, <<"org_key">>} => OrgKeyId, {text, <<"advertiser">>} => Advertiser},
-    unsigned(?TYPE_PROCEDURE_DELEGATION, Payload, Opts).
+    Payload = with_delegated_procedures(#{{text, <<"org_key">>} => OrgKeyId, {text, <<"advertiser">>} => Advertiser},
+                                        maps:get(procedures, Opts, undefined)),
+    unsigned(?TYPE_PROCEDURE_DELEGATION, Payload, maps:remove(procedures, Opts)).
+
+with_delegated_procedures(Payload, undefined) ->
+    Payload;
+with_delegated_procedures(Payload, Procedures) when is_list(Procedures) ->
+    Listed = [{text, P} || P <- Procedures],
+    true = delegated_procedures_ok(Listed),
+    Payload#{{text, <<"procedures">>} => Listed}.
 
 %% @doc An org's statement of one of its apps (macula#75), signed by the org key OrgKeyId: the app's version and its
 %% services, each naming the procedures it serves, all in the org's own namespace. It carries the realm-signed org
@@ -1000,10 +1015,16 @@ read_org_directory(#{type := ?TYPE_ORG_DIRECTORY, payload := P}) ->
       org_name => payload_field(P, <<"org_name">>),
       org_key  => payload_field(P, <<"org_key">>)}.
 
--spec read_procedure_delegation(m_record()) -> #{org_key := <<_:256>>, advertiser := <<_:256>>}.
+%% @doc A procedure delegation's org key and advertiser, and the procedures it names when it names any (macula#128).
+-spec read_procedure_delegation(m_record()) ->
+          #{org_key := <<_:256>>, advertiser := <<_:256>>, procedures => [binary()]}.
 read_procedure_delegation(#{type := ?TYPE_PROCEDURE_DELEGATION, payload := P}) ->
-    #{org_key    => payload_field(P, <<"org_key">>),
-      advertiser => payload_field(P, <<"advertiser">>)}.
+    Read = #{org_key    => payload_field(P, <<"org_key">>),
+             advertiser => payload_field(P, <<"advertiser">>)},
+    delegated_read(maps:get({text, <<"procedures">>}, P, undefined), Read).
+
+delegated_read(undefined, Read) -> Read;
+delegated_read(Listed, Read) -> Read#{procedures => [unwrap_text(Entry) || Entry <- Listed]}.
 
 -spec read_app_record(m_record()) ->
           #{realm_id := <<_:256>>, org_name := binary(), app_name := binary(), version := binary(),
@@ -1110,6 +1131,62 @@ procedure_org(Procedure) when is_binary(Procedure) ->
 verify_authorization(#{type := ?TYPE_PROCEDURE_ADVERTISEMENT} = Advertisement, #{profile := _} = Trust, Now) ->
     #{procedure := Procedure, authorization := Authorization} = read_procedure_advertisement(Advertisement),
     authorization_for(procedure_org(Procedure), Authorization, Advertisement, Trust, Now).
+
+%% @doc verify_authorization/3, and when it accepts, whether the delegation names the procedure the advertisement
+%% serves (delegated_procedure/3): `{ok, ok}', `{ok, {error, Why}}' for a delegation that names no procedures or names
+%% others, which the caller passes to macula_realm_rights:serve/4 (macula#128), and `{ok, none}' for a procedure that
+%% carries no delegation. A refused authorization is refused as verify_authorization/3 refuses it.
+-spec verify_serving(m_record(), trust(), integer()) ->
+          {ok, ok | none | {error, no_procedures_delegated | procedure_not_delegated | delegation_invalid}}
+        | {error, authorization_refusal()}.
+verify_serving(#{type := ?TYPE_PROCEDURE_ADVERTISEMENT} = Advertisement, #{profile := Profile} = Trust, Now) ->
+    serving(verify_authorization(Advertisement, Trust, Now), Advertisement, Profile, Now).
+
+serving(ok, Advertisement, Profile, Now) -> {ok, delegated_procedure(Advertisement, Profile, Now)};
+serving({error, _} = Refused, _Advertisement, _Profile, _Now) -> Refused.
+
+%% @doc Whether the delegation an advertisement carries names the procedure it serves (macula#128, threat model T7): an
+%% exact entry, or a prefix entry `<base>/*' it lies below, whole segments only. A procedure in its advertiser's own
+%% namespace, or with no namespace, carries no delegation and has nothing to check: none. The delegation is verified
+%% here again, so it is meaningful for an advertisement verify_authorization/3 accepted, and refuses one it did not.
+-spec delegated_procedure(m_record(), macula_crypto_profile:profile(), integer()) ->
+          ok | none | {error, no_procedures_delegated | procedure_not_delegated | delegation_invalid}.
+delegated_procedure(#{type := ?TYPE_PROCEDURE_ADVERTISEMENT} = Advertisement, Profile, Now) ->
+    #{procedure := Procedure, authorization := Authorization} = read_procedure_advertisement(Advertisement),
+    delegation_names(procedure_org(Procedure), Authorization, Procedure, Profile, Now).
+
+delegation_names({org, <<"~", _/binary>>}, _Authorization, _Procedure, _Profile, _Now) ->
+    none;
+delegation_names({org, _Org}, #{procedure_delegation := Delegation}, Procedure, Profile, Now)
+  when is_binary(Delegation) ->
+    named_in(verify(Delegation, Profile, Now), Procedure);
+delegation_names({org, _Org}, _NoDelegation, _Procedure, _Profile, _Now) ->
+    {error, delegation_invalid};
+delegation_names(_NoNamespace, _Authorization, _Procedure, _Profile, _Now) ->
+    none.
+
+named_in({ok, #{type := ?TYPE_PROCEDURE_DELEGATION} = Delegation}, Procedure) ->
+    listed(maps:get(procedures, read_procedure_delegation(Delegation), undefined), Procedure);
+named_in(_Refused, _Procedure) ->
+    {error, delegation_invalid}.
+
+listed(undefined, _Procedure) ->
+    {error, no_procedures_delegated};
+listed(Procedures, Procedure) ->
+    delegated(lists:any(fun(Entry) -> names_procedure(Entry, Procedure) end, Procedures)).
+
+delegated(true) -> ok;
+delegated(false) -> {error, procedure_not_delegated}.
+
+names_procedure(Procedure, Procedure) -> true;
+names_procedure(Entry, Procedure) -> prefix_names(binary:split(Entry, <<"/*">>, [trim]), Entry, Procedure).
+
+%% `<base>/*' names what lies below base: base, a `/', and at least one byte more.
+prefix_names([Base], Entry, Procedure) when byte_size(Entry) =:= byte_size(Base) + 2 ->
+    Size = byte_size(Base),
+    byte_size(Procedure) > Size + 1 andalso binary:part(Procedure, 0, Size + 1) =:= <<Base/binary, "/">>;
+prefix_names(_NotAPrefix, _Entry, _Procedure) ->
+    false.
 
 %% @doc The millisecond a verified advertisement's provider authorization ends: the earlier expiry of the org directory
 %% and the procedure delegation it carries, which is how long a caller may hold a stream opened under it (macula#120).
@@ -1805,10 +1882,23 @@ payload_ok(?TYPE_CONTENT_ANNOUNCEMENT, P) ->
 payload_ok(?TYPE_STATION_ENDPOINT, _P) -> true;
 payload_ok(?TYPE_ORG_DIRECTORY, P) ->
     is_id(field(P, <<"realm_id">>)) andalso is_text(field(P, <<"org_name">>)) andalso is_id(field(P, <<"org_key">>));
-payload_ok(?TYPE_PROCEDURE_DELEGATION, P) -> is_id(field(P, <<"org_key">>)) andalso is_id(field(P, <<"advertiser">>));
+payload_ok(?TYPE_PROCEDURE_DELEGATION, P) ->
+    is_id(field(P, <<"org_key">>)) andalso is_id(field(P, <<"advertiser">>))
+        andalso delegated_procedures_ok(maps:get({text, <<"procedures">>}, P, absent));
 payload_ok(?TYPE_APP_RECORD, P) -> app_payload_ok(P);
 payload_ok(Type, _P) when Type >= ?DOMAIN_TYPE_MIN -> true;
 payload_ok(_UnknownType, _P) -> false.
+
+%% A delegation's procedures, when it names any (macula#128): 1 to ?MAX_DELEGATED_PROCEDURES texts of 1 to
+%% ?MAX_DELEGATED_PROCEDURE_BYTES bytes each.
+delegated_procedures_ok(absent) -> true;
+delegated_procedures_ok(Listed) when is_list(Listed), Listed =/= [], length(Listed) =< ?MAX_DELEGATED_PROCEDURES ->
+    lists:all(fun delegated_procedure_text/1, Listed);
+delegated_procedures_ok(_Other) -> false.
+
+delegated_procedure_text({text, P}) when is_binary(P), byte_size(P) > 0, byte_size(P) =< ?MAX_DELEGATED_PROCEDURE_BYTES ->
+    true;
+delegated_procedure_text(_Other) -> false.
 
 %% A station authorization holds the fields the design pins: realm_id and station_node (32-byte ids), hostname
 %% (text of 1 to ?MAX_STATION_HOSTNAME_BYTES bytes), roles (texts of 1 to ?MAX_STATION_ROLE_BYTES bytes each), and
