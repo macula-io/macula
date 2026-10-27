@@ -166,9 +166,9 @@ rows matter to this change:
     A sealed open is unchanged.
   - **Bounds.** The reseal runs at most once per call, and nothing answers a `sealed_required` with clear. A call can
     now go out at most **three** times: clear, resealed to the refusal's key, and resealed once more on a
-    `sealed_refused` (A1). That replaces A1's "at most twice". A stream reopens on a refusal at most once: after a replay its
-    `seq_out` is past 0, so a `sealed_refused` on the new session surfaces as itself and a stream never takes the third
-    attempt. A refusal without the extension, or with a key of the
+    `sealed_refused` (A1). That replaces A1's "at most twice". A stream whose replay sent anything (a chunk or its end) is past
+    `seq_out` 0, so a `sealed_refused` on the new session surfaces as itself. One whose clear session had sent nothing
+    starts the new session at `seq_out` 0 and may take A1's reseal, within the same three. A refusal without the extension, or with a key of the
     wrong length (a provider before release A, or a faulty one), surfaces as the provider's own `sealed_required`,
     unchanged. A station cannot strip the extension from a refusal that carries it: the signature covers it, so a
     stripped refusal fails as a tampered reply (`signature_invalid`, to the call's deadline), never as clear.
@@ -457,4 +457,6 @@ its mode, with a test that a default pool on release B still reads and writes DH
   clause; the reopen is keyed on the provider's first frame, not on a "seq 0", A1's `seq_out` 0 gate does not apply,
   and the replay is renumbered from 0; the refusal that triggers the reopen is not one of the first frames that end
   retention; the round 6 entry named a Fable round that did not run. Observations folded: a stream never takes the
-  third attempt (§3 Bounds); the copy's cap is its own count, not `inbox_bytes`; §8.1 names each provider's shape.
+  third attempt once its replay sent anything (§3 Bounds, corrected in round 8); the copy's cap is its own count, not `inbox_bytes`; §8.1 names each provider's shape.
+- **Round 8 (Uranus, diff-only), one required, folded:** a stream whose clear session sent nothing starts the new
+  session at `seq_out` 0 and may still take A1's reseal, within the same three (§3 Bounds).
