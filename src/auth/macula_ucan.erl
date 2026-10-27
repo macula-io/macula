@@ -38,7 +38,7 @@
 %% a prefix.
 -module(macula_ucan).
 
--export([create/4, authorize/3, authorized_until/2, root_audience/2, proof_id/1, covers/2, did_key/2, carried_key/2, max_lifetime/0, max_did_key_encoded/0]).
+-export([create/4, authorize/3, grants/4, authorized_until/2, root_audience/2, proof_id/1, covers/2, did_key/2, carried_key/2, max_lifetime/0, max_did_key_encoded/0]).
 
 -ifdef(TEST).
 -export([base58btc_encode/1, base58btc_decode/1]).
@@ -49,7 +49,9 @@
 -type capability() :: #{with := binary(), can := binary()}.
 %% The issuer a policy requires: a node's node_id for ucan_required, a realm key's key id for realm_member_required.
 -type issuer_id()  :: <<_:256>>.
--type policy()     :: {ucan_required, issuer_id()} | {realm_member_required, issuer_id(), binary()}.
+%% A realm member policy names the `can' a request needs, or `any' for a gate that verifies the token once and keeps
+%% every capability it grants, which grants/4 then answers requests from (macula#128).
+-type policy()     :: {ucan_required, issuer_id()} | {realm_member_required, issuer_id(), binary() | any}.
 -type refusal()    :: malformed | wrong_algorithm | signature_invalid | not_the_issuer | not_the_audience | expired
                     | exp_beyond_max_lifetime | not_yet_valid | missing_capability | missing_proof | unreferenced_proof
                     | not_the_delegate | chain_not_linear | grants_more_than_proof | can_changed | wrong_realm
@@ -138,6 +140,59 @@ authorize(Token, Policy, #{caller := <<_:256>>, profile := Profile, now := Now} 
                    fun(Checked) -> grants(Policy, Context, Checked) end,
                    fun(Checked) -> chained(Policy, Context, Checked) end,
                    fun(#{claims := Claims}) -> {ok, Claims} end], Token).
+
+%% @doc Whether capabilities a token already verified grants Can on one request in the realm whose id is Realm, with
+%% nothing verified again: a station that verified a member's token once per link, under a realm member policy of
+%% `any', answers each SUBSCRIBE and PUBLISH from the claims it kept (macula#128). Caps are the token's `cap' claim as
+%% authorize/3 returned it.
+%%
+%% A `{topic, T}' or `{procedure, P}' request is checked as authorize/3 checks one. A `{subscription, Pattern}' is a
+%% subscription, whose `*' segments each match one segment (macula_topic_pattern): a grant must cover every topic the
+%% pattern can match, so the pattern is read as the prefix of the segments before its first `*', and a grant covers it
+%% only when it covers that prefix (D7's matrix, covers/2). `orders/eu/*' needs a grant on `orders/eu/*' or wider, and
+%% a pattern whose first `*' follows the realm's name alone needs the realm grant. A pattern without `*' is a topic.
+-spec grants([map()], binary(), <<_:256>>, {topic, binary()} | {subscription, binary()} | {procedure, binary()}) ->
+        ok | {error, refusal()}.
+grants(Caps, Can, <<_:256>> = Realm, Request) when is_list(Caps), is_binary(Can) ->
+    found(granting(asked(Realm, Request), Can, Caps), Realm, Caps).
+
+asked(Realm, {topic, Topic}) -> request_topic(Realm, Topic);
+asked(Realm, {procedure, Procedure}) -> request_grant(Realm, Procedure);
+asked(Realm, {subscription, Pattern}) when is_binary(Pattern) ->
+    {Before, Wild} = lists:splitwith(fun(Segment) -> Segment =/= <<"*">> end,
+                                     binary:split(Pattern, <<"/">>, [global])),
+    pattern_request(Before, Wild, Realm, Pattern);
+asked(_Realm, _Request) -> {error, malformed}.
+
+pattern_request(_Before, [], Realm, Pattern) ->
+    request_topic(Realm, Pattern);
+pattern_request([RealmName], _Wild, Realm, _Pattern) ->
+    pattern_in_realm(grant(<<"mri:realm:", RealmName/binary>>), Realm);
+pattern_request([_RealmName, _ | _] = Before, _Wild, Realm, _Pattern) ->
+    pattern_in_realm(grant(<<"mri:topic:", (iolist_to_binary(lists:join(<<"/">>, Before)))/binary, "/*">>), Realm);
+pattern_request([], _Wild, _Realm, _Pattern) ->
+    {error, topic_without_realm}.
+
+pattern_in_realm({ok, Grant}, Realm) ->
+    pattern_realm_verdict(realm_hash({ok, Grant}) =:= Realm, Grant);
+pattern_in_realm({error, _} = Refusal, _Realm) ->
+    Refusal.
+
+pattern_realm_verdict(true, Grant) -> {ok, pattern, Grant};
+pattern_realm_verdict(false, _Grant) -> {error, wrong_realm}.
+
+granting({error, _} = Refusal, _Can, _Caps) ->
+    Refusal;
+granting({ok, pattern, Child}, Can, Caps) ->
+    [Cap || #{<<"with">> := With, <<"can">> := Granted} = Cap <- Caps,
+            is_binary(With), Granted =:= Can, covered(grant(With), {ok, Child})];
+granting({ok, Realm, Target}, Can, Caps) ->
+    [Cap || #{<<"with">> := With, <<"can">> := Granted} = Cap <- Caps,
+            is_binary(With), Granted =:= Can, realm_matches(With, Realm), covers(With, target_grant(Target, With))].
+
+found({error, _} = Refusal, _Realm, _Caps) -> Refusal;
+found([_ | _], _Realm, _Caps) -> ok;
+found([], Realm, Caps) -> {error, why_not_granted(Caps, Realm)}.
 
 %% @doc The second from which a token that authorize/3 accepted stops authorizing: the earliest exp of the token and
 %% of its proofs. authorize/3 spends every proof that travelled with the request, so every one of them counts. It reads
@@ -371,6 +426,8 @@ named_request(_None, Policy, _Context, Checked) ->
     unrequested(Policy, Checked).
 
 unrequested({ucan_required, _NodeId}, #{claims := #{<<"cap">> := Caps}} = Checked) ->
+    {ok, Checked#{granted => Caps}};
+unrequested({realm_member_required, _KeyId, any}, #{claims := #{<<"cap">> := Caps}} = Checked) ->
     {ok, Checked#{granted => Caps}};
 unrequested({realm_member_required, _KeyId, Can}, #{claims := #{<<"cap">> := Caps}} = Checked) ->
     granted([Cap || #{<<"can">> := Granted} = Cap <- Caps, Granted =:= Can], no_request, Checked).

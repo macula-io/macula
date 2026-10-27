@@ -7,6 +7,8 @@
 %% which handshake version each peer is dialled with
 %% (`macula_peer_versions'): it lives as long as every connection that
 %% reads it, so no child's exit forgets a node seen on v5 (macula#50).
+%% It owns the realm RBAC decision counters too (`macula_realm_rights',
+%% macula#128), for the same reason.
 -module(macula_peering_sup).
 -behaviour(supervisor).
 
@@ -21,6 +23,7 @@ init([]) ->
     ok = macula_tls_posture:ensure(),
     ok = macula_peer_versions:new_table(),
     ok = macula_wire_tolerance:new_table(),
+    ok = macula_realm_rights:new_table(),
     SupFlags = #{strategy => one_for_one, intensity => 5, period => 10},
     Children = [
         #{
