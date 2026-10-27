@@ -24,6 +24,7 @@ cases() ->
      {"a provider that lost its key is re-resolved once", fun a_provider_that_lost_its_key_is_resealed/0},
      {"a required call passes its policy to the station call", fun required_reaches_the_station_call/0},
      {"a stream carries the resolved advertisement", fun a_stream_carries_the_advertisement/0},
+     {"a stream carries the key the pool learnt", fun a_stream_carries_the_key_the_pool_learnt/0},
      {"a stream passes its policy to the station open", fun a_streams_policy_reaches_the_station_open/0},
      {"a stream's reseal re-resolves once, bound to the key the refusal names",
       fun a_streams_reseal_is_bound_to_the_named_key/0},
@@ -188,6 +189,21 @@ a_stream_carries_the_advertisement() ->
     ?assertEqual(kem(1), maps:get(kem_key, macula_record:read_procedure_advertisement(maps:get(advertisement, Opts)))),
     ?assertEqual(bidi, maps:get(mode, Opts)).
 
+%% A key the pool learnt from the provider's own signed refusal seals the NEXT stream open, exactly as it seals the
+%% next call (DESIGN_E2E_SEALED_BY_DEFAULT §3, release A0: "the next call seals at once"). The learned candidate is a
+%% keyless advertisement, which is the case the learnt key exists for: without it every new stream goes out clear, is
+%% refused, and is reopened, for as long as that advertisement lives.
+a_stream_carries_the_key_the_pool_learnt() ->
+    F = fixture(),
+    Candidate = #{provider => maps:get(provider_id, F), version => <<1:128>>, station => maps:get(station_id, F),
+                  ttl_ms => 60_000, advertisement => keyless_ad(F), learnt_kem_key => kem(1)},
+    Seed = #{host => <<"::1">>, port => 4433, expected_node_id => maps:get(station_id, F)},
+    script(F, [], [{ok, self()}]),
+    put(resolved_candidate, {ok, Candidate, Seed}),
+    ?assertEqual({ok, self()}, stream(F, #{mode => bidi})),
+    [Opts] = calls(),
+    ?assertEqual(kem(1), maps:get(learnt_kem_key, Opts)).
+
 a_streams_policy_reaches_the_station_open() ->
     F = fixture(),
     script(F, [[keyed_ad(F, kem(1))]], [{ok, self()}]),
@@ -300,7 +316,8 @@ script(F, Lookups, Answers) ->
     put(lookups, Lookups),
     put(answers, Answers),
     put(calls, []),
-    put(remembered, []).
+    put(remembered, []),
+    put(resolved_candidate, none).
 
 calls() -> lists:reverse(get(calls)).
 
@@ -329,7 +346,7 @@ dial_io() ->
                           put(calls, [Opts | get(calls)]),
                           next(answers, {error, no_more_answers})
                       end,
-      resolved_candidate => fun(_Pool, _Realm, _Proc) -> none end,
+      resolved_candidate => fun(_Pool, _Realm, _Proc) -> remembered() end,
       remember_resolved => fun(_Pool, _Realm, _Proc, Candidate, _TtlMs) ->
                                put(remembered, [Candidate | get(remembered)]),
                                ok
@@ -337,6 +354,13 @@ dial_io() ->
 
 next(Key, Default) ->
     next_of(get(Key), Key, Default).
+
+%% The candidate a case puts in the pool's place: `{ok, Candidate, Seed}', or none as a pool with nothing remembered.
+remembered() ->
+    case erlang:get(resolved_candidate) of
+        undefined -> none;
+        Candidate -> Candidate
+    end.
 
 next_of([Next | Rest], Key, _Default) -> put(Key, Rest), wrapped(Key, Next);
 next_of(_Empty, _Key, Default) -> Default.

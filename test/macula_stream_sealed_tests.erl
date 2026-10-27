@@ -31,6 +31,7 @@ cases(Keys) ->
                  fun a_clear_error_outside_the_closed_set_ends_the_session/1,
                  fun a_stream_end_stays_clear/1,
                  fun a_refused_open_reopens_once_under_the_resealed_key/1,
+                 fun a_frame_that_lands_before_the_reopen_is_read_under_it/1,
                  fun a_refused_open_after_a_send_ends_naming_the_key/1,
                  fun a_reseal_that_fails_ends_with_its_reason/1,
                  fun a_second_refusal_ends_the_stream/1,
@@ -221,6 +222,26 @@ a_refused_open_reopens_once_under_the_resealed_key(#{caller := Caller, provider 
     ?assertEqual({chunk, <<"after">>}, macula_stream:recv(Stream, 1000)),
     gen_server:stop(Stream).
 
+%% The report that the reopen landed comes from the worker that asked for it, and the provider's first frame on the
+%% new session comes from the link: two senders, so Erlang does not order them. A frame that lands ahead of the report
+%% is held and read under the session that is opening. Read where it lands it would be verified against the session
+%% the provider just refused, refused, and dropped — losing the provider's seq 0 and leaving every later frame failing
+%% its seq check (release A0, review round 2).
+a_frame_that_lands_before_the_reopen_is_read_under_it(#{caller := Caller, provider := Provider} = Keys) ->
+    Open = verified_open(Keys, bidi),
+    Test = self(),
+    Reopen = #{args => #{}, reseal => fun(Named) -> Test ! {resealing, Named}, {ok, <<"new kem key">>} end},
+    Stream = stream(client, Caller, Open, seal(), Reopen),
+    ok = macula_stream:deliver_frame(Stream, refusal(<<2:64>>, Provider, Open)),
+    NewOpen = verified_open(Keys, bidi, <<8:128>>),
+    #{k_p2c := KP2C} = NewSeal = seal(),
+    Answer = reopen_held(),
+    ok = macula_stream:deliver_frame(Stream, provider_sealed(stream_data, 0, #{encoding => raw}, <<"after">>, KP2C,
+                                                             Provider, NewOpen)),
+    Answer(#{open => NewOpen, seal => NewSeal, sid => <<8:128>>}),
+    ?assertEqual({chunk, <<"after">>}, macula_stream:recv(Stream, 1000)),
+    gen_server:stop(Stream).
+
 %% Once the caller has sent, its frames are sealed under the refused keys and
 %% cannot be taken back: the stream ends naming the key, and asks no reopen.
 a_refused_open_after_a_send_ends_naming_the_key(#{caller := Caller, provider := Provider} = Keys) ->
@@ -377,6 +398,16 @@ a_provider_seals_no_more_frames_than_random_nonces_allow(#{provider := Provider}
 %%------------------------------------------------------------------
 %% Helpers
 %%------------------------------------------------------------------
+
+%% The reopen request, held until the caller answers it: a link that has already dispatched a frame to the stream and
+%% not yet let the worker's report through.
+reopen_held() ->
+    receive
+        {'$gen_call', From, {reopen_stream, _Stream, _Sid, _Open, _Args, _KemKey}} ->
+            fun(Reopened) -> gen_server:reply(From, {ok, Reopened}) end
+    after 1000 ->
+        error(no_reopen_asked)
+    end.
 
 %% The reopen request and who made it.
 reopen_asked_by(Reopened) ->

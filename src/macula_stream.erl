@@ -182,6 +182,10 @@
     %% A reseal and reopen in flight, run by a worker so the stream keeps
     %% answering: its reference, and what the owner sent meanwhile, in order.
     reopening :: {reference(), [term()]} | undefined,
+    %% The peer's frames that arrived while `reopening' was set, newest first. The link writes the new STREAM_OPEN
+    %% before the worker that asked for it reports back, and those are two different senders, so a frame can land
+    %% ahead of the report and would otherwise be verified against the session the provider just refused.
+    reopening_held = [] :: [term()],
     %% A caller's CLEAR stream waiting for the provider's first frame
     %% (DESIGN_E2E_SEALED_BY_DEFAULT §3, release A0): every action it has
     %% sent, in order, and the bytes of their bodies, kept so a
@@ -981,6 +985,13 @@ peer_frame(true, _Frame, #state{conn = Conn} = State) ->
 peer_frame(false, _Frame, #state{ended = Ended, conn = Conn} = State) when Ended =/= undefined ->
     ok = macula_peering:object_refused(Conn, stream_ended),
     State;
+%% The provider's first frames on the session being opened: the link writes the new STREAM_OPEN before the worker that
+%% asked for it reports back, and the link's frames and the worker's report are not one sender, so Erlang does not
+%% order them. A frame that lands first is held, in order, and read once the session is adopted — read here it would be
+%% verified against the session the provider just refused, and dropped, losing the provider's seq 0 and leaving every
+%% later frame failing its seq check (release A0, review round 2; the clear reopen and A1's reseal both).
+peer_frame(false, Frame, #state{reopening = {_Ref, _Queued}, reopening_held = Held} = State) ->
+    State#state{reopening_held = [Frame | Held]};
 peer_frame(false, #{frame_type := stream_error, relay_error := _} = Frame,
            #state{role = client, open = Open, profile = Profile, station = Station} = State)
   when is_binary(Station) ->
@@ -1060,7 +1071,7 @@ sealed_refused_arrived(Named, #state{seq_out = 0, reopen = #{args := Args, resea
     Stream = self(),
     Ref = make_ref(),
     ok = reopen_worker(Stream, Ref, fun() -> resealed_and_reopened(Reseal, Named, Link, Stream, Sid, Open, Args) end),
-    State#state{reopen = undefined, reopening = {Ref, []}};
+    State#state{reopen = undefined, reopening = {Ref, []}, reopening_held = []};
 sealed_refused_arrived(Named, State) ->
     refused_with({error, {sealed_refused, Named}}, State).
 
@@ -1096,13 +1107,22 @@ reopened({ok, Reopened}, _Queued, #state{settled = Settled} = State) when Settle
     %% report on that key, and the report keeps it. A provider that refuses a key and then answers under it is not
     %% coherent, so the session ends: on the reopen's session, which the link has just opened at the provider, so the
     %% provider is told there and neither side holds it open.
-    abort_session(<<"malformed_frame">>, <<"a provider answered under the key it refused">>, adopted(Reopened, State));
+    abort_session(<<"malformed_frame">>, <<"a provider answered under the key it refused">>,
+                  adopted(Reopened, State#state{reopening_held = []}));
 reopened({ok, Reopened}, Queued, State) ->
-    flushed(Queued, adopted(Reopened, State));
+    held_read(flushed(Queued, adopted(Reopened, State)));
 reopened({error, _} = Refused, _Queued, #state{ended = undefined} = State) ->
-    refused_with(Refused, State);
+    refused_with(Refused, State#state{reopening_held = []});
 reopened({error, _}, _Queued, State) ->
-    State.
+    State#state{reopening_held = []}.
+
+%% The frames held while the reopen was in flight, in the order the peer sent them, read under the session just
+%% adopted. A frame from the session that was refused cannot verify here and is refused as any other would be.
+held_read(#state{reopening_held = []} = State) ->
+    State;
+held_read(#state{reopening_held = Held} = State) ->
+    lists:foldl(fun(Frame, S) -> peer_frame(false, Frame, S) end, State#state{reopening_held = []},
+                lists:reverse(Held)).
 
 %% This stream reads and writes on the reopen's session from now on, numbering from 0 under its own frame type's keys:
 %% what it replays goes out as the new session's first frames, at its own seqs, whatever the old clear session had
@@ -1145,7 +1165,7 @@ clear_open_sealed_to({ok, KemKey}, _Fields, #state{ended = undefined, replay = #
     Ref = make_ref(),
     Args = maps:get(payload, Open),
     ok = reopen_worker(Stream, Ref, fun() -> macula_station_link:reopen_stream(Link, Stream, Sid, Open, Args, KemKey) end),
-    State#state{replay = undefined, reopening = {Ref, lists:reverse(Sent)}};
+    State#state{replay = undefined, reopening = {Ref, lists:reverse(Sent)}, reopening_held = []};
 clear_open_sealed_to(_NoCopyOrEnded, Fields, State) ->
     clear_open_error(Fields, State).
 

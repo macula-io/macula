@@ -956,18 +956,24 @@ candidate_stream_checked(#{provider := Provider} = Candidate,
         ok ->
             sent_or_not(
               followed(settled(CallStreamStation(Pool, DialUrl, Provider, Realm, Procedure, Args,
-                                                 maps:merge(StreamOpts,
-                                                            maps:merge(advertisement_opt(maps:get(advertisement,
-                                                                                                  Candidate,
-                                                                                                  undefined)),
-                                                                       (pinned(Station))#{dial_timeout_ms =>
-                                                                                              budget(Share),
-                                                                                          reseal => Reseal}))),
+                                                 stream_opts(StreamOpts, Candidate, Station, Share, Reseal)),
                                Remember, Pool, Realm, Procedure, Candidate),
                        Candidate, Dial, Realm, Procedure));
         {refused, Error} ->
             {not_sent, Error}
     end.
+
+%% What a stream open is handed to seal from, on the same terms as `policy_opts/3' gives a call: the candidate's
+%% verified advertisement, the key the pool learnt for that provider from its own signed `sealed_required' refusal,
+%% and the station it is pinned to. The learnt key is what `macula:call_seal/5' takes in place of an advertisement
+%% that names none, and `call_seal/5' is the stream's seal decision too — without it here, every new stream to that
+%% provider goes out clear and is refused and reopened until the keyless advertisement expires, however many calls
+%% and streams have already learnt the key (DESIGN_E2E_SEALED_BY_DEFAULT §3, release A0).
+stream_opts(StreamOpts, Candidate, Station, Share, Reseal) ->
+    maps:merge(maps:merge(StreamOpts,
+                          maps:merge(advertisement_opt(maps:get(advertisement, Candidate, undefined)),
+                                     learnt_opt(maps:get(learnt_kem_key, Candidate, none)))),
+               (pinned(Station))#{dial_timeout_ms => budget(Share), reseal => Reseal}).
 
 %% A stream opened under a provider's authorization holds no longer than it, following the provider's renewed
 %% advertisements, verified and trusted as the one it was opened under (macula#120). A provider with no
