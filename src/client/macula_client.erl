@@ -2679,7 +2679,17 @@ budgeted_dial({spent, S}, _Station, _ExtraOpts) ->
     refused_dial(new_peer_budget_spent, S);
 budgeted_dial({ok, S}, Station, ExtraOpts) ->
     S1 = mark_direct(Station, start_link_for_seed(Station, ExtraOpts, S)),
+    ok = memberships_to_seed(maps:get(Station, S1#state.links), S1),
     {link_pid(Station, S1), S1}.
+
+%% A direct link is a publish target like any other (`connected_link_pids/1'),
+%% so it carries the node's presented memberships (macula#128) as a respawned,
+%% discovered or held link does; its subscriptions and advertisements stay on
+%% the links that made them.
+memberships_to_seed(#link_state{pid = Pid}, S) when is_pid(Pid) ->
+    macula_client_replay:memberships_to(Pid, S#state.memberships);
+memberships_to_seed(_, _S) ->
+    ok.
 
 direct_link_count(#state{links = Links}) ->
     length([Seed || Seed := #link_state{direct = true} <- Links]).

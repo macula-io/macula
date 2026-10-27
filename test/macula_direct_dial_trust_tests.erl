@@ -43,7 +43,7 @@ an_authorization_without_the_realm_trust_its_form_needs_is_not_trusted_test() ->
 %% default, keeps the candidate and counts it; refusing drops it.
 a_delegation_that_omits_the_procedure_is_counted_then_refused_test_() ->
     {foreach,
-     fun() -> rights_table(ets:whereis(macula_realm_rights)), ets:delete_all_objects(macula_realm_rights) end,
+     fun() -> {ok, _} = application:ensure_all_started(macula), ets:delete_all_objects(macula_realm_rights) end,
      fun(_) -> application:unset_env(macula, realm_rights) end,
      [{"counting keeps a provider whose delegation omits the procedure, and counts it",
        fun() ->
@@ -75,14 +75,6 @@ a_delegation_that_omits_the_procedure_is_counted_then_refused_test_() ->
 %%====================================================================
 %% Helpers
 %%====================================================================
-
-%% The counter table outlives each test: a process that lives for the run owns it, as macula_peering_sup does.
-rights_table(undefined) ->
-    Self = self(),
-    spawn(fun() -> ok = macula_realm_rights:new_table(), Self ! table_ready, receive never -> ok end end),
-    receive table_ready -> ok end;
-rights_table(_Tid) ->
-    ok.
 
 %% A provider's advertisement of Procedure under an org directory the realm signed and a delegation naming Listed
 %% (none when undefined), and the caller's trust in that realm.

@@ -118,9 +118,7 @@ presented_proofs(false, _Token, _Proofs) -> {error, malformed}.
 admit(#{token := Token, proofs := Proofs} = Presented,
       #{peer := <<_:256>> = Peer, realm_key := <<_:256>> = RealmKey, profile := Profile, now := Now})
   when is_binary(Token), is_list(Proofs), is_integer(Now) ->
-    sized(within_size(Presented), Token, Proofs,
-          #{caller => Peer, profile => Profile, now => Now,
-            proofs => maps:from_list([{macula_ucan:proof_id(P), P} || P <- Proofs])},
+    sized(within_size(Presented), Token, Proofs, #{caller => Peer, profile => Profile, now => Now},
           {realm_member_required, RealmKey, any});
 admit(_Presented, _Context) ->
     {error, malformed}.
@@ -136,7 +134,8 @@ within_size(#{token := Token, proofs := Proofs}) ->
 sized(false, _Token, _Proofs, _Context, _Policy) ->
     {error, too_large};
 sized(true, Token, Proofs, Context, Policy) ->
-    admitted(macula_ucan:authorize(Token, Policy, Context), Token, Proofs).
+    ByProofId = maps:from_list([{macula_ucan:proof_id(P), P} || P <- Proofs]),
+    admitted(macula_ucan:authorize(Token, Policy, Context#{proofs => ByProofId}), Token, Proofs).
 
 admitted({ok, #{<<"cap">> := Caps}}, Token, Proofs) ->
     {ok, #{caps => Caps, until => macula_ucan:authorized_until(Token, Proofs),

@@ -32,7 +32,9 @@ membership_test_() ->
 pool_test_() ->
     {setup, fun() -> {ok, _} = application:ensure_all_started(macula) end, fun(_) -> ok end,
      [{"a token past the verified size is refused before it is sent", fun a_token_past_the_size_is_refused/0},
-      {"the pool presents on every link and to a respawned one", fun the_pool_presents_on_every_link/0}]}.
+      {"the pool presents on every link and to a respawned one", fun the_pool_presents_on_every_link/0},
+      {"a station dialled directly after the membership is presented carries it",
+       fun a_direct_dial_carries_the_membership/0}]}.
 
 the_first_subscribe_carries_it(Link) ->
     ok = macula_station_link:present_membership_async(Link, ?REALM, ?PRESENTED),
@@ -109,6 +111,21 @@ the_pool_presents_on_every_link() ->
         exit(First, kill),
         Respawned = respawned(Pool, [Pid || #{pid := Pid} <- Links], 50),
         ?assertEqual(#{?REALM => #{presented => ?PRESENTED, sent => false}}, memberships(Respawned))
+    after
+        macula_client:close(Pool)
+    end.
+
+a_direct_dial_carries_the_membership() ->
+    Pool = pool(),
+    try
+        {ok, Before} = macula_client:links(Pool),
+        ok = macula:present_membership(Pool, ?REALM, <<"membership token">>, [<<"proof one">>]),
+        {error, not_connected} =
+            macula_client:call_station(Pool, #{host => <<"127.0.0.1">>, port => 3, expected_node_id => <<3:256>>},
+                                       <<3:256>>, ?REALM, <<"x.y">>, #{}, 100, <<>>, #{}, 100, clear),
+        {ok, After} = macula_client:links(Pool),
+        [Direct] = [Pid || #{pid := Pid} <- After, is_pid(Pid)] -- [Pid || #{pid := Pid} <- Before],
+        ?assertEqual(#{?REALM => #{presented => ?PRESENTED, sent => false}}, memberships(Direct))
     after
         macula_client:close(Pool)
     end.

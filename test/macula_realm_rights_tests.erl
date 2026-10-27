@@ -12,17 +12,12 @@
 
 realm() -> crypto:hash(sha256, ?REALM_NAME).
 
+%% The counter table is macula_peering_sup's, so the app owns it: a test that owned it would leave a named table
+%% behind that refuses the next start of the app (already_exists).
 setup() ->
-    ensure_table(ets:whereis(macula_realm_rights)),
+    {ok, _} = application:ensure_all_started(macula),
     ets:delete_all_objects(macula_realm_rights),
     application:unset_env(macula, realm_rights).
-
-%% The table outlives each test: a process that lives for the run owns it, as macula_peering_sup does.
-ensure_table(undefined) ->
-    Self = self(),
-    spawn(fun() -> ok = macula_realm_rights:new_table(), Self ! table_ready, receive never -> ok end end),
-    receive table_ready -> ok end;
-ensure_table(_Tid) -> ok.
 
 rights(Caps) -> #{caps => Caps, until => erlang:system_time(second) + 600, member => <<0:256>>}.
 
@@ -80,7 +75,11 @@ presented_tokens_test_() ->
           {"more proofs than the cap are refused before anything is verified",
            ?_assertEqual({error, too_large},
                          macula_realm_rights:admit(#{token => Token(Member, Subscribe),
-                                                     proofs => lists:duplicate(5, <<"x">>)}, Context))}]
+                                                     proofs => lists:duplicate(5, <<"x">>)}, Context))},
+          {"a proof that fails the size check is refused before any proof is hashed",
+           ?_assertEqual({error, too_large},
+                         macula_realm_rights:admit(#{token => Token(Member, Subscribe), proofs => [not_a_proof]},
+                                                   Context))}]
      end}.
 
 %%------------------------------------------------------------------
