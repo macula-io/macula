@@ -64,7 +64,8 @@ rows matter to this change:
 - **A `preferred` caller's requests after a provider flips from `off` to `required`.** While the caller still holds
   the provider's last keyless advertisement (a remembered candidate up to 5 minutes, a stale DHT record up to 5 + 5
   minutes), each call attempt goes out in the clear, and so does each write a clear stream sends before the refusal
-  (§3). The provider refuses it, but the stations on the path have read it, and the caller then reseals to the key the refusal names, so the call itself succeeds (§3). The caller's operator
+  (§3). The provider refuses it, but the stations on the path have read it, and the caller then reseals to the key
+  the refusal names, so the call itself succeeds (§3). The caller's operator
   accepted that by choosing `preferred`. Until release B (§8) every caller is `preferred` by default, so release A's
   rollout exposes each caller's first request to each newly keyed provider this way. No call fails.
 - **Open pubsub topics.** An open topic has no recipient key, and SUBSCRIBE is unchecked: anyone may subscribe (§5).
@@ -269,7 +270,7 @@ So:
 | Reason | When | Message names |
 |---|---|---|
 | `provider_serves_clear` (new) | a `required` caller resolved only a keyless advertisement | the provider node and procedure, and "call with `preferred` to accept clear" |
-| `sealed_required` (provider ERROR or STREAM_ERROR, existing; from release A its signed `seal.kem_key` extension carries the provider's key) | a clear call or open reached a keyed provider | only when the reseal of §3 is impossible (no `seal.kem_key`, or a key of the wrong length, as from a provider before release A), unchanged from today |
+| `sealed_required` (provider ERROR or STREAM_ERROR, existing; from release A its signed `seal.kem_key` extension carries the provider's key) | a clear call or open reached a keyed provider | only when the reseal of §3 is impossible (no `seal.kem_key`, a key of the wrong length, as from a provider before release A, or a clear stream past its retention bound), unchanged from today |
 | `no_kem_key`, `key_mismatch`, `no_signed_state` (existing) | unchanged | unchanged |
 | `no_group` (new) | publish or subscribe naming neither `group` nor `open` | both options |
 
