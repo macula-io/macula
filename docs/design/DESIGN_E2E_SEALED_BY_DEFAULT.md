@@ -447,13 +447,14 @@ its mode, with a test that a default pool on release B still reads and writes DH
   `ext`; an A0 reader knows `seal.kem_key`.
 - **Round 5, folded:** the §7 and §10 lines follow the A0/A split.
 - **Round 6 (Uranus, diff-only), PASS, none required.** Raf approved the design; `gate:design` applied.
-- **After round 6 (finding from the A0 build, Raf's ruling):** holding a clear stream's writes until the provider's first
-  frame deadlocked every clear `client_stream` and bidi stream whose provider waits for the caller's data. A clear
-  open now sends at once and keeps an ordered copy up to the inbox bound; a seq-0 refusal carrying the key reopens
-  sealed and replays it behind the same handle (§3). The exposure is §2's `preferred` caller row, which names it.
+- **After round 6 (finding from the A0 build, Raf's ruling):** holding a clear stream's writes until the provider's
+  first frame deadlocked every clear `client_stream` and bidi stream whose provider waits for the caller's data. A
+  clear open now sends at once and keeps an ordered copy up to the inbox bound; a refusal carrying the key as the
+  provider's first frame reopens sealed and replays it behind the same handle (§3). The exposure is §2's `preferred`
+  caller row, which names it.
 - **Round 7 (Uranus + Fable, diff-only), four required, folded:** the copy holds every action sent on the clear
-  session, the owner's STREAM_END included, and the replay sends it before the reopening queue, past the
-  `closed_send` clause; "seq 0" names the provider's first frame, A1's `seq_out` 0 gate does not apply, and the
-  replay is renumbered from 0; the refusal that triggers the reopen is not one of the first frames that end
+  session, the owner's STREAM_END included, and the replay sends it before the reopening queue, past the `closed_send`
+  clause; the reopen is keyed on the provider's first frame, not on a "seq 0", A1's `seq_out` 0 gate does not apply,
+  and the replay is renumbered from 0; the refusal that triggers the reopen is not one of the first frames that end
   retention; the round 6 entry named a Fable round that did not run. Observations folded: a stream never takes the
   third attempt (§3 Bounds); the copy's cap is its own count, not `inbox_bytes`; §8.1 names each provider's shape.
