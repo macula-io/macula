@@ -140,24 +140,35 @@ rows matter to this change:
     so the write is its own step. In `call_seal`'s precedence, a key learnt from a signed refusal wins over the same
     candidate's signed keyless advertisement for the advertisement's remaining lifetime, so the next call seals at
     once.
-  - **Clear streams that already wrote.** A reopen runs only before the owner's first write (`seq_out` 0:
-    `macula_stream.erl:997-1004`, Go `pool/call.go:697` and `stationlink/stream_seal.go:137`, Rust
-    `station_link/stream.rs:138`), and STREAM_OPEN has no ack. Holding the writes until the provider answers would
-    deadlock every clear `client_stream` and bidi stream whose provider waits for the caller's data first (macula-rust
-    `tests/station_link.rs:420-446`). So a **clear** open (only a clear one) sends the owner's writes at once, as
-    today, and **keeps an ordered copy** of them until the provider's first frame:
-    - A `sealed_required` refusal at seq 0 that carries `seal.kem_key` reopens the stream sealed to that key, under a
-      new request_id, and replays the copy sealed, in order, behind the same handle. The owner sees one stream.
-    - Any first frame from the provider (data, end or an error) ends retention and drops the copy.
-    - The copy is capped by the stream's inbox bound (`max_inbox_bytes`, 16 MiB by default, `macula_stream.erl:198-200`).
-      Past it retention stops and the copy is dropped; a later refusal surfaces as the provider's `sealed_required`,
-      unchanged.
-    - The writes already sent clear were read by the stations on the path. That is the exposure of §2's `preferred`
+  - **Clear streams that already wrote.** A1's reopen on `sealed_refused` runs only while the owner has sent nothing
+    (`seq_out` 0: `macula_stream.erl:997-1004`, Go `pool/call.go:697` and `stationlink/stream_seal.go:137`, Rust
+    `station_link/stream.rs:138`). That gate does not apply to the clear reopen below. STREAM_OPEN has no ack, and
+    holding the owner's writes until the provider answers would deadlock every clear `client_stream` and bidi stream
+    whose provider waits for the caller's data first (macula-rust `tests/station_link.rs:420-446`). So a **clear** open
+    (only a clear one) sends every owner action at once, as today, and **keeps an ordered copy** of every action it
+    sent on the clear session, its chunks and the owner's STREAM_END (`close_send`, `macula_stream.erl:465-467`), until
+    the provider's first frame:
+    - If the provider's first frame is a `sealed_required` carrying `seal.kem_key`, the stream reopens sealed to that
+      key under a new request_id. On the new session it sends the copy first, then what the owner wrote while the
+      reopen was in flight (the reopening queue, `macula_stream.erl:651-652`), all sealed, in order, behind the same
+      handle. The replay is numbered from 0 on the new session: the caller's nonce is `stream_nonce(Seq)`
+      (`sending/3`, `:742`), so adoption resets `seq_out`, which `adopted/2` (`:1031`) does not do today. The replay
+      carries the copied STREAM_END past the `closed_send = true` clause of `forward_to_peer` (`:661`), as `flushed/2`
+      does. The owner sees one stream.
+    - Any other first frame (data, a reply, an end, or an error that is not a `sealed_required` carrying
+      `seal.kem_key`) ends retention and drops the copy.
+    - The copy keeps its own byte count, capped at the same number as the stream's inbox bound (`max_inbox_bytes`,
+      16 MiB by default, `macula_stream.erl:198-200`). It is not charged to `inbox_bytes`, which `enqueue/4` (`:1140`)
+      aborts the session on. Past the cap retention stops and the copy is dropped; a later refusal surfaces as the
+      provider's `sealed_required`, unchanged.
+    - The actions already sent clear were read by the stations on the path. That is the exposure of §2's `preferred`
       caller row, nothing more.
     A sealed open is unchanged.
   - **Bounds.** The reseal runs at most once per call, and nothing answers a `sealed_required` with clear. A call can
     now go out at most **three** times: clear, resealed to the refusal's key, and resealed once more on a
-    `sealed_refused` (A1). That replaces A1's "at most twice". A refusal without the extension, or with a key of the
+    `sealed_refused` (A1). That replaces A1's "at most twice". A stream reopens on a refusal at most once: after a replay its
+    `seq_out` is past 0, so a `sealed_refused` on the new session surfaces as itself and a stream never takes the third
+    attempt. A refusal without the extension, or with a key of the
     wrong length (a provider before release A, or a faulty one), surfaces as the provider's own `sealed_required`,
     unchanged. A station cannot strip the extension from a refusal that carries it: the signature covers it, so a
     stripped refusal fails as a tampered reply (`signature_invalid`, to the call's deadline), never as clear.
@@ -338,8 +349,9 @@ only from release B on, and the docs of release A say so.
    that does not read it; the safety argument is that gate, not the release order. Interop gains, with a provider
    built to send the extension in the test only: a clear call and a clear open to a keyed provider are refused
    `sealed_required` carrying the key, and every SDK's caller, Go included, reseals to it and gets the answer; a
-   clear client stream that wrote before the refusal replays its writes, in order, under the sealed reopen, and a
-   clear client stream whose provider waits for the caller's first write still completes; an
+   clear client stream to a provider that answers only after the caller's end (as `count_bytes`) whose caller wrote
+   and closed before the refusal replays its chunks and its end, in order, under the sealed reopen, and gets the
+   answer; a clear bidi stream to a provider that waits for the caller's first chunk completes the same way; an
    explicit-target clear call reseals; and an A0 caller that is handed an extension it does not know ignores and
    counts it.
 2. **Every service, macula-station and every client we ship is rebuilt on A0 and rolled, canary first**, through
@@ -434,8 +446,14 @@ its mode, with a test that a default pool on release B still reads and writes DH
   §8). Observations folded: a stripped extension fails as a tampered reply, never clear; `stream_bytes/2` gains
   `ext`; an A0 reader knows `seal.kem_key`.
 - **Round 5, folded:** the §7 and §10 lines follow the A0/A split.
-- **Round 6 (Uranus + Fable), PASS, none required.** Raf approved the design; `gate:design` applied.
-- **Round 7 (finding from the A0 build, Raf's ruling):** holding a clear stream's writes until the provider's first
+- **Round 6 (Uranus, diff-only), PASS, none required.** Raf approved the design; `gate:design` applied.
+- **After round 6 (finding from the A0 build, Raf's ruling):** holding a clear stream's writes until the provider's first
   frame deadlocked every clear `client_stream` and bidi stream whose provider waits for the caller's data. A clear
   open now sends at once and keeps an ordered copy up to the inbox bound; a seq-0 refusal carrying the key reopens
   sealed and replays it behind the same handle (§3). The exposure is §2's `preferred` caller row, which names it.
+- **Round 7 (Uranus + Fable, diff-only), four required, folded:** the copy holds every action sent on the clear
+  session, the owner's STREAM_END included, and the replay sends it before the reopening queue, past the
+  `closed_send` clause; "seq 0" names the provider's first frame, A1's `seq_out` 0 gate does not apply, and the
+  replay is renumbered from 0; the refusal that triggers the reopen is not one of the first frames that end
+  retention; the round 6 entry named a Fable round that did not run. Observations folded: a stream never takes the
+  third attempt (§3 Bounds); the copy's cap is its own count, not `inbox_bytes`; §8.1 names each provider's shape.
