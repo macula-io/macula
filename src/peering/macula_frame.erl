@@ -211,7 +211,7 @@
 -define(MAX_TOPIC_BYTES, 512).
 %% A REGISTER_ACK names a procedure or a topic, so its name has the topic's bound (macula#12).
 -define(MAX_REGISTER_NAME_BYTES, 512).
--define(REGISTER_KINDS, [advertise, unadvertise, subscribe, unsubscribe]).
+-define(REGISTER_KINDS, [advertise, unadvertise, subscribe, unsubscribe, publish]).
 -define(REGISTER_REFUSALS, [too_many_providers, advertiser_quota, name_too_long, record_refused, not_authorized,
                             too_many_realms, refused]).
 %% A NODES entry lists at most 4 addresses, one per observation today with room for IPv4 and IPv6 beside a host name,
@@ -427,12 +427,13 @@
     signature := binary()
 }.
 
-%% What a station did with an ADVERTISE, UNADVERTISE, SUBSCRIBE or UNSUBSCRIBE (macula#12). An advertise kind names the
-%% advertisement's record_version, a pubsub kind its subscriber, so a later registration of the same name is not
-%% taken for this one. A refusal says why, from a closed set; refused is the generic member, and the one a reason
+%% What a station did with an ADVERTISE, UNADVERTISE, SUBSCRIBE or UNSUBSCRIBE (macula#12), or its refusal of a PUBLISH
+%% (macula#128, never an acceptance: a publish has no registration to answer). An advertise kind names the
+%% advertisement's record_version, a pubsub kind its subscriber, the publisher for a publish, so a later registration
+%% of the same name is not taken for this one. A refusal says why, from a closed set; refused is the generic member, and the one a reason
 %% this node does not know reads as. A received kind this node does not know reads as unknown, and the ack
 %% is ignored.
--type register_kind() :: advertise | unadvertise | subscribe | unsubscribe.
+-type register_kind() :: advertise | unadvertise | subscribe | unsubscribe | publish.
 -type register_refusal() :: too_many_providers | advertiser_quota | name_too_long | record_refused | not_authorized
                           | too_many_realms | refused.
 -type register_ack_spec() :: #{
@@ -988,7 +989,7 @@ store_refresh(#{key := K, signer := Signer, record_version := Version,
 register_ack(#{kind := Kind, realm := Realm, name := Name, accepted := Accepted} = Spec)
   when is_binary(Realm), byte_size(Realm) =:= 32,
        is_binary(Name), byte_size(Name) >= 1, byte_size(Name) =< ?MAX_REGISTER_NAME_BYTES,
-       is_boolean(Accepted) ->
+       is_boolean(Accepted), not (Kind =:= publish andalso Accepted) ->
     maps:merge(maps:merge((base(register_ack))#{kind => Kind, realm => Realm, name => Name, accepted => Accepted},
                           registration_named(Kind, Spec)),
                ack_reason(Accepted, Spec)).
@@ -998,7 +999,7 @@ registration_named(Kind, #{record_version := Version} = Spec)
        not is_map_key(subscriber, Spec) ->
     #{record_version => Version};
 registration_named(Kind, #{subscriber := Subscriber} = Spec)
-  when (Kind =:= subscribe orelse Kind =:= unsubscribe), byte_size(Subscriber) =:= 32,
+  when (Kind =:= subscribe orelse Kind =:= unsubscribe orelse Kind =:= publish), byte_size(Subscriber) =:= 32,
        not is_map_key(record_version, Spec) ->
     #{subscriber => Subscriber}.
 
@@ -2606,6 +2607,10 @@ agreed(ok, hyparview_forward_join, #{arwl := Arwl, prwl := Prwl}) when Prwl > Ar
 agreed(ok, register_ack, #{kind := Kind, accepted := _} = Frame) when Kind =:= advertise; Kind =:= unadvertise ->
     named_by(is_map_key(record_version, Frame), record_version, Frame);
 agreed(ok, register_ack, #{kind := Kind, accepted := _} = Frame) when Kind =:= subscribe; Kind =:= unsubscribe ->
+    named_by(is_map_key(subscriber, Frame), subscriber, Frame);
+agreed(ok, register_ack, #{kind := publish, accepted := true}) ->
+    {refused, accepted};
+agreed(ok, register_ack, #{kind := publish} = Frame) ->
     named_by(is_map_key(subscriber, Frame), subscriber, Frame);
 agreed(ok, register_ack, #{accepted := _} = Frame) ->
     reasoned(Frame);

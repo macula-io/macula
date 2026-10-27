@@ -20,7 +20,9 @@ register_ack_test_() ->
       {"an unknown reason reads as refused and is counted", fun an_unknown_reason_reads_as_refused_and_is_counted/0},
       {"an unknown kind reads as unknown and is counted", fun an_unknown_kind_reads_as_unknown_and_is_counted/0},
       {"accepted travels as 0 or 1", fun accepted_travels_as_0_or_1/0},
-      {"a register ack is a control frame", fun a_register_ack_is_a_control_frame/0}]}.
+      {"a register ack is a control frame", fun a_register_ack_is_a_control_frame/0},
+      {"a refused publish travels naming its publisher", fun a_refused_publish_travels_naming_its_publisher/0},
+      {"a publish is never accepted", fun a_publish_is_never_accepted/0}]}.
 
 an_accepted_advertise_travels() ->
     Ack = advertise_ack(#{accepted => true}),
@@ -98,6 +100,22 @@ accepted_travels_as_0_or_1() ->
 a_register_ack_is_a_control_frame() ->
     ?assert(macula_frame:control_frame(register_ack)).
 
+%% A station refuses a PUBLISH a realm's rights do not admit (macula#128); the ack names the publisher.
+a_refused_publish_travels_naming_its_publisher() ->
+    Ack = publish_ack(#{accepted => false, reason => not_authorized}),
+    ?assertMatch(#{kind := publish, subscriber := <<1:256>>, name := <<"acme.counted">>, accepted := false,
+                   reason := not_authorized},
+                 roundtrip(Ack)),
+    ?assertError(function_clause, macula_frame:register_ack((spec(Ack))#{record_version => <<2:128>>})),
+    ?assertEqual({error, {invalid_frame, register_ack, subscriber}}, decode_map((maps:remove(subscriber, Ack))#{record_version => <<2:128>>})),
+    ?assertMatch({error, {invalid_frame, register_ack, _}}, decode_map(maps:remove(subscriber, Ack))).
+
+%% A publish holds no registration, so there is nothing to accept: an accepted publish ack is refused both ways.
+a_publish_is_never_accepted() ->
+    Refused = publish_ack(#{accepted => false, reason => refused}),
+    ?assertError(function_clause, macula_frame:register_ack(maps:remove(reason, (spec(Refused))#{accepted => true}))),
+    ?assertMatch({error, {invalid_frame, register_ack, _}}, decode_map(maps:remove(reason, Refused#{accepted => true}))).
+
 %%------------------------------------------------------------------
 %% Helpers
 %%------------------------------------------------------------------
@@ -108,6 +126,10 @@ advertise_ack(Extra) ->
 
 subscribe_ack(Extra) ->
     macula_frame:register_ack(maps:merge(#{kind => subscribe, realm => <<7:256>>, name => <<"acme.counted">>,
+                                           subscriber => <<1:256>>}, Extra)).
+
+publish_ack(Extra) ->
+    macula_frame:register_ack(maps:merge(#{kind => publish, realm => <<7:256>>, name => <<"acme.counted">>,
                                            subscriber => <<1:256>>}, Extra)).
 
 %% The spec a frame was built from.

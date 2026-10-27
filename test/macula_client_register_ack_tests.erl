@@ -33,7 +33,10 @@ register_ack_test_() ->
                           {"an advertisement a link could not send is not sent", fun an_unsent_advertisement_is_not_sent/1},
                           {"a refusal nobody waits for is reported", fun a_refusal_nobody_waits_for_is_reported/1},
                           {"a registration the pool sends no frame for needs no ack",
-                           fun a_registration_without_a_frame_needs_no_ack/1}]]}.
+                           fun a_registration_without_a_frame_needs_no_ack/1},
+                          {"a refused publish is reported", fun a_refused_publish_is_reported/1},
+                          {"a refused publish of another publisher is not this pool's",
+                           fun a_refused_publish_of_another_publisher_is_dropped/1}]]}.
 
 one_accepting_station_acknowledges(Pool) ->
     [{Link1, _}, _] = connected(Pool),
@@ -122,6 +125,32 @@ a_registration_without_a_frame_needs_no_ack(Pool) ->
     ok = macula_client:advertise(Pool, ?REALM, ?PROCEDURE, fun(_) -> {ok, counted} end, open, undefined),
     ?assertEqual(ok, macula_client:await_registration(Pool, advertise, ?REALM, ?PROCEDURE)).
 
+%% A station refusing a PUBLISH (macula#128) answers a send nobody waits on: the refusal is reported.
+a_refused_publish_is_reported(Pool) ->
+    [{Link1, Station1}, _] = connected(Pool),
+    ok = capturing_afresh(),
+    try
+        acked(Link1, publish_ack(node_id(Pool), not_authorized)),
+        ?assertMatch(#{station := Station1, kind := publish, realm := ?REALM, name := ?TOPIC,
+                       reason := not_authorized},
+                     captured(<<"_macula.client.registration_refused">>))
+    after
+        logger:remove_handler(?HANDLER)
+    end.
+
+a_refused_publish_of_another_publisher_is_dropped(Pool) ->
+    [{Link1, _}, _] = connected(Pool),
+    ok = capturing_afresh(),
+    try
+        acked(Link1, publish_ack(<<99:256>>, not_authorized)),
+        _ = sys:get_state(Pool),
+        receive {captured, <<"_macula.client.registration_refused">>, Props} -> error({reported, Props})
+        after 300 -> ok
+        end
+    after
+        logger:remove_handler(?HANDLER)
+    end.
+
 %%------------------------------------------------------------------
 %% Helpers
 %%------------------------------------------------------------------
@@ -158,6 +187,9 @@ advertise_ack(Accepted, Reason) ->
 
 subscribe_ack(Subscriber, Accepted, Reason) ->
     ack(#{kind => subscribe, name => ?TOPIC, subscriber => Subscriber}, Accepted, Reason).
+
+publish_ack(Publisher, Reason) ->
+    ack(#{kind => publish, name => ?TOPIC, subscriber => Publisher}, false, Reason).
 
 ack(Named, true, undefined) ->
     macula_frame:register_ack(Named#{realm => ?REALM, accepted => true});
@@ -201,6 +233,11 @@ node_id(Pool) ->
 
 capturing() ->
     logger:add_handler(?HANDLER, ?MODULE, #{level => all, config => #{test => self()}}).
+
+%% Capturing with the refusal's log window closed, so an earlier test's report in the last 10 s holds nothing back.
+capturing_afresh() ->
+    true = ets:delete(macula_diagnostics_bound, {topic, <<"_macula.client.registration_refused">>}),
+    capturing().
 
 %% The capture handler's callback.
 log(#{msg := {report, #{event := Topic, properties := Props}}}, #{config := #{test := Test}}) ->
