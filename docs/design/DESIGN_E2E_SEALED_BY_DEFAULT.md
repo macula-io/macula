@@ -121,8 +121,11 @@ rows matter to this change:
     (`frame/signed_frames.go:171-186`) refuses any key its reply, stream and request tables do not name, and none
     names `ext`. That is a wire 1.0 §3.2 conformance bug, macula-go#42. A pre-#42 Go or libmacula caller (the four
     bindings too) would read a refusal carrying the key as `malformed_frame` and wait out its deadline. So **A0 only
-    reads and reseals; no provider sends `seal.kem_key` before release A**, which runs only once every caller is on
-    A0 (§8). An A0 reader adds `seal.kem_key` to its known extensions, so it is not counted as ignored. Erlang's
+    reads and reseals; no service sends `seal.kem_key` before release A**, which runs only once every caller is on
+    A0 (§8). A0's Erlang provider can name it, but only where a served procedure's spec sets
+    `refusal_names_key => true`: the interop programs set it, no service does, and the safety argument below is that
+    nobody outside a test turns it on until release A. An A0 reader adds `seal.kem_key` to its known extensions, so
+    it is not counted as ignored. Erlang's
     `stream_bytes/2` build-key lists for `provider_error` and `stream_error` gain `ext`.
     `test/vectors/E2E_SEAL_V1.md` gains that refusal per profile, so every SDK reads one shape.
   - **Why it can be trusted.** The refusal is signed by the provider's identity key (`MACULA-PQ-REPLY-V1`,
@@ -328,9 +331,10 @@ Two hazards follow from these.
 
 - **Release A0, the caller's reseal.** The reading side of §3: every caller reads a refusal's `seal.kem_key`
   (Go via macula-go#42), reseals to it and replaces its remembered candidate's key. Nothing else changes: no
-  provider sends the key yet, and defaults stay as they are today. A0 is rolled to the whole fleet, and every
-  service and client is rebuilt on it, before any release A provider runs anywhere.
-- **Release A, the provider default.** A keyed provider's `sealed_required` starts carrying `seal.kem_key`, and
+  service's provider sends the key yet, and defaults stay as they are today. A0 is rolled to the whole fleet, and
+  every service and client is rebuilt on it, before any release A provider runs anywhere.
+- **Release A, the provider default.** A keyed provider's `sealed_required` starts carrying `seal.kem_key` by
+  default, and
   everything else in §3 to §7 **except the caller default**: the keyring is always
   on, `kem_advertise` and advertise-side `preferred` are gone, there is no clear window, publish and subscribe need
   `group` or `open`, content is `off`, and the counters and logs are in. The caller default stays `preferred` in
@@ -346,7 +350,8 @@ only from release B on, and the docs of release A say so.
 1. **Release A0 of the three implementations**, the reading and resealing side only: Erlang `macula`, `macula-go`
    and libmacula, and `macula-rust` and its FFI crate, in any order. Go's A0 includes macula-go#42: a signed tbs
    `ext` in the reply, stream and request tables, a non-critical entry ignored and counted, a critical one refused.
-   Then the four bindings re-pin to libmacula A0. No A0 node sends `seal.kem_key`, so no A0 build can hang a caller
+   Then the four bindings re-pin to libmacula A0. No A0 service sends `seal.kem_key` — the Erlang link sends it only
+   for a procedure whose spec sets `refusal_names_key`, which no service does — so no A0 build can hang a caller
    that does not read it; the safety argument is that gate, not the release order. Interop gains, with a provider
    built to send the extension in the test only: a clear call and a clear open to a keyed provider are refused
    `sealed_required` carrying the key, and every SDK's caller, Go included, reseals to it and gets the answer; a
