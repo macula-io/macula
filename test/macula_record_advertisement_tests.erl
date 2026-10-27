@@ -243,6 +243,64 @@ a_delegation_slot_reads_the_org_keys_entry_test() ->
     ?assertEqual({error, wrong_member}, macula_record:delegation_standing([Tomb], OrgKeyId, fill(5), pq_pure, now_ms())).
 
 %%------------------------------------------------------------------
+%% The procedures a delegation names (macula#128, threat model T7): a caller and a station check that the delegation
+%% names the procedure its node serves, an exact entry or a prefix it lies below, whole segments only.
+%%------------------------------------------------------------------
+
+a_delegation_reads_back_the_procedures_it_names_test() ->
+    #{delegation := Del} = delegation_bundle(<<"acme/a">>, #{procedures => [<<"acme/a">>, <<"acme/billing/*">>]}),
+    {ok, V} = verify(Del),
+    ?assertEqual([<<"acme/a">>, <<"acme/billing/*">>],
+                 maps:get(procedures, macula_record:read_procedure_delegation(V))),
+    #{delegation := Bare} = delegation_bundle(<<"acme/a">>, #{}),
+    {ok, BareV} = verify(Bare),
+    ?assertNot(maps:is_key(procedures, macula_record:read_procedure_delegation(BareV))).
+
+a_delegation_names_its_procedures_exactly_or_by_prefix_test_() ->
+    Serving = fun(Procedure, Listed) ->
+                  #{adv := Adv, realm := Realm} = delegation_bundle(Procedure, #{procedures => Listed}),
+                  macula_record:verify_serving(verified(Adv),
+                                               #{profile => pq_pure, realm_key => macula_node_keys:public_key(Realm)},
+                                               now_ms())
+              end,
+    [{"an exact entry names its procedure",
+      ?_assertEqual({ok, ok}, Serving(<<"acme/a">>, [<<"acme/a">>]))},
+     {"a prefix names what lies below it",
+      ?_assertEqual({ok, ok}, Serving(<<"acme/billing/pay">>, [<<"acme/billing/*">>]))},
+     {"a procedure the delegation does not name is not delegated, though the authorization holds",
+      ?_assertEqual({ok, {error, procedure_not_delegated}}, Serving(<<"acme/b">>, [<<"acme/a">>]))},
+     {"whole segments only: acme/bill/* does not name acme/billing/pay",
+      ?_assertEqual({ok, {error, procedure_not_delegated}}, Serving(<<"acme/billing/pay">>, [<<"acme/bill/*">>]))},
+     {"a prefix does not name the name its segments spell",
+      ?_assertEqual({ok, {error, procedure_not_delegated}}, Serving(<<"acme/billing">>, [<<"acme/billing/*">>]))}].
+
+a_delegation_without_procedures_names_none_test() ->
+    #{adv := Adv, realm := Realm} = delegation_bundle(<<"acme/a">>, #{}),
+    ?assertEqual({ok, {error, no_procedures_delegated}},
+                 macula_record:verify_serving(verified(Adv),
+                                              #{profile => pq_pure, realm_key => macula_node_keys:public_key(Realm)},
+                                              now_ms())).
+
+a_refused_authorization_is_refused_by_verify_serving_too_test() ->
+    #{adv := Adv} = delegation_bundle(<<"acme/a">>, #{procedures => [<<"acme/a">>]}),
+    ?assertEqual({error, no_realm_key}, macula_record:verify_serving(verified(Adv), #{profile => pq_pure}, now_ms())).
+
+an_own_namespace_procedure_has_no_delegation_to_check_test() ->
+    A = key(identity),
+    Own = <<"~", (binary:encode_hex(macula_node_keys:key_id(A), lowercase))/binary, "/echo">>,
+    Adv = macula_record:sign(macula_record:procedure_advertisement(macula_node_keys:key_id(A), realm_id(), Own,
+                                                                   [fill(2)], #{ttl_ms => 300_000}), A),
+    ?assertEqual(none, macula_record:delegated_procedure(verified(Adv), pq_pure, now_ms())).
+
+a_delegation_with_a_malformed_procedures_list_is_not_built_test_() ->
+    Build = fun(Listed) ->
+                macula_record:procedure_delegation(fill(1), fill(2), #{procedures => Listed})
+            end,
+    [?_assertError(_, Build([])),
+     ?_assertError(_, Build([<<>>])),
+     ?_assertError(_, Build(lists:duplicate(65, <<"acme/a">>)))].
+
+%%------------------------------------------------------------------
 %% Helpers
 %%------------------------------------------------------------------
 
@@ -260,7 +318,8 @@ delegation_bundle(Procedure, Overrides) ->
     Del = macula_record:sign(macula_record:procedure_delegation(
                                  macula_node_keys:key_id(DelSigner),
                                  maps:get(del_advertiser, Overrides, macula_node_keys:key_id(A)),
-                                 #{ttl_ms => maps:get(del_ttl, Overrides, 30 * ?MINUTE)}), DelSigner),
+                                 maps:merge(#{ttl_ms => maps:get(del_ttl, Overrides, 30 * ?MINUTE)},
+                                            maps:with([procedures], Overrides))), DelSigner),
     DirBytes = corrupt(maps:get(corrupt_dir, Overrides, false), macula_record:encode(OrgDir)),
     Authorization = #{org_directory => DirBytes, procedure_delegation => macula_record:encode(Del)},
     Adv = macula_record:sign(macula_record:procedure_advertisement(

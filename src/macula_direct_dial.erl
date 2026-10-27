@@ -787,8 +787,12 @@ with_realm_key({ok, RealmKey}, Trust) -> Trust#{realm_key => RealmKey};
 with_realm_key(none, Trust)           -> Trust.
 
 %% A verified advertisement is trusted when it advertises the resolved
-%% procedure in the resolved realm and its provider authorization
-%% verifies against the realm trust (D25 item 6).
+%% procedure in the resolved realm, its provider authorization
+%% verifies against the realm trust (D25 item 6), and its delegation
+%% names the procedure, as the realm's mode for the serve check has it
+%% (`macula_realm_rights:serve/4', macula#128): counting lets a
+%% delegation that names no procedures, or others, through and counts
+%% it; refusing drops the candidate.
 advertisement_trusted(#{type := ?TYPE_PROCEDURE_ADVERTISEMENT} = Rec,
                       #{realm := Realm, procedure := Procedure} = Trust) ->
     for_procedure(macula_record:read_procedure_advertisement(Rec), Rec, Realm, Procedure, Trust);
@@ -796,9 +800,17 @@ advertisement_trusted(_OtherRecord, _Trust) ->
     false.
 
 for_procedure(#{realm_id := Realm, procedure := Procedure}, Rec, Realm, Procedure, Trust) ->
-    ok =:= macula_record:verify_authorization(Rec, maps:without([realm, procedure], Trust),
-                                              erlang:system_time(millisecond));
+    served(macula_record:verify_serving(Rec, maps:without([realm, procedure], Trust),
+                                        erlang:system_time(millisecond)),
+           Realm, Procedure);
 for_procedure(_OtherProcedure, _Rec, _Realm, _Procedure, _Trust) ->
+    false.
+
+served({ok, none}, _Realm, _Procedure) ->
+    true;
+served({ok, Delegated}, Realm, Procedure) ->
+    allow =:= macula_realm_rights:serve(macula_realm_rights:mode(Realm), Realm, Procedure, Delegated);
+served({error, _Refused}, _Realm, _Procedure) ->
     false.
 
 %% Sends the CALL to one resolved station. `not_connected' means the link
