@@ -20,6 +20,7 @@ link_limits_test_() ->
                   fun a_link_limit_outside_its_range_does_not_start_the_pool/0,
                   fun a_fresh_direct_dial_past_the_direct_link_limit_is_refused/0,
                   fun a_direct_link_that_restarts_still_counts_against_the_limit/0,
+                  fun a_direct_seed_dialled_again_while_it_waits_keeps_one_link/0,
                   fun a_fresh_direct_dial_past_the_new_peer_budget_is_refused/0,
                   fun configured_seeds_never_spend_the_new_peer_budget/0,
                   fun discovery_past_the_new_peer_budget_defers_its_additions/0,
@@ -78,6 +79,23 @@ a_direct_link_that_restarts_still_counts_against_the_limit() ->
     {ok, [#{pid := Respawned}]} = respawned_links(Pool, Link),
     ?assertNotEqual(Link, Respawned),
     ?assertEqual({error, {dial_refused, too_many_direct_links}}, call_station(Pool, seed(3))),
+    ok = macula_client:close(Pool).
+
+%% Dialling a direct seed again while it waits to respawn fits the limit it already counts against, and the respawn
+%% that follows starts no second link beside the one that dial started.
+a_direct_seed_dialled_again_while_it_waits_keeps_one_link() ->
+    {ok, Pool} = macula_client:connect([], #{max_direct_links => 1}),
+    {error, not_connected} = call_station(Pool, seed(1)),
+    {ok, [#{pid := Link}]} = macula_client:links(Pool),
+    Mon = erlang:monitor(process, Link),
+    exit(Link, kill),
+    receive {'DOWN', Mon, process, Link, killed} -> ok end,
+    ?assertEqual({error, not_connected}, call_station(Pool, seed(1))),
+    ?assertEqual({error, {dial_refused, too_many_direct_links}}, call_station(Pool, seed(2))),
+    {ok, [#{pid := Dialled}]} = macula_client:links(Pool),
+    timer:sleep(1_500),
+    ?assertMatch({ok, [#{pid := Dialled}]}, macula_client:links(Pool)),
+    ?assert(is_process_alive(Dialled)),
     ok = macula_client:close(Pool).
 
 a_fresh_direct_dial_past_the_new_peer_budget_is_refused() ->

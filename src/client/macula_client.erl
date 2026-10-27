@@ -2663,14 +2663,15 @@ reuse_or_dial(undefined, Station, ExtraOpts, S) ->
 
 %% A fresh direct dial names a seed the pool can dial, and fits the pool's
 %% direct links and its new-peer budget, or is refused with a named error and
-%% dials nothing.
+%% dials nothing. A direct seed waiting to respawn is already counted, so
+%% dialling it again fits.
 dial_fresh(Station, ExtraOpts, S) ->
     usable_dial(usable_seed(Station), Station, ExtraOpts, S).
 
 usable_dial(false, _Station, _ExtraOpts, S) ->
     refused_dial(unusable_seed, S);
-usable_dial(true, Station, ExtraOpts, #state{max_direct_links = Max} = S) ->
-    direct_dial(direct_link_count(S) < Max, Station, ExtraOpts, S).
+usable_dial(true, Station, ExtraOpts, #state{max_direct_links = Max, direct_seeds = Direct} = S) ->
+    direct_dial(is_map_key(Station, Direct) orelse direct_link_count(S) < Max, Station, ExtraOpts, S).
 
 direct_dial(false, _Station, _ExtraOpts, S) ->
     refused_dial(too_many_direct_links, S);
@@ -3430,7 +3431,15 @@ seed_host(_) ->
 %% a URL-binary seed, and starting without it is refused by the link
 %% (`seed_without_expected_node_id'), which loses the route rather than
 %% dialling anything unpinned.
-on_respawn_link(Seed, S) ->
+%%
+%% A seed dialled again while it waited holds a live link already: starting a
+%% second would leave the first running untracked.
+on_respawn_link(Seed, #state{links = Links} = S) ->
+    respawn_unless_live(maps:get(Seed, Links, undefined), Seed, S).
+
+respawn_unless_live(#link_state{pid = Pid}, _Seed, S) when is_pid(Pid) ->
+    S;
+respawn_unless_live(_NoneOrHeld, Seed, S) ->
     NewS = start_link_for_seed(Seed, dial_opts_for(Seed, S), S),
     replay_to_seed(maps:get(Seed, NewS#state.links, undefined), NewS).
 
