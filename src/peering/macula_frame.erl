@@ -1212,6 +1212,7 @@ result(#{request := Request} = Spec, Key) ->
 %% @doc Sign a provider's ERROR for a verified request: a code of at most 64 bytes and an optional detail of at most 256,
 %% both UTF-8. Other text raises a badmatch on `{error, {text_too_long, Field}}' or `{error, {invalid_text, Field}}'.
 -spec provider_error(#{request := verified_request(), code => binary(), detail => binary(), sealed => sealed(),
+                       ext => #{binary() => #{critical := 0 | 1, value := binary()}},
                        source_route_reverse => binary()}, macula_node_keys:node_key()) -> frame().
 provider_error(#{request := Request, sealed := #{scheme := 1, key_id := <<_:64>>, ct := Ct} = Sealed} = Spec, Key)
   when not is_map_key(code, Spec), not is_map_key(detail, Spec), is_binary(Ct) ->
