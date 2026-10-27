@@ -13,6 +13,7 @@
 -define(OTHER_PROVIDER, <<5:256>>).
 -define(STATION, <<2:256>>).
 -define(KEM_KEY, <<7:12544>>).
+-define(OTHER_KEM_KEY, <<9:12544>>).
 
 %% The learnt key is written onto the candidate of the provider it came from, and the entry keeps its horizon.
 a_learnt_key_is_written_onto_its_providers_candidate_test() ->
@@ -44,6 +45,34 @@ a_refreshed_candidate_of_another_provider_does_not_test() ->
     Learnt = macula_client:learnt(key(), ?PROVIDER, ?KEM_KEY, #{key() => remembered_entry(?PROVIDER, 1_000)}),
     Refreshed = macula_client:remembered(key(), candidate(?OTHER_PROVIDER), 2_000, 500, Learnt),
     ?assertEqual(candidate(?OTHER_PROVIDER), candidate_of(Refreshed)).
+
+%% A learnt key taken off the candidate of the provider that refused it, and only while it is still that very key.
+forgotten_test_() ->
+    [{"the key a refusal was about comes off its provider's candidate",
+      fun() ->
+              Entry = remembered_entry(?PROVIDER, 1_000),
+              Learnt = macula_client:learnt(key(), ?PROVIDER, ?KEM_KEY, #{key() => Entry}),
+              ?assertEqual(#{key() => Entry}, macula_client:forgotten(key(), ?PROVIDER, ?KEM_KEY, Learnt))
+      end},
+     {"a key another provider's entry holds stays: the refusal answers for the other one",
+      fun() ->
+              Entry = remembered_entry(?OTHER_PROVIDER, 1_000),
+              Learnt = macula_client:learnt(key(), ?OTHER_PROVIDER, ?KEM_KEY, #{key() => Entry}),
+              ?assertEqual(Learnt, macula_client:forgotten(key(), ?PROVIDER, ?KEM_KEY, Learnt))
+      end},
+     {"a key learnt since the refusal went out stays: it is the newer fact",
+      fun() ->
+              Entry = remembered_entry(?PROVIDER, 1_000),
+              Learnt = macula_client:learnt(key(), ?PROVIDER, ?OTHER_KEM_KEY, #{key() => Entry}),
+              ?assertEqual(Learnt, macula_client:forgotten(key(), ?PROVIDER, ?KEM_KEY, Learnt))
+      end},
+     {"a candidate that learnt nothing stays as it is",
+      fun() ->
+              Entry = remembered_entry(?PROVIDER, 1_000),
+              ?assertEqual(#{key() => Entry}, macula_client:forgotten(key(), ?PROVIDER, ?KEM_KEY, #{key() => Entry}))
+      end},
+     {"with no remembered candidate, there is nothing to take anything off",
+      fun() -> ?assertEqual(#{}, macula_client:forgotten(key(), ?PROVIDER, ?KEM_KEY, #{})) end}].
 
 %%------------------------------------------------------------------
 %% Helpers

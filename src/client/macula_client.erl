@@ -112,8 +112,9 @@
 %% remember which station last answered a procedure, and to get it back.
 -export([resolved_candidate/3, remember_resolved/5]).
 %% A key learnt from a provider's signed `sealed_required' refusal, written onto the candidate this pool remembered
-%% for its procedure (DESIGN_E2E_SEALED_BY_DEFAULT §3, release A0).
--export([learn_kem_key/5]).
+%% for its procedure, and taken off it again when a refusal shows it has been rotated away
+%% (DESIGN_E2E_SEALED_BY_DEFAULT §3, release A0).
+-export([learn_kem_key/5, forget_kem_key/5]).
 %% Station-authorization checks counted from the dialling process
 %% (macula-station#63, hook 3).
 -export([note_station_check/2]).
@@ -154,6 +155,9 @@
 %% The write behind `learn_kem_key/5', exported for the same reason: a key learnt from a signed refusal is written onto
 %% one candidate, and which one it lands on is the property that keeps it from sealing a call to another provider.
 -export([learnt/4]).
+%% The write behind `forget_kem_key/5', exported for the same reason: the key a refusal showed to be stale comes off
+%% one candidate, and only when it is still the very key that was refused.
+-export([forgotten/4]).
 %% The pure selection math behind publish/5's replication fan-out, and
 %% the per-link crash guard its fan-out worker uses — exported for
 %% macula_client_tests.erl only, see their own docs.
@@ -1314,6 +1318,19 @@ learn_kem_key(Pool, <<_:256>> = RealmId, Procedure, <<_:256>> = Provider, KemKey
   when is_pid(Pool), is_binary(Procedure), is_binary(KemKey) ->
     gen_server:cast(Pool, {learn_kem_key, RealmId, Procedure, Provider, KemKey}).
 
+%% @doc Take `KemKey' off the candidate this pool remembered for `Procedure' in `RealmId', when a provider refused a
+%% call sealed to it (DESIGN_E2E_SEALED_BY_DEFAULT §3, release A0). A learnt key is not an advertised one: nothing in
+%% the DHT can replace it, so a provider that rotated away from it would otherwise have every call refused until the
+%% remembered candidate expires. Forgetting it costs one call that goes out clear and is answered `sealed_required',
+%% whose signed key teaches the pool the new one; keeping it costs every call until the entry's horizon.
+%%
+%% Written only onto that provider's candidate, and only while it is still the key the refusal was about: a key learnt
+%% since then is the newer fact, and a cast that arrives late must not take it.
+-spec forget_kem_key(pool(), <<_:256>>, binary(), <<_:256>>, binary()) -> ok.
+forget_kem_key(Pool, <<_:256>> = RealmId, Procedure, <<_:256>> = Provider, KemKey)
+  when is_pid(Pool), is_binary(Procedure), is_binary(KemKey) ->
+    gen_server:cast(Pool, {forget_kem_key, RealmId, Procedure, Provider, KemKey}).
+
 %% @doc Count one station-authorization check on the pool's status
 %% (`station_checks'): `live' when the station held a live authorization for
 %% the realm the dial names, `would_refuse' when it did not and a mode admitted
@@ -2098,6 +2115,10 @@ handle_cast({remember_resolved, RealmId, Procedure, Candidate, TtlMs},
 %% the pool still holds one for the procedure: a key names a provider, and the entry names the provider it answers for.
 handle_cast({learn_kem_key, RealmId, Procedure, Provider, KemKey}, #state{resolved = Resolved} = S) ->
     {noreply, S#state{resolved = learnt({RealmId, Procedure}, Provider, KemKey, Resolved)}};
+%% The provider refused a call sealed to the key this pool learnt for it: the key is stale, and only a fresh signed
+%% refusal can name the one it holds now.
+handle_cast({forget_kem_key, RealmId, Procedure, Provider, KemKey}, #state{resolved = Resolved} = S) ->
+    {noreply, S#state{resolved = forgotten({RealmId, Procedure}, Provider, KemKey, Resolved)}};
 handle_cast({discovered_stations, NewSeeds}, S) ->
     {noreply, add_discovered_seeds(NewSeeds, S)};
 
@@ -2904,6 +2925,22 @@ keeping_learnt(Candidate, {ok, #{candidate := #{provider := Provider, learnt_kem
     Candidate#{learnt_kem_key => KemKey};
 keeping_learnt(Candidate, _NoEntryOrAnotherProvider) ->
     Candidate.
+
+%% A learnt key taken off the candidate of the provider that refused it. Only while it is still that very key: a key
+%% learnt since the refusal went out is the newer fact, and a late cast must not take it.
+forgotten(Key, Provider, KemKey, Resolved) ->
+    case maps:find(Key, Resolved) of
+        {ok, Entry} -> Resolved#{Key := forgotten_on(Entry, Provider, KemKey)};
+        error -> Resolved
+    end.
+
+forgotten_on(#{candidate := #{provider := Provider, learnt_kem_key := KemKey} = Candidate} = Entry, Provider, KemKey) ->
+    Entry#{candidate := maps:remove(learnt_kem_key, Candidate)};
+forgotten_on(#{candidate := #{provider := _Another}} = Entry, _Provider, _KemKey) ->
+    %% The entry answers for another provider, or holds another key now: it stays as it is.
+    Entry;
+forgotten_on(#{candidate := _NoLearntKey} = Entry, _Provider, _KemKey) ->
+    Entry.
 
 link_pid(Station, #state{links = Links}) ->
     case maps:find(Station, Links) of

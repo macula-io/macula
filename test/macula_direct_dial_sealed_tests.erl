@@ -36,6 +36,10 @@ cases() ->
       fun a_calls_reseal_finds_the_named_key_among_the_providers_advertisements/0},
      {"a call whose provider lost its key reseals to the first advertisement that names any key",
       fun a_calls_reseal_after_a_lost_key_skips_a_keyless_advertisement/0},
+     {"a refusal of a call sealed to the learnt key forgets it", fun a_refusal_forgets_the_learnt_key/0},
+     {"a refusal of a stream sealed to the learnt key forgets it", fun a_streams_refusal_forgets_the_learnt_key/0},
+     {"a refusal of a call sealed to an advertised key keeps the learnt one",
+      fun a_refusal_of_an_advertised_key_keeps_the_learnt_one/0},
      {"a call refuses confidential => off before any lookup", fun a_call_refuses_off/0},
      {"a stream refuses confidential => off before any lookup", fun a_stream_refuses_off/0},
      {"a confidential that names no policy is an invalid option", fun an_unknown_confidential_is_invalid/0},
@@ -272,7 +276,75 @@ setup() ->
     erase(),
     ok.
 
-%% A provider, the station it serves from, and its own-namespace procedure.
+%% A call sealed to a key the pool learnt, which the provider has since rotated away from, takes that key off the
+%% pool's candidate: a refusal names a key id, not a key, and while the DHT serves only the provider's keyless
+%% advertisement nothing else can replace it — the learnt key would fail every call until the entry expires
+%% (release A0, review round 4).
+a_refusal_forgets_the_learnt_key() ->
+    F = fixture(),
+    script(F, [[keyless_ad(F)]], [{error, {sealed_refused, kem_id(2)}}]),
+    put(resolved_candidate, {ok, learnt_candidate(F), seed(F)}),
+    ?assertEqual({error, {confidentiality, no_kem_key}}, call_on(recording_pool(), F, #{})),
+    ?assertEqual({forget_kem_key, ?REALM, maps:get(procedure, F), maps:get(provider_id, F), kem(1)}, forgotten()).
+
+%% The stream's reseal is where a refused stream learns it: the same forget, once, before it looks the key up.
+a_streams_refusal_forgets_the_learnt_key() ->
+    F = fixture(),
+    script(F, [[keyless_ad(F)]], [{ok, self()}]),
+    put(resolved_candidate, {ok, learnt_candidate(F), seed(F)}),
+    ?assertEqual({ok, self()}, stream_on(recording_pool(), F, #{})),
+    [Opts] = calls(),
+    ?assertEqual({error, {confidentiality, no_kem_key}}, (maps:get(reseal, Opts))(kem_id(2))),
+    ?assertEqual({forget_kem_key, ?REALM, maps:get(procedure, F), maps:get(provider_id, F), kem(1)}, forgotten()).
+
+%% A refusal is about the key the call was sealed to, and a signed advertisement's key wins over the learnt one
+%% (`macula:call_seal/5'): the learnt key answered no question here and stays, in case the next advertisement is a
+%% keyless one again.
+a_refusal_of_an_advertised_key_keeps_the_learnt_one() ->
+    F = fixture(),
+    script(F, [[keyed_ad(F, kem(3))]], [{error, {sealed_refused, kem_id(2)}}]),
+    Candidate = (learnt_candidate(F))#{advertisement => keyed_ad(F, kem(1))},
+    put(resolved_candidate, {ok, Candidate, seed(F)}),
+    ?assertEqual({error, {confidentiality, {key_mismatch, kem_id(2), kem_id(3)}}}, call_on(recording_pool(), F, #{})),
+    ?assertEqual(none, forgotten()).
+
+%%------------------------------------------------------------------
+%% Helpers
+%%------------------------------------------------------------------
+
+%% The same candidate, carrying the first key the pool learnt for its provider.
+learnt_candidate(F) ->
+    #{provider => maps:get(provider_id, F), version => <<1:128>>, station => maps:get(station_id, F),
+      ttl_ms => 60_000, advertisement => keyless_ad(F), learnt_kem_key => kem(1)}.
+
+seed(F) ->
+    #{host => <<"::1">>, port => 4433, expected_node_id => maps:get(station_id, F)}.
+
+call_on(Pool, #{procedure := Proc}, Opts) ->
+    macula_direct_dial:call(Pool, ?REALM, Proc, <<"ping">>, 3_000, Opts#{dial_io => dial_io()}).
+
+stream_on(Pool, #{procedure := Proc}, StreamOpts) ->
+    macula_direct_dial:call_stream(Pool, ?REALM, Proc, #{}, StreamOpts, #{dial_io => dial_io()}).
+
+%% A pool that pins no realm key and hands this process every cast it is sent.
+recording_pool() ->
+    Test = self(),
+    spawn(fun Recorder() ->
+              receive
+                  {'$gen_call', From, {realm_key, _Realm}} -> gen_server:reply(From, none), Recorder();
+                  {'$gen_cast', Cast} -> Test ! {pool_cast, Cast}, Recorder()
+              after 10_000 -> ok
+              end
+          end).
+
+%% The one thing the tie between a refusal and a pool is checked on, and nothing else: what it was told to forget.
+forgotten() ->
+    receive
+        {pool_cast, {forget_kem_key, Realm, Procedure, Provider, KemKey}} -> {forget_kem_key, Realm, Procedure, Provider, KemKey}
+    after 200 -> none
+    end.
+
+
 fixture() ->
     {ok, Provider} = macula_node_keys:generate(identity, profile()),
     {ok, Station} = macula_node_keys:generate(identity, profile()),

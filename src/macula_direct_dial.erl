@@ -834,15 +834,42 @@ candidate_checked(#{provider := Provider} = Candidate,
                   Realm, Procedure, Payload, Deadline, Policy, Station, DialUrl, Share) ->
     case station_checked(Pool, FindRecord, Realm, Station, Share) of
         ok ->
+            Learnt = unadvertised_key(Candidate),
             Call = station_call(CallStation, Pool, DialUrl, Provider, Realm, Procedure, Payload, Deadline,
                                 Policy, Station, Share, maps:get(learnt_kem_key, Candidate, none)),
             sent_or_not(
-              settled(resealed(Call(maps:get(advertisement, Candidate, undefined)), Call, Dial, Realm, Procedure,
-                               Provider, Deadline),
+              settled(resealed_after(Call(maps:get(advertisement, Candidate, undefined)), Call, Dial, Realm, Procedure,
+                                     Provider, Deadline, Learnt),
                       Remember, Pool, Realm, Procedure, Candidate));
         {refused, Error} ->
             {not_sent, Error}
     end.
+
+%% The key a call or a stream is sealed to that no advertisement of the candidate names: its learnt key, and only while
+%% the candidate's own advertisement names none. A signed advertisement's key wins, exactly as it does in
+%% `macula:call_seal/5', so a refusal there is about a key the DHT can still replace and the learnt one stays.
+unadvertised_key(#{advertisement := Ad, learnt_kem_key := KemKey}) when is_binary(KemKey) ->
+    case maps:get(kem_key, macula_record:read_procedure_advertisement(Ad), none) of
+        none -> KemKey;
+        _Advertised -> none
+    end;
+unadvertised_key(_NoLearntKeyOrNoAdvertisement) ->
+    none.
+
+%% A refusal of a call sealed to the learnt key: the provider rotated away from it, and no advertisement of its can
+%% replace it (a refusal names a key id, not a key). The pool forgets it, so the next call resolves as it did before
+%% learning and the provider's own signed `sealed_required' can teach the key it holds now; keeping it would fail
+%% every call until the remembered candidate expires (release A0, review round 4).
+resealed_after({error, {sealed_refused, _Named}} = Refused, Call, Dial, Realm, Procedure, Provider, Deadline, Learnt) ->
+    ok = forgotten_learnt(Dial, Realm, Procedure, Provider, Learnt),
+    resealed(Refused, Call, Dial, Realm, Procedure, Provider, Deadline);
+resealed_after(Result, Call, Dial, Realm, Procedure, Provider, Deadline, _Learnt) ->
+    resealed(Result, Call, Dial, Realm, Procedure, Provider, Deadline).
+
+forgotten_learnt(#{pool := Pool}, Realm, Procedure, Provider, KemKey) when is_binary(KemKey) ->
+    macula_client:forget_kem_key(Pool, Realm, Procedure, Provider, KemKey);
+forgotten_learnt(_Dial, _Realm, _Procedure, _Provider, _NoUnadvertisedKey) ->
+    ok.
 
 %% Hook 3 (macula-station#63): before a client dials a node as a station it
 %% resolved, the station must hold a live authorization from the realm the
@@ -951,7 +978,7 @@ candidate_stream_checked(#{provider := Provider} = Candidate,
                          #{pool := Pool, call_stream_station := CallStreamStation, find_record := FindRecord,
                            remember_resolved := Remember} = Dial,
                          Realm, Procedure, Args, StreamOpts, Station, DialUrl, Share) ->
-    Reseal = stream_reseal(Dial, Realm, Procedure, Provider, StreamOpts),
+    Reseal = stream_reseal(Dial, Realm, Procedure, Provider, StreamOpts, unadvertised_key(Candidate)),
     case station_checked(Pool, FindRecord, Realm, Station, Share) of
         ok ->
             sent_or_not(
@@ -1021,9 +1048,12 @@ renewed_ends(Dial, Realm, Procedure, Provider, Profile, Deadline) ->
     [End || Ad <- providers_ads(Dial, Realm, Procedure, Provider, Deadline),
             End <- [macula_record:authorization_ends_at(Ad, Profile, Now)], is_integer(End)].
 
-%% The `reseal' a stream is handed: one lookup and key binding, on a call's terms.
-stream_reseal(Dial, Realm, Procedure, Provider, StreamOpts) ->
+%% The `reseal' a stream is handed: one lookup and key binding, on a call's terms. A stream is resealed only after the
+%% provider refused it, so a key this stream was sealed to that no advertisement named is forgotten there too — the
+%% pool would otherwise keep sealing to it (release A0, review round 4).
+stream_reseal(Dial, Realm, Procedure, Provider, StreamOpts, Learnt) ->
     fun(Named) ->
+        ok = forgotten_learnt(Dial, Realm, Procedure, Provider, Learnt),
         stream_resealed(Named, Dial, Realm, Procedure, Provider,
                         deadline(maps:get(dial_timeout_ms, StreamOpts, ?DEFAULT_DIAL_TIMEOUT_MS)))
     end.
