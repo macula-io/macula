@@ -2450,11 +2450,12 @@ on_frame(_Frame, S) ->
 
 %% A station's answer to a registration goes to the pool, which waits on it. An ack of a kind this node does not know
 %% was counted when it was read and is ignored here, and so is one for a subscription of another subscriber: this
-%% link registers only its own node.
+%% link registers only its own node. A refused PUBLISH (macula#128) names its publisher the same way; the pool holds
+%% no registration for it, so it reports the refusal.
 registration_answered(#{kind := unknown}, S) ->
     S;
 registration_answered(#{kind := Kind, subscriber := Subscriber} = Ack, #state{node_identity = Key} = S)
-  when Kind =:= subscribe orelse Kind =:= unsubscribe ->
+  when Kind =:= subscribe orelse Kind =:= unsubscribe orelse Kind =:= publish ->
     own_subscriber_answered(Subscriber =:= node_id(Key), Ack, S);
 registration_answered(Ack, S) ->
     registration_told(Ack, S).

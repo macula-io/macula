@@ -119,22 +119,25 @@ signed object, by name, never the link.
 
 ### 3.5 REGISTER_ACK (macula#12)
 
-The station's answer to an ADVERTISE, UNADVERTISE, SUBSCRIBE or UNSUBSCRIBE, on the control stream, unsigned (per-hop):
+The station's answer to an ADVERTISE, UNADVERTISE, SUBSCRIBE or UNSUBSCRIBE, or its refusal of a PUBLISH the realm's
+rights do not admit (macula#128), on the control stream, unsigned (per-hop):
 
 | Key | Type | |
 |---|---|---|
-| `kind` | text | `advertise`, `unadvertise`, `subscribe` or `unsubscribe`: the frame answered |
+| `kind` | text | `advertise`, `unadvertise`, `subscribe`, `unsubscribe` or `publish`: the frame answered |
 | `realm` | bytes, 32 | |
 | `name` | text, 1 to 512 bytes | the procedure or topic |
 | `record_version` | bytes, 16 | for `advertise` and `unadvertise`: the advertisement's record version |
-| `subscriber` | bytes, 32 | for `subscribe` and `unsubscribe`: the subscriber's node id |
+| `subscriber` | bytes, 32 | for `subscribe` and `unsubscribe`: the subscriber's node id; for `publish`, the publisher's |
 | `accepted` | unsigned, 0 or 1 | |
 | `reason` | text | present exactly when `accepted` is 0 |
 
 `reason` is one of `too_many_providers`, `advertiser_quota`, `name_too_long`, `record_refused`, `not_authorized`,
 `too_many_realms` (a subscribe beyond the station's subscribed-realm limit), `refused`; `refused` is the generic one,
 and any other refusal (such as no default identity) is sent as `refused`. A `kind` with the other kind's key (`subscriber` on an advertise, or
-`record_version` on a subscribe), or with both or neither, is `malformed_frame`.
+`record_version` on a subscribe), or with both or neither, is `malformed_frame`. A `publish` ack is only ever a
+refusal: a PUBLISH holds no registration to accept, so `accepted` 1 on it is `malformed_frame`. A node that predates
+the `publish` kind reads it as unknown and ignores the ack, and its publication is dropped as before.
 
 ## 4. Handshake (macula#98)
 
