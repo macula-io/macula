@@ -708,6 +708,12 @@ call(Pid, Target, Realm, Procedure, Payload, TimeoutMs, Token, Seal) ->
 %% and the call runs to its deadline. A key of another profile than this link's, or one that seals nothing, is
 %% `{error, {confidentiality, no_kem_key}}', and nothing is sent.
 %%
+%% A CLEAR call refused `sealed_required' by a provider whose signed refusal names its own KEM key is resealed to that
+%% key under a new request id and sent once more, at most once per call (DESIGN_E2E_SEALED_BY_DEFAULT §3, release A0):
+%% a caller holding the provider's stale keyless advertisement recovers instead of failing until it expires. The key
+%% reaches the seal report when one is asked for, and the pool remembers it for that provider. A refusal that names no
+%% key, or one of another profile's size, reaches the caller as the provider's own `sealed_required'.
+%%
 %% `Report' `true' asks for the call's seal report (DESIGN_E2E_SEAL_REPORT): a result then comes back as
 %% `{ok, Result, #{sealed := 0 | 1, provider := Target, seal_key_id => KeyId}}', `sealed' 1 with the id of the key
 %% the call was sealed to, which is the key its answer opened under, or 0 for a clear call, with no key. It states
@@ -1384,14 +1390,12 @@ valid_stream_seal({sealed_to, KemKey}) when is_binary(KemKey) -> ok.
 
 valid_stream_deadline(DeadlineMs) when is_integer(DeadlineMs), DeadlineMs >= 0 -> ok.
 
-%% @doc Reopen a caller's sealed stream whose open the provider refused
-%% `sealed_refused' before the stream sent anything (E2E design §5.2,
-%% Amendment A1): the old session's dedicated stream closes, and a new
-%% STREAM_OPEN for the same target, procedure, mode, deadline and token,
-%% with `Args' sealed to `KemKey' under a new request id, goes out on a new
-%% one, carrying `StreamPid' on. Returns the new verified open, the keys it
-%% agreed and its attach id, which the stream reads and writes under from
-%% then on. The link does not call the stream, which waits on this call.
+%% @doc Reopen a caller's stream whose open the provider refused before anything it sent took effect: `sealed_refused'
+%% on a sealed open (E2E design §5.2, Amendment A1), or `sealed_required' on a clear one (DESIGN_E2E_SEALED_BY_DEFAULT
+%% §3, release A0). The old session's dedicated stream closes, and a new STREAM_OPEN for the same target, procedure,
+%% mode, deadline and token, with `Args' sealed to `KemKey' under a new request id, goes out on a new one, carrying
+%% `StreamPid' on. Returns the new verified open, the keys it agreed and its attach id, which the stream reads and
+%% writes under from then on. The link does not call the stream, which waits on this call.
 -spec reopen_stream(pid(), pid(), macula_frame:stream_id(), macula_frame:verified_request(), term(), binary()) ->
     {ok, #{open := macula_frame:verified_request(), seal := macula_sealed_call:keys(),
            sid := macula_frame:stream_id()}} | {error, term()}.
@@ -2560,10 +2564,70 @@ probe_answered({error, Refusal}, S) ->
 %% A verified answer completes the call; a refused one leaves it pending. A sealed call's answer is opened first, and
 %% one that does not answer a sealed request is refused too. A result the caller asked the report for carries it,
 %% built here, the one place that holds both the answer and what the call was sealed under.
+%%
+%% A CLEAR call a provider refuses `sealed_required', naming in the refusal its own KEM key, is resealed and sent once
+%% more (DESIGN_E2E_SEALED_BY_DEFAULT §3, release A0): a caller holding the provider's stale keyless advertisement
+%% recovers from the refusal itself instead of failing until that advertisement expires.
+call_answered({ok, #{frame_type := error, code := <<"sealed_required">>} = Fields}, RequestId, From, TRef, Request,
+              clear, Report, S) ->
+    refused_by_a_keyed_provider(Fields, RequestId, From, TRef, Request, Report, S);
 call_answered({ok, Fields}, RequestId, From, TRef, Request, Seal, Report, S) ->
     completed(reported(answer_of(Fields, Seal, Request), Report, Seal, Request), RequestId, From, TRef, S);
 call_answered({error, Refusal}, _RequestId, _From, _TRef, _Request, _Seal, _Report, S) ->
     refused_reply(Refusal, S).
+
+%% The refusal is signed by the provider for this very request and bound to it by its id and hash, so the key it
+%% carries is the target's own, as fresh as the refusal. The link seals the same payload to it under a new request id,
+%% at most once per call: a resealed call is sealed, so a refusal of its own is the provider's answer. The key reaches
+%% the seal report, and the pool, which remembers it for that provider so its next call seals at once.
+refused_by_a_keyed_provider(Fields, RequestId, From, TRef, #{deadline := Deadline} = Request, Report, S) ->
+    case refusal_kem_key(Fields, S) of
+        {ok, KemKey} ->
+            _ = erlang:cancel_timer(TRef),
+            learnt_by_pool(KemKey, Request, S),
+            resent(call_in_time(Deadline - erlang:system_time(millisecond),
+                                resealed_call(KemKey, Request, Report), From, S), From);
+        none ->
+            completed(reported(answer_of(Fields, clear, Request), Report, clear, Request),
+                      RequestId, From, TRef, S)
+    end.
+
+%% The same CALL once more, sealed to the key the refusal named, under a new request id this link draws: the request's
+%% target, deadline and token as they went out, and its payload as the request carries it, which re-encodes to the
+%% bytes the caller's own payload did (a payload arrives in the shape a clear payload does, and the wire encoding of
+%% that shape is itself again).
+resealed_call(KemKey, #{target := Target, realm := Realm, procedure := Proc, deadline := Deadline,
+                        payload := Payload} = Request, Report) ->
+    {Target, Realm, Proc, Payload, Deadline, maps:get(token, Request, <<>>), {sealed_to, KemKey}, Report}.
+
+%% `call_in_time/4' answers its caller the way a gen_server call is answered; here the caller to answer is `From'.
+resent({reply, Answer, S}, From) ->
+    gen_server:reply(From, Answer),
+    S;
+resent({noreply, S}, _From) ->
+    S.
+
+%% The KEM key a refusal carries, when this link can seal to it: a key of its own profile's size. A refusal without
+%% the extension, or with a key of another size (a provider before release A, or a faulty one), names none.
+refusal_kem_key(Fields, #state{profile = Profile}) ->
+    carried_key(macula_frame:refused_kem_key(Fields), Profile).
+
+carried_key({ok, KemKey}, Profile) ->
+    same_profile(macula_seal:public_key(KemKey), KemKey, Profile);
+carried_key(none, _Profile) ->
+    none.
+
+same_profile({ok, Profile, _Public}, KemKey, Profile) -> {ok, KemKey};
+same_profile(_AnotherProfileOrNone, _KemKey, _Profile) -> none.
+
+%% The pool remembers the key for the provider it called (DESIGN_E2E_SEALED_BY_DEFAULT §3): in `call_seal''s
+%% precedence it beats that candidate's own keyless advertisement for the advertisement's remaining lifetime, so the
+%% next call seals from the start. A link with no pool (one dialled on its own, a test) has no candidate to write.
+learnt_by_pool(KemKey, #{target := Provider, realm := Realm, procedure := Proc}, #state{pool = Pool})
+  when is_pid(Pool) ->
+    macula_client:learn_kem_key(Pool, Realm, Proc, Provider, KemKey);
+learnt_by_pool(_KemKey, _Request, _State) ->
+    ok.
 
 %% A result with its seal report when asked for (DESIGN_E2E_SEAL_REPORT §2, §3): a sealed call's result is only ever
 %% one its answer opened under the call's key, so `sealed' 1 names that key; a clear call's reports 0. Anything but a
@@ -4305,7 +4369,8 @@ reopening(#{reseal := Reseal}, Args, StreamOpts) -> StreamOpts#{reopen => #{args
 reopening(_NoReseal, _Args, StreamOpts) -> StreamOpts.
 
 %% The new STREAM_OPEN of a reopened stream: the old one's target, procedure, mode, deadline and token, its args
-%% sealed to the new key under a new request id, on a new dedicated stream.
+%% sealed to the new key under a new request id, on a new dedicated stream. A reopen that sealed reached a key of this
+%% link's profile, so the pool remembers it for that provider, as a call's reseal does.
 reopened_client_stream(StreamPid, #{target := Target, realm := Realm, procedure := Proc, deadline := Deadline,
                                     mode := Mode} = Open, Args, KemKey,
                        #state{node_identity = Key, profile = Profile} = S) ->
@@ -4313,11 +4378,11 @@ reopened_client_stream(StreamPid, #{target := Target, realm := Realm, procedure 
                         target => Target, deadline => Deadline, mode => Mode},
                       open_token(maps:get(token, Open, <<>>))),
     reopen_carried(sealed_to(macula_seal:public_key(KemKey), <<"stream_open">>, Spec, Args, Key, Profile),
-                   StreamPid, S).
+                   KemKey, StreamPid, S).
 
-reopen_carried({ok, Spec, {Keys, _SealRequest}}, StreamPid, #state{node_identity = Key} = S) ->
-    reopen_built(macula_frame:stream_bytes({stream_open, Spec}, Key), Keys, StreamPid, S);
-reopen_carried({error, _} = Refused, _StreamPid, S) ->
+reopen_carried({ok, Spec, {Keys, _SealRequest}}, KemKey, StreamPid, #state{node_identity = Key} = S) ->
+    reopen_built(macula_frame:stream_bytes({stream_open, Spec}, Key), Keys, StreamPid, learnt_by_pool(KemKey, Spec, S));
+reopen_carried({error, _} = Refused, _KemKey, _StreamPid, S) ->
     {reply_value, Refused, S}.
 
 reopen_built({ok, Built}, Keys, StreamPid, #state{profile = Profile} = S) ->

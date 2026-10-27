@@ -538,6 +538,10 @@ sealed_or_refused({error, _} = Refused, _Call) -> Refused.
 %% - `advertisement', a verified procedure advertisement of `Target' for this realm and procedure (as `find_records/2'
 %%   or `providers/3' hand one over): sealed to its KEM key when it names one, in the clear when it names none, unless
 %%   `confidential => required', which then fails with `no_kem_key';
+%% - `learnt_kem_key', a KEM key a link learnt from the provider's own signed `sealed_required' refusal
+%%   (DESIGN_E2E_SEALED_BY_DEFAULT §3, release A0): it seals the call in place of an advertisement that names no key,
+%%   for that advertisement's remaining lifetime, since the advertisement may be stale and the refusal cannot be.
+%%   A key the advertisement itself names wins: it is signed state of the same provider, read after the refusal was;
 %% - `confidential => off': in the clear, the application's own decision;
 %% - `confidential => required' without an advertisement: `Resolve()' looks up the procedure's advertisements, and
 %%   only one `Target' signed is used; with none, or one naming no key, the call fails with `no_kem_key';
@@ -547,11 +551,28 @@ sealed_or_refused({error, _} = Refused, _Call) -> Refused.
 call_seal(_Target, _Realm, _Procedure, #{confidential := off}, _Resolve) ->
     {ok, clear};
 call_seal(Target, Realm, Procedure, #{advertisement := Ad} = Opts, _Resolve) ->
-    sealed_by(advertised_key(Ad, Target, Realm, Procedure), maps:get(confidential, Opts, preferred));
+    sealed_by(learnt_by(advertised_key(Ad, Target, Realm, Procedure), Opts),
+              maps:get(confidential, Opts, preferred));
 call_seal(Target, Realm, Procedure, #{confidential := required}, Resolve) ->
     sealed_by(resolved_key(Resolve(), Target, Realm, Procedure), required);
 call_seal(_Target, _Realm, _Procedure, _Opts, _Resolve) ->
     {error, {confidentiality, no_signed_state}}.
+
+%% A key learnt from the provider's signed refusal fills in only where the advertisement names none: an advertisement
+%% that names a key is signed state too, and its key is the one the provider gave it. A learnt key is used only when it
+%% is one this node's profile carries, so a key remembered under another profile never fails a call that would have
+%% gone clear: it is ignored and the advertisement's own answer stands.
+learnt_by({ok, none}, #{learnt_kem_key := KemKey}) when is_binary(KemKey) ->
+    {ok, carried_size_key(KemKey)};
+learnt_by(Advertised, _Opts) ->
+    Advertised.
+
+carried_size_key(KemKey) ->
+    {ok, Profile} = macula_crypto_profile:configured(),
+    sized_key(macula_seal:carried_key_size(Profile) =:= byte_size(KemKey), KemKey).
+
+sized_key(true, KemKey) -> KemKey;
+sized_key(false, _AnotherSize) -> none.
 
 %% The KEM key an advertisement of `Target' for this realm and procedure names, `none' when it names none.
 advertised_key(Ad, Target, Realm, Procedure) ->

@@ -111,6 +111,9 @@
 %% Direct-dial resolution head start — called by `macula_direct_dial' to
 %% remember which station last answered a procedure, and to get it back.
 -export([resolved_candidate/3, remember_resolved/5]).
+%% A key learnt from a provider's signed `sealed_required' refusal, written onto the candidate this pool remembered
+%% for its procedure (DESIGN_E2E_SEALED_BY_DEFAULT §3, release A0).
+-export([learn_kem_key/5]).
 %% Station-authorization checks counted from the dialling process
 %% (macula-station#63, hook 3).
 -export([note_station_check/2]).
@@ -148,6 +151,9 @@
 %% the reading, and that a remembered station is dropped the moment its link
 %% goes is visible only by taking the link away.
 -export([still_usable/3, remembered/5]).
+%% The write behind `learn_kem_key/5', exported for the same reason: a key learnt from a signed refusal is written onto
+%% one candidate, and which one it lands on is the property that keeps it from sealing a call to another provider.
+-export([learnt/4]).
 %% The pure selection math behind publish/5's replication fan-out, and
 %% the per-link crash guard its fan-out worker uses — exported for
 %% macula_client_tests.erl only, see their own docs.
@@ -1295,6 +1301,19 @@ remember_resolved(Pool, <<_:256>> = RealmId, Procedure, Candidate, TtlMs)
        is_integer(TtlMs), TtlMs >= 0 ->
     gen_server:cast(Pool, {remember_resolved, RealmId, Procedure, Candidate, TtlMs}).
 
+%% @doc Remember `KemKey', learnt from `Provider'''s signed `sealed_required' refusal, on the candidate this pool
+%% remembered for `Procedure' in `RealmId' (DESIGN_E2E_SEALED_BY_DEFAULT §3, release A0). It is written only onto the
+%% candidate of that very provider, so a key learnt for one provider never seals a call to another, and it lives no
+%% longer than the remembered candidate it was written on. In `macula:call_seal/5''s precedence it beats that
+%% candidate's own keyless advertisement, which may have been true when it was stored and stale now.
+%%
+%% A cast, as `remember_resolved/5' is, and for the same reason: nothing waits on it, and losing one costs one call
+%% that seals later than it could have.
+-spec learn_kem_key(pool(), <<_:256>>, binary(), <<_:256>>, binary()) -> ok.
+learn_kem_key(Pool, <<_:256>> = RealmId, Procedure, <<_:256>> = Provider, KemKey)
+  when is_pid(Pool), is_binary(Procedure), is_binary(KemKey) ->
+    gen_server:cast(Pool, {learn_kem_key, RealmId, Procedure, Provider, KemKey}).
+
 %% @doc Count one station-authorization check on the pool's status
 %% (`station_checks'): `live' when the station held a live authorization for
 %% the realm the dial names, `would_refuse' when it did not and a mode admitted
@@ -2075,6 +2094,10 @@ handle_cast({remember_resolved, RealmId, Procedure, Candidate, TtlMs},
     Now = erlang:monotonic_time(millisecond),
     {noreply, S#state{resolved = remembered({RealmId, Procedure}, Candidate,
                                             Now + TtlMs, Now, Resolved)}};
+%% A key a link learnt from the provider's signed refusal, written onto the candidate remembered for that provider, if
+%% the pool still holds one for the procedure: a key names a provider, and the entry names the provider it answers for.
+handle_cast({learn_kem_key, RealmId, Procedure, Provider, KemKey}, #state{resolved = Resolved} = S) ->
+    {noreply, S#state{resolved = learnt({RealmId, Procedure}, Provider, KemKey, Resolved)}};
 handle_cast({discovered_stations, NewSeeds}, S) ->
     {noreply, add_discovered_seeds(NewSeeds, S)};
 
@@ -2849,9 +2872,35 @@ usable_with_seed(none, _Candidate)      -> none.
 %% procedure it has ever called. Nothing else prunes it, and nothing else
 %% needs to: a pool that stops calling a procedure stops writing here too,
 %% and the entries it leaves behind are one small map each.
+%%
+%% A key a link learnt from the provider's signed refusal outlives the candidate it was written on only as far as that
+%% candidate itself does: a new candidate carries it over when it is the same provider's, so a refusal and the answer
+%% that followed it, in either order of arrival, leave the key in force for the advertisement's remaining lifetime.
 remembered(Key, Candidate, UntilMono, Now, Resolved) ->
     Live = maps:filter(fun(_K, #{until_mono := U}) -> Now < U end, Resolved),
-    Live#{Key => #{candidate => Candidate, until_mono => UntilMono}}.
+    Live#{Key => #{candidate => keeping_learnt(Candidate, maps:find(Key, Live)), until_mono => UntilMono}}.
+
+%% The key a link learnt from the provider's signed `sealed_required' refusal, on the candidate this pool remembered
+%% for its procedure (DESIGN_E2E_SEALED_BY_DEFAULT §3, release A0). Written only onto the candidate of that very
+%% provider, and only where the pool still holds one: a call with no remembered candidate has no place to keep it, and
+%% nothing to save its next call from.
+learnt(Key, Provider, KemKey, Resolved) ->
+    case maps:find(Key, Resolved) of
+        {ok, Entry} -> Resolved#{Key := learnt_on(Entry, Provider, KemKey)};
+        error -> Resolved
+    end.
+
+learnt_on(#{candidate := #{provider := Provider} = Candidate} = Entry, Provider, KemKey) ->
+    Entry#{candidate := Candidate#{learnt_kem_key => KemKey}};
+learnt_on(#{candidate := #{provider := _Another}} = Entry, _Provider, _KemKey) ->
+    %% The key answers for another provider: the entry is a different candidate's, and stays as it is.
+    Entry.
+
+keeping_learnt(Candidate, {ok, #{candidate := #{provider := Provider, learnt_kem_key := KemKey}}})
+  when map_get(provider, Candidate) =:= Provider ->
+    Candidate#{learnt_kem_key => KemKey};
+keeping_learnt(Candidate, _NoEntryOrAnotherProvider) ->
+    Candidate.
 
 link_pid(Station, #state{links = Links}) ->
     case maps:find(Station, Links) of

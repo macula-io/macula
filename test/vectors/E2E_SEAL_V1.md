@@ -156,6 +156,47 @@ Byte strings are lowercase hex; `procedure` and `topic` are literal text;
 integers are JSON numbers. `plain` is an arbitrary payload: in use, it is the
 CBOR encoding of the application's payload.
 
+## A refusal carrying the key (release A0)
+
+`e2e_seal_v1_refusals.json` holds, per profile, a keyed provider's refusal of a
+CALL and of a STREAM_OPEN, each beside the request it answers: `call` and
+`refusal`, `stream_open` and `stream_refusal` (`docs/design/DESIGN_E2E_SEALED_BY_DEFAULT.md`
+§3; `call` and `refusal` are control frames, `stream_open` and `stream_refusal`
+are the bytes of a dedicated stream, length-prefixed as on the wire). Erlang
+generates the file (`scripts/generate-seal-refusal-vectors.sh`); signing is
+randomized, so a regenerated file has other bytes and the same shape, and the
+committed file is the vector.
+
+A refused caller already running recovers from the refusal alone, so the key it
+holds now travels with the refusal that refuses it. It is the provider's KEM
+key, as carried (1568 bytes in `pq_pure`, 1665 in `pq_hybrid`), as the **value**
+of the non-critical signed extension `seal.kem_key` inside the `tbs` of the
+ERROR (to a CALL) or the STREAM_ERROR at `seq` 0 (to a STREAM_OPEN). Not in
+`code`, `detail` or `message`: ERROR `detail` and STREAM_ERROR `message` are
+text and capped at 256 bytes.
+
+For every case:
+
+1. The request verifies under the reader's profile, as any request does.
+2. The refusal verifies against it: the reply's signature and `responded_by`,
+   its `request_id` and `request_hash` the request's, `responded_by` the
+   request's `target`; for the stream, the seq-0 frame's signature and
+   `signer`, and its `signer` the open's `target`.
+3. The verified refusal's `ext` holds `seal.kem_key` with `critical` 0, and its
+   value is exactly `kem_key`, whose id is `kem_key_id` and whose size is
+   `kem_key_size`.
+4. An extension under any other name, or one with `critical` 1, is handled as
+   §3.2 says: the first is ignored and counted, the second refuses the signed
+   object.
+
+A reader that knows `seal.kem_key` does not count it among the ignored
+extensions. The refusal is signed by the provider for this very request and
+bound to it, so a station can neither forge nor strip the extension: a stripped
+one fails as a tampered reply, and never as a clear refusal. What the reader
+does with the key — seal the same payload once more to it under a new request
+id, at most once per call — is release A0's reading side; no node built on the
+reading side sends `seal.kem_key` yet.
+
 ## Keyed advertisements (amendment A1)
 
 `e2e_seal_v1_advertisements.json` holds signed procedure advertisements, five

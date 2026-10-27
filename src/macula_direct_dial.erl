@@ -835,7 +835,7 @@ candidate_checked(#{provider := Provider} = Candidate,
     case station_checked(Pool, FindRecord, Realm, Station, Share) of
         ok ->
             Call = station_call(CallStation, Pool, DialUrl, Provider, Realm, Procedure, Payload, Deadline,
-                                Policy, Station, Share),
+                                Policy, Station, Share, maps:get(learnt_kem_key, Candidate, none)),
             sent_or_not(
               settled(resealed(Call(maps:get(advertisement, Candidate, undefined)), Call, Dial, Realm, Procedure,
                                Provider, Deadline),
@@ -857,19 +857,29 @@ station_checked(Pool, FindRecord, Realm, Station, Share) ->
         {error, Reason} -> {refused, {error, {unresolved, Reason}}}
     end.
 
-%% The CALL to one station, sealed from the advertisement it is given.
-station_call(CallStation, Pool, DialUrl, Provider, Realm, Procedure, Payload, Deadline, Policy, Station, Share) ->
+%% The CALL to one station, sealed from the advertisement it is given, and from the KEM key the pool learnt for this
+%% provider from its own signed `sealed_required' refusal, when it holds one
+%% (DESIGN_E2E_SEALED_BY_DEFAULT §3, release A0). The learnt key is what `macula:call_seal/5' takes in place of an
+%% advertisement that names none: the advertisement may be a keyless one that is still inside its lifetime while the
+%% provider has since begun naming a key, and the refusal cannot be.
+station_call(CallStation, Pool, DialUrl, Provider, Realm, Procedure, Payload, Deadline, Policy, Station, Share,
+             LearnedKey) ->
     fun(Ad) ->
         CallStation(Pool, DialUrl, Provider, Realm, Procedure, Payload, budget(Deadline),
-                    maps:merge((pinned(Station))#{dial_timeout_ms => budget(Share)}, policy_opts(Policy, Ad)))
+                    maps:merge((pinned(Station))#{dial_timeout_ms => budget(Share)},
+                               policy_opts(Policy, Ad, LearnedKey)))
     end.
 
-%% What a station call is told to seal from: the candidate's verified advertisement, and the call's own policy when
-%% it is `required' (`preferred' is the station call's default); whether the call asked for its seal report; and the
-%% UCAN it presents, if any.
-policy_opts(#{confidential := Policy, report := Report} = Call, Ad) ->
-    maps:merge(maps:merge(maps:merge(advertisement_opt(Ad), required_opt(Policy)), report_opt(Report)),
+%% What a station call is told to seal from: the candidate's verified advertisement, the key the pool learnt for that
+%% provider, and the call's own policy when it is `required' (`preferred' is the station call's default); whether the
+%% call asked for its seal report; and the UCAN it presents, if any.
+policy_opts(#{confidential := Policy, report := Report} = Call, Ad, LearnedKey) ->
+    maps:merge(maps:merge(maps:merge(maps:merge(advertisement_opt(Ad), learnt_opt(LearnedKey)),
+                                     required_opt(Policy)), report_opt(Report)),
                ucan_opt(maps:get(ucan_token, Call, none))).
+
+learnt_opt(KemKey) when is_binary(KemKey) -> #{learnt_kem_key => KemKey};
+learnt_opt(_None) -> #{}.
 
 ucan_opt(none) -> #{};
 ucan_opt(Token) -> #{ucan_token => Token}.

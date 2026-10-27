@@ -95,6 +95,9 @@
     %% Neighbour signatures on control frames in pq_hybrid (D17)
     control_frame/1, read_hop_extensions/1,
 
+    %% The extension a keyed provider's refusal carries (DESIGN_E2E_SEALED_BY_DEFAULT §3)
+    refused_kem_key/1, kem_key_extension/0,
+
     %% Overlay frames a station relays as they are
     relayed_without_signature/1,
 
@@ -212,10 +215,11 @@
 %% A REGISTER_ACK names a procedure or a topic, so its name has the topic's bound (macula#12).
 -define(MAX_REGISTER_NAME_BYTES, 512).
 -define(REGISTER_KINDS, [advertise, unadvertise, subscribe, unsubscribe, publish]).
-%% The per-hop extensions this node reads (docs/design/WIRE_1_0.md section 3.6): kept as read and not counted as
-%% ignored. Only a non-critical one is ever sent, so a node that predates it ignores it. realm.membership is
-%% macula_realm_rights:extension_name/0.
--define(KNOWN_HOP_EXTENSIONS, [<<"realm.membership">>]).
+%% The extensions this node reads (docs/design/WIRE_1_0.md section 3.6), per-hop or inside a signed tbs: kept as read
+%% and not counted as ignored. Only a non-critical one is ever sent, so a node that predates it ignores it.
+%% realm.membership is macula_realm_rights:extension_name/0; seal.kem_key is kem_key_extension/0 below.
+-define(KNOWN_HOP_EXTENSIONS, [<<"realm.membership">>, <<"seal.kem_key">>]).
+-define(KEM_KEY_EXTENSION, <<"seal.kem_key">>).
 -define(REGISTER_REFUSALS, [too_many_providers, advertiser_quota, name_too_long, record_refused, not_authorized,
                             too_many_realms, refused]).
 %% A NODES entry lists at most 4 addresses, one per observation today with room for IPv4 and IPv6 beside a host name,
@@ -1845,7 +1849,7 @@ check_passed({error, _} = Refused, _Checks) -> Refused.
 known_build_keys({call, Spec})           -> only_build_keys(Spec, ?REQUEST_BUILD_KEYS);
 known_build_keys({stream_open, Spec})    -> only_build_keys(Spec, [mode | ?REQUEST_BUILD_KEYS]);
 known_build_keys({result, Spec})         -> only_build_keys(Spec, [request, payload, sealed, source_route_reverse]);
-known_build_keys({provider_error, Spec}) -> only_build_keys(Spec, [request, code, detail, sealed, source_route_reverse]);
+known_build_keys({provider_error, Spec}) -> only_build_keys(Spec, [request, code, detail, sealed, ext, source_route_reverse]);
 known_build_keys({relay_error, Spec})    ->
     only_build_keys(Spec, [frame_type, request, code, offending_hop, source_route_partial]);
 known_build_keys({Side, Spec, _Open}) when Side =:= provider_stream; Side =:= caller_stream ->
@@ -1853,7 +1857,9 @@ known_build_keys({Side, Spec, _Open}) when Side =:= provider_stream; Side =:= ca
 
 stream_build_keys(#{frame_type := stream_data})  -> [frame_type, seq, encoding, body, sealed];
 stream_build_keys(#{frame_type := stream_end})   -> [frame_type, seq, role];
-stream_build_keys(#{frame_type := stream_error}) -> [frame_type, seq, code, message, sealed];
+%% A STREAM_ERROR may carry an extension (`ext') as any signed tbs may: a keyed provider's `sealed_required' refusal
+%% carries its KEM key there (DESIGN_E2E_SEALED_BY_DEFAULT §3).
+stream_build_keys(#{frame_type := stream_error}) -> [frame_type, seq, code, message, sealed, ext];
 stream_build_keys(#{frame_type := stream_reply}) -> [frame_type, seq, payload, sealed];
 stream_build_keys(_TypeTheBuilderRefuses)        -> [frame_type, seq].
 
@@ -2181,8 +2187,10 @@ stream_shape(stream_reply, #{sealed := _} = Read) -> only_type_fields(Read, [sea
 stream_shape(stream_reply, #{payload := _} = Read) -> only_type_fields(Read, [payload]);
 stream_shape(_Type, _Read) -> false.
 
+%% `ext' rides in a stream frame's signed tbs like any other signed object's (WIRE_1_0.md §3.2): a keyed provider's
+%% `sealed_required' refusal carries its KEM key there.
 only_type_fields(Read, TypeFields) ->
-    only_fields(Read, [frame_type, alg, request_id, request_hash, signer, seq | TypeFields]).
+    only_fields(Read, [frame_type, alg, ext, request_id, request_hash, signer, seq | TypeFields]).
 
 shaped(true, Read) -> {ok, Read};
 shaped(false, _Read) -> error.
@@ -3674,6 +3682,25 @@ non_critical(error) -> error.
 
 non_critical(false, Ext) -> {ok, ignored_counted(Ext)};
 non_critical(true, _Ext) -> extension_unsupported.
+
+%% @doc The extension name a keyed provider's `sealed_required' refusal carries its KEM key in
+%% (docs/design/DESIGN_E2E_SEALED_BY_DEFAULT.md §3): `seal.kem_key'.
+-spec kem_key_extension() -> binary().
+kem_key_extension() -> ?KEM_KEY_EXTENSION.
+
+%% @doc The provider's KEM key a refusal carries, as carried (`macula_seal:key_as_carried/1'): the value of the
+%% non-critical signed extension `seal.kem_key' of a verified ERROR or STREAM_ERROR. `none' when the frame carries no
+%% extension of that name, carries one whose value is not bytes, or carries one a verifier refused already (a critical
+%% one refuses the signed object, so it never reaches here). What the key's size means is the caller's: the profile it
+%% must match is the caller's own.
+-spec refused_kem_key(map()) -> {ok, binary()} | none.
+refused_kem_key(#{ext := Ext}) when is_map(Ext) ->
+    carried_kem_key(maps:get(?KEM_KEY_EXTENSION, Ext, none));
+refused_kem_key(_NoExtensions) ->
+    none.
+
+carried_kem_key(#{critical := 0, value := Key}) when is_binary(Key) -> {ok, Key};
+carried_kem_key(_NoneOrNotAKey) -> none.
 
 critical(Ext) ->
     lists:any(fun(#{critical := Critical}) -> Critical =:= 1 end, maps:values(Ext)).
