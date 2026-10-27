@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [17.1.1] - 2026-10-27
+
 ### Fixed
 
 - **A direct link that restarts still counts against `max_direct_links` (macula#132).** The pool keeps the seeds its
