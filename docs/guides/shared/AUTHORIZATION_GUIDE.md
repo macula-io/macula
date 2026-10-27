@@ -292,7 +292,7 @@ application:
 `off` checks nothing. `counting`, the default, lets everything through and counts what it would refuse.
 `refusing` refuses it. Switch a realm to `refusing` once `macula_realm_rights:counters/0` shows no `would_refuse`
 for its authorised traffic. A realm in `counting` is open by design: show it as counting, never as protected.
-System topics (`_mesh.*` and the like) carry the mesh's own traffic and are exempt.
+System topics (those starting with `_`, such as `_mesh.node.up`) carry the mesh's own traffic and are exempt.
 
 ### provider → consumer: gated streaming procedures
 
