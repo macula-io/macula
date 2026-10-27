@@ -243,3 +243,18 @@ the_bound_counts_unlisted_groups_only_test() ->
     ?assertEqual({error, too_many_groups}, pull(W, Node, <<"io.macula/acme/u3">>)),
     ?assertEqual(4, table_size(W)),
     stopped(W).
+
+%% An answer from a process other than the caller's lookup in flight answers nothing: the pull still waits on its own.
+an_answer_from_another_process_answers_nothing_test() ->
+    W = started(#{}),
+    Gate = make_ref(),
+    Slow = node_as(W, {wait, Gate}),
+    Pending = pull_aside(W, Slow),
+    Lookup = lookup_started(),
+    #{pid := Pid} = W,
+    Pid ! {membership, Slow, self(), ok},
+    _ = sys:get_state(Pid),
+    ?assertEqual(still_waiting, receive {pulled, Pending, _} -> answered after 200 -> still_waiting end),
+    Lookup ! {open, Gate, {error, not_a_member}},
+    ?assertEqual({error, not_a_member}, awaited(Pending)),
+    stopped(W).
