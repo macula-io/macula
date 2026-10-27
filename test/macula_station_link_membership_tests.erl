@@ -1,8 +1,9 @@
 %% EUnit tests for presenting a realm membership on a station link (macula#128; threat model macula-realm#97, carriers
 %% in section 2 and requirement 6.1): the link's next SUBSCRIBE or PUBLISH in the realm carries the membership once per
 %% connection as the per-hop extension `realm.membership', a new connection carries it again, and a membership
-%% presented anew on a link already subscribed in the realm goes out at once on one SUBSCRIBE. The station reads it
-%% back from the decoded frame with macula_realm_rights:presented/1.
+%% presented anew on a link already subscribed in the realm goes out at once, with every subscription the link holds in
+%% the realm sent again (macula#133). The station reads it back from the decoded frame with
+%% macula_realm_rights:presented/1.
 %%
 %% The link's peer is this test process, so every frame it sends arrives here as the peering cast.
 -module(macula_station_link_membership_tests).
@@ -23,7 +24,7 @@ membership_test_() ->
                           {"a SUBSCRIBE in another realm carries none", fun another_realm_carries_none/1},
                           {"the first PUBLISH carries it when no SUBSCRIBE came first", fun the_first_publish_carries_it/1},
                           {"a new connection carries it again", fun a_new_connection_carries_it_again/1},
-                          {"a membership presented anew goes out at once on a subscribed link",
+                          {"a membership presented anew goes out at once, every subscription in the realm sent again",
                            fun a_renewed_membership_goes_out_at_once/1},
                           {"a link not subscribed in the realm waits for its next frame",
                            fun an_unsubscribed_link_waits/1},
@@ -68,10 +69,14 @@ a_renewed_membership_goes_out_at_once(Link) ->
     {ok, _} = macula_station_link:subscribe(Link, ?REALM, <<"acme.other">>, self()),
     ?assertEqual({ok, ?PRESENTED}, presented(sent(subscribe))),
     ?assertEqual(none, presented(sent(subscribe))),
+    {ok, _} = macula_station_link:subscribe(Link, ?OTHER_REALM, <<"acme.elsewhere">>, self()),
+    _ = sent(subscribe),
     ok = macula_station_link:present_membership_async(Link, ?REALM, ?RENEWED),
-    Frame = sent(subscribe),
-    ?assertMatch(#{topic := <<"acme.counted">>}, Frame),
-    ?assertEqual({ok, ?RENEWED}, presented(Frame)),
+    First = sent(subscribe),
+    Second = sent(subscribe),
+    ?assertMatch({#{topic := <<"acme.counted">>, realm := ?REALM}, #{topic := <<"acme.other">>, realm := ?REALM}},
+                 {First, Second}),
+    ?assertEqual({{ok, ?RENEWED}, none}, {presented(First), presented(Second)}),
     ?assertEqual(nothing, next_sent()).
 
 an_unsubscribed_link_waits(Link) ->

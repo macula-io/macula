@@ -14,6 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A direct link that restarts still counts against `max_direct_links` (macula#132).** The pool keeps the seeds its
   fresh direct dials made, so a direct link counts while it waits to respawn and after, instead of dropping out of the
   count and letting later direct dials past the cap.
+- **A renewed realm membership restores every subscription in the realm (macula#133).** A link already subscribed
+  in the realm sends each of its topics there again, the first carrying the new token, instead of one. A station that
+  dropped the member's subscriptions when the old token ended has them all back.
 
 ## [17.1.0] - 2026-10-27
 

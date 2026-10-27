@@ -270,7 +270,8 @@ The pool presents it on every link. The first SUBSCRIBE or PUBLISH in the realm 
 (the per-hop extension `realm.membership`, WIRE_1_0.md section 3.6). The station verifies it once, with the link
 peer as its audience, so a token another node presents is refused. It then answers that connection's SUBSCRIBEs and
 PUBLISHes from the capabilities it keeps until the token expires. Present the renewed token before the old one ends:
-a link already subscribed in the realm sends it at once. A capability must cover the whole subscription:
+a link already subscribed in the realm sends it at once, with every subscription it holds in the realm sent again,
+so one a station dropped when the old token ended is back. A capability must cover the whole subscription:
 `orders.eu.*` does not cover `orders.*`. A station that refuses answers with a REGISTER_ACK naming the topic and
 `not_authorized`. For a PUBLISH the pool reports it as `_macula.client.registration_refused`.
 

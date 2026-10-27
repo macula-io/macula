@@ -281,8 +281,9 @@ publish(Pool, Realm, Topic, Payload, Opts) ->
 %% issued it and the proofs of its chain. A station whose realm runs its rights checks reads the capabilities it grants
 %% when this node subscribes or publishes in `Realm': without them a station counting would refuse the SUBSCRIBE or
 %% PUBLISH, and one refusing does. The pool keeps the latest for each realm, presents it on every link, again on
-%% each new connection, and at once on a link already subscribed in the realm, so a renewed token reaches the
-%% stations before the old one ends. A token or proofs past the sizes a station verifies are refused here,
+%% each new connection, and at once on a link already subscribed in the realm, sending every subscription it holds
+%% there again, so a renewed token reaches the stations before the old one ends and a subscription dropped at the old
+%% one's end is back. A token or proofs past the sizes a station verifies are refused here,
 %% `too_large'. See the authorization guide, "Realm rights".
 -spec present_membership(pool(), realm(), binary(), [binary()]) -> ok | {error, too_large}.
 present_membership(Pool, Realm, Token, Proofs) ->

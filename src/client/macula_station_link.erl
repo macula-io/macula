@@ -980,8 +980,9 @@ subscribe_async(Client, Realm, Topic, Subscriber)
     registration(Client, {subscribe, Realm, Topic, Subscriber}).
 
 %% @doc Present a realm membership token and its proofs to this link's station (macula#128): the next SUBSCRIBE or
-%% PUBLISH in Realm carries it, and a link already subscribed in Realm sends one SUBSCRIBE again to carry it now, so
-%% a fresh token reaches the station before the old one ends. Each new connection presents it again. Without
+%% PUBLISH in Realm carries it, and a link already subscribed in Realm sends every subscription it holds there again,
+%% the first carrying it now, so a fresh token reaches the station before the old one ends and a subscription the
+%% station dropped at the old token's expiry is back (macula#133). Each new connection presents it again. Without
 %% waiting, as `subscribe_async/4'.
 -spec present_membership_async(pid(), <<_:256>>, macula_realm_rights:presented()) -> ok.
 present_membership_async(Client, Realm, #{token := Token, proofs := Proofs} = Presented)
@@ -2904,13 +2905,14 @@ maybe_send_subscribe(Realm, Topic, #state{peer_pid = Pid, node_identity = Id} = 
     {_Sent, NewS} = try presented_sent(Pid, presenting(Realm, Frame, S), S) catch _:_ -> {failed, S} end,
     NewS.
 
-%% A membership presented anew reaches the station at once when the link already holds a subscription in its realm:
-%% one of them is sent again carrying it. Otherwise the realm's next SUBSCRIBE or PUBLISH carries it.
+%% A membership presented anew reaches the station at once when the link already holds subscriptions in its realm:
+%% each topic is sent again, the first carrying it. A station that enforces realm rights drops a member's
+%% subscriptions in the realm when its token ends, so a renewal that arrives after that restores every one of them
+%% (macula#133); the station takes a repeated SUBSCRIBE as the same subscription. Otherwise the realm's next
+%% SUBSCRIBE or PUBLISH carries it.
 membership_resent(Realm, #state{subscriptions = Subs} = S) ->
-    resubscribed(lists:sort([T || {R, T, _Sub, _Mon} <- maps:values(Subs), R =:= Realm]), Realm, S).
-
-resubscribed([Topic | _], Realm, S) -> maybe_send_subscribe(Realm, Topic, S);
-resubscribed([], _Realm, S) -> S.
+    Topics = lists:usort([T || {R, T, _Sub, _Mon} <- maps:values(Subs), R =:= Realm]),
+    lists:foldl(fun(Topic, Acc) -> maybe_send_subscribe(Realm, Topic, Acc) end, S, Topics).
 
 %% A gated stream advertised from a spec makes the node's own stream_renew findable in that realm, so a caller can
 %% renew the token its session there was opened with (macula#120). It is a procedure in the node's own namespace, so
