@@ -44,7 +44,11 @@ sealed_stream_provider_test_() ->
                          {"a caller's flood of clear opens is refused at its own cap",
                           fun a_callers_flood_is_refused_at_its_own_cap/1},
                          {"a refusal for another reason names no key",
-                          fun a_refusal_for_another_reason_names_no_key/1}]].
+                          fun a_refusal_for_another_reason_names_no_key/1},
+                         {"a refusal keeps the session its stream carries",
+                          fun a_refusal_keeps_the_session_its_stream_carries/1},
+                         {"a disconnect closes every stream still draining",
+                          fun a_disconnect_closes_every_draining_stream/1}]].
 
 a_sealed_open_is_served_sealed_both_ways(#{link := Link} = W) ->
     Test = self(),
@@ -233,6 +237,38 @@ a_refusal_for_another_reason_names_no_key(#{link := Link} = W) ->
                  ?assertEqual(none, macula_frame:refused_kem_key(Fields))
              end).
 
+%% A clear open refused on a stream that already carries a live session leaves the session alone: the stream stays
+%% open, the refusal is written under the refused open, and the session's own frames are still served. Draining there
+%% would read and drop them and then close the session's stream (release A0, review round 3).
+a_refusal_keeps_the_session_its_stream_carries(#{link := Link} = W) ->
+    Test = self(),
+    ok = advertise(W, bidi, fun(Stream, _Args) ->
+                                Test ! {served, self()},
+                                {chunk, In} = macula_stream:recv(Stream, ?EVENT_MS),
+                                ok = macula_stream:send(Stream, <<"got ", In/binary>>),
+                                receive stop -> ok end
+                            end),
+    #{quic := Quic, open := Open, keys := Keys, caller := Caller} = sealed_open(W, bidi, #{}),
+    Handler = receive {served, H} -> H after ?EVENT_MS -> error(not_served) end,
+    ok = sealed_opens_only(W),
+    Refused = clear_open_on(W, Quic, bidi, #{}),
+    ?assertMatch(#{code := <<"sealed_required">>}, clear_refusal(written(Quic), Refused)),
+    %% The session keeps the stream: its next frame is served as ever, and nothing closed it.
+    on_stream(Link, Quic, caller_sealed(0, <<"ping">>, Keys, Caller, Open)),
+    ?assertEqual({ok, <<"got ping">>}, provider_opened(written(Quic), 0, Keys, Open)),
+    ?assertEqual(none, closed_within(Quic, 100)),
+    ended(Handler).
+
+%% A connection that goes with refused opens still draining closes their streams: no frame will ever end those drains
+%% once the connection is gone, and the stream resource is independent of it (release A0, review round 3).
+a_disconnect_closes_every_draining_stream(#{link := Link} = W) ->
+    ok = sealed_opens_only(W),
+    #{quic := Quic, open := Open} = clear_open(W, bidi, #{}),
+    ?assertMatch(#{code := <<"sealed_required">>}, clear_refusal(written(Quic), Open)),
+    ?assertEqual(none, closed_within(Quic, 100)),
+    Link ! {macula_peering, disconnected, self(), closed},
+    ?assertEqual(closed, closed_within(Quic, ?EVENT_MS)).
+
 %% A procedure that takes sealed opens only, and a way to say whether a stream closed and when.
 sealed_opens_only(#{link := Link}) ->
     _ = sys:replace_state(Link, fun(S) ->
@@ -343,6 +379,18 @@ clear_open(#{link := Link} = W, Mode, Args, Caller) ->
     Link ! {quic, macula_frame:encode(Frame), Quic, undefined},
     {ok, Open} = macula_frame:verify_request(Frame, profile()),
     #{quic => Quic, open => Open}.
+
+%% A clear STREAM_OPEN on a stream the peer has already opened, so a refusal lands on a stream that may already
+%% carry a session.
+clear_open_on(W, Quic, Mode, Args) ->
+    {ok, Caller} = macula_node_keys:generate(identity, profile()),
+    Frame = wire(macula_frame:stream_open(#{request_id => crypto:strong_rand_bytes(16), realm => ?REALM,
+                                            procedure => procedure(), target => node_id(W),
+                                            deadline => erlang:system_time(millisecond) + 30_000, mode => Mode,
+                                            payload => Args}, Caller)),
+    on_stream(maps:get(link, W), Quic, Frame),
+    {ok, Open} = macula_frame:verify_request(Frame, profile()),
+    Open.
 
 %% A caller STREAM_DATA at Seq, sealed under the open's k_c2p.
 caller_sealed(Seq, Plain, #{k_c2p := KC2P, key_id := KeyId}, Caller, #{request_id := RequestId} = Open) ->

@@ -4782,6 +4782,16 @@ clear_open_admitted(true, Open, Stream, S) ->
     on_stream_open_on(carries_a_session(Stream, S), Open, clear, Stream, S);
 clear_open_admitted(false, Open, Stream, S) ->
     ok = send_stream_refusal(Stream, Open, <<"sealed_required">>, <<"this procedure takes sealed opens only">>, S),
+    refused_clear_open(carries_a_session(Stream, S), Stream, Open, S).
+
+%% A clear open refused on a stream that already carries a live session leaves that session alone: the refused open's
+%% admission place goes and the stream stays open, as every other refusal on a carrying stream does. Draining there
+%% would read and drop the session's frames and then close its stream, stranding its entry, monitor, key place and
+%% served deadline (release A0, review round 3).
+refused_clear_open(true, _Stream, Open, S) ->
+    _ = released_open(Open, S),
+    S;
+refused_clear_open(false, Stream, Open, S) ->
     drain_or_close(Stream, Open, S).
 
 %% The caller wrote on this stream before the refusal could reach it — section 3's clear stream writes everything at
@@ -4818,9 +4828,14 @@ drain_done(Stream, #state{draining = Draining} = S) ->
             S
     end.
 
-%% Every drain a connection was holding, released as it goes.
+%% Every drain a connection was holding: the caller's place goes back, and the stream is closed. The connection is
+%% going, so no frame will ever end the drain, and its expiry timer would fire on a stream this link has forgotten —
+%% the stream resource is independent of the connection and is not reclaimed on its own (release A0, review round 3).
 released_drains(Draining, S) ->
-    _ = [released_open(Open, S) || #{open := Open} <- maps:values(Draining)],
+    maps:foreach(fun(Stream, #{open := Open}) ->
+                         close_dedicated_stream(Stream, S),
+                         released_open(Open, S)
+                 end, Draining),
     ok.
 
 close_unless_carrying(true, _Stream, S) ->
