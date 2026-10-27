@@ -139,6 +139,24 @@ and any other refusal (such as no default identity) is sent as `refused`. A `kin
 refusal: a PUBLISH holds no registration to accept, so `accepted` 1 on it is `malformed_frame`. A node that predates
 the `publish` kind reads it as unknown and ignores the ack, and its publication is dropped as before.
 
+### 3.6 `realm.membership` (macula#128)
+
+The one per-hop extension wire 1.0 defines. A member presents its realm membership token to its own station on the
+envelope of a SUBSCRIBE or PUBLISH in that realm, the first one on each connection and again when the token is
+renewed, never on each frame:
+
+| Key | Type | |
+|---|---|---|
+| `critical` | unsigned | always 0 |
+| `value.token` | bytes | the membership token the realm issued the member, at most 48 KiB |
+| `value.proofs` | array of bytes | the proofs of its chain, at most 4, token and proofs together at most 128 KiB |
+
+On a PUBLISH it sits in the envelope beside `publication`, outside the publisher's signature: it is per-hop and never
+reaches a second station. The station checks the sizes before it verifies anything, verifies the token under the
+realm key with the link peer as its audience, and keeps the capabilities it grants for the connection until the
+token's `exp`. A station that predates it ignores it as any unknown non-critical extension (section 3.2), and a node
+that reads it does not count it as `wire_ext_ignored`. It needs no capability bit, since it is never critical.
+
 ## 4. Handshake (macula#98)
 
 Unchanged from `DESIGN_NEIGHBOUR_CHANNEL_BINDING.md` except as follows.

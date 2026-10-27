@@ -224,6 +224,76 @@ is genuinely realm-signed and unexpired, but minted for a different member, is
 refused. What it adds is trust in a realm rather than one issuer, and the tier
 check: `RequiredCan` must appear in the token's capabilities.
 
+### Realm rights: roles for call, serve, publish and subscribe (macula#128)
+
+A realm admin gives members roles, and the realm expands each member's roles into the capabilities of the
+membership token it issues: `rpc/call` on `mri:proc:<realm>/<procedure>`, `pubsub/publish` and `pubsub/subscribe`
+on `mri:topic:<realm>/<topic pattern>`. The serve right travels in the organisation's procedure delegation instead
+(`rpc/serve`). Each right is checked where it can be enforced, and each check point holds a different promise.
+
+| Right | Carried by | Checked by | Holds against a dishonest station? |
+|---|---|---|---|
+| call | the membership token on each CALL | the provider | yes: the provider verifies the chain itself |
+| serve | the delegation's `procedures` list | the station at admission, and a caller that dials directly | yes for a caller that checks; a station can still drop |
+| publish | the membership token, presented once per connection | the publisher's own station | **no**: see below |
+| subscribe | the membership token, presented once per connection | the subscriber's own station | **no**: delivery control, not confidentiality |
+
+**Call.** A provider gates a procedure on the realm's capability with the policy above:
+
+```erlang
+Opts = #{auth => {realm_member_required, RealmKeyId, <<"rpc/call">>}},
+ok = macula:advertise(Pool, Realm, <<"acme/orders.place">>, Handler, Opts).
+```
+
+A member whose role covers `mri:proc:<realm>/acme/orders.place` is served. A member whose role names another
+procedure is refused `unauthorized`.
+
+**Serve.** An organisation names what a node may serve in the delegation it signs:
+
+```erlang
+Delegation = macula_record:procedure_delegation(OrgKeyId, NodeId,
+                                                #{procedures => [<<"acme/orders.place">>, <<"acme/billing/*">>]}).
+```
+
+Each entry is an exact procedure of the organisation or a prefix ending in `/*`, which covers whole segments below
+it. A delegation names at most 64 entries of at most 512 bytes each. A caller that dials a provider directly checks
+the list (`macula_record:verify_serving/3`). A delegation without the list still verifies, and is counted as one that
+would be refused.
+
+**Publish and subscribe.** A member presents its membership token to its stations once:
+
+```erlang
+ok = macula:present_membership(Pool, Realm, Token, Proofs).
+```
+
+The pool presents it on every link. The first SUBSCRIBE or PUBLISH in the realm on each connection carries it
+(the per-hop extension `realm.membership`, WIRE_1_0.md section 3.6). The station verifies it once, with the link
+peer as its audience, so a token another node presents is refused. It then answers that connection's SUBSCRIBEs and
+PUBLISHes from the capabilities it keeps until the token expires. Present the renewed token before the old one ends:
+a link already subscribed in the realm sends it at once. A capability must cover the whole subscription:
+`orders.eu.*` does not cover `orders.*`. A station that refuses answers with a REGISTER_ACK naming the topic and
+`not_authorized`. For a PUBLISH the pool reports it as `_macula.client.registration_refused`.
+
+What these two do not promise:
+
+- Publish is checked at the publisher's own station only. A station that colludes with a member can accept or inject
+  readable events on a clear topic, and the stations after it never see the token. Protect content with a sealed
+  group, and check publishers at the consumer (`macula:org_member/4,5`).
+- Subscribe on a clear topic controls delivery. A station sees every clear event it relays, and any recipient can
+  forward one. Only a sealed group keeps a topic's content from those who may not read it.
+
+**Counting first.** Every check runs in a mode per realm, set in the `realm_rights` environment of the `macula`
+application:
+
+```erlang
+{macula, [{realm_rights, #{default => counting, RealmId => refusing}}]}
+```
+
+`off` checks nothing. `counting`, the default, lets everything through and counts what it would refuse.
+`refusing` refuses it. Switch a realm to `refusing` once `macula_realm_rights:counters/0` shows no `would_refuse`
+for its authorised traffic. A realm in `counting` is open by design: show it as counting, never as protected.
+System topics (`_mesh.*` and the like) carry the mesh's own traffic and are exempt.
+
 ### provider → consumer: gated streaming procedures
 
 A streaming procedure takes the same policies. Pass `auth` to
