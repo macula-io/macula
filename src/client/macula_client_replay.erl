@@ -11,7 +11,14 @@
 %% (macula#45). Kept apart so the pool's gen_server stays focused on its
 %% state machine and the replay path is testable on its own.
 -module(macula_client_replay).
--export([subs_to/2, advs_to/3, stream_advs_to/3]).
+-export([memberships_to/2, subs_to/2, advs_to/3, stream_advs_to/3]).
+
+%% @doc Hand `LinkPid' the membership the pool presents in each realm (macula#128), before its subscriptions, so the
+%% first SUBSCRIBE the link sends in a realm carries it. Waits on nothing, as `subs_to/2'.
+-spec memberships_to(pid(), #{<<_:256>> => macula_realm_rights:presented()}) -> ok.
+memberships_to(LinkPid, Memberships) when is_pid(LinkPid), is_map(Memberships) ->
+    maps:foreach(fun(Realm, Presented) -> ok = macula_station_link:present_membership_async(LinkPid, Realm, Presented)
+                 end, Memberships).
 
 %% @doc Hand `LinkPid' a subscribe for every distinct `{Realm, Topic}' in
 %% `TopicIndex', for the calling process (the pool), which then receives

@@ -124,6 +124,8 @@
 -export([advertise/8, advertise_stream/9]).
 %% A station's answer to a registration (macula#12): the facade waits on it, and a link with no pool reports a refusal.
 -export([await_registration/4, registration_refused/3]).
+%% A membership the node presents to its stations (macula#128): the facade's `present_membership/4'.
+-export([present_membership/4]).
 
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          terminate/2, code_change/3, format_status/1]).
@@ -694,6 +696,9 @@
     %% topic's segments: an inbound event is matched against these alone,
     %% not against every topic in the index.
     wildcard_topics = #{} :: #{{<<_:256>>, binary()} => [binary()]},
+    %% The membership the node presents in each realm (macula#128), handed to every link and to each respawned one
+    %% before its subscriptions, so the first SUBSCRIBE in the realm carries it.
+    memberships = #{} :: #{<<_:256>> => macula_realm_rights:presented()},
     %% Advertised procedures, replayed on a link respawn to the links
     %% whose station the registration names: {realm, procedure} →
     %% registration.
@@ -949,6 +954,20 @@ call_station(Pool, Station, Target, Realm, Procedure, Payload, TimeoutMs, UcanTo
                     {call_station, Station, Target, Realm, Procedure, Payload,
                      TimeoutMs, DialTimeoutMs, UcanToken, LinkOpts, Seal, Report},
                     TimeoutMs + 2_000).
+
+%% @doc Present Token and Proofs as this node's membership of Realm on every link, and keep them for the links
+%% respawned later; the latest presented for a realm replaces the one before. Refused `too_large' past the sizes a
+%% station verifies (`macula_realm_rights:max_token_bytes/0' and the others), so nothing a station would refuse
+%% unread is sent.
+-spec present_membership(pool(), <<_:256>>, binary(), [binary()]) -> ok | {error, too_large}.
+present_membership(Pool, Realm, Token, Proofs)
+  when is_pid(Pool), is_binary(Realm), byte_size(Realm) =:= 32, is_binary(Token), is_list(Proofs) ->
+    true = lists:all(fun is_binary/1, Proofs),
+    membership_sized(macula_realm_rights:within_size(#{token => Token, proofs => Proofs}), Pool, Realm,
+                     #{token => Token, proofs => Proofs}).
+
+membership_sized(true, Pool, Realm, Presented) -> gen_server:call(Pool, {present_membership, Realm, Presented});
+membership_sized(false, _Pool, _Realm, _Presented) -> {error, too_large}.
 
 %% @doc Register a procedure handler on every healthy link. Stored
 %% in pool state so a respawned link registers it again. A caller
@@ -1849,6 +1868,10 @@ handle_call({publish, Realm, Topic, Payload, Opts}, From, S) ->
 
 handle_call({subscribe, Realm, Topic, Subscriber, Opts}, _From, S) ->
     add_subscription(Realm, Topic, Subscriber, Opts, S);
+
+handle_call({present_membership, Realm, Presented}, _From, #state{memberships = Ms} = S) ->
+    _ = [ok = macula_station_link:present_membership_async(Pid, Realm, Presented) || Pid <- spawned_link_pids(S)],
+    {reply, ok, S#state{memberships = Ms#{Realm => Presented}}};
 
 handle_call({await_registration, Key}, From, #state{registrations = Regs} = S) ->
     awaited(maps:find(Key, Regs), Key, From, S);
@@ -3403,6 +3426,7 @@ on_respawn_link(Seed, S) ->
 dial_opts_for(Seed, #state{dial_extra_opts = Opts}) -> maps:get(Seed, Opts, #{}).
 
 replay_to_seed(#link_state{seed = Seed, pid = Pid}, S) when is_pid(Pid) ->
+    ok = macula_client_replay:memberships_to(Pid, S#state.memberships),
     ok = macula_client_replay:subs_to(Pid, S#state.topic_index),
     Station = pinned_station(Seed, S),
     macula_client_replay:advs_to(Pid, Station, S#state.procs),

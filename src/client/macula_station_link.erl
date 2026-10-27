@@ -169,6 +169,7 @@
     find_records_by_type/2, find_records_by_type/3,
     subscribe/4,
     subscribe_async/4,
+    present_membership_async/3,
     unsubscribe/2,
     unsubscribe_async/2,
     unsubscribe_topic_async/4,
@@ -438,6 +439,10 @@
     %% interest. Keyed by realm only, no topic dimension.
     overlay_subscriptions = #{} :: #{reference() => overlay_subscription()},
     overlay_realm_index   = #{} :: #{<<_:256>> => sets:set(reference())},
+    %% The membership each realm's member presents to this link's station (macula#128), and whether this connection
+    %% has carried it yet: the next SUBSCRIBE or PUBLISH in the realm carries it once, as the per-hop extension
+    %% `realm.membership', and the station keeps the rights it verifies for the connection's life.
+    memberships = #{} :: #{<<_:256>> => #{presented := macula_realm_rights:presented(), sent := boolean()}},
     %% Monotonic per-link publish sequence (stamps outbound PUBLISH
     %% frames). Resets on link respawn — pool dedup absorbs the gap.
     publish_seq = 0 :: non_neg_integer(),
@@ -973,6 +978,16 @@ subscribe_async(Client, Realm, Topic, Subscriber)
        is_binary(Realm), byte_size(Realm) =:= 32,
        is_binary(Topic), is_pid(Subscriber) ->
     registration(Client, {subscribe, Realm, Topic, Subscriber}).
+
+%% @doc Present a realm membership token and its proofs to this link's station (macula#128): the next SUBSCRIBE or
+%% PUBLISH in Realm carries it, and a link already subscribed in Realm sends one SUBSCRIBE again to carry it now, so
+%% a fresh token reaches the station before the old one ends. Each new connection presents it again. Without
+%% waiting, as `subscribe_async/4'.
+-spec present_membership_async(pid(), <<_:256>>, macula_realm_rights:presented()) -> ok.
+present_membership_async(Client, Realm, #{token := Token, proofs := Proofs} = Presented)
+  when is_pid(Client), is_binary(Realm), byte_size(Realm) =:= 32, is_binary(Token), is_list(Proofs),
+       map_size(Presented) =:= 2 ->
+    gen_server:cast(Client, {present_membership, Realm, Presented}).
 
 %% @doc Drop every subscription `Subscriber' holds on `(Realm, Topic)',
 %% without waiting for the link, sending UNSUBSCRIBE for each as
@@ -1722,9 +1737,8 @@ handle_call({subscribe, Realm, Topic, Subscriber}, _From,
     %% return `{error, not_connected}' and silently never land on
     %% the wire even though the client became connected milliseconds
     %% later.
-    maybe_send_subscribe(Realm, Topic, S),
-    {reply, {ok, SubRef}, S#state{subscriptions = NewSubs,
-                                  topic_index   = NewIdx}};
+    {reply, {ok, SubRef}, (maybe_send_subscribe(Realm, Topic, S))#state{subscriptions = NewSubs,
+                                                                          topic_index   = NewIdx}};
 
 handle_call({unsubscribe, SubRef}, _From, S) ->
     {reply, ok, on_unsubscribe(SubRef, S)};
@@ -1789,12 +1803,14 @@ publish_call({publish, Realm, Topic, Payload},
     %% A refused frame also does NOT consume a seq: nothing reached the
     %% wire, and burning the number would fake a gap in the
     %% (publisher, seq) sequence the station dedup keys on.
-    publish_reply(send_publish_frame(Realm, Topic, Payload, Seq, S), Seq, S);
+    publish_reply(send_publish_frame(Realm, Topic, Payload, Seq, S), Seq);
 publish_call({publish, Realm, Topic, Payload, Seq}, S) ->
     %% Pool-driven: the pool owns the seq, so there is none to advance.
-    {reply, send_publish_frame(Realm, Topic, Payload, Seq, S), S};
+    {Reply, NewS} = send_publish_frame(Realm, Topic, Payload, Seq, S),
+    {reply, Reply, NewS};
 publish_call({publish, Realm, Topic, Payload, Seq, {group, Epoch}}, S) ->
-    {reply, send_sealed_publish_frame(Realm, Topic, Payload, Seq, Epoch, S), S};
+    {Reply, NewS} = send_sealed_publish_frame(Realm, Topic, Payload, Seq, Epoch, S),
+    {reply, Reply, NewS};
 publish_call(Request, S) ->
     overlay_call(Request, S).
 
@@ -1904,6 +1920,9 @@ handle_cast({unsubscribe_topic, Realm, Topic, Subscriber}, #state{subscriptions 
     {noreply, lists:foldl(fun on_unsubscribe/2, S,
                           [Ref || {Ref, {R, T, Sub, _Mon}} <- maps:to_list(Subs),
                                   R =:= Realm, T =:= Topic, Sub =:= Subscriber])};
+
+handle_cast({present_membership, Realm, Presented}, #state{memberships = Ms} = S) ->
+    {noreply, membership_resent(Realm, S#state{memberships = Ms#{Realm => #{presented => Presented, sent => false}}})};
 
 handle_cast({overlay_frame_refused, Meta, Kind}, S) ->
     {noreply, overlay_refusal(macula_frame:refusal_charge(Kind), Meta, Kind, S)};
@@ -2049,9 +2068,11 @@ peering_event({macula_peering, connected, Pid, PeerNodeId},
                                  liveness_misses = 0,
                                  liveness_outstanding = undefined,
                                  refused_streak = 0}),
-    drain_pending_subscribes(NewS),
-    drain_pending_advertisements(NewS),
-    {noreply, NewS};
+    %% A new connection has carried no membership yet.
+    Presenting = drain_pending_subscribes(NewS#state{memberships = maps:map(fun(_Realm, M) -> M#{sent := false} end,
+                                                                            NewS#state.memberships)}),
+    drain_pending_advertisements(Presenting),
+    {noreply, Presenting};
 
 peering_event({macula_peering, frame, Pid, Frame},
             #state{peer_pid = Pid} = S) ->
@@ -2243,9 +2264,9 @@ seal_redacted(Entry) ->
 %% Returns whatever the seam decided: `ok', or the structured reason the
 %% frame was refused, which flows back through `summarize_publish/2' to
 %% the caller of `macula_client:publish/5'.
-publish_reply(ok, Seq, S) ->
+publish_reply({ok, S}, Seq) ->
     {reply, ok, S#state{publish_seq = Seq + 1}};
-publish_reply({error, _} = Refused, _Seq, S) ->
+publish_reply({{error, _} = Refused, S}, _Seq) ->
     {reply, Refused, S}.
 
 %% A CALL the link reaches after its caller's deadline is not sent: the
@@ -2331,9 +2352,9 @@ await_call_reply({error, Reason}, _RequestId, _Request, _SealAndReport, _From, _
     {reply, {error, {refused, Reason}}, S}.
 
 -spec send_publish_frame(<<_:256>>, binary(), term(), non_neg_integer(),
-                         #state{}) -> ok | {error, term()}.
+                         #state{}) -> {ok | {error, term()}, #state{}}.
 send_publish_frame(Realm, Topic, Payload, Seq,
-                   #state{peer_pid = Pid, node_identity = Id}) ->
+                   #state{peer_pid = Pid, node_identity = Id} = S) ->
     Frame = macula_frame:publish(#{
         realm        => Realm,
         topic        => Topic,
@@ -2341,20 +2362,39 @@ send_publish_frame(Realm, Topic, Payload, Seq,
         published_at => erlang:system_time(millisecond),
         payload      => Payload
     }, Id),
-    macula_peering:send_frame(Pid, Frame).
+    presented_sent(Pid, presenting(Realm, Frame, S), S).
 
 %% A group's event: sealed here, where published_at is decided, since the seal is bound to it.
-send_sealed_publish_frame(Realm, Topic, Payload, Seq, Epoch, #state{peer_pid = Pid, node_identity = Id}) ->
+send_sealed_publish_frame(Realm, Topic, Payload, Seq, Epoch, #state{peer_pid = Pid, node_identity = Id} = S) ->
     PublishedAt = erlang:system_time(millisecond),
     sealed_publish_sent(macula_group_event:seal(Epoch, #{publisher => macula_node_keys:key_id(Id), realm => Realm,
                                                          topic => Topic, seq => Seq, published_at => PublishedAt},
                                                 Payload),
-                        #{realm => Realm, topic => Topic, seq => Seq, published_at => PublishedAt}, Pid, Id).
+                        #{realm => Realm, topic => Topic, seq => Seq, published_at => PublishedAt}, Pid, Id, S).
 
-sealed_publish_sent({ok, Sealed}, Spec, Pid, Id) ->
-    macula_peering:send_frame(Pid, macula_frame:publish(Spec#{sealed => Sealed}, Id));
-sealed_publish_sent({error, _} = Refused, _Spec, _Pid, _Id) ->
-    Refused.
+sealed_publish_sent({ok, Sealed}, #{realm := Realm} = Spec, Pid, Id, S) ->
+    presented_sent(Pid, presenting(Realm, macula_frame:publish(Spec#{sealed => Sealed}, Id), S), S);
+sealed_publish_sent({error, _} = Refused, _Spec, _Pid, _Id, S) ->
+    {Refused, S}.
+
+%% A frame sent, with the state that knows whether it carried the realm's membership. A frame the seam refuses
+%% leaves the membership unsent.
+presented_sent(Pid, {Frame, Mark}, S) ->
+    membership_marked(macula_peering:send_frame(Pid, Frame), Mark, S).
+
+membership_marked(ok, Mark, S) -> {ok, Mark(S)};
+membership_marked(Refused, _Mark, S) -> {Refused, S}.
+
+%% The frame with the realm's membership attached when this connection has not carried it yet, and how the state
+%% records that it now has (macula#128).
+presenting(Realm, Frame, #state{memberships = Ms}) ->
+    presenting_unsent(maps:find(Realm, Ms), Realm, Frame).
+
+presenting_unsent({ok, #{presented := Presented, sent := false} = M}, Realm, Frame) ->
+    {Frame#{ext => macula_realm_rights:carrying(Presented)},
+     fun(#state{memberships = Ms} = S) -> S#state{memberships = Ms#{Realm => M#{sent := true}}} end};
+presenting_unsent(_SentOrNone, _Realm, Frame) ->
+    {Frame, fun(S) -> S end}.
 
 after_connect_request({ok, Pid}, S) ->
     link(Pid),
@@ -2852,17 +2892,25 @@ send_unsubscribe(Pid, Realm, Topic, Id) ->
 %% `drain_pending_subscribes/1' resends it once `connected' genuinely
 %% fires, but wasteful and alarming on every reconnect, and NOT harmless
 %% for a caller that assumed the frame had actually gone out now.
-maybe_send_subscribe(_Realm, _Topic, #state{peer_pid = undefined}) ->
-    ok;
-maybe_send_subscribe(_Realm, _Topic, #state{peer_node_id = undefined}) ->
-    ok;
-maybe_send_subscribe(Realm, Topic, #state{peer_pid = Pid, node_identity = Id}) ->
+maybe_send_subscribe(_Realm, _Topic, #state{peer_pid = undefined} = S) ->
+    S;
+maybe_send_subscribe(_Realm, _Topic, #state{peer_node_id = undefined} = S) ->
+    S;
+maybe_send_subscribe(Realm, Topic, #state{peer_pid = Pid, node_identity = Id} = S) ->
     SubKey = node_id(Id),
     Frame  = macula_frame:subscribe(#{topic      => Topic,
                                       realm      => Realm,
                                       subscriber => SubKey}),
-    try macula_peering:send_frame(Pid, Frame) catch _:_ -> ok end,
-    ok.
+    {_Sent, NewS} = try presented_sent(Pid, presenting(Realm, Frame, S), S) catch _:_ -> {failed, S} end,
+    NewS.
+
+%% A membership presented anew reaches the station at once when the link already holds a subscription in its realm:
+%% one of them is sent again carrying it. Otherwise the realm's next SUBSCRIBE or PUBLISH carries it.
+membership_resent(Realm, #state{subscriptions = Subs} = S) ->
+    resubscribed(lists:sort([T || {R, T, _Sub, _Mon} <- maps:values(Subs), R =:= Realm]), Realm, S).
+
+resubscribed([Topic | _], Realm, S) -> maybe_send_subscribe(Realm, Topic, S);
+resubscribed([], _Realm, S) -> S.
 
 %% A gated stream advertised from a spec makes the node's own stream_renew findable in that realm, so a caller can
 %% renew the token its session there was opened with (macula#120). It is a procedure in the node's own namespace, so
@@ -3118,8 +3166,7 @@ drain_pending_advertisements(#state{advertisements = Ads} = S) ->
 drain_pending_subscribes(#state{subscriptions = Subs} = S) ->
     Pairs = lists:usort(
               [{R, T} || {_Ref, {R, T, _Sub, _Mon}} <- maps:to_list(Subs)]),
-    [maybe_send_subscribe(R, T, S) || {R, T} <- Pairs],
-    ok.
+    lists:foldl(fun({R, T}, Acc) -> maybe_send_subscribe(R, T, Acc) end, S, Pairs).
 
 %% Subscriber pid died — find its SubRef(s) by monitor ref, drop
 %% them. A pid can only have one subscription via one monitor, but

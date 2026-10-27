@@ -28,7 +28,8 @@
 -module(macula_realm_rights).
 
 -export([new_table/0, admit/2, subscribe/4, publish/4, serve/4, mode/1, counters/0,
-         max_token_bytes/0, max_proofs/0, max_presented_bytes/0]).
+         max_token_bytes/0, max_proofs/0, max_presented_bytes/0, within_size/1, carrying/1, presented/1,
+         extension_name/0]).
 
 -export_type([rights/0, presented/0, mode/0, check/0, outcome/0, refusal/0]).
 
@@ -44,6 +45,8 @@
 %% issues today.
 -define(MAX_PROOFS, 4).
 -define(MAX_PRESENTED_BYTES, 131072).
+%% The per-hop extension a SUBSCRIBE or PUBLISH presents a membership in (docs/design/WIRE_1_0.md section 3.6).
+-define(MEMBERSHIP_EXTENSION, <<"realm.membership">>).
 %% A realm id comes from a peer's frame: past 256 realms with a row, a new one counts under the label other.
 -define(MAX_REALM_LABELS, 256).
 -define(OTHER, other).
@@ -77,6 +80,34 @@ max_proofs() -> ?MAX_PROOFS.
 -spec max_presented_bytes() -> pos_integer().
 max_presented_bytes() -> ?MAX_PRESENTED_BYTES.
 
+%% @doc The name of the per-hop extension that carries a presented membership.
+-spec extension_name() -> binary().
+extension_name() -> ?MEMBERSHIP_EXTENSION.
+
+%% @doc The extension map a SUBSCRIBE or PUBLISH carries to present Presented to the link's station: one entry,
+%% not critical, so a station that predates it ignores it and the frame is handled as before.
+-spec carrying(presented()) -> #{binary() => #{critical := 0, value := map()}}.
+carrying(#{token := Token, proofs := Proofs}) when is_binary(Token), is_list(Proofs) ->
+    #{?MEMBERSHIP_EXTENSION => #{critical => 0, value => #{<<"token">> => Token, <<"proofs">> => Proofs}}}.
+
+%% @doc The membership a received SUBSCRIBE or PUBLISH presents, read from its per-hop extension map as the frame
+%% decoder keeps it: `none' when it carries none, malformed when the entry is not a token and a list of proofs, each
+%% bytes. Nothing is verified here; admit/2 checks the size and verifies.
+-spec presented(macula_frame:frame()) -> {ok, presented()} | none | {error, malformed}.
+presented(#{ext := #{?MEMBERSHIP_EXTENSION := #{value := Value}}}) ->
+    presented_value(Value);
+presented(_Frame) ->
+    none.
+
+presented_value(#{{text, <<"token">>} := Token, {text, <<"proofs">>} := Proofs} = Value)
+  when map_size(Value) =:= 2, is_binary(Token), is_list(Proofs) ->
+    presented_proofs(lists:all(fun is_binary/1, Proofs), Token, Proofs);
+presented_value(_Value) ->
+    {error, malformed}.
+
+presented_proofs(true, Token, Proofs) -> {ok, #{token => Token, proofs => Proofs}};
+presented_proofs(false, _Token, _Proofs) -> {error, malformed}.
+
 %% @doc Verify a membership token a member presented on its link: checked for size before anything is verified, then
 %% under the realm key RealmKeyId with the link peer as its audience (threat model 6.1), so a token another node
 %% presents is refused not_the_audience. The rights it grants are kept until `until', the earliest exp of the token
@@ -94,6 +125,9 @@ admit(#{token := Token, proofs := Proofs} = Presented,
 admit(_Presented, _Context) ->
     {error, malformed}.
 
+%% @doc Whether a token and its proofs fit the sizes admit/2 verifies: the token and each proof within
+%% max_token_bytes/0, at most max_proofs/0 proofs, and all within max_presented_bytes/0.
+-spec within_size(presented()) -> boolean().
 within_size(#{token := Token, proofs := Proofs}) ->
     byte_size(Token) =< ?MAX_TOKEN_BYTES andalso length(Proofs) =< ?MAX_PROOFS
         andalso lists:all(fun(P) -> is_binary(P) andalso byte_size(P) =< ?MAX_TOKEN_BYTES end, Proofs)

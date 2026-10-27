@@ -212,6 +212,10 @@
 %% A REGISTER_ACK names a procedure or a topic, so its name has the topic's bound (macula#12).
 -define(MAX_REGISTER_NAME_BYTES, 512).
 -define(REGISTER_KINDS, [advertise, unadvertise, subscribe, unsubscribe, publish]).
+%% The per-hop extensions this node reads (docs/design/WIRE_1_0.md section 3.6): kept as read and not counted as
+%% ignored. Only a non-critical one is ever sent, so a node that predates it ignores it. realm.membership is
+%% macula_realm_rights:extension_name/0.
+-define(KNOWN_HOP_EXTENSIONS, [<<"realm.membership">>]).
 -define(REGISTER_REFUSALS, [too_many_providers, advertiser_quota, name_too_long, record_refused, not_authorized,
                             too_many_realms, refused]).
 %% A NODES entry lists at most 4 addresses, one per observation today with room for IPv4 and IPv6 beside a host name,
@@ -3623,9 +3627,10 @@ read_value({optional, Kind}, Value) -> read_value(Kind, Value);
 read_value(_Kind, _Value) -> error.
 
 %% An extension map (macula#83 decision 8, docs/design/WIRE_1_0.md section 3.2): 1 to 16 entries, each named by text of
-%% 1 to 64 bytes from [a-z0-9_.] and holding exactly its criticality, 0 or 1, and its value. Wire 1.0 defines no
-%% extension, so every entry is one this node does not know: a non-critical one is kept as read, ignored and counted
-%% by its name, and a critical one refuses the frame or the signed object that carries it, extension_unsupported.
+%% 1 to 64 bytes from [a-z0-9_.] and holding exactly its criticality, 0 or 1, and its value. Every entry is kept as
+%% read. A non-critical one this node does not know is ignored and counted by its name; one it reads
+%% (?KNOWN_HOP_EXTENSIONS, section 3.6) is not counted. A critical one refuses the frame or the signed object that
+%% carries it, extension_unsupported: no extension is defined critical.
 extensions_read([{{text, Name}, #{{text, <<"critical">>} := Critical, {text, <<"value">>} := Value} = Entry} | Rest],
                 Read)
   when map_size(Entry) =:= 2, (Critical =:= 0 orelse Critical =:= 1) ->
@@ -3684,7 +3689,8 @@ refused_counted(Ext) ->
 
 %% Every extension ignored counts by its name.
 ignored_counted(Ext) ->
-    _ = [ok = macula_wire_tolerance:count(wire_ext_ignored, Name) || Name := #{critical := 0} <- Ext],
+    _ = [ok = macula_wire_tolerance:count(wire_ext_ignored, Name) || Name := #{critical := 0} <- Ext,
+                                                                     not lists:member(Name, ?KNOWN_HOP_EXTENSIONS)],
     Ext.
 
 %% A sealed payload's fields (test/vectors/E2E_SEAL_V1.md, "The sealed map").
