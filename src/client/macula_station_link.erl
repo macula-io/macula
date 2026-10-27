@@ -5018,16 +5018,25 @@ run_stream_handler(Handler, Stream, Args, Caller, Proc) ->
 %%-------------------------------------------------------------------
 
 %% The session a dedicated stream carries: at most one, in whichever map holds
-%% it.
+%% it, and the id it is held under — the stream tells the two apart while a
+%% reopen is in flight, where the session the provider is answering on is not
+%% yet the one the stream holds.
 session_on(Stream, #state{client_streams = CS, server_streams = SS}) ->
-    first_or_error([Pid || {Pid, _Mon, On} <- maps:values(CS) ++ maps:values(SS), On =:= Stream]).
+    carried_session([{Sid, Pid} || {Sid, {Pid, _Mon, On}} <- maps:to_list(CS) ++ maps:to_list(SS), On =:= Stream]).
+
+carried_session([{Sid, Pid} | _]) ->
+    {ok, Sid, Pid};
+carried_session([]) ->
+    error.
 
 %% A session frame goes to the stream process of the session its stream
-%% carries. A peer's terminal frame does not end the routing: the session's
-%% stream verifies it first, and the routing goes when that process ends or the
+%% carries, named with that session's id: the stream decides by it whether the
+%% frame belongs to the session it holds or to one a reopen is opening. A
+%% peer's terminal frame does not end the routing: the session's stream
+%% verifies it first, and the routing goes when that process ends or the
 %% session writes its own last frame.
-deliver_on_stream({ok, Pid}, Frame, _Stream, S) ->
-    ok = macula_stream:deliver_frame(Pid, Frame),
+deliver_on_stream({ok, Sid, Pid}, Frame, _Stream, S) ->
+    ok = macula_stream:deliver_frame(Pid, Sid, Frame),
     S;
 deliver_on_stream(error, _Frame, Stream, S) ->
     close_sessionless_stream(Stream, S).

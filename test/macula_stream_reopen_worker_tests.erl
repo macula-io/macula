@@ -38,10 +38,36 @@ a_frame_that_lands_before_the_clear_reopen_is_read_under_it_test_() ->
         Answer = reopen_held(),
         NewOpen = verified_open(W, ?NEW_SID),
         #{k_p2c := KP2C} = NewSeal = seal(),
-        ok = macula_stream:deliver_frame(Stream, provider_sealed(stream_data, 0, #{encoding => raw}, <<"after">>,
-                                                                 KP2C, Provider, NewOpen)),
+        ok = macula_stream:deliver_frame(Stream, ?NEW_SID,
+                                         provider_sealed(stream_data, 0, #{encoding => raw}, <<"after">>,
+                                                         KP2C, Provider, NewOpen)),
         Answer(#{open => NewOpen, seal => NewSeal, sid => ?NEW_SID}),
         ?assertEqual({chunk, <<"after">>}, macula_stream:recv(Stream, 2_000)),
+        gen_server:stop(Stream)
+    end}.
+
+%% A frame on the session the stream still holds is not held: the old session stays open until the reopen lands, and
+%% the provider answering on it is read where it lands. Holding every frame for the reopen's sake would blind the
+%% stream to the session it already has, and a chunk that settles the report settles it there.
+a_frame_on_the_session_the_stream_holds_is_read_while_the_reopen_is_in_flight_test_() ->
+    {timeout, 20, fun() ->
+        #{stream := Stream, open := Open, provider := Provider} = W = stream(),
+        ok = macula_stream:attach_to_link(Stream, self(), ?SID),
+        ok = macula_stream:send(Stream, <<"abc">>),
+        ok = macula_stream:deliver_frame(Stream, refuse(W, Open)),
+        Answer = reopen_held(),
+        ok = macula_stream:deliver_frame(Stream, ?SID,
+                                         wire(macula_frame:provider_stream(#{frame_type => stream_data, seq => 1,
+                                                                             encoding => raw,
+                                                                             body => <<"on the old">>},
+                                                                           Provider, Open))),
+        ?assertEqual({chunk, <<"on the old">>}, macula_stream:recv(Stream, 2_000)),
+        NewOpen = verified_open(W, ?NEW_SID),
+        NewSeal = seal(),
+        Answer(#{open => NewOpen, seal => NewSeal, sid => ?NEW_SID}),
+        %% The report settled on the old session's key, so the provider answered under a key it refused: the stream
+        %% ends rather than swapping the report to the reopen's.
+        ?assertMatch({error, {<<"malformed_frame">>, _}}, macula_stream:recv(Stream, 2_000)),
         gen_server:stop(Stream)
     end}.
 

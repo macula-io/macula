@@ -236,8 +236,9 @@ a_frame_that_lands_before_the_reopen_is_read_under_it(#{caller := Caller, provid
     NewOpen = verified_open(Keys, bidi, <<8:128>>),
     #{k_p2c := KP2C} = NewSeal = seal(),
     Answer = reopen_held(),
-    ok = macula_stream:deliver_frame(Stream, provider_sealed(stream_data, 0, #{encoding => raw}, <<"after">>, KP2C,
-                                                             Provider, NewOpen)),
+    ok = macula_stream:deliver_frame(Stream, <<8:128>>,
+                                     provider_sealed(stream_data, 0, #{encoding => raw}, <<"after">>, KP2C,
+                                                     Provider, NewOpen)),
     Answer(#{open => NewOpen, seal => NewSeal, sid => <<8:128>>}),
     ?assertEqual({chunk, <<"after">>}, macula_stream:recv(Stream, 1000)),
     gen_server:stop(Stream).

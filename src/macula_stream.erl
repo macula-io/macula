@@ -69,7 +69,8 @@
     deliver_end/2,
     deliver_error/3,
     deliver_reply/2,
-    deliver_frame/2
+    deliver_frame/2,
+    deliver_frame/3
 ]).
 
 %% gen_server callbacks
@@ -182,9 +183,10 @@
     %% A reseal and reopen in flight, run by a worker so the stream keeps
     %% answering: its reference, and what the owner sent meanwhile, in order.
     reopening :: {reference(), [term()]} | undefined,
-    %% The peer's frames that arrived while `reopening' was set, newest first. The link writes the new STREAM_OPEN
-    %% before the worker that asked for it reports back, and those are two different senders, so a frame can land
-    %% ahead of the report and would otherwise be verified against the session the provider just refused.
+    %% The peer's frames that arrived on the session a reopen is opening, while `reopening' was set, newest first. The
+    %% link writes the new STREAM_OPEN before the worker that asked for it reports back, and those are two different
+    %% senders, so a frame can land ahead of the report and would otherwise be verified against the session the
+    %% provider just refused. A frame on the session this stream holds is not held: it verifies where it lands.
     reopening_held = [] :: [term()],
     %% A caller's CLEAR stream waiting for the provider's first frame
     %% (DESIGN_E2E_SEALED_BY_DEFAULT §3, release A0): every action it has
@@ -423,8 +425,11 @@ deliver_reply(Pid, Result) ->
     gen_server:cast(Pid, {peer_reply, Result}).
 
 %% @doc Deliver a STREAM_DATA, STREAM_END, STREAM_ERROR or STREAM_REPLY
-%% frame of a link-carried stream from the peer. The stream verifies it
-%% against its STREAM_OPEN before it takes effect. A refused frame is
+%% frame of a link-carried stream from the peer, as a frame of the session
+%% this stream HOLDS: a peer's link routes a frame by the dedicated stream
+%% it arrived on and names that session, which is `deliver_frame/3'.
+%% The stream verifies the frame against its STREAM_OPEN before it takes
+%% effect. A refused frame is
 %% dropped and reported to the stream's peering connection, and the
 %% stream carries on. A frame of a type that belongs on the control
 %% stream rejects the connection with malformed_frame and ends the
@@ -432,6 +437,14 @@ deliver_reply(Pid, Result) ->
 -spec deliver_frame(pid(), macula_frame:frame()) -> ok.
 deliver_frame(Pid, Frame) when is_map(Frame) ->
     gen_server:cast(Pid, {peer_frame, Frame}).
+
+%% @doc The same, carrying the session the frame arrived on: the link routes a frame by the dedicated stream it came
+%% in on, and that session is not always the one the stream holds. A frame on the session a reopen is opening lands
+%% before the worker reports that the session opened — two senders, so Erlang does not order them — and is held until
+%% the stream adopts it, where a frame on the session the stream already holds is read now.
+-spec deliver_frame(pid(), stream_id(), macula_frame:frame()) -> ok.
+deliver_frame(Pid, Origin, Frame) when is_map(Frame) ->
+    gen_server:cast(Pid, {peer_frame, Origin, Frame}).
 
 %%%===================================================================
 %%% gen_server callbacks
@@ -583,9 +596,13 @@ handle_cast({peer_error, Code, Message}, #state{peer = {local, _}} = State) ->
 handle_cast({peer_reply, Result}, #state{peer = {local, _}} = State) ->
     {noreply, reply_arrived(Result, State)};
 handle_cast({peer_frame, #{frame_type := Type} = Frame}, State) ->
-    {noreply, peer_frame(macula_frame:control_frame(Type), Frame, State)};
+    {noreply, peer_frame(undefined, macula_frame:control_frame(Type), Frame, State)};
 handle_cast({peer_frame, Frame}, State) ->
-    {noreply, peer_frame(false, Frame, State)};
+    {noreply, peer_frame(undefined, false, Frame, State)};
+handle_cast({peer_frame, Origin, #{frame_type := Type} = Frame}, State) ->
+    {noreply, peer_frame(Origin, macula_frame:control_frame(Type), Frame, State)};
+handle_cast({peer_frame, Origin, Frame}, State) ->
+    {noreply, peer_frame(Origin, false, Frame, State)};
 
 handle_cast(_Msg, State) ->
     {noreply, State}.
@@ -979,27 +996,32 @@ transport_failed(Err, #state{reply = Reply} = State) ->
 %% stream ends with that transport failure. Once the session has ended, any
 %% other frame takes no effect and is reported as stream_ended, which is not
 %% charged. Any other frame is verified.
-peer_frame(true, _Frame, #state{conn = Conn} = State) ->
+peer_frame(_Origin, true, _Frame, #state{conn = Conn} = State) ->
     ok = macula_peering:reject(Conn, malformed_frame),
     transport_failed({error, {transport, malformed_frame}}, State);
-peer_frame(false, _Frame, #state{ended = Ended, conn = Conn} = State) when Ended =/= undefined ->
+peer_frame(_Origin, false, _Frame, #state{ended = Ended, conn = Conn} = State) when Ended =/= undefined ->
     ok = macula_peering:object_refused(Conn, stream_ended),
     State;
-%% The provider's first frames on the session being opened: the link writes the new STREAM_OPEN before the worker that
-%% asked for it reports back, and the link's frames and the worker's report are not one sender, so Erlang does not
-%% order them. A frame that lands first is held, in order, and read once the session is adopted — read here it would be
-%% verified against the session the provider just refused, and dropped, losing the provider's seq 0 and leaving every
+%% A frame on the session a reopen is opening, landing before the worker's report that it opened: the link writes the
+%% new STREAM_OPEN before it answers the worker, and the link's frames and the worker's report are not one sender, so
+%% Erlang does not order them. Held, in order, and read once the session is adopted — read where it lands it would be
+%% verified against the session the provider just refused and dropped, losing the provider's seq 0 and leaving every
 %% later frame failing its seq check (release A0, review round 2; the clear reopen and A1's reseal both).
-peer_frame(false, Frame, #state{reopening = {_Ref, _Queued}, reopening_held = Held} = State) ->
+%%
+%% Only a frame from a session this stream has NOT adopted is held: a frame on the session it holds — the old one,
+%% still open until the reopen lands — verifies here and is read now, so a provider that answers on it is not made to
+%% wait out the reopen, and a chunk that settles the report still settles it (Fable round 1, 13.1.0).
+peer_frame(Origin, false, Frame, #state{reopening = {_Ref, _Queued}, reopening_held = Held, id = Id} = State)
+  when Origin =/= undefined, Origin =/= Id ->
     State#state{reopening_held = [Frame | Held]};
-peer_frame(false, #{frame_type := stream_error, relay_error := _} = Frame,
+peer_frame(_Origin, false, #{frame_type := stream_error, relay_error := _} = Frame,
            #state{role = client, open = Open, profile = Profile, station = Station} = State)
   when is_binary(Station) ->
     relay_error_verified(macula_frame:verify_relay_error(Frame, Open, Profile, Station), State);
 %% A caller's stream started without its station takes no station's relay error.
-peer_frame(false, #{frame_type := stream_error, relay_error := _}, #state{role = client} = State) ->
+peer_frame(_Origin, false, #{frame_type := stream_error, relay_error := _}, #state{role = client} = State) ->
     relay_error_verified({error, not_the_connection}, State);
-peer_frame(false, Frame, #state{role = Role, verifier = Verifier, profile = Profile} = State) ->
+peer_frame(_Origin, false, Frame, #state{role = Role, verifier = Verifier, profile = Profile} = State) ->
     verified_frame(peer_verified(Role, Frame, Verifier, Profile), State).
 
 %% @private The station the caller's link is connected to reports it cannot
@@ -1121,7 +1143,7 @@ reopened({error, _}, _Queued, State) ->
 held_read(#state{reopening_held = []} = State) ->
     State;
 held_read(#state{reopening_held = Held} = State) ->
-    lists:foldl(fun(Frame, S) -> peer_frame(false, Frame, S) end, State#state{reopening_held = []},
+    lists:foldl(fun(Frame, S) -> peer_frame(undefined, false, Frame, S) end, State#state{reopening_held = []},
                 lists:reverse(Held)).
 
 %% This stream reads and writes on the reopen's session from now on, numbering from 0 under its own frame type's keys:
