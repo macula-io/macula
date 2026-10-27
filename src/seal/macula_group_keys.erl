@@ -239,10 +239,12 @@ handle_cast(_Msg, State) -> {noreply, State}.
 
 %% @private
 %% A membership lookup ended, or overran its wait: its pull is answered here.
-handle_info({'DOWN', Ref, process, _Pid, Ended}, #{lookups := Lookups} = State) ->
-    looked_up(maps:take(Ref, Lookups), member_verdict(Ended), State);
-handle_info({lookup_overdue, Ref}, #{lookups := Lookups} = State) ->
-    overdue(maps:take(Ref, Lookups), Ref, State);
+handle_info({membership, Pid, Answer}, #{lookups := Lookups} = State) ->
+    looked_up(maps:take(Pid, Lookups), member_verdict(Answer), State);
+handle_info({'DOWN', _Ref, process, Pid, _Ended}, #{lookups := Lookups} = State) ->
+    looked_up(maps:take(Pid, Lookups), {error, membership_unknown}, State);
+handle_info({lookup_overdue, Pid}, #{lookups := Lookups} = State) ->
+    overdue(maps:take(Pid, Lookups), Pid, State);
 handle_info(_Msg, State) ->
     {noreply, State}.
 
@@ -288,22 +290,25 @@ answered({{membership, Caller, Prefix, Epoch}, State}, From) ->
 answered({Reply, State}, _From) ->
     {reply, Reply, State}.
 
-%% The lookup runs in a process of its own and ends with its verdict, so the distributor answers other pulls meanwhile.
+%% The lookup runs in a process of its own and sends its answer back, so the distributor answers other pulls meanwhile.
+%% One that ends without an answer is `membership_unknown'.
 lookup(_Caller, _Prefix, _Epoch, _From, #{lookups := Lookups, max_lookups := Max} = State)
   when map_size(Lookups) >= Max ->
     {reply, {error, membership_unknown}, State};
 lookup(Caller, Prefix, Epoch, From, #{membership := Membership, lookups := Lookups, lookup_wait_ms := Wait} = State) ->
-    {Pid, Ref} = spawn_monitor(fun() -> exit({membership, Membership(Caller)}) end),
-    Timer = erlang:send_after(Wait, self(), {lookup_overdue, Ref}),
-    {noreply, State#{lookups := Lookups#{Ref => #{from => From, pid => Pid, timer => Timer,
+    Distributor = self(),
+    {Pid, Ref} = spawn_monitor(fun() -> Distributor ! {membership, self(), Membership(Caller)} end),
+    Timer = erlang:send_after(Wait, self(), {lookup_overdue, Pid}),
+    {noreply, State#{lookups := Lookups#{Pid => #{from => From, ref => Ref, timer => Timer,
                                                   prefix => Prefix, epoch => Epoch}}}}.
 
-member_verdict({membership, ok}) -> ok;
-member_verdict({membership, {error, not_a_member}}) -> {error, not_a_member};
+member_verdict(ok) -> ok;
+member_verdict({error, not_a_member}) -> {error, not_a_member};
 member_verdict(_FailedOrUnknown) -> {error, membership_unknown}.
 
 %% Served at the time the verdict came: the epochs current then.
-looked_up({#{from := From, timer := Timer, prefix := Prefix, epoch := Epoch}, Lookups}, Verdict, State) ->
+looked_up({#{from := From, ref := Ref, timer := Timer, prefix := Prefix, epoch := Epoch}, Lookups}, Verdict, State) ->
+    true = erlang:demonitor(Ref, [flush]),
     _ = erlang:cancel_timer(Timer, [{async, true}, {info, false}]),
     {Reply, NewState} = admitted(Verdict, Prefix, Epoch, (maps:get(now, State))(), State#{lookups := Lookups}),
     gen_server:reply(From, Reply),
@@ -311,12 +316,12 @@ looked_up({#{from := From, timer := Timer, prefix := Prefix, epoch := Epoch}, Lo
 looked_up(error, _Verdict, State) ->
     {noreply, State}.
 
-overdue({#{from := From, pid := Pid}, Lookups}, Ref, State) ->
+overdue({#{from := From, ref := Ref}, Lookups}, Pid, State) ->
     true = erlang:demonitor(Ref, [flush]),
     exit(Pid, kill),
     gen_server:reply(From, {error, membership_unknown}),
     {noreply, State#{lookups := Lookups}};
-overdue(error, _Ref, State) ->
+overdue(error, _Pid, State) ->
     {noreply, State}.
 
 %% The call's own token and proofs, as the provider link hands them to a `handler_authorizes' handler.
