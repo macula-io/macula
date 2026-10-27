@@ -260,7 +260,7 @@ So:
 | Reason | When | Message names |
 |---|---|---|
 | `provider_serves_clear` (new) | a `required` caller resolved only a keyless advertisement | the provider node and procedure, and "call with `preferred` to accept clear" |
-| `sealed_required` (provider ERROR or STREAM_ERROR, existing; from release A0 its signed `seal.kem_key` extension carries the provider's key) | a clear call or open reached a keyed provider | only when the reseal of §3 is impossible (no `seal.kem_key`, or a key of the wrong length, as from a pre-A0 provider), unchanged from today |
+| `sealed_required` (provider ERROR or STREAM_ERROR, existing; from release A its signed `seal.kem_key` extension carries the provider's key) | a clear call or open reached a keyed provider | only when the reseal of §3 is impossible (no `seal.kem_key`, or a key of the wrong length, as from a provider before release A), unchanged from today |
 | `no_kem_key`, `key_mismatch`, `no_signed_state` (existing) | unchanged | unchanged |
 | `no_group` (new) | publish or subscribe naming neither `group` nor `open` | both options |
 
@@ -372,11 +372,11 @@ its mode, with a test that a default pool on release B still reads and writes DH
 
 | # | Package | Size |
 |---|---|---|
-| 1 | Release A0 in Erlang macula, macula-go + libmacula, macula-rust + FFI: `sealed_required` carries the key in `seal.kem_key`; the link reseals (calls, opens, held clear-stream writes) and reports the key; the pool replaces its remembered candidate's key; vectors and interop cases | M each |
+| 1 | Release A0 in Erlang macula, macula-go + libmacula, macula-rust + FFI: callers read `seal.kem_key` (Go: macula-go#42), the link reseals (calls, opens, held clear-stream writes) and reports the key; the pool replaces its remembered candidate's key; vectors and interop cases with a test-only sending provider | M each |
 | 2 | Bindings re-pin to A0; every service, station and shipped client rebuilt on A0 and rolled, canary first | S each |
-| 3 | Erlang macula release A: §3 (provider side, every advertise path, the explicit-target rule), §4, §5 (SDK facts and helpers), §6 (sharer `off`, fetch from the sharer's advertisement), §7, tests | M |
-| 4 | macula-go + libmacula release A: the same, closing link-level `Clear: true`, plus the ABI reason names and the `open` option | M |
-| 5 | macula-rust + FFI release A: the same, closing link-level `Seal::Clear` and moving the content fetch onto §6's advertisement | M |
+| 3 | Erlang macula release A: §3 (provider side, every advertise path, the explicit-target rule), §4, §5 (SDK facts and helpers), §6 (sharer `off`, fetch from the sharer's advertisement), §7, the provider's `sealed_required` carries `seal.kem_key` (`stream_bytes/2` build keys gain `ext`), tests | M |
+| 4 | macula-go + libmacula release A: the same, closing link-level `Clear: true`, the provider's `sealed_required` carries `seal.kem_key`, plus the ABI reason names and the `open` option | M |
+| 5 | macula-rust + FFI release A: the same, closing link-level `Seal::Clear`, moving the content fetch onto §6's advertisement, and the provider's `sealed_required` carries `seal.kem_key` | M |
 | 6 | Four bindings: re-pin, delete `kemAdvertise`, `open`, new reasons | S each |
 | 7 | Interop matrix cases (four) in the existing jobs | S |
 | 8 | Services and macula-station: rebuild, `open` on public topics and helpers, opt-outs listed | S each |
