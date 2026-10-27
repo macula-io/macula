@@ -9,8 +9,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [17.0.0] - 2026-10-27
-
 ### Added
 
 - **Realm rights: roles for call, serve, publish and subscribe (macula#128; threat model macula-realm#97).**
@@ -30,6 +28,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   provider whose delegation does not once the realm runs `refusing`.
 - **REGISTER_ACK `publish` kind.** A station refuses a PUBLISH a realm's rights do not admit with a REGISTER_ACK of
   kind `publish` naming the publisher. It is only ever a refusal. A node that predates the kind ignores the ack.
+
+## [17.0.0] - 2026-10-27
+
+### Added
 
 - **Read control for sealed groups (macula#129).** A distributor (`macula_group_keys`) takes one access policy per
   group at start (`groups`): `org_grant`, the earlier check and the default for a group not listed, or
