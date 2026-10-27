@@ -26,6 +26,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (exact procedures or `<base>/*` prefixes, at most 64, 512 bytes each). `macula_record:verify_serving/3` and
   `delegated_procedure/3` say whether an advertisement's delegation names its procedure, and a direct dial drops a
   provider whose delegation does not once the realm runs `refusing`.
+- **`macula_realm_pubsub_registry:purge_subscriber/3`.** Removes a subscriber from one realm's topics only, leaving
+  its other realms, so a station drops what an expired realm membership admitted (macula#128, threat model 6.2).
 - **REGISTER_ACK `publish` kind.** A station refuses a PUBLISH a realm's rights do not admit with a REGISTER_ACK of
   kind `publish` naming the publisher. It is only ever a refusal. A node that predates the kind ignores the ack.
 

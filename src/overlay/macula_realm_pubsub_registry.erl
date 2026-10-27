@@ -59,6 +59,7 @@
     relay_publish/3,
     list_realms/1,
     purge_subscriber/2,
+    purge_subscriber/3,
     stop/1
 ]).
 
@@ -223,6 +224,15 @@ list_realms(RegistryPid) ->
 purge_subscriber(RegistryPid, <<_:256>> = Sub) ->
     gen_server:call(RegistryPid, {purge_subscriber, Sub}).
 
+%% @doc Remove `Sub' from every topic under `Realm' only, leaving its
+%% subscriptions in other realms in place: a station drops what a
+%% realm membership admitted once that membership expires (macula#128,
+%% threat model 6.2). A realm not materialised here is `ok'; a realm
+%% whose last subscription the purge took has its server stopped.
+-spec purge_subscriber(pid(), realm(), <<_:256>>) -> ok.
+purge_subscriber(RegistryPid, <<_:256>> = Realm, <<_:256>> = Sub) ->
+    gen_server:call(RegistryPid, {purge_subscriber, Realm, Sub}).
+
 %% @doc Stop the registry. Uses reason `shutdown' (not the default
 %% `normal') so the registry's spawn-linked pubsub_servers receive
 %% the exit signal and terminate alongside it. Without this, normal
@@ -285,6 +295,8 @@ handle_call(list_realms, _From, S) ->
 handle_call({purge_subscriber, Sub}, _From, S) ->
     {reply, ok, lists:foldl(fun({Realm, Pid}, Acc) -> purge_one(Realm, Pid, Sub, Acc) end,
                             S, maps:to_list(S#state.by_realm))};
+handle_call({purge_subscriber, Realm, Sub}, _From, S) ->
+    {reply, ok, purge_in_realm(maps:find(Realm, S#state.by_realm), Realm, Sub, S)};
 handle_call(_Other, _From, S) ->
     {reply, {error, unknown_call}, S}.
 
@@ -499,6 +511,9 @@ drop_pid_entry(Pid, ByPid)       -> maps:remove(Pid, ByPid).
 %%====================================================================
 %% Internals — purge_subscriber
 %%====================================================================
+
+purge_in_realm({ok, Pid}, Realm, Sub, S) -> purge_one(Realm, Pid, Sub, S);
+purge_in_realm(error, _Realm, _Sub, S) -> S.
 
 purge_one(Realm, Pid, Sub, S) ->
     reap_if_empty(purged(Pid, Sub), Realm, Pid, S).

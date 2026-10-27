@@ -64,7 +64,9 @@ registry_test_() ->
          fun(Reg) -> ?_test(purge_subscriber_fans_out_across_realms(Reg)) end,
          fun(Reg) -> ?_test(purge_subscriber_keeps_other_subscribers(Reg)) end,
          fun(Reg) -> ?_test(purge_subscriber_tolerates_no_realms(Reg)) end,
-         fun(Reg) -> ?_test(purge_subscriber_tolerates_a_dead_server(Reg)) end
+         fun(Reg) -> ?_test(purge_subscriber_tolerates_a_dead_server(Reg)) end,
+         fun(Reg) -> ?_test(purge_subscriber_in_a_realm_leaves_the_others(Reg)) end,
+         fun(Reg) -> ?_test(purge_subscriber_in_a_realm_not_here_is_ok(Reg)) end
      ]}.
 
 %%---------------------------------------------------------------------
@@ -349,6 +351,24 @@ purge_subscriber_keeps_other_subscribers(Reg) ->
     ok = macula_realm_pubsub_server:subscribe(Server, <<"t">>, id(2)),
     ok = macula_realm_pubsub_registry:purge_subscriber(Reg, id(1)),
     ?assertEqual([id(2)], macula_realm_pubsub_server:subscribers(Server, <<"t">>)).
+
+%% A membership that expires in one realm takes the subscriber's subscriptions in that realm only (macula#128).
+purge_subscriber_in_a_realm_leaves_the_others(Reg) ->
+    R1 = realm(),
+    R2 = realm(),
+    Key = key(),
+    Sub = id(1),
+    {ok, S1} = macula_realm_pubsub_registry:register(Reg, R1, loader(Key)),
+    {ok, S2} = macula_realm_pubsub_registry:register(Reg, R2, loader(Key)),
+    ok = macula_realm_pubsub_server:subscribe(S1, <<"a">>, Sub),
+    ok = macula_realm_pubsub_server:subscribe(S1, <<"a">>, id(2)),
+    ok = macula_realm_pubsub_server:subscribe(S2, <<"b">>, Sub),
+    ok = macula_realm_pubsub_registry:purge_subscriber(Reg, R1, Sub),
+    ?assertEqual([id(2)], macula_realm_pubsub_server:subscribers(S1, <<"a">>)),
+    ?assertEqual([Sub], macula_realm_pubsub_server:subscribers(S2, <<"b">>)).
+
+purge_subscriber_in_a_realm_not_here_is_ok(Reg) ->
+    ?assertEqual(ok, macula_realm_pubsub_registry:purge_subscriber(Reg, realm(), id(1))).
 
 purge_subscriber_tolerates_no_realms(Reg) ->
     ?assertEqual(ok, macula_realm_pubsub_registry:purge_subscriber(Reg, id(1))).
