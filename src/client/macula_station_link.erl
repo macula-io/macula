@@ -2580,13 +2580,21 @@ call_answered({error, Refusal}, _RequestId, _From, _TRef, _Request, _Seal, _Repo
 %% carries is the target's own, as fresh as the refusal. The link seals the same payload to it under a new request id,
 %% at most once per call: a resealed call is sealed, so a refusal of its own is the provider's answer. The key reaches
 %% the seal report, and the pool, which remembers it for that provider so its next call seals at once.
-refused_by_a_keyed_provider(Fields, RequestId, From, TRef, #{deadline := Deadline} = Request, Report, S) ->
+%%
+%% The request being refused is done with the moment the reseal is drawn: its id leaves `pending' before the resealed
+%% call goes out. A provider that replays the same signed refusal therefore finds nothing to answer, instead of
+%% resealing a second time from an entry that no longer stands for anything — the call runs once however often the
+%% refusal arrives. It also drops the payload the entry was holding, and a `{call_timeout, OldId}' already in the
+%% mailbox for it reaches `on_timeout/2' with nothing to take, so a caller mid-reseal is not told it timed out.
+refused_by_a_keyed_provider(Fields, RequestId, From, TRef, #{deadline := Deadline} = Request, Report,
+                            #state{pending = Pending} = S) ->
     case refusal_kem_key(Fields, S) of
         {ok, KemKey} ->
             _ = erlang:cancel_timer(TRef),
             learnt_by_pool(KemKey, Request, S),
             resent(call_in_time(Deadline - erlang:system_time(millisecond),
-                                resealed_call(KemKey, Request, Report), From, S), From);
+                                resealed_call(KemKey, Request, Report), From,
+                                S#state{pending = maps:remove(RequestId, Pending)}), From);
         none ->
             completed(reported(answer_of(Fields, clear, Request), Report, clear, Request),
                       RequestId, From, TRef, S)

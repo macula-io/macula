@@ -2875,7 +2875,10 @@ usable_with_seed(none, _Candidate)      -> none.
 %%
 %% A key a link learnt from the provider's signed refusal outlives the candidate it was written on only as far as that
 %% candidate itself does: a new candidate carries it over when it is the same provider's, so a refusal and the answer
-%% that followed it, in either order of arrival, leave the key in force for the advertisement's remaining lifetime.
+%% that followed it, in either order of arrival, leave the key in force across that refresh and through every later
+%% one, for as long as the provider keeps resolving. (It is not capped at the advertisement's remaining lifetime, which
+%% would end a key the provider itself named seconds earlier: what the refusal says outlives the advertisement it
+%% contradicts.)
 remembered(Key, Candidate, UntilMono, Now, Resolved) ->
     Live = maps:filter(fun(_K, #{until_mono := U}) -> Now < U end, Resolved),
     Live#{Key => #{candidate => keeping_learnt(Candidate, maps:find(Key, Live)), until_mono => UntilMono}}.

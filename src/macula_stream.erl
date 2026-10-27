@@ -1059,7 +1059,7 @@ sealed_refused_arrived(Named, #state{seq_out = 0, reopen = #{args := Args, resea
                                      peer = {remote_via_link, Link, Sid}, open = Open} = State) ->
     Stream = self(),
     Ref = make_ref(),
-    _ = spawn(fun() -> Stream ! {reopened, Ref, resealed_and_reopened(Reseal, Named, Link, Stream, Sid, Open, Args)} end),
+    ok = reopen_worker(Stream, Ref, fun() -> resealed_and_reopened(Reseal, Named, Link, Stream, Sid, Open, Args) end),
     State#state{reopen = undefined, reopening = {Ref, []}};
 sealed_refused_arrived(Named, State) ->
     refused_with({error, {sealed_refused, Named}}, State).
@@ -1070,6 +1070,22 @@ resealed_and_reopened(Reseal, Named, Link, Stream, Sid, Open, Args) ->
         {error, _} = Refused -> Refused
     catch
         Class:_Reason -> {error, {reseal, Class}}
+    end.
+
+%% The reopen runs in a worker so this stream keeps answering its owner and its link, and never waits on the link
+%% while the link may be calling it. The worker ALWAYS reports back: the reopen is a call to the link, and a link that
+%% is busy past that call's timeout, one that is gone, and one that crashes all raise in here. A stream left waiting
+%% for a report that never came would hold `reopening' with every owner write queued behind a session that never
+%% opens, and no deadline ends it (release A0, review round 1: the same hole in A1's reseal and the clear reopen's).
+reopen_worker(Stream, Ref, Reopen) ->
+    _ = spawn(fun() -> Stream ! {reopened, Ref, reopened_guarded(Reopen)} end),
+    ok.
+
+reopened_guarded(Reopen) ->
+    try Reopen() of
+        Result -> Result
+    catch
+        Class:Reason -> {error, {reopen, Class, Reason}}
     end.
 
 %% The link opened the new STREAM_OPEN on a new dedicated stream: this stream reads and writes under it from now on,
@@ -1128,9 +1144,7 @@ clear_open_sealed_to({ok, KemKey}, _Fields, #state{ended = undefined, replay = #
     Stream = self(),
     Ref = make_ref(),
     Args = maps:get(payload, Open),
-    _ = spawn(fun() ->
-              Stream ! {reopened, Ref, macula_station_link:reopen_stream(Link, Stream, Sid, Open, Args, KemKey)}
-          end),
+    ok = reopen_worker(Stream, Ref, fun() -> macula_station_link:reopen_stream(Link, Stream, Sid, Open, Args, KemKey) end),
     State#state{replay = undefined, reopening = {Ref, lists:reverse(Sent)}};
 clear_open_sealed_to(_NoCopyOrEnded, Fields, State) ->
     clear_open_error(Fields, State).

@@ -12,6 +12,7 @@
 -define(PEER_PID_INDEX, macula_station_link:state_field_index(peer_pid)).
 -define(PEER_NODE_ID_INDEX, macula_station_link:state_field_index(peer_node_id)).
 -define(POOL_INDEX, macula_station_link:state_field_index(pool)).
+-define(PENDING_INDEX, macula_station_link:state_field_index(pending)).
 
 %% The provider refuses in the clear, naming the key it holds now; the link seals the same payload to it under a new
 %% request id, and the sealed answer is the call's.
@@ -57,6 +58,27 @@ a_call_is_resealed_at_most_once_test_() ->
         answer(F, Second, clear_error(F, Second, <<"sealed_refused">>, binary:encode_hex(<<7:64>>, lowercase))),
         ?assertEqual({error, {sealed_refused, <<7:64>>}}, result(Caller)),
         ?assertEqual(none, next_call(300)),
+        macula_station_link:stop(Link)
+    end}.
+
+%% At most once per call whatever the provider replays: the refused request is done with the moment the reseal is
+%% drawn, so a second copy of the same signed refusal — signed, still, for the first request id — finds nothing
+%% pending and no further CALL goes out. The entry that held the payload is gone with it, so the link keeps only the
+%% call that is running.
+a_replayed_refusal_does_not_reseal_again_test_() ->
+    {timeout, 15, fun() ->
+        #{link := Link} = F = fixture(),
+        Caller = call_async(F, #{}, clear, false),
+        First = received(#{frame_type => call}),
+        Refusal = refusal(F, First, maps:get(kem_key, F)),
+        answer(F, First, Refusal),
+        Second = received(#{frame_type => call}),
+        answer(F, First, Refusal),
+        ?assertEqual(none, next_call(500)),
+        ?assertEqual(1, map_size(element(?PENDING_INDEX, sys:get_state(Link)))),
+        answer(F, Second, sealed_result(F, Second)),
+        ?assertMatch({ok, _}, result(Caller)),
+        ?assertEqual(0, map_size(element(?PENDING_INDEX, sys:get_state(Link)))),
         macula_station_link:stop(Link)
     end}.
 
