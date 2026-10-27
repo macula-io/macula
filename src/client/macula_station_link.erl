@@ -382,6 +382,13 @@
 %% whole frame before it closes, unless `dedicated_stream_open_timeout_ms'
 %% in the macula application env says otherwise.
 -define(DEDICATED_STREAM_OPEN_TIMEOUT_MS, 10_000).
+%% A `sealed_required' refusal of a clear STREAM_OPEN drains the caller's remaining writes before it closes the
+%% stream: closing at once stops the receive side, and QUIC turns an unread close into a reset the station passes on,
+%% so the refusal is lost and the caller never reseals (release A0, section 3). The drain is bounded by bytes, by time
+%% and by how many a link drains at once, so it cannot be used to hold the link's inbound streams open.
+-define(DRAIN_MAX_MS, 5_000).
+-define(DRAIN_MAX_BYTES, 65_536).
+-define(DRAIN_MAX_STREAMS, 16).
 
 %% The longest STREAM_OPEN a dedicated stream may start with, 1 MiB, unless
 %% `max_stream_open_bytes' in the macula application env says otherwise.
@@ -512,6 +519,9 @@
     %% client stream, or when a stream the peer opened brings its first
     %% whole frame, and removed when the session tears down.
     stream_bufs = #{} :: #{reference() => binary()},
+    %% The refused opens whose caller may still be writing, drained before their stream closes: the bytes it may still
+    %% send, and the open whose admission place it holds until the drain ends.
+    draining = #{} :: #{reference() => #{bytes := non_neg_integer(), open := map()}},
     %% A dedicated stream the peer opened is buffered here until its first
     %% whole frame comes, which decides whether the stream moves on to
     %% `stream_bufs' or closes. A dedicated stream stays open only while it
@@ -1988,6 +1998,15 @@ handle_info({dedicated_stream_open_deadline, _Stream}, S) ->
 handle_info(Msg, S) when is_tuple(Msg), element(1, Msg) =:= quic ->
     quic_event(Msg, S);
 
+%% A stream could not adopt the session a reopen opened for it (the link went first): the link forgets that session
+%% and its dedicated stream, so it is not left to its own timeout.
+handle_info({session_dropped, Sid}, S) ->
+    {noreply, drop_stream(Sid, S)};
+
+%% The bound on a refused open's drain: the caller did not finish in time, so the stream closes.
+handle_info({drain_expired, Stream}, S) ->
+    {noreply, drain_done(Stream, S)};
+
 handle_info({call_timeout, RequestId}, #state{pending = P} = S) ->
     on_timeout(maps:take(RequestId, P), S);
 
@@ -2184,6 +2203,14 @@ quic_event({quic, Closed, Stream, _}, #state{opening_bufs = Opening} = S)
              is_map_key(Stream, Opening) ->
     ok = close_dedicated_stream(Stream, S),
     {noreply, S#state{opening_bufs = maps:remove(Stream, Opening)}};
+%% A refused open still draining: the caller's writes are dropped, and its end — or the connection's — closes it.
+quic_event({quic, Bin, Stream, _Flags}, #state{draining = Draining} = S)
+        when is_binary(Bin), is_map_key(Stream, Draining) ->
+    {noreply, drain_bytes(Stream, byte_size(Bin), S)};
+quic_event({quic, End, Stream, _}, #state{draining = Draining} = S)
+        when (End =:= peer_send_shutdown orelse End =:= stream_closed orelse End =:= send_failed),
+             is_map_key(Stream, Draining) ->
+    {noreply, drain_done(Stream, S)};
 quic_event(_Msg, S) ->
     {noreply, S}.
 
@@ -2794,10 +2821,13 @@ fail_all_pending(Reason, #state{pending = P, subscriptions = Subs,
     maps:foreach(fun(Stream, _Buf) -> close_dedicated_stream(Stream, S) end,
                 S#state.opening_bufs),
     ok = released_keys(maps:values(S#state.server_keys), S),
+    %% A refused open still draining holds its caller's place until the drain ends; the connection is going, so it
+    %% ends here.
+    ok = released_drains(S#state.draining, S),
     S#state{pending = #{}, subscriptions = #{}, topic_index = #{},
             overlay_subscriptions = #{}, overlay_realm_index = #{},
             client_streams = #{}, server_streams = #{}, server_keys = #{}, stream_bufs = #{},
-            opening_bufs = #{}}.
+            opening_bufs = #{}, draining = #{}}.
 
 abort_stream_process(Pid, Reason) ->
     try
@@ -4439,8 +4469,27 @@ reopen_within(false, _Bytes, _Open, _Keys, _StreamPid, S) ->
     {reply_value, {error, {refused, reopen_not_sendable}}, S};
 reopen_within(true, Bytes, #{request_id := Sid} = Open, Keys, StreamPid, S) ->
     Mon = erlang:monitor(process, StreamPid),
-    {reply_value, {ok, #{open => Open, seal => Keys, sid => Sid}},
-     client_stream_opened(opened_stream(S), Bytes, Sid, StreamPid, Mon, S)}.
+    case reopened_stream(opened_stream(S), Bytes, Sid, StreamPid, Mon, S) of
+        {ok, Opened} ->
+            {reply_value, {ok, #{open => Open, seal => Keys, sid => Sid}}, Opened};
+        {error, Reason, Failed} ->
+            {reply_value, {error, {transport, Reason}}, Failed}
+    end.
+
+%% A reopen's new session, opened and its STREAM_OPEN written. The outcome goes back in the link's REPLY, because the
+%% worker that asked for the reopen is what reports it to the stream: a `{stream_write_failed, NewSid, _}' message
+%% would name a session the stream has not adopted — it is still on the old one — so the stream would drop it and
+%% adopt a session that never opened (release A0, review round 2).
+reopened_stream({ok, Stream}, Bytes, AttachId, StreamPid, Mon,
+                #state{client_streams = CS, stream_bufs = Bufs} = S) ->
+    Opened = S#state{client_streams = CS#{AttachId => {StreamPid, Mon, Stream}}, stream_bufs = Bufs#{Stream => <<>>}},
+    case written(Stream, Bytes, Opened) of
+        ok -> {ok, Opened};
+        {error, Reason} -> erlang:demonitor(Mon, [flush]), {error, Reason, drop_stream(AttachId, Opened)}
+    end;
+reopened_stream({error, Reason}, _Bytes, _AttachId, _StreamPid, Mon, S) ->
+    erlang:demonitor(Mon, [flush]),
+    {error, Reason, S}.
 
 %% Opens this session's dedicated stream on the peering connection.
 opened_stream(#state{open_stream = Open, peer_pid = Conn}) ->
@@ -4736,8 +4785,47 @@ sealed_open_opened({refused, Why}, Open, Stream, S) ->
 clear_open_admitted(true, Open, Stream, S) ->
     on_stream_open_on(carries_a_session(Stream, S), Open, clear, Stream, S);
 clear_open_admitted(false, Open, Stream, S) ->
+    ok = send_stream_refusal(Stream, Open, <<"sealed_required">>, <<"this procedure takes sealed opens only">>, S),
+    drain_or_close(Stream, Open, S).
+
+%% The caller wrote on this stream before the refusal could reach it — section 3's clear stream writes everything at
+%% once — so closing now would stop the receive side, and QUIC turns an unread close into a reset the station passes
+%% on: the STREAM_ERROR would be lost and the caller would never reseal. The stream is drained instead, its writes
+%% read and discarded until the caller finishes, the byte cap trips or the timer does. The caller holds its admission
+%% place until then, so draining cannot run up its session count, and a link drains at most `?DRAIN_MAX_STREAMS' at
+%% once; past that the refusal closes at once, as every other code does.
+drain_or_close(Stream, Open, #state{draining = Draining} = S) when map_size(Draining) >= ?DRAIN_MAX_STREAMS ->
     ok = released_open(Open, S),
-    refuse_open(Stream, Open, <<"sealed_required">>, <<"this procedure takes sealed opens only">>, S).
+    close_sessionless_stream(Stream, S);
+drain_or_close(Stream, Open, #state{draining = Draining, stream_bufs = Bufs} = S) ->
+    _ = erlang:send_after(?DRAIN_MAX_MS, self(), {drain_expired, Stream}),
+    S#state{draining = Draining#{Stream => #{bytes => ?DRAIN_MAX_BYTES, open => Open}},
+            stream_bufs = maps:remove(Stream, Bufs)}.
+
+%% A caller's writes on a drained stream are counted and dropped, never parsed: the session they belong to was
+%% refused, so no frame of them can be served.
+drain_bytes(Stream, Size, #state{draining = Draining} = S) ->
+    Drain = maps:get(Stream, Draining),
+    case maps:get(bytes, Drain) - Size of
+        Left when Left > 0 -> S#state{draining = Draining#{Stream => Drain#{bytes := Left}}};
+        _PastTheCap -> drain_done(Stream, S)
+    end.
+
+%% The drain ends the one way it can — the caller finished, the cap tripped, the stream closed or the timer expired:
+%% the place the refused open held goes, and the stream closes.
+drain_done(Stream, #state{draining = Draining} = S) ->
+    case maps:take(Stream, Draining) of
+        {#{open := Open}, Rest} ->
+            ok = released_open(Open, S),
+            close_sessionless_stream(Stream, S#state{draining = Rest});
+        error ->
+            S
+    end.
+
+%% Every drain a connection was holding, released as it goes.
+released_drains(Draining, S) ->
+    _ = [released_open(Open, S) || #{open := Open} <- maps:values(Draining)],
+    ok.
 
 close_unless_carrying(true, _Stream, S) ->
     S;
@@ -4989,11 +5077,15 @@ refuse_opened(Stream, #{request_id := RequestId} = Open, #{k_p2c := KP2C, key_id
 
 %% A refusal this link cannot build is not written. A `sealed_required' refusal
 %% names the KEM key the node holds now when the procedure's spec asks for it
-%% (`refusal_names_key', release A0), on the CALL path's terms.
+%% (`refusal_names_key', release A0), on the CALL path's terms; every other code
+%% names none, since it is not about the key.
 send_stream_refusal(Stream, Open, Code, Message, #state{node_identity = Key} = S) ->
-    Ext = named_kem_key({maps:get(realm, Open), maps:get(procedure, Open)}, S),
+    Ext = refusal_name_key(Code, {maps:get(realm, Open), maps:get(procedure, Open)}, S),
     refusal_built(macula_frame:stream_bytes({provider_stream, stream_refusal(Code, Message, Ext), Open}, Key),
                   Stream, S).
+
+refusal_name_key(<<"sealed_required">>, Procedure, S) -> named_kem_key(Procedure, S);
+refusal_name_key(_OtherCode, _Procedure, _S) -> #{}.
 
 stream_refusal(Code, Message, Ext) when map_size(Ext) =:= 0 ->
     #{frame_type => stream_error, seq => 0, code => Code, message => Message};

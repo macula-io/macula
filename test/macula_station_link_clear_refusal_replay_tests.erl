@@ -26,7 +26,11 @@ clear_refusal_replay_test_() ->
                          {"a first frame that is not a refusal ends the copy",
                           fun a_first_frame_that_is_not_a_refusal_ends_the_copy/1},
                          {"a refusal without the key leaves the copy and surfaces",
-                          fun a_refusal_without_the_key_surfaces_as_sealed_required/1}]].
+                          fun a_refusal_without_the_key_surfaces_as_sealed_required/1},
+                         {"a reopen whose stream does not open ends the stream with a transport error",
+                          fun a_reopen_whose_stream_does_not_open_ends_the_stream/1},
+                         {"a reopen whose open is not written ends the stream with a transport error",
+                          fun a_reopen_whose_open_is_not_written_ends_the_stream/1}]].
 
 %% The chunk sent on the clear session goes out again, sealed to the key the refusal named, as the new session's first
 %% frame; the answer under the new key is the owner's, and the report names the key the stream ended up sealed to.
@@ -98,6 +102,53 @@ a_refusal_without_the_key_surfaces_as_sealed_required(#{link := Link, provider :
     ?assertEqual({error, {<<"sealed_required">>, <<>>}}, macula_stream:recv(Stream, ?EVENT_MS)),
     ?assertEqual(none, receive {opened, _} -> reopened after 200 -> none end).
 
+%% The link's own side of a reopen can fail: its dedicated stream does not open, or the STREAM_OPEN is not written.
+%% The link answers the worker with that transport failure instead of a session that never opened, so the stream ends
+%% with it — a `{stream_write_failed, NewSid, _}' names a session the stream has not adopted, is dropped, and leaves
+%% the owner waiting out its own timeouts (release A0, review round 2).
+a_reopen_whose_stream_does_not_open_ends_the_stream(_W) ->
+    reopened_that_fails(fun(Test) ->
+                            Counting = counters:new(1, []),
+                            fun(_Conn) ->
+                                counters:add(Counting, 1, 1),
+                                case counters:get(Counting, 1) of
+                                    1 -> Opened = make_ref(), Test ! {opened, Opened}, {ok, Opened};
+                                    _Reopen -> {error, no_stream}
+                                end
+                            end
+                        end, #{}).
+
+a_reopen_whose_open_is_not_written_ends_the_stream(_W) ->
+    reopened_that_fails(fun(Test) ->
+                            fun(_Conn) -> Opened = make_ref(), Test ! {opened, Opened}, {ok, Opened} end
+                        end,
+                        #{send_on_stream => send_fails_on_the_reopen(self())}).
+
+%% Writes the clear session's STREAM_OPEN and its chunk, and fails the reopen's open, as a link that cannot reach the
+%% provider on the reopen does.
+send_fails_on_the_reopen(Test) ->
+    Count = counters:new(1, []),
+    fun(Stream, Bytes) ->
+        counters:add(Count, 1, 1),
+        case counters:get(Count, 1) of
+            Written when Written =< 2 -> Test ! {written, Stream, Bytes}, ok;
+            _Reopen -> {error, not_written}
+        end
+    end.
+
+reopened_that_fails(OpenStream, Overrides) ->
+    W = world(Overrides#{open_stream => OpenStream(self())}),
+    try
+        #{link := Link, provider := Provider} = W,
+        #{stream := Stream, quic := Quic, open := Open} = clear_open(W),
+        ok = macula_stream:send(Stream, <<"first">>),
+        _Clear = written(Quic),
+        refuse(Link, Quic, Provider, Open, new_key(W)),
+        ?assertMatch({error, {transport, _}}, macula_stream:recv(Stream, ?EVENT_MS))
+    after
+        stop(W)
+    end.
+
 %%------------------------------------------------------------------
 %% Helpers
 %%------------------------------------------------------------------
@@ -106,7 +157,9 @@ profile() -> pq_pure.
 
 %% A link that believes it is connected, with this process as its peering connection and its dedicated streams, and a
 %% provider with a KEM key the refusals will name.
-world() ->
+world() -> world(#{}).
+
+world(Overrides) ->
     {ok, _} = application:ensure_all_started(macula),
     Test = self(),
     {ok, Key} = macula_node_keys:generate(identity, profile()),
@@ -118,8 +171,11 @@ world() ->
                      node_identity => fun() -> Key end, issuer => Issuer, admission => Admission,
                      share => {seed, {<<"127.0.0.1">>, 1}},
                      connect => fun(_PeeringOpts) -> {error, not_dialed_here} end,
-                     open_stream => fun(_Conn) -> Opened = make_ref(), Test ! {opened, Opened}, {ok, Opened} end,
-                     send_on_stream => fun(Stream, Bytes) -> Test ! {written, Stream, Bytes}, ok end,
+                     open_stream => maps:get(open_stream, Overrides,
+                                             fun(_Conn) -> Opened = make_ref(), Test ! {opened, Opened},
+                                                           {ok, Opened} end),
+                     send_on_stream => maps:get(send_on_stream, Overrides,
+                                                fun(Stream, Bytes) -> Test ! {written, Stream, Bytes}, ok end),
                      close_stream => fun(_Stream) -> ok end}),
     _ = sys:replace_state(Link, fun(S) -> setelement(?PEER_NODE_ID_INDEX, setelement(?PEER_PID_INDEX, S, Test),
                                                      <<2:256>>) end),

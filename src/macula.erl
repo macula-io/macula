@@ -1310,8 +1310,18 @@ advertise_authorized(Pool, Realm, Procedure, Opts, Fun) ->
     confidential(advertise_confidentiality(Opts),
                  fun(Confidentiality) ->
                      signed_provider_advertisement(Pool, Realm, Procedure, provider_io(Opts),
-                                                   confidentiality_merged(Confidentiality, Fun))
+                                                   confidentiality_merged(maps:merge(Confidentiality,
+                                                                                      refusal_named_key(Opts)),
+                                                                          Fun))
                  end).
+
+%% A served procedure that asks for it names its KEM key in a `sealed_required' refusal
+%% (release A0, `macula_station_link:advertisement_spec()'). Off unless the caller says so.
+refusal_named_key(Opts) ->
+    case maps:get(refusal_names_key, Opts, false) of
+        true -> #{refusal_names_key => true};
+        _Off -> #{}
+    end.
 
 confidentiality_merged(Confidentiality, Fun) ->
     fun(Spec) -> Fun(maps:merge(Spec, Confidentiality)) end.

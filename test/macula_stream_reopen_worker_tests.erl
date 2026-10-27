@@ -71,6 +71,30 @@ a_frame_on_the_session_the_stream_holds_is_read_while_the_reopen_is_in_flight_te
         gen_server:stop(Stream)
     end}.
 
+%% The link can go while a reopen is in flight: a write on the old session fails, so the stream's peer is gone by the
+%% time the report lands. There is nothing to adopt — adopting would crash on `peer = undefined' and kill the pid —
+%% so the session the link opened is dropped there instead, and the stream ends with the transport failure it already
+%% had (release A0, review round 2).
+a_reopen_that_lands_after_the_link_went_drops_the_new_session_test_() ->
+    {timeout, 20, fun() ->
+        #{stream := Stream, open := Open} = W = stream(),
+        ok = macula_stream:attach_to_link(Stream, self(), ?SID),
+        ok = macula_stream:send(Stream, <<"abc">>),
+        ok = macula_stream:deliver_frame(Stream, refuse(W, Open)),
+        Answer = reopen_held(),
+        %% A write on the old session fails: the stream's peer goes.
+        Stream ! {stream_write_failed, ?SID, gone},
+        NewOpen = verified_open(W, ?NEW_SID),
+        NewSeal = seal(),
+        Answer(#{open => NewOpen, seal => NewSeal, sid => ?NEW_SID}),
+        receive {session_dropped, Dropped} -> ?assertEqual(?NEW_SID, Dropped)
+        after 2_000 -> error(not_dropped)
+        end,
+        %% The stream is alive, and ended with the transport failure.
+        ?assertMatch({error, _}, macula_stream:recv(Stream, 2_000)),
+        gen_server:stop(Stream)
+    end}.
+
 %%------------------------------------------------------------------
 %% Helpers
 %%------------------------------------------------------------------

@@ -168,6 +168,11 @@
     key      :: fun(() -> macula_node_keys:node_key()) | undefined,
     open     :: macula_frame:verified_request() | undefined,
     conn     :: pid() | undefined,
+    %% The link this stream is carried by, kept once it is paired: `peer' goes
+    %% `undefined' when the transport fails or the link goes down, and a reopen
+    %% that lands after that still has to tell the link to drop the session it
+    %% opened (release A0, review round 2).
+    link     :: pid() | undefined,
     profile  :: macula_crypto_profile:profile() | undefined,
     verifier :: macula_frame:stream_state() | undefined,
     %% A caller's stream: the node_id of the station its link is connected
@@ -475,7 +480,7 @@ handle_call({pair_local, Peer}, _From, State) ->
     {reply, ok, State#state{peer = {local, Peer}}};
 handle_call({pair_via_link, LinkPid, StreamId}, _From, State) ->
     _ = erlang:monitor(process, LinkPid),
-    {reply, ok, State#state{peer = {remote_via_link, LinkPid, StreamId}}};
+    {reply, ok, State#state{peer = {remote_via_link, LinkPid, StreamId}, link = LinkPid}};
 
 %% --- send --------------------------------------------------------------
 
@@ -1124,6 +1129,13 @@ reopened_guarded(Reopen) ->
 %% The link opened the new STREAM_OPEN on a new dedicated stream: this stream reads and writes under it from now on,
 %% and what waited goes out, numbered from 0 under the new keys, whether or not the session has ended meanwhile (an
 %% abort's STREAM_ERROR ends the new session at the link too). A reopen that failed ends a session still running.
+%%
+%% The link can go while the reopen is in flight — a failed write on the old session, or the link itself going down —
+%% and then there is no session here to adopt. The one the link just opened is dropped there instead of being left to
+%% its own timeout, and nothing of this stream's goes out on it (release A0, review round 2).
+reopened({ok, #{sid := NewSid}}, _Queued, #state{peer = undefined, link = Link} = State) ->
+    dropped_at_link(Link, NewSid),
+    State#state{reopening_held = []};
 reopened({ok, Reopened}, _Queued, #state{settled = Settled} = State) when Settled =/= undefined ->
     %% The provider answered under the very key it refused, before the reopen landed: an opened frame settled the
     %% report on that key, and the report keeps it. A provider that refuses a key and then answers under it is not
@@ -1137,6 +1149,14 @@ reopened({error, _} = Refused, _Queued, #state{ended = undefined} = State) ->
     refused_with(Refused, State#state{reopening_held = []});
 reopened({error, _}, _Queued, State) ->
     State#state{reopening_held = []}.
+
+%% A session the link opened for a reopen this stream can no longer adopt: the link forgets it, and the dedicated
+%% stream it opened with it.
+dropped_at_link(Link, Sid) when is_pid(Link) ->
+    Link ! {session_dropped, Sid},
+    ok;
+dropped_at_link(_NoLink, _Sid) ->
+    ok.
 
 %% The frames held while the reopen was in flight, in the order the peer sent them, read under the session just
 %% adopted. A frame from the session that was refused cannot verify here and is refused as any other would be.
