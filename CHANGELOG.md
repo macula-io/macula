@@ -40,14 +40,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **A slow membership lookup no longer stalls a distributor's other pulls (macula#130).** `macula_group_keys` reads a
   caller's realm membership in a process of its own, so every other pull, of any group, is answered while one lookup
-  waits; the order of checks is unchanged. A lookup gets `lookup_wait_ms` (default 10 s) and at most `max_lookups`
-  (default 64) run at once; a pull past either answers `membership_unknown`, and the member retries. A lookup that
+  waits; the order of checks is unchanged. A caller has one lookup at a time, its further pulls (up to 16) sharing that
+  lookup's answer, so one slow caller cannot take every slot; the removed set is asked again when the answer comes. A
+  lookup gets `lookup_wait_ms` (default 10 s) and at most `max_lookups` (default 64) callers are looked up at once; a
+  pull past any of these answers `membership_unknown`, and the member retries. A lookup that
   fails otherwise, a dead `pool` pid included, answers `membership_unknown` too, where a dead pid used to exit the
   distributor.
 - **Unlisted prefixes no longer grow a distributor's table without bound (macula#130).** At most `max_groups` (default
   1024) groups not listed in `groups` are kept; past that, groups whose epochs are all past their keeping are dropped,
-  and if none is, the current epoch of a new unlisted group is refused `too_many_groups` (a member reads it as
-  `no_distributor`). A listed group, and a group already kept, is always served.
+  a listed group's too (it starts afresh on its next pull), and if none is, the current epoch of a new unlisted group is
+  refused `too_many_groups` (a member reads it as `no_distributor`). A listed group, and a group already kept, is always served.
 
 ## [16.1.0] - 2026-10-26
 

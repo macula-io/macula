@@ -79,6 +79,18 @@ awaited(Ref) ->
 lookup_started() ->
     receive {lookup, Pid} -> Pid after 5_000 -> no_lookup end.
 
+%% Until N pulls of Caller wait on its lookup, as the distributor's state shows.
+waiting_on(W, Caller, N) -> waiting_on(W, Caller, N, 200).
+
+waiting_on(_W, _Caller, _N, 0) ->
+    timeout;
+waiting_on(#{pid := Pid} = W, Caller, N, Tries) ->
+    #{lookups := Lookups} = sys:get_state(Pid),
+    waited(length(maps:get(waiting, maps:get(Caller, Lookups, #{}), [])) >= N, W, Caller, N, Tries).
+
+waited(true, _W, _Caller, _N, _Tries) -> ok;
+waited(false, W, Caller, N, Tries) -> timer:sleep(10), waiting_on(W, Caller, N, Tries - 1).
+
 table_size(#{pid := Pid}) ->
     [Table] = [T || T <- ets:all(), ets:info(T, owner) =:= Pid],
     ets:info(Table, size).
@@ -175,4 +187,59 @@ idle_groups_give_their_rows_back_test() ->
     counters:add(Now, 1, 3 * ?R + 70 * ?MIN),
     ?assertMatch(#{epochs := [_]}, pull(W, Node, <<"io.macula/acme/c">>)),
     ?assertEqual(1, table_size(W)),
+    stopped(W).
+
+%% One slow caller pulling again and again holds one lookup, not many: its pulls share that lookup's answer, and
+%% another member is served meanwhile.
+one_slow_caller_holds_one_lookup_test() ->
+    W = started(#{max_lookups => 2}),
+    Gate = make_ref(),
+    Slow = node_as(W, {wait, Gate}),
+    First = pull_aside(W, Slow),
+    Lookup = lookup_started(),
+    Second = pull_aside(W, Slow),
+    ok = waiting_on(W, Slow, 2),
+    ?assertMatch(#{epochs := [_]}, pull(W, node_as(W, ok))),
+    ?assertEqual(no_lookup, receive {lookup, _} -> another_lookup after 100 -> no_lookup end),
+    Lookup ! {open, Gate, ok},
+    ?assertMatch(#{epochs := [_]}, awaited(First)),
+    ?assertMatch(#{epochs := [_]}, awaited(Second)),
+    stopped(W).
+
+%% Past 16 pulls waiting on one caller's lookup, its next pull is membership_unknown at once.
+a_callers_waiting_pulls_are_bounded_test() ->
+    W = started(#{}),
+    Gate = make_ref(),
+    Slow = node_as(W, {wait, Gate}),
+    Waiting = [pull_aside(W, Slow) || _ <- lists:seq(1, 16)],
+    Lookup = lookup_started(),
+    ok = waiting_on(W, Slow, 16),
+    ?assertEqual({error, membership_unknown}, pull(W, Slow)),
+    Lookup ! {open, Gate, ok},
+    [?assertMatch(#{epochs := [_]}, awaited(Ref)) || Ref <- Waiting],
+    stopped(W).
+
+%% A node removed while its lookup ran is refused when the answer comes, a member answer notwithstanding.
+a_node_removed_during_its_lookup_is_refused_test() ->
+    Removed = ets:new(removed, [public, set]),
+    W = started(#{removed => fun(Caller) -> ets:member(Removed, Caller) end}),
+    Gate = make_ref(),
+    Slow = node_as(W, {wait, Gate}),
+    Pending = pull_aside(W, Slow),
+    Lookup = lookup_started(),
+    true = ets:insert(Removed, {Slow}),
+    Lookup ! {open, Gate, ok},
+    ?assertEqual({error, not_a_member}, awaited(Pending)),
+    stopped(W),
+    ets:delete(Removed).
+
+%% The bound counts unlisted groups only: listed groups pulled first leave every unlisted row free.
+the_bound_counts_unlisted_groups_only_test() ->
+    Listed = [<<"io.macula/acme/l1">>, <<"io.macula/acme/l2">>],
+    W = started(#{max_groups => 2, groups => maps:from_keys(Listed, org_grant)}),
+    Node = node_as(W, ok),
+    Unlisted = [<<"io.macula/acme/u1">>, <<"io.macula/acme/u2">>],
+    [?assertMatch(#{epochs := [_]}, pull(W, Node, P)) || P <- Listed ++ Unlisted],
+    ?assertEqual({error, too_many_groups}, pull(W, Node, <<"io.macula/acme/u3">>)),
+    ?assertEqual(4, table_size(W)),
     stopped(W).

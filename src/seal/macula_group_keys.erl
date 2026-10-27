@@ -56,9 +56,12 @@
 %% still a member, and one that is not has no business reading the group.
 %% Each lookup runs in a process of its own, so a slow one holds up only the
 %% pull that waits on it: every other pull, of any group, is answered
-%% meanwhile. A lookup gets `lookup_wait_ms' (default 10 s), and at most
-%% `max_lookups' (default 64) run at once; a pull past either is
-%% `membership_unknown', so its member retries. A lookup that fails in any
+%% meanwhile. A caller has one lookup at a time: its further pulls, up to 16,
+%% wait on the one in flight and share its answer, and the removed set is asked
+%% again when the answer comes. A lookup gets `lookup_wait_ms' (default 10 s),
+%% and at most `max_lookups' (default 64) callers are looked up at once; a pull
+%% past any of these is `membership_unknown', so its member retries. A lookup
+%% that fails in any
 %% other way, a pool given as a pid that has died included, is
 %% `membership_unknown' too, and the distributor stays up.
 %%
@@ -75,8 +78,9 @@
 %%
 %% A group not listed is served on its first pull, and kept as a row of the
 %% table. At most `max_groups' (default 1024) unlisted groups are kept: past
-%% that, the rows whose epochs are all past their keeping are dropped, and if
-%% none is, the current epoch of a new unlisted group is refused
+%% that, the rows whose epochs are all past their keeping are dropped (a
+%% listed group's too, which starts afresh on its next pull), and if none is,
+%% the current epoch of a new unlisted group is refused
 %% `too_many_groups'. A listed group, and a group already kept, is always
 %% served, so a caller asking for prefix after prefix cannot grow the table
 %% past the bound or push out a group its members use.
@@ -124,6 +128,8 @@
 %% `membership_unknown': past the realm read's 5 s, short of the handler's wait.
 -define(LOOKUP_WAIT_MS, 10000).
 -define(MAX_LOOKUPS, 64).
+%% How many pulls of one caller may wait on its lookup in flight.
+-define(MAX_WAITING, 16).
 -define(MAX_GROUPS, 1024).
 
 %% @doc Start a distributor for `org''s groups in `realm' (the realm id),
@@ -239,12 +245,13 @@ handle_cast(_Msg, State) -> {noreply, State}.
 
 %% @private
 %% A membership lookup ended, or overran its wait: its pull is answered here.
-handle_info({membership, Pid, Answer}, #{lookups := Lookups} = State) ->
-    looked_up(maps:take(Pid, Lookups), member_verdict(Answer), State);
-handle_info({'DOWN', _Ref, process, Pid, _Ended}, #{lookups := Lookups} = State) ->
-    looked_up(maps:take(Pid, Lookups), {error, membership_unknown}, State);
-handle_info({lookup_overdue, Pid}, #{lookups := Lookups} = State) ->
-    overdue(maps:take(Pid, Lookups), Pid, State);
+%% Each message names the caller and the lookup's process, so one from a lookup already answered matches nothing.
+handle_info({membership, Caller, Pid, Answer}, State) ->
+    looked_up(lookup_of(Caller, Pid, State), Caller, member_verdict(Answer), State);
+handle_info({{lookup_down, Caller}, _Ref, process, Pid, _Ended}, State) ->
+    looked_up(lookup_of(Caller, Pid, State), Caller, {error, membership_unknown}, State);
+handle_info({lookup_overdue, Caller, Pid}, State) ->
+    overdue(lookup_of(Caller, Pid, State), Caller, State);
 handle_info(_Msg, State) ->
     {noreply, State}.
 
@@ -290,38 +297,61 @@ answered({{membership, Caller, Prefix, Epoch}, State}, From) ->
 answered({Reply, State}, _From) ->
     {reply, Reply, State}.
 
-%% The lookup runs in a process of its own and sends its answer back, so the distributor answers other pulls meanwhile.
-%% One that ends without an answer is `membership_unknown'.
-lookup(_Caller, _Prefix, _Epoch, _From, #{lookups := Lookups, max_lookups := Max} = State)
-  when map_size(Lookups) >= Max ->
+%% One lookup per caller, in a process of its own that sends its answer back, so the distributor answers other pulls
+%% meanwhile; a caller's further pulls wait on its lookup in flight, so one caller holds at most one of the max_lookups.
+%% A lookup that ends without an answer is `membership_unknown'.
+lookup(Caller, Prefix, Epoch, From, #{lookups := Lookups} = State) ->
+    joined(maps:find(Caller, Lookups), Caller, {From, Prefix, Epoch}, State).
+
+joined({ok, #{waiting := Waiting}}, _Caller, _Pull, State) when length(Waiting) >= ?MAX_WAITING ->
     {reply, {error, membership_unknown}, State};
-lookup(Caller, Prefix, Epoch, From, #{membership := Membership, lookups := Lookups, lookup_wait_ms := Wait} = State) ->
+joined({ok, #{waiting := Waiting} = Lookup}, Caller, Pull, #{lookups := Lookups} = State) ->
+    {noreply, State#{lookups := Lookups#{Caller := Lookup#{waiting := [Pull | Waiting]}}}};
+joined(error, _Caller, _Pull, #{lookups := Lookups, max_lookups := Max} = State) when map_size(Lookups) >= Max ->
+    {reply, {error, membership_unknown}, State};
+joined(error, Caller, Pull, #{membership := Membership, lookups := Lookups, lookup_wait_ms := Wait} = State) ->
     Distributor = self(),
-    {Pid, Ref} = spawn_monitor(fun() -> Distributor ! {membership, self(), Membership(Caller)} end),
-    Timer = erlang:send_after(Wait, self(), {lookup_overdue, Pid}),
-    {noreply, State#{lookups := Lookups#{Pid => #{from => From, ref => Ref, timer => Timer,
-                                                  prefix => Prefix, epoch => Epoch}}}}.
+    Pid = spawn(fun() -> Distributor ! {membership, Caller, self(), Membership(Caller)} end),
+    Ref = erlang:monitor(process, Pid, [{tag, {lookup_down, Caller}}]),
+    Timer = erlang:send_after(Wait, self(), {lookup_overdue, Caller, Pid}),
+    {noreply, State#{lookups := Lookups#{Caller => #{pid => Pid, ref => Ref, timer => Timer, waiting => [Pull]}}}}.
+
+lookup_of(Caller, Pid, #{lookups := Lookups}) ->
+    of_pid(maps:find(Caller, Lookups), Pid).
+
+of_pid({ok, #{pid := Pid} = Lookup}, Pid) -> {ok, Lookup};
+of_pid(_NoneOrAnother, _Pid) -> none.
 
 member_verdict(ok) -> ok;
 member_verdict({error, not_a_member}) -> {error, not_a_member};
 member_verdict(_FailedOrUnknown) -> {error, membership_unknown}.
 
-%% Served at the time the verdict came: the epochs current then.
-looked_up({#{from := From, ref := Ref, timer := Timer, prefix := Prefix, epoch := Epoch}, Lookups}, Verdict, State) ->
+%% Every pull waiting on the lookup is served at the time the verdict came, the epochs current then, and the removed set
+%% asked again then, so a node removed while its lookup ran is refused.
+looked_up({ok, #{ref := Ref, timer := Timer, waiting := Waiting}}, Caller, Verdict,
+          #{lookups := Lookups, removed := Removed, now := Now} = State) ->
     true = erlang:demonitor(Ref, [flush]),
     _ = erlang:cancel_timer(Timer, [{async, true}, {info, false}]),
-    {Reply, NewState} = admitted(Verdict, Prefix, Epoch, (maps:get(now, State))(), State#{lookups := Lookups}),
-    gen_server:reply(From, Reply),
-    {noreply, NewState};
-looked_up(error, _Verdict, State) ->
+    Final = still_admitted(Removed(Caller), Verdict),
+    {noreply, lists:foldl(fun(Pull, Served) -> served_pull(Pull, Final, Now(), Served) end,
+                          State#{lookups := maps:remove(Caller, Lookups)}, lists:reverse(Waiting))};
+looked_up(none, _Caller, _Verdict, State) ->
     {noreply, State}.
 
-overdue({#{from := From, ref := Ref}, Lookups}, Pid, State) ->
+still_admitted(true, _Verdict) -> {error, not_a_member};
+still_admitted(false, Verdict) -> Verdict.
+
+served_pull({From, Prefix, Epoch}, Verdict, Now, State) ->
+    {Reply, NewState} = admitted(Verdict, Prefix, Epoch, Now, State),
+    gen_server:reply(From, Reply),
+    NewState.
+
+overdue({ok, #{pid := Pid, ref := Ref, waiting := Waiting}}, Caller, #{lookups := Lookups} = State) ->
     true = erlang:demonitor(Ref, [flush]),
     exit(Pid, kill),
-    gen_server:reply(From, {error, membership_unknown}),
-    {noreply, State#{lookups := Lookups}};
-overdue(error, _Pid, State) ->
+    lists:foreach(fun({From, _Prefix, _Epoch}) -> gen_server:reply(From, {error, membership_unknown}) end, Waiting),
+    {noreply, State#{lookups := maps:remove(Caller, Lookups)}};
+overdue(none, _Caller, State) ->
     {noreply, State}.
 
 %% The call's own token and proofs, as the provider link hands them to a `handler_authorizes' handler.
