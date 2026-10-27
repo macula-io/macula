@@ -12,6 +12,7 @@
 -define(OUTCOMES, [<<"accept">>, <<"refuse">>, <<"ignore">>, <<"fallback">>, <<"store">>, <<"abort_stream">>]).
 -define(PROFILES, [<<"pq_pure">>, <<"pq_hybrid">>]).
 -define(RECORD_LABEL, "MACULA-PQ-RECORD-V1").
+-define(REQUEST_LABEL, "MACULA-PQ-REQUEST-V1").
 -define(SIGNED_FIELDS, [{<<"request">>, <<"MACULA-PQ-REQUEST-V1">>}, {<<"publication">>, <<"MACULA-PQ-PUBLICATION-V1">>},
                         {<<"relay_error">>, <<"MACULA-PQ-RELAY-ERROR-V1">>},
                         {<<"caller_stream">>, <<"MACULA-PQ-CALLER-STREAM-V1">>}]).
@@ -62,9 +63,10 @@ derived_id(<<"station_identity">>, Key, Profile) -> macula_node_keys:node_id(Key
 derived_id(<<"client_identity">>, Key, Profile) -> macula_node_keys:node_id(Key, Profile);
 derived_id(_Role, Key, Profile) -> macula_node_keys:key_id(Key, Profile).
 
-%% Every record object decodes, its tbs meets the decoding rule, its key is its signer's in keys.json (of key_profile
-%% where the case names one), and its signature verifies exactly when the case says so; a key in the other profile's
-%% form does not verify under the case's profile.
+%% Every verify and check_order object decodes, its tbs meets the decoding rule, its key is its signer's in keys.json
+%% (of key_profile where the case names one), and its signature verifies exactly when the case says so; a key in the
+%% other profile's form does not verify under the case's profile. A case's `label', where it names one, is the label
+%% its signing input is built with; a case's `request' is the object it answers, and verifies under its own signer.
 records_test_() ->
     [{binary_to_list(maps:get(<<"id">>, C)), fun() -> record_checked(C) end}
      || Class <- [<<"verify">>, <<"check_order">>], C <- cases(Class)].
@@ -74,8 +76,19 @@ record_checked(#{<<"profile">> := P,
     {ok, #{key := Key, tbs := Tbs, signature := Sig}} = macula_signed_object:decode(binary:decode_hex(Hex)),
     ?assertMatch({ok, _}, macula_record_cbor:decode_strict(Tbs)),
     ?assertEqual(Key, signer_key(maps:get(<<"key_profile">>, In, P), Signer)),
-    Message = <<?RECORD_LABEL, 0, (crypto:hash(sha384, Key))/binary, Tbs/binary>>,
-    ?assertEqual(Valid =:= 1, catch macula_node_keys:verify(Message, Sig, Key, binary_to_atom(P))).
+    Message = <<(label(In))/binary, 0, (crypto:hash(sha384, Key))/binary, Tbs/binary>>,
+    ?assertEqual(Valid =:= 1, catch macula_node_keys:verify(Message, Sig, Key, binary_to_atom(P))),
+    answered(maps:get(<<"request">>, In, undefined), P).
+
+label(#{<<"label">> := Label}) -> Label;
+label(_RecordCase) -> <<?RECORD_LABEL>>.
+
+%% The request a reply case answers signs under the request label and verifies under its own signer's key.
+answered(undefined, _P) -> ok;
+answered(Hex, P) ->
+    {ok, #{key := Key, tbs := Tbs, signature := Sig}} = macula_signed_object:decode(binary:decode_hex(Hex)),
+    Message = <<?REQUEST_LABEL, 0, (crypto:hash(sha384, Key))/binary, Tbs/binary>>,
+    ?assertEqual(true, catch macula_node_keys:verify(Message, Sig, Key, binary_to_atom(P))).
 
 signer_key(Profile, Role) ->
     #{Profile := #{Role := #{<<"key">> := Key}}} = maps:get(<<"profiles">>, vectors(<<"keys">>)),

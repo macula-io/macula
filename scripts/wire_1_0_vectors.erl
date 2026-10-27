@@ -54,7 +54,7 @@ main() ->
     Keys = keys(),
     write(<<"keys">>, keys_file(Keys)),
     Records = lists:append([record_cases(P, Keys) || P <- ?PROFILES]),
-    write_cases(<<"verify">>, [reader_case(C) || C <- Records]),
+    write_cases(<<"verify">>, [reader_case(C) || C <- Records] ++ frame_ext_verify_cases(Keys)),
     write_cases(<<"custodian">>, [custodian_case(C) || C <- Records]),
     write_cases(<<"check_order">>, lists:append([check_order_cases(P, Keys) || P <- ?PROFILES])),
     write_cases(<<"envelope">>, envelope_cases() ++ lists:append([status_cases(P, Keys) || P <- ?PROFILES])),
@@ -475,11 +475,81 @@ record_case(Id, P, Covers, Lands, Bytes, Signer, Now, Expect) ->
 %% 1 when the object's signature verifies over its tbs as received under its own key, with the bare primitive:
 %% what a runner can check before it reaches any wire 1.0 code.
 signature_valid(Bytes, P) ->
+    signature_valid(Bytes, P, ?RECORD_LABEL).
+
+signature_valid(Bytes, P, Label) ->
     {ok, #{key := Key, tbs := Tbs, signature := Sig}} = macula_signed_object:decode(Bytes),
-    bit(catch macula_node_keys:verify(signed_bytes(?RECORD_LABEL, Key, Tbs), Sig, Key, P)).
+    bit(catch macula_node_keys:verify(signed_bytes(Label, Key, Tbs), Sig, Key, P)).
 
 bit(true) -> 1;
 bit(_False) -> 0.
+
+%%------------------------------------------------------------------
+%% Signed frame objects carrying an extension inside their tbs (WIRE_1_0.md section 3.2, macula#83 decision 8).
+%%
+%% The four signed objects a caller and a provider exchange — the CALL a caller sends, and the RESULT, ERROR and
+%% STREAM_ERROR it gets back — are each built twice per profile: once with an extension this node does not know and
+%% that is not critical, which is ignored and counted by its name, and once with the same extension critical, which
+%% refuses the object it sits in (extension_unsupported, no extension is defined critical).
+%%
+%% `label' names the signing input's label, which a tbs does not say on its own: a provider ERROR and a relay ERROR
+%% are both `error' frames but sign under different labels. `request', where present, is the request object the
+%% object answers, so a runner reaches the reply's checks — its request_id and request_hash, its responded_by —
+%% without holding a call table.
+
+frame_ext_verify_cases(Keys) ->
+    lists:append([frame_ext_cases(P, Keys) || P <- ?PROFILES]).
+
+frame_ext_cases(P, Keys) ->
+    Client = key(Keys, P, client_identity),
+    Station = key(Keys, P, station_identity),
+    Request = fun(Type, Extra) ->
+                      maps:merge(#{<<"alg">> => alg(P), <<"caller">> => key_id(Client),
+                                   <<"deadline">> => ?T0 + ?MIN, <<"frame_type">> => {text, Type},
+                                   <<"payload">> => #{{text, <<"n">>} => 1},
+                                   <<"procedure">> => {text, <<"example.procedure">>}, <<"realm">> => <<1:256>>,
+                                   <<"request_id">> => <<1:128>>, <<"target">> => key_id(Station)}, Extra)
+              end,
+    Reply = fun(Type, Extra) ->
+                    maps:merge(#{<<"alg">> => alg(P), <<"frame_type">> => {text, Type},
+                                 <<"request_id">> => <<1:128>>,
+                                 <<"request_hash">> => crypto:hash(sha384, encode(Request(<<"call">>, #{}))),
+                                 <<"responded_by">> => key_id(Station)}, Extra)
+            end,
+    Call = encode(signed(?REQUEST_LABEL, Client, Request(<<"call">>, #{}))),
+    Open = encode(signed(?REQUEST_LABEL, Client, Request(<<"stream_open">>, #{<<"mode">> => {text, <<"bidi">>}}))),
+    Objects = [{<<"call">>, ?REQUEST_LABEL, client_identity, Client, Request(<<"call">>, #{}), none},
+               {<<"result">>, ?REPLY_LABEL, station_identity, Station,
+                Reply(<<"result">>, #{<<"payload">> => #{{text, <<"ok">>} => 1}}), {request, Call}},
+               {<<"error">>, ?REPLY_LABEL, station_identity, Station,
+                Reply(<<"error">>, #{<<"code">> => {text, <<"example_code">>},
+                                     <<"detail">> => {text, <<"for people">>}}), {request, Call}},
+               {<<"stream_error">>, ?STREAM_LABEL, station_identity, Station,
+                #{<<"alg">> => alg(P), <<"frame_type">> => {text, <<"stream_error">>},
+                  <<"request_id">> => <<1:128>>,
+                  <<"request_hash">> => crypto:hash(sha384, encode(Request(<<"stream_open">>,
+                                                                          #{<<"mode">> => {text, <<"bidi">>}}))),
+                  <<"signer">> => key_id(Station), <<"seq">> => 0, <<"code">> => {text, <<"stopped">>},
+                  <<"message">> => {text, <<"no more">>}}, {request, Open}}],
+    lists:append([frame_ext_cases_of(P, Object) || Object <- Objects]).
+
+%% The two cases of one object: the non-critical extension ignored and counted, the critical one refused.
+frame_ext_cases_of(P, {Name, Label, Role, Signer, Tbs, Context}) ->
+    [frame_ext_case(P, {Name, Label, Role, Signer, Tbs, Context}, 0, <<"ext_noncritical_unknown.ignored">>,
+                    #{<<"outcome">> => <<"accept">>, <<"count">> => <<"wire_ext_ignored">>}),
+     frame_ext_case(P, {Name, Label, Role, Signer, Tbs, Context}, 1, <<"ext_critical_unknown.refused">>,
+                    #{<<"outcome">> => <<"refuse">>, <<"reason">> => <<"extension_unsupported">>})].
+
+frame_ext_case(P, {Name, Label, Role, Signer, Tbs, Context}, Critical, Id, Expect) ->
+    Bytes = encode(signed(Label, Signer, Tbs#{<<"ext">> => ext(<<"example.unknown">>, Critical)})),
+    Input = #{<<"object">> => hex(Bytes), <<"label">> => Label, <<"signer">> => atom_to_binary(Role),
+              <<"now_ms">> => ?T0 + 1000, <<"signature_valid">> => signature_valid(Bytes, P, Label)},
+    #{<<"id">> => <<"frame.", Name/binary, ".", Id/binary, ".", (atom_to_binary(P))/binary>>,
+      <<"profile">> => atom_to_binary(P), <<"covers">> => [<<"D8">>], <<"lands_with">> => lands(<<"macula#99">>),
+      <<"input">> => answered(Context, Input), <<"expect">> => Expect}.
+
+answered({request, RequestBytes}, Input) -> Input#{<<"request">> => hex(RequestBytes)};
+answered(none, Input) -> Input.
 
 %% The case's key is the signer's key of another profile (keys.json), in that profile's carried form.
 key_profile(P, #{<<"input">> := Input} = Case) ->
