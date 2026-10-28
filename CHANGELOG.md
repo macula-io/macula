@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [18.0.0] - 2026-10-28
+
+The release where serving openly stops being the default (macula#147, macula#150): a procedure that does not name
+who may call it is refused, a subscription that does not name who may deliver to it is refused, and a streaming
+procedure is held to the same rule as its unary twin. A service that means to serve anyone says `open`, explicitly,
+and every service's log says which it did. This breaks every caller that relied on the old default — in this
+repository and in every SDK built on it — which is why the major moves. Also in this cut: one stream that stops
+taking bytes no longer stalls its whole station link, a distribution tunnel's subscription names the one node it was
+negotiated with, and the suite reads line coverage against a floor that only goes up.
+
 ### Added
 
 - **The strict CBOR decoder is held to corrupted canonical encodings (macula#154).** The existing property fed it
@@ -76,10 +86,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   other policy is logged as an explicit policy that is not a call class, so an operator reading a service's log can
   never mistake an opt-out for a declaration.
 
-  **Streaming is not covered yet**: `macula:advertise_stream` still defaults to `open` where `advertise` now refuses,
-  so a streaming procedure can be advertised without naming a policy. Tracked as
-  [#150](https://github.com/macula-io/macula/issues/150), in its own package because closing it is behaviour-visible
-  for every SDK and moves over a hundred call sites.
+  **Streaming follows the same rule (macula#150).** `macula:advertise_stream/6` without an `auth` key is refused
+  `{error, {auth, required}}`, as `advertise/5` is, the arities that could not name a policy are gone, and a
+  streaming procedure that means to serve anyone who can reach it says `auth => open`, explicitly, like its unary
+  twin. See Changed.
 
   **The gap this closes**: under `{realm_member_required, Key, any}` a bare realm member token — whose only capability
   is `member/email-verified` on `mri:realm:<realm>`, which covers every procedure in the realm — was admitted to every
