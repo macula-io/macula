@@ -260,7 +260,9 @@ link's memory without bound. A session that would go past that has more unread
 than the link will hold for it: its session ends as a failed write ends it,
 with `{outbound_queue_full, Bytes}`, and only its own stream is lost. A
 session's last frame is held like any other, and its stream closes once it is
-written.
+written. A queue is never kept past what could empty it: the session's stream
+process going down drops its queue, and a connection that ends drops every
+queue held for it, since a stream that is gone sends no `send_ready`.
 
 A queued chunk is a copy, but a chunk handed straight to a waiting reader can
 still be part of the frame it arrived in. A handler that keeps chunks after

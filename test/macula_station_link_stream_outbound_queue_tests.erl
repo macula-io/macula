@@ -10,6 +10,7 @@
 -define(PROCEDURE, <<"acme/count_v1">>).
 -define(PEER_PID_INDEX, macula_station_link:state_field_index(peer_pid)).
 -define(PEER_NODE_ID_INDEX, macula_station_link:state_field_index(peer_node_id)).
+-define(STREAM_OUT_INDEX, macula_station_link:state_field_index(stream_out)).
 -define(EVENT_MS, 1_000).
 
 outbound_queue_test_() ->
@@ -18,7 +19,9 @@ outbound_queue_test_() ->
                  fun a_withheld_write_goes_out_in_order_when_the_peer_takes_data_again/0,
                  fun a_second_sessions_call_completes_while_a_first_is_withheld/0,
                  fun a_session_over_the_queue_cap_ends_alone/0,
-                 fun a_withheld_last_frame_ends_the_session_once_it_is_written/0]].
+                 fun a_withheld_last_frame_ends_the_session_once_it_is_written/0,
+                 fun a_stream_process_that_dies_takes_its_held_queue_with_it/0,
+                 fun a_connection_going_takes_the_queues_held_for_its_sessions/0]].
 
 %%------------------------------------------------------------------
 %% Cases
@@ -107,6 +110,32 @@ a_withheld_last_frame_ends_the_session_once_it_is_written() ->
     ?assertEqual(Quic, closed_on(Quic, ?EVENT_MS)),
     stop(Link).
 
+%% A session's process dies while the link holds bytes for it: nothing drives that stream any more, so a queue kept for it
+%% would wait for a send_ready with no owner to write. The session's death takes its queue with it.
+a_stream_process_that_dies_takes_its_held_queue_with_it() ->
+    #{link := Link} = World = linked(),
+    #{stream := StreamPid, quic := Quic} = opened(World, target(), bidi),
+    withhold(World, Quic),
+    ?assertEqual(ok, macula_stream:send(StreamPid, <<"held for a session that dies">>)),
+    wait_held(Link, 1),
+    exit(StreamPid, kill),
+    ?assertEqual(Quic, closed_on(Quic, ?EVENT_MS)),
+    ?assertEqual(#{}, held_out(Link)),
+    stop(Link).
+
+%% The connection goes: every dedicated stream of it is closed, so no send_ready can come for any of them and the queues
+%% held for their sessions are unreachable. The link stops on this path (its pool dials a fresh one), so the state the
+%% teardown returns is what a test can hold to it — the live state dies with the process.
+a_connection_going_takes_the_queues_held_for_its_sessions() ->
+    #{link := Link} = World = linked(),
+    #{stream := StreamPid, quic := Quic} = opened(World, target(), bidi),
+    withhold(World, Quic),
+    ?assertEqual(ok, macula_stream:send(StreamPid, <<"held, then the connection goes">>)),
+    wait_held(Link, 1),
+    Torn = macula_station_link:fail_all_pending({disconnected, <<"test">>}, sys:get_state(Link)),
+    ?assertEqual(#{}, element(?STREAM_OUT_INDEX, Torn)),
+    stop(Link).
+
 %%------------------------------------------------------------------
 %% Helpers
 %%------------------------------------------------------------------
@@ -161,6 +190,28 @@ closed_on(Quic, Ms) ->
         {closed, Quic} -> Quic
     after Ms ->
         none
+    end.
+
+%% The bytes the link holds for sessions, by the dedicated stream they are queued for.
+held_out(Link) ->
+    element(?STREAM_OUT_INDEX, sys:get_state(Link)).
+
+%% The link holds queues for Count streams: the stream process hands a frame over in its own message, so the link's own
+%% bookkeeping is waited for rather than assumed.
+wait_held(Link, Count) ->
+    wait_held(Link, Count, erlang:monotonic_time(millisecond) + ?EVENT_MS).
+
+wait_held(Link, Count, Deadline) ->
+    Held = map_size(held_out(Link)),
+    case Held of
+        Count -> Count;
+        _ -> wait_held_again(Link, Count, Deadline, Held)
+    end.
+
+wait_held_again(Link, Count, Deadline, Held) ->
+    case erlang:monotonic_time(millisecond) >= Deadline of
+        true -> erlang:error({not_held, Count, Held});
+        false -> timer:sleep(5), wait_held(Link, Count, Deadline)
     end.
 
 %% How much the link holds for one session whose peer withholds credit, for the length of Fun.

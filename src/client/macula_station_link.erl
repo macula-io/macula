@@ -244,6 +244,10 @@
 %% A state field's position in the state tuple, by name, for tests that read
 %% or set the state.
 -export([state_field_index/1]).
+%% What a link keeps of itself when its connection goes: every path that calls
+%% it then stops the link, so the state it returns is the only place a test can
+%% hold it to having forgotten what it held (macula#141).
+-export([fail_all_pending/2]).
 -endif.
 
 -type url() :: binary() | string().
@@ -2859,7 +2863,11 @@ fail_all_pending(Reason, #state{pending = P, subscriptions = Subs,
     S#state{pending = #{}, subscriptions = #{}, topic_index = #{},
             overlay_subscriptions = #{}, overlay_realm_index = #{},
             client_streams = #{}, server_streams = #{}, server_keys = #{}, stream_bufs = #{},
-            opening_bufs = #{}, draining = #{}}.
+            opening_bufs = #{}, draining = #{},
+            %% Every dedicated stream of this connection is closed above, so no
+            %% send_ready can come for one: bytes held for them are unreachable
+            %% and go with the connection (macula#141).
+            stream_out = #{}}.
 
 abort_stream_process(Pid, Reason) ->
     try
@@ -5372,7 +5380,11 @@ on_client_stream_down({ok, Sid}, _Pid, Mon, #state{client_streams = CS,
     erlang:demonitor(Mon, [flush]),
     {CS2, Stream} = take_dedicated_stream(Sid, CS),
     close_dedicated_stream(Stream, S),
-    S#state{client_streams = CS2, stream_bufs = drop_bufs([Stream], Bufs)};
+    %% Nothing drives this stream any more, so whatever the link still held for
+    %% it would wait for a send_ready that now has no owner to write it: a
+    %% session's death takes its held queue with it (macula#141).
+    S#state{client_streams = CS2, stream_bufs = drop_bufs([Stream], Bufs),
+            stream_out = drop_out([Stream], S#state.stream_out)};
 on_client_stream_down(error, Pid, Mon, #state{server_streams = SS} = S) ->
     on_server_stream_down(find_stream_by_pid(Pid, SS), Mon, S).
 
@@ -5382,7 +5394,8 @@ on_server_stream_down({ok, Sid}, Mon, #state{server_streams = SS, server_keys = 
     {SS2, Stream} = take_dedicated_stream(Sid, SS),
     close_dedicated_stream(Stream, S),
     S#state{server_streams = SS2, server_keys = released_key(Sid, Keys, S),
-            stream_bufs = drop_bufs([Stream], Bufs)};
+            stream_bufs = drop_bufs([Stream], Bufs),
+            stream_out = drop_out([Stream], S#state.stream_out)};
 on_server_stream_down(error, Mon, S) ->
     on_subscriber_down(Mon, S).
 

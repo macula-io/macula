@@ -21,7 +21,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   queue): a session past that ends as a failed write ends it, with `{outbound_queue_full, Bytes}`, and only its own
   stream is lost. A session's last frame is held the same way, and its stream closes once it is written, so a queue is
   never chopped by a close. The link's `send_on_stream` start option is a hand-over rather than a write: its default is
-  `macula_peering:async_send_on_stream/2`, and a writer may answer `{error, busy}`.
+  `macula_peering:async_send_on_stream/2`, and a writer may answer `{error, busy}`. Nothing waits for a credit grant
+  that cannot come: a session whose stream process goes down takes its held queue with it, and a connection that ends
+  drops every queue held for it.
 
 ## [17.2.0] - 2026-10-28
 
