@@ -65,7 +65,7 @@ encode(Msg) when is_map(Msg) ->
 
 -spec decode(binary()) -> {ok, control_msg()} | {error, term()}.
 decode(PayloadBin) ->
-    case macula_cbor_nif:unpack(PayloadBin) of
+    case macula_cbor_nif:unpack(PayloadBin) of     %% lenient-decoder-ok: macula-io/macula#160
         {ok, Map} -> decode_map(Map);
         {error, Reason} -> {error, {cbor_decode, Reason}}
     end.

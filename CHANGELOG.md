@@ -11,15 +11,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The strict CBOR decoder is held to corrupted canonical encodings (macula#154).** The existing property fed it
+  arbitrary binaries, which in practice all die on the first header byte: what it pinned was the refusal list, not the
+  code that decides a duplicate key or a nesting bound. `test/prop_cbor.erl` now generates a canonical encoding and
+  corrupts one thing in it — a repeated map entry, a length written in a width it does not need, two entries in the
+  other order, a truncated tail, one byte appended, a chain past the nesting bound — and requires
+  `macula_record_cbor:decode_strict/1` to give the answer that corruption owes: `duplicate_key`, `trailing_bytes` and
+  `too_deep` where the answer is unambiguous, the same value where a deterministic reader accepts the bytes, and one of
+  its refusals everywhere else. `macula_cbor_nif:unpack_deterministic/1` is put to the same inputs and owes less,
+  because it is a different decoder: it must return what the reference returns wherever the reference accepts, and
+  otherwise answer without taking the VM down.
+
+  **The two decoders are not held to each other, deliberately.** macula#154 asked for a property showing they refuse
+  the same things; measured, they do not — the NIF accepts duplicate keys, text that is not UTF-8, keys that are
+  neither text nor an integer, integers past 2^63, and nests to 128 rather than 64. That is by design and not a gap
+  wherever the lenient decoder stays off the wire. `test/macula_the_lenient_decoder_stays_off_the_wire_tests.erl`
+  holds that mechanically: no module under `src` may call any `macula_cbor_nif:unpack…` decoder, so a change that
+  reaches for the faster one to read a peer's bytes is a red run rather than a quiet regression.
+  **It found one such call on arrival**: `macula_dist_relay_protocol:decode/1` reads the relay's control frames with
+  `macula_cbor_nif:unpack/1`, a lenient decoder on peer bytes. That is macula-io/macula#160, and it carries the test's
+  one recorded exemption — a `lenient-decoder-ok:` marker on the call line naming that issue — which comes out with
+  the fix.
+
 - **Line coverage has a floor, and CI reads it (macula#153).** No step read coverage, so a change could land with
   its code untested and nothing would say so. The suite now runs under `--cover` in one job — eunit takes about
   twelve minutes instrumented and ct about twelve seconds, so joining them costs seconds — and
-  `scripts/is_line_coverage_at_least_the_floor.sh` merges the two exports and fails below 82% of lines. CI read
-  10773 of 13133 executable lines, 82.03%, on 2026-10-28, so the floor is 82 with about three lines of headroom
-  and deliberately no more: untested code arriving is meant to be red, and adding untested lines is what gets tests
-  written rather than what gets the floor lowered. It only goes up, in a commit that
-  says why, which CONTRIBUTING states and this entry repeats; lowering it is a reviewed decision about which lines
-  stop being tested, never a way to turn a branch green. The number is OTP's own `cover` on the pinned Erlang, so
+  `scripts/is_line_coverage_at_least_the_floor.sh` merges the two exports and fails below 82% of lines. On
+  2026-10-28 that read just under 83%. Neither count is a property of the tree — the covered count moved by up to
+  three lines across consecutive runs of one commit, and a rebase onto a new base moves both — so what is recorded
+  here is the level, and the job's own output is the authority for the counts. The floor is 82, about a hundred
+  covered lines below where a tree this size sits; a whole percent here is about 131 lines, so a whole-percent floor
+  cannot sit closer than that. It only goes up, in a commit
+  that says why, which CONTRIBUTING states and this entry
+  repeats; lowering it is a reviewed decision about which lines stop being tested, never a way to turn a branch
+  green. The number is OTP's own `cover` on the pinned Erlang, so
   the tool is pinned by the CI image digest rather than by a floating tag: a toolchain move is a coverage move and
   arrives as a commit. `rebar.config`'s note that nothing reads coverage is gone with the step that made it untrue.
 

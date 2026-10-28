@@ -6,7 +6,22 @@
 %% - the canonical form does not move when its own bytes are decoded and encoded again;
 %% - a map's entries are written in bytewise order of their own encoded keys, whatever order the map hands them out in;
 %% - the two implementations agree byte for byte, which is what makes the reference an oracle;
-%% - the strict decoder answers on bytes no generator aimed at it, rather than raising.
+%% - the strict decoder answers on bytes no generator aimed at it, rather than raising;
+%% - a canonical encoding corrupted the way an attacker would corrupt it gets the answer that corruption owes, and the
+%%   NIF decoder answers the same input without taking the VM down (macula#154).
+%%
+%% THE TWO DECODERS ARE NOT HELD TO EACH OTHER, and that is deliberate rather than an oversight (macula#154). The NIF is
+%% the fast deterministic decoder: it bounds nesting at 128 and does not check for duplicate map keys, non-UTF-8 text,
+%% keys that are neither text nor an integer, or integers past 2^63. The Erlang reference is the strict decoder: bound at
+%% 64, and it refuses all four. They are different tools and this module tests each to its own contract.
+%%
+%% What keeps that from being a hole is that the lenient decoders are held off the wire, and today they are not all off
+%% it: every peer's bytes are decoded by `macula_record_cbor:decode_strict/1' except the distribution relay's control
+%% channel, which reads with `macula_cbor_nif:unpack/1' (macula_dist_relay_protocol:decode/1). That call is the one
+%% recorded exemption in `test/macula_the_lenient_decoder_stays_off_the_wire_tests.erl', and it comes out when
+%% macula-io/macula#160 lands. macula#154 asked for a property holding the two to the same refusals, which they do not
+%% share; the measurement is on the issue. The guard is what makes any new wiring, and the removal of that one, a red
+%% run rather than a quiet regression.
 %%
 %% Text is `{text, Binary}' throughout, because that is what the decoder returns: a bare atom encodes as its name and
 %% comes back as text, so it is not part of a round-trip (its own property below holds it to encoding as its name).
@@ -173,3 +188,150 @@ strict_answer(_Other) -> false.
 refusals() ->
     [trailing_bytes, bad_key, duplicate_key, invalid_text, too_deep, integer_out_of_range,
      too_many_elements, malformed].
+
+%%------------------------------------------------------------------
+%% The strict decoder against corrupted canonical bytes (macula#154)
+%%------------------------------------------------------------------
+
+%% A canonical encoding with one thing corrupted, which is what an attacker with a valid frame actually sends. This is a
+%% different input class from `binary/0' above and the reason for it: on arbitrary bytes almost every case dies on the
+%% first header byte, so that property pins the refusal list and never reaches the code that decides a duplicate key, a
+%% wrong-width length, or a nesting bound. A mutation starts from bytes the codec produced, so it is well formed right up
+%% to the point it is wrong and the decoder has to walk into it.
+%%
+%% Each case carries what the decoder owes it. Three mutations have one unambiguous answer, and those are required rather
+%% than merely allowed: a duplicated entry is `duplicate_key', a byte after a whole item is `trailing_bytes', a chain
+%% past the nesting bound is `too_deep'. Two have a known value: reordered entries and a length written in a wider form
+%% than it needs are both accepted, and must decode to the value they encode, because CBOR maps are unordered and a
+%% deterministic reader takes the shortest form for writing, not for reading. Truncation is the one whose exact refusal
+%% is not fixed, because which refusal a short read produces is the decoder's business, but it is still a refusal: a
+%% definite-length item is prefix-free and a canonical encoding never uses an indefinite length, so no proper prefix of
+%% one is a whole item - the empty binary included - and a decoded value there would be a decoder reading a tail that
+%% has not arrived.
+prop_a_corrupted_canonical_encoding_gets_the_answer_its_corruption_owes() ->
+    ?FORALL({_Kind, Owed, Bytes}, corrupted_encoding(),
+            owed(Owed, macula_record_cbor:decode_strict(Bytes))).
+
+%% The answer this module accepts, and only this: three corruptions owe one NAMED refusal, two owe a NAMED value, and
+%% truncation owes a refusal without naming which. An answer that is merely "one of the refusals" is not enough for a
+%% corruption whose answer is unambiguous - a decoder that answered `malformed' to a duplicated key would be green
+%% under a looser rule, and that is the case the issue says the property exists to reach.
+owed({refusal, Refusal}, {error, Refusal}) -> true;
+owed({value, Value}, {ok, Value}) -> true;
+owed(refused, {error, Refusal}) -> lists:member(Refusal, refusals());
+owed(_Expectation, _Answer) -> false.
+
+corrupted_encoding() ->
+    oneof([duplicated_entry(), widened_length(), reordered_entries(),
+           truncated_value(), appended_byte(), nested_past_the_bound()]).
+
+%% A map with one entry repeated, and a head that counts it. The decoder cannot see the duplicate until it has read the
+%% whole map, so this reaches `strict_put/3' rather than stopping at a header.
+duplicated_entry() ->
+    ?LET(M, nonempty_map(), duplicate_a_pair(M)).
+
+%% The first pair repeated, and the head saying how many entries the map now holds.
+duplicate_a_pair(M) ->
+    [{K, V} | _] = maps:to_list(M),
+    {duplicate_key, {refusal, duplicate_key},
+     iolist_to_binary([map_head(map_size(M) + 1), map_body_bytes(M), pair_bytes(K, V)])}.
+
+%% A two-entry map with its two pairs written in the other order.
+reordered_entries() ->
+    ?LET(M, two_entry_map(), {swapped_keys, {value, M}, swap_two_pairs(M)}).
+
+swap_two_pairs(M) ->
+    [A, B] = [pair_bytes(K, V) || {K, V} <- maps:to_list(M)],
+    iolist_to_binary([map_head(2), B, A]).
+
+%% A text string that fits in the five-bit length field, written with the one-byte form it does not need.
+widened_length() ->
+    ?LET(B, short_text(), {non_canonical_width, {value, {text, B}}, widen_text(B)}).
+
+widen_text(B) when byte_size(B) =< 23 ->
+    <<3:3, 24:5, (byte_size(B)):8, B/binary>>.
+
+%% The last byte of a whole item, gone. Which refusal this owes is not fixed - that is the decoder's business - but it
+%% owes a refusal, never a value.
+truncated_value() ->
+    ?LET(V, value(), {truncated, refused, drop_last(macula_cbor_nif:pack_deterministic(V))}).
+
+drop_last(B) when byte_size(B) =< 1 -> <<>>;
+drop_last(B) -> binary:part(B, 0, byte_size(B) - 1).
+
+%% One byte after a whole item.
+appended_byte() ->
+    ?LET(V, value(),
+         {appended_byte, {refusal, trailing_bytes},
+          <<(macula_cbor_nif:pack_deterministic(V))/binary, 0>>}).
+
+%% A chain of one-element arrays past the 64 levels a strict decode takes. Each level is one byte, so the whole input
+%% stays tiny: the bound that this reaches is a count of depth, not of bytes.
+nested_past_the_bound() ->
+    ?LET(Depth, choose(65, 70), {nesting_past_the_bound, {refusal, too_deep}, nesting(Depth)}).
+
+nesting(Depth) ->
+    iolist_to_binary([binary:copy(<<4:3, 1:5>>, Depth), <<0>>]).
+
+%% The same corrupted encodings, put to the NIF decoder. It owes LESS than the reference and this property says exactly
+%% how much less, rather than pretending the two are held to the same line (they are not; see the module header):
+%%
+%% - where the reference ACCEPTS the bytes, the NIF must accept them too and return the same value, because a divergence
+%%   there is a real disagreement about the data rather than about strictness;
+%% - where the reference REFUSES, the NIF may return a value or raise, since it is the lenient decoder and refusing is
+%%   not its job. What it may never do is take the VM down: a chain of one-byte array heads has already segfaulted this
+%%   NIF once at depth 10,000 (test/macula_cbor_deterministic_diff_tests.erl), and that class of input is precisely what
+%%   a mutation produces.
+prop_the_nif_answers_a_corrupted_canonical_encoding() ->
+    ?FORALL({_Kind, _Owed, Bytes}, corrupted_encoding(),
+            agree_or_answer(macula_record_cbor:decode_strict(Bytes), nif_answer(Bytes))).
+
+%% The NIF's answer as a value or as a caught raise. A VM abort cannot be caught, so an input that kills the emulator
+%% fails this property by ending the run rather than by returning false.
+nif_answer(Bytes) ->
+    try macula_cbor_nif:unpack_deterministic(Bytes) of
+        Value -> {value, Value}
+    catch
+        _Class:_Reason -> raised
+    end.
+
+agree_or_answer({ok, Value}, {value, NifValue}) -> Value =:= NifValue;
+agree_or_answer({ok, _Value}, raised) -> false;
+agree_or_answer({error, Refusal}, _NifAnswer) -> lists:member(Refusal, refusals());
+agree_or_answer(_Other, _NifAnswer) -> false.
+
+%%------------------------------------------------------------------
+%% The pieces the mutations are built from
+%%------------------------------------------------------------------
+
+%% At most 23 entries, so the map head is the one-byte form and `map_head/1' below can rebuild it. Keys are consecutive
+%% integers from a drawn base, so no two collide and the map really holds N of them.
+nonempty_map() ->
+    ?LET(Base, choose(0, 16#FFFF),
+         ?LET(N, choose(1, 3),
+              ?LET(Values, vector(N, scalar()),
+                   maps:from_list(lists:zip(lists:seq(Base, Base + N - 1), Values))))).
+
+two_entry_map() ->
+    ?LET(Base, choose(0, 16#FFFF),
+         ?LET({V1, V2}, {scalar(), scalar()},
+              #{Base => V1, Base + 1 => V2})).
+
+%% ASCII, so its byte length is its character count and stays inside the five-bit field.
+short_text() ->
+    ?LET(N, choose(0, 20),
+         ?LET(Chars, vector(N, choose(16#41, 16#5A)), unicode:characters_to_binary(Chars))).
+
+%% The head an encoded map of N entries carries, for the N this module builds.
+map_head(N) when N =< 23 -> <<5:3, N:5>>;
+map_head(N) -> <<5:3, 24:5, N:8>>.
+
+%% The pairs of an encoded map without its head. One byte, because every map here holds at most 23 entries.
+map_body_bytes(M) ->
+    <<_:8, Body/binary>> = macula_cbor_nif:pack_deterministic(M),
+    Body.
+
+%% One map entry's bytes, without the head of the one-entry map that carries it.
+pair_bytes(K, V) ->
+    <<_:8, Pair/binary>> = macula_cbor_nif:pack_deterministic(#{K => V}),
+    Pair.

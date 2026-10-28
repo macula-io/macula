@@ -6,8 +6,10 @@
 %% file. Line coverage is a property of the SUITE, not of one of its halves, so the numbers are merged here and
 %% the floor is applied to the merge (macula#153).
 %%
-%% What that merge is worth today, measured rather than assumed: on the tree this landed on it read 10773 covered
-%% lines of 13133 executable ones over 126 modules (82.03%), and eunit alone accounts for all but a couple of them.
+%% What that merge is worth today, measured rather than assumed: on 2026-10-28 it read just under 83% of the
+%% executable lines over 126 modules, and eunit alone accounts for all but a couple of them. Neither count is a
+%% property of the tree - the covered count moved by up to three lines across consecutive runs of one commit, and a
+%% rebase onto a new base moves both - so this records the level and the job's own output is the authority.
 %% The two halves overlap almost entirely at the moment. The merge is still the right shape: which modules ct reaches
 %% is an accident of which fleets the suites build, and a number that leaves a suite out must not quietly look
 %% complete when that changes.

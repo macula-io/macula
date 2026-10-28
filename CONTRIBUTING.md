@@ -91,13 +91,16 @@ a test you have just written.
 - **Line coverage has a floor, and it only goes up.** CI merges the eunit and
   ct suites' line coverage and fails below 82%
   (`scripts/is_line_coverage_at_least_the_floor.sh`). The floor is main's
-  measured value rounded down to a whole percent: across CI runs on 28 October
-  2026 it read 10773 of 13133 executable lines, 82.03%, so 82. That leaves
-  about three covered lines of headroom, deliberately — a change that leaves
-  new code untested is meant to be red here, and a line or two moving between
-  runs is not a reason to give it room. A change that raises
-  coverage raises the number in the same commit. Lowering it is a reviewed
-  decision about which lines stop being tested, stated in the commit that does
+  measured value rounded down to a whole percent: on 28 October 2026 that was
+  just under 83%, so 82. Neither count is a property of the tree — the covered
+  count moved by up to three lines across consecutive runs of one commit, and
+  a rebase onto a new base moves both — so the job's own output is the
+  authority for them. A whole percent here is about 131 lines, so a
+  whole-percent floor cannot sit closer than that, and 82 leaves about a
+  hundred covered lines of headroom. A change that adds more than
+  that many untested lines is red here. A change that raises coverage raises
+  the number in the same commit. Lowering it is a reviewed decision about
+  which lines stop being tested, stated in the commit that does
   it; it is never done to turn a branch green. To see where a change stands:
 
   ```bash

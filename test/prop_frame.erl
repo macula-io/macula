@@ -115,8 +115,6 @@ prop_a_frame_survives_the_wire() ->
 prop_a_built_frame_passes_its_own_check() ->
     ?FORALL(F, frame(), macula_frame:check_frame(F) =:= ok).
 
-%% Cut a frame's bytes anywhere and the decoder says it needs more: a truncated frame is never read as a whole one, so
-%% nothing dispatches on a frame whose tail has not arrived.
 %% Cut a frame's bytes anywhere and the decoder says how many more it needs and nothing else. A prefix is never a whole
 %% frame and never a refusal: a frame split across two reads is an ordinary segment boundary, and a decoder that refused
 %% one would drop the connection on it.
