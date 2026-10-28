@@ -9,13 +9,94 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [17.2.0] - 2026-10-28
+
+Release A0 of the sealed-by-default design (macula#135, macula#136): the **reading and resealing side only**. A caller
+refused with `sealed_required` by a keyed provider now recovers from the refusal itself. Nothing in this release
+changes a default: no node built on it sends `seal.kem_key` unless a procedure's spec asks for it, and the caller and
+provider defaults stay as they are today. Release A (the provider default) and release B (the caller default) follow.
+
+### Added
+
+- **A clear call that a provider refuses `sealed_required` recovers within the call instead of failing (macula#136).**
+  A keyed provider's refusal carries the KEM key it holds now in the non-critical signed extension `seal.kem_key` of
+  its ERROR's or STREAM_ERROR's tbs. The frame layer reads it (`macula_frame:refused_kem_key/1`,
+  `macula_frame:kem_key_extension/0`) on both, knows the name so it is not counted as an ignored extension, and builds
+  both frames with it; the ERROR's build spec accepts `ext`. Under every caller — pool, direct dial and explicit
+  target — a refusal whose key its own profile carries is answered by sealing the same payload once more to that key
+  under a new request id, at most once per call, and the answer's seal report names the key it was opened under
+  (`seal_key_id`). A refusal with no extension, or with a key of another profile, surfaces as `sealed_required`,
+  unchanged. The refused request id leaves the link's pending table as the resealed call goes out, so a provider
+  replaying its refusal draws no third CALL.
+
+  The pool remembers the key it learnt on the candidate it remembered for that provider
+  (`macula_client:learn_kem_key/5`), and the next call seals at once instead of going out clear again: `call_seal/5`'s
+  options take `learnt_kem_key => Key`, which fills in where an advertisement names no key (an advertisement's own key
+  still wins, and a key of another profile is ignored rather than failing the call). A learnt key lives as long as the
+  remembered candidate it was written on, carried across later resolutions of the same provider. A call or stream
+  sealed to that key and refused takes it off again (`macula_client:forget_kem_key/5`), only where it is still the
+  very key the refusal was about, so a provider that rotated away is not refused until the entry's horizon passes.
+
+- **A clear caller stream refused `sealed_required` replays what it already wrote under a sealed reopen
+  (macula#136).** A clear stream still sends every owner action at once and now keeps an ordered copy of its chunks and
+  of the owner's STREAM_END until the provider's first frame, bounded by the stream's own inbox bound (16 MiB by
+  default). When that first frame is a `sealed_required` carrying `seal.kem_key`, the stream reopens sealed under a
+  new request id on a new session behind the same handle and sends the copy first and then what the owner wrote
+  meanwhile, all sealed, in order, numbered from 0 under the new keys, the copied END past `closed_send`. Any other
+  first frame, or a copy past its bound, ends retention and the refusal surfaces as the provider sent it; a clear
+  session that sent nothing starts the new one at seq 0 and may still take A1's reseal. Writes are never held, so a
+  `client_stream` or bidi provider that waits for the caller's data does not deadlock. A new stream to a provider also
+  seals from a learnt key, as a call does.
+
+  Two things this needed on the way: a clear STREAM_OPEN refused `sealed_required` is **drained** rather than closed at
+  once (reading and discarding the caller's remaining writes, 64 KiB or 5 s, at most 16 per link), because closing
+  would reach the caller as a QUIC reset and lose the STREAM_ERROR it has to reseal on; and a stream that already
+  carries a live session keeps it serving when a further open on it is refused. A reopen that cannot answer — its
+  stream does not open, its open is not written, or the link went mid-reopen — ends the stream with the transport
+  error instead of leaving it queueing behind a session that never opens, and a disconnect closes every drain.
+
+- **A served procedure can name its KEM key in a refusal, for the cross-SDK interop programs (macula#136).** A spec
+  passed to `macula:advertise/5`, or a served procedure's own spec, takes `refusal_names_key => true`; the refusal of a
+  clear CALL and of a clear STREAM_OPEN then carries `seal.kem_key` in its tbs, holding the node's current keyring key
+  in carried form, read each time the refusal is built so a rotated key reaches the next caller. It is off unless
+  asked, it is named only by a `sealed_required` refusal (a `too_many_sessions` refusal names none), and no service
+  sets it: no node in service sends the extension in this release.
+
+- **Wire 1.0 vectors: signed frame objects carry a `tbs` extension (macula#136).** The `verify` class gains the four
+  signed frame objects a caller and a provider exchange — the CALL a caller sends, and the RESULT, ERROR and
+  STREAM_ERROR it gets back — each built twice per profile: with an extension this node does not know and that is not
+  critical, which is ignored and counted by its name, and with the same extension critical, which refuses the object
+  it sits in (`extension_unsupported`). A case may carry `label`, the label its signing input is built with (a tbs
+  does not say which label it signs under on its own), and `request`, the signed request a reply or stream object
+  answers; both are additive, and `priv/vectors/wire_1_0/FORMAT.md` documents them. The self-check builds each
+  object's signing input from its own label, and this repo's runner holds all sixteen cases to
+  `verify_request/2`, `verify_reply/3` and `verify_provider_stream/3`.
+
+- **Cross-SDK seal vectors: the refusal carrying the key (macula#136).** `test/vectors/E2E_SEAL_V1.md` gains the
+  section and `test/vectors/e2e_seal_v1_refusals.json` the vector, per profile: a keyed provider's refusal of a CALL
+  and of a STREAM_OPEN beside the request each answers, so Go and Rust read and reseal the same bytes. The key is the
+  value of the non-critical signed extension `seal.kem_key` inside the refusal's `tbs` (1568 bytes in `pq_pure`, 1665
+  in `pq_hybrid`), never in `code`, `detail` or `message`, which are text and capped at 256 bytes; a reader that knows
+  the name does not count it as ignored, and a station can neither forge nor strip it (a stripped one fails as a
+  tampered reply). `scripts/generate-seal-refusal-vectors.sh` regenerates the file.
+
 ### Fixed
 
 - **A caller that half-closes its QUIC write side still gets the provider's reply (macula#145).** A `client_stream`
   caller that sends its STREAM_END and then closes its write direction — the usual half-close, and what macula-go
   does — had its session ended by the station link on the transport's FIN, so the provider's STREAM_REPLY was dropped
-  and the caller saw its stream end with no frame at all. The link now tells the session that the peer finished
-  sending instead of ending it, and a session ends on that only where it still awaited the peer's last frame.
+  and the caller saw its stream end with no frame at all. Found by release A0's cross-SDK interop, which asks for
+  exactly that shape: a clear client stream to a provider that answers only after the caller's end. The link now tells
+  the session that the peer finished sending instead of ending it, and a session ends on that only where it still
+  awaited the peer's last frame.
+
+### Documentation
+
+- **`docs/design/DESIGN_E2E_SEALED_BY_DEFAULT.md` (macula#135, macula#136).** The threat model and design for sealing
+  calls and streams by default: the default and the shape of the opt-out, the removed start-up clear window,
+  publish/subscribe and content, what operators see, the three-release rollout order that keeps a security default
+  from ever causing downtime (A0, the caller's reseal; A, the provider default; B, the caller default), and the gate
+  release A's safety argument rests on.
 
 ## [17.1.1] - 2026-10-27
 
