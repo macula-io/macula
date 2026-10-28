@@ -15,8 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   its code untested and nothing would say so. The suite now runs under `--cover` in one job — eunit takes about
   twelve minutes instrumented and ct about twelve seconds, so joining them costs seconds — and
   `scripts/is_line_coverage_at_least_the_floor.sh` merges the two exports and fails below 82% of lines. CI read
-  10612-10613 of 12934 executable lines, 82.05-82.06%, on 2026-10-28, so the floor is 82 with about six lines of
-  headroom and deliberately no more: untested code arriving is meant to be red. It only goes up, in a commit that
+  10773 of 13133 executable lines, 82.03%, on 2026-10-28, so the floor is 82 with about three lines of headroom
+  and deliberately no more: untested code arriving is meant to be red, and adding untested lines is what gets tests
+  written rather than what gets the floor lowered. It only goes up, in a commit that
   says why, which CONTRIBUTING states and this entry repeats; lowering it is a reviewed decision about which lines
   stop being tested, never a way to turn a branch green. The number is OTP's own `cover` on the pinned Erlang, so
   the tool is pinned by the CI image digest rather than by a floating tag: a toolchain move is a coverage move and

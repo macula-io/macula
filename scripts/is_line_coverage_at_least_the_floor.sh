@@ -7,8 +7,8 @@
 #
 # Usage: bash scripts/is_line_coverage_at_least_the_floor.sh <eunit.coverdata> <ct.coverdata> [...]
 #
-# THE FLOOR ONLY GOES UP. It is main's measured line coverage, rounded down to a whole percent: across CI runs on
-# 2026-10-28 it read 10612-10613 of 12934 executable lines, 82.05-82.06%, so 82. That leaves about six covered
+# THE FLOOR ONLY GOES UP. It is main's measured line coverage, rounded down to a whole percent: 10773 of 13133
+# executable lines, 82.03%, measured in CI on 2026-10-28 after #147 landed, so 82. That leaves about three covered
 # lines of headroom, deliberately: a change that leaves new code untested is meant to be red here, and a line or
 # two moving between runs is not a reason to give it room. A change that raises coverage raises this number in the
 # same commit. Lowering it is a reviewed decision about which lines stop being tested, stated in the commit that
