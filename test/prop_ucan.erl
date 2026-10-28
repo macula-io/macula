@@ -53,6 +53,33 @@ prop_a_did_key_carries_its_key() ->
                 macula_ucan:carried_key(DidKey, Profile) =:= {ok, Carried}
             end).
 
+%% The issuer a policy names is the key that minted the token and no other: the same token, right audience and right
+%% clock, is refused under another issuer's node_id. Every other check in authorize/3 rests on this one — the token's
+%% signature verified against the key its `iss` carries is only worth something once that key is the expected one.
+prop_a_token_is_refused_under_another_issuer() ->
+    ?FORALL({Audience, With, Can}, {id(), grant_target(), can()},
+            begin
+                {Token, _Exp, Now} = minted(Audience, With, Can, 600),
+                Profile = wire_prop_support:profile(),
+                AnotherIssuer = macula_node_keys:node_id(<<9:256>>, Profile),
+                macula_ucan:authorize(Token, {ucan_required, AnotherIssuer},
+                                      #{caller => Audience, profile => Profile, now => Now})
+                    =:= {error, not_the_issuer}
+            end).
+
+%% A token with one byte of it turned over authorizes nothing: the same audience, the same policy, and a refusal. The
+%% byte is inside the signature and clear of the token's last characters — the tail of a base64url text carries unused
+%% bits, so a flip there can decode to the very same signature and prove nothing.
+prop_a_changed_token_is_refused() ->
+    ?FORALL({Audience, With, Can, Back, Bit}, {id(), grant_target(), can(), choose(8, 64), choose(0, 7)},
+            begin
+                {Token, _Exp, Now} = minted(Audience, With, Can, 600),
+                case authorize(flipped(Token, Back, Bit), Audience, Now) of
+                    {error, _Refusal} -> true;
+                    {ok, _Claims} -> false
+                end
+            end).
+
 %%------------------------------------------------------------------
 %% Generators
 %%------------------------------------------------------------------
@@ -93,3 +120,10 @@ minted(Audience, With, Can, Lifetime) ->
 authorize(Token, Caller, Now) ->
     macula_ucan:authorize(Token, {ucan_required, wire_prop_support:node_id(identity)},
                           #{caller => Caller, profile => wire_prop_support:profile(), now => Now}).
+
+%% One bit of the token's byte `Back` from its end turned over — inside the signature, the part a verifier has to check —
+%% leaving the header, the claims and the audience exactly as minted.
+flipped(Token, Back, Bit) ->
+    Index = byte_size(Token) - Back,
+    <<Before:Index/binary, Octet, After/binary>> = Token,
+    <<Before/binary, (Octet bxor (1 bsl Bit)), After/binary>>.

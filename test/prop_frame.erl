@@ -117,14 +117,23 @@ prop_a_built_frame_passes_its_own_check() ->
 
 %% Cut a frame's bytes anywhere and the decoder says it needs more: a truncated frame is never read as a whole one, so
 %% nothing dispatches on a frame whose tail has not arrived.
+%% Cut a frame's bytes anywhere and the decoder says how many more it needs and nothing else. A prefix is never a whole
+%% frame and never a refusal: a frame split across two reads is an ordinary segment boundary, and a decoder that refused
+%% one would drop the connection on it.
 prop_a_cut_short_frame_is_never_a_whole_frame() ->
     ?FORALL(Bytes, ?LET(F, frame(), macula_frame:encode(F)),
             ?FORALL(Cut, choose(0, byte_size(Bytes) - 1),
-                    partial(macula_frame:decode(binary:part(Bytes, 0, Cut))))).
+                    cut_short(macula_frame:decode(binary:part(Bytes, 0, Cut)), Cut, byte_size(Bytes)))).
 
-partial({more, N}) when is_integer(N), N > 0 -> true;
-partial({error, _Refusal}) -> true;
-partial(_WholeOrOther) -> false.
+%% What the decoder must answer, in the two shapes the length prefix has: under the four bytes of the prefix itself it
+%% asks for those, and past them for exactly the bytes of the frame that have not arrived.
+cut_short({more, Missing}, Cut, Size) ->
+    Missing =:= expected_missing(Cut, Size);
+cut_short(_NotMore, _Cut, _Size) ->
+    false.
+
+expected_missing(Cut, _Size) when Cut < 4 -> 4 - Cut;
+expected_missing(Cut, Size) -> Size - Cut.
 
 %% Whatever a peer sends, the decoder answers: a whole frame, a demand for more bytes, or a refusal. It never raises, so
 %% a station reading a stranger's bytes cannot be crashed by them.

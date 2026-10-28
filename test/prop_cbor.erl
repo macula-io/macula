@@ -4,6 +4,7 @@
 %%
 %% - a value the decoder hands back is the value that was encoded;
 %% - the canonical form does not move when its own bytes are decoded and encoded again;
+%% - a map's entries are written in bytewise order of their own encoded keys, whatever order the map hands them out in;
 %% - the two implementations agree byte for byte, which is what makes the reference an oracle;
 %% - the strict decoder answers on bytes no generator aimed at it, rather than raising.
 %%
@@ -64,6 +65,21 @@ codepoint() ->
 value_key() ->
     oneof([an_int(), text()]).
 
+%% A map whose entries exercise the sort: the shapes the rest of the module generates, or a larger one past the 32 keys
+%% where Erlang stops handing a map out in term order.
+map_to_encode() ->
+    oneof([?LET(Pairs, ?LET(N, choose(0, 3), vector(N, {value_key(), scalar()})), maps:from_list(Pairs)),
+           big_map()]).
+
+%% 80 entries of both kinds, keyed by a drawn base so the integer and text encodings change width from case to case.
+big_map() ->
+    ?LET(Base, choose(0, 16#FFFFFFFFFFFF),
+         maps:from_list([{Key, Key} || Key <- big_keys(Base)])).
+
+big_keys(Base) ->
+    [Base + I || I <- lists:seq(0, 39)]
+        ++ [{text, <<"k", (integer_to_binary(Base + I))/binary>>} || I <- lists:seq(0, 39)].
+
 %%------------------------------------------------------------------
 %% Round-trip
 %%------------------------------------------------------------------
@@ -91,6 +107,35 @@ prop_the_canonical_form_is_a_fixed_point() ->
 prop_an_atom_is_encoded_as_its_name() ->
     ?FORALL(A, atom(),
             macula_cbor_nif:pack_deterministic(A) =:= macula_cbor_nif:pack_deterministic({text, atom_to_binary(A, utf8)})).
+
+%%------------------------------------------------------------------
+%% Canonical map order
+%%------------------------------------------------------------------
+
+%% A map's entries are written in bytewise order of their own encoded keys (RFC 8949 4.2.1), whatever order the map
+%% hands them out in. That is checked against the bytes themselves: each key and value encoded alone, the pairs sorted by
+%% their key bytes, and the whole compared with the body of the encoded map.
+%%
+%% This is the property a case list cannot hold, because Erlang iterates a map of up to 32 keys in term order and a
+%% larger one in hash order: a codec that leaned on `maps:to_list/1' would come out right below that line and wrong
+%% above it, which is why the larger map here carries 80 keys of both kinds.
+prop_a_map_is_written_in_the_byte_order_of_its_keys() ->
+    ?FORALL(M, map_to_encode(),
+            begin
+                Bytes = macula_cbor_nif:pack_deterministic(M),
+                {Written, Body} = map_body(Bytes),
+                Pairs = [{encoded(K), encoded(V)} || {K, V} <- maps:to_list(M)],
+                Expected = iolist_to_binary([<<Key/binary, Value/binary>> || {Key, Value} <- lists:sort(Pairs)]),
+                Written =:= map_size(M) andalso Body =:= Expected
+            end).
+
+%% The head and the body of an encoded map, apart: 0xA0..0xB7 for up to 23 entries and 0xB8 plus one byte above that,
+%% which is the whole range these properties encode.
+map_body(<<5:3, 24:5, N:8, Body/binary>>) -> {N, Body};
+map_body(<<5:3, N:5, Body/binary>>) -> {N, Body}.
+
+encoded(V) ->
+    macula_cbor_nif:pack_deterministic(V).
 
 %%------------------------------------------------------------------
 %% The two codecs against each other

@@ -41,6 +41,23 @@ prop_a_record_with_a_changed_signature_is_refused() ->
                 macula_record:verify(Tampered, Profile) =:= {error, signature_invalid}
             end).
 
+%% The tbs is what the signature covers, so a record with one bit of its tbs turned over is not the record that was
+%% signed: a verifier refuses it whatever its fields hold. The refusal may be named anything — a bit in a length can
+%% stop the tbs decoding at all — but it is never an accepted record.
+prop_a_record_with_a_changed_tbs_is_refused() ->
+    ?FORALL({Realms, Capabilities, Where, Bit}, {realms(), capabilities(), where(), choose(0, 7)},
+            begin
+                Profile = wire_prop_support:profile(),
+                Signed = macula_record:sign(node_record(Realms, Capabilities), wire_prop_support:key(identity)),
+                Tampered = #{key => maps:get(key, Signed),
+                             tbs => flipped(maps:get(tbs, Signed), Where, Bit),
+                             signature => maps:get(signature, Signed)},
+                case macula_record:verify(Tampered, Profile) of
+                    {error, _Refusal} -> true;
+                    {ok, _Accepted} -> false
+                end
+            end).
+
 %% A record naming a signer other than the key that signs it is refused before it is signed, whatever else it holds:
 %% the signer a record names is a binding, not a claim.
 prop_a_record_naming_another_signer_cannot_be_signed() ->
