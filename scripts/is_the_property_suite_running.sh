@@ -17,7 +17,9 @@ DIR="${1:-test}"
 # The properties this tree defines: one `prop_name() ->` per property, at the start of a line, in ANY module under the
 # directory — not only the prop_*.erl ones. A property in a module proper does not look in is a test nobody runs, and
 # counting only the files proper already agrees to look at would let a rename out of its prefix pass this check.
-expected=$(grep -hoE '^prop_[a-z0-9_]+\(' "$DIR"/*.erl | sort -u | wc -l)
+# `|| true' because grep exits 1 on no match, and under `set -e' that would end the script at the assignment instead of
+# at the check below, which is where the reason belongs.
+expected=$( { grep -hoE '^prop_[a-z0-9_]+\(' "$DIR"/*.erl || true; } | sort -u | wc -l)
 
 if [ "$expected" -eq 0 ]; then
     echo "no prop_*() definitions under $DIR/*.erl: there is no property suite here to run"
