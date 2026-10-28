@@ -183,7 +183,7 @@ terminate(_Reason, #state{bridge_sock = BridgeSock, tunnel_id = TunnelId,
     try demonitor_if_set(MonRef) catch _:_ -> ok end,
     try unsubscribe_if_set(Pool, SubRef) catch _:_ -> ok end,
     try gen_tcp:close(BridgeSock) catch _:_ -> ok end,
-    remove_metrics(TunnelId),
+    macula_dist_pool:remove_metrics(TunnelId),
     ok.
 
 %%%===================================================================
@@ -315,9 +315,3 @@ demonitor_if_set(Ref) -> erlang:demonitor(Ref, [flush]).
 unsubscribe_if_set(_Pool, undefined) -> ok;
 unsubscribe_if_set(Pool, Ref) -> macula_pubsub:unsubscribe(Pool, Ref).
 
-remove_metrics(TunnelId) ->
-    case persistent_term:get(macula_dist_tunnels, undefined) of
-        undefined -> ok;
-        Tunnels ->
-            persistent_term:put(macula_dist_tunnels, maps:remove(TunnelId, Tunnels))
-    end.

@@ -36,6 +36,7 @@
 -export([register_mesh_pool/1]).
 -export([advertise_dist_accept/0]).
 -export([get_tunnel_metrics/0, get_tunnel_metrics/1]).
+-export([remove_metrics/1]).
 
 -ifdef(TEST).
 %% Readers of decoded tunnel RPC payloads, the two ends of the peer declaration,
@@ -265,10 +266,17 @@ on_tunnel_request_pool(_Pool, undefined, _TunnelId, _SendTopic, _RecvTopic) ->
     ?LOG_WARNING("[dist_pool] Tunnel request with no wire-authenticated caller"),
     {error, <<"no_caller">>};
 on_tunnel_request_pool(Pool, Caller, TunnelId, SendTopic, RecvTopic) ->
-    spawn_accept_bridge(Pool, Caller, TunnelId, SendTopic, RecvTopic),
+    on_accept_bridge(start_accept_bridge(Pool, Caller, TunnelId, SendTopic, RecvTopic),
+                     TunnelId, SendTopic, RecvTopic).
+
+%% The answered `{ok,_}' is the requester's only evidence that a tunnel exists,
+%% so it is sent once the bridge does, and not before (macula#157).
+on_accept_bridge({ok, _Setup}, TunnelId, SendTopic, RecvTopic) ->
     {ok, #{<<"tunnel_id">> => TunnelId,
            <<"send_topic">> => SendTopic,
-           <<"recv_topic">> => RecvTopic}}.
+           <<"recv_topic">> => RecvTopic}};
+on_accept_bridge({error, _Reason}, _TunnelId, _SendTopic, _RecvTopic) ->
+    {error, <<"bridge_failed">>}.
 
 %% The one publisher a tunnel's topics accept (macula#156). Both ends hold the
 %% other's node_id, and both hold it from the wire rather than from the request
@@ -281,54 +289,64 @@ on_tunnel_request_pool(Pool, Caller, TunnelId, SendTopic, RecvTopic) ->
 peer_source(Peer) when is_binary(Peer), byte_size(Peer) =:= 32 ->
     #{sources => {nodes, [Peer]}}.
 
-%% The accept side has a setup phase (kernel negotiation) before the
-%% supervised bridge can start. This setup process is short-lived —
-%% it creates the loopback pair, negotiates with net_kernel, then
-%% hands off to the supervised bridge.
-spawn_accept_bridge(Pool, Caller, TunnelId, SendTopic, RecvTopic) ->
-    {Pid, _Ref} = spawn_monitor(fun() ->
-        dist_accept_setup(Pool, Caller, TunnelId, SendTopic, RecvTopic)
-    end),
-    ?LOG_INFO("[dist_pool] Accept setup ~p for ~s", [Pid, TunnelId]),
-    Pid.
-
-%%%===================================================================
-%%% Internal — Accept-side Setup (short-lived, then hands to bridge)
-%%%===================================================================
-
-dist_accept_setup(Pool, Caller, TunnelId, SendTopic, RecvTopic) ->
-    Self = self(),
+%% The bridge is the socket's only reader and the tunnel's only subscriber, so
+%% nothing is answered until it exists (macula#157). The pair is made and the
+%% bridge started here, in the handler, and only the kernel negotiation -- which
+%% can wait on net_kernel for seconds -- is spawned. Answering `{ok,_}' first and
+%% starting the bridge afterwards left the requester holding a tunnel nobody
+%% read: it created its own socket, published into a topic no one held, and
+%% learned nothing but a bare `pang' after the setup timeout -- #158's symptom,
+%% on the side that hands the answer out.
+start_accept_bridge(Pool, Caller, TunnelId, SendTopic, RecvTopic) ->
     Key = tunnel_key(),
-    Source = peer_source(Caller),
     {DistSock, BridgeSock} = create_loopback_pair(),
+    on_started_bridge(start_supervised_bridge(Pool, BridgeSock, SendTopic, RecvTopic,
+                                              TunnelId, Key, peer_source(Caller)),
+                      DistSock, BridgeSock, TunnelId).
 
-    %% The bridge starts before the kernel is asked for a controller (macula#157).
-    %% It owns the tunnel's only subscription from that moment, so a fact that
-    %% arrives while the handshake is still in flight waits where it will be read
-    %% -- the bridge's mailbox, then the loopback socket -- instead of falling
-    %% into the gap between a buffer subscription's unsubscribe and the bridge's
-    %% subscribe. One subscription also means one copy: the pool fans a
-    %% publication out to every matching subscription, so two would double it.
-    on_bridge_started(start_supervised_bridge(Pool, BridgeSock, SendTopic, RecvTopic,
-                                              TunnelId, Key, Source),
-                      Self, DistSock, TunnelId).
-
-on_bridge_started({ok, Bridge}, Self, DistSock, TunnelId) ->
-    on_kernel_lookup(whereis(net_kernel), Self, Bridge, DistSock, TunnelId);
-on_bridge_started({error, Reason}, _Self, DistSock, TunnelId) ->
+on_started_bridge({ok, Bridge}, DistSock, _BridgeSock, TunnelId) ->
+    %% The negotiation process cannot be handed the socket before it exists, and
+    %% it must not read it before it owns it, so it waits for `go'.
+    Setup = spawn(fun() -> await_go(Bridge, DistSock, TunnelId) end),
+    ok = gen_tcp:controlling_process(DistSock, Setup),
+    Setup ! go,
+    ?LOG_INFO("[dist_pool] Accept setup ~p for ~s", [Setup, TunnelId]),
+    {ok, Setup};
+on_started_bridge({error, Reason}, DistSock, BridgeSock, TunnelId) ->
     %% No bridge means no reader on the socket, so the handshake is not offered
-    %% to the kernel at all: it fails here, with the pair given up in one place,
+    %% to the kernel at all: it fails here, with both ends given up in one place,
     %% rather than half-owned and half-read (macula#158).
     _ = gen_tcp:close(DistSock),
-    ?LOG_ERROR("[dist_bridge] Accept bridge did not start for ~s: ~p", [TunnelId, Reason]).
+    _ = gen_tcp:close(BridgeSock),
+    ?LOG_ERROR("[dist_bridge] Accept bridge did not start for ~s: ~p", [TunnelId, Reason]),
+    {error, Reason}.
 
-on_kernel_lookup(undefined, _Self, Bridge, DistSock, TunnelId) ->
+%%%===================================================================
+%%% Internal — Accept-side Kernel Negotiation (short-lived)
+%%%===================================================================
+
+%% The negotiation process takes the socket only once its owner has handed it
+%% over, so it starts by waiting rather than by reading.
+await_go(Bridge, DistSock, TunnelId) ->
+    receive go -> dist_accept_setup(Bridge, DistSock, TunnelId) end.
+
+%% The kernel handoff only: the bridge is already up and owns the tunnel's only
+%% subscription, so a fact that arrives while the handshake is in flight waits
+%% where it will be read -- the bridge's mailbox, then the loopback socket --
+%% instead of falling into the gap between a buffer subscription's unsubscribe
+%% and the bridge's subscribe. One subscription also means one copy: the pool
+%% fans a publication out to every matching subscription, so two would double it.
+dist_accept_setup(Bridge, DistSock, TunnelId) ->
+    on_kernel_lookup(whereis(net_kernel), Bridge, DistSock, TunnelId).
+
+on_kernel_lookup(undefined, Bridge, DistSock, TunnelId) ->
     ?LOG_WARNING("[dist_bridge] net_kernel not found"),
     abandon_accept(Bridge, DistSock, TunnelId);
-on_kernel_lookup(KernelPid, Self, Bridge, DistSock, TunnelId) ->
-    negotiate_with_kernel(Self, KernelPid, Bridge, DistSock, TunnelId).
+on_kernel_lookup(KernelPid, Bridge, DistSock, TunnelId) ->
+    negotiate_with_kernel(KernelPid, Bridge, DistSock, TunnelId).
 
-negotiate_with_kernel(Self, KernelPid, Bridge, DistSock, TunnelId) ->
+negotiate_with_kernel(KernelPid, Bridge, DistSock, TunnelId) ->
+    Self = self(),
     KernelPid ! {accept, Self, DistSock, inet, macula_dist},
     receive
         {KernelPid, controller, DistCtrl} ->
@@ -396,17 +414,32 @@ start_supervised_bridge(Pool, BridgeSock, SendTopic, RecvTopic, TunnelId, Key, S
         source => Source,
         metrics => Metrics
     },
-    case macula_dist_bridge_sup:start_bridge(BridgeArgs) of
-        {ok, Pid} ->
-            gen_tcp:controlling_process(BridgeSock, Pid),
-            Pid ! socket_ready,
-            ?LOG_INFO("[dist_pool] Supervised bridge ~p for ~s", [Pid, TunnelId]),
-            {ok, Pid};
-        {error, Reason} ->
-            ?LOG_ERROR("[dist_pool] Failed to start bridge for ~s: ~p",
-                        [TunnelId, Reason]),
-            {error, Reason}
+    on_bridge_child(start_bridge_child(BridgeArgs), TunnelId, BridgeSock).
+
+%% An absent bridge supervisor is an EXIT, not an `{error,_}': `supervisor:start_child/2'
+%% exits `noproc' when its name is not registered, and the guard #158 added for a
+%% bridge that fails by name never saw it -- the caller crashed with `noproc'
+%% instead of being told the bridge could not start (macula#157 follow-up).
+start_bridge_child(BridgeArgs) ->
+    try macula_dist_bridge_sup:start_bridge(BridgeArgs) of
+        Result -> Result
+    catch
+        exit:{noproc, _} -> {error, no_bridge_supervisor}
     end.
+
+on_bridge_child({ok, Pid}, TunnelId, BridgeSock) ->
+    gen_tcp:controlling_process(BridgeSock, Pid),
+    Pid ! socket_ready,
+    ?LOG_INFO("[dist_pool] Supervised bridge ~p for ~s", [Pid, TunnelId]),
+    {ok, Pid};
+on_bridge_child({error, Reason}, TunnelId, _BridgeSock) ->
+    %% The tunnel never came up, so its metrics entry goes with it. Nothing else
+    %% removes it: the bridge's own `terminate' never runs for a bridge that
+    %% failed in `init', so every failed attempt used to leave a phantom tunnel
+    %% in `get_tunnel_metrics/0' for the life of the node (macula#157 follow-up).
+    remove_metrics(TunnelId),
+    ?LOG_ERROR("[dist_pool] Failed to start bridge for ~s: ~p", [TunnelId, Reason]),
+    {error, Reason}.
 
 %%%===================================================================
 %%% Internal — Encryption
@@ -425,6 +458,19 @@ init_metrics(TunnelId) ->
     Tunnels = persistent_term:get(macula_dist_tunnels, #{}),
     persistent_term:put(macula_dist_tunnels, Tunnels#{TunnelId => Ref}),
     Ref.
+
+%% @doc Drop a tunnel's metrics entry.
+%%
+%% The pool owns the store, so it owns the removal: a tunnel is only ever
+%% entered here, and a bridge that never started has to be able to take its
+%% entry back out (macula#157 follow-up).
+-spec remove_metrics(binary()) -> ok.
+remove_metrics(TunnelId) ->
+    case persistent_term:get(macula_dist_tunnels, undefined) of
+        undefined -> ok;
+        Tunnels ->
+            persistent_term:put(macula_dist_tunnels, maps:remove(TunnelId, Tunnels))
+    end.
 
 read_metrics(Ref) ->
     #{bytes_out => counters:get(Ref, ?METRIC_BYTES_OUT),

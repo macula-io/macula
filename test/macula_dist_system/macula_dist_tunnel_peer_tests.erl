@@ -180,7 +180,9 @@ bytes_before_the_controller_attaches_reach_it_in_order_once_test_() ->
 
 %% The same reorder's other side: a bridge that cannot start offers the kernel
 %% nothing at all, so there is no socket left half-owned and no reader-less
-%% handshake to hang on (macula#158, macula#157).
+%% handshake to hang on (macula#158, macula#157) -- and the requester is told
+%% the tunnel did not open rather than being handed one nobody reads (the
+%% Fable round's finding 1).
 a_tunnel_whose_bridge_cannot_start_offers_the_kernel_nothing_test_() ->
     {timeout, 30, fun() ->
         ?assertEqual(undefined, whereis(net_kernel)),
@@ -189,7 +191,7 @@ a_tunnel_whose_bridge_cannot_start_offers_the_kernel_nothing_test_() ->
         register(net_kernel, self()),
         macula_dist_pool:register_mesh_pool(RefusingPool),
         try
-            ?assertMatch({ok, _},
+            ?assertEqual({error, <<"bridge_failed">>},
                          macula_dist_pool:handle_tunnel_request(
                            #{caller => ?PEER, <<"from_node">> => <<"a@host">>})),
             receive
@@ -201,6 +203,51 @@ a_tunnel_whose_bridge_cannot_start_offers_the_kernel_nothing_test_() ->
             catch unregister(net_kernel),
             persistent_term:erase(macula_dist_mesh_pool),
             stop_recording_pool(RefusingPool)
+        end
+    end}.
+
+%% A tunnel whose bridge never came up leaves nothing behind to be counted: its
+%% metrics entry is entered before the bridge starts, and the bridge's own
+%% `terminate' -- which would remove it -- never runs for a bridge that failed in
+%% `init'. Every failed attempt used to add a phantom tunnel to
+%% `get_tunnel_metrics/0' for the life of the node (the Fable round's finding 3).
+a_bridge_that_cannot_start_leaves_no_metrics_entry_behind_test_() ->
+    {timeout, 30, fun() ->
+        {ok, _} = application:ensure_all_started(macula),
+        {ok, RefusingPool} = start_refusing_pool(),
+        persistent_term:put(macula_dist_tunnels, #{}),
+        macula_dist_pool:register_mesh_pool(RefusingPool),
+        try
+            ?assertEqual({error, <<"bridge_failed">>},
+                         macula_dist_pool:handle_tunnel_request(
+                           #{caller => ?PEER, <<"from_node">> => <<"a@host">>})),
+            ?assertEqual([], macula_dist_pool:get_tunnel_metrics())
+        after
+            persistent_term:erase(macula_dist_mesh_pool),
+            persistent_term:erase(macula_dist_tunnels),
+            stop_recording_pool(RefusingPool)
+        end
+    end}.
+
+%% An absent bridge supervisor is an exit, not an `{error,_}', so the named
+%% refusal has to catch it: the requester gets `bridge_failed' back instead of
+%% the handler dying with `noproc' (the Fable round's finding 4).
+a_tunnel_request_with_no_bridge_supervisor_is_refused_by_name_test_() ->
+    {timeout, 30, fun() ->
+        {ok, _} = application:ensure_all_started(macula),
+        {ok, Pool} = macula_client:connect([], #{}),
+        SupPid = whereis(macula_dist_bridge_sup),
+        true = is_pid(SupPid),
+        unregister(macula_dist_bridge_sup),
+        macula_dist_pool:register_mesh_pool(Pool),
+        try
+            ?assertEqual({error, <<"bridge_failed">>},
+                         macula_dist_pool:handle_tunnel_request(
+                           #{caller => ?PEER, <<"from_node">> => <<"a@host">>}))
+        after
+            register(macula_dist_bridge_sup, SupPid),
+            persistent_term:erase(macula_dist_mesh_pool),
+            stop(Pool)
         end
     end}.
 
