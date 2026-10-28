@@ -186,7 +186,7 @@ functions_of_another_shape_are_refused_before_anything_is_advertised() ->
 %% process.
 without_functions_a_streamer_advertises_through_the_macula_facade() ->
     ?assertMatch({error, function_clause, [{macula, advertise_stream, _, _} | _]},
-                 try macula_streamer:advertise(pool, ?REALM, <<"p">>, ?MODULE, self()) of
+                 try macula_streamer:advertise(pool, ?REALM, <<"p">>, ?MODULE, self(), #{}) of
                      Result -> Result
                  catch
                      Class:Reason:Stack -> {Class, Reason, Stack}
