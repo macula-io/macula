@@ -248,8 +248,11 @@ publish_if_alive(false, Pool, Topic, Data, Retries) ->
     timer:sleep(1000),
     publish_with_retry(Pool, Topic, Data, Retries - 1).
 
+%% This node's own distribution tunnel: the facts on it are this node's, from the
+%% peers its kernel handed it, so it accepts any publisher explicitly rather than
+%% declaring a source it cannot name (macula#147).
 subscribe_to_tunnel(Pool, RecvTopic) ->
-    macula_pubsub:subscribe(Pool, ?DIST_REALM, RecvTopic, self()).
+    macula_pubsub:subscribe(Pool, ?DIST_REALM, RecvTopic, self(), #{sources => open}).
 
 deliver_tunnel_in({ok, Data}, _EncData, BridgeSock, Metrics, TunnelId, State) ->
     counters:add(Metrics, ?METRIC_BYTES_IN, byte_size(Data)),

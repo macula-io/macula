@@ -22,7 +22,7 @@ subscribe_rejects_short_realm_test() ->
     {ok, _} = application:ensure_all_started(macula),
     {ok, Pool} = macula_client:connect([], #{}),
     ?assertError(function_clause,
-        macula_pubsub:subscribe(Pool, <<0:128>>, <<"x.v1">>, self())),
+        macula_pubsub:subscribe(Pool, <<0:128>>, <<"x.v1">>, self(), #{sources => open})),
     ?assertError(function_clause,
         macula_pubsub:subscribe(Pool, <<0:128>>, <<"x.v1">>, self(), #{})),
     ok = macula_client:close(Pool),
@@ -35,7 +35,7 @@ round_trip_through_slice_test_() ->
          {ok, Pool} = macula_client:connect([], #{}),
          Topic = <<"slice.smoke_v1">>,
          {ok, SubRef} = macula_pubsub:subscribe(Pool, ?REALM,
-                                                Topic, self()),
+                                                Topic, self(), #{sources => open}),
          Pool ! {macula_event, make_ref(), Topic, world,
                  publication_meta(<<1:256>>, 1, <<"tbs world">>)},
          receive
@@ -71,7 +71,7 @@ subscribe_callback_invokes_fun_per_event_test_() ->
          Self = self(),
          CB = fun(T, P, M) -> Self ! {got, T, P, M} end,
          {ok, SubRef} = macula_pubsub:subscribe_callback(
-                           Pool, ?REALM, Topic, CB),
+                           Pool, ?REALM, Topic, CB, #{sources => open}),
          Pool ! {macula_event, make_ref(), Topic, hello,
                  publication_meta(<<2:256>>, 1, <<"tbs hello">>)},
          receive
@@ -101,7 +101,7 @@ subscribe_callback_swallows_callback_crash_test_() ->
              end
          end,
          {ok, SubRef} = macula_pubsub:subscribe_callback(
-                           Pool, ?REALM, Topic, CB),
+                           Pool, ?REALM, Topic, CB, #{sources => open}),
          Pool ! {macula_event, make_ref(), Topic, first,
                  publication_meta(<<3:256>>, 1, <<"tbs first">>)},
          Pool ! {macula_event, make_ref(), Topic, second,
@@ -124,7 +124,7 @@ subscribe_callback_receiver_ends_when_the_pool_is_killed_test_() ->
          {ok, Pool} = macula_client:connect([], #{}),
          Before = callback_receivers(),
          {ok, _SubRef} = macula_pubsub:subscribe_callback(
-                            Pool, ?REALM, <<"cb.pool_killed_v1">>, fun(_, _, _) -> ok end),
+                            Pool, ?REALM, <<"cb.pool_killed_v1">>, fun(_, _, _) -> ok end, #{sources => open}),
          [Receiver] = callback_receivers() -- Before,
          Ref = monitor(process, Receiver),
          exit(Pool, kill),
@@ -145,7 +145,7 @@ subscribe_callback_rejects_wrong_arity_test() ->
     Two = fun(_, _) -> ok end,
     ?assertError(function_clause,
                  macula_pubsub:subscribe_callback(Pool, ?REALM,
-                                                   <<"a.v1">>, Two)),
+                                                   <<"a.v1">>, Two, #{sources => open})),
     ok = macula_client:close(Pool).
 
 subscribe_callback_caller_death_cleans_up_test_() ->
@@ -160,7 +160,7 @@ subscribe_callback_caller_death_cleans_up_test_() ->
          Child = spawn(fun() ->
              {ok, SR} = macula_pubsub:subscribe_callback(
                           Pool, ?REALM, <<"cb.death_v1">>,
-                          fun(_, _, _) -> ok end),
+                          fun(_, _, _) -> ok end, #{sources => open}),
              Self ! {sub, self(), SR},
              receive _ -> ok end %% wait forever; we'll be killed
          end),

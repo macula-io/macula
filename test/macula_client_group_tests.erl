@@ -95,7 +95,7 @@ direct(Payload, Caller) ->
 calls(#{log := Log}) -> [C || {_, C} <- lists:keysort(1, [{I, C} || {call, I, C} <- ets:tab2list(Log)])].
 
 subscribe(#{pool := Pool}, Topic, Opts) ->
-    macula_client:subscribe(Pool, ?REALM, Topic, self(), Opts).
+    macula_client:subscribe(Pool, ?REALM, Topic, self(), Opts#{sources => open}).
 
 group_subscribe(W) ->
     {ok, Ref} = subscribe(W, ?TOPIC, #{group => ?PREFIX, ucan_token => ?TOKEN}),
@@ -237,7 +237,7 @@ a_callback_subscription_logs_an_unopened_event_and_keeps_no_mail(#{pool := Pool}
     ?_test(begin
         Test = self(),
         {ok, _Ref} = macula_pubsub:subscribe_callback(Pool, ?REALM, ?ELSEWHERE,
-                                                      fun(Topic, Payload, _Meta) -> Test ! {called, Topic, Payload} end),
+                                                      fun(Topic, Payload, _Meta) -> Test ! {called, Topic, Payload} end, #{sources => open}),
         _ = inject_sealed(W, ?ELSEWHERE, current_epoch(W), 1, <<"sealed">>),
         ok = inject_clear(W, ?ELSEWHERE, 2, <<"clear">>),
         receive {called, ?ELSEWHERE, <<"clear">>} -> ok after 2000 -> error(no_clear_event) end,

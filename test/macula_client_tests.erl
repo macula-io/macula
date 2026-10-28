@@ -176,8 +176,8 @@ pretend_connected(Pool, Station) ->
 subscribe_returns_subref_test() ->
     {ok, _} = application:ensure_all_started(macula),
     {ok, Pool} = macula_client:connect([], #{}),
-    {ok, SubRef} = macula_client:subscribe(Pool, ?REALM,
-                                           <<"x.v1">>, self(), #{}),
+    {ok, SubRef} = macula_client:subscribe(Pool,  ?REALM, 
+                                           <<"x.v1">>,  self(), #{sources => open}),
     ?assert(is_reference(SubRef)),
     ok = macula_client:close(Pool),
     ok.
@@ -185,8 +185,8 @@ subscribe_returns_subref_test() ->
 unsubscribe_is_idempotent_test() ->
     {ok, _} = application:ensure_all_started(macula),
     {ok, Pool} = macula_client:connect([], #{}),
-    {ok, SubRef} = macula_client:subscribe(Pool, ?REALM,
-                                           <<"x.v1">>, self(), #{}),
+    {ok, SubRef} = macula_client:subscribe(Pool,  ?REALM, 
+                                           <<"x.v1">>,  self(), #{sources => open}),
     ok = macula_client:unsubscribe(Pool, SubRef),
     ok = macula_client:unsubscribe(Pool, SubRef),
     ok = macula_client:unsubscribe(Pool, make_ref()),
@@ -203,8 +203,8 @@ inbound_event_fans_to_local_subscriber_test_() ->
          {ok, _} = application:ensure_all_started(macula),
          {ok, Pool} = macula_client:connect([], #{}),
          Topic = <<"weather.measured_v1">>,
-         {ok, SubRef} = macula_client:subscribe(Pool, ?REALM,
-                                                Topic, self(), #{}),
+         {ok, SubRef} = macula_client:subscribe(Pool,  ?REALM, 
+                                                Topic,  self(), #{sources => open}),
          %% Inject a synthetic inbound event as if a station_link
          %% had received it. The pool's handle_info matches on the
          %% {macula_event, _, Topic, Payload, Meta} shape.
@@ -232,8 +232,8 @@ inbound_event_dedup_test_() ->
          {ok, _} = application:ensure_all_started(macula),
          {ok, Pool} = macula_client:connect([], #{}),
          Topic = <<"x.v1">>,
-         {ok, SubRef} = macula_client:subscribe(Pool, ?REALM,
-                                                Topic, self(), #{}),
+         {ok, SubRef} = macula_client:subscribe(Pool,  ?REALM, 
+                                                Topic,  self(), #{sources => open}),
          %% Three copies of one publication, as three links relay it.
          Meta = publication_meta(<<1:256>>, 7, <<"tbs hello">>),
          Pool ! {macula_event, make_ref(), Topic, hello, Meta},
@@ -266,12 +266,12 @@ a_wildcard_subscription_through_the_pool_receives_matching_events_test_() ->
      fun() ->
          {ok, _} = application:ensure_all_started(macula),
          {ok, Pool} = macula_client:connect([], #{}),
-         {ok, Wildcard} = macula_client:subscribe(Pool, ?REALM,
-                                                  <<"io.macula/sensors/*/v1">>,
-                                                  self(), #{delivery => as_arrives}),
-         {ok, Kitchen} = macula_client:subscribe(Pool, ?REALM,
-                                                 <<"io.macula/sensors/kitchen/v1">>,
-                                                 self(), #{delivery => as_arrives}),
+         {ok, Wildcard} = macula_client:subscribe(Pool,  ?REALM, 
+                                                  <<"io.macula/sensors/*/v1">>, 
+                                                  self(), #{sources => open, delivery => as_arrives}),
+         {ok, Kitchen} = macula_client:subscribe(Pool,  ?REALM, 
+                                                 <<"io.macula/sensors/kitchen/v1">>, 
+                                                 self(), #{sources => open, delivery => as_arrives}),
          Meta = fun(Seq) -> publication_meta(<<1:256>>, Seq, <<"tbs ", (integer_to_binary(Seq))/binary>>) end,
          Pool ! {macula_event, make_ref(), <<"io.macula/sensors/kitchen/v1">>, warm, Meta(1)},
          Pool ! {macula_event, make_ref(), <<"io.macula/sensors/kitchen/v1">>, warm, Meta(1)},
@@ -296,8 +296,8 @@ multiple_consumers_same_topic_test_() ->
          Topic = <<"x.v1">>,
          Test = self(),
          Sub1 = spawn(fun() ->
-             {ok, R} = macula_client:subscribe(Pool, ?REALM,
-                                               Topic, self(), #{}),
+             {ok, R} = macula_client:subscribe(Pool,  ?REALM, 
+                                               Topic,  self(), #{sources => open}),
              Test ! {ready, self(), R},
              receive
                  {macula_event, _, _, P, _} -> Test ! {got, self(), P}
@@ -305,8 +305,8 @@ multiple_consumers_same_topic_test_() ->
              end
          end),
          Sub2 = spawn(fun() ->
-             {ok, R} = macula_client:subscribe(Pool, ?REALM,
-                                               Topic, self(), #{}),
+             {ok, R} = macula_client:subscribe(Pool,  ?REALM, 
+                                               Topic,  self(), #{sources => open}),
              Test ! {ready, self(), R},
              receive
                  {macula_event, _, _, P, _} -> Test ! {got, self(), P}
@@ -363,8 +363,8 @@ subscriber_down_drops_subscription_test_() ->
          Topic = <<"x.v1">>,
          Test = self(),
          Sub = spawn(fun() ->
-             {ok, R} = macula_client:subscribe(Pool, ?REALM,
-                                               Topic, self(), #{}),
+             {ok, R} = macula_client:subscribe(Pool,  ?REALM, 
+                                               Topic,  self(), #{sources => open}),
              Test ! {ready, self(), R}
          end),
          _R = wait_ready(Sub),
@@ -393,8 +393,8 @@ close_notifies_subscribers_test_() ->
      fun() ->
          {ok, _} = application:ensure_all_started(macula),
          {ok, Pool} = macula_client:connect([], #{}),
-         {ok, SubRef} = macula_client:subscribe(Pool, ?REALM,
-                                                <<"x.v1">>, self(), #{}),
+         {ok, SubRef} = macula_client:subscribe(Pool,  ?REALM, 
+                                                <<"x.v1">>,  self(), #{sources => open}),
          ok = macula_client:close(Pool),
          %% Pattern-match SubRef in the receive so stale event_gone
          %% messages from earlier tests in the same eunit process
@@ -539,10 +539,10 @@ status_tracks_subscription_count_test_() ->
      fun() ->
          {ok, _} = application:ensure_all_started(macula),
          {ok, Pool} = macula_client:connect([], #{}),
-         {ok, _S1} = macula_client:subscribe(Pool, ?REALM,
-                                              <<"a.v1">>, self(), #{}),
-         {ok, _S2} = macula_client:subscribe(Pool, ?REALM,
-                                              <<"b.v1">>, self(), #{}),
+         {ok, _S1} = macula_client:subscribe(Pool,  ?REALM, 
+                                              <<"a.v1">>,  self(), #{sources => open}),
+         {ok, _S2} = macula_client:subscribe(Pool,  ?REALM, 
+                                              <<"b.v1">>,  self(), #{sources => open}),
          {ok, S} = macula_client:status(Pool),
          ?assertEqual(2, maps:get(subscriptions, S)),
          ok = macula_client:close(Pool)
@@ -721,9 +721,8 @@ same_realm_publisher_and_seq_with_another_hash_is_delivered_test_() ->
          %% `as_arrives': isolate the dedup LAYER. `ordered' (the
          %% default) also drops a repeated seq, which would mask what
          %% this test measures.
-         {ok, SubRef} = macula_client:subscribe(Pool, ?REALM,
-                                                 Topic, self(),
-                                                 #{delivery => as_arrives}),
+         {ok, SubRef} = macula_client:subscribe(Pool,  ?REALM, 
+                                                 Topic,  self(), #{sources => open, delivery => as_arrives}),
          Pub = <<11:256>>,
          Pool ! {macula_event, make_ref(), Topic, hello,
                  publication_meta(Pub, 3, <<"tbs one">>)},
@@ -744,9 +743,8 @@ a_copy_arriving_after_its_publication_expired_is_dropped_test_() ->
          {ok, _} = application:ensure_all_started(macula),
          {ok, Pool} = macula_client:connect([], #{dedup_sweep_ms => 50}),
          Topic = <<"dedup.expiring_v1">>,
-         {ok, SubRef} = macula_client:subscribe(Pool, ?REALM,
-                                                 Topic, self(),
-                                                 #{delivery => as_arrives}),
+         {ok, SubRef} = macula_client:subscribe(Pool,  ?REALM, 
+                                                 Topic,  self(), #{sources => open, delivery => as_arrives}),
          ExpiresAt = erlang:system_time(millisecond) + 150,
          Meta = (publication_meta(<<9:256>>, 1, <<"tbs expiring">>))#{expires_at := ExpiresAt},
          Pool ! {macula_event, make_ref(), Topic, hello, Meta},
@@ -771,9 +769,8 @@ an_event_expired_at_its_check_is_not_delivered_test_() ->
          {ok, _} = application:ensure_all_started(macula),
          {ok, Pool} = macula_client:connect([], #{}),
          Topic = <<"dedup.expired_v1">>,
-         {ok, SubRef} = macula_client:subscribe(Pool, ?REALM,
-                                                 Topic, self(),
-                                                 #{delivery => as_arrives}),
+         {ok, SubRef} = macula_client:subscribe(Pool,  ?REALM, 
+                                                 Topic,  self(), #{sources => open, delivery => as_arrives}),
          Expired = erlang:system_time(millisecond) - 1,
          Meta = (publication_meta(<<13:256>>, 1, <<"tbs expired">>))#{expires_at := Expired},
          Pool ! {macula_event, make_ref(), Topic, hello, Meta},
@@ -797,9 +794,8 @@ a_copy_with_no_subscription_does_not_hide_it_from_a_later_subscriber_test_() ->
          Pool ! {macula_event, make_ref(), Topic, hello, Meta},
          %% A call behind the event, so the pool has handled it before the subscribe.
          {ok, _} = macula_client:status(Pool),
-         {ok, SubRef} = macula_client:subscribe(Pool, ?REALM,
-                                                 Topic, self(),
-                                                 #{delivery => as_arrives}),
+         {ok, SubRef} = macula_client:subscribe(Pool,  ?REALM, 
+                                                 Topic,  self(), #{sources => open, delivery => as_arrives}),
          Pool ! {macula_event, make_ref(), Topic, hello, Meta},
          receive {macula_event, SubRef, Topic, hello, _} -> ok
          after 1_000 -> erlang:error(hidden_from_later_subscriber) end,
@@ -815,9 +811,8 @@ dedup_holds_a_hash_while_its_publication_is_live_test_() ->
          {ok, Pool} = macula_client:connect([], #{dedup_sweep_ms => 50}),
          Topic = <<"dedup.live_v1">>,
          %% `as_arrives' so the dedup LAYER is the only filter under test.
-         {ok, SubRef} = macula_client:subscribe(Pool, ?REALM,
-                                                 Topic, self(),
-                                                 #{delivery => as_arrives}),
+         {ok, SubRef} = macula_client:subscribe(Pool,  ?REALM, 
+                                                 Topic,  self(), #{sources => open, delivery => as_arrives}),
          Meta = publication_meta(<<10:256>>, 7, <<"tbs live">>),
          Pool ! {macula_event, make_ref(), Topic, hello, Meta},
          receive {macula_event, SubRef, Topic, hello, _} -> ok

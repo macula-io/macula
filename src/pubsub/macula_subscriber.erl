@@ -1,7 +1,7 @@
 %%%-------------------------------------------------------------------
 %%% @doc Behaviour for supervised, stateful PubSub consumers.
 %%%
-%%% `macula:subscribe_callback/4' is the right tool for a stateless
+%%% `macula:subscribe_callback/5' is the right tool for a stateless
 %%% one-shot reaction (log a line, forward to another process): it
 %%% spawns its own receiver process so a slow callback does not
 %%% back-pressure the pool, but that process is not part of your
@@ -20,7 +20,7 @@
 %%% with `{pool_down, Reason}' when the pool process dies without sending it
 %%% (killed, or taken down by a link). Both are abnormal exits, so a supervisor
 %%% restarts it against whatever pool is current. A process that calls
-%%% `macula:subscribe/4,5' itself should monitor the pool the same way.
+%%% `macula:subscribe/5' itself should monitor the pool the same way.
 %%%
 %%% == Subscribe function ==
 %%%
@@ -29,6 +29,10 @@
 %%% `Subscribe(Pool, Realm, Topic, self(), Opts)' with the other options,
 %%% and `macula:subscribe/5' by default. A test gives its own function
 %%% this way instead of replacing the `macula' module.
+%%%
+%%% The other options reach `macula:subscribe/5' as they are, so they must name
+%%% `sources' -- who may deliver to this subscription (macula#147). There is no
+%%% default, and a start without it fails with `{error, {sources, required}}'.
 %%%
 %%% == Example ==
 %%%
@@ -54,7 +58,7 @@
 %%%
 %%% ```
 %%% {ok, Pid} = macula_subscriber:start_link(temperature_logger, Pool,
-%%%     Realm, <<"sensors.temperature_v1">>, []).
+%%%     Realm, <<"sensors.temperature_v1">>, [], #{sources => members}).
 %%% '''
 %%% @end
 %%%-------------------------------------------------------------------

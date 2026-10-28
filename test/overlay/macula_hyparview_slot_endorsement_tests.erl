@@ -24,7 +24,9 @@ cases(Fixture) ->
                  fun slot_standing_refuses_a_withdrawn_member/1,
                  fun slot_standing_reads_the_members_own_slot/1,
                  fun slot_standing_refuses_when_the_lookup_fails/1,
-                 fun slot_standing_refuses_when_the_lookup_exits/1]].
+                 fun slot_standing_refuses_when_the_lookup_exits/1,
+                 fun slot_verdict_reports_the_endorsements_own_expiry/1,
+                 fun slot_verdict_reports_the_tombstones_own_expiry/1]].
 
 the_realm_keys_endorsement_counts_beside_another_keys_endorsement_and_tombstone(
   #{other_key := Other, endorsement := Endorsement, realm := Realm, member := Member} = Fixture) ->
@@ -92,6 +94,23 @@ slot_standing_refuses_when_the_lookup_exits(#{member := Member} = Fixture) ->
     ?assertEqual({error, lookup_failed}, (standing(Lookup, Fixture))(Member)).
 
 %%------------------------------------------------------------------
+%% slot_verdict/4: the verdict with the record's own expiry (macula#147)
+%%------------------------------------------------------------------
+
+%% A caller caches the verdict no longer than the record that produced it, so the
+%% verdict comes with that record's expiry rather than the caller's guess at it.
+slot_verdict_reports_the_endorsements_own_expiry(#{endorsement := Endorsement} = Fixture) ->
+    {{ok, [<<"peer">>]}, Until, _Stats} = verdict([wire(Endorsement)], Fixture),
+    ?assertEqual(macula_record:expires_at(Endorsement), Until).
+
+%% A withdrawal comes with the tombstone's own expiry, which outlives the
+%% endorsement it withdraws: a caller caching the refusal bounds it by that.
+slot_verdict_reports_the_tombstones_own_expiry(#{realm_key := Key, endorsement := Endorsement} = Fixture) ->
+    Tombstone = macula_record:sign(macula_record:tombstone(Endorsement, revoked), Key),
+    {{error, withdrawn}, Until, _Stats} = verdict([wire(Endorsement), wire(Tombstone)], Fixture),
+    ?assertEqual(macula_record:expires_at(Tombstone), Until).
+
+%%------------------------------------------------------------------
 %% Helpers
 %%------------------------------------------------------------------
 
@@ -110,6 +129,10 @@ slot(Entries, Fixture) ->
 slot(Entries, #{realm_key := Key, realm := Realm, member := Member}, Now) ->
     Trust = #{profile => pq_pure, realm => Realm, realm_key_id => macula_node_keys:key_id(Key)},
     macula_hyparview_endorsement:slot_endorsement(Entries, Trust, Member, Now).
+
+verdict(Entries, #{realm_key := Key, realm := Realm, member := Member}) ->
+    Trust = #{profile => pq_pure, realm => Realm, realm_key_id => macula_node_keys:key_id(Key)},
+    macula_hyparview_endorsement:slot_verdict(Entries, Trust, Member, erlang:system_time(millisecond)).
 
 standing(Lookup, #{realm_key := Key, realm := Realm}) ->
     macula_hyparview_endorsement:slot_standing(

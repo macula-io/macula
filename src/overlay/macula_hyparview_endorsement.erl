@@ -30,8 +30,8 @@
 %% </ul>
 -module(macula_hyparview_endorsement).
 
--export([verify_endorsement/3, verify_endorsement/4, slot_endorsement/3, slot_endorsement/4, slot_standing/2,
-         build_join/3]).
+-export([verify_endorsement/3, verify_endorsement/4, slot_endorsement/3, slot_endorsement/4, slot_verdict/4,
+         slot_standing/2, build_join/3]).
 
 -export_type([trust/0, verify_error/0, slot_error/0, slot_lookup/0, standing/0]).
 
@@ -105,10 +105,30 @@ slot_endorsement(Entries, Trust, Member) ->
 %% and of another type as wrong_type. The stats are signer_entry/4's.
 -spec slot_endorsement([binary() | map()], trust(), node_id(), integer()) ->
         {{ok, [binary()]} | {error, slot_error()}, macula_record:signer_entry_stats()}.
-slot_endorsement(Entries, #{profile := Profile, realm := <<_:256>>, realm_key_id := <<_:256>> = RealmKeyId} = Trust,
-                 <<_:256>> = Member, Now) when is_list(Entries), is_integer(Now) ->
+slot_endorsement(Entries, #{realm_key_id := <<_:256>>} = Trust, Member, Now)
+  when is_list(Entries), is_integer(Now) ->
+    {Outcome, _Until, Stats} = slot_verdict(Entries, Trust, Member, Now),
+    {Outcome, Stats}.
+
+%% @doc As slot_endorsement/4, with the record's own expiry: the verdict, the
+%% moment the realm key's entry stops being honoured (the endorsement's when it
+%% admits, the tombstone's when it withdraws, `undefined' when the slot holds no
+%% entry for the realm key), and the stats. A caller that caches the verdict
+%% bounds the entry by this expiry and no longer (macula#147): a withdrawn member
+%% is then heard until the cache's own refresh, never until the record's 24 h
+%% ceiling.
+-spec slot_verdict([binary() | map()], trust(), node_id(), integer()) ->
+        {{ok, [binary()]} | {error, slot_error()}, non_neg_integer() | undefined,
+         macula_record:signer_entry_stats()}.
+slot_verdict(Entries, #{profile := Profile, realm := <<_:256>>, realm_key_id := <<_:256>> = RealmKeyId} = Trust,
+             <<_:256>> = Member, Now) when is_list(Entries), is_integer(Now) ->
     {Entry, Stats} = macula_record:signer_entry(Entries, {key_id, RealmKeyId}, Profile, Now),
-    {slot_entry(Entry, Trust, Member, Now), Stats}.
+    {slot_entry(Entry, Trust, Member, Now), entry_expiry(Entry), Stats}.
+
+%% The realm key's entry's own lifetime, whatever it says: a tombstone answers
+%% withdrawn, and a caller reads only the verdict then.
+entry_expiry({ok, #{expires_at := ExpiresAt}}) when is_integer(ExpiresAt) -> ExpiresAt;
+entry_expiry(_Entry) -> undefined.
 
 %% @doc The standing check that reads a member's slot through Lookup, typically
 %% `fun(Key) -> macula:find_records(Pool, Key) end': ok while the realm key's entry there is an endorsement that admits

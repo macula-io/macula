@@ -96,7 +96,7 @@ pattern_flushed_event_keeps_its_topic_test_() ->
         {ok, Pool} = macula_client:connect([], #{order_timeout_ms => 50}),
         Pattern = <<"order/*/wire_v1">>,
         Concrete = <<"order/east/wire_v1">>,
-        {ok, Ref} = macula_client:subscribe(Pool, ?REALM, Pattern, self(), #{}),
+        {ok, Ref} = macula_client:subscribe(Pool,  ?REALM,  Pattern,  self(), #{sources => open}),
         inject(Pool, Concrete, ?PUB, 1),
         inject(Pool, Concrete, ?PUB, 3),   %% 2 never arrives: 3 waits for the flush
         ?assertEqual([{Concrete, 1}, {Concrete, 3}], collect_topics(Ref, 2, 1000)),
@@ -111,7 +111,7 @@ start(ConnOpts, SubOpts) ->
     {ok, _} = application:ensure_all_started(macula),
     {ok, Pool} = macula_client:connect([], ConnOpts),
     Topic = <<"order.wire_v1">>,
-    {ok, Ref} = macula_client:subscribe(Pool, ?REALM, Topic, self(), SubOpts),
+    {ok, Ref} = macula_client:subscribe(Pool, ?REALM, Topic, self(), SubOpts#{sources => open}),
     {Pool, Ref, Topic}.
 
 stop(Pool, Ref) ->

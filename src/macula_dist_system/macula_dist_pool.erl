@@ -262,9 +262,11 @@ dist_accept_setup(Pool, TunnelId, SendTopic, RecvTopic) ->
 
     %% Subscribe for buffering before kernel knows about us. The V2
     %% pool delivers `{macula_event, SubRef, Topic, Payload, Meta}'
-    %% to Self directly; no callback indirection.
+    %% to Self directly; no callback indirection. The tunnel carries this node's
+    %% own distribution facts from the peers its kernel handed it, so it accepts
+    %% any publisher explicitly (macula#147).
     {ok, BufferSubRef} = macula_pubsub:subscribe(Pool, ?DIST_REALM,
-                                                  RecvTopic, Self),
+                                                  RecvTopic, Self, #{sources => open}),
 
     {DistSock, BridgeSock} = create_loopback_pair(),
 

@@ -76,7 +76,7 @@ an_answer_before_the_wait_is_kept(Pool) ->
 
 a_refused_subscription_is_refused(Pool) ->
     [{Link1, _}, {Link2, _}] = connected(Pool),
-    {ok, _SubRef} = macula_client:subscribe(Pool, ?REALM, ?TOPIC, self(), #{}),
+    {ok, _SubRef} = macula_client:subscribe(Pool,  ?REALM,  ?TOPIC,  self(), #{sources => open}),
     Waiter = waiting(Pool, subscribe, ?TOPIC),
     Subscriber = node_id(Pool),
     acked(Link1, subscribe_ack(Subscriber, false, too_many_realms)),
@@ -85,7 +85,7 @@ a_refused_subscription_is_refused(Pool) ->
 
 an_ack_for_another_subscriber_is_dropped(Pool) ->
     [{Link1, Station1}, {Link2, _}] = connected(Pool),
-    {ok, _SubRef} = macula_client:subscribe(Pool, ?REALM, ?TOPIC, self(), #{}),
+    {ok, _SubRef} = macula_client:subscribe(Pool,  ?REALM,  ?TOPIC,  self(), #{sources => open}),
     acked(Link1, subscribe_ack(<<99:256>>, true, undefined)),
     acked(Link2, subscribe_ack(node_id(Pool), false, refused)),
     ?assertEqual({error, {unacknowledged, Station1}},

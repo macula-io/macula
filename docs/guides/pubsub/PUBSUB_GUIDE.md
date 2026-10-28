@@ -234,6 +234,73 @@ org_fact / app_fact` tier choice.
 
 ---
 
+## Who may deliver to your subscription
+
+Every subscription declares its **sources**: who may deliver facts to it. There
+is no default — a subscription that names none is refused at `subscribe` with
+`{error, {sources, required}}`, so a service cannot ship one that anyone can
+deliver to (macula#147).
+
+```erlang
+%% Any publisher the realm admitted.
+{ok, Sub} = macula:subscribe(Pool, Realm, Topic, self(), #{sources => members}),
+
+%% A node the organisation `acme` delegated (macula:org_member/4,5).
+{ok, Sub2} = macula:subscribe(Pool, Realm, Topic2, self(), #{sources => {org, <<"acme">>}}),
+
+%% Exactly these publishers, and nothing looked up.
+{ok, Sub3} = macula:subscribe(Pool, Realm, Topic3, self(), #{sources => {nodes, [NodeId]}}).
+```
+
+| Source | Admits | What it costs |
+|---|---|---|
+| `{nodes, [NodeId]}` | exactly the listed publisher node ids | nothing: a comparison, and it never expires |
+| `members` | a publisher whose realm member endorsement is live — the member itself, never a delegate | one record lookup per publisher, cached |
+| `{org, Org}` | a node the organisation's directory delegates | one record lookup per publisher, cached |
+| `open` | anyone | nothing; an explicit opt-out, and the log says so |
+
+**It is enforced by your own SDK**, on the `publisher` the delivering link
+verified, before your handler runs and on both delivery channels. No station can
+make a fact it relays look like another node's, so this is the one publish-side
+control that holds even against a station working with a malicious member. It is
+self-protection, not a grant: nothing is minted, published or administered.
+
+**What it is not.** Not a read permission: on a sealed group's topic, whoever may
+read the group key may produce readable events, so use a group's keys for
+confidentiality and `sources` for who may speak. And `members` on a
+*subscription* is stricter than `members` on a *call*: a member's delegate is
+admitted to a `members` procedure, but a subscription admits only the member
+itself, because the endorsement names the member's own node.
+
+**When a lookup is needed**, it runs in a worker inside your pool, never blocking
+delivery, and its verdict is cached under `{realm, source, publisher}` — never
+past the record that produced it, refreshed while still in use, so a steady
+publisher is looked up about once per cache life rather than once per fact. A
+fact from a publisher whose lookup is still running is **held** behind that one
+lookup (bounded, and never past the fact's own expiry) rather than dropped.
+
+**Watching it work.** `macula_client:status/1` keeps three counters, deliberately
+apart:
+
+| Counter | Means |
+|---|---|
+| `source_refused` | a verdict with its reason: the source does not admit that publisher |
+| `source_dropped` | a budget with its reason: the realm's lookup window, the hold cap, an expired hold, or a lookup that could not find out |
+| `source_held` | how many facts are waiting behind a lookup right now |
+
+Alongside them, `source_verdicts` (live cached verdicts) and `source_lookups`
+(lookups in flight). The bounds themselves are one `connect/2` option,
+`subscribe_sources` (`max_publishers`, `held_per_key`, `lookups_per_window`,
+`window_ms`, `cache_ttl_ms`, `refresh_margin_ms`, `refusal_ttl_ms`,
+`lookup_timeout_ms`); a malformed one refuses to start the pool.
+
+**In your log.** Each subscription logs its sources at `subscribe` — the
+alphabet, and the organisation for `org` — and an `open` subscription logs as an
+explicit opt-out, so an operator can read what a running service accepts without
+reading its source.
+
+---
+
 ## When the subscription ends
 
 The only way a live subscription produces a terminal message today is
@@ -426,7 +493,10 @@ keys to its members.
 %% restricted group (below).
 Opts = #{group => <<"io.macula/acme/chat">>, ucan_token => OrgGrant},
 ok = macula:publish(Pool, Realm, <<"io.macula/acme/chat/room/said_v1">>, Payload, Opts),
-{ok, Sub} = macula:subscribe(Pool, Realm, <<"io.macula/acme/chat/room/said_v1">>, self(), Opts),
+%% `sources' is required on every subscription: who may deliver to it
+%% (macula#147). A sealed group's key already decides who may speak.
+{ok, Sub} = macula:subscribe(Pool, Realm, <<"io.macula/acme/chat/room/said_v1">>, self(),
+                             Opts#{sources => {org, <<"acme">>}}),
 receive
     {macula_event, Sub, Topic, Payload, #{sealed := 1, seal_key_id := _Epoch}} -> ok;
     {macula_event_unopened, Sub, Topic, #{publisher := _, seal_key_id := _, reason := _}} -> ok

@@ -189,13 +189,16 @@ Topic     = macula_topic:app_fact(RealmName, <<"example">>, <<"myapp">>,
 Procedure = macula_topic:app_hope(RealmName, <<"example">>, <<"myapp">>,
                                   <<"math">>, <<"add">>, 1),
 
-%% Subscribe (delivers {macula_event, Ref, Topic, Payload, Meta} to a pid),
-{ok, Ref} = macula:subscribe(Pool, Realm, Topic, self()),
+%% Subscribe (delivers {macula_event, Ref, Topic, Payload, Meta} to a pid).
+%% `sources' is required: who may deliver to this subscription (macula#147),
+%% as members | {org, Org} | {nodes, [NodeId]}, or `open' to opt out.
+{ok, Ref} = macula:subscribe(Pool, Realm, Topic, self(), #{sources => members}),
 
 %% or subscribe with a callback fun(Topic, Payload, Meta):
 {ok, Ref2} = macula:subscribe_callback(
     Pool, Realm, Topic,
-    fun(_Topic, Payload, _Meta) -> io:format("~p~n", [Payload]) end),
+    fun(_Topic, Payload, _Meta) -> io:format("~p~n", [Payload]) end,
+    #{sources => members}),
 
 %% Publish. Entity IDs go in the PAYLOAD, never in the topic.
 ok = macula:publish(Pool, Realm, Topic,

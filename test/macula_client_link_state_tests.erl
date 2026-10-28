@@ -107,7 +107,7 @@ a_subscribe_waits_on_no_busy_link_test_() ->
          ok = sys:suspend(LinkB),
          try
              {SubMs, {ok, _SubRef}} =
-                 timed(fun() -> macula_client:subscribe(Pool, ?REALM, <<"acme.tick_v1">>, self(), #{}) end),
+                 timed(fun() -> macula_client:subscribe(Pool,  ?REALM,  <<"acme.tick_v1">>,  self(), #{sources => open}) end),
              ?assert(SubMs < ?PROMPT_MS),
              {StatusMs, {ok, #{healthy_links := 2}}} = timed(fun() -> macula_client:status(Pool) end),
              ?assert(StatusMs < ?PROMPT_MS),
@@ -129,7 +129,7 @@ an_unsubscribe_before_a_busy_link_resumes_leaves_nothing_test_() ->
          {Pool, [_LinkA, LinkB]} = connected_pool(),
          ok = sys:suspend(LinkB),
          try
-             {ok, SubRef} = macula_client:subscribe(Pool, ?REALM, <<"acme.tock_v1">>, self(), #{}),
+             {ok, SubRef} = macula_client:subscribe(Pool,  ?REALM,  <<"acme.tock_v1">>,  self(), #{sources => open}),
              {UnsubMs, ok} = timed(fun() -> macula_client:unsubscribe(Pool, SubRef) end),
              ?assert(UnsubMs < ?PROMPT_MS),
              ?assertEqual([], calls_from(Pool, LinkB))

@@ -19,7 +19,7 @@ Seeds = [<<"quic://relay-1.example.com:4433">>,
 
 %% 3. Use the pool.
 ok          = macula:publish(Pool, Realm, Topic, Payload).
-{ok, _Sub}  = macula:subscribe(Pool, Realm, Topic, self()).
+{ok, _Sub}  = macula:subscribe(Pool, Realm, Topic, self(), #{sources => members}).
 
 %% 4. Stop when done.
 ok = macula:close(Pool).
@@ -210,7 +210,7 @@ started, before any handshake completes. That costs real time on a slow
 host (1.6 to 3.4 s was measured at half a CPU), so never call it from a
 process other processes wait on; a long-lived pool goes under your own
 supervisor via `macula:child_spec/3`. Each link's CONNECT/HELLO
-handshake completes asynchronously. `publish/4` and `subscribe/4` issued
+handshake completes asynchronously. `publish/4` and `subscribe/5` issued
 before any link finishes handshake will succeed (subscribe is queued)
 or fail with `{error, {transient, no_healthy_station}}` (publish, if
 literally zero links are usable). Apps that need to await readiness
@@ -332,8 +332,8 @@ realms; the realm is passed per call:
 ok = macula:publish(Pool, RealmA, TopicA, PayloadA),
 ok = macula:publish(Pool, RealmB, TopicB, PayloadB).
 
-{ok, SubA} = macula:subscribe(Pool, RealmA, TopicA, self()),
-{ok, SubB} = macula:subscribe(Pool, RealmB, TopicA, self()).
+{ok, SubA} = macula:subscribe(Pool, RealmA, TopicA, self(), #{sources => members}),
+{ok, SubB} = macula:subscribe(Pool, RealmB, TopicA, self(), #{sources => members}).
 %% ↑ same topic, different realms — two distinct subscriptions
 ```
 

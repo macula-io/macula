@@ -193,7 +193,7 @@ Do NOT write `MaculaRealm.Topics` or similar wrapper modules. Call the Erlang bu
 
 ## Validation
 
-**`macula:publish/4,5`, `subscribe/4,5`, `advertise/5`, and `call/5` do NOT
+**`macula:publish/4,5`, `subscribe/5`, `advertise/5`, and `call/5` do NOT
 call `macula_topic:validate/1` for you.** They take `Topic`/`Procedure` as an
 opaque binary and send whatever you pass — an inline, malformed string
 publishes and subscribes exactly like a canonical one; the two sides just

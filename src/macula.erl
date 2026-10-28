@@ -5,7 +5,7 @@
 %%%
 %%% Apps connect via `connect/2', which returns a `macula_client'
 %%% pool that internally wraps N peering links to N stations.
-%%% `publish/4,5', `subscribe/4,5', `unsubscribe/2', `call/5,6', `providers/3,4', `resolve_app/2,3',
+%%% `publish/4,5', `subscribe/5', `unsubscribe/2', `call/5,6', `providers/3,4', `resolve_app/2,3',
 %%% `advertise/5', `unadvertise/3', `call_stream/5',
 %%% `advertise_stream/5', and `unadvertise_stream/3' route through
 %%% the pool with realm-per-call semantics. See `macula_pubsub' for
@@ -33,8 +33,8 @@
 -export([field/2, field/3, text/1]).
 
 %% Pub/Sub — realm-per-call against a V2 pool
--export([subscribe/4, subscribe/5,
-         subscribe_callback/4,
+-export([subscribe/5,
+         subscribe_callback/5,
          unsubscribe/2,
          publish/4, publish/5,
          present_membership/4]).
@@ -289,14 +289,21 @@ publish(Pool, Realm, Topic, Payload, Opts) ->
 present_membership(Pool, Realm, Token, Proofs) ->
     macula_client:present_membership(Pool, Realm, Token, Proofs).
 
-%% @doc Subscribe `Subscriber' to `(Realm, Topic)' on `Pool'.
-%% Equivalent to `subscribe/5' with empty opts.
--spec subscribe(pool(), realm(), topic(), pid()) -> {ok, reference()} | {error, {text_too_long | invalid_text, topic} | macula_client:registration_error()}.
-subscribe(Pool, Realm, Topic, Subscriber) ->
-    subscribe(Pool, Realm, Topic, Subscriber, #{}).
-
 %% @doc Subscribe `Subscriber' to `(Realm, Topic)' on `Pool' with
-%% options. The `delivery' option chooses how a single publisher's
+%% options. `sources' is required and has no default: it declares who may deliver
+%% to this subscription (macula#147), as `members' (any realm member), `{org,
+%% Organisation}' (a node that organisation delegated), `{nodes, [NodeId]}'
+%% (exactly those publishers, and no lookup at all), or `open' (an explicit
+%% opt-out). A subscription that names none is refused `{error, {sources,
+%% required}}' rather than delivered to by anyone, the same way an advertisement
+%% with no `auth' is refused; a subscription that names a source it cannot
+%% enforce -- `members' or `{org, _}' in a realm whose key the pool never pinned
+%% -- is refused `{error, {source_class, no_realm_key}}' rather than served open.
+%% What the declaration admits is logged per subscription, and the pool's
+%% `status/1' keeps refused, dropped and held apart, so an operator can tell an
+%% attack from a misdeclaration.
+%%
+%% The `delivery' option chooses how a single publisher's
 %% out-of-order arrivals are handled:
 %% <ul>
 %%   <li>`ordered' (default) — per-publisher FIFO by seq; out-of-order
@@ -321,19 +328,22 @@ subscribe(Pool, Realm, Topic, Subscriber) ->
 -spec subscribe(pool(), realm(), topic(), pid(), map()) ->
     {ok, reference()}
     | {error, {text_too_long | invalid_text, topic} | {invalid_option, group | distributor | ucan_token}
-              | {group, macula_group_keyring:reason()} | macula_client:registration_error()}.
+              | {group, macula_group_keyring:reason()}
+              | {sources, required} | {source_class, term()} | macula_client:registration_error()}.
 subscribe(Pool, Realm, Topic, Subscriber, Opts) ->
     subscribed(macula_pubsub:subscribe(Pool, Realm, Topic, Subscriber, Opts), Pool, Realm, Topic).
 
 %% @doc Subscribe with a callback function. The SDK spawns a small
 %% receiver process internally and invokes the callback once per
 %% inbound event. It returns, as `subscribe/5' does, once a station
-%% acknowledges the subscription. See `macula_pubsub:subscribe_callback/4'.
+%% acknowledges the subscription, and its `Opts' are `subscribe/5's: a
+%% subscription that names no `sources' is refused. See
+%% `macula_pubsub:subscribe_callback/5'.
 -spec subscribe_callback(pool(), realm(), topic(),
-                          macula_pubsub:callback()) ->
+                          macula_pubsub:callback(), map()) ->
     {ok, reference()} | {error, term()}.
-subscribe_callback(Pool, Realm, Topic, Callback) ->
-    subscribed(macula_pubsub:subscribe_callback(Pool, Realm, Topic, Callback), Pool, Realm, Topic).
+subscribe_callback(Pool, Realm, Topic, Callback, Opts) ->
+    subscribed(macula_pubsub:subscribe_callback(Pool, Realm, Topic, Callback, Opts), Pool, Realm, Topic).
 
 %% A subscription holds once a station acknowledges it (macula#12); a refused or unacknowledged one is dropped and
 %% its refusal returned.
@@ -913,6 +923,11 @@ profile_verified({error, _} = Refusal, _Verify) -> Refusal.
 %% subscription reference for `unsubscribe_records/2'.
 %% Topic shape is `_dht.records.<type>.stored', rendered with the
 %% type tag as a decimal integer for log friendliness.
+%%
+%% The source is `open' explicitly: a stored record may be published by any node
+%% that stores one, and what protects this subscriber is the record's own
+%% verification under the pinned realm key, not the publisher's identity. A
+%% per-type source declaration is a different package (macula#147).
 -spec subscribe_records(pool(), record_type(),
                         fun((m_record()) -> any())) ->
     {ok, reference()} | {error, term()}.
@@ -921,7 +936,7 @@ subscribe_records(Pool, Type, Callback)
        is_function(Callback, 1) ->
     Topic = record_stored_topic(Type),
     macula_pubsub:subscribe_callback(Pool, ?DHT_REALM, Topic,
-                                     wrap_record_callback(Callback)).
+                                     wrap_record_callback(Callback), #{sources => open}).
 
 %% @doc Cancel a `subscribe_records/3' subscription.
 -spec unsubscribe_records(pool(), reference()) -> ok.

@@ -17,7 +17,8 @@
 %% ```
 %% {ok, Pool} = macula:connect(Seeds, ConnectOpts),
 %% ok          = macula_pubsub:publish(Pool, Realm, Topic, Payload),
-%% {ok, Sub}   = macula_pubsub:subscribe(Pool, Realm, Topic, self()),
+%% {ok, Sub}   = macula_pubsub:subscribe(Pool, Realm, Topic, self(),
+%%                                          #{sources => members}),
 %% receive
 %%     {macula_event, Sub, Topic, Payload, Meta} -> ok
 %% end,
@@ -28,14 +29,14 @@
 -module(macula_pubsub).
 
 -export([publish/4, publish/5,
-         subscribe/4, subscribe/5,
-         subscribe_callback/4,
+         subscribe/5,
+         subscribe_callback/5,
          unsubscribe/2,
          event_meta/2]).
 
 -export_type([callback/0, event_meta/0]).
 
-%% Callback shape accepted by `subscribe_callback/4'. Invoked once
+%% Callback shape accepted by `subscribe_callback/5'. Invoked once
 %% per inbound event in a separate receiver process so a slow
 %% callback does not back-pressure the pool.
 -type callback() :: fun((Topic :: binary(),
@@ -102,13 +103,6 @@ publish(Pool, Realm, Topic, Payload, Opts)
     macula_client:publish(Pool, Realm, Topic, Payload, Opts).
 
 %% @doc Subscribe `Subscriber' to `(Realm, Topic)' via `Pool'.
-%% Equivalent to `subscribe/5' with empty opts.
--spec subscribe(macula_client:pool(), <<_:256>>, binary(), pid()) ->
-    {ok, reference()} | {error, {text_too_long | invalid_text, topic}}.
-subscribe(Pool, Realm, Topic, Subscriber) ->
-    subscribe(Pool, Realm, Topic, Subscriber, #{}).
-
-%% @doc Subscribe `Subscriber' to `(Realm, Topic)' via `Pool'.
 %%
 %% Returns `{ok, SubRef}'. `Subscriber' subsequently receives
 %% `{macula_event, SubRef, Topic, Payload, Meta}' for each delivered
@@ -117,8 +111,8 @@ subscribe(Pool, Realm, Topic, Subscriber) ->
 %% `{macula_event_gone, SubRef, Reason}' once when the subscription
 %% terminates (pool close, subscriber pid death).
 %%
-%% `Opts' honors `delivery' (see `macula:subscribe/5') and `group', a
-%% sealed group's prefix `Topic' (or every topic a pattern matches) must
+%% `Opts' honors `delivery' (see `macula:subscribe/5'), `sources' (see below) and
+%% `group', a sealed group's prefix `Topic' (or every topic a pattern matches) must
 %% be under, with `ucan_token' and `distributor' as for `publish/5'. The
 %% group is joined before the subscription is made, and a refusal fails
 %% it closed as `{error, {group, Reason}}'. Under a group, a sealed event
@@ -130,10 +124,24 @@ subscribe(Pool, Realm, Topic, Subscriber) ->
 %% a subscription that named no group) and `tag_invalid'. A clear event
 %% carries `sealed => 0', and one under a prefix this node holds as
 %% `required' is refused, counted and logged naming its publisher.
+%%
+%% `sources' declares who may deliver to this subscription, and there is NO
+%% default: a subscription that names none is refused `{error, {sources, required}}'
+%% rather than delivered to by anyone (macula#147). The forms are
+%% `members' (any realm member), `{org, Organisation}' (a node that organisation
+%% delegated), `{nodes, [NodeId]}' (exactly those publishers, and no lookup at
+%% all), or `open' (an explicit opt-out). The subscriber's own SDK enforces it on
+%% the publisher its link verified, before the handler runs, on both delivery
+%% channels; `members' and `{org, _}' are refused `{error, {source_class,
+%% no_realm_key}}' in a realm whose key the pool never pinned rather than served
+%% open. A fact from a source that cannot be resolved is dropped and counted, and
+%% the pool's `status/1' keeps three separate counters: refused (a verdict),
+%% dropped (a budget) and held (waiting behind a lookup).
 -spec subscribe(macula_client:pool(), <<_:256>>, binary(), pid(), map()) ->
     {ok, reference()}
     | {error, {text_too_long | invalid_text, topic} | {invalid_option, group | distributor | ucan_token}
-              | {group, macula_group_keyring:reason()}}.
+              | {group, macula_group_keyring:reason()}
+              | {sources, required} | {source_class, term()}}.
 subscribe(Pool, Realm, Topic, Subscriber, Opts)
   when is_pid(Pool),
        is_binary(Realm), byte_size(Realm) =:= 32,
@@ -169,6 +177,9 @@ event_meta(#{realm := Realm, publisher := Publisher, seq := Seq,
 %% path. It monitors the pool too, and ends when the pool dies: a pool
 %% that is killed sends no `macula_event_gone'.
 %%
+%% `Opts' is `subscribe/5's, and names `sources' like this arity's
+%% receiver-pid sibling: there is no default.
+%%
 %% A crashing callback does NOT kill the receiver — the exception is
 %% logged and the next event is delivered. This is intentional: a
 %% transient bug in event handler N should not lose events N+1..M.
@@ -177,16 +188,17 @@ event_meta(#{realm := Realm, publisher := Publisher, seq := Seq,
 %% returned ref. The receiver shuts down on the resulting
 %% `macula_event_gone' message.
 -spec subscribe_callback(macula_client:pool(), <<_:256>>, binary(),
-                          callback()) ->
+                          callback(), map()) ->
     {ok, reference()} | {error, term()}.
-subscribe_callback(Pool, Realm, Topic, Callback)
+subscribe_callback(Pool, Realm, Topic, Callback, Opts)
   when is_pid(Pool),
        is_binary(Realm), byte_size(Realm) =:= 32,
        is_binary(Topic),
-       is_function(Callback, 3) ->
+       is_function(Callback, 3),
+       is_map(Opts) ->
     Caller = self(),
     {Receiver, Mon} = spawn_monitor(
-        fun() -> receiver_init(Caller, Pool, Realm, Topic, Callback) end),
+        fun() -> receiver_init(Caller, Pool, Realm, Topic, Callback, Opts) end),
     await_init(Receiver, Mon).
 
 await_init(Receiver, Mon) ->
@@ -205,9 +217,9 @@ await_init(Receiver, Mon) ->
         {error, init_timeout}
     end.
 
-receiver_init(Caller, Pool, Realm, Topic, Callback) ->
+receiver_init(Caller, Pool, Realm, Topic, Callback, Opts) ->
     Mons = {erlang:monitor(process, Caller), erlang:monitor(process, Pool)},
-    on_subscribe(macula_client:subscribe(Pool, Realm, Topic, self(), #{}),
+    on_subscribe(macula_client:subscribe(Pool, Realm, Topic, self(), Opts),
                  Caller, Mons, Callback).
 
 on_subscribe({ok, SubRef}, Caller, Mons, Callback) ->

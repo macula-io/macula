@@ -50,7 +50,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   A role holder's delegate is still admitted at `members` and `role` (a delegation keeps a capability whose `can`
   matches and whose `with` is covered); only `{nodes, _}` is exact.
 
+- **A subscription declares who may deliver to it, and its own SDK refuses every
+  fact from anywhere else (macula#147, WP2; threat model:
+  [issue #147](https://github.com/macula-io/macula/issues/147#issuecomment-6458270096),
+  decisions: [the note](https://github.com/macula-io/macula/issues/147#issuecomment-6461033269)).**
+  `macula:subscribe/5` and `macula_pubsub:subscribe/5` take `sources`: `members` (a publisher the
+  realm admitted), `{org, Organisation}` (a node that organisation delegated, verified by
+  `macula:org_member/4,5`), `{nodes, [NodeId]}` (exactly those publishers, and no lookup at all), or
+  `open` as an explicit opt-out. The check runs in the subscriber's own pool on the `publisher` the
+  delivering link verified, per matching subscription and after the pool's dedupe, before the handler
+  and on both delivery channels, so a colluding station cannot make a fact it relays look like another
+  node's.
+
+  **What it costs.** `{nodes, _}` is a comparison with a list and never expires. `members` and `org` are
+  one record lookup per publisher, cached: under `{Realm, Source, Publisher}`, never honoured past the
+  record that produced it nor past the cache's own life, refreshed while still in use so a steady
+  publisher never waits. The lookup runs in a worker, never in the pool process, and the pool keeps
+  only the verdict cache and the in-flight set. A fact whose publisher is being looked up is *held*
+  behind that one lookup rather than dropped -- dropping on arrival would lose the first fact of every
+  new publisher -- bounded by a per-key hold cap and by the fact's own expiry. Three counters keep
+  apart what an operator must not confuse: `refused` (a verdict: the source does not admit that
+  publisher), `dropped` (a budget: the realm's per-window lookup cap, the hold cap, an expired hold, or
+  a lookup that could not find out) and `held` (waiting right now); all three are in `status/1`, with
+  the live verdict count and the lookups in flight. The bounds are one `connect/2` option,
+  `subscribe_sources`, and a malformed one refuses to start the pool rather than run on a bound nobody
+  chose.
+
+  **A `role` source is not in this release.** A role names procedures, not topics: the realm mints no
+  publish capability (`pubsub/publish` is refused inside a role, realm#98), so nothing local decides
+  whether a role admits a publisher on one concrete topic. It is deferred with its own package.
+
+  **What the log says.** Every subscription logs its sources -- the alphabet, and the organisation
+  for `org` -- and `open` logs as an explicit opt-out, so an operator reading a running service's log
+  never mistakes an opt-out for a declaration.
+
 ### Changed
+
+- **Breaking: a subscription that names no `sources` is refused, and `subscribe/4` is removed
+  (macula#147).** The arities that could not name a source are gone -- `macula:subscribe/4`,
+  `macula_pubsub:subscribe/4`, `macula:subscribe_callback/4` and
+  `macula_pubsub:subscribe_callback/4` -- and `macula:subscribe/5` without a `sources` key returns
+  `{error, {sources, required}}`; `subscribe_callback/5` is the callback form, taking the same `Opts`.
+  A source that needs a record is refused `{error, {source_class, no_realm_key}}` in a realm whose key
+  the pool never pinned, never served open. The SDK's own subscriptions (the DHT record feed, the
+  distribution tunnel) now say `open` explicitly, which is what they mean. This breaks every caller
+  that relied on the old default, so it lands in the same major as the `advertise` change and the next
+  cut is 18.0.0.
 
 - **Breaking: a procedure advertised with no `auth` is refused, and `advertise/4` is removed (macula#147).** The arity
   that served openly is gone from `macula`, `macula_client` and `macula_station_link`, and `macula:advertise/5` without

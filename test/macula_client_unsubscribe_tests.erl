@@ -51,7 +51,7 @@ unsubscribe_test_() ->
 
 only_subscriber_unsubscribes() ->
     with_pool(fun(Pool, _Link, Frames) ->
-        {ok, Sub} = macula_client:subscribe(Pool, ?REALM, ?TOPIC, self(), #{}),
+        {ok, Sub} = macula_client:subscribe(Pool,  ?REALM,  ?TOPIC,  self(), #{sources => open}),
         ?assertEqual(subscribe, next_frame(Frames)),
         ok = macula_client:unsubscribe(Pool, Sub),
         ?assertEqual({unsubscribe, ?REALM, ?TOPIC}, next_unsubscribe(Frames))
@@ -59,8 +59,8 @@ only_subscriber_unsubscribes() ->
 
 last_subscriber_unsubscribes() ->
     with_pool(fun(Pool, _Link, Frames) ->
-        {ok, First} = macula_client:subscribe(Pool, ?REALM, ?TOPIC, self(), #{}),
-        {ok, Second} = macula_client:subscribe(Pool, ?REALM, ?TOPIC, self(), #{}),
+        {ok, First} = macula_client:subscribe(Pool,  ?REALM,  ?TOPIC,  self(), #{sources => open}),
+        {ok, Second} = macula_client:subscribe(Pool,  ?REALM,  ?TOPIC,  self(), #{sources => open}),
         ?assertEqual(subscribe, next_frame(Frames)),
         ok = macula_client:unsubscribe(Pool, First),
         ?assertEqual(none, next_frame(Frames, ?QUIET_MS)),
@@ -70,7 +70,7 @@ last_subscriber_unsubscribes() ->
 
 respawned_link_unsubscribes() ->
     with_pool(fun(Pool, OldLink, _Frames) ->
-        {ok, Sub} = macula_client:subscribe(Pool, ?REALM, ?TOPIC, self(), #{}),
+        {ok, Sub} = macula_client:subscribe(Pool,  ?REALM,  ?TOPIC,  self(), #{sources => open}),
         Mon = erlang:monitor(process, OldLink),
         exit(OldLink, kill),
         receive
@@ -88,7 +88,7 @@ respawned_link_unsubscribes() ->
 
 busy_link_does_not_block() ->
     with_pool(fun(Pool, Link, Frames) ->
-        {ok, Sub} = macula_client:subscribe(Pool, ?REALM, ?TOPIC, self(), #{}),
+        {ok, Sub} = macula_client:subscribe(Pool,  ?REALM,  ?TOPIC,  self(), #{sources => open}),
         ?assertEqual(subscribe, next_frame(Frames)),
         ok = sys:suspend(Link),
         {Micros, Result} = timer:tc(fun() -> catch macula_client:unsubscribe(Pool, Sub) end),
@@ -100,10 +100,10 @@ busy_link_does_not_block() ->
 
 unsubscribe_then_subscribe_in_order() ->
     with_pool(fun(Pool, Link, Frames) ->
-        {ok, First} = macula_client:subscribe(Pool, ?REALM, ?TOPIC, self(), #{}),
+        {ok, First} = macula_client:subscribe(Pool,  ?REALM,  ?TOPIC,  self(), #{sources => open}),
         ?assertEqual(subscribe, next_frame(Frames)),
         ok = macula_client:unsubscribe(Pool, First),
-        {ok, Again} = macula_client:subscribe(Pool, ?REALM, ?TOPIC, self(), #{}),
+        {ok, Again} = macula_client:subscribe(Pool,  ?REALM,  ?TOPIC,  self(), #{sources => open}),
         ?assertEqual([unsubscribe, subscribe], [next_frame(Frames), next_frame(Frames)]),
         ?assertEqual({event, Again}, event_through(Link))
     end).
@@ -115,7 +115,7 @@ registrations_name_the_node_itself() ->
     {ok, Key} = macula_node_keys:generate(identity, Profile),
     {ok, NodeId} = macula_node_keys:node_id(Key),
     with_pool(#{node_identity => fun() -> Key end}, fun(Pool, _Link, Frames) ->
-        {ok, Sub} = macula_client:subscribe(Pool, ?REALM, ?TOPIC, self(), #{}),
+        {ok, Sub} = macula_client:subscribe(Pool,  ?REALM,  ?TOPIC,  self(), #{sources => open}),
         ?assertEqual({subscribe, NodeId}, next_registration(Frames)),
         ok = macula_client:unsubscribe(Pool, Sub),
         ?assertEqual({unsubscribe, NodeId}, next_registration(Frames))

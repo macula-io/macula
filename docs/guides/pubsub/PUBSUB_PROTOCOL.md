@@ -16,10 +16,12 @@
 %% 1. Connect to the mesh — see ../shared/CONNECTING_GUIDE.md.
 {ok, Pool} = macula:connect(Seeds, #{}).
 
-%% 2. Subscribe.
+%% 2. Subscribe. `sources' is required and has no default: it names who may
+%% deliver to this subscription -- members | {org, Org} | {nodes, [NodeId]},
+%% or `open' as an explicit opt-out (macula#147).
 Topic = macula_topic:app_fact(Realm, Org, App,
                               <<"orders">>, <<"placed">>, 1),
-{ok, Sub} = macula:subscribe(Pool, Realm, Topic, self()).
+{ok, Sub} = macula:subscribe(Pool, Realm, Topic, self(), #{sources => members}).
 
 %% 3. Receive events.
 receive
@@ -47,7 +49,7 @@ building something the wrappers don't fit.
 ## Subscribing
 
 ```erlang
-{ok, SubRef} = macula:subscribe(Pool, Realm, Topic, Subscriber).
+{ok, SubRef} = macula:subscribe(Pool, Realm, Topic, Subscriber, #{sources => members}).
 ```
 
 | Argument | Type | Notes |
@@ -56,6 +58,7 @@ building something the wrappers don't fit.
 | `Realm` | `<<_:256>>` | 32-byte realm tag |
 | `Topic` | `binary()` | Built via `macula_topic` |
 | `Subscriber` | `pid()` | Process that will receive events |
+| `Opts` | `map()` | `sources` is required: `members`, `{org, Org}`, `{nodes, [NodeId]}`, or `open` |
 
 The subscriber receives:
 
@@ -100,7 +103,7 @@ something the wrapper doesn't fit.
 init(#{pool := Pool, realm := Realm}) ->
     Topic = macula_topic:app_fact(Realm, my_org, my_app,
                                   <<"orders">>, <<"placed">>, 1),
-    {ok, Sub} = macula:subscribe(Pool, Realm, Topic, self()),
+    {ok, Sub} = macula:subscribe(Pool, Realm, Topic, self(), #{sources => members}),
     {ok, #{sub => Sub}}.
 
 handle_info({macula_event, Sub, _Topic, Payload, _Meta},

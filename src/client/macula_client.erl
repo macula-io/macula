@@ -646,6 +646,10 @@
     topic      :: binary(),
     subscriber :: pid(),
     mon        :: reference(),
+    %% Who this subscription accepts facts from (macula#147, WP2), resolved
+    %% against the realm keys the pool pinned when the subscription was made.
+    %% There is no default: a subscription that declared none was refused.
+    sources    :: macula_subscriber_sources:source(),
     %% Per-publisher delivery ordering for this subscription (the
     %% `delivery' mode: ordered | latest_only | as_arrives).
     order      :: macula_pubsub_order:t(),
@@ -668,6 +672,11 @@
                                  ad       := macula_station_link:advertisement() | undefined,
                                  stations := stations()}.
 -type stations() :: all | [<<_:256>>, ...].
+%% A fact waiting behind its publisher's one lookup: the subscription, the topic,
+%% the payload and the meta to deliver it with, and nothing else. The subscription
+%% is found again when the fact is released, so one unsubscribed while it waited
+%% is simply gone.
+-type held_fact() :: {reference(), binary(), term(), map()}.
 %% How a registration renews its chain (D32): `apply(M, F, [Pool | A])' answers
 %% `{ok, Spec}' or `{error, Reason}'.
 -type renew() :: {module(), atom(), [term()]}.
@@ -730,6 +739,21 @@
     %% Advertised streaming procedures, replayed alongside `procs'.
     stream_procs = #{} :: #{{<<_:256>>, binary()} => stream_registration()},
     dedup_tab     :: ets:tid(),
+    %% The subscription source check (macula#147, WP2): who may deliver to each
+    %% subscription. Its bounds, the DHT-read seam a worker resolves a publisher
+    %% through, the verdict cache, the lookups in flight, the facts waiting behind
+    %% them, each realm's lookup window, and the three counters that never merge --
+    %% refused is a verdict, dropped is a budget, held is waiting.
+    source_bounds  :: macula_subscriber_sources:bounds(),
+    source_lookup  :: fun(),
+    source_verdicts = #{} :: macula_subscriber_sources:cache(),
+    %% cache key → the monitor, the worker and its deadline.
+    source_inflight = #{} :: #{macula_subscriber_sources:key() => {reference(), pid(), reference()}},
+    %% cache key → the facts waiting behind its one lookup, newest first.
+    source_held = #{} :: #{macula_subscriber_sources:key() => [held_fact()]},
+    source_windows = #{} :: #{<<_:256>> => {integer(), pos_integer()}},
+    source_refused = #{} :: #{term() => non_neg_integer()},
+    source_dropped = #{} :: #{term() => non_neg_integer()},
     %% Per-`ordered'-subscription reorder-buffer timeout + count cap, and
     %% a lazily armed one-shot timer that fires to release timed-out gaps.
     order_timeout    :: non_neg_integer(),
@@ -1588,10 +1612,16 @@ group_keyring(Pool) ->
 %% message: the pool never blocks on a subscriber or drops an event for it,
 %% so a subscriber slower than its topic holds every unread event in its
 %% mailbox, without bound (PUBSUB_GUIDE.md, Backpressure).
+%%
+%% `Opts' must name `sources', who may deliver to this subscription
+%% (macula#147): `members`, `{org, Organisation}', `{nodes, [NodeId]}', or
+%% `open'. There is no default, and a subscription that names none is refused
+%% rather than delivered to by anyone.
 -spec subscribe(pool(), <<_:256>>, binary(), pid(), map()) ->
     {ok, reference()}
     | {error, {text_too_long | invalid_text, topic} | {invalid_option, group | distributor | ucan_token}
-              | {group, macula_group_keyring:reason()}}.
+              | {group, macula_group_keyring:reason()}
+              | {sources, required} | {source_class, term()}}.
 subscribe(Pool, Realm, Topic, Subscriber, Opts)
   when is_pid(Pool),
        is_binary(Realm), byte_size(Realm) =:= 32,
@@ -1800,9 +1830,17 @@ names_verify(Seeds, Opts) ->
 %% refuse that seed at every start, and the pool would look ready with nothing it could reach. A seed map's own
 %% expected_node_id stands over the pool's option, as a link reads it.
 init_with_pinned_seeds(true, Seeds, Opts) ->
-    init_with_keys(pool_keys(Opts), Seeds, Opts);
+    sources_within_bounds(macula_subscriber_sources:bounds(Opts), Seeds, Opts);
 init_with_pinned_seeds(false, _Seeds, _Opts) ->
     {error, {seeds, expected_node_id_required}}.
+
+%% A pool whose subscription source bounds are malformed does not start: a check
+%% that silently ran on a bound nobody chose looks exactly like one that ran on
+%% the bound it names.
+sources_within_bounds({ok, Bounds}, Seeds, Opts) ->
+    init_with_keys(pool_keys(Opts), Seeds, Opts#{source_bounds => Bounds});
+sources_within_bounds({error, _} = Refused, _Seeds, _Opts) ->
+    Refused.
 
 pinned_seed(#{expected_node_id := NodeId}, _Opts) -> node_id_sized(NodeId);
 pinned_seed(_Seed, #{expected_node_id := NodeId}) -> node_id_sized(NodeId);
@@ -1859,6 +1897,8 @@ init_with_keys({ok, #{node_identity := NodeIdentity, issuer := Issuer, issuer_st
                     register_ack_timeout = register_ack_timeout(maps:get(register_ack_timeout_ms, Opts,
                                                                          ?REGISTER_ACK_TIMEOUT_MS)),
                     dedup_tab = DedupTab,
+                    source_bounds = maps:get(source_bounds, Opts),
+                    source_lookup = maps:get(source_lookup, Opts, fun macula_subscriber_sources:lookup/3),
                     order_timeout = OrderTimeout, order_max_buffer = OrderMaxBuf,
                     flush_timer = undefined,
                     discovery = Discovery, link_selection = LinkSelection,
@@ -2037,8 +2077,24 @@ pool_status(#state{seeds = Seeds, links = Links, subs = Subs,
         %% Issuers the pool started after its first, one for each that ended.
         issuer_restarts    => S#state.issuer_restarts,
         %% Issuers the pool lost, whether or not a new one runs yet.
-        issuer_losses      => S#state.issuer_losses
+        issuer_losses      => S#state.issuer_losses,
+        %% The subscription source check (macula#147, WP2). Three counters that
+        %% never merge, because an operator can tell an attack from a
+        %% misdeclaration only if they stay apart: `refused' is a verdict (the
+        %% source does not admit that publisher), `dropped' is a budget (the
+        %% lookup window, the held cap, an expired hold), and `source_held' is
+        %% how many facts are waiting behind a lookup right now.
+        source_refused     => S#state.source_refused,
+        source_dropped     => S#state.source_dropped,
+        source_held        => held_count(S#state.source_held),
+        %% Live verdicts cached, and the lookups in flight, so the bounds the
+        %% check runs on are visible from outside it.
+        source_verdicts    => map_size(S#state.source_verdicts),
+        source_lookups     => map_size(S#state.source_inflight)
     }.
+
+held_count(Held) ->
+    maps:fold(fun(_Key, Facts, Count) -> Count + length(Facts) end, 0, Held).
 
 start_publish(Realm, Topic, Payload, Opts, From, S) ->
     %% Publish only to links that have completed CONNECT/HELLO. A
@@ -2068,10 +2124,20 @@ start_publish(Realm, Topic, Payload, Opts, From, S) ->
     {noreply, S}.
 
 add_subscription(Realm, Topic, Subscriber, Opts, S) ->
+    declared_sources(macula_subscriber_sources:declared(maps:get(sources, Opts, undefined), Realm,
+                                                        S#state.realm_keys),
+                     Realm, Topic, Subscriber, Opts, S).
+
+%% A subscription declares who may deliver to it (macula#147, WP2), and there is
+%% no default: one that names no source is refused here, before a SubRef exists,
+%% rather than served openly. The same sources are logged per subscription, so an
+%% operator reads what a running service accepts from its log (threat model 5.2).
+declared_sources({ok, Sources}, Realm, Topic, Subscriber, Opts, S) ->
+    sources_declared(Sources, Realm, Topic),
     SubRef = make_ref(),
     Mon = erlang:monitor(process, Subscriber),
     Spec = with_opener(maps:find(group, Opts), SubRef,
-                       #sub_spec{realm = Realm, topic = Topic,
+                       #sub_spec{realm = Realm, topic = Topic, sources = Sources,
                                  subscriber = Subscriber, mon = Mon,
                                  order = macula_pubsub_order:new(delivery_mode(Opts),
                                                                  S#state.order_max_buffer)},
@@ -2079,7 +2145,25 @@ add_subscription(Realm, Topic, Subscriber, Opts, S) ->
     Key = {Realm, Topic},
     AlreadyTracked = maps:is_key(Key, S#state.topic_index),
     NewS = register_sub(SubRef, Spec, S),
-    {reply, {ok, SubRef}, issue_wire_subs(AlreadyTracked, Realm, Topic, NewS)}.
+    {reply, {ok, SubRef}, issue_wire_subs(AlreadyTracked, Realm, Topic, NewS)};
+declared_sources({error, _} = Refused, _Realm, _Topic, _Subscriber, _Opts, S) ->
+    {reply, Refused, S}.
+
+%% One line per subscription saying who may deliver to it: a declaration is
+%% announced as its alphabet (and, for an organisation, which one), and `open' is
+%% announced as exactly that, so a log never shows an opt-out as a declaration.
+sources_declared(open, Realm, Topic) ->
+    logger:notice("macula: ~ts declares open sources, an explicit opt-out: any publisher's fact is delivered in realm ~ts",
+                  [Topic, binary:encode_hex(Realm, lowercase)]);
+sources_declared(members, Realm, Topic) ->
+    logger:notice("macula: ~ts declares realm members as its sources in realm ~ts",
+                  [Topic, binary:encode_hex(Realm, lowercase)]);
+sources_declared({org, Org}, Realm, Topic) ->
+    logger:notice("macula: ~ts declares the nodes of organisation ~ts as its sources in realm ~ts",
+                  [Topic, Org, binary:encode_hex(Realm, lowercase)]);
+sources_declared({nodes, NodeIds}, Realm, Topic) ->
+    logger:notice("macula: ~ts declares named publishers ~p as its sources in realm ~ts",
+                  [Topic, NodeIds, binary:encode_hex(Realm, lowercase)]).
 
 %% Withdraw a unary or a stream procedure: stop renewing it, send the
 %% withdrawal to the links that carried it, and forget it.
@@ -2150,6 +2234,27 @@ handle_info({macula_event, _LinkSubRef, Topic, Payload,
                expires_at := ExpiresAt} = Meta}, S) ->
     {noreply, on_inbound_event(matching_subscriptions(Realm, Topic, S),
                                Hash, ExpiresAt, Topic, Payload, Meta, S)};
+
+handle_info({source_verdict, Key, Outcome}, #state{source_inflight = Inflight} = S)
+  when is_map_key(Key, Inflight) ->
+    {Mon, _Worker, Deadline} = map_get(Key, Inflight),
+    _ = erlang:cancel_timer(Deadline),
+    true = erlang:demonitor(Mon, [flush]),
+    {noreply, verdict_arrived(Key, Outcome, S#state{source_inflight = maps:remove(Key, Inflight)})};
+
+%% A lookup worker that died before answering: the fact waits no longer, and
+%% nothing is cached, so the next fact from that publisher asks again.
+handle_info({source_lookup, _Mon, process, Worker, _Reason}, #state{source_inflight = Inflight} = S) ->
+    {noreply, lost_lookup(inflight_key(Worker, Inflight), S)};
+
+%% A lookup that blew its deadline is ended, and what waited behind it is
+%% dropped and counted: a lookup that never answers must not hold a publisher's
+%% facts until they expire one by one.
+handle_info({source_lookup_timeout, Key}, #state{source_inflight = Inflight} = S)
+  when is_map_key(Key, Inflight) ->
+    {_Mon, Worker, _Deadline} = map_get(Key, Inflight),
+    exit(Worker, kill),
+    {noreply, lost_lookup(Key, S)};
 
 handle_info({macula_event_gone, _LinkSubRef, _Reason}, S) ->
     %% A link torn down its subscription end. Pool will respawn the
@@ -4381,8 +4486,13 @@ deliver_one(SubRef, Topic, Payload, Meta, S) ->
 
 deliver_to(error, _SubRef, _Topic, _Payload, _Meta, S) ->
     S;
-deliver_to({ok, #sub_spec{subscriber = Pid, order = Order} = Spec}, SubRef,
-           Topic, Payload, Meta, S) ->
+deliver_to({ok, #sub_spec{sources = open} = Spec}, SubRef, Topic, Payload, Meta, S) ->
+    deliver_now(Spec, SubRef, Topic, Payload, Meta, S);
+deliver_to({ok, #sub_spec{sources = Source} = Spec}, SubRef, Topic, Payload, Meta, S) ->
+    source_gated(Source, Spec, SubRef, Topic, Payload, Meta, S).
+
+deliver_now(#sub_spec{subscriber = Pid, order = Order} = Spec, SubRef,
+            Topic, Payload, Meta, S) ->
     %% Run the fact through this subscription's delivery ordering; send
     %% whatever it releases now, and keep the updated per-publisher state.
     %% Each event keeps its own topic through the ordering: a pattern
@@ -4394,6 +4504,199 @@ deliver_to({ok, #sub_spec{subscriber = Pid, order = Order} = Spec}, SubRef,
     ok = routed_events(Spec, Pid, SubRef, Events, S#state.keyring),
     S#state{subs = maps:put(SubRef, Spec#sub_spec{order = Order2},
                             S#state.subs)}.
+
+%%------------------------------------------------------------------
+%% Who may deliver to this subscription (macula#147, WP2)
+%%------------------------------------------------------------------
+
+%% The declaration is enforced on the `publisher' the delivering link verified,
+%% per matching subscription and after the pool's dedupe, so one publication is
+%% checked once and each subscription on it gets the answer its own declaration
+%% earned. A `{nodes, Ids}' source is a comparison with the list and never
+%% expires: a node id is not a credential.
+source_gated({nodes, NodeIds}, Spec, SubRef, Topic, Payload, Meta, S) ->
+    admitted_or_refused(macula_subscriber_sources:admits({nodes, NodeIds}, publisher(Meta)),
+                        {refuse, not_listed}, Spec, SubRef, Topic, Payload, Meta, S);
+source_gated(Source, Spec, SubRef, Topic, Payload, Meta, S) ->
+    cached_source(Source, Spec, SubRef, Topic, Payload, Meta, S).
+
+publisher(#{publisher := Publisher}) -> Publisher.
+
+admitted_or_refused(true, _Refusal, Spec, SubRef, Topic, Payload, Meta, S) ->
+    deliver_now(Spec, SubRef, Topic, Payload, Meta, S);
+admitted_or_refused(false, {refuse, Reason}, _Spec, _SubRef, _Topic, _Payload, _Meta, S) ->
+    count_refused(Reason, S).
+
+%% A source that rests on a record, served from the pool's verdict cache. A miss
+%% starts one lookup for that cache key and holds the fact behind it: the note's
+%% decision 4, because dropping on arrival would drop the first fact from every
+%% new publisher and the first after every expiry.
+cached_source(Source, Spec, SubRef, Topic, Payload, Meta, S) ->
+    Key = macula_subscriber_sources:cache_key(maps:get(realm, Meta), Source, publisher(Meta)),
+    case macula_subscriber_sources:cache_get(S#state.source_verdicts, Key, erlang:system_time(millisecond)) of
+        {ok, admit, RefreshAt, Cache} ->
+            Served = refresh_verdict(Key, Source, RefreshAt, S#state{source_verdicts = Cache}),
+            deliver_now(Spec, SubRef, Topic, Payload, Meta, Served);
+        {ok, {refuse, Reason}, _ExpiresAt, Cache} ->
+            count_refused(Reason, S#state{source_verdicts = Cache});
+        {miss, Cache} ->
+            awaiting_verdict(Key, Source, SubRef, Topic, Payload, Meta,
+                             S#state{source_verdicts = Cache})
+    end.
+
+%% A verdict still in use is refreshed before it expires, so a steady publisher
+%% never waits on a lookup. The old verdict keeps serving until the refresh
+%% answers, and a failed refresh is not a verdict: the entry simply expires.
+refresh_verdict(Key, Source, RefreshAt, S) ->
+    refreshing(macula_subscriber_sources:refresh_due(RefreshAt, erlang:system_time(millisecond)),
+               Key, Source, S).
+
+refreshing(true, Key, Source, S) ->
+    idle_key(not maps:is_key(Key, S#state.source_inflight), Key, Source, S);
+refreshing(false, _Key, _Source, S) ->
+    S.
+
+%% One in-flight lookup per cache key, a refresh included: a second would answer
+%% into the same key and leave a monitor and a deadline behind.
+idle_key(true, Key, Source, S) ->
+    started_lookup(Key, Source, element(1, Key), S);
+idle_key(false, _Key, _Source, S) ->
+    S.
+
+%% The fact waits behind the key's one lookup, or behind a new one when there is
+%% none yet. Both bounds fail closed: past the lookup window no lookup is made,
+%% and past the held cap the fact is dropped -- each counted, never merged.
+awaiting_verdict(Key, Source, SubRef, Topic, Payload, Meta, S) ->
+    Realm = element(1, Key),
+    waiting(maps:is_key(Key, S#state.source_inflight),
+            Key, Source, Realm, SubRef, Topic, Payload, Meta, S).
+
+waiting(true, Key, _Source, _Realm, SubRef, Topic, Payload, Meta, S) ->
+    hold(Key, SubRef, Topic, Payload, Meta, S);
+waiting(false, Key, Source, Realm, SubRef, Topic, Payload, Meta, S) ->
+    in_window(macula_subscriber_sources:window_allows(S#state.source_windows, Realm,
+                                                     erlang:system_time(millisecond),
+                                                     S#state.source_bounds),
+              Key, Source, SubRef, Topic, Payload, Meta, S).
+
+in_window({ok, Windows}, Key, Source, SubRef, Topic, Payload, Meta, S) ->
+    hold(Key, SubRef, Topic, Payload, Meta,
+         started_lookup(Key, Source, element(1, Key), S#state{source_windows = Windows}));
+in_window(over, _Key, _Source, _SubRef, _Topic, _Payload, _Meta, S) ->
+    count_dropped(lookup_window, S).
+
+%% The lookup runs in a worker, never in the pool: both reads are DHT calls, and a
+%% pool that waited on one would stall delivery for every topic on it. One lookup
+%% per cache key, with a deadline, so one that never answers releases what waits
+%% behind it instead of holding it for ever.
+started_lookup(Key, Source, Realm, S) ->
+    Pool = self(),
+    Context = #{pool => Pool, realm => Realm,
+                realm_key => maps:get(Realm, S#state.realm_keys, undefined),
+                now => erlang:system_time(millisecond)},
+    Lookup = S#state.source_lookup,
+    Publisher = element(3, Key),
+    Worker = spawn(fun() -> Pool ! {source_verdict, Key, Lookup(Source, Context, Publisher)} end),
+    Deadline = erlang:send_after(maps:get(lookup_timeout_ms, S#state.source_bounds), self(),
+                                 {source_lookup_timeout, Key}),
+    Mon = erlang:monitor(process, Worker, [{tag, source_lookup}]),
+    S#state{source_inflight = maps:put(Key, {Mon, Worker, Deadline}, S#state.source_inflight)}.
+
+hold(Key, SubRef, Topic, Payload, Meta, S) ->
+    Held = maps:get(Key, S#state.source_held, []),
+    holding(length(Held) < maps:get(held_per_key, S#state.source_bounds),
+            Key, SubRef, Topic, Payload, Meta, Held, S).
+
+holding(true, Key, SubRef, Topic, Payload, Meta, Held, S) ->
+    S#state{source_held = maps:put(Key, [{SubRef, Topic, Payload, Meta} | Held], S#state.source_held)};
+holding(false, _Key, _SubRef, _Topic, _Payload, _Meta, _Held, S) ->
+    count_dropped(held_full, S).
+
+%% The worker answered: cache a verdict, and release what waited behind it in
+%% arrival order. Anything it could not find out is not a verdict -- nothing is
+%% cached, so the next fact asks again within the lookup window -- and what waited
+%% is dropped and counted, never delivered.
+verdict_arrived(Key, {admit, Until}, S) ->
+    release_held(Key, admit, cached_verdict(Key, admit, Until, S));
+verdict_arrived(Key, {refuse, Reason}, S) ->
+    release_held(Key, {refuse, Reason}, cached_verdict(Key, {refuse, Reason}, undefined, S));
+verdict_arrived(Key, {unavailable, _Why}, S) ->
+    drop_held(Key, lookup_unavailable, S).
+
+cached_verdict(Key, Verdict, Until, S) ->
+    S#state{source_verdicts = macula_subscriber_sources:cache_put(
+                                S#state.source_verdicts, Key, Verdict, Until,
+                                S#state.source_bounds, erlang:system_time(millisecond))}.
+
+release_held(Key, Verdict, S) ->
+    case maps:take(Key, S#state.source_held) of
+        error -> S;
+        {Held, Rest} ->
+            %% A released fact goes through this subscription's delivery ordering
+            %% exactly as one that never waited, so the reorder-buffer's flush
+            %% timer is armed here as `on_sighting/7' arms it: without it a fact
+            %% buffered for order would sit until some later publication armed it.
+            ensure_flush_timer(lists:foldl(fun(Fact, Acc) -> released(Verdict, Fact, Acc) end,
+                                           S#state{source_held = Rest}, lists:reverse(Held)))
+    end.
+
+released(admit, {_SubRef, _Topic, _Payload, #{expires_at := ExpiresAt}} = Fact, S) ->
+    expired_while_held(ExpiresAt, Fact, S);
+released({refuse, Reason}, _Fact, S) ->
+    count_refused(Reason, S).
+
+%% A held fact is never kept, or delivered, past its own expiry: a fact the
+%% source admits but that expired while it waited is dropped and counted like any
+%% other budget.
+expired_while_held(ExpiresAt, Fact, S) ->
+    kept(ExpiresAt =< erlang:system_time(millisecond), Fact, S).
+
+kept(true, _Fact, S) ->
+    count_dropped(held_expired, S);
+kept(false, {SubRef, Topic, Payload, Meta}, S) ->
+    deliver_held(SubRef, Topic, Payload, Meta, S).
+
+%% The subscription may have been dropped while its fact waited.
+deliver_held(SubRef, Topic, Payload, Meta, S) ->
+    case maps:find(SubRef, S#state.subs) of
+        {ok, Spec} -> deliver_now(Spec, SubRef, Topic, Payload, Meta, S);
+        error      -> S
+    end.
+
+drop_held(Key, Reason, S) ->
+    case maps:take(Key, S#state.source_held) of
+        error -> S;
+        {Held, Rest} ->
+            Counted = S#state{source_held = Rest},
+            lists:foldl(fun(_Fact, Acc) -> count_dropped(Reason, Acc) end, Counted, Held)
+    end.
+
+%% The cache key whose worker just died, or none when its verdict already landed
+%% (the answer is always sent before the worker exits).
+inflight_key(Worker, Inflight) ->
+    key_of_worker(Worker, maps:to_list(Inflight)).
+
+key_of_worker(_Worker, []) ->
+    none;
+key_of_worker(Worker, [{Key, {_Mon, Worker, Deadline}} | _Rest]) ->
+    _ = erlang:cancel_timer(Deadline),
+    Key;
+key_of_worker(Worker, [_Other | Rest]) ->
+    key_of_worker(Worker, Rest).
+
+lost_lookup(none, S) ->
+    S;
+lost_lookup(Key, S) ->
+    drop_held(Key, lookup_unavailable, S#state{source_inflight = maps:remove(Key, S#state.source_inflight)}).
+
+count_refused(Reason, S) ->
+    S#state{source_refused = counted(Reason, S#state.source_refused)}.
+
+count_dropped(Reason, S) ->
+    S#state{source_dropped = counted(Reason, S#state.source_dropped)}.
+
+counted(Reason, Counts) ->
+    Counts#{Reason => maps:get(Reason, Counts, 0) + 1}.
 
 %% Every event reaching the pool carries a publication its link verified,
 %% so each publisher's ordering state is its own.

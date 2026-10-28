@@ -29,8 +29,8 @@ text_checked_names_each_bound() ->
 a_pool_refuses_a_topic_before_building() ->
     {ok, Pool} = macula_client:connect([], #{}),
     Long = binary:copy(<<"t">>, 513),
-    Results = [macula_client:subscribe(Pool, ?REALM, Long, self(), #{}),
-               macula_client:subscribe(Pool, ?REALM, <<16#ff>>, self(), #{}),
+    Results = [macula_client:subscribe(Pool,  ?REALM,  Long,  self(), #{sources => open}),
+               macula_client:subscribe(Pool,  ?REALM,  <<16#ff>>,  self(), #{sources => open}),
                macula_client:publish(Pool, ?REALM, Long, #{n => 1}, #{}),
                macula_client:publish(Pool, ?REALM, <<16#ff>>, #{n => 1}, #{})],
     Status = macula_client:status(Pool),

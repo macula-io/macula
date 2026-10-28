@@ -23,8 +23,8 @@ subscription_survives_link_respawn_test_() ->
          {ok, _} = application:ensure_all_started(macula),
          {ok, Pool} = macula_client:connect([?SEED], #{}),
 
-         {ok, SubRef} = macula_client:subscribe(Pool, ?REALM, ?TOPIC,
-                                                self(), #{}),
+         {ok, SubRef} = macula_client:subscribe(Pool,  ?REALM,  ?TOPIC, 
+                                                self(), #{sources => open}),
 
          {ok, [#{pid := OldPid}]} = macula_client:links(Pool),
 
