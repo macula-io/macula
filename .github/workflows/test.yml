@@ -80,11 +80,11 @@ jobs:
     #
     # eunit and ct are ONE entry, not two (#153). They are run together under
     # cover so the coverage floor has the whole suite to measure, and they cost
-    # almost nothing to join: measured on 2026-10-28 in this image, eunit is
-    # 731 s under instrumentation and ct is 12 s. As two entries, ct paid a
-    # second container, toolchain and NIF build — minutes of setup for twelve
-    # seconds of test — to report what the joined entry reports on the same
-    # number.
+    # almost nothing to join: eunit takes about twelve minutes instrumented and
+    # ct about twelve seconds (measured 2026-10-28, in CI and in this image). As
+    # two entries, ct paid a second container, toolchain and NIF build — minutes
+    # of setup for twelve seconds of test — to report what the joined entry
+    # reports from one run.
     #
     # fail-fast is OFF deliberately: the serial job reported every check's
     # result, and cancelling the others on the first red would report less
@@ -222,10 +222,9 @@ jobs:
       # reported as "flaky, N of M runs", not silenced here.
       #
       # --cover is what turns this run into the coverage number (#153). It costs
-      # about a quarter of the step's run time — 731 s against 445 s for the same
-      # 7661 tests in the pinned image on 2026-10-28 — and it buys a figure
-      # measured on the run that gated, rather than on a second run of the same
-      # tests in a job of its own.
+      # about a quarter more run time (rebar.config's note on cover_enabled), and
+      # it buys a figure measured on the run that gated, rather than on a second
+      # run of the same tests in a job of its own.
       - name: eunit
         if: matrix.check == 'coverage'
         run: rebar3 eunit --cover --cover_export_name eunit
@@ -237,11 +236,11 @@ jobs:
       # needs something CI does not have belongs outside test/, not skipped.
       #
       # --cover for the same reason as eunit above. What it adds is small and
-      # measured, not assumed: 2 covered lines on 2026-10-28, 82.06% with eunit
-      # alone and 82.08% merged. It is measured anyway because the floor is a
-      # property of the SUITE, and today's overlap between the two halves is an
-      # accident of which modules the fleet suites happen to touch. If that
-      # stops being true, the number must not keep looking complete without it.
+      # measured, not assumed: eunit accounts for all but a couple of the covered
+      # lines today. It is measured anyway because the floor is a property of the
+      # SUITE, and today's overlap between the two halves is an accident of which
+      # modules the fleet suites happen to touch. If that stops being true, the
+      # number must not keep looking complete without it.
       #
       # `!cancelled()` rather than the default, because eunit and ct used to be
       # separate matrix entries and a red eunit did not stop ct from reporting.

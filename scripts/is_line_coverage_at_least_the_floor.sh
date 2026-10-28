@@ -7,8 +7,9 @@
 #
 # Usage: bash scripts/is_line_coverage_at_least_the_floor.sh <eunit.coverdata> <ct.coverdata> [...]
 #
-# THE FLOOR ONLY GOES UP. It is main's measured line coverage, rounded down to a whole percent: 82.08% over
-# 125 modules, measured in the pinned image on 1de6a799 (2026-10-28), so 82. A change that raises coverage raises
+# THE FLOOR ONLY GOES UP. It is main's measured line coverage, rounded down to a whole percent: 82.06% over
+# 125 modules (10613 of 12934 executable lines), measured in CI on 2026-10-28, so 82. That is deliberately no
+# headroom — a change that leaves new code untested is meant to be red here. A change that raises coverage raises
 # this number in the same commit. Lowering it is a reviewed decision about which lines stop being tested, stated
 # in the commit that does it, and never something done to turn a branch green. CONTRIBUTING, Testing, says the
 # same where someone writing a test will read it.

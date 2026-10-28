@@ -91,11 +91,13 @@ a test you have just written.
 - **Line coverage has a floor, and it only goes up.** CI merges the eunit and
   ct suites' line coverage and fails below 82%
   (`scripts/is_line_coverage_at_least_the_floor.sh`). The floor is main's
-  measured value rounded down to a whole percent: 82.08% over 125 modules
-  measured on 28 October 2026, so 82. A change that raises coverage raises the
-  number in the same commit. Lowering it is a reviewed decision about which
-  lines stop being tested, stated in the commit that does it; it is never done
-  to turn a branch green. To see where a change stands:
+  measured value rounded down to a whole percent: 82.06% over 125 modules,
+  10613 of 12934 executable lines, measured in CI on 28 October 2026, so 82.
+  That is deliberately no headroom — a change that leaves new code untested is
+  meant to be red here. A change that raises coverage raises the number in the
+  same commit. Lowering it is a reviewed decision about which lines stop being
+  tested, stated in the commit that does it; it is never done to turn a branch
+  green. To see where a change stands:
 
   ```bash
   rebar3 eunit --cover
@@ -105,12 +107,11 @@ a test you have just written.
   ```
 
   Both suites, merged: the floor is a property of the suite, not of one of
-  its halves. The two are not equal contributors — on 28 October 2026 eunit
-  alone measured 82.06% and the fleet suites added 2 covered lines — but a
-  number that silently leaves half the suite out is not the suite's coverage,
-  and which half matters is not something to re-decide each time. The number
-  is OTP's `cover` on the pinned Erlang, which is why CI asserts that pin
-  before it measures.
+  its halves. The two are not equal contributors — eunit accounts for all but
+  a couple of the covered lines today — but a number that silently leaves half
+  the suite out is not the suite's coverage, and which half matters is not
+  something to re-decide each time. The number is OTP's `cover` on the pinned
+  Erlang, which is why CI asserts that pin before it measures.
 
 ## Submitting Changes
 
