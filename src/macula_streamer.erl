@@ -4,7 +4,7 @@
 %%% `advertise_stream/6' on the raw SDK takes a bare handler fun
 %%% invoked as `Handler(StreamPid, Args)' in a transient process
 %%% spawned per inbound STREAM_OPEN (see the internal
-%%% macula_station_link advertise_stream/5 — "this link spawns a
+%%% macula_station_link advertise_stream/6 — "this link spawns a
 %%% server-side macula_stream and dispatches Handler(StreamPid, Args)
 %%% in a transient process"). This is the provider-side counterpart to
 %%% `macula_stream_sink': each inbound stream starts one supervised
