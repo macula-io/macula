@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Fails when the merged line coverage of the eunit and ct suites is below the floor (macula#153).
 #
-# The two suites run in separate CI jobs, so they arrive as two cover export files and neither on its own is the
-# suite's coverage: a module only the fleet suites reach reads as dead in the eunit file. scripts/line_coverage.erl
-# merges them and applies the floor.
+# Each suite is run by its own step in the `coverage' matrix entry, so they arrive as two cover export files and
+# neither on its own is the suite's coverage: a module only the fleet suites reach reads as dead in the eunit file.
+# scripts/line_coverage.erl merges them and applies the floor.
 #
 # Usage: bash scripts/is_line_coverage_at_least_the_floor.sh <eunit.coverdata> <ct.coverdata> [...]
 #

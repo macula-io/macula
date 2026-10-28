@@ -36,11 +36,12 @@ main([FloorArg, ListFile]) ->
     Floor = floor_of(FloorArg),
     Files = paths(ListFile),
     cover:start(),
-    Imported = lists:append([imported(File) || File <- Files]),
-    Rows = analysis(lists:usort(Imported)),
+    [imported(File) || File <- Files],
+    Modules = modules(),
+    Rows = analysis(Modules),
     {Covered, Total} = sum(Rows),
     Percent = percent(Covered, Total),
-    report(Files, Imported, Rows, Covered, Total, Percent),
+    report(Files, Modules, Rows, Covered, Total, Percent),
     verdict(Floor, Percent);
 main(Args) ->
     io:format(standard_error,
@@ -79,7 +80,7 @@ nonempty(Paths) ->
 imported(File) ->
     require_regular(File),
     case cover:import(File) of
-        ok -> cover:imported_modules();
+        ok -> ok;
         {error, Reason} -> refuse(2, "could not import ~ts: ~p", [File, Reason])
     end.
 
@@ -88,6 +89,12 @@ require_regular(File) ->
         true -> ok;
         false -> refuse(2, "no cover export file at ~ts: did that suite run with --cover?", [File])
     end.
+
+%% Asked ONCE, after every import. cover:imported_modules/0 answers with everything imported SO FAR, not with
+%% what the last file carried, so asking per file and concatenating counts a module that both suites reached
+%% twice — a figure about the calls, not about the coverage (Pluto, review r1).
+modules() ->
+    lists:usort(cover:imported_modules()).
 
 %% -- analysing -------------------------------------------------------------------------------------
 
@@ -117,11 +124,10 @@ percent(Covered, Total) -> 100 * Covered / Total.
 
 %% -- reporting -------------------------------------------------------------------------------------
 
-report(Files, Merged, Rows, Covered, Total, Percent) ->
+report(Files, Modules, Rows, Covered, Total, Percent) ->
     io:format("Merged line coverage from ~b export file(s):~n", [length(Files)]),
     [io:format("  ~ts~n", [File]) || File <- Files],
-    io:format("~n~b module(s) merged (~b after de-duplication).~n~n",
-              [length(Merged), length(lists:usort(Merged))]),
+    io:format("~n~b module(s) analysed.~n~n", [length(Modules)]),
     io:format("  covered lines      ~b~n", [Covered]),
     io:format("  executable lines   ~b~n", [Total]),
     io:format("  line coverage      ~.2f%~n~n", [Percent]),

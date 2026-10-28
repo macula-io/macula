@@ -226,6 +226,7 @@ jobs:
       # it buys a figure measured on the run that gated, rather than on a second
       # run of the same tests in a job of its own.
       - name: eunit
+        id: eunit
         if: matrix.check == 'coverage'
         run: rebar3 eunit --cover --cover_export_name eunit
 
@@ -242,15 +243,18 @@ jobs:
       # modules the fleet suites happen to touch. If that stops being true, the
       # number must not keep looking complete without it.
       #
-      # `!cancelled()` rather than the default, because eunit and ct used to be
-      # separate matrix entries and a red eunit did not stop ct from reporting.
-      # Joining the jobs must not quietly cost that: a failure in one suite is
-      # information about the other, and a job that skips ct says less than the
-      # two jobs it replaced. It still does not run on a cancelled run, which is
-      # the only case where skipping is right.
+      # ct runs exactly when eunit RAN — not on the default `success()`, and not
+      # on `!cancelled()` alone. eunit and ct used to be separate matrix entries,
+      # so a red eunit did not stop ct from reporting, and joining them must not
+      # quietly cost that. But the job also has a compile step, a NIF-load check
+      # and the OTP-pin assertion before eunit, and `!cancelled()` would run ct
+      # after one of those failed too: ct would then be executed against a build
+      # that is already known bad and would add failures with nothing to do with
+      # it. A step whose outcome is `success` or `failure` is a step that ran, so
+      # this is "after eunit, whatever eunit said".
       - name: common_test
         id: common_test
-        if: ${{ !cancelled() && matrix.check == 'coverage' }}
+        if: ${{ !cancelled() && matrix.check == 'coverage' && (steps.eunit.outcome == 'success' || steps.eunit.outcome == 'failure') }}
         run: rebar3 ct --cover --cover_export_name ct
 
       # A failed common_test run leaves its reasons in HTML logs, not on the
