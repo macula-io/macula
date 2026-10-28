@@ -54,6 +54,19 @@ a_tunnel_takes_its_peer_on_both_channels_and_refuses_every_other_test_() ->
 %% The accept side: the caller the link authenticated, or no tunnel
 %%------------------------------------------------------------------
 
+%% A CALL's payload need not be a map, and the procedure is advertised `open', so
+%% a probe with a payload of any other shape must not crash the handler: it is
+%% refused by name, before anything reads a field out of it.
+a_tunnel_request_whose_payload_is_not_a_map_is_refused_test() ->
+    macula_dist_pool:register_mesh_pool(self()),
+    try
+        [?assertEqual({error, <<"bad_args">>},
+                      macula_dist_pool:handle_tunnel_request(Shaped))
+         || Shaped <- [<<"not a map">>, [], {a, tuple}, 42]]
+    after
+        persistent_term:erase(macula_dist_mesh_pool)
+    end.
+
 %% `caller' is a required, wire-authenticated field of a CALL, so args without
 %% one are not a tunnel request this node can name a peer for. It is refused
 %% rather than opened to any publisher.

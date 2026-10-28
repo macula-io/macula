@@ -233,6 +233,13 @@ text_value(Value) -> Value.
 tunnel_request_from_node(Args) ->
     text_value(macula:field(from_node, Args, <<>>)).
 
+%% A CALL's payload need not be a map (`with_caller/2' can only merge the caller
+%% into one), and this procedure is advertised `open', so a payload that is not
+%% one is refused by name here rather than crashing a reader on every probe
+%% (macula#159).
+handle_tunnel_request(Args) when not is_map(Args) ->
+    ?LOG_WARNING("[dist_pool] Tunnel request whose payload is not a map"),
+    {error, <<"bad_args">>};
 handle_tunnel_request(Args) ->
     FromNode = tunnel_request_from_node(Args),
     TunnelId = base64:encode(crypto:strong_rand_bytes(16)),
