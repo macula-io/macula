@@ -208,6 +208,23 @@ a_tunnel_whose_bridge_cannot_start_offers_the_kernel_nothing_test_() ->
 %% The connect side: the provider the report named, made by the real path
 %%------------------------------------------------------------------
 
+%% A tunnel whose bridge cannot start reports the bridge's reason instead of
+%% handing the distribution setup a socket nothing reads, which would surface
+%% only as a `pang' at the end of the setup timeout (macula#158). A pool that is
+%% already gone is the bridge that cannot start: `init' subscribes before it does
+%% anything else, and a subscribe to a dead pool refuses to start it.
+a_tunnel_whose_bridge_cannot_start_reports_it_test_() ->
+    {timeout, 30, fun() ->
+        {ok, _} = application:ensure_all_started(macula),
+        Dead = spawn(fun() -> ok end),
+        timer:sleep(50),
+        ?assertNot(is_process_alive(Dead)),
+        ?assertMatch({error, {bridge, _}},
+                     macula_dist_pool:on_tunnel_rpc_reply(
+                       {ok, #{<<"tunnel_id">> => <<"ceres158">>},
+                        #{provider => ?PEER, sealed => 0}}, Dead))
+    end}.
+
 %% The subscription the connect path creates for a tunnel it opened names the
 %% provider the seal report carried: that provider's publication passes the gate
 %% and another node's is refused, on the topic the bridge reads.

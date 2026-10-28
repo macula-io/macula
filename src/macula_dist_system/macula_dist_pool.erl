@@ -363,10 +363,22 @@ create_dist_socket(Pool, TunnelId, Provider) ->
     {DistSock, BridgeSock} = create_loopback_pair(),
 
     Key = tunnel_key(),
-    start_supervised_bridge(Pool, BridgeSock, SendTopic, RecvTopic,
-                             TunnelId, Key, peer_source(Provider)),
+    started_bridge(start_supervised_bridge(Pool, BridgeSock, SendTopic, RecvTopic,
+                                           TunnelId, Key, peer_source(Provider)),
+                   DistSock, BridgeSock).
 
-    {ok, DistSock, DistSock}.
+%% A tunnel whose bridge did not start has no reader on its socket, so handing
+%% the socket to the distribution setup only buys a handshake that writes into
+%% nothing and a `pang' at the end of it with no cause attached. The bridge's own
+%% reason goes back instead, and both ends of the loopback pair are given up
+%% here rather than left open (macula#158).
+started_bridge({ok, _Bridge}, DistSock, _BridgeSock) ->
+    {ok, DistSock, DistSock};
+started_bridge({error, Reason}, DistSock, BridgeSock) ->
+    _ = gen_tcp:close(DistSock),
+    _ = gen_tcp:close(BridgeSock),
+    ?LOG_ERROR("[dist_pool] Tunnel bridge did not start: ~p", [Reason]),
+    {error, {bridge, Reason}}.
 
 %%%===================================================================
 %%% Internal — Supervised Bridge Startup
