@@ -125,10 +125,27 @@ slot_verdict(Entries, #{profile := Profile, realm := <<_:256>>, realm_key_id := 
     {Entry, Stats} = macula_record:signer_entry(Entries, {key_id, RealmKeyId}, Profile, Now),
     {slot_entry(Entry, Trust, Member, Now), entry_expiry(Entry), Stats}.
 
-%% The realm key's entry's own lifetime, whatever it says: a tombstone answers
-%% withdrawn, and a caller reads only the verdict then.
-entry_expiry({ok, #{expires_at := ExpiresAt}}) when is_integer(ExpiresAt) -> ExpiresAt;
-entry_expiry(_Entry) -> undefined.
+%% How long the entry's answer may be honoured: its own lifetime, and never past
+%% the window it names. A realm member endorsement keeps `valid_until' apart from
+%% the record's expiry (a 24 h record may carry a 1 h endorsement), so an answer
+%% that rested on the record alone would outlive the endorsement that gave it
+%% (macula#147, threat model 6.2). A tombstone answers withdrawn, and a caller
+%% reads only the verdict then.
+entry_expiry({ok, #{expires_at := ExpiresAt} = Entry}) when is_integer(ExpiresAt) ->
+    min(ExpiresAt, named_until(Entry, ExpiresAt));
+entry_expiry(_Entry) ->
+    undefined.
+
+%% The window an entry names for itself, when it names one: an endorsement's
+%% `valid_until'. A record of another type carries no window, so its own expiry
+%% is all there is.
+named_until(#{payload := Payload}, ExpiresAt) when is_map(Payload) ->
+    case maps:get({text, <<"valid_until">>}, Payload, undefined) of
+        Until when is_integer(Until) -> Until;
+        _NotAWindow -> ExpiresAt
+    end;
+named_until(_Entry, ExpiresAt) ->
+    ExpiresAt.
 
 %% @doc The standing check that reads a member's slot through Lookup, typically
 %% `fun(Key) -> macula:find_records(Pool, Key) end': ok while the realm key's entry there is an endorsement that admits

@@ -26,6 +26,7 @@ cases(Fixture) ->
                  fun slot_standing_refuses_when_the_lookup_fails/1,
                  fun slot_standing_refuses_when_the_lookup_exits/1,
                  fun slot_verdict_reports_the_endorsements_own_expiry/1,
+                 fun slot_verdict_reports_a_nearer_valid_until/1,
                  fun slot_verdict_reports_the_tombstones_own_expiry/1]].
 
 the_realm_keys_endorsement_counts_beside_another_keys_endorsement_and_tombstone(
@@ -97,11 +98,30 @@ slot_standing_refuses_when_the_lookup_exits(#{member := Member} = Fixture) ->
 %% slot_verdict/4: the verdict with the record's own expiry (macula#147)
 %%------------------------------------------------------------------
 
-%% A caller caches the verdict no longer than the record that produced it, so the
-%% verdict comes with that record's expiry rather than the caller's guess at it.
+%% A caller caches the verdict no longer than the entry that produced it, and an
+%% endorsement's window is shorter than its record: the record runs a clock
+%% tolerance past the window's end, so the verdict carries the window's end, not
+%% the record's expiry.
 slot_verdict_reports_the_endorsements_own_expiry(#{endorsement := Endorsement} = Fixture) ->
     {{ok, [<<"peer">>]}, Until, _Stats} = verdict([wire(Endorsement)], Fixture),
-    ?assertEqual(macula_record:expires_at(Endorsement), Until).
+    ?assertEqual(valid_until(Endorsement), Until),
+    ?assert(Until < macula_record:expires_at(Endorsement)).
+
+%% An endorsement's window is its own: `valid_until' is set apart from the
+%% record's lifetime, and a 24 h record may carry a one-minute endorsement. A
+%% caller caches the verdict until the earlier of the two, never past the window
+%% that gave it (macula#147, threat model 6.2).
+slot_verdict_reports_a_nearer_valid_until(#{realm_key := Key, realm := Realm, member := Member} = Fixture) ->
+    Now = erlang:system_time(millisecond),
+    ValidUntil = Now + 90_000,
+    Endorsement = macula_record:sign(
+                    macula_record:realm_member_endorsement(
+                      Realm, #{realm => Realm, member_node => Member, roles => [<<"peer">>]},
+                      #{valid_from => Now - 5_000, valid_until => ValidUntil}), Key),
+    %% The record outlives its own endorsement, which is what makes the bound bite.
+    ?assert(macula_record:expires_at(Endorsement) > ValidUntil),
+    {{ok, [<<"peer">>]}, Until, _Stats} = verdict([wire(Endorsement)], Fixture),
+    ?assertEqual(ValidUntil, Until).
 
 %% A withdrawal comes with the tombstone's own expiry, which outlives the
 %% endorsement it withdraws: a caller caching the refusal bounds it by that.
@@ -140,6 +160,10 @@ standing(Lookup, #{realm_key := Key, realm := Realm}) ->
 
 wire(Record) ->
     macula_record:encode(Record).
+
+%% The window the endorsement names for itself.
+valid_until(Record) ->
+    maps:get({text, <<"valid_until">>}, maps:get(payload, Record)).
 
 endorsement(Realm, Member) ->
     macula_record:realm_member_endorsement(Realm, #{realm => Realm, member_node => Member, roles => [<<"peer">>]}).

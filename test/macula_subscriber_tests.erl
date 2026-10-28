@@ -180,7 +180,7 @@ the_subscribe_function_gets_the_other_options() ->
 without_a_subscribe_function_it_subscribes_through_macula() ->
     process_flag(trap_exit, true),
     ?assertMatch({error, {function_clause, [{macula_pubsub, subscribe, _, _} | _]}},
-                 macula_subscriber:start_link(?MODULE, pool, ?REALM, ?TOPIC, self())).
+                 macula_subscriber:start_link(?MODULE, pool, ?REALM, ?TOPIC, self(), #{})).
 
 a_subscribe_option_that_is_not_an_arity_5_fun_is_refused() ->
     ?assertError(function_clause,

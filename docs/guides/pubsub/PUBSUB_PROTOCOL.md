@@ -173,7 +173,7 @@ Returns:
 > the frame. Subsequent links are best-effort.
 
 This is what [`macula_publisher` wraps](PUBSUB_GUIDE.md#supervised-wrappers-macula_subscriber-macula_publisher) —
-`start_link/5,6` returns an addressable pid instead of blocking the
+`start_link/6` returns an addressable pid instead of blocking the
 caller, and delivers the same `ok | {error, term()}` outcome to
 `Module:handle_published/2`.
 

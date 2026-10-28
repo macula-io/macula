@@ -51,15 +51,20 @@
 %% opened with a sealed group's epoch, named by `seal_key_id', and 0 for
 %% one that travelled in the clear.
 -type event_meta() :: #{
-    realm            := <<_:256>>,
-    publisher        := <<_:256>>,
-    seq              := non_neg_integer(),
-    published_at     := non_neg_integer(),
-    delivered_via    := macula_frame:delivery_channel(),
-    publication_hash := <<_:384>>,
-    expires_at       := non_neg_integer(),
-    sealed           => 0 | 1,
-    seal_key_id      => <<_:64>>
+    realm              := <<_:256>>,
+    publisher          := <<_:256>>,
+    %% Whether the publisher's signature was checked against `publisher'
+    %% (macula#147). The link delivers an EVENT whose publication did not verify
+    %% with `false' in lenient mode, and its `publisher' is then a claim: a
+    %% subscription's declared sources refuse it.
+    publisher_verified := boolean(),
+    seq                := non_neg_integer(),
+    published_at       := non_neg_integer(),
+    delivered_via      := macula_frame:delivery_channel(),
+    publication_hash   := <<_:384>>,
+    expires_at         := non_neg_integer(),
+    sealed             => 0 | 1,
+    seal_key_id        => <<_:64>>
 }.
 
 %% @doc Publish to `(Realm, Topic)' on `Pool'. Equivalent to
@@ -165,7 +170,7 @@ event_meta(#{realm := Realm, publisher := Publisher, seq := Seq,
              published_at := PublishedAt, publication_hash := Hash,
              expires_at := ExpiresAt}, DeliveredVia)
   when DeliveredVia =:= plumtree; DeliveredVia =:= direct ->
-    #{realm => Realm, publisher => Publisher, seq => Seq,
+    #{realm => Realm, publisher => Publisher, publisher_verified => true, seq => Seq,
       published_at => PublishedAt, delivered_via => DeliveredVia,
       publication_hash => Hash, expires_at => ExpiresAt}.
 

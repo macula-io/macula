@@ -122,6 +122,33 @@ a_named_nodes_source_admits_only_its_list_test_() ->
         stop(Pool)
     end}.
 
+%% A publication whose signature did not verify is not the publisher it claims:
+%% the link delivers it with `publisher_verified => false', and a `{nodes, Ids}'
+%% source would otherwise take a forged identity on its word alone (threat model
+%% 1 and 7.6).
+a_publication_that_did_not_verify_is_refused_test_() ->
+    {timeout, 30, fun() ->
+        {Pool, _RealmKey, _Test} = start(#{}, {nodes, [?PUB]}),
+        inject_unverified(Pool, ?TOPIC, ?PUB, 1, direct),
+        ?assertEqual(ok, collect_none(300)),
+        {ok, Status} = macula_client:status(Pool),
+        ?assertEqual(#{unverified_publisher => 1}, maps:get(source_refused, Status)),
+        stop(Pool)
+    end}.
+
+%% The same for a source that rests on a record: a claimed identity is not worth
+%% a DHT read, so the refusal happens before any lookup.
+an_unverified_publication_costs_no_lookup_test_() ->
+    {timeout, 30, fun() ->
+        {Pool, _RealmKey, _Test} = start(#{}, members, reporting({admit, now_ms() + 60_000})),
+        inject_unverified(Pool, ?TOPIC, ?PUB, 1, direct),
+        ?assertEqual(ok, collect_none(300)),
+        ?assertEqual([], looked_up()),
+        {ok, Status} = macula_client:status(Pool),
+        ?assertEqual(#{unverified_publisher => 1}, maps:get(source_refused, Status)),
+        stop(Pool)
+    end}.
+
 %% Two subscriptions on one topic may declare different sources, and each gets the
 %% answer its own declaration earned: the check is per subscription, on the same
 %% publication, after the pool's dedupe.
@@ -238,6 +265,25 @@ a_fact_behind_a_lookup_is_held_and_released_test_() ->
         {ok, Released} = macula_client:status(Pool),
         ?assertEqual(0, maps:get(source_held, Released)),
         ?assertEqual(#{}, maps:get(source_dropped, Released)),
+        stop(Pool)
+    end}.
+
+%% A deadline that names a lookup the key no longer runs ends nothing. The pool
+%% can hold a second lookup for the same key while a stale timeout sits in its
+%% mailbox, and a timeout matched on the key alone would kill that one -- with its
+%% held facts -- in place of the lookup it belonged to.
+a_deadline_that_names_another_lookup_ends_nothing_test_() ->
+    {timeout, 30, fun() ->
+        {Pool, _RealmKey, Test} = start(#{}, members, controlled()),
+        inject(Pool, ?TOPIC, ?PUB, 1, direct),
+        {Running, [?PUB]} = await_lookup(Test),
+        %% The deadline of a lookup that is not the one in flight.
+        Pool ! {source_lookup_timeout, macula_subscriber_sources:cache_key(?REALM, members, ?PUB), self()},
+        %% The running lookup keeps its held fact and answers it.
+        Running ! {verdict, {admit, now_ms() + 60_000}},
+        ?assertEqual([1], collect(1, 1000)),
+        {ok, Status} = macula_client:status(Pool),
+        ?assertEqual(#{}, maps:get(source_dropped, Status)),
         stop(Pool)
     end}.
 
@@ -403,6 +449,68 @@ a_verdict_still_in_use_is_refreshed_before_it_expires_test_() ->
     end}.
 
 %%------------------------------------------------------------------
+%% The refresh is a lookup like any other
+%%------------------------------------------------------------------
+
+%% A refresh that could not find out is not retried on every fact. Its entry
+%% keeps serving, and its refresh moment moves to the entry's own expiry, so a
+%% source that keeps failing costs one lookup per life of the entry rather than
+%% one per fact -- which would sit outside the lookup window entirely.
+a_failed_refresh_is_not_retried_on_every_fact_test_() ->
+    {timeout, 30, fun() ->
+        {Pool, _RealmKey, Test} = start(#{subscribe_sources => #{refresh_margin_ms => 1000}},
+                                        members, controlled()),
+        inject(Pool, ?TOPIC, ?PUB, 1, direct),
+        {First, [?PUB]} = await_lookup(Test),
+        First ! {verdict, {admit, now_ms() + 3000}},
+        ?assertEqual([1], collect(1, 1000)),
+        timer:sleep(2100),
+        %% Past the refresh moment: the fact is served from the entry, and one
+        %% refresh starts behind it.
+        inject(Pool, ?TOPIC, ?PUB, 2, direct),
+        ?assertEqual([2], collect(1, 1000)),
+        {Refresh, [?PUB]} = await_lookup(Test),
+        %% It could not find out. The entry keeps serving, and nothing asks again
+        %% on the facts that follow.
+        Refresh ! {verdict, {unavailable, no_station}},
+        %% The pool answers the facts in the order it sees them, and this test
+        %% sends the verdict and the facts from one process: give the failure its
+        %% moment, so what follows is measured after the pool has seen it.
+        timer:sleep(100),
+        [inject(Pool, ?TOPIC, ?PUB, Seq, direct) || Seq <- [3, 4, 5]],
+        ?assertEqual([3, 4, 5], collect(3, 1000)),
+        ?assertEqual({none, []}, await_lookup(Test, [], 300)),
+        %% Nothing was refused and nothing was dropped: these facts were admitted
+        %% all along, and the failed refresh cost them nothing.
+        {ok, Status} = macula_client:status(Pool),
+        ?assertEqual(#{}, maps:get(source_refused, Status)),
+        ?assertEqual(#{}, maps:get(source_dropped, Status)),
+        stop(Pool)
+    end}.
+
+%% A refresh spends the realm's window budget as any other lookup does: with the
+%% window already spent by the subscription's own first fact, no refresh starts,
+%% and the fact that prompted it is still served from the entry (§6.3.3).
+a_refresh_over_the_lookup_window_is_skipped_test_() ->
+    {timeout, 30, fun() ->
+        {Pool, _RealmKey, Test} = start(#{subscribe_sources => #{refresh_margin_ms => 1000,
+                                                                lookups_per_window => 1}},
+                                        members, controlled()),
+        inject(Pool, ?TOPIC, ?PUB, 1, direct),
+        {First, [?PUB]} = await_lookup(Test),
+        First ! {verdict, {admit, now_ms() + 3000}},
+        ?assertEqual([1], collect(1, 1000)),
+        timer:sleep(2100),
+        inject(Pool, ?TOPIC, ?PUB, 2, direct),
+        ?assertEqual([2], collect(1, 1000)),
+        ?assertEqual({none, []}, await_lookup(Test, [], 300)),
+        %% The fact was admitted, not dropped, so no dropped count rose for it.
+        {ok, Status} = macula_client:status(Pool),
+        ?assertEqual(#{}, maps:get(source_dropped, Status)),
+        stop(Pool)
+    end}.
+
+%%------------------------------------------------------------------
 %% The bounds option itself
 %%------------------------------------------------------------------
 
@@ -466,8 +574,16 @@ inject(Pool, Topic, Publisher, Seq, DeliveredVia) ->
     inject(Pool, Topic, Publisher, Seq, DeliveredVia, now_ms() + 60_000).
 
 inject(Pool, Topic, Publisher, Seq, DeliveredVia, ExpiresAt) ->
+    inject_meta(Pool, Topic, Publisher, Seq, DeliveredVia, ExpiresAt, true).
+
+%% A publication whose signature did not verify reaches the pool with the link's
+%% `publisher_verified => false' (lenient mode), and its publisher is a claim.
+inject_unverified(Pool, Topic, Publisher, Seq, DeliveredVia) ->
+    inject_meta(Pool, Topic, Publisher, Seq, DeliveredVia, now_ms() + 60_000, false).
+
+inject_meta(Pool, Topic, Publisher, Seq, DeliveredVia, ExpiresAt, Verified) ->
     Pool ! {macula_event, make_ref(), Topic, Seq,
-            #{realm => ?REALM, publisher => Publisher, seq => Seq,
+            #{realm => ?REALM, publisher => Publisher, publisher_verified => Verified, seq => Seq,
               delivered_via => DeliveredVia,
               publication_hash => crypto:hash(sha384, <<Publisher/binary, Seq:64>>),
               expires_at => ExpiresAt}},

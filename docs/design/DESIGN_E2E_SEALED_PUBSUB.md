@@ -242,7 +242,7 @@ from the same authority the advertisement field would have and cannot be forged 
 ## 7. The API (Erlang; the other SDKs follow the same shape)
 
 - `macula:publish(Pool, Realm, Topic, Payload, #{group => Prefix})` and
-  `macula:subscribe(Pool, Realm, Topic, Pid, #{group => Prefix})`, with `distributor => NodeId` (§2) and
+  `macula:subscribe(Pool, Realm, Topic, Pid, #{sources => members, group => Prefix})`, with `distributor => NodeId` (§2) and
   `ucan_token => Token`, the org's grant (§3). `Topic`, or for a
   pattern subscription every topic it matches, must be under `Prefix` (§2), and `Prefix` must have an org segment:
   anything else is `{error, {invalid_option, group}}` before anything is sent.

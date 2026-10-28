@@ -9,7 +9,7 @@
 %%% to thread state across events.
 %%%
 %%% `macula_subscriber' is the supervised alternative. Implement three
-%%% callbacks; `start_link/5,6' returns an ordinary `gen_server' pid you
+%%% callbacks; `start_link/6' returns an ordinary `gen_server' pid you
 %%% drop straight into your own supervision tree, and every event
 %%% arrives as a `Module:handle_event/4' call against state your module
 %%% owns and threads itself.
@@ -66,7 +66,7 @@
 
 -behaviour(gen_server).
 
--export([start_link/5, start_link/6]).
+-export([start_link/6]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
 -export_type([subscribe/0, start_opts/0]).
@@ -103,14 +103,15 @@
 
 %% @doc Start a subscriber. Subscribes `Module' to `(Realm, Topic)' on
 %% `Pool'; `Args' is passed to `Module:init/1'.
--spec start_link(module(), macula:pool(), macula:realm(), macula:topic(),
-                  term()) -> {ok, pid()} | {error, term()}.
-start_link(Module, Pool, Realm, Topic, Args) ->
-    start_link(Module, Pool, Realm, Topic, Args, #{}).
-
-%% @doc As `start_link/5', with options: `subscribe' gives the function
-%% the subscriber subscribes with (see "Subscribe function" above), and
-%% the other options pass through to it (e.g. `delivery').
+%%
+%% There is no arity without options, because the subscription's `sources'
+%% live there and a subscription that names none is refused (macula#147):
+%% `Opts' is `macula:subscribe/5's, so `sources => members | {org, Org} |
+%% {nodes, [NodeId]} | open' is required and the call answers
+%% `{error, {sources, required}}' without it. `subscribe' gives the
+%% function the subscriber subscribes with instead (see "Subscribe
+%% function" above), and the other options pass through to it (e.g.
+%% `delivery').
 -spec start_link(module(), macula:pool(), macula:realm(), macula:topic(),
                   term(), start_opts()) -> {ok, pid()} | {error, term()}.
 start_link(Module, Pool, Realm, Topic, Args, Opts) when is_map(Opts) ->

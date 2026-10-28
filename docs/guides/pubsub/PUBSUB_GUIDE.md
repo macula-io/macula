@@ -40,7 +40,7 @@ proper OTP behaviours. Only the publish side announces itself on the mesh —
 no mesh-fact equivalent, since a subscription has no single "done" moment to
 announce.
 
-Subscriber side — `start_link/5,6` opens the subscription in its own
+Subscriber side — `start_link/6` opens the subscription in its own
 `init/1` and threads `macula_event` / `macula_event_gone` dispatch into
 `Module:handle_event/4` for you — no hand-rolled `handle_info` clauses
 needed (see [PUBSUB_PROTOCOL.md](PUBSUB_PROTOCOL.md#subscribing-in-a-callback-module)
@@ -80,11 +80,11 @@ handle_event(_Topic, Payload, _Meta, State) ->
 Topic = macula_topic:app_fact(Realm, my_org, my_app,
                               <<"orders">>, <<"placed">>, 1),
 {ok, Pid} = macula_subscriber:start_link(my_orders_listener, Pool, Realm,
-                                         Topic, []).
+                                         Topic, [], #{sources => members}).
 ```
 
-`Opts` (the arity-6 `start_link/6`) passes straight through to
-`macula:subscribe/5` — the `delivery` option covered in
+`Opts` passes straight through to `macula:subscribe/5`, so `sources` is
+required here as it is there — the `delivery` option covered in
 [Delivery ordering](#delivery-ordering), below, works exactly the same way
 whether you call it raw or through the wrapper.
 
@@ -346,15 +346,16 @@ verified publisher's EVENTs.
 
 ```erlang
 %% default — per-publisher FIFO
-{ok, Pid1} = macula_subscriber:start_link(my_orders_listener, Pool, Realm, Topic, []),
+{ok, Pid1} = macula_subscriber:start_link(my_orders_listener, Pool, Realm, Topic, [],
+                                          #{sources => members}),
 
 %% newest-wins, drop stale
 {ok, Pid2} = macula_subscriber:start_link(my_orders_listener, Pool, Realm, Topic, [],
-                                          #{delivery => latest_only}),
+                                          #{sources => members, delivery => latest_only}),
 
 %% raw arrival order (the pre-8.8 behaviour)
 {ok, Pid3} = macula_subscriber:start_link(my_orders_listener, Pool, Realm, Topic, [],
-                                          #{delivery => as_arrives}).
+                                          #{sources => members, delivery => as_arrives}).
 ```
 
 **Ordered mode and loss.** `ordered` trades a bounded delay for order:

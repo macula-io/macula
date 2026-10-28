@@ -2237,7 +2237,7 @@ handle_info({macula_event, _LinkSubRef, Topic, Payload,
 
 handle_info({source_verdict, Key, Outcome}, S) -> {noreply, source_answered(Key, Outcome, S)};
 handle_info({source_lookup, _Mon, process, Worker, _Reason}, S) -> {noreply, source_worker_gone(Worker, S)};
-handle_info({source_lookup_timeout, Key}, S) -> {noreply, source_deadline_passed(Key, S)};
+handle_info({source_lookup_timeout, Key, Worker}, S) -> {noreply, source_deadline_passed(Key, Worker, S)};
 
 handle_info({macula_event_gone, _LinkSubRef, _Reason}, S) ->
     %% A link torn down its subscription end. Pool will respawn the
@@ -2587,8 +2587,8 @@ caller_policy(Policy, _Realm, _S) ->
 %%
 %% Walked by pattern, never with `lists:all/2' or an `is_list' guard. `[_ | _]'
 %% matches an improper cons as happily as a proper one, `lists:all/2' over
-%% `[a | b]' raises, and on OTP 28 `is_list/1' answers true for an improper list
-%% too, so a guard cannot catch this. An improper list has no `[]' to end on and
+%% `[a | b]' raises, and `is_list/1' answers true for any cons, improper or not,
+%% so a guard cannot catch this. An improper list has no `[]' to end on and
 %% falls out of this walk as `not_a_list' -- inside the pool process, where the
 %% raise that used to happen took every link, subscription and advertisement
 %% on the pool down with it.
@@ -4497,11 +4497,27 @@ deliver_now(#sub_spec{subscriber = Pid, order = Order} = Spec, SubRef,
 %% checked once and each subscription on it gets the answer its own declaration
 %% earned. A `{nodes, Ids}' source is a comparison with the list and never
 %% expires: a node id is not a credential.
-source_gated({nodes, NodeIds}, Spec, SubRef, Topic, Payload, Meta, S) ->
+source_gated(Source, Spec, SubRef, Topic, Payload, Meta, S) ->
+    verified_source(publisher_verified(Meta), Source, Spec, SubRef, Topic, Payload, Meta, S).
+
+%% The link delivers a publication whose signature did not verify with
+%% `publisher_verified => false' (lenient mode, `pubsub_strict_publisher_sig'),
+%% and its `publisher' is then a claim, not an identity. No declared source can
+%% admit a claim -- a `{nodes, Ids}' list would take a forged identity and a
+%% record source would spend a DHT read on one -- so every source but `open'
+%% refuses it here, before any of them is consulted.
+verified_source(false, _Source, _Spec, _SubRef, _Topic, _Payload, _Meta, S) ->
+    count_refused(unverified_publisher, S);
+verified_source(true, {nodes, NodeIds}, Spec, SubRef, Topic, Payload, Meta, S) ->
     admitted_or_refused(macula_subscriber_sources:admits({nodes, NodeIds}, publisher(Meta)),
                         {refuse, not_listed}, Spec, SubRef, Topic, Payload, Meta, S);
-source_gated(Source, Spec, SubRef, Topic, Payload, Meta, S) ->
+verified_source(true, Source, Spec, SubRef, Topic, Payload, Meta, S) ->
     cached_source(Source, Spec, SubRef, Topic, Payload, Meta, S).
+
+%% Absent is not verified: an EVENT that arrives without the link's own word on
+%% it (a fact this pool never received from a link) is nobody's either.
+publisher_verified(#{publisher_verified := true}) -> true;
+publisher_verified(_Meta) -> false.
 
 publisher(#{publisher := Publisher}) -> Publisher.
 
@@ -4541,9 +4557,22 @@ refreshing(false, _Key, _Source, S) ->
 
 %% One in-flight lookup per cache key, a refresh included: a second would answer
 %% into the same key and leave a monitor and a deadline behind.
+%%
+%% A refresh costs a DHT read like any other lookup, so it spends the realm's
+%% window as one (§6.3.3): over the bound no refresh starts, and the fact that
+%% prompted it is still served from the entry, which has not expired. Nothing is
+%% dropped here -- the fact was admitted -- so no dropped count rises.
 idle_key(true, Key, Source, S) ->
-    started_lookup(Key, Source, element(1, Key), S);
+    refresh_in_window(macula_subscriber_sources:window_allows(S#state.source_windows, element(1, Key),
+                                                             erlang:system_time(millisecond),
+                                                             S#state.source_bounds),
+                      Key, Source, S);
 idle_key(false, _Key, _Source, S) ->
+    S.
+
+refresh_in_window({ok, Windows}, Key, Source, S) ->
+    started_lookup(Key, Source, element(1, Key), S#state{source_windows = Windows});
+refresh_in_window(over, _Key, _Source, S) ->
     S.
 
 %% The fact waits behind the key's one lookup, or behind a new one when there is
@@ -4580,8 +4609,11 @@ started_lookup(Key, Source, Realm, S) ->
     Lookup = S#state.source_lookup,
     Publisher = element(3, Key),
     Worker = spawn(fun() -> Pool ! {source_verdict, Key, Lookup(Source, Context, Publisher)} end),
+    %% The deadline names the worker it belongs to: the pool can hold a second
+    %% lookup for the same key by the time a stale timeout is still in its
+    %% mailbox, and a timeout that matched on the key alone would kill that one.
     Deadline = erlang:send_after(maps:get(lookup_timeout_ms, S#state.source_bounds), self(),
-                                 {source_lookup_timeout, Key}),
+                                 {source_lookup_timeout, Key, Worker}),
     Mon = erlang:monitor(process, Worker, [{tag, source_lookup}]),
     S#state{source_inflight = maps:put(Key, {Mon, Worker, Deadline}, S#state.source_inflight)}.
 
@@ -4615,15 +4647,19 @@ source_worker_gone(Worker, #state{source_inflight = Inflight} = S) ->
 
 %% A lookup that blew its deadline is ended, and what waited behind it is dropped
 %% and counted: a lookup that never answers must not hold a publisher's facts
-%% until they expire one by one.
-source_deadline_passed(Key, S) ->
-    deadline_passed(maps:find(Key, S#state.source_inflight), Key, S).
+%% until they expire one by one. A timeout that names a worker the key no longer
+%% runs is a stale one -- the lookup it belonged to already answered, and the one
+%% running now is not it -- so it ends nothing.
+source_deadline_passed(Key, Worker, S) ->
+    deadline_passed(maps:find(Key, S#state.source_inflight), Key, Worker, S).
 
-deadline_passed(error, _Key, S) ->
+deadline_passed(error, _Key, _Worker, S) ->
     S;
-deadline_passed({ok, {_Mon, Worker, _Deadline}}, Key, S) ->
+deadline_passed({ok, {_Mon, Worker, _Deadline}}, Key, Worker, S) ->
     exit(Worker, kill),
-    lost_lookup(Key, S).
+    lost_lookup(Key, S);
+deadline_passed({ok, _Other}, _Key, _Worker, S) ->
+    S.
 
 %% The worker answered: cache a verdict, and release what waited behind it in
 %% arrival order. Anything it could not find out is not a verdict -- nothing is
@@ -4634,7 +4670,19 @@ verdict_arrived(Key, {admit, Until}, S) ->
 verdict_arrived(Key, {refuse, Reason}, S) ->
     release_held(Key, {refuse, Reason}, cached_verdict(Key, {refuse, Reason}, undefined, S));
 verdict_arrived(Key, {unavailable, _Why}, S) ->
-    drop_held(Key, lookup_unavailable, S).
+    lookup_failed(Key, S).
+
+%% A lookup that could not find out is not a verdict: what waited behind it is
+%% dropped and counted, and a refresh that failed does not arm another on the very
+%% next fact -- its refresh moment moves to the entry's own expiry, so a source
+%% that keeps failing costs one lookup per life of the entry, not one per fact
+%% (which would sit outside the lookup window entirely).
+lookup_failed(Key, S) ->
+    refreshed_at_expiry(Key, drop_held(Key, lookup_unavailable, S)).
+
+refreshed_at_expiry(Key, S) ->
+    S#state{source_verdicts = macula_subscriber_sources:refresh_failed(
+                                S#state.source_verdicts, Key)}.
 
 cached_verdict(Key, Verdict, Until, S) ->
     S#state{source_verdicts = macula_subscriber_sources:cache_put(
@@ -4710,7 +4758,7 @@ key_of_worker(Worker, [_Other | Rest]) ->
 lost_lookup(none, S) ->
     S;
 lost_lookup(Key, S) ->
-    drop_held(Key, lookup_unavailable, S#state{source_inflight = maps:remove(Key, S#state.source_inflight)}).
+    lookup_failed(Key, S#state{source_inflight = maps:remove(Key, S#state.source_inflight)}).
 
 count_refused(Reason, S) ->
     S#state{source_refused = counted(Reason, S#state.source_refused)}.

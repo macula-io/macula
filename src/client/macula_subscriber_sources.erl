@@ -36,7 +36,7 @@
 
 -export([declared/3,
          bounds/1,
-         cache_key/3, cache_get/3, cache_put/6,
+         cache_key/3, cache_get/3, cache_put/6, refresh_failed/2,
          refresh_due/2,
          window_allows/4,
          admits/2,
@@ -144,9 +144,9 @@ member_source(Realm, RealmKeys, Source) ->
 
 %% Walked by pattern, never with `lists:all/2' or an `is_list' guard: `[_ | _]'
 %% matches an improper cons too, `lists:all/2' over it raises (inside the pool
-%% process), and on OTP 28 `is_list/1' answers true for an improper list, so no
-%% guard catches it. An improper list has no `[]' to end on and falls out as
-%% `not_a_list'. The call side is walked the same way
+%% process), and `is_list/1' has always answered true for any cons, improper or
+%% not, so no guard catches it. An improper list has no `[]' to end on and falls
+%% out as `not_a_list'. The call side is walked the same way
 %% (`macula_client:caller_policy/3').
 node_ids_or_error(NodeIds) ->
     node_ids_formed(NodeIds, NodeIds).
@@ -231,6 +231,19 @@ held_verdict({ok, _Expired}, Cache, Key, _Now) ->
     {miss, maps:remove(Key, Cache)};
 held_verdict(error, Cache, _Key, _Now) ->
     {miss, Cache}.
+
+%% @doc The refresh of `Key' did not answer. Its entry keeps serving, and its
+%% refresh moment moves to the entry's own expiry: a source that keeps failing
+%% costs one lookup per life of the entry, not one per fact, and the lookup that
+%% replaces it goes through the window like any other.
+-spec refresh_failed(cache(), key()) -> cache().
+refresh_failed(Cache, Key) ->
+    failed_refresh(maps:find(Key, Cache), Cache, Key).
+
+failed_refresh({ok, {Verdict, ExpiresAt, Used, _RefreshAt}}, Cache, Key) ->
+    Cache#{Key => {Verdict, ExpiresAt, Used, ExpiresAt}};
+failed_refresh(error, Cache, _Key) ->
+    Cache.
 
 %% @doc Record a verdict for `Key', honoured until `Until', but never past the
 %% cache's own TTL and never past the record it came from. Expired entries of the

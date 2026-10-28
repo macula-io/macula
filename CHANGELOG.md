@@ -62,10 +62,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and on both delivery channels, so a colluding station cannot make a fact it relays look like another
   node's.
 
+  **Only a verified publisher is anyone.** The link delivers an EVENT whose publication did not verify
+  with `publisher_verified => false` (lenient mode, `pubsub_strict_publisher_sig`), and its `publisher`
+  is then a claim: every source but `open` refuses it, counted as `unverified_publisher`, before any
+  lookup -- a `{nodes, [NodeId]}` list would otherwise take a forged identity on its word.
+
   **What it costs.** `{nodes, _}` is a comparison with a list and never expires. `members` and `org` are
   one record lookup per publisher, cached: under `{Realm, Source, Publisher}`, never honoured past the
-  record that produced it nor past the cache's own life, refreshed while still in use so a steady
-  publisher never waits. The lookup runs in a worker, never in the pool process, and the pool keeps
+  record that produced it, never past an endorsement's own `valid_until` (which a record outlives), nor
+  past the cache's own life, refreshed while still in use so a steady publisher never waits. A refresh
+  spends the realm's lookup window like any other lookup, and a refresh that could not find out is not
+  retried on the next fact: the entry's refresh moment moves to its own expiry. The lookup runs in a worker, never in the pool process, and the pool keeps
   only the verdict cache and the in-flight set. A fact whose publisher is being looked up is *held*
   behind that one lookup rather than dropped -- dropping on arrival would lose the first fact of every
   new publisher -- bounded by a per-key hold cap and by the fact's own expiry. Three counters keep

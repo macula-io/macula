@@ -24,11 +24,14 @@ event_meta_test_() ->
 %% Cases
 %%------------------------------------------------------------------
 
-%% No payload, carried key, ttl_ms or publisher_verified: only the keys of event_meta().
+%% No payload, carried key or ttl_ms: only the keys of event_meta(). publisher_verified is one of them and is true
+%% here, because the publication this is built from verified (macula#147).
 the_meta_holds_exactly_the_event_meta_keys(Publisher) ->
     Meta = macula_pubsub:event_meta(verified(event(Publisher, #{}, plumtree)), plumtree),
-    ?assertEqual([delivered_via, expires_at, publication_hash, published_at, publisher, realm, seq],
-                 lists:sort(maps:keys(Meta))).
+    ?assertEqual([delivered_via, expires_at, publication_hash, published_at, publisher, publisher_verified,
+                  realm, seq],
+                 lists:sort(maps:keys(Meta))),
+    ?assertEqual(true, maps:get(publisher_verified, Meta)).
 
 %% publisher is the key id of the publication's key, the publisher's node_id, and publication_hash is the SHA-384
 %% of its tbs.
