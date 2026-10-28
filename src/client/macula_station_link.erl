@@ -400,6 +400,24 @@
 %% before it is refused, so a stalled admission never holds up the link.
 -define(ADMIT_TIMEOUT_MS, 1_000).
 
+%% The most bytes the link holds for one session whose peer withholds QUIC
+%% flow-control credit, 1 MiB unless `max_stream_out_queue_bytes' in the macula
+%% application env says otherwise (macula#141). Past it that session ends as a
+%% failed write ends it, so the link's own memory stays bounded whatever its
+%% producers do, and only the slow session's stream is lost.
+-define(MAX_STREAM_OUT_QUEUE_BYTES, 16#100000).
+
+%% What a dedicated stream's peer has not taken yet: the bytes the link was
+%% given for it while the QUIC stream held 1 MiB unwritten, in the order they
+%% were signed, and whether the session's last frame is among them. `closing' is
+%% set by a last frame the stream answered `busy' for, and its session ends once
+%% the queue is handed over, so a close cannot chop a queued tail.
+-record(out, {
+    q       = queue:new() :: queue:queue({binary(), boolean()}),
+    bytes   = 0           :: non_neg_integer(),
+    closing = false       :: boolean()
+}).
+
 -record(state, {
     seed             :: #{host := binary() | string(),
                           port := inet:port_number(),
@@ -415,6 +433,9 @@
     connect          :: fun((map()) -> {ok, pid()} | {error, term()}),
     %% The functions every dedicated stream is opened, written and closed
     %% through (start opts `open_stream', `send_on_stream', `close_stream').
+    %% `send_on_stream' is a hand-over, not a write: `macula_peering:async_send_on_stream/2'
+    %% unless the start opts give another, answering `ok' once the bytes are
+    %% queued and `{error, busy}' while the stream holds 1 MiB unwritten.
     open_stream      :: fun((pid()) -> {ok, reference()} | {error, term()}),
     send_on_stream   :: fun((reference(), binary()) -> ok | {error, term()}),
     close_stream     :: fun((reference()) -> ok),
@@ -519,6 +540,13 @@
     %% client stream, or when a stream the peer opened brings its first
     %% whole frame, and removed when the session tears down.
     stream_bufs = #{} :: #{reference() => binary()},
+    %% What a dedicated stream's peer has not taken yet, keyed by the QUIC
+    %% stream it was signed for: the bytes the stream answered `busy' for, held
+    %% here so a peer that withholds flow-control credit on one stream waits
+    %% alone instead of holding the link (macula#141). An entry exists only
+    %% while a stream has bytes held, and goes when they are handed over or its
+    %% session ends.
+    stream_out = #{} :: #{reference() => #out{}},
     %% The refused opens whose caller may still be writing, drained before their stream closes: the bytes it may still
     %% send, and the open whose admission place it holds until the drain ends.
     draining = #{} :: #{reference() => #{bytes := non_neg_integer(), open := map()}},
@@ -1662,7 +1690,9 @@ started({ok, Seed, Key, Profile, Issuer}, Opts) ->
     _ = erlang:monitor(process, Issuer),
     Connect  = maps:get(connect, Opts, fun macula_peering:connect/1),
     OpenStream   = maps:get(open_stream, Opts, fun macula_peering:open_dedicated_stream/1),
-    SendOnStream = maps:get(send_on_stream, Opts, fun macula_peering:send_on_stream/2),
+    %% A hand-over, not a write: a peer that stops granting credit on one stream
+    %% holds only that stream's bytes (macula#141).
+    SendOnStream = maps:get(send_on_stream, Opts, fun macula_peering:async_send_on_stream/2),
     CloseStream  = maps:get(close_stream, Opts, fun macula_peering:close_dedicated_stream/1),
     ResetStream  = maps:get(reset_stream, Opts, fun macula_peering:reset_dedicated_stream/2),
     %% Every link reads the relay code `overloaded', so it says so (macula#54).
@@ -2192,6 +2222,13 @@ quic_event({quic, stream_closed, Stream, Flags}, #state{stream_bufs = Bufs} = S)
 quic_event({quic, peer_send_shutdown, Stream, _}, #state{stream_bufs = Bufs} = S)
         when is_map_key(Stream, Bufs) ->
     {noreply, peer_finished_on_stream(Stream, S)};
+%% The peer takes data again on a dedicated stream it answered busy for: hand it
+%% what this link held meanwhile, in order (`stream_takes_data/2'). No buffer is
+%% needed and none is checked: a stream may wait for credit with its inbound side
+%% already finished (macula#145), and the entry itself says what it holds.
+quic_event({quic, send_ready, Stream, _}, #state{stream_out = Out} = S)
+        when is_map_key(Stream, Out) ->
+    {noreply, stream_takes_data(Stream, S)};
 %% A stream that closes before its STREAM_OPEN completed carries no session.
 quic_event({quic, Closed, Stream, _}, #state{opening_bufs = Opening} = S)
         when (Closed =:= stream_closed orelse Closed =:= peer_send_shutdown),
@@ -4478,9 +4515,9 @@ reopen_within(true, Bytes, #{request_id := Sid} = Open, Keys, StreamPid, S) ->
 reopened_stream({ok, Stream}, Bytes, AttachId, StreamPid, Mon,
                 #state{client_streams = CS, stream_bufs = Bufs} = S) ->
     Opened = S#state{client_streams = CS#{AttachId => {StreamPid, Mon, Stream}}, stream_bufs = Bufs#{Stream => <<>>}},
-    case written(Stream, Bytes, Opened) of
-        ok -> {ok, Opened};
-        {error, Reason} -> erlang:demonitor(Mon, [flush]), {error, Reason, drop_stream(AttachId, Opened)}
+    case written(Stream, Bytes, false, Opened) of
+        {{error, Reason}, Refused} -> erlang:demonitor(Mon, [flush]), {error, Reason, drop_stream(AttachId, Refused)};
+        {_Accepted, Opened2} -> {ok, Opened2}
     end;
 reopened_stream({error, Reason}, _Bytes, _AttachId, _StreamPid, Mon, S) ->
     erlang:demonitor(Mon, [flush]),
@@ -4498,7 +4535,8 @@ opened_stream(#state{open_stream = Open, peer_pid = Conn}) ->
 client_stream_opened({ok, Stream}, Bytes, AttachId, StreamPid, Mon,
                      #state{client_streams = CS, stream_bufs = Bufs} = S) ->
     Opened = S#state{client_streams = CS#{AttachId => {StreamPid, Mon, Stream}}, stream_bufs = Bufs#{Stream => <<>>}},
-    stream_written(written(Stream, Bytes, Opened), StreamPid, AttachId, false, Opened);
+    {Result, S2} = written(Stream, Bytes, false, Opened),
+    stream_written(Result, StreamPid, AttachId, false, S2);
 client_stream_opened({error, Reason}, _Bytes, AttachId, StreamPid, Mon, S) ->
     erlang:demonitor(Mon, [flush]),
     StreamPid ! {stream_write_failed, AttachId, Reason},
@@ -4515,7 +4553,7 @@ attach_id_free(AttachId, #state{client_streams = CS, server_streams = SS}) ->
 
 %% Each `macula_stream' bound to this link via the
 %% `{remote_via_link, _, Sid}' peer shape casts the bytes of each frame
-%% it signs here, and the link writes them on the stream's dedicated
+%% it signs here, and the link hands them to the stream's dedicated
 %% QUIC stream. Every open stream session has its own dedicated QUIC
 %% stream by the time anything is outbound on it: `find_stream/2'
 %% returning `error' means the session already tore down (peer closed,
@@ -4523,12 +4561,117 @@ attach_id_free(AttachId, #state{client_streams = CS, server_streams = SS}) ->
 stream_bytes_sent(error, _Sid, _Bytes, _Last, S) ->
     S;
 stream_bytes_sent({ok, {Pid, _Mon, Stream}}, Sid, Bytes, Last, S) ->
-    stream_written(written(Stream, Bytes, S), Pid, Sid, Last, S).
+    {Result, S2} = written(Stream, Bytes, Last, S),
+    stream_written(Result, Pid, Sid, Last, S2).
 
-written(Stream, Bytes, #state{send_on_stream = Send}) ->
+%% Hand a frame's bytes to its dedicated stream, and hold them for it when the
+%% peer is not taking data. The hand-over never waits on the peer: the bytes go
+%% to `macula_peering:async_send_on_stream/2', which queues them and answers at
+%% once. `busy' means the stream already holds 1 MiB unwritten, so this frame
+%% and every one after it is held here, in order, until the peer takes data
+%% again (`stream_takes_data/2'). A peer that withholds credit on one stream
+%% therefore waits alone: the link's own process writes every other session's
+%% frames meanwhile (macula#141).
+%%
+%% `ok' means the stream took everything, so a caller may still end the session
+%% on its last frame; `held' means the link keeps them, and the session ends
+%% when the last one is handed over; `{error, Reason}' is a write that failed,
+%% or a session with more unread than the link holds for it. The state comes
+%% back with it, because holding is state.
+-spec written(reference(), binary(), boolean(), #state{}) ->
+        {ok | held | {error, term()}, #state{}}.
+written(Stream, Bytes, Last, #state{stream_out = Out} = S) ->
+    case maps:find(Stream, Out) of
+        error -> writer_took(Stream, Bytes, Last, S);
+        {ok, Held} -> holding(hold_out(Stream, {Bytes, Last}, Held, S), S)
+    end.
+
+writer_took(Stream, Bytes, Last, #state{send_on_stream = Send} = S) ->
+    case write_to_stream(Stream, Bytes, Send) of
+        ok -> {ok, S};
+        {error, busy} -> holding(hold_out(Stream, {Bytes, Last}, #out{}, S), S);
+        {error, Reason} -> {{error, Reason}, S}
+    end.
+
+write_to_stream(Stream, Bytes, Send) ->
     try Send(Stream, Bytes)
     catch Class:Reason -> {error, {Class, Reason}}
     end.
+
+%% Holding changed the state; a refusal to hold it leaves the state as it was.
+holding({error, _} = Refused, S) ->
+    {Refused, S};
+holding(Held, _S) ->
+    {held, Held}.
+
+%% Hold a frame for a stream whose peer is not taking data. A session over the
+%% queue's cap has more unread than the link will hold for it: it ends where the
+%% hand-over is, as a failed write ends it, and no other session is touched. A
+%% frame larger than the cap is held when nothing else is held for its stream,
+%% so a stream's queue never exceeds the cap by more than the one frame that
+%% starts it: frames run to 16 MiB, and a peer withholding credit is no reason to
+%% refuse one the stream itself takes otherwise.
+hold_out(Stream, {Bytes, Last} = Item, #out{q = Q, bytes = Held, closing = Closing} = Out, S) ->
+    Over = Held + byte_size(Bytes),
+    case Held > 0 andalso Over > stream_out_limit() of
+        true ->
+            {error, {outbound_queue_full, Over}};
+        false ->
+            S#state{stream_out = maps:put(Stream, Out#out{q = queue:in(Item, Q), bytes = Over,
+                                                          closing = Closing orelse Last},
+                                          S#state.stream_out)}
+    end.
+
+stream_out_limit() ->
+    app_env(max_stream_out_queue_bytes, ?MAX_STREAM_OUT_QUEUE_BYTES).
+
+%% The peer takes data again on a stream the link held bytes for: hand them over
+%% in order while it takes them, and end the session if its last frame was among
+%% them.
+stream_takes_data(Stream, #state{stream_out = Out} = S) ->
+    case maps:take(Stream, Out) of
+        error ->
+            S;
+        {#out{q = Q, closing = Closing}, Out2} ->
+            drain_out(Stream, Closing, queue:to_list(Q), S#state{stream_out = Out2})
+    end.
+
+drain_out(Stream, Closing, [{Bytes, _Last} = Item | Rest], #state{send_on_stream = Send} = S) ->
+    case write_to_stream(Stream, Bytes, Send) of
+        ok ->
+            drain_out(Stream, Closing, Rest, S);
+        {error, busy} ->
+            held_again(Stream, Closing, [Item | Rest], S);
+        {error, Reason} ->
+            failed_out(Stream, Reason, S)
+    end;
+drain_out(Stream, true, [], S) ->
+    ended_out(Stream, S);
+drain_out(_Stream, false, [], S) ->
+    S.
+
+%% The peer took no more of what the link held: it waits again, in order.
+held_again(Stream, Closing, Items, S) ->
+    Held = #out{q = queue:from_list(Items), bytes = lists:sum([byte_size(B) || {B, _} <- Items]),
+                closing = Closing},
+    S#state{stream_out = maps:put(Stream, Held, S#state.stream_out)}.
+
+%% The last frame the link held for a stream has gone over: each session the
+%% stream carries ends as its own last frame written straight through ends it.
+ended_out(Stream, S) ->
+    lists:foldl(fun drop_stream/2, S, lists:usort([Sid || {Sid, _Pid} <- carried_by(Stream, S)])).
+
+%% A write failed while the link was handing over held bytes: each session the
+%% stream carries hears why and ends, as a failed write ends it, and nothing more
+%% is held for it.
+failed_out(Stream, Reason, S) ->
+    lists:foldl(fun({Sid, Pid}, Acc) -> stream_written({error, Reason}, Pid, Sid, false, Acc) end,
+                S, carried_by(Stream, S)).
+
+%% The sessions a dedicated stream carries, by attach id and process.
+carried_by(Stream, #state{client_streams = CS, server_streams = SS}) ->
+    lists:usort([{Sid, Pid} || {Sid, {Pid, _Mon, On}} <- maps:to_list(CS) ++ maps:to_list(SS),
+                               On =:= Stream]).
 
 %% A failed write ends the session: the stream hears why, and the link
 %% forgets it.
@@ -4536,14 +4679,19 @@ stream_written(ok, _Pid, Sid, true, S) ->
     drop_stream(Sid, S);
 stream_written(ok, _Pid, _Sid, false, S) ->
     S;
+%% The bytes are held for the stream's peer to take: nothing to drop yet, and
+%% its last frame ends the session when it is handed over (`drain_out/4').
+stream_written(held, _Pid, _Sid, _Last, S) ->
+    S;
 stream_written({error, Reason}, Pid, Sid, _Last, S) ->
     Pid ! {stream_write_failed, Sid, Reason},
     drop_stream(Sid, S).
 
 %% A session's own last frame, a failed write, or a stream that carried a
 %% malformed frame ends its routing: its attach id leaves whichever map holds
-%% it, its dedicated stream closes, and the stream's inbound buffer goes with
-%% it, so `stream_bufs' keeps no entry for a finished session.
+%% it, its dedicated stream closes, and the stream's inbound buffer and held
+%% outbound bytes go with it, so neither map keeps an entry for a finished
+%% session.
 drop_stream(Sid, #state{client_streams = CS, server_streams = SS, server_keys = Keys,
                         stream_bufs = Bufs} = S) ->
     {CS2, ClientMon, ClientStream} = drop_one(Sid, CS),
@@ -4554,8 +4702,9 @@ drop_stream(Sid, #state{client_streams = CS, server_streams = SS, server_keys = 
          || Stream <- lists:usort([ClientStream, ServerStream]),
             Stream =/= undefined],
     Bufs2 = drop_bufs([ClientStream, ServerStream], Bufs),
+    Out2 = drop_out([ClientStream, ServerStream], S#state.stream_out),
     S#state{client_streams = CS2, server_streams = SS2,
-            server_keys = released_key(Sid, Keys, S), stream_bufs = Bufs2,
+            server_keys = released_key(Sid, Keys, S), stream_bufs = Bufs2, stream_out = Out2,
             served_until = maps:remove(Sid, S#state.served_until)}.
 
 drop_one(Sid, Map) ->
@@ -4568,6 +4717,12 @@ drop_bufs(Streams, Bufs) ->
     lists:foldl(fun(undefined, Acc) -> Acc;
                    (Stream, Acc) -> maps:remove(Stream, Acc)
                 end, Bufs, Streams).
+
+%% A stream that ends carries nothing, so nothing is held for it.
+drop_out(Streams, Out) ->
+    lists:foldl(fun(undefined, Acc) -> Acc;
+                   (Stream, Acc) -> maps:remove(Stream, Acc)
+                end, Out, Streams).
 
 %% What `macula_frame:parse_received/1' gave for a dedicated stream: its frames
 %% are dispatched in order and its tail is buffered. A frame that failed
@@ -4611,10 +4766,8 @@ unknown_frame_on_stream(Stream, Unknown, #state{reset_stream = Reset} = S) ->
 %% was dropped because the session had already been aborted and its routing gone). One still
 %% waiting for that frame will never get it, and ends as a lost link ends it. A stream carrying
 %% no session has nothing left to say at all, and closes here.
-peer_finished_on_stream(Stream, #state{client_streams = CS, server_streams = SS} = S) ->
-    Carried = lists:usort([{Sid, Pid} || {Sid, {Pid, _Mon, On}} <- maps:to_list(CS) ++ maps:to_list(SS),
-                                         On =:= Stream]),
-    peer_finished_on_stream(Stream, Carried, S).
+peer_finished_on_stream(Stream, S) ->
+    peer_finished_on_stream(Stream, carried_by(Stream, S), S).
 
 peer_finished_on_stream(Stream, [], S) ->
     end_sessions_on_stream(Stream, peer_send_shutdown, S);
@@ -4636,7 +4789,8 @@ end_sessions_on_stream(Stream, Reason, #state{client_streams = CS,
     _ = [abort_stream_process(Pid, Reason) || Pid <- lists:usort([P || {_, P} <- Carried])],
     S2 = lists:foldl(fun drop_stream/2, S, lists:usort([Sid || {Sid, _} <- Carried])),
     close_dedicated_stream(Stream, S2),
-    S2#state{stream_bufs = maps:remove(Stream, S2#state.stream_bufs)}.
+    S2#state{stream_bufs = maps:remove(Stream, S2#state.stream_bufs),
+             stream_out = maps:remove(Stream, S2#state.stream_out)}.
 
 %%-------------------------------------------------------------------
 %% Streaming RPC — dispatch for frames decoded off a dedicated stream
@@ -5121,8 +5275,10 @@ stream_refusal(Code, Message, Ext) when map_size(Ext) =:= 0 ->
 stream_refusal(Code, Message, Ext) ->
     #{frame_type => stream_error, seq => 0, code => Code, message => Message, ext => Ext}.
 
-refusal_built({ok, Built}, Stream, S) ->
-    _ = written(Stream, macula_frame:written_bytes(Built), S),
+%% A refusal is written straight through, never held: it goes out on a stream that carries no session yet, so the
+%% stream is empty here, and a refusal nobody may answer is not one this link waits for.
+refusal_built({ok, Built}, Stream, #state{send_on_stream = Send} = _S) ->
+    _ = write_to_stream(Stream, macula_frame:written_bytes(Built), Send),
     ok;
 refusal_built({error, _Unbuildable}, _Stream, _S) ->
     ok.

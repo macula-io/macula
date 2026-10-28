@@ -60,9 +60,9 @@
     set_session_proof_limits/2
 ]).
 
-%% Exports with no caller inside macula yet: macula-station's observer relays
-%% stream frames with them, so a peer that stops reading never holds it.
--ignore_xref([{macula_peering, async_send_on_stream, 2}]).
+%% Exports with no caller inside macula: macula-station's observer relays
+%% stream frames with them, so a peer that stops reading never holds it. The
+%% station link hands its stream bytes to /2 (macula#141).
 -ignore_xref([{macula_peering, async_send_on_stream, 3}]).
 
 %% Capability bit asserting the peer is a relay-station (i.e. it

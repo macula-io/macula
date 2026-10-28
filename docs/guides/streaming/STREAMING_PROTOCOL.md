@@ -250,6 +250,18 @@ broke the protocol, and sending the same again fails the same way.
 which a well-behaved sender cannot see coming, and a later session may
 succeed.
 
+A peer that stops taking data on one stream does not hold the link. A frame
+the peer's stream answers `busy` for — it already holds 1 MiB unwritten —
+waits in the link, in order, until that peer takes data again, and every other
+session on the same link carries on meanwhile. The link holds at most 1 MiB
+that way for one session (`max_stream_out_queue_bytes`), plus the single frame
+that starts a queue, so a stream whose peer withholds credit cannot grow the
+link's memory without bound. A session that would go past that has more unread
+than the link will hold for it: its session ends as a failed write ends it,
+with `{outbound_queue_full, Bytes}`, and only its own stream is lost. A
+session's last frame is held like any other, and its stream closes once it is
+written.
+
 A queued chunk is a copy, but a chunk handed straight to a waiting reader can
 still be part of the frame it arrived in. A handler that keeps chunks after
 reading them, in a list, a table or its state, should copy what it keeps

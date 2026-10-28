@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A peer that stops granting flow-control credit on one stream no longer stalls the whole station link (macula#141).**
+  The link wrote a stream's bytes from its own process, through `macula_quic:send/2`, which waits on the peer for as
+  long as it withholds credit — so one slow reader held every other call, stream, heartbeat and inbound delivery on
+  that link. The link now hands the bytes over without waiting
+  (`macula_peering:async_send_on_stream/2`, which queues up to 1 MiB and answers `busy`) and holds what that stream
+  will not take, in order, until the peer takes data again; every other session on the link carries on meanwhile. The
+  held bytes are bounded at 1 MiB per session (`max_stream_out_queue_bytes`, in bytes, plus the one frame that starts a
+  queue): a session past that ends as a failed write ends it, with `{outbound_queue_full, Bytes}`, and only its own
+  stream is lost. A session's last frame is held the same way, and its stream closes once it is written, so a queue is
+  never chopped by a close. The link's `send_on_stream` start option is a hand-over rather than a write: its default is
+  `macula_peering:async_send_on_stream/2`, and a writer may answer `{error, busy}`.
+
 ## [17.2.0] - 2026-10-28
 
 Release A0 of the sealed-by-default design (macula#135, macula#136): the **reading and resealing side only**. A caller
