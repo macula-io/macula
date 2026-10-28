@@ -1093,7 +1093,8 @@ unsubscribe_async(Client, SubRef)
 %% return `{ok, Reply}', `{error, Reason}', or any other term (treated
 %% as `{ok, Other}' shorthand). A handler crash is mapped to a
 %% structured `temporary_relay_failure' BOLT#4 error.
-%% @doc Advertise with an auth policy -- see `macula_client:auth_policy()' for
+%%
+%% `Policy' is who may call it -- see `macula_client:auth_policy()' for
 %% the full set: a call class (`{callers, Class}' at the pool, which arrives here
 %% resolved as `{realm_member_required, Key, Can}' or `{nodes, Ids}'), `open' as an
 %% explicit opt-out, `handler_authorizes', or a raw `macula_ucan:policy()' form.

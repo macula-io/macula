@@ -40,7 +40,7 @@ advertising_without_a_resolved_advertisement_sends_no_frame_test_() ->
      fun() ->
          Pid = start_connected_link(),
          ok = macula_station_link:advertise(Pid, ?REALM, ?PROCEDURE,
-                                            fun unary_handler/1),
+                                            fun unary_handler/1, open),
          ?assertEqual(none, sent_frame_within(200)),
          ?assert(maps:is_key({?REALM, ?PROCEDURE}, registered(procedures, Pid))),
          macula_station_link:stop(Pid)

@@ -25,6 +25,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `macula_client` and `macula_station_link`, and `macula:advertise/5` without an `auth` key returns
   `{error, {auth, required}}`. A procedure that means to serve anyone who can reach it now says `auth => open`.
 
+  **What the policy may still be, and what the log says.** The class grammar is not the only thing `auth` accepts:
+  `open`, `handler_authorizes` and a raw `macula_ucan:policy()` still pass through to the link unchanged, because a
+  service that already gated a procedure by its own policy keeps working. The two are deliberately distinguishable
+  rather than silently equal — a class is logged as its alphabet, `open` is logged as an explicit opt-out, and any
+  other policy is logged as an explicit policy that is not a call class, so an operator reading a service's log can
+  never mistake an opt-out for a declaration.
+
+  **Streaming is not covered yet**: `macula:advertise_stream` still defaults to `open` where `advertise` now refuses,
+  so a streaming procedure can be advertised without naming a policy. Tracked as
+  [#150](https://github.com/macula-io/macula/issues/150), in its own package because closing it is behaviour-visible
+  for every SDK and moves over a hundred call sites.
+
   **The gap this closes**: under `{realm_member_required, Key, any}` a bare realm member token — whose only capability
   is `member/email-verified` on `mri:realm:<realm>`, which covers every procedure in the realm — was admitted to every
   so-declared procedure. Where the class is `role` that token is now refused, which is what "closed by default" means.

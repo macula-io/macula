@@ -291,7 +291,7 @@ a_registration_without_an_advertisement_reaches_every_link_test_() ->
          Pool = pool(),
          {ok, Links} = macula_client:links(Pool),
          ?assertEqual(ok, macula_client:advertise(Pool, ?REALM, ?PROCEDURE,
-                                                  fun(_) -> {ok, counted} end)),
+                                                  fun(_) -> {ok, counted} end, open)),
          [?assert(maps:is_key({?REALM, ?PROCEDURE}, registered(procedures, Pid)))
           || #{pid := Pid} <- Links],
          ?assertEqual([], sent_frames(1)),

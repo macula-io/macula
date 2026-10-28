@@ -181,7 +181,11 @@ an_advertised_chain_is_registered_with_its_renewal(#{key := Key} = Keys) ->
             ?assertEqual(ok, macula:advertise(Pool, ?REALM, ?PROC, Handler, Seams)),
             Procs = element(macula_client:state_field_index(procs), sys:get_state(Pool)),
             #{renew := Renew} = maps:get({?REALM, ?PROC}, Procs),
-            ?assertEqual({macula, renew_authorization, [?REALM, ?PROC, Seams]}, Renew)
+            %% The policy travels in the registration, not in the renewal: the
+            %% pool re-resolves the chain with the resolution seams alone
+            %% (`macula:renewal/3'), so `auth' is not among them.
+            RenewSeams = maps:with([status, find_record, sign_node_record, realm_key, confidential], Seams),
+            ?assertEqual({macula, renew_authorization, [?REALM, ?PROC, RenewSeams]}, Renew)
         end)
     after
         ok = macula_test_station_acks:stop(Acks),

@@ -2461,13 +2461,19 @@ advertised_classed(Kind, Realm, Procedure, #{policy := Policy} = Registration,
 
 %% One line per served procedure saying who may call it (threat model 5.2): an
 %% operator reads what a running service admits from its log, without reading the
-%% service's source. Only a class is announced; the explicit non-class policies are
-%% not this package's business.
+%% service's source. A class is announced as its alphabet; an explicit policy the
+%% class grammar does not cover -- `open', `handler_authorizes', or a raw
+%% `macula_ucan:policy()' handed straight to the pool -- is announced as exactly
+%% that, so an opt-out is never mistaken in a log for a declaration.
 class_declared({callers, Class}, Realm, Procedure) ->
     logger:notice("macula: ~ts declares its callers ~p in realm ~ts",
                   [Procedure, Class, binary:encode_hex(Realm, lowercase)]);
-class_declared(_Policy, _Realm, _Procedure) ->
-    ok.
+class_declared(open, Realm, Procedure) ->
+    logger:notice("macula: ~ts declares open callers, an explicit opt-out: any identified caller may call it in realm ~ts",
+                  [Procedure, binary:encode_hex(Realm, lowercase)]);
+class_declared(Policy, Realm, Procedure) ->
+    logger:notice("macula: ~ts declares an explicit caller policy ~p, not a call class, in realm ~ts",
+                  [Procedure, Policy, binary:encode_hex(Realm, lowercase)]).
 
 %% `members` and `role` are the realm-key policy with the capability each one
 %% demands: `any' admits a capability of any `can' whose `with' covers the
@@ -2475,9 +2481,9 @@ class_declared(_Policy, _Realm, _Procedure) ->
 %% a role expansion minted. `{nodes, Ids}' names its callers itself and needs no
 %% key; the link compares the verified caller against the list.
 caller_policy({callers, members}, Realm, RealmKeys) ->
-    realm_caller_policy(Realm, any, RealmKeys);
+    membership_gate_policy(Realm, any, RealmKeys);
 caller_policy({callers, role}, Realm, RealmKeys) ->
-    realm_caller_policy(Realm, <<"rpc/call">>, RealmKeys);
+    membership_gate_policy(Realm, <<"rpc/call">>, RealmKeys);
 caller_policy({callers, {nodes, [_ | _] = NodeIds}}, _Realm, _S) ->
     node_ids_or_error(NodeIds);
 caller_policy({callers, {nodes, []}}, _Realm, _S) ->
@@ -2500,7 +2506,7 @@ node_id_formed(Id) -> is_binary(Id) andalso byte_size(Id) =:= 32.
 
 %% A class that rests on realm membership cannot be enforced in a realm whose key
 %% this pool never pinned, so it is refused rather than served open.
-realm_caller_policy(Realm, Can, RealmKeys) ->
+membership_gate_policy(Realm, Can, RealmKeys) ->
     case maps:find(Realm, RealmKeys) of
         {ok, RealmKey} ->
             {ok, Profile} = macula_crypto_profile:configured(),
