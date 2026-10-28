@@ -27,8 +27,9 @@ prop_a_signed_record_survives_its_wire_form() ->
                 end
             end).
 
-%% One bit of the signature changed and the record is not the record: a verifier refuses it. The fields are the same
-%% and the key is the same, so nothing but the signature check can be what refuses it.
+%% One bit of the signature changed and the record is not the record: the verifier refuses it, and the refusal it names
+%% is the signature's. The fields and the key are the record's own, so a refusal for any other reason would mean the
+%% record never reached the check this property is about.
 prop_a_record_with_a_changed_signature_is_refused() ->
     ?FORALL({Realms, Capabilities, Where, Bit}, {realms(), capabilities(), where(), choose(0, 7)},
             begin
@@ -37,10 +38,7 @@ prop_a_record_with_a_changed_signature_is_refused() ->
                 Signature = maps:get(signature, Signed),
                 Tampered = #{key => maps:get(key, Signed), tbs => maps:get(tbs, Signed),
                              signature => flipped(Signature, Where, Bit)},
-                case macula_record:verify(Tampered, Profile) of
-                    {error, _Refusal} -> true;
-                    {ok, _Accepted} -> false
-                end
+                macula_record:verify(Tampered, Profile) =:= {error, signature_invalid}
             end).
 
 %% A record naming a signer other than the key that signs it is refused before it is signed, whatever else it holds:
