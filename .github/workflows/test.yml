@@ -1,7 +1,8 @@
 name: Test
 
 # Runs the suite on every push and pull request: eunit, common_test, xref and
-# dialyzer.
+# dialyzer, the linter, the docs build, the frozen wire vectors, and the wire
+# property tests.
 #
 # It also gates the publish: publish-hex.yml calls it on the release tag and
 # publishes only when it is green (mcl-om#34).
@@ -83,7 +84,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        check: [eunit, ct, xref, dialyzer, lint, docs, vectors]
+        check: [eunit, ct, xref, dialyzer, lint, docs, vectors, proper]
     # A GitHub-hosted public runner, deliberately. macula is a public
     # repository and this costs nothing there. Do NOT put `self-hosted` here:
     # the Default runner group is closed to public repositories on purpose,
@@ -280,6 +281,14 @@ jobs:
       - name: wire 1.0 vectors
         if: matrix.check == 'vectors'
         run: bash scripts/check-wire-1-0-vectors.sh
+
+      # The wire property tests (macula#151): CBOR canonicalisation and round-trip, the frame codec, signed records
+      # and UCAN tokens, over inputs generated rather than listed. `proper' has been a test dependency with nothing
+      # using it; this is the step that runs it, and it fails when ZERO properties ran — a renamed module or a file
+      # proper does not discover would otherwise turn the check green while testing nothing.
+      - name: property tests
+        if: matrix.check == 'proper'
+        run: bash scripts/is_the_property_suite_running.sh
 
   # The structural floor for the native crates (macula-codebase-checks#9):
   # a function that nests past three blocks, goes past cognitive complexity

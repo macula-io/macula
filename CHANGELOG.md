@@ -11,6 +11,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Property tests on the wire (macula#151).** `proper` has been a test dependency with no property in the tree. Four
+  modules now generate the inputs the parsers claim to hold for: the CBOR codec (what the decoder returns is what the
+  encoder was given, the canonical form is a fixed point, the NIF and the pure-Erlang reference agree byte for byte,
+  and the strict decoder answers on bytes nobody aimed at it), the frame codec (every unsigned constructor survives the
+  wire and re-encodes to the bytes it read, a cut-short frame is never read as a whole one, arbitrary bytes are
+  answered rather than raised on), signed records (a signed record survives its own wire form, one changed bit of its
+  signature is refused, a record naming another signer cannot be signed) and UCAN (a minted token authorizes its own
+  audience until its own expiry and no other, and a `did:key` carries its key). A `proper` entry in the test matrix
+  runs them in CI through `scripts/is_the_property_suite_running.sh`, which fails when zero properties ran, so a
+  renamed module cannot turn the check green while testing nothing.
+
 - **A procedure declares who may call it, and serves no one else (macula#147; threat model:
   [issue #147](https://github.com/macula-io/macula/issues/147#issuecomment-6458270096)).** `macula:advertise/5` and
   `macula_client:advertise/5` take a call class, `{callers, Class}`: `members` (any realm member), `role` (a caller
@@ -46,7 +57,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   an `auth` key returns `{error, {auth, required}}`. A procedure that means to serve anyone who can reach it now says
   `auth => open`, explicitly. This breaks every caller that relied on the old default — in this repository and in every
   SDK built on it — so the next cut is 18.0.0, not 17.3.0.
-
 ### Fixed
 
 - **A peer that stops granting flow-control credit on one stream no longer stalls the whole station link (macula#141).**

@@ -29,6 +29,9 @@ rebar3 compile
 rebar3 eunit
 rebar3 ct
 
+# The wire property tests: CBOR, frames, records and UCAN, over generated inputs
+bash scripts/is_the_property_suite_running.sh
+
 # The same eunit tests in parallel shards, for the run before a push.
 # About half the wall clock, same tests, one result.
 bash scripts/test-parallel.sh
@@ -65,6 +68,14 @@ a test you have just written.
 - Tests go in `test/` mirroring `src/` structure
 - Use EUnit for unit tests, and common_test for a suite that runs several
   processes as a fleet (`test/overlay/`); CI runs both
+- Use PropEr for a property about the wire — a value that must round-trip, a
+  decoder that must answer whatever arrives, a signature that must not verify
+  once a bit of it changes. Properties live in `test/prop_*.erl` and run with
+  `rebar3 proper`; CI runs them, and fails when zero properties ran, so a
+  renamed module is a red run rather than a check that silently tested nothing.
+  A property is only as good as its generator: `scripts/is_the_property_suite_running.sh`
+  and a deliberate break for a moment are how to see yours fail before you
+  trust it.
 - Clean up test fixtures properly (see `ensure_stopped/0` pattern)
 - **A run passes on its exit code, never on the absence of "Failed".** A
   cancelled eunit test (a fixture whose setup crashed, a test past its
