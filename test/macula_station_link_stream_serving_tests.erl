@@ -77,7 +77,7 @@ a_stream_handler_crash_tells_the_caller_its_name_only() ->
         #{link := Link} = World = linked(),
         Procedure = <<"foo.crashing">>,
         Crash = fun(_Stream, _Args) -> error({boom, lists:duplicate(10_000, ?MARKER)}) end,
-        ok = macula_station_link:advertise_stream(Link, ?REALM, Procedure, server_stream, Crash),
+        ok = macula_station_link:advertise_stream(Link, ?REALM, Procedure, server_stream, Crash, open),
         #{quic := Quic, frame := Open} = opened_by_peer(World, key(), Procedure, #{}),
         {ok, Refusal} = written_within(Quic, ?EVENT_MS),
         ?assertMatch({ok, #{frame_type := stream_error, code := <<"error">>, message := <<"boom">>}},
@@ -97,7 +97,7 @@ a_served_session_its_handler_aborts_sends_its_stream_error() ->
     Before = macula_test_sessions:serving(),
     Procedure = <<"foo.aborted">>,
     Abort = fun(Stream, _Args) -> macula_stream:abort(Stream, <<"stop">>, <<"why">>) end,
-    ok = macula_station_link:advertise_stream(Link, ?REALM, Procedure, server_stream, Abort),
+    ok = macula_station_link:advertise_stream(Link, ?REALM, Procedure, server_stream, Abort, open),
     #{quic := Quic, frame := Open} = opened_by_peer(World, key(), Procedure, #{}),
     {ok, Written} = written_within(Quic, ?EVENT_MS),
     ?assertMatch({ok, #{frame_type := stream_error, code := <<"stop">>, message := <<"why">>}},
@@ -114,7 +114,7 @@ a_served_session_past_its_inbox_budget_sends_its_stream_error() ->
         #{link := Link} = World = linked(),
         Before = macula_test_sessions:serving(),
         Procedure = <<"foo.unread">>,
-        ok = macula_station_link:advertise_stream(Link, ?REALM, Procedure, bidi, telling_how_it_ended(self())),
+        ok = macula_station_link:advertise_stream(Link, ?REALM, Procedure, bidi, telling_how_it_ended(self()), open),
         Caller = key(),
         #{quic := Quic, frame := Open} = served(World, Caller, Procedure, bidi),
         on_stream(Link, Quic, caller_frame(#{frame_type => stream_data, seq => 0, encoding => raw,
@@ -440,7 +440,7 @@ a_stream_open_past_the_callers_session_cap_is_refused() ->
     with_env(max_served_sessions_per_caller, 1, fun() ->
         #{link := Link} = World = linked(),
         Procedure = <<"foo.capped">>,
-        ok = macula_station_link:advertise_stream(Link, ?REALM, Procedure, server_stream, telling_how_it_ended(self())),
+        ok = macula_station_link:advertise_stream(Link, ?REALM, Procedure, server_stream, telling_how_it_ended(self()), open),
         [Caller, Other] = [key(), key()],
         #{quic := FirstQuic, frame := FirstOpen} = served(World, Caller, Procedure),
         #{quic := SecondQuic, frame := SecondOpen} = opened_by_peer(World, Caller, Procedure, #{}),
@@ -467,7 +467,7 @@ a_stream_open_past_the_callers_session_cap_is_refused() ->
 a_stream_open_without_the_session_counter_is_refused() ->
     #{link := Link} = World = linked(),
     Procedure = <<"foo.without_counter">>,
-    ok = macula_station_link:advertise_stream(Link, ?REALM, Procedure, server_stream, telling_how_it_ended(self())),
+    ok = macula_station_link:advertise_stream(Link, ?REALM, Procedure, server_stream, telling_how_it_ended(self()), open),
     Caller = key(),
     #{quic := ServedQuic, frame := ServedOpen} = served(World, Caller, Procedure),
     ok = supervisor:terminate_child(macula_root, macula_stream_sessions),
@@ -506,7 +506,7 @@ a_streamer_served_session_ends_with_its_caller() ->
     Before = macula_test_sessions:serving(),
     Procedure = <<"foo.streamed">>,
     AdvertiseOnLink = fun(_Pool, Realm, Proc, Mode, Handler, _Opts) ->
-                          macula_station_link:advertise_stream(Link, Realm, Proc, Mode, Handler)
+                          macula_station_link:advertise_stream(Link, Realm, Proc, Mode, Handler, open)
                       end,
     {ok, _Sup} = macula_streamer:advertise(pool, ?REALM, Procedure, ?MODULE, self(),
                                            #{announce => false, advertise_stream => AdvertiseOnLink,
@@ -530,7 +530,7 @@ served_sessions_end(Handler, Ending) ->
         Test = self(),
         ok = macula_station_link:advertise_stream(Link, ?REALM, Procedure, server_stream,
                                                   fun(Stream, Args) -> Test ! {session_served, Stream},
-                                                                       Handler(Stream, Args) end),
+                                                                       Handler(Stream, Args) end, open),
         Caller = key(),
         Served = [served(World, Caller, Procedure) || _ <- lists:seq(1, ?SESSIONS)],
         ok = end_served_sessions(Ending, World, Caller, Served),
@@ -620,7 +620,7 @@ a_callers_quic_half_close_after_its_stream_end_keeps_the_reply() ->
                                                   receive answer_now -> ok end,
                                                   macula_stream:set_reply(Stream, <<"x1,x2">>),
                                                   macula_stream:close(Stream)
-                                              end),
+                                              end, open),
     Caller = key(),
     #{quic := Quic, frame := Open} = opened_by_peer(World, Caller, Procedure, #{}, #{mode => client_stream}),
     Handler = receive {session_served, Served} -> Served after ?EVENT_MS -> erlang:error(session_not_served) end,
@@ -750,7 +750,7 @@ caller_count_back_to(_Count, Caller, Want, Ms) ->
 a_sealed_stream_open_is_refused_by_name() ->
     #{link := Link} = World = linked(),
     Procedure = <<"foo.sealed">>,
-    ok = macula_station_link:advertise_stream(Link, ?REALM, Procedure, server_stream, telling_how_it_ended(self())),
+    ok = macula_station_link:advertise_stream(Link, ?REALM, Procedure, server_stream, telling_how_it_ended(self()), open),
     Open = wire(macula_sealed_frames:request(stream_open, #{request_id => crypto:strong_rand_bytes(16), realm => ?REALM,
                                                             procedure => Procedure, target => node_id(World),
                                                             deadline => erlang:system_time(millisecond) + 30_000,
@@ -777,7 +777,7 @@ a_caller_serves_more_stream_opens_than_its_quota() ->
                                               fun(Stream, _Args) ->
                                                   Test ! {served_one, self()},
                                                   ok = macula:close_stream(Stream)
-                                              end),
+                                              end, open),
     Admission = element(macula_station_link:state_field_index(admission), sys:get_state(Link)),
     [begin
          _Session = opened_by_peer(World, Caller, Procedure, #{}),
@@ -800,7 +800,7 @@ a_copy_of_a_live_stream_open_keeps_its_place() ->
                                               fun(_Stream, _Args) ->
                                                   Test ! {served_one, self()},
                                                   receive go -> ok end
-                                              end),
+                                              end, open),
     #{frame := OpenFrame} = opened_by_peer(World, Caller, Procedure, #{}),
     Handler = receive {served_one, H} -> H after ?EVENT_MS -> erlang:error(not_served) end,
     Admission = element(macula_station_link:state_field_index(admission), sys:get_state(Link)),

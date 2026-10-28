@@ -7,7 +7,7 @@
 %%% pool that internally wraps N peering links to N stations.
 %%% `publish/4,5', `subscribe/5', `unsubscribe/2', `call/5,6', `providers/3,4', `resolve_app/2,3',
 %%% `advertise/5', `unadvertise/3', `call_stream/5',
-%%% `advertise_stream/5', and `unadvertise_stream/3' route through
+%%% `advertise_stream/6', and `unadvertise_stream/3' route through
 %%% the pool with realm-per-call semantics. See `macula_pubsub' for
 %%% the slice module of the publish/subscribe surface.
 %%%
@@ -90,7 +90,7 @@
 -export([
     call_stream/2, call_stream/3, call_stream/5, call_stream_station/7, call_resolved_stream_station/7,
     open_stream/3, open_stream/4,
-    advertise_stream/2, advertise_stream/3, advertise_stream/5,
+    advertise_stream/2, advertise_stream/3,
     advertise_stream/6,
     unadvertise_stream/1, unadvertise_stream/3,
     send/2, send/3,
@@ -1283,24 +1283,16 @@ advertise_stream(Procedure, Mode, Handler)
 %% every healthy link and stores in pool state for replay on link
 %% respawn. A caller reaches this provider only through a
 %% `procedure_advertisement' record that names it; registering the
-%% handler publishes none. See `macula_client:advertise_stream/5'.
--spec advertise_stream(pool(), realm(), procedure(),
-                        stream_mode(), stream_handler()) ->
-        ok | {error, term()}.
-advertise_stream(Pool, Realm, Procedure, Mode, Handler)
-  when is_pid(Pool), is_binary(Realm), byte_size(Realm) =:= 32,
-       is_binary(Procedure),
-       (Mode =:= server_stream orelse Mode =:= client_stream
-        orelse Mode =:= bidi),
-       is_function(Handler, 2) ->
-    advertise_stream(Pool, Realm, Procedure, Mode, Handler, #{}).
-
-%% @doc As `advertise_stream/5', with `Opts'. `auth' sets the streaming
-%% procedure's policy, the same set `advertise/5' takes: `open' (default),
-%% `{ucan_required, IssuerNodeId}' or `{realm_member_required, RealmKeyId,
-%% RequiredCan}'. A consumer presents its token with `call_stream/5''s
-%% `ucan_token' opt. `stations' registers it on the links to those stations
-%% only, as `advertise/5' does.
+%% handler publishes none. See `macula_client:advertise_stream/6'.
+%%
+%% `Opts' `auth' declares who may call the streaming procedure, and there is NO
+%% default: an advertise that names none is refused `{error, {auth, required}}'
+%% rather than served openly (macula#150), the same way `advertise/5' refuses one
+%% (macula#147). The forms are the ones `advertise/5' takes; `open' is the
+%% explicit opt-out for a streaming procedure that really is for anyone who can
+%% reach it. `stations' registers it on the links to those stations only, as
+%% `advertise/5' does. A consumer presents its token with `call_stream/5''s
+%% `ucan_token' opt.
 -spec advertise_stream(pool(), realm(), procedure(),
                         stream_mode(), stream_handler(), map()) ->
         ok | {error, term()}.
@@ -1311,10 +1303,18 @@ advertise_stream(Pool, Realm, Procedure, Mode, Handler, Opts)
         orelse Mode =:= bidi),
        is_function(Handler, 2), is_map(Opts) ->
     on_stations(stations_opt(Opts),
-                fun(Stations) -> advertise_stream_on(Stations, Pool, Realm, Procedure, Mode, Handler, Opts) end).
+                fun(Stations) ->
+                    classed_stream(maps:get(auth, Opts, undefined), Stations, Pool, Realm,
+                                   Procedure, Mode, Handler, Opts)
+                end).
 
-advertise_stream_on(Stations, Pool, Realm, Procedure, Mode, Handler, Opts) ->
-    Policy = maps:get(auth, Opts, open),
+%% A streaming procedure declares who may call it, and there is no default: an
+%% advertise that names no `auth' is refused here, before anything is resolved or
+%% registered, rather than served openly (macula#150). `open' remains an explicit
+%% opt-out, exactly as it is for `advertise/5' (macula#147).
+classed_stream(undefined, _Stations, _Pool, _Realm, _Procedure, _Mode, _Handler, _Opts) ->
+    {error, {auth, required}};
+classed_stream(Policy, Stations, Pool, Realm, Procedure, Mode, Handler, Opts) ->
     acknowledged(advertise_authorized(Pool, Realm, Procedure, Opts,
                                       fun(Spec) ->
                                           macula_client:advertise_stream(Pool, Realm, Procedure, Mode, Handler,

@@ -193,9 +193,9 @@
     %% Streaming RPC (SDK 3.17+, Part 6 §5.6)
     call_stream/6,
     reopen_stream/6,
-    advertise_stream/5,
     advertise_stream/6,
     advertise_stream/7,
+    valid_policy/1,
     unadvertise_stream/3,
     unadvertise_stream/4,
     send_stream_bytes/4,
@@ -1457,17 +1457,10 @@ valid_stream_deadline(DeadlineMs) when is_integer(DeadlineMs), DeadlineMs >= 0 -
 reopen_stream(Link, StreamPid, OldSid, Open, Args, KemKey) when is_pid(Link), is_pid(StreamPid), is_binary(KemKey) ->
     gen_server:call(Link, {reopen_stream, StreamPid, OldSid, Open, Args, KemKey}, 5_000).
 
-%% @doc Register a streaming RPC handler on this link. Idempotent —
-%% re-advertising replaces the prior `{Mode, Handler}'. A STREAM_OPEN
-%% for `(Realm, Procedure)' that the connected station delivers to this
-%% node spawns a server-side `macula_stream' and dispatches
-%% `Handler(StreamPid, Args)' in a transient process. The link sends no
-%% frame for it. Same as `advertise_stream/6' with policy `open'.
--spec advertise_stream(pid(), <<_:256>>, binary(),
-                        macula_frame:stream_mode(), stream_handler()) ->
-    ok | {error, term()}.
-advertise_stream(Pid, Realm, Procedure, Mode, Handler) ->
-    advertise_stream(Pid, Realm, Procedure, Mode, Handler, open).
+%% A streaming procedure declares who may call it here too, and the arity that
+%% could not name a policy is gone, as the unary `advertise/4' went in macula#147:
+%% this link serves a STREAM_OPEN from the policy it was told, and a default of
+%% `open' one layer below the facade was the same hole (macula#150).
 
 %% @doc Advertise a streaming RPC handler with an auth policy, the same
 %% `macula_client:auth_policy()' set `advertise/5' takes. An inbound
@@ -1529,8 +1522,14 @@ advertise_stream_async(Pid, Realm, Procedure, Mode, Handler, Policy, EncodedAd)
     ok = valid_policy(Policy),
     registration(Pid, {stream_advertise, Realm, Procedure, Mode, Handler, Policy, EncodedAd}).
 
-%% One clause per valid `macula_client:auth_policy()' shape and no
+%% @doc One clause per valid `macula_client:auth_policy()' shape and no
 %% catch-all, so a malformed policy raises `function_clause' in the caller.
+%%
+%% Exported so the pool can ask the same question before it keeps a streaming
+%% registration that no link could ever serve: `handler_authorizes' is a valid
+%% policy for a unary procedure and not for a stream, and a registration the
+%% pool keeps and the links refuse is one the next link respawn replays into a
+%% `function_clause' (macula#150).
 valid_policy(open) -> ok;
 valid_policy({nodes, [_ | _] = NodeIds}) when is_list(NodeIds) ->
     lists:all(fun(Id) -> is_binary(Id) andalso byte_size(Id) =:= 32 end, NodeIds)

@@ -3,7 +3,7 @@
 %%%
 %%% `call_stream/5' hands back a raw stream pid; a real consumer has to
 %%% hand-write a `recv/2' loop around it — the provider side already
-%%% gets this for free via `advertise_stream/5''s callback handler, this
+%%% gets this for free via `advertise_stream/6''s callback handler, this
 %%% is the missing consumer-side half. `macula_stream_sink' opens the
 %%% stream for you, drives the `recv/2' loop in a linked reader process
 %%% (so a slow or stuck `recv' never blocks your gen_server's own

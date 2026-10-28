@@ -104,6 +104,50 @@ an_advertise_that_declares_no_class_is_refused_test() ->
     ?assertEqual({error, {auth, required}},
                  macula:advertise(self(), ?REALM, ?PROCEDURE, fun(_) -> {ok, 1} end, #{})).
 
+%% A streaming procedure has no default class either (macula#150). The same
+%% refusal, at the same boundary, so a service cannot ship a stream that is
+%% open because its advertise forgot to say otherwise -- the two paths agree
+%% about whether a default exists.
+a_stream_advertise_that_declares_no_class_is_refused_test() ->
+    ?assertEqual({error, {auth, required}},
+                 macula:advertise_stream(self(), ?REALM, ?PROCEDURE, server_stream,
+                                         fun(_Stream, _Args) -> ok end, #{})).
+
+%% `open' is still an opt-out -- named rather than defaulted -- and the station
+%% tests are what prove it still reaches registration:
+%% `macula_advertise_stations_tests' advertises with `auth => open' and asserts
+%% the procedure lands on the stations it named.
+
+%% A policy no link can serve on a STREAM is refused before the pool keeps the
+%% registration. `handler_authorizes' is a legitimate unary policy and has no
+%% clause in the link's `valid_policy/1' for a stream: keeping it would store a
+%% registration every link refuses, answer the advertise with a failure, and
+%% replay it into a `function_clause' on the next link respawn -- inside the pool
+%% process (macula#150, Fable finding 3).
+a_stream_policy_no_link_can_serve_is_refused_before_it_is_kept_test_() ->
+    {timeout, 30, fun() ->
+        {ok, Pool} = macula_client:connect([], #{}),
+        try
+            ?assertEqual({error, {stream_policy, handler_authorizes}},
+                         macula_client:advertise_stream(Pool, ?REALM, ?PROCEDURE, server_stream,
+                                                        fun(_Stream, _Args) -> ok end,
+                                                        handler_authorizes, spec())),
+            %% The crash the refusal prevents is a replay of what the pool kept:
+            %% nothing is kept, so there is nothing for a respawned link to replay.
+            Kept = element(macula_client:state_field_index(stream_procs), sys:get_state(Pool)),
+            ?assertEqual(error, maps:find({?REALM, ?PROCEDURE}, Kept))
+        after
+            macula_client:close(Pool)
+        end
+    end}.
+
+%% The advertisement spec a stream registration carries, as a provider that
+%% resolved its own authorization would hand it over.
+spec() ->
+    #{authorization => #{org_directory => <<"org directory wire">>,
+                         procedure_delegation => <<"delegation wire">>},
+      not_after => erlang:system_time(millisecond) + 3_600_000}.
+
 %%------------------------------------------------------------------
 %% What the verifier accepts at each class
 %%------------------------------------------------------------------

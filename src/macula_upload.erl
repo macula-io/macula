@@ -3,7 +3,7 @@
 %%% a push-initiated upload, shipped in 9.13.0, the
 %%% recipient `macula_pusher' pushes at).
 %%%
-%%% `advertise/5,6' registers an upload procedure. Each inbound push
+%%% `advertise/6' registers an upload procedure. Each inbound push
 %%% starts one supervised, ephemeral receiver: it reads the manifest
 %%% `macula_pusher' passed as the stream's open-time `Args' (decoded
 %%% via `macula_manifest:from_wire/1', the same decode content
@@ -84,7 +84,7 @@
 %%%
 %%% == Direct-dial ==
 %%%
-%%% `advertise_direct/6,7' is `macula_streamer:advertise_direct/6,7'
+%%% `advertise_direct/7' is `macula_streamer:advertise_direct/7'
 %%% verbatim, `mode => client_stream' folded into `Opts' before
 %%% forwarding — see that module's own "Direct-dial" section. (Building
 %%% this surfaced a real, separate bug in `macula_streamer:advertise_direct/7'
@@ -128,7 +128,7 @@
 
 -behaviour(macula_streamer).
 
--export([advertise/5, advertise/6, advertise_direct/6, advertise_direct/7,
+-export([advertise/6, advertise_direct/7,
         unadvertise/3]).
 -export([init/1, handle_open/2, handle_chunk/2, handle_eof/1, terminate/2]).
 
@@ -158,13 +158,7 @@
 %% @doc Advertise `Procedure' on `Pool'/`Realm' as an upload target.
 %% Each push sent at it starts one supervised, ephemeral receiver,
 %% threading state through `Module:init/1' and delivering the final
-%% outcome to `Module:handle_uploaded/2'.
--spec advertise(macula:pool(), macula:realm(), macula:procedure(),
-                module(), term()) -> {ok, pid()} | {error, term()}.
-advertise(Pool, Realm, Procedure, Module, Args) ->
-    advertise(Pool, Realm, Procedure, Module, Args, #{}).
-
-%% @doc As `advertise/5'. `Opts' may include `announce' (default
+%% outcome to `Module:handle_uploaded/2'. `Opts' may include `announce' (default
 %% `true') for this module's OWN `sharing.upload_*' facts and
 %% `fact_publish', the function it announces them with. The other options,
 %% such as `auth', `reuse_sup', `stream_io' and `advertise_stream', go on
@@ -180,17 +174,11 @@ advertise(Pool, Realm, Procedure, Module, Args, Opts) ->
                               {Module, Pool, Realm, Announce, FactPublish, Args},
                               StreamerOpts#{mode => client_stream, announce => false}).
 
-%% @doc As `advertise/5', and additionally publishes a signed
+%% @doc Advertise an upload target and additionally publish a signed
 %% `procedure_advertisement' DHT record naming this pool's connected
 %% station as the server, so `macula_pusher:start_link_direct/5,6' can
-%% resolve and dial here directly. See `macula_streamer:advertise_direct/6,7'.
--spec advertise_direct(macula:pool(), macula:realm(), macula:procedure(),
-                       module(), term(), macula_node_keys:node_key()) ->
-    {ok, pid()} | {error, term()}.
-advertise_direct(Pool, Realm, Procedure, Module, Args, NodeIdentity) ->
-    advertise_direct(Pool, Realm, Procedure, Module, Args, NodeIdentity, #{}).
-
-%% @doc As `advertise_direct/6', with `Opts' forwarded to
+%% resolve and dial here directly. See `macula_streamer:advertise_direct/7'.
+%% `Opts' is forwarded to
 %% `macula_streamer:advertise_direct/7', and so to the advertisement
 %% publish, e.g. `authorization', the provider authorization an org
 %% namespaced procedure needs, except `fact_publish', the function this

@@ -91,11 +91,12 @@ a_respawned_link_replays_only_what_names_its_station() ->
 a_stream_advertisement_goes_to_the_named_stations_only() ->
     with_pool(fun(Pool, Proc) ->
         ok = macula:advertise_stream(Pool, ?REALM, Proc, server_stream, fun stream_handler/2,
-                                     #{stations => [?B]}),
+                                     #{auth => open, stations => [?B]}),
         ?assertEqual({false, true}, {holds_stream(Pool, ?A, Proc), holds_stream(Pool, ?B, Proc)}),
         ?assertEqual({error, {station_not_linked, <<3:256>>}},
                      macula:advertise_stream(Pool, ?REALM, <<Proc/binary, "_2">>, server_stream,
-                                             fun stream_handler/2, #{stations => [<<3:256>>]}))
+                                             fun stream_handler/2,
+                                             #{auth => open, stations => [<<3:256>>]}))
     end).
 
 without_stations_every_link_has_it() ->

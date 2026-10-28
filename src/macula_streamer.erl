@@ -1,7 +1,7 @@
 %%%-------------------------------------------------------------------
 %%% @doc Behaviour for supervised streaming RPC providers.
 %%%
-%%% `advertise_stream/5' on the raw SDK takes a bare handler fun
+%%% `advertise_stream/6' on the raw SDK takes a bare handler fun
 %%% invoked as `Handler(StreamPid, Args)' in a transient process
 %%% spawned per inbound STREAM_OPEN (see the internal
 %%% macula_station_link advertise_stream/5 — "this link spawns a
@@ -40,7 +40,7 @@
 %%% set, eof just stops the stream.
 %%%
 %%% This is the general-purpose RPC streaming feature (`call_stream/5',
-%%% `advertise_stream/5', e.g. a `logs.tail_v1'-style procedure) —
+%%% `advertise_stream/6', e.g. a `logs.tail_v1'-style procedure) —
 %%% unrelated to content sharing's own chunked-transfer protocol; see
 %%% `macula_feeder' / `macula_download' for that.
 %%%
@@ -56,13 +56,13 @@
 %%%
 %%% == Direct-dial ==
 %%%
-%%% `advertise/5,6' registers the handler with the pool, and since
+%%% `advertise/6' registers the handler with the pool, and since
 %%% 14.1.0 that alone makes it resolvable: each link sends its station an
 %%% ADVERTISE and puts the same signed `procedure_advertisement' in the
 %%% DHT, signed once by the pool and naming that link's station
 %%% (macula#33). A caller using `macula_stream_sink:start_link_direct/5,6' resolves it and dials in one hop,
 %%% whether or not the two stations have a routing edge between them.
-%%% `advertise_direct/6,7' is the same registration, kept for the 14.x API.
+%%% `advertise_direct/7' is the same registration, kept for the 14.x API.
 %%%
 %%% == Stream I/O ==
 %%%
@@ -131,7 +131,7 @@
 
 -include_lib("kernel/include/logger.hrl").
 
--export([advertise/5, advertise/6, advertise_direct/6, advertise_direct/7,
+-export([advertise/6, advertise_direct/7,
         unadvertise/3]).
 -export([send/2, send/3, close/1]).
 -export([start_link/8]).
@@ -186,26 +186,19 @@
     user      :: term()
 }).
 
-%% @doc Advertise `Procedure' on `Pool'/`Realm'. Starts a private
-%% factory supervisor for per-stream provider children and registers
-%% a dispatch handler with `macula:advertise_stream/5,6'. Returns the
-%% supervisor pid so the caller can supervise it (or ignore it).
--spec advertise(macula:pool(), macula:realm(), macula:procedure(),
-                module(), term()) -> {ok, pid()} | {error, term()}.
-advertise(Pool, Realm, Procedure, Module, Args) ->
-    advertise(Pool, Realm, Procedure, Module, Args, #{}).
-
-%% @doc As `advertise/5'. `Opts' may include `announce' (default
+%% @doc Advertise `Procedure' on `Pool'/`Realm'. `Opts' may include `announce' (default
 %% `true'), `mode' (default `server_stream'), `auth' (the procedure's
-%% auth policy, default `open', see `macula:advertise_stream/6'),
+%% auth policy, which has NO default: an advertise naming none is
+%% refused `{error, {auth, required}}' as `macula:advertise_stream/6'
+%% refuses it, macula#150),
 %% `confidential' (its sealing mode, `preferred' by default, as
 %% `macula:advertise_stream/6' takes it), and
 %% `reuse_sup' — an
-%% existing supervisor pid (as returned by a prior `advertise/5,6'
+%% existing supervisor pid (as returned by a prior `advertise/6'
 %% call) to register the handler again with, without starting a new
 %% factory supervisor. Use this for a periodic re-advertise (see
-%% `advertise_direct/6,7''s own doc) — calling plain
-%% `advertise/5,6' on a timer would leak one orphaned supervisor per
+%% `advertise_direct/7''s own doc) — calling plain
+%% `advertise/6' on a timer would leak one orphaned supervisor per
 %% tick, since each call otherwise starts a fresh one. The functions a
 %% streamer runs on come from `Opts' too; see "Stream I/O" above.
 -spec advertise(macula:pool(), macula:realm(), macula:procedure(),
@@ -269,17 +262,7 @@ new_sup() ->
     {ok, Sup} = macula_streamer_sup:start_link(),
     Sup.
 
-%% @doc As `advertise/5'. Since 14.1.0 the pool's links put the stream's
-%% advertisement in the DHT themselves, signed once by the pool (macula#33),
-%% so this publishes nothing of its own. `NodeIdentity' is kept for the 14.x
-%% signature and is not used.
--spec advertise_direct(macula:pool(), macula:realm(), macula:procedure(),
-                       module(), term(), macula_node_keys:node_key()) ->
-    {ok, pid()} | {error, term()}.
-advertise_direct(Pool, Realm, Procedure, Module, Args, NodeIdentity) ->
-    advertise_direct(Pool, Realm, Procedure, Module, Args, NodeIdentity, #{}).
-
-%% @doc As `advertise_direct/6', with `Opts' forwarded to `advertise/6'
+%% @doc The direct-dial form: as `advertise/6', with `Opts' forwarded to it
 %% (so `mode', `announce', `reuse_sup' and the functions apply, e.g.
 %% `mode => client_stream'). `cert_chain', a 10.x option `authorization'
 %% replaces, is refused with `{error, {removed_option, cert_chain}}' before
@@ -298,7 +281,7 @@ advertise_direct_unless_removed(Removed, _Pool, _Realm, _Procedure, _Module, _Ar
     {error, Removed}.
 
 %% @doc Stop advertising. Does not stop the factory supervisor
-%% returned by `advertise/5,6' — callers that want to tear it down
+%% returned by `advertise/6' — callers that want to tear it down
 %% should `exit(Sup, shutdown)' themselves.
 -spec unadvertise(macula:pool(), macula:realm(), macula:procedure()) -> ok.
 unadvertise(Pool, Realm, Procedure) ->

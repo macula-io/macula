@@ -382,7 +382,7 @@ a_fetch_of_more_chunks_than_the_callers_quota_completes() ->
     Lookup = fun(Want, M) -> macula_content_serve:lookup(Want, M, Store) end,
     Procedure = <<"~", (hex(macula_node_keys:key_id(ProviderKey)))/binary, "/content_v1">>,
     ok = macula_station_link:advertise_stream(Provider, ?REALM, Procedure, server_stream,
-                                              fun(Stream, Args) -> macula_content_serve:serve(Stream, Args, Lookup) end),
+                                              fun(Stream, Args) -> macula_content_serve:serve(Stream, Args, Lookup) end, open),
     Announcement = announcement(#{node => macula_node_keys:key_id(ProviderKey), key => ProviderKey,
                                   procedure => Procedure}, MCID),
     Io = #{find_records => fun(_Pool, Key, _T) ->

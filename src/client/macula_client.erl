@@ -106,7 +106,7 @@
 %% RPC fan-out (since 3.16.0) — called by the `macula' facade.
 -export([call_linked_station/5, call_station/11, call_station/12,
          advertise/5, advertise/6, advertise/7, unadvertise/3,
-         advertise_stream/5, advertise_stream/6, advertise_stream/7, advertise_stream/8,
+         advertise_stream/6, advertise_stream/7, advertise_stream/8,
          unadvertise_stream/3]).
 %% Direct-dial resolution head start — called by `macula_direct_dial' to
 %% remember which station last answered a procedure, and to get it back.
@@ -240,7 +240,7 @@
 -type handler() :: fun((term()) -> term())
                  | {module(), atom()}.
 
-%% Streaming RPC handler — accepted by `advertise_stream/5'. A 2-arg
+%% Streaming RPC handler — accepted by `advertise_stream/6'. A 2-arg
 %% fun invoked as `Handler(StreamPid, Args)' where `StreamPid' is
 %% the local `macula_stream' bound to the inbound STREAM_OPEN.
 -type stream_handler() :: fun((pid(), term()) -> any()).
@@ -1181,17 +1181,14 @@ call_stream_station(Pool, Station, Target, Realm, Procedure, Args, Opts, Seal)
 %% @doc Advertise a streaming procedure handler on every healthy
 %% link. Stored in pool state so links respawned later replay the
 %% advertisement. Returns `ok' when the registration was handed to at
-%% least one live link, without waiting for any (macula#45). Same as `advertise_stream/6' with policy `open'.
--spec advertise_stream(pool(), <<_:256>>, binary(),
-                        macula_frame:stream_mode(),
-                        stream_handler()) ->
-    ok | {error, term()}.
-advertise_stream(Pool, Realm, Procedure, Mode, Handler) ->
-    advertise_stream(Pool, Realm, Procedure, Mode, Handler, open).
-
-%% @doc Advertise a streaming procedure with an auth policy -- the same
-%% `auth_policy()' set `advertise/5' takes. The policy is stored with the
-%% procedure, so a link respawned later re-advertises it still gated.
+%% least one live link, without waiting for any (macula#45).
+%%
+%% `Policy' declares who may call the stream -- the same `auth_policy()' set
+%% `advertise/5' takes -- and there is NO default: the arity that could not name
+%% one is gone (macula#150), so a streaming procedure is reachable only by the
+%% callers its service declared. `open' is the explicit opt-out. The policy is
+%% stored with the procedure, so a link respawned later re-advertises it still
+%% gated.
 -spec advertise_stream(pool(), <<_:256>>, binary(),
                         macula_frame:stream_mode(),
                         stream_handler(), auth_policy()) ->
@@ -2539,12 +2536,37 @@ advertised_classed(Kind, Realm, Procedure, #{policy := Policy} = Registration,
                    #state{realm_keys = RealmKeys} = S) ->
     case caller_policy(Policy, Realm, RealmKeys) of
         {ok, Resolved} ->
+            on_class_resolved(Kind, Realm, Procedure, Policy, Resolved, Registration, S);
+        {error, _} = Refused ->
+            {reply, Refused, S}
+    end.
+
+on_class_resolved(Kind, Realm, Procedure, Policy, Resolved, Registration, S) ->
+    case servable_policy(Kind, Resolved) of
+        true ->
             class_declared(Policy, Realm, Procedure),
             {Reply, NewS} = advertised(Kind, {Realm, Procedure}, Registration#{policy := Resolved},
                                        renewal_cancelled(Kind, {Realm, Procedure}, S)),
             {reply, Reply, renewal_armed(Kind, {Realm, Procedure}, NewS)};
-        {error, _} = Refused ->
-            {reply, Refused, S}
+        {false, _} ->
+            {reply, {error, {stream_policy, Resolved}}, S}
+    end.
+
+%% A unary procedure takes the whole policy set. A STREAM takes only the shapes a
+%% link can carry: `handler_authorizes' is the handler's business on a unary call
+%% and no clause of the link's `valid_policy/1' admits it on a stream, so a
+%% registration the pool kept and every link refused would be stored with nothing
+%% serving it and replayed into a `function_clause' on the next link respawn -- in
+%% the pool process (macula#150). Refused here, before anything is kept, so the
+%% question the link would raise is asked once, by the component that owns the
+%% answer.
+servable_policy(unary, _Policy) ->
+    true;
+servable_policy(stream, Policy) ->
+    try macula_station_link:valid_policy(Policy) of
+        ok -> true
+    catch
+        _:_ -> {false, Policy}
     end.
 
 %% One line per served procedure saying who may call it (threat model 5.2): an

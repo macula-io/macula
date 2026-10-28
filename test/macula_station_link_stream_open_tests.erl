@@ -529,7 +529,7 @@ link_serving(Handler, Mode) ->
     _ = sys:replace_state(Link, fun(S) -> setelement(?PEER_NODE_ID_INDEX, setelement(?PEER_PID_INDEX, S, Test),
                                                      <<2:256>>) end),
     ok = macula_station_link:advertise_stream(Link, ?REALM, ?PROCEDURE, Mode,
-                                              fun(Stream, Args) -> Test ! {handler_ran, Handler(Stream, Args)}, ok end),
+                                              fun(Stream, Args) -> Test ! {handler_ran, Handler(Stream, Args)}, ok end, open),
     #{link => Link, key => Key, admission => Admission}.
 
 stop(#{link := Link}) ->

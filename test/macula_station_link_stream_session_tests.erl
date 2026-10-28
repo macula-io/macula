@@ -186,7 +186,7 @@ a_same_pool_request_keeps_its_client_and_server_sessions_apart() ->
     Test = self(),
     %% The handler owns the server session's stream, which ends when it returns, so it waits while the test uses it.
     ok = macula_station_link:advertise_stream(Link, ?REALM, ?PROCEDURE, bidi,
-                                              fun(Stream, _Args) -> Test ! {serving, Stream}, timer:sleep(2_000) end),
+                                              fun(Stream, _Args) -> Test ! {serving, Stream}, timer:sleep(2_000) end, open),
     #{stream := Client, quic := ClientQuic, open_frame := OpenFrame} = opened(World, node_id(World), bidi),
     ServerQuic = make_ref(),
     Link ! {macula_peering, new_dedicated_stream, Test, ServerQuic},

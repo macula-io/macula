@@ -122,6 +122,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   an `auth` key returns `{error, {auth, required}}`. A procedure that means to serve anyone who can reach it now says
   `auth => open`, explicitly. This breaks every caller that relied on the old default — in this repository and in every
   SDK built on it — so the next cut is 18.0.0, not 17.3.0.
+
+- **Breaking: a streaming procedure advertised with no `auth` is refused, and the arities that could not name one are
+  removed (macula#150).** `macula:advertise_stream/6` without an `auth` key returns `{error, {auth, required}}`, as
+  `advertise/5` does, and `macula:advertise_stream/5` and `macula_client:advertise_stream/5` are gone. A streaming
+  procedure that means to serve anyone who can reach it now says `auth => open`, explicitly, like its unary twin. The
+  streaming path had kept the open default the unary path lost in #147, so the two disagreed about whether a default
+  exists at all; they no longer do, and this closes the streaming half of the #147 threat model's section 6.1, which
+  already treats a `client_stream` as a call checked once at STREAM_OPEN. The one caller in this repository that
+  relied on the default was realm content sharing: it served any caller that could reach the node's station, and now
+  says `auth => open`, so its behaviour is unchanged and its policy is visible. Because it breaks every caller that
+  relied on the default — here and in the SDKs — it lands in the same major: 18.0.0.
 ### Fixed
 
 - **A peer that stops granting flow-control credit on one stream no longer stalls the whole station link (macula#141).**

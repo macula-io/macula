@@ -75,7 +75,7 @@ a_relayed_frame_of_a_type_outside_the_overlay_set_is_dropped_and_counted_test_()
                                             fun(Args) -> Test ! {handler_ran, call, Args}, {ok, done} end,
                                             open),
          ok = macula_station_link:advertise_stream(B, ?REALM, Procedure, bidi,
-                                                   fun(_Stream, Args) -> Test ! {handler_ran, stream, Args}, ok end),
+                                                   fun(_Stream, Args) -> Test ! {handler_ran, stream, Args}, ok end, open),
          Key = element(?NODE_IDENTITY_INDEX, sys:get_state(A)),
          Request = #{request_id => crypto:strong_rand_bytes(16), realm => ?REALM, procedure => Procedure,
                      target => node_id(B), deadline => erlang:system_time(millisecond) + 30_000, payload => #{}},

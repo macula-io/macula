@@ -117,7 +117,8 @@ ok = macula:advertise_stream(
        fun(Stream, _Args) ->
            Feeder = spawn(fun() -> feed(Stream) end),
            ok = macula_stream:controlling_process(Stream, Feeder)
-       end).
+       end,
+       #{auth => open}).
 ```
 
 When a session ends (both sides closed, an abort, or the link lost), the
@@ -151,7 +152,8 @@ ok = macula:advertise_stream(
        fun(Stream, _Args) ->
            lists:foreach(fun(Frame) -> macula:send(Stream, Frame) end, frames()),
            macula:close_stream(Stream)
-       end),
+       end,
+       #{auth => open}),
 
 %% client_stream: drain the consumer's chunks, then reply
 ok = macula:advertise_stream(
@@ -159,7 +161,8 @@ ok = macula:advertise_stream(
        fun(Stream, _Args) ->
            N = drain(Stream, 0),
            macula:set_reply(Stream, #{ingested => N})
-       end).
+       end,
+       #{auth => open}).
 ```
 
 ```erlang
@@ -276,7 +279,7 @@ reading them, in a list, a table or its state, should copy what it keeps
 `macula:open_stream/3,4`, `macula:advertise_stream/2,3`, and `call_stream/2,3`
 drive streams **inside one BEAM** (no mesh), backed by `macula_stream_local`.
 They are for unit tests and same-node dispatch. The pool forms
-(`call_stream/5`, `advertise_stream/5,6`) are the ones that go over the mesh.
+(`call_stream/5`, `advertise_stream/6`) are the ones that go over the mesh.
 
 ---
 
@@ -286,8 +289,7 @@ They are for unit tests and same-node dispatch. The pool forms
 |---|---|
 | `call_stream(Pool, Realm, Proc, Args, Opts)` | raw consumer: open a stream on the pool's own link (`Opts` may set `mode`, and `ucan_token` for a gated procedure) |
 | `call_stream_station(Pool, Station, Realm, Proc, Args, Opts)` | raw consumer: **direct-dial** — dial `Station` and open the stream there in one hop |
-| `advertise_stream(Pool, Realm, Proc, Mode, Handler)` | raw provider: serve a streaming procedure |
-| `advertise_stream(Pool, Realm, Proc, Mode, Handler, Opts)` | raw provider: as `/5`, with an `auth` policy in `Opts` |
+| `advertise_stream(Pool, Realm, Proc, Mode, Handler, Opts)` | raw provider: serve a streaming procedure; `Opts` must name its `auth` policy |
 | `unadvertise_stream(Pool, Realm, Proc)` | raw provider: stop serving it |
 | `send(Stream, Bin)` / `send(Stream, Body, Enc)` | send a chunk (`Enc` = `raw` \| `msgpack`) |
 | `recv(Stream)` / `recv(Stream, Timeout)` | read the next `{chunk,_}` / `{data,_}` / `eof` |

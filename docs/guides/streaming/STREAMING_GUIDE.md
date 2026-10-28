@@ -8,7 +8,7 @@
 > feed of frames, an upload of many chunks, or a long-lived two-way exchange.
 > Available since SDK 3.17. Building something the wrappers below don't fit?
 > See [STREAMING_PROTOCOL.md](STREAMING_PROTOCOL.md) for the raw
-> `call_stream/5` / `advertise_stream/5` primitives underneath.
+> `call_stream/5` / `advertise_stream/6` primitives underneath.
 
 ---
 
@@ -241,5 +241,5 @@ same-node dispatch).
   to request/response instead of streaming.
 - [`macula_streamer`](https://hexdocs.pm/macula/macula_streamer.html) /
   [`macula_stream_sink`](https://hexdocs.pm/macula/macula_stream_sink.html) —
-  supervised, fact-announcing wrappers around `advertise_stream/5` and
+  supervised, fact-announcing wrappers around `advertise_stream/6` and
   `call_stream/5`.
