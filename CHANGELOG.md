@@ -131,8 +131,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   exists at all; they no longer do, and this closes the streaming half of the #147 threat model's section 6.1, which
   already treats a `client_stream` as a call checked once at STREAM_OPEN. The one caller in this repository that
   relied on the default was realm content sharing: it served any caller that could reach the node's station, and now
-  says `auth => open`, so its behaviour is unchanged and its policy is visible. Because it breaks every caller that
-  relied on the default — here and in the SDKs — it lands in the same major: 18.0.0.
+  says `auth => open`, so its behaviour is unchanged and its policy is visible. A policy a stream cannot carry is
+  refused before the pool keeps the registration: `handler_authorizes` is a legitimate unary policy that no link
+  clause admits on a stream, and a registration every link refused was kept, answered with a failure, and replayed
+  into a `function_clause` on the next link respawn. That path was verified by reading it and is pinned by a test
+  asserting the pool keeps nothing, not reproduced end to end. Because it breaks every caller that relied on the
+  default — here and in the SDKs — it lands in the same major: 18.0.0.
 ### Fixed
 
 - **A peer that stops granting flow-control credit on one stream no longer stalls the whole station link (macula#141).**
