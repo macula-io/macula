@@ -206,7 +206,7 @@
 advertise(Pool, Realm, Procedure, Module, Args, Opts) ->
     AdvertiseStream = arity_6(maps:get(advertise_stream, Opts, fun macula:advertise_stream/6)),
     Functions = functions(Opts),
-    Sup = existing_or_new_sup(maps:get(reuse_sup, Opts, undefined)),
+    {Sup, Fresh} = sup_for(maps:get(reuse_sup, Opts, undefined)),
     Announce = maps:get(announce, Opts, true),
     Mode = maps:get(mode, Opts, server_stream),
     Handler = fun(StreamPid, StreamArgs) ->
@@ -220,8 +220,28 @@ advertise(Pool, Realm, Procedure, Module, Args, Opts) ->
     case AdvertiseStream(Pool, Realm, Procedure, Mode, Handler,
                          maps:with([auth, stations, confidential], Opts)) of
         ok -> {ok, Sup};
-        {error, Reason} -> {error, Reason}
+        {error, Reason} -> refused(Fresh, Sup, Reason)
     end.
+
+%% A factory supervisor started for THIS registration exists only to serve it,
+%% so a refusal takes it down with it. Since macula#150 a refusal is a normal
+%% outcome -- no `auth' at all is `{error, {auth, required}}', a policy no link
+%% can serve is `{error, {stream_policy, _}}' -- and every one of them used to
+%% leave a supervisor behind, linked to the caller and serving nothing. A
+%% `reuse_sup' supervisor belongs to whoever passes it in and is left alone.
+refused(true, Sup, Reason) ->
+    stop_fresh_sup(Sup),
+    {error, Reason};
+refused(false, _Sup, Reason) ->
+    {error, Reason}.
+
+%% It was started with `start_link', so it is unlinked before it is told to go:
+%% stopping it while linked would send this caller the exit signal instead.
+stop_fresh_sup(Sup) ->
+    unlink(Sup),
+    Ref = erlang:monitor(process, Sup),
+    exit(Sup, shutdown),
+    receive {'DOWN', Ref, process, Sup, _} -> ok end.
 
 %% The functions each streamer runs on, from the options or else the
 %% defaults. Stream functions macula_stream:stream_io/2 does not accept,
@@ -250,13 +270,15 @@ arity_6(Fun) when is_function(Fun, 6) -> Fun.
 %% See `macula_response:existing_or_new_sup/1' for why a dead `reuse_sup'
 %% pid must fall through to a fresh one rather than being handed to
 %% `dispatch/9' as-is.
-existing_or_new_sup(Pid) when is_pid(Pid) ->
-    existing_or_new_sup(Pid, erlang:is_process_alive(Pid));
-existing_or_new_sup(undefined) ->
-    new_sup().
+%% Whether the supervisor was started here, which is what decides if a refusal
+%% may stop it.
+sup_for(Pid) when is_pid(Pid) ->
+    on_live_sup(Pid, erlang:is_process_alive(Pid));
+sup_for(undefined) ->
+    {new_sup(), true}.
 
-existing_or_new_sup(Pid, true)  -> Pid;
-existing_or_new_sup(_Pid, false) -> new_sup().
+on_live_sup(Pid, true)  -> {Pid, false};
+on_live_sup(_Pid, false) -> {new_sup(), true}.
 
 new_sup() ->
     {ok, Sup} = macula_streamer_sup:start_link(),

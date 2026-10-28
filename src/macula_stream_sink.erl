@@ -48,7 +48,7 @@
 %%% gossip-propagated routing `call_stream/5' always used.
 %%% `start_link_direct/5,6' is the direct-dial counterpart: it resolves
 %%% the procedure's `procedure_advertisement' from the DHT (published by
-%%% `macula_streamer:advertise_direct/6,7' on the provider side) and
+%%% `macula_streamer:advertise_direct/7' on the provider side) and
 %%% opens the stream there directly, in one hop, instead of depending on
 %%% advertise-gossip having propagated a route between arbitrary
 %%% stations. Requires the provider to have advertised via

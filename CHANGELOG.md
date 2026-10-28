@@ -125,7 +125,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Breaking: a streaming procedure advertised with no `auth` is refused, and the arities that could not name one are
   removed (macula#150).** `macula:advertise_stream/6` without an `auth` key returns `{error, {auth, required}}`, as
-  `advertise/5` does, and `macula:advertise_stream/5` and `macula_client:advertise_stream/5` are gone. A streaming
+  `advertise/5` does, and the arities that could not name a policy are gone: `macula:advertise_stream/5`,
+  `macula_client:advertise_stream/5`, `macula_station_link:advertise_stream/5`, `macula_streamer:advertise/5` and
+  `advertise_direct/6`, and `macula_upload:advertise/5` and `advertise_direct/6`. A streaming
   procedure that means to serve anyone who can reach it now says `auth => open`, explicitly, like its unary twin. The
   streaming path had kept the open default the unary path lost in #147, so the two disagreed about whether a default
   exists at all; they no longer do, and this closes the streaming half of the #147 threat model's section 6.1, which

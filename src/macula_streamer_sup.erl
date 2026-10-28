@@ -1,7 +1,7 @@
 %%%-------------------------------------------------------------------
 %%% @doc Factory supervisor for `macula_streamer' children.
 %%%
-%%% One instance is started internally by `macula_streamer:advertise/5,6'
+%%% One instance is started internally by `macula_streamer:advertise/6'
 %%% per advertised streaming procedure. Each inbound STREAM_OPEN starts
 %%% one `temporary' child here — a crashed or completed streamer is
 %%% never restarted, since it represents exactly one already-ended (or

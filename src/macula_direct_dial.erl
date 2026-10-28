@@ -6,7 +6,7 @@
 %%% Not a public API on its own — `macula_request:start_link_direct/6,7,8',
 %%% `macula_response:advertise_direct/6,7',
 %%% `macula_stream_sink:start_link_direct/5,6',
-%%% `macula_streamer:advertise_direct/6,7',
+%%% `macula_streamer:advertise_direct/7',
 %%% `macula_download:start_link_direct/4,5', and
 %%% `macula_feeder:start_link_direct/5,6' are the entry points.
 %%% Factored out because RPC, streaming, and content-download all need

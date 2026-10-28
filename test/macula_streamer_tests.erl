@@ -57,7 +57,49 @@ streamer_test_() ->
                  fun reuse_sup_resends_advertise_without_a_new_supervisor/0,
                  fun reuse_sup_with_a_dead_pid_starts_a_fresh_supervisor/0,
                  fun the_stations_reach_the_stream_advertisement/0,
-                 fun the_confidential_mode_reaches_the_stream_advertisement/0]].
+                 fun the_confidential_mode_reaches_the_stream_advertisement/0,
+                 fun a_refused_advertise_leaves_no_supervisor_behind/0,
+                 fun a_refused_advertise_leaves_a_reused_supervisor_alone/0]].
+
+%% A refused advertise takes the factory supervisor it started with it. Since a
+%% streaming advertise must name its policy (macula#150), a refusal is a normal
+%% outcome rather than an exceptional one, and every one of them used to leave a
+%% supervisor behind -- linked to the caller, serving nothing (Neptunus' review
+%% of macula#150). Nothing new may be left running.
+a_refused_advertise_leaves_no_supervisor_behind() ->
+    Before = streamer_sups(),
+    ?assertEqual({error, {auth, required}},
+                 macula_streamer:advertise(self(), ?REALM, <<"p">>, ?MODULE, self(), #{})),
+    ?assertEqual([], streamer_sups() -- Before).
+
+%% A supervisor the caller passes in is the caller's: the refusal reports and
+%% leaves it running, so a service that reuses one keeps it.
+a_refused_advertise_leaves_a_reused_supervisor_alone() ->
+    {ok, Sup} = macula_streamer_sup:start_link(),
+    try
+        ?assertEqual({error, {auth, required}},
+                     macula_streamer:advertise(self(), ?REALM, <<"p">>, ?MODULE, self(),
+                                               #{reuse_sup => Sup})),
+        ?assert(is_process_alive(Sup))
+    after
+        unlink(Sup),
+        exit(Sup, shutdown)
+    end.
+
+%% Every streamer factory supervisor alive in this VM. They are not registered
+%% under a name, so they are found by the initial call `proc_lib' recorded for
+%% them -- `{supervisor, Callback, 1}', which names the callback module. The test
+%% compares the set before and after, so only a NEW one can fail it.
+streamer_sups() ->
+    [P || P <- processes(), is_streamer_sup(P)].
+
+is_streamer_sup(P) ->
+    case process_info(P, dictionary) of
+        {dictionary, D} ->
+            proplists:get_value('$initial_call', D) =:= {supervisor, macula_streamer_sup, 1};
+        undefined ->
+            false
+    end.
 
 %% `stations' names where the procedure registers, so it reaches the stream
 %% advertisement with the auth policy, and none of the streamer's own options

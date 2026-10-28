@@ -11,7 +11,7 @@
 %%% Unlike `macula_feeder' (which shares content from this node
 %%% for a downloader to find and fetch later), this actively pushes
 %%% bytes AT a specific, already-known recipient advertising an upload
-%%% procedure (`macula_upload:advertise/5,6') — the `client_stream'
+%%% procedure (`macula_upload:advertise/6') — the `client_stream'
 %%% mode `STREAMING_GUIDE.md' names for exactly this ("an upload, a
 %%% batch submit"), wrapped with `macula_feeder'/`macula_download''s
 %%% own integrity machinery: `macula_manifest:create/2' chunks and
@@ -53,7 +53,7 @@
 %%% == Direct-dial ==
 %%%
 %%% A push targets a specific ADVERTISED PROCEDURE
-%%% (`macula_upload:advertise_direct/6,7''s `procedure_advertisement'), so
+%%% (`macula_upload:advertise_direct/7''s `procedure_advertisement'), so
 %%% `start_link_direct/5,6' mirrors `macula_stream_sink:start_link_direct/5,6''s
 %%% shape: a `Procedure'-based resolve, no `Station' parameter, reusing
 %%% `macula_direct_dial:call_stream/5', which resolves and dials as one step.
@@ -154,8 +154,8 @@ start_link(Module, Pool, Realm, Procedure, Bytes, Args, Opts) when is_map(Opts) 
 %% `procedure_advertisement' from the DHT and dials its provider
 %% directly instead of pushing through the pool's existing links. See
 %% the "Direct-dial" section above. Requires the recipient to have
-%% advertised via `macula_upload:advertise_direct/6,7', not plain
-%% `advertise/5,6'.
+%% advertised via `macula_upload:advertise_direct/7', not plain
+%% `advertise/6'.
 -spec start_link_direct(module(), macula:pool(), macula:realm(),
                         macula:procedure(), binary()) ->
     {ok, pid()} | {error, term()}.

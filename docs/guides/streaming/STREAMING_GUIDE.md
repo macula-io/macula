@@ -162,7 +162,7 @@ hop, instead of routing through the pool's existing links. A
 is the exact same resolve-and-trust mechanism as [RPC direct-dial](../rpc/RPC_GUIDE.md) —
 see that guide for the full trust-model writeup.
 
-Provider — `advertise_direct/6,7` does everything `advertise/5,6` does, and
+Provider — `advertise_direct/7` does everything `advertise/6` does, and
 additionally publishes the discoverable record:
 
 ```erlang
@@ -179,8 +179,8 @@ Consumer — `start_link_direct/5,6` resolves and dials in one hop:
                                                  <<"logs.tail">>, []).
 ```
 
-Requires the provider to have advertised via `advertise_direct/6,7`, not
-plain `advertise/5,6` — a plain advertise publishes no discoverable record.
+Requires the provider to have advertised via `advertise_direct/7`, not
+plain `advertise/6` — a plain advertise publishes no discoverable record.
 
 ---
 
@@ -215,8 +215,8 @@ as a direct-dial caller re-resolves on a dial failure.
 
 | Function | Role |
 |---|---|
-| `macula_streamer:advertise/5,6` | provider: supervised, `streaming.*_v1`-announcing wrapper. Optional `Module:handle_chunk/2` drives a receive loop for `client_stream` mode; optional `Module:handle_eof/1` sets the terminal reply; abort-wired cancel |
-| `macula_streamer:advertise_direct/6,7` | provider: as above, and publishes a `procedure_advertisement` for direct-dial |
+| `macula_streamer:advertise/6` | provider: supervised, `streaming.*_v1`-announcing wrapper. Optional `Module:handle_chunk/2` drives a receive loop for `client_stream` mode; optional `Module:handle_eof/1` sets the terminal reply; abort-wired cancel |
+| `macula_streamer:advertise_direct/7` | provider: as above, and publishes a `procedure_advertisement` for direct-dial |
 | `macula_stream_sink:start_link/5,6` | consumer: supervised, `streaming.*_v1`-announcing wrapper; abort-wired cancel |
 | `macula_stream_sink:start_link_direct/5,6` | consumer: **direct-dial** — resolve the provider and dial in one hop |
 

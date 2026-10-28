@@ -207,7 +207,7 @@ handle_uploaded(Result, Parent) ->
 
 `Result` is `{ok, Mcid, Bytes} | {error, _}` on the receiver's side,
 `{ok, Mcid} | {error, _}` on the sender's. `macula_pusher:start_link_direct/5,6`
-/ `macula_upload:advertise_direct/6,7` are the direct-dial counterparts (a
+/ `macula_upload:advertise_direct/7` are the direct-dial counterparts (a
 `Procedure` resolves via its `procedure_advertisement`). `macula_pusher:cancel/1`
 reaches the real underlying stream.
 
@@ -233,7 +233,7 @@ reaches the real underlying stream.
 | `macula_feeder:start_link/4,5,6` | supervised, fact-announcing share; `cancel/1` withdraws it |
 | `macula_download:start_link/4,5,6` | supervised, fact-announcing fetch; `cancel/1` stops it |
 | `macula_pusher:start_link/5,6` / `start_link_direct/5,6` | sender: push over `client_stream`, deliver the recipient's verified `{ok, Mcid} \| {error, _}` |
-| `macula_upload:advertise/5,6` / `advertise_direct/6,7` | receiver: accept pushes for `Procedure`, verify, deliver `{ok, Mcid, Bytes} \| {error, _}` |
+| `macula_upload:advertise/6` / `advertise_direct/7` | receiver: accept pushes for `Procedure`, verify, deliver `{ok, Mcid, Bytes} \| {error, _}` |
 | `macula_manifest:default_chunk_size()` | the single-block / chunked threshold (256 KiB) |
 
 ---
