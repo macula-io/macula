@@ -2496,13 +2496,30 @@ caller_policy(Policy, _Realm, _S) ->
     {ok, Policy}.
 
 %% A named-nodes class is a list of node ids: 32-byte binaries, and at least one.
+%%
+%% Walked by pattern, never with `lists:all/2' or an `is_list' guard. `[_ | _]'
+%% matches an improper cons as happily as a proper one, `lists:all/2' over
+%% `[a | b]' raises, and on OTP 28 `is_list/1' answers true for an improper list
+%% too, so a guard cannot catch this. An improper list has no `[]' to end on and
+%% falls out of this walk as `not_a_list' -- inside the pool process, where the
+%% raise that used to happen took every link, subscription and advertisement
+%% on the pool down with it.
+node_ids_or_error([]) ->
+    {error, {call_class, {nodes, empty}}};
 node_ids_or_error(NodeIds) ->
-    node_ids_formed(lists:all(fun node_id_formed/1, NodeIds), NodeIds).
+    node_ids_formed(NodeIds, NodeIds).
 
-node_ids_formed(true, NodeIds) -> {ok, {nodes, NodeIds}};
-node_ids_formed(false, _NodeIds) -> {error, {call_class, {nodes, not_node_ids}}}.
+node_ids_formed([], NodeIds) ->
+    {ok, {nodes, NodeIds}};
+node_ids_formed([Id | Rest], NodeIds) ->
+    node_id_formed(Id, Rest, NodeIds);
+node_ids_formed(_NotAList, _NodeIds) ->
+    {error, {call_class, {nodes, not_a_list}}}.
 
-node_id_formed(Id) -> is_binary(Id) andalso byte_size(Id) =:= 32.
+node_id_formed(Id, Rest, NodeIds) when is_binary(Id), byte_size(Id) =:= 32 ->
+    node_ids_formed(Rest, NodeIds);
+node_id_formed(_Id, _Rest, _NodeIds) ->
+    {error, {call_class, {nodes, not_node_ids}}}.
 
 %% A class that rests on realm membership cannot be enforced in a realm whose key
 %% this pool never pinned, so it is refused rather than served open.

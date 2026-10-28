@@ -63,6 +63,28 @@ a_class_naming_no_nodes_is_refused_test() ->
     ?assertEqual({error, {call_class, {nodes, not_node_ids}}},
                  macula_client:caller_policy({callers, {nodes, [<<"not-a-node-id">>]}}, ?REALM, #{})).
 
+%% An improper list is not a list of node ids. `[_ | _]' matches an improper
+%% cons as happily as a proper one, so without the `is_list' guard this reached
+%% `lists:all/2', which raises on `[a | b]' -- inside the pool process, so the
+%% whole pool went down for one bad declaration.
+an_improper_node_list_is_refused_test() ->
+    ?assertEqual({error, {call_class, {nodes, not_a_list}}},
+                 macula_client:caller_policy({callers, {nodes, [<<1:256>> | <<2:256>>]}}, ?REALM, #{})).
+
+%% The refusal happens in the pool, so prove the pool answers it and stays up:
+%% a crash here would take every subscription, link and advertisement with it.
+an_improper_node_list_does_not_take_the_pool_down_test_() ->
+    {timeout, 10, fun() ->
+        {ok, _} = application:ensure_all_started(macula),
+        {ok, Pool} = macula_client:connect([], #{}),
+        ?assertEqual({error, {call_class, {nodes, not_a_list}}},
+                     macula_client:advertise(Pool, ?REALM, ?PROCEDURE, fun(_) -> {ok, 1} end,
+                                             {callers, {nodes, [<<1:256>> | <<2:256>>]}},
+                                             undefined, all, undefined)),
+        ?assertMatch({ok, _}, macula_client:status(Pool)),
+        ok = macula_client:close(Pool)
+    end}.
+
 a_class_that_is_not_one_is_refused_test() ->
     ?assertEqual({error, {call_class, {unknown, elevated}}},
                  macula_client:caller_policy({callers, elevated}, ?REALM, #{})).
