@@ -11,6 +11,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Line coverage has a floor, and CI reads it (macula#153).** No step read coverage, so a change could land with
+  its code untested and nothing would say so. The suite now runs under `--cover` in one job — eunit 731 s and ct
+  12 s in the pinned image, so joining them costs seconds — and `scripts/is_line_coverage_at_least_the_floor.sh`
+  merges the two exports and fails below 82% of lines. main measured 82.08% over 125 modules on 2026-10-28, so
+  the floor is 82. It only goes up, in a commit that says why, which CONTRIBUTING states and this entry repeats;
+  lowering it is a reviewed decision about which lines stop being tested, never a way to turn a branch green.
+  The number is OTP's own `cover` on the pinned Erlang, so the tool is pinned by the CI image digest rather than
+  by a floating tag: a toolchain move is a coverage move and arrives as a commit. `rebar.config`'s note that
+  nothing reads coverage is gone with the step that made it untrue.
+
 - **Property tests on the wire (macula#151).** `proper` has been a test dependency with no property in the tree. Four
   modules now generate the inputs the parsers claim to hold for: the CBOR codec (what the decoder returns is what the
   encoder was given, the canonical form is a fixed point, the NIF and the pure-Erlang reference agree byte for byte,

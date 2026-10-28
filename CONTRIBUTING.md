@@ -88,6 +88,29 @@ a test you have just written.
   it with a reason: `rebar3 ct` exits 0 on a case that skipped itself, so
   `cth_skip_is_failure` (from `macula_testkit`) turns an unallowed skip into
   a failure.
+- **Line coverage has a floor, and it only goes up.** CI merges the eunit and
+  ct suites' line coverage and fails below 82%
+  (`scripts/is_line_coverage_at_least_the_floor.sh`). The floor is main's
+  measured value rounded down to a whole percent: 82.08% over 125 modules
+  measured on 28 October 2026, so 82. A change that raises coverage raises the
+  number in the same commit. Lowering it is a reviewed decision about which
+  lines stop being tested, stated in the commit that does it; it is never done
+  to turn a branch green. To see where a change stands:
+
+  ```bash
+  rebar3 eunit --cover
+  rebar3 ct --cover
+  bash scripts/is_line_coverage_at_least_the_floor.sh \
+       _build/test/cover/eunit.coverdata _build/test/cover/ct.coverdata
+  ```
+
+  Both suites, merged: the floor is a property of the suite, not of one of
+  its halves. The two are not equal contributors — on 28 October 2026 eunit
+  alone measured 82.06% and the fleet suites added 2 covered lines — but a
+  number that silently leaves half the suite out is not the suite's coverage,
+  and which half matters is not something to re-decide each time. The number
+  is OTP's `cover` on the pinned Erlang, which is why CI asserts that pin
+  before it measures.
 
 ## Submitting Changes
 

@@ -1,8 +1,8 @@
 name: Test
 
-# Runs the suite on every push and pull request: eunit, common_test, xref and
-# dialyzer, the linter, the docs build, the frozen wire vectors, and the wire
-# property tests.
+# Runs the suite on every push and pull request: eunit and common_test under
+# cover with the merged line coverage held to a floor, xref and dialyzer, the
+# linter, the docs build, the frozen wire vectors, and the wire property tests.
 #
 # It also gates the publish: publish-hex.yml calls it on the release tag and
 # publishes only when it is green (mcl-om#34).
@@ -78,13 +78,21 @@ jobs:
     # them in parallel without duplicating the container, the toolchain or
     # the caches.
     #
+    # eunit and ct are ONE entry, not two (#153). They are run together under
+    # cover so the coverage floor has the whole suite to measure, and they cost
+    # almost nothing to join: measured on 2026-10-28 in this image, eunit is
+    # 731 s under instrumentation and ct is 12 s. As two entries, ct paid a
+    # second container, toolchain and NIF build — minutes of setup for twelve
+    # seconds of test — to report what the joined entry reports on the same
+    # number.
+    #
     # fail-fast is OFF deliberately: the serial job reported every check's
     # result, and cancelling the others on the first red would report less
     # than it used to.
     strategy:
       fail-fast: false
       matrix:
-        check: [eunit, ct, xref, dialyzer, lint, docs, vectors, proper]
+        check: [coverage, xref, dialyzer, lint, docs, vectors, proper]
     # A GitHub-hosted public runner, deliberately. macula is a public
     # repository and this costs nothing there. Do NOT put `self-hosted` here:
     # the Default runner group is closed to public repositories on purpose,
@@ -212,29 +220,54 @@ jobs:
 
       # Known to be flaky under load. If this goes red intermittently, that is
       # reported as "flaky, N of M runs", not silenced here.
+      #
+      # --cover is what turns this run into the coverage number (#153). It costs
+      # about a quarter of the step's run time — 731 s against 445 s for the same
+      # 7661 tests in the pinned image on 2026-10-28 — and it buys a figure
+      # measured on the run that gated, rather than on a second run of the same
+      # tests in a job of its own.
       - name: eunit
-        if: matrix.check == 'eunit'
-        run: rebar3 eunit
+        if: matrix.check == 'coverage'
+        run: rebar3 eunit --cover --cover_export_name eunit
 
       # The fleet suites in test/overlay: realm-gated HyParView admission and
       # Plumtree gossip, across in-VM stations, over the frame codec. Until
       # this step nothing ran common_test, and both suites failed from 11.x on
       # without anyone seeing it. Every suite under test/ runs here; one that
       # needs something CI does not have belongs outside test/, not skipped.
+      #
+      # --cover for the same reason as eunit above. What it adds is small and
+      # measured, not assumed: 2 covered lines on 2026-10-28, 82.06% with eunit
+      # alone and 82.08% merged. It is measured anyway because the floor is a
+      # property of the SUITE, and today's overlap between the two halves is an
+      # accident of which modules the fleet suites happen to touch. If that
+      # stops being true, the number must not keep looking complete without it.
       - name: common_test
         id: common_test
-        if: matrix.check == 'ct'
-        run: rebar3 ct
+        if: matrix.check == 'coverage'
+        run: rebar3 ct --cover --cover_export_name ct
 
       # A failed common_test run leaves its reasons in HTML logs, not on the
       # console, so they are kept for a week.
       - name: Keep the common_test logs of a failed run
-        if: failure() && matrix.check == 'ct' && steps.common_test.outcome == 'failure'
+        if: failure() && matrix.check == 'coverage' && steps.common_test.outcome == 'failure'
         uses: actions/upload-artifact@v4
         with:
           name: common-test-logs
           path: _build/test/logs
           retention-days: 7
+
+      # The floor (#153). Merging is the point: this step has just run both
+      # suites and each `--cover` exported only its own half, so a module only
+      # the fleet suites reach reads as dead in the eunit file and the merge is
+      # what puts the suite back together. It runs last because a suite that
+      # failed tells you more about the run than its coverage does.
+      - name: Line coverage, merged over both suites, at or above the floor
+        if: matrix.check == 'coverage'
+        run: |
+          bash scripts/is_line_coverage_at_least_the_floor.sh \
+            _build/test/cover/eunit.coverdata \
+            _build/test/cover/ct.coverdata
 
       - name: xref
         if: matrix.check == 'xref'
