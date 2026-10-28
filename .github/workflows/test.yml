@@ -242,9 +242,16 @@ jobs:
       # property of the SUITE, and today's overlap between the two halves is an
       # accident of which modules the fleet suites happen to touch. If that
       # stops being true, the number must not keep looking complete without it.
+      #
+      # `!cancelled()` rather than the default, because eunit and ct used to be
+      # separate matrix entries and a red eunit did not stop ct from reporting.
+      # Joining the jobs must not quietly cost that: a failure in one suite is
+      # information about the other, and a job that skips ct says less than the
+      # two jobs it replaced. It still does not run on a cancelled run, which is
+      # the only case where skipping is right.
       - name: common_test
         id: common_test
-        if: matrix.check == 'coverage'
+        if: ${{ !cancelled() && matrix.check == 'coverage' }}
         run: rebar3 ct --cover --cover_export_name ct
 
       # A failed common_test run leaves its reasons in HTML logs, not on the
@@ -258,10 +265,11 @@ jobs:
           retention-days: 7
 
       # The floor (#153). Merging is the point: this step has just run both
-      # suites and each `--cover` exported only its own half, so a module only
-      # the fleet suites reach reads as dead in the eunit file and the merge is
-      # what puts the suite back together. It runs last because a suite that
-      # failed tells you more about the run than its coverage does.
+      # suites and each `--cover` exported only its own half, so the merge is
+      # what puts the suite back together into one number. It runs last, and
+      # only when both suites are green: a suite that failed tells you more
+      # about the run than its coverage would, and a figure from a suite that
+      # stopped early describes tests that never ran.
       - name: Line coverage, merged over both suites, at or above the floor
         if: matrix.check == 'coverage'
         run: |
