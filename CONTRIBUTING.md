@@ -37,6 +37,41 @@ bash scripts/is_the_property_suite_running.sh
 bash scripts/test-parallel.sh
 ```
 
+### Before you push: the gate that is CI
+
+```bash
+bash scripts/is_tree_pushable.sh
+```
+
+It runs the steps of the gating workflows themselves - `.github/workflows/test.yml` and
+`docs.yml`, including the doc-snippet check, whose escript lives in `macula-ci-images` at the sha `docs.yml` pins -
+inside the image those workflows pin, as root. It exports `HEAD` with `git archive` and runs on that export, never on
+your working directory: a file git ignores - a `_checkouts/<dep>` shadowing the locked one, an `_build` from another
+branch - cannot make the gate disagree with CI, and the container's files land outside your checkout.
+
+**It is derived from the workflows, not copied from them (macula#163).** The steps are read out of the workflow files
+at run time, so a step CI gains is a step the gate gains, and the two cannot drift apart in silence. The thing that
+used to happen instead is worth knowing, because it is why the script exists: a package deleted several exported
+arities, the hand-written local gate reported eight green steps, and CI's docs job then went red because three runnable
+examples in the guides still called the deleted functions. The gap was real, invisible locally, and found after the
+work had been handed over.
+
+Three things follow from that, and they are the rule:
+
+- **`scripts/ci_gate_plan.sh` is the only place a job can be excluded.** A job that cannot run inside the build image
+  (cargo clippy on a plain runner, the advisory scans) is ruled there with the reason a member is told. A job nobody
+  has ruled on is a refusal, not a silent skip: a new job is a decision, and the decision belongs in a commit.
+- **`scripts/is_the_local_gate_in_step_with_ci.sh` fails when the two drift**, and CI runs it. A ruling that outlives
+  its job, a matrix check whose steps all skipped, a reusable workflow not pinned by a full sha - each is red there
+  rather than discovered by the next member.
+- **A green gate names what it does not cover.** The `NOT-RUN:` lines before the steps are the jobs and the workflows
+  CI still runs and the gate does not - `rust-lint`, the advisory scans, the PDF build, the release - each with the
+  reason. A job nobody has ruled on, a workflow file in `.github/workflows` in neither the plan nor the ruled list, a
+  shell other than the default bash, a `${{ ... }}` the gate cannot resolve: each is a refusal, not a skip.
+  Read those lines before believing a green gate is a green push.
+
+It exits 3, never 0, when no container runtime is installed: a gate that could not run has not passed.
+
 `scripts/test-parallel.sh` is also how to check that a test is honest rather
 than merely passing. A test can be green because of the order or timing the
 suite happens to give it; running it under the shards, and on its own with

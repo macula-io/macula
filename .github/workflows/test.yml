@@ -291,6 +291,13 @@ jobs:
         if: matrix.check == 'lint'
         run: rebar3 as lint lint
 
+      # The local gate is derived from this file and docs.yml, so it cannot silently fall behind them; this is the check
+      # that it has not, and it runs in CI because that is where drift has to be seen by everyone (macula#163). It
+      # refuses a job nobody has ruled on, a matrix check whose steps all skipped, and a ruling that outlives its job.
+      - name: the local gate is in step with CI
+        if: matrix.check == 'lint'
+        run: bash scripts/is_the_local_gate_in_step_with_ci.sh
+
       # The package and its docs, as publish-hex.yml builds them on a release
       # tag. Until this step nothing before the tag built the docs, so an edoc
       # refusal (two @doc tags on one function) passed every check here and

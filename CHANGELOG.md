@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **The local gate is derived from CI, and a check fails when they drift (macula#163).** `scripts/is_tree_pushable.sh`
+  used to be a hand-copied list — xref and eunit — so every step CI gained left it behind in silence, and the gap was
+  found by a red run after the work had been handed over. It now reads `.github/workflows/test.yml` and `docs.yml`,
+  follows the reusable doc-snippet workflow to the sha `docs.yml` pins, and runs every step those workflows run, in
+  their own order, inside the image they pin and as root. Nothing is copied: a step CI gains is a step the gate gains.
+  `scripts/ci_gate_plan.sh` holds the one place a job can be excluded, with the reason a member is told, and a job
+  nobody has ruled on is a refusal rather than a silent skip. `scripts/is_the_local_gate_in_step_with_ci.sh` fails in
+  CI when the two have drifted — an unruled job, a ruling that outlives its job, a matrix check whose steps all
+  skipped, a reusable workflow not pinned by a full sha — and every green gate prints the jobs it does not cover.
+
 ## [18.0.0] - 2026-10-28
 
 The release where serving openly stops being the default (macula#147, macula#150): a procedure that does not name
