@@ -104,6 +104,107 @@ the_accept_side_subscribes_for_the_caller_it_was_given_test_() ->
     end}.
 
 %%------------------------------------------------------------------
+%% The accept side: bytes that arrive before the kernel takes the socket
+%%------------------------------------------------------------------
+
+%% The reorder's own property, and the half that kills the old design: a tunnel
+%% holds exactly ONE subscription, and it is the bridge's. The setup used to hold
+%% a buffer subscription of its own and hand the topic over at the end of the
+%% handshake, which is two subscriptions and a gap between them -- and two
+%% subscriptions on one topic also double every fact, because the pool fans a
+%% publication out to each.
+a_tunnel_holds_one_subscription_and_the_bridge_owns_it_test_() ->
+    {timeout, 60, fun() ->
+        ?assertEqual(undefined, whereis(net_kernel)),
+        {ok, _} = application:ensure_all_started(macula),
+        {ok, Pool} = start_recording_pool(),
+        register(net_kernel, self()),
+        macula_dist_pool:register_mesh_pool(Pool),
+        try
+            {ok, _Reply} = macula_dist_pool:handle_tunnel_request(
+                             #{caller => ?PEER, <<"from_node">> => <<"a@host">>}),
+            {accept, Setup, _DistSock, inet, macula_dist} = await_accept(),
+            {Count, Subscriber} = gen_server:call(Pool, subscriptions, 1000),
+            ?assertEqual(1, Count),
+            %% The one subscriber is the bridge, never the setup process that
+            %% offers the socket to the kernel.
+            ?assertNotEqual(Setup, Subscriber),
+            ?assert(is_pid(Subscriber))
+        after
+            catch unregister(net_kernel),
+            persistent_term:erase(macula_dist_mesh_pool),
+            stop_recording_pool(Pool)
+        end
+    end}.
+
+%% A tunnel's bytes are not lost while the kernel is still being asked for a
+%% controller, and they are not doubled either (macula#157). The kernel is stood
+%% in for by this process: it is registered under the name the setup looks up,
+%% it withholds the controller until two facts are in flight, and it then takes
+%% the socket and reads what the bridge wrote in the meantime.
+%%
+%% The reads below are `{packet, 2}', which is the dist wire's own framing, so
+%% each recv is exactly one datagram the bridge wrote -- in order, and the third
+%% read finding nothing is the "exactly once" half.
+bytes_before_the_controller_attaches_reach_it_in_order_once_test_() ->
+    {timeout, 60, fun() ->
+        ?assertEqual(undefined, whereis(net_kernel)),
+        {ok, _} = application:ensure_all_started(macula),
+        drain(),
+        {ok, Pool} = macula_client:connect([], #{}),
+        register(net_kernel, self()),
+        macula_dist_pool:register_mesh_pool(Pool),
+        try
+            {ok, Reply} = macula_dist_pool:handle_tunnel_request(
+                            #{caller => ?PEER, <<"from_node">> => <<"a@host">>}),
+            Topic = maps:get(<<"recv_topic">>, Reply),
+            {accept, Setup, DistSock, inet, macula_dist} = await_accept(),
+            %% Both facts are published while the kernel holds the controller.
+            inject_tunnel_fact(Pool, Topic, <<"first">>, 1),
+            inject_tunnel_fact(Pool, Topic, <<"second">>, 2),
+            Setup ! {self(), controller, self()},
+            receive
+                {Setup, controller, ok, <<>>} -> ok
+            after 5000 ->
+                ?assert(false)
+            end,
+            ?assertEqual({ok, <<"first">>}, gen_tcp:recv(DistSock, 0, 3000)),
+            ?assertEqual({ok, <<"second">>}, gen_tcp:recv(DistSock, 0, 3000)),
+            ?assertEqual({error, timeout}, gen_tcp:recv(DistSock, 0, 300))
+        after
+            catch unregister(net_kernel),
+            persistent_term:erase(macula_dist_mesh_pool),
+            stop(Pool)
+        end
+    end}.
+
+%% The same reorder's other side: a bridge that cannot start offers the kernel
+%% nothing at all, so there is no socket left half-owned and no reader-less
+%% handshake to hang on (macula#158, macula#157).
+a_tunnel_whose_bridge_cannot_start_offers_the_kernel_nothing_test_() ->
+    {timeout, 30, fun() ->
+        ?assertEqual(undefined, whereis(net_kernel)),
+        {ok, _} = application:ensure_all_started(macula),
+        {ok, RefusingPool} = start_refusing_pool(),
+        register(net_kernel, self()),
+        macula_dist_pool:register_mesh_pool(RefusingPool),
+        try
+            ?assertMatch({ok, _},
+                         macula_dist_pool:handle_tunnel_request(
+                           #{caller => ?PEER, <<"from_node">> => <<"a@host">>})),
+            receive
+                {accept, _Setup, _Sock, inet, macula_dist} -> ?assert(false)
+            after 700 ->
+                ok
+            end
+        after
+            catch unregister(net_kernel),
+            persistent_term:erase(macula_dist_mesh_pool),
+            stop_recording_pool(RefusingPool)
+        end
+    end}.
+
+%%------------------------------------------------------------------
 %% The connect side: the provider the report named, made by the real path
 %%------------------------------------------------------------------
 
@@ -163,10 +264,36 @@ stop(Pool) ->
 %% and records the topic and options it was subscribed with, which is the only
 %% way to read a subscription's declaration from outside the pool.
 start_recording_pool() ->
-    gen_server:start(?MODULE, recording_pool, []).
+    gen_server:start(?MODULE, {recording_pool, accept}, []).
+
+%% The same pool refusing every subscription: a bridge whose `init' cannot
+%% subscribe is a bridge that cannot start.
+start_refusing_pool() ->
+    gen_server:start(?MODULE, {recording_pool, refuse}, []).
 
 stop_recording_pool(Pool) ->
     try gen_server:stop(Pool, normal, 1000) catch _:_ -> ok end.
+
+%% The socket the setup offers the kernel, once it has started the bridge.
+await_accept() ->
+    receive
+        {accept, _Setup, _DistSock, inet, macula_dist} = Offered -> Offered
+    after 5000 ->
+        none
+    end.
+
+%% One fact published by the tunnel's peer, encrypted under the tunnel's own key
+%% and framed as the dist wire frames a datagram, so the bridge writes it to the
+%% socket exactly as it writes a peer's bytes.
+inject_tunnel_fact(Pool, Topic, Datagram, Seq) ->
+    Key = macula_dist_pool:tunnel_key(),
+    Framed = <<(byte_size(Datagram)):16, Datagram/binary>>,
+    Pool ! {macula_event, make_ref(), Topic, macula_dist_bridge:encrypt(Key, Framed),
+            #{realm => ?DIST_REALM, publisher => ?PEER, publisher_verified => true,
+              seq => Seq, delivered_via => direct,
+              publication_hash => crypto:hash(sha384, <<?PEER/binary, Seq:64>>),
+              expires_at => erlang:system_time(millisecond) + 60_000}},
+    ok.
 
 %% What the pool was last subscribed with, once it has been, or `none' when the
 %% setup has not got that far inside the window.
@@ -181,20 +308,35 @@ subscription_recorded(Pool, Timeout) ->
             Recorded
     end.
 
-%% gen_server callbacks for the recording pool.
-init(recording_pool) ->
-    {ok, none}.
+%% gen_server callbacks for the recording pool. It counts subscriptions and keeps
+%% the last one's subscriber, because "how many subscriptions a tunnel holds, and
+%% whose they are" is the property the reorder in macula#157 changed.
+init({recording_pool, Mode}) ->
+    {ok, #{mode => Mode, count => 0, last => undefined}}.
 
-handle_call({subscribe, _Realm, Topic, _Subscriber, Opts}, _From, _State) ->
-    {reply, {ok, make_ref()}, {Topic, Opts}};
+handle_call({subscribe, _Realm, Topic, Subscriber, Opts}, _From, #{mode := Mode} = State) ->
+    Recorded = #{count => maps:get(count, State) + 1,
+                 last => {Topic, Opts, Subscriber}},
+    {reply, subscribe_reply(Mode), maps:merge(State, Recorded)};
+handle_call(subscription, _From, #{last := undefined} = State) ->
+    {reply, none, State};
+handle_call(subscription, _From, #{last := {Topic, Opts, _Subscriber}} = State) ->
+    {reply, {Topic, Opts}, State};
+handle_call(subscriptions, _From, #{count := Count, last := undefined} = State) ->
+    {reply, {Count, none}, State};
+handle_call(subscriptions, _From, #{count := Count, last := {_, _, Subscriber}} = State) ->
+    {reply, {Count, Subscriber}, State};
 handle_call({unsubscribe, _Ref}, _From, State) ->
     {reply, ok, State};
 handle_call({publish, _Realm, _Topic, _Payload, _Opts}, _From, State) ->
     {reply, ok, State};
-handle_call(subscription, _From, State) ->
-    {reply, State, State};
 handle_call(_Request, _From, State) ->
     {reply, {error, unknown}, State}.
+
+%% A refusing pool answers the subscription with an error, which is a bridge whose
+%% `init' cannot subscribe and therefore cannot start.
+subscribe_reply(refuse) -> {error, <<"nope">>};
+subscribe_reply(accept) -> {ok, make_ref()}.
 
 handle_cast(_Msg, State) ->
     {noreply, State}.

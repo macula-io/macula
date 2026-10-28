@@ -35,6 +35,12 @@
 -export([start_link/1]).
 -export([init/1, handle_info/2, handle_cast/2, handle_call/3, terminate/2]).
 
+-ifdef(TEST).
+%% The tunnel's own encryption, exported so a test can stand in for the peer's
+%% publication and read what reaches the socket.
+-export([encrypt/2]).
+-endif.
+
 -define(BRIDGE_RECV_TIMEOUT, 60000).
 -define(BACKPRESSURE_HWM, 64).
 -define(RECONNECT_INTERVAL, 2000).

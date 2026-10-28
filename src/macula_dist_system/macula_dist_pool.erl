@@ -38,10 +38,10 @@
 -export([get_tunnel_metrics/0, get_tunnel_metrics/1]).
 
 -ifdef(TEST).
-%% Readers of decoded tunnel RPC payloads, and the two ends of the peer
-%% declaration, exported for unit tests.
+%% Readers of decoded tunnel RPC payloads, the two ends of the peer declaration,
+%% and the tunnel key, exported for unit tests.
 -export([tunnel_reply/1, tunnel_request_from_node/1, peer_source/1,
-         handle_tunnel_request/1, on_tunnel_rpc_reply/2]).
+         handle_tunnel_request/1, on_tunnel_rpc_reply/2, tunnel_key/0]).
 -endif.
 
 %% Must be shorter than OTP's SetupTime. Default SetupTime is 7000ms
@@ -299,50 +299,58 @@ spawn_accept_bridge(Pool, Caller, TunnelId, SendTopic, RecvTopic) ->
 dist_accept_setup(Pool, Caller, TunnelId, SendTopic, RecvTopic) ->
     Self = self(),
     Key = tunnel_key(),
-
-    %% Subscribe for buffering before kernel knows about us. The V2
-    %% pool delivers `{macula_event, SubRef, Topic, Payload, Meta}'
-    %% to Self directly; no callback indirection. The tunnel carries bytes from
-    %% the one node that requested it, so that node is the only publisher these
-    %% topics accept (macula#156).
     Source = peer_source(Caller),
-    {ok, BufferSubRef} = macula_pubsub:subscribe(Pool, ?DIST_REALM,
-                                                  RecvTopic, Self, Source),
-
     {DistSock, BridgeSock} = create_loopback_pair(),
 
-    on_kernel_lookup(whereis(net_kernel), Self, Pool, DistSock, BridgeSock,
-                     BufferSubRef, SendTopic, RecvTopic, TunnelId, Key, Source).
+    %% The bridge starts before the kernel is asked for a controller (macula#157).
+    %% It owns the tunnel's only subscription from that moment, so a fact that
+    %% arrives while the handshake is still in flight waits where it will be read
+    %% -- the bridge's mailbox, then the loopback socket -- instead of falling
+    %% into the gap between a buffer subscription's unsubscribe and the bridge's
+    %% subscribe. One subscription also means one copy: the pool fans a
+    %% publication out to every matching subscription, so two would double it.
+    on_bridge_started(start_supervised_bridge(Pool, BridgeSock, SendTopic, RecvTopic,
+                                              TunnelId, Key, Source),
+                      Self, DistSock, TunnelId).
 
-on_kernel_lookup(undefined, _Self, Pool, _DistSock, _BridgeSock, BufferSubRef,
-                 _SendTopic, _RecvTopic, _TunnelId, _Key, _Source) ->
+on_bridge_started({ok, Bridge}, Self, DistSock, TunnelId) ->
+    on_kernel_lookup(whereis(net_kernel), Self, Bridge, DistSock, TunnelId);
+on_bridge_started({error, Reason}, _Self, DistSock, TunnelId) ->
+    %% No bridge means no reader on the socket, so the handshake is not offered
+    %% to the kernel at all: it fails here, with the pair given up in one place,
+    %% rather than half-owned and half-read (macula#158).
+    _ = gen_tcp:close(DistSock),
+    ?LOG_ERROR("[dist_bridge] Accept bridge did not start for ~s: ~p", [TunnelId, Reason]).
+
+on_kernel_lookup(undefined, _Self, Bridge, DistSock, TunnelId) ->
     ?LOG_WARNING("[dist_bridge] net_kernel not found"),
-    macula_pubsub:unsubscribe(Pool, BufferSubRef);
-on_kernel_lookup(KernelPid, Self, Pool, DistSock, BridgeSock, BufferSubRef,
-                 SendTopic, RecvTopic, TunnelId, Key, Source) ->
-    negotiate_with_kernel(Self, KernelPid, Pool, DistSock, BridgeSock,
-                          BufferSubRef, SendTopic, RecvTopic, TunnelId, Key, Source).
+    abandon_accept(Bridge, DistSock, TunnelId);
+on_kernel_lookup(KernelPid, Self, Bridge, DistSock, TunnelId) ->
+    negotiate_with_kernel(Self, KernelPid, Bridge, DistSock, TunnelId).
 
-negotiate_with_kernel(Self, KernelPid, Pool, DistSock, BridgeSock,
-                      BufferSubRef, SendTopic, RecvTopic, TunnelId, Key, Source) ->
+negotiate_with_kernel(Self, KernelPid, Bridge, DistSock, TunnelId) ->
     KernelPid ! {accept, Self, DistSock, inet, macula_dist},
     receive
         {KernelPid, controller, DistCtrl} ->
             DistCtrl ! {Self, controller, ok, <<>>},
             %% Transfer DistSock to the dist controller so it survives
-            %% when this setup process exits.
-            gen_tcp:controlling_process(DistSock, DistCtrl),
-            macula_pubsub:unsubscribe(Pool, BufferSubRef),
-            flush_buffered_to_socket(BridgeSock, Key, BufferSubRef, TunnelId),
-            start_supervised_bridge(Pool, BridgeSock, SendTopic, RecvTopic,
-                                     TunnelId, Key, Source);
+            %% when this setup process exits. The bridge keeps the other end and
+            %% keeps reading it; nothing is handed over between subscriptions.
+            gen_tcp:controlling_process(DistSock, DistCtrl);
         {KernelPid, unsupported_protocol} ->
             ?LOG_WARNING("[dist_bridge] Unsupported protocol"),
-            macula_pubsub:unsubscribe(Pool, BufferSubRef)
+            abandon_accept(Bridge, DistSock, TunnelId)
     after ?CONTROLLER_TIMEOUT ->
         ?LOG_WARNING("[dist_bridge] Controller timeout"),
-        macula_pubsub:unsubscribe(Pool, BufferSubRef)
+        abandon_accept(Bridge, DistSock, TunnelId)
     end.
+
+%% The kernel never took the socket: the bridge goes with it, so no subscription
+%% and no socket outlive the handshake that did not complete.
+abandon_accept(Bridge, DistSock, TunnelId) ->
+    _ = gen_tcp:close(DistSock),
+    _ = catch gen_server:stop(Bridge, normal, 5000),
+    ?LOG_WARNING("[dist_bridge] Accept abandoned for ~s", [TunnelId]).
 
 %%%===================================================================
 %%% Internal — Connect-side Bridge Creation
@@ -426,39 +434,3 @@ create_loopback_pair() ->
     gen_tcp:close(LSock),
     inet:setopts(ASock, [{packet, raw}, {nodelay, true}]),
     {CSock, ASock}.
-
-%% Drain the buffered events that arrived while net_kernel was still
-%% setting up the dist controller. The V2 pool delivers a tagged
-%% 5-tuple — match on the SubRef we used to subscribe so we don't
-%% accidentally consume unrelated events (the same process may host
-%% other subscriptions during setup). `macula_event_gone' is the
-%% terminal signal sent once the subscription tears down.
-flush_buffered_to_socket(BridgeSock, Key, SubRef, TunnelId) ->
-    receive
-        {macula_event, SubRef, _Topic, EncData, _Meta} ->
-            ship_buffered(BridgeSock, decrypt(Key, EncData), TunnelId),
-            flush_buffered_to_socket(BridgeSock, Key, SubRef, TunnelId);
-        {macula_event_gone, SubRef, _Reason} ->
-            ok
-    after 0 ->
-        ok
-    end.
-
-%% A buffered fact reaches the socket as the bytes it decrypts to, and one that
-%% does not decrypt is dropped: writing its ciphertext instead would put framing
-%% the tunnel never wrote into the distribution stream (macula#156). Only the
-%% tunnel's own peer can get this far, and it is still wrong to forward.
-ship_buffered(BridgeSock, {ok, Data}, _TunnelId) ->
-    gen_tcp:send(BridgeSock, Data);
-ship_buffered(_BridgeSock, {error, decrypt_failed}, TunnelId) ->
-    ?LOG_WARNING("[dist_bridge] Buffered fact for ~s did not decrypt, dropped",
-                 [TunnelId]).
-
-decrypt(Key, <<Nonce:12/binary, Tag:16/binary, Ciphertext/binary>>) ->
-    aead_decrypt(crypto:crypto_one_time_aead(
-                   aes_256_gcm, Key, Nonce, Ciphertext, <<>>, Tag, false));
-decrypt(_Key, _Data) ->
-    {error, decrypt_failed}.
-
-aead_decrypt(error)     -> {error, decrypt_failed};
-aead_decrypt(Plaintext) -> {ok, Plaintext}.
