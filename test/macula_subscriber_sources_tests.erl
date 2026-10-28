@@ -351,25 +351,54 @@ the_cache_life_caps_a_long_record_test() ->
     ?assertMatch({ok, admit, _, _}, macula_subscriber_sources:cache_get(Cache, key(?PUB), Now + Ttl - 1)),
     ?assertMatch({miss, _}, macula_subscriber_sources:cache_get(Cache, key(?PUB), Now + Ttl)).
 
+%% A verdict that lives shorter than the refresh margin is refreshed halfway
+%% through its life, not before it begins -- the margin is capped at half the
+%% life. Caching one used to raise inside the pool instead: the capped margin was
+%% matched back onto the argument it was computed from, so every verdict living
+%% under twice the margin (a refusal, at 30 s, always) killed the pool that
+%% cached it.
+a_verdict_living_under_the_margin_refreshes_at_half_its_life_test() ->
+    Now = now_ms(),
+    Bounds = bounds(),
+    ?assertEqual(60_000, maps:get(refresh_margin_ms, Bounds)),
+    Admitted = macula_subscriber_sources:cache_put(#{}, key(?PUB), admit, Now + 60_000, Bounds, Now),
+    {ok, admit, RefreshAt, _} = macula_subscriber_sources:cache_get(Admitted, key(?PUB), Now),
+    ?assertEqual(Now + 30_000, RefreshAt),
+    %% A refusal rests on no record, so it lives the refusal TTL (30 s), which is
+    %% itself under the margin.
+    Refused = macula_subscriber_sources:cache_put(#{}, key(?OTHER_PUB),
+                                                  {refuse, not_found}, undefined, Bounds, Now),
+    {ok, {refuse, not_found}, RefusalRefreshAt, _} =
+        macula_subscriber_sources:cache_get(Refused, key(?OTHER_PUB), Now),
+    ?assertEqual(Now + 15_000, RefusalRefreshAt).
+
 %% A verdict that is still in use is refreshed before it expires (§6.3), once per
 %% life of the entry: a steady publisher therefore never waits on a lookup.
 a_verdict_still_in_use_is_refreshed_before_it_expires_test_() ->
     {timeout, 30, fun() ->
-        Until = now_ms() + 600,
-        {Pool, _RealmKey, _} = start(#{subscribe_sources => #{refresh_margin_ms => 100}},
-                                     members, reporting({admit, Until})),
+        %% The record's life is counted from the lookup that reads it, never from
+        %% the test's start (the pool's own keygen sits in between, and a life
+        %% that began before it is half spent before the first fact arrives), and
+        %% the lookup holds its answer until this test sends one, so the refresh
+        %% is waited for rather than raced against.
+        {Pool, _RealmKey, Test} = start(#{subscribe_sources => #{refresh_margin_ms => 500}},
+                                        members, controlled()),
         inject(Pool, ?TOPIC, ?PUB, 1, direct),
+        {First, [?PUB]} = await_lookup(Test),
+        First ! {verdict, {admit, now_ms() + 2000}},
         ?assertEqual([1], collect(1, 1000)),
-        %% The entry's own refresh moment is 100 ms before it expires, so a fact
-        %% arriving now is served from the cache without another lookup.
+        %% The refresh moment is 500 ms before the entry expires, so a fact
+        %% arriving now is served from the entry without a lookup of its own.
         inject(Pool, ?TOPIC, ?PUB, 2, direct),
         ?assertEqual([2], collect(1, 1000)),
-        ?assertEqual([?PUB], looked_up()),
-        timer:sleep(450),
-        %% Past that moment, the next fact refreshes while it is served.
+        ?assertEqual({none, []}, await_lookup(Test, [], 200)),
+        %% Past that moment the next fact is still served from the entry, and one
+        %% refresh starts behind it.
+        timer:sleep(1600),
         inject(Pool, ?TOPIC, ?PUB, 3, direct),
         ?assertEqual([3], collect(1, 1000)),
-        ?assertEqual([?PUB, ?PUB], looked_up()),
+        {Refresh, [?PUB]} = await_lookup(Test),
+        Refresh ! {verdict, {admit, now_ms() + 2000}},
         stop(Pool)
     end}.
 
@@ -400,11 +429,23 @@ start(ConnOpts, Sources) ->
 
 start(ConnOpts, Sources, Lookup) ->
     {ok, _} = application:ensure_all_started(macula),
+    %% eunit runs a module's tests in one process, so a message an earlier test
+    %% left behind (a lookup report it never drained, a `macula_event_gone') is
+    %% still in the mailbox when this one counts what it sees. Drain it before
+    %% anything of this test's can be in flight.
+    drain(),
     #{realm_key := RealmKey} = parties(),
     {ok, Pool} = macula_client:connect([], ConnOpts#{realm_trust => #{?REALM => carried(RealmKey)},
                                                      source_lookup => Lookup}),
     _ = subscribed(Pool, Sources),
     {Pool, RealmKey, self()}.
+
+drain() ->
+    receive
+        _Stale -> drain()
+    after 0 ->
+        ok
+    end.
 
 %% `as_arrives': these tests are about who may deliver, not about the reorder
 %% buffer, and `ordered' would hold a new publisher's first fact for its timeout

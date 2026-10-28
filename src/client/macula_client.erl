@@ -2235,26 +2235,9 @@ handle_info({macula_event, _LinkSubRef, Topic, Payload,
     {noreply, on_inbound_event(matching_subscriptions(Realm, Topic, S),
                                Hash, ExpiresAt, Topic, Payload, Meta, S)};
 
-handle_info({source_verdict, Key, Outcome}, #state{source_inflight = Inflight} = S)
-  when is_map_key(Key, Inflight) ->
-    {Mon, _Worker, Deadline} = map_get(Key, Inflight),
-    _ = erlang:cancel_timer(Deadline),
-    true = erlang:demonitor(Mon, [flush]),
-    {noreply, verdict_arrived(Key, Outcome, S#state{source_inflight = maps:remove(Key, Inflight)})};
-
-%% A lookup worker that died before answering: the fact waits no longer, and
-%% nothing is cached, so the next fact from that publisher asks again.
-handle_info({source_lookup, _Mon, process, Worker, _Reason}, #state{source_inflight = Inflight} = S) ->
-    {noreply, lost_lookup(inflight_key(Worker, Inflight), S)};
-
-%% A lookup that blew its deadline is ended, and what waited behind it is
-%% dropped and counted: a lookup that never answers must not hold a publisher's
-%% facts until they expire one by one.
-handle_info({source_lookup_timeout, Key}, #state{source_inflight = Inflight} = S)
-  when is_map_key(Key, Inflight) ->
-    {_Mon, Worker, _Deadline} = map_get(Key, Inflight),
-    exit(Worker, kill),
-    {noreply, lost_lookup(Key, S)};
+handle_info({source_verdict, Key, Outcome}, S) -> {noreply, source_answered(Key, Outcome, S)};
+handle_info({source_lookup, _Mon, process, Worker, _Reason}, S) -> {noreply, source_worker_gone(Worker, S)};
+handle_info({source_lookup_timeout, Key}, S) -> {noreply, source_deadline_passed(Key, S)};
 
 handle_info({macula_event_gone, _LinkSubRef, _Reason}, S) ->
     %% A link torn down its subscription end. Pool will respawn the
@@ -4612,6 +4595,36 @@ holding(true, Key, SubRef, Topic, Payload, Meta, Held, S) ->
 holding(false, _Key, _SubRef, _Topic, _Payload, _Meta, _Held, S) ->
     count_dropped(held_full, S).
 
+%% The worker answered in time: its monitor and its deadline go with the verdict.
+%% An answer for a key no longer in flight is a late copy -- its deadline already
+%% ended that lookup, or its monitor already reported it -- and changes nothing.
+source_answered(Key, Outcome, S) ->
+    answered(maps:take(Key, S#state.source_inflight), Key, Outcome, S).
+
+answered(error, _Key, _Outcome, S) ->
+    S;
+answered({{Mon, _Worker, Deadline}, Inflight}, Key, Outcome, S) ->
+    _ = erlang:cancel_timer(Deadline),
+    true = erlang:demonitor(Mon, [flush]),
+    verdict_arrived(Key, Outcome, S#state{source_inflight = Inflight}).
+
+%% A lookup worker that died before answering: the fact waits no longer, and
+%% nothing is cached, so the next fact from that publisher asks again.
+source_worker_gone(Worker, #state{source_inflight = Inflight} = S) ->
+    lost_lookup(inflight_key(Worker, Inflight), S).
+
+%% A lookup that blew its deadline is ended, and what waited behind it is dropped
+%% and counted: a lookup that never answers must not hold a publisher's facts
+%% until they expire one by one.
+source_deadline_passed(Key, S) ->
+    deadline_passed(maps:find(Key, S#state.source_inflight), Key, S).
+
+deadline_passed(error, _Key, S) ->
+    S;
+deadline_passed({ok, {_Mon, Worker, _Deadline}}, Key, S) ->
+    exit(Worker, kill),
+    lost_lookup(Key, S).
+
 %% The worker answered: cache a verdict, and release what waited behind it in
 %% arrival order. Anything it could not find out is not a verdict -- nothing is
 %% cached, so the next fact asks again within the lookup window -- and what waited
@@ -4629,16 +4642,21 @@ cached_verdict(Key, Verdict, Until, S) ->
                                 S#state.source_bounds, erlang:system_time(millisecond))}.
 
 release_held(Key, Verdict, S) ->
-    case maps:take(Key, S#state.source_held) of
-        error -> S;
-        {Held, Rest} ->
-            %% A released fact goes through this subscription's delivery ordering
-            %% exactly as one that never waited, so the reorder-buffer's flush
-            %% timer is armed here as `on_sighting/7' arms it: without it a fact
-            %% buffered for order would sit until some later publication armed it.
-            ensure_flush_timer(lists:foldl(fun(Fact, Acc) -> released(Verdict, Fact, Acc) end,
-                                           S#state{source_held = Rest}, lists:reverse(Held)))
-    end.
+    released_facts(maps:take(Key, S#state.source_held), Verdict, S).
+
+released_facts(error, _Verdict, S) ->
+    S;
+released_facts({Held, Rest}, Verdict, S) ->
+    %% A released fact goes through this subscription's delivery ordering exactly
+    %% as one that never waited, so the reorder-buffer's flush timer is armed here
+    %% as `on_sighting/7' arms it: without it a fact buffered for order would sit
+    %% until some later publication armed it.
+    ensure_flush_timer(release_each(lists:reverse(Held), Verdict, S#state{source_held = Rest})).
+
+release_each([], _Verdict, S) ->
+    S;
+release_each([Fact | Facts], Verdict, S) ->
+    release_each(Facts, Verdict, released(Verdict, Fact, S)).
 
 released(admit, {_SubRef, _Topic, _Payload, #{expires_at := ExpiresAt}} = Fact, S) ->
     expired_while_held(ExpiresAt, Fact, S);
@@ -4664,12 +4682,17 @@ deliver_held(SubRef, Topic, Payload, Meta, S) ->
     end.
 
 drop_held(Key, Reason, S) ->
-    case maps:take(Key, S#state.source_held) of
-        error -> S;
-        {Held, Rest} ->
-            Counted = S#state{source_held = Rest},
-            lists:foldl(fun(_Fact, Acc) -> count_dropped(Reason, Acc) end, Counted, Held)
-    end.
+    dropped_facts(maps:take(Key, S#state.source_held), Reason, S).
+
+dropped_facts(error, _Reason, S) ->
+    S;
+dropped_facts({Held, Rest}, Reason, S) ->
+    count_each_dropped(Held, Reason, S#state{source_held = Rest}).
+
+count_each_dropped([], _Reason, S) ->
+    S;
+count_each_dropped([_Fact | Facts], Reason, S) ->
+    count_each_dropped(Facts, Reason, count_dropped(Reason, S)).
 
 %% The cache key whose worker just died, or none when its verdict already landed
 %% (the answer is always sent before the worker exits).

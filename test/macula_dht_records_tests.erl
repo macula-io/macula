@@ -1,7 +1,7 @@
 %% EUnit tests for the DHT record paths of the macula facade: a record is put as its wire form in the 1.0 argument
 %% shape, a station's reply is read in the 1.0 reply shape (WIRE_1_0.md section 6), and a record reaches a caller of a
 %% find or a subscription only after it verifies under the node's crypto profile. The pool's RPC is mocked at
-%% macula_client:call_linked_station/5 and the subscription at macula_pubsub:subscribe_callback/4; what a station
+%% macula_client:call_linked_station/5 and the subscription at macula_pubsub:subscribe_callback/5; what a station
 %% does with the bytes is the station's.
 -module(macula_dht_records_tests).
 
@@ -97,9 +97,16 @@ records_found_by_type_that_do_not_verify_are_dropped(#{key := Key} = Keys) ->
 a_subscription_delivers_only_verified_records(#{key := Key} = Keys) ->
     Test = self(),
     ok = meck:expect(macula_pubsub, subscribe_callback,
-                     fun(_Pool, _Realm, _Topic, Wrapped) -> Test ! {wrapped, Wrapped}, {ok, make_ref()} end),
+                     fun(_Pool, _Realm, _Topic, Wrapped, Opts) ->
+                             Test ! {wrapped, Wrapped, Opts},
+                             {ok, make_ref()}
+                     end),
     {ok, _Ref} = macula:subscribe_records(self(), 1, fun(Record) -> Test ! {delivered, Record} end),
-    Wrapped = receive {wrapped, Fun} -> Fun after 1000 -> erlang:error(not_subscribed) end,
+    {Wrapped, Opts} = receive {wrapped, Fun, O} -> {Fun, O} after 1000 -> erlang:error(not_subscribed) end,
+    %% The SDK's own record feed declares `open' explicitly: what protects it is
+    %% the record's verification under the pinned key, not the publisher's
+    %% identity (macula#147).
+    ?assertEqual(#{sources => open}, Opts),
     Wrapped(<<"_dht.records.1.stored">>, tampered(node_record(Keys)), #{}),
     Wrapped(<<"_dht.records.1.stored">>, macula_record:encode(node_record(Keys)), #{}),
     Wrapped(<<"_dht.records.1.stored">>, #{not_a => record}, #{}),

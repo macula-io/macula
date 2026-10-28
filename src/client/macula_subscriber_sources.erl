@@ -251,8 +251,8 @@ cache_put(Cache, {Realm, _Source, _Publisher} = Key, Verdict, Until, Bounds, Now
 %% life: a record living under the margin would otherwise be looked up once per
 %% fact instead of once per life.
 refresh_at(ExpiresAt, Now, Margin) ->
-    Margin = min(Margin, (ExpiresAt - Now) div 2),
-    ExpiresAt - Margin.
+    Applied = min(Margin, (ExpiresAt - Now) div 2),
+    ExpiresAt - Applied.
 
 %% A verdict never outlives the cache TTL, and an admission never outlives the
 %% record that admitted it. Only a refusal reaches the second clause without an
