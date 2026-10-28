@@ -91,13 +91,14 @@ a test you have just written.
 - **Line coverage has a floor, and it only goes up.** CI merges the eunit and
   ct suites' line coverage and fails below 82%
   (`scripts/is_line_coverage_at_least_the_floor.sh`). The floor is main's
-  measured value rounded down to a whole percent: 82.06% over 125 modules,
-  10613 of 12934 executable lines, measured in CI on 28 October 2026, so 82.
-  That is deliberately no headroom — a change that leaves new code untested is
-  meant to be red here. A change that raises coverage raises the number in the
-  same commit. Lowering it is a reviewed decision about which lines stop being
-  tested, stated in the commit that does it; it is never done to turn a branch
-  green. To see where a change stands:
+  measured value rounded down to a whole percent: across CI runs on 28 October
+  2026 it read 10612-10613 of 12934 executable lines, 82.05-82.06%, so 82.
+  That leaves about six covered lines of headroom, deliberately — a change
+  that leaves new code untested is meant to be red here, and a line or two
+  moving between runs is not a reason to give it room. A change that raises
+  coverage raises the number in the same commit. Lowering it is a reviewed
+  decision about which lines stop being tested, stated in the commit that does
+  it; it is never done to turn a branch green. To see where a change stands:
 
   ```bash
   rebar3 eunit --cover

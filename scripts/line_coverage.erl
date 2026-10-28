@@ -6,11 +6,11 @@
 %% file. Line coverage is a property of the SUITE, not of one of its halves, so the numbers are merged here and
 %% the floor is applied to the merge (macula#153).
 %%
-%% What that merge is worth today, measured rather than assumed: on 2026-10-28 CI read 10613 covered lines of
-%% 12934 executable ones over 125 modules (82.06%), and eunit alone accounts for all but a couple of them. The two
-%% halves overlap almost entirely at the moment. The merge is still the right shape: which modules ct reaches is an
-%% accident of which fleets the suites build, and a number that leaves a suite out must not quietly look complete
-%% when that changes.
+%% What that merge is worth today, measured rather than assumed: across CI runs on 2026-10-28 it read 10612-10613
+%% covered lines of 12934 executable ones over 125 modules (82.05-82.06%), and eunit alone accounts for all but a
+%% couple of them. The two halves overlap almost entirely at the moment. The merge is still the right shape: which
+%% modules ct reaches is an accident of which fleets the suites build, and a number that leaves a suite out must not
+%% quietly look complete when that changes.
 %%
 %% The merge is cover's own: importing several export files into one node adds their per-line hit counts when
 %% analysed (cover:import/1, OTP tools). A line either suite executed counts as covered once. Doing the union by

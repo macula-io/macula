@@ -7,12 +7,13 @@
 #
 # Usage: bash scripts/is_line_coverage_at_least_the_floor.sh <eunit.coverdata> <ct.coverdata> [...]
 #
-# THE FLOOR ONLY GOES UP. It is main's measured line coverage, rounded down to a whole percent: 82.06% over
-# 125 modules (10613 of 12934 executable lines), measured in CI on 2026-10-28, so 82. That is deliberately no
-# headroom — a change that leaves new code untested is meant to be red here. A change that raises coverage raises
-# this number in the same commit. Lowering it is a reviewed decision about which lines stop being tested, stated
-# in the commit that does it, and never something done to turn a branch green. CONTRIBUTING, Testing, says the
-# same where someone writing a test will read it.
+# THE FLOOR ONLY GOES UP. It is main's measured line coverage, rounded down to a whole percent: across CI runs on
+# 2026-10-28 it read 10612-10613 of 12934 executable lines, 82.05-82.06%, so 82. That leaves about six covered
+# lines of headroom, deliberately: a change that leaves new code untested is meant to be red here, and a line or
+# two moving between runs is not a reason to give it room. A change that raises coverage raises this number in the
+# same commit. Lowering it is a reviewed decision about which lines stop being tested, stated in the commit that
+# does it, and never something done to turn a branch green. CONTRIBUTING, Testing, says the same where someone
+# writing a test will read it.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
