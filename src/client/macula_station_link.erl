@@ -2181,18 +2181,17 @@ quic_event({quic, send_failed, Stream, Reason}, #state{stream_bufs = Bufs} = S)
         when is_map_key(Stream, Bufs) ->
     {noreply, end_sessions_on_stream(Stream, {send_failed, Reason}, S)};
 
-%% A dedicated stream QUIC closed, or the peer finished, under open sessions:
-%% nothing more can arrive on it, so they end as for a failed write. The
-%% station relay closes a session's streams only once both sides have ended,
-%% or when it gives the session up (its lifetime, a lost relay), and a
-%% half-close is a STREAM_END frame, never a QUIC close. Before these clauses
-%% the event fell to the catch-all, and a reader waited for ever.
+%% A dedicated stream QUIC closed under open sessions (the station relay gave the session up:
+%% its lifetime ran out, or the relay was lost, or the peer reset its send side): nothing more
+%% can arrive on it and nothing can be written, so they end as for a failed write.
 quic_event({quic, stream_closed, Stream, Flags}, #state{stream_bufs = Bufs} = S)
         when is_map_key(Stream, Bufs) ->
     {noreply, end_sessions_on_stream(Stream, {stream_closed, Flags}, S)};
+%% The peer finished sending on a dedicated stream: its QUIC FIN, the transport's half-close,
+%% which is no session's end (`peer_finished_on_stream/2').
 quic_event({quic, peer_send_shutdown, Stream, _}, #state{stream_bufs = Bufs} = S)
         when is_map_key(Stream, Bufs) ->
-    {noreply, end_sessions_on_stream(Stream, peer_send_shutdown, S)};
+    {noreply, peer_finished_on_stream(Stream, S)};
 %% A stream that closes before its STREAM_OPEN completed carries no session.
 quic_event({quic, Closed, Stream, _}, #state{opening_bufs = Opening} = S)
         when (Closed =:= stream_closed orelse Closed =:= peer_send_shutdown),
@@ -4603,6 +4602,25 @@ end_malformed_dedicated({ended, S}, _Stream, _Reason) ->
 unknown_frame_on_stream(Stream, Unknown, #state{reset_stream = Reset} = S) ->
     _ = Reset(Stream, unknown_frame_type),
     end_sessions_on_stream(Stream, {malformed, Unknown}, S).
+
+%% The peer finished sending on `Stream' — its QUIC FIN — so no more of its frames will ever
+%% arrive on it, though this side may still write. Each session the stream carries hears that and
+%% decides: one that has already had the peer's last frame (an end, an error, a reply) has
+%% everything it was waiting for and goes on writing, so a caller that half-closes its write side
+%% after its own STREAM_END still gets the provider's reply (macula#145; a reply set afterwards
+%% was dropped because the session had already been aborted and its routing gone). One still
+%% waiting for that frame will never get it, and ends as a lost link ends it. A stream carrying
+%% no session has nothing left to say at all, and closes here.
+peer_finished_on_stream(Stream, #state{client_streams = CS, server_streams = SS} = S) ->
+    Carried = lists:usort([{Sid, Pid} || {Sid, {Pid, _Mon, On}} <- maps:to_list(CS) ++ maps:to_list(SS),
+                                         On =:= Stream]),
+    peer_finished_on_stream(Stream, Carried, S).
+
+peer_finished_on_stream(Stream, [], S) ->
+    end_sessions_on_stream(Stream, peer_send_shutdown, S);
+peer_finished_on_stream(_Stream, Carried, S) ->
+    _ = [Pid ! {stream_read_closed, Sid, peer_send_shutdown} || {Sid, Pid} <- Carried],
+    S.
 
 %% End every session carried by `Stream' once a write on it failed, or once
 %% its bytes turned out not to be frames this link accepts: abort each

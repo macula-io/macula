@@ -645,6 +645,13 @@ handle_info({reopened, Ref, Result}, #state{reopening = {Ref, Queued}} = State) 
 handle_info({stream_write_failed, Sid, Reason}, #state{id = Sid} = State) ->
     {noreply, transport_failed({error, {transport, Reason}}, State)};
 
+%% The peer finished sending on this stream's transport (its QUIC write side closed), so no more of its frames will
+%% ever arrive. A session that has already had the peer's last frame has all it was waiting for and goes on writing: a
+%% caller that half-closes after its own STREAM_END still gets the provider's reply (macula#145). One still waiting for
+%% that frame will never get it, and ends as a lost link ends it.
+handle_info({stream_read_closed, Sid, Reason}, #state{id = Sid} = State) ->
+    {noreply, read_closed(Reason, State)};
+
 handle_info(_Msg, State) ->
     {noreply, State}.
 
@@ -994,6 +1001,18 @@ ended_with(Err, State) ->
 %% A transport failure ends the session too, and the owner is told.
 transport_failed(Err, #state{reply = Reply} = State) ->
     session_ended(Err, ended_with(Err, State#state{peer = undefined, reply = first_reply(Reply, Err)})).
+
+%% @private The peer's write side closed on the transport. A session that has already had the peer's last frame -- an
+%% end, an error, a reply -- is not waiting for anything more of it, and keeps the end its own frames give it. One that
+%% is still waiting for that frame ends as a lost link ends it, with the reason's name only.
+read_closed(_Reason, #state{ended = Ended} = State) when Ended =/= undefined ->
+    State;
+read_closed(_Reason, #state{closed_recv = true} = State) ->
+    State;
+read_closed(_Reason, #state{reply = Reply} = State) when Reply =/= undefined ->
+    State;
+read_closed(Reason, State) ->
+    abort_session(<<"disconnected">>, macula_reason_name:text(Reason), State).
 
 %% @private A frame of a type that belongs on the control stream has no place
 %% on a dedicated stream, in either profile. It is the connection peer's

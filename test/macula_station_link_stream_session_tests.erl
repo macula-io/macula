@@ -35,7 +35,8 @@ stream_session_test_() ->
                  fun a_disconnect_ends_open_sessions/0,
                  fun a_disconnect_tells_open_sessions_its_reasons_name_only/0,
                  fun a_closed_dedicated_stream_ends_its_session/0,
-                 fun a_dedicated_stream_the_peer_finished_ends_its_session/0]].
+                 fun a_dedicated_stream_the_peer_finished_ends_a_session_still_awaiting_it/0,
+                 fun a_session_that_had_the_peers_last_frame_writes_on_after_its_quic_fin/0]].
 
 %%------------------------------------------------------------------
 %% Cases
@@ -221,9 +222,8 @@ a_disconnect_tells_open_sessions_its_reasons_name_only() ->
     ?assertEqual({error, {<<"disconnected">>, <<"disconnected">>}}, macula_stream:await_reply(StreamPid, ?EVENT_MS)).
 
 %% A dedicated stream QUIC closes under an open session (the station relay gave the session up: its lifetime ran out,
-%% or the relay was lost) ends that session: a reader waiting on it gets a disconnected error instead of waiting for
-%% ever, the link closes the stream and stays up. A clean end never gets here: the relay closes a stream only once
-%% both sides have ended, and a half-close is a STREAM_END, not a QUIC close.
+%% or the relay was lost, or a peer reset its send side) ends that session: a reader waiting on it gets a disconnected
+%% error instead of waiting for ever, the link closes the stream and stays up. A clean peer FIN is not this event.
 a_closed_dedicated_stream_ends_its_session() ->
     #{link := Link} = World = linked(),
     #{stream := StreamPid, quic := Quic} = opened(World, macula_node_keys:key_id(key()), bidi),
@@ -233,13 +233,31 @@ a_closed_dedicated_stream_ends_its_session() ->
     ?assert(is_process_alive(Link)),
     stop(Link).
 
-%% Likewise a stream the peer finished (a QUIC FIN) while the session was open: nothing more can arrive on it.
-a_dedicated_stream_the_peer_finished_ends_its_session() ->
+%% A stream the peer finished (a QUIC FIN) while the session still awaited the peer's last frame: none will ever
+%% arrive on it, so the reader is told instead of waiting for ever.
+a_dedicated_stream_the_peer_finished_ends_a_session_still_awaiting_it() ->
     #{link := Link} = World = linked(),
     #{stream := StreamPid, quic := Quic} = opened(World, macula_node_keys:key_id(key()), bidi),
     Link ! {quic, peer_send_shutdown, Quic, undefined},
     ?assertMatch({error, {<<"disconnected">>, _}}, macula_stream:recv(StreamPid, ?EVENT_MS)),
     ?assert(is_process_alive(Link)),
+    stop(Link).
+
+%% But a peer that half-closes its QUIC write side once its own last frame is in has said everything this session
+%% waits for, and the session goes on to answer it: the caller writes, and the write reaches the stream (macula#145,
+%% the mirror of the served session whose reply was thrown away).
+a_session_that_had_the_peers_last_frame_writes_on_after_its_quic_fin() ->
+    #{link := Link} = World = linked(),
+    Provider = key(),
+    #{stream := StreamPid, quic := Quic, open := Open} = opened(World, macula_node_keys:key_id(Provider), bidi),
+    on_stream(Link, Quic, provider_frame(#{frame_type => stream_end, seq => 0, role => send}, Provider, Open)),
+    ?assertEqual(eof, macula_stream:recv(StreamPid, ?EVENT_MS)),
+    Link ! {quic, peer_send_shutdown, Quic, undefined},
+    _ = sys:get_state(Link),
+    ?assertEqual(ok, macula_stream:send(StreamPid, <<"still here">>)),
+    {ok, Written} = written_within(Quic, ?EVENT_MS),
+    ?assertMatch({ok, #{frame_type := stream_data, seq := 0, body := <<"still here">>}, _},
+                 macula_frame:verify_caller_stream(Written, macula_frame:open_stream(Open), profile())),
     stop(Link).
 
 %%------------------------------------------------------------------

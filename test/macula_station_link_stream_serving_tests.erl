@@ -53,7 +53,8 @@ stream_serving_test_() ->
                  fun a_served_handler_sees_the_verified_caller/0,
                  fun a_caller_serves_more_stream_opens_than_its_quota/0,
                  fun a_copy_of_a_live_stream_open_keeps_its_place/0,
-                 fun a_served_handler_sees_the_caller_of_a_non_map_open/0]]
+                 fun a_served_handler_sees_the_caller_of_a_non_map_open/0,
+                 fun a_callers_quic_half_close_after_its_stream_end_keeps_the_reply/0]]
     ++ [{"a served session leaves no process behind: " ++ Name,
          {timeout, 15, {spawn, fun() -> process_flag(trap_exit, true), served_sessions_end(Handler, Ending) end}}}
         || {Name, Handler, Ending} <- [{"the handler closes and returns", fun close_and_return/2, none},
@@ -579,6 +580,37 @@ a_served_handler_sees_the_caller_of_a_non_map_open() ->
                  receive {text_caller_seen, _, _} = Seen -> Seen after ?EVENT_MS -> none end),
     stop(Link).
 
+%% A caller that closes its QUIC write side once its STREAM_END is written -- the usual half-close, and what macula-go's
+%% caller does -- has sent the transport's FIN and nothing about the session: a handler that answers only after it has
+%% read the end still gets its STREAM_REPLY out, and the caller reads it (macula#145: the reply was thrown away and the
+%% caller saw its stream end with no frame at all).
+a_callers_quic_half_close_after_its_stream_end_keeps_the_reply() ->
+    #{link := Link} = World = linked(),
+    Test = self(),
+    Procedure = <<"foo.answers_after_eof">>,
+    ok = macula_station_link:advertise_stream(Link, ?REALM, Procedure, client_stream,
+                                              fun(Stream, _Args) ->
+                                                  Test ! {session_served, self()},
+                                                  read_to_the_end(Stream, []),
+                                                  Test ! read_the_end,
+                                                  receive answer_now -> ok end,
+                                                  macula_stream:set_reply(Stream, <<"x1,x2">>),
+                                                  macula_stream:close(Stream)
+                                              end),
+    Caller = key(),
+    #{quic := Quic, frame := Open} = opened_by_peer(World, Caller, Procedure, #{}, #{mode => client_stream}),
+    Handler = receive {session_served, Served} -> Served after ?EVENT_MS -> erlang:error(session_not_served) end,
+    on_stream(Link, Quic, caller_half_end(Caller, Open)),
+    ?assertEqual(read_the_end, receive read_the_end -> read_the_end after ?EVENT_MS -> not_read end),
+    %% The caller's FIN, once the end is written and before the handler answers. The link has
+    %% taken it in when it answers its own state.
+    Link ! {quic, peer_send_shutdown, Quic, undefined},
+    _ = sys:get_state(Link),
+    Handler ! answer_now,
+    {ok, Reply} = written_within(Quic, ?EVENT_MS),
+    ?assertMatch({ok, #{frame_type := stream_reply, payload := <<"x1,x2">>}}, provider_fields(Open, Reply)),
+    stop(Link).
+
 read_to_the_end(Stream, _Args) -> read_until_ended(macula_stream:recv(Stream, 5_000), Stream).
 
 read_until_ended({chunk, _Chunk}, Stream) -> read_until_ended(macula_stream:recv(Stream, 5_000), Stream);
@@ -831,6 +863,11 @@ caller_frame(Spec, Caller, OpenFrame) ->
 %% The caller's STREAM_END, as its first frame on the session.
 caller_stream_end(Caller, OpenFrame) ->
     caller_frame(#{frame_type => stream_end, seq => 0, role => both}, Caller, OpenFrame).
+
+%% The caller's STREAM_END of its own direction alone: what a caller that goes on to read the
+%% provider's answer sends, and what a caller that then closes its QUIC write side has wrapped up.
+caller_half_end(Caller, OpenFrame) ->
+    caller_frame(#{frame_type => stream_end, seq => 0, role => send}, Caller, OpenFrame).
 
 %% The fields of a provider frame the link wrote, verified as the provider's first frame under the open it answers.
 provider_fields(OpenFrame, Written) ->

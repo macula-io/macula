@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A caller that half-closes its QUIC write side still gets the provider's reply (macula#145).** A `client_stream`
+  caller that sends its STREAM_END and then closes its write direction — the usual half-close, and what macula-go
+  does — had its session ended by the station link on the transport's FIN, so the provider's STREAM_REPLY was dropped
+  and the caller saw its stream end with no frame at all. The link now tells the session that the peer finished
+  sending instead of ending it, and a session ends on that only where it still awaited the peer's last frame.
+
 ## [17.1.1] - 2026-10-27
 
 ### Fixed
