@@ -13,7 +13,11 @@
 %% (`macula_frame_request_tests:a_reply_from_a_node_other_than_the_target_is_refused').
 -module(macula_dist_tunnel_peer_tests).
 
+-behaviour(gen_server).
+
 -include_lib("eunit/include/eunit.hrl").
+
+-export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
 -define(DIST_REALM, <<0:256>>).
 -define(PEER, <<7:256>>).
@@ -62,6 +66,29 @@ a_tunnel_request_with_no_wire_authenticated_caller_is_refused_test() ->
     after
         persistent_term:erase(macula_dist_mesh_pool)
     end.
+
+%% The positive half of the refusal above, and the half that makes the test
+%% suite fail when the acceptance is weakened: a request that carries a caller
+%% reaches a subscription naming exactly that node, on the very topic the reply
+%% hands the peer, made by the code the tunnel path runs.
+the_accept_side_subscribes_for_the_caller_it_was_given_test_() ->
+    {timeout, 30, fun() ->
+        %% With no distribution started the setup stops at its kernel lookup, so
+        %% this exercises the subscription it makes and nothing beyond it.
+        ?assertEqual(undefined, whereis(net_kernel)),
+        {ok, Pool} = start_recording_pool(),
+        macula_dist_pool:register_mesh_pool(Pool),
+        try
+            {ok, Reply} = macula_dist_pool:handle_tunnel_request(
+                            #{caller => ?PEER, <<"from_node">> => <<"a@host">>}),
+            ?assertEqual({maps:get(<<"recv_topic">>, Reply),
+                          #{sources => {nodes, [?PEER]}}},
+                         subscription_recorded(Pool, 1000))
+        after
+            persistent_term:erase(macula_dist_mesh_pool),
+            stop_recording_pool(Pool)
+        end
+    end}.
 
 %%------------------------------------------------------------------
 %% The connect side: the provider the report named, made by the real path
@@ -117,6 +144,52 @@ drain() ->
 
 stop(Pool) ->
     try macula_client:close(Pool) catch _:_ -> ok end,
+    ok.
+
+%% A stand-in for a V2 pool: it answers the client calls the tunnel's setup makes
+%% and records the topic and options it was subscribed with, which is the only
+%% way to read a subscription's declaration from outside the pool.
+start_recording_pool() ->
+    gen_server:start(?MODULE, recording_pool, []).
+
+stop_recording_pool(Pool) ->
+    try gen_server:stop(Pool, normal, 1000) catch _:_ -> ok end.
+
+%% What the pool was last subscribed with, once it has been, or `none' when the
+%% setup has not got that far inside the window.
+subscription_recorded(_Pool, Timeout) when Timeout =< 0 ->
+    none;
+subscription_recorded(Pool, Timeout) ->
+    case gen_server:call(Pool, subscription, 1000) of
+        none ->
+            timer:sleep(20),
+            subscription_recorded(Pool, Timeout - 20);
+        Recorded ->
+            Recorded
+    end.
+
+%% gen_server callbacks for the recording pool.
+init(recording_pool) ->
+    {ok, none}.
+
+handle_call({subscribe, _Realm, Topic, _Subscriber, Opts}, _From, _State) ->
+    {reply, {ok, make_ref()}, {Topic, Opts}};
+handle_call({unsubscribe, _Ref}, _From, State) ->
+    {reply, ok, State};
+handle_call({publish, _Realm, _Topic, _Payload, _Opts}, _From, State) ->
+    {reply, ok, State};
+handle_call(subscription, _From, State) ->
+    {reply, State, State};
+handle_call(_Request, _From, State) ->
+    {reply, {error, unknown}, State}.
+
+handle_cast(_Msg, State) ->
+    {noreply, State}.
+
+handle_info(_Msg, State) ->
+    {noreply, State}.
+
+terminate(_Reason, _State) ->
     ok.
 
 %% Each (publisher, seq) stands in for one verified publication over the given
