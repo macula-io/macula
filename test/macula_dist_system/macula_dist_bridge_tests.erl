@@ -23,6 +23,9 @@
 
 -define(BRIDGE_RECV_TIMEOUT, 60000).
 
+%% The one publisher a tunnel's subscription names (macula#156).
+-define(TUNNEL_PEER, <<7:256>>).
+
 %%%===================================================================
 %%% Tests — Encryption roundtrip
 %%%===================================================================
@@ -130,12 +133,20 @@ bridge_init_and_tunnel_in_test_() ->
     {setup,
      fun setup_bridge/0,
      fun teardown_bridge/1,
-     fun(#{bridge := Bridge, sub_ref := SubRef,
+     fun(#{bridge := Bridge, sub_ref := SubRef, mock_pool := MockPool,
            bridge_sock_peer := BridgeSockPeer, key := Key}) ->
          [
           {"init succeeds and bridge is alive",
            fun() ->
                ?assert(is_process_alive(Bridge))
+           end},
+
+          %% A tunnel's subscription declares the one publisher its topics take
+          %% (macula#156), handed down from the negotiation that named the peer.
+          {"the subscription names the one peer the bridge was handed",
+           fun() ->
+               ?assertEqual(#{sources => {nodes, [?TUNNEL_PEER]}},
+                            last_subscription_opts(MockPool))
            end},
 
           {"tunnel_in decrypts and writes to BridgeSock",
@@ -207,6 +218,7 @@ bridge_metrics_updated_on_tunnel_in_test() ->
         recv_topic => <<"_dist.data.", TunnelId/binary, ".in">>,
         tunnel_id => TunnelId,
         key => Key,
+        source => #{sources => {nodes, [?TUNNEL_PEER]}},
         metrics => Metrics
     },
     {ok, Bridge} = macula_dist_bridge:start_link(Args),
@@ -242,7 +254,8 @@ bridge_metrics_updated_on_tunnel_in_test() ->
 
 -record(mock_pool, {
     subs    = #{} :: #{reference() => {binary(), binary(), pid()}},
-    last_sub = undefined :: {pid(), reference()} | undefined
+    last_sub = undefined :: {pid(), reference()} | undefined,
+    last_opts = undefined :: map() | undefined
 }).
 
 start_mock_pool() ->
@@ -255,16 +268,22 @@ stop_mock_pool(Pid) ->
 last_subscription(Pool) ->
     gen_server:call(Pool, last_subscription, 1_000).
 
+%% The options the bridge subscribed with: a tunnel's subscription declares the
+%% one publisher its topics take (macula#156), so a test reads them here.
+last_subscription_opts(Pool) ->
+    gen_server:call(Pool, last_subscription_opts, 1_000).
+
 %% gen_server callbacks for mock V2 pool.
 init(mock_pool) ->
     {ok, #mock_pool{}}.
 
-handle_call({subscribe, Realm, Topic, Subscriber, _Opts}, _From,
+handle_call({subscribe, Realm, Topic, Subscriber, Opts}, _From,
             #mock_pool{subs = Subs} = State) ->
     Ref = make_ref(),
     NewState = State#mock_pool{
         subs = Subs#{Ref => {Realm, Topic, Subscriber}},
-        last_sub = {Subscriber, Ref}
+        last_sub = {Subscriber, Ref},
+        last_opts = Opts
     },
     {reply, {ok, Ref}, NewState};
 handle_call({unsubscribe, Ref}, _From, #mock_pool{subs = Subs} = State) ->
@@ -273,6 +292,8 @@ handle_call({publish, _Realm, _Topic, _Payload, _Opts}, _From, State) ->
     {reply, ok, State};
 handle_call(last_subscription, _From, #mock_pool{last_sub = LS} = State) ->
     {reply, LS, State};
+handle_call(last_subscription_opts, _From, #mock_pool{last_opts = Opts} = State) ->
+    {reply, Opts, State};
 handle_call(_Req, _From, State) ->
     {reply, {error, unknown}, State}.
 
@@ -296,6 +317,9 @@ setup_bridge() ->
     Key = crypto:hash(sha256, <<"test-bridge-key">>),
     TunnelId = unique_tunnel_id(),
     Metrics = counters:new(4, [write_concurrency]),
+    %% The declaration the tunnel's subscription carries: this tunnel's one peer
+    %% (macula#156).
+    Source = #{sources => {nodes, [?TUNNEL_PEER]}},
     persistent_term:put(macula_dist_tunnels, #{TunnelId => Metrics}),
 
     Args = #{
@@ -305,6 +329,7 @@ setup_bridge() ->
         recv_topic => <<"_dist.data.", TunnelId/binary, ".in">>,
         tunnel_id => TunnelId,
         key => Key,
+        source => Source,
         metrics => Metrics
     },
     {ok, Bridge} = macula_dist_bridge:start_link(Args),

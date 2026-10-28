@@ -38,8 +38,10 @@
 -export([get_tunnel_metrics/0, get_tunnel_metrics/1]).
 
 -ifdef(TEST).
-%% Readers of decoded tunnel RPC payloads, exported for unit tests.
--export([tunnel_reply/1, tunnel_request_from_node/1]).
+%% Readers of decoded tunnel RPC payloads, and the two ends of the peer
+%% declaration, exported for unit tests.
+-export([tunnel_reply/1, tunnel_request_from_node/1, peer_source/1,
+         handle_tunnel_request/1, on_tunnel_rpc_reply/2]).
 -endif.
 
 %% Must be shorter than OTP's SetupTime. Default SetupTime is 7000ms
@@ -105,7 +107,12 @@ advertise_dist_accept() ->
             %% `open' is what this procedure had by the old default; naming it
             %% keeps the bridge's behaviour unchanged (macula#147 removed the
             %% default). Tightening it is a decision about distribution, not a
-            %% side effect of declaring call classes.
+            %% side effect of declaring call classes. It is not what names the
+            %% tunnel's peer: whoever calls this gets a tunnel whose topics only
+            %% they may publish on, named from the CALL's `caller' (macula#156),
+            %% and the bytes that tunnel carries are salted with the
+            %% distribution cookie (`tunnel_key/0'), so a caller gets a tunnel
+            %% into its own handshake and no further.
             macula_client:advertise(Pool, ?DIST_REALM, Procedure,
                                     fun handle_tunnel_request/1, open),
             ?LOG_INFO("[dist_pool] Advertised distribution accept: ~s", [Procedure]),
@@ -173,12 +180,14 @@ request_tunnel(Pool, NodeStr) ->
     ?LOG_INFO("[dist_pool] RPC ~s via ~p", [Procedure, Pool]),
     %% The tunnel procedure's provider is resolved through its
     %% advertisement and called at the station that advertisement names.
-    Result = macula:call(Pool, ?DIST_REALM, Procedure, Args,
-                         ?DIST_TIMEOUT),
+    %% The seal report names the provider the call was addressed to, which
+    %% is the peer of the tunnel it opens (macula#156): see `peer_source/1'.
+    Result = macula:call(Pool, ?DIST_REALM, Procedure, Args, ?DIST_TIMEOUT,
+                         #{report => true}),
     on_tunnel_rpc_reply(Result, Pool).
 
-on_tunnel_rpc_reply({ok, Reply}, Pool) when is_map(Reply) ->
-    on_tunnel_reply(tunnel_reply(Reply), Reply, Pool);
+on_tunnel_rpc_reply({ok, Reply, #{provider := Provider}}, Pool) when is_map(Reply) ->
+    on_tunnel_reply(tunnel_reply(Reply), Reply, Provider, Pool);
 on_tunnel_rpc_reply({error, Reason}, _Pool) ->
     ?LOG_WARNING("[dist_pool] Tunnel request failed: ~p", [Reason]),
     {error, {tunnel_failed, Reason}};
@@ -186,13 +195,14 @@ on_tunnel_rpc_reply(Other, _Pool) ->
     ?LOG_WARNING("[dist_pool] Unexpected RPC result: ~p", [Other]),
     {error, {unexpected_result, Other}}.
 
-on_tunnel_reply({tunnel, TunnelId}, _Reply, Pool) ->
-    ?LOG_INFO("[dist_pool] Tunnel established: ~s", [TunnelId]),
-    create_dist_socket(Pool, TunnelId);
-on_tunnel_reply({tunnel_error, ErrorInfo}, _Reply, _Pool) ->
+on_tunnel_reply({tunnel, TunnelId}, _Reply, Provider, Pool) ->
+    ?LOG_INFO("[dist_pool] Tunnel established with ~s: ~s",
+              [binary:encode_hex(Provider, lowercase), TunnelId]),
+    create_dist_socket(Pool, TunnelId, Provider);
+on_tunnel_reply({tunnel_error, ErrorInfo}, _Reply, _Provider, _Pool) ->
     ?LOG_WARNING("[dist_pool] Tunnel error: ~p", [ErrorInfo]),
     {error, {tunnel_error, ErrorInfo}};
-on_tunnel_reply(unexpected, Reply, _Pool) ->
+on_tunnel_reply(unexpected, Reply, _Provider, _Pool) ->
     ?LOG_WARNING("[dist_pool] Unexpected RPC result: ~p", [{ok, Reply}]),
     {error, {unexpected_result, {ok, Reply}}}.
 
@@ -231,23 +241,46 @@ handle_tunnel_request(Args) ->
     SendTopic = <<"_dist.data.", TunnelId/binary, ".in">>,
     RecvTopic = <<"_dist.data.", TunnelId/binary, ".out">>,
 
-    on_tunnel_request_pool(get_mesh_pool(), TunnelId, SendTopic, RecvTopic).
+    on_tunnel_request_pool(get_mesh_pool(), caller_id(Args), TunnelId,
+                           SendTopic, RecvTopic).
 
-on_tunnel_request_pool(undefined, _TunnelId, _SendTopic, _RecvTopic) ->
+%% The calling node's wire-authenticated node_id, merged into the handler's
+%% payload by the link (`with_caller/2'), and `undefined' when there is none.
+caller_id(Args) ->
+    maps:get(caller, Args, undefined).
+
+on_tunnel_request_pool(undefined, _Caller, _TunnelId, _SendTopic, _RecvTopic) ->
     {error, <<"no_mesh_pool">>};
-on_tunnel_request_pool(Pool, TunnelId, SendTopic, RecvTopic) ->
-    spawn_accept_bridge(Pool, TunnelId, SendTopic, RecvTopic),
+on_tunnel_request_pool(_Pool, undefined, _TunnelId, _SendTopic, _RecvTopic) ->
+    %% A CALL's `caller' is a required, wire-authenticated field, so args
+    %% without one are not a tunnel request this node can name a peer for. It is
+    %% refused rather than opened to any publisher (macula#156).
+    ?LOG_WARNING("[dist_pool] Tunnel request with no wire-authenticated caller"),
+    {error, <<"no_caller">>};
+on_tunnel_request_pool(Pool, Caller, TunnelId, SendTopic, RecvTopic) ->
+    spawn_accept_bridge(Pool, Caller, TunnelId, SendTopic, RecvTopic),
     {ok, #{<<"tunnel_id">> => TunnelId,
            <<"send_topic">> => SendTopic,
            <<"recv_topic">> => RecvTopic}}.
+
+%% The one publisher a tunnel's topics accept (macula#156). Both ends hold the
+%% other's node_id, and both hold it from the wire rather than from the request
+%% body: the accept side from the CALL's `caller', the connect side from the
+%% seal report's `provider', which `macula_frame:verify_reply/3' admits only
+%% when the reply is signed by the key of the node it claims to be and that node
+%% is the call's target. So the node that requested the tunnel is the node that
+%% publishes on it, and anything else that publishes to those topics is refused
+%% before the socket.
+peer_source(Peer) when is_binary(Peer), byte_size(Peer) =:= 32 ->
+    #{sources => {nodes, [Peer]}}.
 
 %% The accept side has a setup phase (kernel negotiation) before the
 %% supervised bridge can start. This setup process is short-lived —
 %% it creates the loopback pair, negotiates with net_kernel, then
 %% hands off to the supervised bridge.
-spawn_accept_bridge(Pool, TunnelId, SendTopic, RecvTopic) ->
+spawn_accept_bridge(Pool, Caller, TunnelId, SendTopic, RecvTopic) ->
     {Pid, _Ref} = spawn_monitor(fun() ->
-        dist_accept_setup(Pool, TunnelId, SendTopic, RecvTopic)
+        dist_accept_setup(Pool, Caller, TunnelId, SendTopic, RecvTopic)
     end),
     ?LOG_INFO("[dist_pool] Accept setup ~p for ~s", [Pid, TunnelId]),
     Pid.
@@ -256,34 +289,35 @@ spawn_accept_bridge(Pool, TunnelId, SendTopic, RecvTopic) ->
 %%% Internal — Accept-side Setup (short-lived, then hands to bridge)
 %%%===================================================================
 
-dist_accept_setup(Pool, TunnelId, SendTopic, RecvTopic) ->
+dist_accept_setup(Pool, Caller, TunnelId, SendTopic, RecvTopic) ->
     Self = self(),
     Key = tunnel_key(),
 
     %% Subscribe for buffering before kernel knows about us. The V2
     %% pool delivers `{macula_event, SubRef, Topic, Payload, Meta}'
-    %% to Self directly; no callback indirection. The tunnel carries this node's
-    %% own distribution facts from the peers its kernel handed it, so it accepts
-    %% any publisher explicitly (macula#147).
+    %% to Self directly; no callback indirection. The tunnel carries bytes from
+    %% the one node that requested it, so that node is the only publisher these
+    %% topics accept (macula#156).
+    Source = peer_source(Caller),
     {ok, BufferSubRef} = macula_pubsub:subscribe(Pool, ?DIST_REALM,
-                                                  RecvTopic, Self, #{sources => open}),
+                                                  RecvTopic, Self, Source),
 
     {DistSock, BridgeSock} = create_loopback_pair(),
 
     on_kernel_lookup(whereis(net_kernel), Self, Pool, DistSock, BridgeSock,
-                     BufferSubRef, SendTopic, RecvTopic, TunnelId, Key).
+                     BufferSubRef, SendTopic, RecvTopic, TunnelId, Key, Source).
 
 on_kernel_lookup(undefined, _Self, Pool, _DistSock, _BridgeSock, BufferSubRef,
-                 _SendTopic, _RecvTopic, _TunnelId, _Key) ->
+                 _SendTopic, _RecvTopic, _TunnelId, _Key, _Source) ->
     ?LOG_WARNING("[dist_bridge] net_kernel not found"),
     macula_pubsub:unsubscribe(Pool, BufferSubRef);
 on_kernel_lookup(KernelPid, Self, Pool, DistSock, BridgeSock, BufferSubRef,
-                 SendTopic, RecvTopic, TunnelId, Key) ->
+                 SendTopic, RecvTopic, TunnelId, Key, Source) ->
     negotiate_with_kernel(Self, KernelPid, Pool, DistSock, BridgeSock,
-                          BufferSubRef, SendTopic, RecvTopic, TunnelId, Key).
+                          BufferSubRef, SendTopic, RecvTopic, TunnelId, Key, Source).
 
 negotiate_with_kernel(Self, KernelPid, Pool, DistSock, BridgeSock,
-                      BufferSubRef, SendTopic, RecvTopic, TunnelId, Key) ->
+                      BufferSubRef, SendTopic, RecvTopic, TunnelId, Key, Source) ->
     KernelPid ! {accept, Self, DistSock, inet, macula_dist},
     receive
         {KernelPid, controller, DistCtrl} ->
@@ -292,9 +326,9 @@ negotiate_with_kernel(Self, KernelPid, Pool, DistSock, BridgeSock,
             %% when this setup process exits.
             gen_tcp:controlling_process(DistSock, DistCtrl),
             macula_pubsub:unsubscribe(Pool, BufferSubRef),
-            flush_buffered_to_socket(BridgeSock, Key, BufferSubRef),
+            flush_buffered_to_socket(BridgeSock, Key, BufferSubRef, TunnelId),
             start_supervised_bridge(Pool, BridgeSock, SendTopic, RecvTopic,
-                                     TunnelId, Key);
+                                     TunnelId, Key, Source);
         {KernelPid, unsupported_protocol} ->
             ?LOG_WARNING("[dist_bridge] Unsupported protocol"),
             macula_pubsub:unsubscribe(Pool, BufferSubRef)
@@ -307,7 +341,7 @@ negotiate_with_kernel(Self, KernelPid, Pool, DistSock, BridgeSock,
 %%% Internal — Connect-side Bridge Creation
 %%%===================================================================
 
-create_dist_socket(Pool, TunnelId) ->
+create_dist_socket(Pool, TunnelId, Provider) ->
     SendTopic = <<"_dist.data.", TunnelId/binary, ".out">>,
     RecvTopic = <<"_dist.data.", TunnelId/binary, ".in">>,
 
@@ -315,7 +349,7 @@ create_dist_socket(Pool, TunnelId) ->
 
     Key = tunnel_key(),
     start_supervised_bridge(Pool, BridgeSock, SendTopic, RecvTopic,
-                             TunnelId, Key),
+                             TunnelId, Key, peer_source(Provider)),
 
     {ok, DistSock, DistSock}.
 
@@ -323,7 +357,7 @@ create_dist_socket(Pool, TunnelId) ->
 %%% Internal — Supervised Bridge Startup
 %%%===================================================================
 
-start_supervised_bridge(Pool, BridgeSock, SendTopic, RecvTopic, TunnelId, Key) ->
+start_supervised_bridge(Pool, BridgeSock, SendTopic, RecvTopic, TunnelId, Key, Source) ->
     Metrics = init_metrics(TunnelId),
     BridgeArgs = #{
         pool => Pool,
@@ -332,6 +366,7 @@ start_supervised_bridge(Pool, BridgeSock, SendTopic, RecvTopic, TunnelId, Key) -
         recv_topic => RecvTopic,
         tunnel_id => TunnelId,
         key => Key,
+        source => Source,
         metrics => Metrics
     },
     case macula_dist_bridge_sup:start_bridge(BridgeArgs) of
@@ -391,21 +426,26 @@ create_loopback_pair() ->
 %% accidentally consume unrelated events (the same process may host
 %% other subscriptions during setup). `macula_event_gone' is the
 %% terminal signal sent once the subscription tears down.
-flush_buffered_to_socket(BridgeSock, Key, SubRef) ->
+flush_buffered_to_socket(BridgeSock, Key, SubRef, TunnelId) ->
     receive
         {macula_event, SubRef, _Topic, EncData, _Meta} ->
-            ship_buffered(BridgeSock, decrypt(Key, EncData), EncData),
-            flush_buffered_to_socket(BridgeSock, Key, SubRef);
+            ship_buffered(BridgeSock, decrypt(Key, EncData), TunnelId),
+            flush_buffered_to_socket(BridgeSock, Key, SubRef, TunnelId);
         {macula_event_gone, SubRef, _Reason} ->
             ok
     after 0 ->
         ok
     end.
 
-ship_buffered(BridgeSock, {ok, Data}, _EncData) ->
+%% A buffered fact reaches the socket as the bytes it decrypts to, and one that
+%% does not decrypt is dropped: writing its ciphertext instead would put framing
+%% the tunnel never wrote into the distribution stream (macula#156). Only the
+%% tunnel's own peer can get this far, and it is still wrong to forward.
+ship_buffered(BridgeSock, {ok, Data}, _TunnelId) ->
     gen_tcp:send(BridgeSock, Data);
-ship_buffered(BridgeSock, {error, _}, EncData) ->
-    gen_tcp:send(BridgeSock, EncData).
+ship_buffered(_BridgeSock, {error, decrypt_failed}, TunnelId) ->
+    ?LOG_WARNING("[dist_bridge] Buffered fact for ~s did not decrypt, dropped",
+                 [TunnelId]).
 
 decrypt(Key, <<Nonce:12/binary, Tag:16/binary, Ciphertext/binary>>) ->
     aead_decrypt(crypto:crypto_one_time_aead(

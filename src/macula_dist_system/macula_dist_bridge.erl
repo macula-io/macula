@@ -62,6 +62,9 @@
     reader_pid       :: pid() | undefined,
     send_topic       :: binary(),
     recv_topic       :: binary(),
+    %% The subscribe options this tunnel's subscription declares, kept so a
+    %% re-acquired pool is subscribed under the same one publisher (macula#156).
+    source           :: map(),
     reconnect_count  :: non_neg_integer()
 }).
 
@@ -79,11 +82,11 @@ start_link(Args) ->
 
 init(#{pool := Pool, bridge_sock := BridgeSock, send_topic := SendTopic,
        recv_topic := RecvTopic, tunnel_id := TunnelId, key := Key,
-       metrics := Metrics}) ->
+       source := Source, metrics := Metrics}) ->
     process_flag(trap_exit, true),
 
     MonRef = erlang:monitor(process, Pool),
-    {ok, SubRef} = subscribe_to_tunnel(Pool, RecvTopic),
+    {ok, SubRef} = subscribe_to_tunnel(Pool, RecvTopic, Source),
 
     %% Don't start reader yet — socket ownership hasn't been transferred.
     %% The caller sends {socket_ready} after gen_tcp:controlling_process.
@@ -92,7 +95,7 @@ init(#{pool := Pool, bridge_sock := BridgeSock, send_topic := SendTopic,
     {ok, #state{bridge_sock = BridgeSock, tunnel_id = TunnelId, pool = Pool,
                 pool_mon = MonRef, sub_ref = SubRef, key = Key, metrics = Metrics,
                 reader_pid = undefined, send_topic = SendTopic, recv_topic = RecvTopic,
-                reconnect_count = 0}}.
+                source = Source, reconnect_count = 0}}.
 
 handle_call(_Request, _From, State) ->
     {reply, {error, unknown}, State}.
@@ -197,7 +200,7 @@ on_reacquire_pool(undefined, _RecvTopic, TunnelId, N, State) ->
 on_reacquire_pool(NewPool, RecvTopic, TunnelId, _N, State) ->
     ?LOG_INFO("[dist_bridge] Re-acquired mesh pool for ~s", [TunnelId]),
     MonRef = erlang:monitor(process, NewPool),
-    {ok, SubRef} = subscribe_to_tunnel(NewPool, RecvTopic),
+    {ok, SubRef} = subscribe_to_tunnel(NewPool, RecvTopic, State#state.source),
     try exit(State#state.reader_pid, kill) catch _:_ -> ok end,
     NewReader = start_reader(NewPool, State#state.bridge_sock,
                               State#state.send_topic, TunnelId,
@@ -249,10 +252,10 @@ publish_if_alive(false, Pool, Topic, Data, Retries) ->
     publish_with_retry(Pool, Topic, Data, Retries - 1).
 
 %% This node's own distribution tunnel: the facts on it are this node's, from the
-%% peers its kernel handed it, so it accepts any publisher explicitly rather than
-%% declaring a source it cannot name (macula#147).
-subscribe_to_tunnel(Pool, RecvTopic) ->
-    macula_pubsub:subscribe(Pool, ?DIST_REALM, RecvTopic, self(), #{sources => open}).
+%% peers its kernel handed it, so the tunnel subscribes for the one publisher it
+%% was negotiated with rather than for any (macula#156).
+subscribe_to_tunnel(Pool, RecvTopic, Source) ->
+    macula_pubsub:subscribe(Pool, ?DIST_REALM, RecvTopic, self(), Source).
 
 deliver_tunnel_in({ok, Data}, _EncData, BridgeSock, Metrics, TunnelId, State) ->
     counters:add(Metrics, ?METRIC_BYTES_IN, byte_size(Data)),

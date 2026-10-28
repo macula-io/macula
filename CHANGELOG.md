@@ -111,8 +111,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `macula_pubsub:subscribe_callback/4` -- and `macula:subscribe/5` without a `sources` key returns
   `{error, {sources, required}}`; `subscribe_callback/5` is the callback form, taking the same `Opts`.
   A source that needs a record is refused `{error, {source_class, no_realm_key}}` in a realm whose key
-  the pool never pinned, never served open. The SDK's own subscriptions (the DHT record feed, the
-  distribution tunnel) now say `open` explicitly, which is what they mean. This breaks every caller
+  the pool never pinned, never served open. The SDK's own subscriptions (the DHT record feed) now say
+  `open` explicitly, which is what they mean, and a distribution tunnel names the one node it was
+  negotiated with instead of accepting any publisher (see Fixed). This breaks every caller
   that relied on the old default, so it lands in the same major as the `advertise` change and the next
   cut is 18.0.0.
 
@@ -136,6 +137,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `macula_peering:async_send_on_stream/2`, and a writer may answer `{error, busy}`. Nothing waits for a credit grant
   that cannot come: a session whose stream process goes down takes its held queue with it, and a connection that ends
   drops every queue held for it.
+
+- **A distribution tunnel's subscription names its peer instead of accepting any publisher (macula#156).**
+  Both ends of a relay tunnel now subscribe to its topics with `{nodes, [Peer]}`, so the only node
+  whose facts reach the tunnel's socket is the node the tunnel was negotiated with. The peer is the
+  wire's at both ends and never the request body's: the accepting node reads the CALL's
+  wire-authenticated `caller`, and the connecting node reads the seal report's `provider`, which the
+  frame layer fills only for a reply signed by the key of the node it claims to be and naming the
+  call's target as `responded_by` — so no node answers under another's id. A tunnel request that
+  arrives with no authenticated caller is refused `no_caller` rather than opened. This closes the
+  window in which a third party who learnt a tunnel's topic could push bytes at the distribution
+  handshake: the setup phase used to forward an undecryptable fact's ciphertext to the socket as it
+  stood, and now drops it and says so in the log. No wire or API change.
 
 ## [17.2.0] - 2026-10-28
 
