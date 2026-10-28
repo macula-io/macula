@@ -75,7 +75,8 @@ handle_open(#{<<"topic">> := Topic}, Registry) ->
 
 ```erlang
 {ok, _Sup} = macula_streamer:advertise(Pool, Realm, <<"logs.tail">>,
-                                       log_tailer_provider, self()).
+                                       log_tailer_provider, self(),
+                                       #{auth => open}).
 
 %% elsewhere, once the provider has announced its pid:
 ok = macula_streamer:send(TailerPid, <<"a log line\n">>).
@@ -168,7 +169,7 @@ additionally publishes the discoverable record:
 {ok, Identity} = macula_node_keys:generate(identity, pq_pure),
 {ok, _Sup} = macula_streamer:advertise_direct(Pool, Realm, <<"logs.tail">>,
                                               log_tailer_provider, self(),
-                                              Identity).
+                                              Identity, #{auth => open}).
 ```
 
 Consumer — `start_link_direct/5,6` resolves and dials in one hop:

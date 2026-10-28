@@ -202,7 +202,7 @@ handle_uploaded(Result, Parent) ->
 
 ```erlang
 {ok, _Sup} = macula_upload:advertise(Pool, Realm, <<"bulk/ingest">>,
-    doc_upload, self()).
+    doc_upload, self(), #{auth => open}).
 ```
 
 `Result` is `{ok, Mcid, Bytes} | {error, _}` on the receiver's side,
