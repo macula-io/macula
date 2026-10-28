@@ -21,10 +21,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   so an advertisement is refused (`{error, {call_class, no_realm_key}}`) in a realm whose key the pool never pinned
   rather than served open. Each served procedure logs the class it declares.
 
-  **There is no default policy any more**: `advertise/4`, which served openly, is gone from `macula`,
-  `macula_client` and `macula_station_link`, and `macula:advertise/5` without an `auth` key returns
-  `{error, {auth, required}}`. A procedure that means to serve anyone who can reach it now says `auth => open`.
-
   **What the policy may still be, and what the log says.** The class grammar is not the only thing `auth` accepts:
   `open`, `handler_authorizes` and a raw `macula_ucan:policy()` still pass through to the link unchanged, because a
   service that already gated a procedure by its own policy keeps working. The two are deliberately distinguishable
@@ -42,6 +38,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   so-declared procedure. Where the class is `role` that token is now refused, which is what "closed by default" means.
   A role holder's delegate is still admitted at `members` and `role` (a delegation keeps a capability whose `can`
   matches and whose `with` is covered); only `{nodes, _}` is exact.
+
+### Changed
+
+- **Breaking: a procedure advertised with no `auth` is refused, and `advertise/4` is removed (macula#147).** The arity
+  that served openly is gone from `macula`, `macula_client` and `macula_station_link`, and `macula:advertise/5` without
+  an `auth` key returns `{error, {auth, required}}`. A procedure that means to serve anyone who can reach it now says
+  `auth => open`, explicitly. This breaks every caller that relied on the old default — in this repository and in every
+  SDK built on it — so the next cut is 18.0.0, not 17.3.0.
 
 ### Fixed
 

@@ -5077,6 +5077,12 @@ on_stream_open_verdict(malformed_frame, Open, Seal, Stream, S) ->
 %% carries a token, since a gated procedure serves no open without one.
 watch_authority(open, _Open, _AttachId, S) ->
     S;
+%% A `{nodes, Ids}' session (macula#147) rests on no token either: its caller is the identity the open's own signature
+%% verified under, and the list was compared once at STREAM_OPEN, as `open' is. There is nothing to watch and nothing to
+%% end, so it runs exactly as an open procedure's session does; ending it at a token's exp would end a session no token
+%% ever held (threat model 6.2).
+watch_authority({nodes, _NodeIds}, _Open, _AttachId, S) ->
+    S;
 watch_authority(Policy, #{token := Token, realm := Realm, procedure := Proc, caller := Caller,
                           request_id := RequestId} = Open, AttachId, #state{served_until = Until} = S) ->
     Proofs = maps:get(proofs, Open, []),

@@ -31,6 +31,7 @@ stream_serving_test_() ->
                  fun a_served_session_past_its_inbox_budget_sends_its_stream_error/0,
                  fun a_stream_procedures_policy_is_enforced_before_its_handler/0,
                  fun a_stream_procedures_ucan_policy_binds_its_token_to_the_caller/0,
+                 fun a_nodes_class_stream_serves_a_named_caller_without_a_token/0,
                  fun a_gated_session_ends_when_its_token_expires/0,
                  fun a_renewed_gated_session_outlives_its_first_token/0,
                  fun an_older_renewal_does_not_pull_a_sessions_end_back/0,
@@ -149,6 +150,29 @@ a_stream_procedures_policy_is_enforced_before_its_handler() ->
     ?assertMatch({ok, #{code := <<"unauthorized">>}}, provider_fields(NoTokenOpen, Refusal)),
     ?assertEqual({handler_ran, MemberTag}, receive {handler_ran, MemberTag} = Ran -> Ran after ?EVENT_MS -> none end),
     ?assertEqual(none, receive {handler_ran, NoTokenTag} = Unauthorized -> Unauthorized after 300 -> none end),
+    stop(Link).
+
+%% A `{nodes, Ids}' stream procedure serves a listed caller with no token at all and the link survives it: the session
+%% rests on the identity the open's own signature verified under, so there is no token to watch and it ends the way an
+%% open procedure's does. A caller the service did not name is refused, and its handler never runs (macula#147).
+a_nodes_class_stream_serves_a_named_caller_without_a_token() ->
+    #{link := Link} = World = linked(),
+    Test = self(),
+    Procedure = <<"acme/foo.named">>,
+    Listed = key(),
+    {ok, ListedId} = macula_node_keys:node_id(Listed),
+    ok = macula_station_link:advertise_stream(Link, ?REALM, Procedure, server_stream,
+                                              fun(_Stream, Args) -> Test ! {handler_ran, macula:field(tag, Args)}, ok end,
+                                              {nodes, [ListedId]}),
+    [ListedTag, StrangerTag] = [1, 2],
+    _ = opened_by_peer(World, Listed, Procedure, #{tag => ListedTag}),
+    #{quic := StrangerQuic, frame := StrangerOpen} =
+        opened_by_peer(World, key(), Procedure, #{tag => StrangerTag}),
+    ?assertEqual({handler_ran, ListedTag}, receive {handler_ran, ListedTag} = Ran -> Ran after ?EVENT_MS -> none end),
+    {ok, Refusal} = written_within(StrangerQuic, ?EVENT_MS),
+    ?assertMatch({ok, #{code := <<"unauthorized">>}}, provider_fields(StrangerOpen, Refusal)),
+    ?assertEqual(none, receive {handler_ran, StrangerTag} = Unauthorized -> Unauthorized after 300 -> none end),
+    ?assert(is_process_alive(Link)),
     stop(Link).
 
 %% A ucan_required stream procedure binds a token's audience to its caller. An open carrying a genuine token the issuer
