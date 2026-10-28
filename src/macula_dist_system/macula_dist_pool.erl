@@ -102,8 +102,12 @@ advertise_dist_accept() ->
         Pool ->
             NodeName = atom_to_binary(node()),
             Procedure = <<"_dist.tunnel.", NodeName/binary>>,
+            %% `open' is what this procedure had by the old default; naming it
+            %% keeps the bridge's behaviour unchanged (macula#147 removed the
+            %% default). Tightening it is a decision about distribution, not a
+            %% side effect of declaring call classes.
             macula_client:advertise(Pool, ?DIST_REALM, Procedure,
-                                    fun handle_tunnel_request/1),
+                                    fun handle_tunnel_request/1, open),
             ?LOG_INFO("[dist_pool] Advertised distribution accept: ~s", [Procedure]),
             ok
     end.

@@ -75,7 +75,8 @@ teardown(undefined) -> application:unset_env(macula, kem_advertise);
 teardown({ok, Value}) -> application:set_env(macula, kem_advertise, Value).
 
 advertise(Opts) ->
-    macula:advertise(self(), ?REALM, procedure(), fun(_) -> {ok, 1} end, maps:merge(seams(), Opts)).
+    macula:advertise(self(), ?REALM, procedure(), fun(_) -> {ok, 1} end,
+                   maps:merge(seams(), maps:merge(#{auth => open}, Opts))).
 
 advertised() ->
     receive {advertised, Spec} -> Spec after 1_000 -> error(not_advertised) end.

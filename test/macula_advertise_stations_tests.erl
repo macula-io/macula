@@ -40,7 +40,7 @@ an_advertise_with_no_link_up_is_kept_for_the_respawn() ->
         Mon = erlang:monitor(process, Old),
         exit(Old, kill),
         receive {'DOWN', Mon, process, Old, _} -> ok after 2_000 -> error(link_not_down) end,
-        ?assertEqual({error, no_healthy_station}, macula:advertise(Pool, ?REALM, Proc, fun handler/1, #{})),
+        ?assertEqual({error, no_healthy_station}, macula:advertise(Pool, ?REALM, Proc, fun handler/1, #{auth => open})),
         _ = wait_new(Pool, ?A, Old, 100),
         ?assert(holds(Pool, ?A, Proc))
     after
@@ -49,14 +49,14 @@ an_advertise_with_no_link_up_is_kept_for_the_respawn() ->
 
 an_advertisement_goes_to_the_named_stations_only() ->
     with_pool(fun(Pool, Proc) ->
-        ok = macula:advertise(Pool, ?REALM, Proc, fun handler/1, #{stations => [?A]}),
+        ok = macula:advertise(Pool, ?REALM, Proc, fun handler/1, #{auth => open, stations => [?A]}),
         ?assertEqual({true, false}, {holds(Pool, ?A, Proc), holds(Pool, ?B, Proc)})
     end).
 
 a_station_without_a_link_is_refused_and_nothing_is_kept() ->
     with_pool(fun(Pool, Proc) ->
         ?assertEqual({error, {station_not_linked, <<3:256>>}},
-                     macula:advertise(Pool, ?REALM, Proc, fun handler/1, #{stations => [?A, <<3:256>>]})),
+                     macula:advertise(Pool, ?REALM, Proc, fun handler/1, #{auth => open, stations => [?A, <<3:256>>]})),
         ?assertEqual({false, false}, {holds(Pool, ?A, Proc), holds(Pool, ?B, Proc)}),
         %% Not kept: a respawned link to A does not replay it.
         _ = respawned(Pool, ?A),
@@ -66,9 +66,9 @@ a_station_without_a_link_is_refused_and_nothing_is_kept() ->
 an_empty_or_malformed_list_is_refused() ->
     with_pool(fun(Pool, Proc) ->
         ?assertEqual({error, {stations, empty}},
-                     macula:advertise(Pool, ?REALM, Proc, fun handler/1, #{stations => []})),
+                     macula:advertise(Pool, ?REALM, Proc, fun handler/1, #{auth => open, stations => []})),
         [?assertEqual({error, {stations, malformed}},
-                      macula:advertise(Pool, ?REALM, Proc, fun handler/1, #{stations => Bad}))
+                      macula:advertise(Pool, ?REALM, Proc, fun handler/1, #{auth => open, stations => Bad}))
          || Bad <- [?A, [<<1:8>>], [?A | ?B], all]],
         %% A record names at most `max_serving_stations/0' stations, so a
         %% longer pin is refused rather than cut to fit: the stations past
@@ -76,13 +76,13 @@ an_empty_or_malformed_list_is_refused() ->
         %% calls to them ride a forward.
         TooMany = [<<N:256>> || N <- lists:seq(1, macula_record:max_serving_stations() + 1)],
         ?assertEqual({error, {stations, too_many}},
-                     macula:advertise(Pool, ?REALM, Proc, fun handler/1, #{stations => TooMany})),
+                     macula:advertise(Pool, ?REALM, Proc, fun handler/1, #{auth => open, stations => TooMany})),
         ?assertEqual({false, false}, {holds(Pool, ?A, Proc), holds(Pool, ?B, Proc)})
     end).
 
 a_respawned_link_replays_only_what_names_its_station() ->
     with_pool(fun(Pool, Proc) ->
-        ok = macula:advertise(Pool, ?REALM, Proc, fun handler/1, #{stations => [?B]}),
+        ok = macula:advertise(Pool, ?REALM, Proc, fun handler/1, #{auth => open, stations => [?B]}),
         _ = respawned(Pool, ?A),
         _ = respawned(Pool, ?B),
         ?assertEqual({false, true}, {holds(Pool, ?A, Proc), holds(Pool, ?B, Proc)})
@@ -100,7 +100,7 @@ a_stream_advertisement_goes_to_the_named_stations_only() ->
 
 without_stations_every_link_has_it() ->
     with_pool(fun(Pool, Proc) ->
-        ok = macula:advertise(Pool, ?REALM, Proc, fun handler/1, #{}),
+        ok = macula:advertise(Pool, ?REALM, Proc, fun handler/1, #{auth => open}),
         ?assertEqual({true, true}, {holds(Pool, ?A, Proc), holds(Pool, ?B, Proc)})
     end).
 

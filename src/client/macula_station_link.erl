@@ -177,7 +177,6 @@
     unadvertise_async/4,
     advertise_stream_async/7,
     unadvertise_stream_async/4,
-    advertise/4,
     advertise/5,
     advertise/6,
     unadvertise/3,
@@ -1094,13 +1093,10 @@ unsubscribe_async(Client, SubRef)
 %% return `{ok, Reply}', `{error, Reason}', or any other term (treated
 %% as `{ok, Other}' shorthand). A handler crash is mapped to a
 %% structured `temporary_relay_failure' BOLT#4 error.
--spec advertise(pid(), <<_:256>>, binary(), handler()) -> ok | {error, term()}.
-advertise(Pid, Realm, Procedure, Handler) ->
-    advertise(Pid, Realm, Procedure, Handler, open).
-
-%% @doc Advertise with an auth policy -- see `macula_client:auth_policy()'
-%% for the full set (`open' | `{ucan_required, IssuerNodeId}' |
-%% `{realm_member_required, RealmKeyId, RequiredCan}').
+%% @doc Advertise with an auth policy -- see `macula_client:auth_policy()' for
+%% the full set: a call class (`{callers, Class}' at the pool, which arrives here
+%% resolved as `{realm_member_required, Key, Can}' or `{nodes, Ids}'), `open' as an
+%% explicit opt-out, `handler_authorizes', or a raw `macula_ucan:policy()' form.
 %%
 %% `Policy''s own shape is validated HERE, at the call boundary, one
 %% clause per valid shape with no catch-all: a malformed issuer id
@@ -1126,6 +1122,14 @@ advertise(Pid, Realm, Procedure, Handler, handler_authorizes = Policy)
        (is_function(Handler, 1) orelse
         (is_tuple(Handler) andalso tuple_size(Handler) =:= 2)) ->
     gen_server:call(Pid, {advertise, Realm, Procedure, Handler, Policy}, 5_000);
+advertise(Pid, Realm, Procedure, Handler, {nodes, NodeIds} = Policy)
+  when is_pid(Pid),
+       is_binary(Realm), byte_size(Realm) =:= 32,
+       is_binary(Procedure),
+       (is_function(Handler, 1) orelse
+        (is_tuple(Handler) andalso tuple_size(Handler) =:= 2)),
+       is_list(NodeIds), NodeIds =/= [] ->
+    gen_server:call(Pid, {advertise, Realm, Procedure, Handler, Policy}, 5_000);
 advertise(Pid, Realm, Procedure, Handler, {ucan_required, Issuer} = Policy)
   when is_pid(Pid),
        is_binary(Realm), byte_size(Realm) =:= 32,
@@ -1142,7 +1146,7 @@ advertise(Pid, Realm, Procedure, Handler,
        (is_function(Handler, 1) orelse
         (is_tuple(Handler) andalso tuple_size(Handler) =:= 2)),
        is_binary(RealmKeyId), byte_size(RealmKeyId) =:= 32,
-       is_binary(RequiredCan), RequiredCan =/= <<>> ->
+       (RequiredCan =:= any orelse (is_binary(RequiredCan) andalso RequiredCan =/= <<>>)) ->
     gen_server:call(Pid, {advertise, Realm, Procedure, Handler, Policy}, 5_000).
 
 %% @doc As `advertise/5', sending the resolved provider advertisement
@@ -1527,7 +1531,12 @@ advertise_stream_async(Pid, Realm, Procedure, Mode, Handler, Policy, EncodedAd)
 %% One clause per valid `macula_client:auth_policy()' shape and no
 %% catch-all, so a malformed policy raises `function_clause' in the caller.
 valid_policy(open) -> ok;
+valid_policy({nodes, [_ | _] = NodeIds}) when is_list(NodeIds) ->
+    lists:all(fun(Id) -> is_binary(Id) andalso byte_size(Id) =:= 32 end, NodeIds)
+        orelse error({nodes, not_node_ids}),
+    ok;
 valid_policy({ucan_required, <<_:256>>}) -> ok;
+valid_policy({realm_member_required, <<_:256>>, any}) -> ok;
 valid_policy({realm_member_required, <<_:256>>, RequiredCan})
   when is_binary(RequiredCan), RequiredCan =/= <<>> -> ok.
 
@@ -4102,6 +4111,16 @@ authorize_policy(open, _Frame, _Profile) ->
     ok;
 authorize_policy(handler_authorizes, _Frame, _Profile) ->
     ok;
+%% A named-nodes procedure (macula#147) needs no token: the caller is the identity the request's own signature
+%% verified under, so the list is compared against a value the caller cannot choose. A call whose caller did not
+%% verify, or a caller the service did not name, is refused.
+authorize_policy({nodes, NodeIds}, #{caller := <<_:256>> = Caller}, _Profile) when is_list(NodeIds) ->
+    case lists:member(Caller, NodeIds) of
+        true -> ok;
+        false -> unauthorized
+    end;
+authorize_policy({nodes, _NodeIds}, _Frame, _Profile) ->
+    unauthorized;
 authorize_policy(Policy, #{token := Token, caller := <<_:256>> = Caller, realm := Realm, procedure := Procedure}
                  = Frame, Profile) when is_binary(Token) ->
     token_verdict(macula_ucan:authorize(Token, Policy,

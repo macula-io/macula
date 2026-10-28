@@ -9,6 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A procedure declares who may call it, and serves no one else (macula#147; threat model:
+  [issue #147](https://github.com/macula-io/macula/issues/147#issuecomment-6458270096)).** `macula:advertise/5` and
+  `macula_client:advertise/5` take a call class, `{callers, Class}`: `members` (any realm member), `role` (a caller
+  whose realm roles name this procedure, which its membership token proves as `rpc/call` on the procedure's MRI), or
+  `{nodes, [NodeId]}` (exactly the identities listed, and no token at all). The class is resolved against the realm key
+  the pool pinned and enforced by the provider before its handler runs, on every call, with no admin act per caller and
+  no extra signature verification: `members` and `role` are the realm-membership gate with the capability each demands,
+  so an advertisement is refused (`{error, {call_class, no_realm_key}}`) in a realm whose key the pool never pinned
+  rather than served open. Each served procedure logs the class it declares.
+
+  **There is no default policy any more**: `advertise/4`, which served openly, is gone from `macula`,
+  `macula_client` and `macula_station_link`, and `macula:advertise/5` without an `auth` key returns
+  `{error, {auth, required}}`. A procedure that means to serve anyone who can reach it now says `auth => open`.
+
+  **The gap this closes**: under `{realm_member_required, Key, any}` a bare realm member token — whose only capability
+  is `member/email-verified` on `mri:realm:<realm>`, which covers every procedure in the realm — was admitted to every
+  so-declared procedure. Where the class is `role` that token is now refused, which is what "closed by default" means.
+  A role holder's delegate is still admitted at `members` and `role` (a delegation keeps a capability whose `can`
+  matches and whose `with` is covered); only `{nodes, _}` is exact.
+
 ### Fixed
 
 - **A peer that stops granting flow-control credit on one stream no longer stalls the whole station link (macula#141).**

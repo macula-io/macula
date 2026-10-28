@@ -629,12 +629,15 @@ sealed_by({error, _} = Refused, _Mode) -> Refused.
 %% pin the realm's key (`realm_trust' at connect); a missing piece
 %% fails fast with `{error, {provider_authorization, _}}'.
 %%
-%% `Opts' `auth' sets the procedure's policy: `open' (default, serve
-%% any identified caller), `{ucan_required, IssuerNodeId}' (gated to
-%% tokens from one known node), `{realm_member_required, RealmKeyId,
-%% RequiredCan}' (gated to realm membership at a specific tier), or
-%% `handler_authorizes' (no gate: the handler gets the call's own token
-%% and proofs and decides) -- see `macula_client:auth_policy()' for the
+%% `Opts' `auth' declares who may call the procedure, and there is NO default: an
+%% advertise that names none is refused `{error, {auth, required}}' rather than
+%% served openly (macula#147). The forms are a call class --
+%% `{callers, members | role | {nodes, [NodeId]}}', resolved against the realm key
+%% this pool pinned -- `open' (an explicit opt-out: serve any identified caller),
+%% `{ucan_required, IssuerNodeId}' (gated to tokens from one known node),
+%% `{realm_member_required, RealmKeyId, RequiredCan}' (gated to realm membership at
+%% a specific tier), or `handler_authorizes' (no gate: the handler gets the call's
+%% own token and proofs and decides) -- see `macula_client:auth_policy()' for the
 %% full set.
 %%
 %% `stations => [StationNodeId]' registers the procedure on the links to
@@ -668,7 +671,14 @@ advertise(Pool, Realm, Procedure, Handler, Opts)
                 fun(Stations) -> advertise_on(Stations, Pool, Realm, Procedure, Handler, Opts) end).
 
 advertise_on(Stations, Pool, Realm, Procedure, Handler, Opts) ->
-    Policy = maps:get(auth, Opts, open),
+    classed(maps:get(auth, Opts, undefined), Stations, Pool, Realm, Procedure, Handler, Opts).
+
+%% A procedure declares who may call it (macula#147), and there is no default: an advertise that names no `auth' is
+%% refused here, before anything is resolved or registered, rather than served openly. `open' remains an explicit
+%% opt-out for a procedure that really is for anyone who can reach it, the same way a call opts out of sealing.
+classed(undefined, _Stations, _Pool, _Realm, _Procedure, _Handler, _Opts) ->
+    {error, {auth, required}};
+classed(Policy, Stations, Pool, Realm, Procedure, Handler, Opts) ->
     Advertise = maps:get(advertise, Opts, pool_advertise(Stations, Opts)),
     acknowledged(advertise_authorized(Pool, Realm, Procedure, Opts,
                                       fun(Spec) -> Advertise(Pool, Realm, Procedure, Handler, Policy, Spec) end),

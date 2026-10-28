@@ -324,7 +324,10 @@ an_unpinned_realm_key_is_refused(Keys) ->
 %% override recording the spec it is handed, each overridable per case.
 with_opts(Keys, Overrides, _Handler, Fun) ->
     Self = self(),
-    Base = #{status => fun(_Pool) ->
+    Base = % A procedure names who may call it (macula#147); `open' here is the
+           % explicit opt-out these tests are about (transport, not authority).
+           #{auth => open,
+             status => fun(_Pool) ->
                            {ok, #{self_node_id => maps:get(node, Keys)}}
                        end,
              find_record => find_stub(Keys, none),

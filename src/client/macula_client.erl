@@ -105,7 +105,7 @@
 -export([publish/5, subscribe/5, unsubscribe/2]).
 %% RPC fan-out (since 3.16.0) — called by the `macula' facade.
 -export([call_linked_station/5, call_station/11, call_station/12,
-         advertise/4, advertise/5, advertise/6, advertise/7, unadvertise/3,
+         advertise/5, advertise/6, advertise/7, unadvertise/3,
          advertise_stream/5, advertise_stream/6, advertise_stream/7, advertise_stream/8,
          unadvertise_stream/3]).
 %% Direct-dial resolution head start — called by `macula_direct_dial' to
@@ -175,7 +175,7 @@
 -endif.
 
 -export_type([pool/0, opts/0, seed/0, status/0, link_info/0, last_disconnect/0, handler/0,
-              stream_handler/0, auth_policy/0]).
+              stream_handler/0, auth_policy/0, call_class/0]).
 
 %% Per-procedure auth policy for `advertise'. `open' (default) serves any
 %% identified caller. `{ucan_required, IssuerNodeId}' gates the procedure
@@ -217,7 +217,19 @@
 %% checks the token per group). A handler advertised with it that reads no
 %% token serves every identified caller. Unary procedures only: a streaming
 %% procedure refuses it.
--type auth_policy() :: open | handler_authorizes | macula_ucan:policy().
+%% A procedure's call class (macula#147): who may call it, declared with the
+%% service's release and enforced by the provider before its handler runs, with
+%% no admin act per caller. `members' any realm member -- and any node a member
+%% delegated a realm-rooted token to, which is what a realm membership token
+%% means; `role' a caller whose realm roles name this procedure, which the
+%% membership token proves as `rpc/call' on the procedure's MRI; `{nodes, Ids}'
+%% exactly the identities listed, and no token at all. A procedure declaring
+%% none of these is refused. Classes are resolved against the realm key the
+%% pool pinned (`realm_trust'), so a realm with no pinned key cannot advertise
+%% one. Threat model: macula-io/macula#147.
+-type call_class() :: members | role | {nodes, [<<_:256>>]}.
+
+-type auth_policy() :: open | handler_authorizes | {callers, call_class()} | macula_ucan:policy().
 
 -type pool() :: pid().
 
@@ -661,6 +673,12 @@
 -type renew() :: {module(), atom(), [term()]}.
 -export_type([stations/0, renew/0, registration_error/0]).
 
+-ifdef(TEST).
+%% The class resolver's own tests read it directly: it is a pure function of a
+%% policy, a realm id and the pinned realm keys (macula#147).
+-export([caller_policy/3]).
+-endif.
+
 -record(state, {
     seeds         :: [seed()],
     %% Each connected link and the station it reached, from the link's own
@@ -992,14 +1010,16 @@ membership_sized(false, _Pool, _Realm, _Presented) -> {error, too_large}.
 %% A handler that answers `{error, Text}' with a binary or a printable
 %% charlist sends that text to its caller, up to 256 bytes of it; any
 %% other error reason reaches the caller as its name only.
--spec advertise(pool(), <<_:256>>, binary(), handler()) ->
-    ok | {error, term()}.
-advertise(Pool, Realm, Procedure, Handler) ->
-    advertise(Pool, Realm, Procedure, Handler, open).
-
-%% @doc Advertise with an auth policy -- see `auth_policy()' above for
-%% the full set (`open' | `{ucan_required, IssuerNodeId}' |
-%% `{realm_member_required, RealmKeyId, RequiredCan}').
+%%
+%% A procedure also declares who may call it -- see `auth_policy()' above for
+%% the full set: `{callers, Class}' is how a service declares its call class
+%% (macula#147), `open' is the explicit opt-out for a procedure that really is
+%% for anyone who can reach it, `handler_authorizes' hands the decision to the
+%% handler, and the raw `macula_ucan:policy()' forms remain for a
+%% provider-issued token.
+%%
+%% There is no default policy and no arity that omits one: a procedure that
+%% advertises no class is refused rather than served openly.
 -spec advertise(pool(), <<_:256>>, binary(), handler(), auth_policy()) ->
     ok | {error, term()}.
 advertise(Pool, Realm, Procedure, Handler, Policy)
@@ -1932,8 +1952,7 @@ handle_call({call_station, Station, Target, Realm, Procedure, Payload, TimeoutMs
             end);
 
 handle_call({advertise, Realm, Procedure, Registration}, _From, S) ->
-    {Reply, NewS} = advertised(unary, {Realm, Procedure}, Registration, renewal_cancelled(unary, {Realm, Procedure}, S)),
-    {reply, Reply, renewal_armed(unary, {Realm, Procedure}, NewS)};
+    advertised_classed(unary, Realm, Procedure, Registration, S);
 
 handle_call({unadvertise, Realm, Procedure}, _From, S0) ->
     {reply, ok, withdraw_unary(Realm, Procedure, S0)};
@@ -1955,9 +1974,7 @@ handle_call({call_stream_station, Station, Target, Realm, Procedure, Args, Opts,
             fun(Pid) -> stream_when_connected(Pid, Target, Realm, Procedure, Args, Opts) end);
 
 handle_call({advertise_stream, Realm, Procedure, Registration}, _From, S) ->
-    {Reply, NewS} = advertised(stream, {Realm, Procedure}, Registration,
-                               renewal_cancelled(stream, {Realm, Procedure}, S)),
-    {reply, Reply, renewal_armed(stream, {Realm, Procedure}, NewS)};
+    advertised_classed(stream, Realm, Procedure, Registration, S);
 
 handle_call({unadvertise_stream, Realm, Procedure}, _From, S0) ->
     {reply, ok, withdraw_stream(Realm, Procedure, S0)};
@@ -2423,6 +2440,74 @@ prior_link_state(Seed, #state{links = Links}) ->
 
 spawned_link_pids(#state{links = Links}) ->
     [P || #link_state{pid = P} <- maps:values(Links), is_pid(P)].
+
+%% An advertise whose policy is a call class is resolved against the realm key
+%% this pool pinned before any link registers it (macula#147): a class the pool
+%% cannot resolve -- a member or role class in a realm it holds no key for, an
+%% unknown class, an empty node list -- is refused here, so the procedure is
+%% never registered with a policy nobody checked. Anything that is not a class
+%% is not this function's business.
+advertised_classed(Kind, Realm, Procedure, #{policy := Policy} = Registration,
+                   #state{realm_keys = RealmKeys} = S) ->
+    case caller_policy(Policy, Realm, RealmKeys) of
+        {ok, Resolved} ->
+            class_declared(Policy, Realm, Procedure),
+            {Reply, NewS} = advertised(Kind, {Realm, Procedure}, Registration#{policy := Resolved},
+                                       renewal_cancelled(Kind, {Realm, Procedure}, S)),
+            {reply, Reply, renewal_armed(Kind, {Realm, Procedure}, NewS)};
+        {error, _} = Refused ->
+            {reply, Refused, S}
+    end.
+
+%% One line per served procedure saying who may call it (threat model 5.2): an
+%% operator reads what a running service admits from its log, without reading the
+%% service's source. Only a class is announced; the explicit non-class policies are
+%% not this package's business.
+class_declared({callers, Class}, Realm, Procedure) ->
+    logger:notice("macula: ~ts declares its callers ~p in realm ~ts",
+                  [Procedure, Class, binary:encode_hex(Realm, lowercase)]);
+class_declared(_Policy, _Realm, _Procedure) ->
+    ok.
+
+%% `members` and `role` are the realm-key policy with the capability each one
+%% demands: `any' admits a capability of any `can' whose `with' covers the
+%% procedure (a member's realm capability does), and `rpc/call' admits only one
+%% a role expansion minted. `{nodes, Ids}' names its callers itself and needs no
+%% key; the link compares the verified caller against the list.
+caller_policy({callers, members}, Realm, RealmKeys) ->
+    realm_caller_policy(Realm, any, RealmKeys);
+caller_policy({callers, role}, Realm, RealmKeys) ->
+    realm_caller_policy(Realm, <<"rpc/call">>, RealmKeys);
+caller_policy({callers, {nodes, [_ | _] = NodeIds}}, _Realm, _S) ->
+    node_ids_or_error(NodeIds);
+caller_policy({callers, {nodes, []}}, _Realm, _S) ->
+    {error, {call_class, {nodes, empty}}};
+caller_policy({callers, {nodes, _}}, _Realm, _S) ->
+    {error, {call_class, {nodes, not_a_list}}};
+caller_policy({callers, Class}, _Realm, _S) ->
+    {error, {call_class, {unknown, Class}}};
+caller_policy(Policy, _Realm, _S) ->
+    {ok, Policy}.
+
+%% A named-nodes class is a list of node ids: 32-byte binaries, and at least one.
+node_ids_or_error(NodeIds) ->
+    node_ids_formed(lists:all(fun node_id_formed/1, NodeIds), NodeIds).
+
+node_ids_formed(true, NodeIds) -> {ok, {nodes, NodeIds}};
+node_ids_formed(false, _NodeIds) -> {error, {call_class, {nodes, not_node_ids}}}.
+
+node_id_formed(Id) -> is_binary(Id) andalso byte_size(Id) =:= 32.
+
+%% A class that rests on realm membership cannot be enforced in a realm whose key
+%% this pool never pinned, so it is refused rather than served open.
+realm_caller_policy(Realm, Can, RealmKeys) ->
+    case maps:find(Realm, RealmKeys) of
+        {ok, RealmKey} ->
+            {ok, Profile} = macula_crypto_profile:configured(),
+            {ok, {realm_member_required, macula_node_keys:key_id(RealmKey, Profile), Can}};
+        error ->
+            {error, {call_class, no_realm_key}}
+    end.
 
 %% Register an advertisement on the links to its stations and keep it for
 %% the respawns: the one path an advertise and a stream advertise take. A

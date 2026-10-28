@@ -642,7 +642,7 @@ advertise_no_seeds_returns_no_healthy_test_() ->
          {ok, Pool} = macula_client:connect([], #{}),
          Handler = fun(_) -> {ok, pong} end,
          R = macula_client:advertise(Pool, ?REALM,
-                                      <<"foo.v1">>, Handler),
+                                      <<"foo.v1">>, Handler, open),
          ?assertEqual({error, no_healthy_station}, R),
          ok = macula_client:close(Pool)
      end}.
@@ -667,7 +667,7 @@ facade_v2_rpc_delegates_test() ->
     %% an org namespace before the pool fan-out is even asked (the
     %% no-seeds fan-out refusal stays covered by the pool-level test).
     ?assertEqual({error, {provider_authorization, no_org_namespace}},
-                 macula:advertise(Pool, ?REALM, <<"x.v1">>, Handler, #{})),
+                 macula:advertise(Pool, ?REALM, <<"x.v1">>, Handler, #{auth => open})),
     %% V2 unadvertise/3
     ?assertEqual(ok, macula:unadvertise(Pool, ?REALM, <<"x.v1">>)),
     %% call/5 resolves the provider through the DHT, which no linked station can answer
@@ -681,7 +681,7 @@ advertise_rejects_wrong_handler_arity_test() ->
     Three = fun(_, _, _) -> ok end,
     ?assertError(function_clause,
                  macula_client:advertise(Pool, ?REALM,
-                                          <<"a.v1">>, Three)),
+                                          <<"a.v1">>, Three, open)),
     ok = macula_client:close(Pool).
 
 %%------------------------------------------------------------------

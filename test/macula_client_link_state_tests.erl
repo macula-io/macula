@@ -151,9 +151,9 @@ an_advertise_waits_on_no_busy_link_test_() ->
          Handler = fun(_Args) -> {ok, pong} end,
          ok = sys:suspend(LinkB),
          try
-             {AdMs, ok} = timed(fun() -> macula_client:advertise(Pool, ?REALM, <<"acme.ping_v1">>, Handler) end),
+             {AdMs, ok} = timed(fun() -> macula_client:advertise(Pool, ?REALM, <<"acme.ping_v1">>, Handler, open) end),
              ?assert(AdMs < ?PROMPT_MS),
-             ok = macula_client:advertise(Pool, ?REALM, <<"acme.gone_v1">>, Handler),
+             ok = macula_client:advertise(Pool, ?REALM, <<"acme.gone_v1">>, Handler, open),
              {UnadMs, ok} = timed(fun() -> macula_client:unadvertise(Pool, ?REALM, <<"acme.gone_v1">>) end),
              ?assert(UnadMs < ?PROMPT_MS),
              ?assertEqual([], calls_from(Pool, LinkB))

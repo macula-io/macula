@@ -1824,6 +1824,79 @@ realm_member_required_test_() ->
 %% {ucan_required, Issuer} -- binds the token's audience to the caller
 %%------------------------------------------------------------------
 
+%%------------------------------------------------------------------
+%% Call classes (macula#147): who may call each procedure, declared with the
+%% service's release and enforced here, before the handler runs. The class is
+%% resolved at the pool (`macula_client:caller_policy/3', unit-tested in
+%% `macula_call_class_tests'); these are the resolved policies arriving at the
+%% link and being enforced end to end.
+%%------------------------------------------------------------------
+
+%% `members' is the policy that admits a capability of any `can' covering the
+%% procedure, which a bare member token's realm capability does; a caller with no
+%% token at all is still refused.
+a_members_class_admits_any_member_test_() ->
+    {timeout, 15,
+     fun() ->
+         Unauthorized = <<"unauthorized">>,
+         RealmIdentity = realm_key(),
+         Handler = fun(_Payload) -> {ok, #{admitted => true}} end,
+         Policy = {realm_member_required, macula_node_keys:key_id(RealmIdentity), any},
+         {Pid, CallerKp} = inbound_call_fixture([{?GATED_PROCEDURE, Handler}], Policy),
+         Caller = macula_node_keys:key_id(CallerKp),
+         Bare = mint_membership_ucan(RealmIdentity, Caller, #{}),
+         Frame = inject_call_with_ucan(Pid, self(), CallerKp, crypto:strong_rand_bytes(16),
+                                       ?GATED_PROCEDURE, Bare),
+         ?assertMatch({ok, #{{text, <<"admitted">>} := {text, <<"true">>}}}, await_result(Frame, 2_000)),
+         NoToken = inject_call(Pid, self(), CallerKp, crypto:strong_rand_bytes(16), ?GATED_PROCEDURE),
+         ?assertMatch({error, #{code := Unauthorized}}, await_result(NoToken, 2_000))
+     end}.
+
+%% `role' is the policy that demands the capability a role expansion mints. THE
+%% GAP THIS CLOSES: the same bare member token that `members' admits is refused
+%% here, because a realm capability's `can' is not `rpc/call'.
+a_role_class_refuses_a_bare_member_and_admits_the_role_test_() ->
+    {timeout, 15,
+     fun() ->
+         Unauthorized = <<"unauthorized">>,
+         RealmIdentity = realm_key(),
+         Handler = fun(_Payload) -> {ok, #{admitted => true}} end,
+         Policy = {realm_member_required, macula_node_keys:key_id(RealmIdentity), <<"rpc/call">>},
+         {Pid, CallerKp} = inbound_call_fixture([{?GATED_PROCEDURE, Handler}], Policy),
+         Caller = macula_node_keys:key_id(CallerKp),
+         Bare = mint_membership_ucan(RealmIdentity, Caller, #{}),
+         BareFrame = inject_call_with_ucan(Pid, self(), CallerKp, crypto:strong_rand_bytes(16),
+                                           ?GATED_PROCEDURE, Bare),
+         ?assertMatch({error, #{code := Unauthorized}}, await_result(BareFrame, 2_000)),
+         %% The realm's role expansion: `rpc/call' on this procedure's MRI.
+         RoleToken = macula_ucan:create(
+                       RealmIdentity, Caller,
+                       [#{with => <<"mri:proc:test/", ?GATED_PROCEDURE/binary>>, can => <<"rpc/call">>}],
+                       #{exp => erlang:system_time(second) + 3_600}),
+         RoleFrame = inject_call_with_ucan(Pid, self(), CallerKp, crypto:strong_rand_bytes(16),
+                                           ?GATED_PROCEDURE, RoleToken),
+         ?assertMatch({ok, #{{text, <<"admitted">>} := {text, <<"true">>}}}, await_result(RoleFrame, 2_000))
+     end}.
+
+%% `{nodes, Ids}' is the exact class, and it needs no token: the caller is the
+%% identity the request's own signature verified under. A caller it does not name
+%% is refused.
+a_nodes_class_admits_only_the_named_node_test_() ->
+    {timeout, 15,
+     fun() ->
+         Unauthorized = <<"unauthorized">>,
+         Handler = fun(_Payload) -> {ok, #{admitted => true}} end,
+         {ok, NamedKey} = macula_node_keys:generate(identity, pq_pure),
+         {ok, NamedId} = macula_node_keys:node_id(NamedKey),
+         Policy = {nodes, [NamedId]},
+         {Pid, _FixtureKp} = inbound_call_fixture([{?GATED_PROCEDURE, Handler}], Policy),
+         Named = inject_call(Pid, self(), NamedKey, crypto:strong_rand_bytes(16), ?GATED_PROCEDURE),
+         ?assertMatch({ok, #{{text, <<"admitted">>} := {text, <<"true">>}}}, await_result(Named, 2_000)),
+         {ok, StrangerKey} = macula_node_keys:generate(identity, pq_pure),
+         Stranger = inject_call(Pid, self(), StrangerKey, crypto:strong_rand_bytes(16), ?GATED_PROCEDURE),
+         ?assertMatch({error, #{code := Unauthorized}}, await_result(Stranger, 2_000))
+     end}.
+
 %% A token for a `ucan_required' procedure: `IssuerIdentity' signs it and
 %% names `AudiencePub' (hex-encoded, the same convention as membership
 %% tokens) as audience, with a plain `call' capability.
