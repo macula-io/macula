@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [18.1.0] - 2026-10-30
+
+The release where a subscriber hears that it may have missed events (macula-station#129, phase 1). When the last link
+carrying a subscription is lost for longer than its liveness probes allow, the subscriber is told, and told again with
+the window once a station carries the subscription again, so an application can resync instead of carrying on with a
+silent hole. Nothing changes on the wire, the callbacks that take the notices are optional, and a subscriber process
+gets them as two more `{macula_*, SubRef, ...}` messages beside the ones it already handles (`macula_event_gone`,
+`macula_event_unopened`), which is why this is a minor. A process that crashes on a message it does not know should
+ignore these two, or handle them. Also in this cut: the
+local gate runs exactly what CI runs, and a check fails when the two drift apart.
+
 ### Added
 
 - **A subscriber is told when its subscription may have missed events (macula-station#129, phase 1).** A link that
