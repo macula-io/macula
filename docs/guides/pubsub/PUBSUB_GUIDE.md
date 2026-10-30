@@ -352,6 +352,12 @@ end.
   refusal is logged as `_macula.client.registration_refused`.
 - Nothing is sent while another link still carries the subscription, at the
   first subscribe, or after you unsubscribe.
+- A subscriber that joins a subscription the pool already holds while it is
+  interrupted is told the gap too, for a window that began before it joined.
+- On a sealed group subscription, events reach you through the group's
+  opener while the notices come straight from the pool, so a notice can
+  arrive ahead of events the opener still holds. Resyncing on the gap
+  covers both orders.
 
 **Answer a gap by resyncing**, not by filtering. The times are hints: an
 event's `published_at` is the publisher's clock, not yours, and an event can

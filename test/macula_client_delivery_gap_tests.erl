@@ -37,7 +37,13 @@ delivery_gap_test_() ->
                           {"a notice option that is not a function is refused",
                            fun a_notice_option_that_is_not_a_function_is_refused/1},
                           {"a macula_subscriber module is told through its callbacks",
-                           fun a_subscriber_module_is_told/1}]]}.
+                           fun a_subscriber_module_is_told/1},
+                          {"the interruption starts at the link's last frame, not at the ack",
+                           fun the_interruption_starts_at_the_last_frame/1},
+                          {"a macula_subscriber module without the callbacks serves on",
+                           fun a_subscriber_module_without_the_callbacks_serves_on/1},
+                          {"a callback subscription without the options serves on",
+                           fun a_callback_subscription_without_the_options_serves_on/1}]]}.
 
 the_last_link_ending_interrupts_then_a_gap_follows(Pool) ->
     [{Link1, _}, {Link2, _}] = connected(Pool),
@@ -132,6 +138,52 @@ a_subscriber_module_is_told(Pool) ->
     unlink(Subscriber),
     exit(Subscriber, shutdown).
 
+the_interruption_starts_at_the_last_frame(Pool) ->
+    [{Link1, _}, {Link2, _}] = connected(Pool),
+    {ok, SubRef} = subscribed(Pool),
+    accepted(Pool, Link1),
+    AckedBy = erlang:system_time(millisecond),
+    timer:sleep(50),
+    FrameAt = erlang:system_time(millisecond),
+    %% Any frame from the station counts; this one, an ack for another node, changes nothing else.
+    acked(Link1, subscribe_ack(<<99:256>>, true, undefined)),
+    timer:sleep(20),
+    ended(Link1),
+    #{from_ms := From} = told(macula_delivery_interrupted, SubRef),
+    ?assert(From >= FrameAt andalso FrameAt > AckedBy),
+    New = respawned(Pool, [Link1, Link2]),
+    {ok, Links} = macula_client:links(Pool),
+    [#{last_disconnect := LastDisconnect}] = [L || #{pid := Pid} = L <- Links, Pid =:= New],
+    ?assertMatch(#{last_heard_ms := From, reason := <<"app_liveness_lost">>}, LastDisconnect).
+
+a_subscriber_module_without_the_callbacks_serves_on(Pool) ->
+    [{Link1, _}, {Link2, _}] = connected(Pool),
+    {ok, Subscriber} = macula_subscriber:start_link(macula_client_delivery_gap_plain_subscriber, Pool, ?REALM, ?TOPIC,
+                                                    self(), #{sources => open, subscribe => fun macula_client:subscribe/5}),
+    %% Unlinked, so a subscriber that stopped on a notice fails the assertion below rather than this process.
+    unlink(Subscriber),
+    interrupted_then_gap(Pool, Link1, Link2),
+    Pool ! {macula_event, make_ref(), ?TOPIC, after_the_gap, publication_meta(1)},
+    ?assertEqual({?TOPIC, after_the_gap}, received(plain_event)),
+    exit(Subscriber, shutdown).
+
+a_callback_subscription_without_the_options_serves_on(Pool) ->
+    [{Link1, _}, {Link2, _}] = connected(Pool),
+    Test = self(),
+    {ok, _SubRef} = macula_pubsub:subscribe_callback(
+                      Pool, ?REALM, ?TOPIC, fun(Topic, Payload, _Meta) -> Test ! {callback_event, {Topic, Payload}} end,
+                      #{sources => open}),
+    interrupted_then_gap(Pool, Link1, Link2),
+    Pool ! {macula_event, make_ref(), ?TOPIC, after_the_gap, publication_meta(2)},
+    ?assertEqual({?TOPIC, after_the_gap}, received(callback_event)).
+
+%% Link1 alone carries the subscription, ends, and a respawned link's station accepts it again: one interruption and
+%% one gap, sent by the pool once its state shows both.
+interrupted_then_gap(Pool, Link1, Link2) ->
+    accepted(Pool, Link1),
+    ended(Link1),
+    accepted(Pool, respawned(Pool, [Link1, Link2])).
+
 %%------------------------------------------------------------------
 %% macula_subscriber callbacks: each notice goes to the test process.
 %%------------------------------------------------------------------
@@ -210,6 +262,12 @@ acked(Link, Ack) ->
     Link ! {macula_peering, frame, self(), Frame},
     _ = sys:get_state(Link),
     ok.
+
+%% A verified publication's delivery context, as a link hands it to the pool.
+publication_meta(Seq) ->
+    #{realm => ?REALM, publisher => <<1:256>>, publisher_verified => true, seq => Seq, delivered_via => direct,
+      publication_hash => crypto:hash(sha384, <<"tbs ", Seq>>),
+      expires_at => erlang:system_time(millisecond) + 60_000}.
 
 node_id(Pool) ->
     element(macula_client:state_field_index(node_id), sys:get_state(Pool)).
