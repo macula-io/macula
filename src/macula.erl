@@ -324,7 +324,10 @@ present_membership(Pool, Realm, Token, Proofs) ->
 %% It returns once a station acknowledges the subscription (macula#12),
 %% within 30 seconds; a refused or unacknowledged one is dropped and
 %% returned as `macula_client:await_registration/4' names it.
-%% See `macula_pubsub:subscribe/5'.
+%% When no station link carries it any more, `Subscriber' is told
+%% `macula_delivery_interrupted', and `macula_delivery_gap' with the window
+%% events may have been missed in once a station carries it again
+%% (macula-station#129). See `macula_pubsub:subscribe/5'.
 -spec subscribe(pool(), realm(), topic(), pid(), map()) ->
     {ok, reference()}
     | {error, {text_too_long | invalid_text, topic} | {invalid_option, group | distributor | ucan_token}

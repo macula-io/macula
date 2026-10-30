@@ -22,6 +22,15 @@
 %%% restarts it against whatever pool is current. A process that calls
 %%% `macula:subscribe/5' itself should monitor the pool the same way.
 %%%
+%%% == When events may have been missed ==
+%%%
+%%% When the last station link carrying the subscription ends, the optional
+%%% `Module:handle_interrupted/2' is called with `#{from_ms, reason}', and when a
+%%% station accepts it again `Module:handle_gap/2' with `#{from_ms, to_ms,
+%%% reason}': events may have been missed between the two times. Resync what the
+%%% subscription feeds there. A module without them has the notice logged and
+%%% serves on. See `macula_pubsub:subscribe/5' (macula-station#129).
+%%%
 %%% == Subscribe function ==
 %%%
 %%% `start_link/6' takes `subscribe' in its options: the function the
@@ -86,9 +95,19 @@
                           State :: term()) ->
     {noreply, NewState :: term()} | {stop, Reason :: term(), NewState :: term()}.
 
+%% The subscription may be missing events: no station link carries it since
+%% `from_ms' (macula-station#129). Optional: without it the notice is logged.
+-callback handle_interrupted(Info :: #{from_ms := integer(), reason := binary()}, State :: term()) ->
+    {noreply, NewState :: term()} | {stop, Reason :: term(), NewState :: term()}.
+
+%% A station carries the subscription again: events on it may have been missed
+%% between `from_ms' and `to_ms'. Optional: without it the notice is logged.
+-callback handle_gap(Info :: #{from_ms := integer(), to_ms := integer(), reason := binary()}, State :: term()) ->
+    {noreply, NewState :: term()} | {stop, Reason :: term(), NewState :: term()}.
+
 -callback terminate(Reason :: term(), State :: term()) -> any().
 
--optional_callbacks([handle_unopened/3, terminate/2]).
+-optional_callbacks([handle_unopened/3, handle_interrupted/2, handle_gap/2, terminate/2]).
 
 -type subscribe() :: fun((macula:pool(), macula:realm(), macula:topic(), pid(), map()) ->
                             {ok, term()} | {error, term()}).
@@ -167,6 +186,10 @@ handle_info({macula_event, SubRef, Topic, Payload, Meta},
     dispatch(Module:handle_event(Topic, Payload, Meta, User), State);
 handle_info({macula_event_unopened, SubRef, Topic, Info}, #sstate{module = Module, sub_ref = SubRef} = State) ->
     unopened(erlang:function_exported(Module, handle_unopened, 3), Topic, Info, State);
+handle_info({macula_delivery_interrupted, SubRef, Info}, #sstate{module = Module, sub_ref = SubRef} = State) ->
+    noticed(erlang:function_exported(Module, handle_interrupted, 2), handle_interrupted, Info, State);
+handle_info({macula_delivery_gap, SubRef, Info}, #sstate{module = Module, sub_ref = SubRef} = State) ->
+    noticed(erlang:function_exported(Module, handle_gap, 2), handle_gap, Info, State);
 handle_info({macula_event_gone, SubRef, Reason}, #sstate{sub_ref = SubRef} = State) ->
     {stop, Reason, State};
 handle_info({'DOWN', Mon, process, _Pool, Reason}, #sstate{pool_mon = Mon} = State) ->
@@ -179,6 +202,12 @@ unopened(true, Topic, Info, #sstate{module = Module, user = User} = State) ->
 unopened(false, Topic, Info, #sstate{module = Module} = State) ->
     ok = macula_diagnostics:bounded_event(warning, <<"_macula.subscriber.event_unopened">>,
                                           Info#{topic => Topic, module => Module}),
+    {noreply, State}.
+
+%% The pool logged the notice already; a module without the callback needs nothing more.
+noticed(true, Callback, Info, #sstate{module = Module, user = User} = State) ->
+    dispatch(Module:Callback(Info, User), State);
+noticed(false, _Callback, _Info, State) ->
     {noreply, State}.
 
 dispatch({noreply, NewUser}, State) ->

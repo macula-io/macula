@@ -56,6 +56,12 @@
 %% macula_client_replay helper, and starts the link with the options it
 %% was started with before (`#link_state.extra_opts'), which is what
 %% keeps a direct dial's `expected_node_id' across a bounce.
+%%
+%% Replay restores the subscription, not what the old link lost. A
+%% subscription no link carries any more is told so, and told again with
+%% the window it may have missed events in once a station accepts it anew:
+%% `macula_delivery_interrupted' and `macula_delivery_gap', see
+%% `macula_pubsub:subscribe/5' (macula-station#129).
 -module(macula_client).
 
 %% An advertisement spec (macula_station_link:advertisement_spec()), checked
@@ -280,10 +286,12 @@
 %% is the reason's name only, never its terms. A `peer_identity_mismatch' also
 %% names the node id the seed expected and the one the station presented, in
 %% lowercase hex: both are public, and an operator needs both to tell a stale
-%% pin from a station whose identity moved.
+%% pin from a station whose identity moved. `last_heard_ms' is when the link
+%% last received a frame from its station, absent when it never did.
 -type last_disconnect() :: #{
     reason            := binary(),
     at_ms             := integer(),
+    last_heard_ms     => integer(),
     expected_node_id  => binary(),
     presented_node_id => binary()
 }.
@@ -729,6 +737,10 @@
     %% topic's segments: an inbound event is matched against these alone,
     %% not against every topic in the index.
     wildcard_topics = #{} :: #{{<<_:256>>, binary()} => [binary()]},
+    %% Which links carry each subscription, and the subscriptions no link
+    %% carries now (macula-station#129): their subscribers are told when one
+    %% may have missed events.
+    coverage = macula_client_coverage:new() :: macula_client_coverage:t(),
     %% The membership the node presents in each realm (macula#128), handed to every link and to each respawned one
     %% before its subscriptions, so the first SUBSCRIBE in the realm carries it.
     memberships = #{} :: #{<<_:256>> => macula_realm_rights:presented()},
@@ -2238,9 +2250,10 @@ handle_info({source_lookup_timeout, Key, Worker}, S) -> {noreply, source_deadlin
 
 handle_info({macula_event_gone, _LinkSubRef, _Reason}, S) ->
     %% A link torn down its subscription end. Pool will respawn the
-    %% link via the DOWN handler and replay subs. Don't propagate to
-    %% local consumers — they see a continuous stream. The pool keeps no
-    %% link SubRef: it unsubscribes a link by topic (macula#45).
+    %% link via the DOWN handler and replay subs. Not passed on as it is:
+    %% the DOWN tells a consumer once no link carries its subscription
+    %% (macula-station#129). The pool keeps no link SubRef: it unsubscribes
+    %% a link by topic (macula#45).
     {noreply, S};
 
 handle_info({renew_due, Kind, Key, Ref}, S) ->
@@ -2306,7 +2319,7 @@ handle_info({'EXIT', Admission, Reason}, #state{admission = Admission} = S) ->
     {stop, {shutdown, {admission_down, Reason}}, S};
 %% A station's answer to a registration, through the link that sent it (macula#12).
 handle_info({macula_register_ack, Link, Station, Key, Answer}, S) ->
-    {noreply, station_answered(Link, Station, Key, Answer, S)};
+    {noreply, station_answered(Link, Station, Key, Answer, covered(Key, Link, Answer, S))};
 %% A link could not send an advertisement, so its station will not answer it.
 handle_info({macula_register_unsent, Link, Key, Reason}, #state{registrations = Regs} = S) ->
     {noreply, link_answered(maps:find(Key, Regs), Link, Key, {not_sent, Reason}, S)};
@@ -2314,12 +2327,12 @@ handle_info({register_ack_timeout, Key, From}, #state{registrations = Regs} = S)
     {noreply, wait_ended(maps:find(Key, Regs), Key, From, S)};
 %% A link tells the pool its station at handshake.
 handle_info({macula_link_connected, Pid, NodeId}, S) ->
-    {noreply, link_connected(find_link_by_pid(Pid, S), Pid, NodeId, S)};
+    {noreply, link_connected(find_link_by_pid(Pid, S), Pid, NodeId, link_heard(Pid, erlang:system_time(millisecond), S))};
 %% A link says why it disconnected, just before it stops `normal'. Its DOWN
 %% follows this message, as signals from one process arrive in order.
 handle_info({macula_link_disconnected, Pid, Summary}, #state{connected = Connected} = S) ->
     {noreply, disconnect_kept(find_link_by_pid(Pid, S), Summary,
-                              S#state{connected = maps:remove(Pid, Connected)})};
+                              last_heard(Pid, Summary, S#state{connected = maps:remove(Pid, Connected)}))};
 handle_info({'EXIT', Pid, Reason}, #state{keyring = Keyring} = S) ->
     %% Links are linked to us via gen_server:start_link in
     %% start_link_for_seed (we trap_exit). The DOWN monitor fires
@@ -4209,7 +4222,7 @@ on_down_routed({ok, Seed}, _Mon, Pid, Reason, S0) ->
     macula_diagnostics:event(<<"_macula.client.link_down">>,
                              #{seed => Seed, pid => Pid, reason => Reason}),
     erlang:send_after(?LINK_RESPAWN_DELAY_MS, self(), {respawn_link, Seed}),
-    S = exit_kept(Reason, Seed, S0),
+    S = coverage_lost(Pid, Reason, exit_kept(Reason, Seed, S0)),
     S1 = S#state{links = maps:remove(Seed, S#state.links),
                  connected = maps:remove(Pid, S#state.connected)},
     {noreply, maybe_rediscover_now(S1)};
@@ -4407,7 +4420,11 @@ drop_sub_take({#sub_spec{realm = R, topic = T, mon = Mon} = Spec, NewSubs},
     NewIdx = on_index_after_drop(Empty, Key, NewSet, Idx),
     unsubscribe_links(Empty, Key,
                       S#state{subs = NewSubs, topic_index = NewIdx,
-                              wildcard_topics = wildcards_after_drop(Empty, Key, S#state.wildcard_topics)}).
+                              wildcard_topics = wildcards_after_drop(Empty, Key, S#state.wildcard_topics),
+                              coverage = coverage_after_drop(Empty, Key, S#state.coverage)}).
+
+coverage_after_drop(true,  Key, C) -> macula_client_coverage:withdrawn(Key, C);
+coverage_after_drop(false, _Key, C) -> C.
 
 wildcards_after_drop(true,  Key, W) -> maps:remove(Key, W);
 wildcards_after_drop(false, _Key, W) -> W.
@@ -4438,6 +4455,61 @@ unsubscribe_links(true, {Realm, Topic}, S) ->
     PoolPid = self(),
     _ = [macula_station_link:unsubscribe_topic_async(P, Realm, Topic, PoolPid) || P <- spawned_link_pids(S)],
     registration_withdrawn({subscribe, Realm, Topic}, S).
+
+%%====================================================================
+%% Internals — delivery coverage (macula-station#129)
+%%====================================================================
+
+%% A station's answer to a subscription moves its coverage: an acceptance
+%% makes the link carry it, and ends an interruption with a gap; a refusal
+%% stops the link carrying it, and may start one. Only a subscription the pool
+%% still holds is followed. Every answer is a frame from the link's station.
+covered({subscribe, Realm, Topic}, Link, Answer, S) ->
+    Key = {Realm, Topic},
+    Heard = link_heard(Link, erlang:system_time(millisecond), S),
+    coverage_moved(is_map_key(Key, S#state.topic_index), Key, Link, Answer, Heard);
+covered(_Key, Link, _Answer, S) ->
+    link_heard(Link, erlang:system_time(millisecond), S).
+
+coverage_moved(false, _Key, _Link, _Answer, S) ->
+    S;
+coverage_moved(true, Key, Link, accepted, #state{coverage = C} = S) ->
+    {Gap, C1} = macula_client_coverage:accepted(Key, Link, erlang:system_time(millisecond), C),
+    told(Gap, gap, Key, S#state{coverage = C1});
+coverage_moved(true, Key, Link, {refused, Reason}, #state{coverage = C} = S) ->
+    {Interruption, C1} = macula_client_coverage:refused(Key, Link, macula_reason_name:text(Reason), C),
+    told(Interruption, interrupted, Key, S#state{coverage = C1}).
+
+link_heard(Link, AtMs, #state{coverage = C} = S) ->
+    S#state{coverage = macula_client_coverage:heard(Link, AtMs, C)}.
+
+%% A link reports, as it disconnects, why, and the last time its station sent
+%% it a frame.
+last_heard(Link, #{reason := Reason} = Summary, #state{coverage = C} = S) ->
+    S#state{coverage = macula_client_coverage:ending(Link, Reason, maps:get(last_heard_ms, Summary, undefined), C)}.
+
+%% A link ended: every subscription it was the last to carry is interrupted,
+%% named by why the link went down, as it said before it stopped, or else by
+%% its exit.
+coverage_lost(Link, Reason, #state{coverage = C} = S) ->
+    {Interruptions, C1} = macula_client_coverage:link_ended(Link, macula_reason_name:text(Reason), C),
+    lists:foldl(fun({Key, Interruption}, Acc) -> told(Interruption, interrupted, Key, Acc) end,
+                S#state{coverage = C1}, Interruptions).
+
+%% Every subscriber of `Key' is told, in its own mailbox, beside its events.
+told(none, _Notice, _Key, S) ->
+    S;
+told(Info, Notice, {Realm, Topic} = Key, #state{topic_index = Idx, subs = Subs} = S) ->
+    {Tag, Event} = notice(Notice),
+    ok = macula_diagnostics:bounded_event(warning, Event,
+                                          Info#{realm => binary:encode_hex(Realm, lowercase), topic => Topic}),
+    _ = [Pid ! {Tag, SubRef, Info}
+         || SubRef <- sets:to_list(maps:get(Key, Idx, sets:new())),
+            #sub_spec{subscriber = Pid} <- [maps:get(SubRef, Subs)]],
+    S.
+
+notice(interrupted) -> {macula_delivery_interrupted, <<"_macula.client.delivery_interrupted">>};
+notice(gap) -> {macula_delivery_gap, <<"_macula.client.delivery_gap">>}.
 
 %%====================================================================
 %% Internals — inbound event fan-out

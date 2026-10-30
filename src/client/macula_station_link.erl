@@ -567,6 +567,11 @@
     liveness_timer        :: undefined | reference(),
     liveness_outstanding  :: undefined | {<<_:128>>, macula_frame:verified_request()},
     liveness_misses = 0   :: non_neg_integer(),
+    %% When this link last received a frame from its station, in milliseconds
+    %% of wall-clock time: the pool is told as the link disconnects, so a
+    %% subscription that no link carries any more is interrupted from then
+    %% (macula-station#129).
+    last_heard_ms         :: integer() | undefined,
     %% Replies refused before they could clear a probe, counted by reason.
     refused_replies       :: macula_refusal_report:t(),
     %% Sealed frames this node cannot open yet (E2E packages 3 to 5), by
@@ -2169,7 +2174,7 @@ peering_event({macula_peering, disconnected, Pid, Reason},
     Summary = disconnect_summary(Reason),
     macula_diagnostics:event(notice, <<"_macula.station_link.disconnected">>,
                              maps:merge(#{seed => Seed, peer_pid => Pid}, Summary)),
-    pool_told(Pool, Summary#{at_ms => erlang:system_time(millisecond)}),
+    pool_told(Pool, heard_summary(S#state.last_heard_ms, Summary#{at_ms => erlang:system_time(millisecond)})),
     NewS = fail_all_pending({disconnected, macula_reason_name:text(Reason)}, cancel_liveness(S)),
     %% Stop normally — the supervisor (or owning gen_server) decides
     %% whether to restart us.
@@ -2282,7 +2287,7 @@ drain_frames(Pid, Acc, N) ->
     end.
 
 fold_frames(Frames, S) ->
-    lists:foldl(fun on_frame/2, S, Frames).
+    lists:foldl(fun on_frame/2, S#state{last_heard_ms = erlang:system_time(millisecond)}, Frames).
 
 %% A link ends answering every caller still waiting on it, whatever it ends
 %% for, so no caller waits out its timeout or reads the end as a call that
@@ -2315,6 +2320,9 @@ disconnect_detail(_Reason) ->
 
 pool_connected(undefined, _PeerNodeId) -> ok;
 pool_connected(Pool, PeerNodeId) -> Pool ! {macula_link_connected, self(), PeerNodeId}, ok.
+
+heard_summary(undefined, Summary) -> Summary;
+heard_summary(AtMs, Summary) -> Summary#{last_heard_ms => AtMs}.
 
 pool_told(undefined, _Summary) -> ok;
 pool_told(Pool, Summary) -> Pool ! {macula_link_disconnected, self(), Summary}, ok.

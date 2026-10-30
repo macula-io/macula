@@ -309,16 +309,67 @@ the pool closing — delivered to `handle_event/4`'s raw equivalent as
 sink as its own termination with that reason.
 
 A link dying does **not** end the subscription — the pool logs
-`_macula.client.link_down`, schedules a respawn, and silently
-re-issues the subscription against the new link once it's up (see
-[Connecting Guide](../shared/CONNECTING_GUIDE.md#lifecycle)). Neither layer
-sees a gap-signaling message for that case, only a possible gap in
-delivery itself, which `ordered` mode handles the same way it handles
-any other gap: the skip is counted (`pubsub_gap_skips`), and a copy of a
-skipped fact that arrives later is delivered late, flagged
-`late => true` (`pubsub_late_delivered`).
+`_macula.client.link_down`, schedules a respawn, and re-issues the
+subscription against the new link once it's up (see
+[Connecting Guide](../shared/CONNECTING_GUIDE.md#lifecycle)). It may still
+have cost you events; the next section says when, and how you are told.
 
 After the subscription ends, no further events come for it.
+
+---
+
+## When events may have been missed
+
+The pool carries each subscription on every station link it holds. While
+one of them carries it, nothing is missed: every publication reached the
+pool on some link, and the pool's dedup merged the copies. A link that
+loses its station for less than about a minute also loses nothing, because
+QUIC resends what was in flight.
+
+A longer outage — a laptop lid closed over lunch, a train through a tunnel —
+ends the link after two missed liveness probes (30 seconds apart). Whatever
+the station had written to it since is gone, and the station does not keep
+it. When that link was the last one carrying the subscription, the pool
+tells the subscriber, beside its events:
+
+```erlang
+receive
+    {macula_delivery_interrupted, SubRef, #{from_ms := From, reason := Reason}} ->
+        %% No station carries the subscription since From.
+        show_offline(From, Reason);
+    {macula_delivery_gap, SubRef, #{from_ms := From, to_ms := To}} ->
+        %% A station carries it again; events may have been missed in between.
+        resync(From, To)
+end.
+```
+
+- `from_ms` is the last time any link carrying the subscription heard from
+  its station; `to_ms` is when a station accepted it again. Both are this
+  node's wall-clock milliseconds.
+- `reason` names why the last link ended, such as `<<"app_liveness_lost">>`.
+- A gap comes once per interruption, and only after one. If every station
+  refuses the re-subscription, it stays interrupted and no gap follows; the
+  refusal is logged as `_macula.client.registration_refused`.
+- Nothing is sent while another link still carries the subscription, at the
+  first subscribe, or after you unsubscribe.
+
+**Answer a gap by resyncing**, not by filtering. The times are hints: an
+event's `published_at` is the publisher's clock, not yours, and an event can
+be lost slightly before `from_ms`. Ask whatever the subscription feeds for
+its current state, or exchange state with its peers, and merge.
+
+A `macula_subscriber` module gets the notices through the optional callbacks
+`handle_interrupted/2` and `handle_gap/2`; a `subscribe_callback/5`
+subscription through the options `on_interrupted` and `on_gap`, each a
+function of the notice's map. Without them, the notice is logged as
+`_macula.client.delivery_interrupted` or `_macula.client.delivery_gap`, and
+serving goes on.
+
+What this does not cover: events a station refused to write to a link that
+stayed up because it was too far behind, a subscription a station drops while
+the link stays up (at a membership token's end), and events lost before they
+reached any station. The `ordered` mode's own gap handling, for a missing
+`seq` from one publisher, is separate (see [Delivery ordering](#delivery-ordering)).
 
 ---
 

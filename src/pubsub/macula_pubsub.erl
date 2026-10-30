@@ -116,6 +116,19 @@ publish(Pool, Realm, Topic, Payload, Opts)
 %% `{macula_event_gone, SubRef, Reason}' once when the subscription
 %% terminates (pool close, subscriber pid death).
 %%
+%% The pool carries a subscription on every station link it holds. When the
+%% last link carrying it ends, whatever its station had written to that link
+%% is lost, and `Subscriber' receives
+%% `{macula_delivery_interrupted, SubRef, #{from_ms, reason}}': `from_ms' is
+%% the last time that link heard from its station, `reason' the name of why it
+%% ended. When a station accepts the subscription again, it receives
+%% `{macula_delivery_gap, SubRef, #{from_ms, to_ms, reason}}': events on the
+%% subscription may have been missed between the two times. Both are this
+%% node's wall-clock milliseconds, a hint, not a filter: answer a gap by
+%% resyncing what the subscription feeds, never by dropping events whose
+%% `published_at' falls outside it. While another link still carries the
+%% subscription nothing was missed and nothing is sent (macula-station#129).
+%%
 %% `Opts' honors `delivery' (see `macula:subscribe/5'), `sources' (see below) and
 %% `group', a sealed group's prefix `Topic' (or every topic a pattern matches) must
 %% be under, with `ucan_token' and `distributor' as for `publish/5'. The
@@ -183,7 +196,11 @@ event_meta(#{realm := Realm, publisher := Publisher, seq := Seq,
 %% that is killed sends no `macula_event_gone'.
 %%
 %% `Opts' is `subscribe/5's, and names `sources' like this arity's
-%% receiver-pid sibling: there is no default.
+%% receiver-pid sibling: there is no default. Two more options take the
+%% notices a receiver pid gets when the subscription may be missing events
+%% (see `subscribe/5'): `on_interrupted' and `on_gap', each a function of the
+%% notice's map. Without them a notice is only logged. Any other value is
+%% `{error, {invalid_option, on_interrupted | on_gap}}'.
 %%
 %% A crashing callback does NOT kill the receiver — the exception is
 %% logged and the next event is delivered. This is intentional: a
@@ -201,10 +218,23 @@ subscribe_callback(Pool, Realm, Topic, Callback, Opts)
        is_binary(Topic),
        is_function(Callback, 3),
        is_map(Opts) ->
+    callback_subscribed(invalid_notice([on_interrupted, on_gap], Opts), Pool, Realm, Topic, Callback, Opts).
+
+%% A notice option is a function of one argument, or absent.
+invalid_notice([], _Opts) -> none;
+invalid_notice([Key | Keys], Opts) -> notice_option(maps:find(Key, Opts), Key, Keys, Opts).
+
+notice_option({ok, Fun}, _Key, Keys, Opts) when is_function(Fun, 1) -> invalid_notice(Keys, Opts);
+notice_option(error, _Key, Keys, Opts) -> invalid_notice(Keys, Opts);
+notice_option({ok, _NotAFun}, Key, _Keys, _Opts) -> Key.
+
+callback_subscribed(none, Pool, Realm, Topic, Callback, Opts) ->
     Caller = self(),
     {Receiver, Mon} = spawn_monitor(
         fun() -> receiver_init(Caller, Pool, Realm, Topic, Callback, Opts) end),
-    await_init(Receiver, Mon).
+    await_init(Receiver, Mon);
+callback_subscribed(Key, _Pool, _Realm, _Topic, _Callback, _Opts) ->
+    {error, {invalid_option, Key}}.
 
 await_init(Receiver, Mon) ->
     receive
@@ -225,28 +255,36 @@ await_init(Receiver, Mon) ->
 receiver_init(Caller, Pool, Realm, Topic, Callback, Opts) ->
     Mons = {erlang:monitor(process, Caller), erlang:monitor(process, Pool)},
     on_subscribe(macula_client:subscribe(Pool, Realm, Topic, self(), Opts),
-                 Caller, Mons, Callback).
+                 Caller, Mons, {Callback, maps:with([on_interrupted, on_gap], Opts)}).
 
-on_subscribe({ok, SubRef}, Caller, Mons, Callback) ->
+on_subscribe({ok, SubRef}, Caller, Mons, Handlers) ->
     Caller ! {?MODULE, started, self(), SubRef},
-    receiver_loop(SubRef, Mons, Callback);
-on_subscribe({error, _} = E, Caller, {CallerMon, PoolMon}, _Callback) ->
+    receiver_loop(SubRef, Mons, Handlers);
+on_subscribe({error, _} = E, Caller, {CallerMon, PoolMon}, _Handlers) ->
     Caller ! {?MODULE, failed, self(), E},
     erlang:demonitor(CallerMon, [flush]),
     erlang:demonitor(PoolMon, [flush]).
 
-receiver_loop(SubRef, {CallerMon, PoolMon} = Mons, Callback) ->
+receiver_loop(SubRef, {CallerMon, PoolMon} = Mons, {Callback, Notices} = Handlers) ->
     receive
         {macula_event, SubRef, Topic, Payload, Meta} ->
             invoke(Callback, Topic, Payload, Meta),
-            receiver_loop(SubRef, Mons, Callback);
+            receiver_loop(SubRef, Mons, Handlers);
+        %% The subscription may be missing events (macula-station#129): told
+        %% to the option's fun, else only logged, which the pool already did.
+        {macula_delivery_interrupted, SubRef, Info} ->
+            ok = notice_told(maps:find(on_interrupted, Notices), Info),
+            receiver_loop(SubRef, Mons, Handlers);
+        {macula_delivery_gap, SubRef, Info} ->
+            ok = notice_told(maps:find(on_gap, Notices), Info),
+            receiver_loop(SubRef, Mons, Handlers);
         %% A sealed event this subscription could not open: the callback
         %% takes payloads, and this one has none, so it is logged, never
         %% left in the mailbox.
         {macula_event_unopened, SubRef, Topic, Info} ->
             ok = macula_diagnostics:bounded_event(warning, <<"_macula.pubsub.event_unopened">>,
                                                   Info#{topic => Topic}),
-            receiver_loop(SubRef, Mons, Callback);
+            receiver_loop(SubRef, Mons, Handlers);
         {macula_event_gone, SubRef, _Reason} ->
             ok;
         {'DOWN', CallerMon, process, _, _} ->
@@ -254,6 +292,16 @@ receiver_loop(SubRef, {CallerMon, PoolMon} = Mons, Callback) ->
         {'DOWN', PoolMon, process, _Pool, _Reason} ->
             ok
     end.
+
+notice_told({ok, Fun}, Info) ->
+    try Fun(Info) of
+        _ -> ok
+    catch
+        Class:Reason:Stack ->
+            logger:warning("[macula_pubsub] notice callback crashed: ~p:~p~n~p", [Class, Reason, Stack])
+    end;
+notice_told(error, _Info) ->
+    ok.
 
 %% Guard the user callback so a transient handler bug does not
 %% wedge the entire subscription stream. This is the rare place where

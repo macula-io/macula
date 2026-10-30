@@ -110,7 +110,7 @@ a_refusal_nobody_waits_for_is_reported(Pool) ->
     ok = advertise(Pool),
     acked(Link2, advertise_ack(true, undefined)),
     ok = macula_client:await_registration(Pool, advertise, ?REALM, ?PROCEDURE),
-    ok = capturing(),
+    ok = capturing_afresh(),
     try
         acked(Link1, advertise_ack(false, advertiser_quota)),
         ?assertMatch(#{station := Station1, kind := advertise, realm := ?REALM, name := ?PROCEDURE,

@@ -11,6 +11,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A subscriber is told when its subscription may have missed events (macula-station#129, phase 1).** A link that
+  loses its station for longer than its liveness probes allow ends, and whatever the station had written to it is
+  lost; the pool re-subscribed on a new link and delivered on as if nothing had happened. Now, when the last link
+  carrying a subscription ends, its subscriber receives `{macula_delivery_interrupted, SubRef, #{from_ms, reason}}`,
+  and once a station accepts the subscription again `{macula_delivery_gap, SubRef, #{from_ms, to_ms, reason}}`:
+  events may have been missed between the two. Nothing is sent while another link still carries the subscription,
+  so a second link is still what keeps a subscription whole. `macula_subscriber` gains the optional callbacks
+  `handle_interrupted/2` and `handle_gap/2`, and `subscribe_callback/5` the options `on_interrupted` and `on_gap`;
+  without them the notice is logged. A link now reports, as it disconnects, the last time its station sent it a
+  frame, as `last_heard_ms` in `links/1`'s `last_disconnect`. No wire change. The Pub/Sub guide's "When events may
+  have been missed" says how to answer a gap: resync, never filter by time.
+
 - **The local gate is derived from CI, and a check fails when they drift (macula#163).** `scripts/is_tree_pushable.sh`
   used to be a hand-copied list — xref and eunit — so every step CI gained left it behind in silence, and the gap was
   found by a red run after the work had been handed over. It now reads `.github/workflows/test.yml` and `docs.yml`,
