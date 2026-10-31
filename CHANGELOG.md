@@ -26,8 +26,8 @@ counted from counting mode up before a realm is closed. Wire unchanged.
   operator can watch the close's effect on kept members and services first.
 - **`serve/5` (macula-realm#175, D3).** An ADVERTISE in a members-mode realm needs both the provider's delegation
   verdict and a live membership, each counted under its own check; either one failing refuses it.
-- **`membership_reason/1`.** Maps what `admit/2` refused to the four membership reasons, so a station keeps the
-  reason it has today's `none` for.
+- **`membership_reason/1`.** Turns what `admit/2` refused into the membership reason a station keeps beside the link,
+  so a frame turned away because its token ended says `expired` rather than a bare refusal.
 - The module documents what a members-mode realm does not promise: its availability is its members' availability
   (threat 5, D4, accepted — if the realm cannot mint, every member is refused within the token life and the way back
   is an operator's mode change), and membership is closed, not secret.

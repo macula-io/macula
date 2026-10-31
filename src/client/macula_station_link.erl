@@ -3150,8 +3150,12 @@ maybe_send_advertise(Realm, Proc, Spec, #state{peer_node_id = Station} = S) ->
 %% only advertises presents its token here, so a members-mode station can admit it (macula-realm#175, D3).
 send_advertise(Pid, Realm, EncodedAd, S) ->
     {Frame, Mark} = presenting(Realm, macula_frame:advertise(#{advertisement => EncodedAd}), S),
-    try macula_peering:send_frame(Pid, Frame) catch _:_ -> ok end,
-    Mark(S).
+    %% Marked only on a frame that actually went out, as presented_sent/3 does: a refused or raised send leaves the
+    %% membership to the next frame (macula#128), rather than recording a token this station never saw.
+    case catch macula_peering:send_frame(Pid, Frame) of
+        ok -> Mark(S);
+        _SentOrRaised -> S
+    end.
 
 %% The advertisement this link sends for a spec names the station this
 %% link is connected to and every other station its pool is connected to
