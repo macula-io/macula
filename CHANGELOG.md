@@ -26,6 +26,12 @@ counted from counting mode up before a realm is closed. Wire unchanged.
   operator can watch the close's effect on kept members and services first.
 - **`serve/5` (macula-realm#175, D3).** An ADVERTISE in a members-mode realm needs both the provider's delegation
   verdict and a live membership, each counted under its own check; either one failing refuses it.
+- **A provider that only advertises presents its token too (`macula_station_link`, macula-realm#175, D3).** The first
+  ADVERTISE in a realm carries `realm.membership`, once per connection as SUBSCRIBE and PUBLISH already did, and a
+  renewed membership re-sends the realm's advertisements as it re-sends its subscriptions (macula#133). Without it a
+  provider that never subscribes is never admitted, and when a rotation arrives it has nothing to re-present with.
+  The cost is a DHT write per rotation, not per frame: every advertisement in the realm is re-signed and re-published
+  once each time the membership is renewed.
 - **`membership_reason/1`.** Turns what `admit/2` refused into the membership reason a station keeps beside the link,
   so a frame turned away because its token ended says `expired` rather than a bare refusal.
 - The module documents what a members-mode realm does not promise: its availability is its members' availability

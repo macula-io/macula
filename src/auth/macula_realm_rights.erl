@@ -176,6 +176,11 @@ admitted({error, _} = Refusal, _Token, _Proofs) ->
 %% it presented no token, or its token stopped authorizing). A grant must cover every topic the pattern can match
 %% (threat model 4.4, macula_ucan:grants/4). `allow' lets the SUBSCRIBE through; `{refuse, Refusal}' refuses it
 %% not_authorized, naming the capability and the pattern.
+%%
+%% In `members' mode the rights map is read as a live membership and its `until' is NOT re-checked here: the caller
+%% keeps what admit/2 kept and drops it at `until', as it already does on the capability path, and members mode
+%% relies on that. A caller that holds the map past `until' admits a member whose token ended — which is why the
+%% station, not this function, is the one that knows why a token ended (membership/3).
 -spec subscribe(mode(), <<_:256>>, rights() | none, binary()) -> allow | {refuse, refusal()}.
 subscribe(Mode, Realm, Rights, Pattern) when is_binary(Pattern) ->
     topic_decision(subscribe, ?SUBSCRIBE_CAN, Mode, Realm, Rights, Pattern, {subscription, Pattern}).
