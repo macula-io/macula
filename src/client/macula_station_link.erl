@@ -1039,11 +1039,11 @@ subscribe_async(Client, Realm, Topic, Subscriber)
        is_binary(Topic), is_pid(Subscriber) ->
     registration(Client, {subscribe, Realm, Topic, Subscriber}).
 
-%% @doc Present a realm membership token and its proofs to this link's station (macula#128): the next SUBSCRIBE or
-%% PUBLISH in Realm carries it, and a link already subscribed in Realm sends every subscription it holds there again,
-%% the first carrying it now, so a fresh token reaches the station before the old one ends and a subscription the
-%% station dropped at the old token's expiry is back (macula#133). Each new connection presents it again. Without
-%% waiting, as `subscribe_async/4'.
+%% @doc Present a realm membership token and its proofs to this link's station (macula#128): the next SUBSCRIBE,
+%% PUBLISH or ADVERTISE in Realm carries it, and a link already subscribed or advertising in Realm sends every
+%% subscription and advertisement it holds there again, the first carrying it now, so a fresh token reaches the
+%% station before the old one ends and what the station dropped at the old token's expiry is back (macula#133,
+%% macula-realm#175 D3). Each new connection presents it again. Without waiting, as `subscribe_async/4'.
 -spec present_membership_async(pid(), <<_:256>>, macula_realm_rights:presented()) -> ok.
 present_membership_async(Client, Realm, #{token := Token, proofs := Proofs} = Presented)
   when is_pid(Client), is_binary(Realm), byte_size(Realm) =:= 32, is_binary(Token), is_list(Proofs),
@@ -1830,8 +1830,7 @@ handle_call({advertise, Realm, Proc, Handler, Policy, EncodedAd}, _From,
     S1 = S#state{procedures     = P#{{Realm, Proc} => Handler},
                  policies       = set_policy({Realm, Proc}, Policy, Pols),
                  advertisements = store_advertisement({Realm, Proc}, EncodedAd, S)},
-    maybe_send_advertise(Realm, Proc, EncodedAd, S1),
-    {reply, ok, S1};
+    {reply, ok, maybe_send_advertise(Realm, Proc, EncodedAd, S1)};
 
 handle_call({unadvertise, Realm, Proc}, _From,
             #state{procedures = P, policies = Pols, advertisements = Ads} = S) ->
@@ -1955,8 +1954,8 @@ stream_call({stream_advertise, Realm, Proc, Mode, Handler, Policy, EncodedAd},
     S1 = S#state{stream_procedures = SP#{{Realm, Proc} => {Mode, Handler}},
                  stream_policies   = set_policy({Realm, Proc}, Policy, SPols),
                  advertisements    = store_advertisement({Realm, Proc}, EncodedAd, S)},
-    maybe_send_advertise(Realm, Proc, EncodedAd, S1),
-    {reply, ok, renewal_advertised(Realm, Policy, EncodedAd, S1)};
+    {reply, ok, renewal_advertised(Realm, Policy, EncodedAd,
+                                   maybe_send_advertise(Realm, Proc, EncodedAd, S1))};
 
 stream_call({stream_unadvertise, Realm, Proc},
             #state{stream_procedures = SP, stream_policies = SPols, advertisements = Ads} = S) ->
@@ -2147,8 +2146,7 @@ peering_event({macula_peering, connected, Pid, PeerNodeId},
     %% A new connection has carried no membership yet.
     Presenting = drain_pending_subscribes(NewS#state{memberships = maps:map(fun(_Realm, M) -> M#{sent := false} end,
                                                                             NewS#state.memberships)}),
-    drain_pending_advertisements(Presenting),
-    {noreply, Presenting};
+    {noreply, drain_pending_advertisements(Presenting)};
 
 peering_event({macula_peering, frame, Pid, Frame},
             #state{peer_pid = Pid} = S) ->
@@ -3086,9 +3084,15 @@ maybe_send_subscribe(Realm, Topic, #state{peer_pid = Pid, node_identity = Id} = 
 %% subscriptions in the realm when its token ends, so a renewal that arrives after that restores every one of them
 %% (macula#133); the station takes a repeated SUBSCRIBE as the same subscription. Otherwise the realm's next
 %% SUBSCRIBE or PUBLISH carries it.
-membership_resent(Realm, #state{subscriptions = Subs} = S) ->
+membership_resent(Realm, #state{subscriptions = Subs, advertisements = Ads} = S) ->
     Topics = lists:usort([T || {R, T, _Sub, _Mon} <- maps:values(Subs), R =:= Realm]),
-    lists:foldl(fun(Topic, Acc) -> maybe_send_subscribe(Realm, Topic, Acc) end, S, Topics).
+    S1 = lists:foldl(fun(Topic, Acc) -> maybe_send_subscribe(Realm, Topic, Acc) end, S, Topics),
+    %% And every advertisement it holds in the realm, so a provider that only advertises is admitted by its first
+    %% ADVERTISE and keeps being admitted across a rotation: the station drops what it admitted at the old token's
+    %% `until' (macula-realm#175, D3), and a repeated ADVERTISE replaces rather than duplicates.
+    lists:foldl(fun({R, P}, Acc) when R =:= Realm -> maybe_send_advertise(R, P, maps:get({R, P}, Ads), Acc);
+                   (_Other, Acc) -> Acc
+                end, S1, maps:keys(Ads)).
 
 %% A gated stream advertised from a spec makes the node's own stream_renew findable in that realm, so a caller can
 %% renew the token its session there was opened with (macula#120). It is a procedure in the node's own namespace, so
@@ -3105,8 +3109,7 @@ renewal_registered(true, _Key, _RenewalSpec, S) ->
     S;
 renewal_registered(false, {Realm, Proc} = Key, RenewalSpec, #state{advertisements = Ads} = S) ->
     S1 = S#state{advertisements = Ads#{Key => RenewalSpec}},
-    maybe_send_advertise(Realm, Proc, RenewalSpec, S1),
-    S1.
+    maybe_send_advertise(Realm, Proc, RenewalSpec, S1).
 
 %% The node's stream_renew in a realm is kept while a gated stream is still registered there; with the last one gone
 %% it is no longer renewed, and its advertisement lapses at its expiry.
@@ -3126,23 +3129,32 @@ store_advertisement(Key, EncodedAd, S) ->
 
 %% Send the ADVERTISE frame at once when the link is connected; a
 %% register that arrived before the handshake sits in `advertisements'
-%% until `drain_pending_advertisements/1' runs on `connected'.
-maybe_send_advertise(_Realm, _Proc, undefined, _S) ->
-    ok;
-maybe_send_advertise(_Realm, _Proc, _EncodedAd, #state{peer_pid = undefined}) ->
-    ok;
-maybe_send_advertise(_Realm, _Proc, _EncodedAd, #state{peer_node_id = undefined}) ->
-    ok;
-maybe_send_advertise(_Realm, _Proc, EncodedAd, #state{peer_pid = Pid})
+%% until `drain_pending_advertisements/1' runs on `connected'. Returns the
+%% state, because the frame may be the realm's first word to this station
+%% and so carry its membership (macula-realm#175, D3).
+maybe_send_advertise(_Realm, _Proc, undefined, S) ->
+    S;
+maybe_send_advertise(_Realm, _Proc, _EncodedAd, #state{peer_pid = undefined} = S) ->
+    S;
+maybe_send_advertise(_Realm, _Proc, _EncodedAd, #state{peer_node_id = undefined} = S) ->
+    S;
+maybe_send_advertise(Realm, _Proc, EncodedAd, #state{peer_pid = Pid} = S)
   when is_binary(EncodedAd) ->
-    send_advertise(Pid, EncodedAd);
+    send_advertise(Pid, Realm, EncodedAd, S);
 maybe_send_advertise(Realm, Proc, Spec, #state{peer_node_id = Station} = S) ->
-    sign_advertisement(Realm, Proc, Spec, Station, S).
+    sign_advertisement(Realm, Proc, Spec, Station, S),
+    S.
 
-send_advertise(Pid, EncodedAd) ->
-    Frame = macula_frame:advertise(#{advertisement => EncodedAd}),
-    try macula_peering:send_frame(Pid, Frame) catch _:_ -> ok end,
-    ok.
+%% The ADVERTISE frame, carrying the realm's membership when this connection has not carried it yet: a provider that
+%% only advertises presents its token here, so a members-mode station can admit it (macula-realm#175, D3).
+send_advertise(Pid, Realm, EncodedAd, S) ->
+    {Frame, Mark} = presenting(Realm, macula_frame:advertise(#{advertisement => EncodedAd}), S),
+    %% Marked only on a frame that actually went out, as presented_sent/3 does: a refused or raised send leaves the
+    %% membership to the next frame (macula#128), rather than recording a token this station never saw.
+    case catch macula_peering:send_frame(Pid, Frame) of
+        ok -> Mark(S);
+        _SentOrRaised -> S
+    end.
 
 %% The advertisement this link sends for a spec names the station this
 %% link is connected to and every other station its pool is connected to
@@ -3226,12 +3238,12 @@ on_advertisement_signed({Realm, Proc} = Key, Spec, Station, {error, Reason}, S) 
     Final = final_signing_refusal(Reason),
     ok = unsent_told(Final, S#state.pool, Realm, Proc, Reason),
     retried(Final, Key, Spec, Station, S);
-on_advertisement_signed(Key, Spec, Station, {ok, Signed},
+on_advertisement_signed({Realm, _Proc} = Key, Spec, Station, {ok, Signed},
                         #state{advertisements = Ads, peer_node_id = Station, peer_pid = Pid} = S)
   when is_pid(Pid), map_get(Key, Ads) =:= Spec ->
-    send_advertise(Pid, macula_record:encode(Signed)),
+    S1 = send_advertise(Pid, Realm, macula_record:encode(Signed), S),
     ok = put_advertisement(Signed),
-    renewal_armed(Key, macula_record:expires_at(Signed), S);
+    renewal_armed(Key, macula_record:expires_at(Signed), S1);
 on_advertisement_signed(_Key, _Spec, _Station, {ok, _Signed}, S) ->
     S.
 
@@ -3329,11 +3341,14 @@ maybe_send_unadvertise(Realm, Proc, Withdrawal, #state{peer_pid = Pid}) ->
     put_wire_in_dht(Withdrawal, Realm, Proc, withdrawal).
 
 %% On handshake completion, send an ADVERTISE frame for every stored
-%% advertisement registered before connect.
+%% advertisement registered before connect. Folded rather than listed, because
+%% the first frame in a realm may carry the realm's membership and so changes
+%% the state the next one is sent with; returning `ok' here threw that change
+%% away, and the caller returned a state that still said the membership was
+%% unsent (macula-realm#175).
 drain_pending_advertisements(#state{advertisements = Ads} = S) ->
-    [maybe_send_advertise(R, P, EncodedAd, S)
-     || {{R, P}, EncodedAd} <- maps:to_list(Ads)],
-    ok.
+    lists:foldl(fun({{Realm, Proc}, EncodedAd}, Acc) -> maybe_send_advertise(Realm, Proc, EncodedAd, Acc) end,
+                S, maps:to_list(Ads)).
 
 %% On handshake completion, send a SUBSCRIBE frame for every stored
 %% subscription. Subscribers that came in before connect have been
