@@ -41,10 +41,16 @@ a length it happens to dislike.
 
 Why each field is where it is:
 
-- **The key id inside** is what makes a swapped file be refused **by name**. A
-  sealed file of one node's identity, moved over another's, fails on the key id
-  before a single signature is made under the wrong identity. It also lets an
-  operator tell two sealed files apart without a KEK.
+- **The key id inside** lets an operator tell two sealed files apart without a
+  KEK, and it makes a file whose header and content disagree be refused by name:
+  a header naming one key over another key's ciphertext fails on the key id
+  before a single signature is made under the wrong identity. **It does not, on
+  its own, refuse one node's whole sealed file moved over another's.** The
+  reader compares the header's key id with the key inside the same file, not
+  with a key the caller expected; two boxes that share a KEK accept each
+  other's files, and a caller that must refuse that passes the id it expects
+  (`#{key_id => Expected}` to `load/4`, section 4). Per-box KEKs are what make
+  that substitution impossible without the caller asking (section 6).
 - **The KEK's id** says which KEK this file was sealed to, so a box rotated to
   a new KEK refuses with "wrong KEK" instead of "tampered" — a refusal an
   operator can act on.
@@ -92,9 +98,16 @@ A KEK is refused when:
 | `accept` (the default, and the first release's) | loads, and the load is counted and logged at `notice` |
 | `sealed_required` | refused as `plaintext_key_refused` |
 
-The count is an ETS counter (`plaintext_loads/0`), read by the fleet check: a
-box that has gone through WP-K3 must report zero, and drift shows as a failing
-check rather than as a quietly unsealed key.
+A caller that knows which key it must get passes it: `#{key_id => Expected}`,
+and a file holding any other key is refused as `{key_id_mismatch, Expected}`,
+sealed or plaintext. Without it, the reader can only catch a file whose header
+and content disagree, not a whole sealed file of another node's — see section 6.
+
+The count is a `counters` ref in `persistent_term` (`plaintext_loads/0`),
+created when the module is loaded, so no process owns it and it cannot go back
+to zero when a short-lived loader exits. The fleet check reads it: a box that
+has gone through WP-K3 must report zero, and drift shows as a failing check
+rather than as a quietly unsealed key.
 
 ## 5. Sealing a file in place
 
@@ -110,12 +123,25 @@ check rather than as a quietly unsealed key.
 The plaintext file is replaced only after step 4 passes. A crash before the
 rename leaves the plaintext and a stray temporary, never a half-sealed key.
 
+`save/2` and a first ground identity write their temporary and rename it
+without an `fsync`, which predates this format and is left as it was: what it
+can lose in a hard crash is a freshly minted key that no peer has seen yet. It
+is noted for WP-K3, where the fleet's write paths are weighed together.
+
 A KEK that is configured seals a key **whatever the mode**. Steps 2 to 4 leave
 a box in `accept` for as long as it takes to confirm the sealed load, and in
 that window a statement issuer rewrites connect and TLS keys and a node that
 has none grinds a new identity: all of those are sealed too, so the flip at
 step 4 cannot refuse a file the box itself wrote. A key file is written in
 plaintext only when no KEK is configured at all.
+
+**A KEK that is configured and unusable stops the write.** If the KEK path is
+set but the file is on the key's own device, readable by group or others, or
+not 32 bytes, then a node that has to grind its first identity fails to start,
+in `accept` as much as in `sealed_required`. That is deliberate: the
+alternative is writing a plaintext key on a box whose operator has said where
+the KEK is, and the refusal names the KEK file and what is wrong with it. The
+fix is the KEK, not the mode.
 
 ## 6. The order on a box, and what we do not claim
 
@@ -133,6 +159,19 @@ so only copies of the data directory and the backup are closed there; the
 `same_filesystem` refusal is about the running box, not about the disk image.
 A desktop key with no KEK path configured is still plaintext. Hardware custody
 of the realm key is #142's later step.
+
+**Not claimed: that a sealed file is the *right* file.** Nothing here detects a
+replay or a rollback. An older sealed file of the same key — one taken before a
+rotation, or restored from a backup — opens exactly as the current one does,
+because the header carries no counter, time or generation. Nor is cross-node
+substitution caught by the file alone: the reader compares the header's key id
+with the key inside that same file, so if two boxes share one KEK, one box's
+sealed file opened on the other yields the other's identity without a word.
+**KEKs are therefore per box, one per box, and sharing one between boxes is a
+misconfiguration, not a supported arrangement.** A caller that must refuse a
+substituted file in its own right passes `#{key_id => Expected}` to `load/4`,
+and a caller that must refuse a rolled-back one has to keep that record
+somewhere this format does not: a generation is a follow-up with its own issue.
 
 **Not claimed about a file that has been sealed.** The rename replaces the
 name, not the blocks: the plaintext a key file held before sealing stays in
@@ -169,3 +208,10 @@ plaintext file itself under `sealed_required`.
 Passphrase-derived KEKs, the macOS Keychain and the Linux keyring on desktops,
 and Windows DPAPI (the Rust SDK keeps the Credential Manager it already has).
 Desktop sources are a follow-up with their own issue.
+
+Two things version 1 fixes that a passphrase KEK would force open: the KEK is
+used **raw** as the AES-256 key, with no KDF, and its id is a **plain,
+unsalted** SHA-256 of it. Both are right for 32 random bytes from a file and
+both are wrong for anything a person chooses, so a version 2 that derives a KEK
+from a passphrase must derive the key and the id from the same KDF output, and
+the id must cover the derivation's parameters.

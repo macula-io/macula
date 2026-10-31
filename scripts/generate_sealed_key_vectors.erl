@@ -18,7 +18,8 @@ main() ->
     _ = os:unsetenv("MACULA_KEY_KEK_FILE"),
     _ = application:unset_env(macula, key_kek_file),
     Vectors = [vector(<<"identity_pq_pure">>, identity, pq_pure),
-               vector(<<"org_pq_pure">>, org, pq_pure)],
+               vector(<<"org_pq_pure">>, org, pq_pure),
+               vector(<<"identity_pq_hybrid">>, identity, pq_hybrid)],
     ok = file:write_file(?VECTOR_FILE, json:encode(document(Vectors))),
     io:format("wrote ~s~n", [?VECTOR_FILE]),
     halt(0).
@@ -40,7 +41,8 @@ vector(Name, Purpose, Profile) ->
       plaintext => hex(Plaintext),
       sealed => hex(Sealed),
       key_id => hex(macula_node_keys:key_id(Key)),
-      flipped_byte_offset => 110}.
+      flipped_byte_offset => 110,
+      header_flip_offset => 24}.
 
 document(Vectors) ->
     #{generator => <<"scripts/generate-sealed-key-vectors.sh">>,

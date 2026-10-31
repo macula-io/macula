@@ -111,6 +111,7 @@
                    | sealed_key_read_back
                    | {sealed_key, wrong_kek | wrong_key_id | header_mismatch}
                    | {key_file_mode, term()}
+                   | {key_id_mismatch, <<_:256>>}
                    | {kek, not_configured | wrong_length}
                    | {kek, file:name_all(), not_owner_only | same_filesystem | wrong_length | file:posix()}
                    | {unknown_purpose, term()}
@@ -397,12 +398,32 @@ saved({error, _} = Failed, _Path) ->
 load(Path, Purpose, Profile) ->
     load(Path, Purpose, Profile, #{}).
 
-%% @doc Load a key file, with options. `kek_file' names the file the KEK is read from, and `mode' overrides the
-%% application's key_file_mode setting (`accept' or `sealed_required').
+%% @doc Load a key file, with options. `kek_file' names the file the KEK is read from, `mode' overrides the
+%% application's key_file_mode setting (`accept' or `sealed_required'), and `key_id' names the key the caller must get,
+%% so a file holding any other is refused as {key_id_mismatch, Expected} rather than loaded.
 -spec load(file:name_all(), purpose(), macula_crypto_profile:profile(), map()) ->
         {ok, node_key()} | {error, refusal() | file:posix() | badarg | terminated | system_limit}.
 load(Path, Purpose, Profile, Options) ->
-    checked_key(owner_only_read(file:read_file_info(Path), Path, Options), Purpose, Profile).
+    loaded_key(key_file_mode(Options), Path, Purpose, Profile, Options).
+
+%% The mode is checked once, here, before the file is read: a mode nobody recognises refuses a sealed file and a
+%% plaintext one alike, instead of the sealed path having no opinion while the plaintext path refused.
+loaded_key({invalid, Mode}, _Path, _Purpose, _Profile, _Options) ->
+    {error, {key_file_mode, Mode}};
+loaded_key(_Mode, Path, Purpose, Profile, Options) ->
+    expected_key_id(checked_key(owner_only_read(file:read_file_info(Path), Path, Options), Purpose, Profile),
+                    Options).
+
+%% A caller that knows which key it must get names it, and a file holding any other is refused whatever the KEK
+%% opens: the header's key id can only speak for the file it is in, not for the one the caller meant
+%% (DESIGN_SEALED_KEY_FILE.md, section 6).
+expected_key_id({ok, Key} = Loaded, #{key_id := Expected}) ->
+    named_key_id(key_id(Key) =:= Expected, Expected, Loaded);
+expected_key_id(Loaded, _Options) ->
+    Loaded.
+
+named_key_id(true, _Expected, Loaded) -> Loaded;
+named_key_id(false, Expected, _Loaded) -> {error, {key_id_mismatch, Expected}}.
 
 %%------------------------------------------------------------------
 %% Sealed key files
@@ -417,9 +438,13 @@ kek_id(Kek) when is_binary(Kek) ->
 
 %% @doc The mode a key file is loaded under: `#{mode := Mode}' when the caller names one, else the macula
 %% application's `key_file_mode' setting, whose default is `accept'. `sealed_required' refuses a plaintext key file.
--spec key_file_mode(map()) -> accept | sealed_required.
-key_file_mode(#{mode := Mode}) -> Mode;
-key_file_mode(_Options) -> application:get_env(macula, key_file_mode, accept).
+-spec key_file_mode(map()) -> accept | sealed_required | {invalid, term()}.
+key_file_mode(#{mode := Mode}) -> valid_mode(Mode);
+key_file_mode(_Options) -> valid_mode(application:get_env(macula, key_file_mode, accept)).
+
+valid_mode(accept) -> accept;
+valid_mode(sealed_required) -> sealed_required;
+valid_mode(Other) -> {invalid, Other}.
 
 %% @doc How many plaintext key files have been loaded since this module was loaded. A box that has gone through the
 %% fleet's sealing shows zero; a count that keeps moving is a key file that was never sealed (WP-K3's fleet check reads
@@ -694,7 +719,7 @@ plaintext_allowed(accept, Plain, Path) ->
     decode(Plain);
 plaintext_allowed(sealed_required, _Plain, _Path) ->
     {error, plaintext_key_refused};
-plaintext_allowed(Mode, _Plain, _Path) ->
+plaintext_allowed({invalid, Mode}, _Plain, _Path) ->
     {error, {key_file_mode, Mode}}.
 
 %% The bytes a key is stored as. A KEK that is configured seals them whatever the mode: a box in the middle of the
@@ -713,7 +738,7 @@ stored_form({error, _}, accept, ok, _Path, Key) ->
     {ok, encode(Key)};
 stored_form({error, _} = NoKek, sealed_required, ok, _Path, _Key) ->
     NoKek;
-stored_form(_Kek, Mode, ok, _Path, _Key) ->
+stored_form(_Kek, {invalid, Mode}, ok, _Path, _Key) ->
     {error, {key_file_mode, Mode}}.
 
 sealed_key_bytes({ok, Kek}, Key) ->

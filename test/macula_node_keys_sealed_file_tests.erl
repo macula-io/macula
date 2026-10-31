@@ -6,6 +6,10 @@
 %% temporary directory and its KEKs under /dev/shm, and asserts first that the two really are different devices: on a
 %% box where they are not, every load here would refuse, and a suite that quietly went green would be worse than one
 %% that fails.
+%%
+%% REQUIREMENT FOR ANY MACHINE THAT RUNS THIS: a second filesystem at /dev/shm that is not TMPDIR. The CI image has one
+%% (a tmpfs mount). Where it does not, two_filesystems_test fails by name before anything else runs, rather than
+%% leaving the KEK refusals untested or the suite green on a check it never really made.
 -module(macula_node_keys_sealed_file_tests).
 
 -include_lib("eunit/include/eunit.hrl").
@@ -350,9 +354,48 @@ a_ground_identity_with_a_kek_configured_is_sealed_even_under_accept_test_() ->
 an_unknown_key_file_mode_is_refused_not_crashed_on_test_() ->
     {timeout, ?EU_TIMEOUT, fun() ->
          {ok, Key} = macula_node_keys:generate(identity, pq_pure),
-         Path = plaintext_file("unknown_mode", Key),
-         ?assertEqual({error, {key_file_mode, sealed_if_you_like}},
-                      macula_node_keys:load(Path, identity, pq_pure, #{mode => sealed_if_you_like}))
+         Kek = kek(),
+         Plain = plaintext_file("unknown_mode", Key),
+         Sealed = key_file("unknown_mode_sealed", macula_node_keys:seal(Key, Kek)),
+         [?assertEqual({error, {key_file_mode, sealed_if_you_like}},
+                       macula_node_keys:load(Path, identity, pq_pure, #{mode => sealed_if_you_like}))
+          || Path <- [Plain, Sealed]]
+     end}.
+
+%% A KEK that is configured but unusable stops a write rather than falling back to plaintext, in accept as much as in
+%% sealed_required: the box has been told where its KEK is, so the answer is the refusal and not a key file the flip to
+%% sealed_required would refuse later.
+a_broken_kek_stops_a_write_under_accept_test_() ->
+    {timeout, ?EU_TIMEOUT, fun() ->
+         {ok, Key} = macula_node_keys:generate(identity, pq_pure),
+         Dir = tmp_dir(),
+         Beside = filename:join(Dir, "kek.beside"),
+         _Kek = write_kek(Beside),
+         Path = filename:join(Dir, "broken_kek.key"),
+         with_mode(accept, fun() ->
+             with_kek_setting(Beside, fun() ->
+                 ?assertEqual({error, {kek, Beside, same_filesystem}}, macula_node_keys:save(Path, Key)),
+                 ?assertEqual(false, filelib:is_regular(Path))
+             end)
+         end)
+     end}.
+
+%% The header's key id speaks for the file it is in, not for the one the caller meant: a caller that knows which key it
+%% must get names it, and a key file of another node's sealed to the same KEK is then refused.
+a_caller_that_names_the_key_it_must_get_is_obeyed_test_() ->
+    {timeout, ?EU_TIMEOUT, fun() ->
+         {ok, Ours} = macula_node_keys:generate(identity, pq_pure),
+         {ok, Theirs} = macula_node_keys:generate(identity, pq_pure),
+         Kek = kek(),
+         KekPath = kek_file(Kek),
+         Path = key_file("named", macula_node_keys:seal(Ours, Kek)),
+         ?assertEqual({ok, Ours}, macula_node_keys:load(Path, identity, pq_pure,
+                                                       #{kek_file => KekPath,
+                                                         key_id => macula_node_keys:key_id(Ours)})),
+         ?assertEqual({error, {key_id_mismatch, macula_node_keys:key_id(Theirs)}},
+                      macula_node_keys:load(Path, identity, pq_pure,
+                                            #{kek_file => KekPath,
+                                              key_id => macula_node_keys:key_id(Theirs)}))
      end}.
 
 %% A short-lived loader is the ordinary case: a pool asks for its identity, and the process that asked can be gone a
@@ -397,16 +440,19 @@ check_vector(#{<<"kek">> := KekHex, <<"kek_id">> := KekIdHex, <<"nonce">> := Non
     ?assertEqual({error, {sealed_key, wrong_kek}},
                  macula_node_keys:unseal(Sealed, crypto:hash(sha256, <<"another kek">>))).
 
-check_altered(#{<<"kek">> := KekHex, <<"sealed">> := SealedHex, <<"flipped_byte_offset">> := Offset}) ->
+check_altered(#{<<"kek">> := KekHex, <<"sealed">> := SealedHex, <<"flipped_byte_offset">> := Offset,
+                <<"header_flip_offset">> := HeaderOffset}) ->
     Kek = binary:decode_hex(KekHex),
     Sealed = binary:decode_hex(SealedHex),
     ?assertEqual({error, sealed_key_not_authentic}, macula_node_keys:unseal(flip(Sealed, Offset), Kek)),
+    ?assertEqual({error, sealed_key_not_authentic}, macula_node_keys:unseal(flip(Sealed, HeaderOffset), Kek)),
     ?assertEqual({error, sealed_key_bad_file},
                  macula_node_keys:unseal(binary:part(Sealed, 0, ?HEADER_BYTES - 1), Kek)).
 
-the_vectors_pin_down_both_key_id_derivations_test() ->
-    Purposes = [P || #{<<"purpose">> := P} <- vectors()],
-    ?assertEqual([<<"identity">>, <<"org">>], Purposes).
+the_vectors_pin_down_both_key_id_derivations_and_both_profiles_test() ->
+    Pairs = lists:sort([{P, F} || #{<<"purpose">> := P, <<"profile">> := F} <- vectors()]),
+    ?assertEqual([{<<"identity">>, <<"pq_hybrid">>}, {<<"identity">>, <<"pq_pure">>}, {<<"org">>, <<"pq_pure">>}],
+                 Pairs).
 
 sealed_key_id(<<_Magic:21/binary, _Version:8, _Purpose:8, _Profile:8, KeyId:32/binary, _/binary>>) ->
     KeyId.
@@ -449,12 +495,18 @@ plaintext_of(Key) ->
 
 %% A directory of this call's own, so no test reads another's files.
 tmp_dir() ->
-    Dir = filename:join([tmp_root(), "macula-k1", integer_to_list(erlang:unique_integer([positive]))]),
+    Dir = filename:join([tmp_root(), "macula-k1", run_tag()]),
     ok = filelib:ensure_dir(filename:join(Dir, "x")),
     Dir.
 
 tmp_root() ->
     os:getenv("TMPDIR", "/tmp").
+
+%% `erlang:unique_integer/1` is unique within a VM and starts again in the next one, while the temporary directory
+%% survives between runs: a directory named by it alone can hold an earlier run's key file, and a ground-identity test
+%% would then load one it expected to create. The OS pid tells two VMs apart, including two CI jobs on one box.
+run_tag() ->
+    lists:flatten(io_lib:format("~s-~b", [os:getpid(), erlang:unique_integer([positive])])).
 
 plaintext_file(Name, Key) ->
     Path = filename:join(tmp_dir(), Name ++ ".key"),
@@ -481,7 +533,7 @@ kek_file(Kek) ->
     Path.
 
 it_kek_file(Name) ->
-    Dir = filename:join([?KEK_DIR, "macula-k1", integer_to_list(erlang:unique_integer([positive]))]),
+    Dir = filename:join([?KEK_DIR, "macula-k1", run_tag()]),
     ok = filelib:ensure_dir(filename:join(Dir, "x")),
     filename:join(Dir, Name).
 
