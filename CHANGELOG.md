@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A subscriber whose link lost its station is told `app_liveness_lost`, not `drained` (macula-station#129).** When a
+  link stops hearing its station it closes its own connection for lost liveness, and the connection, which drains
+  before it ends, reported only that it had drained. That word went into `macula_delivery_interrupted` and
+  `macula_delivery_gap`, `links/1`'s `last_disconnect` and the `_macula.station_link.disconnected` log, so the person
+  was told the wrong cause. A link now names the liveness loss when its own liveness close ended it. Found by the live
+  run on macula-station#129, against a real station with the path dropped for three minutes; the unit test had sent
+  the link `app_liveness_lost` itself, which a real connection never does.
+
 ## [18.1.0] - 2026-10-30
 
 The release where a subscriber hears that it may have missed events (macula-station#129, phase 1). When the last link

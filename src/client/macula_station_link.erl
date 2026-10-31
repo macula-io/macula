@@ -2171,11 +2171,12 @@ peering_event({macula_peering, disconnected, Pid, Reason},
     %% `macula_client:on_down_routed/5' has left to log. Without this,
     %% a station-initiated close is indistinguishable from any other
     %% disconnect in every log this link ever produces.
-    Summary = disconnect_summary(Reason),
+    Ended = ended_by(S, Reason),
+    Summary = disconnect_summary(Ended),
     macula_diagnostics:event(notice, <<"_macula.station_link.disconnected">>,
                              maps:merge(#{seed => Seed, peer_pid => Pid}, Summary)),
     pool_told(Pool, heard_summary(S#state.last_heard_ms, Summary#{at_ms => erlang:system_time(millisecond)})),
-    NewS = fail_all_pending({disconnected, macula_reason_name:text(Reason)}, cancel_liveness(S)),
+    NewS = fail_all_pending({disconnected, macula_reason_name:text(Ended)}, cancel_liveness(S)),
     %% Stop normally — the supervisor (or owning gen_server) decides
     %% whether to restart us.
     {stop, normal, NewS#state{peer_pid = undefined,
@@ -2299,6 +2300,14 @@ terminate(Reason, #state{peer_pid = Pid} = S) when is_pid(Pid) ->
     ok;
 terminate(Reason, S) ->
     answer_waiting_callers({link_stopped, macula_reason_name:text(Reason)}, S).
+
+%% Why the link ended. When the link closed its own connection for lost liveness, the connection reports only that it
+%% drained; the cause is the liveness loss, and that is what the pool, a subscriber's notice and the log are told
+%% (macula-station#129).
+ended_by(#state{liveness_misses = Misses, liveness_max_misses = Max}, _Reported) when Misses >= Max, Max > 0 ->
+    app_liveness_lost;
+ended_by(_S, Reported) ->
+    Reported.
 
 %% Why a link disconnected, in what leaves this process: the reason's name, and
 %% for the reasons listed below the named facts an operator needs and nothing

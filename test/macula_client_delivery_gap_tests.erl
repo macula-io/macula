@@ -38,6 +38,8 @@ delivery_gap_test_() ->
                            fun a_notice_option_that_is_not_a_function_is_refused/1},
                           {"a macula_subscriber module is told through its callbacks",
                            fun a_subscriber_module_is_told/1},
+                          {"a link that closed itself for lost liveness is told as that, not as drained",
+                           fun a_liveness_close_is_told_as_liveness_lost/1},
                           {"the interruption starts at the link's last frame, not at the ack",
                            fun the_interruption_starts_at_the_last_frame/1},
                           {"a macula_subscriber module without the callbacks serves on",
@@ -155,6 +157,41 @@ the_interruption_starts_at_the_last_frame(Pool) ->
     {ok, Links} = macula_client:links(Pool),
     [#{last_disconnect := LastDisconnect}] = [L || #{pid := Pid} = L <- Links, Pid =:= New],
     ?assertMatch(#{last_heard_ms := From, reason := <<"app_liveness_lost">>}, LastDisconnect).
+
+%% The sequence a real link goes through when its station stops answering: probes go unanswered until the link closes
+%% its connection for lost liveness, and the connection, which drains before it ends, reports `drained'. The live run
+%% on macula-station#129 told the subscriber `drained'; the cause it is told is the liveness loss.
+a_liveness_close_is_told_as_liveness_lost(Pool) ->
+    [{Link1, _}, {Link2, _}] = connected(Pool),
+    {ok, SubRef} = subscribed(Pool),
+    accepted(Pool, Link1),
+    ok = probes_unanswered_until_closed(Link1, 10),
+    Mon = erlang:monitor(process, Link1),
+    Link1 ! {macula_peering, disconnected, self(), drained},
+    receive {'DOWN', Mon, process, Link1, _} -> ok after 5_000 -> error(link_not_ended) end,
+    ?assertMatch(#{reason := <<"app_liveness_lost">>}, told(macula_delivery_interrupted, SubRef)),
+    New = respawned(Pool, [Link1, Link2]),
+    {ok, Links} = macula_client:links(Pool),
+    [#{last_disconnect := LastDisconnect}] = [L || #{pid := Pid} = L <- Links, Pid =:= New],
+    ?assertMatch(#{reason := <<"app_liveness_lost">>}, LastDisconnect).
+
+%% Ticks the link's liveness, never answering a probe, until it asks this process, its peer, to close for lost liveness.
+probes_unanswered_until_closed(_Link, 0) ->
+    error(no_liveness_close);
+probes_unanswered_until_closed(Link, Ticks) ->
+    Link ! liveness_tick,
+    _ = sys:get_state(Link),
+    closed_or_tick_again(liveness_close_asked(), Link, Ticks).
+
+closed_or_tick_again(true, _Link, _Ticks) -> ok;
+closed_or_tick_again(false, Link, Ticks) -> probes_unanswered_until_closed(Link, Ticks - 1).
+
+liveness_close_asked() ->
+    receive
+        {'$gen_statem', _, {close, app_liveness_lost}} -> true;
+        {'$gen_cast', {close, app_liveness_lost}} -> true
+    after 100 -> false
+    end.
 
 a_subscriber_module_without_the_callbacks_serves_on(Pool) ->
     [{Link1, _}, {Link2, _}] = connected(Pool),
