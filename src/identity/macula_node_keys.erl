@@ -110,6 +110,7 @@
                    | sealed_key_not_authentic
                    | sealed_key_read_back
                    | {sealed_key, wrong_kek | wrong_key_id | header_mismatch}
+                   | {key_file_mode, term()}
                    | {kek, not_configured | wrong_length}
                    | {kek, file:name_all(), not_owner_only | same_filesystem | wrong_length | file:posix()}
                    | {unknown_purpose, term()}
@@ -131,7 +132,13 @@
 -define(KEY_ID_BYTES, 32).
 -define(NONCE_BYTES, 12).
 -define(SEALED_HEADER_BYTES, (21 + 1 + 1 + 1 + 32 + 32 + 12)).
--define(PLAINTEXT_LOADS, macula_node_keys_plaintext_loads).
+-define(PLAINTEXT_COUNTER, macula_node_keys_plaintext_counter).
+
+%% The count of plaintext key loads is created when the code server loads this module, which it does once, so two
+%% processes cannot race to create it and the count has no owning process to die with. It is kept in persistent_term
+%% because a key file can be loaded before the application starts (see stored_identity/2), when there is no supervisor
+%% to own a table.
+-on_load(init_plaintext_counter/0).
 -define(MLDSA87_PUBLIC_BYTES, 2592).
 -define(MLDSA87_SIGNATURE_BYTES, 4627).
 -define(COMPOSITE_PREFIX, "CompositeAlgorithmSignatures2025").
@@ -414,31 +421,39 @@ kek_id(Kek) when is_binary(Kek) ->
 key_file_mode(#{mode := Mode}) -> Mode;
 key_file_mode(_Options) -> application:get_env(macula, key_file_mode, accept).
 
-%% @doc How many plaintext key files have been loaded since this VM started. A box that has gone through the fleet's
-%% sealing shows zero; a count that keeps moving is a key file that was never sealed (WP-K3's fleet check reads it).
+%% @doc How many plaintext key files have been loaded since this module was loaded. A box that has gone through the
+%% fleet's sealing shows zero; a count that keeps moving is a key file that was never sealed (WP-K3's fleet check reads
+%% it). The count is a counters ref, a resource no process owns, so it does not go back to zero when the process that
+%% loaded the key exits.
 -spec plaintext_loads() -> non_neg_integer().
 plaintext_loads() ->
-    try ets:lookup(?PLAINTEXT_LOADS, loads) of
-        [{loads, Count}] -> Count;
-        [] -> 0
-    catch
-        error:badarg -> 0
-    end.
+    counters:get(plaintext_counter(), 1).
 
 plaintext_load_counted(Path) ->
     logger:notice(#{msg => {report, #{label => {macula_node_keys, plaintext_key_loaded}, path => Path}}}),
-    counted_table(),
-    _ = ets:update_counter(?PLAINTEXT_LOADS, loads, {2, 1}, {loads, 0}),
+    counters:add(plaintext_counter(), 1, 1),
     ok.
 
-%% The table is created by whichever load needs it first: a key file can be loaded before the application starts (see
-%% stored_identity/2), so there is nowhere else to create it. A second creator is told badarg and does nothing.
-counted_table() ->
-    try ets:new(?PLAINTEXT_LOADS, [named_table, public, set, {write_concurrency, true}]) of
-        _ -> ok
-    catch
-        error:badarg -> ok
+plaintext_counter() ->
+    persistent_term:get(?PLAINTEXT_COUNTER).
+
+%% Created when the code server loads this module (see the on_load attribute above), which it does once, so two
+%% processes cannot race to create it. A hot reload finds it present and keeps it, so an upgrade does not reset the
+%% count either.
+init_plaintext_counter() ->
+    initialized_counter(held_plaintext_counter()).
+
+held_plaintext_counter() ->
+    case persistent_term:get(?PLAINTEXT_COUNTER, undefined) of
+        undefined -> none;
+        Ref -> {held, Ref}
     end.
+
+initialized_counter(none) ->
+    persistent_term:put(?PLAINTEXT_COUNTER, counters:new(1, [write_concurrency])),
+    ok;
+initialized_counter({held, _Ref}) ->
+    ok.
 
 %% @doc The sealed form of a key (MACULA-SEALED-KEY-V1): the header, then the plaintext key file sealed under `Kek'
 %% with a fresh nonce. Sealing changes no identity: the key id inside stays the one the key already had.
@@ -678,24 +693,28 @@ plaintext_allowed(accept, Plain, Path) ->
     plaintext_load_counted(Path),
     decode(Plain);
 plaintext_allowed(sealed_required, _Plain, _Path) ->
-    {error, plaintext_key_refused}.
+    {error, plaintext_key_refused};
+plaintext_allowed(Mode, _Plain, _Path) ->
+    {error, {key_file_mode, Mode}}.
 
-%% The bytes a key is stored as: plaintext under `accept', sealed under `sealed_required', which needs a KEK and says
-%% so rather than writing a file the next start would refuse.
+%% The bytes a key is stored as. A KEK that is configured seals them whatever the mode: a box in the middle of the
+%% rollout (the KEK wired in and its keys sealed, still in `accept') would otherwise keep writing the connect and TLS
+%% keys a statement issuer rewrites and every new ground identity in plaintext, and the flip to `sealed_required'
+%% would refuse its own fresh files at the next start. With no KEK, `accept' writes plaintext and `sealed_required'
+%% refuses rather than write a file the next start would refuse.
 storage_bytes(Path, Key) ->
-    stored_form(key_file_mode(#{}), filelib:ensure_dir(Path), Path, Key).
+    stored_form(kek_file(#{}), key_file_mode(#{}), filelib:ensure_dir(Path), Path, Key).
 
-stored_form(_Mode, {error, _} = Error, _Path, _Key) ->
+stored_form(_Kek, _Mode, {error, _} = Error, _Path, _Key) ->
     Error;
-stored_form(accept, ok, _Path, Key) ->
+stored_form({ok, KekPath}, Mode, ok, Path, Key) when Mode =:= accept; Mode =:= sealed_required ->
+    sealed_key_bytes(key_kek(KekPath, key_device(Path)), Key);
+stored_form({error, _}, accept, ok, _Path, Key) ->
     {ok, encode(Key)};
-stored_form(sealed_required, ok, Path, Key) ->
-    sealed_storage(kek_file(#{}), key_device(Path), Key).
-
-sealed_storage({ok, KekPath}, Device, Key) ->
-    sealed_key_bytes(key_kek(KekPath, Device), Key);
-sealed_storage({error, _} = Error, _Device, _Key) ->
-    Error.
+stored_form({error, _} = NoKek, sealed_required, ok, _Path, _Key) ->
+    NoKek;
+stored_form(_Kek, Mode, ok, _Path, _Key) ->
+    {error, {key_file_mode, Mode}}.
 
 sealed_key_bytes({ok, Kek}, Key) ->
     {ok, seal(Key, Kek)};

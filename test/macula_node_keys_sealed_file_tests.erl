@@ -277,11 +277,13 @@ a_key_saved_under_sealed_required_is_sealed_test_() ->
          end)
      end}.
 
-a_key_saved_under_accept_is_plaintext_test_() ->
+a_key_saved_under_accept_with_no_kek_is_plaintext_test_() ->
     {timeout, ?EU_TIMEOUT, fun() ->
          {ok, Key} = macula_node_keys:generate(identity, pq_pure),
          Path = filename:join(tmp_dir(), "plain_saved.key"),
-         with_mode(accept, fun() -> ?assertEqual(ok, macula_node_keys:save(Path, Key)) end),
+         without_kek(fun() ->
+             with_mode(accept, fun() -> ?assertEqual(ok, macula_node_keys:save(Path, Key)) end)
+         end),
          {ok, Bytes} = file:read_file(Path),
          ?assertMatch(<<"macula-node-key-v1\0", _/binary>>, Bytes)
      end}.
@@ -314,16 +316,79 @@ a_ground_identity_under_sealed_required_without_a_kek_is_refused_test_() ->
          end)
      end}.
 
+%% A configured KEK seals what the box writes, whatever the mode: a box between step 2 and step 4 of section 6 is in
+%% `accept', and a key it writes there in plaintext would be refused by its own flip to `sealed_required'.
+a_key_saved_with_a_kek_configured_is_sealed_even_under_accept_test_() ->
+    {timeout, ?EU_TIMEOUT, fun() ->
+         {ok, Key} = macula_node_keys:generate(identity, pq_pure),
+         Path = filename:join(tmp_dir(), "sealed_while_accepting.key"),
+         KekPath = kek_file(kek()),
+         with_mode(accept, fun() ->
+             with_kek_setting(KekPath, fun() ->
+                 ?assertEqual(ok, macula_node_keys:save(Path, Key)),
+                 {ok, Bytes} = file:read_file(Path),
+                 ?assertMatch(<<?SEALED_MAGIC, _/binary>>, Bytes),
+                 ?assertEqual({ok, Key}, macula_node_keys:load(Path, identity, pq_pure, #{kek_file => KekPath}))
+             end)
+         end)
+     end}.
+
+a_ground_identity_with_a_kek_configured_is_sealed_even_under_accept_test_() ->
+    {timeout, ?EU_TIMEOUT, fun() ->
+         Path = filename:join(tmp_dir(), "ground_accepting.key"),
+         KekPath = kek_file(kek()),
+         with_mode(accept, fun() ->
+             with_kek_setting(KekPath, fun() ->
+                 {ok, Key} = macula_node_keys:node_identity(Path, pq_pure),
+                 {ok, Bytes} = file:read_file(Path),
+                 ?assertMatch(<<?SEALED_MAGIC, _/binary>>, Bytes),
+                 ?assertEqual({ok, Key}, macula_node_keys:load(Path, identity, pq_pure, #{kek_file => KekPath}))
+             end)
+         end)
+     end}.
+
+an_unknown_key_file_mode_is_refused_not_crashed_on_test_() ->
+    {timeout, ?EU_TIMEOUT, fun() ->
+         {ok, Key} = macula_node_keys:generate(identity, pq_pure),
+         Path = plaintext_file("unknown_mode", Key),
+         ?assertEqual({error, {key_file_mode, sealed_if_you_like}},
+                      macula_node_keys:load(Path, identity, pq_pure, #{mode => sealed_if_you_like}))
+     end}.
+
+%% A short-lived loader is the ordinary case: a pool asks for its identity, and the process that asked can be gone a
+%% moment later. The count is a counters ref kept in persistent_term, which no process owns, so it stays.
+the_plaintext_count_outlives_the_process_that_loaded_the_key_test_() ->
+    {timeout, ?EU_TIMEOUT, fun() ->
+         {ok, Key} = macula_node_keys:generate(identity, pq_pure),
+         Path = plaintext_file("outlives", Key),
+         Before = macula_node_keys:plaintext_loads(),
+         {Pid, Ref} = spawn_monitor(fun() ->
+                                       {ok, _} = macula_node_keys:load(Path, identity, pq_pure, #{mode => accept})
+                                   end),
+         receive {'DOWN', Ref, process, Pid, _} -> ok
+         after 30000 -> ?assert(false)
+         end,
+         ?assertEqual(Before + 1, macula_node_keys:plaintext_loads())
+     end}.
+
 %%------------------------------------------------------------------
-%% The shared vector
+%% The shared vectors
 %%------------------------------------------------------------------
 
-the_vector_opens_and_seals_to_the_same_bytes_test() ->
-    #{<<"kek">> := KekHex, <<"nonce">> := NonceHex, <<"plaintext">> := PlaintextHex, <<"sealed">> := SealedHex,
-      <<"key_id">> := KeyIdHex} = vectors(),
+the_vectors_open_and_seal_to_the_same_bytes_test_() ->
+    [?_test(check_vector(V)) || V <- vectors()].
+
+the_vectors_are_refused_when_altered_test_() ->
+    [?_test(check_altered(V)) || V <- vectors()].
+
+check_vector(#{<<"kek">> := KekHex, <<"kek_id">> := KekIdHex, <<"nonce">> := NonceHex,
+               <<"header">> := HeaderHex, <<"plaintext">> := PlaintextHex, <<"sealed">> := SealedHex,
+               <<"key_id">> := KeyIdHex}) ->
     Kek = binary:decode_hex(KekHex),
     Nonce = binary:decode_hex(NonceHex),
     Sealed = binary:decode_hex(SealedHex),
+    ?assertEqual(KekIdHex, hex(macula_node_keys:kek_id(Kek))),
+    ?assertEqual(HeaderHex, hex(binary:part(Sealed, 0, ?HEADER_BYTES))),
     ?assertMatch(<<?SEALED_MAGIC, _/binary>>, Sealed),
     {ok, Key} = macula_node_keys:unseal(Sealed, Kek),
     ?assertEqual(KeyIdHex, hex(macula_node_keys:key_id(Key))),
@@ -332,13 +397,16 @@ the_vector_opens_and_seals_to_the_same_bytes_test() ->
     ?assertEqual({error, {sealed_key, wrong_kek}},
                  macula_node_keys:unseal(Sealed, crypto:hash(sha256, <<"another kek">>))).
 
-the_vector_is_refused_when_altered_test() ->
-    #{<<"kek">> := KekHex, <<"sealed">> := SealedHex, <<"flipped_byte_offset">> := Offset} = vectors(),
+check_altered(#{<<"kek">> := KekHex, <<"sealed">> := SealedHex, <<"flipped_byte_offset">> := Offset}) ->
     Kek = binary:decode_hex(KekHex),
     Sealed = binary:decode_hex(SealedHex),
     ?assertEqual({error, sealed_key_not_authentic}, macula_node_keys:unseal(flip(Sealed, Offset), Kek)),
     ?assertEqual({error, sealed_key_bad_file},
                  macula_node_keys:unseal(binary:part(Sealed, 0, ?HEADER_BYTES - 1), Kek)).
+
+the_vectors_pin_down_both_key_id_derivations_test() ->
+    Purposes = [P || #{<<"purpose">> := P} <- vectors()],
+    ?assertEqual([<<"identity">>, <<"org">>], Purposes).
 
 sealed_key_id(<<_Magic:21/binary, _Version:8, _Purpose:8, _Profile:8, KeyId:32/binary, _/binary>>) ->
     KeyId.
@@ -375,7 +443,7 @@ hex(Bin) -> binary:encode_hex(Bin, lowercase).
 %% The key file bytes a key is saved as: written by the one writer, and read back.
 plaintext_of(Key) ->
     Path = filename:join(tmp_dir(), "plaintext.key"),
-    ok = macula_node_keys:save(Path, Key),
+    without_kek(fun() -> ok = macula_node_keys:save(Path, Key) end),
     {ok, Bytes} = file:read_file(Path),
     Bytes.
 
@@ -450,10 +518,14 @@ without_kek(Test) ->
 restore_env(App, Key, undefined) -> application:unset_env(App, Key);
 restore_env(App, Key, {ok, Value}) -> application:set_env(App, Key, Value).
 
-restore_os_env(false) -> ok;
+restore_os_env(false) -> os:unsetenv("MACULA_KEY_KEK_FILE");
 restore_os_env(Value) -> os:putenv("MACULA_KEY_KEK_FILE", Value).
 
 vectors() ->
+    #{<<"vectors">> := Vectors} = vector_json(),
+    Vectors.
+
+vector_json() ->
     {ok, Bytes} = file:read_file(vector_file()),
     json:decode(Bytes).
 

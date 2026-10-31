@@ -110,6 +110,13 @@ check rather than as a quietly unsealed key.
 The plaintext file is replaced only after step 4 passes. A crash before the
 rename leaves the plaintext and a stray temporary, never a half-sealed key.
 
+A KEK that is configured seals a key **whatever the mode**. Steps 2 to 4 leave
+a box in `accept` for as long as it takes to confirm the sealed load, and in
+that window a statement issuer rewrites connect and TLS keys and a node that
+has none grinds a new identity: all of those are sealed too, so the flip at
+step 4 cannot refuse a file the box itself wrote. A key file is written in
+plaintext only when no KEK is configured at all.
+
 ## 6. The order on a box, and what we do not claim
 
 1. Wire the KEK into the service.
@@ -127,18 +134,35 @@ so only copies of the data directory and the backup are closed there; the
 A desktop key with no KEK path configured is still plaintext. Hardware custody
 of the realm key is #142's later step.
 
+**Not claimed about a file that has been sealed.** The rename replaces the
+name, not the blocks: the plaintext a key file held before sealing stays in
+those blocks until the filesystem reuses them, and no step here overwrites it.
+A backup or a snapshot taken before the seal still holds the plaintext, so
+sealing a box does not seal its history — the age backup and any other copy
+have to be dealt with as copies. The directory itself is not synced after the
+rename; the sealed file is synced before it, so a crash costs the rename, not
+the file.
+
+
 ## 7. Vectors
 
 `test/vectors/sealed_key_v1.json` is the shared contract for the three
-implementations. It holds a KEK, a plaintext key file, a nonce, and the sealed
-bytes they produce, written once by `scripts/generate-sealed-key-vectors.sh`
-(key generation is random, so a run makes a new key and the committed file is
-the vector). A conforming reader unseals the vector's bytes to a key of the
-vector's key id; a conforming writer seals the vector's plaintext with the
-vector's nonce to those exact bytes. From those inputs every implementation
-also runs the same refusals: another KEK (`wrong_kek`), a byte flipped at
-`flipped_byte_offset` (`not_authentic`), a file shorter than its header
-(`bad_file`), and the plaintext file itself under `sealed_required`.
+implementations. It carries two vectors, each with a KEK, the KEK's id, a
+nonce, the header, the plaintext key file and the sealed bytes they produce,
+written once by `scripts/generate-sealed-key-vectors.sh` (key generation is
+random, so a run makes new keys and the committed file is the vector). One is
+an identity key in `pq_pure`, whose key id is the `node_id` derivation; the
+other is an `org` key in `pq_pure`, whose key id is the `MACULA-KEY-ID-V1`
+derivation. Between them an implementation can tell the two derivations apart,
+and the separate `kek_id` and `header` fields let a label or an offset mistake
+show without a full open.
+
+A conforming reader unseals a vector's bytes to a key of that vector's key id;
+a conforming writer seals the vector's plaintext with the vector's nonce to
+those exact bytes. From the same inputs every implementation also runs the same
+refusals: another KEK (`wrong_kek`), a byte flipped at `flipped_byte_offset`
+(`not_authentic`), a file shorter than its header (`bad_file`), and the
+plaintext file itself under `sealed_required`.
 
 ## 8. Out of version 1
 
