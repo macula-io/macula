@@ -171,7 +171,8 @@ sealed file opened on the other yields the other's identity without a word.
 misconfiguration, not a supported arrangement.** A caller that must refuse a
 substituted file in its own right passes `#{key_id => Expected}` to `load/4`,
 and a caller that must refuse a rolled-back one has to keep that record
-somewhere this format does not: a generation is a follow-up with its own issue.
+somewhere this format does not: macula-io/macula#179 carries that work,
+including the restore it has to survive.
 
 **Not claimed about a file that has been sealed.** The rename replaces the
 name, not the blocks: the plaintext a key file held before sealing stays in
