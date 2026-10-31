@@ -34,10 +34,12 @@ peer sees a difference. Wire unchanged.
   flipping it to `sealed_required` cannot have the box write a fresh plaintext file that the flip would then refuse.
 - **`plaintext_loads/0`**, a `counters` ref in `persistent_term` that no process owns, so a plaintext load on a box
   that has gone through WP-K3 shows as a number rather than as a log line nobody greps.
-- **The cross-SDK vectors (WP-K2's contract).** `test/vectors/sealed_key_v1.json` carries two vectors — an identity
-  key and an organisation key, each with its KEK, the KEK's id, the nonce, the header, the plaintext file and the
-  sealed bytes — written by `scripts/generate-sealed-key-vectors.sh`; `test/macula_node_keys_sealed_file_tests.erl`
-  opens each one and refuses a changed byte. Go and Rust are held to these same vectors.
+- **The cross-SDK vectors (WP-K2's contract).** `test/vectors/sealed_key_v1.json` carries three vectors — an
+  identity key in `pq_pure`, an organisation key in `pq_pure`, and an identity key in `pq_hybrid`, so both profiles
+  are in the contract and not only the pure one — each with its KEK, the KEK's id, the nonce, the header, the
+  plaintext file and the sealed bytes, written by `scripts/generate-sealed-key-vectors.sh`;
+  `test/macula_node_keys_sealed_file_tests.erl` opens each one and refuses a changed byte. Go and Rust are held to
+  these same vectors.
 
 ### Security
 

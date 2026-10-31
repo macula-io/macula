@@ -187,14 +187,16 @@ the file.
 ## 7. Vectors
 
 `test/vectors/sealed_key_v1.json` is the shared contract for the three
-implementations. It carries two vectors, each with a KEK, the KEK's id, a
+implementations. It carries three vectors, each with a KEK, the KEK's id, a
 nonce, the header, the plaintext key file and the sealed bytes they produce,
 written once by `scripts/generate-sealed-key-vectors.sh` (key generation is
 random, so a run makes new keys and the committed file is the vector). One is
 an identity key in `pq_pure`, whose key id is the `node_id` derivation; the
-other is an `org` key in `pq_pure`, whose key id is the `MACULA-KEY-ID-V1`
-derivation. Between them an implementation can tell the two derivations apart,
-and the separate `kek_id` and `header` fields let a label or an offset mistake
+second is an `org` key in `pq_pure`, whose key id is the `MACULA-KEY-ID-V1`
+derivation; the third is an identity key in `pq_hybrid`, so both profiles the
+format accepts are in the contract rather than only the pure one. Between the
+first two an implementation can tell the two derivations apart, and the
+separate `kek_id` and `header` fields let a label or an offset mistake
 show without a full open.
 
 A conforming reader unseals a vector's bytes to a key of that vector's key id;
