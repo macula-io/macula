@@ -176,3 +176,129 @@ the_mode_is_set_per_realm_with_a_default_test_() ->
           ?assertEqual(refusing, macula_realm_rights:mode(realm())),
           ?assertEqual(off, macula_realm_rights:mode(<<1:256>>))
       end]}.
+
+%%------------------------------------------------------------------
+%% Members mode: a closed realm asks only for a live membership (macula-realm#175)
+%%------------------------------------------------------------------
+
+%% The membership verdict the station keeps, built from what admit/2 answered on a real minted token — never a
+%% hand-built map (macula-realm#175, WP2.5).
+membership_of(Token, Proofs, Context) ->
+    case macula_realm_rights:admit(#{token => Token, proofs => Proofs}, Context) of
+        {ok, Rights} -> {member, Rights};
+        {error, Reason} -> {not_member, macula_realm_rights:membership_reason(Reason)}
+    end.
+
+members_mode_closes_the_realm_test_() ->
+    {setup, fun() -> {ok, RealmKey} = macula_node_keys:generate(realm, pq_pure), RealmKey end,
+     fun(RealmKey) -> members_mode_tests(RealmKey) end}.
+
+members_mode_tests(RealmKey) ->
+    {foreach, fun setup/0, fun(_) -> ok end,
+     [{"each of the five links gets the reason the realm closed on it",
+       fun() ->
+           Now = erlang:system_time(second),
+           Member = macula_test_identity:node_id(),
+           Context = #{peer => Member, realm_key => macula_node_keys:key_id(RealmKey), profile => pq_pure,
+                       now => Now},
+           Subscribe = [#{with => <<"mri:topic:io.example/acme/*">>, can => ?SUBSCRIBE}],
+           Token = fun(Audience, Exp) -> macula_ucan:create(RealmKey, Audience, Subscribe, #{exp => Exp}) end,
+           {ok, ForeignRealmKey} = macula_node_keys:generate(realm, pq_pure),
+           Links = [{{not_member, no_token}, none},
+                    {{not_member, expired}, {Token(Member, Now - 1), []}},
+                    {{not_member, not_the_audience}, {Token(<<1:256>>, Now + 600), []}},
+                    {{not_member, wrong_realm}, {macula_ucan:create(ForeignRealmKey, Member, Subscribe,
+                                                                    #{exp => Now + 600}), []}},
+                    {member, {Token(Member, Now + 600), []}}],
+           [decided_per_frame(Expected, Presented, Context) || {Expected, Presented} <- Links]
+       end},
+      {"counting: the same five links are all let through, and the members decision is counted by reason",
+       fun() ->
+           Now = erlang:system_time(second),
+           Member = macula_test_identity:node_id(),
+           Context = #{peer => Member, realm_key => macula_node_keys:key_id(RealmKey), profile => pq_pure,
+                       now => Now},
+           Subscribe = [#{with => <<"mri:topic:io.example/acme/*">>, can => ?SUBSCRIBE}],
+           Token = fun(Audience, Exp) -> macula_ucan:create(RealmKey, Audience, Subscribe, #{exp => Exp}) end,
+           {ok, ForeignRealmKey} = macula_node_keys:generate(realm, pq_pure),
+           Links = [none,
+                    {Token(Member, Now - 1), []},
+                    {Token(<<1:256>>, Now + 600), []},
+                    {macula_ucan:create(ForeignRealmKey, Member, Subscribe, #{exp => Now + 600}), []},
+                    {Token(Member, Now + 600), []}],
+           Verdicts = [presented_verdict(Presented, Context) || Presented <- Links],
+           ?assertEqual([allow, allow, allow, allow, allow],
+                        [macula_realm_rights:membership(counting, realm(), V) || V <- Verdicts]),
+           ?assertEqual(1, count(membership, member)),
+           ?assertEqual(4, count(membership, would_refuse)),
+           ?assertEqual(1, count(membership, no_token)),
+           ?assertEqual(1, count(membership, expired)),
+           ?assertEqual(1, count(membership, not_the_audience)),
+           ?assertEqual(1, count(membership, wrong_realm))
+       end},
+      {"a system topic stays exempt in members mode, admitted with no token at all",
+       fun() ->
+           ?assertEqual(allow, macula_realm_rights:publish(members, realm(), none, <<"_mesh.patterns">>)),
+           ?assertEqual(1, count(publish, exempt)),
+           ?assertEqual(0, count(membership, refused))
+       end},
+      {"off decides nothing and counts nothing",
+       fun() ->
+           ?assertEqual(allow, macula_realm_rights:membership(off, realm(), {not_member, no_token})),
+           ?assertEqual(#{}, macula_realm_rights:counters())
+       end},
+      {"a delegation that names the procedure is still not enough without a live membership",
+       fun() ->
+           ?assertEqual({refuse, #{can => <<"realm/member">>, resource => realm(), reason => no_token}},
+                        macula_realm_rights:serve(members, realm(), <<"acme/a">>, ok, {not_member, no_token})),
+           ?assertEqual(1, count(serve, authorised)),
+           ?assertEqual(1, count(membership, refused))
+       end},
+      {"a live membership does not excuse a delegation that omits the procedure",
+       ?_assertEqual({refuse, #{can => <<"rpc/serve">>, resource => <<"acme/a">>,
+                                reason => no_procedures_delegated}},
+                     macula_realm_rights:serve(members, realm(), <<"acme/a">>, {error, no_procedures_delegated},
+                                               {member, orders_rights()}))},
+      {"both halves held: the advertisement is admitted",
+       ?_assertEqual(allow, macula_realm_rights:serve(members, realm(), <<"acme/a">>, ok,
+                                                      {member, orders_rights()}))},
+      {"counting counts both halves and refuses neither",
+       fun() ->
+           ?assertEqual(allow, macula_realm_rights:serve(counting, realm(), <<"acme/a">>, ok,
+                                                         {not_member, no_token})),
+           ?assertEqual(1, count(serve, authorised)),
+           ?assertEqual(1, count(membership, would_refuse))
+       end}]}.
+
+%% Each frame kind answers for one link: membership/3 is the decision the station makes, and the older entry points
+%% defer to it. They can only see rights or nothing, so past the decision a token that ended reads as `no_token'
+%% there — the reason is the station's to report, through membership/3.
+decided_per_frame(Expected, none, _Context) ->
+    ?assertEqual(refusal(Expected), macula_realm_rights:subscribe(members, realm(), none, ?ORDERS)),
+    ?assertEqual(refusal(Expected), macula_realm_rights:publish(members, realm(), none, ?ORDERS));
+decided_per_frame(member, Presented, Context) ->
+    Verdict = presented_verdict(Presented, Context),
+    ?assertEqual(allow, macula_realm_rights:membership(members, realm(), Verdict)),
+    ?assertEqual(allow, macula_realm_rights:subscribe(members, realm(), rights_of(Verdict), ?ORDERS)),
+    ?assertEqual(allow, macula_realm_rights:publish(members, realm(), rights_of(Verdict), ?ORDERS));
+decided_per_frame(Expected, Presented, Context) ->
+    Verdict = presented_verdict(Presented, Context),
+    ?assertEqual(refusal(Expected), macula_realm_rights:membership(members, realm(), Verdict)),
+    ?assertMatch({refuse, #{can := <<"realm/member">>}},
+                 macula_realm_rights:publish(members, realm(), rights_of(Verdict), ?ORDERS)).
+
+presented_verdict(none, _Context) -> {not_member, no_token};
+presented_verdict({Token, Proofs}, Context) -> membership_of(Token, Proofs, Context).
+
+rights_of({member, Rights}) -> Rights;
+rights_of({not_member, _}) -> none.
+
+refusal(member) -> allow;
+refusal({not_member, Reason}) -> {refuse, #{can => <<"realm/member">>, resource => realm(), reason => Reason}}.
+
+members_is_a_mode_test_() ->
+    {foreach, fun setup/0, fun(_) -> application:unset_env(macula, realm_rights) end,
+     [fun() ->
+          application:set_env(macula, realm_rights, #{realm() => members}),
+          ?assertEqual(members, macula_realm_rights:mode(realm()))
+      end]}.

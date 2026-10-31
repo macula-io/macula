@@ -9,6 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+A realm can be closed on the wire. `macula_realm_rights` gains a fourth mode, `members`, in which the whole
+decision is whether the link holds a live membership of the realm, and a membership decision of its own that is
+counted from counting mode up before a realm is closed. Wire unchanged.
+
+### Added
+
+- **`members` mode, and `membership/3` beside the capability checks (macula-realm#175, D1).** A realm mints no
+  `pubsub/publish` capability by design (macula#147), so `refusing` refuses every legitimate PUBLISH and cannot close
+  anything. `membership/3` asks the one question a close needs — is this link a live member of this realm — and in
+  `members` its answer is the decision for SUBSCRIBE, PUBLISH and ADVERTISE, with no capability read; a refusal names
+  `realm/member` and the reason (`no_token`, `expired`, `not_the_audience`, `wrong_realm`, `invalid`).
+- **The membership decision is counted before it is switched on (threat 6).** In `counting` and `refusing` the same
+  call always allows and counts what members mode would have done: `{Realm, membership, member | would_refuse}` plus
+  the reason as its own outcome, kept apart from the capability decision's `no_token` and `not_granted`, so an
+  operator can watch the close's effect on kept members and services first.
+- **`serve/5` (macula-realm#175, D3).** An ADVERTISE in a members-mode realm needs both the provider's delegation
+  verdict and a live membership, each counted under its own check; either one failing refuses it.
+- **`membership_reason/1`.** Maps what `admit/2` refused to the four membership reasons, so a station keeps the
+  reason it has today's `none` for.
+- The module documents what a members-mode realm does not promise: its availability is its members' availability
+  (threat 5, D4, accepted — if the realm cannot mint, every member is refused within the token life and the way back
+  is an operator's mode change), and membership is closed, not secret.
+
 ## [18.1.1] - 2026-10-31
 
 A subscriber told that it may have missed events is now told the right cause. 18.1.0 named a lost link's liveness
