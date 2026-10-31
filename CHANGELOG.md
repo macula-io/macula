@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [18.2.0] - 2026-10-31
+
 A realm can be closed on the wire. `macula_realm_rights` gains a fourth mode, `members`, in which the whole
 decision is whether the link holds a live membership of the realm, and a membership decision of its own that is
 counted from counting mode up before a realm is closed. Wire unchanged.
