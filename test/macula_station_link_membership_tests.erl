@@ -13,6 +13,8 @@
 -define(REALM, <<7:256>>).
 -define(OTHER_REALM, <<8:256>>).
 -define(TOPIC, <<"acme.counted">>).
+-define(PROCEDURE, <<"acme.proc">>).
+-define(AD, <<"an advertisement's wire form">>).
 -define(PRESENTED, #{token => <<"membership token">>, proofs => [<<"proof one">>]}).
 -define(RENEWED, #{token => <<"renewed token">>, proofs => []}).
 
@@ -22,6 +24,10 @@ membership_test_() ->
       || {Name, Case} <- [{"the first SUBSCRIBE in the realm carries the membership, and only that one",
                            fun the_first_subscribe_carries_it/1},
                           {"a SUBSCRIBE in another realm carries none", fun another_realm_carries_none/1},
+                          {"the first ADVERTISE in the realm carries the membership, and only that one",
+                           fun the_first_advertise_carries_it/1},
+                          {"a provider that only advertises presents its token, and a rotation sends its advertisements again",
+                           fun a_rotation_resends_the_advertisements/1},
                           {"the first PUBLISH carries it when no SUBSCRIBE came first", fun the_first_publish_carries_it/1},
                           {"a new connection carries it again", fun a_new_connection_carries_it_again/1},
                           {"a membership presented anew goes out at once, every subscription in the realm sent again",
@@ -48,6 +54,30 @@ another_realm_carries_none(Link) ->
     ok = macula_station_link:present_membership_async(Link, ?REALM, ?PRESENTED),
     {ok, _} = macula_station_link:subscribe(Link, ?OTHER_REALM, ?TOPIC, self()),
     ?assertEqual(none, presented(sent(subscribe))).
+
+%% A provider that never subscribes or publishes: its first ADVERTISE is the realm's first word to its station.
+the_first_advertise_carries_it(Link) ->
+    ok = macula_station_link:present_membership_async(Link, ?REALM, ?PRESENTED),
+    ok = advertise(Link, ?PROCEDURE),
+    ?assertEqual({ok, ?PRESENTED}, presented(sent(advertise))),
+    ok = advertise(Link, <<"acme.other">>),
+    ?assertEqual(none, presented(sent(advertise))).
+
+%% A fresh token reaches the station before the old one ends, on the advertisements as on the subscriptions
+%% (macula-realm#175 D3): the station purges what it admitted at `until', and a provider that only advertises has
+%% nothing else to re-present with.
+a_rotation_resends_the_advertisements(Link) ->
+    ok = macula_station_link:present_membership_async(Link, ?REALM, ?PRESENTED),
+    ok = advertise(Link, ?PROCEDURE),
+    ?assertEqual({ok, ?PRESENTED}, presented(sent(advertise))),
+    ok = advertise(Link, <<"acme.other">>),
+    ?assertEqual(none, presented(sent(advertise))),
+    ok = macula_station_link:present_membership_async(Link, ?REALM, ?RENEWED),
+    ?assertEqual([none, {ok, ?RENEWED}], lists:sort([presented(sent(advertise)) || _ <- [1, 2]])),
+    ?assertEqual(nothing, next_sent()).
+
+advertise(Link, Procedure) ->
+    macula_station_link:advertise(Link, ?REALM, Procedure, fun(_Request) -> {error, unavailable} end, open, ?AD).
 
 the_first_publish_carries_it(Link) ->
     ok = macula_station_link:present_membership_async(Link, ?REALM, ?PRESENTED),
