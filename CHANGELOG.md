@@ -9,6 +9,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [18.3.0] - 2026-10-31
+
+A key file can be sealed at rest. A copy of one is no longer a working identity: the bytes are AES-256-GCM
+ciphertext under a key-encryption key the deployment supplies, and the thing that opens it lives off that file's
+volume. The default mode still loads a plaintext key file exactly as before, so nothing changes for a box that has
+not opted in. Sealing changes no identity — the node id, the key id and every signature stay what they were — and no
+peer sees a difference. Wire unchanged.
+
+### Added
+
+- **`MACULA-SEALED-KEY-V1`, and the two modes that adopt it (macula-realm#176, WP-K1, D2).** A sealed key file is a
+  100-byte header — magic, format version, purpose, profile, the key id inside, the KEK's id, the nonce — and then
+  the plaintext key file under AES-256-GCM, with the header as the whole of the additional authenticated data. The
+  header names the key it holds, so a file whose header and content disagree is refused by name, and it names the KEK
+  it was sealed to, so a box rotated to a new KEK refuses with "wrong KEK" instead of "tampered".
+  `key_file_mode/1` reads the new `key_file_mode` setting: `accept`, the default, loads a plaintext file and counts
+  the load; `sealed_required` refuses one as `plaintext_key_refused`.
+- **`seal/2,3`, `unseal/2`, `kek_id/1` and `seal_file/4`.** `seal_file/4` is the only writer of the format and it
+  converts a file in place: write the sealed file to a temporary `0600`, `fsync` it, read it back and unseal it,
+  check the key id is the one that went in, and only then rename it over the old name. A crash before the rename
+  leaves the plaintext and a stray temporary, never a half-sealed key.
+- **A KEK that is configured seals every write, whatever the mode**, so the window between sealing a box's keys and
+  flipping it to `sealed_required` cannot have the box write a fresh plaintext file that the flip would then refuse.
+- **`plaintext_loads/0`**, a `counters` ref in `persistent_term` that no process owns, so a plaintext load on a box
+  that has gone through WP-K3 shows as a number rather than as a log line nobody greps.
+- **The cross-SDK vectors (WP-K2's contract).** `test/vectors/sealed_key_v1.json` carries two vectors — an identity
+  key and an organisation key, each with its KEK, the KEK's id, the nonce, the header, the plaintext file and the
+  sealed bytes — written by `scripts/generate-sealed-key-vectors.sh`; `test/macula_node_keys_sealed_file_tests.erl`
+  opens each one and refuses a changed byte. Go and Rust are held to these same vectors.
+
+### Security
+
+- **A KEK is refused when it sits on the same filesystem as the sealed key** (a whole-disk copy would carry both),
+  when group or others can read it, when it is not 32 bytes, and when it is configured but unusable at all — a box
+  whose operator named a KEK fails to start rather than writing plaintext beside it. Every refusal names the file and
+  what is wrong with it.
+- **What the format does not claim is written down** in `docs/design/DESIGN_SEALED_KEY_FILE.md`: a live intruder who
+  can read the process holds the key; a rolled-back or replayed older sealed file of the same key opens as the
+  current one (macula-io/macula#179); a caller that must refuse another node's sealed file passes the key id it
+  expects to `load/4`; KEKs are per box.
+- **Permissions:** a key file `save/2` writes is owner-only, and a sealed file is written `0600` before it is renamed
+  into place.
+
 ## [18.2.0] - 2026-10-31
 
 A realm can be closed on the wire. `macula_realm_rights` gains a fourth mode, `members`, in which the whole
