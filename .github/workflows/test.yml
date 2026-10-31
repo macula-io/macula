@@ -394,6 +394,10 @@ jobs:
       ecosystem: erlang
       otp-version: '28.4.3'
       rebar3-version: '3.27.0'
+      # Named, not defaulted (macula-station#135): this account refuses a hosted
+      # dispatch outright, so a job that takes the reusable workflow's
+      # `ubuntu-latest` cannot start at all. Every other job here runs on host00.
+      runs-on: '["self-hosted","host00"]'
 
   # The same for the four Rust NIF crates, which build from source and ship in
   # the package: each has its own Cargo.lock, so each is its own job.
@@ -405,3 +409,5 @@ jobs:
     with:
       ecosystem: rust
       working-directories: '["native/macula_cbor_nif","native/macula_crypto_nif","native/macula_mri_nif","native/macula_quic"]'
+      # Named for the same reason as the erlang job above (macula-station#135).
+      runs-on: '["self-hosted","host00"]'
