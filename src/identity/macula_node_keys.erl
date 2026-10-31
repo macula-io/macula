@@ -18,6 +18,12 @@
 %% private key and must equal the stored one, and every component passes a sign-and-verify round trip. A key file
 %% its group or others can read is refused.
 %%
+%% A key file may also be sealed (MACULA-SEALED-KEY-V1, docs/design/DESIGN_SEALED_KEY_FILE.md): the same key bytes
+%% sealed with AES-256-GCM under a key-encryption key the deployment supplies from off the key's volume, so that a
+%% copied file is not a working identity. Sealing changes no identity, and a sealed file loads wherever a plaintext
+%% one did. Under the key_file_mode setting `sealed_required' a plaintext file is refused; the default, `accept',
+%% loads it and counts and logs the load.
+%%
 %% A process that holds keys shows them through redacted/1, and the primary logger filter redacted_log_event/2, which
 %% install_log_redaction/0 puts in place, keeps their private halves out of crash and diagnostics reports.
 %%
@@ -57,6 +63,14 @@
     identity_path/3,
     save/2,
     load/3,
+    load/4,
+    seal/2,
+    seal/3,
+    unseal/2,
+    seal_file/4,
+    kek_id/1,
+    key_file_mode/1,
+    plaintext_loads/0,
     redacted/1,
     redacted_log_event/2,
     install_log_redaction/0,
@@ -90,6 +104,16 @@
                        components := [component(), ...]}.
 -type refusal()   :: bad_key_file
                    | key_file_permissions
+                   | plaintext_key_refused
+                   | already_sealed
+                   | sealed_key_bad_file
+                   | sealed_key_not_authentic
+                   | sealed_key_read_back
+                   | {sealed_key, wrong_kek | wrong_key_id | header_mismatch}
+                   | {key_file_mode, term()}
+                   | {key_id_mismatch, <<_:256>>}
+                   | {kek, not_configured | wrong_length}
+                   | {kek, file:name_all(), not_owner_only | same_filesystem | wrong_length | file:posix()}
                    | {unknown_purpose, term()}
                    | {crypto_profile_unknown, term()}
                    | {wrong_purpose, purpose()}
@@ -101,6 +125,21 @@
                    | round_trip_failed.
 
 -define(KEY_FILE_MAGIC, "macula-node-key-v1\0").
+-define(SEALED_KEY_MAGIC, "MACULA-SEALED-KEY-V1\0").
+-define(SEALED_VERSION, 1).
+-define(KEK_ID_LABEL, "MACULA-KEK-ID-V1").
+-define(KEK_ENV, "MACULA_KEY_KEK_FILE").
+-define(KEK_BYTES, 32).
+-define(KEY_ID_BYTES, 32).
+-define(NONCE_BYTES, 12).
+-define(SEALED_HEADER_BYTES, (21 + 1 + 1 + 1 + 32 + 32 + 12)).
+-define(PLAINTEXT_COUNTER, macula_node_keys_plaintext_counter).
+
+%% The count of plaintext key loads is created when the code server loads this module, which it does once, so two
+%% processes cannot race to create it and the count has no owning process to die with. It is kept in persistent_term
+%% because a key file can be loaded before the application starts (see stored_identity/2), when there is no supervisor
+%% to own a table.
+-on_load(init_plaintext_counter/0).
 -define(MLDSA87_PUBLIC_BYTES, 2592).
 -define(MLDSA87_SIGNATURE_BYTES, 4627).
 -define(COMPOSITE_PREFIX, "CompositeAlgorithmSignatures2025").
@@ -288,7 +327,7 @@ stored_or_ground({error, _Refusal} = Refused, _Path, _Profile) ->
     Refused.
 
 ground_and_store({ok, Key}, Path, Profile) ->
-    claimed(create_new(Path, encode(Key)), Key, Path, Profile);
+    claimed(create_new(Path, Key), Key, Path, Profile);
 ground_and_store({error, _} = Failed, _Path, _Profile) ->
     Failed.
 
@@ -322,10 +361,15 @@ claimed({error, _} = Failed, _Key, _Path, _Profile) ->
 %%
 %% The link rather than a rename is also what stops a reader seeing a half-written file: the name appears only once
 %% the content behind it is complete.
-create_new(Path, Blob) ->
+create_new(Path, Key) ->
+    created(storage_bytes(Path, Key), Path).
+
+created({ok, Blob}, Path) ->
     Tmp = iolist_to_binary([Path, ".new.", integer_to_binary(erlang:unique_integer([positive])),
                             ".", list_to_binary(os:getpid())]),
-    linked(write_restricted(filelib:ensure_dir(Path), Tmp, Tmp, Blob), Tmp, Path).
+    linked(write_restricted(filelib:ensure_dir(Path), Tmp, Tmp, Blob), Tmp, Path);
+created({error, _} = Failed, _Path) ->
+    Failed.
 
 linked(ok, Tmp, Path) ->
     Result = file:make_link(Tmp, Path),
@@ -335,18 +379,372 @@ linked({error, _} = Failed, Tmp, _Path) ->
     _ = file:delete(Tmp),
     Failed.
 
-%% @doc Save a key atomically. The temporary file is restricted to its owner before the key is written into it.
+%% @doc Save a key atomically. The temporary file is restricted to its owner before the key is written into it. The
+%% bytes are sealed when the key file mode is `sealed_required', and plaintext under `accept'.
 -spec save(file:name_all(), node_key()) -> ok | {error, term()}.
 save(Path, #{purpose := _, profile := _, components := [_ | _]} = Key) ->
+    saved(storage_bytes(Path, Key), Path).
+
+saved({ok, Blob}, Path) ->
     Tmp = iolist_to_binary([Path, ".tmp"]),
-    write_restricted(filelib:ensure_dir(Path), Tmp, Path, encode(Key)).
+    write_restricted(filelib:ensure_dir(Path), Tmp, Path, Blob);
+saved({error, _} = Failed, _Path) ->
+    Failed.
 
 %% @doc Load the key saved for a purpose in a profile, and check it before returning it. A key file its group or others
-%% can read is refused.
+%% can read is refused. A sealed file is unsealed with the configured KEK; see load/4 for the options that name one.
 -spec load(file:name_all(), purpose(), macula_crypto_profile:profile()) ->
         {ok, node_key()} | {error, refusal() | file:posix() | badarg | terminated | system_limit}.
 load(Path, Purpose, Profile) ->
-    checked_key(owner_only_read(file:read_file_info(Path), Path), Purpose, Profile).
+    load(Path, Purpose, Profile, #{}).
+
+%% @doc Load a key file, with options. `kek_file' names the file the KEK is read from, `mode' overrides the
+%% application's key_file_mode setting (`accept' or `sealed_required'), and `key_id' names the key the caller must get,
+%% so a file holding any other is refused as {key_id_mismatch, Expected} rather than loaded.
+-spec load(file:name_all(), purpose(), macula_crypto_profile:profile(), map()) ->
+        {ok, node_key()} | {error, refusal() | file:posix() | badarg | terminated | system_limit}.
+load(Path, Purpose, Profile, Options) ->
+    loaded_key(key_file_mode(Options), Path, Purpose, Profile, Options).
+
+%% The mode is checked once, here, before the file is read: a mode nobody recognises refuses a sealed file and a
+%% plaintext one alike, instead of the sealed path having no opinion while the plaintext path refused.
+loaded_key({invalid, Mode}, _Path, _Purpose, _Profile, _Options) ->
+    {error, {key_file_mode, Mode}};
+loaded_key(_Mode, Path, Purpose, Profile, Options) ->
+    expected_key_id(checked_key(owner_only_read(file:read_file_info(Path), Path, Options), Purpose, Profile),
+                    Options).
+
+%% A caller that knows which key it must get names it, and a file holding any other is refused whatever the KEK
+%% opens: the header's key id can only speak for the file it is in, not for the one the caller meant
+%% (DESIGN_SEALED_KEY_FILE.md, section 6).
+expected_key_id({ok, Key} = Loaded, #{key_id := Expected}) ->
+    named_key_id(key_id(Key) =:= Expected, Expected, Loaded);
+expected_key_id(Loaded, _Options) ->
+    Loaded.
+
+named_key_id(true, _Expected, Loaded) -> Loaded;
+named_key_id(false, Expected, _Loaded) -> {error, {key_id_mismatch, Expected}}.
+
+%%------------------------------------------------------------------
+%% Sealed key files
+%%------------------------------------------------------------------
+
+%% @doc The id of a key-encryption key (DESIGN_SEALED_KEY_FILE.md, section 3): SHA-256 over the label
+%% MACULA-KEK-ID-V1, a zero byte, and the KEK. It names which KEK a sealed file was sealed to, so a box that has been
+%% given a new KEK refuses with that, and not as a tampered file.
+-spec kek_id(<<_:256>>) -> <<_:256>>.
+kek_id(Kek) when is_binary(Kek) ->
+    crypto:hash(sha256, <<?KEK_ID_LABEL, 0:8, Kek/binary>>).
+
+%% @doc The mode a key file is loaded under: `#{mode := Mode}' when the caller names one, else the macula
+%% application's `key_file_mode' setting, whose default is `accept'. `sealed_required' refuses a plaintext key file.
+-spec key_file_mode(map()) -> accept | sealed_required | {invalid, term()}.
+key_file_mode(#{mode := Mode}) -> valid_mode(Mode);
+key_file_mode(_Options) -> valid_mode(application:get_env(macula, key_file_mode, accept)).
+
+valid_mode(accept) -> accept;
+valid_mode(sealed_required) -> sealed_required;
+valid_mode(Other) -> {invalid, Other}.
+
+%% @doc How many plaintext key files have been loaded since this module was loaded. A box that has gone through the
+%% fleet's sealing shows zero; a count that keeps moving is a key file that was never sealed (WP-K3's fleet check reads
+%% it). The count is a counters ref, a resource no process owns, so it does not go back to zero when the process that
+%% loaded the key exits.
+-spec plaintext_loads() -> non_neg_integer().
+plaintext_loads() ->
+    counters:get(plaintext_counter(), 1).
+
+plaintext_load_counted(Path) ->
+    logger:notice(#{msg => {report, #{label => {macula_node_keys, plaintext_key_loaded}, path => Path}}}),
+    counters:add(plaintext_counter(), 1, 1),
+    ok.
+
+plaintext_counter() ->
+    persistent_term:get(?PLAINTEXT_COUNTER).
+
+%% Created when the code server loads this module (see the on_load attribute above), which it does once, so two
+%% processes cannot race to create it. A hot reload finds it present and keeps it, so an upgrade does not reset the
+%% count either.
+init_plaintext_counter() ->
+    initialized_counter(held_plaintext_counter()).
+
+held_plaintext_counter() ->
+    case persistent_term:get(?PLAINTEXT_COUNTER, undefined) of
+        undefined -> none;
+        Ref -> {held, Ref}
+    end.
+
+initialized_counter(none) ->
+    persistent_term:put(?PLAINTEXT_COUNTER, counters:new(1, [write_concurrency])),
+    ok;
+initialized_counter({held, _Ref}) ->
+    ok.
+
+%% @doc The sealed form of a key (MACULA-SEALED-KEY-V1): the header, then the plaintext key file sealed under `Kek'
+%% with a fresh nonce. Sealing changes no identity: the key id inside stays the one the key already had.
+-spec seal(node_key(), <<_:256>>) -> binary().
+seal(Key, Kek) ->
+    seal(Key, Kek, crypto:strong_rand_bytes(?NONCE_BYTES)).
+
+%% @doc The sealed form of a key under a given nonce. This is the writer the cross-SDK vectors are made with, so that
+%% another implementation reproduces them byte for byte.
+-spec seal(node_key(), <<_:256>>, <<_:96>>) -> binary().
+seal(#{purpose := Purpose, profile := Profile} = Key, Kek, Nonce) ->
+    Header = sealed_header(Purpose, Profile, key_id(Key), kek_id(Kek), Nonce),
+    <<Header/binary, (macula_seal:seal(Kek, Nonce, Header, encode(Key)))/binary>>.
+
+%% @doc The key in a sealed file, or the refusal that names what is wrong with it: not a sealed file, a KEK other than
+%% the one it was sealed to, a file altered since it was sealed, or a file whose header and key disagree.
+-spec unseal(binary(), <<_:256>>) -> {ok, node_key()} | {error, refusal()}.
+unseal(Sealed, Kek) when is_binary(Kek), byte_size(Kek) =:= ?KEK_BYTES ->
+    sealed_file(Sealed, Kek);
+unseal(_Sealed, _Kek) ->
+    {error, {kek, wrong_length}}.
+
+sealed_file(<<?SEALED_KEY_MAGIC, _/binary>> = Sealed, Kek) ->
+    sealed_ciphertext(Sealed, Kek);
+sealed_file(_NotSealed, _Kek) ->
+    {error, bad_key_file}.
+
+sealed_ciphertext(<<Header:(?SEALED_HEADER_BYTES)/binary, Ciphertext/binary>>, Kek) ->
+    sealed_unsealed(sealed_header_fields(Header), Ciphertext, Header, Kek);
+sealed_ciphertext(_TooShort, _Kek) ->
+    {error, sealed_key_bad_file}.
+
+sealed_unsealed(error, _Sealed, _Header, _Kek) ->
+    {error, sealed_key_bad_file};
+sealed_unsealed({ok, {Purpose, Profile, KeyId, KekId, Nonce}}, Sealed, Header, Kek) ->
+    sealed_authentic(KekId =:= kek_id(Kek), {Purpose, Profile, KeyId}, Nonce, Sealed, Header, Kek).
+
+sealed_authentic(false, _Named, _Nonce, _Sealed, _Header, _Kek) ->
+    {error, {sealed_key, wrong_kek}};
+sealed_authentic(true, {Purpose, Profile, KeyId}, Nonce, Sealed, Header, Kek) ->
+    sealed_key(macula_seal:open(Kek, Nonce, Header, Sealed), Purpose, Profile, KeyId).
+
+sealed_key({error, sealed_refused}, _Purpose, _Profile, _KeyId) ->
+    {error, sealed_key_not_authentic};
+sealed_key({ok, Plain}, Purpose, Profile, KeyId) ->
+    sealed_named(decode(Plain), Purpose, Profile, KeyId).
+
+sealed_named({ok, #{purpose := Purpose, profile := Profile} = Key}, Purpose, Profile, KeyId) ->
+    sealed_key_id(KeyId =:= key_id(Key), Key);
+sealed_named({ok, _Other}, _Purpose, _Profile, _KeyId) ->
+    {error, {sealed_key, header_mismatch}};
+sealed_named({error, _} = Error, _Purpose, _Profile, _KeyId) ->
+    Error.
+
+sealed_key_id(true, Key) -> {ok, Key};
+sealed_key_id(false, _Key) -> {error, {sealed_key, wrong_key_id}}.
+
+sealed_header(Purpose, Profile, KeyId, KekId, Nonce) ->
+    <<?SEALED_KEY_MAGIC, ?SEALED_VERSION:8, (purpose_tag(Purpose)):8, (profile_tag(Profile)):8,
+      KeyId:?KEY_ID_BYTES/binary, KekId:?KEY_ID_BYTES/binary, Nonce:?NONCE_BYTES/binary>>.
+
+sealed_header_fields(<<?SEALED_KEY_MAGIC, ?SEALED_VERSION:8, PurposeTag:8, ProfileTag:8,
+                       KeyId:?KEY_ID_BYTES/binary, KekId:?KEY_ID_BYTES/binary, Nonce:?NONCE_BYTES/binary>>) ->
+    sealed_tags(tag_purpose(PurposeTag), tag_profile(ProfileTag), KeyId, KekId, Nonce);
+sealed_header_fields(_Header) ->
+    error.
+
+sealed_tags({ok, Purpose}, {ok, Profile}, KeyId, KekId, Nonce) ->
+    {ok, {Purpose, Profile, KeyId, KekId, Nonce}};
+sealed_tags(_Purpose, _Profile, _KeyId, _KekId, _Nonce) ->
+    error.
+
+%% @doc Seal the key file at `Path' in place, with the KEK at `KekPath'. The sealed file is written beside the old
+%% one, synced, read back and unsealed to the same key id, and only then renamed over it; a failure at any step leaves
+%% the plaintext as it was. A file that is already sealed is refused rather than sealed again.
+-spec seal_file(file:name_all(), purpose(), macula_crypto_profile:profile(), file:name_all()) -> ok | {error, term()}.
+seal_file(Path, Purpose, Profile, KekPath) ->
+    sealing(file:read_file(Path), Path, Purpose, Profile, KekPath).
+
+sealing({ok, <<?SEALED_KEY_MAGIC, _/binary>>}, _Path, _Purpose, _Profile, _KekPath) ->
+    {error, already_sealed};
+sealing({ok, _Plain}, Path, Purpose, Profile, KekPath) ->
+    with_plaintext_key(plaintext_key(Path, Purpose, Profile), Path, KekPath);
+sealing({error, Reason}, _Path, _Purpose, _Profile, _KekPath) ->
+    {error, Reason}.
+
+with_plaintext_key({ok, Key}, Path, KekPath) ->
+    with_sealing_kek(key_kek(KekPath, key_device(Path)), Key, Path);
+with_plaintext_key({error, _} = Error, _Path, _KekPath) ->
+    Error.
+
+with_sealing_kek({ok, Kek}, Key, Path) ->
+    write_then_replace(Path, seal(Key, Kek), Key, Kek);
+with_sealing_kek({error, _} = Error, _Key, _Path) ->
+    Error.
+
+write_then_replace(Path, Sealed, Key, Kek) ->
+    Tmp = temp_path(Path),
+    replaced(write_synced(filelib:ensure_dir(Path), Tmp, Sealed), Tmp, Path, Key, Kek).
+
+replaced(ok, Tmp, Path, Key, Kek) ->
+    replaced_after_read_back(read_back(Tmp, Key, Kek), Tmp, Path);
+replaced({error, _} = Error, Tmp, _Path, _Key, _Kek) ->
+    _ = file:delete(Tmp),
+    Error.
+
+read_back(Tmp, Key, Kek) ->
+    case file:read_file(Tmp) of
+        {ok, Sealed} -> read_back_key(unseal(Sealed, Kek), Key);
+        {error, Reason} -> {error, Reason}
+    end.
+
+read_back_key({ok, SealedKey}, Key) ->
+    read_back_matches(key_id(SealedKey) =:= key_id(Key));
+read_back_key({error, _} = Error, _Key) ->
+    Error.
+
+read_back_matches(true) -> ok;
+read_back_matches(false) -> {error, sealed_key_read_back}.
+
+replaced_after_read_back(ok, Tmp, Path) ->
+    file:rename(Tmp, Path);
+replaced_after_read_back({error, _} = Error, Tmp, _Path) ->
+    _ = file:delete(Tmp),
+    Error.
+
+%% The plaintext key at Path, checked as load/4 checks it, but without the mode gate: sealing a file is what happens
+%% before a box is set to sealed_required, and must work while it is still accept.
+plaintext_key(Path, Purpose, Profile) ->
+    checked_key(plaintext_read(file:read_file_info(Path), Path), Purpose, Profile).
+
+plaintext_read({ok, #file_info{mode = Mode}}, Path) when Mode band 8#077 =:= 0 ->
+    decode_file(file:read_file(Path));
+plaintext_read({ok, #file_info{}}, _Path) ->
+    {error, key_file_permissions};
+plaintext_read({error, _} = Error, _Path) ->
+    Error.
+
+%% The KEK's path: what the caller named, else the macula application's key_kek_file setting, else the
+%% MACULA_KEY_KEK_FILE the deployment sets in the service's environment.
+kek_file(#{kek_file := Path}) ->
+    {ok, Path};
+kek_file(_Options) ->
+    configured_kek(application:get_env(macula, key_kek_file), os:getenv(?KEK_ENV)).
+
+configured_kek({ok, Path}, _EnvPath) -> {ok, Path};
+configured_kek(undefined, false) -> {error, {kek, not_configured}};
+configured_kek(undefined, EnvPath) -> {ok, EnvPath}.
+
+%% The KEK at KekPath, refused when it is not the owner's, when it sits on the same device as the key file it would
+%% unseal (a whole-disk copy would then carry both), or when it is not 32 bytes.
+key_kek(KekPath, KeyDevice) ->
+    kek_checks(file:read_file_info(KekPath), KekPath, KeyDevice).
+
+kek_checks({ok, #file_info{mode = Mode} = Info}, KekPath, KeyDevice) when Mode band 8#077 =:= 0 ->
+    kek_device(Info, KekPath, KeyDevice);
+kek_checks({ok, #file_info{}}, KekPath, _KeyDevice) ->
+    {error, {kek, KekPath, not_owner_only}};
+kek_checks({error, Reason}, KekPath, _KeyDevice) ->
+    {error, {kek, KekPath, Reason}}.
+
+kek_device(#file_info{major_device = Device}, KekPath, Device) ->
+    {error, {kek, KekPath, same_filesystem}};
+kek_device(_Info, KekPath, _KeyDevice) ->
+    kek_bytes(file:read_file(KekPath), KekPath).
+
+kek_bytes({ok, <<_:32/binary>> = Kek}, _KekPath) -> {ok, Kek};
+kek_bytes({ok, _ShortOrLong}, KekPath) -> {error, {kek, KekPath, wrong_length}};
+kek_bytes({error, Reason}, KekPath) -> {error, {kek, KekPath, Reason}}.
+
+%% The device a key file sits on, or the device of the directory it will be created in: a key file being written for
+%% the first time has no device of its own yet.
+key_device(Path) ->
+    key_device_of(file:read_file_info(Path), Path).
+
+key_device_of({ok, #file_info{major_device = Device}}, _Path) ->
+    Device;
+key_device_of({error, _}, Path) ->
+    {ok, #file_info{major_device = Device}} = file:read_file_info(filename:dirname(Path)),
+    Device.
+
+%% Written, then synced, so that what is read back below is what is on the disk and not what is in the page cache.
+write_synced(ok, Tmp, Blob) ->
+    synced(filled(restrict(file:write_file(Tmp, <<>>, [raw, binary]), Tmp), Tmp, Blob), Tmp);
+write_synced({error, _} = Error, _Tmp, _Blob) ->
+    Error.
+
+filled(ok, Tmp, Blob) -> file:write_file(Tmp, Blob, [raw, binary]);
+filled({error, _} = Error, _Tmp, _Blob) -> Error.
+
+synced(ok, Tmp) ->
+    opened_for_sync(file:open(Tmp, [read, write, raw, binary]), Tmp);
+synced({error, _} = Error, _Tmp) ->
+    Error.
+
+opened_for_sync({ok, Fd}, _Tmp) ->
+    Result = file:sync(Fd),
+    ok = file:close(Fd),
+    Result;
+opened_for_sync({error, Reason}, _Tmp) ->
+    {error, Reason}.
+
+temp_path(Path) ->
+    iolist_to_binary([Path, ".sealed.", integer_to_binary(erlang:unique_integer([positive])),
+                      ".", list_to_binary(os:getpid())]).
+
+%%------------------------------------------------------------------
+%% Internals: reading a sealed or plaintext key file
+%%------------------------------------------------------------------
+
+%% A sealed file is unsealed with the KEK, which is checked against the device the key file sits on. A plaintext one
+%% loads or is refused by the mode, and under `accept' the load is counted and logged.
+key_file({ok, <<?SEALED_KEY_MAGIC, _/binary>> = Sealed}, #file_info{major_device = Device}, _Path, Options) ->
+    sealed_at(Sealed, Device, Options);
+key_file({ok, Plain}, _Info, Path, Options) ->
+    plaintext_at(Plain, Path, Options);
+key_file({error, _} = Error, _Info, _Path, _Options) ->
+    Error.
+
+sealed_at(Sealed, Device, Options) ->
+    sealed_with_kek(kek_file(Options), Sealed, Device).
+
+sealed_with_kek({ok, KekPath}, Sealed, Device) ->
+    sealed_with(key_kek(KekPath, Device), Sealed);
+sealed_with_kek({error, _} = Error, _Sealed, _Device) ->
+    Error.
+
+sealed_with({ok, Kek}, Sealed) ->
+    unseal(Sealed, Kek);
+sealed_with({error, _} = Error, _Sealed) ->
+    Error.
+
+plaintext_at(Plain, Path, Options) ->
+    plaintext_allowed(key_file_mode(Options), Plain, Path).
+
+plaintext_allowed(accept, Plain, Path) ->
+    plaintext_load_counted(Path),
+    decode(Plain);
+plaintext_allowed(sealed_required, _Plain, _Path) ->
+    {error, plaintext_key_refused};
+plaintext_allowed({invalid, Mode}, _Plain, _Path) ->
+    {error, {key_file_mode, Mode}}.
+
+%% The bytes a key is stored as. A KEK that is configured seals them whatever the mode: a box in the middle of the
+%% rollout (the KEK wired in and its keys sealed, still in `accept') would otherwise keep writing the connect and TLS
+%% keys a statement issuer rewrites and every new ground identity in plaintext, and the flip to `sealed_required'
+%% would refuse its own fresh files at the next start. With no KEK, `accept' writes plaintext and `sealed_required'
+%% refuses rather than write a file the next start would refuse.
+storage_bytes(Path, Key) ->
+    stored_form(kek_file(#{}), key_file_mode(#{}), filelib:ensure_dir(Path), Path, Key).
+
+stored_form(_Kek, _Mode, {error, _} = Error, _Path, _Key) ->
+    Error;
+stored_form({ok, KekPath}, Mode, ok, Path, Key) when Mode =:= accept; Mode =:= sealed_required ->
+    sealed_key_bytes(key_kek(KekPath, key_device(Path)), Key);
+stored_form({error, _}, accept, ok, _Path, Key) ->
+    {ok, encode(Key)};
+stored_form({error, _} = NoKek, sealed_required, ok, _Path, _Key) ->
+    NoKek;
+stored_form(_Kek, {invalid, Mode}, ok, _Path, _Key) ->
+    {error, {key_file_mode, Mode}}.
+
+sealed_key_bytes({ok, Kek}, Key) ->
+    {ok, seal(Key, Kek)};
+sealed_key_bytes({error, _} = Error, _Key) ->
+    Error.
 
 %%------------------------------------------------------------------
 %% Redaction
@@ -820,11 +1218,11 @@ encode_component(#{algorithm := Algorithm, public := Public, private := Private}
     <<(algorithm_tag(Algorithm)):8, (byte_size(Public)):32, Public/binary,
       (byte_size(Private)):32, Private/binary>>.
 
-owner_only_read({ok, #file_info{mode = Mode}}, Path) when Mode band 8#077 =:= 0 ->
-    decode_file(file:read_file(Path));
-owner_only_read({ok, #file_info{}}, _Path) ->
+owner_only_read({ok, #file_info{mode = Mode} = Info}, Path, Options) when Mode band 8#077 =:= 0 ->
+    key_file(file:read_file(Path), Info, Path, Options);
+owner_only_read({ok, #file_info{}}, _Path, _Options) ->
     {error, key_file_permissions};
-owner_only_read({error, _} = Error, _Path) ->
+owner_only_read({error, _} = Error, _Path, _Options) ->
     Error.
 
 decode_file({ok, Bin}) -> decode(Bin);
