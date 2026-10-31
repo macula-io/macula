@@ -28,6 +28,7 @@ membership_test_() ->
                            fun the_first_advertise_carries_it/1},
                           {"a provider that only advertises presents its token, and a rotation sends its advertisements again",
                            fun a_rotation_resends_the_advertisements/1},
+                          {"a reconnect presents on one advertisement only", fun a_reconnect_presents_on_one_advertise_only/1},
                           {"the first PUBLISH carries it when no SUBSCRIBE came first", fun the_first_publish_carries_it/1},
                           {"a new connection carries it again", fun a_new_connection_carries_it_again/1},
                           {"a membership presented anew goes out at once, every subscription in the realm sent again",
@@ -78,6 +79,22 @@ a_rotation_resends_the_advertisements(Link) ->
 
 advertise(Link, Procedure) ->
     macula_station_link:advertise(Link, ?REALM, Procedure, fun(_Request) -> {error, unavailable} end, open, ?AD).
+
+%% A reconnect drains every advertisement the link holds in the realm, and the token rides exactly one of them: the
+%% state after the drain knows it went out, so the second frame does not carry it again. It did carry it twice before
+%% this was folded, and the state still said `sent := false', so the realm's next PUBLISH carried it a third time
+%% (macula-realm#175; found in the Fable round on WP2).
+a_reconnect_presents_on_one_advertise_only(Link) ->
+    ok = macula_station_link:present_membership_async(Link, ?REALM, ?PRESENTED),
+    ok = advertise(Link, ?PROCEDURE),
+    ok = advertise(Link, <<"acme.other">>),
+    ?assertEqual([none, {ok, ?PRESENTED}], lists:sort([presented(sent(advertise)) || _ <- [1, 2]])),
+    Link ! {macula_peering, connected, self(), <<21:256>>},
+    ?assertEqual([none, {ok, ?PRESENTED}], lists:sort([presented(sent(advertise)) || _ <- [1, 2]])),
+    %% And it is marked sent, so the next frame in the realm is not the third carrying of the same token.
+    ok = advertise(Link, <<"acme.third">>),
+    ?assertEqual(none, presented(sent(advertise))),
+    ?assertEqual(nothing, next_sent()).
 
 the_first_publish_carries_it(Link) ->
     ok = macula_station_link:present_membership_async(Link, ?REALM, ?PRESENTED),

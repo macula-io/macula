@@ -38,6 +38,11 @@
 %% anything the realm can do. Membership is also closed, not secret: a member's node id is readable from its
 %% endorsement records in the DHT.
 %%
+%% SUBSCRIBE and PUBLISH are counted under `membership' only in `members' mode, where that is the whole decision: in
+%% `counting' and `refusing' they are counted under `subscribe' and `publish' as they always were, and a `membership'
+%% row moves only where the caller asks `membership/3' itself — which is exactly what a station watching a realm
+%% before it closes it does, and why the two kinds of row must be read apart.
+%%
 %% The counter table belongs to macula_peering_sup, which creates it with new_table/0, as macula_wire_tolerance's is.
 -module(macula_realm_rights).
 
@@ -232,6 +237,11 @@ serve(Mode, Realm, Procedure, Verdict) when is_binary(Procedure) ->
 %% is refused `realm/member'. In every other mode the delegation decides as `serve/4' does, and the membership is
 %% only counted (which is all `counting' and `refusing' do with it). Both decisions are counted, under `serve' and
 %% under `membership'.
+%%
+%% Which refusal comes back when both fail: the delegation's. A provider with neither is told what it can fix in its
+%% own record first (`rpc/serve'), and what it lacks in the realm — its membership — is what it then finds on the
+%% next attempt. The membership decision is still taken and counted in that case, so the counters do not depend on
+%% which one was reported.
 -spec serve(mode(), <<_:256>>, binary(), ok | {error, atom()}, membership()) -> allow | {refuse, refusal()}.
 serve(off, _Realm, _Procedure, _Verdict, _Membership) ->
     allow;
@@ -255,13 +265,20 @@ both(allow, {refuse, _} = Refused) -> Refused.
 %% `{Realm, membership, member | would_refuse}' and, when it would have refused, the reason as its own outcome — the
 %% counter threat 6 is read on before a realm is closed, kept apart from the capability decision's `no_token' and
 %% `not_granted'. `off' does nothing.
+%%
+%% Only the five reasons in `membership_reason/0' are accepted in `members': any other atom in `not_member' raises,
+%% rather than being put on the wire as a refusal whose reason a peer cannot name. A term that is neither `{member,
+%% Rights}' nor `{not_member, Reason}' does not match any clause, so it raises in every mode; in `counting' that is
+%% the first thing that happens, to the caller, rather than a counter nobody can explain.
 -spec membership(mode(), <<_:256>>, membership()) -> allow | {refuse, refusal()}.
 membership(off, _Realm, _Membership) ->
     allow;
 membership(members, Realm, {member, _Rights}) ->
     count(Realm, membership, authorised),
     allow;
-membership(members, Realm, {not_member, Reason}) ->
+membership(members, Realm, {not_member, Reason})
+  when Reason =:= no_token; Reason =:= expired; Reason =:= not_the_audience;
+       Reason =:= wrong_realm; Reason =:= invalid ->
     count(Realm, membership, refused),
     count(Realm, membership, Reason),
     {refuse, #{can => ?MEMBER_CAN, resource => Realm, reason => Reason}};

@@ -2146,8 +2146,7 @@ peering_event({macula_peering, connected, Pid, PeerNodeId},
     %% A new connection has carried no membership yet.
     Presenting = drain_pending_subscribes(NewS#state{memberships = maps:map(fun(_Realm, M) -> M#{sent := false} end,
                                                                             NewS#state.memberships)}),
-    drain_pending_advertisements(Presenting),
-    {noreply, Presenting};
+    {noreply, drain_pending_advertisements(Presenting)};
 
 peering_event({macula_peering, frame, Pid, Frame},
             #state{peer_pid = Pid} = S) ->
@@ -3342,11 +3341,14 @@ maybe_send_unadvertise(Realm, Proc, Withdrawal, #state{peer_pid = Pid}) ->
     put_wire_in_dht(Withdrawal, Realm, Proc, withdrawal).
 
 %% On handshake completion, send an ADVERTISE frame for every stored
-%% advertisement registered before connect.
+%% advertisement registered before connect. Folded rather than listed, because
+%% the first frame in a realm may carry the realm's membership and so changes
+%% the state the next one is sent with; returning `ok' here threw that change
+%% away, and the caller returned a state that still said the membership was
+%% unsent (macula-realm#175).
 drain_pending_advertisements(#state{advertisements = Ads} = S) ->
-    [maybe_send_advertise(R, P, EncodedAd, S)
-     || {{R, P}, EncodedAd} <- maps:to_list(Ads)],
-    ok.
+    lists:foldl(fun({{Realm, Proc}, EncodedAd}, Acc) -> maybe_send_advertise(Realm, Proc, EncodedAd, Acc) end,
+                S, maps:to_list(Ads)).
 
 %% On handshake completion, send a SUBSCRIBE frame for every stored
 %% subscription. Subscribers that came in before connect have been
