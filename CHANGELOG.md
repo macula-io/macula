@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [18.1.1] - 2026-10-31
+
+A subscriber told that it may have missed events is now told the right cause. 18.1.0 named a lost link's liveness
+loss as `drained`, the last state of the connection rather than the reason it ended. No API or wire change.
+
 ### Fixed
 
 - **A subscriber whose link lost its station is told `app_liveness_lost`, not `drained` (macula-station#129).** When a
