@@ -272,15 +272,17 @@ count_membership_reason(Realm, {not_member, Reason}) -> count(Realm, membership,
 count_membership_reason(_Realm, {member, _Rights}) -> ok.
 
 %% @doc Why a frame from a link is not from a live member, from what admit/2 answered (macula-realm#175, WP3): a
-%% token the realm did not issue for this realm is `wrong_realm', one minted for another node's link is
-%% `not_the_audience', one past its exp is `expired', and every other refusal is `invalid' — the refusal's own atom
-%% stays in the refusal's reason, and in the log line of whoever reported it.
+%% token another realm minted is `wrong_realm' — its issuer is not this realm's key (`not_the_issuer'), or a
+%% capability it grants names another realm (`wrong_realm') — one minted for another node's link is
+%% `not_the_audience', one past its exp is `expired', and every other refusal is `invalid': `malformed',
+%% `signature_invalid', `not_yet_valid', `realm_name_not_canonical' (a malformed realm NAME in a capability says
+%% nothing about which realm the token belongs to) and the capability-side refusals. The refusal's own atom stays in
+%% the refusal's reason, and in the log line of whoever reported it.
 -spec membership_reason(atom()) -> membership_reason().
 membership_reason(not_the_audience) -> not_the_audience;
 membership_reason(expired) -> expired;
 membership_reason(not_the_issuer) -> wrong_realm;
 membership_reason(wrong_realm) -> wrong_realm;
-membership_reason(realm_name_not_canonical) -> wrong_realm;
 membership_reason(_Other) -> invalid.
 
 decided(_Mode, Check, Realm, _Asked, ok) ->

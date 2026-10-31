@@ -236,6 +236,19 @@ members_mode_tests(RealmKey) ->
            ?assertEqual(1, count(membership, not_the_audience)),
            ?assertEqual(1, count(membership, wrong_realm))
        end},
+      {"the four reasons hold their boundary: a foreign realm is wrong_realm, a malformed realm name is not",
+       fun() ->
+           %% The token's issuer not being this realm's key is, for a membership, exactly a token for another
+           %% realm; macula_ucan's own wrong_realm is a capability naming another realm. A malformed realm NAME
+           %% in a capability says nothing about which realm the token belongs to, so it is invalid.
+           ?assertEqual(wrong_realm, macula_realm_rights:membership_reason(not_the_issuer)),
+           ?assertEqual(wrong_realm, macula_realm_rights:membership_reason(wrong_realm)),
+           ?assertEqual(not_the_audience, macula_realm_rights:membership_reason(not_the_audience)),
+           ?assertEqual(expired, macula_realm_rights:membership_reason(expired)),
+           ?assertEqual(invalid, macula_realm_rights:membership_reason(realm_name_not_canonical)),
+           ?assertEqual(invalid, macula_realm_rights:membership_reason(malformed)),
+           ?assertEqual(invalid, macula_realm_rights:membership_reason(signature_invalid))
+       end},
       {"a system topic stays exempt in members mode, admitted with no token at all",
        fun() ->
            ?assertEqual(allow, macula_realm_rights:publish(members, realm(), none, <<"_mesh.patterns">>)),
