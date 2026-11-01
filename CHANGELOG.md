@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A metrics write never fails its caller when there is no counter table (macula#186).** The realm RBAC decision
+  counters live in a named ETS table that `macula_peering_sup` creates and owns for the run, and a caller can outlive
+  that run: a station's peer observer sits in the station's own supervision tree and is still handed frames while the
+  station shuts down. `count/3` then took `badarg` out of `ets:member/2` on a table that no longer existed, and the
+  caller — the observer — died on bookkeeping that could not change its answer. `count/3` and `counters/0` now read
+  the table's absence the way `macula_provider_standing` and `macula_diagnostics_bound` do, through `ets:whereis/1`:
+  with no table there is no decision to count, the caller carries on with the decision it already had, and
+  `counters/0` answers an empty map. Nothing is caught or swallowed, so a `badarg` from a bad key still raises. Found
+  by a station test fixture that watched an observer crash on `badarg` during a module's own teardown
+  (macula-station#152); the regression test removes the table by stopping the application and asserts the verdict,
+  not the count.
+
 ## [18.3.0] - 2026-10-31
 
 A key file can be sealed at rest. A copy of one is no longer a working identity: the bytes are AES-256-GCM
