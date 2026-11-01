@@ -39,7 +39,7 @@
                         i := pos_integer(),
                         object := macula_signed_object:object()}.
 
--type refusal() :: {bad_field, atom()} | {malformed, term()} | macula_signed_object:refusal().
+-type refusal() :: {bad_field, atom()} | {malformed, term()} | key_not_the_nodes | macula_signed_object:refusal().
 
 %%------------------------------------------------------------------
 %% Signing
@@ -67,10 +67,15 @@ encode_bytes(#{object := Object}) ->
 
 %% @doc Read a checkpoint from its signed bytes, under the verifier's profile and the checkpoint label. The signature
 %% is checked before the fields are read, and the fields are then held to the shape the format gives them.
+%%
+%% The signed object carries its own key, so the key is also held to the `node' the checkpoint names: a checkpoint is
+%% only this node's word about this node's chain when `macula_node_keys:node_id/2' of the key that signed it IS that
+%% node id. Without this, anybody's key could sign a checkpoint claiming somebody else's node, and a verifier holding
+%% nothing but the export would have no reason to refuse it.
 -spec verify(binary(), macula_crypto_profile:profile()) -> {ok, checkpoint()} | {error, refusal()}.
 verify(Bytes, Profile) when is_binary(Bytes) ->
     case macula_signed_object:decode(Bytes) of
-        {ok, Object} -> verified(macula_signed_object:verify(?LABEL, Object, Profile), Object);
+        {ok, Object} -> verified(macula_signed_object:verify(?LABEL, Object, Profile), Object, Profile);
         {error, Why} -> {error, {malformed, Why}}
     end;
 verify(_NotBytes, _Profile) ->
@@ -82,6 +87,9 @@ verify(_NotBytes, _Profile) ->
 -spec received(checkpoint() | undefined, checkpoint()) -> ok | {error, term()}.
 received(undefined, _New) ->
     ok;
+received(#{node := Node}, #{node := Other} = New) when Node =/= Other ->
+    %% A checkpoint for another node's chain is not this chain's next one, whatever its signature says.
+    {error, {checkpoint_key_mismatch, cs(New)}};
 received(#{cs := Cs, hash := Hash}, #{cs := Cs, hash := Hash}) ->
     ok;
 received(#{cs := Cs}, #{cs := Cs}) ->
@@ -178,8 +186,19 @@ atom_key(Text) ->
 text_value_back(_Key, {text, Value}) -> Value;
 text_value_back(_Key, Value) -> Value.
 
-verified({ok, #{fields := Decoded}}, Object) -> from_fields(Decoded, Object);
-verified({error, _} = Error, _Object)      -> Error.
+verified({ok, #{key := Key, fields := Decoded}}, Object, Profile) ->
+    case is_the_nodes_key(Key, Decoded, Profile) of
+        true  -> from_fields(Decoded, Object);
+        false -> {error, key_not_the_nodes}
+    end;
+verified({error, _} = Error, _Object, _Profile) ->
+    Error.
+
+is_the_nodes_key(Key, Decoded, Profile) ->
+    case maps:find({text, <<"node">>}, Decoded) of
+        {ok, Node} when is_binary(Node) -> macula_node_keys:node_id(Key, Profile) =:= Node;
+        _                               -> false
+    end.
 
 from_fields(Decoded, Object) ->
     case missing_text(Decoded) of
@@ -191,6 +210,7 @@ shaped(Fields, Object) ->
     case well_typed(maps:without([alg], Fields)) of
         ok ->
             {ok, #{bytes => macula_signed_object:encode(Object),
+                   node => maps:get(node, Fields),
                    cs => maps:get(cs, Fields),
                    n => maps:get(n, Fields),
                    head => maps:get(head, Fields),

@@ -24,6 +24,8 @@
                  | {truncated_after_checkpoint, pos_integer(), non_neg_integer()}
                  | {anchor_mismatch, pos_integer()}
                  | {checkpoint_signature_invalid, pos_integer()}
+                 | {checkpoint_key_mismatch, pos_integer()}
+                 | {unsealed_tail, pos_integer(), non_neg_integer()}
                  | {checkpoint_not_extending, pos_integer()}
                  | {checkpoint_replayed, pos_integer()}
                  | {checkpoint_head_mismatch, pos_integer(), non_neg_integer()}
@@ -49,11 +51,11 @@ verify(#{header := Header, entries := Entries, checkpoints := Checkpoints}, Anch
     Now = maps:get(now, Opts, erlang:system_time(second)),
     case walk_entries(Entries) of
         {error, Finding} -> {error, [Finding]};
-        {ok, Read}       -> walked(Checkpoints, Profile, Read, Header, Anchors, Now)
+        {ok, Read}       -> walked(Checkpoints, maps:get(node, Header), Profile, Read, Header, Anchors, Now)
     end.
 
-walked(Checkpoints, Profile, Read, Header, Anchors, Now) ->
-    case walk_checkpoints(Checkpoints, Profile, Read) of
+walked(Checkpoints, Node, Profile, Read, Header, Anchors, Now) ->
+    case walk_checkpoints(Checkpoints, Node, Profile, Read) of
         {error, Finding} -> {error, [Finding]};
         {ok, Read1}      -> judged(Header, Read1, Anchors, Now)
     end.
@@ -109,39 +111,50 @@ optional_agrees(Entry, Line, Keys) ->
 %% The checkpoints
 %%------------------------------------------------------------------
 
-walk_checkpoints(Checkpoints, Profile, Read) ->
-    walk_checkpoints(Checkpoints, Profile, Read, undefined, []).
+walk_checkpoints(Checkpoints, Node, Profile, Read) ->
+    walk_checkpoints(Checkpoints, Node, Profile, Read, undefined, []).
 
-walk_checkpoints([], _Profile, Read, Last, Seen) ->
+walk_checkpoints([], _Node, _Profile, Read, Last, Seen) ->
     {ok, Read#{last_checkpoint => Last, checkpoints => lists:reverse(Seen)}};
-walk_checkpoints([#{bytes := Bytes, cs := LineCs} | Rest], Profile, Read, Last, Seen) ->
+walk_checkpoints([#{bytes := Bytes, cs := LineCs} | Rest], Node, Profile, Read, Last, Seen) ->
     case macula_audit_checkpoint:verify(Bytes, Profile) of
+        {error, key_not_the_nodes} ->
+            {error, {checkpoint_key_mismatch, LineCs}};
         {error, _} ->
             {error, {checkpoint_signature_invalid, LineCs}};
         {ok, Checkpoint} ->
-            extending(Checkpoint, Rest, Profile, Read, Last, Seen)
+            right_node(Checkpoint, Node, Rest, Profile, Read, Last, Seen)
     end.
 
-extending(Checkpoint, Rest, Profile, Read, Last, Seen) ->
+%% The checkpoint's key is bound to the node it names, and it must name the node the export is about: a checkpoint of
+%% another chain, however well signed, says nothing about this one.
+right_node(Checkpoint, Node, Rest, Profile, Read, Last, Seen) ->
+    case maps:get(node, Checkpoint) =:= Node of
+        false -> {error, {checkpoint_key_mismatch, macula_audit_checkpoint:cs(Checkpoint)}};
+        true  -> extending(Checkpoint, Rest, Node, Profile, Read, Last, Seen)
+    end.
+
+extending(Checkpoint, Rest, Node, Profile, Read, Last, Seen) ->
     Cs = macula_audit_checkpoint:cs(Checkpoint),
     case macula_audit_checkpoint:received(Last, Checkpoint) of
         {error, {checkpoint_replayed, _}}         -> {error, {checkpoint_replayed, Cs}};
         {error, {checkpoint_not_extending, _}}    -> {error, {checkpoint_not_extending, Cs}};
-        ok                                        -> covered(Checkpoint, Rest, Profile, Read, Seen)
+        {error, {checkpoint_key_mismatch, _}}     -> {error, {checkpoint_key_mismatch, Cs}};
+        ok                                        -> covered(Checkpoint, Rest, Node, Profile, Read, Seen)
     end.
 
 %% A checkpoint may not claim entries the export does not hold, and its head must be the hash of the entry it says.
-covered(Checkpoint, Rest, Profile, Read, Seen) ->
+covered(Checkpoint, Rest, Node, Profile, Read, Seen) ->
     Cs = macula_audit_checkpoint:cs(Checkpoint),
     Count = macula_audit_checkpoint:count(Checkpoint),
     case Count =< maps:get(count, Read) of
         false -> {error, {truncated_after_checkpoint, Cs, Count}};
-        true  -> head_checked(Checkpoint, Rest, Profile, Read, Seen)
+        true  -> head_checked(Checkpoint, Rest, Node, Profile, Read, Seen)
     end.
 
-head_checked(Checkpoint, Rest, Profile, Read, Seen) ->
+head_checked(Checkpoint, Rest, Node, Profile, Read, Seen) ->
     case covered_head(Checkpoint, Read) of
-        true  -> walk_checkpoints(Rest, Profile, Read, Checkpoint, [Checkpoint | Seen]);
+        true  -> walk_checkpoints(Rest, Node, Profile, Read, Checkpoint, [Checkpoint | Seen]);
         false -> {error, {checkpoint_head_mismatch, macula_audit_checkpoint:cs(Checkpoint),
                           macula_audit_checkpoint:count(Checkpoint)}}
     end.
@@ -208,8 +221,17 @@ report(#{node := Node, segment := Segment, sealed := Sealed}, Read, Anchors, Now
 %% A chain the exporter says has ENDED may not end without an anchor sealing its last checkpoint.
 sealed(_Base, #{last_checkpoint := undefined}, _Anchors) ->
     {error, [{sealed_without_anchor, 0}]};
-sealed(Base, #{last_checkpoint := Last}, Anchors) ->
+sealed(#{entries := Entries} = Base, #{last_checkpoint := Last}, Anchors) ->
     Cs = macula_audit_checkpoint:cs(Last),
+    Covered = macula_audit_checkpoint:count(Last),
+    case Covered =:= Entries of
+        %% A seal that does not reach the end of the export seals nothing: the tail could have been written after the
+        %% node's key rotated, and no anchor can speak for it.
+        false -> {error, [{unsealed_tail, Cs, Entries - Covered}]};
+        true  -> sealed_anchor(Base, Last, Cs, Anchors)
+    end.
+
+sealed_anchor(Base, Last, Cs, Anchors) ->
     Hash = macula_audit_checkpoint:hash(Last),
     case [Anchor || #{cs := AnchorCs, hash := AnchorHash} = Anchor <- Anchors,
                     AnchorCs =:= Cs, AnchorHash =:= Hash] of
@@ -221,12 +243,18 @@ sealed(Base, #{last_checkpoint := Last}, Anchors) ->
 watched(_Base, #{last_checkpoint := undefined}, _Anchors, _Now) ->
     %% No checkpoint at all: nothing has ever been anchored, so nothing is being watched.
     {overdue, #{overdue_by => undefined, interval => undefined}};
-watched(Base, #{last_checkpoint := Last}, Anchors, Now) ->
-    Interval = maps:get(i, Last),
-    case newest_receipt(Anchors) of
-        none       -> {overdue, Base#{overdue_by => undefined}};
-        ReceivedAt -> aging(Base, Interval, Now - ReceivedAt)
+watched(Base, Read, Anchors, Now) ->
+    %% The interval is the one the checkpoint the NEWEST ANCHOR NAMES promised. Reading it from the last checkpoint in
+    %% the export instead would let a holder of the node's key append an unanchored checkpoint promising a longer
+    %% interval and read as watched while nothing has been anchored for weeks.
+    case newest_anchor(Anchors) of
+        none                     -> {overdue, Base#{overdue_by => undefined}};
+        #{cs := Cs, received_at := ReceivedAt} ->
+            aging(Base, promised(Read, Cs), Now - ReceivedAt)
     end.
+
+promised(#{checkpoints := Checkpoints}, Cs) ->
+    maps:get(i, hd([Checkpoint || #{cs := Found} = Checkpoint <- Checkpoints, Found =:= Cs])).
 
 aging(Base, Interval, Age) ->
     case Age > Interval of
@@ -234,10 +262,11 @@ aging(Base, Interval, Age) ->
         false -> {ok, Base#{overdue_by => 0, interval => Interval}}
     end.
 
-newest_receipt([]) ->
+newest_anchor([]) ->
     none;
-newest_receipt(Anchors) ->
-    case [maps:get(received_at, Anchor) || Anchor <- Anchors, maps:is_key(received_at, Anchor)] of
+newest_anchor(Anchors) ->
+    case [Anchor || #{received_at := _} = Anchor <- Anchors] of
         []    -> none;
-        Times -> lists:max(Times)
+        Held  -> element(2, lists:last(lists:keysort(1, [{maps:get(received_at, Anchor), Anchor}
+                                                           || Anchor <- Held])))
     end.

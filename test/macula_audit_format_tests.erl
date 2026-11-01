@@ -64,12 +64,13 @@ a_checkpoint_missing_a_field_cannot_be_signed_test() ->
                  macula_audit_checkpoint:sign(#{v => 1, cs => 1, n => 0, head => <<>>, prev => <<>>, i => 60}, key())).
 
 a_checkpoint_with_a_field_of_the_wrong_shape_cannot_be_signed_test() ->
+    Key = key(),
     ?assertEqual({error, {bad_field, node}},
                  macula_audit_checkpoint:sign(#{v => 1, node => <<"short">>, cs => 1, n => 0,
-                                                head => <<>>, prev => <<>>, i => 60}, key())),
+                                                head => <<>>, prev => <<>>, i => 60}, Key)),
     ?assertEqual({error, {bad_field, i}},
-                 macula_audit_checkpoint:sign(#{v => 1, node => ?NODE, cs => 1, n => 0,
-                                                head => <<>>, prev => <<>>, i => 0}, key())).
+                 macula_audit_checkpoint:sign(#{v => 1, node => node_of(Key), cs => 1, n => 0,
+                                                head => <<>>, prev => <<>>, i => 0}, Key)).
 
 a_checkpoint_that_is_not_a_map_cannot_be_signed_test() ->
     ?assertEqual({error, {malformed, not_a_map}}, macula_audit_checkpoint:sign(not_a_map, key())).
@@ -81,7 +82,7 @@ bytes_that_are_not_a_checkpoint_are_refused_test() ->
 a_signed_checkpoint_with_fields_outside_the_format_is_refused_test() ->
     Key = key(),
     Object = macula_signed_object:sign(macula_audit_checkpoint:label(),
-                                       #{{text, <<"v">>} => 1, {text, <<"node">>} => ?NODE,
+                                       #{{text, <<"v">>} => 1, {text, <<"node">>} => node_of(Key),
                                          {text, <<"cs">>} => 0, {text, <<"n">>} => 0,
                                          {text, <<"head">>} => <<>>, {text, <<"prev">>} => <<>>,
                                          {text, <<"i">>} => 60}, Key),
@@ -91,7 +92,7 @@ a_signed_checkpoint_with_fields_outside_the_format_is_refused_test() ->
 a_signed_checkpoint_missing_a_field_is_refused_test() ->
     Key = key(),
     Object = macula_signed_object:sign(macula_audit_checkpoint:label(),
-                                       #{{text, <<"v">>} => 1, {text, <<"node">>} => ?NODE,
+                                       #{{text, <<"v">>} => 1, {text, <<"node">>} => node_of(Key),
                                          {text, <<"cs">>} => 1, {text, <<"n">>} => 0,
                                          {text, <<"head">>} => <<>>, {text, <<"prev">>} => <<>>}, Key),
     ?assertEqual({error, {bad_field, i}}, macula_audit_checkpoint:verify(macula_signed_object:encode(Object),
@@ -178,10 +179,14 @@ cbor_entry(Version) ->
 
 chain() ->
     {ok, Sink} = macula_audit_memory_sink:new(#{}),
-    {ok, Chain} = macula_audit:start(#{node => ?NODE, sink => {macula_audit_memory_sink, Sink}}),
+    {ok, Chain} = macula_audit:start(#{node => node_of(key()), sink => {macula_audit_memory_sink, Sink}}),
     {ok, Chain1} = macula_audit:append(Chain, <<"store_refused">>, #{t => ?NOW}),
     Chain1.
 
 key() ->
     {ok, Key} = macula_node_keys:generate(identity, pq_pure),
     Key.
+
+node_of(Key) ->
+    {ok, Node} = macula_node_keys:node_id(Key),
+    Node.

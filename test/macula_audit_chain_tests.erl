@@ -222,9 +222,19 @@ flip(Bytes, At) ->
     <<Head:At/binary, Byte, Tail/binary>> = Bytes,
     <<Head/binary, (Byte bxor 1), Tail/binary>>.
 
+%% The chain's node is the node_id of the key that signs its checkpoints: since macula#175 WP1's first review, a
+%% checkpoint's key is held to the node the checkpoint names, so a made-up node id would be refused for the wrong
+%% reason. The key is made once per run.
 node_id() ->
-    binary:copy(<<16#11>>, 32).
+    {ok, Node} = macula_node_keys:node_id(key()),
+    Node.
 
 key() ->
-    {ok, Key} = macula_node_keys:generate(identity, pq_pure),
-    Key.
+    case get(audit_test_key) of
+        undefined ->
+            {ok, Key} = macula_node_keys:generate(identity, pq_pure),
+            put(audit_test_key, Key),
+            Key;
+        Key ->
+            Key
+    end.
