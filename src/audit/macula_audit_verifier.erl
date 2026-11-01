@@ -48,13 +48,14 @@ verify(#{header := Header, entries := Entries, checkpoints := Checkpoints}, Anch
     Profile = maps:get(profile, Opts, pq_pure),
     Now = maps:get(now, Opts, erlang:system_time(second)),
     case walk_entries(Entries) of
-        {error, Finding} ->
-            {error, [Finding]};
-        {ok, Read} ->
-            case walk_checkpoints(Checkpoints, Profile, Read) of
-                {error, Finding} -> {error, [Finding]};
-                {ok, Read1}      -> judged(Header, Read1, Anchors, Now)
-            end
+        {error, Finding} -> {error, [Finding]};
+        {ok, Read}       -> walked(Checkpoints, Profile, Read, Header, Anchors, Now)
+    end.
+
+walked(Checkpoints, Profile, Read, Header, Anchors, Now) ->
+    case walk_checkpoints(Checkpoints, Profile, Read) of
+        {error, Finding} -> {error, [Finding]};
+        {ok, Read1}      -> judged(Header, Read1, Anchors, Now)
     end.
 
 %%------------------------------------------------------------------
@@ -68,29 +69,31 @@ walk_entries([], Read) ->
     {ok, Read};
 walk_entries([#{bytes := Bytes, n := Seq, h := Recorded} = Line | Rest], Read) ->
     case macula_audit_entry:hash(Bytes) =:= Recorded of
-        false ->
-            {error, {entry_hash_mismatch, Seq}};
-        true ->
-            case macula_audit_entry:decode(Bytes) of
-                {ok, Entry} -> sequenced(Entry, Recorded, Line, Rest, Read);
-                {error, _}  -> {error, {fields_bytes_mismatch, Seq}}
-            end
+        false -> {error, {entry_hash_mismatch, Seq}};
+        true  -> readable(Bytes, Seq, Recorded, Line, Rest, Read)
     end.
 
-sequenced(#{n := Seq, p := Prev} = Entry, Hash, Line, Rest, #{count := Count, head := Head} = Read) ->
+readable(Bytes, Seq, Recorded, Line, Rest, Read) ->
+    case macula_audit_entry:decode(Bytes) of
+        {ok, Entry} -> sequenced(Entry, Recorded, Line, Rest, Read);
+        {error, _}  -> {error, {fields_bytes_mismatch, Seq}}
+    end.
+
+sequenced(#{n := Seq} = Entry, Hash, Line, Rest, Read) ->
     case agrees(Entry, Line) of
-        false ->
-            {error, {fields_bytes_mismatch, Seq}};
-        true ->
-            case Seq =:= Count + 1 of
-                false -> {error, {sequence_gap, Count + 1, Seq}};
-                true  -> linked(Prev, Head, Seq, Entry, Hash, Line, Rest, Read)
-            end
+        false -> {error, {fields_bytes_mismatch, Seq}};
+        true  -> in_sequence(Entry, Hash, Rest, Read)
     end.
 
-linked(Prev, Head, Seq, _Entry, _Hash, _Line, _Rest, _Read) when Prev =/= Head ->
+in_sequence(#{n := Seq, p := Prev}, Hash, Rest, #{count := Count, head := Head} = Read) ->
+    case Seq =:= Count + 1 of
+        false -> {error, {sequence_gap, Count + 1, Seq}};
+        true  -> linked(Prev, Head, Seq, Hash, Rest, Read)
+    end.
+
+linked(Prev, Head, Seq, _Hash, _Rest, _Read) when Prev =/= Head ->
     {error, {prev_hash_mismatch, Seq}};
-linked(_Prev, _Head, Seq, _Entry, Hash, _Line, Rest, #{hashes := Hashes} = Read) ->
+linked(_Prev, _Head, Seq, Hash, Rest, #{hashes := Hashes} = Read) ->
     walk_entries(Rest, Read#{count => Seq, head => Hash, hashes => Hashes#{Seq => Hash}}).
 
 %% The readable fields beside an entry must say exactly what its own bytes say, in both directions.
@@ -132,13 +135,15 @@ covered(Checkpoint, Rest, Profile, Read, Seen) ->
     Cs = macula_audit_checkpoint:cs(Checkpoint),
     Count = macula_audit_checkpoint:count(Checkpoint),
     case Count =< maps:get(count, Read) of
-        false ->
-            {error, {truncated_after_checkpoint, Cs, Count}};
-        true ->
-            case covered_head(Checkpoint, Read) of
-                true  -> walk_checkpoints(Rest, Profile, Read, Checkpoint, [Checkpoint | Seen]);
-                false -> {error, {checkpoint_head_mismatch, Cs, Count}}
-            end
+        false -> {error, {truncated_after_checkpoint, Cs, Count}};
+        true  -> head_checked(Checkpoint, Rest, Profile, Read, Seen)
+    end.
+
+head_checked(Checkpoint, Rest, Profile, Read, Seen) ->
+    case covered_head(Checkpoint, Read) of
+        true  -> walk_checkpoints(Rest, Profile, Read, Checkpoint, [Checkpoint | Seen]);
+        false -> {error, {checkpoint_head_mismatch, macula_audit_checkpoint:cs(Checkpoint),
+                          macula_audit_checkpoint:count(Checkpoint)}}
     end.
 
 covered_head(#{n := 0, head := <<>>}, _Read) ->
@@ -174,11 +179,13 @@ anchored_each([#{cs := Cs} = Anchor | Rest], Checkpoints) ->
     case [Checkpoint || #{cs := Found} = Checkpoint <- Checkpoints, Found =:= Cs] of
         [] ->
             {error, {truncated_after_checkpoint, Cs, maps:get(n, Anchor, 0)}};
-        [Checkpoint] ->
-            case agrees_with_anchor(Anchor, Checkpoint) of
-                true  -> anchored_each(Rest, Checkpoints);
-                false -> {error, {anchor_mismatch, Cs}}
-            end
+        [Checkpoint] -> matching(Anchor, Checkpoint, Rest, Checkpoints)
+    end.
+
+matching(#{cs := Cs} = Anchor, Checkpoint, Rest, Checkpoints) ->
+    case agrees_with_anchor(Anchor, Checkpoint) of
+        true  -> anchored_each(Rest, Checkpoints);
+        false -> {error, {anchor_mismatch, Cs}}
     end.
 
 agrees_with_anchor(#{hash := Hash, head := Head}, Checkpoint) ->
@@ -217,14 +224,14 @@ watched(_Base, #{last_checkpoint := undefined}, _Anchors, _Now) ->
 watched(Base, #{last_checkpoint := Last}, Anchors, Now) ->
     Interval = maps:get(i, Last),
     case newest_receipt(Anchors) of
-        none ->
-            {overdue, Base#{overdue_by => undefined}};
-        ReceivedAt ->
-            Age = Now - ReceivedAt,
-            case Age > Interval of
-                true  -> {overdue, Base#{overdue_by => Age, interval => Interval}};
-                false -> {ok, Base#{overdue_by => 0, interval => Interval}}
-            end
+        none       -> {overdue, Base#{overdue_by => undefined}};
+        ReceivedAt -> aging(Base, Interval, Now - ReceivedAt)
+    end.
+
+aging(Base, Interval, Age) ->
+    case Age > Interval of
+        true  -> {overdue, Base#{overdue_by => Age, interval => Interval}};
+        false -> {ok, Base#{overdue_by => 0, interval => Interval}}
     end.
 
 newest_receipt([]) ->

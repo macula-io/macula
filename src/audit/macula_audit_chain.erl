@@ -51,19 +51,19 @@ start(_Opts) ->
 %% @doc Append one event. The kind is a business verb from `macula_audit_entry:kinds/0'; the fields carry the time, the
 %% verified node id, the reason, the request digest and the coalesced count where the kind has them.
 -spec append(chain(), binary(), map()) -> {ok, chain()} | {error, term()}.
-append(#chain{n = Count, head = Head, sink = Module, sink_state = State} = Chain, Kind, Fields)
+append(#chain{n = Count, head = Head} = Chain, Kind, Fields)
   when is_binary(Kind), is_map(Fields) ->
     case macula_audit_entry:new(Fields#{k => Kind, n => Count + 1, p => Head}) of
-        {ok, Entry} ->
-            Bytes = macula_audit_entry:encode(Entry),
-            case Module:append(Bytes, State) of
-                {ok, State1} ->
-                    {ok, Chain#chain{n = Count + 1, head = macula_audit_entry:hash(Bytes), sink_state = State1}};
-                {error, Reason} ->
-                    {error, {sink_refused, Reason}}
-            end;
-        {error, _} = Error ->
-            Error
+        {ok, Entry}      -> written(Chain, macula_audit_entry:encode(Entry));
+        {error, _} = Error -> Error
+    end.
+
+written(#chain{n = Count, sink = Module, sink_state = State} = Chain, Bytes) ->
+    case Module:append(Bytes, State) of
+        {ok, State1} ->
+            {ok, Chain#chain{n = Count + 1, head = macula_audit_entry:hash(Bytes), sink_state = State1}};
+        {error, Reason} ->
+            {error, {sink_refused, Reason}}
     end.
 
 %% @doc Sign a checkpoint over everything the chain holds, after the sink has synced it. A sink that cannot sync
@@ -73,20 +73,20 @@ append(#chain{n = Count, head = Head, sink = Module, sink_state = State} = Chain
 checkpoint(#chain{sink = Module, sink_state = State} = Chain, Key, Interval)
   when is_integer(Interval), Interval >= 1 ->
     case Module:sync(State) of
-        ok ->
-            {Cs, Prev} = next(Chain#chain.last),
-            Fields = #{v => 1, node => Chain#chain.node, cs => Cs, n => Chain#chain.n,
-                       head => Chain#chain.head, prev => Prev, i => Interval},
-            case macula_audit_checkpoint:sign(Fields, Key) of
-                {ok, Checkpoint} ->
-                    {ok, Checkpoint,
-                     Chain#chain{last = #{cs => Cs, hash => macula_audit_checkpoint:hash(Checkpoint)},
-                                 checkpoints = Chain#chain.checkpoints ++ [Checkpoint]}};
-                {error, _} = Error ->
-                    Error
-            end;
-        {error, Reason} ->
-            {error, {sink_unsynced, Reason}}
+        ok               -> signed(Chain, Key, Interval);
+        {error, Reason}  -> {error, {sink_unsynced, Reason}}
+    end.
+
+signed(#chain{n = Count, head = Head, node = Node, last = Last} = Chain, Key, Interval) ->
+    {Cs, Prev} = next(Last),
+    Fields = #{v => 1, node => Node, cs => Cs, n => Count, head => Head, prev => Prev, i => Interval},
+    case macula_audit_checkpoint:sign(Fields, Key) of
+        {ok, Checkpoint} ->
+            {ok, Checkpoint,
+             Chain#chain{last = #{cs => Cs, hash => macula_audit_checkpoint:hash(Checkpoint)},
+                         checkpoints = Chain#chain.checkpoints ++ [Checkpoint]}};
+        {error, _} = Error ->
+            Error
     end.
 
 %% @doc The entries the sink holds, in chain order, as the bytes they were written and hashed as.

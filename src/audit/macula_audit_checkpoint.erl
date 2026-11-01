@@ -70,13 +70,8 @@ encode_bytes(#{object := Object}) ->
 -spec verify(binary(), macula_crypto_profile:profile()) -> {ok, checkpoint()} | {error, refusal()}.
 verify(Bytes, Profile) when is_binary(Bytes) ->
     case macula_signed_object:decode(Bytes) of
-        {ok, Object} ->
-            case macula_signed_object:verify(?LABEL, Object, Profile) of
-                {ok, #{fields := Decoded}} -> from_fields(Decoded, Object);
-                {error, _} = Error        -> Error
-            end;
-        {error, Why} ->
-            {error, {malformed, Why}}
+        {ok, Object} -> verified(macula_signed_object:verify(?LABEL, Object, Profile), Object);
+        {error, Why} -> {error, {malformed, Why}}
     end;
 verify(_NotBytes, _Profile) ->
     {error, {malformed, not_bytes}}.
@@ -183,25 +178,28 @@ atom_key(Text) ->
 text_value_back(_Key, {text, Value}) -> Value;
 text_value_back(_Key, Value) -> Value.
 
+verified({ok, #{fields := Decoded}}, Object) -> from_fields(Decoded, Object);
+verified({error, _} = Error, _Object)      -> Error.
+
 from_fields(Decoded, Object) ->
     case missing_text(Decoded) of
-        [] ->
-            Fields = atom_fields(Decoded),
-            case well_typed(maps:without([alg], Fields)) of
-                ok ->
-                    {ok, #{bytes => macula_signed_object:encode(Object),
-                           cs => maps:get(cs, Fields),
-                           n => maps:get(n, Fields),
-                           head => maps:get(head, Fields),
-                           prev => maps:get(prev, Fields),
-                           i => maps:get(i, Fields),
-                           hash => crypto:hash(sha384, tbs(Object)),
-                           object => Object}};
-                {error, _} = Error ->
-                    Error
-            end;
-        [Missing|_] ->
-            {error, {bad_field, Missing}}
+        []          -> shaped(atom_fields(Decoded), Object);
+        [Missing|_] -> {error, {bad_field, Missing}}
+    end.
+
+shaped(Fields, Object) ->
+    case well_typed(maps:without([alg], Fields)) of
+        ok ->
+            {ok, #{bytes => macula_signed_object:encode(Object),
+                   cs => maps:get(cs, Fields),
+                   n => maps:get(n, Fields),
+                   head => maps:get(head, Fields),
+                   prev => maps:get(prev, Fields),
+                   i => maps:get(i, Fields),
+                   hash => crypto:hash(sha384, tbs(Object)),
+                   object => Object}};
+        {error, _} = Error ->
+            Error
     end.
 
 %% The signed bytes as received: the object carries them, so they are never re-encoded.

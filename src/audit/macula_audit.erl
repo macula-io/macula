@@ -5,12 +5,13 @@
 %% event, take a checkpoint, export it as JSON lines, and verify an export against what a destination holds.
 %%
 %%   {ok, Chain0} = macula_audit:start(#{node => NodeId, sink => {macula_audit_file_sink, Sink}}),
-%%   {ok, Chain1} = macula_audit:append(Chain0, <<"handshake_refused">>, #{t => Now, s => PeerId}),
+%%   {ok, Chain1} = macula_audit:append(Chain0, Kind, #{t => Now, s => PeerId}),
 %%   {ok, Checkpoint, Chain2} = macula_audit:checkpoint(Chain1, IdentityKey, 3600),
 %%   {ok, Lines} = macula_audit:export(Chain2, false),
 %%   {ok, _Report} = macula_audit:verify(iolist_to_binary(Lines), Anchors, #{}).
 %%
-%% The format, what a checkpoint signs and what the verifier refuses are docs/design/DESIGN_AUDIT_CHAIN.md. The verifier
+%% `Kind' is one of the kinds `kinds/0' lists, and `IdentityKey' is the node's identity key. The format, what a
+%% checkpoint signs and what the verifier refuses are docs/design/DESIGN_AUDIT_CHAIN.md. The verifier
 %% is the only module here that trusts nothing: it reads bytes it was given, hashes them as received, and reports the
 %% first bad place.
 -module(macula_audit).

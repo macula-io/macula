@@ -3,7 +3,8 @@
 %% macula_record:refreshed/4, which both refresh/2 and refresh/3 stamp through, and the pool's tombstone signing; the
 %% two refresh doors are called only by the pool's record signing. The calls are read with xref from the application's
 %% compiled modules, so a new caller fails this test until it signs through the pool or is named here with its reason.
-%% One level down, only macula_record and macula_frame call macula_signed_object's signing functions.
+%% One level down, only macula_record, macula_frame and the audit chain's checkpoint signer call macula_signed_object's
+%% signing functions.
 -module(macula_record_signing_custody_tests).
 
 -include_lib("eunit/include/eunit.hrl").
@@ -21,11 +22,17 @@ only_the_pool_signs_records_test_() ->
     end}.
 
 %% One level down, a module could sign under the record label by calling macula_signed_object directly, past
-%% macula_record:sign/2. Only macula_record, which signs records, and macula_frame, which signs frames, call its
-%% signing functions, and only macula_frame signs a held object.
-only_records_and_frames_call_the_object_signers_test_() ->
+%% macula_record:sign/2. Only macula_record, which signs records, macula_frame, which signs frames, and
+%% macula_audit_checkpoint, which signs an audit chain's checkpoints (macula#175 WP1), call its signing functions, and
+%% only macula_frame signs a held object.
+%%
+%% The checkpoint signer is named here rather than routed through macula_record because a checkpoint is not a record:
+%% it is never stored or replicated, it carries no payload, and it says nothing about the node's own state — it is a
+%% statement about a chain, signed under MACULA-AUDIT-CHECKPOINT-V1, which is what keeps a checkpoint signature from
+%% ever being read as a record or a frame.
+only_the_three_signing_doors_call_the_object_signers_test_() ->
     {timeout, 60, fun() ->
-        ?assertEqual(#{{macula_signed_object, sign, 3} => [macula_frame, macula_record],
+        ?assertEqual(#{{macula_signed_object, sign, 3} => [macula_audit_checkpoint, macula_frame, macula_record],
                        {macula_signed_object, sign_held, 3} => [macula_frame]},
                      calling_modules([{macula_signed_object, sign, 3}, {macula_signed_object, sign_held, 3}]))
     end}.
