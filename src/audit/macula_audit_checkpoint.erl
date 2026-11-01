@@ -31,6 +31,7 @@
 
 %% The signed object as it travels, with the facts a chain and a destination ask of it read out once.
 -type checkpoint() :: #{bytes := binary(),
+                        node := binary(),
                         cs := pos_integer(),
                         n := non_neg_integer(),
                         head := binary(),
