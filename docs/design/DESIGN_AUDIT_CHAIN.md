@@ -117,13 +117,26 @@ The findings, and the test that produces each:
 | `{anchor_mismatch, Cs}` | the chain was rewritten after an anchor: the checkpoint no longer matches what a destination holds |
 | `{checkpoint_signature_invalid, Cs}` | a checkpoint was forged, or signed under another label |
 | `{checkpoint_not_extending, Cs}` | a checkpoint does not extend the previous one (a fork in the verifier) |
-| `{checkpoint_head_mismatch, Cs, N}` | a signed checkpoint's head is not the hash of entry `N` in the export — the entries were rewritten consistently, so their own links are intact and only the checkpoint signed before the rewrite disagrees. This is the rewrite-after-anchor case the verifier catches with no anchor at all |
+| `{checkpoint_head_mismatch, Cs, N}` | a signed checkpoint's head is not the hash of entry `N` in the export — the entries were rewritten consistently, so their own links are intact and only the checkpoint signed before the rewrite disagrees. This is the rewrite-after-anchor case the verifier catches with no anchor at all, **and it rests entirely on the key binding below**: without it, anyone could rewrite the chain and re-sign the checkpoint with their own key, and this finding would never fire |
+| `{checkpoint_key_mismatch, Cs}` | a checkpoint's signing key is not the node it names, or it names a node other than the export's. The signed object carries its own key, so `macula_node_keys:node_id/2` of that key must equal the checkpoint's `node` field, and that field must equal the export header's. The same check runs at receipt (`macula_audit_checkpoint:received/2` refuses a checkpoint of another node) |
+| `{unsealed_tail, Cs, N}` | a chain exported as sealed whose last checkpoint covers fewer entries than the export holds: the seal does not reach the tail, so nothing anchored speaks for it |
 | `{checkpoint_replayed, Cs}` | an old checkpoint was replayed: the sequence went backwards, or a `cs` repeated with a different hash |
 | `{sealed_without_anchor, Cs}` | the chain ends because the node's key rotated, with no anchor sealing the last checkpoint |
 
 `macula_audit_checkpoint:received/2` is the same fork and replay check at RECEIPT, for a destination holding anchors: it
 is handed the checkpoint it just received and the last one it holds for that node, and refuses a checkpoint that does
 not extend it.
+
+**The interval that judges an overdue chain is the one the newest anchor names.** The verifier takes the anchor with the
+newest `received_at`, finds the checkpoint that anchor names, and uses THAT checkpoint's `i`. Reading the interval from
+the last checkpoint in the export instead would let a holder of the node's key append an unanchored checkpoint promising
+a long interval and read as watched while nothing had been anchored for weeks.
+
+**A seal covers the whole export.** `sealed: true` says the chain ended; it is only true if the last checkpoint covers
+every entry the export holds (`n` equal to the entry count). An entry written after the last checkpoint is not sealed by
+anything, so a chain claiming to have ended is refused with `{unsealed_tail, Cs, N}`. What no verifier can see is a tail
+that was CUT: with the tail removed, the export claims to have ended earlier, and only an anchor of a later checkpoint —
+which a sealed chain does not have — could show otherwise.
 
 **The anchors, and the only clock in the verifier.** An anchor is what a destination holds for one node:
 `#{cs, n, head, prev, hash, received_at}` — the checkpoint's sequence number, its entry count, the head and previous

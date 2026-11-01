@@ -17,11 +17,11 @@
 %%------------------------------------------------------------------
 
 an_intact_chain_with_a_fresh_anchor_passes_test() ->
-    #{export := Export, anchor := Anchor} = fixture(),
+    #{export := Export, anchor := Anchor, node := Node} = fixture(),
     {ok, Report} = macula_audit:verify(Export, [Anchor], #{now => ?NOW}),
     ?assertEqual(3, maps:get(entries, Report)),
     ?assertEqual(1, maps:get(checkpoints, Report)),
-    ?assertEqual(?NODE, maps:get(node, Report)).
+    ?assertEqual(Node, maps:get(node, Report)).
 
 a_chain_nobody_anchored_is_overdue_and_never_ok_test() ->
     #{export := Export} = fixture(),
@@ -107,10 +107,10 @@ a_sealed_chain_cut_short_and_exported_as_unsealed_is_never_clean_test() ->
 %%------------------------------------------------------------------
 
 a_forged_checkpoint_is_caught_test() ->
-    #{export := Export, anchor := Anchor, key := Key} = fixture(),
+    #{export := Export, anchor := Anchor, key := Key, node := Node} = fixture(),
     Parsed = parsed(Export),
     [Checkpoint] = maps:get(checkpoints, Parsed),
-    Fields = #{{text, <<"v">>} => 1, {text, <<"node">>} => ?NODE, {text, <<"cs">>} => 1,
+    Fields = #{{text, <<"v">>} => 1, {text, <<"node">>} => Node, {text, <<"cs">>} => 1,
                {text, <<"n">>} => 3, {text, <<"head">>} => macula_audit:entry_hash(<<>>),
                {text, <<"prev">>} => <<>>, {text, <<"i">>} => ?INTERVAL},
     Transport = macula_signed_object:encode(macula_signed_object:sign(<<"MACULA-FRAME-V1">>, Fields, Key)),
@@ -119,9 +119,9 @@ a_forged_checkpoint_is_caught_test() ->
                                      [Anchor], #{now => ?NOW})).
 
 a_checkpoint_that_does_not_extend_the_previous_one_is_caught_test() ->
-    #{export := Export, anchor := Anchor, key := Key, checkpoint := First} = fixture(),
+    #{export := Export, anchor := Anchor, key := Key, checkpoint := First, node := Node} = fixture(),
     Parsed = parsed(Export),
-    Fork = element(2, macula_audit_checkpoint:sign(#{v => 1, node => ?NODE, cs => 2, n => 3,
+    Fork = element(2, macula_audit_checkpoint:sign(#{v => 1, node => Node, cs => 2, n => 3,
                                                      head => macula_audit_checkpoint:head(First),
                                                      prev => binary:copy(<<16#AB>>, 48),
                                                      i => ?INTERVAL}, Key)),
@@ -131,10 +131,10 @@ a_checkpoint_that_does_not_extend_the_previous_one_is_caught_test() ->
                  macula_audit:verify(Parsed#{checkpoints => Lines}, [Anchor], #{now => ?NOW})).
 
 a_replayed_checkpoint_is_caught_test() ->
-    #{export := Export, anchor := Anchor, key := Key} = fixture(),
+    #{export := Export, anchor := Anchor, key := Key, node := Node} = fixture(),
     Parsed = parsed(Export),
     [Checkpoint] = maps:get(checkpoints, Parsed),
-    Other = element(2, macula_audit_checkpoint:sign(#{v => 1, node => ?NODE, cs => 1, n => 2,
+    Other = element(2, macula_audit_checkpoint:sign(#{v => 1, node => Node, cs => 1, n => 2,
                                                       head => binary:copy(<<16#CD>>, 48), prev => <<>>,
                                                       i => ?INTERVAL}, Key)),
     Replayed = Checkpoint#{bytes => macula_audit_checkpoint:encode_bytes(Other), cs => 1},
@@ -205,14 +205,15 @@ fixture() ->
 
 fixture(Time) ->
     Key = key(),
+    Node = node_of(Key),
     {ok, Sink} = macula_audit_memory_sink:new(#{}),
-    {ok, C0} = macula_audit:start(#{node => ?NODE, sink => {macula_audit_memory_sink, Sink}}),
+    {ok, C0} = macula_audit:start(#{node => Node, sink => {macula_audit_memory_sink, Sink}}),
     {ok, C1} = macula_audit:append(C0, <<"handshake_refused">>, #{t => Time, s => binary:copy(<<16#22>>, 32)}),
     {ok, C2} = macula_audit:append(C1, <<"store_refused">>, #{t => Time + 1, r => <<"no space">>}),
     {ok, C3} = macula_audit:append(C2, <<"call_refused">>, #{t => Time + 2, c => 5}),
     {ok, Checkpoint, C4} = macula_audit:checkpoint(C3, Key, ?INTERVAL),
     {ok, Export} = macula_audit:export(C4, false),
-    #{key => Key, checkpoint => Checkpoint, export => iolist_to_binary(Export),
+    #{key => Key, node => Node, checkpoint => Checkpoint, export => iolist_to_binary(Export),
       anchor => anchor(Checkpoint, ?NOW)}.
 
 anchor(Checkpoint, ReceivedAt) ->
@@ -256,3 +257,7 @@ flip(Bytes, At) ->
 key() ->
     {ok, Key} = macula_node_keys:generate(identity, pq_pure),
     Key.
+
+node_of(Key) ->
+    {ok, Node} = macula_node_keys:node_id(Key),
+    Node.
