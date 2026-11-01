@@ -138,6 +138,10 @@ anything, so a chain claiming to have ended is refused with `{unsealed_tail, Cs,
 that was CUT: with the tail removed, the export claims to have ended earlier, and only an anchor of a later checkpoint —
 which a sealed chain does not have — could show otherwise.
 
+A sealed export therefore proves completeness only up to its last anchored checkpoint. The seal closes the tail the
+exporter still had; only an anchor the destination holds says that tail was the real one, so everything the export holds
+after its last anchored checkpoint rests on the node's own word.
+
 **The anchors, and the only clock in the verifier.** An anchor is what a destination holds for one node:
 `#{cs, n, head, prev, hash, received_at}` — the checkpoint's sequence number, its entry count, the head and previous
 hash it carries, its own hash, and the destination's receipt time in seconds. `received_at` is the only time the
