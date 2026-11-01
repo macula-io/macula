@@ -79,6 +79,23 @@ decodes from those bytes to the same value. A line whose fields disagree with it
 editing a readable field leaves the bytes claiming something else, and editing the bytes leaves the hash broken. The
 human-readable half can never say something the signed half does not.
 
+**The order is strict, and one export is one segment.** The verifier reads the header once, then the entries in
+ascending `n`, then the checkpoints in ascending `cs`. A second header, an entry or a checkpoint out of that order, or
+one repeated is refused as malformed rather than sorted into place — sorting is how a spliced export would pass. An
+export carries one segment of one chain because `segment` and `sealed` are facts about the segment, and a reader that
+stitches two of them together would be reading a chain nobody wrote.
+
+**A checkpoint line's readable fields are decoration.** The verifier reads a checkpoint's `cs`, `n`, `head` and `prev`
+from the signed object's own bytes and never from the line beside it: editing them changes nothing that is believed.
+The encoder writes them from the object, so a normal export always agrees.
+
+**`sealed` is the exporter's claim, and the verifier tests it.** `false` says the chain was still being written when the
+export was taken: the verifier judges it by its anchors and reports `overdue` when the newest anchor is older than the
+interval the last checkpoint promised. `true` says the chain ended because the node's identity key rotated: the verifier
+then requires an anchor for the last checkpoint's sequence number and hash, and reports `{sealed_without_anchor, Cs}`
+otherwise. Writing `false` buys an exporter nothing — an ended chain whose last anchor is stale reads `overdue`, which
+is the same verdict under another name, and one whose anchor is current is inside the window L1 already states.
+
 ## What the verifier refuses
 
 `macula_audit_verifier:verify/3` takes the export, the anchors, and options, and answers one of three things:
@@ -100,12 +117,21 @@ The findings, and the test that produces each:
 | `{anchor_mismatch, Cs}` | the chain was rewritten after an anchor: the checkpoint no longer matches what a destination holds |
 | `{checkpoint_signature_invalid, Cs}` | a checkpoint was forged, or signed under another label |
 | `{checkpoint_not_extending, Cs}` | a checkpoint does not extend the previous one (a fork in the verifier) |
+| `{checkpoint_head_mismatch, Cs, N}` | a signed checkpoint's head is not the hash of entry `N` in the export — the entries were rewritten consistently, so their own links are intact and only the checkpoint signed before the rewrite disagrees. This is the rewrite-after-anchor case the verifier catches with no anchor at all |
 | `{checkpoint_replayed, Cs}` | an old checkpoint was replayed: the sequence went backwards, or a `cs` repeated with a different hash |
 | `{sealed_without_anchor, Cs}` | the chain ends because the node's key rotated, with no anchor sealing the last checkpoint |
 
 `macula_audit_checkpoint:received/2` is the same fork and replay check at RECEIPT, for a destination holding anchors: it
 is handed the checkpoint it just received and the last one it holds for that node, and refuses a checkpoint that does
 not extend it.
+
+**The anchors, and the only clock in the verifier.** An anchor is what a destination holds for one node:
+`#{cs, n, head, prev, hash, received_at}` — the checkpoint's sequence number, its entry count, the head and previous
+hash it carries, its own hash, and the destination's receipt time in seconds. `received_at` is the only time the
+verifier uses, and it is the destination's clock, never the node's. Nothing in the export supplies a time: an entry's
+`t` is a hint a node writes about itself, and a line that tried to state when a checkpoint was received would be a
+claim by the party being checked. An export that does not parse at all is not a finding — nothing was verified — and is
+answered `{error, [{malformed_export, Reason}]}`.
 
 ## What this does not claim
 
