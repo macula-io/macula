@@ -140,10 +140,7 @@ entries([], Entries, _Index, Header) ->
 entries([Line|Rest], Entries, Index, Header) ->
     case decode(Line) of
         {ok, #{<<"entry">> := _} = Line0} ->
-            case entry_fields(Line0) of
-                {ok, EntryLine} -> ascending_entry(EntryLine, Rest, Entries, Index, Header);
-                {error, Why}    -> {error, {malformed_entry, Index + 1, Why}}
-            end;
+            read_entry(Line0, Rest, Entries, Index, Header);
         {ok, #{<<"chain">> := _}} ->
             {error, {out_of_order, second_header}};
         {ok, _Other} ->
@@ -156,6 +153,12 @@ entries([Line|Rest], Entries, Index, Header) ->
 %% Entries are read in ascending sequence with no repeats. A GAP is not refused here: that is a finding, and the
 %% verifier names it. A repeat or a step backwards is refused here, because sorting it into place is how a spliced
 %% export would pass.
+read_entry(Line0, Rest, Entries, Index, Header) ->
+    case entry_fields(Line0) of
+        {ok, EntryLine} -> ascending_entry(EntryLine, Rest, Entries, Index, Header);
+        {error, Why}    -> {error, {malformed_entry, Index + 1, Why}}
+    end.
+
 ascending_entry(#{n := Seq} = EntryLine, Rest, [], Index, Header) when is_integer(Seq) ->
     entries(Rest, [EntryLine], Index + 1, Header);
 ascending_entry(#{n := Seq} = EntryLine, Rest, [#{n := Last} | _] = Entries, Index, Header) ->
@@ -171,10 +174,7 @@ checkpoint_run([], Entries, Header, Checkpoints) ->
 checkpoint_run([Line|Rest], Entries, Header, Checkpoints) ->
     case decode(Line) of
         {ok, #{<<"checkpoint">> := _} = Line0} ->
-            case checkpoint_fields(Line0) of
-                {ok, Checkpoint} -> ascending_checkpoint(Checkpoint, Rest, Entries, Header, Checkpoints);
-                {error, Why}     -> {error, {malformed_checkpoint, Why}}
-            end;
+            read_checkpoint(Line0, Rest, Entries, Header, Checkpoints);
         {ok, #{<<"chain">> := _}} ->
             {error, {out_of_order, second_header}};
         {ok, _Other} ->
@@ -201,14 +201,15 @@ entry_values(Line) ->
 
 with_optional(EntryLine, Line) ->
     case optional_hexes(Line, [s, d]) of
-        {ok, Digests} ->
-            case maps:find(<<"r">>, Line) of
-                {ok, Reason} when is_binary(Reason) -> {ok, maps:merge(EntryLine, Digests#{r => Reason})};
-                {ok, _NotText}                      -> {error, reason_not_text};
-                error                               -> {ok, maps:merge(EntryLine, Digests)}
-            end;
-        {error, Why} ->
-            {error, Why}
+        {ok, Digests} -> with_reason(EntryLine, Digests, Line);
+        {error, Why}  -> {error, Why}
+    end.
+
+with_reason(EntryLine, Digests, Line) ->
+    case maps:find(<<"r">>, Line) of
+        {ok, Reason} when is_binary(Reason) -> {ok, maps:merge(EntryLine, Digests#{r => Reason})};
+        {ok, _NotText}                      -> {error, reason_not_text};
+        error                               -> {ok, maps:merge(EntryLine, Digests)}
     end.
 
 optional_hexes(Line, Keys) ->
@@ -223,6 +224,12 @@ hex_field({_Key, error}, {ok, Acc}) ->
     {ok, Acc};
 hex_field({Key, _Other}, _Acc) ->
     {error, {bad_field, Key}}.
+
+read_checkpoint(Line0, Rest, Entries, Header, Checkpoints) ->
+    case checkpoint_fields(Line0) of
+        {ok, Checkpoint} -> ascending_checkpoint(Checkpoint, Rest, Entries, Header, Checkpoints);
+        {error, Why}     -> {error, {malformed_checkpoint, Why}}
+    end.
 
 ascending_checkpoint(#{cs := _Cs} = Checkpoint, Rest, Entries, Header, []) ->
     checkpoint_run(Rest, Entries, Header, [Checkpoint]);

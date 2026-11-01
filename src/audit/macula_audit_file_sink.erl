@@ -5,8 +5,8 @@
 %% read the file back after a restart, which is what `macula_audit_chain:start/1' needs. A deployment with a bounded
 %% store or a flood policy answers the same behaviour with its own module (WP2, WP3).
 %%
-%% The frames are `<<Size:32, Bytes/binary>>', so an entry may hold any bytes and a truncated tail is visible as a
-%% short frame rather than read as an entry.
+%% Each frame is a 32-bit big-endian size followed by that many bytes, so an entry may hold any bytes at all and a
+%% truncated tail is visible as a short frame rather than read as an entry.
 -module(macula_audit_file_sink).
 
 -behaviour(macula_audit_sink).
