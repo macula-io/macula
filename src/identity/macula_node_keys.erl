@@ -754,8 +754,10 @@ sealed_key_bytes({error, _} = Error, _Key) ->
 %% value of every map that holds both a public and a private value, as node key components and key pairs do, and every
 %% sealed call's or stream's secret by name, in any map: its keys (`k_req', `k_rep', `k_c2p', `k_p2c') and a KEM
 %% private key's halves (`mlkem_dk', `p384_priv'); and a sealed group's epoch key (the `key' of a map that is an epoch
-%% of macula_group_epoch). A function that captured values is replaced by its printed form, since what it captured can
-%% hold a key.
+%% of macula_group_epoch). A group's admission token is redacted by name too (`ucan', as the keyring keeps it in a
+%% group, and `ucan_token', as a join or a subscribe passes it in its options): it is a bearer credential, and a
+%% process that shows its state or its last message must not show one (macula#189). A function that captured values
+%% is replaced by its printed form, since what it captured can hold a key.
 -spec redacted(term()) -> term().
 redacted(Term) ->
     redacted(Term, #{}).
@@ -1304,7 +1306,8 @@ redacted(Other, _Modules) ->
 
 redacted_value(Modules) ->
     fun(Key, _Value) when Key =:= k_req; Key =:= k_rep; Key =:= k_c2p; Key =:= k_p2c;
-                          Key =:= mlkem_dk; Key =:= p384_priv ->
+                          Key =:= mlkem_dk; Key =:= p384_priv;
+                          Key =:= ucan; Key =:= ucan_token ->
            redacted;
        (_Key, Value) ->
            redacted(Value, Modules)
