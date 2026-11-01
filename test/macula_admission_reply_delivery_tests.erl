@@ -40,8 +40,13 @@ replies_past_the_budget() ->
         Burst = [call_frame(W, RequestId) || RequestId <- request_ids(?BURST)],
         [deliver(W, Frame) || {_RequestId, Frame} <- Burst],
         %% Every caller's own request is answered with the bytes it asked for, whether or not the budget kept a copy
-        %% of that reply: 4 x 64 KiB fit the 256 KiB a caller may have kept, and the four after them do not.
-        ?assertEqual(lists:duplicate(?BURST, {result, ?REPLY_BYTES}), answers(W, Burst)),
+        %% of that reply: 4 x 64 KiB fit the 256 KiB a caller may have kept, and the four after them do not. The ids
+        %% are compared as a SET against the burst's own, so an answer that reached the wrong caller -- or two answers
+        %% to one request and none to another -- fails here rather than passing as "eight replies arrived".
+        Answers = answers(W, Burst),
+        ?assertEqual(lists:sort([RequestId || {RequestId, _Frame} <- Burst]),
+                     lists:sort([RequestId || {RequestId, _Answer} <- Answers])),
+        ?assertEqual(lists:duplicate(?BURST, {result, ?REPLY_BYTES}), [Answer || {_RequestId, Answer} <- Answers]),
         %% What the budget does with them: some fit and are kept, the rest are answered and not kept. How many fit is
         %% the encoded size of a reply, not the bytes in it, so only "not all, and not none" is asserted.
         BurstNotStored = maps:get(reply_not_stored, refusals(W), 0),
@@ -50,12 +55,12 @@ replies_past_the_budget() ->
         %% A request made while the budget is full is answered the same way, and its reply is not kept either.
         Over = call_frame(W, crypto:strong_rand_bytes(16)),
         deliver(W, element(2, Over)),
-        ?assertEqual([{result, ?REPLY_BYTES}], answers(W, [Over])),
+        ?assertEqual([{element(1, Over), {result, ?REPLY_BYTES}}], answers(W, [Over])),
         ?assertEqual(BurstNotStored + 1, maps:get(reply_not_stored, refusals(W), 0)),
         %% A copy of that request is refused at once, by name: the one thing the budget costs a caller, and never a
         %% deadline spent waiting for a frame that was not going to come.
         deliver(W, element(2, Over)),
-        ?assertEqual([{error, <<"reply_not_kept">>}], answers(W, [Over]))
+        ?assertEqual([{element(1, Over), {error, <<"reply_not_kept">>}}], answers(W, [Over]))
     after
         stop(W)
     end.
@@ -112,8 +117,9 @@ received(Frame) ->
     {ok, Decoded, <<>>} = macula_frame:decode(macula_frame:encode(Frame)),
     Decoded.
 
-%% The answers the provider sends its peer, each verified against the request it claims to answer: a RESULT carrying
-%% the bytes asked for, or an ERROR carrying its code.
+%% The answers the provider sends its peer, each with the request id it claims and verified against that request: a
+%% RESULT carrying the bytes asked for, or an ERROR carrying its code. Returned with the id so a test can say WHICH
+%% request each answer belongs to, not only how many arrived.
 answers(#{profile := Profile}, Requests) ->
     Verified = maps:from_list([{RequestId, verified_request(Frame, Profile)} || {RequestId, Frame} <- Requests]),
     [reply(sent_frame(), Verified, Profile) || _ <- Requests].
@@ -130,7 +136,7 @@ sent_frame() ->
 
 reply(Frame, Verified, Profile) ->
     {ok, #{request_id := RequestId}} = macula_frame:claimed_reply_ids(Frame),
-    read_reply(macula_frame:verify_reply(Frame, maps:get(RequestId, Verified), Profile)).
+    {RequestId, read_reply(macula_frame:verify_reply(Frame, maps:get(RequestId, Verified), Profile))}.
 
 read_reply({ok, #{payload := Payload}}) ->
     {result, byte_size(bytes_of(Payload))};
