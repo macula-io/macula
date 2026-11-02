@@ -104,6 +104,10 @@
     %% Wire codec — single frame
     encode/1, decode/1,
 
+    %% A frame with its signed bytes dropped, for a status or a crash report, and an
+    %% incomplete frame's buffer
+    redacted/1, redacted_buffer/1,
+
     %% Wire codec for the post-quantum handshake: frame CBOR bytes exactly as
     %% sent and received, which the connection proof hashes
     encode_bytes/1, parse_stream_bytes/1, parse_stream_bytes/2, read_wire/1,
@@ -2360,6 +2364,24 @@ decode(Buf) when is_binary(Buf) ->
 single({invalid, Invalid, _Rest}) -> {error, Invalid};
 single({unknown, Unknown, _Rest}) -> {error, Unknown};
 single(Decoded) -> Decoded.
+
+%% @doc A frame as a status output or a crash report may show it: its signed bytes dropped, and its type kept.
+%%
+%% A frame's fields live in those bytes -- the caller's UCAN under `token', the payload, the signature -- so a report
+%% holding a frame holds a bearer credential whose bytes no by-name redaction can reach. The type is what names what
+%% the process was handling, and that is what an operator is reading for. A term that is no frame passes through.
+-spec redacted(frame()) -> frame().
+redacted(#{frame_type := Type, version := Version}) -> #{frame_type => Type, version => Version, redacted => true};
+redacted(#{frame_type := Type}) -> #{frame_type => Type, redacted => true};
+redacted(Frame) -> Frame.
+
+%% @doc Bytes of a frame still being read, shown as how many there were: a partial frame holds the same fields the
+%% whole one does, a caller's UCAN among them (macula#192). An empty buffer stays empty, so a status still says whether
+%% anything was in flight.
+-spec redacted_buffer(binary()) -> binary() | {truncated, pos_integer()}.
+redacted_buffer(<<>>) -> <<>>;
+redacted_buffer(Bytes) when is_binary(Bytes), byte_size(Bytes) > 0 -> {truncated, byte_size(Bytes)};
+redacted_buffer(Other) -> Other.
 
 %% @doc Read a frame from its decoded CBOR value, the way decode/1 reads one after decoding its bytes. A connection
 %% decodes each frame once to route it by its frame_type, and passes the value here. A frame whose fields its type

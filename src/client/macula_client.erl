@@ -2388,8 +2388,31 @@ terminate(_Reason, #state{subs = Subs, admission = Admission, keyring = Keyring}
 code_change(_OldVsn, S, _Extra) -> {ok, S}.
 
 %% The link options hold the node's keys: status output and crash reports show them with their private halves
-%% redacted.
-format_status(Status) -> macula_node_keys:redacted(Status).
+%% redacted. They also show no bearer credential: a realm's membership token, which the pool holds and replays to
+%% every link it dials, and the UCAN of a CALL, which reaches the pool by position in its own `call_station' message
+%% (macula#192).
+format_status(Status) -> macula_node_keys:redacted(credentials_redacted(Status)).
+
+credentials_redacted(Status) ->
+    message_redacted(memberships_redacted(Status)).
+
+memberships_redacted(#{state := #state{memberships = Memberships} = S} = Status) ->
+    Status#{state := S#state{memberships = maps:map(fun(_Realm, Presented) -> token_redacted(Presented) end,
+                                                    Memberships)}};
+memberships_redacted(Status) ->
+    Status.
+
+message_redacted(#{message := {call_station, Station, Target, Realm, Proc, Payload, TimeoutMs, DialTimeoutMs,
+                               _UcanToken, LinkOpts, Seal, Report}} = Status) ->
+    Status#{message := {call_station, Station, Target, Realm, Proc, Payload, TimeoutMs, DialTimeoutMs,
+                        redacted, LinkOpts, Seal, Report}};
+message_redacted(#{message := {present_membership, Realm, Presented}} = Status) ->
+    Status#{message := {present_membership, Realm, token_redacted(Presented)}};
+message_redacted(Status) ->
+    Status.
+
+token_redacted(#{token := _} = Held) -> Held#{token := redacted};
+token_redacted(Other) -> Other.
 
 %% A record the pool signs is one a node signs about itself. macula_record:refresh/2 stamps it now and signs it, and
 %% sign/2 checks the key's purpose, the lifetime, that the payload names this node, verify/3's field and payload

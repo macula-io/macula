@@ -411,9 +411,35 @@ terminate(_Reason, _State, Data) ->
 code_change(_OldVsn, State, Data, _Extra) ->
     {ok, State, Data}.
 
-%% Status output and crash reports show this process's keys with their private halves redacted.
+%% Status output and crash reports show this process's keys with their private halves redacted, and no caller's UCAN:
+%% this connection is handed CALL frames to send (`{send_frame, QueuedAt, Frame}') and receives them, and a frame's
+%% fields -- the caller's UCAN among them -- live in its signed bytes (macula#192). So the event being handled is shown
+%% without its frame's bytes, and the incomplete frame in `buf' as its size alone.
 format_status(Status) ->
-    macula_node_keys:redacted(Status).
+    macula_node_keys:redacted(buffer_redacted(frames_redacted(Status))).
+
+frames_redacted(Status) ->
+    held_event(held_message(Status)).
+
+held_message(#{message := Message} = Status) -> Status#{message := frame_message(Message)};
+held_message(Status) -> Status.
+
+held_event(#{last_event := Event} = Status) -> Status#{last_event := frame_message(Event)};
+held_event(Status) -> Status.
+
+frame_message({send_frame, QueuedAt, Frame}) ->
+    {send_frame, QueuedAt, macula_frame:redacted(Frame)};
+frame_message({macula_peering, frame, Conn, Frame}) ->
+    {macula_peering, frame, Conn, macula_frame:redacted(Frame)};
+frame_message({macula_peering, frame, Conn, Frame, RecvAtUs}) ->
+    {macula_peering, frame, Conn, macula_frame:redacted(Frame), RecvAtUs};
+frame_message(Other) ->
+    Other.
+
+buffer_redacted(#{data := #data{buf = Buf} = D} = Status) ->
+    Status#{data := D#data{buf = macula_frame:redacted_buffer(Buf)}};
+buffer_redacted(Status) ->
+    Status.
 
 %%------------------------------------------------------------------
 %% State: connecting (client only)
