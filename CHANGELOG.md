@@ -42,6 +42,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   its epochs, its pending re-pull and an automatic pin. An invalid option is refused whether the group is new or
   already held.
 
+### Security
+
+- **A group's admission UCAN no longer shows in a keyring's status output or in its crash report (macula#189).** The
+  token that admits a node to a sealed group is a bearer credential: anyone who reads it can be that node there. The
+  keyring keeps it per group to present on every later epoch pull, and `redacted/1` — which `format_status/1` runs
+  the whole process status through — redacted private keys and epoch keys but passed a UCAN straight through, by
+  either of the names it travels under: `ucan` in a held group, `ucan_token` in a join's or a subscribe's options.
+  Both are now redacted by name, so `sys:get_status/1` and the report an abnormal exit logs show the atom `redacted`
+  where the token was.
+
+  This does not cover `sys:get_state/1`, which is OTP's raw state accessor and still returns the group as the keyring
+  holds it. Every epoch key is out of reach there because epochs live in the keyring's own ETS table; the UCAN is in
+  the state map itself.
+
 ## [18.3.0] - 2026-10-31
 
 A key file can be sealed at rest. A copy of one is no longer a working identity: the bytes are AES-256-GCM

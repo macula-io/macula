@@ -52,7 +52,8 @@ keyring_test_() ->
       fun a_publish_triggered_pull_leaves_one_re_pull_chain/1,
       fun a_distributor_that_is_not_a_node_id_is_an_invalid_option/1,
       fun a_ucan_token_that_is_not_bytes_is_an_invalid_option/1,
-      fun no_epoch_key_shows_in_the_keyrings_state_or_status/1]}.
+      fun no_epoch_key_shows_in_the_keyrings_state_or_status/1,
+      fun no_join_token_shows_in_the_keyrings_status_or_a_crash_report/1]}.
 
 %%--------------------------------------------------------------------
 %% Fixture: a clock, the real distributor behind a fake wire, and a
@@ -170,6 +171,31 @@ no_epoch_key_shows_in_the_keyrings_state_or_status(#{pid := K} = W) ->
         {ok, required} = join(W),
         {ok, #{key := Key}} = publish_epoch(W),
         [?assertEqual(nomatch, binary:match(term_to_binary(Shown), Key)) || Shown <- [sys:get_state(K), sys:get_status(K)]]
+    end).
+
+%% The join's UCAN is a bearer credential: it admits this node to a sealed group, so anyone who reads it can be this
+%% node there. The keyring keeps it per group to present on every later pull, and the two places a process shows its
+%% insides -- the status `sys:get_status/1` prints and the report an abnormal exit leaves behind -- must not carry it
+%% (macula#189). Both go through format_status/1, and both were showing it before this test.
+%%
+%% Not covered here, and deliberately: `sys:get_state/1` is OTP's RAW state accessor and shows the group as the
+%% keyring holds it. Every epoch key is out of reach there because epochs live in the keyring's own ETS table, but the
+%% UCAN is in the state map itself.
+no_join_token_shows_in_the_keyrings_status_or_a_crash_report(#{pid := K} = W) ->
+    ?_test(begin
+        {ok, required} = join(W),
+        %% The status `sys:get_status/1' prints.
+        ?assertEqual(nomatch, binary:match(term_to_binary(sys:get_status(K)), ?TOKEN)),
+        %% And the term a crash report prints for the same process. A gen_server that terminates abnormally logs its
+        %% state, its last message and its reason through format_status/1, so that is the object to read here. The
+        %% keyring is not literally killed for it: the fixture's is linked to the fixture process, and ending it
+        %% abnormally takes that process down and cancels the module.
+        %% `sys:get_state/1' is what the report starts from, raw state and all, so the token goes in as it is.
+        Crash = macula_group_keyring:format_status(#{state => sys:get_state(K),
+                                                     message => {join, ?REALM, ?PREFIX, #{ucan_token => ?TOKEN}},
+                                                     reason => crashed}),
+        ?assertEqual(nomatch, binary:match(term_to_binary(Crash), ?TOKEN)),
+        ?assertEqual(nomatch, binary:match(iolist_to_binary(io_lib:format("~p", [Crash])), ?TOKEN))
     end).
 
 joining_pulls_the_current_epoch_sealed_with_the_org_grant(W) ->
