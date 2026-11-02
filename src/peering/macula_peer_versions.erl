@@ -43,10 +43,19 @@ new_table() ->
 %% @doc The floor held for NodeId: the one this run holds, else the store's, or none.
 -spec floor(<<_:256>>, store()) -> pos_integer() | none.
 floor(<<_:256>> = NodeId, Store) ->
-    held(ets:lookup(?TABLE, {floor, NodeId}), NodeId, Store).
+    held(ets:whereis(?TABLE), NodeId, Store).
 
-held([{_, Version}], _NodeId, _Store) -> Version;
-held([], NodeId, Store) -> stored(Store, NodeId).
+%% The floors belong to the peering run: `macula_peering_sup' creates this table and its life is the run's, so a
+%% caller can outlive it. With no table this run holds no floor, and the store's -- which is what survives a restart
+%% anyway -- is the whole answer (macula#186). Read through `ets:whereis/1' as `macula_realm_rights' reads its own
+%% table, with nothing caught.
+held(undefined, NodeId, Store) ->
+    stored(Store, NodeId);
+held(Table, NodeId, Store) ->
+    read(ets:lookup(Table, {floor, NodeId}), NodeId, Store).
+
+read([{_, Version}], _NodeId, _Store) -> Version;
+read([], NodeId, Store) -> stored(Store, NodeId).
 
 stored(none, _NodeId) -> none;
 stored({Mod, Arg}, NodeId) -> Mod:floor(Arg, NodeId).
@@ -63,8 +72,16 @@ above(Version, Floor) -> Version > Floor.
 risen(false, _NodeId, _Version, _Store) ->
     ok;
 risen(true, NodeId, Version, Store) ->
-    true = ets:insert(?TABLE, {{floor, NodeId}, Version}),
+    ok = record(ets:whereis(?TABLE), NodeId, Version),
     persisted(persist(Store, NodeId, Version), NodeId, Version).
+
+%% A raise the run has no table for still reaches the store, which is the copy that survives a restart anyway; only
+%% the in-memory floor is skipped (macula#186).
+record(undefined, _NodeId, _Version) ->
+    ok;
+record(Table, NodeId, Version) ->
+    true = ets:insert(Table, {{floor, NodeId}, Version}),
+    ok.
 
 persist(none, _NodeId, _Version) -> ok;
 persist({Mod, Arg}, NodeId, Version) -> Mod:raise(Arg, NodeId, Version).
@@ -81,13 +98,24 @@ persisted({error, Reason}, NodeId, Version) ->
 -spec count(counter()) -> ok.
 count(Name) ->
     true = lists:member(Name, ?COUNTERS),
-    _ = ets:update_counter(?TABLE, {counter, Name}, 1, {{counter, Name}, 0}),
+    bumped(ets:whereis(?TABLE), Name).
+
+%% A handshake counter is bookkeeping and never a connection's answer, so with no table there is nothing to count and
+%% the caller carries on (macula#186).
+bumped(undefined, _Name) ->
+    ok;
+bumped(Table, Name) ->
+    _ = ets:update_counter(Table, {counter, Name}, 1, {{counter, Name}, 0}),
     ok.
 
 %% @doc Every handshake counter, zero included.
 -spec counters() -> #{counter() => non_neg_integer()}.
 counters() ->
-    maps:from_list([{Name, counted(ets:lookup(?TABLE, {counter, Name}))} || Name <- ?COUNTERS]).
+    counters_in(ets:whereis(?TABLE)).
+
+counters_in(undefined) -> maps:from_keys(?COUNTERS, 0);
+counters_in(Table) ->
+    maps:from_list([{Name, counted(ets:lookup(Table, {counter, Name}))} || Name <- ?COUNTERS]).
 
 counted([{_, Count}]) -> Count;
 counted([]) -> 0.
