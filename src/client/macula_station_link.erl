@@ -2351,10 +2351,15 @@ seals_redacted(#{state := #state{pending = Pending} = S} = Status) ->
 seals_redacted(Status) ->
     Status.
 
-seal_redacted({From, TRef, Request, {_Keys, _SealRequest}, Report}) ->
-    {From, TRef, token_redacted(Request), sealed, Report};
+seal_redacted({From, TRef, Request, Seal, Report}) ->
+    {From, TRef, token_redacted(Request), seal_hidden(Seal), Report};
 seal_redacted(Entry) ->
     Entry.
+
+%% A pending entry's seal is replaced as a whole, whatever it is; a CLEAR call's entry has none to hide, and its
+%% request's token is redacted by the same clause (macula#192, review r1).
+seal_hidden({_Keys, _SealRequest}) -> sealed;
+seal_hidden(Seal) -> Seal.
 
 %% A membership's token is a bearer credential the same way a call's UCAN is: this link presents it to stations, and
 %% shows it to nobody.
@@ -2371,12 +2376,17 @@ membership_redacted(#{presented := Presented} = Membership) ->
 membership_redacted(Membership) ->
     Membership.
 
-%% The credentials this process was handed and has not consumed yet: a CALL carries its caller's UCAN by position,
-%% and a membership is presented as a cast.
+%% The credentials this process was handed and has not consumed yet: a CALL carries its caller's UCAN by position, a
+%% membership is presented as a cast, and on the provider side a decoded CALL frame -- someone else's credential --
+%% arrives as `{macula_peering, frame, ...}', its fields in signed bytes that hold the UCAN (macula#192).
 message_redacted(#{message := {call, Target, Realm, Proc, Payload, DeadlineMs, _UcanToken, Seal, Report}} = Status) ->
     Status#{message := {call, Target, Realm, Proc, Payload, DeadlineMs, redacted, Seal, Report}};
 message_redacted(#{message := {present_membership, Realm, Presented}} = Status) ->
     Status#{message := {present_membership, Realm, token_redacted(Presented)}};
+message_redacted(#{message := {macula_peering, frame, Conn, Frame}} = Status) ->
+    Status#{message := {macula_peering, frame, Conn, macula_frame:redacted(Frame)}};
+message_redacted(#{message := {macula_peering, frame, Conn, Frame, RecvAtUs}} = Status) ->
+    Status#{message := {macula_peering, frame, Conn, macula_frame:redacted(Frame), RecvAtUs}};
 message_redacted(Status) ->
     Status.
 

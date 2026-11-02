@@ -797,24 +797,30 @@ a_decoded_payload_key_named_ucan_token_is_redacted_test() ->
 
 %% A call's UCAN and a realm's membership token are bearer credentials the same way a private key is: an operator who
 %% reads a status or a crash report must not be able to use one (macula#192). Each token is put where the process
-%% really keeps it -- the link's presented memberships and its pending entry, the pool's memberships -- and the last
-%% message is the one a caller really queued, read from the suspended process, so no shape here is the test's own idea
-%% of what the code builds.
+%% really keeps it -- the link's presented memberships and its pending entries (sealed AND clear), the pool's
+%% memberships -- and the last message is the one a caller really queued, read from the suspended process, so no shape
+%% here is the test's own idea of what the code builds. The CALL frame is decoded from a frame `macula_frame' built,
+%% which is what a provider link is handed: someone else's UCAN, under `token' (review r1).
 a_call_ucan_and_a_membership_token_are_shown_nowhere_test_() ->
     {timeout, ?EU_TIMEOUT, fun() ->
         started(),
         Key = key(),
         Token = canary(),
+        ClearToken = canary(),
         Realm = <<7:256>>,
         {Link, Issuer} = started_link(Key),
         {ok, Pool} = macula_client:connect([], #{node_identity => Key}),
+        Conn = spawn(fun() -> receive stop -> ok end end),
         try
             ok = macula:present_membership(Pool, Realm, Token, []),
             Link ! {present_membership, Realm, #{token => Token, proofs => []}},
-            PendingEntry = {{self(), make_ref()}, make_ref(), #{request_id => <<0:128>>, token => Token},
-                            {keys, seal_request}, false},
+            SealedEntry = {{self(), make_ref()}, make_ref(), #{request_id => <<0:128>>, token => Token},
+                           {keys, seal_request}, false},
+            ClearEntry = {{self(), make_ref()}, make_ref(), #{request_id => <<1:128>>, token => ClearToken},
+                          clear, false},
             _ = sys:replace_state(Link, fun(S) ->
-                    setelement(macula_station_link:state_field_index(pending), S, #{make_ref() => PendingEntry})
+                    setelement(macula_station_link:state_field_index(pending), S,
+                               #{make_ref() => SealedEntry, make_ref() => ClearEntry})
                 end),
             LinkCall = queued_message(Link, fun() ->
                              catch macula_station_link:call(Link, station, Realm, <<"acme/p">>, #{}, 5_000, Token, clear)
@@ -824,24 +830,60 @@ a_call_ucan_and_a_membership_token_are_shown_nowhere_test_() ->
                                                               Realm, <<"acme/p">>, #{}, 1_000, Token, #{}, 500,
                                                               clear)
                          end),
+            Frame = call_frame_with(Token),
             LinkState = sys:get_state(Link),
             PoolState = sys:get_state(Pool),
             Shown = [sys:get_status(Link), sys:get_status(Pool),
                      macula_station_link:format_status(#{state => LinkState, message => LinkCall, reason => normal}),
-                     macula_client:format_status(#{state => PoolState, message => PoolCall, reason => normal})],
-            ?assertEqual([nomatch, nomatch, nomatch, nomatch], [where_is(ShownTerm, Token) || ShownTerm <- Shown]),
-            %% The check is not vacuous: the raw state does hold the token, and the message really is a CALL or a
-            %% call_station carrying it.
+                     macula_client:format_status(#{state => PoolState, message => PoolCall, reason => normal}),
+                     macula_station_link:format_status(#{message => {macula_peering, frame, Conn, Frame}}),
+                     macula_station_link:format_status(#{message => {macula_peering, frame, Conn, Frame, 1_000}}),
+                     macula_peering_conn:format_status(#{message => {macula_peering, frame, Conn, Frame}}),
+                     macula_peering_conn:format_status(#{last_event => {send_frame, 0, Frame}}),
+                     macula_peering_conn:format_status(#{last_event => {macula_peering, frame, Conn, Frame, 1_000}})],
+            ?assertEqual(lists:duplicate(length(Shown), nomatch),
+                         [where_is(ShownTerm, Token) || ShownTerm <- Shown]),
+            ?assertEqual(lists:duplicate(length(Shown), nomatch),
+                         [where_is(ShownTerm, ClearToken) || ShownTerm <- Shown]),
+            %% The check is not vacuous: the raw state does hold the tokens, and each message really is a CALL, a
+            %% call_station or a CALL frame carrying one.
             ?assertNotEqual(nomatch, where_is(LinkState, Token)),
+            ?assertNotEqual(nomatch, where_is(LinkState, ClearToken)),
             ?assertNotEqual(nomatch, where_is(PoolState, Token)),
+            ?assertNotEqual(nomatch, where_is(Frame, Token)),
+            ?assertMatch(#{frame_type := call}, Frame),
+            %% The redacted frame keeps what names it and loses the bytes, so an operator still reads what was being
+            %% handled.
+            ?assertMatch(#{message := {macula_peering, frame, _, #{frame_type := call, redacted := true}}},
+                         macula_station_link:format_status(#{message => {macula_peering, frame, Conn, Frame}})),
             ?assertMatch({call, _, _, _, _, _, Token, _, _}, LinkCall),
             ?assertMatch({call_station, _, _, _, _, _, _, _, Token, _, _, _}, PoolCall)
         after
+            Conn ! stop,
             _ = catch macula_client:close(Pool),
             _ = catch macula_station_link:stop(Link),
             Issuer ! stop
         end
     end}.
+
+%% An incomplete frame in a peering connection's read buffer holds the same fields the whole one does, so a status
+%% shows how many bytes were there and not what they were (macula#192).
+a_partial_frame_in_a_read_buffer_is_shown_as_its_size_test() ->
+    Bytes = macula_frame:encode(call_frame(canary())),
+    ?assertEqual({truncated, byte_size(Bytes)}, macula_frame:redacted_buffer(Bytes)),
+    ?assertEqual(<<>>, macula_frame:redacted_buffer(<<>>)).
+
+%% A CALL frame carrying `Token' as its caller's UCAN, decoded from a frame macula_frame built: the shape a provider
+%% link is handed, not the test's idea of it.
+call_frame_with(Token) ->
+    link_wire(call_frame(Token)).
+
+call_frame(Token) ->
+    Caller = key(),
+    macula_frame:call(#{request_id => crypto:strong_rand_bytes(16), realm => <<0:256>>,
+                        procedure => <<"acme/p">>, target => macula_node_keys:key_id(Caller),
+                        deadline => erlang:system_time(millisecond) + 5_000, payload => #{}, token => Token},
+                      Caller).
 
 %% A token nothing else on the node holds, so a match can only be this one.
 canary() ->
