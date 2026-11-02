@@ -30,6 +30,7 @@ keyring_test_() ->
       fun a_prefix_without_an_org_segment_is_refused_before_any_call/1,
       fun a_second_join_pulls_nothing/1,
       fun a_re_join_with_a_rotated_token_is_what_the_next_pull_presents/1,
+      fun a_re_join_with_an_invalid_option_is_refused_and_changes_nothing/1,
       fun a_publisher_seals_under_the_current_epoch_then_the_next/1,
       fun the_re_pull_is_scheduled_inside_the_ahead_window/1,
       fun a_failed_re_pull_backs_off_doubling_up_to_a_third_of_an_epoch/1,
@@ -241,6 +242,24 @@ a_re_join_with_a_rotated_token_is_what_the_next_pull_presents(#{keyring := K} = 
         wake(W),
         {_, _, _, Opts} = lists:last(calls(W)),
         ?assertEqual(Rotated, maps:get(ucan_token, Opts))
+    end).
+
+%% A re-join's options are checked as the first join's are, and a refusal leaves the
+%% group exactly as it was: the token it held is still the one the next pull
+%% presents (macula#190).
+a_re_join_with_an_invalid_option_is_refused_and_changes_nothing(#{keyring := K} = W) ->
+    ?_test(begin
+        {ok, required} = join(W),
+        ?assertEqual({error, {invalid_option, ucan_token}},
+                     macula_group_keyring:join(K, ?REALM, ?PREFIX, #{ucan_token => not_a_token})),
+        ?assertEqual({error, {invalid_option, distributor}},
+                     macula_group_keyring:join(K, ?REALM, ?PREFIX, #{ucan_token => ?TOKEN,
+                                                                    distributor => <<"not-a-node-id">>})),
+        ?assertEqual(1, length(calls(W))),
+        advance(W, ?R),
+        wake(W),
+        {_, _, _, Opts} = lists:last(calls(W)),
+        ?assertEqual(?TOKEN, maps:get(ucan_token, Opts))
     end).
 
 a_publisher_seals_under_the_current_epoch_then_the_next(W) ->
