@@ -75,8 +75,10 @@ handle(Pid) ->
 pid(#{pid := Pid}) -> Pid.
 
 %% @doc Join the group `Prefix' in `Realm': pull its current epoch and hold it. A group already held is not pulled
-%% again. `ucan_token' is the token the distributor admits for this group (the org's grant, or the member's membership
-%% UCAN for a restricted group), `distributor' pins the distributor's node id.
+%% again, but the join's options still apply: the `ucan_token' it carries is the one every later pull presents, so a
+%% subscriber re-admitted with a rotated token keeps opening epochs. `ucan_token' is the token the distributor admits
+%% for this group (the org's grant, or the member's membership UCAN for a restricted group), `distributor' pins the
+%% distributor's node id.
 -spec join(keyring(), binary(), binary(), join_options()) ->
           {ok, policy()} | {error, reason() | {invalid_option, group}}.
 join(#{pid := Pid}, Realm, Prefix, Opts) ->
@@ -179,10 +181,38 @@ format_status(Status) ->
 
 joined({error, _} = Invalid, _Held, _Realm, _Prefix, _Opts, State) ->
     {reply, Invalid, State};
-joined({ok, _Org}, {ok, #{policy := Policy}}, _Realm, _Prefix, _Opts, State) ->
-    {reply, {ok, Policy}, State};
+joined({ok, _Org}, {ok, #{policy := Policy} = Held}, Realm, Prefix, Opts, State) ->
+    rejoined(join_options_checked(Opts), Policy, Held, {Realm, Prefix}, Opts, State);
 joined({ok, Org}, error, Realm, Prefix, Opts, State) ->
     options_valid(join_options_checked(Opts), Org, {Realm, Prefix}, Opts, State).
+
+%% A held group is not pulled again, but its options are not dropped either: a
+%% subscriber is re-admitted at every subscribe attempt, so a rotated
+%% `ucan_token' arrives as a later join of a group already held. Keeping the
+%% first join's token meant every later epoch pull presented an expired grant --
+%% `not_authorized' from then on, while the subscription stayed up and nothing
+%% re-admitted it (macula#190). The group keeps everything else it has won: its
+%% policy, its epochs, its pending re-pull, and an automatic pin, since a join
+%% that names no distributor is not asking for one to be forgotten.
+rejoined({error, _} = Invalid, _Policy, _Held, _Key, _Opts, State) ->
+    {reply, Invalid, State};
+rejoined(ok, Policy, Held, Key, Opts, State) ->
+    {reply, {ok, Policy}, State#{groups := maps:put(Key, reheld(Held, Opts), maps:get(groups, State))}}.
+
+reheld(Held, Opts) ->
+    pinned(ucan_replaced(Held, Opts), Opts).
+
+ucan_replaced(Held, Opts) ->
+    case maps:find(ucan_token, Opts) of
+        {ok, Token} -> Held#{ucan := Token};
+        error -> Held
+    end.
+
+pinned(Held, Opts) ->
+    case pin(maps:find(distributor, Opts)) of
+        none -> Held;
+        Pin -> Held#{pin := Pin}
+    end.
 
 %% A join's options, checked before anything is sent: a pinned distributor is a node id, a grant is bytes.
 join_options_checked(#{distributor := Node}) when not (is_binary(Node) andalso byte_size(Node) =:= 32) ->

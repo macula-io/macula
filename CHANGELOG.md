@@ -32,6 +32,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (macula-station#152). Each table has a regression test that removes it by stopping the application and asserts the
   answer, not the count.
 
+- **A rotated admission token now reaches the keyring of a group it already holds (macula#190).** An application
+  re-admits itself at every subscribe attempt, so a subscriber that restarts — or is simply re-admitted — presents a
+  fresh `ucan_token` to a join of a group the keyring already holds. `joined/6` answered a held group without reading
+  the new options, so the keyring kept the FIRST join's token and presented it on every later epoch pull. Once that
+  token expired, pulls failed `not_authorized` while the subscription stayed up: nothing re-admitted the subscriber and
+  no new epoch could be opened, and restarting it did not help. A join of a held group now replaces the held
+  `ucan_token`, and a `distributor` pin when the join names one, and still pulls nothing: the group keeps its policy,
+  its epochs, its pending re-pull and an automatic pin. An invalid option is refused whether the group is new or
+  already held.
+
 ### Security
 
 - **A group's admission UCAN no longer shows in a keyring's status output or in its crash report (macula#189).** The
