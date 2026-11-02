@@ -46,6 +46,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   holds it. Every epoch key is out of reach there because epochs live in the keyring's own ETS table; the UCAN is in
   the state map itself.
 
+- **A call's UCAN and a realm's membership token no longer show in a station link's or a pool's status or crash report
+  (macula#192).** Both are bearer credentials, and both travelled in shapes the by-name redaction could not reach. A
+  call's UCAN arrives by position in a message — `{call, Target, Realm, Procedure, Payload, DeadlineMs, Token, Seal,
+  Report}` at a station link, `{call_station, ...}` at a pool — and is printed as the last message of a crash report;
+  under `token` it sits in a link's pending entries and in the membership a node presents; and a decoded payload holds
+  a join's token under the wire's own key, `{text, <<"ucan_token">>}`, which is not the atom `ucan_token`. The link and
+  the pool now redact both in their own `format_status/1` — the pending entries, the memberships, and the message a
+  crash report prints — and `redacted/1` names the wire's key form as well. The by-name list is not widened to `token`
+  itself, which is too generic a key to redact everywhere; each process redacts the token where it knows it keeps one.
+
+  Not covered, as for a group's UCAN: `sys:get_state/1` still returns the state as the process holds it.
+
 ## [18.3.0] - 2026-10-31
 
 A key file can be sealed at rest. A copy of one is no longer a working identity: the bytes are AES-256-GCM

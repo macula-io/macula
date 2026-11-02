@@ -2340,9 +2340,11 @@ answer_waiting_callers(Reason, #state{pending = Pending}) ->
 
 code_change(_OldVsn, S, _Extra) -> {ok, S}.
 
-%% Status output and crash reports show this process's keys with their private halves redacted, and no sealed call's
-%% keys: a pending sealed call's reply key would open its reply.
-format_status(Status) -> macula_node_keys:redacted(seals_redacted(Status)).
+%% Status output and crash reports show this process's keys with their private halves redacted, no sealed call's
+%% keys -- a pending sealed call's reply key would open its reply -- and no bearer credential: a call's UCAN, where a
+%% pending entry holds it, where a presented membership holds one, and where the CALL still in the message queue of a
+%% crash report holds it (macula#192). An operator who reads one can be the node it admits.
+format_status(Status) -> macula_node_keys:redacted(credentials_redacted(seals_redacted(Status))).
 
 seals_redacted(#{state := #state{pending = Pending} = S} = Status) ->
     Status#{state := S#state{pending = maps:map(fun(_Id, Entry) -> seal_redacted(Entry) end, Pending)}};
@@ -2350,9 +2352,36 @@ seals_redacted(Status) ->
     Status.
 
 seal_redacted({From, TRef, Request, {_Keys, _SealRequest}, Report}) ->
-    {From, TRef, Request, sealed, Report};
+    {From, TRef, token_redacted(Request), sealed, Report};
 seal_redacted(Entry) ->
     Entry.
+
+%% A membership's token is a bearer credential the same way a call's UCAN is: this link presents it to stations, and
+%% shows it to nobody.
+credentials_redacted(Status) ->
+    message_redacted(memberships_redacted(Status)).
+
+memberships_redacted(#{state := #state{memberships = Memberships} = S} = Status) ->
+    Status#{state := S#state{memberships = maps:map(fun(_Realm, M) -> membership_redacted(M) end, Memberships)}};
+memberships_redacted(Status) ->
+    Status.
+
+membership_redacted(#{presented := Presented} = Membership) ->
+    Membership#{presented := token_redacted(Presented)};
+membership_redacted(Membership) ->
+    Membership.
+
+%% The credentials this process was handed and has not consumed yet: a CALL carries its caller's UCAN by position,
+%% and a membership is presented as a cast.
+message_redacted(#{message := {call, Target, Realm, Proc, Payload, DeadlineMs, _UcanToken, Seal, Report}} = Status) ->
+    Status#{message := {call, Target, Realm, Proc, Payload, DeadlineMs, redacted, Seal, Report}};
+message_redacted(#{message := {present_membership, Realm, Presented}} = Status) ->
+    Status#{message := {present_membership, Realm, token_redacted(Presented)}};
+message_redacted(Status) ->
+    Status.
+
+token_redacted(#{token := _} = Held) -> Held#{token := redacted};
+token_redacted(Other) -> Other.
 
 %%====================================================================
 %% Internals

@@ -781,3 +781,88 @@ seal_secrets_are_redacted_by_name_test() ->
     ?assertEqual(nomatch, binary:match(term_to_binary(Redacted), Secret)),
     ?assertMatch({pending, #{seal := {#{key_id := <<1:64>>, k_req := redacted}, _}}, [_, #{mlkem_ek := <<3>>}]},
                  Redacted).
+
+%%------------------------------------------------------------------
+%% Credentials that are not keys: a call's UCAN and a membership token
+%%------------------------------------------------------------------
+
+%% A decoded payload holds a join's token under the wire's own key, which is not the atom `ucan_token', so the by-name
+%% list names that key too (macula#192).
+a_decoded_payload_key_named_ucan_token_is_redacted_test() ->
+    Token = canary(),
+    Held = #{{text, <<"ucan_token">>} => Token, {text, <<"prefix">>} => {text, <<"io.macula/acme">>}},
+    Redacted = macula_node_keys:redacted(Held),
+    ?assertEqual(Held#{{text, <<"ucan_token">>} := redacted}, Redacted),
+    ?assertEqual(nomatch, binary:match(term_to_binary(Redacted), Token)).
+
+%% A call's UCAN and a realm's membership token are bearer credentials the same way a private key is: an operator who
+%% reads a status or a crash report must not be able to use one (macula#192). Each token is put where the process
+%% really keeps it -- the link's presented memberships and its pending entry, the pool's memberships -- and the last
+%% message is the one a caller really queued, read from the suspended process, so no shape here is the test's own idea
+%% of what the code builds.
+a_call_ucan_and_a_membership_token_are_shown_nowhere_test_() ->
+    {timeout, ?EU_TIMEOUT, fun() ->
+        started(),
+        Key = key(),
+        Token = canary(),
+        Realm = <<7:256>>,
+        {Link, Issuer} = started_link(Key),
+        {ok, Pool} = macula_client:connect([], #{node_identity => Key}),
+        try
+            ok = macula:present_membership(Pool, Realm, Token, []),
+            Link ! {present_membership, Realm, #{token => Token, proofs => []}},
+            PendingEntry = {{self(), make_ref()}, make_ref(), #{request_id => <<0:128>>, token => Token},
+                            {keys, seal_request}, false},
+            _ = sys:replace_state(Link, fun(S) ->
+                    setelement(macula_station_link:state_field_index(pending), S, #{make_ref() => PendingEntry})
+                end),
+            LinkCall = queued_message(Link, fun() ->
+                             catch macula_station_link:call(Link, station, Realm, <<"acme/p">>, #{}, 5_000, Token, clear)
+                         end),
+            PoolCall = queued_message(Pool, fun() ->
+                             catch macula_client:call_station(Pool, #{host => <<"127.0.0.1">>, port => 1}, <<8:256>>,
+                                                              Realm, <<"acme/p">>, #{}, 1_000, Token, #{}, 500,
+                                                              clear)
+                         end),
+            LinkState = sys:get_state(Link),
+            PoolState = sys:get_state(Pool),
+            Shown = [sys:get_status(Link), sys:get_status(Pool),
+                     macula_station_link:format_status(#{state => LinkState, message => LinkCall, reason => normal}),
+                     macula_client:format_status(#{state => PoolState, message => PoolCall, reason => normal})],
+            ?assertEqual([nomatch, nomatch, nomatch, nomatch], [where_is(ShownTerm, Token) || ShownTerm <- Shown]),
+            %% The check is not vacuous: the raw state does hold the token, and the message really is a CALL or a
+            %% call_station carrying it.
+            ?assertNotEqual(nomatch, where_is(LinkState, Token)),
+            ?assertNotEqual(nomatch, where_is(PoolState, Token)),
+            ?assertMatch({call, _, _, _, _, _, Token, _, _}, LinkCall),
+            ?assertMatch({call_station, _, _, _, _, _, _, _, Token, _, _, _}, PoolCall)
+        after
+            _ = catch macula_client:close(Pool),
+            _ = catch macula_station_link:stop(Link),
+            Issuer ! stop
+        end
+    end}.
+
+%% A token nothing else on the node holds, so a match can only be this one.
+canary() ->
+    <<"canary-", (crypto:strong_rand_bytes(24))/binary>>.
+
+where_is(Term, Bytes) ->
+    binary:match(term_to_binary(Term), Bytes).
+
+%% The message a caller queued for `Pid', read while it is suspended: both `macula:call_station' and
+%% `macula_station_link:call/8' block in `gen_server:call', so nothing of theirs reaches the process until it resumes.
+queued_message(Pid, Spawn) ->
+    ok = sys:suspend(Pid),
+    _ = Spawn(),
+    Message = queued_call(Pid, 200),
+    ok = sys:resume(Pid),
+    Message.
+
+queued_call(_Pid, 0) ->
+    error(no_queued_call);
+queued_call(Pid, Tries) ->
+    case [Message || {'$gen_call', _From, Message} <- element(2, erlang:process_info(Pid, messages))] of
+        [Message | _] -> Message;
+        [] -> timer:sleep(10), queued_call(Pid, Tries - 1)
+    end.
