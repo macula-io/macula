@@ -11,6 +11,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A counter write no longer fails its caller when there is no table, across all three tables the peering run owns
+  (macula#186, folding macula#187).** `macula_peering_sup:init/1` creates `macula_realm_rights`,
+  `macula_wire_tolerance` and `macula_peer_versions` and owns them for the run, and a caller can outlive that run: a
+  station's peer observer sits in the station's own supervision tree and is still handed frames while the station shuts
+  down. Each of the three then took `badarg` out of that caller — the RBAC decision counters, the frame decoder's
+  tolerance counts (`macula_frame` matches the result with `ok =`, so an absent table was a crash in the decoder and
+  not a lost count) and the handshake floor and counters. Every entry point now reads the table's absence through
+  `ets:whereis/1`, the way `macula_provider_standing` and `macula_diagnostics_bound` already do: with no table there
+  is nothing to count, the caller carries on with the answer it already had, `counters/0` answers an empty map (zeros
+  for the handshake counters, whose contract is that every counter is present), a floor falls back to the store that
+  outlives the run, and a raise still reaches that store. Nothing is caught, so a `badarg` from a bad key still
+  raises.
+
+  One window is left on purpose: between `ets:whereis/1` and the write the owner can still exit, so a write racing the
+  teardown can still raise. Closing that means making the table outlive its callers — an heir, or an owner outside the
+  peering run — which is a design change and not this one.
+
+  Found by a station test fixture that watched an observer crash on `badarg` during a module's own teardown
+  (macula-station#152). Each table has a regression test that removes it by stopping the application and asserts the
+  answer, not the count.
+
 - **A rotated admission token now reaches the keyring of a group it already holds (macula#190).** An application
   re-admits itself at every subscribe attempt, so a subscriber that restarts — or is simply re-admitted — presents a
   fresh `ucan_token` to a join of a group the keyring already holds. `joined/6` answered a held group without reading

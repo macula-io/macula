@@ -329,24 +329,40 @@ known_mode(Mode) when Mode =:= off; Mode =:= counting; Mode =:= members; Mode =:
 %% @doc Every decision counted since the table was created, keyed by realm (or `other'), check and outcome. A
 %% `membership' row also carries the outcome members mode only counts while it is counting (`member', `would_refuse')
 %% and the reason a frame would have been refused for (`no_token', `expired', `not_the_audience', `wrong_realm',
-%% `invalid').
+%% `invalid'). Empty when there is no table to read, which is what a caller finds while the peering run that owns it
+%% is not up (macula#186).
 -spec counters() -> #{{<<_:256>> | other, check(), outcome() | member_outcome() | membership_reason()} =>
                           non_neg_integer()}.
 counters() ->
-    maps:from_list([Row || {{_Realm, _Check, _Outcome}, _} = Row <- ets:tab2list(?TABLE)]).
+    counters_in(ets:whereis(?TABLE)).
 
+%% The counters belong to the peering run: `macula_peering_sup' creates the table and its life is the run's. A caller
+%% can outlive it -- the station's peer observer is in the station's own tree, not in macula's, and is still handed
+%% events while a station shuts down -- and then there is no table and no decision in it. That is not an error to
+%% fail the caller with: nothing reads a counter back on the decision's path, so bookkeeping that cannot be written
+%% must not take the caller down (macula#186). `ets:whereis/1' is the same reading `macula_provider_standing' and
+%% `macula_diagnostics_bound' make of a table that may not be there.
 count(Realm, Check, Outcome) ->
-    Key = {realm_label(ets:member(?TABLE, {realm, Realm}), Realm), Check, Outcome},
-    _ = ets:update_counter(?TABLE, Key, 1, {Key, 0}),
+    count_in(ets:whereis(?TABLE), Realm, Check, Outcome).
+
+counters_in(undefined) -> #{};
+counters_in(Table) ->
+    maps:from_list([Row || {{_Realm, _Check, _Outcome}, _} = Row <- ets:tab2list(Table)]).
+
+count_in(undefined, _Realm, _Check, _Outcome) ->
+    ok;
+count_in(Table, Realm, Check, Outcome) ->
+    Key = {realm_label(Table, ets:member(Table, {realm, Realm}), Realm), Check, Outcome},
+    _ = ets:update_counter(Table, Key, 1, {Key, 0}),
     ok.
 
 %% A realm already counted keeps its label; a new one takes one while fewer than 256 realms have one.
-realm_label(true, Realm) -> Realm;
-realm_label(false, Realm) ->
-    labelled(ets:update_counter(?TABLE, realm_labels, 1, {realm_labels, 0}), Realm).
+realm_label(_Table, true, Realm) -> Realm;
+realm_label(Table, false, Realm) ->
+    labelled(Table, ets:update_counter(Table, realm_labels, 1, {realm_labels, 0}), Realm).
 
-labelled(N, Realm) when N =< ?MAX_REALM_LABELS ->
-    true = ets:insert(?TABLE, {{realm, Realm}, labelled}),
+labelled(Table, N, Realm) when N =< ?MAX_REALM_LABELS ->
+    true = ets:insert(Table, {{realm, Realm}, labelled}),
     Realm;
-labelled(_N, _Realm) ->
+labelled(_Table, _N, _Realm) ->
     ?OTHER.
