@@ -29,6 +29,7 @@ keyring_test_() ->
      [fun joining_pulls_the_current_epoch_sealed_with_the_org_grant/1,
       fun a_prefix_without_an_org_segment_is_refused_before_any_call/1,
       fun a_second_join_pulls_nothing/1,
+      fun a_re_join_with_a_rotated_token_is_what_the_next_pull_presents/1,
       fun a_publisher_seals_under_the_current_epoch_then_the_next/1,
       fun the_re_pull_is_scheduled_inside_the_ahead_window/1,
       fun a_failed_re_pull_backs_off_doubling_up_to_a_third_of_an_epoch/1,
@@ -123,6 +124,12 @@ org_grant(Caller) ->
     macula_ucan:create(persistent_term:get({?MODULE, org_key}), Caller,
                        [#{with => <<"mri:org:io.macula/acme">>, can => <<"group_keys">>}], #{exp => 100_000}).
 
+%% A later grant the distributor admits as well, distinguishable from ?TOKEN by
+%% its expiry, for the join that re-admits a subscriber (macula#190).
+rotated_grant(Caller) ->
+    macula_ucan:create(persistent_term:get({?MODULE, org_key}), Caller,
+                       [#{with => <<"mri:org:io.macula/acme">>, can => <<"group_keys">>}], #{exp => 200_000}).
+
 %% A pull as the provider link hands it to the distributor's handler.
 on_link(Payload, Opts) ->
     Payload#{caller => ?WIRE_CALLER, ucan_token => maps:get(ucan_token, Opts, <<>>), proofs => []}.
@@ -216,6 +223,24 @@ a_second_join_pulls_nothing(W) ->
         {ok, required} = join(W),
         ?assertEqual({ok, required}, join(W)),
         ?assertEqual(1, length(calls(W)))
+    end).
+
+%% A subscriber is re-admitted at every subscribe attempt, so a rotated admission
+%% token reaches the keyring as a join of a group it already holds. The pull it
+%% makes next must present the NEW token: keeping the first join's meant an
+%% expired grant went out on every later pull -- `not_authorized' from then on,
+%% while the subscription stayed up, so nothing re-admitted it (macula#190).
+a_re_join_with_a_rotated_token_is_what_the_next_pull_presents(#{keyring := K} = W) ->
+    ?_test(begin
+        {ok, required} = join(W),
+        Rotated = rotated_grant(?WIRE_CALLER),
+        ?assertNotEqual(?TOKEN, Rotated),
+        ?assertEqual({ok, required}, macula_group_keyring:join(K, ?REALM, ?PREFIX, #{ucan_token => Rotated})),
+        ?assertEqual(1, length(calls(W))),
+        advance(W, ?R),
+        wake(W),
+        {_, _, _, Opts} = lists:last(calls(W)),
+        ?assertEqual(Rotated, maps:get(ucan_token, Opts))
     end).
 
 a_publisher_seals_under_the_current_epoch_then_the_next(W) ->
