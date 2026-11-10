@@ -51,7 +51,6 @@ RELAY_MODULES=(
     macula_quic_stream_acceptor.erl
     macula_realm_trust.erl
     macula_relay.erl
-    macula_relay_discovery.erl
     macula_relay_handler.erl
     macula_relay_node.erl
     macula_relay_registry.erl

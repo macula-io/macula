@@ -218,6 +218,9 @@
               advertisement/0, advertisement_spec/0, own_namespace_spec/0]).
 
 -ifdef(TEST).
+%% The advertisement body rule is pure and is what the tests pin (macula#201
+%% amendment 2): which station ids a body signed by a given tier may name.
+-export([serving_stations/4]).
 -export([with_client_stream/3, advertisement_opts/3]).
 %% How a DHT put's reply reads (macula#33, WIRE_1_0.md section 6), asserted
 %% directly: a peer that answers a CALL needs a station's signed reply.
@@ -433,6 +436,13 @@
     admission        :: pid(),
     share            :: term(),
     pool             :: pid() | undefined,
+    %% The role this link's station was configured under in its pool
+    %% (macula#201): `public' or `fallback'. It decides which station ids the
+    %% advertisement THIS link signs may name — a public-signed body never
+    %% names a fallback station, while a fallback-signed body names its own
+    %% station and may name public ones, so a LAN caller can still resolve the
+    %% procedure it holds during an outage.
+    tier = public    :: public | fallback,
     connect          :: fun((map()) -> {ok, pid()} | {error, term()}),
     %% The functions every dedicated stream is opened, written and closed
     %% through (start opts `open_stream', `send_on_stream', `close_stream').
@@ -1724,6 +1734,7 @@ started({ok, Seed, Key, Profile, Issuer}, Opts) ->
     State    = #state{seed = Seed, node_identity = Key, profile = Profile,
                       issuer = Issuer, admission = maps:get(admission, Opts),
                       share = maps:get(share, Opts), pool = maps:get(pool, Opts, undefined),
+                      tier = maps:get(seed_tier, Opts, public),
                       connect = Connect, open_stream = OpenStream,
                       send_on_stream = SendOnStream, close_stream = CloseStream,
                       reset_stream = ResetStream,
@@ -2139,6 +2150,9 @@ peering_event({macula_peering, connected, Pid, PeerNodeId},
     %% The pool keeps each link's connectedness and station from this notice
     %% and never asks the link (macula#44).
     pool_connected(S1#state.pool, PeerNodeId),
+    %% And it ranks its links by this one: read the fresh measurement now, off
+    %% this process, so the pool never has to probe a link for it.
+    read_rtt(S1#state.pool, Pid),
     NewS = arm_liveness(S1#state{peer_node_id = PeerNodeId,
                                  liveness_misses = 0,
                                  liveness_outstanding = undefined,
@@ -2327,6 +2341,17 @@ disconnect_detail(_Reason) ->
 
 pool_connected(undefined, _PeerNodeId) -> ok;
 pool_connected(Pool, PeerNodeId) -> Pool ! {macula_link_connected, self(), PeerNodeId}, ok.
+
+%% The pool ranks its links by measured round trip (macula#201 §4) and must
+%% never probe one to get it (macula#44): the read happens in a process of its
+%% own, so a slow or wedged connection costs that process and not this link, and
+%% the ANSWER goes straight to the pool. `undefined' pool: nothing to tell.
+read_rtt(undefined, _PeerPid) ->
+    ok;
+read_rtt(Pool, PeerPid) ->
+    Link = self(),
+    _ = spawn(fun() -> Pool ! {macula_link_rtt, Link, macula_peering:rtt(PeerPid)} end),
+    ok.
 
 heard_summary(undefined, Summary) -> Summary;
 heard_summary(AtMs, Summary) -> Summary#{last_heard_ms => AtMs}.
@@ -3004,9 +3029,16 @@ on_liveness_tick(#state{peer_node_id = undefined} = S) ->
 on_liveness_tick(S0) ->
     S1 = on_outstanding_check(S0#state.liveness_outstanding, S0),
     case is_pid(S1#state.peer_pid) of
-        true  -> arm_liveness(send_probe(S1));
+        true  -> arm_liveness(tick_rtt(send_probe(S1)));
         false -> S1
     end.
+
+%% Each liveness tick is also when the pool's ranking gets a fresh measurement:
+%% the tick already means "the connection is up and answering", which is exactly
+%% when the number is worth reading.
+tick_rtt(#state{pool = Pool, peer_pid = PeerPid} = S) ->
+    read_rtt(Pool, PeerPid),
+    S.
 
 on_outstanding_check(undefined, S) ->
     %% No prior probe pending; nothing to count.
@@ -3210,24 +3242,51 @@ send_advertise(Pid, Realm, EncodedAd, S) ->
 %% connected to the station it names.
 sign_advertisement(Realm, Proc, _Spec, _Station, #state{pool = undefined}) ->
     not_sent(Realm, Proc, no_pool);
-sign_advertisement(Realm, Proc, Spec, Station, #state{pool = Pool, node_identity = Key, profile = Profile}) ->
+sign_advertisement(Realm, Proc, Spec, Station,
+                    #state{pool = Pool, node_identity = Key, profile = Profile, tier = Tier}) ->
     Link = self(),
     Opts = advertisement_opts(Spec, Key, Profile),
     SignOpts = maps:with([not_after], Spec),
     _ = spawn(fun() ->
-            Unsigned = macula_record:procedure_advertisement(node_id(Key), Realm, Proc,
-                                                             serving_stations(Station, pool_stations(Pool), Spec), Opts),
+            Unsigned = macula_record:procedure_advertisement(
+                         node_id(Key), Realm, Proc,
+                         serving_stations(Station, pool_stations(Pool), Spec, Tier), Opts),
             Link ! {advertisement_signed, {Realm, Proc}, Spec, Station, signed_or_refused(Pool, Unsigned, SignOpts)}
         end),
     ok.
 
-%% The stations the pool holds a connected link to, from its own state (no link is asked); none when the pool
-%% cannot answer, so the advertisement still names this link's station.
+%% The stations the pool holds a connected link to AND the role each was configured
+%% under, from the pool's own state (no link is asked); none when the pool cannot
+%% answer, so the advertisement still names this link's station.
 pool_stations(Pool) ->
     connected_stations(try macula_client:links(Pool) catch _:_ -> unanswered end).
 
-connected_stations({ok, Links}) -> [NodeId || #{connected := true, node_id := NodeId} <- Links, is_binary(NodeId)];
+connected_stations({ok, Links}) ->
+    [{NodeId, Tier} || #{connected := true, node_id := NodeId, tier := Tier} <- Links, is_binary(NodeId)];
 connected_stations(_Unanswered) -> [].
+
+%% The station ids of that list, whichever tier they are on.
+stations(PoolStations) -> [NodeId || {NodeId, _Tier} <- PoolStations].
+
+%% What a body signed by THIS link's tier may name (macula#201, amendment 2).
+%%
+%% A `public' link names public stations only, so a fallback station's node id
+%% never reaches a record a public station stores. A `fallback' link names its own
+%% station and may name public ones — required, not merely allowed: the body the
+%% fallback station holds is what a LAN caller resolves during an outage, so it
+%% must name a station the caller can dial.
+named_on(public, Station, PoolStations) ->
+    tier_of(Station, PoolStations) =:= public;
+named_on(fallback, _Station, _PoolStations) ->
+    true.
+
+%% A station the pool holds no tier for is NOT nameable on a public body: it is
+%% either a pinned station whose link is down (so it is not registered there right
+%% now) or one the pool cannot classify, and the fail-closed answer is to leave it
+%% off. Naming fewer holders is allowed by macula#116; naming a fallback station
+%% on a public record is the leak this design forbids.
+tier_of(Station, PoolStations) ->
+    proplists:get_value(Station, PoolStations, unconfigured).
 
 %% This link's station and up to 7 more of the pool's, sorted: an advertisement names at most 8 (macula-station#55).
 %%
@@ -3236,11 +3295,13 @@ connected_stations(_Unanswered) -> [].
 %% the procedure is registered on those links and on no other, so naming a
 %% station that does not hold it hands the caller a dial target that must
 %% forward every call (macula#116).
-serving_stations(Station, _PoolStations, #{serving_stations := Stations})
+serving_stations(Station, PoolStations, #{serving_stations := Stations}, Tier)
   when is_list(Stations), Stations =/= [] ->
-    lists:usort(lists:sublist([Station | lists:usort(Stations) -- [Station]], 8));
-serving_stations(Station, PoolStations, _Unpinned) ->
-    Others = lists:sublist(lists:usort(PoolStations) -- [Station], 7),
+    Pinned = [S || S <- lists:usort(Stations) -- [Station], named_on(Tier, S, PoolStations)],
+    lists:usort(lists:sublist([Station | Pinned], 8));
+serving_stations(Station, PoolStations, _Unpinned, Tier) ->
+    Others = lists:sublist([S || S <- lists:usort(stations(PoolStations)) -- [Station],
+                                 named_on(Tier, S, PoolStations)], 7),
     lists:usort([Station | Others]).
 
 %% The pool's signature on an advertisement, or why there is none: a pool call that exits is a refusal, not a crash.

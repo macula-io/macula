@@ -72,6 +72,7 @@
     peername/1,
     max_datagram_size/1,
     lost_packets/1,
+    rtt/1,
     peer_leaf/1,
     presented_leaf/1,
     export_keying_material/4,
@@ -534,6 +535,17 @@ max_datagram_size(Conn) ->
 lost_packets(Conn) ->
     nif_lost_packets(Conn).
 
+%% @doc This connection's smoothed round-trip time, in MICROSECONDS.
+%%
+%% ONE real field, like `lost_packets/1', and for the same reason not routed
+%% through `getstat/2'. This is the number a link is ranked by (macula#201 §4):
+%% a measured link outranks an unmeasured one and the lowest measured one goes
+%% first, so `first_success' over a list ordered by this is "fastest live link
+%% first". A closed connection answers `{error, already_closed}'.
+-spec rtt(reference()) -> {ok, non_neg_integer()} | {error, term()}.
+rtt(Conn) ->
+    nif_rtt(Conn).
+
 %% @doc The leaf certificate the other side sent in this connection's TLS
 %% handshake, as DER, exactly as received. A dialed connection has the
 %% station's leaf. An accepted connection returns `{error, no_peer_leaf}',
@@ -814,6 +826,9 @@ nif_max_datagram_size(_Conn) ->
     erlang:nif_error(nif_not_loaded).
 
 nif_lost_packets(_Conn) ->
+    erlang:nif_error(nif_not_loaded).
+
+nif_rtt(_Conn) ->
     erlang:nif_error(nif_not_loaded).
 
 nif_peer_leaf(_Conn) ->

@@ -20,12 +20,6 @@
         crypto,
         public_key,
         ssl,
-        %% macula_relay_discovery:fetch_topology/1 calls httpc:request/4
-        %% to fetch bootstrap topology over HTTPS -- still a live caller
-        %% after the macula-net removal (10.0.0) dropped this thinking
-        %% macula_metrics_http was the only one; dialyzer caught the miss
-        %% ("Unknown function httpc:request/4") before release.
-        inets,
         gproc,
         telemetry
     ]},

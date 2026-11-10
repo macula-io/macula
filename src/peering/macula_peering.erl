@@ -40,6 +40,7 @@
     reject/2,
     send_frame/2,
     peer_capabilities/1,
+    rtt/1,
     capability_bit/1,
     has_capability/2,
     peer_identity/1,
@@ -376,6 +377,20 @@ peer_capabilities(Pid) when is_pid(Pid) ->
     try gen_statem:call(Pid, peer_capabilities, 1_000) of
         {ok, _Caps} = Ok -> Ok;
         not_connected   -> {error, not_connected}
+    catch _:_ -> {error, not_connected}
+    end.
+
+%% @doc This connection's smoothed round-trip time, in MICROSECONDS.
+%%
+%% The number a link is ranked by (macula#201 §4). Read from the QUIC
+%% connection itself, so it is a live measurement of the link we actually use
+%% rather than an estimate kept elsewhere. `{error, not_connected}' until the
+%% handshake completes, and for a connection that has closed.
+-spec rtt(pid()) -> {ok, non_neg_integer()} | {error, not_connected}.
+rtt(Pid) when is_pid(Pid) ->
+    try gen_statem:call(Pid, rtt, 1_000) of
+        {ok, _Micros} = Ok -> Ok;
+        not_connected     -> {error, not_connected}
     catch _:_ -> {error, not_connected}
     end.
 

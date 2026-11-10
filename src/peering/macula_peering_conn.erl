@@ -1156,6 +1156,11 @@ connected({call, From}, peer_identity, #data{peer = #{node_id := _, identity_key
     {keep_state, Data, [{reply, From, {ok, peer_answer(peer_identity, Data)}}]};
 connected({call, From}, peer_capabilities, Data) ->
     {keep_state, Data, [{reply, From, {ok, peer_answer(peer_capabilities, Data)}}]};
+%% The connection's smoothed round trip, in microseconds (macula#201 §4). Read
+%% by the link that owns this worker, which forwards it to its pool so the pool
+%% can rank its links without ever probing one itself (macula#44).
+connected({call, From}, rtt, #data{quic_conn = Conn} = Data) ->
+    {keep_state, Data, [{reply, From, macula_quic:rtt(Conn)}]};
 connected(EventType, Event, Data) ->
     other_event(EventType, Event, connected, Data).
 

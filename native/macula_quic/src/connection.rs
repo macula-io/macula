@@ -545,6 +545,35 @@ fn nif_max_datagram_size<'a>(
     Ok((atoms::ok(), mtu).encode(env))
 }
 
+/// NIF: rtt(ConnRef) -> {ok, Microseconds} | {error, already_closed}
+///
+/// The smoothed round-trip time the congestion controller is using, from
+/// `quinn::Connection::stats().path.rtt`.
+///
+/// This is the number a link is RANKED by (macula#201 §4): a measured link
+/// outranks an unmeasured one, and the lowest measured one goes first. It is
+/// the live measurement of the connection we actually use, which is why the
+/// ranking no longer needs the relay-era cache of estimates fed by an HTTP
+/// poll of a different list.
+///
+/// ⚠ ONE field, like `nif_lost_packets', and deliberately not routed through
+/// `macula_quic:getstat/2` — that function refuses on purpose, because a
+/// counter that always reads zero makes "nothing is moving" indistinguishable
+/// from "nobody implemented the counter". A real measurement here compromises
+/// nothing: it is read from the connection, or the call says the connection is
+/// closed.
+#[rustler::nif]
+fn nif_rtt<'a>(
+    env: Env<'a>,
+    conn: ResourceArc<ConnectionResource>,
+) -> NifResult<Term<'a>> {
+    if conn.closed.load(Ordering::Relaxed) {
+        return Ok((atoms::error(), atoms::already_closed()).encode(env));
+    }
+    let stats = conn.connection.stats();
+    Ok((atoms::ok(), stats.path.rtt.as_micros() as u64).encode(env))
+}
+
 /// NIF: lost_packets(ConnRef) -> {ok, Count} | {error, already_closed}
 ///
 /// Packets this connection's congestion controller has declared lost,

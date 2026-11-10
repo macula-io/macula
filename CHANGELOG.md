@@ -42,6 +42,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   its epochs, its pending re-pull and an automatic pin. An invalid option is refused whether the group is new or
   already held.
 
+### Added
+
+- **Two station roles: public stations and a LAN fallback station (macula#201).** `connect/2` gains
+  `fallback_stations => [seed()]`. Both lists are dialed and held exactly as before; each seed carries the role of the
+  list it came from, and the role filters only ORIGINATING operations — a publish, a call, a station procedure, a
+  replication copy go to the active tier and to nothing in the other one. While any public link is up the pool is on
+  the public tier; the fallback carries traffic only when none is. Standing registrations (memberships, subscriptions,
+  advertisements) still go to every link in both tiers, so two nodes on different tiers still reach each other and a
+  tier switch is one selection, not a re-registration. The filter runs before `ordered_for_selection/2`, so the
+  guarantee holds whatever `link_selection` is. A station named in both lists does not start the pool
+  (`{error, {seeds, {station_in_both_tiers, Seed}}}`), and a pool with no fallback list behaves exactly as before.
+  `status/1` gains `active_tier` and `links/1` reports each link's `tier`, so a caller can say "offline: on the LAN
+  fallback" instead of failing silently.
+- **Links are ranked by measured round trip, and the lowest goes first (macula#201 §4).** New `macula_quic:rtt/1` reads
+  the QUIC connection's smoothed RTT from Quinn's own stats — one real field, like `lost_packets/1`, and for the same
+  reason not routed through the deliberately unimplemented `getstat/2`. Each link reads it off its own process on
+  connect and on every liveness tick and reports it to the pool, so the pool ranks its candidates without ever probing
+  a link (macula#44). The candidate order is now `connected -> tier filter -> RTT sort`, and an unmeasured link sorts
+  after every measured one. `ordered_for_selection/2` and `select_publish_targets/2` are untouched: `first_success`
+  means "whatever order the pids came in", so measured order makes it fastest-first.
+- **A redial schedule with a floor, growth and a steady-up reset (macula#201 §3).** A link whose tier is the active one
+  keeps the flat respawn delay. A link whose tier is NOT active is retried on a backoff: never below the base (the
+  first retry is exactly the base, with no jitter), growing per failed attempt up to a cap, with jitter only above the
+  floor. A seed's counter resets only after its link has stayed up past the steady-up window — not on connect — so a
+  connect-then-die loop escalates instead of retrying at the base forever. Symmetric for both tiers: one reset rule.
+
+### Changed
+
+- **Discovery no longer chooses `random` link selection for the caller (macula#202).** `default_link_selection/1`
+  answered `random` whenever station discovery was on, silently discarding the order the caller never asked to lose;
+  with the tier filter above, a fallback station in the list could take a share of a publish through it. The default is
+  now `first_success` with or without discovery, and `random` remains available when a caller sets `link_selection`
+  explicitly.
+
+### Removed
+
+- **`macula_relay_discovery` is deleted, with its tests.** Relay-era code nothing in `src/` started, called or named: an
+  ETS cache fed by an HTTPS `/topology` poll of relay hosts and a five-minute reconciliation, for a world the
+  station-era client no longer has. The one part worth keeping — its ranking rule, a measured RTT outranking an
+  estimate and an unmeasured entry sorting last — is what the RTT sort above encodes, fed by the live connection
+  instead of a cache of estimates. Its entry is dropped from `scripts/strip-to-sdk.sh` and `scripts/split-to-relay.sh`,
+  and `inets` leaves `macula.app.src` with its only caller.
+
 ### Security
 
 - **A group's admission UCAN no longer shows in a keyring's status output or in its crash report (macula#189).** The

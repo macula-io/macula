@@ -181,7 +181,7 @@
 -endif.
 
 -export_type([pool/0, opts/0, seed/0, status/0, link_info/0, last_disconnect/0, handler/0,
-              stream_handler/0, auth_policy/0, call_class/0]).
+              stream_handler/0, auth_policy/0, call_class/0, tier/0]).
 
 %% Per-procedure auth policy for `advertise'. `open' (default) serves any
 %% identified caller. `{ucan_required, IssuerNodeId}' gates the procedure
@@ -256,6 +256,7 @@
     seeds              := [seed()],
     healthy_links      := non_neg_integer(),
     failed_links       := non_neg_integer(),
+    active_tier        := tier(),
     self_node_id       := <<_:256>>,
     subscriptions      := non_neg_integer(),
     replication_factor := pos_integer(),
@@ -279,9 +280,26 @@
     host            := binary() | undefined,
     pid             := pid(),
     connected       := boolean(),
+    %% The role the seed was configured under (macula#201): `public' for a
+    %% seed given to `connect/2', `fallback' for one given in
+    %% `fallback_stations'. A seed the pool did not get from configuration
+    %% (a direct dial, a discovered station) is `public'.
+    tier            := tier(),
     node_id         := macula_node_keys:node_id() | undefined,
     last_disconnect := last_disconnect() | undefined
 }.
+%% The two roles a configured station can have (macula#201), and the pool's
+%% own state: `public' while any public link is up, `fallback' otherwise when
+%% a fallback list was configured.
+-type tier() :: public | fallback.
+
+%% The redial schedule's numbers (macula#201 §3): the floor, the growth per
+%% failed attempt, the ceiling, and how long a link must stay up before its
+%% seed's counter resets. Held in state so a test can shorten them.
+-type redial() :: #{base_ms      := pos_integer(),
+                    factor       := pos_integer(),
+                    cap_ms       := pos_integer(),
+                    steady_up_ms := pos_integer()}.
 %% Why a seed's link last went down, and when (`at_ms', system time). `reason'
 %% is the reason's name only, never its terms. A `peer_identity_mismatch' also
 %% names the node id the seed expected and the one the station presented, in
@@ -441,17 +459,43 @@
 
     %% How a one-shot CALL (`call_linked_station/5') or PUBLISH (`publish/5', within its
     %% `replication_factor' slice) picks among currently-connected links.
-    %% `first_success' (default, unless `station_discovery' is enabled --
-    %% see below): today's behaviour, unchanged -- try links in the order
-    %% they were spawned, first non-error reply wins. `random': shuffle
-    %% the candidate list first, so load spreads across every connected
-    %% link instead of pinning to whichever seed happened to be listed or
-    %% discovered first. Defaults to `random' when `station_discovery' is
-    %% enabled (there is little reason to discover a bigger station set
-    %% and then still only ever call the first one) and `first_success'
-    %% otherwise, but either can be set explicitly to override that
-    %% pairing.
+    %% `first_success' (the default, with or without `station_discovery'):
+    %% try links in the candidate order, first non-error reply wins. That
+    %% order is the measured round trip of each link, lowest first, with an
+    %% unmeasured link last (macula#201 §4), so the default always prefers
+    %% the fastest live link. `random': shuffle the candidate list first, so
+    %% load spreads across every connected link instead of pinning to the
+    %% fastest. `random' is never chosen for a caller: it is set here or not
+    %% at all (macula#202).
     link_selection => first_success | random,
+
+    %% Stations that are a LOCAL FALLBACK, by role (macula#201). The
+    %% `Seeds' argument of `connect/2' are the public ones; these are the
+    %% ones that carry traffic only while no public link is up. They are
+    %% dialed and held exactly like a public seed — the same connection
+    %% management, the same redial, the same replay — and the role decides
+    %% only where an ORIGINATING operation goes: a publish, a call, a
+    %% station procedure, a replication copy. Standing registrations
+    %% (memberships, subscriptions, advertisements) go to every link in
+    %% both tiers, so two nodes on different tiers still reach each other
+    %% and a tier switch is one selection rather than a re-registration.
+    %%
+    %% A pool with no `fallback_stations' has one tier: every operation
+    %% behaves exactly as it did before this option existed. A station
+    %% named in both lists does not start the pool
+    %% (`{error, {seeds, {station_in_both_tiers, Seed}}}'): one station
+    %% holding two roles has no defined behaviour.
+    fallback_stations => [seed()],
+
+    %% The redial schedule of a seed whose tier is not the active one
+    %% (macula#201 §3). `base_ms' is the floor — the first retry is exactly
+    %% this — `factor' is the growth per failed attempt, `cap_ms' the ceiling
+    %% before jitter, and `steady_up_ms' how long a link must stay up before
+    %% its seed's counter resets. A link whose tier IS active keeps the flat
+    %% respawn delay. Overridable for tests; a caller has no reason to set it
+    %% otherwise.
+    redial => #{base_ms => pos_integer(), factor => pos_integer(),
+                cap_ms => pos_integer(), steady_up_ms => pos_integer()},
 
     %% Most configured seeds a pool starts with. A pool given more does
     %% not start: `connect/2' returns `{error, {too_many_seeds, Given,
@@ -535,6 +579,19 @@
 %% replication_factor=1 there was never a "later" link for that to matter;
 %% raising the default makes it matter for everyone.
 -define(DEFAULT_REPLICATION, 2).
+%% The redial schedule for a seed whose TIER is not the active one (macula#201
+%% §3). A flat respawn delay is right for a link that drops while its tier is
+%% otherwise healthy; it is wrong for a seed whose whole tier is down and may
+%% stay down for an hour. The wait never drops below `REDIAL_BASE_MS` (the
+%% first retry is exactly that), grows by `REDIAL_FACTOR` per failed attempt up
+%% to `REDIAL_CAP_MS`, and jitter is applied ONLY above the floor. A seed's
+%% counter resets only after its link has stayed up past `STEADY_UP_MS`, so a
+%% connect-then-die loop escalates instead of retrying at the base forever.
+%% Each is overridable through the matching option, for tests.
+-define(REDIAL_BASE_MS, 5_000).
+-define(REDIAL_FACTOR, 2).
+-define(REDIAL_CAP_MS, 300_000).
+-define(STEADY_UP_MS, 60_000).
 -define(DEFAULT_DEDUP_SWEEP_MS, 30_000).
 -define(DEFAULT_ADMISSION_SWEEP_MS, 30_000).
 -define(DEFAULT_RENEW_BACKOFF_MS, 5_000).
@@ -694,10 +751,39 @@
 %% The class resolver's own tests read it directly: it is a pure function of a
 %% policy, a realm id and the pinned realm keys (macula#147).
 -export([caller_policy/3]).
+%% The tier rules are pure and are what the tests pin (macula#201): the filter
+%% an originating operation passes through, the tier a pool is on, the candidate
+%% order, the redial bound, and the two-list configuration. `discovery_state/0'
+%% is the seam a test needs to ask the default selection about a discovery pool
+%% without constructing the private record.
+-export([tier_targets/3, tier_for/2, rtt_ordered/2, redial_wait_ms/2,
+         default_link_selection/1, tier_roles/2, discovery_state/0]).
+-endif.
+
+-ifdef(TEST).
+discovery_state() -> #discovery_state{}.
 -endif.
 
 -record(state, {
     seeds         :: [seed()],
+    %% Each link's smoothed round trip in microseconds, as that link last
+    %% reported it (macula#201 §4). The pool ranks its candidates by this and
+    %% never probes a link to get it (macula#44).
+    rtts = #{} :: #{pid() => non_neg_integer()},
+    %% Retries of a seed whose tier is not the active one (macula#201 §3): its
+    %% failed retries so far. Reset only once its link stays up past the
+    %% steady-up window (`?STEADY_UP_MS'), never merely on connect.
+    redial_attempts = #{} :: #{seed() => non_neg_integer()},
+    %% The redial schedule's numbers, resolved at start from the options (the
+    %% constants above are the defaults).
+    redial :: redial(),
+    %% Each configured seed's role, by the list it came from (macula#201):
+    %% the `Seeds' argument of `connect/2' is `public', `fallback_stations'
+    %% is `fallback'. A seed absent from here was not configured (a direct
+    %% dial, a discovered station) and counts as `public'. Empty when no
+    %% fallback list was given, so every operation sees one tier exactly as
+    %% it always has.
+    roles = #{}   :: #{seed() => tier()},
     %% Each connected link and the station it reached, from the link's own
     %% notice at handshake, dropped on its disconnect notice or its DOWN. The
     %% pool reads connectedness and stations from here and never probes a
@@ -1677,7 +1763,46 @@ unsubscribe(Pool, SubRef) when is_pid(Pool), is_reference(SubRef) ->
 init({Seeds, Opts}) ->
     process_flag(trap_exit, true),
     warn_legacy_opts(Opts),
-    init_within_realm_trust(realm_trust_refusal(Opts), Seeds, Opts).
+    init_with_tier_roles(tier_roles(Seeds, Opts), Opts).
+
+%% The two lists become one seed list with a role each (macula#201). Both are
+%% dialed and held the same way; only an originating operation reads the role.
+%% A station named in both lists does not start the pool: one station with two
+%% roles has no defined behaviour, and guessing which the caller meant would be
+%% a silent choice about where their traffic goes.
+init_with_tier_roles({ok, Seeds, Roles}, Opts) ->
+    init_within_realm_trust(realm_trust_refusal(Opts), Seeds, Opts#{seed_roles => Roles});
+init_with_tier_roles({error, _} = Refusal, _Opts) ->
+    Refusal.
+
+tier_roles(Seeds, Opts) ->
+    tier_roles_checked(maps:get(fallback_stations, Opts, []), Seeds).
+
+tier_roles_checked(Fallbacks, Seeds) when is_list(Fallbacks) ->
+    tiered_seeds(Seeds, Fallbacks, first_in_both(Seeds, Fallbacks));
+tier_roles_checked(_NotAList, _Seeds) ->
+    {error, {fallback_stations, not_a_list}}.
+
+tiered_seeds(_Seeds, _Fallbacks, {some, Seed}) ->
+    {error, {seeds, {station_in_both_tiers, Seed}}};
+tiered_seeds(Seeds, Fallbacks, none) ->
+    {ok, Seeds ++ Fallbacks,
+     maps:from_list([{Seed, public} || Seed <- Seeds] ++ [{Seed, fallback} || Seed <- Fallbacks])}.
+
+%% The first fallback seed that is also a public one, as the caller wrote it;
+%% compared on `normalize_seed/1' so `https://a:4433' and `a:4433' are one
+%% station, which is what the rest of the pool already means by one peer.
+first_in_both(Seeds, Fallbacks) ->
+    Public = normalized_seed_set(Seeds),
+    first_normalized_in(Public, Fallbacks).
+
+first_normalized_in(_Public, []) ->
+    none;
+first_normalized_in(Public, [Fallback | Rest]) ->
+    in_both(sets:is_element(normalize_seed(Fallback), Public), Fallback, Public, Rest).
+
+in_both(true, Fallback, _Public, _Rest)  -> {some, Fallback};
+in_both(false, _Fallback, Public, Rest)  -> first_normalized_in(Public, Rest).
 
 %% A realm trust that is not a map of 32-byte realm ids to realm keys well formed for the node's crypto profile does
 %% not start the pool, loads no key and dials nothing: a key that can never equal an org directory's signer would leave
@@ -1897,7 +2022,9 @@ init_with_keys({ok, #{node_identity := NodeIdentity, issuer := Issuer, issuer_st
     OrderMaxBuf  = maps:get(order_max_buffer, Opts, ?DEFAULT_ORDER_MAX_BUFFER),
     Discovery = init_discovery(maps:get(station_discovery, Opts, #{})),
     LinkSelection = maps:get(link_selection, Opts, default_link_selection(Discovery)),
-    State0 = #state{seeds = Seeds, node_id = NodeId, realm_keys = maps:get(realm_trust, Opts, #{}),
+    State0 = #state{seeds = Seeds, roles = maps:get(seed_roles, Opts, #{}),
+                    redial = redial_schedule(Opts),
+                    node_id = NodeId, realm_keys = maps:get(realm_trust, Opts, #{}),
                     link_opts = LinkOpts, replication = Replication,
                     dedup_sweep = DedupSweep,
                     admission_sweep = AdmissionSweep,
@@ -1949,8 +2076,12 @@ init_discovery(#{enabled := true} = Opts) ->
 init_discovery(_NotEnabled) ->
     undefined.
 
-default_link_selection(undefined)          -> first_success;
-default_link_selection(#discovery_state{}) -> random.
+%% The default selection is `first_success' over the candidate order, whether
+%% or not station discovery runs (macula#202). Discovery used to flip the
+%% default to `random', which silently discarded the measured link order the
+%% caller never asked to lose; nothing now chooses `random' for a caller, and
+%% one that wants it says so in `link_selection'.
+default_link_selection(_DiscoveryOrUndefined) -> first_success.
 
 schedule_discovery(_DelayMs, #state{discovery = undefined} = S) ->
     S;
@@ -2046,7 +2177,7 @@ handle_call(status, _From, S) ->
     {reply, {ok, pool_status(S)}, S};
 
 handle_call(links, _From, #state{links = Links, last_disconnects = Last} = S) ->
-    {reply, {ok, link_infos(Links, Last, S#state.connected)}, S};
+    {reply, {ok, link_infos(Links, Last, S#state.connected, S#state.roles)}, S};
 
 handle_call(_Req, _From, S) ->
     {reply, {error, unknown_call}, S}.
@@ -2058,6 +2189,12 @@ pool_status(#state{seeds = Seeds, links = Links, subs = Subs,
         seeds              => Seeds,
         healthy_links      => Healthy,
         failed_links       => Failed,
+        %% Which tier this pool's originating traffic goes to right now
+        %% (macula#201): `public' while any public link is up, `fallback'
+        %% only when none is and a fallback list was configured. A caller
+        %% reports "offline: on the LAN fallback" from this instead of
+        %% failing silently when a call needs the outside world.
+        active_tier        => active_tier(S),
         self_node_id       => NodeId,
         subscriptions      => map_size(Subs),
         %% How many links one publish/5 call fans to (Opts'
@@ -2118,7 +2255,7 @@ start_publish(Realm, Topic, Payload, Opts, From, S) ->
     %% calls are sync 5s timeouts; under load they pile up at the pool
     %% and the harness's `multi_publisher_pubsub' case fails with
     %% empty receives).
-    Targets = ordered_for_selection(connected_link_pids(S), S#state.link_selection),
+    Targets = ordered_for_selection(candidate_links(S), S#state.link_selection),
     Selected = select_publish_targets(Targets, S#state.replication),
     AllTargets = Targets,
     %% One seq per publication, from the node's counter for the pool's key
@@ -2202,7 +2339,7 @@ start_linked_call(Realm, Procedure, Payload, TimeoutMs, From, S) ->
     %% the link replied, capping concurrent CALL throughput at 1.
     %% The candidates are the links the pool holds connected: the worker asks
     %% none of them first, as a busy link would hold it (macula#44).
-    Pids = ordered_for_selection(connected_link_pids(S), S#state.link_selection),
+    Pids = ordered_for_selection(candidate_links(S), S#state.link_selection),
     _ = spawn(fun() ->
         Reply = call_first_success(Pids, Realm, Procedure, Payload,
                                     TimeoutMs),
@@ -2275,6 +2412,18 @@ handle_info({'DOWN', Mon, process, Pid, Reason}, S) ->
 
 handle_info({respawn_link, Seed}, S) ->
     {noreply, on_respawn_link(Seed, S)};
+
+%% A link's measured round trip, read by the link's own worker and reported
+%% straight here: the pool ranks by it and never asks a link (macula#201 §4,
+%% macula#44). A reading for a link the pool no longer holds — one that raced
+%% the link's DOWN — is dropped rather than kept for a dead pid.
+handle_info({macula_link_rtt, Pid, Result}, #state{rtts = Rtts} = S) ->
+    {noreply, S#state{rtts = rtt_kept(holds_link(Pid, S), Pid, Result, Rtts)}};
+
+%% A link that has stayed up past the steady-up window: its seed's backoff
+%% starts again from the base (macula#201 §3).
+handle_info({steady_up, Seed, Pid}, S) ->
+    {noreply, steady_up(Seed, Pid, S)};
 
 %% A restart timer that fires while an issuer runs starts nothing.
 handle_info(restart_issuer, #state{issuer = Issuer} = S) when is_pid(Issuer) ->
@@ -2500,9 +2649,13 @@ start_link_for_seed(Seed, S) -> start_link_for_seed(Seed, #{}, S).
 
 start_link_for_seed(Seed, ExtraOpts, #state{issuer = undefined} = S) ->
     held_start(Seed, ExtraOpts, S);
-start_link_for_seed(Seed, ExtraOpts, #state{node_identity = NodeIdentity} = S) ->
+start_link_for_seed(Seed, ExtraOpts, #state{node_identity = NodeIdentity, roles = Roles} = S) ->
     LinkOpts = maps:merge(S#state.link_opts,
                           ExtraOpts#{seed => Seed, node_identity => fun() -> NodeIdentity end,
+                                     %% The role this link's station was configured
+                                     %% under (macula#201): it decides which station
+                                     %% ids the advertisement this link SIGNS may name.
+                                     seed_tier => maps:get(Seed, Roles, public),
                                      share => seed_peer(Seed)}),
     after_link_start(macula_station_link:start_link(LinkOpts), Seed,
                      remember_dial_opts(Seed, ExtraOpts, S)).
@@ -2542,8 +2695,88 @@ after_link_start({error, Reason}, Seed, S) ->
 start_refused({permanent, Kind}, _Seed, S) ->
     count_refused_dial(Kind, S);
 start_refused(transient, Seed, S) ->
-    erlang:send_after(?LINK_RESPAWN_DELAY_MS, self(), {respawn_link, Seed}),
+    schedule_respawn(Seed, S).
+
+%%--------------------------------------------------------------------
+%% The redial schedule (macula#201 §3)
+%%--------------------------------------------------------------------
+
+redial_schedule(Opts) ->
+    Given = maps:get(redial, Opts, #{}),
+    #{base_ms      => maps:get(base_ms, Given, ?REDIAL_BASE_MS),
+      factor       => maps:get(factor, Given, ?REDIAL_FACTOR),
+      cap_ms       => maps:get(cap_ms, Given, ?REDIAL_CAP_MS),
+      steady_up_ms => maps:get(steady_up_ms, Given, ?STEADY_UP_MS)}.
+
+%% A seed whose link ended is dialled again. While its tier is the ACTIVE one
+%% that is today's flat respawn delay, unchanged. While it is not — the whole
+%% tier is down, or a fallback that is normally absent — it is the backoff
+%% schedule instead, so an hour-long outage costs a handful of dials rather
+%% than one a second.
+%%
+%% The plan is made AFTER the ended link has left the pool's state, so a tier
+%% that just lost its last link is already "not active" here and its retry takes
+%% the schedule. That is the whole point: the moment a tier goes, its seeds stop
+%% being hammered.
+schedule_respawn(Seed, S) ->
+    {Kind, Delay} = respawn_plan(Seed, S),
+    _ = erlang:send_after(Delay, self(), {respawn_link, Seed}),
+    counted_attempt(Kind, Seed, S).
+
+respawn_plan(Seed, #state{roles = Roles} = S) ->
+    respawn_plan_for(maps:get(Seed, Roles, public) =:= active_tier(S), Seed, S).
+
+respawn_plan_for(true, _Seed, _S) ->
+    {flat, ?LINK_RESPAWN_DELAY_MS};
+respawn_plan_for(false, Seed, #state{redial_attempts = Attempts, redial = Redial}) ->
+    {backoff, redial_wait_ms(maps:get(Seed, Attempts, 0), Redial)}.
+
+%% Only a backoff attempt counts against the seed. The active tier's flat
+%% delay is not a backoff and leaves the counter alone, so a single link
+%% flapping inside a healthy tier never escalates anyone's wait.
+counted_attempt(flat, _Seed, S) ->
+    S;
+counted_attempt(backoff, Seed, #state{redial_attempts = Attempts} = S) ->
+    S#state{redial_attempts = Attempts#{Seed => maps:get(Seed, Attempts, 0) + 1}}.
+
+%% The wait before a failed retry is made again (macula#201 §3):
+%%
+%%     base + random(0, min(cap, base * factor^attempt) - base)
+%%
+%% The floor is exact: attempt 0 waits exactly the base, with no jitter at all,
+%% because there is no range above the floor to spread within yet. No wait is
+%% ever below the base, and none above the cap.
+redial_wait_ms(Attempt, #{base_ms := Base, factor := Factor, cap_ms := Cap}) ->
+    Ceiling = min(Cap, capped_growth(Base, Factor, Attempt, Cap)),
+    Base + rand:uniform(max(1, Ceiling - Base + 1)) - 1.
+
+%% `base * factor^attempt', stopping as soon as it reaches `Cap': a value above
+%% the cap is never used, and an unbounded attempt count must not build a bignum
+%% only to throw it away.
+capped_growth(Grown, _Factor, 0, _Cap) -> Grown;
+capped_growth(Grown, _Factor, _Attempt, Cap) when Grown >= Cap -> Grown;
+capped_growth(Grown, Factor, Attempt, Cap) ->
+    capped_growth(Grown * Factor, Factor, Attempt - 1, Cap).
+
+%% A link that stays up past the steady-up window has proved itself, and its
+%% seed's backoff starts again from the base. Symmetric for both tiers: one
+%% reset rule, not one per tier.
+%%
+%% The window is measured from the handshake, not from a retry, and the message
+%% names the link that completed it: a link that connected and died before the
+%% window elapses leaves a message that resets nothing, so a connect-then-die
+%% loop keeps the backoff it accumulated.
+steady_up(Seed, Pid, #state{links = Links, connected = Connected} = S) ->
+    steady_up_link(maps:get(Seed, Links, undefined), Pid, is_map_key(Pid, Connected), Seed, S).
+
+steady_up_link(#link_state{pid = Pid}, Pid, true, Seed, #state{redial_attempts = Attempts} = S) ->
+    S#state{redial_attempts = maps:remove(Seed, Attempts)};
+steady_up_link(_Link, _Pid, _Connected, _Seed, S) ->
     S.
+
+arm_steady_up(Seed, Pid, #state{redial = #{steady_up_ms := SteadyUp}}) ->
+    _ = erlang:send_after(SteadyUp, self(), {steady_up, Seed, Pid}),
+    ok.
 
 permanent_refusal({seed, expected_node_id_required}) -> {permanent, seed_without_expected_node_id};
 permanent_refusal({seed, {pin_tls_cert, _Reason}}) -> {permanent, pin_tls_cert_refused};
@@ -3283,9 +3516,88 @@ call_after_connect(false, _Pid, _Target, _Realm, _Proc, _Payload, _Deadline, _Uc
 connected_link_pids(#state{connected = Connected} = S) ->
     [P || P <- spawned_link_pids(S), is_map_key(P, Connected)].
 
+%% The candidate links of the ACTIVE tier (macula#201 §2): an originating
+%% operation — a publish, a call, a station procedure, a replication copy — goes
+%% to the tier the pool is on and to nothing in the other one.
+%%
+%% Standing registrations never pass through here: memberships, subscriptions
+%% and advertisements fan out to `spawned_link_pids/1' and are replayed onto a
+%% returning link by `replay_to_seed/3'. That is deliberate, and it is what
+%% lets two nodes on different tiers still reach each other.
+%%
+%% This runs BEFORE `ordered_for_selection/2', so the guarantee holds whatever
+%% `link_selection' is. A pool with no fallback list has only public seeds, so
+%% the active tier is `public' and this is the identity.
+tier_targets(Pids, #state{} = S) ->
+    tier_targets(Pids, link_tiers(S), active_tier(S)).
+
+tier_targets(Pids, Tiers, Active) ->
+    [P || P <- Pids, maps:get(P, Tiers, public) =:= Active].
+
+%% The candidate links for an ORIGINATING operation, in the order this design
+%% says to build it (macula#201 §4):
+%%
+%%     connected links -> tier filter -> RTT sort
+%%
+%% The RTT sort replaces spawn order as the input order, which is the whole
+%% mechanism: `ordered_for_selection/2' documents `first_success' as "whatever
+%% order `Pids' already came in", so feeding it measured order makes the lowest
+%% round trip go first and `select_publish_targets/2' keeps its first-N slice
+%% over the same list. Neither function changes.
+candidate_links(S) ->
+    rtt_ordered(tier_targets(connected_link_pids(S), S), S#state.rtts).
+
+%% Lowest measured round trip first; a link with no measurement sorts after
+%% every measured one. This is the rule `macula_relay_discovery:rank_compare/2'
+%% encoded, which is the one part of that dead module worth keeping — fed now by
+%% the live QUIC connection rather than a cache fed by an HTTP poll of a
+%% different list.
+rtt_ordered(Pids, Rtts) ->
+    lists:sort(fun(A, B) -> rtt_before(maps:get(A, Rtts, undefined), maps:get(B, Rtts, undefined)) end,
+               Pids).
+
+rtt_before(undefined, undefined) -> true;
+rtt_before(undefined, _Measured) -> false;
+rtt_before(_Measured, undefined) -> true;
+rtt_before(A, B)                 -> A =< B.
+
+rtt_kept(true, Pid, {ok, Micros}, Rtts) when is_integer(Micros) -> Rtts#{Pid => Micros};
+rtt_kept(_Held, _Pid, _Result, Rtts)                              -> Rtts.
+
+holds_link(Pid, S) ->
+    lists:member(Pid, spawned_link_pids(S)).
+
+%% Which tier the pool's originating traffic belongs to: `public' the moment any
+%% public link is up; `fallback' only when none is AND a fallback list was
+%% configured. A pool with no fallback list is `public' even with every link
+%% down, so "neither tier up" fails exactly as it did before this design.
+active_tier(#state{roles = Roles} = S) ->
+    tier_for(any_connected(public, Roles, S), lists:member(fallback, maps:values(Roles))).
+
+tier_for(true, _FallbackConfigured) -> public;
+tier_for(false, true)               -> fallback;
+tier_for(false, false)              -> public.
+
+any_connected(Tier, Roles, #state{links = Links, connected = Connected}) ->
+    lists:any(fun({Seed, #link_state{pid = Pid}}) ->
+                      maps:get(Seed, Roles, public) =:= Tier andalso is_map_key(Pid, Connected)
+              end, maps:to_list(Links)).
+
+%% pid → the role of the seed it was started for. A link the pool did not get
+%% from configuration (a direct dial, a discovered station) counts as `public'.
+link_tiers(#state{links = Links, roles = Roles}) ->
+    maps:from_list([{Pid, maps:get(Seed, Roles, public)}
+                    || {Seed, #link_state{pid = Pid}} <- maps:to_list(Links), is_pid(Pid)]).
+
 %% A connected notice from a link the pool holds; one from a link it no longer
 %% holds (a notice racing that link's DOWN) is dropped.
-link_connected({ok, _Seed}, Pid, NodeId, #state{connected = Connected} = S) ->
+link_connected({ok, Seed}, Pid, NodeId, #state{connected = Connected} = S) ->
+    %% A completed handshake is what makes this link's tier live again
+    %% (macula#201 §3): the tier is read from `connected', so recording it here
+    %% IS the return to the public tier — not a timer. The steady-up window
+    %% starts here too, and only a link still up when it elapses resets its
+    %% seed's backoff.
+    arm_steady_up(Seed, Pid, S),
     S#state{connected = Connected#{Pid => NodeId}};
 link_connected(_NotHeld, _Pid, _NodeId, S) ->
     S.
@@ -3693,17 +4005,19 @@ bump(false, H, F) -> {H, F + 1}.
 
 %% Build one `link_info()' per spawned link. Skips seeds whose link
 %% worker is not (yet) a live pid — those have no addressable station.
-link_infos(Links, Last, Connected) ->
-    [link_info(Seed, Pid, maps:get(Seed, Last, undefined), maps:find(Pid, Connected))
+link_infos(Links, Last, Connected, Roles) ->
+    [link_info(Seed, Pid, maps:get(Seed, Last, undefined), maps:find(Pid, Connected),
+               maps:get(Seed, Roles, public))
      || {Seed, #link_state{pid = Pid}} <- maps:to_list(Links),
         is_pid(Pid)].
 
 %% A link's station, as it told the pool at handshake; `undefined' before.
-link_info(Seed, Pid, LastDisconnect, Station) ->
+link_info(Seed, Pid, LastDisconnect, Station, Tier) ->
     #{seed            => Seed,
       host            => seed_host(Seed),
       pid             => Pid,
       connected       => Station =/= error,
+      tier            => Tier,
       node_id         => station_or_undefined(Station),
       last_disconnect => LastDisconnect}.
 
@@ -4244,11 +4558,14 @@ held_start_resumed(Seed, ExtraOpts, S) ->
 on_down_routed({ok, Seed}, _Mon, Pid, Reason, S0) ->
     macula_diagnostics:event(<<"_macula.client.link_down">>,
                              #{seed => Seed, pid => Pid, reason => Reason}),
-    erlang:send_after(?LINK_RESPAWN_DELAY_MS, self(), {respawn_link, Seed}),
     S = coverage_lost(Pid, Reason, exit_kept(Reason, Seed, S0)),
     S1 = S#state{links = maps:remove(Seed, S#state.links),
-                 connected = maps:remove(Pid, S#state.connected)},
-    {noreply, maybe_rediscover_now(S1)};
+                 connected = maps:remove(Pid, S#state.connected),
+                 rtts = maps:remove(Pid, S#state.rtts)},
+    %% Scheduled AFTER the link left the pool, so a tier that has just lost its
+    %% last link is already inactive and its retry takes the backoff schedule
+    %% rather than the flat delay (macula#201 §3).
+    {noreply, maybe_rediscover_now(schedule_respawn(Seed, S1))};
 on_down_routed(error, Mon, _Pid, Reason, S) ->
     {noreply, on_opener_down(Mon, Reason, on_subscriber_down(Mon, S))}.
 
