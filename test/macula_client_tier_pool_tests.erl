@@ -289,13 +289,20 @@ connect_to(Pool, Pid, Station) ->
     connected(Pool, Pid, Station),
     Pid.
 
+%% Tagger for one link: every frame the link sends carries the link it came
+%% from. It ends with its link, so a closed pool leaves no relay behind.
 relay(Test, Link) ->
+    relay(Test, Link, erlang:monitor(process, Link)).
+
+relay(Test, Link, Mon) ->
     receive
         {'$gen_cast', {send_frame, _Peer, Frame}} ->
             Test ! {frame_from, Link, Frame},
-            relay(Test, Link);
+            relay(Test, Link, Mon);
+        {'DOWN', Mon, process, Link, _} ->
+            ok;
         _Other ->
-            relay(Test, Link)
+            relay(Test, Link, Mon)
     end.
 
 %% Wait until the pool reports this link connected to this station.
