@@ -2413,17 +2413,8 @@ handle_info({'DOWN', Mon, process, Pid, Reason}, S) ->
 handle_info({respawn_link, Seed}, S) ->
     {noreply, on_respawn_link(Seed, S)};
 
-%% A link's measured round trip, read by the link's own worker and reported
-%% straight here: the pool ranks by it and never asks a link (macula#201 §4,
-%% macula#44). A reading for a link the pool no longer holds — one that raced
-%% the link's DOWN — is dropped rather than kept for a dead pid.
-handle_info({macula_link_rtt, Pid, Result}, #state{rtts = Rtts} = S) ->
-    {noreply, S#state{rtts = rtt_kept(holds_link(Pid, S), Pid, Result, Rtts)}};
-
-%% A link that has stayed up past the steady-up window: its seed's backoff
-%% starts again from the base (macula#201 §3).
-handle_info({steady_up, Seed, Pid}, S) ->
-    {noreply, steady_up(Seed, Pid, S)};
+handle_info({macula_link_rtt, Pid, Result}, #state{rtts = Rtts} = S) -> {noreply, S#state{rtts = rtt_kept(holds_link(Pid, S), Pid, Result, Rtts)}};
+handle_info({steady_up, Seed, Pid}, S) -> {noreply, steady_up(Seed, Pid, S)};
 
 %% A restart timer that fires while an issuer runs starts nothing.
 handle_info(restart_issuer, #state{issuer = Issuer} = S) when is_pid(Issuer) ->
@@ -2431,10 +2422,7 @@ handle_info(restart_issuer, #state{issuer = Issuer} = S) when is_pid(Issuer) ->
 handle_info(restart_issuer, #state{node_identity = NodeIdentity, issuer_start = Start} = S) ->
     {noreply, issuer_restarted(Start(fun() -> NodeIdentity end, self()), S)};
 
-handle_info(run_discovery, #state{discovery = undefined} = S) ->
-    %% Disabled after being scheduled (should not happen -- discovery
-    %% is fixed at connect/2 time today) or a stray message. No-op.
-    {noreply, S};
+handle_info(run_discovery, #state{discovery = undefined} = S) -> {noreply, S};  %% disabled late, or a stray
 handle_info(run_discovery, #state{discovery = D} = S) ->
     {noreply, discovery_ran(D, S)};
 
@@ -2447,11 +2435,7 @@ handle_info(dedup_sweep, S) ->
 handle_info(admission_sweep, S) ->
     {noreply, admission_swept(S)};
 
-handle_info(discovery_giveup_sweep, #state{discovery = undefined} = S) ->
-    %% Defensive only -- `arm_giveup_sweep/1' never arms this timer
-    %% unless discovery was enabled at `connect/2' time, and nothing
-    %% today can disable it afterwards. Dropped, not re-armed.
-    {noreply, S};
+handle_info(discovery_giveup_sweep, #state{discovery = undefined} = S) -> {noreply, S};  %% never armed
 handle_info(discovery_giveup_sweep, #state{discovery = D} = S) ->
     {noreply, giveup_swept(D, S)};
 
@@ -2656,6 +2640,10 @@ start_link_for_seed(Seed, ExtraOpts, #state{node_identity = NodeIdentity, roles 
                                      %% under (macula#201): it decides which station
                                      %% ids the advertisement this link SIGNS may name.
                                      seed_tier => maps:get(Seed, Roles, public),
+                                     %% Whether ANY fallback was configured at all: with
+                                     %% none, a signed body may name every pinned and
+                                     %% connected station exactly as it always did.
+                                     fallback_configured => lists:member(fallback, maps:values(Roles)),
                                      share => seed_peer(Seed)}),
     after_link_start(macula_station_link:start_link(LinkOpts), Seed,
                      remember_dial_opts(Seed, ExtraOpts, S)).

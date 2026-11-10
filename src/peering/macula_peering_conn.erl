@@ -1156,11 +1156,6 @@ connected({call, From}, peer_identity, #data{peer = #{node_id := _, identity_key
     {keep_state, Data, [{reply, From, {ok, peer_answer(peer_identity, Data)}}]};
 connected({call, From}, peer_capabilities, Data) ->
     {keep_state, Data, [{reply, From, {ok, peer_answer(peer_capabilities, Data)}}]};
-%% The connection's smoothed round trip, in microseconds (macula#201 §4). Read
-%% by the link that owns this worker, which forwards it to its pool so the pool
-%% can rank its links without ever probing one itself (macula#44).
-connected({call, From}, rtt, #data{quic_conn = Conn} = Data) ->
-    {keep_state, Data, [{reply, From, macula_quic:rtt(Conn)}]};
 connected(EventType, Event, Data) ->
     other_event(EventType, Event, connected, Data).
 
@@ -1788,6 +1783,10 @@ classify(_)              -> other.
 other_event(cast, {object_refused, Kind, Charged}, _State, #data{refusals = Refusals, charged = Count} = Data) ->
     {keep_state, Data#data{refusals = maps:update_with(Kind, fun(N) -> N + 1 end, 1, Refusals),
                            charged = Count + charge(Charged)}};
+%% This connection's smoothed round trip, in microseconds, for the link that owns
+%% this worker (macula#201 §4): the pool ranks links by it and never probes one.
+other_event({call, From}, rtt, _State, #data{quic_conn = Conn}) ->
+    {keep_state_and_data, [{reply, From, macula_quic:rtt(Conn)}]};
 other_event({call, From}, refusals, _State, #data{refusals = Refusals, charged = Count}) ->
     {keep_state_and_data, [{reply, From, #{counts => Refusals, charged => Count}}]};
 other_event(EventType, Event, State, Data) ->

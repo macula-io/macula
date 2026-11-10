@@ -220,7 +220,7 @@
 -ifdef(TEST).
 %% The advertisement body rule is pure and is what the tests pin (macula#201
 %% amendment 2): which station ids a body signed by a given tier may name.
--export([serving_stations/4]).
+-export([serving_stations/5]).
 -export([with_client_stream/3, advertisement_opts/3]).
 %% How a DHT put's reply reads (macula#33, WIRE_1_0.md section 6), asserted
 %% directly: a peer that answers a CALL needs a station's signed reply.
@@ -292,6 +292,15 @@
     %% `{macula_link_disconnected, Link, Summary}', before the link stops,
     %% because the link's exit is `normal' whatever the reason was.
     pool => pid(),
+    %% The role this link's station was configured under in its pool
+    %% (macula#201): it decides which station ids the advertisement this link
+    %% signs may name. Default `public', which is what every caller that does
+    %% not name a tier gets.
+    seed_tier => public | fallback,
+    %% Whether this link's pool configured ANY fallback station (macula#201).
+    %% With none, a signed body names the pinned stations exactly as it always
+    %% did: there is no LAN tier for the role filter to protect.
+    fallback_configured => boolean(),
     %% The function that opens the peering connection, by default
     %% `macula_peering:connect/1'. An option, so a test replaces no
     %% shared module.
@@ -443,6 +452,8 @@
     %% station and may name public ones, so a LAN caller can still resolve the
     %% procedure it holds during an outage.
     tier = public    :: public | fallback,
+    %% Whether this link's pool configured any fallback station at all.
+    fallback_configured = false :: boolean(),
     connect          :: fun((map()) -> {ok, pid()} | {error, term()}),
     %% The functions every dedicated stream is opened, written and closed
     %% through (start opts `open_stream', `send_on_stream', `close_stream').
@@ -1735,6 +1746,7 @@ started({ok, Seed, Key, Profile, Issuer}, Opts) ->
                       issuer = Issuer, admission = maps:get(admission, Opts),
                       share = maps:get(share, Opts), pool = maps:get(pool, Opts, undefined),
                       tier = maps:get(seed_tier, Opts, public),
+                      fallback_configured = maps:get(fallback_configured, Opts, false),
                       connect = Connect, open_stream = OpenStream,
                       send_on_stream = SendOnStream, close_stream = CloseStream,
                       reset_stream = ResetStream,
@@ -3243,14 +3255,15 @@ send_advertise(Pid, Realm, EncodedAd, S) ->
 sign_advertisement(Realm, Proc, _Spec, _Station, #state{pool = undefined}) ->
     not_sent(Realm, Proc, no_pool);
 sign_advertisement(Realm, Proc, Spec, Station,
-                    #state{pool = Pool, node_identity = Key, profile = Profile, tier = Tier}) ->
+                    #state{pool = Pool, node_identity = Key, profile = Profile,
+                           tier = Tier, fallback_configured = Fallback}) ->
     Link = self(),
     Opts = advertisement_opts(Spec, Key, Profile),
     SignOpts = maps:with([not_after], Spec),
     _ = spawn(fun() ->
             Unsigned = macula_record:procedure_advertisement(
                          node_id(Key), Realm, Proc,
-                         serving_stations(Station, pool_stations(Pool), Spec, Tier), Opts),
+                         serving_stations(Station, pool_stations(Pool), Spec, Tier, Fallback), Opts),
             Link ! {advertisement_signed, {Realm, Proc}, Spec, Station, signed_or_refused(Pool, Unsigned, SignOpts)}
         end),
     ok.
@@ -3275,9 +3288,15 @@ stations(PoolStations) -> [NodeId || {NodeId, _Tier} <- PoolStations].
 %% station and may name public ones — required, not merely allowed: the body the
 %% fallback station holds is what a LAN caller resolves during an outage, so it
 %% must name a station the caller can dial.
-named_on(public, Station, PoolStations) ->
+%% A pool with NO fallback configured keeps today's body exactly: every pinned
+%% station is named, and every connected station is named, whether the pool can
+%% classify it or not. The role filter exists for the LAN tier; where there is
+%% none it must not silently narrow a record.
+named_on(_Tier, _Station, _PoolStations, false) ->
+    true;
+named_on(public, Station, PoolStations, true) ->
     tier_of(Station, PoolStations) =:= public;
-named_on(fallback, _Station, _PoolStations) ->
+named_on(fallback, _Station, _PoolStations, true) ->
     true.
 
 %% A station the pool holds no tier for is NOT nameable on a public body: it is
@@ -3295,13 +3314,13 @@ tier_of(Station, PoolStations) ->
 %% the procedure is registered on those links and on no other, so naming a
 %% station that does not hold it hands the caller a dial target that must
 %% forward every call (macula#116).
-serving_stations(Station, PoolStations, #{serving_stations := Stations}, Tier)
+serving_stations(Station, PoolStations, #{serving_stations := Stations}, Tier, Fallback)
   when is_list(Stations), Stations =/= [] ->
-    Pinned = [S || S <- lists:usort(Stations) -- [Station], named_on(Tier, S, PoolStations)],
+    Pinned = [S || S <- lists:usort(Stations) -- [Station], named_on(Tier, S, PoolStations, Fallback)],
     lists:usort(lists:sublist([Station | Pinned], 8));
-serving_stations(Station, PoolStations, _Unpinned, Tier) ->
+serving_stations(Station, PoolStations, _Unpinned, Tier, Fallback) ->
     Others = lists:sublist([S || S <- lists:usort(stations(PoolStations)) -- [Station],
-                                 named_on(Tier, S, PoolStations)], 7),
+                                 named_on(Tier, S, PoolStations, Fallback)], 7),
     lists:usort([Station | Others]).
 
 %% The pool's signature on an advertisement, or why there is none: a pool call that exits is a refusal, not a crash.
