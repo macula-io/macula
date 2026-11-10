@@ -231,7 +231,7 @@ cleaned(Body) ->
 station_links(Io) ->
     case ets:lookup(Io, station) of
         [{station, none}] -> [];
-        [{station, S}] -> [#{connected => true, node_id => S}]
+        [{station, S}] -> [#{connected => true, node_id => S, tier => public}]
     end.
 
 set_station(Io, Station) ->

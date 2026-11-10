@@ -278,8 +278,13 @@ a_spec_is_signed_naming_every_station_the_pool_is_connected_to_test_() ->
      fun() ->
          {ok, _} = application:ensure_all_started(macula),
          Opts = with_link_keys(#{seed => #{host => <<"127.0.0.1">>, port => 1}, connect_timeout_ms => 2000}),
-         Links = [#{connected => true, node_id => <<12:256>>}, #{connected => true, node_id => <<3:256>>},
-                  #{connected => false, node_id => <<4:256>>}, #{connected => true, node_id => undefined}],
+         %% Each link info names the role its seed was configured under (macula#201); a
+         %% pool link the test does not care about is `public', which is what the real pool
+         %% reports for a seed given to connect/2.
+         Links = [#{connected => true, node_id => <<12:256>>, tier => public},
+                  #{connected => true, node_id => <<3:256>>, tier => public},
+                  #{connected => false, node_id => <<4:256>>, tier => public},
+                  #{connected => true, node_id => undefined, tier => public}],
          Pool = with_pool_links(maps:get(pool, Opts), Links),
          {ok, Pid} = macula_station_link:start_link(Opts#{pool => Pool}),
          Peer = self(),

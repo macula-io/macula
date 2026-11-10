@@ -770,7 +770,7 @@ a_published_advertisement_is_signed_by_the_node_identity_and_put_as_its_wire_for
     Station = station(<<"s.test">>),
     Test = self(),
     StationId = maps:get(id, Station),
-    meck:expect(macula, links, fun(_Pool) -> {ok, [#{connected => true, node_id => StationId}]} end),
+    meck:expect(macula, links, fun(_Pool) -> {ok, [#{connected => true, node_id => StationId, tier => public}]} end),
     meck:expect(macula_client, sign_node_record,
                 fun(_Pool, Unsigned, _Opts) ->
                         Test ! pool_signed,
