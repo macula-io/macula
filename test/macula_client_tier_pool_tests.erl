@@ -47,6 +47,12 @@ redial_test_() ->
       fun a_link_that_stays_up_resets_its_backoff/0,
       fun a_link_that_dies_early_keeps_it/0]}.
 
+rearm_test_() ->
+    {timeout, 60,
+     [fun a_fallback_retry_rearms_when_the_public_tier_dies/0,
+      fun a_fallback_retry_rearms_when_the_public_tier_reports_down/0,
+      fun a_public_retry_rearms_when_a_public_link_returns/0]}.
+
 %%--------------------------------------------------------------------
 %% Which links an originating operation may use
 %%--------------------------------------------------------------------
@@ -216,13 +222,99 @@ a_link_that_dies_early_keeps_it() ->
     ?assertEqual(2, attempts(Pool, 3)),
     ok = macula_client:close(Pool).
 
+%%--------------------------------------------------------------------
+%% §3's re-arm rule: a tier that BECOMES the active one does not inherit the
+%% wait the other tier earned. The pending retry restarts at the redial base and
+%% its counter starts again from zero; the tier that just went keeps the wait it
+%% earned, which is what makes an outage cheap.
+%
+%% All three tests use a schedule whose fourth failed retry waits at least 2 s,
+%% and then let no more than 800 ms pass: "re-armed" and "left to run out" are
+%% two orders of magnitude apart, so none of them can pass by winning a race.
+%%--------------------------------------------------------------------
+
+%% The public tier dies for real -- its links' DOWN, no goodbye notice -- while
+%% the fallback seed waits out a backoff it earned behind an up public tier.
+a_fallback_retry_rearms_when_the_public_tier_dies() ->
+    Pool = rearm_pool(),
+    #{public := Pub} = connect_all(Pool),
+    ok = escalated(Pool, 3, 4),
+    [kill(Pid) || Pid <- Pub],
+    ok = await_tier(Pool, fallback),
+    ?assert(is_pid(wait_for_link(Pool, 3, 32))),
+    ?assertEqual(0, attempts(Pool, 3)),
+    ok = macula_client:close(Pool).
+
+%% The same flip through the notice a link sends just before it stops, which the
+%% pool handles BEFORE that link's DOWN: a re-arm hooked only on the DOWN would
+%% find the tier already changed and never restart the retry.
+a_fallback_retry_rearms_when_the_public_tier_reports_down() ->
+    Pool = rearm_pool(),
+    #{public := Pub} = connect_all(Pool),
+    ok = escalated(Pool, 3, 4),
+    [disconnected(Pool, Pid) || Pid <- Pub],
+    ok = await_tier(Pool, fallback),
+    ?assert(is_pid(wait_for_link(Pool, 3, 32))),
+    ?assertEqual(0, attempts(Pool, 3)),
+    ok = macula_client:close(Pool).
+
+%% And back the other way: a public link completing its handshake makes the
+%% public tier active again, so a public seed waiting out a long retry is
+%% dialled again on the base rather than left on the other tier's schedule.
+a_public_retry_rearms_when_a_public_link_returns() ->
+    Pool = rearm_pool(),
+    #{public := [A | _] = Pub} = connect_all(Pool),
+    kill(A),
+    [disconnected(Pool, Pid) || Pid <- tl(Pub)],
+    ok = await_tier(Pool, fallback),
+    ok = escalated(Pool, 1, 4),
+    reconnected(Pool, lists:last(Pub), ?PUB_B_STATION),
+    ok = await_tier(Pool, public),
+    ?assert(is_pid(wait_for_link(Pool, 1, 32))),
+    ?assertEqual(0, attempts(Pool, 1)),
+    ok = macula_client:close(Pool).
+
 %%------------------------------------------------------------------
 %% Helpers
 %%------------------------------------------------------------------
 
+%% Kill the seed's link until the pool counts `Target' backoff attempts on it,
+%% waiting out the retry the pool arms between one kill and the next.
+escalated(Pool, Port, 1) ->
+    kill(held_link(Pool, Port)),
+    counted(Pool, Port, 1);
+escalated(Pool, Port, Target) ->
+    ok = escalated(Pool, Port, Target - 1),
+    kill(held_link(Pool, Port)),
+    counted(Pool, Port, Target).
+
+held_link(Pool, Port) -> wait_for_link(Pool, Port, 400).
+
+counted(_Pool, _Port, _N, 0) ->
+    error(attempt_never_counted);
+counted(Pool, Port, N, Tries) ->
+    case attempts(Pool, Port) of
+        N -> ok;
+        _ -> timer:sleep(25), counted(Pool, Port, N, Tries - 1)
+    end.
+
+counted(Pool, Port, N) -> counted(Pool, Port, N, 200).
+
+await_tier(_Pool, _Tier, 0) ->
+    error(tier_never_changed);
+await_tier(Pool, Tier, Tries) ->
+    case active_tier(Pool) of
+        Tier -> ok;
+        _ -> timer:sleep(25), await_tier(Pool, Tier, Tries - 1)
+    end.
+
+await_tier(Pool, Tier) -> await_tier(Pool, Tier, 40).
+
 %% A pool on the public tier with a LAN fallback: two public seeds, one
 %% fallback seed, all unreachable, and a redial schedule short enough to watch.
-pool() ->
+pool() -> pool(redial()).
+
+pool(Redial) ->
     ok = flushed(),
     {ok, _} = application:ensure_all_started(macula),
     {ok, Profile} = macula_crypto_profile:configured(),
@@ -231,11 +323,19 @@ pool() ->
                                        #{node_identity => Key,
                                          fallback_stations => [seed(3, 3)],
                                          replication_factor => 1,
-                                         redial => redial()}),
+                                         redial => Redial}),
     Pool.
 
 redial() ->
     #{base_ms => 50, factor => 2, cap_ms => 1_000, steady_up_ms => steady_up_ms()}.
+
+%% The re-arm tests' schedule: a floor of a couple of milliseconds to watch by,
+%% and a growth steep enough that the fourth failed retry waits at least 2 s.
+rearm_pool() ->
+    pool(rearm_redial()).
+
+rearm_redial() ->
+    #{base_ms => 2, factor => 10, cap_ms => 60_000, steady_up_ms => steady_up_ms()}.
 
 steady_up_ms() -> 400.
 

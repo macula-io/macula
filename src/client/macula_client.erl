@@ -774,6 +774,12 @@ discovery_state() -> #discovery_state{}.
     %% failed retries so far. Reset only once its link stays up past the
     %% steady-up window (`?STEADY_UP_MS'), never merely on connect.
     redial_attempts = #{} :: #{seed() => non_neg_integer()},
+    %% Each seed whose retry is armed, and the tag its timer carries. A tier
+    %% that BECOMES the active one re-arms its seeds' pending retries from the
+    %% redial base (macula#201 §3), and only a tracked timer can be cancelled
+    %% rather than left to run out; the tag keeps a message a cancel raced from
+    %% untracking its replacement.
+    respawn_timers = #{} :: #{seed() => reference()},
     %% The redial schedule's numbers, resolved at start from the options (the
     %% constants above are the defaults).
     redial :: redial(),
@@ -2410,10 +2416,17 @@ handle_info({'DOWN', _Mon, process, Worker, Reason}, #state{renewals = Renewals}
 handle_info({'DOWN', Mon, process, Pid, Reason}, S) ->
     on_down(Mon, Pid, Reason, S);
 
-handle_info({respawn_link, Seed}, S) ->
-    {noreply, on_respawn_link(Seed, S)};
+handle_info({respawn_link, Seed, Tag}, S) ->
+    {noreply, respawn_armed(Seed, Tag, S)};
 
-handle_info({macula_link_rtt, Pid, Result}, #state{rtts = Rtts} = S) -> {noreply, S#state{rtts = rtt_kept(holds_link(Pid, S), Pid, Result, Rtts)}};
+%% A link's measured round trip, read by the link's own worker and reported
+%% straight here: the pool ranks by it and never asks a link (macula#201 §4,
+%% macula#44). A reading for a link the pool no longer holds — one that raced
+%% the link's DOWN — is dropped rather than kept for a dead pid.
+handle_info({macula_link_rtt, Pid, Result}, S) -> {noreply, rtt_reported(Pid, Result, S)};
+
+%% A link that has stayed up past the steady-up window: its seed's backoff
+%% starts again from the base (macula#201 §3).
 handle_info({steady_up, Seed, Pid}, S) -> {noreply, steady_up(Seed, Pid, S)};
 
 %% A restart timer that fires while an issuer runs starts nothing.
@@ -2462,10 +2475,10 @@ handle_info({register_ack_timeout, Key, From}, #state{registrations = Regs} = S)
 handle_info({macula_link_connected, Pid, NodeId}, S) ->
     {noreply, link_connected(find_link_by_pid(Pid, S), Pid, NodeId, link_heard(Pid, erlang:system_time(millisecond), S))};
 %% A link says why it disconnected, just before it stops `normal'. Its DOWN
-%% follows this message, as signals from one process arrive in order.
-handle_info({macula_link_disconnected, Pid, Summary}, #state{connected = Connected} = S) ->
-    {noreply, disconnect_kept(find_link_by_pid(Pid, S), Summary,
-                              last_heard(Pid, Summary, S#state{connected = maps:remove(Pid, Connected)}))};
+%% follows this message, as signals from one process arrive in order, and this
+%% is where the pool can notice a tier change (see `link_reported_down/3').
+handle_info({macula_link_disconnected, Pid, Summary}, S) ->
+    {noreply, link_reported_down(Pid, Summary, S)};
 handle_info({'EXIT', Pid, Reason}, #state{keyring = Keyring} = S) ->
     %% Links are linked to us via gen_server:start_link in
     %% start_link_for_seed (we trap_exit). The DOWN monitor fires
@@ -2708,8 +2721,15 @@ redial_schedule(Opts) ->
 %% being hammered.
 schedule_respawn(Seed, S) ->
     {Kind, Delay} = respawn_plan(Seed, S),
-    _ = erlang:send_after(Delay, self(), {respawn_link, Seed}),
-    counted_attempt(Kind, Seed, S).
+    counted_attempt(Kind, Seed, arm_respawn(Seed, Delay, S)).
+
+%% Arm the seed's retry `Delay' ms from now, remembering the tag its message
+%% carries, so a tier switch can cancel a wait the other tier earned
+%% (macula#201 §3).
+arm_respawn(Seed, Delay, #state{respawn_timers = Timers} = S) ->
+    Tag = make_ref(),
+    _ = erlang:send_after(Delay, self(), {respawn_link, Seed, Tag}),
+    S#state{respawn_timers = Timers#{Seed => Tag}}.
 
 respawn_plan(Seed, #state{roles = Roles} = S) ->
     respawn_plan_for(maps:get(Seed, Roles, public) =:= active_tier(S), Seed, S).
@@ -2726,6 +2746,32 @@ counted_attempt(flat, _Seed, S) ->
     S;
 counted_attempt(backoff, Seed, #state{redial_attempts = Attempts} = S) ->
     S#state{redial_attempts = Attempts#{Seed => maps:get(Seed, Attempts, 0) + 1}}.
+
+%% A tier switch re-arms the tier that has just become the active one
+%% (macula#201 §3): every seed of it that is waiting out a retry is scheduled
+%% again from the redial base, jitter-free, and its counter starts again from
+%% zero. A seed of the tier that just went keeps the wait it earned -- that
+%% backoff is what keeps a long outage cheap -- and a seed already dialling or
+%% connected has no wait to restart.
+%%
+%% Called with the state as it was before the change and the state the handler
+%% is about to keep; the tier is read from `connected' both times rather than
+%% kept as a field, so there is one answer to "which tier is live", not two.
+tier_noticed(Before, S) ->
+    case active_tier(S) =:= active_tier(Before) of
+        true -> S;
+        false -> rearm_pending(active_tier(S), S)
+    end.
+
+rearm_pending(Tier, #state{roles = Roles, respawn_timers = Timers, redial_attempts = Attempts} = S) ->
+    Pending = [Seed || {Seed, Role} <- maps:to_list(Roles),
+                       Role =:= Tier, maps:is_key(Seed, Timers)],
+    lists:foldl(fun(Seed, Acc) -> rearm_retry(Seed, Acc) end,
+                S#state{redial_attempts = maps:without(Pending, Attempts)}, Pending).
+
+rearm_retry(Seed, #state{respawn_timers = Timers, redial = Redial} = S) ->
+    _ = erlang:cancel_timer(maps:get(Seed, Timers)),
+    arm_respawn(Seed, redial_wait_ms(0, Redial), S).
 
 %% The wait before a failed retry is made again (macula#201 §3):
 %%
@@ -3552,6 +3598,12 @@ rtt_before(A, B)                 -> A =< B.
 rtt_kept(true, Pid, {ok, Micros}, Rtts) when is_integer(Micros) -> Rtts#{Pid => Micros};
 rtt_kept(_Held, _Pid, _Result, Rtts)                              -> Rtts.
 
+%% A link reported the round trip it measured (macula#201 §4): kept only for a
+%% link the pool still holds, so a reading that races its link's DOWN leaves no
+%% entry for a dead pid behind.
+rtt_reported(Pid, Result, #state{rtts = Rtts} = S) ->
+    S#state{rtts = rtt_kept(holds_link(Pid, S), Pid, Result, Rtts)}.
+
 holds_link(Pid, S) ->
     lists:member(Pid, spawned_link_pids(S)).
 
@@ -3586,7 +3638,7 @@ link_connected({ok, Seed}, Pid, NodeId, #state{connected = Connected} = S) ->
     %% starts here too, and only a link still up when it elapses resets its
     %% seed's backoff.
     arm_steady_up(Seed, Pid, S),
-    S#state{connected = Connected#{Pid => NodeId}};
+    tier_noticed(S, S#state{connected = Connected#{Pid => NodeId}});
 link_connected(_NotHeld, _Pid, _NodeId, S) ->
     S.
 
@@ -4082,6 +4134,16 @@ seed_host(_) ->
 on_respawn_link(Seed, #state{links = Links} = S) ->
     respawn_unless_live(maps:get(Seed, Links, undefined), Seed, S).
 
+%% A retry whose tag is still the one armed for its seed is the retry the pool
+%% is waiting for, and the seed's timer entry goes with it. One carrying any
+%% other tag lost its race with a re-arm: it is dropped, leaving the timer that
+%% replaced it tracked (macula#201 §3).
+respawn_armed(Seed, Tag, #state{respawn_timers = Timers} = S) ->
+    case maps:take(Seed, Timers) of
+        {Tag, Rest} -> on_respawn_link(Seed, S#state{respawn_timers = Rest});
+        _Superseded -> S
+    end.
+
 respawn_unless_live(#link_state{pid = Pid}, _Seed, S) when is_pid(Pid) ->
     S;
 respawn_unless_live(_NoneOrHeld, Seed, S) ->
@@ -4550,10 +4612,14 @@ on_down_routed({ok, Seed}, _Mon, Pid, Reason, S0) ->
     S1 = S#state{links = maps:remove(Seed, S#state.links),
                  connected = maps:remove(Pid, S#state.connected),
                  rtts = maps:remove(Pid, S#state.rtts)},
+    %% A link that died without a goodbye notice leaves `connected' here, so
+    %% this is where its tier's loss is noticed and the other tier's pending
+    %% retries are re-armed (macula#201 §3).
+    %%
     %% Scheduled AFTER the link left the pool, so a tier that has just lost its
     %% last link is already inactive and its retry takes the backoff schedule
-    %% rather than the flat delay (macula#201 §3).
-    {noreply, maybe_rediscover_now(schedule_respawn(Seed, S1))};
+    %% rather than the flat delay.
+    {noreply, maybe_rediscover_now(schedule_respawn(Seed, tier_noticed(S0, S1)))};
 on_down_routed(error, Mon, _Pid, Reason, S) ->
     {noreply, on_opener_down(Mon, Reason, on_subscriber_down(Mon, S))}.
 
@@ -4587,6 +4653,16 @@ find_link_by_pid(Pid, #state{links = Links}) ->
 
 %% A link's own account of its disconnect: its reason's name and the facts
 %% the link chose to name, never the reason's terms.
+%%
+%% The link leaves `connected' here, which is what can make the other tier the
+%% live one, so the switch is noticed HERE and not on its DOWN: signals from one
+%% process arrive in order, so by the time the DOWN is handled `connected' has
+%% already lost the link and that state would show no change at all
+%% (macula#201 §3).
+link_reported_down(Pid, Summary, #state{connected = Connected} = S) ->
+    S1 = last_heard(Pid, Summary, S#state{connected = maps:remove(Pid, Connected)}),
+    tier_noticed(S, disconnect_kept(find_link_by_pid(Pid, S), Summary, S1)).
+
 disconnect_kept({ok, Seed}, Summary, #state{last_disconnects = Last} = S) ->
     S#state{last_disconnects = Last#{Seed => Summary}};
 disconnect_kept(error, _Summary, S) ->

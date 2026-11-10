@@ -74,6 +74,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   first retry is exactly the base, with no jitter), growing per failed attempt up to a cap, with jitter only above the
   floor. A seed's counter resets only after its link has stayed up past the steady-up window — not on connect — so a
   connect-then-die loop escalates instead of retrying at the base forever. Symmetric for both tiers: one reset rule.
+  A tier that BECOMES the active one does not inherit the wait the other tier earned: when the public tier goes down,
+  a fallback seed waiting out a retry of up to the cap is dialled again after the base — jitter-free, its counter back
+  to zero — and the same holds for a public seed when a public link's handshake makes that tier live again.
 
 ### Changed
 
