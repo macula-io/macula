@@ -55,6 +55,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`{error, {seeds, {station_in_both_tiers, Seed}}}`), and a pool with no fallback list behaves exactly as before.
   `status/1` gains `active_tier` and `links/1` reports each link's `tier`, so a caller can say "offline: on the LAN
   fallback" instead of failing silently.
+- **A signed advertisement names only stations on its signer's tier (macula#201, amendment 2).** Each link signs its
+  own body from the pool's connected stations, so the body now also follows the tier of the link that signs it: a
+  public link names public stations only, and a fallback link names itself and the public ones, because its body is
+  what a LAN caller resolves during an outage. A station the pool holds no tier for is left off a public body rather
+  than guessed at. The rule is what keeps a fallback station's address — and any LAN address learned from it — out of
+  every record a public station stores. A pool with no fallback list is untouched: every pinned and every connected
+  station is named, byte for byte as today.
 - **Links are ranked by measured round trip, and the lowest goes first (macula#201 §4).** New `macula_quic:rtt/1` reads
   the QUIC connection's smoothed RTT from Quinn's own stats — one real field, like `lost_packets/1`, and for the same
   reason not routed through the deliberately unimplemented `getstat/2`. Each link reads it off its own process on
