@@ -76,7 +76,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   connect-then-die loop escalates instead of retrying at the base forever. Symmetric for both tiers: one reset rule.
   A tier that BECOMES the active one does not inherit the wait the other tier earned: when the public tier goes down,
   a fallback seed waiting out a retry of up to the cap is dialled again after the base — jitter-free, its counter back
-  to zero — and the same holds for a public seed when a public link's handshake makes that tier live again.
+  to zero — and the same holds for a public seed when a public link's handshake makes that tier live again. A seed the
+  pool was never configured with counts as public here, as it does for the schedule and the tier it is reported under:
+  a direct dial or a discovered station is re-armed like a configured public seed, not left on the wait it earned.
 
 ### Changed
 

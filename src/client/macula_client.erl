@@ -2763,9 +2763,14 @@ tier_noticed(Before, S) ->
         false -> rearm_pending(active_tier(S), S)
     end.
 
+%% The pending seeds come from the timers, and each is classified the way
+%% `respawn_plan/2' classifies it: a seed the pool was never configured with (a
+%% direct dial, a discovered station) is public. Reading the pending list off
+%% `roles' alone left exactly those seeds on the wait the outage earned, while
+%% `respawn_plan/2', `active_tier/1' and `link_tiers/1' all called them public.
 rearm_pending(Tier, #state{roles = Roles, respawn_timers = Timers, redial_attempts = Attempts} = S) ->
-    Pending = [Seed || {Seed, Role} <- maps:to_list(Roles),
-                       Role =:= Tier, maps:is_key(Seed, Timers)],
+    Pending = [Seed || Seed <- maps:keys(Timers),
+                       maps:get(Seed, Roles, public) =:= Tier],
     lists:foldl(fun(Seed, Acc) -> rearm_retry(Seed, Acc) end,
                 S#state{redial_attempts = maps:without(Pending, Attempts)}, Pending).
 

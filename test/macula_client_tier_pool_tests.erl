@@ -51,7 +51,8 @@ rearm_test_() ->
     {timeout, 60,
      [fun a_fallback_retry_rearms_when_the_public_tier_dies/0,
       fun a_fallback_retry_rearms_when_the_public_tier_reports_down/0,
-      fun a_public_retry_rearms_when_a_public_link_returns/0]}.
+      fun a_public_retry_rearms_when_a_public_link_returns/0,
+      fun an_unconfigured_public_retry_rearms_when_a_public_link_returns/0]}.
 
 %%--------------------------------------------------------------------
 %% Which links an originating operation may use
@@ -272,6 +273,27 @@ a_public_retry_rearms_when_a_public_link_returns() ->
     ok = await_tier(Pool, public),
     ?assert(is_pid(wait_for_link(Pool, 1, 32))),
     ?assertEqual(0, attempts(Pool, 1)),
+    ok = macula_client:close(Pool).
+
+%% The same switch for a seed the pool was never configured with. A direct dial
+%% (`ensure_station_link/4') puts a link in the pool without an entry in its
+%% `roles', and everywhere else -- `respawn_plan/2', `active_tier/1',
+%% `link_tiers/1' -- such a seed counts as public. The re-arm must count it the
+%% same way: one rule, one answer. Before that, this seed alone kept the wait
+%% the outage earned, because only `roles' was consulted for the pending list.
+an_unconfigured_public_retry_rearms_when_a_public_link_returns() ->
+    Pool = rearm_pool(),
+    #{public := [A | _] = Pub} = connect_all(Pool),
+    kill(A),
+    [disconnected(Pool, Pid) || Pid <- tl(Pub)],
+    ok = await_tier(Pool, fallback),
+    ?assertEqual({error, not_connected},
+                 macula_client:ensure_station_link(Pool, seed(4, 4), #{}, 200)),
+    ok = escalated(Pool, 4, 4),
+    reconnected(Pool, lists:last(Pub), ?PUB_B_STATION),
+    ok = await_tier(Pool, public),
+    ?assert(is_pid(wait_for_link(Pool, 4, 32))),
+    ?assertEqual(0, attempts(Pool, 4)),
     ok = macula_client:close(Pool).
 
 %%------------------------------------------------------------------
